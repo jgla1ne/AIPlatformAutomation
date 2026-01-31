@@ -2,8 +2,7 @@
 set -euo pipefail
 
 # ============================================
-# AI Platform - System Setup v5.0
-# Idempotent, can be run multiple times safely
+# AI Platform - System Setup v5.1
 # ============================================
 
 RED='\033[0;31m'
@@ -13,439 +12,541 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOG_FILE="/var/log/ai-platform-setup.log"
+LOG_FILE="$SCRIPT_DIR/logs/setup-$(date +%Y%m%d-%H%M%S).log"
 
-# Ensure log file exists
-sudo touch "$LOG_FILE" 2>/dev/null || LOG_FILE="$HOME/ai-platform-setup.log"
-sudo chown $USER:$USER "$LOG_FILE" 2>/dev/null || true
-exec > >(tee -a "$LOG_FILE") 2>&1
+mkdir -p "$SCRIPT_DIR/logs"
 
-echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}AI Platform - System Setup v5.0${NC}"
-echo -e "${BLUE}Started: $(date)${NC}"
-echo -e "${BLUE}User: $USER | Hostname: $(hostname)${NC}"
-echo -e "${BLUE}========================================${NC}"
+log() {
+    echo -e "$1" | tee -a "$LOG_FILE"
+}
+
+echo ""
+log "${BLUE}========================================${NC}"
+log "${BLUE}AI Platform - System Setup v5.1${NC}"
+log "${BLUE}Started: $(date)${NC}"
+log "${BLUE}User: $(whoami) | Hostname: $(hostname)${NC}"
+log "${BLUE}========================================${NC}"
+echo ""
 
 # ============================================
-# Pre-flight Checks
+# [1/12] Pre-flight Checks (FIXED)
 # ============================================
 preflight_checks() {
-    echo -e "\n${BLUE}[1/12] Pre-flight checks...${NC}"
-
-    # Check user
-    if [[ "$USER" != "jglaine" ]] && [[ "$USER" != "ubuntu" ]]; then
-        echo -e "   ${YELLOW}⚠️  Running as: $USER (expected: jglaine)${NC}"
-        read -p "   Continue? (y/n): " -n 1 -r
-        echo
-        [[ ! $REPLY =~ ^[Yy]$ ]] && exit 1
-    fi
-
-    # Check Ubuntu version
-    if ! grep -q "22.04" /etc/os-release 2>/dev/null; then
-        echo -e "   ${YELLOW}⚠️  Not Ubuntu 22.04, may have issues${NC}"
-    fi
-
-    # Check disk space
-    local available=$(df -BG "$HOME" | awk 'NR==2 {print $4}' | sed 's/G//')
-    if [[ $available -lt 100 ]]; then
-        echo -e "   ${RED}❌ Insufficient disk space: ${available}GB (need 100GB+)${NC}"
-        exit 1
-    fi
-
-    # Check for GPU
-    if command -v nvidia-smi &> /dev/null; then
-        echo -e "   ${GREEN}✅ NVIDIA GPU detected${NC}"
-        nvidia-smi --query-gpu=name --format=csv,noheader | sed 's/^/      /'
+    log "${BLUE}[1/12] Pre-flight checks...${NC}"
+    
+    # Check OS (warning only, not fatal)
+    if ! grep -q "Ubuntu 22.04" /etc/os-release 2>/dev/null; then
+        log "   ${YELLOW}⚠️  Not Ubuntu 22.04, may have issues${NC}"
     else
-        echo -e "   ${YELLOW}⚠️  No NVIDIA GPU detected${NC}"
+        log "   ${GREEN}✓ Ubuntu 22.04 detected${NC}"
     fi
-
-    echo -e "   ${GREEN}✅ Pre-flight checks passed${NC}"
+    
+    # Check root disk (reduced requirement: 30GB minimum)
+    local root_available=$(df / | awk 'NR==2 {print int($4/1024/1024)}')
+    if [[ $root_available -lt 30 ]]; then
+        log "   ${RED}❌ Insufficient root disk: ${root_available}GB (need 30GB+ for system packages)${NC}"
+        exit 1
+    else
+        log "   ${GREEN}✓ Root disk: ${root_available}GB available${NC}"
+    fi
+    
+    # Check data disk (if /mnt/data exists)
+    if mountpoint -q /mnt/data; then
+        local data_available=$(df /mnt/data | awk 'NR==2 {print int($4/1024/1024)}')
+        if [[ $data_available -lt 50 ]]; then
+            log "   ${YELLOW}⚠️  Data disk: ${data_available}GB (recommend 100GB+ for AI models)${NC}"
+        else
+            log "   ${GREEN}✓ Data disk: ${data_available}GB available at /mnt/data${NC}"
+        fi
+    else
+        log "   ${YELLOW}⚠️  /mnt/data not mounted yet (will mount EBS volume)${NC}"
+    fi
+    
+    # Check RAM (warning only)
+    local ram_gb=$(free -g | awk 'NR==2 {print $2}')
+    if [[ $ram_gb -lt 16 ]]; then
+        log "   ${YELLOW}⚠️  RAM: ${ram_gb}GB (recommend 16GB+ for AI workloads)${NC}"
+    else
+        log "   ${GREEN}✓ RAM: ${ram_gb}GB${NC}"
+    fi
+    
+    # Check if running as root
+    if [[ $EUID -eq 0 ]]; then
+        log "   ${RED}❌ Don't run as root! Run as normal user (jglaine)${NC}"
+        exit 1
+    else
+        log "   ${GREEN}✓ Running as user: $(whoami)${NC}"
+    fi
+    
+    # Check sudo access
+    if ! sudo -n true 2>/dev/null; then
+        log "   ${YELLOW}⚠️  Will prompt for sudo password during installation${NC}"
+    else
+        log "   ${GREEN}✓ Sudo access verified${NC}"
+    fi
+    
+    echo ""
 }
 
 # ============================================
-# Verify Directory Structure
+# [2/12] Detect EBS Volume and Mount
 # ============================================
-verify_structure() {
-    echo -e "\n${BLUE}[2/12] Verifying directory structure...${NC}"
-
-    cd "$SCRIPT_DIR"
-
-    # Check configs/ exists
-    if [[ ! -d "configs" ]]; then
-        echo -e "   ${RED}❌ configs/ directory missing${NC}"
+setup_ebs_volume() {
+    log "${BLUE}[2/12] Setting up EBS volume...${NC}"
+    
+    # Check if already mounted
+    if mountpoint -q /mnt/data; then
+        log "   ${GREEN}✓ /mnt/data already mounted${NC}"
+        df -h /mnt/data | tail -1 | awk '{print "   Size: "$2", Used: "$3", Available: "$4}'
+        echo ""
+        return 0
+    fi
+    
+    # Detect EBS volume (look for large unformatted disk)
+    local ebs_device=""
+    
+    # Check for NVMe devices (AWS)
+    for dev in /dev/nvme*n1; do
+        if [[ -b "$dev" ]] && [[ "$dev" != "/dev/nvme0n1" ]]; then
+            local size_gb=$(lsblk -b "$dev" | awk 'NR==2 {print int($4/1024/1024/1024)}')
+            if [[ $size_gb -ge 50 ]]; then
+                ebs_device="$dev"
+                log "   ${GREEN}✓ Found EBS volume: $dev (${size_gb}GB)${NC}"
+                break
+            fi
+        fi
+    done
+    
+    # Check for /dev/xvd* devices (older instances)
+    if [[ -z "$ebs_device" ]]; then
+        for dev in /dev/xvd[b-z]; do
+            if [[ -b "$dev" ]]; then
+                local size_gb=$(lsblk -b "$dev" | awk 'NR==2 {print int($4/1024/1024/1024)}')
+                if [[ $size_gb -ge 50 ]]; then
+                    ebs_device="$dev"
+                    log "   ${GREEN}✓ Found EBS volume: $dev (${size_gb}GB)${NC}"
+                    break
+                fi
+            fi
+        done
+    fi
+    
+    if [[ -z "$ebs_device" ]]; then
+        log "   ${RED}❌ No EBS volume detected (need 100GB+ disk)${NC}"
+        log "   ${YELLOW}💡 Attach EBS volume in AWS console, then re-run${NC}"
         exit 1
     fi
-
-    # Verify required config directories
-    local required_configs=(signal ollama litellm dify anythingllm clawdbot)
-    for config in "${required_configs[@]}"; do
-        if [[ -d "configs/$config" ]]; then
-            echo -e "   ${GREEN}✅ configs/$config${NC}"
-        else
-            echo -e "   ${YELLOW}⚠️  configs/$config missing (will create)${NC}"
-            mkdir -p "configs/$config"
-        fi
-    done
-
-    # Create stacks/ if missing (runtime directory)
-    mkdir -p stacks
-    echo -e "   ${GREEN}✅ Directory structure verified${NC}"
+    
+    # Check if already formatted
+    if ! sudo blkid "$ebs_device" | grep -q "TYPE="; then
+        log "   Formatting $ebs_device as ext4..."
+        sudo mkfs.ext4 -F "$ebs_device" >> "$LOG_FILE" 2>&1
+        log "   ${GREEN}✓ Formatted${NC}"
+    else
+        log "   ${GREEN}✓ Already formatted${NC}"
+    fi
+    
+    # Create mount point
+    sudo mkdir -p /mnt/data
+    
+    # Mount
+    log "   Mounting $ebs_device at /mnt/data..."
+    sudo mount "$ebs_device" /mnt/data
+    
+    # Add to /etc/fstab (if not already there)
+    local uuid=$(sudo blkid -s UUID -o value "$ebs_device")
+    if ! grep -q "$uuid" /etc/fstab; then
+        echo "UUID=$uuid /mnt/data ext4 defaults,nofail 0 2" | sudo tee -a /etc/fstab > /dev/null
+        log "   ${GREEN}✓ Added to /etc/fstab (auto-mount on boot)${NC}"
+    fi
+    
+    # Set ownership
+    sudo chown -R $(whoami):$(whoami) /mnt/data
+    
+    log "   ${GREEN}✓ /mnt/data ready${NC}"
+    df -h /mnt/data | tail -1 | awk '{print "   Size: "$2", Available: "$4}'
+    echo ""
 }
 
 # ============================================
-# Create Data Directories
-# ============================================
-create_data_dirs() {
-    echo -e "\n${BLUE}[3/12] Creating data directories...${NC}"
-
-    local base_dir="$HOME/ai-platform-data"
-
-    local dirs=(
-        "$base_dir"
-        "$base_dir/ollama"
-        "$base_dir/litellm"
-        "$base_dir/dify/postgres"
-        "$base_dir/dify/redis"
-        "$base_dir/dify/weaviate"
-        "$base_dir/dify/nginx/certs"
-        "$base_dir/anythingllm"
-        "$base_dir/signal"
-        "$base_dir/clawdbot/config"
-        "$base_dir/clawdbot/logs"
-        "$base_dir/clawdbot/data"
-    )
-
-    for dir in "${dirs[@]}"; do
-        if [[ ! -d "$dir" ]]; then
-            mkdir -p "$dir"
-            echo "   Created: $dir"
-        fi
-    done
-
-    # Set proper permissions
-    chmod -R 755 "$base_dir"
-
-    echo -e "   ${GREEN}✅ Data directories created${NC}"
-}
-
-# ============================================
-# Update System
+# [3/12] Update System Packages
 # ============================================
 update_system() {
-    echo -e "\n${BLUE}[4/12] Updating system packages...${NC}"
-
-    sudo apt-get update -qq
-    sudo apt-get upgrade -y -qq
-
-    echo -e "   ${GREEN}✅ System updated${NC}"
+    log "${BLUE}[3/12] Updating system packages...${NC}"
+    
+    sudo apt-get update >> "$LOG_FILE" 2>&1
+    sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y >> "$LOG_FILE" 2>&1
+    
+    log "   ${GREEN}✓ System updated${NC}"
+    echo ""
 }
 
 # ============================================
-# Install Base Packages
+# [4/12] Install Base Dependencies
 # ============================================
-install_base_packages() {
-    echo -e "\n${BLUE}[5/12] Installing base packages...${NC}"
-
+install_dependencies() {
+    log "${BLUE}[4/12] Installing base dependencies...${NC}"
+    
     local packages=(
-        curl wget git vim htop tmux jq tree
-        ca-certificates gnupg lsb-release
-        apt-transport-https software-properties-common
-        gettext-base build-essential
-        python3 python3-pip python3-venv
-        qrencode  # For QR code generation
+        curl
+        wget
+        git
+        vim
+        htop
+        jq
+        tree
+        net-tools
+        ca-certificates
+        gnupg
+        lsb-release
+        software-properties-common
     )
-
-    sudo apt-get install -y -qq "${packages[@]}"
-
-    echo -e "   ${GREEN}✅ Base packages installed${NC}"
+    
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${packages[@]}" >> "$LOG_FILE" 2>&1
+    
+    log "   ${GREEN}✓ Base packages installed${NC}"
+    echo ""
 }
 
 # ============================================
-# Install Docker
+# [5/12] Install Docker
 # ============================================
 install_docker() {
-    echo -e "\n${BLUE}[6/12] Installing Docker...${NC}"
-
+    log "${BLUE}[5/12] Installing Docker...${NC}"
+    
     if command -v docker &> /dev/null; then
-        echo -e "   ${GREEN}✅ Docker already installed${NC}"
-        docker --version | sed 's/^/      /'
+        local version=$(docker --version | awk '{print $3}' | tr -d ',')
+        log "   ${GREEN}✓ Docker already installed: $version${NC}"
+        echo ""
         return 0
     fi
-
+    
     # Add Docker GPG key
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
-        sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-
+    sudo install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg >> "$LOG_FILE" 2>&1
+    sudo chmod a+r /etc/apt/keyrings/docker.gpg
+    
     # Add Docker repository
     echo \
-        "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] \
-        https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | \
-        sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+      $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+      sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+    
     # Install Docker
-    sudo apt-get update -qq
-    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
+    sudo apt-get update >> "$LOG_FILE" 2>&1
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        docker-ce \
+        docker-ce-cli \
+        containerd.io \
+        docker-buildx-plugin \
+        docker-compose-plugin >> "$LOG_FILE" 2>&1
+    
     # Add user to docker group
-    sudo usermod -aG docker $USER
-
-    echo -e "   ${GREEN}✅ Docker installed${NC}"
-    echo -e "   ${YELLOW}⚠️  Log out and back in for group changes to take effect${NC}"
+    sudo usermod -aG docker $(whoami)
+    
+    # Start Docker
+    sudo systemctl enable docker >> "$LOG_FILE" 2>&1
+    sudo systemctl start docker >> "$LOG_FILE" 2>&1
+    
+    log "   ${GREEN}✓ Docker installed${NC}"
+    log "   ${YELLOW}⚠️  Logout and login to apply docker group membership${NC}"
+    echo ""
 }
 
 # ============================================
-# Configure Docker
+# [6/12] Detect GPU and Install NVIDIA Stack
 # ============================================
-configure_docker() {
-    echo -e "\n${BLUE}[7/12] Configuring Docker...${NC}"
-
-    # Create daemon.json for better logging
-    sudo mkdir -p /etc/docker
-
-    if [[ -f /etc/docker/daemon.json ]]; then
-        echo -e "   ${GREEN}✅ daemon.json already exists${NC}"
-    else
-        sudo tee /etc/docker/daemon.json > /dev/null <<DAEMON_EOF
-{
-  "log-driver": "json-file",
-  "log-opts": {
-    "max-size": "10m",
-    "max-file": "3"
-  },
-  "storage-driver": "overlay2"
-}
-DAEMON_EOF
-        sudo systemctl restart docker
-        echo -e "   ${GREEN}✅ Docker configured${NC}"
-    fi
-}
-
-# ============================================
-# Install NVIDIA Container Toolkit
-# ============================================
-install_nvidia_toolkit() {
-    echo -e "\n${BLUE}[8/12] Installing NVIDIA Container Toolkit...${NC}"
-
-    if ! command -v nvidia-smi &> /dev/null; then
-        echo -e "   ${BLUE}ℹ️  No NVIDIA GPU, skipping${NC}"
+install_nvidia() {
+    log "${BLUE}[6/12] Checking for NVIDIA GPU...${NC}"
+    
+    # Check if NVIDIA GPU exists
+    if ! lspci | grep -i nvidia > /dev/null; then
+        log "   ${YELLOW}⚠️  No NVIDIA GPU detected, skipping driver installation${NC}"
+        echo ""
         return 0
     fi
-
-    # Test if already working
-    if docker run --rm --gpus all nvidia/cuda:12.3.1-base-ubuntu22.04 nvidia-smi &> /dev/null 2>&1; then
-        echo -e "   ${GREEN}✅ NVIDIA Container Toolkit already working${NC}"
+    
+    local gpu_model=$(lspci | grep -i nvidia | head -1 | cut -d: -f3)
+    log "   ${GREEN}✓ Found GPU:$gpu_model${NC}"
+    
+    # Check if nvidia-smi already works
+    if command -v nvidia-smi &> /dev/null && nvidia-smi > /dev/null 2>&1; then
+        local driver_version=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader)
+        log "   ${GREEN}✓ NVIDIA driver already installed: $driver_version${NC}"
+        nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | \
+            awk '{print "   "$0}'
+        echo ""
         return 0
     fi
+    
+    log "   Installing NVIDIA drivers..."
+    
+    # Install drivers
+    sudo apt-get update >> "$LOG_FILE" 2>&1
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        nvidia-driver-535 \
+        nvidia-utils-535 >> "$LOG_FILE" 2>&1
+    
+    log "   ${GREEN}✓ NVIDIA drivers installed${NC}"
+    log "   ${YELLOW}⚠️  Reboot required to load drivers${NC}"
+    echo ""
+}
 
-    # Install toolkit
-    distribution=$(. /etc/os-release; echo $ID$VERSION_ID)
-
+# ============================================
+# [7/12] Install NVIDIA Container Toolkit
+# ============================================
+install_nvidia_docker() {
+    log "${BLUE}[7/12] Installing NVIDIA Container Toolkit...${NC}"
+    
+    # Skip if no GPU
+    if ! lspci | grep -i nvidia > /dev/null; then
+        log "   ${YELLOW}⚠️  No GPU, skipping${NC}"
+        echo ""
+        return 0
+    fi
+    
+    if command -v nvidia-ctk &> /dev/null; then
+        log "   ${GREEN}✓ Already installed${NC}"
+        echo ""
+        return 0
+    fi
+    
+    # Add NVIDIA GPG key
     curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
-        sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-
-    curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
+        sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg >> "$LOG_FILE" 2>&1
+    
+    # Add repository
+    curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
         sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-        sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
-
-    sudo apt-get update -qq
-    sudo apt-get install -y nvidia-container-toolkit
-
-    # Configure Docker to use NVIDIA runtime
-    sudo nvidia-ctk runtime configure --runtime=docker
-    sudo systemctl restart docker
-
-    echo -e "   ${GREEN}✅ NVIDIA Container Toolkit installed${NC}"
+        sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
+    
+    # Install
+    sudo apt-get update >> "$LOG_FILE" 2>&1
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nvidia-container-toolkit >> "$LOG_FILE" 2>&1
+    
+    # Configure Docker
+    sudo nvidia-ctk runtime configure --runtime=docker >> "$LOG_FILE" 2>&1
+    sudo systemctl restart docker >> "$LOG_FILE" 2>&1
+    
+    log "   ${GREEN}✓ NVIDIA Container Toolkit installed${NC}"
+    echo ""
 }
 
 # ============================================
-# Create Docker Network
+# [8/12] Verify Tailscale
 # ============================================
-create_docker_network() {
-    echo -e "\n${BLUE}[9/12] Creating Docker network...${NC}"
-
-    if docker network ls | grep -q "ai-platform-network"; then
-        echo -e "   ${GREEN}✅ Network already exists${NC}"
+verify_tailscale() {
+    log "${BLUE}[8/12] Verifying Tailscale...${NC}"
+    
+    if ! command -v tailscale &> /dev/null; then
+        log "   ${YELLOW}⚠️  Tailscale not installed${NC}"
+        log "   💡 Install: curl -fsSL https://tailscale.com/install.sh | sh${NC}"
+        echo ""
+        return 0
+    fi
+    
+    if ! tailscale status &> /dev/null; then
+        log "   ${YELLOW}⚠️  Tailscale not connected${NC}"
+        log "   💡 Connect: sudo tailscale up${NC}"
+        echo ""
+        return 0
+    fi
+    
+    local tailscale_ip=$(tailscale ip -4 2>/dev/null)
+    if [[ -n "$tailscale_ip" ]]; then
+        log "   ${GREEN}✓ Tailscale connected: $tailscale_ip${NC}"
+        echo "TAILSCALE_IP=$tailscale_ip" >> "$SCRIPT_DIR/.env.tmp"
     else
-        docker network create ai-platform-network
-        echo -e "   ${GREEN}✅ Network created: ai-platform-network${NC}"
+        log "   ${YELLOW}⚠️  Tailscale IP not found${NC}"
     fi
+    
+    echo ""
 }
 
 # ============================================
-# Install Tailscale
+# [9/12] Create Service Users
 # ============================================
-install_tailscale() {
-    echo -e "\n${BLUE}[10/12] Installing Tailscale...${NC}"
-
-    if command -v tailscale &> /dev/null; then
-        if tailscale status &> /dev/null 2>&1; then
-            local ts_ip=$(tailscale ip -4 2>/dev/null || echo "UNKNOWN")
-            echo -e "   ${GREEN}✅ Tailscale connected: $ts_ip${NC}"
+create_service_users() {
+    log "${BLUE}[9/12] Creating service users...${NC}"
+    
+    local users=("ollama" "litellm" "signal" "dify" "anythingllm" "clawdbot")
+    
+    for user in "${users[@]}"; do
+        if id "$user" &>/dev/null; then
+            log "   ${GREEN}✓ User exists: $user${NC}"
         else
-            echo -e "   ${YELLOW}⚠️  Tailscale installed but not connected${NC}"
-            echo -e "   ${BLUE}   Run: sudo tailscale up${NC}"
+            sudo useradd -r -s /bin/false -d /mnt/data/$user "$user" >> "$LOG_FILE" 2>&1
+            log "   ${GREEN}✓ Created user: $user${NC}"
         fi
-        return 0
-    fi
-
-    curl -fsSL https://tailscale.com/install.sh | sh
-    echo -e "   ${GREEN}✅ Tailscale installed${NC}"
-    echo -e "   ${YELLOW}⚠️  Run 'sudo tailscale up' to connect${NC}"
+    done
+    
+    echo ""
 }
 
 # ============================================
-# Generate Secrets
+# [10/12] Create Directory Structure
 # ============================================
-generate_secrets() {
-    echo -e "\n${BLUE}[11/12] Generating secrets...${NC}"
-
-    if [[ -f "$SCRIPT_DIR/.secrets" ]]; then
-        echo -e "   ${GREEN}✅ .secrets already exists${NC}"
-        return 0
-    fi
-
-    # Generate all secrets
-    local postgres_pw=$(openssl rand -hex 32)
-    local redis_pw=$(openssl rand -hex 32)
-    local dify_secret=$(openssl rand -hex 32)
-    local dify_init_pw=$(openssl rand -base64 12)
-    local litellm_key="sk-$(openssl rand -hex 24)"
-    local anythingllm_jwt=$(openssl rand -hex 32)
-    local anythingllm_key="sk-$(openssl rand -hex 24)"
-    local weaviate_key=$(openssl rand -hex 32)
-
-    cat > "$SCRIPT_DIR/.secrets" <<SECRETS_EOF
-# AI Platform Secrets
-# Generated: $(date)
-# DO NOT COMMIT THIS FILE
-
-export POSTGRES_PASSWORD="$postgres_pw"
-export REDIS_PASSWORD="$redis_pw"
-export DIFY_SECRET_KEY="$dify_secret"
-export DIFY_INIT_PASSWORD="$dify_init_pw"
-export DIFY_WEAVIATE_API_KEY="$weaviate_key"
-export LITELLM_MASTER_KEY="$litellm_key"
-export ANYTHINGLLM_JWT_SECRET="$anythingllm_jwt"
-export ANYTHINGLLM_API_KEY="$anythingllm_key"
-export SIGNAL_NUMBER=""
-SECRETS_EOF
-
-    chmod 600 "$SCRIPT_DIR/.secrets"
-
-    echo -e "   ${GREEN}✅ Secrets generated and saved${NC}"
+create_directories() {
+    log "${BLUE}[10/12] Creating directory structure...${NC}"
+    
+    local dirs=(
+        "/mnt/data/ollama"
+        "/mnt/data/litellm"
+        "/mnt/data/signal"
+        "/mnt/data/dify/db"
+        "/mnt/data/dify/storage"
+        "/mnt/data/dify/redis"
+        "/mnt/data/anythingllm"
+        "/mnt/data/clawdbot"
+        "/mnt/data/gateway/certs"
+        "$SCRIPT_DIR/stacks"
+        "$SCRIPT_DIR/logs"
+    )
+    
+    for dir in "${dirs[@]}"; do
+        sudo mkdir -p "$dir"
+        log "   ${GREEN}✓ Created: $dir${NC}"
+    done
+    
+    # Set ownership
+    sudo chown -R ollama:ollama /mnt/data/ollama
+    sudo chown -R litellm:litellm /mnt/data/litellm
+    sudo chown -R signal:signal /mnt/data/signal
+    sudo chown -R dify:dify /mnt/data/dify
+    sudo chown -R anythingllm:anythingllm /mnt/data/anythingllm
+    sudo chown -R clawdbot:clawdbot /mnt/data/clawdbot
+    sudo chown -R $(whoami):$(whoami) /mnt/data/gateway
+    sudo chown -R $(whoami):$(whoami) "$SCRIPT_DIR/stacks"
+    
+    log "   ${GREEN}✓ Permissions set${NC}"
+    echo ""
 }
 
 # ============================================
-# Create Environment File
+# [11/12] Generate Environment File
 # ============================================
-create_env_file() {
-    echo -e "\n${BLUE}[12/12] Creating environment file...${NC}"
-
-    if [[ -f "$SCRIPT_DIR/.env" ]]; then
-        echo -e "   ${GREEN}✅ .env already exists${NC}"
-        return 0
-    fi
-
-    # Detect Tailscale IP
-    local ts_ip=$(tailscale ip -4 2>/dev/null || echo "NOT_SET")
-    local data_path="$HOME/ai-platform-data"
-
-    cat > "$SCRIPT_DIR/.env" <<ENV_EOF
+generate_env_file() {
+    log "${BLUE}[11/12] Generating environment file...${NC}"
+    
+    local env_file="$SCRIPT_DIR/.env"
+    
+    # Get Tailscale IP if available
+    local tailscale_ip=$(tailscale ip -4 2>/dev/null || echo "100.x.x.x")
+    
+    cat > "$env_file" <<ENV_EOF
 # ============================================
-# AI Platform Environment Configuration
+# AI Platform - Environment Configuration
 # Generated: $(date)
 # ============================================
 
 # System
-PLATFORM_USER=$USER
-PLATFORM_UID=$(id -u)
-PLATFORM_GID=$(id -g)
-TAILSCALE_IP=$ts_ip
-DATA_PATH=$data_path
+DOMAIN=ai-platform.local
+TAILSCALE_IP=$tailscale_ip
+PRIMARY_USER=$(whoami)
+HOSTNAME=$(hostname)
 
-# Network
+# Storage
+DATA_ROOT=/mnt/data
 NETWORK_NAME=ai-platform-network
 
-# Paths (relative to DATA_PATH)
-OLLAMA_DATA=\${DATA_PATH}/ollama
-LITELLM_DATA=\${DATA_PATH}/litellm
-DIFY_DATA=\${DATA_PATH}/dify
-ANYTHINGLLM_DATA=\${DATA_PATH}/anythingllm
-SIGNAL_DATA=\${DATA_PATH}/signal
-CLAWDBOT_DATA=\${DATA_PATH}/clawdbot
-
-# Ollama
-OLLAMA_MODELS=llama3.2:latest,mistral:latest
-OLLAMA_HOST=0.0.0.0:11434
-
-# LiteLLM
+# Service Ports (internal)
+OLLAMA_PORT=11434
 LITELLM_PORT=4000
+SIGNAL_PORT=8080
+DIFY_API_PORT=5001
+DIFY_WEB_PORT=4343
+ANYTHINGLLM_PORT=3001
+CLAWDBOT_PORT=18789
+GATEWAY_PORT=8443
+
+# AI Models
+OLLAMA_MODELS=llama3.2:3b,qwen2.5:3b,nomic-embed-text
+LITELLM_DEFAULT_MODEL=smart-router
+
+# Database
+POSTGRES_VERSION=15-alpine
+POSTGRES_USER=dify
+POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d /=+)
+POSTGRES_DB=dify
+
+# Redis
+REDIS_VERSION=7-alpine
+REDIS_PASSWORD=$(openssl rand -base64 32 | tr -d /=+)
 
 # Dify
-DIFY_POSTGRES_DB=dify
-DIFY_POSTGRES_USER=dify
-DIFY_API_PORT=5001
-DIFY_WEB_PORT=3000
+DIFY_VERSION=0.11.0
+DIFY_SECRET_KEY=$(openssl rand -base64 64 | tr -d /=+)
 
 # AnythingLLM
-ANYTHINGLLM_PORT=3001
+ANYTHINGLLM_VERSION=latest
 
 # Signal
-SIGNAL_API_PORT=8080
-SIGNAL_NUMBER=
+SIGNAL_VERSION=latest
 
 # ClawdBot
-CLAWDBOT_PORT=18789
-ANTHROPIC_API_KEY=
-
-# External Services
-OPENAI_API_KEY=
+CLAWDBOT_VERSION=latest
 ENV_EOF
-
-    chmod 644 "$SCRIPT_DIR/.env"
-
-    echo -e "   ${GREEN}✅ .env created${NC}"
+    
+    chmod 600 "$env_file"
+    log "   ${GREEN}✓ Environment file created: .env${NC}"
+    log "   ${YELLOW}⚠️  Contains sensitive data, never commit to git${NC}"
+    echo ""
 }
 
 # ============================================
-# Final Summary
+# [12/12] Summary
 # ============================================
 print_summary() {
+    log "${BLUE}[12/12] Setup complete!${NC}"
     echo ""
-    echo -e "${GREEN}========================================${NC}"
-    echo -e "${GREEN}System Setup Complete!${NC}"
-    echo -e "${GREEN}========================================${NC}"
+    log "${GREEN}========================================${NC}"
+    log "${GREEN}✅ System Setup Complete${NC}"
+    log "${GREEN}========================================${NC}"
     echo ""
-    echo "✅ Ubuntu system updated"
-    echo "✅ Docker installed and configured"
-    echo "✅ NVIDIA toolkit installed (if GPU present)"
-    echo "✅ Tailscale installed"
-    echo "✅ Docker network created"
-    echo "✅ Data directories created"
-    echo "✅ Environment files generated"
+    
+    log "Installation summary:"
+    log "  ${GREEN}✓${NC} Docker installed"
+    
+    if lspci | grep -i nvidia > /dev/null; then
+        log "  ${GREEN}✓${NC} NVIDIA GPU support enabled"
+    else
+        log "  ${YELLOW}⚠${NC} No GPU (CPU-only mode)"
+    fi
+    
+    if command -v tailscale &> /dev/null && tailscale status &> /dev/null; then
+        local ts_ip=$(tailscale ip -4)
+        log "  ${GREEN}✓${NC} Tailscale connected: $ts_ip"
+    else
+        log "  ${YELLOW}⚠${NC} Tailscale not connected"
+    fi
+    
+    local data_size=$(df -h /mnt/data | awk 'NR==2 {print $2}')
+    log "  ${GREEN}✓${NC} Data volume: /mnt/data ($data_size)"
+    log "  ${GREEN}✓${NC} Service users created"
+    log "  ${GREEN}✓${NC} Directories configured"
+    log "  ${GREEN}✓${NC} Environment file generated"
+    
     echo ""
-    echo -e "${BLUE}Configuration Files:${NC}"
-    echo "  • $SCRIPT_DIR/.env (main config)"
-    echo "  • $SCRIPT_DIR/.secrets (generated secrets)"
+    log "Root disk usage:"
+    df -h / | tail -1 | awk '{print "  Size: "$2", Used: "$3", Available: "$4", Use%: "$5}'
+    
     echo ""
-    echo -e "${BLUE}Data Directory:${NC}"
-    echo "  • $HOME/ai-platform-data/"
+    log "Data disk usage:"
+    df -h /mnt/data | tail -1 | awk '{print "  Size: "$2", Used: "$3", Available: "$4", Use%: "$5}'
+    
     echo ""
-    echo -e "${BLUE}Next Steps:${NC}"
-    echo "  1. Review and edit .env if needed:"
-    echo "     vim $SCRIPT_DIR/.env"
+    log "${BLUE}Next steps:${NC}"
+    log "  1. Logout and login (to apply docker group): ${YELLOW}exit${NC}"
+    log "  2. Reconnect: ${YELLOW}ssh $(whoami)@$(hostname)${NC}"
+    log "  3. Run: ${YELLOW}cd ~/ai-platform-installer/scripts${NC}"
+    log "  4. Deploy services: ${YELLOW}./2-deploy-services.sh${NC}"
     echo ""
-    echo "  2. If you were added to docker group, log out and back in:"
-    echo "     logout (then reconnect)"
-    echo ""
-    echo "  3. Deploy services:"
-    echo "     cd $SCRIPT_DIR/scripts"
-    echo "     ./2-deploy-services.sh"
-    echo ""
-    echo -e "${YELLOW}⚠️  Important: If Tailscale not connected, run:${NC}"
-    echo "     sudo tailscale up"
-    echo ""
+    
+    if lspci | grep -i nvidia > /dev/null && ! nvidia-smi > /dev/null 2>&1; then
+        log "${YELLOW}⚠️  REBOOT REQUIRED to load NVIDIA drivers:${NC}"
+        log "   ${YELLOW}sudo reboot${NC}"
+        echo ""
+    fi
 }
 
 # ============================================
@@ -453,23 +554,19 @@ print_summary() {
 # ============================================
 main() {
     preflight_checks
-    verify_structure
-    create_data_dirs
+    setup_ebs_volume
     update_system
-    install_base_packages
+    install_dependencies
     install_docker
-    configure_docker
-    install_nvidia_toolkit
-    create_docker_network
-    install_tailscale
-    generate_secrets
-    create_env_file
+    install_nvidia
+    install_nvidia_docker
+    verify_tailscale
+    create_service_users
+    create_directories
+    generate_env_file
     print_summary
 }
 
-# Run if executed directly
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
-fi
+main "$@"
 
 chmod +x ~/ai-platform-installer/scripts/1-setup-system.sh
