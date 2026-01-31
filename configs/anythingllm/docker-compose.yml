@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  anythingllm:
+    image: mintplexlabs/anythingllm:latest
+    container_name: anythingllm
+    restart: unless-stopped
+    # AnythingLLM uses UID 1000 internally
+    user: "1000:1000"
+    
+    volumes:
+      - /mnt/data/anythingllm/storage:/app/server/storage
+      - /mnt/data/anythingllm/vector-cache:/app/server/storage/vector-cache
+      - /mnt/data/anythingllm/documents:/app/collector/hotdir
+      - /mnt/data/anythingllm/lancedb:/app/server/storage/lancedb
+    
+    ports:
+      - "3001:3001"
+    
+    networks:
+      - ai-platform-network
+    
+    environment:
+      - SERVER_PORT=3001
+      - STORAGE_DIR=/app/server/storage
+      - JWT_SECRET=${ANYTHINGLLM_JWT_SECRET}
+      - LLM_PROVIDER=native
+      - NATIVE_LLM_BASE_PATH=http://ollama:11434
+      - NATIVE_LLM_MODEL_PREF=llama3.2:3b
+      - NATIVE_LLM_TOKEN_LIMIT=4096
+      - EMBEDDING_ENGINE=native
+      - NATIVE_EMBEDDING_BASE_PATH=http://ollama:11434
+      - NATIVE_EMBEDDING_MODEL_PREF=nomic-embed-text
+      - VECTOR_DB=lancedb
+      - DISABLE_TELEMETRY=true
+      - AUTH_TOKEN=${ANYTHINGLLM_API_KEY}
+    
+    depends_on:
+      - ollama
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+networks:
+  ai-platform-network:
+    external: true

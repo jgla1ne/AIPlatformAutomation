@@ -1,0 +1,3 @@
+DEPLOYED_STACK:ollama
+DEPLOYED_STACK:litellm
+DEPLOYED_STACK:signal

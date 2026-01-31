@@ -1,0 +1,22 @@
+services:
+  clawdbot:
+    image: ghcr.io/yourusername/clawdbot:latest
+    container_name: clawdbot
+    restart: unless-stopped
+    ports:
+      - "${CLAWDBOT_PORT:-8000}:8000"
+    volumes:
+      - ${CLAWDBOT_DATA}:/app/data
+    environment:
+      - SIGNAL_API_URL=http://signal-cli:8080
+      - OLLAMA_API_URL=http://ollama:11434
+      - MCP_API_KEY=${CLAWDBOT_MCP_API_KEY}
+    networks:
+      - ai-platform-network
+    depends_on:
+      - signal-cli
+      - ollama
+
+networks:
+  ai-platform-network:
+    external: true

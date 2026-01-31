@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  clawdbot:
+    image: python:3.11-slim
+    container_name: clawdbot
+    restart: unless-stopped
+    user: "${PLATFORM_UID}:${PLATFORM_GID}"
+    
+    working_dir: /app
+    
+    volumes:
+      - /opt/ai-platform/clawdbot/bot.py:/app/bot.py:ro
+      - /opt/ai-platform/clawdbot/config.json:/app/config/config.json:ro
+      - /opt/ai-platform/clawdbot/requirements.txt:/app/requirements.txt:ro
+      - /mnt/data/clawdbot/logs:/app/logs
+      - /mnt/data/clawdbot/state:/app/state
+    
+    expose:
+      - "18789"
+    
+    networks:
+      - ai-platform-network
+    
+    environment:
+      - CONFIG_FILE=/app/config/config.json
+      - PYTHONUNBUFFERED=1
+    
+    command: >
+      sh -c "pip install --quiet --no-cache-dir -r requirements.txt && 
+             python bot.py"
+    
+    depends_on:
+      - anythingllm
+      - signal-api
+    
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:18789/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+networks:
+  ai-platform-network:
+    external: true

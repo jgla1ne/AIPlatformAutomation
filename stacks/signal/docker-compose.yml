@@ -1,0 +1,17 @@
+services:
+  signal-cli:
+    image: bbernhard/signal-cli-rest-api:latest
+    container_name: signal-cli
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - /home/jglaine/ai-platform-data/signal:/home/.local/share/signal-cli
+    environment:
+      - MODE=native
+    networks:
+      - ai-platform-network
+
+networks:
+  ai-platform-network:
+    external: true

@@ -1,0 +1,68 @@
+model_list:
+  - model_name: llama3.2-3b
+    litellm_params:
+      model: ollama/llama3.2:3b
+      api_base: http://ollama:11434
+      stream: true
+      
+  - model_name: llama3.1-8b
+    litellm_params:
+      model: ollama/llama3.1:8b
+      api_base: http://ollama:11434
+      stream: true
+      
+  - model_name: mistral-7b
+    litellm_params:
+      model: ollama/mistral:7b-instruct
+      api_base: http://ollama:11434
+      stream: true
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  request_timeout: 300
+  telemetry: false
+
+general_settings:
+  master_key: REPLACE_WITH_GENERATED_KEY
+  database_url: null
+LITELLM_CONFIG_EOF
+
+cat > ~/ai-platform-installer/configs/litellm/docker-compose.yml <<'LITELLM_COMPOSE_EOF'
+version: '3.8'
+
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: litellm
+    restart: unless-stopped
+    user: "${PLATFORM_UID}:${PLATFORM_GID}"
+    
+    volumes:
+      - /opt/ai-platform/litellm/config.yaml:/app/config.yaml:ro
+      - /mnt/data/litellm/logs:/app/logs
+      - /mnt/data/litellm/cache:/app/cache
+    
+    ports:
+      - "4000:4000"
+    
+    networks:
+      - ai-platform-network
+    
+    environment:
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+    
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0"]
+    
+    depends_on:
+      - ollama
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  ai-platform-network:
+    external: true

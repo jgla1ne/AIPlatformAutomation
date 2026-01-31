@@ -1,0 +1,248 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: dify-postgres
+    restart: unless-stopped
+    
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: dify
+      PGDATA: /var/lib/postgresql/data/pgdata
+    
+    volumes:
+      - /mnt/data/dify/db/pgdata:/var/lib/postgresql/data/pgdata
+      - /opt/ai-platform/dify/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    
+    networks:
+      - ai-platform-network
+    
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    
+    command: >
+      postgres
+      -c max_connections=200
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c maintenance_work_mem=64MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: dify-redis
+    restart: unless-stopped
+    
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD}
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+    
+    volumes:
+      - /mnt/data/dify/redis:/data
+    
+    networks:
+      - ai-platform-network
+    
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Weaviate Vector Database
+  weaviate:
+    image: semitechnologies/weaviate:1.24.8
+    container_name: dify-weaviate
+    restart: unless-stopped
+    
+    environment:
+      AUTHENTICATION_APIKEY_ENABLED: 'true'
+      AUTHENTICATION_APIKEY_ALLOWED_KEYS: ${WEAVIATE_API_KEY}
+      AUTHORIZATION_ADMINLIST_ENABLED: 'true'
+      AUTHORIZATION_ADMINLIST_USERS: 'admin@dify.ai'
+      QUERY_DEFAULTS_LIMIT: 25
+      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
+      DEFAULT_VECTORIZER_MODULE: 'none'
+      CLUSTER_HOSTNAME: 'node1'
+      ENABLE_MODULES: ''
+      DISK_USE_WARNING_PERCENTAGE: 90
+      DISK_USE_READONLY_PERCENTAGE: 95
+    
+    volumes:
+      - /mnt/data/dify/weaviate:/var/lib/weaviate
+    
+    networks:
+      - ai-platform-network
+    
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Dify API Service
+  api:
+    image: langgenius/dify-api:0.6.13
+    container_name: dify-api
+    restart: unless-stopped
+    user: "${PLATFORM_UID}:${PLATFORM_GID}"
+    
+    environment:
+      MODE: api
+      CONSOLE_CORS_ALLOW_ORIGINS: ${CONSOLE_CORS_ALLOW_ORIGINS:-*}
+    
+    env_file:
+      - /opt/ai-platform/dify/.env
+    
+    volumes:
+      - /mnt/data/dify/storage:/app/storage
+    
+    networks:
+      - ai-platform-network
+    
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      weaviate:
+        condition: service_healthy
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Dify Worker (Background Tasks)
+  worker:
+    image: langgenius/dify-api:0.6.13
+    container_name: dify-worker
+    restart: unless-stopped
+    user: "${PLATFORM_UID}:${PLATFORM_GID}"
+    
+    environment:
+      MODE: worker
+    
+    env_file:
+      - /opt/ai-platform/dify/.env
+    
+    volumes:
+      - /mnt/data/dify/storage:/app/storage
+    
+    networks:
+      - ai-platform-network
+    
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Dify Web Frontend
+  web:
+    image: langgenius/dify-web:0.6.13
+    container_name: dify-web
+    restart: unless-stopped
+    
+    environment:
+      CONSOLE_API_URL: ${CONSOLE_API_URL}
+      APP_API_URL: ${SERVICE_API_URL}
+    
+    networks:
+      - ai-platform-network
+    
+    depends_on:
+      - api
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Dify NGINX (Internal)
+  nginx:
+    image: nginx:alpine
+    container_name: dify-nginx
+    restart: unless-stopped
+    
+    volumes:
+      - /opt/ai-platform/dify/nginx.conf:/etc/nginx/nginx.conf:ro
+      - /opt/ai-platform/certs/dify.crt:/etc/nginx/certs/dify.crt:ro
+      - /opt/ai-platform/certs/dify.key:/etc/nginx/certs/dify.key:ro
+      - /mnt/data/dify/nginx-logs:/var/log/nginx
+    
+    ports:
+      - "4343:443"
+    
+    networks:
+      - ai-platform-network
+    
+    depends_on:
+      - api
+      - web
+    
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Sandbox (Code Execution)
+  sandbox:
+    image: langgenius/dify-sandbox:0.2.1
+    container_name: dify-sandbox
+    restart: unless-stopped
+    
+    environment:
+      API_KEY: dify-sandbox
+      GIN_MODE: release
+      WORKER_TIMEOUT: 15
+    
+    volumes:
+      - /mnt/data/dify/sandbox:/dependencies
+    
+    networks:
+      - ai-platform-network
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8194/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # SSRF Proxy (Security)
+  ssrf_proxy:
+    image: ubuntu/squid:latest
+    container_name: dify-ssrf-proxy
+    restart: unless-stopped
+    
+    volumes:
+      - /opt/ai-platform/dify/squid.conf:/etc/squid/squid.conf:ro
+    
+    networks:
+      - ai-platform-network
+    
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "3128"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  ai-platform-network:
+    external: true
