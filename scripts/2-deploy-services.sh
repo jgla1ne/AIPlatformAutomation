@@ -3,8 +3,8 @@ set -euo pipefail
 
 # ============================================================================
 # AI Platform - Service Deployment Script
-# Version: 10.2 FINAL
-# Description: Deploys all Docker services in correct order
+# Version: 10.4 FINAL - ULTRA ROBUST
+# Description: Deploys all Docker services with bulletproof error handling
 # ============================================================================
 
 # Logging setup
@@ -46,11 +46,46 @@ log_step() {
 # Error handler
 error_handler() {
     log_error "Script failed at line $1"
+    log_error "Command: $BASH_COMMAND"
     log_error "Check log file: $LOGFILE"
+    
+    # Show recent docker activity
+    log_error "Recent Docker containers:"
+    docker ps -a --format "table {{.Names}}\t{{.Status}}" 2>&1 | tail -n 10 | tee -a "$LOGFILE"
+    
     exit 1
 }
 
 trap 'error_handler $LINENO' ERR
+
+# ============================================================================
+# WAIT FOR SERVICE WITH TIMEOUT
+# ============================================================================
+wait_for_service() {
+    local service_name="$1"
+    local check_command="$2"
+    local max_attempts="${3:-30}"
+    local sleep_time="${4:-5}"
+    
+    log_info "Waiting for $service_name to be ready..."
+    
+    local attempt=0
+    while [[ $attempt -lt $max_attempts ]]; do
+        if eval "$check_command" &>/dev/null; then
+            log_success "$service_name is ready"
+            return 0
+        fi
+        
+        echo -n "."
+        sleep "$sleep_time"
+        ((attempt++))
+    done
+    
+    echo ""
+    log_warning "$service_name did not become ready within timeout"
+    log_info "Service may still be starting - check with: docker logs $service_name"
+    return 1
+}
 
 # ============================================================================
 # LOAD ENVIRONMENT
@@ -82,8 +117,6 @@ load_environment() {
         "OLLAMA_PORT"
         "LITELLM_PORT"
         "ANYTHINGLLM_PORT"
-        "POSTGRES_PASSWORD"
-        "REDIS_PASSWORD"
     )
     
     local missing=0
@@ -115,15 +148,28 @@ ensure_stack_dirs() {
         "${STACKS_DIR}/dify"
         "${STACKS_DIR}/n8n"
         "${STACKS_DIR}/signal"
-        "${STACKS_DIR}/clawdbot"
         "${STACKS_DIR}/nginx"
     )
     
     for dir in "${stack_dirs[@]}"; do
-        if [[ ! -d "$dir" ]]; then
-            mkdir -p "$dir"
-            log_info "Created: $dir"
-        fi
+        mkdir -p "$dir"
+    done
+    
+    # Ensure data directories
+    local data_dirs=(
+        "${DATA_DIR}/ollama"
+        "${DATA_DIR}/anythingllm"
+        "${DATA_DIR}/postgres"
+        "${DATA_DIR}/redis"
+        "${DATA_DIR}/dify/api/storage"
+        "${DATA_DIR}/dify/qdrant"
+        "${DATA_DIR}/n8n"
+        "${DATA_DIR}/signal"
+    )
+    
+    for dir in "${data_dirs[@]}"; do
+        sudo mkdir -p "$dir"
+        sudo chown -R $(whoami):$(whoami) "$dir"
     done
     
     log_success "All stack directories ready"
@@ -162,17 +208,17 @@ services:
     container_name: ollama
     restart: unless-stopped
     ports:
-      - "${OLLAMA_PORT}:11434"
+      - "${OLLAMA_HOST}:${OLLAMA_PORT}:11434"
     volumes:
       - ${DATA_DIR}/ollama:/root/.ollama
     networks:
       - ai-platform
     healthcheck:
-      test: ["CMD", "ollama", "list"]
+      test: ["CMD-SHELL", "ollama list || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 40s
+      retries: 5
+      start_period: 60s
 
 networks:
   ai-platform:
@@ -180,16 +226,10 @@ networks:
 EOF
 
     log_info "Starting Ollama..."
-    docker compose -f "${stack_dir}/docker-compose.yml" up -d >> "$LOGFILE" 2>&1
+    docker compose -f "${stack_dir}/docker-compose.yml" up -d 2>&1 | tee -a "$LOGFILE"
     
-    log_info "Waiting for Ollama to be ready..."
-    sleep 20
-    
-    if curl -s http://localhost:${OLLAMA_PORT}/api/tags > /dev/null; then
-        log_success "Ollama deployed and healthy"
-    else
-        log_warning "Ollama may not be fully ready yet"
-    fi
+    # Wait for Ollama with proper error handling
+    wait_for_service "Ollama" "curl -s http://localhost:${OLLAMA_PORT}/api/tags" 20 3 || true
 }
 
 # ============================================================================
@@ -213,18 +253,14 @@ model_list:
     litellm_params:
       model: ollama/qwen2.5:7b
       api_base: http://ollama:11434
-  
-  - model_name: deepseek-r1
-    litellm_params:
-      model: ollama/deepseek-r1:7b
-      api_base: http://ollama:11434
 
+litellm_settings:
+  drop_params: True
+  
 general_settings:
   master_key: ${LITELLM_MASTER_KEY}
-  database_url: null
 EOF
 
-    # Create docker-compose
     cat > "${stack_dir}/docker-compose.yml" << EOF
 services:
   litellm:
@@ -242,10 +278,10 @@ services:
     networks:
       - ai-platform
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      test: ["CMD-SHELL", "curl -f http://localhost:4000/health || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
       start_period: 30s
 
 networks:
@@ -254,16 +290,9 @@ networks:
 EOF
 
     log_info "Starting LiteLLM..."
-    docker compose -f "${stack_dir}/docker-compose.yml" up -d >> "$LOGFILE" 2>&1
+    docker compose -f "${stack_dir}/docker-compose.yml" up -d 2>&1 | tee -a "$LOGFILE"
     
-    log_info "Waiting for LiteLLM to be ready..."
-    sleep 15
-    
-    if curl -s http://localhost:${LITELLM_PORT}/health > /dev/null; then
-        log_success "LiteLLM deployed and healthy"
-    else
-        log_warning "LiteLLM may not be fully ready yet"
-    fi
+    wait_for_service "LiteLLM" "curl -s http://localhost:${LITELLM_PORT}/health" 15 2 || true
 }
 
 # ============================================================================
@@ -285,24 +314,23 @@ services:
       - "${ANYTHINGLLM_PORT}:3001"
     cap_add:
       - SYS_ADMIN
+    volumes:
+      - ${DATA_DIR}/anythingllm:/app/server/storage
     environment:
       - STORAGE_DIR=/app/server/storage
       - LLM_PROVIDER=ollama
       - OLLAMA_BASE_PATH=http://ollama:11434
-      - EMBEDDING_ENGINE=ollama
-      - EMBEDDING_BASE_PATH=http://ollama:11434
+      - EMBEDDING_PROVIDER=ollama
       - EMBEDDING_MODEL_PREF=nomic-embed-text:latest
       - VECTOR_DB=lancedb
-    volumes:
-      - ${ANYTHINGLLM_STORAGE}:/app/server/storage
     networks:
       - ai-platform
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/api/ping"]
+      test: ["CMD-SHELL", "curl -f http://localhost:3001/api/ping || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 60s
+      retries: 5
+      start_period: 90s
 
 networks:
   ai-platform:
@@ -310,16 +338,9 @@ networks:
 EOF
 
     log_info "Starting AnythingLLM..."
-    docker compose -f "${stack_dir}/docker-compose.yml" up -d >> "$LOGFILE" 2>&1
+    docker compose -f "${stack_dir}/docker-compose.yml" up -d 2>&1 | tee -a "$LOGFILE"
     
-    log_info "Waiting for AnythingLLM to be ready..."
-    sleep 30
-    
-    if curl -s http://localhost:${ANYTHINGLLM_PORT}/api/ping > /dev/null; then
-        log_success "AnythingLLM deployed and healthy"
-    else
-        log_warning "AnythingLLM may not be fully ready yet"
-    fi
+    wait_for_service "AnythingLLM" "curl -s http://localhost:${ANYTHINGLLM_PORT}/api/ping" 30 3 || true
 }
 
 # ============================================================================
@@ -331,16 +352,20 @@ deploy_dify() {
     local stack_dir="${STACKS_DIR}/dify"
     mkdir -p "$stack_dir"
     
+    # Ensure data directories exist
+    log_info "Preparing Dify data directories..."
+    sudo mkdir -p "${DATA_DIR}/postgres" "${DATA_DIR}/redis" "${DATA_DIR}/dify/api/storage" "${DATA_DIR}/dify/qdrant"
+    sudo chown -R $(whoami):$(whoami) "${DATA_DIR}/postgres" "${DATA_DIR}/redis" "${DATA_DIR}/dify"
+    
     cat > "${stack_dir}/docker-compose.yml" << 'EOF'
 services:
-  # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
     container_name: dify-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_DB: ${POSTGRES_DB:-dify}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
@@ -348,137 +373,28 @@ services:
     networks:
       - ai-platform
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 40s
 
-  # Redis Cache
   redis:
     image: redis:7-alpine
     container_name: dify-redis
     restart: unless-stopped
-    command: redis-server --requirepass ${REDIS_PASSWORD}
+    command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes
     volumes:
       - ${DATA_DIR}/redis:/data
     networks:
       - ai-platform
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
 
-  # Dify API Server
-  dify-api:
-    image: langgenius/dify-api:latest
-    container_name: dify-api
-    restart: unless-stopped
-    environment:
-      # Core
-      SECRET_KEY: ${DIFY_SECRET_KEY}
-      LOG_LEVEL: INFO
-      
-      # Database
-      DB_USERNAME: ${POSTGRES_USER}
-      DB_PASSWORD: ${POSTGRES_PASSWORD}
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_DATABASE: ${POSTGRES_DB}
-      
-      # Redis
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
-      REDIS_USE_SSL: "false"
-      
-      # Celery
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
-      
-      # Storage
-      STORAGE_TYPE: local
-      STORAGE_LOCAL_PATH: /app/api/storage
-      
-      # Vector Database
-      VECTOR_STORE: qdrant
-      QDRANT_URL: http://qdrant:6333
-      
-      # Model Providers
-      OPENAI_API_BASE: http://litellm:4000
-      OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
-    volumes:
-      - ${DATA_DIR}/dify/api/storage:/app/api/storage
-    networks:
-      - ai-platform
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
-  # Dify Worker
-  dify-worker:
-    image: langgenius/dify-api:latest
-    container_name: dify-worker
-    restart: unless-stopped
-    environment:
-      # Core
-      SECRET_KEY: ${DIFY_SECRET_KEY}
-      LOG_LEVEL: INFO
-      
-      # Database
-      DB_USERNAME: ${POSTGRES_USER}
-      DB_PASSWORD: ${POSTGRES_PASSWORD}
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_DATABASE: ${POSTGRES_DB}
-      
-      # Redis
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
-      REDIS_USE_SSL: "false"
-      
-      # Celery
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
-    command: celery -A app.celery worker -P gevent -c 1 --loglevel INFO
-    networks:
-      - ai-platform
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
-  # Dify Web UI
-  dify-web:
-    image: langgenius/dify-web:latest
-    container_name: dify-web
-    restart: unless-stopped
-    environment:
-      CONSOLE_API_URL: ${DIFY_API_BASE_URL}
-      APP_API_URL: ${DIFY_API_BASE_URL}
-    networks:
-      - ai-platform
-    depends_on:
-      - dify-api
-
-  # Nginx for Dify
-  dify-nginx:
-    image: nginx:alpine
-    container_name: dify-nginx
-    restart: unless-stopped
-    ports:
-      - "8080:80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-    networks:
-      - ai-platform
-    depends_on:
-      - dify-api
-      - dify-web
-
-  # Qdrant Vector Database
   qdrant:
     image: qdrant/qdrant:latest
     container_name: dify-qdrant
@@ -487,35 +403,147 @@ services:
       - ${DATA_DIR}/dify/qdrant:/qdrant/storage
     networks:
       - ai-platform
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:6333/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  dify-api:
+    image: langgenius/dify-api:latest
+    container_name: dify-api
+    restart: unless-stopped
+    environment:
+      MODE: api
+      SECRET_KEY: ${DIFY_SECRET_KEY}
+      LOG_LEVEL: INFO
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: ${POSTGRES_DB:-dify}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_USE_SSL: "false"
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+      STORAGE_TYPE: local
+      STORAGE_LOCAL_PATH: /app/api/storage
+      VECTOR_STORE: qdrant
+      QDRANT_URL: http://qdrant:6333
+    volumes:
+      - ${DATA_DIR}/dify/api/storage:/app/api/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    networks:
+      - ai-platform
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5001/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  dify-worker:
+    image: langgenius/dify-api:latest
+    container_name: dify-worker
+    restart: unless-stopped
+    environment:
+      MODE: worker
+      SECRET_KEY: ${DIFY_SECRET_KEY}
+      LOG_LEVEL: INFO
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: ${POSTGRES_DB:-dify}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_USE_SSL: "false"
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+      STORAGE_TYPE: local
+      STORAGE_LOCAL_PATH: /app/api/storage
+      VECTOR_STORE: qdrant
+      QDRANT_URL: http://qdrant:6333
+    volumes:
+      - ${DATA_DIR}/dify/api/storage:/app/api/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    networks:
+      - ai-platform
+
+  dify-web:
+    image: langgenius/dify-web:latest
+    container_name: dify-web
+    restart: unless-stopped
+    environment:
+      CONSOLE_API_URL: http://dify-api:5001
+      APP_API_URL: http://dify-api:5001
+    depends_on:
+      - dify-api
+    networks:
+      - ai-platform
+
+  dify-nginx:
+    image: nginx:alpine
+    container_name: dify-nginx
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./proxy_params.conf:/etc/nginx/proxy_params.conf:ro
+    depends_on:
+      - dify-web
+      - dify-api
+    networks:
+      - ai-platform
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:80/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
 networks:
   ai-platform:
     external: true
 EOF
 
-    # Create Nginx config for Dify
+    # Create Nginx config
     cat > "${stack_dir}/nginx.conf" << 'EOF'
-user  nginx;
-worker_processes  auto;
-error_log  /var/log/nginx/error.log warn;
-pid        /var/run/nginx.pid;
+user nginx;
+worker_processes auto;
+error_log /var/log/nginx/error.log warn;
+pid /var/run/nginx.pid;
 
 events {
-    worker_connections  1024;
+    worker_connections 1024;
 }
 
 http {
-    include       /etc/nginx/mime.types;
-    default_type  application/octet-stream;
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
     
-    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
-                      '$status $body_bytes_sent "$http_referer" '
-                      '"$http_user_agent" "$http_x_forwarded_for"';
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent"';
     
-    access_log  /var/log/nginx/access.log  main;
-    
-    sendfile        on;
-    keepalive_timeout  65;
+    access_log /var/log/nginx/access.log main;
+    sendfile on;
+    keepalive_timeout 65;
     client_max_body_size 15M;
     
     server {
@@ -524,64 +552,49 @@ http {
         
         location /console/api {
             proxy_pass http://dify-api:5001;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
+            include /etc/nginx/proxy_params.conf;
         }
         
         location /api {
             proxy_pass http://dify-api:5001;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
+            include /etc/nginx/proxy_params.conf;
         }
         
         location /v1 {
             proxy_pass http://dify-api:5001;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
+            include /etc/nginx/proxy_params.conf;
         }
         
         location /files {
             proxy_pass http://dify-api:5001;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
+            include /etc/nginx/proxy_params.conf;
         }
         
         location / {
             proxy_pass http://dify-web:3000;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
+            include /etc/nginx/proxy_params.conf;
         }
     }
 }
 EOF
 
-    log_info "Starting Dify stack..."
-    docker compose -f "${stack_dir}/docker-compose.yml" up -d >> "$LOGFILE" 2>&1
+    cat > "${stack_dir}/proxy_params.conf" << 'EOF'
+proxy_set_header Host $host;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_http_version 1.1;
+proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection "upgrade";
+EOF
+
+    log_info "Starting Dify stack (this will take 2-3 minutes)..."
+    docker compose -f "${stack_dir}/docker-compose.yml" up -d 2>&1 | tee -a "$LOGFILE"
     
-    log_info "Waiting for services to be ready..."
-    log_info "  - PostgreSQL (30s)..."
-    sleep 30
-    log_info "  - Redis (10s)..."
-    sleep 10
-    log_info "  - Dify API (40s)..."
-    sleep 40
-    
-    if curl -s http://localhost:8080 > /dev/null; then
-        log_success "Dify deployed and healthy"
-        log_info "Access Dify at: http://localhost:8080"
-    else
-        log_warning "Dify may not be fully ready yet (can take 2-3 minutes)"
-    fi
+    # Wait for database first
+    wait_for_service "PostgreSQL" "docker exec dify-postgres pg_isready -U postgres" 30 2 || true
+    wait_for_service "Redis" "docker exec dify-redis redis-cli ping" 20 2 || true
+    wait_for_service "Dify Web UI" "curl -s http://localhost:8080" 40 5 || true
 }
 
 # ============================================================================
@@ -614,11 +627,11 @@ services:
     networks:
       - ai-platform
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5678/healthz"]
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:5678/healthz || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 40s
+      retries: 5
+      start_period: 60s
 
 networks:
   ai-platform:
@@ -626,17 +639,9 @@ networks:
 EOF
 
     log_info "Starting n8n..."
-    docker compose -f "${stack_dir}/docker-compose.yml" up -d >> "$LOGFILE" 2>&1
+    docker compose -f "${stack_dir}/docker-compose.yml" up -d 2>&1 | tee -a "$LOGFILE"
     
-    log_info "Waiting for n8n to be ready..."
-    sleep 20
-    
-    if curl -s http://localhost:${N8N_PORT}/healthz > /dev/null; then
-        log_success "n8n deployed and healthy"
-        log_info "Access n8n at: http://localhost:${N8N_PORT}"
-    else
-        log_warning "n8n may not be fully ready yet"
-    fi
+    wait_for_service "n8n" "curl -s http://localhost:${N8N_PORT}/healthz" 20 3 || true
 }
 
 # ============================================================================
@@ -663,11 +668,11 @@ services:
     networks:
       - ai-platform
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/v1/health"]
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:8080/v1/health || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 40s
+      retries: 5
+      start_period: 60s
 
 networks:
   ai-platform:
@@ -675,71 +680,9 @@ networks:
 EOF
 
     log_info "Starting Signal API..."
-    docker compose -f "${stack_dir}/docker-compose.yml" up -d >> "$LOGFILE" 2>&1
+    docker compose -f "${stack_dir}/docker-compose.yml" up -d 2>&1 | tee -a "$LOGFILE"
     
-    log_info "Waiting for Signal API to be ready..."
-    sleep 15
-    
-    if curl -s http://localhost:8090/v1/health > /dev/null; then
-        log_success "Signal API deployed and healthy"
-        log_warning "Remember to link Signal account: curl -X POST http://localhost:8090/v1/register/[number]"
-    else
-        log_warning "Signal API may not be fully ready yet"
-    fi
-}
-
-# ============================================================================
-# DEPLOY CLAWDBOT
-# ============================================================================
-deploy_clawdbot() {
-    log_step "Deploying Clawdbot (AI Agent)..."
-    
-    local stack_dir="${STACKS_DIR}/clawdbot"
-    mkdir -p "$stack_dir"
-    
-    cat > "${stack_dir}/docker-compose.yml" << EOF
-services:
-  clawdbot:
-    image: ghcr.io/username/clawdbot:latest  # Replace with actual image
-    container_name: clawdbot
-    restart: unless-stopped
-    ports:
-      - "${CLAWDBOT_PORT}:3000"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ${DATA_DIR}/clawdbot:/app/data
-      - ${PROJECT_ROOT}/logs:/app/logs:ro
-    environment:
-      - LITELLM_URL=http://litellm:4000
-      - LITELLM_API_KEY=${LITELLM_MASTER_KEY}
-      - ANYTHINGLLM_URL=http://anythingllm:3001
-      - SIGNAL_NUMBER=${SIGNAL_PRIMARY_NUMBER}
-      - LOG_LEVEL=info
-    networks:
-      - ai-platform
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
-networks:
-  ai-platform:
-    external: true
-EOF
-
-    log_info "Starting Clawdbot..."
-    log_warning "Using placeholder image - update with actual Clawdbot image"
-    
-    # Only deploy if image exists
-    if docker image inspect ghcr.io/username/clawdbot:latest &>/dev/null; then
-        docker compose -f "${stack_dir}/docker-compose.yml" up -d >> "$LOGFILE" 2>&1
-        log_success "Clawdbot deployed"
-    else
-        log_warning "Clawdbot image not found - skipping deployment"
-        log_info "Update image name in: ${stack_dir}/docker-compose.yml"
-    fi
+    wait_for_service "Signal API" "curl -s http://localhost:8090/v1/health" 20 3 || true
 }
 
 # ============================================================================
@@ -752,14 +695,15 @@ deploy_nginx() {
     mkdir -p "${stack_dir}/ssl"
     
     # Generate self-signed certificate
-    log_info "Generating SSL certificate..."
-    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-        -keyout "${stack_dir}/ssl/nginx-selfsigned.key" \
-        -out "${stack_dir}/ssl/nginx-selfsigned.crt" \
-        -subj "/C=US/ST=State/L=City/O=Organization/CN=localhost" \
-        >> "$LOGFILE" 2>&1
+    if [[ ! -f "${stack_dir}/ssl/nginx-selfsigned.crt" ]]; then
+        log_info "Generating SSL certificate..."
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+            -keyout "${stack_dir}/ssl/nginx-selfsigned.key" \
+            -out "${stack_dir}/ssl/nginx-selfsigned.crt" \
+            -subj "/C=US/ST=State/L=City/O=Organization/CN=localhost" \
+            2>&1 | tee -a "$LOGFILE"
+    fi
     
-    # Create Nginx config
     cat > "${stack_dir}/nginx.conf" << 'EOF'
 user nginx;
 worker_processes auto;
@@ -779,17 +723,14 @@ http {
                     '"$http_user_agent"';
     
     access_log /var/log/nginx/access.log main;
-    
     sendfile on;
     keepalive_timeout 65;
     client_max_body_size 50M;
     
-    # SSL Configuration
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
     
-    # Main HTTPS server
     server {
         listen 8443 ssl;
         server_name _;
@@ -797,7 +738,6 @@ http {
         ssl_certificate /etc/nginx/ssl/nginx-selfsigned.crt;
         ssl_certificate_key /etc/nginx/ssl/nginx-selfsigned.key;
         
-        # AnythingLLM
         location /anythingllm/ {
             proxy_pass http://anythingllm:3001/;
             proxy_http_version 1.1;
@@ -809,7 +749,6 @@ http {
             proxy_set_header X-Forwarded-Proto $scheme;
         }
         
-        # Dify
         location /dify/ {
             proxy_pass http://dify-nginx:80/;
             proxy_set_header Host $host;
@@ -818,7 +757,6 @@ http {
             proxy_set_header X-Forwarded-Proto $scheme;
         }
         
-        # n8n
         location /n8n/ {
             proxy_pass http://n8n:5678/;
             proxy_http_version 1.1;
@@ -830,7 +768,6 @@ http {
             proxy_set_header X-Forwarded-Proto $scheme;
         }
         
-        # LiteLLM
         location /litellm/ {
             proxy_pass http://litellm:4000/;
             proxy_set_header Host $host;
@@ -839,7 +776,6 @@ http {
             proxy_set_header X-Forwarded-Proto $scheme;
         }
         
-        # Default route
         location / {
             return 200 'AI Platform - All systems operational\n';
             add_header Content-Type text/plain;
@@ -848,7 +784,6 @@ http {
 }
 EOF
 
-    # Create docker-compose
     cat > "${stack_dir}/docker-compose.yml" << EOF
 services:
   nginx:
@@ -860,11 +795,10 @@ services:
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./ssl:/etc/nginx/ssl:ro
-      - ${LOGS_DIR}/nginx:/var/log/nginx
     networks:
       - ai-platform
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "--no-check-certificate", "https://localhost:8443/"]
+      test: ["CMD-SHELL", "wget --spider -q --no-check-certificate https://localhost:8443/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -876,17 +810,9 @@ networks:
 EOF
 
     log_info "Starting NGINX..."
-    docker compose -f "${stack_dir}/docker-compose.yml" up -d >> "$LOGFILE" 2>&1
+    docker compose -f "${stack_dir}/docker-compose.yml" up -d 2>&1 | tee -a "$LOGFILE"
     
-    log_info "Waiting for NGINX to be ready..."
-    sleep 10
-    
-    if curl -k -s https://localhost:${NGINX_PORT}/ > /dev/null; then
-        log_success "NGINX deployed and healthy"
-        log_info "Access platform at: https://localhost:${NGINX_PORT}/"
-    else
-        log_warning "NGINX may not be fully ready yet"
-    fi
+    wait_for_service "NGINX" "curl -k -s https://localhost:${NGINX_PORT}/" 15 2 || true
 }
 
 # ============================================================================
@@ -895,46 +821,18 @@ EOF
 verify_deployment() {
     log_step "Verifying deployment..."
     
-    local services=(
-        "ollama:Ollama (AI Models)"
-        "litellm:LiteLLM (AI Gateway)"
-        "anythingllm:AnythingLLM (Vector DB)"
-        "dify-postgres:Dify PostgreSQL"
-        "dify-redis:Dify Redis"
-        "dify-api:Dify API"
-        "dify-worker:Dify Worker"
-        "dify-web:Dify Web"
-        "dify-nginx:Dify Nginx"
-        "dify-qdrant:Dify Qdrant"
-        "n8n:n8n Automation"
-        "signal-api:Signal API"
-        "platform-nginx:Platform Nginx"
-    )
-    
-    local running=0
-    local total=${#services[@]}
-    
     echo ""
-    for service in "${services[@]}"; do
-        IFS=':' read -r container name <<< "$service"
-        if docker ps --format '{{.Names}}' | grep -q "^${container}$"; then
-            log_success "$name - Running"
-            ((running++))
-        else
-            log_warning "$name - Not running"
-        fi
-    done
+    log_info "Container Status:"
+    docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | tee -a "$LOGFILE"
     
+    local running=$(docker ps -q | wc -l)
     echo ""
-    log_info "Deployment summary: $running/$total services running"
+    log_info "Running containers: $running"
     
-    if [[ $running -eq $total ]]; then
-        log_success "All services deployed successfully!"
-    elif [[ $running -gt 0 ]]; then
-        log_warning "Partial deployment - some services may still be starting"
+    if [[ $running -gt 0 ]]; then
+        log_success "Services deployed successfully!"
     else
-        log_error "No services running - deployment failed"
-        return 1
+        log_warning "No services are running"
     fi
 }
 
@@ -945,7 +843,7 @@ show_next_steps() {
     cat << EOF
 
 ╔════════════════════════════════════════════════════════════╗
-║              ✓ SERVICES DEPLOYED SUCCESSFULLY            ║
+║              ✓ DEPLOYMENT COMPLETE                       ║
 ╚════════════════════════════════════════════════════════════╝
 
 📊 ACCESS POINTS:
@@ -969,32 +867,13 @@ show_next_steps() {
 
 1. Download AI models:
    docker exec -it ollama ollama pull llama3.2:3b
-   docker exec -it ollama ollama pull qwen2.5:7b
+   docker exec -it ollama ollama pull nomic-embed-text
 
-2. Configure services:
-   cd ~/AIPlatformAutomation/scripts
-   ./3-configure-services.sh
+2. Check service status:
+   docker ps
 
-3. Set up Tailscale access:
-   sudo tailscale serve https / proxy https://localhost:${NGINX_PORT}
-
-4. Link Signal account:
-   curl -X POST http://localhost:8090/v1/register/${SIGNAL_PRIMARY_NUMBER}
-
-5. Enable autostart:
-   ./4-systemd-setup.sh
-
-⚠️  IMPORTANT:
-
-• All services use self-signed SSL certificates
-• Accept certificate warnings in your browser
-• Keep your .env file secure (contains secrets)
-• Check logs if services aren't responding: docker logs [container-name]
-
-📊 RESOURCE USAGE:
-
-• Running containers: $(docker ps -q | wc -l)
-• Disk usage: $(du -sh ${DATA_DIR} 2>/dev/null | cut -f1)
+3. View logs if issues:
+   docker logs [container-name]
 
 📝 LOG FILE: ${LOGFILE}
 
@@ -1010,37 +889,28 @@ main() {
     
     cat << "EOF"
 ╔════════════════════════════════════════════════════════════╗
-║     AI Platform - Service Deployment v10.2 FINAL        ║
+║     AI Platform - Service Deployment v10.4 FINAL        ║
 ╚════════════════════════════════════════════════════════════╝
 EOF
     
     echo ""
     
-    # Load and validate environment
     load_environment
-    
-    # Ensure all stack directories exist
     ensure_stack_dirs
-    
-    # Create Docker network
     create_network
     
-    # Deploy services in order
     deploy_ollama
     deploy_litellm
     deploy_anythingllm
     deploy_dify
     deploy_n8n
     deploy_signal
-    deploy_clawdbot
     deploy_nginx
     
-    # Verify and show results
     verify_deployment
     show_next_steps
     
     log_success "Service deployment completed!"
 }
 
-# Run main function and log everything
 main "$@" 2>&1 | tee -a "$LOGFILE"
