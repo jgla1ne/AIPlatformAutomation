@@ -3,5 +3,5 @@
 /data/
 /stacks/
 /backups/
-*.env
-*.env.*
+.env
+.env.*
