@@ -2,398 +2,351 @@
 set -euo pipefail
 
 # ============================================================================
-# AI Platform - Service Configuration Script
-# Version: 11.0 FINAL - ALL SERVICES
+# AI Platform - Configure Services Script
+# Version: 8.0 - COMPLETE WITH CLAWDBOT ONBOARDING
 # ============================================================================
 
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 LOGS_DIR="${PROJECT_ROOT}/logs"
-mkdir -p "$LOGS_DIR"
 LOGFILE="${LOGS_DIR}/configure-${TIMESTAMP}.log"
 
-# Color codes
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m'
 
 log_info() { echo -e "${BLUE}ℹ${NC} $1" | tee -a "$LOGFILE"; }
 log_success() { echo -e "${GREEN}✓${NC} $1" | tee -a "$LOGFILE"; }
 log_warning() { echo -e "${YELLOW}⚠${NC} $1" | tee -a "$LOGFILE"; }
 log_error() { echo -e "${RED}✗${NC} $1" | tee -a "$LOGFILE"; }
-log_step() { echo -e "\n${BLUE}▶${NC} $1" | tee -a "$LOGFILE"; }
+log_step() { echo -e "\n${CYAN}[$1]${NC} $2" | tee -a "$LOGFILE"; }
 
 error_handler() {
-    log_error "Script failed at line $1"
-    log_error "Command: $BASH_COMMAND"
+    log_error "Configuration failed at line $1"
+    log_error "Check log: $LOGFILE"
     exit 1
 }
 trap 'error_handler $LINENO' ERR
 
 # ============================================================================
-# LOAD ENVIRONMENT
+# CHECK ENVIRONMENT
 # ============================================================================
-load_environment() {
-    log_step "Loading environment configuration..."
+check_environment() {
+    log_step "1/6" "Checking environment..."
     
     if [[ ! -f "${PROJECT_ROOT}/.env" ]]; then
-        log_error ".env file not found!"
+        log_error ".env file not found"
         exit 1
     fi
     
-    set -a
     source "${PROJECT_ROOT}/.env"
-    set +a
     
-    log_success "Environment loaded"
-}
-
-# ============================================================================
-# HELPER FUNCTIONS
-# ============================================================================
-check_container() {
-    local container_name=$1
+    cd "$PROJECT_ROOT"
     
-    if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
-        log_success "${container_name} is running"
-        return 0
-    else
-        log_error "${container_name} is not running"
-        return 1
-    fi
-}
-
-check_service_tcp() {
-    local service_name=$1
-    local port=$2
-    local max_wait=${3:-60}
-    local elapsed=0
+    # Check if services are running
+    local required_services=(
+        "ollama"
+        "litellm"
+        "anythingllm"
+        "dify-api"
+        "n8n"
+        "signal-api"
+        "clawdbot"
+    )
     
-    log_info "Checking ${service_name} on port ${port}..."
-    
-    while [[ $elapsed -lt $max_wait ]]; do
-        if timeout 2 bash -c "echo > /dev/tcp/localhost/${port}" 2>/dev/null; then
-            log_success "${service_name} is responding on port ${port}"
-            return 0
+    for service in "${required_services[@]}"; do
+        if ! docker compose ps "$service" | grep -q "Up"; then
+            log_error "${service} is not running"
+            log_error "Run ./2-deploy-services.sh first"
+            exit 1
         fi
-        
-        if [[ $((elapsed % 10)) -eq 0 ]] && [[ $elapsed -gt 0 ]]; then
-            echo -n "."
-        fi
-        
-        sleep 2
-        ((elapsed+=2))
     done
     
-    echo ""
-    log_warning "${service_name} not responding after ${max_wait}s (may still be starting)"
-    return 0
+    log_success "All required services are running"
 }
 
 # ============================================================================
 # CONFIGURE OLLAMA
 # ============================================================================
 configure_ollama() {
-    log_step "Configuring Ollama..."
+    log_step "2/6" "Configuring Ollama..."
     
-    check_container "ollama"
-    check_service_tcp "Ollama" "$OLLAMA_PORT" 30
+    echo ""
+    log_info "Available Ollama models to download:"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  1. llama3.2:latest      (Recommended - 4.7GB)"
+    echo "  2. mistral:latest       (7.2GB)"
+    echo "  3. codellama:latest     (3.8GB)"
+    echo "  4. phi3:latest          (2.2GB)"
+    echo "  5. qwen2.5:latest       (4.7GB)"
+    echo "  6. Custom model"
+    echo "  7. Skip model download"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
     
-    log_info "Verifying Ollama models..."
-    if docker exec ollama ollama list | grep -q "llama3.2:3b"; then
-        log_success "llama3.2:3b model available"
+    read -p "Select model to download (1-7): " model_choice
+    
+    case $model_choice in
+        1) MODEL_NAME="llama3.2:latest" ;;
+        2) MODEL_NAME="mistral:latest" ;;
+        3) MODEL_NAME="codellama:latest" ;;
+        4) MODEL_NAME="phi3:latest" ;;
+        5) MODEL_NAME="qwen2.5:latest" ;;
+        6) 
+            read -p "Enter custom model name (e.g., llama3.2:3b): " MODEL_NAME
+            ;;
+        7)
+            log_warning "Skipping model download"
+            return 0
+            ;;
+        *)
+            log_error "Invalid choice"
+            return 1
+            ;;
+    esac
+    
+    log_info "Downloading ${MODEL_NAME}... (this may take several minutes)"
+    echo ""
+    
+    if docker exec ollama ollama pull "$MODEL_NAME" 2>&1 | tee -a "$LOGFILE"; then
+        log_success "Model ${MODEL_NAME} downloaded successfully"
+        
+        # Test the model
+        log_info "Testing model..."
+        if docker exec ollama ollama run "$MODEL_NAME" "Hello" --verbose=false 2>&1 | tee -a "$LOGFILE"; then
+            log_success "Model test successful"
+        else
+            log_warning "Model test failed, but model is downloaded"
+        fi
     else
-        log_warning "llama3.2:3b model not found, may need to pull"
+        log_error "Failed to download model"
+        return 1
     fi
     
-    if docker exec ollama ollama list | grep -q "nomic-embed-text"; then
-        log_success "nomic-embed-text model available"
-    else
-        log_warning "nomic-embed-text model not found, may need to pull"
-    fi
-    
     echo ""
-    log_info "📋 Ollama is ready at:"
-    log_info "  • API: http://${TAILSCALE_IP}:${OLLAMA_PORT}"
-    log_info ""
-    log_info "Test with:"
-    log_info "  curl http://localhost:${OLLAMA_PORT}/api/generate -d '{\"model\":\"llama3.2:3b\",\"prompt\":\"Hello!\"}'"
-    echo ""
-}
-
-# ============================================================================
-# CONFIGURE LITELLM
-# ============================================================================
-configure_litellm() {
-    log_step "Configuring LiteLLM..."
-    
-    check_container "litellm"
-    check_service_tcp "LiteLLM" "$LITELLM_PORT" 45
-    
-    log_info "LiteLLM Master Key: ${LITELLM_MASTER_KEY}"
-    
-    echo ""
-    log_info "📋 LiteLLM is ready at:"
-    log_info "  • API: http://${TAILSCALE_IP}:${LITELLM_PORT}"
-    log_info "  • Proxy: https://${TAILSCALE_IP}:${NGINX_PORT}/litellm/"
-    log_info ""
-    log_info "Test with:"
-    log_info "  curl http://localhost:${LITELLM_PORT}/health"
-    echo ""
-}
-
-# ============================================================================
-# CONFIGURE ANYTHINGLLM
-# ============================================================================
-configure_anythingllm() {
-    log_step "Configuring AnythingLLM..."
-    
-    check_container "anythingllm"
-    check_service_tcp "AnythingLLM" "$ANYTHINGLLM_PORT" 60
-    
-    echo ""
-    log_info "📋 AnythingLLM Setup:"
-    log_info "1. Open: https://${TAILSCALE_IP}:${NGINX_PORT}/anythingllm/"
-    log_info "2. Create admin account on first access"
-    log_info "3. Configure LLM provider:"
-    log_info "   - Provider: Ollama"
-    log_info "   - Base URL: http://ollama:11434"
-    log_info "   - Model: llama3.2:3b"
-    log_info "4. Configure embeddings:"
-    log_info "   - Provider: Ollama"
-    log_info "   - Model: nomic-embed-text"
-    log_info "5. Configure vector database:"
-    log_info "   - Type: LanceDB (default)"
-    log_info ""
-    log_info "Direct access: http://${TAILSCALE_IP}:${ANYTHINGLLM_PORT}"
-    echo ""
-}
-
-# ============================================================================
-# CONFIGURE DIFY
-# ============================================================================
-configure_dify() {
-    log_step "Configuring Dify..."
-    
-    check_container "dify-web"
-    check_container "dify-api"
-    check_container "dify-db"
-    check_container "dify-redis"
-    
-    check_service_tcp "Dify Web" "$DIFY_WEB_PORT" 60
-    
-    echo ""
-    log_info "📋 Dify Setup:"
-    log_info "1. Open: https://${TAILSCALE_IP}:${NGINX_PORT}/dify/"
-    log_info "2. Create admin account"
-    log_info "3. Configure model provider:"
-    log_info "   - Add OpenAI-compatible provider"
-    log_info "   - API Base: http://litellm:4000/v1"
-    log_info "   - API Key: ${LITELLM_MASTER_KEY}"
-    log_info "   - Model: llama3.2"
-    log_info "4. Start building applications!"
-    log_info ""
-    log_info "Direct access: http://${TAILSCALE_IP}:${DIFY_WEB_PORT}"
-    echo ""
-}
-
-# ============================================================================
-# CONFIGURE N8N
-# ============================================================================
-configure_n8n() {
-    log_step "Configuring n8n..."
-    
-    check_container "n8n"
-    check_service_tcp "n8n" "$N8N_PORT" 45
-    
-    echo ""
-    log_info "📋 n8n Setup:"
-    log_info "1. Open: https://${TAILSCALE_IP}:${NGINX_PORT}/n8n/"
-    log_info "2. Create owner account"
-    log_info "3. Install community nodes (optional):"
-    log_info "   - Settings > Community Nodes"
-    log_info "   - Install: n8n-nodes-langchain"
-    log_info "4. Configure credentials:"
-    log_info "   - OpenAI API: Use LiteLLM endpoint"
-    log_info "   - URL: http://litellm:4000/v1"
-    log_info "   - API Key: ${LITELLM_MASTER_KEY}"
-    log_info ""
-    log_info "Webhook URL: ${WEBHOOK_URL}"
-    log_info "Direct access: http://${TAILSCALE_IP}:${N8N_PORT}"
-    echo ""
+    log_info "To list all models: docker exec ollama ollama list"
+    log_info "To download more models: docker exec ollama ollama pull <model-name>"
 }
 
 # ============================================================================
 # CONFIGURE SIGNAL API
 # ============================================================================
 configure_signal() {
-    log_step "Configuring Signal API..."
-    
-    check_container "signal-api"
-    check_service_tcp "Signal API" "$SIGNAL_PORT" 30
+    log_step "3/6" "Configuring Signal API..."
     
     echo ""
-    log_info "📋 Signal API Setup:"
-    log_info ""
-    log_info "METHOD 1 - QR Code Linking (Recommended):"
-    log_info "1. Open in browser:"
-    log_info "   https://${TAILSCALE_IP}:${NGINX_PORT}/signal/v1/qrcodelink?device_name=ai-platform"
-    log_info "2. Scan QR code with Signal app:"
-    log_info "   - Open Signal on your phone"
-    log_info "   - Settings > Linked Devices > Link New Device"
-    log_info "   - Scan the QR code displayed"
-    log_info "3. Your phone number will be automatically registered"
-    log_info ""
-    log_info "METHOD 2 - Phone Number Registration:"
-    log_info "1. Register phone number:"
-    log_info "   curl -X POST http://${TAILSCALE_IP}:${SIGNAL_PORT}/v1/register/+YOUR_PHONE"
-    log_info "2. Verify with SMS code:"
-    log_info "   curl -X POST http://${TAILSCALE_IP}:${SIGNAL_PORT}/v1/register/+YOUR_PHONE/verify/CODE"
-    log_info ""
-    log_info "Access points:"
-    log_info "  • Proxied: https://${TAILSCALE_IP}:${NGINX_PORT}/signal/"
-    log_info "  • Direct:  http://${TAILSCALE_IP}:${SIGNAL_PORT}"
-    log_info "  • Health:  http://${TAILSCALE_IP}:${SIGNAL_PORT}/v1/health"
-    echo ""
+    log_info "Signal API requires phone number registration"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    read -p "Do you want to register Signal now? (y/n): " register_signal
+    
+    if [[ "$register_signal" =~ ^[Yy]$ ]]; then
+        echo ""
+        read -p "Enter phone number (with country code, e.g., +1234567890): " phone_number
+        
+        log_info "Registering ${phone_number}..."
+        
+        # Register with Signal
+        local response=$(curl -s -X POST "http://localhost:8080/v1/register/${phone_number}" \
+            -H "Content-Type: application/json" \
+            -d '{"use_voice": false}')
+        
+        if echo "$response" | grep -q "error"; then
+            log_error "Registration failed: $response"
+            return 1
+        fi
+        
+        log_success "Verification code sent to ${phone_number}"
+        echo ""
+        
+        read -p "Enter verification code: " verification_code
+        
+        # Verify the code
+        local verify_response=$(curl -s -X POST "http://localhost:8080/v1/register/${phone_number}/verify/${verification_code}")
+        
+        if echo "$verify_response" | grep -q "error"; then
+            log_error "Verification failed: $verify_response"
+            return 1
+        fi
+        
+        log_success "Signal registration successful!"
+        
+        # Save phone number to .env
+        echo "" >> "${PROJECT_ROOT}/.env"
+        echo "SIGNAL_PHONE=${phone_number}" >> "${PROJECT_ROOT}/.env"
+        
+        log_info "Phone number saved to .env"
+        
+    else
+        log_warning "Skipping Signal registration"
+        log_info "You can register later with:"
+        log_info "  curl -X POST http://localhost:8080/v1/register/+1234567890"
+    fi
 }
 
 # ============================================================================
-# CONFIGURE CLAWDBOT
+# CONFIGURE CLAWDBOT (MOLTBOT)
 # ============================================================================
 configure_clawdbot() {
-    log_step "Configuring ClawdBot..."
+    log_step "4/6" "Configuring ClawdBot (Moltbot)..."
     
-    check_container "clawdbot"
-    check_service_tcp "ClawdBot" "$CLAWDBOT_PORT" 30
+    source "${PROJECT_ROOT}/.env"
     
     echo ""
-    log_info "📋 ClawdBot Setup:"
-    log_info "1. Ensure Signal is configured first (see above)"
-    log_info "2. Register webhook with Signal:"
-    log_info "   curl -X POST http://${TAILSCALE_IP}:${SIGNAL_PORT}/v1/configuration \\"
-    log_info "     -H 'Content-Type: application/json' \\"
-    log_info "     -d '{\"webhook_url\":\"http://clawdbot:8000/webhook/signal\"}'"
-    log_info ""
-    log_info "3. Test ClawdBot:"
-    log_info "   - Send a message to your Signal number"
-    log_info "   - ClawdBot should respond with AI-generated reply"
-    log_info ""
-    log_info "Admin panel: https://${TAILSCALE_IP}:${NGINX_PORT}/clawdbot/"
-    log_info "Admin password: ${CLAWDBOT_ADMIN_PASSWORD}"
-    log_info "Direct API: http://${TAILSCALE_IP}:${CLAWDBOT_PORT}"
+    log_info "Starting ClawdBot onboarding process..."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
-}
-
-# ============================================================================
-# CONFIGURE GOOGLE DRIVE SYNC
-# ============================================================================
-configure_gdrive() {
-    log_step "Configuring Google Drive Sync..."
     
-    if check_container "gdrive-sync"; then
+    log_info "Gateway Token: ${CLAWDBOT_GATEWAY_TOKEN}"
+    echo ""
+    
+    # Check if ClawdBot is responsive
+    log_info "Checking ClawdBot service..."
+    if docker exec clawdbot wget --quiet --tries=1 --spider http://localhost:18789/health 2>/dev/null; then
+        log_success "ClawdBot is running"
+    else
+        log_error "ClawdBot is not responding"
+        log_error "Check logs: docker compose logs clawdbot"
+        return 1
+    fi
+    
+    echo ""
+    log_info "Running ClawdBot onboarding..."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    
+    # Run onboarding command
+    if docker exec -it clawdbot node /app/dist/index.js onboard; then
+        log_success "ClawdBot onboarding completed!"
+        
         echo ""
-        log_info "📋 Google Drive Setup:"
-        log_info "1. Configure rclone:"
-        log_info "   docker exec -it gdrive-sync rclone config"
-        log_info ""
-        log_info "2. Follow prompts to add Google Drive:"
-        log_info "   - Choose: n) New remote"
-        log_info "   - Name: gdrive"
-        log_info "   - Type: drive"
-        log_info "   - Complete OAuth flow"
-        log_info ""
-        log_info "3. Test connection:"
-        log_info "   docker exec gdrive-sync rclone lsd gdrive:"
-        log_info ""
-        log_info "4. Set up sync cron job:"
-        log_info "   docker exec gdrive-sync rclone sync /data gdrive:AIPlatform --progress"
-        log_info ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        log_info "ClawdBot Access Information:"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "  Gateway URL:    http://${TAILSCALE_IP}:18789"
+        echo "  Control Port:   http://${TAILSCALE_IP}:18790"
+        echo "  Gateway Token:  ${CLAWDBOT_GATEWAY_TOKEN}"
+        echo ""
+        echo "  📝 Configuration saved in container at:"
+        echo "     /home/node/.clawdbot/"
+        echo ""
+        echo "  📁 Workspace directory:"
+        echo "     /home/node/clawd/"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
     else
-        log_warning "gdrive-sync container not running"
+        log_error "ClawdBot onboarding failed"
+        log_info "You can run it manually with:"
+        log_info "  docker exec -it clawdbot node /app/dist/index.js onboard"
+        return 1
+    fi
+    
+    echo ""
+    log_info "Testing ClawdBot CLI..."
+    if docker exec clawdbot node /app/dist/index.js --version 2>&1 | tee -a "$LOGFILE"; then
+        log_success "ClawdBot CLI is working"
+    else
+        log_warning "ClawdBot CLI test failed"
     fi
 }
 
 # ============================================================================
-# VERIFY NETWORK
+# VERIFY LITELLM
 # ============================================================================
-verify_network() {
-    log_step "Verifying network connectivity..."
+verify_litellm() {
+    log_step "5/6" "Verifying LiteLLM configuration..."
     
-    log_info "Testing inter-service communication..."
+    source "${PROJECT_ROOT}/.env"
     
-    # Test Ollama from LiteLLM
-    if docker exec litellm curl -s http://ollama:11434/api/tags >/dev/null 2>&1; then
-        log_success "LiteLLM can reach Ollama"
+    echo ""
+    log_info "Testing LiteLLM connection to Ollama..."
+    
+    # Test LiteLLM health
+    local health_response=$(curl -s http://localhost:4000/health)
+    
+    if echo "$health_response" | grep -q "healthy"; then
+        log_success "LiteLLM is healthy"
     else
-        log_warning "LiteLLM cannot reach Ollama"
+        log_warning "LiteLLM health check returned: $health_response"
     fi
     
-    # Test LiteLLM from n8n
-    if docker exec n8n wget -q -O- http://litellm:4000/health >/dev/null 2>&1; then
-        log_success "n8n can reach LiteLLM"
-    else
-        log_warning "n8n cannot reach LiteLLM"
-    fi
-    
-    # Test Signal from ClawdBot
-    if docker exec clawdbot curl -s http://signal-api:8080/v1/health >/dev/null 2>&1; then
-        log_success "ClawdBot can reach Signal API"
-    else
-        log_warning "ClawdBot cannot reach Signal API"
-    fi
-    
-    log_success "Network verification complete"
+    echo ""
+    log_info "LiteLLM Configuration:"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  API Endpoint:  http://localhost:4000"
+    echo "  Master Key:    ${LITELLM_MASTER_KEY}"
+    echo "  Ollama Proxy:  http://ollama:11434"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
 # ============================================================================
-# SHOW SUMMARY
+# SHOW CONFIGURATION SUMMARY
 # ============================================================================
 show_summary() {
+    log_step "6/6" "Configuration complete!"
+    
+    source "${PROJECT_ROOT}/.env"
+    
     echo ""
-    echo "╔════════════════════════════════════════════════════════════╗"
-    echo "║            CONFIGURATION COMPLETE                       ║"
-    echo "╚════════════════════════════════════════════════════════════╝"
-    echo ""
-    echo "🌐 PRIMARY ACCESS (HTTPS - Recommended):"
-    echo "   https://${TAILSCALE_IP}:${NGINX_PORT}/"
-    echo ""
-    echo "📱 WEB INTERFACES:"
-    echo "   • Dashboard:    https://${TAILSCALE_IP}:${NGINX_PORT}/"
-    echo "   • AnythingLLM:  https://${TAILSCALE_IP}:${NGINX_PORT}/anythingllm/"
-    echo "   • Dify:         https://${TAILSCALE_IP}:${NGINX_PORT}/dify/"
-    echo "   • n8n:          https://${TAILSCALE_IP}:${NGINX_PORT}/n8n/"
-    echo "   • ClawdBot:     https://${TAILSCALE_IP}:${NGINX_PORT}/clawdbot/"
-    echo ""
-    echo "🔌 API ENDPOINTS (HTTP):"
-    echo "   • Ollama:       http://${TAILSCALE_IP}:${OLLAMA_PORT}"
-    echo "   • LiteLLM:      http://${TAILSCALE_IP}:${LITELLM_PORT}"
-    echo "   • Signal:       http://${TAILSCALE_IP}:${SIGNAL_PORT}"
-    echo ""
-    echo "📱 SIGNAL QR CODE LINKING:"
-    echo "   https://${TAILSCALE_IP}:${NGINX_PORT}/signal/v1/qrcodelink?device_name=ai-platform"
-    echo ""
-    echo "🔑 CREDENTIALS:"
-    echo "   • LiteLLM API Key:      ${LITELLM_MASTER_KEY}"
-    echo "   • ClawdBot Admin PWD:   ${CLAWDBOT_ADMIN_PASSWORD}"
-    echo ""
-    echo "📝 LOG FILE: ${LOGFILE}"
-    echo ""
-    echo "🎯 NEXT STEPS:"
-    echo "1. Open the dashboard in your browser"
-    echo "2. Complete setup for each service (create accounts)"
-    echo "3. Link Signal device using QR code"
-    echo "4. Configure ClawdBot webhook"
-    echo "5. Set up Google Drive sync (optional)"
-    echo ""
-    echo "🔧 USEFUL COMMANDS:"
-    echo "   • View logs:     docker compose logs -f [service]"
-    echo "   • Restart:       docker compose restart [service]"
-    echo "   • Stop all:      docker compose down"
-    echo "   • Status:        docker compose ps"
-    echo ""
+    echo "╔════════════════════════════════════════════════════════════╗" | tee -a "$LOGFILE"
+    echo "║            CONFIGURATION SUMMARY                       ║" | tee -a "$LOGFILE"
+    echo "╚════════════════════════════════════════════════════════════╝" | tee -a "$LOGFILE"
+    echo "" | tee -a "$LOGFILE"
+    
+    echo "🌐 SERVICE ACCESS:" | tee -a "$LOGFILE"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$LOGFILE"
+    echo "  Main Dashboard:  https://${TAILSCALE_IP}:${NGINX_PORT}/" | tee -a "$LOGFILE"
+    echo "  AnythingLLM:     https://${TAILSCALE_IP}:${NGINX_PORT}/anythingllm/" | tee -a "$LOGFILE"
+    echo "  Dify:            https://${TAILSCALE_IP}:${NGINX_PORT}/dify/" | tee -a "$LOGFILE"
+    echo "  n8n:             https://${TAILSCALE_IP}:${NGINX_PORT}/n8n/" | tee -a "$LOGFILE"
+    echo "  Signal API:      https://${TAILSCALE_IP}:${NGINX_PORT}/signal/" | tee -a "$LOGFILE"
+    echo "  ClawdBot:        http://${TAILSCALE_IP}:18789/" | tee -a "$LOGFILE"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$LOGFILE"
+    echo "" | tee -a "$LOGFILE"
+    
+    echo "🔑 API KEYS:" | tee -a "$LOGFILE"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$LOGFILE"
+    echo "  LiteLLM Master:    ${LITELLM_MASTER_KEY}" | tee -a "$LOGFILE"
+    echo "  ClawdBot Gateway:  ${CLAWDBOT_GATEWAY_TOKEN}" | tee -a "$LOGFILE"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$LOGFILE"
+    echo "" | tee -a "$LOGFILE"
+    
+    echo "🤖 CLAWDBOT COMMANDS:" | tee -a "$LOGFILE"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$LOGFILE"
+    echo "  Run onboarding:   docker exec -it clawdbot node /app/dist/index.js onboard" | tee -a "$LOGFILE"
+    echo "  Start session:    docker exec -it clawdbot node /app/dist/index.js" | tee -a "$LOGFILE"
+    echo "  Check version:    docker exec clawdbot node /app/dist/index.js --version" | tee -a "$LOGFILE"
+    echo "  View config:      docker exec clawdbot cat /home/node/.clawdbot/config.json" | tee -a "$LOGFILE"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$LOGFILE"
+    echo "" | tee -a "$LOGFILE"
+    
+    echo "📊 USEFUL COMMANDS:" | tee -a "$LOGFILE"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$LOGFILE"
+    echo "  View all logs:         docker compose logs -f" | tee -a "$LOGFILE"
+    echo "  View service logs:     docker compose logs -f [service]" | tee -a "$LOGFILE"
+    echo "  Check status:          docker compose ps" | tee -a "$LOGFILE"
+    echo "  Restart service:       docker compose restart [service]" | tee -a "$LOGFILE"
+    echo "  Stop all:              docker compose down" | tee -a "$LOGFILE"
+    echo "  List Ollama models:    docker exec ollama ollama list" | tee -a "$LOGFILE"
+    echo "  Pull Ollama model:     docker exec ollama ollama pull <model>" | tee -a "$LOGFILE"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$LOGFILE"
+    echo "" | tee -a "$LOGFILE"
+    
+    echo "📁 IMPORTANT PATHS:" | tee -a "$LOGFILE"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$LOGFILE"
+    echo "  Project Root:       ${PROJECT_ROOT}" | tee -a "$LOGFILE"
+    echo "  Environment File:   ${PROJECT_ROOT}/.env" | tee -a "$LOGFILE"
+    echo "  Docker Compose:     ${PROJECT_ROOT}/docker-compose.yml" | tee -a "$LOGFILE"
+    echo "  Configuration Log:  ${LOGFILE}" | tee -a "$LOGFILE"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$LOGFILE"
+    echo "" | tee -a "$LOGFILE"
+    
+    log_success "✅ All services configured and ready to use!" | tee -a "$LOGFILE"
+    echo "" | tee -a "$LOGFILE"
 }
 
 # ============================================================================
@@ -402,26 +355,23 @@ show_summary() {
 main() {
     cat << "EOF"
 ╔════════════════════════════════════════════════════════════╗
-║    AI Platform - Service Configuration v11 FINAL       ║
-║              Complete Setup Guide                      ║
+║       AI Platform - Configure Services v8              ║
+║         WITH CLAWDBOT ONBOARDING                       ║
 ╚════════════════════════════════════════════════════════════╝
 EOF
     
-    load_environment
+    echo ""
+    echo "Started: $(date)" | tee -a "$LOGFILE"
+    echo ""
     
+    check_environment
     configure_ollama
-    configure_litellm
-    configure_anythingllm
-    configure_dify
-    configure_n8n
     configure_signal
     configure_clawdbot
-    configure_gdrive
-    
-    verify_network
+    verify_litellm
     show_summary
     
-    log_success "Configuration completed successfully!"
+    log_success "Configuration completed at: $(date)" | tee -a "$LOGFILE"
 }
 
-main "$@" 2>&1 | tee -a "$LOGFILE"
+main "$@"

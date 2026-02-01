@@ -1,8 +1,0 @@
-{
-  "bot_name": "ClawdBot",
-  "version": "1.0.0",
-  "signal_webhook_enabled": true,
-  "ai_model": "llama3.2",
-  "max_response_tokens": 500,
-  "system_prompt": "You are ClawdBot, a helpful AI assistant accessible via Signal messaging."
-}
