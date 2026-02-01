@@ -1,11 +1,16 @@
 #!/bin/bash
 
+set -euo pipefail
+
 # ============================================================================
-# AI Platform - Complete Cleanup Script v3.2
-# Removes all containers, networks, volumes, and data
+# AI Platform - Complete Cleanup Script v9.0
+# Nuclear option: removes everything and returns to fresh state
 # ============================================================================
 
-readonly SCRIPT_VERSION="3.2"
+readonly SCRIPT_VERSION="9.0"
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+readonly LOG_FILE="${PROJECT_ROOT}/logs/cleanup-$(date +%Y%m%d-%H%M%S).log"
 
 # Color codes
 RED='\033[0;31m'
@@ -14,229 +19,289 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# Icons
-CHECK_MARK="✓"
-CROSS_MARK="✗"
-WARN_MARK="⚠"
-INFO_MARK="ℹ"
+success() { echo -e "${GREEN}✓ $*${NC}" | tee -a "$LOG_FILE"; }
+error() { echo -e "${RED}✗ $*${NC}" | tee -a "$LOG_FILE"; }
+warn() { echo -e "${YELLOW}⚠ $*${NC}" | tee -a "$LOG_FILE"; }
+info() { echo -e "${BLUE}ℹ $*${NC}" | tee -a "$LOG_FILE"; }
 
-log() {
-    echo "[$(date +'%Y-%m-%d %H:%:%S')] $*"
-}
+# ============================================================================
+# Setup logging
+# ============================================================================
 
-success() {
-    echo -e "${GREEN}${CHECK_MARK} $*${NC}"
-}
-
-error() {
-    echo -e "${RED}${CROSS_MARK} $*${NC}"
-}
-
-warn() {
-    echo -e "${YELLOW}${WARN_MARK} $*${NC}"
-}
-
-info() {
-    echo -e "${BLUE}${INFO_MARK} $*${NC}"
+setup_logging() {
+    mkdir -p "${PROJECT_ROOT}/logs"
+    echo "Cleanup started at $(date)" > "$LOG_FILE"
 }
 
 # ============================================================================
-# Cleanup Functions
+# Display Warning Banner
 # ============================================================================
 
-confirm_cleanup() {
+display_warning() {
     echo ""
-    echo "========================================"
-    echo "AI Platform - Complete Cleanup v${SCRIPT_VERSION}"
-    echo "========================================"
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║                    ⚠  WARNING  ⚠                           ║"
+    echo "║          COMPLETE PLATFORM CLEANUP v${SCRIPT_VERSION}                  ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
     echo ""
-    warn "This will remove:"
-    echo "  • All AI Platform Docker containers"
-    echo "  • All AI Platform Docker networks"
-    echo "  • All AI Platform Docker volumes"
-    echo "  • All data in ~/AIPlatformAutomation/data/"
+    warn "This will PERMANENTLY DELETE:"
+    echo "  • All Docker containers and images"
+    echo "  • All data volumes and databases"
+    echo "  • All configuration files"
+    echo "  • All logs"
+    echo "  • Docker networks"
     echo ""
+    warn "This action CANNOT be undone!"
+    echo ""
+    read -p "Type 'YES' to confirm complete cleanup: " -r
     
-    read -p "Are you sure? (yes/no): " -r
-    echo
-    
-    if [[ ! $REPLY =~ ^[Yy][Ee][Ss]$ ]]; then
+    if [[ $REPLY != "YES" ]]; then
         info "Cleanup cancelled"
         exit 0
     fi
-}
-
-stop_containers() {
-    info "[1/6] Stopping all AI Platform containers..."
     
-    # Get list of all containers (running or stopped) matching our patterns
-    local containers
-    containers=$(docker ps -aq --filter "name=caddy" \
-                            --filter "name=litellm" \
-                            --filter "name=ollama" \
-                            --filter "name=dify" \
-                            --filter "name=n8n" \
-                            --filter "name=signal" 2>/dev/null || echo "")
-    
-    if [[ -z "$containers" ]]; then
-        success "No containers to stop"
-        return 0
-    fi
-    
-    # Stop and remove all at once
-    echo "$containers" | xargs -r docker stop 2>/dev/null || true
-    echo "$containers" | xargs -r docker rm 2>/dev/null || true
-    
-    local count
-    count=$(echo "$containers" | wc -w)
-    success "Stopped and removed $count containers"
-}
-
-remove_networks() {
-    info "[2/6] Removing Docker networks..."
-    
-    local networks
-    networks=$(docker network ls --format '{{.Name}}' 2>/dev/null | grep -E '(ai-platform|dify)' || echo "")
-    
-    if [[ -z "$networks" ]]; then
-        success "No networks to remove"
-        return 0
-    fi
-    
-    local removed=0
-    for network in $networks; do
-        docker network rm "$network" 2>/dev/null && ((removed++)) || true
-    done
-    
-    success "Removed $removed networks"
-}
-
-remove_volumes() {
-    info "[3/6] Removing Docker volumes..."
-    
-    # Get volumes with our prefixes
-    local volumes
-    volumes=$(docker volume ls --format '{{.Name}}' 2>/dev/null | \
-              grep -E '(ai-platform|dify|litellm|ollama|n8n|signal|caddy)' || echo "")
-    
-    if [[ -z "$volumes" ]]; then
-        success "No volumes to remove"
-        return 0
-    fi
-    
-    local removed=0
-    for volume in $volumes; do
-        docker volume rm "$volume" 2>/dev/null && ((removed++)) || true
-    done
-    
-    success "Removed $removed volumes"
-}
-
-remove_data_directory() {
-    info "[4/6] Removing data directory..."
-    
-    local data_dir="${HOME}/AIPlatformAutomation/data"
-    
-    if [[ ! -d "$data_dir" ]]; then
-        success "Data directory does not exist"
-        return 0
-    fi
-    
-    # Check if anything is mounted from data directory
-    if mount | grep -q "$data_dir"; then
-        warn "Found mounted filesystems, unmounting..."
-        mount | grep "$data_dir" | awk '{print $3}' | xargs -r sudo umount -f 2>/dev/null || true
-    fi
-    
-    # Remove directory
-    rm -rf "$data_dir" 2>/dev/null || sudo rm -rf "$data_dir"
-    success "Data directory removed"
-}
-
-remove_compose_files() {
-    info "[5/6] Removing compose files..."
-    
-    local stacks_dir="${HOME}/AIPlatformAutomation/stacks"
-    
-    if [[ ! -d "$stacks_dir" ]]; then
-        success "Stacks directory does not exist"
-        return 0
-    fi
-    
-    rm -rf "$stacks_dir"
-    success "Compose files removed"
-}
-
-prune_docker() {
-    info "[6/6] Pruning Docker system..."
-    
-    # Prune unused images
-    docker image prune -af 2>/dev/null || true
-    
-    # Prune orphaned volumes
-    docker volume prune -f 2>/dev/null || true
-    
-    # Prune unused networks
-    docker network prune -f 2>/dev/null || true
-    
-    success "Docker system pruned"
-}
-
-verify_cleanup() {
     echo ""
-    info "Verifying cleanup..."
+    info "Starting cleanup in 5 seconds... (Ctrl+C to abort)"
+    sleep 5
+}
+
+# ============================================================================
+# Stop and Remove All Containers
+# ============================================================================
+
+cleanup_containers() {
+    info "[1/8] Stopping and removing all containers..."
     
-    # Check for remaining containers
-    local remaining_containers
-    remaining_containers=$(docker ps -a --format '{{.Names}}' 2>/dev/null | \
-                          grep -E '(caddy|litellm|ollama|dify|n8n|signal)' || echo "")
+    local containers=(
+        "nginx"
+        "gdrive-sync"
+        "signal-api"
+        "n8n"
+        "dify-web"
+        "dify-worker"
+        "dify-api"
+        "dify-weaviate"
+        "dify-redis"
+        "dify-db"
+        "clawdbot"
+        "anythingllm"
+        "litellm"
+        "ollama"
+    )
     
-    if [[ -n "$remaining_containers" ]]; then
-        warn "Some containers still exist:"
-        echo "$remaining_containers"
-    else
-        success "All containers removed"
+    for container in "${containers[@]}"; do
+        if docker ps -a --format '{{.Names}}' | grep -q "^${container}$"; then
+            info "Stopping and removing: $container"
+            docker stop "$container" 2>/dev/null || true
+            docker rm -f "$container" 2>/dev/null || true
+        fi
+    done
+    
+    # Remove any remaining containers on ai-platform network
+    if docker network inspect ai-platform &>/dev/null; then
+        local network_containers
+        network_containers=$(docker network inspect ai-platform -f '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null || echo "")
+        
+        if [[ -n "$network_containers" ]]; then
+            info "Removing remaining containers on ai-platform network..."
+            for container in $network_containers; do
+                docker stop "$container" 2>/dev/null || true
+                docker rm -f "$container" 2>/dev/null || true
+            done
+        fi
     fi
     
-    # Check for remaining networks
-    local remaining_networks
-    remaining_networks=$(docker network ls --format '{{.Name}}' 2>/dev/null | \
-                        grep -E '(ai-platform|dify)' || echo "")
+    success "All containers removed"
+}
+
+# ============================================================================
+# Remove Docker Compose Stacks
+# ============================================================================
+
+cleanup_stacks() {
+    info "[2/8] Removing Docker Compose stacks..."
     
-    if [[ -n "$remaining_networks" ]]; then
-        warn "Some networks still exist:"
-        echo "$remaining_networks"
-    else
-        success "All networks removed"
-    fi
+    local stacks=(
+        "${PROJECT_ROOT}/stacks/nginx"
+        "${PROJECT_ROOT}/stacks/gdrive"
+        "${PROJECT_ROOT}/stacks/signal"
+        "${PROJECT_ROOT}/stacks/n8n"
+        "${PROJECT_ROOT}/stacks/dify"
+        "${PROJECT_ROOT}/stacks/clawdbot"
+        "${PROJECT_ROOT}/stacks/anythingllm"
+        "${PROJECT_ROOT}/stacks/litellm"
+        "${PROJECT_ROOT}/stacks/ollama"
+    )
     
-    # Check data directory
-    if [[ -d "${HOME}/AIPlatformAutomation/data" ]]; then
-        warn "Data directory still exists"
-    else
-        success "Data directory removed"
-    fi
+    for stack in "${stacks[@]}"; do
+        if [[ -f "${stack}/docker-compose.yml" ]]; then
+            info "Removing stack: $(basename "$stack")"
+            cd "$stack" && docker compose down -v 2>/dev/null || true
+        fi
+    done
     
-    # Check stacks directory
-    if [[ -d "${HOME}/AIPlatformAutomation/stacks" ]]; then
-        warn "Stacks directory still exists"
+    success "Docker Compose stacks removed"
+}
+
+# ============================================================================
+# Remove Docker Networks
+# ============================================================================
+
+cleanup_networks() {
+    info "[3/8] Removing Docker networks..."
+    
+    if docker network ls --format '{{.Name}}' | grep -q "^ai-platform$"; then
+        docker network rm ai-platform 2>/dev/null || true
+        success "Docker network removed"
     else
-        success "Stacks directory removed"
+        info "No Docker networks to remove"
     fi
 }
+
+# ============================================================================
+# Remove Docker Images
+# ============================================================================
+
+cleanup_images() {
+    info "[4/8] Removing Docker images..."
+    
+    local images=(
+        "nginx:alpine"
+        "controlol/gdrive-rclone-docker:latest"
+        "bbernhard/signal-cli-rest-api:latest"
+        "n8nio/n8n:latest"
+        "langgenius/dify-web:latest"
+        "langgenius/dify-api:latest"
+        "semitechnologies/weaviate:latest"
+        "redis:7-alpine"
+        "postgres:15-alpine"
+        "mintplexlabs/anythingllm:latest"
+        "ghcr.io/berriai/litellm:main-latest"
+        "ollama/ollama:latest"
+    )
+    
+    for image in "${images[@]}"; do
+        if docker images --format '{{.Repository}}:{{.Tag}}' | grep -q "^${image}$"; then
+            info "Removing image: $image"
+            docker rmi -f "$image" 2>/dev/null || true
+        fi
+    done
+    
+    # Remove dangling images
+    info "Removing dangling images..."
+    docker image prune -f &>/dev/null || true
+    
+    success "Docker images removed"
+}
+
+# ============================================================================
+# Remove Data Volumes
+# ============================================================================
+
+cleanup_data() {
+    info "[5/8] Removing data volumes..."
+    
+    if [[ -d "${PROJECT_ROOT}/data" ]]; then
+        warn "Removing all data in ${PROJECT_ROOT}/data"
+        
+        # Stop any processes that might be using the files
+        sudo fuser -k "${PROJECT_ROOT}/data" 2>/dev/null || true
+        
+        # Remove data directory
+        sudo rm -rf "${PROJECT_ROOT}/data"
+        success "Data volumes removed"
+    else
+        info "No data volumes to remove"
+    fi
+}
+
+# ============================================================================
+# Remove Stack Configurations
+# ============================================================================
+
+cleanup_configs() {
+    info "[6/8] Removing stack configurations..."
+    
+    if [[ -d "${PROJECT_ROOT}/stacks" ]]; then
+        rm -rf "${PROJECT_ROOT}/stacks"
+        success "Stack configurations removed"
+    else
+        info "No stack configurations to remove"
+    fi
+}
+
+# ============================================================================
+# Remove Environment File
+# ============================================================================
+
+cleanup_env() {
+    info "[7/8] Removing environment configuration..."
+    
+    if [[ -f "${PROJECT_ROOT}/.env" ]]; then
+        # Backup before removing
+        cp "${PROJECT_ROOT}/.env" "${PROJECT_ROOT}/.env.backup.$(date +%s)" 2>/dev/null || true
+        rm -f "${PROJECT_ROOT}/.env"
+        success "Environment file removed (backup created)"
+    else
+        info "No environment file to remove"
+    fi
+}
+
+# ============================================================================
+# Clean Docker System
+# ============================================================================
+
+cleanup_docker_system() {
+    info "[8/8] Cleaning Docker system..."
+    
+    # Remove unused volumes
+    docker volume prune -f &>/dev/null || true
+    
+    # Remove unused networks
+    docker network prune -f &>/dev/null || true
+    
+    # Remove build cache
+    docker builder prune -f &>/dev/null || true
+    
+    success "Docker system cleaned"
+}
+
+# ============================================================================
+# Display Summary
+# ============================================================================
 
 display_summary() {
     echo ""
-    echo "========================================"
-    echo "Cleanup Complete"
-    echo "========================================"
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║            CLEANUP COMPLETED SUCCESSFULLY!                 ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
     echo ""
-    success "All AI Platform components removed"
+    
+    success "System returned to fresh state"
     echo ""
-    info "To redeploy, run:"
-    echo "  cd ~/AIPlatformAutomation/scripts"
-    echo "  ./1-setup-system.sh"
-    echo "  ./2-deploy-services.sh"
+    
+    info "Cleanup log saved to: $LOG_FILE"
+    echo ""
+    
+    info "What was removed:"
+    echo "  ✓ All Docker containers"
+    echo "  ✓ All Docker images"
+    echo "  ✓ All Docker networks"
+    echo "  ✓ All data volumes"
+    echo "  ✓ All stack configurations"
+    echo "  ✓ Environment configuration"
+    echo ""
+    
+    info "What was preserved:"
+    echo "  • Scripts directory"
+    echo "  • Log files"
+    echo "  • Environment backup (.env.backup.*)"
+    echo ""
+    
+    info "Next steps:"
+    echo "  1. Run: ./1-system-setup.sh"
+    echo "  2. Run: ./2-deploy-services.sh"
+    echo "  3. Run: ./3-configure-services.sh"
     echo ""
 }
 
@@ -245,17 +310,20 @@ display_summary() {
 # ============================================================================
 
 main() {
-    confirm_cleanup
+    setup_logging
+    display_warning
     
-    stop_containers
-    remove_networks
-    remove_volumes
-    remove_data_directory
-    remove_compose_files
-    prune_docker
+    cleanup_containers
+    cleanup_stacks
+    cleanup_networks
+    cleanup_images
+    cleanup_data
+    cleanup_configs
+    cleanup_env
+    cleanup_docker_system
     
-    verify_cleanup
     display_summary
 }
 
 main "$@"
+

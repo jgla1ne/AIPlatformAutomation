@@ -1,15 +1,19 @@
 #!/bin/bash
-
 set -euo pipefail
 
 # ============================================================================
-# AI Platform - System Setup Script v8.2
-# Fully automated setup including Google Drive sync
+# AI Platform - System Setup Script
+# Version: 10.2 FINAL
+# Description: Installs all system dependencies and prepares environment
 # ============================================================================
 
-readonly SCRIPT_VERSION="8.2"
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+# Logging setup
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+LOGS_DIR="${PROJECT_ROOT}/logs"
+mkdir -p "$LOGS_DIR"
+LOGFILE="${LOGS_DIR}/setup-${TIMESTAMP}.log"
 
 # Color codes
 RED='\033[0;31m'
@@ -18,456 +22,476 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# Icons
-CHECK_MARK="✓"
-CROSS_MARK="✗"
-WARN_MARK="⚠"
-INFO_MARK="ℹ"
-
-success() { echo -e "${GREEN}${CHECK_MARK} $*${NC}"; }
-error() { echo -e "${RED}${CROSS_MARK} $*${NC}"; }
-warn() { echo -e "${YELLOW}${WARN_MARK} $*${NC}"; }
-info() { echo -e "${BLUE}${INFO_MARK} $*${NC}"; }
-
-# ============================================================================
-# Display Banner
-# ============================================================================
-
-display_banner() {
-    echo ""
-    echo "========================================"
-    echo "AI Platform - System Setup v${SCRIPT_VERSION}"
-    echo "========================================"
-    echo ""
+# Logging functions
+log_info() {
+    echo -e "${BLUE}ℹ${NC} $1" | tee -a "$LOGFILE"
 }
 
-# ============================================================================
-# Directory Creation
-# ============================================================================
-
-create_directories() {
-    info "[1/7] Creating directory structure..."
-    
-    local dirs=(
-        "${PROJECT_ROOT}/data/ollama"
-        "${PROJECT_ROOT}/data/litellm"
-        "${PROJECT_ROOT}/data/anythingllm"
-        "${PROJECT_ROOT}/data/anythingllm/storage"
-        "${PROJECT_ROOT}/data/anythingllm/vector-cache"
-        "${PROJECT_ROOT}/data/clawdbot"
-        "${PROJECT_ROOT}/data/dify/postgres"
-        "${PROJECT_ROOT}/data/dify/redis"
-        "${PROJECT_ROOT}/data/dify/api"
-        "${PROJECT_ROOT}/data/n8n"
-        "${PROJECT_ROOT}/data/signal"
-        "${PROJECT_ROOT}/data/gdrive/config"
-        "${PROJECT_ROOT}/data/gdrive/sync"
-        "${PROJECT_ROOT}/data/gdrive/logs"
-        "${PROJECT_ROOT}/data/nginx/ssl"
-        "${PROJECT_ROOT}/data/nginx/conf.d"
-        "${PROJECT_ROOT}/stacks/ollama"
-        "${PROJECT_ROOT}/stacks/litellm"
-        "${PROJECT_ROOT}/stacks/anythingllm"
-        "${PROJECT_ROOT}/stacks/clawdbot"
-        "${PROJECT_ROOT}/stacks/dify"
-        "${PROJECT_ROOT}/stacks/n8n"
-        "${PROJECT_ROOT}/stacks/signal"
-        "${PROJECT_ROOT}/stacks/gdrive"
-        "${PROJECT_ROOT}/stacks/nginx"
-        "${PROJECT_ROOT}/scripts"
-        "${PROJECT_ROOT}/logs"
-    )
-    
-    for dir in "${dirs[@]}"; do
-        mkdir -p "$dir"
-    done
-    
-    success "Directory structure created"
+log_success() {
+    echo -e "${GREEN}✓${NC} $1" | tee -a "$LOGFILE"
 }
 
-# ============================================================================
-# System Dependencies
-# ============================================================================
-
-install_system_dependencies() {
-    info "[2/7] Installing system dependencies..."
-    
-    sudo apt-get update
-    sudo apt-get install -y \
-        curl \
-        wget \
-        git \
-        jq \
-        ca-certificates \
-        gnupg \
-        lsb-release \
-        apt-transport-https \
-        software-properties-common \
-        openssl \
-        fuse3 \
-        libfuse3-dev
-    
-    success "System dependencies installed"
+log_warning() {
+    echo -e "${YELLOW}⚠${NC} $1" | tee -a "$LOGFILE"
 }
 
-# ============================================================================
-# Docker Installation
-# ============================================================================
-
-install_docker() {
-    info "[3/7] Installing Docker..."
-    
-    if command -v docker &>/dev/null; then
-        success "Docker already installed"
-        docker --version
-        return 0
-    fi
-    
-    # Add Docker's official GPG key
-    sudo install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-    sudo chmod a+r /etc/apt/keyrings/docker.gpg
-    
-    # Add Docker repository
-    echo \
-      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-      $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-    
-    # Install Docker
-    sudo apt-get update
-    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-    
-    # Add user to docker group
-    sudo usermod -aG docker "${USER}"
-    
-    # Enable and start Docker
-    sudo systemctl enable docker
-    sudo systemctl start docker
-    
-    success "Docker installed"
-    docker --version
+log_error() {
+    echo -e "${RED}✗${NC} $1" | tee -a "$LOGFILE"
 }
 
-# ============================================================================
-# Tailscale Installation & Configuration
-# ============================================================================
+log_step() {
+    echo -e "\n${BLUE}▶${NC} $1" | tee -a "$LOGFILE"
+}
 
-install_and_configure_tailscale() {
-    info "[4/7] Installing and configuring Tailscale..."
-    
-    # Install Tailscale if not present
-    if ! command -v tailscale &>/dev/null; then
-        info "Installing Tailscale..."
-        curl -fsSL https://tailscale.com/install.sh | sh
-        success "Tailscale installed"
-    else
-        success "Tailscale already installed"
-    fi
-    
-    # Check if already authenticated
-    if sudo tailscale status &>/dev/null; then
-        local tailscale_ip
-        tailscale_ip=$(tailscale ip -4 2>/dev/null || echo "")
-        
-        if [[ -n "$tailscale_ip" ]]; then
-            success "Tailscale already authenticated"
-            info "Tailscale IP: $tailscale_ip"
-            return 0
-        fi
-    fi
-    
-    # Need to authenticate
-    echo ""
-    warn "═══════════════════════════════════════════════════════════"
-    warn "  TAILSCALE AUTHENTICATION REQUIRED"
-    warn "═══════════════════════════════════════════════════════════"
-    echo ""
-    info "This will open a browser window for authentication."
-    info "Please complete the authentication process."
-    echo ""
-    read -p "Press ENTER to continue..." -r
-    
-    # Start Tailscale and authenticate
-    sudo tailscale up --accept-routes --ssh
-    
-    # Wait for authentication
-    local max_wait=60
-    local count=0
-    
-    info "Waiting for Tailscale authentication..."
-    while [ $count -lt $max_wait ]; do
-        if tailscale status &>/dev/null; then
-            local tailscale_ip
-            tailscale_ip=$(tailscale ip -4 2>/dev/null || echo "")
-            
-            if [[ -n "$tailscale_ip" ]]; then
-                echo ""
-                success "Tailscale authenticated successfully!"
-                success "Tailscale IP: $tailscale_ip"
-                
-                # Configure Tailscale serve for HTTPS on port 8443
-                info "Configuring Tailscale serve..."
-                sudo tailscale serve https:8443 / https://127.0.0.1:443 &>/dev/null || \
-                    warn "Tailscale serve will be configured after deployment"
-                
-                return 0
-            fi
-        fi
-        echo -n "."
-        sleep 2
-        ((count+=2))
-    done
-    
-    echo ""
-    error "Tailscale authentication timed out"
-    error "Please run manually: sudo tailscale up --accept-routes --ssh"
+# Error handler
+error_handler() {
+    log_error "Script failed at line $1"
+    log_error "Check log file: $LOGFILE"
     exit 1
 }
 
-# ============================================================================
-# Generate SSL Certificates
-# ============================================================================
+trap 'error_handler $LINENO' ERR
 
-generate_ssl_certs() {
-    info "[5/7] Generating self-signed SSL certificates..."
+# ============================================================================
+# STEP 1: CREATE DIRECTORY STRUCTURE
+# ============================================================================
+create_directories() {
+    log_step "Creating directory structure..."
     
-    local ssl_dir="${PROJECT_ROOT}/data/nginx/ssl"
-    local cert_file="${ssl_dir}/cert.pem"
-    local key_file="${ssl_dir}/key.pem"
+    local dirs=(
+        "${PROJECT_ROOT}/scripts"
+        "${PROJECT_ROOT}/stacks"
+        "${PROJECT_ROOT}/stacks/ollama"
+        "${PROJECT_ROOT}/stacks/litellm"
+        "${PROJECT_ROOT}/stacks/anythingllm"
+        "${PROJECT_ROOT}/stacks/dify"
+        "${PROJECT_ROOT}/stacks/n8n"
+        "${PROJECT_ROOT}/stacks/signal"
+        "${PROJECT_ROOT}/stacks/clawdbot"
+        "${PROJECT_ROOT}/stacks/nginx"
+        "${PROJECT_ROOT}/data"
+        "${PROJECT_ROOT}/logs"
+        "/mnt/data/ollama"
+        "/mnt/data/anythingllm"
+        "/mnt/data/gdrive"
+        "/mnt/data/postgres"
+        "/mnt/data/redis"
+        "/mnt/data/dify"
+        "/mnt/data/dify/api/storage"
+        "/mnt/data/dify/qdrant"
+        "/mnt/data/n8n"
+        "/mnt/data/signal"
+        "/mnt/data/clawdbot"
+        "/mnt/data/backups"
+    )
     
-    if [[ -f "$cert_file" ]] && [[ -f "$key_file" ]]; then
-        success "SSL certificates already exist"
-        return 0
-    fi
+    for dir in "${dirs[@]}"; do
+        if [[ ! -d "$dir" ]]; then
+            sudo mkdir -p "$dir"
+            sudo chown -R $(whoami):$(whoami) "$dir"
+            log_success "Created: $dir"
+        else
+            log_info "Already exists: $dir"
+        fi
+    done
     
-    # Generate self-signed certificate valid for 1 year
-    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-        -keyout "$key_file" \
-        -out "$cert_file" \
-        -subj "/C=US/ST=State/L=City/O=AI Platform/CN=ai-platform.local"
-    
-    chmod 600 "$key_file"
-    chmod 644 "$cert_file"
-    
-    success "SSL certificates generated"
+    log_success "All directories created"
 }
 
 # ============================================================================
-# Environment File Generation
+# STEP 2: SYSTEM UPDATES
 # ============================================================================
+update_system() {
+    log_step "Updating system packages..."
+    
+    sudo apt-get update >> "$LOGFILE" 2>&1
+    log_success "Package lists updated"
+    
+    sudo apt-get upgrade -y >> "$LOGFILE" 2>&1
+    log_success "System packages upgraded"
+}
 
-generate_env_file() {
-    info "[6/7] Generating environment configuration..."
+# ============================================================================
+# STEP 3: INSTALL DOCKER
+# ============================================================================
+install_docker() {
+    log_step "Installing Docker..."
+    
+    if command -v docker &> /dev/null; then
+        local version=$(docker --version | cut -d' ' -f3 | tr -d ',')
+        log_info "Docker already installed (version: $version)"
+        return 0
+    fi
+    
+    # Install prerequisites
+    log_info "Installing prerequisites..."
+    sudo apt-get install -y \
+        ca-certificates \
+        curl \
+        gnupg \
+        lsb-release >> "$LOGFILE" 2>&1
+    
+    # Add Docker's official GPG key
+    log_info "Adding Docker GPG key..."
+    sudo install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
+        sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    sudo chmod a+r /etc/apt/keyrings/docker.gpg
+    
+    # Set up repository
+    log_info "Setting up Docker repository..."
+    echo \
+        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+        $(lsb_release -cs) stable" | \
+        sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+    
+    # Install Docker Engine
+    log_info "Installing Docker Engine..."
+    sudo apt-get update >> "$LOGFILE" 2>&1
+    sudo apt-get install -y \
+        docker-ce \
+        docker-ce-cli \
+        containerd.io \
+        docker-buildx-plugin \
+        docker-compose-plugin >> "$LOGFILE" 2>&1
+    
+    # Add user to docker group
+    sudo usermod -aG docker $(whoami)
+    
+    log_success "Docker installed successfully"
+    log_warning "You may need to log out and back in for docker group to take effect"
+}
+
+# ============================================================================
+# STEP 4: INSTALL TAILSCALE
+# ============================================================================
+install_tailscale() {
+    log_step "Installing Tailscale..."
+    
+    if command -v tailscale &> /dev/null; then
+        local version=$(tailscale version | head -n1)
+        log_info "Tailscale already installed ($version)"
+        return 0
+    fi
+    
+    log_info "Adding Tailscale repository..."
+    curl -fsSL https://tailscale.com/install.sh | sh >> "$LOGFILE" 2>&1
+    
+    log_success "Tailscale installed successfully"
+    log_warning "Run 'sudo tailscale up' to connect to your network"
+}
+
+# ============================================================================
+# STEP 5: INSTALL RCLONE
+# ============================================================================
+install_rclone() {
+    log_step "Installing rclone..."
+    
+    if command -v rclone &> /dev/null; then
+        local version=$(rclone version | head -n1 | cut -d' ' -f2)
+        log_info "rclone already installed (version: $version)"
+        return 0
+    fi
+    
+    log_info "Downloading and installing rclone..."
+    curl https://rclone.org/install.sh | sudo bash >> "$LOGFILE" 2>&1
+    
+    log_success "rclone installed successfully"
+    log_warning "Run 'rclone config' to set up Google Drive sync"
+}
+
+# ============================================================================
+# STEP 6: INSTALL ADDITIONAL TOOLS
+# ============================================================================
+install_tools() {
+    log_step "Installing additional tools..."
+    
+    local tools=(
+        "jq"
+        "htop"
+        "ncdu"
+        "net-tools"
+        "git"
+        "vim"
+        "curl"
+        "wget"
+        "unzip"
+        "tree"
+    )
+    
+    log_info "Installing: ${tools[*]}"
+    sudo apt-get install -y "${tools[@]}" >> "$LOGFILE" 2>&1
+    
+    log_success "Additional tools installed"
+}
+
+# ============================================================================
+# STEP 7: CREATE ENVIRONMENT FILE
+# ============================================================================
+create_env_file() {
+    log_step "Creating environment configuration..."
     
     local env_file="${PROJECT_ROOT}/.env"
     
     if [[ -f "$env_file" ]]; then
-        warn "Environment file already exists, backing up..."
-        mv "$env_file" "${env_file}.backup.$(date +%s)"
+        log_warning ".env file already exists"
+        read -p "Overwrite? (y/N): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            log_info "Keeping existing .env file"
+            return 0
+        fi
+        mv "$env_file" "${env_file}.backup.${TIMESTAMP}"
+        log_info "Backed up existing .env to .env.backup.${TIMESTAMP}"
     fi
     
-    # Generate secure random keys
-    local litellm_master_key=$(openssl rand -hex 32)
-    local litellm_salt_key=$(openssl rand -hex 16)
-    local dify_secret_key=$(openssl rand -hex 32)
-    local dify_encrypt_key=$(openssl rand -base64 32)
-    local dify_db_password=$(openssl rand -hex 16)
-    local dify_redis_password=$(openssl rand -hex 16)
-    local n8n_encryption_key=$(openssl rand -hex 32)
-    local anythingllm_jwt_secret=$(openssl rand -hex 32)
-    local anythingllm_storage_key=$(openssl rand -hex 32)
-    local clawdbot_secret=$(openssl rand -hex 32)
-    local gdrive_encryption_password=$(openssl rand -hex 32)
+    log_info "Generating secure secrets..."
     
-    # Get Tailscale IP
-    local tailscale_ip
-    tailscale_ip=$(tailscale ip -4 2>/dev/null || echo "100.64.0.1")
+    # Generate strong random passwords
+    local litellm_key="sk-lit-$(openssl rand -hex 16)"
+    local postgres_pass="pg_$(openssl rand -base64 16 | tr -d '/+=' | cut -c1-20)"
+    local redis_pass="redis_$(openssl rand -base64 16 | tr -d '/+=' | cut -c1-20)"
+    local dify_secret="$(openssl rand -hex 32)"
+    local n8n_enc_key="$(openssl rand -hex 32)"
+    local n8n_jwt_secret="$(openssl rand -hex 32)"
     
     cat > "$env_file" << EOF
+#!/bin/bash
 # ============================================================================
-# AI Platform Environment Configuration v8.2
-# Generated: $(date)
+# AI Platform Environment Configuration
+# Generated: $(date +"%Y-%m-%d %H:%M:%S")
+# Version: 10.2 FINAL
 # ============================================================================
 
-# Project Paths
-PROJECT_ROOT=${PROJECT_ROOT}
-DATA_DIR=${PROJECT_ROOT}/data
-STACKS_DIR=${PROJECT_ROOT}/stacks
+# ----------------------------------------------------------------------------
+# CORE PATHS
+# ----------------------------------------------------------------------------
+PROJECT_ROOT="${PROJECT_ROOT}"
+SCRIPTS_DIR="\${PROJECT_ROOT}/scripts"
+STACKS_DIR="\${PROJECT_ROOT}/stacks"
+DATA_DIR="/mnt/data"
+CONFIG_DIR="\${PROJECT_ROOT}/data"
+LOGS_DIR="\${PROJECT_ROOT}/logs"
 
-# Network Configuration
-TAILSCALE_IP=${tailscale_ip}
-NGINX_HTTP_PORT=80
-NGINX_HTTPS_PORT=443
-TAILSCALE_HTTPS_PORT=8443
+# ----------------------------------------------------------------------------
+# DOCKER CONFIGURATION
+# ----------------------------------------------------------------------------
+DOCKER_NETWORK="ai-platform"
+DOCKER_SUBNET="172.20.0.0/16"
 
-# Ollama Configuration
-OLLAMA_PORT=11434
-OLLAMA_HOST=0.0.0.0
+# ----------------------------------------------------------------------------
+# OLLAMA (Local AI Models)
+# ----------------------------------------------------------------------------
+OLLAMA_HOST="0.0.0.0"
+OLLAMA_PORT="11434"
+OLLAMA_MODELS="llama3.2:3b qwen2.5:7b deepseek-r1:7b"
 
-# LiteLLM Configuration
-LITELLM_PORT=4000
-LITELLM_MASTER_KEY=${litellm_master_key}
-LITELLM_SALT_KEY=${litellm_salt_key}
+# ----------------------------------------------------------------------------
+# LITELLM (AI Gateway)
+# ----------------------------------------------------------------------------
+LITELLM_PORT="4000"
+LITELLM_MASTER_KEY="${litellm_key}"
 
-# AnythingLLM Configuration
-ANYTHINGLLM_PORT=3001
-ANYTHINGLLM_JWT_SECRET=${anythingllm_jwt_secret}
-ANYTHINGLLM_STORAGE_KEY=${anythingllm_storage_key}
-ANYTHINGLLM_STORAGE_DIR=${PROJECT_ROOT}/data/anythingllm/storage
-ANYTHINGLLM_VECTOR_DB=lancedb
+# ----------------------------------------------------------------------------
+# ANYTHINGLLM (Vector Database & RAG)
+# ----------------------------------------------------------------------------
+ANYTHINGLLM_PORT="3001"
+ANYTHINGLLM_STORAGE="\${DATA_DIR}/anythingllm"
 
-# Clawdbot Configuration
-CLAWDBOT_PORT=18789
-CLAWDBOT_SECRET=${clawdbot_secret}
-CLAWDBOT_SIGNAL_NUMBER=
-CLAWDBOT_ADMIN_NUMBERS=
+# ----------------------------------------------------------------------------
+# CLAWDBOT (AI Agent)
+# ----------------------------------------------------------------------------
+CLAWDBOT_PORT="3000"
 
-# Dify Configuration
-DIFY_WEB_PORT=3000
-DIFY_API_PORT=5001
-DIFY_DB_USER=dify
-DIFY_DB_PASSWORD=${dify_db_password}
-DIFY_DB_NAME=dify
-DIFY_REDIS_PASSWORD=${dify_redis_password}
-DIFY_SECRET_KEY=${dify_secret_key}
-DIFY_ENCRYPT_KEY=${dify_encrypt_key}
+# ----------------------------------------------------------------------------
+# DIFY (Workflow Automation)
+# ----------------------------------------------------------------------------
+POSTGRES_DB="dify"
+POSTGRES_USER="dify"
+POSTGRES_PASSWORD="${postgres_pass}"
+POSTGRES_PORT="5432"
 
-# n8n Configuration
-N8N_PORT=5678
-N8N_ENCRYPTION_KEY=${n8n_encryption_key}
-N8N_WEBHOOK_URL=https://${tailscale_ip}:8443/n8n/webhook
+REDIS_PASSWORD="${redis_pass}"
+REDIS_PORT="6379"
 
-# Signal API Configuration
-SIGNAL_API_PORT=8080
-SIGNAL_AUTO_RECEIVE=0 */5 * * * *
+DIFY_SECRET_KEY="${dify_secret}"
+DIFY_API_BASE_URL="http://dify-nginx:80/api"
+DIFY_WEB_URL="http://dify-nginx:80"
 
-# Google Drive Sync Configuration
-GDRIVE_SYNC_INTERVAL=3600
-GDRIVE_SYNC_DIR=${PROJECT_ROOT}/data/gdrive/sync
-GDRIVE_CONFIG_DIR=${PROJECT_ROOT}/data/gdrive/config
-GDRIVE_LOG_DIR=${PROJECT_ROOT}/data/gdrive/logs
-GDRIVE_RCLONE_CONFIG_PASS=${gdrive_encryption_password}
-GDRIVE_MOUNT_PATH=/gdrive
-GDRIVE_REMOTE_NAME=gdrive
-GDRIVE_REMOTE_PATH=/AI-Platform-Docs
+# ----------------------------------------------------------------------------
+# N8N (Workflow Automation)
+# ----------------------------------------------------------------------------
+N8N_PORT="5678"
+N8N_ENCRYPTION_KEY="${n8n_enc_key}"
+N8N_USER_MANAGEMENT_JWT_SECRET="${n8n_jwt_secret}"
 
-# User Configuration
-PLATFORM_USER=${USER}
-PLATFORM_UID=$(id -u)
-PLATFORM_GID=$(id -g)
+# ----------------------------------------------------------------------------
+# SIGNAL API (Messaging)
+# ----------------------------------------------------------------------------
+SIGNAL_PRIMARY_NUMBER="+1234567890"
+SIGNAL_SECONDARY_NUMBER="+0987654321"
 
-# Logging
-LOG_LEVEL=INFO
-LOG_DIR=${PROJECT_ROOT}/logs
+# ----------------------------------------------------------------------------
+# GOOGLE DRIVE (Cloud Storage)
+# ----------------------------------------------------------------------------
+GDRIVE_REMOTE="gdrive"
+GDRIVE_SYNC_DIR="\${DATA_DIR}/gdrive"
+
+# ----------------------------------------------------------------------------
+# EXTERNAL AI APIS (Optional - Add your keys)
+# ----------------------------------------------------------------------------
+ANTHROPIC_API_KEY=""
+OPENAI_API_KEY=""
+GROQ_API_KEY=""
+
+# ----------------------------------------------------------------------------
+# NGINX (Reverse Proxy)
+# ----------------------------------------------------------------------------
+NGINX_PORT="8443"
+
+# ----------------------------------------------------------------------------
+# DO NOT EDIT BELOW THIS LINE
+# ----------------------------------------------------------------------------
+EOF
+
+    chmod 600 "$env_file"
+    log_success "Environment file created: $env_file"
+    log_warning "Secrets generated - keep .env file secure!"
+    log_info "File permissions set to 600 (owner read/write only)"
+}
+
+# ============================================================================
+# STEP 8: VERIFY INSTALLATION
+# ============================================================================
+verify_installation() {
+    log_step "Verifying installation..."
+    
+    local checks=(
+        "docker:Docker"
+        "docker:Docker Compose"
+        "tailscale:Tailscale"
+        "rclone:rclone"
+        "jq:jq"
+    )
+    
+    local failed=0
+    
+    for check in "${checks[@]}"; do
+        IFS=':' read -r cmd name <<< "$check"
+        if command -v "$cmd" &> /dev/null; then
+            log_success "$name installed"
+        else
+            log_error "$name NOT installed"
+            ((failed++))
+        fi
+    done
+    
+    # Verify directories
+    log_info "Verifying directories..."
+    if [[ -d "${PROJECT_ROOT}/stacks" ]]; then
+        local stack_count=$(find "${PROJECT_ROOT}/stacks" -mindepth 1 -maxdepth 1 -type d | wc -l)
+        log_success "Stack directories created ($stack_count subdirs)"
+    else
+        log_error "Stack directory not created"
+        ((failed++))
+    fi
+    
+    if [[ -f "${PROJECT_ROOT}/.env" ]]; then
+        log_success "Environment file created"
+    else
+        log_error "Environment file missing"
+        ((failed++))
+    fi
+    
+    if [[ $failed -gt 0 ]]; then
+        log_error "$failed component(s) failed to install"
+        return 1
+    fi
+    
+    log_success "All components verified"
+}
+
+# ============================================================================
+# STEP 9: DISPLAY NEXT STEPS
+# ============================================================================
+show_next_steps() {
+    cat << "EOF"
+
+╔════════════════════════════════════════════════════════════╗
+║                  ✓ SYSTEM SETUP COMPLETE                 ║
+╚════════════════════════════════════════════════════════════╝
+
+📋 NEXT STEPS:
+
+1. Configure Tailscale (if not already done):
+   sudo tailscale up
+
+2. Configure Google Drive (optional):
+   rclone config
+   # Follow prompts to set up 'gdrive' remote
+
+3. Review environment configuration:
+   nano ~/AIPlatformAutomation/.env
+   # Add your API keys for Anthropic, OpenAI, etc.
+
+4. Deploy services:
+   cd ~/AIPlatformAutomation/scripts
+   ./2-deploy-services.sh
+
+5. Configure services:
+   ./3-configure-services.sh
+
+6. Set up systemd (autostart):
+   ./4-systemd-setup.sh
+
+⚠️  IMPORTANT NOTES:
+
+• Docker group membership requires logout/login to take effect
+  If 'docker ps' fails, run: newgrp docker
+
+• Keep your .env file secure (contains secrets)
+  Already set to 600 permissions
+
+• Backup your .env file before making changes:
+  cp .env .env.backup
+
+📊 RESOURCE USAGE:
+• Disk space used: $(du -sh ${PROJECT_ROOT} 2>/dev/null | cut -f1)
+• Data directory: $(du -sh /mnt/data 2>/dev/null | cut -f1)
+
+📝 LOG FILE: ${LOGFILE}
+
+EOF
+}
+
+# ============================================================================
+# MAIN EXECUTION
+# ============================================================================
+main() {
+    echo "ℹ Log file: $LOGFILE"
+    echo ""
+    
+    cat << "EOF"
+╔════════════════════════════════════════════════════════════╗
+║      AI Platform - System Setup v10.2 FINAL             ║
+╚════════════════════════════════════════════════════════════╝
 EOF
     
-    chmod 600 "$env_file"
-    
-    success "Environment file generated: $env_file"
-}
-
-# ============================================================================
-# Permissions Setup
-# ============================================================================
-
-set_permissions() {
-    info "[7/7] Setting file permissions..."
-    
-    # Make all shell scripts executable
-    find "${PROJECT_ROOT}/scripts" -name "*.sh" -type f -exec chmod +x {} \; 2>/dev/null || true
-    
-    # Set ownership for data directories
-    sudo chown -R "${USER}:${USER}" "${PROJECT_ROOT}/data"
-    
-    # Specific permissions for sensitive files
-    chmod 700 "${PROJECT_ROOT}/data/nginx/ssl"
-    chmod 700 "${PROJECT_ROOT}/data/gdrive/config"
-    
-    success "Permissions set"
-}
-
-# ============================================================================
-# Verify Docker Group Membership
-# ============================================================================
-
-verify_docker_group() {
-    info "Verifying Docker group membership..."
-    
-    if groups | grep -q docker; then
-        success "User already in docker group"
-        return 0
-    fi
-    
-    warn "Docker group membership not active yet"
-    warn "You need to log out and back in, OR run: newgrp docker"
-    echo ""
-    read -p "Would you like to activate docker group now? (y/n) " -n 1 -r
     echo ""
     
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        info "Activating docker group..."
-        exec sg docker "$0 --continue"
-    fi
-}
-
-# ============================================================================
-# Post-Installation Instructions
-# ============================================================================
-
-display_post_install() {
-    local tailscale_ip
-    tailscale_ip=$(tailscale ip -4 2>/dev/null || echo "NOT_CONFIGURED")
-    
-    echo ""
-    echo "╔════════════════════════════════════════════════════════════╗"
-    echo "║              SETUP COMPLETED SUCCESSFULLY!                 ║"
-    echo "╚════════════════════════════════════════════════════════════╝"
-    echo ""
-    
-    success "System setup completed successfully"
-    echo ""
-    
-    if [[ "$tailscale_ip" != "NOT_CONFIGURED" ]]; then
-        success "Tailscale IP: $tailscale_ip"
-        echo ""
-        info "Next step:"
-        echo "  cd ${PROJECT_ROOT}/scripts && ./2-deploy-services.sh"
-    else
-        warn "Tailscale not fully configured"
-        echo ""
-        info "Next steps:"
-        echo "  1. Authenticate Tailscale: sudo tailscale up --accept-routes --ssh"
-        echo "  2. Deploy services: cd ${PROJECT_ROOT}/scripts && ./2-deploy-services.sh"
-    fi
-    
-    echo ""
-    info "Environment file: ${PROJECT_ROOT}/.env"
-    echo ""
-}
-
-# ============================================================================
-# Main Execution
-# ============================================================================
-
-main() {
-    # Handle --continue flag for docker group activation
-    if [[ "${1:-}" == "--continue" ]]; then
-        shift
-    fi
-    
-    display_banner
-    
+    # Execute all steps
     create_directories
-    install_system_dependencies
+    update_system
     install_docker
-    install_and_configure_tailscale
-    generate_ssl_certs
-    generate_env_file
-    set_permissions
+    install_tailscale
+    install_rclone
+    install_tools
+    create_env_file
+    verify_installation
+    show_next_steps
     
-    verify_docker_group
-    
-    display_post_install
+    log_success "System setup completed successfully!"
 }
 
-main "$@"
+# Run main function and log everything
+main "$@" 2>&1 | tee -a "$LOGFILE"
