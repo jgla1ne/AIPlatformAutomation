@@ -246,4 +246,3 @@ main() {
 
 main "$@"
 
-chmod +x scripts/5-configure-services.sh

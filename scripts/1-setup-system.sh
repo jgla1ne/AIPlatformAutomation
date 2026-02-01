@@ -482,4 +482,3 @@ main() {
 
 main "$@"
 
-chmod +x scripts/1-setup-system.sh

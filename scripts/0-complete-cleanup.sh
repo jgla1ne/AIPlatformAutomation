@@ -338,4 +338,3 @@ main() {
 
 main "$@"
 
-chmod +x scripts/0-complete-cleanup.sh

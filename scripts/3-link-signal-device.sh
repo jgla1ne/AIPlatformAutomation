@@ -122,4 +122,3 @@ else
     exit 1
 fi
 
-chmod +x scripts/3-link-signal-device.sh

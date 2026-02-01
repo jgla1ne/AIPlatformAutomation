@@ -233,4 +233,3 @@ log "  2. View logs: ${YELLOW}docker logs -f clawdbot${NC}"
 log "  3. Configure services: ${YELLOW}./5-configure-services.sh${NC}"
 echo ""
 
-chmod +x scripts/4-deploy-clawdbot.sh
