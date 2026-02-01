@@ -1,7 +1,9 @@
+.gitignore
 .secrets
 /logs/
 /data/
 /stacks/
 /backups/
 .env
-.env.*
+.env.backup.*
+/.env*
