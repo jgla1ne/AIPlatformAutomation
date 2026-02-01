@@ -1,7 +1,7 @@
 .secrets
-logs/
-data/
-stacks/
-backups/
-.env
-.env*
+/logs/
+/data/
+/stacks/
+/backups/
+*.env
+
