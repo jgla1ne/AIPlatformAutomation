@@ -1,2 +1,4 @@
 .secrets
 logs/
+.env
+.env*

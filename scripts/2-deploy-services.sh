@@ -1,190 +1,153 @@
 #!/bin/bash
 set -euo pipefail
 
-# ============================================
-# AI Platform - Service Deployment v5.3
-# Path-agnostic: Works with any repo name
-# ============================================
+# =============================================================================
+# AI Platform - Service Deployment Script v5.4
+# =============================================================================
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+ENV_FILE="${PROJECT_ROOT}/.env"
+STACKS_DIR="${PROJECT_ROOT}/stacks"
+
+# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# Auto-detect script directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENV_FILE="$SCRIPT_DIR/.env"
-LOG_FILE="$SCRIPT_DIR/logs/deploy-$(date +%Y%m%d-%H%M%S).log"
+log() { echo -e "${GREEN}✓${NC} $1"; }
+warn() { echo -e "${YELLOW}⚠${NC} $1"; }
+error() { echo -e "${RED}✗${NC} $1" >&2; }
+info() { echo -e "${BLUE}ℹ${NC} $1"; }
 
-mkdir -p "$SCRIPT_DIR/logs"
-
-log() {
-    echo -e "$1" | tee -a "$LOG_FILE"
+header() {
+    echo ""
+    echo "========================================"
+    echo "$1"
+    echo "========================================"
+    echo ""
 }
 
-# ============================================
-# [0/8] Load Environment & Fix Permissions
-# ============================================
-echo ""
-log "${BLUE}========================================${NC}"
-log "${BLUE}AI Platform - Service Deployment v5.3${NC}"
-log "${BLUE}Location: $SCRIPT_DIR${NC}"
-log "${BLUE}Started: $(date)${NC}"
-log "${BLUE}========================================${NC}"
-echo ""
+# =============================================================================
+# Load Environment
+# =============================================================================
 
-log "${BLUE}[0/8] Loading environment...${NC}"
+header "AI Platform - Service Deployment v5.4"
+info "Location: ${PROJECT_ROOT}"
+info "Started: $(date)"
 
-if [[ ! -f "$ENV_FILE" ]]; then
-    log "${RED}✗ Environment file not found: $ENV_FILE${NC}"
-    log "${YELLOW}Run: ./1-setup-system.sh first${NC}"
+info "[0/8] Loading environment..."
+if [[ ! -f "${ENV_FILE}" ]]; then
+    error "Configuration file not found: ${ENV_FILE}"
+    error "Please run 1-setup-system.sh first"
     exit 1
 fi
 
-# Load environment
 set -a
-source "$ENV_FILE"
+source "${ENV_FILE}"
 set +a
+log "Environment loaded"
 
-log "   ${GREEN}✓ Environment loaded${NC}"
+# Verify critical variables
+REQUIRED_VARS=(
+    "DATA_DIR"
+    "GPU_AVAILABLE"
+    "LITELLM_MASTER_KEY"
+    "DIFY_DB_USER"
+    "DIFY_DB_PASSWORD"
+    "POSTGRES_PASSWORD"
+    "DIFY_SECRET_KEY"
+    "TAILSCALE_IP"
+)
 
-# Fix script permissions automatically
-log "${BLUE}[0/8] Ensuring script permissions...${NC}"
-if [[ -d "$SCRIPT_DIR/scripts" ]]; then
-    chmod +x "$SCRIPT_DIR/scripts"/*.sh 2>/dev/null || true
-    log "   ${GREEN}✓ All scripts are executable${NC}"
-fi
+for var in "${REQUIRED_VARS[@]}"; do
+    if [[ -z "${!var:-}" ]]; then
+        error "Required variable $var is not set in ${ENV_FILE}"
+        exit 1
+    fi
+done
 
-echo ""
+# Set defaults for optional variables
+LITELLM_PORT=${LITELLM_PORT:-4000}
+OLLAMA_PORT=${OLLAMA_PORT:-11434}
+DIFY_API_PORT=${DIFY_API_PORT:-5001}
+DIFY_WEB_PORT=${DIFY_WEB_PORT:-3000}
+N8N_PORT=${N8N_PORT:-5678}
+POSTGRES_PORT=${POSTGRES_PORT:-5432}
+REDIS_PORT=${REDIS_PORT:-6379}
+WEAVIATE_PORT=${WEAVIATE_PORT:-8080}
+NGINX_HTTP_PORT=${NGINX_HTTP_PORT:-80}
+NGINX_HTTPS_PORT=${NGINX_HTTPS_PORT:-443}
 
-# Verify Docker group membership
-if ! groups | grep -q docker; then
-    log "${RED}✗ User not in docker group${NC}"
-    log "${YELLOW}Did you logout and reconnect after running script 1?${NC}"
+# =============================================================================
+# Ensure Permissions
+# =============================================================================
+
+info "[0/8] Ensuring script permissions..."
+chmod +x "${SCRIPT_DIR}"/*.sh 2>/dev/null || true
+log "All scripts are executable"
+
+# =============================================================================
+# Preflight Checks
+# =============================================================================
+
+info "[1/8] Running preflight checks..."
+
+# Check Docker
+if ! docker ps &> /dev/null; then
+    error "Cannot connect to Docker daemon"
+    error "Try: newgrp docker (or logout/login)"
     exit 1
 fi
+log "Docker running"
 
-log "   ${GREEN}✓ Docker access verified${NC}"
-echo ""
+# Check Docker access
+if ! docker info &> /dev/null; then
+    error "Docker daemon not accessible"
+    exit 1
+fi
+log "Docker access verified"
 
-# ============================================
-# [1/8] Preflight Checks
-# ============================================
-preflight_checks() {
-    log "${BLUE}[1/8] Running preflight checks...${NC}"
-    
-    # Check Docker
-    if ! docker ps &>/dev/null; then
-        log "${RED}✗ Docker not accessible${NC}"
-        exit 1
-    fi
-    log "   ${GREEN}✓ Docker running${NC}"
-    
-    # Check data directory
-    if [[ ! -d "$DATA_DIR" ]]; then
-        log "${RED}✗ Data directory not found: $DATA_DIR${NC}"
-        exit 1
-    fi
-    log "   ${GREEN}✓ Data directory exists${NC}"
-    
-    # Check GPU availability
-    if [[ "$GPU_AVAILABLE" == "true" ]]; then
-        if ! docker run --rm --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi &>/dev/null; then
-            log "${YELLOW}⚠ GPU detected but Docker GPU access failed${NC}"
-            log "${YELLOW}  Continuing in CPU-only mode${NC}"
-            GPU_AVAILABLE=false
-        else
-            log "   ${GREEN}✓ GPU access verified${NC}"
-        fi
-    else
-        log "   ${YELLOW}⚠ Running in CPU-only mode${NC}"
-    fi
-    
-    echo ""
-}
+# Check data directory
+if [[ ! -d "${DATA_DIR}" ]]; then
+    error "Data directory not found: ${DATA_DIR}"
+    exit 1
+fi
+log "Data directory exists"
 
-# ============================================
-# [1.5/8] Create Docker Network
-# ============================================
-create_network() {
-    log "${BLUE}[1.5/8] Creating Docker network...${NC}"
-    
-    if docker network inspect ai-platform-network &>/dev/null; then
-        log "   ${GREEN}✓ Network already exists${NC}"
-    else
-        docker network create ai-platform-network
-        log "   ${GREEN}✓ Network created${NC}"
-    fi
-    
-    echo ""
-}
+# GPU status
+if [[ "${GPU_AVAILABLE}" == "true" ]]; then
+    log "GPU acceleration enabled"
+else
+    warn "Running in CPU-only mode"
+fi
 
-# ============================================
-# [2/8] Prepare Stack Files
-# ============================================
-prepare_stacks() {
-    log "${BLUE}[2/8] Preparing Docker stack files...${NC}"
-    
-    mkdir -p "$SCRIPT_DIR/stacks"
-    
-    # Ollama Stack (GPU)
-    cat > "$SCRIPT_DIR/stacks/ollama-stack.yml" <<'OLLAMA_STACK'
-version: '3.8'
+# =============================================================================
+# Create Docker Networks
+# =============================================================================
 
-services:
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    restart: unless-stopped
-    networks:
-      - ai-platform-network
-    ports:
-      - "11434:11434"
-    volumes:
-      - ${DATA_DIR}/ollama:/root/.ollama
-    environment:
-      - OLLAMA_HOST=0.0.0.0
-      - OLLAMA_ORIGINS=*
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+info "[2/8] Creating Docker networks..."
+docker network create ai-platform 2>/dev/null || log "Network ai-platform exists"
+docker network create dify-network 2>/dev/null || log "Network dify-network exists"
+log "Networks ready"
 
-networks:
-  ai-platform-network:
-    external: true
-OLLAMA_STACK
+# =============================================================================
+# Create Stack Directory
+# =============================================================================
 
-    # Ollama Stack (CPU)
-    cat > "$SCRIPT_DIR/stacks/ollama-stack-cpu.yml" <<'OLLAMA_CPU'
-version: '3.8'
+info "[3/8] Preparing deployment files..."
+rm -rf "${STACKS_DIR}"
+mkdir -p "${STACKS_DIR}"
 
-services:
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    restart: unless-stopped
-    networks:
-      - ai-platform-network
-    ports:
-      - "11434:11434"
-    volumes:
-      - ${DATA_DIR}/ollama:/root/.ollama
-    environment:
-      - OLLAMA_HOST=0.0.0.0
-      - OLLAMA_ORIGINS=*
+# =============================================================================
+# Deploy LiteLLM
+# =============================================================================
 
-networks:
-  ai-platform-network:
-    external: true
-OLLAMA_CPU
-    
-    # LiteLLM Stack
-    cat > "$SCRIPT_DIR/stacks/litellm-stack.yml" <<'LITELLM_STACK'
+info "[4/8] Deploying LiteLLM proxy..."
+
+cat > "${STACKS_DIR}/litellm-compose.yml" << 'EOF'
 version: '3.8'
 
 services:
@@ -192,458 +155,381 @@ services:
     image: ghcr.io/berriai/litellm:main-latest
     container_name: litellm
     restart: unless-stopped
-    networks:
-      - ai-platform-network
     ports:
-      - "4000:4000"
-    volumes:
-      - ${DATA_DIR}/litellm/config.yaml:/app/config.yaml:ro
-      - ${DATA_DIR}/litellm/data:/app/data
+      - "${LITELLM_PORT}:4000"
     environment:
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
-      - DATABASE_URL=sqlite:////app/data/litellm.db
-      - STORE_MODEL_IN_DB=True
-    command: --config /app/config.yaml --detailed_debug
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-networks:
-  ai-platform-network:
-    external: true
-LITELLM_STACK
-    
-    # Signal Stack
-    cat > "$SCRIPT_DIR/stacks/signal-stack.yml" <<'SIGNAL_STACK'
-version: '3.8'
-
-services:
-  signal-cli:
-    image: bbernhard/signal-cli-rest-api:latest
-    container_name: signal-cli
-    restart: unless-stopped
-    networks:
-      - ai-platform-network
-    ports:
-      - "8080:8080"
+      - LITELLM_LOG=INFO
     volumes:
-      - ${DATA_DIR}/signal-cli:/home/.local/share/signal-cli
-    environment:
-      - MODE=json-rpc
-      - AUTO_RECEIVE_SCHEDULE=0 */1 * * * *
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      - ${DATA_DIR}/litellm:/app/config
+    networks:
+      - ai-platform
+    command: >
+      --port 4000
+      --detailed_debug
 
 networks:
-  ai-platform-network:
+  ai-platform:
     external: true
-SIGNAL_STACK
-    
-    # Dify Stack
-    cat > "$SCRIPT_DIR/stacks/dify-stack.yml" <<'DIFY_STACK'
+EOF
+
+docker compose -f "${STACKS_DIR}/litellm-compose.yml" up -d
+log "LiteLLM deployed on port ${LITELLM_PORT}"
+
+# =============================================================================
+# Deploy Ollama
+# =============================================================================
+
+info "[5/8] Deploying Ollama..."
+
+if [[ "${GPU_AVAILABLE}" == "true" ]]; then
+    OLLAMA_RUNTIME="--gpus all"
+else
+    OLLAMA_RUNTIME=""
+fi
+
+cat > "${STACKS_DIR}/ollama-compose.yml" << 'EOF'
 version: '3.8'
 
 services:
-  dify-db:
-    image: postgres:15-alpine
-    container_name: dify-db
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
     restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT}:11434"
+    volumes:
+      - ${DATA_DIR}/ollama:/root/.ollama
     networks:
-      - ai-platform-network
+      - ai-platform
+EOF
+
+if [[ "${GPU_AVAILABLE}" == "true" ]]; then
+    cat >> "${STACKS_DIR}/ollama-compose.yml" << 'EOF'
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+EOF
+fi
+
+cat >> "${STACKS_DIR}/ollama-compose.yml" << 'EOF'
+
+networks:
+  ai-platform:
+    external: true
+EOF
+
+docker compose -f "${STACKS_DIR}/ollama-compose.yml" up -d
+log "Ollama deployed on port ${OLLAMA_PORT}"
+
+# =============================================================================
+# Deploy Dify
+# =============================================================================
+
+info "[6/8] Deploying Dify platform..."
+
+cat > "${STACKS_DIR}/dify-compose.yml" << 'EOF'
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: dify-postgres
+    restart: unless-stopped
     environment:
+      POSTGRES_DB: ${POSTGRES_DB:-dify}
       POSTGRES_USER: ${DIFY_DB_USER}
       POSTGRES_PASSWORD: ${DIFY_DB_PASSWORD}
-      POSTGRES_DB: ${DIFY_DB_NAME}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
-      - ${DATA_DIR}/dify/db:/var/lib/postgresql/data
+      - ${DATA_DIR}/postgres:/var/lib/postgresql/data
+    networks:
+      - dify-network
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "${DIFY_DB_USER}"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U ${DIFY_DB_USER}"]
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
-  dify-redis:
+  redis:
     image: redis:7-alpine
     container_name: dify-redis
     restart: unless-stopped
-    networks:
-      - ai-platform-network
+    command: redis-server --appendonly yes
     volumes:
-      - ${DATA_DIR}/dify/redis:/data
-    command: redis-server --requirepass ${DIFY_REDIS_PASSWORD}
+      - ${DATA_DIR}/redis:/data
+    networks:
+      - dify-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
-  dify-api:
+  weaviate:
+    image: semitechnologies/weaviate:latest
+    container_name: dify-weaviate
+    restart: unless-stopped
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
+      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
+      DEFAULT_VECTORIZER_MODULE: 'none'
+      CLUSTER_HOSTNAME: 'node1'
+    volumes:
+      - ${DATA_DIR}/weaviate:/var/lib/weaviate
+    networks:
+      - dify-network
+
+  sandbox:
+    image: langgenius/dify-sandbox:latest
+    container_name: dify-sandbox
+    restart: unless-stopped
+    environment:
+      API_KEY: ${DIFY_SECRET_KEY}
+      GIN_MODE: release
+      WORKER_TIMEOUT: 15
+    volumes:
+      - ${DATA_DIR}/sandbox/dependencies:/dependencies
+    networks:
+      - dify-network
+    cap_add:
+      - SYS_ADMIN
+
+  api:
     image: langgenius/dify-api:latest
     container_name: dify-api
     restart: unless-stopped
-    networks:
-      - ai-platform-network
-    depends_on:
-      - dify-db
-      - dify-redis
     environment:
       MODE: api
       LOG_LEVEL: INFO
       SECRET_KEY: ${DIFY_SECRET_KEY}
       DB_USERNAME: ${DIFY_DB_USER}
       DB_PASSWORD: ${DIFY_DB_PASSWORD}
-      DB_HOST: dify-db
+      DB_HOST: postgres
       DB_PORT: 5432
-      DB_DATABASE: ${DIFY_DB_NAME}
-      REDIS_HOST: dify-redis
+      DB_DATABASE: ${POSTGRES_DB:-dify}
+      REDIS_HOST: redis
       REDIS_PORT: 6379
-      REDIS_PASSWORD: ${DIFY_REDIS_PASSWORD}
-      CELERY_BROKER_URL: redis://:${DIFY_REDIS_PASSWORD}@dify-redis:6379/1
-      CONSOLE_WEB_URL: http://localhost:3000
-      CONSOLE_API_URL: http://localhost:5001
-      SERVICE_API_URL: http://localhost:5001
+      REDIS_DB: 0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      BROKER_USE_SSL: 'false'
+      WEB_API_CORS_ALLOW_ORIGINS: '*'
+      CONSOLE_CORS_ALLOW_ORIGINS: '*'
+      STORAGE_TYPE: local
+      STORAGE_LOCAL_PATH: /app/storage
+      VECTOR_STORE: weaviate
+      WEAVIATE_ENDPOINT: http://weaviate:8080
+      CODE_EXECUTION_ENDPOINT: http://sandbox:8194
+      CODE_EXECUTION_API_KEY: ${DIFY_SECRET_KEY}
     volumes:
-      - ${DATA_DIR}/dify/app:/app/api/storage
+      - ${DATA_DIR}/storage:/app/storage
+    networks:
+      - dify-network
+      - ai-platform
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
-  dify-worker:
+  worker:
     image: langgenius/dify-api:latest
     container_name: dify-worker
     restart: unless-stopped
-    networks:
-      - ai-platform-network
-    depends_on:
-      - dify-db
-      - dify-redis
     environment:
       MODE: worker
       LOG_LEVEL: INFO
       SECRET_KEY: ${DIFY_SECRET_KEY}
       DB_USERNAME: ${DIFY_DB_USER}
       DB_PASSWORD: ${DIFY_DB_PASSWORD}
-      DB_HOST: dify-db
+      DB_HOST: postgres
       DB_PORT: 5432
-      DB_DATABASE: ${DIFY_DB_NAME}
-      REDIS_HOST: dify-redis
+      DB_DATABASE: ${POSTGRES_DB:-dify}
+      REDIS_HOST: redis
       REDIS_PORT: 6379
-      REDIS_PASSWORD: ${DIFY_REDIS_PASSWORD}
-      CELERY_BROKER_URL: redis://:${DIFY_REDIS_PASSWORD}@dify-redis:6379/1
+      REDIS_DB: 0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      BROKER_USE_SSL: 'false'
+      STORAGE_TYPE: local
+      STORAGE_LOCAL_PATH: /app/storage
+      VECTOR_STORE: weaviate
+      WEAVIATE_ENDPOINT: http://weaviate:8080
+      CODE_EXECUTION_ENDPOINT: http://sandbox:8194
+      CODE_EXECUTION_API_KEY: ${DIFY_SECRET_KEY}
     volumes:
-      - ${DATA_DIR}/dify/app:/app/api/storage
+      - ${DATA_DIR}/storage:/app/storage
+    networks:
+      - dify-network
+      - ai-platform
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
-  dify-web:
+  web:
     image: langgenius/dify-web:latest
     container_name: dify-web
     restart: unless-stopped
-    networks:
-      - ai-platform-network
-    ports:
-      - "3000:3000"
-    depends_on:
-      - dify-api
     environment:
-      CONSOLE_API_URL: http://dify-api:5001
-      APP_API_URL: http://dify-api:5001
+      CONSOLE_API_URL: http://${TAILSCALE_IP}:${DIFY_API_PORT}
+      APP_API_URL: http://${TAILSCALE_IP}:${DIFY_API_PORT}
+    networks:
+      - dify-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: dify-nginx
+    restart: unless-stopped
+    ports:
+      - "${DIFY_API_PORT}:80"
+      - "${DIFY_WEB_PORT}:81"
+    volumes:
+      - ${STACKS_DIR}/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - dify-network
+    depends_on:
+      - api
+      - web
 
 networks:
-  ai-platform-network:
+  dify-network:
     external: true
-DIFY_STACK
+  ai-platform:
+    external: true
+EOF
+
+# Create nginx config
+cat > "${STACKS_DIR}/nginx.conf" << 'EOF'
+user nginx;
+worker_processes auto;
+error_log /var/log/nginx/error.log warn;
+pid /var/run/nginx.pid;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
     
-    # AnythingLLM Stack
-    cat > "$SCRIPT_DIR/stacks/anythingllm-stack.yml" <<'ANYTHINGLLM_STACK'
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" "$http_x_forwarded_for"';
+    
+    access_log /var/log/nginx/access.log main;
+    
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+    client_max_body_size 15M;
+
+    # API Server
+    server {
+        listen 80;
+        server_name _;
+
+        location / {
+            proxy_pass http://api:5001;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_cache_bypass $http_upgrade;
+            proxy_buffering off;
+            proxy_read_timeout 300s;
+            proxy_connect_timeout 75s;
+        }
+    }
+
+    # Web Frontend
+    server {
+        listen 81;
+        server_name _;
+
+        location / {
+            proxy_pass http://web:3000;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+        }
+    }
+}
+EOF
+
+docker compose -f "${STACKS_DIR}/dify-compose.yml" up -d
+log "Dify deployed (API: ${DIFY_API_PORT}, Web: ${DIFY_WEB_PORT})"
+
+# =============================================================================
+# Deploy n8n
+# =============================================================================
+
+info "[7/8] Deploying n8n workflow automation..."
+
+cat > "${STACKS_DIR}/n8n-compose.yml" << 'EOF'
 version: '3.8'
 
 services:
-  anythingllm:
-    image: mintplexlabs/anythingllm:latest
-    container_name: anythingllm
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
     restart: unless-stopped
-    networks:
-      - ai-platform-network
     ports:
-      - "3001:3001"
-    volumes:
-      - ${DATA_DIR}/anythingllm:/app/server/storage
+      - "${N8N_PORT}:5678"
     environment:
-      - STORAGE_DIR=/app/server/storage
-    cap_add:
-      - SYS_ADMIN
+      - N8N_HOST=${TAILSCALE_IP}
+      - N8N_PORT=${N8N_PORT}
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://${TAILSCALE_IP}:${N8N_PORT}/
+      - GENERIC_TIMEZONE=UTC
+    volumes:
+      - ${DATA_DIR}/n8n:/home/node/.n8n
+    networks:
+      - ai-platform
 
 networks:
-  ai-platform-network:
+  ai-platform:
     external: true
-ANYTHINGLLM_STACK
-    
-    log "   ${GREEN}✓ Stack files created${NC}"
-    echo ""
-}
+EOF
 
-# ============================================
-# [3/8] Deploy Ollama
-# ============================================
-deploy_ollama() {
-    log "${BLUE}[3/8] Deploying Ollama...${NC}"
-    
-    # Create data directory with correct permissions
-    sudo mkdir -p "$DATA_DIR/ollama"
-    sudo chown -R $(id -u):$(id -g) "$DATA_DIR/ollama"
-    sudo chmod 755 "$DATA_DIR/ollama"
-    
-    # Deploy based on GPU availability
-    if [[ "$GPU_AVAILABLE" == "true" ]]; then
-        log "   ${YELLOW}Deploying with GPU support...${NC}"
-        docker compose -f "$SCRIPT_DIR/stacks/ollama-stack.yml" up -d
-    else
-        log "   ${YELLOW}Deploying in CPU-only mode...${NC}"
-        docker compose -f "$SCRIPT_DIR/stacks/ollama-stack-cpu.yml" up -d
-    fi
-    
-    # Wait for Ollama to be ready
-    log "   ${YELLOW}Waiting for Ollama to be ready...${NC}"
-    for i in {1..30}; do
-        if curl -s http://localhost:11434/api/tags &>/dev/null; then
-            log "   ${GREEN}✓ Ollama is ready${NC}"
-            break
-        fi
-        sleep 2
-    done
-    
-    echo ""
-}
+docker compose -f "${STACKS_DIR}/n8n-compose.yml" up -d
+log "n8n deployed on port ${N8N_PORT}"
 
-# ============================================
-# [4/8] Pull Ollama Models
-# ============================================
-pull_ollama_models() {
-    log "${BLUE}[4/8] Pulling Ollama models...${NC}"
-    
-    # Parse model list from environment
-    IFS=',' read -ra MODELS <<< "$OLLAMA_MODELS"
-    
-    for model in "${MODELS[@]}"; do
-        model=$(echo "$model" | xargs)  # Trim whitespace
-        log "   ${YELLOW}Pulling $model...${NC}"
-        
-        if docker exec ollama ollama pull "$model"; then
-            log "   ${GREEN}✓ $model pulled successfully${NC}"
-        else
-            log "   ${RED}✗ Failed to pull $model${NC}"
-        fi
-    done
-    
-    echo ""
-}
+# =============================================================================
+# Deployment Summary
+# =============================================================================
 
-# ============================================
-# [5/8] Deploy LiteLLM
-# ============================================
-deploy_litellm() {
-    log "${BLUE}[5/8] Deploying LiteLLM...${NC}"
-    
-    # Create directories
-    sudo mkdir -p "$DATA_DIR/litellm/data"
-    
-    # Create LiteLLM configuration
-    sudo tee "$DATA_DIR/litellm/config.yaml" > /dev/null <<LITELLM_CONFIG
-model_list:
-  # Ollama Models
-  - model_name: llama3.2
-    litellm_params:
-      model: ollama/llama3.2
-      api_base: http://ollama:11434
-  
-  - model_name: qwen2.5-coder
-    litellm_params:
-      model: ollama/qwen2.5-coder:latest
-      api_base: http://ollama:11434
-  
-  - model_name: phi4
-    litellm_params:
-      model: ollama/phi4:latest
-      api_base: http://ollama:11434
+info "[8/8] Waiting for services to start..."
+sleep 10
 
-litellm_settings:
-  drop_params: true
-  set_verbose: true
-  
-general_settings:
-  master_key: ${LITELLM_MASTER_KEY}
-  database_url: sqlite:////app/data/litellm.db
-LITELLM_CONFIG
-    
-    sudo chown -R $(id -u):$(id -g) "$DATA_DIR/litellm"
-    sudo chmod 755 "$DATA_DIR/litellm"
-    
-    # Deploy
-    docker compose -f "$SCRIPT_DIR/stacks/litellm-stack.yml" up -d
-    
-    # Wait for LiteLLM
-    log "   ${YELLOW}Waiting for LiteLLM to be ready...${NC}"
-    for i in {1..30}; do
-        if curl -s http://localhost:4000/health &>/dev/null; then
-            log "   ${GREEN}✓ LiteLLM is ready${NC}"
-            break
-        fi
-        sleep 2
-    done
-    
-    echo ""
-}
-
-# ============================================
-# [6/8] Deploy Signal
-# ============================================
-deploy_signal() {
-    log "${BLUE}[6/8] Deploying Signal...${NC}"
-    
-    # Create directories
-    sudo mkdir -p "$DATA_DIR/signal-cli"
-    sudo chown -R $(id -u):$(id -g) "$DATA_DIR/signal-cli"
-    sudo chmod 755 "$DATA_DIR/signal-cli"
-    
-    # Deploy
-    docker compose -f "$SCRIPT_DIR/stacks/signal-stack.yml" up -d
-    
-    # Wait for Signal
-    log "   ${YELLOW}Waiting for Signal to be ready...${NC}"
-    for i in {1..30}; do
-        if curl -s http://localhost:8080/v1/health &>/dev/null; then
-            log "   ${GREEN}✓ Signal is ready${NC}"
-            break
-        fi
-        sleep 2
-    done
-    
-    log "   ${YELLOW}⚠ Signal requires manual linking${NC}"
-    log "   ${YELLOW}  Run: ./3-link-signal.sh${NC}"
-    
-    echo ""
-}
-
-# ============================================
-# [7/8] Deploy Dify
-# ============================================
-deploy_dify() {
-    log "${BLUE}[7/8] Deploying Dify...${NC}"
-    
-    # Create directories
-    sudo mkdir -p "$DATA_DIR/dify"/{db,redis,app}
-    sudo chown -R $(id -u):$(id -g) "$DATA_DIR/dify"
-    sudo chmod 755 "$DATA_DIR/dify"
-    
-    # Deploy
-    docker compose -f "$SCRIPT_DIR/stacks/dify-stack.yml" up -d
-    
-    # Wait for Dify
-    log "   ${YELLOW}Waiting for Dify to be ready...${NC}"
-    sleep 30  # Dify takes longer to initialize
-    
-    for i in {1..60}; do
-        if curl -s http://localhost:3000 &>/dev/null; then
-            log "   ${GREEN}✓ Dify is ready${NC}"
-            break
-        fi
-        sleep 2
-    done
-    
-    echo ""
-}
-
-# ============================================
-# [8/8] Deploy AnythingLLM
-# ============================================
-deploy_anythingllm() {
-    log "${BLUE}[8/8] Deploying AnythingLLM...${NC}"
-    
-    # Create directories
-    sudo mkdir -p "$DATA_DIR/anythingllm"
-    sudo chown -R $(id -u):$(id -g) "$DATA_DIR/anythingllm"
-    sudo chmod 755 "$DATA_DIR/anythingllm"
-    
-    # Deploy
-    docker compose -f "$SCRIPT_DIR/stacks/anythingllm-stack.yml" up -d
-    
-    # Wait for AnythingLLM
-    log "   ${YELLOW}Waiting for AnythingLLM to be ready...${NC}"
-    for i in {1..30}; do
-        if curl -s http://localhost:3001 &>/dev/null; then
-            log "   ${GREEN}✓ AnythingLLM is ready${NC}"
-            break
-        fi
-        sleep 2
-    done
-    
-    echo ""
-}
-
-# ============================================
-# Print Deployment Summary
-# ============================================
-print_summary() {
-    log "${GREEN}========================================${NC}"
-    log "${GREEN}✅ Deployment Complete${NC}"
-    log "${GREEN}========================================${NC}"
-    echo ""
-    
-    log "${BLUE}Services Status:${NC}"
-    docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "ollama|litellm|signal|dify|anythingllm" || log "   ${YELLOW}No services running${NC}"
-    echo ""
-    
-    log "${BLUE}Access URLs:${NC}"
-    log "  Ollama:       http://localhost:11434"
-    log "  LiteLLM:      http://localhost:4000"
-    log "  Signal:       http://localhost:8080"
-    log "  Dify:         http://localhost:3000"
-    log "  AnythingLLM:  http://localhost:3001"
-    echo ""
-    
-    if [[ "$TAILSCALE_ENABLED" == "true" ]]; then
-        TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "Not available")
-        log "${BLUE}Tailscale Access:${NC}"
-        log "  Ollama:       http://$TAILSCALE_IP:11434"
-        log "  LiteLLM:      http://$TAILSCALE_IP:4000"
-        log "  Signal:       http://$TAILSCALE_IP:8080"
-        log "  Dify:         http://$TAILSCALE_IP:3000"
-        log "  AnythingLLM:  http://$TAILSCALE_IP:3001"
-        echo ""
-    fi
-    
-    log "${BLUE}Credentials:${NC}"
-    log "  LiteLLM Master Key: $LITELLM_MASTER_KEY"
-    log "  Dify DB User:       $DIFY_DB_USER"
-    log "  Dify DB Password:   $DIFY_DB_PASSWORD"
-    echo ""
-    
-    log "${YELLOW}Next Steps:${NC}"
-    log "  1. Link Signal: ${YELLOW}./3-link-signal.sh${NC}"
-    log "  2. Deploy ClawdBot: ${YELLOW}./4-deploy-clawdbot.sh${NC}"
-    log "  3. Configure services: ${YELLOW}./5-configure-services.sh${NC}"
-    echo ""
-    
-    log "${BLUE}Log file: $LOG_FILE${NC}"
-    echo ""
-}
-
-# ============================================
-# Main Execution
-# ============================================
-main() {
-    preflight_checks
-    create_network  # ← NEW: Create network before deploying
-    prepare_stacks
-    deploy_ollama
-    pull_ollama_models
-    deploy_litellm
-    deploy_signal
-    deploy_dify
-    deploy_anythingllm
-    print_summary
-}
-
-main "$@"
+header "Deployment Complete!"
+echo ""
+echo "Service URLs:"
+echo "  • LiteLLM:    http://${TAILSCALE_IP}:${LITELLM_PORT}"
+echo "  • Ollama:     http://${TAILSCALE_IP}:${OLLAMA_PORT}"
+echo "  • Dify API:   http://${TAILSCALE_IP}:${DIFY_API_PORT}"
+echo "  • Dify Web:   http://${TAILSCALE_IP}:${DIFY_WEB_PORT}"
+echo "  • n8n:        http://${TAILSCALE_IP}:${N8N_PORT}"
+echo ""
+echo "Credentials stored in: ${ENV_FILE}"
+echo ""
+echo "Check status: docker ps"
+echo "View logs: docker compose -f ${STACKS_DIR}/<service>-compose.yml logs -f"
+echo ""
+log "All services deployed successfully!"
+echo ""
