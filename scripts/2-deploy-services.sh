@@ -3,8 +3,8 @@ set -euo pipefail
 
 # ============================================================================
 # AI Platform - Service Deployment Script
-# Version: 10.4 FINAL - ULTRA ROBUST
-# Description: Deploys all Docker services with bulletproof error handling
+# Version: 10.5 FINAL - PERMISSION FIX
+# Description: Deploys all services with proper volume permissions
 # ============================================================================
 
 # Logging setup
@@ -48,18 +48,13 @@ error_handler() {
     log_error "Script failed at line $1"
     log_error "Command: $BASH_COMMAND"
     log_error "Check log file: $LOGFILE"
-    
-    # Show recent docker activity
-    log_error "Recent Docker containers:"
-    docker ps -a --format "table {{.Names}}\t{{.Status}}" 2>&1 | tail -n 10 | tee -a "$LOGFILE"
-    
     exit 1
 }
 
 trap 'error_handler $LINENO' ERR
 
 # ============================================================================
-# WAIT FOR SERVICE WITH TIMEOUT
+# WAIT FOR SERVICE
 # ============================================================================
 wait_for_service() {
     local service_name="$1"
@@ -83,7 +78,6 @@ wait_for_service() {
     
     echo ""
     log_warning "$service_name did not become ready within timeout"
-    log_info "Service may still be starting - check with: docker logs $service_name"
     return 1
 }
 
@@ -101,14 +95,12 @@ load_environment() {
         exit 1
     fi
     
-    # Source environment file
     set -a
     source "$env_file"
     set +a
     
     log_success "Environment loaded from .env"
     
-    # Validate required variables
     local required_vars=(
         "PROJECT_ROOT"
         "STACKS_DIR"
@@ -136,7 +128,7 @@ load_environment() {
 }
 
 # ============================================================================
-# ENSURE STACK DIRECTORIES EXIST
+# ENSURE STACK DIRECTORIES
 # ============================================================================
 ensure_stack_dirs() {
     log_step "Ensuring stack directories exist..."
@@ -155,7 +147,9 @@ ensure_stack_dirs() {
         mkdir -p "$dir"
     done
     
-    # Ensure data directories
+    # Create data directories with PROPER PERMISSIONS
+    log_info "Creating data directories with proper permissions..."
+    
     local data_dirs=(
         "${DATA_DIR}/ollama"
         "${DATA_DIR}/anythingllm"
@@ -169,10 +163,16 @@ ensure_stack_dirs() {
     
     for dir in "${data_dirs[@]}"; do
         sudo mkdir -p "$dir"
-        sudo chown -R $(whoami):$(whoami) "$dir"
+        # Set ownership to current user
+        sudo chown -R $(id -u):$(id -g) "$dir"
+        # Set permissions: rwxr-xr-x
+        sudo chmod -R 755 "$dir"
     done
     
-    log_success "All stack directories ready"
+    # AnythingLLM needs FULL write access
+    sudo chmod -R 777 "${DATA_DIR}/anythingllm"
+    
+    log_success "All stack directories ready with proper permissions"
 }
 
 # ============================================================================
@@ -228,7 +228,6 @@ EOF
     log_info "Starting Ollama..."
     docker compose -f "${stack_dir}/docker-compose.yml" up -d 2>&1 | tee -a "$LOGFILE"
     
-    # Wait for Ollama with proper error handling
     wait_for_service "Ollama" "curl -s http://localhost:${OLLAMA_PORT}/api/tags" 20 3 || true
 }
 
@@ -241,7 +240,6 @@ deploy_litellm() {
     local stack_dir="${STACKS_DIR}/litellm"
     mkdir -p "$stack_dir"
     
-    # Create LiteLLM config
     cat > "${stack_dir}/config.yaml" << EOF
 model_list:
   - model_name: llama3.2
@@ -302,7 +300,15 @@ deploy_anythingllm() {
     log_step "Deploying AnythingLLM (Vector Database & RAG)..."
     
     local stack_dir="${STACKS_DIR}/anythingllm"
+    local data_path="${DATA_DIR}/anythingllm"
+    
     mkdir -p "$stack_dir"
+    
+    # Ensure AnythingLLM data directory has FULL permissions
+    log_info "Setting up AnythingLLM data directory..."
+    sudo mkdir -p "$data_path"
+    sudo chown -R 1000:1000 "$data_path"
+    sudo chmod -R 777 "$data_path"
     
     cat > "${stack_dir}/docker-compose.yml" << EOF
 services:
@@ -310,14 +316,15 @@ services:
     image: mintplexlabs/anythingllm:latest
     container_name: anythingllm
     restart: unless-stopped
+    user: "1000:1000"
     ports:
       - "${ANYTHINGLLM_PORT}:3001"
-    cap_add:
-      - SYS_ADMIN
     volumes:
-      - ${DATA_DIR}/anythingllm:/app/server/storage
+      - ${data_path}:/app/server/storage
     environment:
       - STORAGE_DIR=/app/server/storage
+      - UID=1000
+      - GID=1000
       - LLM_PROVIDER=ollama
       - OLLAMA_BASE_PATH=http://ollama:11434
       - EMBEDDING_PROVIDER=ollama
@@ -326,7 +333,7 @@ services:
     networks:
       - ai-platform
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:3001/api/ping || exit 1"]
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:3001/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -340,7 +347,15 @@ EOF
     log_info "Starting AnythingLLM..."
     docker compose -f "${stack_dir}/docker-compose.yml" up -d 2>&1 | tee -a "$LOGFILE"
     
-    wait_for_service "AnythingLLM" "curl -s http://localhost:${ANYTHINGLLM_PORT}/api/ping" 30 3 || true
+    # Give it more time to initialize database
+    log_info "Waiting for AnythingLLM to initialize (this may take 60-90 seconds)..."
+    sleep 10
+    
+    wait_for_service "AnythingLLM" "curl -s http://localhost:${ANYTHINGLLM_PORT}/" 40 5 || true
+    
+    # Check container logs for any errors
+    log_info "AnythingLLM container status:"
+    docker ps -a | grep anythingllm | tee -a "$LOGFILE"
 }
 
 # ============================================================================
@@ -352,10 +367,11 @@ deploy_dify() {
     local stack_dir="${STACKS_DIR}/dify"
     mkdir -p "$stack_dir"
     
-    # Ensure data directories exist
+    # Prepare data directories with proper permissions
     log_info "Preparing Dify data directories..."
     sudo mkdir -p "${DATA_DIR}/postgres" "${DATA_DIR}/redis" "${DATA_DIR}/dify/api/storage" "${DATA_DIR}/dify/qdrant"
-    sudo chown -R $(whoami):$(whoami) "${DATA_DIR}/postgres" "${DATA_DIR}/redis" "${DATA_DIR}/dify"
+    sudo chown -R $(id -u):$(id -g) "${DATA_DIR}/postgres" "${DATA_DIR}/redis" "${DATA_DIR}/dify"
+    sudo chmod -R 755 "${DATA_DIR}/postgres" "${DATA_DIR}/redis" "${DATA_DIR}/dify"
     
     cat > "${stack_dir}/docker-compose.yml" << 'EOF'
 services:
@@ -522,7 +538,7 @@ networks:
     external: true
 EOF
 
-    # Create Nginx config
+    # Create Nginx configs
     cat > "${stack_dir}/nginx.conf" << 'EOF'
 user nginx;
 worker_processes auto;
@@ -591,9 +607,12 @@ EOF
     log_info "Starting Dify stack (this will take 2-3 minutes)..."
     docker compose -f "${stack_dir}/docker-compose.yml" up -d 2>&1 | tee -a "$LOGFILE"
     
-    # Wait for database first
     wait_for_service "PostgreSQL" "docker exec dify-postgres pg_isready -U postgres" 30 2 || true
     wait_for_service "Redis" "docker exec dify-redis redis-cli ping" 20 2 || true
+    
+    log_info "Waiting for Dify services to initialize..."
+    sleep 15
+    
     wait_for_service "Dify Web UI" "curl -s http://localhost:8080" 40 5 || true
 }
 
@@ -604,7 +623,14 @@ deploy_n8n() {
     log_step "Deploying n8n (Workflow Automation)..."
     
     local stack_dir="${STACKS_DIR}/n8n"
+    local data_path="${DATA_DIR}/n8n"
+    
     mkdir -p "$stack_dir"
+    
+    # Ensure n8n data directory has proper permissions
+    sudo mkdir -p "$data_path"
+    sudo chown -R 1000:1000 "$data_path"
+    sudo chmod -R 755 "$data_path"
     
     cat > "${stack_dir}/docker-compose.yml" << EOF
 services:
@@ -612,6 +638,7 @@ services:
     image: n8nio/n8n:latest
     container_name: n8n
     restart: unless-stopped
+    user: "1000:1000"
     ports:
       - "${N8N_PORT}:5678"
     environment:
@@ -623,7 +650,7 @@ services:
       - NODE_ENV=production
       - WEBHOOK_URL=http://localhost:${N8N_PORT}/
     volumes:
-      - ${DATA_DIR}/n8n:/home/node/.n8n
+      - ${data_path}:/home/node/.n8n
     networks:
       - ai-platform
     healthcheck:
@@ -651,7 +678,14 @@ deploy_signal() {
     log_step "Deploying Signal API (Messaging)..."
     
     local stack_dir="${STACKS_DIR}/signal"
+    local data_path="${DATA_DIR}/signal"
+    
     mkdir -p "$stack_dir"
+    
+    # Ensure Signal data directory has proper permissions
+    sudo mkdir -p "$data_path"
+    sudo chown -R 1000:1000 "$data_path"
+    sudo chmod -R 755 "$data_path"
     
     cat > "${stack_dir}/docker-compose.yml" << EOF
 services:
@@ -664,7 +698,7 @@ services:
     environment:
       - MODE=native
     volumes:
-      - ${DATA_DIR}/signal:/home/.local/share/signal-cli
+      - ${data_path}:/home/.local/share/signal-cli
     networks:
       - ai-platform
     healthcheck:
@@ -686,7 +720,7 @@ EOF
 }
 
 # ============================================================================
-# DEPLOY NGINX REVERSE PROXY
+# DEPLOY NGINX
 # ============================================================================
 deploy_nginx() {
     log_step "Deploying NGINX (Reverse Proxy)..."
@@ -694,7 +728,6 @@ deploy_nginx() {
     local stack_dir="${STACKS_DIR}/nginx"
     mkdir -p "${stack_dir}/ssl"
     
-    # Generate self-signed certificate
     if [[ ! -f "${stack_dir}/ssl/nginx-selfsigned.crt" ]]; then
         log_info "Generating SSL certificate..."
         openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
@@ -870,10 +903,15 @@ show_next_steps() {
    docker exec -it ollama ollama pull nomic-embed-text
 
 2. Check service status:
-   docker ps
+   docker ps -a
 
-3. View logs if issues:
-   docker logs [container-name]
+3. View logs for any service:
+   docker logs anythingllm
+   docker logs dify-api
+   docker logs n8n
+
+4. Check AnythingLLM specifically:
+   docker logs anythingllm --tail 50
 
 📝 LOG FILE: ${LOGFILE}
 
@@ -889,7 +927,7 @@ main() {
     
     cat << "EOF"
 ╔════════════════════════════════════════════════════════════╗
-║     AI Platform - Service Deployment v10.4 FINAL        ║
+║     AI Platform - Service Deployment v10.5 FINAL        ║
 ╚════════════════════════════════════════════════════════════╝
 EOF
     
