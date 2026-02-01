@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # ============================================
-# AI Platform - Deploy Services v5.0
-# Idempotent deployment with proper cleanup
+# AI Platform - Deploy Services v2.0
+# Path-agnostic: Works with any repo name
 # ============================================
 
 RED='\033[0;31m'
@@ -12,391 +12,517 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
+# Auto-detect script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOG_FILE="/var/log/ai-platform-deploy.log"
+ENV_FILE="$SCRIPT_DIR/.env"
+LOG_FILE="$SCRIPT_DIR/logs/deploy-$(date +%Y%m%d-%H%M%S).log"
 
-sudo touch "$LOG_FILE" 2>/dev/null || LOG_FILE="$HOME/ai-platform-deploy.log"
-sudo chown $USER:$USER "$LOG_FILE" 2>/dev/null || true
-exec > >(tee -a "$LOG_FILE") 2>&1
+mkdir -p "$SCRIPT_DIR/logs"
+
+log() {
+    echo -e "$1" | tee -a "$LOG_FILE"
+}
+
+echo ""
+log "${BLUE}========================================${NC}"
+log "${BLUE}AI Platform - Deploy Services v2.0${NC}"
+log "${BLUE}Repository: $(basename "$SCRIPT_DIR")${NC}"
+log "${BLUE}Started: $(date)${NC}"
+log "${BLUE}========================================${NC}"
+echo ""
 
 # ============================================
 # Load Environment
 # ============================================
 load_environment() {
-    if [[ ! -f "$SCRIPT_DIR/.env" ]]; then
-        echo -e "${RED}❌ .env not found. Run 1-setup-system.sh first${NC}"
+    if [[ ! -f "$ENV_FILE" ]]; then
+        log "${RED}❌ Environment file not found: $ENV_FILE${NC}"
+        log "${YELLOW}Run ./1-setup-system.sh first${NC}"
         exit 1
     fi
-
-    source "$SCRIPT_DIR/.env"
-
-    if [[ -f "$SCRIPT_DIR/.secrets" ]]; then
-        source "$SCRIPT_DIR/.secrets"
-    fi
+    
+    source "$ENV_FILE"
+    log "${GREEN}✓ Environment loaded${NC}"
+    echo ""
 }
 
 # ============================================
-# Parse Arguments
-# ============================================
-ROLLBACK=false
-FORCE=false
-
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --rollback)
-            ROLLBACK=true
-            shift
-            ;;
-        --force)
-            FORCE=true
-            shift
-            ;;
-        *)
-            echo "Unknown option: $1"
-            echo "Usage: $0 [--rollback] [--force]"
-            exit 1
-            ;;
-    esac
-done
-
-# ============================================
-# Rollback Function
-# ============================================
-do_rollback() {
-    echo -e "${YELLOW}========================================${NC}"
-    echo -e "${YELLOW}Rollback Mode${NC}"
-    echo -e "${YELLOW}========================================${NC}"
-    echo ""
-    echo "This will:"
-    echo "  • Stop all containers"
-    echo "  • Remove all containers"
-    echo "  • Clean stacks/ directory"
-    echo ""
-    echo "Preserved:"
-    echo "  ✅ .env and .secrets"
-    echo "  ✅ configs/ templates"
-    echo "  ✅ Data in $DATA_PATH"
-    echo ""
-
-    read -p "Continue with rollback? (y/n): " -n 1 -r
-    echo
-
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "Cancelled"
-        exit 0
-    fi
-
-    echo ""
-    echo -e "${BLUE}Stopping all containers...${NC}"
-    docker ps -q | xargs -r docker stop
-
-    echo -e "${BLUE}Removing all containers...${NC}"
-    docker ps -aq | xargs -r docker rm
-
-    echo -e "${BLUE}Cleaning stacks directory...${NC}"
-    rm -rf "$SCRIPT_DIR/stacks/*"
-
-    echo ""
-    echo -e "${GREEN}✅ Rollback complete${NC}"
-    echo "Run ./2-deploy-services.sh to redeploy"
-    exit 0
-}
-
-[[ "$ROLLBACK" == "true" ]] && do_rollback
-
-# ============================================
-# Pre-deployment Checks
+# [1/8] Preflight Checks
 # ============================================
 preflight_checks() {
-    echo -e "${BLUE}========================================${NC}"
-    echo -e "${BLUE}AI Platform - Deploy Services v5.0${NC}"
-    echo -e "${BLUE}Started: $(date)${NC}"
-    echo -e "${BLUE}========================================${NC}"
-    echo ""
-
-    echo -e "${BLUE}[1/9] Pre-deployment checks...${NC}"
-
+    log "${BLUE}[1/8] Pre-flight checks...${NC}"
+    
     # Check Docker
-    if ! docker info &> /dev/null; then
-        echo -e "   ${RED}❌ Docker not running${NC}"
+    if ! docker info > /dev/null 2>&1; then
+        log "${RED}❌ Docker not running or no permission${NC}"
+        log "${YELLOW}Try: sudo systemctl start docker${NC}"
+        log "${YELLOW}Or logout/login to apply docker group${NC}"
         exit 1
     fi
-
-    # Check network
-    if ! docker network ls | grep -q "ai-platform-network"; then
-        echo -e "   ${RED}❌ Docker network missing${NC}"
+    log "   ${GREEN}✓ Docker ready${NC}"
+    
+    # Check data directory
+    if [[ ! -d /mnt/data ]]; then
+        log "${RED}❌ /mnt/data not found${NC}"
         exit 1
     fi
-
-    # Check configs
-    if [[ ! -d "$SCRIPT_DIR/configs" ]]; then
-        echo -e "   ${RED}❌ configs/ directory missing${NC}"
-        exit 1
-    fi
-
-    # Check GPU if needed
-    if command -v nvidia-smi &> /dev/null; then
-        echo -e "   ${GREEN}✅ GPU available${NC}"
+    log "   ${GREEN}✓ Data directory exists${NC}"
+    
+    # Check stacks directory
+    if [[ ! -d "$SCRIPT_DIR/stacks" ]]; then
+        mkdir -p "$SCRIPT_DIR/stacks"
+        log "   ${GREEN}✓ Created stacks directory${NC}"
     else
-        echo -e "   ${YELLOW}⚠️  No GPU (Ollama will use CPU)${NC}"
+        log "   ${GREEN}✓ Stacks directory exists${NC}"
     fi
-
-    echo -e "   ${GREEN}✅ Pre-flight checks passed${NC}"
+    
+    # Check network
+    if ! docker network ls | grep -q ai-platform-network; then
+        docker network create ai-platform-network
+        log "   ${GREEN}✓ Created network: ai-platform-network${NC}"
+    else
+        log "   ${GREEN}✓ Network exists: ai-platform-network${NC}"
+    fi
+    
+    echo ""
 }
 
 # ============================================
-# Prepare Stacks Directory
-# ============================================
-prepare_stacks() {
-    echo -e "\n${BLUE}[2/9] Preparing stacks directory...${NC}"
-
-    # Create stacks if missing
-    mkdir -p "$SCRIPT_DIR/stacks"
-
-    # Copy configs to stacks (idempotent)
-    for service in signal ollama litellm dify anythingllm; do
-        if [[ -d "$SCRIPT_DIR/configs/$service" ]]; then
-            mkdir -p "$SCRIPT_DIR/stacks/$service"
-
-            # Copy docker-compose.yml if exists
-            if [[ -f "$SCRIPT_DIR/configs/$service/docker-compose.yml" ]]; then
-                cp "$SCRIPT_DIR/configs/$service/docker-compose.yml" \
-                   "$SCRIPT_DIR/stacks/$service/docker-compose.yml"
-                echo "   Prepared: $service"
-            fi
-
-            # Copy additional configs
-            for file in "$SCRIPT_DIR/configs/$service"/*; do
-                if [[ -f "$file" ]] && [[ "$(basename "$file")" != "docker-compose.yml" ]]; then
-                    cp "$file" "$SCRIPT_DIR/stacks/$service/"
-                fi
-            done
-        fi
-    done
-
-    echo -e "   ${GREEN}✅ Stacks prepared from configs/\${NC}"
-}
-
-# ============================================
-# Deploy Ollama
+# [2/8] Deploy Ollama
 # ============================================
 deploy_ollama() {
-    echo -e "\n${BLUE}[3/9] Deploying Ollama...${NC}"
+    log "${BLUE}[2/8] Deploying Ollama...${NC}"
+    
+    cat > "$SCRIPT_DIR/stacks/ollama-compose.yml" <<OLLAMA_COMPOSE
+version: '3.8'
 
-    cd "$SCRIPT_DIR/stacks/ollama"
+services:
+  ollama:
+    image: ollama/ollama:${OLLAMA_VERSION}
+    container_name: ollama
+    restart: unless-stopped
+    networks:
+      - ai-platform-network
+    ports:
+      - "11434:11434"
+    volumes:
+      - /mnt/data/ollama:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+      - OLLAMA_ORIGINS=*
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
-    # Substitute environment variables
-    envsubst < docker-compose.yml > docker-compose.tmp.yml
-    mv docker-compose.tmp.yml docker-compose.yml
+networks:
+  ai-platform-network:
+    external: true
+OLLAMA_COMPOSE
 
-    # Deploy
-    docker compose up -d
-
-    # Wait for ready
-    echo -n "   Waiting for Ollama"
-    for i in {1..30}; do
-        if curl -sf http://localhost:11434/api/tags &> /dev/null; then
-            echo ""
-            echo -e "   ${GREEN}✅ Ollama ready${NC}"
-            return 0
+    docker compose -f "$SCRIPT_DIR/stacks/ollama-compose.yml" up -d
+    
+    # Wait for health
+    log "   Waiting for Ollama to be ready..."
+    local retries=0
+    while ! curl -sf http://localhost:11434 > /dev/null 2>&1; do
+        sleep 5
+        retries=$((retries + 1))
+        if [[ $retries -gt 12 ]]; then
+            log "   ${RED}❌ Ollama failed to start${NC}"
+            exit 1
         fi
-        echo -n "."
-        sleep 2
     done
-
+    
+    log "   ${GREEN}✓ Ollama running at http://localhost:11434${NC}"
     echo ""
-    echo -e "   ${YELLOW}⚠️  Ollama slow to start${NC}"
 }
 
 # ============================================
-# Pull Ollama Models
+# [3/8] Pull Ollama Models
 # ============================================
 pull_ollama_models() {
-    echo -e "\n${BLUE}[4/9] Pulling Ollama models...${NC}"
-
-    if [[ -z "${OLLAMA_MODELS:-}" ]]; then
-        echo -e "   ${YELLOW}⚠️  No models specified${NC}"
-        return 0
-    fi
-
-    IFS=',' read -ra MODELS <<< "$OLLAMA_MODELS"
-
-    for model in "${MODELS[@]}"; do
-        model=$(echo "$model" | xargs)
-        echo -e "   Pulling: $model"
-
-        if docker exec ollama ollama pull "$model" 2>&1 | grep -q "success"; then
-            echo -e "   ${GREEN}✅ $model${NC}"
-        else
-            echo -e "   ${YELLOW}⚠️  $model failed${NC}"
-        fi
+    log "${BLUE}[3/8] Pulling Ollama models...${NC}"
+    
+    local models=("${OLLAMA_MODELS//,/ }")
+    
+    for model in $models; do
+        log "   Pulling $model..."
+        docker exec ollama ollama pull "$model"
+        log "   ${GREEN}✓ $model ready${NC}"
     done
+    
+    echo ""
 }
 
 # ============================================
-# Deploy LiteLLM
+# [4/8] Deploy LiteLLM
 # ============================================
 deploy_litellm() {
-    echo -e "\n${BLUE}[5/9] Deploying LiteLLM...${NC}"
+    log "${BLUE}[4/8] Deploying LiteLLM...${NC}"
+    
+    # Create config
+    mkdir -p /mnt/data/litellm
+    cat > /mnt/data/litellm/config.yaml <<LITELLM_CONFIG
+model_list:
+  - model_name: llama3.2
+    litellm_params:
+      model: ollama/llama3.2
+      api_base: http://ollama:11434
 
-    cd "$SCRIPT_DIR/stacks/litellm"
+  - model_name: qwen2.5-coder
+    litellm_params:
+      model: ollama/qwen2.5-coder:latest
+      api_base: http://ollama:11434
 
-    envsubst < docker-compose.yml > docker-compose.tmp.yml
-    mv docker-compose.tmp.yml docker-compose.yml
+litellm_settings:
+  drop_params: true
+  set_verbose: false
 
-    docker compose up -d
+general_settings:
+  master_key: ${LITELLM_MASTER_KEY}
+LITELLM_CONFIG
 
-    echo -n "   Waiting for LiteLLM"
-    for i in {1..20}; do
-        if curl -sf http://localhost:4000/health &> /dev/null; then
-            echo ""
-            echo -e "   ${GREEN}✅ LiteLLM ready${NC}"
-            return 0
+    # Create compose
+    cat > "$SCRIPT_DIR/stacks/litellm-compose.yml" <<LITELLM_COMPOSE
+version: '3.8'
+
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:${LITELLM_VERSION}
+    container_name: litellm
+    restart: unless-stopped
+    networks:
+      - ai-platform-network
+    ports:
+      - "4000:4000"
+    volumes:
+      - /mnt/data/litellm:/app/config
+    environment:
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+      - DATABASE_URL=
+    command: ["--config", "/app/config/config.yaml", "--port", "4000", "--detailed_debug"]
+    depends_on:
+      - ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  ai-platform-network:
+    external: true
+LITELLM_COMPOSE
+
+    docker compose -f "$SCRIPT_DIR/stacks/litellm-compose.yml" up -d
+    
+    # Wait for health
+    log "   Waiting for LiteLLM to be ready..."
+    local retries=0
+    while ! curl -sf http://localhost:4000/health > /dev/null 2>&1; do
+        sleep 5
+        retries=$((retries + 1))
+        if [[ $retries -gt 12 ]]; then
+            log "   ${RED}❌ LiteLLM failed to start${NC}"
+            exit 1
         fi
-        echo -n "."
-        sleep 2
     done
-
+    
+    log "   ${GREEN}✓ LiteLLM running at http://localhost:4000${NC}"
+    log "   ${YELLOW}Master Key: ${LITELLM_MASTER_KEY}${NC}"
     echo ""
-    echo -e "   ${YELLOW}⚠️  LiteLLM slow to start${NC}"
 }
 
 # ============================================
-# Deploy Signal
+# [5/8] Deploy Signal
 # ============================================
 deploy_signal() {
-    echo -e "\n${BLUE}[6/9] Deploying Signal API...${NC}"
+    log "${BLUE}[5/8] Deploying Signal...${NC}"
+    
+    cat > "$SCRIPT_DIR/stacks/signal-compose.yml" <<SIGNAL_COMPOSE
+version: '3.8'
 
-    cd "$SCRIPT_DIR/stacks/signal"
+services:
+  signal-api:
+    image: bbernhard/signal-cli-rest-api:${SIGNAL_VERSION}
+    container_name: signal-api
+    restart: unless-stopped
+    networks:
+      - ai-platform-network
+    ports:
+      - "8080:8080"
+    volumes:
+      - /mnt/data/signal:/home/.local/share/signal-cli
+    environment:
+      - MODE=native
+      - AUTO_RECEIVE_SCHEDULE=0 22 * * *
 
-    envsubst < docker-compose.yml > docker-compose.tmp.yml
-    mv docker-compose.tmp.yml docker-compose.yml
+networks:
+  ai-platform-network:
+    external: true
+SIGNAL_COMPOSE
 
-    docker compose up -d
-
-    echo -n "   Waiting for Signal API"
-    for i in {1..30}; do
-        if curl -sf http://localhost:8080/v1/health &> /dev/null; then
-            echo ""
-            echo -e "   ${GREEN}✅ Signal API ready${NC}"
-            return 0
-        fi
-        echo -n "."
-        sleep 2
-    done
-
+    docker compose -f "$SCRIPT_DIR/stacks/signal-compose.yml" up -d
+    
+    # Wait for health
+    log "   Waiting for Signal API to be ready..."
+    sleep 10
+    
+    if docker ps | grep -q signal-api; then
+        log "   ${GREEN}✓ Signal API running at http://localhost:8080${NC}"
+        log "   ${YELLOW}⚠️  Link device: Run ./3-link-signal-device.sh${NC}"
+    else
+        log "   ${RED}❌ Signal API failed to start${NC}"
+        exit 1
+    fi
+    
     echo ""
-    echo -e "   ${YELLOW}⚠️  Signal API slow to start${NC}"
 }
 
 # ============================================
-# Deploy Dify
+# [6/8] Deploy Dify
 # ============================================
 deploy_dify() {
-    echo -e "\n${BLUE}[7/9] Deploying Dify...${NC}"
+    log "${BLUE}[6/8] Deploying Dify...${NC}"
+    
+    cat > "$SCRIPT_DIR/stacks/dify-compose.yml" <<DIFY_COMPOSE
+version: '3.8'
 
-    cd "$SCRIPT_DIR/stacks/dify"
+services:
+  # PostgreSQL
+  dify-db:
+    image: postgres:15-alpine
+    container_name: dify-db
+    restart: unless-stopped
+    networks:
+      - ai-platform-network
+    volumes:
+      - /mnt/data/dify/db:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=dify
+      - POSTGRES_PASSWORD=${DIFY_DB_PASSWORD}
+      - POSTGRES_DB=dify
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dify"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-    envsubst < docker-compose.yml > docker-compose.tmp.yml
-    mv docker-compose.tmp.yml docker-compose.yml
+  # Redis
+  dify-redis:
+    image: redis:7-alpine
+    container_name: dify-redis
+    restart: unless-stopped
+    networks:
+      - ai-platform-network
+    volumes:
+      - /mnt/data/dify/redis:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-    docker compose up -d
+  # Dify API
+  dify-api:
+    image: langgenius/dify-api:${DIFY_VERSION}
+    container_name: dify-api
+    restart: unless-stopped
+    networks:
+      - ai-platform-network
+    depends_on:
+      dify-db:
+        condition: service_healthy
+      dify-redis:
+        condition: service_healthy
+    volumes:
+      - /mnt/data/dify/storage:/app/api/storage
+    environment:
+      - MODE=api
+      - LOG_LEVEL=INFO
+      - SECRET_KEY=${DIFY_SECRET_KEY}
+      - DB_USERNAME=dify
+      - DB_PASSWORD=${DIFY_DB_PASSWORD}
+      - DB_HOST=dify-db
+      - DB_PORT=5432
+      - DB_DATABASE=dify
+      - REDIS_HOST=dify-redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - CELERY_BROKER_URL=redis://dify-redis:6379/1
+      - STORAGE_TYPE=local
+      - STORAGE_LOCAL_PATH=/app/api/storage
+      - VECTOR_STORE=qdrant
+      - QDRANT_URL=http://dify-qdrant:6333
+      - QDRANT_API_KEY=${DIFY_SECRET_KEY}
 
-    echo -n "   Waiting for Dify"
-    for i in {1..60}; do
-        if curl -sf http://localhost:5001/health &> /dev/null; then
-            echo ""
-            echo -e "   ${GREEN}✅ Dify ready${NC}"
-            return 0
-        fi
-        echo -n "."
-        sleep 3
-    done
+  # Dify Worker
+  dify-worker:
+    image: langgenius/dify-api:${DIFY_VERSION}
+    container_name: dify-worker
+    restart: unless-stopped
+    networks:
+      - ai-platform-network
+    depends_on:
+      dify-db:
+        condition: service_healthy
+      dify-redis:
+        condition: service_healthy
+    volumes:
+      - /mnt/data/dify/storage:/app/api/storage
+    environment:
+      - MODE=worker
+      - LOG_LEVEL=INFO
+      - SECRET_KEY=${DIFY_SECRET_KEY}
+      - DB_USERNAME=dify
+      - DB_PASSWORD=${DIFY_DB_PASSWORD}
+      - DB_HOST=dify-db
+      - DB_PORT=5432
+      - DB_DATABASE=dify
+      - REDIS_HOST=dify-redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - CELERY_BROKER_URL=redis://dify-redis:6379/1
+      - STORAGE_TYPE=local
+      - STORAGE_LOCAL_PATH=/app/api/storage
+      - VECTOR_STORE=qdrant
+      - QDRANT_URL=http://dify-qdrant:6333
+      - QDRANT_API_KEY=${DIFY_SECRET_KEY}
 
+  # Dify Web
+  dify-web:
+    image: langgenius/dify-web:${DIFY_VERSION}
+    container_name: dify-web
+    restart: unless-stopped
+    networks:
+      - ai-platform-network
+    ports:
+      - "3000:3000"
+    depends_on:
+      - dify-api
+    environment:
+      - CONSOLE_API_URL=http://dify-api:5001
+      - APP_API_URL=http://dify-api:5001
+
+  # Qdrant Vector DB
+  dify-qdrant:
+    image: qdrant/qdrant:latest
+    container_name: dify-qdrant
+    restart: unless-stopped
+    networks:
+      - ai-platform-network
+    volumes:
+      - /mnt/data/dify/qdrant:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__API_KEY=${DIFY_SECRET_KEY}
+
+networks:
+  ai-platform-network:
+    external: true
+DIFY_COMPOSE
+
+    docker compose -f "$SCRIPT_DIR/stacks/dify-compose.yml" up -d
+    
+    log "   Waiting for Dify to initialize..."
+    sleep 30
+    
+    if docker ps | grep -q dify-web; then
+        log "   ${GREEN}✓ Dify running at http://localhost:3000${NC}"
+        log "   ${YELLOW}First login: Create admin account${NC}"
+    else
+        log "   ${RED}❌ Dify failed to start${NC}"
+        docker compose -f "$SCRIPT_DIR/stacks/dify-compose.yml" logs
+        exit 1
+    fi
+    
     echo ""
-    echo -e "   ${YELLOW}⚠️  Dify slow to start (check logs)${NC}"
 }
 
 # ============================================
-# Deploy AnythingLLM
+# [7/8] Deploy AnythingLLM
 # ============================================
 deploy_anythingllm() {
-    echo -e "\n${BLUE}[8/9] Deploying AnythingLLM...${NC}"
+    log "${BLUE}[7/8] Deploying AnythingLLM...${NC}"
+    
+    cat > "$SCRIPT_DIR/stacks/anythingllm-compose.yml" <<ANYTHINGLLM_COMPOSE
+version: '3.8'
 
-    cd "$SCRIPT_DIR/stacks/anythingllm"
+services:
+  anythingllm:
+    image: mintplexlabs/anythingllm:${ANYTHINGLLM_VERSION}
+    container_name: anythingllm
+    restart: unless-stopped
+    networks:
+      - ai-platform-network
+    ports:
+      - "3001:3001"
+    volumes:
+      - /mnt/data/anythingllm:/app/server/storage
+    environment:
+      - STORAGE_DIR=/app/server/storage
+      - UID=1000
+      - GID=1000
+    cap_add:
+      - SYS_ADMIN
 
-    envsubst < docker-compose.yml > docker-compose.tmp.yml
-    mv docker-compose.tmp.yml docker-compose.yml
+networks:
+  ai-platform-network:
+    external: true
+ANYTHINGLLM_COMPOSE
 
-    docker compose up -d
-
-    echo -n "   Waiting for AnythingLLM"
-    for i in {1..30}; do
-        if curl -sf http://localhost:3001/ &> /dev/null; then
-            echo ""
-            echo -e "   ${GREEN}✅ AnythingLLM ready${NC}"
-            return 0
-        fi
-        echo -n "."
-        sleep 2
-    done
-
+    docker compose -f "$SCRIPT_DIR/stacks/anythingllm-compose.yml" up -d
+    
+    log "   Waiting for AnythingLLM to be ready..."
+    sleep 15
+    
+    if docker ps | grep -q anythingllm; then
+        log "   ${GREEN}✓ AnythingLLM running at http://localhost:3001${NC}"
+        log "   ${YELLOW}First login: Create admin account${NC}"
+    else
+        log "   ${RED}❌ AnythingLLM failed to start${NC}"
+        exit 1
+    fi
+    
     echo ""
-    echo -e "   ${YELLOW}⚠️  AnythingLLM slow to start${NC}"
 }
 
 # ============================================
-# Deployment Summary
+# [8/8] Summary
 # ============================================
 print_summary() {
-    echo -e "\n${BLUE}[9/9] Deployment summary...${NC}"
+    log "${BLUE}[8/8] Deployment complete!${NC}"
     echo ""
-
-    docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "(ollama|litellm|signal|dify|anythingllm)"
-
+    log "${GREEN}========================================${NC}"
+    log "${GREEN}✅ All Services Running${NC}"
+    log "${GREEN}========================================${NC}"
     echo ""
-    echo -e "${GREEN}========================================${NC}"
-    echo -e "${GREEN}Services Deployed!${NC}"
-    echo -e "${GREEN}========================================${NC}"
+    
+    log "${BLUE}Service Status:${NC}"
+    docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "ollama|litellm|signal|dify|anythingllm"
     echo ""
-    echo -e "${BLUE}Service Status:${NC}"
-
-    # Check each service
-    curl -sf http://localhost:11434/api/tags &> /dev/null && \
-        echo -e "  ${GREEN}✅${NC} Ollama      http://localhost:11434" || \
-        echo -e "  ${RED}❌${NC} Ollama      http://localhost:11434"
-
-    curl -sf http://localhost:4000/health &> /dev/null && \
-        echo -e "  ${GREEN}✅${NC} LiteLLM     http://localhost:4000" || \
-        echo -e "  ${RED}❌${NC} LiteLLM     http://localhost:4000"
-
-    curl -sf http://localhost:8080/v1/health &> /dev/null && \
-        echo -e "  ${GREEN}✅${NC} Signal API  http://localhost:8080" || \
-        echo -e "  ${RED}❌${NC} Signal API  http://localhost:8080"
-
-    curl -sf http://localhost:5001/health &> /dev/null && \
-        echo -e "  ${GREEN}✅${NC} Dify        http://localhost:5001" || \
-        echo -e "  ${RED}❌${NC} Dify        http://localhost:5001"
-
-    curl -sf http://localhost:3001/ &> /dev/null && \
-        echo -e "  ${GREEN}✅${NC} AnythingLLM http://localhost:3001" || \
-        echo -e "  ${RED}❌${NC} AnythingLLM http://localhost:3001"
-
+    
+    log "${BLUE}Access URLs:${NC}"
+    log "  ${GREEN}Ollama:${NC}       http://localhost:11434"
+    log "  ${GREEN}LiteLLM:${NC}      http://localhost:4000"
+    log "  ${GREEN}Signal API:${NC}   http://localhost:8080"
+    log "  ${GREEN}Dify:${NC}         http://localhost:3000"
+    log "  ${GREEN}AnythingLLM:${NC}  http://localhost:3001"
     echo ""
-    echo -e "${BLUE}Next Steps:${NC}"
-    echo "  1. Link Signal device:"
-    echo "     ./3-link-signal-device.sh"
+    
+    log "${BLUE}Next Steps:${NC}"
+    log "  1. Link Signal device: ${YELLOW}./3-link-signal-device.sh${NC}"
+    log "  2. Deploy ClawdBot: ${YELLOW}./4-deploy-clawdbot.sh${NC}"
+    log "  3. Configure services: ${YELLOW}./5-configure-services.sh${NC}"
     echo ""
-    echo "  2. Deploy ClawdBot (after Signal linked):"
-    echo "     ./4-deploy-clawdbot.sh"
-    echo ""
-    echo "  3. Configure all services:"
-    echo "     ./5-configure-services.sh"
-    echo ""
-    echo -e "${BLUE}Management:${NC}"
-    echo "  • View logs:    docker logs -f <container-name>"
-    echo "  • Restart:      cd stacks/<service> && docker compose restart"
-    echo "  • Full rollback: ./2-deploy-services.sh --rollback"
+    
+    log "${YELLOW}Important:${NC}"
+    log "  • LiteLLM Master Key: ${LITELLM_MASTER_KEY}"
+    log "  • Dify DB Password: ${DIFY_DB_PASSWORD}"
+    log "  • Save these credentials securely!"
     echo ""
 }
 
@@ -406,7 +532,6 @@ print_summary() {
 main() {
     load_environment
     preflight_checks
-    prepare_stacks
     deploy_ollama
     pull_ollama_models
     deploy_litellm
@@ -418,4 +543,4 @@ main() {
 
 main "$@"
 
-chmod +x ~/ai-platform-installer/scripts/2-deploy-services.sh
+chmod +x scripts/2-deploy-services.sh
