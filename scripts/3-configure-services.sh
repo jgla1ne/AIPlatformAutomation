@@ -3,11 +3,9 @@ set -euo pipefail
 
 # ============================================================================
 # AI Platform - Service Configuration Script
-# Version: 10.4 FINAL - NO HEREDOC PIPING
-# Description: Ultra-robust configuration with simple logging
+# Version: 11.0 FINAL - ALL SERVICES
 # ============================================================================
 
-# Logging setup
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
@@ -22,35 +20,17 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# Logging functions
-log_info() {
-    echo -e "${BLUE}ℹ${NC} $1" | tee -a "$LOGFILE"
-}
+log_info() { echo -e "${BLUE}ℹ${NC} $1" | tee -a "$LOGFILE"; }
+log_success() { echo -e "${GREEN}✓${NC} $1" | tee -a "$LOGFILE"; }
+log_warning() { echo -e "${YELLOW}⚠${NC} $1" | tee -a "$LOGFILE"; }
+log_error() { echo -e "${RED}✗${NC} $1" | tee -a "$LOGFILE"; }
+log_step() { echo -e "\n${BLUE}▶${NC} $1" | tee -a "$LOGFILE"; }
 
-log_success() {
-    echo -e "${GREEN}✓${NC} $1" | tee -a "$LOGFILE"
-}
-
-log_warning() {
-    echo -e "${YELLOW}⚠${NC} $1" | tee -a "$LOGFILE"
-}
-
-log_error() {
-    echo -e "${RED}✗${NC} $1" | tee -a "$LOGFILE"
-}
-
-log_step() {
-    echo -e "\n${BLUE}▶${NC} $1" | tee -a "$LOGFILE"
-}
-
-# Error handler
 error_handler() {
     log_error "Script failed at line $1"
     log_error "Command: $BASH_COMMAND"
-    log_error "Check log file: $LOGFILE"
     exit 1
 }
-
 trap 'error_handler $LINENO' ERR
 
 # ============================================================================
@@ -59,112 +39,89 @@ trap 'error_handler $LINENO' ERR
 load_environment() {
     log_step "Loading environment configuration..."
     
-    local env_file="${PROJECT_ROOT}/.env"
-    
-    if [[ ! -f "$env_file" ]]; then
-        log_error ".env file not found at: $env_file"
+    if [[ ! -f "${PROJECT_ROOT}/.env" ]]; then
+        log_error ".env file not found!"
         exit 1
     fi
     
-    # Source without exporting readonly vars
-    while IFS='=' read -r key value; do
-        # Skip comments and empty lines
-        [[ "$key" =~ ^#.*$ ]] && continue
-        [[ -z "$key" ]] && continue
-        
-        # Remove quotes from value
-        value="${value%\"}"
-        value="${value#\"}"
-        
-        # Only export if not already set as readonly
-        if ! declare -p "$key" 2>/dev/null | grep -q 'declare -[^ ]*r'; then
-            export "$key=$value"
-        fi
-    done < "$env_file"
+    set -a
+    source "${PROJECT_ROOT}/.env"
+    set +a
     
     log_success "Environment loaded"
 }
 
 # ============================================================================
-# SIMPLE SERVICE CHECK (PURE BASH - NO CURL/GREP ISSUES)
+# HELPER FUNCTIONS
 # ============================================================================
-check_service_simple() {
-    local service_name="$1"
-    local port="$2"
-    local max_wait="${3:-30}"
+check_container() {
+    local container_name=$1
     
-    log_info "Checking $service_name availability..."
+    if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
+        log_success "${container_name} is running"
+        return 0
+    else
+        log_error "${container_name} is not running"
+        return 1
+    fi
+}
+
+check_service_tcp() {
+    local service_name=$1
+    local port=$2
+    local max_wait=${3:-60}
+    local elapsed=0
     
-    local waited=0
-    while [[ $waited -lt $max_wait ]]; do
-        # Pure bash TCP check - no external tools
+    log_info "Checking ${service_name} on port ${port}..."
+    
+    while [[ $elapsed -lt $max_wait ]]; do
         if timeout 2 bash -c "echo > /dev/tcp/localhost/${port}" 2>/dev/null; then
-            log_success "$service_name is responding on port $port"
+            log_success "${service_name} is responding on port ${port}"
             return 0
         fi
         
-        # Show progress dots
-        if [[ $((waited % 5)) -eq 0 ]]; then
-            echo -n "." | tee -a "$LOGFILE"
+        if [[ $((elapsed % 10)) -eq 0 ]] && [[ $elapsed -gt 0 ]]; then
+            echo -n "."
         fi
         
-        sleep 1
-        ((waited++))
+        sleep 2
+        ((elapsed+=2))
     done
     
-    echo "" | tee -a "$LOGFILE"
-    log_warning "$service_name did not respond within ${max_wait}s (may still be starting)"
-    return 0  # Don't fail - just warn
-}
-
-# ============================================================================
-# CHECK CONTAINER STATUS
-# ============================================================================
-check_container() {
-    local container_name="$1"
-    
-    if docker ps --format '{{.Names}}' | grep -q "^${container_name}$"; then
-        log_success "$container_name is running"
-        return 0
-    else
-        log_error "$container_name is not running"
-        log_info "Check container logs: docker logs $container_name"
-        return 1
-    fi
+    echo ""
+    log_warning "${service_name} not responding after ${max_wait}s (may still be starting)"
+    return 0
 }
 
 # ============================================================================
 # CONFIGURE OLLAMA
 # ============================================================================
 configure_ollama() {
-    log_step "Configuring Ollama with AI models..."
+    log_step "Configuring Ollama..."
     
     check_container "ollama"
+    check_service_tcp "Ollama" "$OLLAMA_PORT" 30
     
-    # Wait for Ollama to be ready
-    sleep 5
+    log_info "Verifying Ollama models..."
+    if docker exec ollama ollama list | grep -q "llama3.2:3b"; then
+        log_success "llama3.2:3b model available"
+    else
+        log_warning "llama3.2:3b model not found, may need to pull"
+    fi
     
-    # Pull required models
-    local models=("llama3.2:3b" "nomic-embed-text")
+    if docker exec ollama ollama list | grep -q "nomic-embed-text"; then
+        log_success "nomic-embed-text model available"
+    else
+        log_warning "nomic-embed-text model not found, may need to pull"
+    fi
     
-    for model in "${models[@]}"; do
-        log_info "Checking model: $model"
-        
-        if docker exec ollama ollama list 2>/dev/null | grep -q "$model"; then
-            log_success "Model $model already exists"
-        else
-            log_info "Pulling model: $model (this may take a while)..."
-            if docker exec ollama ollama pull "$model" >> "$LOGFILE" 2>&1; then
-                log_success "Model $model pulled successfully"
-            else
-                log_warning "Failed to pull $model - will retry later"
-            fi
-        fi
-    done
-    
-    # Show available models
-    log_info "Current Ollama models:"
-    docker exec ollama ollama list 2>/dev/null | tee -a "$LOGFILE" || log_warning "Could not list models"
+    echo ""
+    log_info "📋 Ollama is ready at:"
+    log_info "  • API: http://${TAILSCALE_IP}:${OLLAMA_PORT}"
+    log_info ""
+    log_info "Test with:"
+    log_info "  curl http://localhost:${OLLAMA_PORT}/api/generate -d '{\"model\":\"llama3.2:3b\",\"prompt\":\"Hello!\"}'"
+    echo ""
 }
 
 # ============================================================================
@@ -174,12 +131,18 @@ configure_litellm() {
     log_step "Configuring LiteLLM..."
     
     check_container "litellm"
-    check_service_simple "LiteLLM" "$LITELLM_PORT" 30
+    check_service_tcp "LiteLLM" "$LITELLM_PORT" 45
     
-    log_info "LiteLLM endpoints:"
-    log_info "  • Health:  http://localhost:${LITELLM_PORT}/health"
-    log_info "  • Chat:    http://localhost:${LITELLM_PORT}/v1/chat/completions"
-    log_info "  • Models:  http://localhost:${LITELLM_PORT}/v1/models"
+    log_info "LiteLLM Master Key: ${LITELLM_MASTER_KEY}"
+    
+    echo ""
+    log_info "📋 LiteLLM is ready at:"
+    log_info "  • API: http://${TAILSCALE_IP}:${LITELLM_PORT}"
+    log_info "  • Proxy: https://${TAILSCALE_IP}:${NGINX_PORT}/litellm/"
+    log_info ""
+    log_info "Test with:"
+    log_info "  curl http://localhost:${LITELLM_PORT}/health"
+    echo ""
 }
 
 # ============================================================================
@@ -189,32 +152,23 @@ configure_anythingllm() {
     log_step "Configuring AnythingLLM..."
     
     check_container "anythingllm"
-    check_service_simple "AnythingLLM" "$ANYTHINGLLM_PORT" 30
-    
-    log_info "AnythingLLM access:"
-    log_info "  • Direct: http://100.114.125.50:${ANYTHINGLLM_PORT}"
-    log_info "  • Proxy:  https://100.114.125.50:${NGINX_PORT}/anythingllm/"
-    
-    echo "" >> "$LOGFILE"
-    echo "📋 AnythingLLM Setup:" >> "$LOGFILE"
-    echo "1. Open the web interface" >> "$LOGFILE"
-    echo "2. Set admin password" >> "$LOGFILE"
-    echo "3. Configure Ollama:" >> "$LOGFILE"
-    echo "   - Provider: Ollama" >> "$LOGFILE"
-    echo "   - URL: http://ollama:11434" >> "$LOGFILE"
-    echo "   - Chat Model: llama3.2:3b" >> "$LOGFILE"
-    echo "   - Embedding Model: nomic-embed-text" >> "$LOGFILE"
-    echo "" >> "$LOGFILE"
+    check_service_tcp "AnythingLLM" "$ANYTHINGLLM_PORT" 60
     
     echo ""
-    echo "📋 AnythingLLM Setup:"
-    echo "1. Open the web interface"
-    echo "2. Set admin password"
-    echo "3. Configure Ollama:"
-    echo "   - Provider: Ollama"
-    echo "   - URL: http://ollama:11434"
-    echo "   - Chat Model: llama3.2:3b"
-    echo "   - Embedding Model: nomic-embed-text"
+    log_info "📋 AnythingLLM Setup:"
+    log_info "1. Open: https://${TAILSCALE_IP}:${NGINX_PORT}/anythingllm/"
+    log_info "2. Create admin account on first access"
+    log_info "3. Configure LLM provider:"
+    log_info "   - Provider: Ollama"
+    log_info "   - Base URL: http://ollama:11434"
+    log_info "   - Model: llama3.2:3b"
+    log_info "4. Configure embeddings:"
+    log_info "   - Provider: Ollama"
+    log_info "   - Model: nomic-embed-text"
+    log_info "5. Configure vector database:"
+    log_info "   - Type: LanceDB (default)"
+    log_info ""
+    log_info "Direct access: http://${TAILSCALE_IP}:${ANYTHINGLLM_PORT}"
     echo ""
 }
 
@@ -224,52 +178,25 @@ configure_anythingllm() {
 configure_dify() {
     log_step "Configuring Dify..."
     
-    # Check Dify containers
-    local dify_containers=("dify-api" "dify-worker" "dify-web" "dify-db" "dify-redis" "dify-weaviate")
+    check_container "dify-web"
+    check_container "dify-api"
+    check_container "dify-db"
+    check_container "dify-redis"
     
-    for container in "${dify_containers[@]}"; do
-        if docker ps --format '{{.Names}}' | grep -q "^${container}$"; then
-            log_success "$container is running"
-        else
-            log_warning "$container is not running yet"
-        fi
-    done
-    
-    # Check Dify web interface
-    check_service_simple "Dify Web" "8081" 45
-    
-    log_info "Dify access:"
-    log_info "  • Direct: http://100.114.125.50:8081"
-    log_info "  • Proxy:  https://100.114.125.50:${NGINX_PORT}/dify/"
-    
-    echo "" >> "$LOGFILE"
-    echo "📋 Dify Setup:" >> "$LOGFILE"
-    echo "1. Open http://100.114.125.50:8081" >> "$LOGFILE"
-    echo "2. Create admin account" >> "$LOGFILE"
-    echo "3. Configure LLM Provider:" >> "$LOGFILE"
-    echo "   - Add OpenAI Compatible provider" >> "$LOGFILE"
-    echo "   - API Base: http://litellm:4000/v1" >> "$LOGFILE"
-    echo "   - API Key: ${LITELLM_MASTER_KEY}" >> "$LOGFILE"
-    echo "   - Model: llama3.2" >> "$LOGFILE"
-    echo "4. Configure Embedding Provider:" >> "$LOGFILE"
-    echo "   - Add Ollama provider" >> "$LOGFILE"
-    echo "   - Base URL: http://ollama:11434" >> "$LOGFILE"
-    echo "   - Model: nomic-embed-text" >> "$LOGFILE"
-    echo "" >> "$LOGFILE"
+    check_service_tcp "Dify Web" "$DIFY_WEB_PORT" 60
     
     echo ""
-    echo "📋 Dify Setup:"
-    echo "1. Open http://100.114.125.50:8081"
-    echo "2. Create admin account"
-    echo "3. Configure LLM Provider:"
-    echo "   - Add OpenAI Compatible provider"
-    echo "   - API Base: http://litellm:4000/v1"
-    echo "   - API Key: ${LITELLM_MASTER_KEY}"
-    echo "   - Model: llama3.2"
-    echo "4. Configure Embedding Provider:"
-    echo "   - Add Ollama provider"
-    echo "   - Base URL: http://ollama:11434"
-    echo "   - Model: nomic-embed-text"
+    log_info "📋 Dify Setup:"
+    log_info "1. Open: https://${TAILSCALE_IP}:${NGINX_PORT}/dify/"
+    log_info "2. Create admin account"
+    log_info "3. Configure model provider:"
+    log_info "   - Add OpenAI-compatible provider"
+    log_info "   - API Base: http://litellm:4000/v1"
+    log_info "   - API Key: ${LITELLM_MASTER_KEY}"
+    log_info "   - Model: llama3.2"
+    log_info "4. Start building applications!"
+    log_info ""
+    log_info "Direct access: http://${TAILSCALE_IP}:${DIFY_WEB_PORT}"
     echo ""
 }
 
@@ -280,28 +207,22 @@ configure_n8n() {
     log_step "Configuring n8n..."
     
     check_container "n8n"
-    check_service_simple "n8n" "$N8N_PORT" 45
-    
-    log_info "n8n access:"
-    log_info "  • Direct: http://100.114.125.50:${N8N_PORT}"
-    log_info "  • Proxy:  https://100.114.125.50:${NGINX_PORT}/n8n/"
-    
-    echo "" >> "$LOGFILE"
-    echo "📋 n8n Setup:" >> "$LOGFILE"
-    echo "1. Open the web interface" >> "$LOGFILE"
-    echo "2. Create owner account" >> "$LOGFILE"
-    echo "3. Install community nodes if needed:" >> "$LOGFILE"
-    echo "   - n8n-nodes-langchain" >> "$LOGFILE"
-    echo "   - Custom integrations" >> "$LOGFILE"
-    echo "" >> "$LOGFILE"
+    check_service_tcp "n8n" "$N8N_PORT" 45
     
     echo ""
-    echo "📋 n8n Setup:"
-    echo "1. Open the web interface"
-    echo "2. Create owner account"
-    echo "3. Install community nodes if needed:"
-    echo "   - n8n-nodes-langchain"
-    echo "   - Custom integrations"
+    log_info "📋 n8n Setup:"
+    log_info "1. Open: https://${TAILSCALE_IP}:${NGINX_PORT}/n8n/"
+    log_info "2. Create owner account"
+    log_info "3. Install community nodes (optional):"
+    log_info "   - Settings > Community Nodes"
+    log_info "   - Install: n8n-nodes-langchain"
+    log_info "4. Configure credentials:"
+    log_info "   - OpenAI API: Use LiteLLM endpoint"
+    log_info "   - URL: http://litellm:4000/v1"
+    log_info "   - API Key: ${LITELLM_MASTER_KEY}"
+    log_info ""
+    log_info "Webhook URL: ${WEBHOOK_URL}"
+    log_info "Direct access: http://${TAILSCALE_IP}:${N8N_PORT}"
     echo ""
 }
 
@@ -312,116 +233,166 @@ configure_signal() {
     log_step "Configuring Signal API..."
     
     check_container "signal-api"
-    check_service_simple "Signal API" "8090" 30
-    
-    log_info "Signal API access:"
-    log_info "  • API:     http://100.114.125.50:8090"
-    log_info "  • Health:  http://100.114.125.50:8090/v1/health"
-    
-    echo "" >> "$LOGFILE"
-    echo "📋 Signal API Setup:" >> "$LOGFILE"
-    echo "1. Register your phone number:" >> "$LOGFILE"
-    echo "   curl -X POST http://localhost:8090/v1/register/+YOUR_PHONE \\" >> "$LOGFILE"
-    echo "     -H \"Content-Type: application/json\"" >> "$LOGFILE"
-    echo "" >> "$LOGFILE"
-    echo "2. Verify with code received via SMS:" >> "$LOGFILE"
-    echo "   curl -X POST http://localhost:8090/v1/register/+YOUR_PHONE/verify/CODE \\" >> "$LOGFILE"
-    echo "     -H \"Content-Type: application/json\"" >> "$LOGFILE"
-    echo "" >> "$LOGFILE"
+    check_service_tcp "Signal API" "$SIGNAL_PORT" 30
     
     echo ""
-    echo "📋 Signal API Setup:"
-    echo "1. Register your phone number:"
-    echo "   curl -X POST http://localhost:8090/v1/register/+YOUR_PHONE \\"
-    echo "     -H \"Content-Type: application/json\""
+    log_info "📋 Signal API Setup:"
+    log_info ""
+    log_info "METHOD 1 - QR Code Linking (Recommended):"
+    log_info "1. Open in browser:"
+    log_info "   https://${TAILSCALE_IP}:${NGINX_PORT}/signal/v1/qrcodelink?device_name=ai-platform"
+    log_info "2. Scan QR code with Signal app:"
+    log_info "   - Open Signal on your phone"
+    log_info "   - Settings > Linked Devices > Link New Device"
+    log_info "   - Scan the QR code displayed"
+    log_info "3. Your phone number will be automatically registered"
+    log_info ""
+    log_info "METHOD 2 - Phone Number Registration:"
+    log_info "1. Register phone number:"
+    log_info "   curl -X POST http://${TAILSCALE_IP}:${SIGNAL_PORT}/v1/register/+YOUR_PHONE"
+    log_info "2. Verify with SMS code:"
+    log_info "   curl -X POST http://${TAILSCALE_IP}:${SIGNAL_PORT}/v1/register/+YOUR_PHONE/verify/CODE"
+    log_info ""
+    log_info "Access points:"
+    log_info "  • Proxied: https://${TAILSCALE_IP}:${NGINX_PORT}/signal/"
+    log_info "  • Direct:  http://${TAILSCALE_IP}:${SIGNAL_PORT}"
+    log_info "  • Health:  http://${TAILSCALE_IP}:${SIGNAL_PORT}/v1/health"
     echo ""
-    echo "2. Verify with code received via SMS:"
-    echo "   curl -X POST http://localhost:8090/v1/register/+YOUR_PHONE/verify/CODE \\"
-    echo "     -H \"Content-Type: application/json\""
+}
+
+# ============================================================================
+# CONFIGURE CLAWDBOT
+# ============================================================================
+configure_clawdbot() {
+    log_step "Configuring ClawdBot..."
+    
+    check_container "clawdbot"
+    check_service_tcp "ClawdBot" "$CLAWDBOT_PORT" 30
+    
     echo ""
+    log_info "📋 ClawdBot Setup:"
+    log_info "1. Ensure Signal is configured first (see above)"
+    log_info "2. Register webhook with Signal:"
+    log_info "   curl -X POST http://${TAILSCALE_IP}:${SIGNAL_PORT}/v1/configuration \\"
+    log_info "     -H 'Content-Type: application/json' \\"
+    log_info "     -d '{\"webhook_url\":\"http://clawdbot:8000/webhook/signal\"}'"
+    log_info ""
+    log_info "3. Test ClawdBot:"
+    log_info "   - Send a message to your Signal number"
+    log_info "   - ClawdBot should respond with AI-generated reply"
+    log_info ""
+    log_info "Admin panel: https://${TAILSCALE_IP}:${NGINX_PORT}/clawdbot/"
+    log_info "Admin password: ${CLAWDBOT_ADMIN_PASSWORD}"
+    log_info "Direct API: http://${TAILSCALE_IP}:${CLAWDBOT_PORT}"
+    echo ""
+}
+
+# ============================================================================
+# CONFIGURE GOOGLE DRIVE SYNC
+# ============================================================================
+configure_gdrive() {
+    log_step "Configuring Google Drive Sync..."
+    
+    if check_container "gdrive-sync"; then
+        echo ""
+        log_info "📋 Google Drive Setup:"
+        log_info "1. Configure rclone:"
+        log_info "   docker exec -it gdrive-sync rclone config"
+        log_info ""
+        log_info "2. Follow prompts to add Google Drive:"
+        log_info "   - Choose: n) New remote"
+        log_info "   - Name: gdrive"
+        log_info "   - Type: drive"
+        log_info "   - Complete OAuth flow"
+        log_info ""
+        log_info "3. Test connection:"
+        log_info "   docker exec gdrive-sync rclone lsd gdrive:"
+        log_info ""
+        log_info "4. Set up sync cron job:"
+        log_info "   docker exec gdrive-sync rclone sync /data gdrive:AIPlatform --progress"
+        log_info ""
+    else
+        log_warning "gdrive-sync container not running"
+    fi
 }
 
 # ============================================================================
 # VERIFY NETWORK
 # ============================================================================
 verify_network() {
-    log_step "Verifying network configuration..."
+    log_step "Verifying network connectivity..."
     
-    if docker network inspect ai-platform >/dev/null 2>&1; then
-        log_success "Network 'ai-platform' exists"
-        
-        # Show connected containers
-        log_info "Connected containers:"
-        docker network inspect ai-platform --format '{{range .Containers}}  • {{.Name}}{{println}}{{end}}' | tee -a "$LOGFILE"
+    log_info "Testing inter-service communication..."
+    
+    # Test Ollama from LiteLLM
+    if docker exec litellm curl -s http://ollama:11434/api/tags >/dev/null 2>&1; then
+        log_success "LiteLLM can reach Ollama"
     else
-        log_warning "Network 'ai-platform' not found"
+        log_warning "LiteLLM cannot reach Ollama"
     fi
+    
+    # Test LiteLLM from n8n
+    if docker exec n8n wget -q -O- http://litellm:4000/health >/dev/null 2>&1; then
+        log_success "n8n can reach LiteLLM"
+    else
+        log_warning "n8n cannot reach LiteLLM"
+    fi
+    
+    # Test Signal from ClawdBot
+    if docker exec clawdbot curl -s http://signal-api:8080/v1/health >/dev/null 2>&1; then
+        log_success "ClawdBot can reach Signal API"
+    else
+        log_warning "ClawdBot cannot reach Signal API"
+    fi
+    
+    log_success "Network verification complete"
 }
 
 # ============================================================================
 # SHOW SUMMARY
 # ============================================================================
 show_summary() {
-    echo "" >> "$LOGFILE"
-    echo "╔════════════════════════════════════════════════════════════╗" >> "$LOGFILE"
-    echo "║          CONFIGURATION SUMMARY                         ║" >> "$LOGFILE"
-    echo "╚════════════════════════════════════════════════════════════╝" >> "$LOGFILE"
-    echo "" >> "$LOGFILE"
-    echo "🎯 SERVICE STATUS" >> "$LOGFILE"
-    echo "" >> "$LOGFILE"
-    
     echo ""
     echo "╔════════════════════════════════════════════════════════════╗"
-    echo "║          CONFIGURATION SUMMARY                         ║"
+    echo "║            CONFIGURATION COMPLETE                       ║"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo ""
-    echo "🎯 SERVICE STATUS"
+    echo "🌐 PRIMARY ACCESS (HTTPS - Recommended):"
+    echo "   https://${TAILSCALE_IP}:${NGINX_PORT}/"
     echo ""
-    
-    docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | tee -a "$LOGFILE"
-    
-    echo "" >> "$LOGFILE"
-    echo "📊 ACCESS POINTS" >> "$LOGFILE"
-    echo "" >> "$LOGFILE"
-    echo "PROXIED (Recommended - HTTPS):" >> "$LOGFILE"
-    echo "• Dashboard:    https://100.114.125.50:${NGINX_PORT}/" >> "$LOGFILE"
-    echo "• AnythingLLM:  https://100.114.125.50:${NGINX_PORT}/anythingllm/" >> "$LOGFILE"
-    echo "• Dify:         https://100.114.125.50:${NGINX_PORT}/dify/" >> "$LOGFILE"
-    echo "• n8n:          https://100.114.125.50:${NGINX_PORT}/n8n/" >> "$LOGFILE"
-    echo "" >> "$LOGFILE"
-    echo "DIRECT (API Access - HTTP):" >> "$LOGFILE"
-    echo "• Ollama:       http://100.114.125.50:${OLLAMA_PORT}" >> "$LOGFILE"
-    echo "• LiteLLM:      http://100.114.125.50:${LITELLM_PORT}" >> "$LOGFILE"
-    echo "• AnythingLLM:  http://100.114.125.50:${ANYTHINGLLM_PORT}" >> "$LOGFILE"
-    echo "• Dify Web:     http://100.114.125.50:8081" >> "$LOGFILE"
-    echo "• n8n:          http://100.114.125.50:${N8N_PORT}" >> "$LOGFILE"
-    echo "• Signal API:   http://100.114.125.50:8090" >> "$LOGFILE"
-    echo "" >> "$LOGFILE"
-    
+    echo "📱 WEB INTERFACES:"
+    echo "   • Dashboard:    https://${TAILSCALE_IP}:${NGINX_PORT}/"
+    echo "   • AnythingLLM:  https://${TAILSCALE_IP}:${NGINX_PORT}/anythingllm/"
+    echo "   • Dify:         https://${TAILSCALE_IP}:${NGINX_PORT}/dify/"
+    echo "   • n8n:          https://${TAILSCALE_IP}:${NGINX_PORT}/n8n/"
+    echo "   • ClawdBot:     https://${TAILSCALE_IP}:${NGINX_PORT}/clawdbot/"
     echo ""
-    echo "📊 ACCESS POINTS"
+    echo "🔌 API ENDPOINTS (HTTP):"
+    echo "   • Ollama:       http://${TAILSCALE_IP}:${OLLAMA_PORT}"
+    echo "   • LiteLLM:      http://${TAILSCALE_IP}:${LITELLM_PORT}"
+    echo "   • Signal:       http://${TAILSCALE_IP}:${SIGNAL_PORT}"
     echo ""
-    echo "PROXIED (Recommended - HTTPS):"
-    echo "• Dashboard:    https://100.114.125.50:${NGINX_PORT}/"
-    echo "• AnythingLLM:  https://100.114.125.50:${NGINX_PORT}/anythingllm/"
-    echo "• Dify:         https://100.114.125.50:${NGINX_PORT}/dify/"
-    echo "• n8n:          https://100.114.125.50:${NGINX_PORT}/n8n/"
+    echo "📱 SIGNAL QR CODE LINKING:"
+    echo "   https://${TAILSCALE_IP}:${NGINX_PORT}/signal/v1/qrcodelink?device_name=ai-platform"
     echo ""
-    echo "DIRECT (API Access - HTTP):"
-    echo "• Ollama:       http://100.114.125.50:${OLLAMA_PORT}"
-    echo "• LiteLLM:      http://100.114.125.50:${LITELLM_PORT}"
-    echo "• AnythingLLM:  http://100.114.125.50:${ANYTHINGLLM_PORT}"
-    echo "• Dify Web:     http://100.114.125.50:8081"
-    echo "• n8n:          http://100.114.125.50:${N8N_PORT}"
-    echo "• Signal API:   http://100.114.125.50:8090"
+    echo "🔑 CREDENTIALS:"
+    echo "   • LiteLLM API Key:      ${LITELLM_MASTER_KEY}"
+    echo "   • ClawdBot Admin PWD:   ${CLAWDBOT_ADMIN_PASSWORD}"
     echo ""
     echo "📝 LOG FILE: ${LOGFILE}"
     echo ""
-    echo "🚀 NEXT STEPS:"
-    echo "1. Open https://100.114.125.50:${NGINX_PORT}/ in your browser"
-    echo "2. Complete setup for each service (see instructions above)"
-    echo "3. Test the integrations"
-    echo "4. Register Signal API phone number"
+    echo "🎯 NEXT STEPS:"
+    echo "1. Open the dashboard in your browser"
+    echo "2. Complete setup for each service (create accounts)"
+    echo "3. Link Signal device using QR code"
+    echo "4. Configure ClawdBot webhook"
+    echo "5. Set up Google Drive sync (optional)"
+    echo ""
+    echo "🔧 USEFUL COMMANDS:"
+    echo "   • View logs:     docker compose logs -f [service]"
+    echo "   • Restart:       docker compose restart [service]"
+    echo "   • Stop all:      docker compose down"
+    echo "   • Status:        docker compose ps"
     echo ""
 }
 
@@ -429,10 +400,12 @@ show_summary() {
 # MAIN
 # ============================================================================
 main() {
-    echo "╔════════════════════════════════════════════════════════════╗"
-    echo "║    AI Platform - Service Configuration v10.4 FINAL     ║"
-    echo "║              No Heredoc Piping Issues                  ║"
-    echo "╚════════════════════════════════════════════════════════════╝"
+    cat << "EOF"
+╔════════════════════════════════════════════════════════════╗
+║    AI Platform - Service Configuration v11 FINAL       ║
+║              Complete Setup Guide                      ║
+╚════════════════════════════════════════════════════════════╝
+EOF
     
     load_environment
     
@@ -442,6 +415,8 @@ main() {
     configure_dify
     configure_n8n
     configure_signal
+    configure_clawdbot
+    configure_gdrive
     
     verify_network
     show_summary
@@ -449,4 +424,4 @@ main() {
     log_success "Configuration completed successfully!"
 }
 
-main "$@"
+main "$@" 2>&1 | tee -a "$LOGFILE"
