@@ -4,4 +4,4 @@
 /stacks/
 /backups/
 *.env
-
+*.env.*
