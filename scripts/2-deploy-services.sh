@@ -105,6 +105,22 @@ preflight_checks() {
 }
 
 # ============================================
+# [1.5/8] Create Docker Network
+# ============================================
+create_network() {
+    log "${BLUE}[1.5/8] Creating Docker network...${NC}"
+    
+    if docker network inspect ai-platform-network &>/dev/null; then
+        log "   ${GREEN}✓ Network already exists${NC}"
+    else
+        docker network create ai-platform-network
+        log "   ${GREEN}✓ Network created${NC}"
+    fi
+    
+    echo ""
+}
+
+# ============================================
 # [2/8] Prepare Stack Files
 # ============================================
 prepare_stacks() {
@@ -112,7 +128,7 @@ prepare_stacks() {
     
     mkdir -p "$SCRIPT_DIR/stacks"
     
-    # Ollama Stack
+    # Ollama Stack (GPU)
     cat > "$SCRIPT_DIR/stacks/ollama-stack.yml" <<'OLLAMA_STACK'
 version: '3.8'
 
@@ -142,6 +158,30 @@ networks:
   ai-platform-network:
     external: true
 OLLAMA_STACK
+
+    # Ollama Stack (CPU)
+    cat > "$SCRIPT_DIR/stacks/ollama-stack-cpu.yml" <<'OLLAMA_CPU'
+version: '3.8'
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    networks:
+      - ai-platform-network
+    ports:
+      - "11434:11434"
+    volumes:
+      - ${DATA_DIR}/ollama:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_ORIGINS=*
+
+networks:
+  ai-platform-network:
+    external: true
+OLLAMA_CPU
     
     # LiteLLM Stack
     cat > "$SCRIPT_DIR/stacks/litellm-stack.yml" <<'LITELLM_STACK'
@@ -350,9 +390,10 @@ ANYTHINGLLM_STACK
 deploy_ollama() {
     log "${BLUE}[3/8] Deploying Ollama...${NC}"
     
-    # Create data directory
-    mkdir -p "$DATA_DIR/ollama"
-    chown -R ollama:ollama "$DATA_DIR/ollama"
+    # Create data directory with correct permissions
+    sudo mkdir -p "$DATA_DIR/ollama"
+    sudo chown -R $(id -u):$(id -g) "$DATA_DIR/ollama"
+    sudo chmod 755 "$DATA_DIR/ollama"
     
     # Deploy based on GPU availability
     if [[ "$GPU_AVAILABLE" == "true" ]]; then
@@ -360,29 +401,6 @@ deploy_ollama() {
         docker compose -f "$SCRIPT_DIR/stacks/ollama-stack.yml" up -d
     else
         log "   ${YELLOW}Deploying in CPU-only mode...${NC}"
-        # Remove GPU configuration for CPU-only
-        cat > "$SCRIPT_DIR/stacks/ollama-stack-cpu.yml" <<'OLLAMA_CPU'
-version: '3.8'
-
-services:
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    restart: unless-stopped
-    networks:
-      - ai-platform-network
-    ports:
-      - "11434:11434"
-    volumes:
-      - ${DATA_DIR}/ollama:/root/.ollama
-    environment:
-      - OLLAMA_HOST=0.0.0.0
-      - OLLAMA_ORIGINS=*
-
-networks:
-  ai-platform-network:
-    external: true
-OLLAMA_CPU
         docker compose -f "$SCRIPT_DIR/stacks/ollama-stack-cpu.yml" up -d
     fi
     
@@ -429,11 +447,10 @@ deploy_litellm() {
     log "${BLUE}[5/8] Deploying LiteLLM...${NC}"
     
     # Create directories
-    mkdir -p "$DATA_DIR/litellm/data"
-    chown -R litellm:litellm "$DATA_DIR/litellm"
+    sudo mkdir -p "$DATA_DIR/litellm/data"
     
     # Create LiteLLM configuration
-    cat > "$DATA_DIR/litellm/config.yaml" <<LITELLM_CONFIG
+    sudo tee "$DATA_DIR/litellm/config.yaml" > /dev/null <<LITELLM_CONFIG
 model_list:
   # Ollama Models
   - model_name: llama3.2
@@ -460,7 +477,8 @@ general_settings:
   database_url: sqlite:////app/data/litellm.db
 LITELLM_CONFIG
     
-    chown litellm:litellm "$DATA_DIR/litellm/config.yaml"
+    sudo chown -R $(id -u):$(id -g) "$DATA_DIR/litellm"
+    sudo chmod 755 "$DATA_DIR/litellm"
     
     # Deploy
     docker compose -f "$SCRIPT_DIR/stacks/litellm-stack.yml" up -d
@@ -485,8 +503,9 @@ deploy_signal() {
     log "${BLUE}[6/8] Deploying Signal...${NC}"
     
     # Create directories
-    mkdir -p "$DATA_DIR/signal-cli"
-    chown -R signal:signal "$DATA_DIR/signal-cli"
+    sudo mkdir -p "$DATA_DIR/signal-cli"
+    sudo chown -R $(id -u):$(id -g) "$DATA_DIR/signal-cli"
+    sudo chmod 755 "$DATA_DIR/signal-cli"
     
     # Deploy
     docker compose -f "$SCRIPT_DIR/stacks/signal-stack.yml" up -d
@@ -514,8 +533,9 @@ deploy_dify() {
     log "${BLUE}[7/8] Deploying Dify...${NC}"
     
     # Create directories
-    mkdir -p "$DATA_DIR/dify"/{db,redis,app}
-    chown -R dify:dify "$DATA_DIR/dify"
+    sudo mkdir -p "$DATA_DIR/dify"/{db,redis,app}
+    sudo chown -R $(id -u):$(id -g) "$DATA_DIR/dify"
+    sudo chmod 755 "$DATA_DIR/dify"
     
     # Deploy
     docker compose -f "$SCRIPT_DIR/stacks/dify-stack.yml" up -d
@@ -542,8 +562,9 @@ deploy_anythingllm() {
     log "${BLUE}[8/8] Deploying AnythingLLM...${NC}"
     
     # Create directories
-    mkdir -p "$DATA_DIR/anythingllm"
-    chown -R anythingllm:anythingllm "$DATA_DIR/anythingllm"
+    sudo mkdir -p "$DATA_DIR/anythingllm"
+    sudo chown -R $(id -u):$(id -g) "$DATA_DIR/anythingllm"
+    sudo chmod 755 "$DATA_DIR/anythingllm"
     
     # Deploy
     docker compose -f "$SCRIPT_DIR/stacks/anythingllm-stack.yml" up -d
@@ -614,6 +635,7 @@ print_summary() {
 # ============================================
 main() {
     preflight_checks
+    create_network  # ← NEW: Create network before deploying
     prepare_stacks
     deploy_ollama
     pull_ollama_models

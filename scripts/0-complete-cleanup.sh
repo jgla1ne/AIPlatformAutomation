@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # ============================================
-# AI Platform - Complete Cleanup v2.0
-# Path-agnostic: Works with any repo name
+# AI Platform - Complete System Reset v5.4
+# Stops all services before cleanup
 # ============================================
 
 RED='\033[0;31m'
@@ -14,327 +14,250 @@ NC='\033[0m'
 
 # Auto-detect script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REPO_NAME="$(basename "$SCRIPT_DIR")"
 
-echo -e "${RED}========================================${NC}"
-echo -e "${RED}⚠️  COMPLETE SYSTEM CLEANUP  ⚠️${NC}"
-echo -e "${RED}========================================${NC}"
-echo ""
-echo -e "${BLUE}Repository: $REPO_NAME${NC}"
-echo -e "${BLUE}Location: $SCRIPT_DIR${NC}"
-echo ""
-echo -e "${YELLOW}This will remove:${NC}"
-echo "  • All Docker containers (AI Platform)"
-echo "  • All Docker images (AI Platform)"
-echo "  • All Docker volumes"
-echo "  • All platform data (/mnt/data/*)"
-echo "  • All config files (.env, .secrets, stacks/)"
-echo "  • Docker Engine (optional)"
-echo "  • NVIDIA drivers (optional)"
-echo "  • Service users"
-echo ""
-echo -e "${RED}⚠️  THIS CANNOT BE UNDONE!  ⚠️${NC}"
-echo ""
-read -p "Type 'DELETE EVERYTHING' to confirm: " confirmation
+log() {
+    echo -e "$1"
+}
 
-if [[ "$confirmation" != "DELETE EVERYTHING" ]]; then
-    echo "Cleanup cancelled"
+echo ""
+log "${RED}========================================${NC}"
+log "${RED}⚠️  COMPLETE SYSTEM RESET${NC}"
+log "${RED}========================================${NC}"
+log "${YELLOW}This will remove:${NC}"
+log "  • All Docker containers & images"
+log "  • All Docker networks & volumes"
+log "  • All service data in /mnt/data"
+log "  • Docker Engine"
+log "  • NVIDIA drivers (if installed)"
+log "  • Tailscale"
+log "  • Service users (ollama, litellm, signal, dify, anythingllm)"
+echo ""
+read -p "Continue? (yes/no): " confirm
+
+if [[ "$confirm" != "yes" ]]; then
+    log "${BLUE}Reset cancelled${NC}"
     exit 0
 fi
 
 echo ""
-echo -e "${BLUE}Starting cleanup...${NC}"
+log "${BLUE}========================================${NC}"
+log "${BLUE}Starting Complete Reset${NC}"
+log "${BLUE}Started: $(date)${NC}"
+log "${BLUE}========================================${NC}"
 echo ""
 
 # ============================================
-# [1/12] Stop Containers
+# [1/12] Stop All Docker Containers
 # ============================================
-cleanup_containers() {
-    echo -e "${BLUE}[1/12] Stopping containers...${NC}"
-    
-    local containers=$(docker ps -aq 2>/dev/null | wc -l)
-    if [[ $containers -gt 0 ]]; then
-        docker stop $(docker ps -aq) 2>/dev/null || true
-        docker rm $(docker ps -aq) 2>/dev/null || true
-        echo "   ${GREEN}✓ Removed $containers containers${NC}"
+log "${BLUE}[1/12] Stopping all Docker containers...${NC}"
+if docker ps -q &>/dev/null; then
+    CONTAINERS=$(docker ps -aq)
+    if [[ -n "$CONTAINERS" ]]; then
+        docker stop $CONTAINERS 2>/dev/null || true
+        docker rm -f $CONTAINERS 2>/dev/null || true
+        log "   ${GREEN}✓ All containers stopped${NC}"
     else
-        echo "   ${GREEN}✓ No containers${NC}"
+        log "   ${YELLOW}No containers to stop${NC}"
     fi
-    echo ""
-}
+else
+    log "   ${YELLOW}Docker not running${NC}"
+fi
+echo ""
 
 # ============================================
-# [2/12] Remove Images
+# [2/12] Remove All Docker Networks
 # ============================================
-cleanup_images() {
-    echo -e "${BLUE}[2/12] Removing images...${NC}"
-    
-    local images=$(docker images -q 2>/dev/null | wc -l)
-    if [[ $images -gt 0 ]]; then
-        docker rmi $(docker images -q) -f 2>/dev/null || true
-        echo "   ${GREEN}✓ Removed $images images${NC}"
+log "${BLUE}[2/12] Removing all Docker networks...${NC}"
+if docker network ls -q &>/dev/null; then
+    # Remove custom networks (skip default ones)
+    NETWORKS=$(docker network ls --filter "type=custom" -q)
+    if [[ -n "$NETWORKS" ]]; then
+        docker network rm $NETWORKS 2>/dev/null || true
+        log "   ${GREEN}✓ Custom networks removed${NC}"
     else
-        echo "   ${GREEN}✓ No images${NC}"
+        log "   ${YELLOW}No custom networks to remove${NC}"
     fi
-    echo ""
-}
+else
+    log "   ${YELLOW}Docker not running${NC}"
+fi
+echo ""
 
 # ============================================
-# [3/12] Remove Volumes
+# [3/12] Remove All Docker Volumes
 # ============================================
-cleanup_volumes() {
-    echo -e "${BLUE}[3/12] Removing volumes...${NC}"
-    
-    local volumes=$(docker volume ls -q 2>/dev/null | wc -l)
-    if [[ $volumes -gt 0 ]]; then
-        docker volume rm $(docker volume ls -q) 2>/dev/null || true
-        echo "   ${GREEN}✓ Removed $volumes volumes${NC}"
+log "${BLUE}[3/12] Removing all Docker volumes...${NC}"
+if docker volume ls -q &>/dev/null; then
+    VOLUMES=$(docker volume ls -q)
+    if [[ -n "$VOLUMES" ]]; then
+        docker volume rm $VOLUMES 2>/dev/null || true
+        log "   ${GREEN}✓ All volumes removed${NC}"
     else
-        echo "   ${GREEN}✓ No volumes${NC}"
+        log "   ${YELLOW}No volumes to remove${NC}"
     fi
-    echo ""
-}
+else
+    log "   ${YELLOW}Docker not running${NC}"
+fi
+echo ""
 
 # ============================================
-# [4/12] Remove Networks
+# [4/12] Stop Docker Service
 # ============================================
-cleanup_networks() {
-    echo -e "${BLUE}[4/12] Removing networks...${NC}"
-    
-    docker network rm ai-platform-network 2>/dev/null || true
-    docker network prune -f 2>/dev/null || true
-    echo "   ${GREEN}✓ Networks cleaned${NC}"
-    echo ""
-}
+log "${BLUE}[4/12] Stopping Docker service...${NC}"
+if systemctl is-active --quiet docker; then
+    sudo systemctl stop docker.socket 2>/dev/null || true
+    sudo systemctl stop docker 2>/dev/null || true
+    log "   ${GREEN}✓ Docker service stopped${NC}"
+else
+    log "   ${YELLOW}Docker service not running${NC}"
+fi
+echo ""
 
 # ============================================
-# [5/12] Clean Data Directories
+# [5/12] Unmount /mnt/data (Force)
 # ============================================
-cleanup_data() {
-    echo -e "${BLUE}[5/12] Cleaning data directories...${NC}"
+log "${BLUE}[5/12] Unmounting /mnt/data...${NC}"
+
+# Kill processes using /mnt/data
+if mountpoint -q /mnt/data; then
+    log "   ${YELLOW}Killing processes using /mnt/data...${NC}"
+    sudo fuser -km /mnt/data 2>/dev/null || true
+    sleep 2
     
-    if [[ -d /mnt/data ]]; then
-        sudo rm -rf /mnt/data/ollama
-        sudo rm -rf /mnt/data/litellm
-        sudo rm -rf /mnt/data/signal
-        sudo rm -rf /mnt/data/dify
-        sudo rm -rf /mnt/data/anythingllm
-        sudo rm -rf /mnt/data/clawdbot
-        sudo rm -rf /mnt/data/gateway
-        echo "   ${GREEN}✓ Data directories removed${NC}"
+    # Force unmount
+    if sudo umount -f /mnt/data 2>/dev/null; then
+        log "   ${GREEN}✓ /mnt/data unmounted${NC}"
+    elif sudo umount -l /mnt/data 2>/dev/null; then
+        log "   ${GREEN}✓ /mnt/data lazy unmounted${NC}"
     else
-        echo "   ${GREEN}✓ No data directories${NC}"
+        log "   ${YELLOW}⚠ Could not unmount /mnt/data (may need reboot)${NC}"
     fi
-    echo ""
-}
+else
+    log "   ${YELLOW}/mnt/data not mounted${NC}"
+fi
+echo ""
 
 # ============================================
-# [6/12] Clean Repo Files
+# [6/12] Clean /mnt/data Directory
 # ============================================
-cleanup_repo() {
-    echo -e "${BLUE}[6/12] Cleaning repo files...${NC}"
-    
-    cd "$SCRIPT_DIR"
-    
-    # Remove generated directories
-    [[ -d stacks ]] && rm -rf stacks && echo "   ${GREEN}✓ stacks/ removed${NC}"
-    [[ -d logs ]] && rm -rf logs && echo "   ${GREEN}✓ logs/ removed${NC}"
-    
-    # Remove config files
-    [[ -f .env ]] && rm -f .env && echo "   ${GREEN}✓ .env removed${NC}"
-    [[ -f .secrets ]] && rm -f .secrets && echo "   ${GREEN}✓ .secrets removed${NC}"
-    
-    echo ""
-}
+log "${BLUE}[6/12] Cleaning /mnt/data directory...${NC}"
+if [[ -d /mnt/data ]]; then
+    sudo rm -rf /mnt/data/* 2>/dev/null || true
+    log "   ${GREEN}✓ /mnt/data cleaned${NC}"
+fi
+echo ""
 
 # ============================================
-# [7/12] Remove Service Users
+# [7/12] Remove fstab Entry
 # ============================================
-cleanup_users() {
-    echo -e "${BLUE}[7/12] Removing service users...${NC}"
-    
-    local users=("ollama" "litellm" "signal" "dify" "anythingllm" "clawdbot")
-    
-    for user in "${users[@]}"; do
-        if id "$user" &>/dev/null; then
-            sudo userdel "$user" 2>/dev/null || true
-            echo "   ${GREEN}✓ Removed: $user${NC}"
-        fi
-    done
-    echo ""
-}
+log "${BLUE}[7/12] Removing /mnt/data from fstab...${NC}"
+if grep -q "/mnt/data" /etc/fstab 2>/dev/null; then
+    sudo sed -i '\|/mnt/data|d' /etc/fstab
+    sudo systemctl daemon-reload
+    log "   ${GREEN}✓ fstab entry removed${NC}"
+else
+    log "   ${YELLOW}No fstab entry found${NC}"
+fi
+echo ""
 
 # ============================================
-# [8/12] Unmount EBS (optional)
+# [8/12] Remove Docker Completely
 # ============================================
-unmount_ebs() {
-    echo -e "${BLUE}[8/12] Unmount EBS volume?${NC}"
-    read -p "Unmount /mnt/data? (y/N): " unmount
-    
-    if [[ "$unmount" =~ ^[Yy]$ ]]; then
-        if mountpoint -q /mnt/data; then
-            sudo umount /mnt/data
-            sudo sed -i '/\/mnt\/data/d' /etc/fstab
-            echo "   ${GREEN}✓ Unmounted${NC}"
-        else
-            echo "   ${GREEN}✓ Not mounted${NC}"
-        fi
-    else
-        echo "   ${YELLOW}⊘ Skipped${NC}"
-    fi
-    echo ""
-}
+log "${BLUE}[8/12] Uninstalling Docker...${NC}"
+
+# Remove Docker packages
+if dpkg -l | grep -q docker; then
+    log "   ${YELLOW}Removing Docker packages...${NC}"
+    sudo apt-get purge -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin 2>/dev/null || true
+    sudo apt-get autoremove -y 2>/dev/null || true
+    log "   ${GREEN}✓ Docker packages removed${NC}"
+fi
+
+# Remove Docker data
+if [[ -d /var/lib/docker ]]; then
+    log "   ${YELLOW}Removing Docker data...${NC}"
+    sudo rm -rf /var/lib/docker
+    sudo rm -rf /var/lib/containerd
+    log "   ${GREEN}✓ Docker data removed${NC}"
+fi
+
+# Remove Docker group
+if getent group docker &>/dev/null; then
+    sudo groupdel docker 2>/dev/null || true
+    log "   ${GREEN}✓ Docker group removed${NC}"
+fi
+
+echo ""
 
 # ============================================
-# [9/12] Uninstall Docker (optional)
+# [9/12] Remove Docker Compose
 # ============================================
-uninstall_docker() {
-    echo -e "${BLUE}[9/12] Uninstall Docker?${NC}"
-    read -p "Remove Docker Engine? (y/N): " remove_docker
-    
-    if [[ "$remove_docker" =~ ^[Yy]$ ]]; then
-        sudo systemctl stop docker 2>/dev/null || true
-        sudo apt-get purge -y docker-ce docker-ce-cli containerd.io \
-            docker-buildx-plugin docker-compose-plugin 2>/dev/null || true
-        
-        sudo rm -rf /var/lib/docker
-        sudo rm -rf /var/lib/containerd
-        sudo rm -rf /etc/docker
-        sudo rm -f /etc/apt/sources.list.d/docker.list
-        sudo rm -f /etc/apt/keyrings/docker.gpg
-        
-        sudo groupdel docker 2>/dev/null || true
-        
-        echo "   ${GREEN}✓ Docker uninstalled${NC}"
-    else
-        echo "   ${YELLOW}⊘ Skipped${NC}"
-    fi
-    echo ""
-}
+log "${BLUE}[9/12] Removing Docker Compose...${NC}"
+if [[ -f /usr/local/bin/docker-compose ]]; then
+    sudo rm -f /usr/local/bin/docker-compose
+    log "   ${GREEN}✓ Docker Compose removed${NC}"
+else
+    log "   ${YELLOW}Docker Compose not installed${NC}"
+fi
+echo ""
 
 # ============================================
-# [10/12] Uninstall NVIDIA (optional)
+# [10/12] Uninstall NVIDIA Drivers
 # ============================================
-uninstall_nvidia() {
-    echo -e "${BLUE}[10/12] Uninstall NVIDIA?${NC}"
-    
-    if ! lspci | grep -i nvidia > /dev/null; then
-        echo "   ${YELLOW}⊘ No GPU${NC}"
-        echo ""
-        return 0
-    fi
-    
-    read -p "Remove NVIDIA drivers? (y/N): " remove_nvidia
-    
-    if [[ "$remove_nvidia" =~ ^[Yy]$ ]]; then
-        sudo apt-get purge -y '*nvidia*' 2>/dev/null || true
-        sudo apt-get purge -y nvidia-container-toolkit 2>/dev/null || true
-        
-        sudo rm -f /etc/apt/sources.list.d/nvidia-container-toolkit.list
-        sudo rm -f /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-        
-        echo "   ${GREEN}✓ NVIDIA uninstalled (reboot needed)${NC}"
-    else
-        echo "   ${YELLOW}⊘ Skipped${NC}"
-    fi
-    echo ""
-}
+log "${BLUE}[10/12] Uninstalling NVIDIA drivers...${NC}"
+if dpkg -l | grep -q nvidia; then
+    sudo apt-get purge -y 'nvidia-*' 2>/dev/null || true
+    sudo apt-get autoremove -y 2>/dev/null || true
+    log "   ${GREEN}✓ NVIDIA drivers removed${NC}"
+else
+    log "   ${YELLOW}⚠ NVIDIA drivers not installed${NC}"
+fi
+echo ""
 
 # ============================================
-# [11/12] Clean Package Cache
+# [11/12] Uninstall Tailscale
 # ============================================
-cleanup_packages() {
-    echo -e "${BLUE}[11/12] Cleaning package cache...${NC}"
-    
-    sudo apt-get autoremove -y
-    sudo apt-get clean
-    
-    echo "   ${GREEN}✓ Cache cleaned${NC}"
-    echo ""
-}
+log "${BLUE}[11/12] Uninstalling Tailscale...${NC}"
+if command -v tailscale &>/dev/null; then
+    sudo tailscale down 2>/dev/null || true
+    sudo apt-get purge -y tailscale 2>/dev/null || true
+    sudo rm -rf /var/lib/tailscale
+    log "   ${GREEN}✓ Tailscale removed${NC}"
+else
+    log "   ${YELLOW}Tailscale not installed${NC}"
+fi
+echo ""
 
 # ============================================
-# [12/12] Verify Cleanup
+# [12/12] Remove Service Users
 # ============================================
-verify_cleanup() {
-    echo -e "${BLUE}[12/12] Verifying cleanup...${NC}"
-    echo ""
-    
-    # Check containers
-    local containers=$(docker ps -aq 2>/dev/null | wc -l)
-    if [[ $containers -eq 0 ]]; then
-        echo "   ${GREEN}✓ All containers removed${NC}"
-    else
-        echo "   ${YELLOW}⚠ $containers containers remain${NC}"
+log "${BLUE}[12/12] Removing service users...${NC}"
+
+USERS=("ollama" "litellm" "signal" "dify" "anythingllm")
+for user in "${USERS[@]}"; do
+    if id "$user" &>/dev/null; then
+        sudo userdel -r "$user" 2>/dev/null || true
+        log "   ${GREEN}✓ Removed user: $user${NC}"
     fi
-    
-    # Check data dirs
-    if [[ ! -d /mnt/data/ollama ]] && [[ ! -d /mnt/data/dify ]]; then
-        echo "   ${GREEN}✓ Data directories cleaned${NC}"
-    else
-        echo "   ${YELLOW}⚠ Some data remains${NC}"
-    fi
-    
-    # Check repo files
-    if [[ ! -d "$SCRIPT_DIR/stacks" ]] && [[ ! -f "$SCRIPT_DIR/.env" ]]; then
-        echo "   ${GREEN}✓ Repo files cleaned${NC}"
-    else
-        echo "   ${YELLOW}⚠ Some files remain${NC}"
-    fi
-    
-    # Check Docker
-    if command -v docker &> /dev/null; then
-        echo "   ${YELLOW}⚠ Docker still installed${NC}"
-    else
-        echo "   ${GREEN}✓ Docker uninstalled${NC}"
-    fi
-    
-    # Check NVIDIA
-    if command -v nvidia-smi &> /dev/null; then
-        echo "   ${YELLOW}⚠ NVIDIA drivers remain${NC}"
-    else
-        echo "   ${GREEN}✓ NVIDIA uninstalled${NC}"
-    fi
-    
-    echo ""
-}
+done
+
+echo ""
 
 # ============================================
 # Summary
 # ============================================
-print_summary() {
-    echo -e "${GREEN}✅ Cleanup completed!${NC}"
-    echo ""
-    echo -e "${GREEN}========================================${NC}"
-    echo -e "${GREEN}Next Steps${NC}"
-    echo -e "${GREEN}========================================${NC}"
-    echo ""
-    echo -e "${BLUE}To start fresh:${NC}"
-    echo "  1. Reboot: ${YELLOW}sudo reboot${NC}"
-    echo "  2. Reconnect: ${YELLOW}ssh $(whoami)@$(hostname)${NC}"
-    echo "  3. Go to repo: ${YELLOW}cd $SCRIPT_DIR/scripts${NC}"
-    echo "  4. Run setup: ${YELLOW}./1-setup-system.sh${NC}"
-    echo ""
-}
-
-# ============================================
-# Main
-# ============================================
-main() {
-    cleanup_containers
-    cleanup_images
-    cleanup_volumes
-    cleanup_networks
-    cleanup_data
-    cleanup_repo
-    cleanup_users
-    unmount_ebs
-    uninstall_docker
-    uninstall_nvidia
-    cleanup_packages
-    verify_cleanup
-    print_summary
-}
-
-main "$@"
+log "${GREEN}========================================${NC}"
+log "${GREEN}✅ Reset Complete${NC}"
+log "${GREEN}========================================${NC}"
+echo ""
+log "${BLUE}System Status:${NC}"
+log "  Docker:     $(command -v docker &>/dev/null && echo 'Removed' || echo '✓ Not installed')"
+log "  NVIDIA:     $(command -v nvidia-smi &>/dev/null && echo 'Still installed' || echo '✓ Not installed')"
+log "  Tailscale:  $(command -v tailscale &>/dev/null && echo 'Still installed' || echo '✓ Not installed')"
+log "  /mnt/data:  $(mountpoint -q /mnt/data && echo 'Still mounted' || echo '✓ Unmounted')"
+echo ""
+log "${YELLOW}Next Steps:${NC}"
+log "  1. ${YELLOW}Reboot system:${NC} sudo reboot"
+log "  2. ${YELLOW}Reconnect:${NC}     ssh $USER@$(hostname)"
+log "  3. ${YELLOW}Start fresh:${NC}   cd $SCRIPT_DIR/scripts && ./1-setup-system.sh"
+echo ""
 
