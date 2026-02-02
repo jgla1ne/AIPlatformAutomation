@@ -2,336 +2,632 @@
 set -euo pipefail
 
 # ============================================================================
-# AI Platform - Deploy Services Script
-# Version: 7.0 - MOLTBOT COMPLETE INTEGRATION
+# AI Platform - Service Management Script
+# Version: 17.0 - WITH INDIVIDUAL SERVICE CONTROL
 # ============================================================================
 
-TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-LOGS_DIR="${PROJECT_ROOT}/logs"
-LOGFILE="${LOGS_DIR}/deploy-${TIMESTAMP}.log"
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+LOGFILE="${PROJECT_ROOT}/logs/services-${TIMESTAMP}.log"
 
+# Color codes
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
 NC='\033[0m'
 
+# Logging functions
 log_info() { echo -e "${BLUE}ℹ${NC} $1" | tee -a "$LOGFILE"; }
 log_success() { echo -e "${GREEN}✓${NC} $1" | tee -a "$LOGFILE"; }
 log_warning() { echo -e "${YELLOW}⚠${NC} $1" | tee -a "$LOGFILE"; }
 log_error() { echo -e "${RED}✗${NC} $1" | tee -a "$LOGFILE"; }
-log_step() { echo -e "\n${BLUE}[$1]${NC} $2" | tee -a "$LOGFILE"; }
-
-error_handler() {
-    log_error "Deployment failed at line $1"
-    log_error "Check log: $LOGFILE"
-    log_info "Run 'docker compose logs' to view service logs"
-    exit 1
-}
-trap 'error_handler $LINENO' ERR
+log_step() { echo -e "\n${CYAN}[$1]${NC} $2" | tee -a "$LOGFILE"; }
 
 # ============================================================================
-# CHECK ENVIRONMENT
+# LOAD ENVIRONMENT
 # ============================================================================
-check_environment() {
-    log_step "1/6" "Checking environment..."
-    
+load_environment() {
     if [[ ! -f "${PROJECT_ROOT}/.env" ]]; then
-        log_error ".env file not found"
-        log_error "Run ./1-setup-system.sh first"
+        log_error "Environment file not found: ${PROJECT_ROOT}/.env"
+        log_error "Please run ./scripts/1-setup-system.sh first"
         exit 1
     fi
     
-    if [[ ! -f "${PROJECT_ROOT}/docker-compose.yml" ]]; then
-        log_error "docker-compose.yml not found"
-        log_error "Run ./1-setup-system.sh first"
-        exit 1
-    fi
-    
+    set -a
     source "${PROJECT_ROOT}/.env"
+    set +a
+    
     log_success "Environment loaded"
-    log_info "Network: ${NETWORK_NAME}"
 }
 
 # ============================================================================
-# PULL IMAGES
+# SERVICE DEFINITIONS
 # ============================================================================
-pull_images() {
-    log_step "2/6" "Pulling Docker images..."
+declare -A SERVICES=(
+    ["ollama"]="Ollama (Local LLM)"
+    ["litellm"]="LiteLLM (LLM Gateway)"
+    ["weaviate"]="Weaviate (Vector DB)"
+    ["qdrant"]="Qdrant (Vector DB)"
+    ["milvus"]="Milvus (Vector DB)"
+    ["dify"]="Dify (LLM Platform)"
+    ["n8n"]="n8n (Workflow Automation)"
+    ["anythingllm"]="AnythingLLM (Document Chat)"
+    ["flowise"]="Flowise (Visual AI Builder)"
+    ["signal"]="Signal API"
+    ["clawdbot"]="ClawdBot (AI Assistant)"
+    ["nginx"]="Nginx (Reverse Proxy)"
+)
+
+declare -A SERVICE_URLS=(
+    ["ollama"]="http://localhost:${OLLAMA_PORT:-11434}"
+    ["litellm"]="http://localhost:${LITELLM_PORT:-4000}"
+    ["weaviate"]="http://localhost:${WEAVIATE_PORT:-8080}"
+    ["qdrant"]="http://localhost:${QDRANT_PORT:-6333}"
+    ["milvus"]="http://localhost:${MILVUS_PORT:-19530}"
+    ["dify"]="http://${DOMAIN:-localhost}/dify"
+    ["n8n"]="http://${DOMAIN:-localhost}/n8n"
+    ["anythingllm"]="http://${DOMAIN:-localhost}/anythingllm"
+    ["flowise"]="http://${DOMAIN:-localhost}/flowise"
+    ["signal"]="http://localhost:${SIGNAL_PORT:-8081}"
+    ["clawdbot"]="http://${DOMAIN:-localhost}/clawdbot"
+    ["nginx"]="http://${DOMAIN:-localhost}"
+)
+
+# ============================================================================
+# CHECK IF SERVICE IS ENABLED
+# ============================================================================
+is_service_enabled() {
+    local service=$1
+    local enable_var=""
     
-    cd "$PROJECT_ROOT"
+    case "$service" in
+        ollama) enable_var="${ENABLE_OLLAMA:-false}" ;;
+        litellm) enable_var="${ENABLE_LITELLM:-false}" ;;
+        weaviate) enable_var="${ENABLE_WEAVIATE:-false}" ;;
+        qdrant) enable_var="${ENABLE_QDRANT:-false}" ;;
+        milvus) enable_var="${ENABLE_MILVUS:-false}" ;;
+        dify) enable_var="${ENABLE_DIFY:-false}" ;;
+        n8n) enable_var="${ENABLE_N8N:-false}" ;;
+        anythingllm) enable_var="${ENABLE_ANYTHINGLLM:-false}" ;;
+        flowise) enable_var="${ENABLE_FLOWISE:-false}" ;;
+        signal) enable_var="${ENABLE_SIGNAL:-false}" ;;
+        clawdbot) enable_var="${ENABLE_CLAWDBOT:-false}" ;;
+        nginx) enable_var="true" ;; # Always enabled
+        *) return 1 ;;
+    esac
     
-    local images=(
-        "ollama/ollama:latest"
-        "ghcr.io/berriai/litellm:main-latest"
-        "mintplexlabs/anythingllm:latest"
-        "postgres:15-alpine"
-        "redis:7-alpine"
-        "semitechnologies/weaviate:1.19.0"
-        "langgenius/dify-api:latest"
-        "langgenius/dify-web:latest"
-        "n8nio/n8n:latest"
-        "bbernhard/signal-cli-rest-api:latest"
-        "moltbot/moltbot:latest"
-        "rclone/rclone:latest"
-        "nginx:alpine"
+    [[ "$enable_var" == "true" ]]
+}
+
+# ============================================================================
+# GET SERVICE CONTAINERS
+# ============================================================================
+get_service_containers() {
+    local service=$1
+    
+    case "$service" in
+        ollama) echo "ai-ollama" ;;
+        litellm) echo "ai-litellm" ;;
+        weaviate) echo "ai-weaviate" ;;
+        qdrant) echo "ai-qdrant" ;;
+        milvus) echo "ai-milvus milvus-etcd milvus-minio" ;;
+        dify) echo "dify-api dify-worker dify-web" ;;
+        n8n) echo "ai-n8n" ;;
+        anythingllm) echo "ai-anythingllm" ;;
+        flowise) echo "ai-flowise" ;;
+        signal) echo "ai-signal" ;;
+        clawdbot) echo "ai-clawdbot" ;;
+        nginx) echo "ai-nginx" ;;
+        *) echo "" ;;
+    esac
+}
+
+# ============================================================================
+# START SERVICE
+# ============================================================================
+start_service() {
+    local service=$1
+    
+    if ! is_service_enabled "$service"; then
+        log_warning "${SERVICES[$service]} is not enabled in configuration"
+        return 1
+    fi
+    
+    local service_dir="${PROJECT_ROOT}/stacks/${service}"
+    
+    if [[ ! -d "$service_dir" ]]; then
+        log_error "Service directory not found: $service_dir"
+        return 1
+    fi
+    
+    if [[ ! -f "$service_dir/docker-compose.yml" ]]; then
+        log_error "Docker compose file not found: $service_dir/docker-compose.yml"
+        return 1
+    fi
+    
+    log_info "Starting ${SERVICES[$service]}..."
+    
+    cd "$service_dir"
+    
+    # Start with environment variables
+    export $(cat "${PROJECT_ROOT}/.env" | grep -v '^#' | xargs)
+    docker-compose up -d 2>&1 | tee -a "$LOGFILE"
+    
+    # Wait for service to be healthy
+    sleep 3
+    
+    local containers=$(get_service_containers "$service")
+    local all_running=true
+    
+    for container in $containers; do
+        if docker ps --filter "name=${container}" --filter "status=running" | grep -q "$container"; then
+            log_success "  ✓ $container is running"
+        else
+            log_error "  ✗ $container failed to start"
+            all_running=false
+        fi
+    done
+    
+    if $all_running; then
+        log_success "${SERVICES[$service]} started successfully"
+        if [[ -n "${SERVICE_URLS[$service]:-}" ]]; then
+            log_info "  Access at: ${SERVICE_URLS[$service]}"
+        fi
+        return 0
+    else
+        log_error "${SERVICES[$service]} failed to start properly"
+        return 1
+    fi
+}
+
+# ============================================================================
+# STOP SERVICE
+# ============================================================================
+stop_service() {
+    local service=$1
+    
+    local service_dir="${PROJECT_ROOT}/stacks/${service}"
+    
+    if [[ ! -d "$service_dir" ]]; then
+        log_warning "Service directory not found: $service_dir"
+        return 0
+    fi
+    
+    log_info "Stopping ${SERVICES[$service]}..."
+    
+    cd "$service_dir"
+    docker-compose down 2>&1 | tee -a "$LOGFILE"
+    
+    log_success "${SERVICES[$service]} stopped"
+}
+
+# ============================================================================
+# RESTART SERVICE
+# ============================================================================
+restart_service() {
+    local service=$1
+    
+    log_info "Restarting ${SERVICES[$service]}..."
+    stop_service "$service"
+    sleep 2
+    start_service "$service"
+}
+
+# ============================================================================
+# START ALL SERVICES
+# ============================================================================
+start_all() {
+    log_step "START" "Starting all enabled services"
+    
+    # Start in dependency order
+    local start_order=(
+        "ollama"
+        "litellm"
+        "weaviate"
+        "qdrant"
+        "milvus"
+        "dify"
+        "n8n"
+        "anythingllm"
+        "flowise"
+        "signal"
+        "clawdbot"
+        "nginx"
     )
     
-    log_info "Pulling ${#images[@]} Docker images..."
-    echo ""
+    local started=0
+    local failed=0
     
-    for image in "${images[@]}"; do
-        log_info "Pulling ${image}..."
-        if docker pull "$image" &>> "$LOGFILE"; then
-            log_success "${image} ✓"
-        else
-            log_error "Failed to pull ${image}"
-            exit 1
+    for service in "${start_order[@]}"; do
+        if is_service_enabled "$service"; then
+            if start_service "$service"; then
+                ((started++))
+            else
+                ((failed++))
+            fi
         fi
     done
     
     echo ""
-    log_success "All images pulled successfully"
+    log_step "SUMMARY" "Startup complete"
+    log_success "$started services started successfully"
+    [[ $failed -gt 0 ]] && log_error "$failed services failed to start"
+    
+    show_status
 }
 
 # ============================================================================
-# START CORE SERVICES
+# STOP ALL SERVICES
 # ============================================================================
-start_core_services() {
-    log_step "3/6" "Starting core infrastructure..."
+stop_all() {
+    log_step "STOP" "Stopping all services"
     
-    cd "$PROJECT_ROOT"
+    # Stop in reverse order
+    local stop_order=(
+        "nginx"
+        "clawdbot"
+        "signal"
+        "flowise"
+        "anythingllm"
+        "n8n"
+        "dify"
+        "milvus"
+        "qdrant"
+        "weaviate"
+        "litellm"
+        "ollama"
+    )
     
-    log_info "Starting databases..."
-    docker compose up -d dify-db dify-redis dify-weaviate
+    for service in "${stop_order[@]}"; do
+        if [[ -d "${PROJECT_ROOT}/stacks/${service}" ]]; then
+            stop_service "$service"
+        fi
+    done
     
-    log_info "Waiting for databases to initialize (30s)..."
-    for i in {1..30}; do
-        echo -n "."
-        sleep 1
+    log_success "All services stopped"
+}
+
+# ============================================================================
+# RESTART ALL SERVICES
+# ============================================================================
+restart_all() {
+    log_step "RESTART" "Restarting all services"
+    stop_all
+    sleep 3
+    start_all
+}
+
+# ============================================================================
+# SHOW STATUS
+# ============================================================================
+show_status() {
+    log_step "STATUS" "Service status"
+    
+    echo ""
+    printf "${CYAN}%-15s %-30s %-10s %-50s${NC}\n" "SERVICE" "DESCRIPTION" "STATUS" "URL"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    for service in ollama litellm weaviate qdrant milvus dify n8n anythingllm flowise signal clawdbot nginx; do
+        if is_service_enabled "$service"; then
+            local containers=$(get_service_containers "$service")
+            local status="${RED}STOPPED${NC}"
+            local all_running=true
+            
+            for container in $containers; do
+                if ! docker ps --filter "name=${container}" --filter "status=running" | grep -q "$container"; then
+                    all_running=false
+                    break
+                fi
+            done
+            
+            if $all_running; then
+                status="${GREEN}RUNNING${NC}"
+            fi
+            
+            printf "%-15s %-30s %-20b %-50s\n" \
+                "$service" \
+                "${SERVICES[$service]}" \
+                "$status" \
+                "${SERVICE_URLS[$service]:-N/A}"
+        else
+            printf "%-15s %-30s %-20s %-50s\n" \
+                "$service" \
+                "${SERVICES[$service]}" \
+                "${YELLOW}DISABLED${NC}" \
+                "Not configured"
+        fi
+    done
+    
+    echo ""
+}
+
+# ============================================================================
+# VIEW LOGS
+# ============================================================================
+view_logs() {
+    local service=${1:-}
+    
+    if [[ -z "$service" ]]; then
+        log_error "Please specify a service name"
+        list_services
+        return 1
+    fi
+    
+    if [[ ! -d "${PROJECT_ROOT}/stacks/${service}" ]]; then
+        log_error "Service not found: $service"
+        list_services
+        return 1
+    fi
+    
+    local containers=$(get_service_containers "$service")
+    
+    if [[ -z "$containers" ]]; then
+        log_error "No containers found for service: $service"
+        return 1
+    fi
+    
+    log_info "Showing logs for ${SERVICES[$service]}..."
+    echo ""
+    
+    cd "${PROJECT_ROOT}/stacks/${service}"
+    docker-compose logs -f --tail=100
+}
+
+# ============================================================================
+# LIST SERVICES
+# ============================================================================
+list_services() {
+    echo ""
+    echo "${CYAN}Available services:${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    for service in "${!SERVICES[@]}"; do
+        local enabled="disabled"
+        if is_service_enabled "$service"; then
+            enabled="${GREEN}enabled${NC}"
+        else
+            enabled="${YELLOW}disabled${NC}"
+        fi
+        printf "  %-15s %-30s [%b]\n" "$service" "${SERVICES[$service]}" "$enabled"
     done
     echo ""
+}
+
+# ============================================================================
+# HEALTH CHECK
+# ============================================================================
+health_check() {
+    log_step "HEALTH" "Running health checks"
     
-    # Verify database health
-    log_info "Verifying database health..."
+    echo ""
     
-    if docker exec dify-db pg_isready -U ${POSTGRES_USER} &>> "$LOGFILE"; then
-        log_success "PostgreSQL ready"
+    # Check infrastructure first
+    log_info "Checking infrastructure..."
+    
+    # PostgreSQL
+    if docker exec ai-postgres pg_isready -U "${POSTGRES_USER}" &>/dev/null; then
+        log_success "PostgreSQL: Healthy"
     else
-        log_warning "PostgreSQL still initializing..."
+        log_error "PostgreSQL: Unhealthy"
     fi
     
-    if docker exec dify-redis redis-cli --no-auth-warning -a ${REDIS_PASSWORD} ping &>> "$LOGFILE"; then
-        log_success "Redis ready"
+    # Redis
+    if docker exec ai-redis redis-cli -a "${REDIS_PASSWORD}" ping &>/dev/null 2>&1; then
+        log_success "Redis: Healthy"
     else
-        log_warning "Redis still initializing..."
+        log_error "Redis: Unhealthy"
     fi
     
-    log_success "Core infrastructure started"
-}
-
-# ============================================================================
-# START AI SERVICES
-# ============================================================================
-start_ai_services() {
-    log_step "4/6" "Starting AI services..."
+    echo ""
+    log_info "Checking application services..."
     
-    cd "$PROJECT_ROOT"
-    
-    log_info "Starting Ollama..."
-    docker compose up -d ollama
-    sleep 15
-    
-    log_info "Starting LiteLLM..."
-    docker compose up -d litellm
-    sleep 15
-    
-    log_info "Starting AnythingLLM..."
-    docker compose up -d anythingllm
-    sleep 10
-    
-    log_success "AI services started"
-}
-
-# ============================================================================
-# START APPLICATION SERVICES
-# ============================================================================
-start_app_services() {
-    log_step "5/6" "Starting application services..."
-    
-    cd "$PROJECT_ROOT"
-    
-    log_info "Starting Dify backend..."
-    docker compose up -d dify-api dify-worker
-    sleep 15
-    
-    log_info "Starting Dify frontend..."
-    docker compose up -d dify-web
-    sleep 10
-    
-    log_info "Starting n8n..."
-    docker compose up -d n8n
-    sleep 10
-    
-    log_info "Starting Signal API..."
-    docker compose up -d signal-api
-    sleep 10
-    
-    log_info "Starting ClawdBot (Moltbot)..."
-    docker compose up -d clawdbot
-    sleep 10
-    
-    log_info "Starting Google Drive sync..."
-    docker compose up -d gdrive-sync
-    sleep 5
-    
-    log_success "Application services started"
-}
-
-# ============================================================================
-# START NGINX
-# ============================================================================
-start_nginx() {
-    log_step "6/6" "Starting NGINX reverse proxy..."
-    
-    cd "$PROJECT_ROOT"
-    
-    log_info "Waiting for all services to be ready (20s)..."
-    for i in {1..20}; do
-        echo -n "."
-        sleep 1
+    # Check each enabled service
+    for service in ollama litellm weaviate qdrant milvus dify n8n anythingllm flowise signal clawdbot; do
+        if is_service_enabled "$service"; then
+            local containers=$(get_service_containers "$service")
+            local all_healthy=true
+            
+            for container in $containers; do
+                if docker ps --filter "name=${container}" --filter "status=running" | grep -q "$container"; then
+                    : # Container is running
+                else
+                    all_healthy=false
+                    break
+                fi
+            done
+            
+            if $all_healthy; then
+                log_success "${SERVICES[$service]}: Healthy"
+            else
+                log_error "${SERVICES[$service]}: Unhealthy"
+            fi
+        fi
     done
-    echo ""
-    
-    log_info "Starting NGINX..."
-    docker compose up -d nginx
-    sleep 5
-    
-    log_success "NGINX started"
-}
-
-# ============================================================================
-# VERIFY DEPLOYMENT
-# ============================================================================
-verify_deployment() {
-    echo ""
-    log_info "Verifying deployment..."
-    echo ""
-    
-    cd "$PROJECT_ROOT"
-    
-    # Show container status
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "Container Status:"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    docker compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
-    echo ""
-    
-    # Check service health
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "Service Health Checks:"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    
-    check_service_health "ollama" "11434" "/api/tags"
-    check_service_health "litellm" "4000" "/health"
-    check_service_health "anythingllm" "3001" "/api/ping"
-    check_service_health "dify-web" "3000" "/"
-    check_service_health "dify-api" "5001" "/health"
-    check_service_health "n8n" "5678" "/healthz"
-    check_service_health "signal-api" "8080" "/v1/health"
-    check_service_health "clawdbot" "18789" "/health"
-    check_service_health "nginx" "443" "/"
     
     echo ""
 }
 
-check_service_health() {
-    local service=$1
-    local port=$2
-    local path=$3
+# ============================================================================
+# SHOW USAGE
+# ============================================================================
+show_usage() {
+    cat << EOF
+
+${CYAN}╔════════════════════════════════════════════════════════════╗
+║                                                            ║
+║         AI PLATFORM - SERVICE MANAGEMENT v17.0             ║
+║                                                            ║
+╚════════════════════════════════════════════════════════════╝${NC}
+
+${YELLOW}USAGE:${NC}
+  $0 <command> [service]
+
+${YELLOW}COMMANDS:${NC}
+  ${GREEN}start${NC} [service]        Start all services or specific service
+  ${GREEN}stop${NC} [service]         Stop all services or specific service
+  ${GREEN}restart${NC} [service]      Restart all services or specific service
+  ${GREEN}status${NC}                 Show status of all services
+  ${GREEN}logs${NC} <service>         View logs for specific service
+  ${GREEN}health${NC}                 Run health checks on all services
+  ${GREEN}list${NC}                   List all available services
+
+${YELLOW}EXAMPLES:${NC}
+  $0 start                    # Start all enabled services
+  $0 start dify               # Start only Dify
+  $0 stop n8n                 # Stop only n8n
+  $0 restart anythingllm      # Restart AnythingLLM
+  $0 logs flowise             # View Flowise logs
+  $0 status                   # Show service status
+  $0 health                   # Run health checks
+
+${YELLOW}AVAILABLE SERVICES:${NC}
+EOF
     
-    if docker exec "$service" wget --quiet --tries=1 --spider "http://localhost:${port}${path}" 2>/dev/null; then
-        echo -e "  ${GREEN}✓${NC} ${service} (port ${port}) - responding"
-    else
-        echo -e "  ${YELLOW}⚠${NC} ${service} (port ${port}) - starting up..."
-    fi
+    list_services
 }
 
 # ============================================================================
-# SHOW SUMMARY
+# SHOW ACCESS INFO
 # ============================================================================
-show_summary() {
-    source "${PROJECT_ROOT}/.env"
-    
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$LOGFILE"
-    log_success "✅ DEPLOYMENT COMPLETED SUCCESSFULLY!" | tee -a "$LOGFILE"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$LOGFILE"
-    echo "" | tee -a "$LOGFILE"
-    
-    echo "🌐 ACCESS URLS:" | tee -a "$LOGFILE"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$LOGFILE"
-    echo "  Dashboard:     https://${TAILSCALE_IP}:${NGINX_PORT}/" | tee -a "$LOGFILE"
-    echo "  AnythingLLM:   https://${TAILSCALE_IP}:${NGINX_PORT}/anythingllm/" | tee -a "$LOGFILE"
-    echo "  Dify:          https://${TAILSCALE_IP}:${NGINX_PORT}/dify/" | tee -a "$LOGFILE"
-    echo "  n8n:           https://${TAILSCALE_IP}:${NGINX_PORT}/n8n/" | tee -a "$LOGFILE"
-    echo "  Signal:        https://${TAILSCALE_IP}:${NGINX_PORT}/signal/" | tee -a "$LOGFILE"
-    echo "  ClawdBot:      http://${TAILSCALE_IP}:18789/" | tee -a "$LOGFILE"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$LOGFILE"
-    echo "" | tee -a "$LOGFILE"
-    
-    echo "🔑 IMPORTANT CREDENTIALS:" | tee -a "$LOGFILE"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$LOGFILE"
-    echo "  LiteLLM Master Key:       ${LITELLM_MASTER_KEY}" | tee -a "$LOGFILE"
-    echo "  ClawdBot Gateway Token:   ${CLAWDBOT_GATEWAY_TOKEN}" | tee -a "$LOGFILE"
-    echo "  Database Password:        ${POSTGRES_PASSWORD}" | tee -a "$LOGFILE"
-    echo "" | tee -a "$LOGFILE"
-    echo "  💾 Saved in: ${PROJECT_ROOT}/.env" | tee -a "$LOGFILE"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$LOGFILE"
-    echo "" | tee -a "$LOGFILE"
-    
-    echo "📋 NEXT STEPS:" | tee -a "$LOGFILE"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$LOGFILE"
-    echo "  1. Configure services:  ./3-configure-services.sh" | tee -a "$LOGFILE"
-    echo "  2. View logs:           docker compose logs -f [service]" | tee -a "$LOGFILE"
-    echo "  3. Check status:        docker compose ps" | tee -a "$LOGFILE"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$LOGFILE"
-    echo "" | tee -a "$LOGFILE"
-    
-    log_info "📝 Deployment log: ${LOGFILE}" | tee -a "$LOGFILE"
-    echo "" | tee -a "$LOGFILE"
+show_access_info() {
+    cat << EOF
+
+${GREEN}╔════════════════════════════════════════════════════════════╗
+║                                                            ║
+║              ✓ SERVICES STARTED SUCCESSFULLY               ║
+║                                                            ║
+╚════════════════════════════════════════════════════════════╝${NC}
+
+${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  🌐 ACCESS URLS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}
+
+${MAGENTA}Main Portal:${NC}
+  • http://${DOMAIN:-localhost}
+
+${MAGENTA}Applications (via Nginx):${NC}
+EOF
+
+    [[ "${ENABLE_DIFY}" == "true" ]] && echo "  • Dify:        http://${DOMAIN:-localhost}/dify"
+    [[ "${ENABLE_N8N}" == "true" ]] && echo "  • n8n:         http://${DOMAIN:-localhost}/n8n"
+    [[ "${ENABLE_ANYTHINGLLM}" == "true" ]] && echo "  • AnythingLLM: http://${DOMAIN:-localhost}/anythingllm"
+    [[ "${ENABLE_FLOWISE}" == "true" ]] && echo "  • Flowise:     http://${DOMAIN:-localhost}/flowise"
+    [[ "${ENABLE_CLAWDBOT}" == "true" ]] && echo "  • ClawdBot:    http://${DOMAIN:-localhost}/clawdbot"
+
+    cat << EOF
+
+${MAGENTA}Direct Access (without proxy):${NC}
+EOF
+
+    [[ "${ENABLE_OLLAMA}" == "true" ]] && echo "  • Ollama:      http://localhost:${OLLAMA_PORT:-11434}"
+    [[ "${ENABLE_LITELLM}" == "true" ]] && echo "  • LiteLLM:     http://localhost:${LITELLM_PORT:-4000}"
+    [[ "${ENABLE_WEAVIATE}" == "true" ]] && echo "  • Weaviate:    http://localhost:${WEAVIATE_PORT:-8080}"
+    [[ "${ENABLE_QDRANT}" == "true" ]] && echo "  • Qdrant:      http://localhost:${QDRANT_PORT:-6333}"
+
+    [[ "${ENABLE_TAILSCALE}" == "true" ]] && cat << EOF
+
+${MAGENTA}Tailscale VPN:${NC}
+  • Port: ${TAILSCALE_PORT:-8443}
+  • All services accessible via Tailscale network
+EOF
+
+    cat << EOF
+
+${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  📖 USEFUL COMMANDS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}
+
+  View status:        ./2-start-services.sh status
+  View service logs:  ./2-start-services.sh logs <service>
+  Restart service:    ./2-start-services.sh restart <service>
+  Health check:       ./2-start-services.sh health
+  Stop all:           ./2-start-services.sh stop
+
+${GREEN}All services are now running!${NC}
+
+EOF
 }
 
 # ============================================================================
 # MAIN
 # ============================================================================
 main() {
-    cat << "EOF"
-╔════════════════════════════════════════════════════════════╗
-║        AI Platform - Deploy Services v7                ║
-║          MOLTBOT COMPLETE INTEGRATION                  ║
-╚════════════════════════════════════════════════════════════╝
-EOF
+    load_environment
     
-    echo ""
-    echo "Started: $(date)" | tee -a "$LOGFILE"
-    echo ""
+    local command="${1:-}"
+    local service="${2:-}"
     
-    check_environment
-    pull_images
-    start_core_services
-    start_ai_services
-    start_app_services
-    start_nginx
-    
-    sleep 5
-    verify_deployment
-    show_summary
-    
-    log_success "Deployment completed at: $(date)" | tee -a "$LOGFILE"
+    case "$command" in
+        start)
+            if [[ -n "$service" ]]; then
+                if [[ -n "${SERVICES[$service]:-}" ]]; then
+                    start_service "$service"
+                else
+                    log_error "Unknown service: $service"
+                    list_services
+                    exit 1
+                fi
+            else
+                start_all
+                show_access_info
+            fi
+            ;;
+        stop)
+            if [[ -n "$service" ]]; then
+                if [[ -n "${SERVICES[$service]:-}" ]]; then
+                    stop_service "$service"
+                else
+                    log_error "Unknown service: $service"
+                    list_services
+                    exit 1
+                fi
+            else
+                stop_all
+            fi
+            ;;
+        restart)
+            if [[ -n "$service" ]]; then
+                if [[ -n "${SERVICES[$service]:-}" ]]; then
+                    restart_service "$service"
+                else
+                    log_error "Unknown service: $service"
+                    list_services
+                    exit 1
+                fi
+            else
+                restart_all
+            fi
+            ;;
+        status)
+            show_status
+            ;;
+        logs)
+            if [[ -z "$service" ]]; then
+                log_error "Please specify a service name"
+                list_services
+                exit 1
+            fi
+            view_logs "$service"
+            ;;
+        health)
+            health_check
+            ;;
+        list)
+            list_services
+            ;;
+        "")
+            show_usage
+            ;;
+        *)
+            log_error "Unknown command: $command"
+            show_usage
+            exit 1
+            ;;
+    esac
 }
 
 main "$@"
-

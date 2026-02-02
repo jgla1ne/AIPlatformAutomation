@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ============================================================================
 # AI Platform - System Setup Script
-# Version: 19.0 - COMPLETE MOLTBOT INTEGRATION
+# Version: 19.0 - ALL FIXES APPLIED
 # ============================================================================
 
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
@@ -13,18 +13,37 @@ LOGS_DIR="${PROJECT_ROOT}/logs"
 mkdir -p "$LOGS_DIR"
 LOGFILE="${LOGS_DIR}/setup-${TIMESTAMP}.log"
 
+# Color codes
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
 NC='\033[0m'
 
-log_info() { echo -e "${BLUE}ℹ${NC} $1" | tee -a "$LOGFILE"; }
-log_success() { echo -e "${GREEN}✓${NC} $1" | tee -a "$LOGFILE"; }
-log_warning() { echo -e "${YELLOW}⚠${NC} $1" | tee -a "$LOGFILE"; }
-log_error() { echo -e "${RED}✗${NC} $1" | tee -a "$LOGFILE"; }
-log_step() { echo -e "\n${BLUE}[$1]${NC} $2" | tee -a "$LOGFILE"; }
+# Logging functions
+log_info() {
+    echo -e "${BLUE}ℹ${NC} $1" | tee -a "$LOGFILE"
+}
 
+log_success() {
+    echo -e "${GREEN}✓${NC} $1" | tee -a "$LOGFILE"
+}
+
+log_warning() {
+    echo -e "${YELLOW}⚠${NC} $1" | tee -a "$LOGFILE"
+}
+
+log_error() {
+    echo -e "${RED}✗${NC} $1" | tee -a "$LOGFILE"
+}
+
+log_step() {
+    echo -e "\n${CYAN}[$1]${NC} $2" | tee -a "$LOGFILE"
+}
+
+# Error handler
 error_handler() {
     log_error "Setup failed at line $1"
     log_error "Check log: $LOGFILE"
@@ -33,23 +52,76 @@ error_handler() {
 trap 'error_handler $LINENO' ERR
 
 # ============================================================================
-# CHECK PREREQUISITES
+# BANNER
+# ============================================================================
+show_banner() {
+    clear
+    cat << "EOF"
+╔════════════════════════════════════════════════════════════╗
+║                                                            ║
+║          AI PLATFORM - SYSTEM SETUP v19.0                  ║
+║           Complete Self-Hosted AI Infrastructure           ║
+║                                                            ║
+║  Services:                                                 ║
+║    • Ollama (Local LLMs)                                   ║
+║    • LiteLLM (LLM Gateway)                                 ║
+║    • Vector DBs (Weaviate, Qdrant, Milvus)                ║
+║    • Dify (LLM Platform)                                   ║
+║    • n8n (Workflow Automation)                             ║
+║    • AnythingLLM (Document Chat)                           ║
+║    • Flowise (Visual AI Builder)                           ║
+║    • Signal API (Messaging)                                ║
+║    • ClawdBot (AI Assistant)                               ║
+║    • Nginx (Reverse Proxy)                                 ║
+║    • Tailscale (VPN Access)                                ║
+║                                                            ║
+╚════════════════════════════════════════════════════════════╝
+
+EOF
+}
+
+# ============================================================================
+# PREREQUISITES CHECK
 # ============================================================================
 check_prerequisites() {
-    log_step "1/13" "Checking prerequisites..."
+    log_step "1/12" "Checking prerequisites"
     
+    local missing_tools=()
+    
+    # Check Docker
     if ! command -v docker &> /dev/null; then
-        log_error "Docker is not installed"
-        exit 1
+        missing_tools+=("docker")
+    else
+        log_success "Docker found: $(docker --version | cut -d' ' -f3)"
     fi
     
+    # Check Docker Compose
     if ! docker compose version &> /dev/null; then
-        log_error "Docker Compose is not installed"
-        exit 1
+        missing_tools+=("docker-compose")
+    else
+        log_success "Docker Compose found: $(docker compose version | cut -d' ' -f4)"
     fi
     
-    if ! systemctl is-active --quiet docker; then
-        log_error "Docker service is not running"
+    # Check jq
+    if ! command -v jq &> /dev/null; then
+        log_warning "jq not found (optional, recommended)"
+    else
+        log_success "jq found: $(jq --version)"
+    fi
+    
+    # Check curl
+    if ! command -v curl &> /dev/null; then
+        missing_tools+=("curl")
+    else
+        log_success "curl found"
+    fi
+    
+    if [[ ${#missing_tools[@]} -gt 0 ]]; then
+        log_error "Missing required tools: ${missing_tools[*]}"
+        echo ""
+        echo "Install missing tools:"
+        echo "  Ubuntu/Debian: sudo apt-get install ${missing_tools[*]}"
+        echo "  CentOS/RHEL: sudo yum install ${missing_tools[*]}"
         exit 1
     fi
     
@@ -57,1214 +129,941 @@ check_prerequisites() {
 }
 
 # ============================================================================
-# CLEAN OLD NETWORKS
+# SET DEFAULT VALUES - MUST BE CALLED BEFORE COLLECT_CONFIGURATION
 # ============================================================================
-clean_old_networks() {
-    log_step "2/13" "Cleaning old Docker networks..."
+set_default_values() {
+    log_step "2/12" "Setting default values"
     
-    local network_patterns=(
-        "ai-platform"
-        "aiplatform"
-        "ai_platform"
-    )
+    # Domain configuration
+    DOMAIN=${DOMAIN:-"localhost"}
     
-    for pattern in "${network_patterns[@]}"; do
-        local networks=$(docker network ls --filter "name=${pattern}" -q 2>/dev/null || true)
-        
-        if [[ -n "$networks" ]]; then
-            log_info "Found networks matching '${pattern}'"
-            
-            for net_id in $networks; do
-                local net_name=$(docker network inspect "$net_id" --format '{{.Name}}' 2>/dev/null || echo "unknown")
-                
-                # Disconnect all containers from this network
-                local containers=$(docker network inspect "$net_id" --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null || true)
-                
-                if [[ -n "$containers" ]]; then
-                    log_info "Disconnecting containers from network ${net_name}..."
-                    for container in $containers; do
-                        docker network disconnect -f "$net_id" "$container" 2>/dev/null || true
-                    done
-                fi
-                
-                # Remove the network
-                if docker network rm "$net_id" 2>/dev/null; then
-                    log_success "Removed network: ${net_name}"
-                else
-                    log_warning "Could not remove network: ${net_name}"
-                fi
-            done
-        fi
-    done
+    # Service enablement flags
+    ENABLE_OLLAMA=${ENABLE_OLLAMA:-"true"}
+    ENABLE_LITELLM=${ENABLE_LITELLM:-"true"}
+    ENABLE_WEAVIATE=${ENABLE_WEAVIATE:-"true"}
+    ENABLE_QDRANT=${ENABLE_QDRANT:-"true"}
+    ENABLE_MILVUS=${ENABLE_MILVUS:-"false"}
+    ENABLE_DIFY=${ENABLE_DIFY:-"true"}
+    ENABLE_N8N=${ENABLE_N8N:-"true"}
+    ENABLE_ANYTHINGLLM=${ENABLE_ANYTHINGLLM:-"true"}
+    ENABLE_FLOWISE=${ENABLE_FLOWISE:-"true"}
+    ENABLE_LIBRECHAT=${ENABLE_LIBRECHAT:-"false"}
+    ENABLE_SIGNAL=${ENABLE_SIGNAL:-"false"}
+    ENABLE_CLAWDBOT=${ENABLE_CLAWDBOT:-"false"}
+    ENABLE_NGINX=${ENABLE_NGINX:-"true"}
+    ENABLE_TAILSCALE=${ENABLE_TAILSCALE:-"false"}
     
-    log_success "Old networks cleaned"
+    # Database configuration
+    POSTGRES_USER=${POSTGRES_USER:-"aiuser"}
+    POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-"$(openssl rand -base64 32)"}
+    POSTGRES_DB=${POSTGRES_DB:-"aiplatform"}
+    POSTGRES_PORT=${POSTGRES_PORT:-"5432"}
+    POSTGRES_VERSION=${POSTGRES_VERSION:-"16-alpine"}
+    
+    # Redis configuration
+    REDIS_PASSWORD=${REDIS_PASSWORD:-"$(openssl rand -base64 32)"}
+    REDIS_PORT=${REDIS_PORT:-"6379"}
+    REDIS_VERSION=${REDIS_VERSION:-"7-alpine"}
+    
+    # MinIO configuration
+    MINIO_ROOT_USER=${MINIO_ROOT_USER:-"minioadmin"}
+    MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-"$(openssl rand -base64 32)"}
+    MINIO_PORT=${MINIO_PORT:-"9000"}
+    MINIO_CONSOLE_PORT=${MINIO_CONSOLE_PORT:-"9001"}
+    MINIO_VERSION=${MINIO_VERSION:-"latest"}
+    
+    # Ollama configuration
+    OLLAMA_PORT=${OLLAMA_PORT:-"11434"}
+    OLLAMA_VERSION=${OLLAMA_VERSION:-"latest"}
+    
+    # LiteLLM configuration
+    LITELLM_PORT=${LITELLM_PORT:-"4000"}
+    LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-"sk-$(openssl rand -hex 16)"}
+    LITELLM_VERSION=${LITELLM_VERSION:-"main-latest"}
+    
+    # Weaviate configuration
+    WEAVIATE_PORT=${WEAVIATE_PORT:-"8080"}
+    WEAVIATE_GRPC_PORT=${WEAVIATE_GRPC_PORT:-"50051"}
+    WEAVIATE_VERSION=${WEAVIATE_VERSION:-"1.25.0"}
+    
+    # Qdrant configuration
+    QDRANT_PORT=${QDRANT_PORT:-"6333"}
+    QDRANT_GRPC_PORT=${QDRANT_GRPC_PORT:-"6334"}
+    QDRANT_API_KEY=${QDRANT_API_KEY:-"$(openssl rand -base64 32)"}
+    QDRANT_VERSION=${QDRANT_VERSION:-"latest"}
+    
+    # Dify configuration
+    DIFY_PORT=${DIFY_PORT:-"3000"}
+    DIFY_API_PORT=${DIFY_API_PORT:-"5001"}
+    DIFY_SECRET_KEY=${DIFY_SECRET_KEY:-"$(openssl rand -base64 32)"}
+    DIFY_DB_NAME=${DIFY_DB_NAME:-"dify"}
+    DIFY_VERSION=${DIFY_VERSION:-"0.6.13"}
+    
+    # n8n configuration
+    N8N_PORT=${N8N_PORT:-"5678"}
+    N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:-"$(openssl rand -base64 32)"}
+    N8N_DB_NAME=${N8N_DB_NAME:-"n8n"}
+    N8N_VERSION=${N8N_VERSION:-"latest"}
+    
+    # AnythingLLM configuration
+    ANYTHINGLLM_PORT=${ANYTHINGLLM_PORT:-"3001"}
+    ANYTHINGLLM_JWT_SECRET=${ANYTHINGLLM_JWT_SECRET:-"$(openssl rand -base64 32)"}
+    ANYTHINGLLM_VERSION=${ANYTHINGLLM_VERSION:-"latest"}
+    
+    # Flowise configuration
+    FLOWISE_PORT=${FLOWISE_PORT:-"3002"}
+    FLOWISE_USERNAME=${FLOWISE_USERNAME:-"admin"}
+    FLOWISE_PASSWORD=${FLOWISE_PASSWORD:-"$(openssl rand -base64 16)"}
+    FLOWISE_SECRETKEY=${FLOWISE_SECRETKEY:-"$(openssl rand -base64 32)"}
+    FLOWISE_VERSION=${FLOWISE_VERSION:-"latest"}
+    
+    log_success "Default values set"
 }
 
 # ============================================================================
 # COLLECT CONFIGURATION
 # ============================================================================
-collect_config() {
-    log_step "3/13" "Collecting configuration..."
+collect_configuration() {
+    log_step "3/12" "Collecting configuration"
     
-    # Detect Tailscale IP
-    TAILSCALE_IP=$(ip -4 addr show tailscale0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || echo "")
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}  CONFIGURATION${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
     
-    if [[ -z "$TAILSCALE_IP" ]]; then
-        log_warning "Tailscale IP not detected automatically"
-        read -p "Enter Tailscale IP: " TAILSCALE_IP
-    else
-        log_info "Detected Tailscale IP: $TAILSCALE_IP"
-        read -p "Use this IP? (y/n): " confirm
-        if [[ "$confirm" != "y" ]]; then
-            read -p "Enter Tailscale IP: " TAILSCALE_IP
-        fi
-    fi
+    # Domain
+    read -p "Enter domain [${DOMAIN}]: " input_domain
+    DOMAIN=${input_domain:-$DOMAIN}
     
-    # Get Google Drive configuration
-    log_info "Google Drive configuration:"
-    read -p "Enter Rclone remote name (e.g., gdrive): " RCLONE_REMOTE
-    read -p "Enter Google Drive folder path: " GDRIVE_FOLDER
+    echo ""
+    echo -e "${YELLOW}Select services to enable (y/n):${NC}"
     
-    # Get Signal configuration
-    log_info "Signal configuration:"
-    read -p "Enter Signal phone number (e.g., +1234567890): " SIGNAL_PHONE
+    # Ollama
+    read -p "Enable Ollama? [Y/n]: " enable_ollama
+    ENABLE_OLLAMA=${enable_ollama:-"y"}
+    [[ "$ENABLE_OLLAMA" =~ ^[Yy]$ ]] && ENABLE_OLLAMA="true" || ENABLE_OLLAMA="false"
     
-    # Network configuration
-    NETWORK_NAME="aiplatform_net_$(date +%s)"
-    NGINX_PORT=8443
+    # LiteLLM
+    read -p "Enable LiteLLM? [Y/n]: " enable_litellm
+    ENABLE_LITELLM=${enable_litellm:-"y"}
+    [[ "$ENABLE_LITELLM" =~ ^[Yy]$ ]] && ENABLE_LITELLM="true" || ENABLE_LITELLM="false"
+    
+    # Weaviate
+    read -p "Enable Weaviate? [Y/n]: " enable_weaviate
+    ENABLE_WEAVIATE=${enable_weaviate:-"y"}
+    [[ "$ENABLE_WEAVIATE" =~ ^[Yy]$ ]] && ENABLE_WEAVIATE="true" || ENABLE_WEAVIATE="false"
+    
+    # Qdrant
+    read -p "Enable Qdrant? [Y/n]: " enable_qdrant
+    ENABLE_QDRANT=${enable_qdrant:-"y"}
+    [[ "$ENABLE_QDRANT" =~ ^[Yy]$ ]] && ENABLE_QDRANT="true" || ENABLE_QDRANT="false"
+    
+    # Dify
+    read -p "Enable Dify? [Y/n]: " enable_dify
+    ENABLE_DIFY=${enable_dify:-"y"}
+    [[ "$ENABLE_DIFY" =~ ^[Yy]$ ]] && ENABLE_DIFY="true" || ENABLE_DIFY="false"
+    
+    # n8n
+    read -p "Enable n8n? [Y/n]: " enable_n8n
+    ENABLE_N8N=${enable_n8n:-"y"}
+    [[ "$ENABLE_N8N" =~ ^[Yy]$ ]] && ENABLE_N8N="true" || ENABLE_N8N="false"
+    
+    # AnythingLLM
+    read -p "Enable AnythingLLM? [Y/n]: " enable_anythingllm
+    ENABLE_ANYTHINGLLM=${enable_anythingllm:-"y"}
+    [[ "$ENABLE_ANYTHINGLLM" =~ ^[Yy]$ ]] && ENABLE_ANYTHINGLLM="true" || ENABLE_ANYTHINGLLM="false"
+    
+    # Flowise
+    read -p "Enable Flowise? [Y/n]: " enable_flowise
+    ENABLE_FLOWISE=${enable_flowise:-"y"}
+    [[ "$ENABLE_FLOWISE" =~ ^[Yy]$ ]] && ENABLE_FLOWISE="true" || ENABLE_FLOWISE="false"
+    
+    # Nginx
+    read -p "Enable Nginx reverse proxy? [Y/n]: " enable_nginx
+    ENABLE_NGINX=${enable_nginx:-"y"}
+    [[ "$ENABLE_NGINX" =~ ^[Yy]$ ]] && ENABLE_NGINX="true" || ENABLE_NGINX="false"
     
     log_success "Configuration collected"
-    log_info "Network: ${NETWORK_NAME}"
-    log_info "IP: ${TAILSCALE_IP}"
-    log_info "Port: ${NGINX_PORT}"
 }
 
 # ============================================================================
 # CREATE DIRECTORIES
 # ============================================================================
 create_directories() {
-    log_step "4/13" "Creating directory structure..."
+    log_step "4/12" "Creating directory structure"
     
-    local dirs=(
-        "${PROJECT_ROOT}/configs"
-        "${PROJECT_ROOT}/configs/nginx"
-        "${PROJECT_ROOT}/configs/litellm"
-        "${PROJECT_ROOT}/configs/clawdbot"
-        "${PROJECT_ROOT}/configs/rclone"
-        "${PROJECT_ROOT}/data"
-        "${PROJECT_ROOT}/logs"
-        "${PROJECT_ROOT}/certs"
-        "${PROJECT_ROOT}/dashboard"
-    )
+    # Main directories
+    mkdir -p "${PROJECT_ROOT}"/{data,logs,backups,stacks,scripts}
     
-    for dir in "${dirs[@]}"; do
-        mkdir -p "$dir"
-        log_success "Created: $dir"
-    done
+    # Data directories
+    mkdir -p "${PROJECT_ROOT}/data"/{postgres,redis,minio,ollama,weaviate,qdrant,milvus,dify,n8n,anythingllm,flowise,librechat,nginx}
+    
+    # Stack directories
+    mkdir -p "${PROJECT_ROOT}/stacks"/{infrastructure,ollama,litellm,weaviate,qdrant,milvus,dify,n8n,anythingllm,flowise,librechat,signal,clawdbot,nginx,tailscale}
+    
+    log_success "Directory structure created"
 }
 
 # ============================================================================
-# GENERATE .ENV FILE
+# SAVE CREDENTIALS
 # ============================================================================
-generate_env_file() {
-    log_step "5/13" "Generating environment file..."
+save_credentials() {
+    log_step "5/12" "Saving credentials"
     
-    # Generate secure passwords and tokens
-    local POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-    local REDIS_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-    local SECRET_KEY=$(openssl rand -hex 32)
-    local LITELLM_MASTER_KEY=$(openssl rand -hex 32)
-    local LITELLM_SALT_KEY=$(openssl rand -hex 16)
-    local CLAWDBOT_GATEWAY_TOKEN=$(openssl rand -hex 32)
+    # Backup existing .env if it exists
+    if [[ -f "${PROJECT_ROOT}/.env" ]]; then
+        cp "${PROJECT_ROOT}/.env" "${PROJECT_ROOT}/.env.backup.${TIMESTAMP}"
+        log_info "Backed up existing .env"
+    fi
     
+    # Create new .env file
     cat > "${PROJECT_ROOT}/.env" << EOF
-# ============================================================================
-# AI Platform Environment Configuration
+# AI Platform Configuration
 # Generated: $(date)
-# ============================================================================
 
-# Network Configuration
-NETWORK_NAME=${NETWORK_NAME}
-TAILSCALE_IP=${TAILSCALE_IP}
-NGINX_PORT=${NGINX_PORT}
+# Domain Configuration
+DOMAIN=${DOMAIN}
 
-# Database Configuration
-POSTGRES_USER=aiplatform
+# Service Enablement
+ENABLE_OLLAMA=${ENABLE_OLLAMA}
+ENABLE_LITELLM=${ENABLE_LITELLM}
+ENABLE_WEAVIATE=${ENABLE_WEAVIATE}
+ENABLE_QDRANT=${ENABLE_QDRANT}
+ENABLE_MILVUS=${ENABLE_MILVUS}
+ENABLE_DIFY=${ENABLE_DIFY}
+ENABLE_N8N=${ENABLE_N8N}
+ENABLE_ANYTHINGLLM=${ENABLE_ANYTHINGLLM}
+ENABLE_FLOWISE=${ENABLE_FLOWISE}
+ENABLE_LIBRECHAT=${ENABLE_LIBRECHAT}
+ENABLE_SIGNAL=${ENABLE_SIGNAL}
+ENABLE_CLAWDBOT=${ENABLE_CLAWDBOT}
+ENABLE_NGINX=${ENABLE_NGINX}
+ENABLE_TAILSCALE=${ENABLE_TAILSCALE}
+
+# PostgreSQL
+POSTGRES_USER=${POSTGRES_USER}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-POSTGRES_DB=aiplatform
+POSTGRES_DB=${POSTGRES_DB}
+POSTGRES_PORT=${POSTGRES_PORT}
+POSTGRES_VERSION=${POSTGRES_VERSION}
 
-# Redis Configuration
+# Redis
 REDIS_PASSWORD=${REDIS_PASSWORD}
+REDIS_PORT=${REDIS_PORT}
+REDIS_VERSION=${REDIS_VERSION}
 
-# Security Keys
-SECRET_KEY=${SECRET_KEY}
+# MinIO
+MINIO_ROOT_USER=${MINIO_ROOT_USER}
+MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+MINIO_PORT=${MINIO_PORT}
+MINIO_CONSOLE_PORT=${MINIO_CONSOLE_PORT}
+MINIO_VERSION=${MINIO_VERSION}
 
-# LiteLLM Configuration
+# Ollama
+OLLAMA_PORT=${OLLAMA_PORT}
+OLLAMA_VERSION=${OLLAMA_VERSION}
+
+# LiteLLM
+LITELLM_PORT=${LITELLM_PORT}
 LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
-LITELLM_SALT_KEY=${LITELLM_SALT_KEY}
+LITELLM_VERSION=${LITELLM_VERSION}
 
-# Dify Configuration
-DIFY_API_URL=http://dify-api:5001
-DIFY_WEB_URL=http://dify-web:3000
+# Weaviate
+WEAVIATE_PORT=${WEAVIATE_PORT}
+WEAVIATE_GRPC_PORT=${WEAVIATE_GRPC_PORT}
+WEAVIATE_VERSION=${WEAVIATE_VERSION}
 
-# AnythingLLM Configuration
-ANYTHINGLLM_URL=http://anythingllm:3001
+# Qdrant
+QDRANT_PORT=${QDRANT_PORT}
+QDRANT_GRPC_PORT=${QDRANT_GRPC_PORT}
+QDRANT_API_KEY=${QDRANT_API_KEY}
+QDRANT_VERSION=${QDRANT_VERSION}
 
-# n8n Configuration
-N8N_HOST=${TAILSCALE_IP}
-N8N_PORT=5678
-N8N_PROTOCOL=https
+# Dify
+DIFY_PORT=${DIFY_PORT}
+DIFY_API_PORT=${DIFY_API_PORT}
+DIFY_SECRET_KEY=${DIFY_SECRET_KEY}
+DIFY_DB_NAME=${DIFY_DB_NAME}
+DIFY_VERSION=${DIFY_VERSION}
 
-# Ollama Configuration
-OLLAMA_HOST=http://ollama:11434
+# n8n
+N8N_PORT=${N8N_PORT}
+N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+N8N_DB_NAME=${N8N_DB_NAME}
+N8N_VERSION=${N8N_VERSION}
 
-# Signal Configuration
-SIGNAL_PHONE=${SIGNAL_PHONE}
-SIGNAL_API_URL=http://signal-api:8080
+# AnythingLLM
+ANYTHINGLLM_PORT=${ANYTHINGLLM_PORT}
+ANYTHINGLLM_JWT_SECRET=${ANYTHINGLLM_JWT_SECRET}
+ANYTHINGLLM_VERSION=${ANYTHINGLLM_VERSION}
 
-# ClawdBot/Moltbot Configuration
-CLAWDBOT_GATEWAY_TOKEN=${CLAWDBOT_GATEWAY_TOKEN}
-CLAWDBOT_PORT=18789
-
-# Google Drive Sync Configuration
-RCLONE_REMOTE=${RCLONE_REMOTE}
-GDRIVE_FOLDER=${GDRIVE_FOLDER}
-SYNC_INTERVAL=3600
-
-# Timezone
-TZ=UTC
-
+# Flowise
+FLOWISE_PORT=${FLOWISE_PORT}
+FLOWISE_USERNAME=${FLOWISE_USERNAME}
+FLOWISE_PASSWORD=${FLOWISE_PASSWORD}
+FLOWISE_SECRETKEY=${FLOWISE_SECRETKEY}
+FLOWISE_VERSION=${FLOWISE_VERSION}
 EOF
-    
+
     chmod 600 "${PROJECT_ROOT}/.env"
-    log_success "Environment file created"
-    log_info "Credentials saved to: ${PROJECT_ROOT}/.env"
+    log_success "Credentials saved to .env"
 }
 
 # ============================================================================
-# GENERATE DOCKER COMPOSE
+# CREATE DOCKER NETWORK
 # ============================================================================
-generate_docker_compose() {
-    log_step "6/13" "Generating docker-compose.yml..."
+create_docker_network() {
+    log_step "6/12" "Creating Docker network"
     
-    cat > "${PROJECT_ROOT}/docker-compose.yml" << 'EOF'
-version: '3.8'
+    if docker network inspect ai-network &>/dev/null; then
+        log_info "Network 'ai-network' already exists"
+    else
+        docker network create ai-network
+        log_success "Network 'ai-network' created"
+    fi
+}
 
 # ============================================================================
-# AI PLATFORM - DOCKER COMPOSE CONFIGURATION
+# GENERATE STACK CONFIGS - DOCKER COMPOSE V2 FORMAT (NO VERSION ATTRIBUTE)
 # ============================================================================
-
+generate_stack_configs() {
+    log_step "7/12" "Generating Docker Compose configurations"
+    
+    # Source the .env file
+    set -a
+    source "${PROJECT_ROOT}/.env"
+    set +a
+    
+    # ========================================================================
+    # INFRASTRUCTURE STACK
+    # ========================================================================
+    cat > "${PROJECT_ROOT}/stacks/infrastructure/docker-compose.yml" << 'EOF'
 networks:
-  default:
-    name: ${NETWORK_NAME}
-    driver: bridge
-
-volumes:
-  ollama_data:
-  anythingllm_data:
-  dify_postgres:
-  dify_redis:
-  dify_weaviate:
-  dify_storage:
-  n8n_data:
-  signal_data:
-  clawdbot_data:
-  clawdbot_workspace:
-  gdrive_data:
+  ai-network:
+    external: true
 
 services:
-  # ============================================================================
-  # OLLAMA - Local LLM Engine
-  # ============================================================================
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    restart: unless-stopped
+  postgres:
+    image: postgres:${POSTGRES_VERSION}
+    container_name: ai-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      - "11434:11434"
+      - "${POSTGRES_PORT}:5432"
     volumes:
-      - ollama_data:/root/.ollama
-    environment:
-      - OLLAMA_HOST=0.0.0.0:11434
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-  # ============================================================================
-  # LITELLM - Unified LLM Gateway
-  # ============================================================================
-  litellm:
-    image: ghcr.io/berriai/litellm:main-latest
-    container_name: litellm
+      - ../../data/postgres:/var/lib/postgresql/data
+    networks:
+      - ai-network
     restart: unless-stopped
-    ports:
-      - "4000:4000"
-    volumes:
-      - ./configs/litellm/config.yaml:/app/config.yaml:ro
-    environment:
-      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
-      - LITELLM_SALT_KEY=${LITELLM_SALT_KEY}
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@dify-db:5432/${POSTGRES_DB}
-    command: --config /app/config.yaml --port 4000
-    depends_on:
-      ollama:
-        condition: service_healthy
-      dify-db:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  # ============================================================================
-  # ANYTHINGLLM - Document Chat Interface
-  # ============================================================================
-  anythingllm:
-    image: mintplexlabs/anythingllm:latest
-    container_name: anythingllm
-    restart: unless-stopped
-    ports:
-      - "3001:3001"
-    volumes:
-      - anythingllm_data:/app/server/storage
-    environment:
-      - STORAGE_DIR=/app/server/storage
-      - LLM_PROVIDER=ollama
-      - OLLAMA_BASE_PATH=http://ollama:11434
-      - EMBEDDING_ENGINE=ollama
-      - EMBEDDING_BASE_PATH=http://ollama:11434
-      - VECTOR_DB=lancedb
-    depends_on:
-      ollama:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001/api/ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  # ============================================================================
-  # DIFY - AI Application Platform
-  # ============================================================================
-  dify-db:
-    image: postgres:15-alpine
-    container_name: dify-db
-    restart: unless-stopped
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
-      - PGDATA=/var/lib/postgresql/data/pgdata
-    volumes:
-      - dify_postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
 
-  dify-redis:
-    image: redis:7-alpine
-    container_name: dify-redis
-    restart: unless-stopped
+  redis:
+    image: redis:${REDIS_VERSION}
+    container_name: ai-redis
     command: redis-server --requirepass ${REDIS_PASSWORD}
+    ports:
+      - "${REDIS_PORT}:6379"
     volumes:
-      - dify_redis:/data
+      - ../../data/redis:/data
+    networks:
+      - ai-network
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 20s
 
-  dify-weaviate:
-    image: semitechnologies/weaviate:1.19.0
-    container_name: dify-weaviate
-    restart: unless-stopped
-    volumes:
-      - dify_weaviate:/var/lib/weaviate
+  minio:
+    image: minio/minio:${MINIO_VERSION}
+    container_name: ai-minio
+    command: server /data --console-address ":9001"
     environment:
-      - QUERY_DEFAULTS_LIMIT=25
-      - AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true
-      - PERSISTENCE_DATA_PATH=/var/lib/weaviate
-      - DEFAULT_VECTORIZER_MODULE=none
-      - CLUSTER_HOSTNAME=node1
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/v1/.well-known/ready"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  dify-api:
-    image: langgenius/dify-api:latest
-    container_name: dify-api
-    restart: unless-stopped
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     ports:
-      - "5001:5001"
-    environment:
-      - MODE=api
-      - LOG_LEVEL=INFO
-      - SECRET_KEY=${SECRET_KEY}
-      - DB_USERNAME=${POSTGRES_USER}
-      - DB_PASSWORD=${POSTGRES_PASSWORD}
-      - DB_HOST=dify-db
-      - DB_PORT=5432
-      - DB_DATABASE=${POSTGRES_DB}
-      - REDIS_HOST=dify-redis
-      - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-      - REDIS_USE_SSL=false
-      - REDIS_DB=0
-      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@dify-redis:6379/1
-      - WEB_API_CORS_ALLOW_ORIGINS=*
-      - CONSOLE_CORS_ALLOW_ORIGINS=*
-      - STORAGE_TYPE=local
-      - STORAGE_LOCAL_PATH=/app/storage
-      - VECTOR_STORE=weaviate
-      - WEAVIATE_ENDPOINT=http://dify-weaviate:8080
+      - "${MINIO_PORT}:9000"
+      - "${MINIO_CONSOLE_PORT}:9001"
     volumes:
-      - dify_storage:/app/storage
-    depends_on:
-      dify-db:
-        condition: service_healthy
-      dify-redis:
-        condition: service_healthy
-      dify-weaviate:
-        condition: service_healthy
+      - ../../data/minio:/data
+    networks:
+      - ai-network
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:5001/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+EOF
+
+    log_success "Infrastructure stack configuration generated"
+    
+    # ========================================================================
+    # OLLAMA STACK
+    # ========================================================================
+    if [[ "${ENABLE_OLLAMA}" == "true" ]]; then
+        cat > "${PROJECT_ROOT}/stacks/ollama/docker-compose.yml" << 'EOF'
+networks:
+  ai-network:
+    external: true
+
+services:
+  ollama:
+    image: ollama/ollama:${OLLAMA_VERSION}
+    container_name: ai-ollama
+    ports:
+      - "${OLLAMA_PORT}:11434"
+    volumes:
+      - ../../data/ollama:/root/.ollama
+    networks:
+      - ai-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+EOF
+        log_success "Ollama stack configuration generated"
+    fi
+    
+    # ========================================================================
+    # LITELLM STACK
+    # ========================================================================
+    if [[ "${ENABLE_LITELLM}" == "true" ]]; then
+        cat > "${PROJECT_ROOT}/stacks/litellm/docker-compose.yml" << 'EOF'
+networks:
+  ai-network:
+    external: true
+
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:${LITELLM_VERSION}
+    container_name: ai-litellm
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@ai-postgres:5432/${POSTGRES_DB}
+    ports:
+      - "${LITELLM_PORT}:4000"
+    networks:
+      - ai-network
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+EOF
+        log_success "LiteLLM stack configuration generated"
+    fi
+    
+    # ========================================================================
+    # WEAVIATE STACK
+    # ========================================================================
+    if [[ "${ENABLE_WEAVIATE}" == "true" ]]; then
+        cat > "${PROJECT_ROOT}/stacks/weaviate/docker-compose.yml" << 'EOF'
+networks:
+  ai-network:
+    external: true
+
+services:
+  weaviate:
+    image: semitechnologies/weaviate:${WEAVIATE_VERSION}
+    container_name: ai-weaviate
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
+      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
+      DEFAULT_VECTORIZER_MODULE: 'none'
+      ENABLE_MODULES: ''
+      CLUSTER_HOSTNAME: 'node1'
+    ports:
+      - "${WEAVIATE_PORT}:8080"
+      - "${WEAVIATE_GRPC_PORT}:50051"
+    volumes:
+      - ../../data/weaviate:/var/lib/weaviate
+    networks:
+      - ai-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+EOF
+        log_success "Weaviate stack configuration generated"
+    fi
+    
+    # ========================================================================
+    # QDRANT STACK
+    # ========================================================================
+    if [[ "${ENABLE_QDRANT}" == "true" ]]; then
+        cat > "${PROJECT_ROOT}/stacks/qdrant/docker-compose.yml" << 'EOF'
+networks:
+  ai-network:
+    external: true
+
+services:
+  qdrant:
+    image: qdrant/qdrant:${QDRANT_VERSION}
+    container_name: ai-qdrant
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY}
+    ports:
+      - "${QDRANT_PORT}:6333"
+      - "${QDRANT_GRPC_PORT}:6334"
+    volumes:
+      - ../../data/qdrant:/qdrant/storage
+    networks:
+      - ai-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+EOF
+        log_success "Qdrant stack configuration generated"
+    fi
+    
+    # ========================================================================
+    # DIFY STACK
+    # ========================================================================
+    if [[ "${ENABLE_DIFY}" == "true" ]]; then
+        cat > "${PROJECT_ROOT}/stacks/dify/docker-compose.yml" << 'EOF'
+networks:
+  ai-network:
+    external: true
+
+services:
+  dify-api:
+    image: langgenius/dify-api:${DIFY_VERSION}
+    container_name: ai-dify-api
+    environment:
+      MODE: api
+      SECRET_KEY: ${DIFY_SECRET_KEY}
+      DB_USERNAME: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_HOST: ai-postgres
+      DB_PORT: 5432
+      DB_DATABASE: ${DIFY_DB_NAME}
+      REDIS_HOST: ai-redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      STORAGE_TYPE: s3
+      S3_ENDPOINT: http://ai-minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET_NAME: dify
+    ports:
+      - "${DIFY_API_PORT}:5001"
+    volumes:
+      - ../../data/dify:/app/api/storage
+    networks:
+      - ai-network
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   dify-worker:
-    image: langgenius/dify-api:latest
-    container_name: dify-worker
-    restart: unless-stopped
+    image: langgenius/dify-api:${DIFY_VERSION}
+    container_name: ai-dify-worker
     environment:
-      - MODE=worker
-      - LOG_LEVEL=INFO
-      - SECRET_KEY=${SECRET_KEY}
-      - DB_USERNAME=${POSTGRES_USER}
-      - DB_PASSWORD=${POSTGRES_PASSWORD}
-      - DB_HOST=dify-db
-      - DB_PORT=5432
-      - DB_DATABASE=${POSTGRES_DB}
-      - REDIS_HOST=dify-redis
-      - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-      - REDIS_USE_SSL=false
-      - REDIS_DB=0
-      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@dify-redis:6379/1
-      - STORAGE_TYPE=local
-      - STORAGE_LOCAL_PATH=/app/storage
-      - VECTOR_STORE=weaviate
-      - WEAVIATE_ENDPOINT=http://dify-weaviate:8080
-    volumes:
-      - dify_storage:/app/storage
+      MODE: worker
+      SECRET_KEY: ${DIFY_SECRET_KEY}
+      DB_USERNAME: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_HOST: ai-postgres
+      DB_PORT: 5432
+      DB_DATABASE: ${DIFY_DB_NAME}
+      REDIS_HOST: ai-redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      STORAGE_TYPE: s3
+      S3_ENDPOINT: http://ai-minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET_NAME: dify
+    networks:
+      - ai-network
+    restart: unless-stopped
     depends_on:
-      dify-db:
+      postgres:
         condition: service_healthy
-      dify-redis:
-        condition: service_healthy
-      dify-weaviate:
+      redis:
         condition: service_healthy
 
   dify-web:
-    image: langgenius/dify-web:latest
-    container_name: dify-web
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
+    image: langgenius/dify-web:${DIFY_VERSION}
+    container_name: ai-dify-web
     environment:
-      - CONSOLE_API_URL=http://dify-api:5001
-      - APP_API_URL=http://dify-api:5001
+      CONSOLE_API_URL: http://${DOMAIN}:${DIFY_API_PORT}
+      APP_API_URL: http://${DOMAIN}:${DIFY_API_PORT}
+    ports:
+      - "${DIFY_PORT}:3000"
+    networks:
+      - ai-network
+    restart: unless-stopped
     depends_on:
-      dify-api:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  # ============================================================================
-  # N8N - Workflow Automation
-  # ============================================================================
-  n8n:
-    image: n8nio/n8n:latest
-    container_name: n8n
-    restart: unless-stopped
-    ports:
-      - "5678:5678"
-    environment:
-      - N8N_HOST=${N8N_HOST}
-      - N8N_PORT=5678
-      - N8N_PROTOCOL=${N8N_PROTOCOL}
-      - WEBHOOK_URL=https://${N8N_HOST}:${NGINX_PORT}/n8n/
-      - GENERIC_TIMEZONE=${TZ}
-      - N8N_PATH=/n8n/
-    volumes:
-      - n8n_data:/home/node/.n8n
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:5678/healthz"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  # ============================================================================
-  # SIGNAL API - Messaging Gateway
-  # ============================================================================
-  signal-api:
-    image: bbernhard/signal-cli-rest-api:latest
-    container_name: signal-api
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-    environment:
-      - MODE=native
-    volumes:
-      - signal_data:/home/.local/share/signal-cli
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/v1/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  # ============================================================================
-  # CLAWDBOT (MOLTBOT) - AI Assistant Gateway
-  # ============================================================================
-  clawdbot:
-    image: moltbot/moltbot:latest
-    container_name: clawdbot
-    restart: unless-stopped
-    ports:
-      - "18789:18789"
-      - "18790:18790"
-    environment:
-      - CLAWDBOT_GATEWAY_TOKEN=${CLAWDBOT_GATEWAY_TOKEN}
-    volumes:
-      - clawdbot_data:/home/node/.clawdbot
-      - clawdbot_workspace:/home/node/clawd
-    depends_on:
-      ollama:
-        condition: service_healthy
-      litellm:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:18789/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  # ============================================================================
-  # RCLONE - Google Drive Sync
-  # ============================================================================
-  gdrive-sync:
-    image: rclone/rclone:latest
-    container_name: gdrive-sync
-    restart: unless-stopped
-    volumes:
-      - ./configs/rclone/rclone.conf:/config/rclone/rclone.conf:ro
-      - gdrive_data:/data
-      - anythingllm_data:/sync/anythingllm:ro
-      - dify_storage:/sync/dify:ro
-      - n8n_data:/sync/n8n:ro
-      - clawdbot_workspace:/sync/clawdbot:ro
-    environment:
-      - RCLONE_CONFIG=/config/rclone/rclone.conf
-      - SYNC_INTERVAL=${SYNC_INTERVAL}
-    command: >
-      rcd
-      --rc-addr=:5572
-      --rc-web-gui
-      --rc-web-gui-no-open-browser
-      --rc-user=admin
-      --rc-pass=admin
-    healthcheck:
-      test: ["CMD", "rclone", "version"]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-  # ============================================================================
-  # NGINX - Reverse Proxy
-  # ============================================================================
-  nginx:
-    image: nginx:alpine
-    container_name: nginx
-    restart: unless-stopped
-    ports:
-      - "${NGINX_PORT}:443"
-    volumes:
-      - ./configs/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./configs/nginx/conf.d:/etc/nginx/conf.d:ro
-      - ./certs:/etc/nginx/certs:ro
-      - ./dashboard:/usr/share/nginx/html:ro
-    depends_on:
-      - ollama
-      - litellm
-      - anythingllm
-      - dify-web
       - dify-api
-      - n8n
-      - signal-api
-      - clawdbot
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:443"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
 EOF
+        log_success "Dify stack configuration generated"
+    fi
     
-    log_success "docker-compose.yml generated"
-}
+    # ========================================================================
+    # N8N STACK
+    # ========================================================================
+    if [[ "${ENABLE_N8N}" == "true" ]]; then
+        cat > "${PROJECT_ROOT}/stacks/n8n/docker-compose.yml" << 'EOF'
+networks:
+  ai-network:
+    external: true
 
-# ============================================================================
-# GENERATE NGINX CONFIGURATION
-# ============================================================================
-generate_nginx_config() {
-    log_step "7/13" "Generating NGINX configuration..."
-    
-    # Main nginx.conf
-    cat > "${PROJECT_ROOT}/configs/nginx/nginx.conf" << 'EOF'
-user nginx;
-worker_processes auto;
-error_log /var/log/nginx/error.log warn;
-pid /var/run/nginx.pid;
-
-events {
-    worker_connections 1024;
-}
-
-http {
-    include /etc/nginx/mime.types;
-    default_type application/octet-stream;
-    
-    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
-                    '$status $body_bytes_sent "$http_referer" '
-                    '"$http_user_agent" "$http_x_forwarded_for"';
-    
-    access_log /var/log/nginx/access.log main;
-    
-    sendfile on;
-    tcp_nopush on;
-    tcp_nodelay on;
-    keepalive_timeout 65;
-    types_hash_max_size 2048;
-    client_max_body_size 100M;
-    
-    gzip on;
-    gzip_vary on;
-    gzip_proxied any;
-    gzip_comp_level 6;
-    gzip_types text/plain text/css text/xml text/javascript 
-               application/json application/javascript application/xml+rss 
-               application/rss+xml font/truetype font/opentype 
-               application/vnd.ms-fontobject image/svg+xml;
-    
-    include /etc/nginx/conf.d/*.conf;
-}
+services:
+  n8n:
+    image: n8nio/n8n:${N8N_VERSION}
+    container_name: ai-n8n
+    environment:
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: ai-postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${N8N_DB_NAME}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      N8N_HOST: ${DOMAIN}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: http://${DOMAIN}/n8n/
+    ports:
+      - "${N8N_PORT}:5678"
+    volumes:
+      - ../../data/n8n:/home/node/.n8n
+    networks:
+      - ai-network
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
 EOF
+        log_success "n8n stack configuration generated"
+    fi
     
-    mkdir -p "${PROJECT_ROOT}/configs/nginx/conf.d"
-    
-    # Default server configuration
-    cat > "${PROJECT_ROOT}/configs/nginx/conf.d/default.conf" << 'EOF'
-# ============================================================================
-# AI Platform - NGINX Reverse Proxy Configuration
-# ============================================================================
+    # ========================================================================
+    # ANYTHINGLLM STACK
+    # ========================================================================
+    if [[ "${ENABLE_ANYTHINGLLM}" == "true" ]]; then
+        cat > "${PROJECT_ROOT}/stacks/anythingllm/docker-compose.yml" << 'EOF'
+networks:
+  ai-network:
+    external: true
 
-# Upstream definitions
-upstream ollama {
-    server ollama:11434;
-}
-
-upstream litellm {
-    server litellm:4000;
-}
-
-upstream anythingllm {
-    server anythingllm:3001;
-}
-
-upstream dify_web {
-    server dify-web:3000;
-}
-
-upstream dify_api {
-    server dify-api:5001;
-}
-
-upstream n8n {
-    server n8n:5678;
-}
-
-upstream signal_api {
-    server signal-api:8080;
-}
-
-upstream clawdbot {
-    server clawdbot:18789;
-}
-
-# Main HTTPS server
-server {
-    listen 443 ssl http2 default_server;
-    server_name _;
-    
-    ssl_certificate /etc/nginx/certs/server.crt;
-    ssl_certificate_key /etc/nginx/certs/server.key;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
-    ssl_prefer_server_ciphers on;
-    
-    root /usr/share/nginx/html;
-    index index.html;
-    
-    # Dashboard
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-    
-    # Ollama API
-    location /ollama/ {
-        proxy_pass http://ollama/;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_buffering off;
-        proxy_request_buffering off;
-        proxy_read_timeout 300s;
-        proxy_connect_timeout 75s;
-    }
-    
-    # LiteLLM API
-    location /litellm/ {
-        proxy_pass http://litellm/;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_buffering off;
-        proxy_read_timeout 300s;
-        proxy_connect_timeout 75s;
-    }
-    
-    # AnythingLLM
-    location /anythingllm/ {
-        proxy_pass http://anythingllm/;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 86400;
-    }
-    
-    # Dify Web Interface
-    location /dify/ {
-        proxy_pass http://dify_web/;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 86400;
-    }
-    
-    # Dify API
-    location /dify/api/ {
-        proxy_pass http://dify_api/;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_buffering off;
-        proxy_read_timeout 300s;
-    }
-    
-    # n8n Workflow Automation
-    location /n8n/ {
-        proxy_pass http://n8n/;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 86400;
-    }
-    
-    # Signal API
-    location /signal/ {
-        proxy_pass http://signal_api/;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-    
-    # ClawdBot API
-    location /clawdbot/ {
-        proxy_pass http://clawdbot/;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
+services:
+  anythingllm:
+    image: mintplexlabs/anythingllm:${ANYTHINGLLM_VERSION}
+    container_name: ai-anythingllm
+    environment:
+      JWT_SECRET: ${ANYTHINGLLM_JWT_SECRET}
+      STORAGE_DIR: /app/server/storage
+    ports:
+      - "${ANYTHINGLLM_PORT}:3001"
+    volumes:
+      - ../../data/anythingllm:/app/server/storage
+    networks:
+      - ai-network
+    restart: unless-stopped
 EOF
+        log_success "AnythingLLM stack configuration generated"
+    fi
     
-    log_success "NGINX configuration generated"
-}
+    # ========================================================================
+    # FLOWISE STACK
+    # ========================================================================
+    if [[ "${ENABLE_FLOWISE}" == "true" ]]; then
+        cat > "${PROJECT_ROOT}/stacks/flowise/docker-compose.yml" << 'EOF'
+networks:
+  ai-network:
+    external: true
 
-# ============================================================================
-# GENERATE SSL CERTIFICATES
-# ============================================================================
-generate_ssl_certs() {
-    log_step "8/13" "Generating SSL certificates..."
-    
-    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-        -keyout "${PROJECT_ROOT}/certs/server.key" \
-        -out "${PROJECT_ROOT}/certs/server.crt" \
-        -subj "/C=US/ST=State/L=City/O=Organization/CN=${TAILSCALE_IP}" \
-        &>> "$LOGFILE"
-    
-    chmod 600 "${PROJECT_ROOT}/certs/server.key"
-    chmod 644 "${PROJECT_ROOT}/certs/server.crt"
-    
-    log_success "SSL certificates generated"
-}
-
-# ============================================================================
-# GENERATE LITELLM CONFIG
-# ============================================================================
-generate_litellm_config() {
-    log_step "9/13" "Generating LiteLLM configuration..."
-    
-    cat > "${PROJECT_ROOT}/configs/litellm/config.yaml" << 'EOF'
-model_list:
-  - model_name: ollama/llama3.2
-    litellm_params:
-      model: ollama/llama3.2
-      api_base: http://ollama:11434
-
-  - model_name: ollama/qwen2.5-coder
-    litellm_params:
-      model: ollama/qwen2.5-coder
-      api_base: http://ollama:11434
-
-  - model_name: ollama/deepseek-r1
-    litellm_params:
-      model: ollama/deepseek-r1
-      api_base: http://ollama:11434
-
-litellm_settings:
-  drop_params: true
-  set_verbose: false
-  
-general_settings:
-  master_key: ${LITELLM_MASTER_KEY}
-  database_url: ${DATABASE_URL}
+services:
+  flowise:
+    image: flowiseai/flowise:${FLOWISE_VERSION}
+    container_name: ai-flowise
+    environment:
+      FLOWISE_USERNAME: ${FLOWISE_USERNAME}
+      FLOWISE_PASSWORD: ${FLOWISE_PASSWORD}
+      FLOWISE_SECRETKEY_OVERWRITE: ${FLOWISE_SECRETKEY}
+      DATABASE_TYPE: postgres
+      DATABASE_HOST: ai-postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${POSTGRES_DB}
+      DATABASE_USER: ${POSTGRES_USER}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${FLOWISE_PORT}:3000"
+    volumes:
+      - ../../data/flowise:/root/.flowise
+    networks:
+      - ai-network
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
 EOF
+        log_success "Flowise stack configuration generated"
+    fi
     
-    log_success "LiteLLM configuration generated"
+    log_success "All stack configurations generated (Docker Compose v2 format)"
 }
 
 # ============================================================================
-# GENERATE CLAWDBOT TOKEN
+# DEPLOY INFRASTRUCTURE
 # ============================================================================
-generate_clawdbot_files() {
-    log_step "10/13" "Generating ClawdBot configuration..."
+deploy_infrastructure() {
+    log_step "8/12" "Deploying infrastructure services"
     
-    log_success "ClawdBot gateway token generated"
-    log_info "Token will be available in .env file"
+    log_info "Starting infrastructure stack..."
+    cd "${PROJECT_ROOT}/stacks/infrastructure"
+    docker compose up -d
+    
+    log_info "Waiting for services to be healthy..."
+    sleep 10
+    
+    # Check PostgreSQL
+    if docker exec ai-postgres pg_isready -U "${POSTGRES_USER}" &>/dev/null; then
+        log_success "PostgreSQL is ready"
+    else
+        log_warning "PostgreSQL may need more time to start"
+    fi
+    
+    # Check Redis
+    if docker exec ai-redis redis-cli ping &>/dev/null; then
+        log_success "Redis is ready"
+    else
+        log_warning "Redis may need more time to start"
+    fi
+    
+    log_success "Infrastructure deployed"
 }
 
 # ============================================================================
-# GENERATE RCLONE CONFIG TEMPLATE
+# INITIALIZE DATABASES
 # ============================================================================
-generate_rclone_config() {
-    log_step "11/13" "Generating Rclone configuration template..."
+initialize_databases() {
+    log_step "9/12" "Initializing databases"
     
-    cat > "${PROJECT_ROOT}/configs/rclone/rclone.conf" << EOF
-# Google Drive Configuration
-# To configure:
-# 1. docker exec -it gdrive-sync rclone config
-# 2. Follow prompts to authenticate with Google Drive
-# 3. Remote name: ${RCLONE_REMOTE}
-# 4. Choose 'drive' as storage type
-# 5. Follow OAuth flow
-
-# After configuration, sync will run automatically every ${SYNC_INTERVAL} seconds
-EOF
+    log_info "Creating databases for services..."
     
-    log_success "Rclone configuration template generated"
-    log_warning "Configure Rclone after deployment with: docker exec -it gdrive-sync rclone config"
-}
-
-# ============================================================================
-# GENERATE DASHBOARD
-# ============================================================================
-generate_dashboard() {
-    log_step "12/13" "Generating web dashboard..."
+    # Create Dify database
+    if [[ "${ENABLE_DIFY}" == "true" ]]; then
+        docker exec ai-postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "CREATE DATABASE ${DIFY_DB_NAME};" 2>/dev/null || log_info "Dify database already exists"
+        log_success "Dify database ready"
+    fi
     
-    cat > "${PROJECT_ROOT}/dashboard/index.html" << 'DASHBOARD'
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Platform Dashboard</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
-        
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        
-        header {
-            text-align: center;
-            color: white;
-            margin-bottom: 40px;
-        }
-        
-        h1 {
-            font-size: 3em;
-            margin-bottom: 10px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-        }
-        
-        .subtitle {
-            font-size: 1.2em;
-            opacity: 0.9;
-        }
-        
-        .services-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 20px;
-            margin-bottom: 40px;
-        }
-        
-        .service-card {
-            background: white;
-            border-radius: 15px;
-            padding: 25px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
-            cursor: pointer;
-        }
-        
-        .service-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 15px 40px rgba(0,0,0,0.3);
-        }
-        
-        .service-header {
-            display: flex;
-            align-items: center;
-            margin-bottom: 15px;
-        }
-        
-        .service-icon {
-            font-size: 2em;
-            margin-right: 15px;
-        }
-        
-        .service-title {
-            font-size: 1.5em;
-            color: #333;
-        }
-        
-        .service-description {
-            color: #666;
-            margin-bottom: 15px;
-            line-height: 1.6;
-        }
-        
-        .service-link {
-            display: inline-block;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 10px 20px;
-            border-radius: 25px;
-            text-decoration: none;
-            transition: opacity 0.3s ease;
-        }
-        
-        .service-link:hover {
-            opacity: 0.8;
-        }
-        
-        .status-indicator {
-            display: inline-block;
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            background: #4CAF50;
-            margin-left: 10px;
-            animation: pulse 2s infinite;
-        }
-        
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-        
-        .info-section {
-            background: white;
-            border-radius: 15px;
-            padding: 25px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-        }
-        
-        .info-title {
-            font-size: 1.5em;
-            color: #333;
-            margin-bottom: 15px;
-        }
-        
-        .info-content {
-            color: #666;
-            line-height: 1.8;
-        }
-        
-        code {
-            background: #f4f4f4;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-family: 'Courier New', monospace;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <header>
-            <h1>🤖 AI Platform</h1>
-            <p class="subtitle">Your Unified AI Development Environment</p>
-        </header>
-        
-        <div class="services-grid">
-            <div class="service-card">
-                <div class="service-header">
-                    <span class="service-icon">🧠</span>
-                    <h2 class="service-title">Ollama<span class="status-indicator"></span></h2>
-                </div>
-                <p class="service-description">
-                    Local large language model engine. Run LLMs like Llama, Mistral, and more.
-                </p>
-                <a href="/ollama/api/tags" class="service-link">View Models →</a>
-            </div>
-            
-            <div class="service-card">
-                <div class="service-header">
-                    <span class="service-icon">🔄</span>
-                    <h2 class="service-title">LiteLLM<span class="status-indicator"></span></h2>
-                </div>
-                <p class="service-description">
-                    Unified API gateway for all LLM providers with load balancing and fallbacks.
-                </p>
-                <a href="/litellm/" class="service-link">Open Gateway →</a>
-            </div>
-            
-            <div class="service-card">
-                <div class="service-header">
-                    <span class="service-icon">💬</span>
-                    <h2 class="service-title">AnythingLLM<span class="status-indicator"></span></h2>
-                </div>
-                <p class="service-description">
-                    Document chat interface with RAG capabilities. Chat with your documents.
-                </p>
-                <a href="/anythingllm/" class="service-link">Start Chatting →</a>
-            </div>
-            
-            <div class="service-card">
-                <div class="service-header">
-                    <span class="service-icon">🚀</span>
-                    <h2 class="service-title">Dify<span class="status-indicator"></span></h2>
-                </div>
-                <p class="service-description">
-                    AI application development platform. Build and deploy AI applications.
-                </p>
-                <a href="/dify/" class="service-link">Build Apps →</a>
-            </div>
-            
-            <div class="service-card">
-                <div class="service-header">
-                    <span class="service-icon">⚡</span>
-                    <h2 class="service-title">n8n<span class="status-indicator"></span></h2>
-                </div>
-                <p class="service-description">
-                    Workflow automation platform. Connect apps and automate tasks.
-                </p>
-                <a href="/n8n/" class="service-link">Create Workflows →</a>
-            </div>
-            
-            <div class="service-card">
-                <div class="service-header">
-                    <span class="service-icon">📱</span>
-                    <h2 class="service-title">Signal API<span class="status-indicator"></span></h2>
-                </div>
-                <p class="service-description">
-                    Messaging gateway for Signal. Send and receive messages via API.
-                </p>
-                <a href="/signal/v1/about" class="service-link">API Docs →</a>
-            </div>
-            
-            <div class="service-card">
-                <div class="service-header">
-                    <span class="service-icon">🦞</span>
-                    <h2 class="service-title">ClawdBot<span class="status-indicator"></span></h2>
-                </div>
-                <p class="service-description">
-                    AI assistant gateway powered by Moltbot. Multi-channel AI automation.
-                </p>
-                <a href="/clawdbot/" class="service-link">Configure Bot →</a>
-            </div>
-            
-            <div class="service-card">
-                <div class="service-header">
-                    <span class="service-icon">☁️</span>
-                    <h2 class="service-title">Google Drive<span class="status-indicator"></span></h2>
-                </div>
-                <p class="service-description">
-                    Automatic backup and sync to Google Drive. Keep your data safe.
-                </p>
-                <a href="#" class="service-link" onclick="alert('Configure via rclone CLI'); return false;">Configure Sync →</a>
-            </div>
-        </div>
-        
-        <div class="info-section">
-            <h2 class="info-title">🔧 System Information</h2>
-            <div class="info-content">
-                <p><strong>Network:</strong> All services are connected via isolated Docker network</p>
-                <p><strong>Security:</strong> HTTPS enabled with self-signed certificates</p>
-                <p><strong>Access:</strong> Available on Tailscale VPN only</p>
-                <p><strong>Management:</strong> Use <code>./3-manage-services.sh</code> for service control</p>
-            </div>
-        </div>
-    </div>
-</body>
-</html>
-DASHBOARD
+    # Create n8n database
+    if [[ "${ENABLE_N8N}" == "true" ]]; then
+        docker exec ai-postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "CREATE DATABASE ${N8N_DB_NAME};" 2>/dev/null || log_info "n8n database already exists"
+        log_success "n8n database ready"
+    fi
     
-    log_success "Dashboard generated"
-}
-
-# ============================================================================
-# MAKE SCRIPTS EXECUTABLE
-# ============================================================================
-make_scripts_executable() {
-    log_step "13/13" "Making scripts executable..."
-    chmod +x "${SCRIPT_DIR}"/*.sh
-    log_success "Scripts are executable"
+    # Create MinIO buckets
+    log_info "Creating MinIO buckets..."
+    sleep 5
+    docker exec ai-minio mc alias set myminio http://localhost:9000 "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}" 2>/dev/null || true
+    docker exec ai-minio mc mb myminio/dify 2>/dev/null || log_info "Dify bucket already exists"
+    docker exec ai-minio mc mb myminio/n8n 2>/dev/null || log_info "n8n bucket already exists"
+    
+    log_success "Databases initialized"
 }
 
 # ============================================================================
 # SHOW SUMMARY
 # ============================================================================
 show_summary() {
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$LOGFILE"
-    log_success "✅ SYSTEM SETUP COMPLETED!" | tee -a "$LOGFILE"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$LOGFILE"
-    echo "" | tee -a "$LOGFILE"
-    log_info "Configuration Summary:" | tee -a "$LOGFILE"
-    echo "  Network: ${NETWORK_NAME}" | tee -a "$LOGFILE"
-    echo "  IP: ${TAILSCALE_IP}" | tee -a "$LOGFILE"
-    echo "  Port: ${NGINX_PORT}" | tee -a "$LOGFILE"
-    echo "" | tee -a "$LOGFILE"
-    log_info "📂 Files Generated:" | tee -a "$LOGFILE"
-    echo "  ✓ .env" | tee -a "$LOGFILE"
-    echo "  ✓ docker-compose.yml" | tee -a "$LOGFILE"
-    echo "  ✓ configs/nginx/*.conf" | tee -a "$LOGFILE"
-    echo "  ✓ configs/litellm/config.yaml" | tee -a "$LOGFILE"
-    echo "  ✓ configs/rclone/rclone.conf" | tee -a "$LOGFILE"
-    echo "  ✓ certs/server.{crt,key}" | tee -a "$LOGFILE"
-    echo "  ✓ dashboard/index.html" | tee -a "$LOGFILE"
-    echo "" | tee -a "$LOGFILE"
-    log_info "🚀 NEXT STEP:" | tee -a "$LOGFILE"
-    echo "  Run: ./2-deploy-services.sh" | tee -a "$LOGFILE"
-    echo "" | tee -a "$LOGFILE"
+    log_step "10/12" "Setup Summary"
+    
+    cat << EOF
+
+${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ✓ SETUP COMPLETE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}
+
+${CYAN}Enabled Services:${NC}
+EOF
+
+    [[ "${ENABLE_OLLAMA}" == "true" ]] && echo "  ✓ Ollama (Local LLMs)"
+    [[ "${ENABLE_LITELLM}" == "true" ]] && echo "  ✓ LiteLLM (LLM Gateway)"
+    [[ "${ENABLE_WEAVIATE}" == "true" ]] && echo "  ✓ Weaviate (Vector DB)"
+    [[ "${ENABLE_QDRANT}" == "true" ]] && echo "  ✓ Qdrant (Vector DB)"
+    [[ "${ENABLE_DIFY}" == "true" ]] && echo "  ✓ Dify (LLM Platform)"
+    [[ "${ENABLE_N8N}" == "true" ]] && echo "  ✓ n8n (Workflow Automation)"
+    [[ "${ENABLE_ANYTHINGLLM}" == "true" ]] && echo "  ✓ AnythingLLM (Document Chat)"
+    [[ "${ENABLE_FLOWISE}" == "true" ]] && echo "  ✓ Flowise (Visual AI Builder)"
+
+    cat << EOF
+
+${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  🚀 NEXT STEPS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}
+
+${YELLOW}1. Start All Services:${NC}
+   cd ${PROJECT_ROOT}
+   ./scripts/2-start-services.sh start
+
+${YELLOW}2. Check Service Status:${NC}
+   ./scripts/2-start-services.sh status
+
+${YELLOW}3. Access Services:${NC}
+   Domain: http://${DOMAIN}
+
+${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  🔐 IMPORTANT CREDENTIALS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}
+
+${RED}⚠️  Credentials saved in: ${PROJECT_ROOT}/.env${NC}
+
+${YELLOW}PostgreSQL:${NC}
+  User: ${POSTGRES_USER}
+  Database: ${POSTGRES_DB}
+  Port: ${POSTGRES_PORT}
+
+${YELLOW}MinIO:${NC}
+  Console: http://${DOMAIN}:${MINIO_CONSOLE_PORT}
+  User: ${MINIO_ROOT_USER}
+
+${YELLOW}Flowise:${NC}
+  Username: ${FLOWISE_USERNAME}
+
+EOF
 }
 
 # ============================================================================
-# MAIN
+# SAVE QUICK REFERENCE
+# ============================================================================
+save_quick_reference() {
+    log_step "11/12" "Creating quick reference guide"
+    
+    cat > "${PROJECT_ROOT}/QUICK_START.md" << EOF
+# AI Platform - Quick Reference Guide
+
+## 🚀 Quick Start
+
+\`\`\`bash
+# Start all services
+./scripts/2-start-services.sh start
+
+# Check status
+./scripts/2-start-services.sh status
+\`\`\`
+
+## 🌐 Service URLs
+
+- **Domain**: http://${DOMAIN}
+- **Dify**: http://${DOMAIN}:${DIFY_PORT}
+- **n8n**: http://${DOMAIN}:${N8N_PORT}
+- **MinIO Console**: http://${DOMAIN}:${MINIO_CONSOLE_PORT}
+
+## 🔐 Credentials
+
+All credentials saved in: \`.env\`
+
+---
+**Setup Date**: $(date)
+**Log File**: ${LOGFILE}
+EOF
+
+    log_success "Quick reference saved to QUICK_START.md"
+}
+
+# ============================================================================
+# VERIFY SETUP
+# ============================================================================
+verify_setup() {
+    log_step "12/12" "Verifying setup"
+    
+    local errors=0
+    
+    # Check .env file
+    if [[ -f "${PROJECT_ROOT}/.env" ]]; then
+        log_success ".env file exists"
+    else
+        log_error ".env file missing"
+        ((errors++))
+    fi
+    
+    # Check Docker network
+    if docker network inspect ai-network &>/dev/null; then
+        log_success "Docker network exists"
+    else
+        log_error "Docker network missing"
+        ((errors++))
+    fi
+    
+    # Check infrastructure containers
+    if docker ps --filter "name=ai-postgres" --format "{{.Names}}" | grep -q "ai-postgres"; then
+        log_success "PostgreSQL container running"
+    else
+        log_warning "PostgreSQL container not running"
+        ((errors++))
+    fi
+    
+    if docker ps --filter "name=ai-redis" --format "{{.Names}}" | grep -q "ai-redis"; then
+        log_success "Redis container running"
+    else
+        log_warning "Redis container not running"
+        ((errors++))
+    fi
+    
+    if docker ps --filter "name=ai-minio" --format "{{.Names}}" | grep -q "ai-minio"; then
+        log_success "MinIO container running"
+    else
+        log_warning "MinIO container not running"
+        ((errors++))
+    fi
+    
+    if [[ $errors -eq 0 ]]; then
+        log_success "Setup verification passed!"
+    else
+        log_warning "Setup completed with ${errors} warning(s)"
+    fi
+}
+
+# ============================================================================
+# MAIN EXECUTION
 # ============================================================================
 main() {
-    cat << "EOF"
-╔════════════════════════════════════════════════════════════╗
-║      AI Platform Setup v19 - MOLTBOT INTEGRATION       ║
-╚════════════════════════════════════════════════════════════╝
-EOF
-    
-    echo "" | tee -a "$LOGFILE"
-    echo "Started: $(date)" | tee -a "$LOGFILE"
-    echo "" | tee -a "$LOGFILE"
-    
+    show_banner
     check_prerequisites
-    clean_old_networks
-    collect_config
+    set_default_values
+    collect_configuration
     create_directories
-    generate_env_file
-    generate_docker_compose
-    generate_nginx_config
-    generate_ssl_certs
-    generate_litellm_config
-    generate_clawdbot_files
-    generate_rclone_config
-    generate_dashboard
-    make_scripts_executable
+    save_credentials
+    create_docker_network
+    generate_stack_configs
+    deploy_infrastructure
+    initialize_databases
     show_summary
+    save_quick_reference
+    verify_setup
     
-    log_success "Setup completed: $(date)" | tee -a "$LOGFILE"
+    echo ""
+    log_success "Setup complete! Check ${LOGFILE} for details."
+    log_info "Next: Run ./scripts/2-start-services.sh start"
+    echo ""
 }
 
+# Run main function
 main "$@"
