@@ -7,3 +7,6 @@
 .env
 .env.backup.*
 /.env*
+/config/
+/configs/
+/cert/
