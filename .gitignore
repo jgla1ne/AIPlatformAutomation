@@ -9,4 +9,4 @@
 /.env*
 /config/
 /configs/
-/cert/
+/certs/
