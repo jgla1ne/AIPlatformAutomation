@@ -214,7 +214,7 @@ Copy table
 | 10 | **OpenClaw** | 18789 | **Tailscale IP ONLY** | AI coding agent | Yes |
 | 11 | **Dify** | 3001 | Proxied via domain | LLM application builder | Yes |
 | 12 | **Anything LLM** | 3002 | Proxied via domain | Document chat with RAG | Yes |
-| 13 | **Open WebUI** | 3003 | Proxied via domain | Ollama web interface | Yes |
+| 13 | **Open WebUI** | 3003 | Proxied via domain | litelllm web interface | Yes |
 | 14 | **Qdrant** | 6333 | Internal \+ proxied | Vector database (option 1\) | Pick ONE |
 | 15 | **Weaviate** | 8080 | Internal \+ proxied | Vector database (option 2\) | Pick ONE |
 | 16 | **Chroma** | 8000 | Internal \+ proxied | Vector database (option 3\) | Pick ONE |
@@ -4811,5 +4811,3 @@ A **production-ready, enterprise-grade AI platform** with:
 * **Script 4** (Optional): \~30 minutes (varies by selections)
 
 **Total: \~1-2 hours** (including user inputs and initial model downloads)
-
-
