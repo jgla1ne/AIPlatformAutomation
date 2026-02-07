@@ -1,13 +1,5 @@
 .gitignore
 .secrets
-/logs/
-/data/
-/stacks/
-/backups/
-.env
-.env.backup.*
-/.env*
-/config/
-/configs/
-/certs/
 !/scripts/
+!/doc/
+!/changelog/
