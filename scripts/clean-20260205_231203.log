@@ -1,0 +1,56 @@
+ℹ[0m [2026-02-05 23:12:03] [INFO] [0;36mStarting 0-complete-cleanup.sh v1.1.0...[0m
+⚠[0m [2026-02-05 23:12:03] [WARN] [1;33m---------------------------------------------------------------------[0m
+⚠[0m [2026-02-05 23:12:03] [WARN] [1;33m WARNING: This script will perform a nuclear reset of your AI Platform setup.[0m
+⚠[0m [2026-02-05 23:12:03] [WARN] [1;33m It will attempt to stop and remove all related Docker resources[0m
+⚠[0m [2026-02-05 23:12:03] [WARN] [1;33m (containers, networks, volumes) and delete project directories.[0m
+⚠[0m [2026-02-05 23:12:03] [WARN] [1;33m All data stored within these directories and volumes will be LOST.[0m
+⚠[0m [2026-02-05 23:12:03] [WARN] [1;33m---------------------------------------------------------------------[0m
+
+ℹ[0m [2026-02-05 23:12:03] [CONFIRM] [1;33mAre you absolutely sure you want to proceed with this nuclear cleanup? [y/N]: [0m
+ℹ[0m [2026-02-05 23:12:06] [INFO] [0;36mProceeding with nuclear cleanup...[0m
+ℹ[0m [2026-02-05 23:12:06] [INFO] [0;36m--- Step 1: Cleaning Docker Resources ---[0m
+ℹ[0m [2026-02-05 23:12:06] [INFO] [0;36mAttempting to stop and remove all Docker containers...[0m
+✓[0m [2026-02-05 23:12:06] [SUCCESS] [0;32mStopped running AI Platform containers.[0m
+ℹ[0m [2026-02-05 23:12:06] [INFO] [0;36mAttempting to remove all AI Platform Docker containers...[0m
+✓[0m [2026-02-05 23:12:06] [SUCCESS] [0;32mRemoved all AI Platform containers.[0m
+ℹ[0m [2026-02-05 23:12:06] [INFO] [0;36mAttempting to remove AI Platform specific Docker networks...[0m
+✓[0m [2026-02-05 23:12:06] [SUCCESS] [0;32mRemoved AI Platform Docker networks.[0m
+ℹ[0m [2026-02-05 23:12:06] [INFO] [0;36mAttempting to remove AI Platform specific Docker volumes...[0m
+✓[0m [2026-02-05 23:12:06] [SUCCESS] [0;32mRemoved AI Platform Docker volumes.[0m
+ℹ[0m [2026-02-05 23:12:06] [CONFIRM] [1;33mDo you want to remove ALL Docker containers, networks, and dangling images? This is a more aggressive cleanup and may affect other Docker setups on this machine. [y/N]: [0mℹ[0m [2026-02-05 23:12:07] [INFO] [0;36mPerforming comprehensive Docker cleanup...[0m
+ℹ[0m [2026-02-05 23:12:07] [INFO] [0;36mStopping and removing ALL Docker containers...[0m
+✓[0m [2026-02-05 23:12:07] [SUCCESS] [0;32mStopped running containers.[0m
+✓[0m [2026-02-05 23:12:07] [SUCCESS] [0;32mRemoved all containers.[0m
+ℹ[0m [2026-02-05 23:12:07] [INFO] [0;36mRemoving ALL Docker networks...[0m
+✓[0m [2026-02-05 23:12:07] [SUCCESS] [0;32mPruned all unused Docker networks.[0m
+ℹ[0m [2026-02-05 23:12:07] [INFO] [0;36mRemoving ALL dangling Docker images...[0m
+✓[0m [2026-02-05 23:12:07] [SUCCESS] [0;32mPruned all dangling Docker images.[0m
+✓[0m [2026-02-05 23:12:07] [SUCCESS] [0;32mComprehensive Docker cleanup completed.[0m
+✓[0m [2026-02-05 23:12:07] [SUCCESS] [0;32mDocker resource cleanup for AI Platform completed.[0m
+ℹ[0m [2026-02-05 23:12:07] [INFO] [0;36m--- Step 2: Cleaning Project Directories ---[0m
+ℹ[0m [2026-02-05 23:12:07] [INFO] [0;36mDetermining project root directory for cleanup...[0m
+ℹ[0m [2026-02-05 23:12:07] [INFO] [0;36mDetected Project Root Directory: /home/jglaine/AIPlatformAutomation[0m
+ℹ[0m [2026-02-05 23:12:07] [INFO] [0;36mCleaning up project directories under /home/jglaine/AIPlatformAutomation...[0m
+ℹ[0m [2026-02-05 23:12:07] [INFO] [0;36mNot found, skipping removal: /home/jglaine/AIPlatformAutomation/.ai_platform_install[0m
+ℹ[0m [2026-02-05 23:12:07] [INFO] [0;36mRemoving: /home/jglaine/AIPlatformAutomation/data[0m
+✓[0m [2026-02-05 23:12:08] [SUCCESS] [0;32mRemoved /home/jglaine/AIPlatformAutomation/data.[0m
+ℹ[0m [2026-02-05 23:12:08] [INFO] [0;36mNot found, skipping removal: /home/jglaine/AIPlatformAutomation/logs[0m
+ℹ[0m [2026-02-05 23:12:08] [INFO] [0;36mRemoving: /home/jglaine/AIPlatformAutomation/config[0m
+✓[0m [2026-02-05 23:12:08] [SUCCESS] [0;32mRemoved /home/jglaine/AIPlatformAutomation/config.[0m
+ℹ[0m [2026-02-05 23:12:08] [INFO] [0;36mNot found, skipping removal: /home/jglaine/AIPlatformAutomation/compose[0m
+ℹ[0m [2026-02-05 23:12:08] [INFO] [0;36mRemoving: /home/jglaine/AIPlatformAutomation/stacks[0m
+✓[0m [2026-02-05 23:12:08] [SUCCESS] [0;32mRemoved /home/jglaine/AIPlatformAutomation/stacks.[0m
+ℹ[0m [2026-02-05 23:12:08] [INFO] [0;36mRemoving: /home/jglaine/AIPlatformAutomation/backups[0m
+✓[0m [2026-02-05 23:12:08] [SUCCESS] [0;32mRemoved /home/jglaine/AIPlatformAutomation/backups.[0m
+ℹ[0m [2026-02-05 23:12:08] [INFO] [0;36mRemoving: /home/jglaine/AIPlatformAutomation/.env[0m
+✓[0m [2026-02-05 23:12:08] [SUCCESS] [0;32mRemoved /home/jglaine/AIPlatformAutomation/.env.[0m
+ℹ[0m [2026-02-05 23:12:08] [INFO] [0;36mCleaning up old log files in /home/jglaine/AIPlatformAutomation/scripts older than 7 days...[0m
+✓[0m [2026-02-05 23:12:08] [SUCCESS] [0;32mCleaned up old log files.[0m
+✓[0m [2026-02-05 23:12:08] [SUCCESS] [0;32mProject directory cleanup completed.[0m
+
+✓[0m [2026-02-05 23:12:08] [SUCCESS] [0;32m0-complete-cleanup.sh v1.1.0 completed successfully![0m
+ℹ[0m [2026-02-05 23:12:08] [INFO] [0;36mTotal execution time: 5 seconds.[0m
+ℹ[0m [2026-02-05 23:12:08] [INFO] [0;36mAll AI Platform related Docker resources and project directories have been removed.[0m
+ℹ[0m [2026-02-05 23:12:08] [INFO] [0;36mYour system should now be clean for a fresh re-installation.[0m
+ℹ[0m [2026-02-05 23:12:08] [INFO] [0;36mLog file for this run: /home/jglaine/AIPlatformAutomation/scripts/clean-20260205_231203.log[0m
+

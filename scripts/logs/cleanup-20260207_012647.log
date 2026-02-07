@@ -1,0 +1,29 @@
+[2026-02-07 01:26:52] [WARNING] User confirmed cleanup - proceeding with nuclear reset
+[2026-02-07 01:26:52] [INFO] No existing configuration found to backup
+[2026-02-07 01:26:52] [WARNING] Docker not installed - skipping Docker cleanup
+[2026-02-07 01:26:52] [INFO] Not found: /root/ai-platform
+[2026-02-07 01:26:52] [INFO] Removing: /mnt/data/ai-platform
+[2026-02-07 01:26:52] [SUCCESS] Removed: /mnt/data/ai-platform (freed 72KiB)
+[2026-02-07 01:26:52] [INFO] Not found: /opt/ai-platform
+[2026-02-07 01:26:52] [INFO] Not found: /opt/ai-services
+[2026-02-07 01:26:52] [INFO] Not found: /var/lib/ai-platform
+[2026-02-07 01:26:52] [INFO] Not found: /var/log/ai-platform
+[2026-02-07 01:26:52] [INFO] Not found: /var/backups/ai-platform
+[2026-02-07 01:26:52] [INFO] Not found: /etc/ai-platform
+[2026-02-07 01:26:52] [INFO] Cleaning old log files (>7 days) in /home/jglaine/AIPlatformAutomation/scripts/logs...
+[2026-02-07 01:26:52] [SUCCESS] Old log files cleaned
+[2026-02-07 01:26:52] [SUCCESS] Total disk space freed: 72KiB
+[2026-02-07 01:26:52] [INFO] No systemd services found
+[2026-02-07 01:26:52] [INFO] No system cron jobs found
+[2026-02-07 01:26:52] [INFO] No user crontab entries found
+[2026-02-07 01:26:52] [INFO] No NVIDIA GPU detected - skipping GPU cleanup
+[2026-02-07 01:26:52] [INFO] Removing UFW rules for AI Platform...
+[2026-02-07 01:26:54] [SUCCESS] UFW rules cleaned
+[2026-02-07 01:26:54] [INFO] No user config files found
+[2026-02-07 01:26:54] [INFO] Checking directories...
+[2026-02-07 01:26:54] [SUCCESS] No systemd services remaining
+[2026-02-07 01:26:54] [SUCCESS] No cron jobs remaining
+[2026-02-07 01:26:54] [SUCCESS] System is completely clean
+[2026-02-07 01:26:54] [SUCCESS] AI Platform cleanup completed successfully!
+[2026-02-07 01:26:54] [INFO] Total execution time: 7 seconds
+[2026-02-07 01:26:54] [INFO] Log file: /home/jglaine/AIPlatformAutomation/scripts/logs/cleanup-20260207_012647.log
