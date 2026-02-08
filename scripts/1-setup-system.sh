@@ -1,1329 +1,1613 @@
 #!/usr/bin/env bash
+
+#==============================================================================
+# Script: 1-setup-system.sh
+# Description: System setup and configuration collection for AI Platform
+# Version: 3.1.0 - Production Ready - Handles All Hardware Scenarios
+# Purpose: Prepares system, collects config, generates .env and compose skeleton
+# Flow: 0-cleanup → 1-setup → 2-deploy → 3-configure → 4-add-service
+#==============================================================================
+
 set -euo pipefail
-IFS=$'\n\t'
 
-# ============================================================
-# Script 1: System Setup & Configuration Collector
-# Version: 99.0.0
-# Commit: fix menus display before input, uuidgen->uuid-runtime,
-#         port health check, full service/model/provider selection
-# ============================================================
+#==============================================================================
+# SCRIPT LOCATION & USER DETECTION
+#==============================================================================
 
-LOGFILE="/var/log/ai-platform-setup.log"
-CONFIG_DIR="/opt/ai-platform"
-ENV_FILE="${CONFIG_DIR}/.env"
-LITELLM_CONFIG="${CONFIG_DIR}/litellm-config.yaml"
-TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-# Color codes
+# Detect real user (works with sudo)
+if [ -n "${SUDO_USER:-}" ]; then
+    REAL_USER="${SUDO_USER}"
+    REAL_UID=$(id -u "${SUDO_USER}")
+    REAL_GID=$(id -g "${SUDO_USER}")
+    REAL_HOME=$(getent passwd "${SUDO_USER}" | cut -d: -f6)
+else
+    REAL_USER="${USER}"
+    REAL_UID=$(id -u)
+    REAL_GID=$(id -g)
+    REAL_HOME="${HOME}"
+fi
+
+#==============================================================================
+# GLOBAL CONFIGURATION
+#==============================================================================
+
+# Directories
+BASE_DIR="/opt/ai-platform"
+CONFIG_DIR="${BASE_DIR}/config"
+DATA_DIR="${BASE_DIR}/data"
+LOGS_DIR="${BASE_DIR}/logs"
+BACKUP_DIR="${BASE_DIR}/backups"
+SSL_DIR="${BASE_DIR}/ssl"
+SCRIPTS_DIR="${BASE_DIR}/scripts"
+
+# Configuration files
+ENV_FILE="${BASE_DIR}/.env"
+COMPOSE_FILE="${BASE_DIR}/docker-compose.yml"
+SECRETS_FILE="${BASE_DIR}/.secrets"
+STATE_FILE="${BASE_DIR}/.setup-state"
+
+# Logging
+LOGFILE="${LOGS_DIR}/setup-$(date +%Y%m%d-%H%M%S).log"
+ERROR_LOG="${LOGS_DIR}/setup-errors-$(date +%Y%m%d-%H%M%S).log"
+
+# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+MAGENTA='\033[0;35m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-log_info()  { echo -e "${GREEN}[OK]${NC} $1" | tee -a "$LOGFILE"; }
-log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1" | tee -a "$LOGFILE"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1" | tee -a "$LOGFILE"; }
+# Hardware requirements - GUIDELINES ONLY
+RECOMMENDED_CPU_CORES=4
+RECOMMENDED_RAM_GB=16
+MIN_DISK_GB=50
+
+# Setup phases tracking
+declare -A SETUP_PHASES
+SETUP_PHASES[preflight]=0
+SETUP_PHASES[packages]=0
+SETUP_PHASES[docker]=0
+SETUP_PHASES[directories]=0
+SETUP_PHASES[networks]=0
+SETUP_PHASES[security]=0
+SETUP_PHASES[tailscale]=0
+SETUP_PHASES[secrets]=0
+SETUP_PHASES[domain]=0
+SETUP_PHASES[services]=0
+SETUP_PHASES[apikeys]=0
+SETUP_PHASES[env]=0
+SETUP_PHASES[compose]=0
+SETUP_PHASES[litellm]=0
+SETUP_PHASES[postgres_init]=0
+
+# System detection variables
+OS=""
+OS_VERSION=""
+ARCH=""
+HARDWARE_TYPE=""
+GPU_TYPE="none"
+GPU_COUNT=0
+TOTAL_CPU_CORES=0
+TOTAL_RAM_GB=0
+AVAILABLE_DISK_GB=0
+
+# Service flags (default disabled)
+ENABLE_LITELLM=false
+ENABLE_OLLAMA=false
+ENABLE_OPENWEBUI=false
+ENABLE_ANYTHINGLLM=false
+ENABLE_DIFY=false
+ENABLE_N8N=false
+ENABLE_FLOWISE=false
+ENABLE_AIRFLOW=false
+ENABLE_WEAVIATE=false
+ENABLE_QDRANT=false
+ENABLE_MILVUS=false
+ENABLE_JUPYTERHUB=false
+ENABLE_MLFLOW=false
+ENABLE_MONGODB=false
+ENABLE_NEO4J=false
+ENABLE_METABASE=false
+ENABLE_MONITORING=false
+ENABLE_TAILSCALE=false
+
+# Domain and SSL config
+BASE_DOMAIN=""
+USE_LETSENCRYPT=false
+LETSENCRYPT_EMAIL=""
+
+# API Keys
+OPENAI_API_KEY=""
+ANTHROPIC_API_KEY=""
+GEMINI_API_KEY=""
+GROQ_API_KEY=""
+MISTRAL_API_KEY=""
+OPENROUTER_API_KEY=""
+HUGGINGFACE_API_KEY=""
+
+# Generated secrets
+DB_PASSWORD=""
+ADMIN_PASSWORD=""
+JWT_SECRET=""
+ENCRYPTION_KEY=""
+REDIS_PASSWORD=""
+
+#==============================================================================
+# LOGGING FUNCTIONS
+#==============================================================================
+
+log_info() {
+    local msg="$1"
+    echo -e "${BLUE}ℹ${NC} ${msg}"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] INFO: ${msg}" >> "$LOGFILE" 2>/dev/null || true
+}
+
+log_success() {
+    local msg="$1"
+    echo -e "${GREEN}✓${NC} ${msg}"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] SUCCESS: ${msg}" >> "$LOGFILE" 2>/dev/null || true
+}
+
+log_warning() {
+    local msg="$1"
+    echo -e "${YELLOW}⚠${NC} ${msg}"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: ${msg}" >> "$LOGFILE" 2>/dev/null || true
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: ${msg}" >> "$ERROR_LOG" 2>/dev/null || true
+}
+
+log_error() {
+    local msg="$1"
+    echo -e "${RED}✗${NC} ${msg}"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: ${msg}" >> "$LOGFILE" 2>/dev/null || true
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: ${msg}" >> "$ERROR_LOG" 2>/dev/null || true
+}
+
 log_phase() {
-    echo "" | tee -a "$LOGFILE"
-    echo -e "${CYAN}▸ $1${NC}" | tee -a "$LOGFILE"
-    echo "═══════════════════════════════════════" | tee -a "$LOGFILE"
+    local phase="$1"
+    echo ""
+    echo -e "${CYAN}╔════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC} ${phase}"
+    echo -e "${CYAN}╚════════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] PHASE: ${phase}" >> "$LOGFILE" 2>/dev/null || true
 }
 
-gen_password() {
-    local len="${1:-32}"
-    tr -dc 'A-Za-z0-9' < /dev/urandom | head -c "$len" 2>/dev/null || \
-    openssl rand -hex "$((len / 2))" 2>/dev/null || \
-    date +%s%N | sha256sum | head -c "$len"
-}
+#==============================================================================
+# STATE MANAGEMENT
+#==============================================================================
 
-gen_uuid() {
-    if command -v uuidgen >/dev/null 2>&1; then
-        uuidgen
-    elif [ -f /proc/sys/kernel/random/uuid ]; then
-        cat /proc/sys/kernel/random/uuid
-    else
-        gen_password 32 | sed 's/\(........\)\(....\)\(....\)\(....\)\(............\)/\1-\2-\3-\4-\5/'
+save_state() {
+    local phase="$1"
+    SETUP_PHASES[$phase]=1
+    
+    if [ -d "$(dirname "$STATE_FILE")" ]; then
+        {
+            for key in "${!SETUP_PHASES[@]}"; do
+                echo "${key}=${SETUP_PHASES[$key]}"
+            done
+        } > "$STATE_FILE"
     fi
 }
 
-# ============================================================
-# PHASE 0: Pre-flight checks
-# ============================================================
+load_state() {
+    if [ -f "$STATE_FILE" ]; then
+        log_info "Loading previous setup state..."
+        while IFS='=' read -r key value; do
+            if [ -n "$key" ]; then
+                SETUP_PHASES[$key]=$value
+            fi
+        done < "$STATE_FILE"
+    fi
+}
+
+#==============================================================================
+# BANNER AND SYSTEM INFO
+#==============================================================================
+
+print_banner() {
+    clear
+    echo ""
+    echo -e "${CYAN}╔════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC}                                                                    ${CYAN}║${NC}"
+    echo -e "${CYAN}║${NC}            ${MAGENTA}AI PLATFORM AUTOMATION - SETUP${NC}                      ${CYAN}║${NC}"
+    echo -e "${CYAN}║${NC}                      ${YELLOW}Version 3.1.0${NC}                              ${CYAN}║${NC}"
+    echo -e "${CYAN}║${NC}                                                                    ${CYAN}║${NC}"
+    echo -e "${CYAN}╚════════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo "Repository root: ${REPO_ROOT}"
+    echo "Running as user: ${REAL_USER}"
+    echo ""
+}
+
+#==============================================================================
+# SYSTEM DETECTION
+#==============================================================================
+
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS="$ID"
+        OS_VERSION="$VERSION_ID"
+    else
+        OS="unknown"
+        OS_VERSION="unknown"
+    fi
+    
+    ARCH=$(uname -m)
+}
+
+detect_hardware() {
+    # CPU Detection
+    if command -v nproc &> /dev/null; then
+        TOTAL_CPU_CORES=$(nproc)
+    else
+        TOTAL_CPU_CORES=$(grep -c ^processor /proc/cpuinfo 2>/dev/null || echo "1")
+    fi
+    
+    # RAM Detection (in GB)
+    TOTAL_RAM_GB=$(free -g | awk '/^Mem:/{print $2}')
+    if [ "$TOTAL_RAM_GB" -eq 0 ]; then
+        TOTAL_RAM_GB=$(free -m | awk '/^Mem:/{printf "%.1f", $2/1024}')
+    fi
+    
+    # Disk Detection (in GB)
+    AVAILABLE_DISK_GB=$(df -BG / | awk 'NR==2 {print $4}' | sed 's/G//')
+    
+    # GPU Detection
+    if command -v nvidia-smi &> /dev/null; then
+        GPU_COUNT=$(nvidia-smi --list-gpus 2>/dev/null | wc -l || echo "0")
+        if [ "$GPU_COUNT" -gt 0 ]; then
+            GPU_TYPE="nvidia"
+            HARDWARE_TYPE="gpu"
+        fi
+    elif lspci 2>/dev/null | grep -i 'vga.*amd' &> /dev/null; then
+        GPU_TYPE="amd"
+        GPU_COUNT=1
+        HARDWARE_TYPE="gpu"
+    elif lspci 2>/dev/null | grep -i 'vga.*intel' &> /dev/null; then
+        GPU_TYPE="intel"
+        GPU_COUNT=1
+        HARDWARE_TYPE="gpu"
+    elif sysctl -n hw.optional.arm64 &> /dev/null 2>&1; then
+        GPU_TYPE="apple_silicon"
+        GPU_COUNT=1
+        HARDWARE_TYPE="gpu"
+    else
+        GPU_TYPE="none"
+        GPU_COUNT=0
+        HARDWARE_TYPE="cpu"
+    fi
+}
+
+#==============================================================================
+# PHASE 1: PREFLIGHT CHECKS
+#==============================================================================
+
 preflight_checks() {
-    log_phase "PHASE 0: Pre-flight Checks"
-
-    if [ "$(id -u)" -ne 0 ]; then
-        log_error "Must run as root (sudo)"
-        exit 1
+    log_phase "PHASE 1: Preflight Checks"
+    
+    if [ "${SETUP_PHASES[preflight]}" -eq 1 ]; then
+        log_info "Preflight checks already completed - skipping"
+        return 0
     fi
-
-    if [ -f "$ENV_FILE" ]; then
-        echo -e "${YELLOW}Existing config found at ${ENV_FILE}${NC}"
-        echo "    1) Overwrite (fresh setup)"
-        echo "    2) Load and modify"
-        echo "    3) Abort"
+    
+    # Detect system
+    detect_os
+    detect_hardware
+    
+    echo "▶ System Detection:"
+    echo "  • OS: ${OS} ${OS_VERSION}"
+    echo "  • Architecture: ${ARCH}"
+    echo "  • CPU Cores: ${TOTAL_CPU_CORES}"
+    echo "  • RAM: ${TOTAL_RAM_GB}GB"
+    echo "  • Available Disk: ${AVAILABLE_DISK_GB}GB"
+    echo "  • Hardware Type: ${HARDWARE_TYPE}"
+    echo "  • GPU: ${GPU_TYPE} (${GPU_COUNT} devices)"
+    echo ""
+    
+    # Check requirements - WARNINGS ONLY, NOT BLOCKING
+    echo "▶ Checking requirements (guidelines only)..."
+    
+    local warnings=0
+    
+    if [ "$TOTAL_CPU_CORES" -lt "$RECOMMENDED_CPU_CORES" ]; then
+        log_warning "CPU: ${TOTAL_CPU_CORES} cores (${RECOMMENDED_CPU_CORES} recommended for optimal performance)"
+        warnings=$((warnings + 1))
+    else
+        log_success "CPU: ${TOTAL_CPU_CORES} cores"
+    fi
+    
+    if [ "${TOTAL_RAM_GB%.*}" -lt "$RECOMMENDED_RAM_GB" ]; then
+        log_warning "RAM: ${TOTAL_RAM_GB}GB (${RECOMMENDED_RAM_GB}GB recommended for optimal performance)"
+        warnings=$((warnings + 1))
+    else
+        log_success "RAM: ${TOTAL_RAM_GB}GB"
+    fi
+    
+    if [ "$AVAILABLE_DISK_GB" -lt "$MIN_DISK_GB" ]; then
+        log_warning "Disk: ${AVAILABLE_DISK_GB}GB available (${MIN_DISK_GB}GB recommended)"
+        warnings=$((warnings + 1))
+    else
+        log_success "Disk: ${AVAILABLE_DISK_GB}GB available"
+    fi
+    
+    # Show recommendation but don't block
+    if [ "$warnings" -gt 0 ]; then
         echo ""
-        read -rp "  Choose [1-3]: " env_choice
-        case "$env_choice" in
-            1) log_info "Starting fresh setup" ;;
-            2) log_info "Loading existing config"; source "$ENV_FILE" ;;
-            3) log_info "Aborted by user"; exit 0 ;;
-            *) log_warn "Invalid choice, starting fresh" ;;
-        esac
-    fi
-
-    mkdir -p "$CONFIG_DIR"
-    mkdir -p "$(dirname "$LOGFILE")"
-    touch "$LOGFILE"
-    log_info "Pre-flight checks passed"
-}
-
-# ============================================================
-# PHASE 1: Port health check
-# ============================================================
-declare -A DEFAULT_PORTS
-DEFAULT_PORTS=(
-    [ollama]=11434
-    [openwebui]=3000
-    [n8n]=5678
-    [supabase_studio]=3001
-    [supabase_api]=8000
-    [supabase_db]=5432
-    [supabase_auth]=9999
-    [supabase_realtime]=4000
-    [flowise]=3003
-    [langfuse]=3004
-    [dify]=3005
-    [litellm]=4000
-    [litellm_alt]=4001
-    [qdrant]=6333
-    [qdrant_grpc]=6334
-    [chromadb]=8100
-    [redis]=6379
-    [caddy_http]=80
-    [caddy_https]=443
-    [crawl4ai]=4444
-    [firecrawl]=3006
-    [whisper]=9000
-    [kokoro]=8880
-    [searxng]=8888
-    [neo4j_http]=7474
-    [neo4j_bolt]=7687
-    [docling]=5001
-    [mongo]=27017
-    [signalapi]=8080
-    [minio]=9002
-    [minio_console]=9003
-    [grafana]=3007
-    [prometheus]=9090
-    [libretranslate]=5555
-    [tailscale]=41641
-)
-
-port_health_check() {
-    log_phase "PHASE 1: Port Health Check"
-    echo "[INFO] Scanning for port conflicts before setup..."
-
-    local conflicts=0
-    local conflict_list=""
-
-    for svc in $(echo "${!DEFAULT_PORTS[@]}" | tr ' ' '\n' | sort); do
-        local port="${DEFAULT_PORTS[$svc]}"
-        local in_use=""
-        in_use=$(ss -tlnp 2>/dev/null | grep ":${port} " || true)
-        if [ -n "$in_use" ]; then
-            local proc=""
-            proc=$(echo "$in_use" | grep -oP 'users:\(\(.*?\)\)' || echo "unknown")
-            log_warn "Port ${port} (${svc}) is IN USE by: ${proc}"
-            conflicts=$((conflicts + 1))
-            conflict_list="${conflict_list}  ${port} -> ${svc}\n"
-        fi
-    done
-
-    if [ "$conflicts" -gt 0 ]; then
+        log_warning "Your system is below recommended specs but can still run the platform"
+        log_info "Consider: Limiting active services, using CPU-only models, or upgrading hardware"
         echo ""
-        echo -e "${YELLOW}Found ${conflicts} port conflict(s):${NC}"
-        echo -e "$conflict_list"
-        echo ""
-        echo "    1) Continue anyway (will reassign ports later)"
-        echo "    2) Stop conflicting services and continue"
-        echo "    3) Abort"
-        echo ""
-        read -rp "  Choose [1-3]: " port_choice
-        case "$port_choice" in
-            1) log_info "Continuing with conflicts — will handle during port assignment" ;;
-            2)
-                log_info "Stopping conflicting services..."
-                for svc in $(echo "${!DEFAULT_PORTS[@]}" | tr ' ' '\n'); do
-                    local port="${DEFAULT_PORTS[$svc]}"
-                    if ss -tlnp 2>/dev/null | grep -q ":${port} "; then
-                        fuser -k "${port}/tcp" 2>/dev/null || true
-                        log_info "Killed process on port ${port} (${svc})"
-                    fi
-                done
-                sleep 2
-                log_info "Services stopped"
-                ;;
-            3) log_info "Aborted by user"; exit 0 ;;
-            *) log_warn "Invalid choice, continuing" ;;
-        esac
-    else
-        log_info "No port conflicts detected — all clear"
-    fi
-}
-
-# ============================================================
-# PHASE 2: System packages
-# ============================================================
-install_system_packages() {
-    log_phase "PHASE 2: System Package Installation"
-
-    export DEBIAN_FRONTEND=noninteractive
-
-    log_info "Updating package lists..."
-    apt-get update -qq
-
-    local packages=(
-        curl wget git jq yq unzip gnupg2 lsb-release
-        ca-certificates apt-transport-https
-        software-properties-common
-        htop btop iotop ncdu tmux
-        uuid-runtime openssl
-        python3 python3-pip python3-venv
-        net-tools dnsutils
-        fail2ban ufw
-        cron logrotate
-    )
-
-    log_info "Installing system packages..."
-    for pkg in "${packages[@]}"; do
-        if dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
-            log_info "${pkg} already installed"
-        else
-            if apt-get install -y -qq "$pkg" 2>/dev/null; then
-                log_info "${pkg} installed"
-            else
-                log_warn "${pkg} failed to install — skipping"
-            fi
+        read -p "Continue with current hardware? (Y/n): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Nn]$ ]]; then
+            log_info "Setup cancelled by user"
+            exit 0
         fi
-    done
-
-    log_info "System packages phase complete"
-}
-
-# ============================================================
-# PHASE 3: Docker installation
-# ============================================================
-install_docker() {
-    log_phase "PHASE 3: Docker Installation"
-
-    if command -v docker >/dev/null 2>&1; then
-        local dv=""
-        dv=$(docker --version 2>/dev/null || echo "unknown")
-        log_info "Docker already installed: ${dv}"
-    else
-        log_info "Installing Docker..."
-        curl -fsSL https://get.docker.com | bash
-        log_info "Docker installed"
     fi
-
-    if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-        local dcv=""
-        dcv=$(docker compose version 2>/dev/null || echo "unknown")
-        log_info "Docker Compose available: ${dcv}"
-    else
-        log_info "Installing Docker Compose plugin..."
-        apt-get install -y -qq docker-compose-plugin 2>/dev/null || true
-    fi
-
-    systemctl enable docker
-    systemctl start docker
-
-    local real_user=""
-    real_user="${SUDO_USER:-$USER}"
-    if [ -n "$real_user" ] && [ "$real_user" != "root" ]; then
-        usermod -aG docker "$real_user" 2>/dev/null || true
-        log_info "Added ${real_user} to docker group"
-    fi
-
-    log_info "Docker phase complete"
-}
-
-# ============================================================
-# PHASE 4: Domain & Infrastructure
-# ============================================================
-DOMAIN=""
-REVERSE_PROXY=""
-VECTOR_DB=""
-
-collect_domain() {
-    log_phase "PHASE 4: Domain & Infrastructure"
-
-    read -rp "  Enter your domain (e.g., ai.example.com): " DOMAIN
-    if [ -z "$DOMAIN" ]; then
-        DOMAIN="localhost"
-        log_warn "No domain entered — using localhost"
-    else
-        log_info "Domain: ${DOMAIN}"
-    fi
-}
-
-collect_reverse_proxy() {
-    echo ""
-    echo "  Select reverse proxy:"
-    echo "    1) caddy (recommended — auto-SSL)"
-    echo "    2) nginx"
-    echo "    3) traefik"
-    echo "    4) none"
-    echo ""
-    read -rp "  Choose [1-4]: " proxy_choice
-
-    case "$proxy_choice" in
-        1) REVERSE_PROXY="caddy" ;;
-        2) REVERSE_PROXY="nginx" ;;
-        3) REVERSE_PROXY="traefik" ;;
-        4) REVERSE_PROXY="none" ;;
-        *) REVERSE_PROXY="caddy"; log_warn "Invalid choice — defaulting to caddy" ;;
-    esac
-    log_info "Reverse proxy: ${REVERSE_PROXY}"
-}
-
-collect_vector_db() {
-    echo ""
-    echo "  Select vector database:"
-    echo "    1) qdrant (recommended)"
-    echo "    2) chromadb"
-    echo "    3) both"
-    echo "    4) none"
-    echo ""
-    read -rp "  Choose [1-4]: " vdb_choice
-
-    case "$vdb_choice" in
-        1) VECTOR_DB="qdrant" ;;
-        2) VECTOR_DB="chromadb" ;;
-        3) VECTOR_DB="both" ;;
-        4) VECTOR_DB="none" ;;
-        *) VECTOR_DB="qdrant"; log_warn "Invalid choice — defaulting to qdrant" ;;
-    esac
-    log_info "Vector DB: ${VECTOR_DB}"
-}
-
-# ============================================================
-# PHASE 5: Service Selection & Port Assignment
-# ============================================================
-
-# Service registry: name|default_port|description|category
-SERVICE_REGISTRY=(
-    "ollama|11434|Local LLM inference engine|core"
-    "open-webui|3000|Chat UI for LLMs|core"
-    "n8n|5678|Workflow automation|core"
-    "litellm|4001|LLM proxy/router|core"
-    "supabase|5432|Postgres + Auth + API|core"
-    "flowise|3003|Visual LLM chain builder|agents"
-    "langfuse|3004|LLM observability|agents"
-    "dify|3005|LLM app builder|agents"
-    "redis|6379|Cache and queue|infra"
-    "crawl4ai|4444|AI web crawler|tools"
-    "firecrawl|3006|Web scraper for LLMs|tools"
-    "whisper|9000|Speech-to-text|tools"
-    "kokoro-tts|8880|Text-to-speech|tools"
-    "searxng|8888|Meta search engine|tools"
-    "neo4j|7474|Graph database|tools"
-    "docling|5001|Document processing|tools"
-    "mongodb|27017|Document database|infra"
-    "signal-api|8080|Signal messaging API|extras"
-    "minio|9002|S3-compatible storage|infra"
-    "grafana|3007|Monitoring dashboard|monitoring"
-    "libretranslate|5555|Translation API|tools"
-)
-
-declare -A SELECTED_SERVICES
-declare -A SERVICE_PORTS
-
-collect_services() {
-    log_phase "PHASE 5: Service Selection"
-
-    echo ""
-    echo "  Available services to deploy:"
-    echo "  ─────────────────────────────────────"
-    echo ""
-
-    local idx=1
-    local svc_names=()
-    local svc_ports=()
-    local svc_descs=()
-    local svc_cats=()
-
-    for entry in "${SERVICE_REGISTRY[@]}"; do
-        local sname=""
-        local sport=""
-        local sdesc=""
-        local scat=""
-        sname=$(echo "$entry" | cut -d'|' -f1)
-        sport=$(echo "$entry" | cut -d'|' -f2)
-        sdesc=$(echo "$entry" | cut -d'|' -f3)
-        scat=$(echo "$entry" | cut -d'|' -f4)
-
-        svc_names+=("$sname")
-        svc_ports+=("$sport")
-        svc_descs+=("$sdesc")
-        svc_cats+=("$scat")
-
-        printf "    %2d) %-18s :%s  [%s]  %s\n" "$idx" "$sname" "$sport" "$scat" "$sdesc"
-        idx=$((idx + 1))
-    done
-
-    echo ""
-    echo "  Enter service numbers separated by spaces, commas, or ranges"
-    echo "  Examples:  1 2 3 5    or    1-6,8,10-12    or    all"
-    echo ""
-    read -rp "  Select services: " svc_input
-
-    if [ -z "$svc_input" ]; then
-        svc_input="all"
-        log_warn "No selection — defaulting to ALL services"
-    fi
-
-    # Parse selection
-    local selected_indices=()
-
-    if [ "$svc_input" = "all" ] || [ "$svc_input" = "ALL" ]; then
-        local i=0
-        while [ "$i" -lt "${#svc_names[@]}" ]; do
-            selected_indices+=("$i")
-            i=$((i + 1))
-        done
-    else
-        # Replace commas with spaces
-        svc_input=$(echo "$svc_input" | tr ',' ' ')
-        for token in $svc_input; do
-            if echo "$token" | grep -q '-'; then
-                local range_start=""
-                local range_end=""
-                range_start=$(echo "$token" | cut -d'-' -f1)
-                range_end=$(echo "$token" | cut -d'-' -f2)
-                local r="$range_start"
-                while [ "$r" -le "$range_end" ]; do
-                    selected_indices+=("$((r - 1))")
-                    r=$((r + 1))
-                done
-            else
-                selected_indices+=("$((token - 1))")
-            fi
-        done
-    fi
-
-    echo ""
-    echo "  Selected services:"
-    for si in "${selected_indices[@]}"; do
-        if [ "$si" -ge 0 ] && [ "$si" -lt "${#svc_names[@]}" ]; then
-            local sn="${svc_names[$si]}"
-            local sp="${svc_ports[$si]}"
-            SELECTED_SERVICES["$sn"]=1
-            SERVICE_PORTS["$sn"]="$sp"
-            echo "    ✓ ${sn} (port ${sp})"
-        fi
-    done
-
-    local total="${#SELECTED_SERVICES[@]}"
-    log_info "Selected ${total} services"
-}
-
-# ============================================================
-# PHASE 5b: Port Assignment & Conflict Resolution
-# ============================================================
-assign_ports() {
-    log_phase "PHASE 5b: Port Assignment"
-
-    echo ""
-    echo "  Review and customize port assignments:"
-    echo "  (Press Enter to keep default, or type new port)"
-    echo ""
-
-    for svc in $(echo "${!SELECTED_SERVICES[@]}" | tr ' ' '\n' | sort); do
-        local current_port="${SERVICE_PORTS[$svc]}"
-        local conflict=""
-        conflict=$(ss -tlnp 2>/dev/null | grep ":${current_port} " || true)
-
-        local status=""
-        if [ -n "$conflict" ]; then
-            status="${RED}IN USE${NC}"
-        else
-            status="${GREEN}available${NC}"
-        fi
-
-        echo -e "    ${svc} — port ${current_port} [${status}]"
-        read -rp "      New port (Enter=keep ${current_port}): " new_port
-
-        if [ -n "$new_port" ]; then
-            SERVICE_PORTS["$svc"]="$new_port"
-            log_info "${svc} port changed to ${new_port}"
-        fi
-    done
-
-    log_info "Port assignment complete"
-}
-
-# ============================================================
-# PHASE 6: LLM Provider & API Key Collection
-# ============================================================
-
-declare -A LLM_PROVIDERS
-declare -a SELECTED_MODELS
-GOOGLE_PROJECT_ID=""
-GOOGLE_AUTH_METHOD=""
-GOOGLE_JSON_PATH=""
-
-collect_llm_providers() {
-    log_phase "PHASE 6: LLM Providers & API Keys"
-
-    echo ""
-    echo "  Select external LLM providers (enter numbers, e.g. 1 3 5):"
-    echo "    1) OpenAI          (GPT-4o, o1, o3)"
-    echo "    2) Anthropic       (Claude 3.5/4 Sonnet, Opus)"
-    echo "    3) Google Gemini   (Gemini 2.5 Pro/Flash)"
-    echo "    4) DeepSeek        (DeepSeek-V3, R1)"
-    echo "    5) Groq            (Llama, Mixtral — fast inference)"
-    echo "    6) OpenRouter      (Multi-provider gateway)"
-    echo "    7) Mistral         (Mistral Large, Codestral)"
-    echo "    8) None / skip"
-    echo ""
-    read -rp "  Select providers: " provider_input
-
-    if [ -z "$provider_input" ] || [ "$provider_input" = "8" ]; then
-        log_info "No external LLM providers selected"
-        return
-    fi
-
-    for num in $provider_input; do
-        case "$num" in
-            1)
-                echo ""
-                read -rp "    OpenAI API key: " oai_key
-                if [ -n "$oai_key" ]; then
-                    LLM_PROVIDERS[openai]="$oai_key"
-                    log_info "OpenAI API key collected"
-                fi
-                ;;
-            2)
-                echo ""
-                read -rp "    Anthropic API key: " anth_key
-                if [ -n "$anth_key" ]; then
-                    LLM_PROVIDERS[anthropic]="$anth_key"
-                    log_info "Anthropic API key collected"
-                fi
-                ;;
-            3)
-                echo ""
-                echo "    Google Gemini auth method:"
-                echo "      a) API key"
-                echo "      b) Service account JSON file"
-                echo "      c) OAuth (gcloud CLI)"
-                echo ""
-                read -rp "    Choose [a/b/c]: " gauth
-                case "$gauth" in
-                    a|A)
-                        read -rp "    Google API key: " gkey
-                        read -rp "    Google Project ID: " gproj
-                        if [ -n "$gkey" ]; then
-                            LLM_PROVIDERS[google]="$gkey"
-                            GOOGLE_PROJECT_ID="$gproj"
-                            GOOGLE_AUTH_METHOD="api_key"
-                            log_info "Google API key + project collected"
-                        fi
-                        ;;
-                    b|B)
-                        read -rp "    Path to service account JSON: " gjson
-                        read -rp "    Google Project ID: " gproj
-                        if [ -n "$gjson" ] && [ -f "$gjson" ]; then
-                            GOOGLE_JSON_PATH="$gjson"
-                            GOOGLE_PROJECT_ID="$gproj"
-                            GOOGLE_AUTH_METHOD="service_account"
-                            LLM_PROVIDERS[google]="service_account"
-                            cp "$gjson" "${CONFIG_DIR}/google-credentials.json"
-                            chmod 600 "${CONFIG_DIR}/google-credentials.json"
-                            log_info "Google service account JSON copied"
-                        else
-                            log_warn "JSON file not found — skipping Google"
-                        fi
-                        ;;
-                    c|C)
-                        read -rp "    Google Project ID: " gproj
-                        GOOGLE_PROJECT_ID="$gproj"
-                        GOOGLE_AUTH_METHOD="oauth"
-                        LLM_PROVIDERS[google]="oauth"
-                        log_info "Google OAuth — ensure gcloud is configured"
-                        ;;
-                    *)
-                        log_warn "Invalid Google auth choice — skipping"
-                        ;;
-                esac
-                ;;
-            4)
-                echo ""
-                read -rp "    DeepSeek API key: " ds_key
-                if [ -n "$ds_key" ]; then
-                    LLM_PROVIDERS[deepseek]="$ds_key"
-                    log_info "DeepSeek API key collected"
-                fi
-                ;;
-            5)
-                echo ""
-                read -rp "    Groq API key: " groq_key
-                if [ -n "$groq_key" ]; then
-                    LLM_PROVIDERS[groq]="$groq_key"
-                    log_info "Groq API key collected"
-                fi
-                ;;
-            6)
-                echo ""
-                read -rp "    OpenRouter API key: " or_key
-                if [ -n "$or_key" ]; then
-                    LLM_PROVIDERS[openrouter]="$or_key"
-                    log_info "OpenRouter API key collected"
-                fi
-                ;;
-            7)
-                echo ""
-                read -rp "    Mistral API key: " mis_key
-                if [ -n "$mis_key" ]; then
-                    LLM_PROVIDERS[mistral]="$mis_key"
-                    log_info "Mistral API key collected"
-                fi
-                ;;
-            *)
-                log_warn "Unknown provider number: ${num}"
-                ;;
-        esac
-    done
-
-    local pcount="${#LLM_PROVIDERS[@]}"
-    log_info "Collected ${pcount} LLM provider(s)"
-}
-
-# ============================================================
-# PHASE 6b: Local Model Selection (Ollama)
-# ============================================================
-collect_models() {
-    log_phase "PHASE 6b: Local Model Selection (Ollama)"
-
-    if [ -z "${SELECTED_SERVICES[ollama]+x}" ]; then
-        log_info "Ollama not selected — skipping model selection"
-        return
-    fi
-
-    echo ""
-    echo "  Select models to pull (by VRAM tier):"
-    echo ""
-    echo "  ── Small (< 8GB VRAM) ──────────────"
-    echo "    1)  llama3.2:3b              (2.0 GB)"
-    echo "    2)  phi3:mini                (2.3 GB)"
-    echo "    3)  gemma2:2b                (1.6 GB)"
-    echo "    4)  qwen2.5:3b               (2.0 GB)"
-    echo "    5)  nomic-embed-text          (0.3 GB)"
-    echo "    6)  all-minilm                (0.1 GB)"
-    echo ""
-    echo "  ── Medium (8-16GB VRAM) ────────────"
-    echo "    7)  llama3.1:8b              (4.7 GB)"
-    echo "    8)  mistral:7b               (4.1 GB)"
-    echo "    9)  codellama:7b             (3.8 GB)"
-    echo "   10)  deepseek-coder-v2:16b    (8.9 GB)"
-    echo "   11)  gemma2:9b                (5.4 GB)"
-    echo "   12)  qwen2.5:7b               (4.4 GB)"
-    echo ""
-    echo "  ── Large (24GB+ VRAM) ──────────────"
-    echo "   13)  llama3.1:70b             (40 GB)"
-    echo "   14)  mixtral:8x7b             (26 GB)"
-    echo "   15)  codellama:34b            (19 GB)"
-    echo "   16)  qwen2.5:72b              (41 GB)"
-    echo "   17)  deepseek-v3:671b          (custom)"
-    echo ""
-    echo "  ── Specialized ─────────────────────"
-    echo "   18)  llava:7b                 (4.5 GB) [vision]"
-    echo "   19)  bakllava                 (4.3 GB) [vision]"
-    echo "   20)  dolphin-mixtral          (26 GB)  [uncensored]"
-    echo "   21)  wizard-vicuna-uncensored (4.0 GB) [uncensored]"
-    echo ""
-    echo "  Enter numbers (e.g. 1 5 7 11), 'small', 'medium', 'all', or 'none'"
-    echo ""
-    read -rp "  Select models: " model_input
-
-    # Model name lookup
-    local model_names=(
-        "llama3.2:3b"
-        "phi3:mini"
-        "gemma2:2b"
-        "qwen2.5:3b"
-        "nomic-embed-text"
-        "all-minilm"
-        "llama3.1:8b"
-        "mistral:7b"
-        "codellama:7b"
-        "deepseek-coder-v2:16b"
-        "gemma2:9b"
-        "qwen2.5:7b"
-        "llama3.1:70b"
-        "mixtral:8x7b"
-        "codellama:34b"
-        "qwen2.5:72b"
-        "deepseek-v3:671b"
-        "llava:7b"
-        "bakllava"
-        "dolphin-mixtral"
-        "wizard-vicuna-uncensored"
-    )
-
-    SELECTED_MODELS=()
-
-    case "$model_input" in
-        none|NONE|"")
-            log_info "No models selected — can pull later"
-            return
-            ;;
-        small|SMALL)
-            SELECTED_MODELS=("${model_names[@]:0:6}")
-            ;;
-        medium|MEDIUM)
-            SELECTED_MODELS=("${model_names[@]:0:12}")
-            ;;
-        all|ALL)
-            SELECTED_MODELS=("${model_names[@]}")
+    
+    # Check supported OS
+    case "$OS" in
+        ubuntu|debian|centos|rhel|fedora|rocky|alma)
+            log_success "Operating system supported: ${OS}"
             ;;
         *)
-            for num in $model_input; do
-                local midx=$((num - 1))
-                if [ "$midx" -ge 0 ] && [ "$midx" -lt "${#model_names[@]}" ]; then
-                    SELECTED_MODELS+=("${model_names[$midx]}")
-                else
-                    log_warn "Invalid model number: ${num}"
-                fi
-            done
+            log_warning "Untested operating system: ${OS}"
+            read -p "Continue anyway? (y/N): " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                exit 1
+            fi
             ;;
     esac
-
-    echo ""
-    echo "  Selected models:"
-    for m in "${SELECTED_MODELS[@]}"; do
-        echo "    ✓ ${m}"
-    done
-    log_info "Selected ${#SELECTED_MODELS[@]} model(s)"
-}
-
-# ============================================================
-# PHASE 7: Tailscale Configuration
-# ============================================================
-TAILSCALE_ENABLED="no"
-TAILSCALE_AUTH_KEY=""
-
-collect_tailscale() {
-    log_phase "PHASE 7: Tailscale VPN"
-
-    echo ""
-    echo "  Enable Tailscale VPN for secure access?"
-    echo "    1) Yes"
-    echo "    2) No"
-    echo ""
-    read -rp "  Choose [1-2]: " ts_choice
-
-    if [ "$ts_choice" = "1" ]; then
-        TAILSCALE_ENABLED="yes"
-        echo ""
-        echo "  Tailscale requires an AUTH KEY (not API key)"
-        echo "  Generate at: https://login.tailscale.com/admin/settings/keys"
-        echo "  Format: tskey-auth-XXXXXXXXXX"
-        echo ""
-        read -rp "  Tailscale auth key: " TAILSCALE_AUTH_KEY
-
-        if [ -n "$TAILSCALE_AUTH_KEY" ]; then
-            # Validate format
-            if echo "$TAILSCALE_AUTH_KEY" | grep -q "^tskey-auth-"; then
-                log_info "Tailscale auth key format valid"
-            else
-                log_warn "Key doesn't match tskey-auth-* format — may fail"
-                echo "  Continue anyway? [y/N]: "
-                read -rp "" ts_continue
-                if [ "$ts_continue" != "y" ] && [ "$ts_continue" != "Y" ]; then
-                    TAILSCALE_AUTH_KEY=""
-                    log_warn "Tailscale auth key cleared — will configure in Script 3"
-                fi
-            fi
-        else
-            log_warn "No auth key — Tailscale will be configured in Script 3"
-        fi
-
-        # Install Tailscale
-        if command -v tailscale >/dev/null 2>&1; then
-            log_info "Tailscale already installed"
-        else
-            log_info "Installing Tailscale..."
-            curl -fsSL https://tailscale.com/install.sh | bash 2>/dev/null || true
-        fi
-
-        # Authenticate if key provided
-        if [ -n "$TAILSCALE_AUTH_KEY" ]; then
-            log_info "Authenticating Tailscale..."
-            if tailscale up --authkey="$TAILSCALE_AUTH_KEY" --hostname="$(hostname)" 2>/dev/null; then
-                log_info "Tailscale authenticated successfully"
-            else
-                log_warn "Tailscale auth failed — will retry in Script 3"
-            fi
-        fi
+    
+    # Check internet connectivity
+    if ping -c 1 8.8.8.8 &> /dev/null; then
+        log_success "Internet connectivity verified"
     else
-        TAILSCALE_ENABLED="no"
-        log_info "Tailscale skipped"
+        log_error "No internet connectivity - required for downloads"
+        exit 1
     fi
+    
+    save_state "preflight"
+    log_success "Preflight checks completed"
 }
 
-# ============================================================
-# PHASE 8: Extras
-# ============================================================
-GDRIVE_SYNC="no"
-SIGNAL_API="no"
-OPENCLAW="no"
+#==============================================================================
+# PHASE 2: PORT HEALTH CHECK
+#==============================================================================
 
-collect_extras() {
-    log_phase "PHASE 8: Additional Features"
-
-    echo ""
-    read -rp "  Enable Google Drive sync? [y/N]: " gd
-    if [ "$gd" = "y" ] || [ "$gd" = "Y" ]; then
-        GDRIVE_SYNC="yes"
-    fi
-
-    if [ -n "${SELECTED_SERVICES[signal-api]+x}" ]; then
-        SIGNAL_API="yes"
-    else
-        read -rp "  Enable Signal messaging API? [y/N]: " sig
-        if [ "$sig" = "y" ] || [ "$sig" = "Y" ]; then
-            SIGNAL_API="yes"
-            SELECTED_SERVICES[signal-api]=1
-            SERVICE_PORTS[signal-api]=8080
+port_health_check() {
+    log_phase "PHASE 2: Port Health Check"
+    
+    local required_ports=(80 443 5432 6379 8080 11434)
+    local ports_in_use=()
+    
+    echo "▶ Checking required ports..."
+    
+    for port in "${required_ports[@]}"; do
+        if ss -tuln 2>/dev/null | grep -q ":${port} " || netstat -tuln 2>/dev/null | grep -q ":${port} "; then
+            log_warning "Port ${port} is already in use"
+            ports_in_use+=("$port")
+        else
+            log_success "Port ${port} is available"
+        fi
+    done
+    
+    if [ ${#ports_in_use[@]} -gt 0 ]; then
+        echo ""
+        log_warning "Some ports are in use: ${ports_in_use[*]}"
+        echo "This may cause conflicts. Consider running ./0-cleanup.sh first"
+        echo ""
+        read -p "Continue anyway? (y/N): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
         fi
     fi
-
-    read -rp "  Enable OpenClaw (open-source Claude)? [y/N]: " oc
-    if [ "$oc" = "y" ] || [ "$oc" = "Y" ]; then
-        OPENCLAW="yes"
-    fi
-
-    log_info "Extras: GDrive=${GDRIVE_SYNC}, Signal=${SIGNAL_API}, OpenClaw=${OPENCLAW}"
+    
+    log_success "Port health check completed"
 }
 
-# ============================================================
-# PHASE 9: Generate All Credentials
-# ============================================================
-declare -A CREDENTIALS
+#==============================================================================
+# PHASE 3: INSTALL SYSTEM PACKAGES
+#==============================================================================
 
-generate_credentials() {
-    log_phase "PHASE 9: Credential Generation"
-
-    CREDENTIALS=(
-        [POSTGRES_PASSWORD]="$(gen_password 32)"
-        [REDIS_PASSWORD]="$(gen_password 32)"
-        [JWT_SECRET]="$(gen_password 64)"
-        [ANON_KEY]="$(gen_password 40)"
-        [SERVICE_ROLE_KEY]="$(gen_password 40)"
-        [SUPABASE_DB_PASSWORD]="$(gen_password 32)"
-        [N8N_ENCRYPTION_KEY]="$(gen_password 32)"
-        [LITELLM_MASTER_KEY]="sk-$(gen_password 40)"
-        [LANGFUSE_SECRET_KEY]="sk-lf-$(gen_password 32)"
-        [LANGFUSE_PUBLIC_KEY]="pk-lf-$(gen_password 32)"
-        [LANGFUSE_SALT]="$(gen_password 32)"
-        [FLOWISE_PASSWORD]="$(gen_password 24)"
-        [GRAFANA_ADMIN_PASSWORD]="$(gen_password 24)"
-        [MINIO_ROOT_PASSWORD]="$(gen_password 32)"
-        [MONGO_PASSWORD]="$(gen_password 32)"
-        [NEO4J_PASSWORD]="$(gen_password 24)"
-        [DIFY_SECRET_KEY]="$(gen_password 32)"
-        [OPENWEBUI_SECRET]="$(gen_password 32)"
-        [WEBHOOK_SECRET]="$(gen_password 32)"
-        [ENCRYPTION_KEY]="$(gen_password 32)"
-        [INSTANCE_ID]="$(gen_uuid)"
-    )
-
-    log_info "Generated ${#CREDENTIALS[@]} credentials"
+install_system_packages() {
+    log_phase "PHASE 3: Installing System Packages"
+    
+    if [ "${SETUP_PHASES[packages]}" -eq 1 ]; then
+        log_info "System packages already installed - skipping"
+        return 0
+    fi
+    
+    log_info "Updating package lists..."
+    
+    case "$OS" in
+        ubuntu|debian)
+            apt-get update -qq
+            apt-get install -y -qq \
+                curl \
+                wget \
+                git \
+                jq \
+                openssl \
+                ca-certificates \
+                gnupg \
+                lsb-release \
+                apt-transport-https \
+                software-properties-common \
+                net-tools \
+                htop \
+                vim \
+                unzip
+            ;;
+        centos|rhel|fedora|rocky|alma)
+            yum install -y -q \
+                curl \
+                wget \
+                git \
+                jq \
+                openssl \
+                ca-certificates \
+                gnupg \
+                net-tools \
+                htop \
+                vim \
+                unzip
+            ;;
+        *)
+            log_error "Unsupported OS for automatic package installation"
+            exit 1
+            ;;
+    esac
+    
+    log_success "System packages installed"
+    save_state "packages"
 }
 
-# ============================================================
-# PHASE 10: Write .env file
-# ============================================================
-write_env_file() {
-    log_phase "PHASE 10: Writing Configuration"
+#==============================================================================
+# PHASE 4: INSTALL DOCKER
+#==============================================================================
 
-    mkdir -p "$CONFIG_DIR"
-
-    if [ -f "$ENV_FILE" ]; then
-        cp "$ENV_FILE" "${ENV_FILE}.bak.${TIMESTAMP}"
-        log_info "Backed up existing .env"
+install_docker() {
+    log_phase "PHASE 4: Installing Docker"
+    
+    if [ "${SETUP_PHASES[docker]}" -eq 1 ]; then
+        log_info "Docker already installed - skipping"
+        return 0
     fi
+    
+    if command -v docker &> /dev/null; then
+        log_info "Docker already installed: $(docker --version)"
+        
+        # Check Docker Compose
+        if docker compose version &> /dev/null; then
+            log_info "Docker Compose already installed: $(docker compose version)"
+        else
+            log_warning "Docker Compose plugin not found, installing..."
+            case "$OS" in
+                ubuntu|debian)
+                    apt-get install -y docker-compose-plugin
+                    ;;
+                centos|rhel|fedora|rocky|alma)
+                    yum install -y docker-compose-plugin
+                    ;;
+            esac
+        fi
+        
+        # Ensure user is in docker group
+        if ! groups "$REAL_USER" | grep -q docker; then
+            log_info "Adding ${REAL_USER} to docker group..."
+            usermod -aG docker "$REAL_USER"
+            log_success "User added to docker group (logout/login required)"
+        fi
+        
+        save_state "docker"
+        return 0
+    fi
+    
+    log_info "Installing Docker..."
+    
+    case "$OS" in
+        ubuntu|debian)
+            # Add Docker's official GPG key
+            install -m 0755 -d /etc/apt/keyrings
+            curl -fsSL https://download.docker.com/linux/${OS}/gpg -o /etc/apt/keyrings/docker.asc
+            chmod a+r /etc/apt/keyrings/docker.asc
+            
+            # Add Docker repository
+            echo \
+              "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${OS} \
+              $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+              tee /etc/apt/sources.list.d/docker.list > /dev/null
+            
+            apt-get update -qq
+            apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+            ;;
+            
+        centos|rhel|rocky|alma)
+            yum install -y yum-utils
+            yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+            yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+            systemctl start docker
+            systemctl enable docker
+            ;;
+            
+        fedora)
+            dnf -y install dnf-plugins-core
+            dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
+            dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+            systemctl start docker
+            systemctl enable docker
+            ;;
+            
+        *)
+            log_error "Unsupported OS for Docker installation: ${OS}"
+            exit 1
+            ;;
+    esac
+    
+    # Add user to docker group
+    usermod -aG docker "$REAL_USER"
+    
+    # Start Docker
+    systemctl start docker
+    systemctl enable docker
+    
+    log_success "Docker installed successfully"
+    log_info "Docker version: $(docker --version)"
+    log_info "Docker Compose version: $(docker compose version)"
+    log_warning "User ${REAL_USER} added to docker group - logout/login required for non-sudo docker"
+    
+    save_state "docker"
+}
 
-    cat > "$ENV_FILE" << ENVEOF
-# ============================================================
-# AI Platform Configuration
-# Generated: $(date -Iseconds)
-# Script: 1-setup-system.sh v99.0.0
-# ============================================================
+#==============================================================================
+# PHASE 5: CREATE DIRECTORY STRUCTURE
+#==============================================================================
 
-# Domain & Proxy
-DOMAIN=${DOMAIN}
-REVERSE_PROXY=${REVERSE_PROXY}
-VECTOR_DB=${VECTOR_DB}
+create_directory_structure() {
+    log_phase "PHASE 5: Creating Directory Structure"
+    
+    if [ "${SETUP_PHASES[directories]}" -eq 1 ]; then
+        log_info "Directory structure already created - skipping"
+        return 0
+    fi
+    
+    log_info "Creating directory structure at ${BASE_DIR}..."
+    
+    # Core directories
+    mkdir -p "${BASE_DIR}"/{config,data,logs,backups,ssl,scripts}
+    
+    # Service-specific data directories
+    mkdir -p "${DATA_DIR}"/{postgres,redis,ollama,mongodb,neo4j,weaviate,qdrant,milvus}
+    
+    # Config directories for services
+    mkdir -p "${CONFIG_DIR}"/{litellm,n8n,flowise,airflow,grafana,prometheus,nginx}
+    
+    # Jupyter and MLflow directories
+    mkdir -p "${DATA_DIR}"/{jupyterhub,mlflow}
+    
+    # Log directories for services
+    mkdir -p "${LOGS_DIR}"/{nginx,postgres,airflow}
+    
+    # Set ownership
+    chown -R "${REAL_UID}:${REAL_GID}" "${BASE_DIR}"
+    
+    # Set permissions
+    chmod -R 755 "${BASE_DIR}"
+    chmod 700 "${SSL_DIR}"
+    
+    log_success "Directory structure created"
+    log_info "Base directory: ${BASE_DIR}"
+    
+    save_state "directories"
+}
 
-# Tailscale
-TAILSCALE_ENABLED=${TAILSCALE_ENABLED}
-TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY}
+#==============================================================================
+# PHASE 6: CREATE DOCKER NETWORKS
+#==============================================================================
 
-# Extras
-GDRIVE_SYNC=${GDRIVE_SYNC}
-SIGNAL_API=${SIGNAL_API}
-OPENCLAW=${OPENCLAW}
-
-# ── Service Ports ──
-ENVEOF
-
-    for svc in $(echo "${!SERVICE_PORTS[@]}" | tr ' ' '\n' | sort); do
-        local port="${SERVICE_PORTS[$svc]}"
-        local varname=""
-        varname=$(echo "${svc}" | tr '-' '_' | tr '[:lower:]' '[:upper:]')
-        echo "${varname}_PORT=${port}" >> "$ENV_FILE"
+create_docker_networks() {
+    log_phase "PHASE 6: Creating Docker Networks"
+    
+    if [ "${SETUP_PHASES[networks]}" -eq 1 ]; then
+        log_info "Docker networks already created - skipping"
+        return 0
+    fi
+    
+    local networks=("ai-platform" "ai-platform-internal" "ai-platform-monitoring")
+    
+    for network in "${networks[@]}"; do
+        if docker network inspect "$network" &> /dev/null; then
+            log_info "Network ${network} already exists"
+        else
+            docker network create "$network" --driver bridge
+            log_success "Created network: ${network}"
+        fi
     done
-
-    cat >> "$ENV_FILE" << ENVEOF2
-
-# ── Selected Services ──
-SELECTED_SERVICES=$(echo "${!SELECTED_SERVICES[@]}" | tr ' ' ',')
-
-# ── Selected Models ──
-SELECTED_MODELS=$(printf '%s,' "${SELECTED_MODELS[@]}" | sed 's/,$//')
-
-# ── LLM Provider API Keys ──
-ENVEOF2
-
-    for provider in $(echo "${!LLM_PROVIDERS[@]}" | tr ' ' '\n' | sort); do
-        local varname=""
-        varname=$(echo "${provider}" | tr '[:lower:]' '[:upper:]')
-        echo "${varname}_API_KEY=${LLM_PROVIDERS[$provider]}" >> "$ENV_FILE"
-    done
-
-    if [ -n "$GOOGLE_PROJECT_ID" ]; then
-        echo "GOOGLE_PROJECT_ID=${GOOGLE_PROJECT_ID}" >> "$ENV_FILE"
-        echo "GOOGLE_AUTH_METHOD=${GOOGLE_AUTH_METHOD}" >> "$ENV_FILE"
-    fi
-
-    cat >> "$ENV_FILE" << ENVEOF3
-
-# ── Generated Credentials ──
-ENVEOF3
-
-    for cred in $(echo "${!CREDENTIALS[@]}" | tr ' ' '\n' | sort); do
-        echo "${cred}=${CREDENTIALS[$cred]}" >> "$ENV_FILE"
-    done
-
-    chmod 600 "$ENV_FILE"
-    log_info "Configuration written to ${ENV_FILE}"
+    
+    save_state "networks"
+    log_success "Docker networks configured"
 }
 
-# ============================================================
-# PHASE 10b: Generate LiteLLM config.yaml
-# ============================================================
-generate_litellm_config() {
-    log_phase "PHASE 10b: LiteLLM Configuration"
+#==============================================================================
+# PHASE 7: CONFIGURE SECURITY
+#==============================================================================
 
-    if [ -z "${SELECTED_SERVICES[litellm]+x}" ]; then
-        log_info "LiteLLM not selected — skipping config generation"
-        return
+configure_security() {
+    log_phase "PHASE 7: Configuring Security"
+    
+    if [ "${SETUP_PHASES[security]}" -eq 1 ]; then
+        log_info "Security already configured - skipping"
+        return 0
     fi
-
-    cat > "$LITELLM_CONFIG" << 'LITEEOF'
-# LiteLLM Proxy Configuration
-# Auto-generated by Script 1
-
-general_settings:
-  master_key: MASTER_KEY_PLACEHOLDER
-  database_url: postgresql://litellm:POSTGRES_PW_PLACEHOLDER@supabase-db:5432/litellm
-
-model_list:
-LITEEOF
-
-    # Replace placeholders
-    sed -i "s|MASTER_KEY_PLACEHOLDER|${CREDENTIALS[LITELLM_MASTER_KEY]}|g" "$LITELLM_CONFIG"
-    sed -i "s|POSTGRES_PW_PLACEHOLDER|${CREDENTIALS[POSTGRES_PASSWORD]}|g" "$LITELLM_CONFIG"
-
-    # Add Ollama models
-    if [ -n "${SELECTED_SERVICES[ollama]+x}" ]; then
-        for model in "${SELECTED_MODELS[@]}"; do
-            cat >> "$LITELLM_CONFIG" << MODELEOF
-  - model_name: ${model}
-    litellm_params:
-      model: ollama/${model}
-      api_base: http://ollama:11434
-MODELEOF
-        done
-    fi
-
-    # Add external providers
-    if [ -n "${LLM_PROVIDERS[openai]+x}" ]; then
-        cat >> "$LITELLM_CONFIG" << 'OAIEOF'
-  - model_name: gpt-4o
-    litellm_params:
-      model: openai/gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
-  - model_name: gpt-4o-mini
-    litellm_params:
-      model: openai/gpt-4o-mini
-      api_key: os.environ/OPENAI_API_KEY
-OAIEOF
-    fi
-
-    if [ -n "${LLM_PROVIDERS[anthropic]+x}" ]; then
-        cat >> "$LITELLM_CONFIG" << 'ANTHEOF'
-  - model_name: claude-sonnet-4
-    litellm_params:
-      model: anthropic/claude-sonnet-4-20250514
-      api_key: os.environ/ANTHROPIC_API_KEY
-  - model_name: claude-3.5-sonnet
-    litellm_params:
-      model: anthropic/claude-3-5-sonnet-20241022
-      api_key: os.environ/ANTHROPIC_API_KEY
-ANTHEOF
-    fi
-
-    if [ -n "${LLM_PROVIDERS[google]+x}" ]; then
-        cat >> "$LITELLM_CONFIG" << 'GEMEOF'
-  - model_name: gemini-2.5-pro
-    litellm_params:
-      model: gemini/gemini-2.5-pro-preview-06-05
-      api_key: os.environ/GOOGLE_API_KEY
-  - model_name: gemini-2.5-flash
-    litellm_params:
-      model: gemini/gemini-2.5-flash-preview-05-20
-      api_key: os.environ/GOOGLE_API_KEY
-GEMEOF
-    fi
-
-    if [ -n "${LLM_PROVIDERS[deepseek]+x}" ]; then
-        cat >> "$LITELLM_CONFIG" << 'DSEOF'
-  - model_name: deepseek-chat
-    litellm_params:
-      model: deepseek/deepseek-chat
-      api_key: os.environ/DEEPSEEK_API_KEY
-  - model_name: deepseek-reasoner
-    litellm_params:
-      model: deepseek/deepseek-reasoner
-      api_key: os.environ/DEEPSEEK_API_KEY
-DSEOF
-    fi
-
-    if [ -n "${LLM_PROVIDERS[groq]+x}" ]; then
-        cat >> "$LITELLM_CONFIG" << 'GROQEOF'
-  - model_name: groq-llama-70b
-    litellm_params:
-      model: groq/llama-3.3-70b-versatile
-      api_key: os.environ/GROQ_API_KEY
-  - model_name: groq-mixtral
-    litellm_params:
-      model: groq/mixtral-8x7b-32768
-      api_key: os.environ/GROQ_API_KEY
-GROQEOF
-    fi
-
-    if [ -n "${LLM_PROVIDERS[openrouter]+x}" ]; then
-        cat >> "$LITELLM_CONFIG" << 'OREOF'
-  - model_name: openrouter-auto
-    litellm_params:
-      model: openrouter/auto
-      api_key: os.environ/OPENROUTER_API_KEY
-OREOF
-    fi
-
-    if [ -n "${LLM_PROVIDERS[mistral]+x}" ]; then
-        cat >> "$LITELLM_CONFIG" << 'MISEOF'
-  - model_name: mistral-large
-    litellm_params:
-      model: mistral/mistral-large-latest
-      api_key: os.environ/MISTRAL_API_KEY
-MISEOF
-    fi
-
-    chmod 600 "$LITELLM_CONFIG"
-    log_info "LiteLLM config written to ${LITELLM_CONFIG}"
-}
-
-# ============================================================
-# PHASE 11: System Hardening
-# ============================================================
-harden_system() {
-    log_phase "PHASE 11: System Hardening"
-
-    # UFW firewall
-    if command -v ufw >/dev/null 2>&1; then
+    
+    # Configure firewall (basic setup)
+    if command -v ufw &> /dev/null; then
         log_info "Configuring UFW firewall..."
-        ufw --force reset >/dev/null 2>&1 || true
-        ufw default deny incoming >/dev/null 2>&1
-        ufw default allow outgoing >/dev/null 2>&1
-        ufw allow 22/tcp >/dev/null 2>&1
-        ufw allow 80/tcp >/dev/null 2>&1
-        ufw allow 443/tcp >/dev/null 2>&1
-
-        if [ "$TAILSCALE_ENABLED" = "yes" ]; then
-            ufw allow 41641/udp >/dev/null 2>&1
-            ufw allow in on tailscale0 >/dev/null 2>&1
-        fi
-
-        ufw --force enable >/dev/null 2>&1
-        log_info "UFW firewall enabled"
+        
+        # Allow SSH
+        ufw allow 22/tcp comment 'SSH' 2>/dev/null || true
+        
+        # Allow HTTP/HTTPS
+        ufw allow 80/tcp comment 'HTTP' 2>/dev/null || true
+        ufw allow 443/tcp comment 'HTTPS' 2>/dev/null || true
+        
+        # Enable firewall (if not already enabled)
+        echo "y" | ufw enable 2>/dev/null || true
+        
+        log_success "UFW firewall configured"
+    elif command -v firewall-cmd &> /dev/null; then
+        log_info "Configuring firewalld..."
+        
+        systemctl start firewalld
+        systemctl enable firewalld
+        
+        firewall-cmd --permanent --add-service=ssh
+        firewall-cmd --permanent --add-service=http
+        firewall-cmd --permanent --add-service=https
+        firewall-cmd --reload
+        
+        log_success "Firewalld configured"
+    else
+        log_warning "No firewall detected - consider installing ufw or firewalld"
     fi
-
-    # Fail2ban
-    if command -v fail2ban-server >/dev/null 2>&1; then
-        systemctl enable fail2ban >/dev/null 2>&1 || true
-        systemctl start fail2ban >/dev/null 2>&1 || true
-        log_info "Fail2ban enabled"
-    fi
-
-    # SSH hardening
-    if [ -f /etc/ssh/sshd_config ]; then
-        local ssh_changed=0
-        if grep -q "^PermitRootLogin yes" /etc/ssh/sshd_config 2>/dev/null; then
-            sed -i 's/^PermitRootLogin yes/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
-            ssh_changed=1
-        fi
-        if grep -q "^PasswordAuthentication yes" /etc/ssh/sshd_config 2>/dev/null; then
-            sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
-            ssh_changed=1
-        fi
-        if [ "$ssh_changed" -eq 1 ]; then
-            systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || true
-            log_info "SSH hardened"
-        else
-            log_info "SSH already hardened"
-        fi
-    fi
-
-    # Docker daemon settings
-    mkdir -p /etc/docker
+    
+    # Set up Docker daemon security
     if [ ! -f /etc/docker/daemon.json ]; then
-        cat > /etc/docker/daemon.json << 'DOCKERJSON'
+        log_info "Configuring Docker daemon security..."
+        cat > /etc/docker/daemon.json <<EOF
 {
   "log-driver": "json-file",
   "log-opts": {
     "max-size": "10m",
     "max-file": "3"
   },
-  "default-ulimits": {
-    "nofile": {
-      "Name": "nofile",
-      "Hard": 65536,
-      "Soft": 65536
-    }
-  },
-  "storage-driver": "overlay2"
+  "live-restore": true,
+  "userland-proxy": false
 }
-DOCKERJSON
-        systemctl restart docker 2>/dev/null || true
-        log_info "Docker daemon configured"
-    else
-        log_info "Docker daemon.json already exists — skipping"
+EOF
+        systemctl restart docker
+        log_success "Docker daemon configured"
     fi
-
-    # Sysctl tuning
-    local sysctl_file="/etc/sysctl.d/99-ai-platform.conf"
-    if [ ! -f "$sysctl_file" ]; then
-        cat > "$sysctl_file" << 'SYSCTLEOF'
-# AI Platform sysctl tuning
-vm.swappiness=10
-vm.overcommit_memory=1
-net.core.somaxconn=65535
-net.ipv4.tcp_max_syn_backlog=65535
-net.ipv4.ip_local_port_range=1024 65535
-net.ipv4.tcp_tw_reuse=1
-fs.file-max=2097152
-fs.inotify.max_user_watches=524288
-SYSCTLEOF
-        sysctl -p "$sysctl_file" >/dev/null 2>&1 || true
-        log_info "Sysctl tuning applied"
-    else
-        log_info "Sysctl already configured"
-    fi
-
-    log_info "System hardening complete"
+    
+    save_state "security"
+    log_success "Security configuration completed"
 }
 
-# ============================================================
-# PHASE 12: Final Health Check
-# ============================================================
-final_health_check() {
-    log_phase "PHASE 12: Final Health Check"
+#==============================================================================
+# PHASE 8: INSTALL TAILSCALE (OPTIONAL)
+#==============================================================================
 
-    local checks_passed=0
-    local checks_failed=0
-
-    # Docker
-    if docker info >/dev/null 2>&1; then
-        log_info "Docker: running"
-        checks_passed=$((checks_passed + 1))
+install_tailscale() {
+    log_phase "PHASE 8: Tailscale Setup (Optional)"
+    
+    if [ "${SETUP_PHASES[tailscale]}" -eq 1 ]; then
+        log_info "Tailscale already configured - skipping"
+        return 0
+    fi
+    
+    echo ""
+    read -p "Install Tailscale for secure remote access? (y/N): " -n 1 -r
+    echo
+    
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        ENABLE_TAILSCALE=true
+        
+        if command -v tailscale &> /dev/null; then
+            log_info "Tailscale already installed"
+        else
+            log_info "Installing Tailscale..."
+            curl -fsSL https://tailscale.com/install.sh | sh
+            log_success "Tailscale installed"
+        fi
+        
+        echo ""
+        log_info "To connect this machine to your Tailscale network, run:"
+        echo "  sudo tailscale up"
+        echo ""
     else
-        log_error "Docker: not running"
-        checks_failed=$((checks_failed + 1))
+        ENABLE_TAILSCALE=false
+        log_info "Skipping Tailscale installation"
+    fi
+    
+    save_state "tailscale"
+}
+
+#==============================================================================
+# PHASE 9: GENERATE SECRETS
+#==============================================================================
+
+generate_secrets() {
+    log_phase "PHASE 9: Generating Secure Secrets"
+    
+    if [ "${SETUP_PHASES[secrets]}" -eq 1 ] && [ -f "$SECRETS_FILE" ]; then
+        log_info "Secrets already generated - skipping"
+        
+        # Load existing secrets
+        source "$SECRETS_FILE"
+        return 0
+    fi
+    
+    log_info "Generating secure passwords and keys..."
+    
+    # Generate secrets
+    DB_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-32)
+    ADMIN_PASSWORD=$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-24)
+    JWT_SECRET=$(openssl rand -base64 64 | tr -d '/+=' | cut -c1-64)
+    ENCRYPTION_KEY=$(openssl rand -hex 32)
+    REDIS_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-32)
+    
+    # Save secrets
+    cat > "$SECRETS_FILE" <<EOF
+# Generated secrets - DO NOT COMMIT TO VERSION CONTROL
+# Generated: $(date)
+
+DB_PASSWORD="${DB_PASSWORD}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD}"
+JWT_SECRET="${JWT_SECRET}"
+ENCRYPTION_KEY="${ENCRYPTION_KEY}"
+REDIS_PASSWORD="${REDIS_PASSWORD}"
+EOF
+    
+    chmod 600 "$SECRETS_FILE"
+    chown "${REAL_UID}:${REAL_GID}" "$SECRETS_FILE"
+    
+    log_success "Secrets generated and saved to ${SECRETS_FILE}"
+    log_warning "IMPORTANT: Back up this file securely!"
+    
+    save_state "secrets"
+}
+
+#==============================================================================
+# PHASE 10: COLLECT DOMAIN CONFIGURATION
+#==============================================================================
+
+collect_domain_config() {
+    log_phase "PHASE 10: Domain Configuration"
+    
+    if [ "${SETUP_PHASES[domain]}" -eq 1 ]; then
+        log_info "Domain configuration already collected - skipping"
+        return 0
+    fi
+    
+    echo ""
+    echo "Domain Configuration"
+    echo "────────────────────────────────────────────────────────────"
+    echo ""
+    
+    read -p "Enter your base domain (e.g., example.com): " BASE_DOMAIN
+    
+    if [ -z "$BASE_DOMAIN" ]; then
+        log_error "Domain cannot be empty"
+        exit 1
+    fi
+    
+    # Validate domain format
+    if [[ ! "$BASE_DOMAIN" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
+        log_error "Invalid domain format"
+        exit 1
+    fi
+    
+    log_success "Domain configured: ${BASE_DOMAIN}"
+    
+    # Ask about SSL
+    echo ""
+    read -p "Use Let's Encrypt for SSL certificates? (Y/n): " -n 1 -r
+    echo
+    USE_LETSENCRYPT=$([[ ! $REPLY =~ ^[Nn]$ ]] && echo true || echo false)
+    
+    if [ "$USE_LETSENCRYPT" = true ]; then
+        read -p "Enter email for Let's Encrypt: " LETSENCRYPT_EMAIL
+        
+        if [[ ! "$LETSENCRYPT_EMAIL" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+            log_error "Invalid email format"
+            exit 1
+        fi
+        
+        log_success "SSL configured with Let's Encrypt"
+    else
+        log_info "Self-signed certificates will be used"
+    fi
+    
+    save_state "domain"
+}
+
+#==============================================================================
+# PHASE 11: SELECT SERVICES
+#==============================================================================
+
+select_services() {
+    log_phase "PHASE 11: Service Selection"
+    
+    if [ "${SETUP_PHASES[services]}" -eq 1 ]; then
+        log_info "Services already selected - skipping"
+        return 0
+    fi
+    
+    echo ""
+    echo "Select services to deploy:"
+    echo "────────────────────────────────────────────────────────────"
+    echo ""
+    
+    # Core AI Services
+    echo "🤖 Core AI Services:"
+    read -p "  Install LiteLLM (AI Gateway)? (Y/n): " -n 1 -r; echo; ENABLE_LITELLM=$([[ ! $REPLY =~ ^[Nn]$ ]] && echo true || echo false)
+    read -p "  Install Ollama (Local LLMs)? (Y/n): " -n 1 -r; echo; ENABLE_OLLAMA=$([[ ! $REPLY =~ ^[Nn]$ ]] && echo true || echo false)
+    read -p "  Install Open WebUI? (Y/n): " -n 1 -r; echo; ENABLE_OPENWEBUI=$([[ ! $REPLY =~ ^[Nn]$ ]] && echo true || echo false)
+    
+    echo ""
+    echo "💬 AI Platforms:"
+    read -p "  Install AnythingLLM? (y/N): " -n 1 -r; echo; ENABLE_ANYTHINGLLM=$([[ $REPLY =~ ^[Yy]$ ]] && echo true || echo false)
+    read -p "  Install Dify? (y/N): " -n 1 -r; echo; ENABLE_DIFY=$([[ $REPLY =~ ^[Yy]$ ]] && echo true || echo false)
+    
+    echo ""
+    echo "🔄 Workflow Automation:"
+    read -p "  Install n8n? (y/N): " -n 1 -r; echo; ENABLE_N8N=$([[ $REPLY =~ ^[Yy]$ ]] && echo true || echo false)
+    read -p "  Install Flowise? (y/N): " -n 1 -r; echo; ENABLE_FLOWISE=$([[ $REPLY =~ ^[Yy]$ ]] && echo true || echo false)
+    read -p "  Install Apache Airflow? (y/N): " -n 1 -r; echo; ENABLE_AIRFLOW=$([[ $REPLY =~ ^[Yy]$ ]] && echo true || echo false)
+    
+    echo ""
+    echo "🗄️ Vector Databases:"
+    read -p "  Install Weaviate? (y/N): " -n 1 -r; echo; ENABLE_WEAVIATE=$([[ $REPLY =~ ^[Yy]$ ]] && echo true || echo false)
+    read -p "  Install Qdrant? (y/N): " -n 1 -r; echo; ENABLE_QDRANT=$([[ $REPLY =~ ^[Yy]$ ]] && echo true || echo false)
+    read -p "  Install Milvus? (y/N): " -n 1 -r; echo; ENABLE_MILVUS=$([[ $REPLY =~ ^[Yy]$ ]] && echo true || echo false)
+    
+    echo ""
+    echo "🔬 ML/Data Science:"
+    read -p "  Install JupyterHub? (y/N): " -n 1 -r; echo; ENABLE_JUPYTERHUB=$([[ $REPLY =~ ^[Yy]$ ]] && echo true || echo false)
+    read -p "  Install MLflow? (y/N): " -n 1 -r; echo; ENABLE_MLFLOW=$([[ $REPLY =~ ^[Yy]$ ]] && echo true || echo false)
+    
+    echo ""
+    echo "💾 Databases:"
+    read -p "  Install MongoDB? (y/N): " -n 1 -r; echo; ENABLE_MONGODB=$([[ $REPLY =~ ^[Yy]$ ]] && echo true || echo false)
+    read -p "  Install Neo4j? (y/N): " -n 1 -r; echo; ENABLE_NEO4J=$([[ $REPLY =~ ^[Yy]$ ]] && echo true || echo false)
+    
+    echo ""
+    echo "📊 Analytics & Monitoring:"
+    read -p "  Install Metabase? (y/N): " -n 1 -r; echo; ENABLE_METABASE=$([[ $REPLY =~ ^[Yy]$ ]] && echo true || echo false)
+    read -p "  Install Monitoring (Prometheus + Grafana)? (Y/n): " -n 1 -r; echo; ENABLE_MONITORING=$([[ ! $REPLY =~ ^[Nn]$ ]] && echo true || echo false)
+    
+    echo ""
+    log_success "Service selection completed"
+    
+    save_state "services"
+}
+
+#==============================================================================
+# PHASE 12: COLLECT API KEYS
+#==============================================================================
+
+collect_api_keys() {
+    log_phase "PHASE 12: API Key Collection"
+    
+    if [ "${SETUP_PHASES[apikeys]}" -eq 1 ]; then
+        log_info "API keys already collected - skipping"
+        return 0
+    fi
+    
+    if [ "$ENABLE_LITELLM" = false ]; then
+        log_info "LiteLLM not enabled - skipping API key collection"
+        save_state "apikeys"
+        return 0
+    fi
+    
+    echo ""
+    echo "API Key Configuration (Optional - press Enter to skip)"
+    echo "────────────────────────────────────────────────────────────"
+    echo ""
+    echo "These keys are optional. You can add them later in the .env file."
+    echo ""
+    
+    read -p "OpenAI API Key: " OPENAI_API_KEY
+    read -p "Anthropic API Key: " ANTHROPIC_API_KEY
+    read -p "Google Gemini API Key: " GEMINI_API_KEY
+    read -p "Groq API Key: " GROQ_API_KEY
+    read -p "Mistral API Key: " MISTRAL_API_KEY
+    read -p "OpenRouter API Key: " OPENROUTER_API_KEY
+    read -p "HuggingFace API Key: " HUGGINGFACE_API_KEY
+    
+    echo ""
+    
+    local keys_count=0
+    [ -n "$OPENAI_API_KEY" ] && keys_count=$((keys_count + 1))
+    [ -n "$ANTHROPIC_API_KEY" ] && keys_count=$((keys_count + 1))
+    [ -n "$GEMINI_API_KEY" ] && keys_count=$((keys_count + 1))
+    [ -n "$GROQ_API_KEY" ] && keys_count=$((keys_count + 1))
+    [ -n "$MISTRAL_API_KEY" ] && keys_count=$((keys_count + 1))
+    [ -n "$OPENROUTER_API_KEY" ] && keys_count=$((keys_count + 1))
+    [ -n "$HUGGINGFACE_API_KEY" ] && keys_count=$((keys_count + 1))
+    
+    if [ $keys_count -gt 0 ]; then
+        log_success "Collected ${keys_count} API key(s)"
+    else
+        log_info "No API keys provided - you can add them later"
+    fi
+    
+    save_state "apikeys"
+}
+
+#==============================================================================
+# PHASE 13: GENERATE .ENV FILE
+#==============================================================================
+
+generate_env_file() {
+    log_phase "PHASE 13: Generating Environment Configuration"
+    
+    if [ "${SETUP_PHASES[env]}" -eq 1 ]; then
+        log_info ".env file already generated - skipping"
+        return 0
+    fi
+    
+    log_info "Generating .env file..."
+    
+    cat > "$ENV_FILE" <<EOF
+# AI Platform Environment Configuration
+# Generated: $(date)
+# DO NOT COMMIT THIS FILE TO VERSION CONTROL
+
+#==============================================================================
+# SYSTEM CONFIGURATION
+#==============================================================================
+
+BASE_DIR=${BASE_DIR}
+CONFIG_DIR=${CONFIG_DIR}
+DATA_DIR=${DATA_DIR}
+LOGS_DIR=${LOGS_DIR}
+BACKUP_DIR=${BACKUP_DIR}
+
+#==============================================================================
+# HARDWARE DETECTION
+#==============================================================================
+
+HARDWARE_TYPE=${HARDWARE_TYPE}
+GPU_TYPE=${GPU_TYPE}
+GPU_COUNT=${GPU_COUNT}
+TOTAL_CPU_CORES=${TOTAL_CPU_CORES}
+TOTAL_RAM_GB=${TOTAL_RAM_GB}
+
+#==============================================================================
+# DOMAIN AND SSL
+#==============================================================================
+
+BASE_DOMAIN=${BASE_DOMAIN}
+USE_LETSENCRYPT=${USE_LETSENCRYPT}
+LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL:-}
+
+#==============================================================================
+# SECURITY - AUTO-GENERATED SECRETS
+#==============================================================================
+
+DB_PASSWORD=${DB_PASSWORD}
+ADMIN_PASSWORD=${ADMIN_PASSWORD}
+JWT_SECRET=${JWT_SECRET}
+ENCRYPTION_KEY=${ENCRYPTION_KEY}
+REDIS_PASSWORD=${REDIS_PASSWORD}
+
+#==============================================================================
+# DATABASE CONFIGURATION
+#==============================================================================
+
+POSTGRES_DB=aiplatform
+POSTGRES_USER=aiplatform
+POSTGRES_PASSWORD=${DB_PASSWORD}
+POSTGRES_HOST=postgres
+POSTGRES_PORT=5432
+
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_PASSWORD=${REDIS_PASSWORD}
+
+EOF
+
+    # Add MongoDB config if enabled
+    if [ "$ENABLE_MONGODB" = true ]; then
+        cat >> "$ENV_FILE" <<EOF
+
+#==============================================================================
+# MONGODB CONFIGURATION
+#==============================================================================
+
+MONGODB_HOST=mongodb
+MONGODB_PORT=27017
+MONGODB_USERNAME=aiplatform
+MONGODB_PASSWORD=${DB_PASSWORD}
+MONGODB_DATABASE=aiplatform
+
+EOF
     fi
 
-    # Docker Compose
-    if docker compose version >/dev/null 2>&1; then
-        log_info "Docker Compose: available"
-        checks_passed=$((checks_passed + 1))
-    else
-        log_error "Docker Compose: not available"
-        checks_failed=$((checks_failed + 1))
+    # Add Neo4j config if enabled
+    if [ "$ENABLE_NEO4J" = true ]; then
+        cat >> "$ENV_FILE" <<EOF
+
+#==============================================================================
+# NEO4J CONFIGURATION
+#==============================================================================
+
+NEO4J_AUTH=neo4j/${DB_PASSWORD}
+NEO4J_HOST=neo4j
+NEO4J_BOLT_PORT=7687
+NEO4J_HTTP_PORT=7474
+
+EOF
     fi
 
-    # .env file
+    # Add API keys if LiteLLM is enabled
+    if [ "$ENABLE_LITELLM" = true ]; then
+        cat >> "$ENV_FILE" <<EOF
+
+#==============================================================================
+# AI PROVIDER API KEYS
+#==============================================================================
+
+OPENAI_API_KEY=${OPENAI_API_KEY:-}
+ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+GEMINI_API_KEY=${GEMINI_API_KEY:-}
+GROQ_API_KEY=${GROQ_API_KEY:-}
+MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
+OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+HUGGINGFACE_API_KEY=${HUGGINGFACE_API_KEY:-}
+
+EOF
+    fi
+
+    # Add service-specific configs
+    cat >> "$ENV_FILE" <<EOF
+
+#==============================================================================
+# SERVICE FLAGS
+#==============================================================================
+
+ENABLE_LITELLM=${ENABLE_LITELLM}
+ENABLE_OLLAMA=${ENABLE_OLLAMA}
+ENABLE_OPENWEBUI=${ENABLE_OPENWEBUI}
+ENABLE_ANYTHINGLLM=${ENABLE_ANYTHINGLLM}
+ENABLE_DIFY=${ENABLE_DIFY}
+ENABLE_N8N=${ENABLE_N8N}
+ENABLE_FLOWISE=${ENABLE_FLOWISE}
+ENABLE_AIRFLOW=${ENABLE_AIRFLOW}
+ENABLE_WEAVIATE=${ENABLE_WEAVIATE}
+ENABLE_QDRANT=${ENABLE_QDRANT}
+ENABLE_MILVUS=${ENABLE_MILVUS}
+ENABLE_JUPYTERHUB=${ENABLE_JUPYTERHUB}
+ENABLE_MLFLOW=${ENABLE_MLFLOW}
+ENABLE_MONGODB=${ENABLE_MONGODB}
+ENABLE_NEO4J=${ENABLE_NEO4J}
+ENABLE_METABASE=${ENABLE_METABASE}
+ENABLE_MONITORING=${ENABLE_MONITORING}
+ENABLE_TAILSCALE=${ENABLE_TAILSCALE}
+
+#==============================================================================
+# LITELLM CONFIGURATION
+#==============================================================================
+
+LITELLM_MASTER_KEY=${JWT_SECRET}
+LITELLM_SALT_KEY=${ENCRYPTION_KEY}
+LITELLM_DATABASE_URL=postgresql://\${POSTGRES_USER}:\${POSTGRES_PASSWORD}@\${POSTGRES_HOST}:\${POSTGRES_PORT}/\${POSTGRES_DB}
+
+#==============================================================================
+# OLLAMA CONFIGURATION
+#==============================================================================
+
+OLLAMA_HOST=0.0.0.0:11434
+OLLAMA_ORIGINS=*
+OLLAMA_MODELS=llama2,mistral,codellama
+
+EOF
+
+    # Add GPU-specific config
+    if [ "$HARDWARE_TYPE" = "gpu" ]; then
+        cat >> "$ENV_FILE" <<EOF
+
+#==============================================================================
+# GPU CONFIGURATION
+#==============================================================================
+
+OLLAMA_GPU=1
+OLLAMA_NUM_GPU=1
+
+EOF
+    else
+        cat >> "$ENV_FILE" <<EOF
+
+#==============================================================================
+# CPU-ONLY CONFIGURATION
+#==============================================================================
+
+OLLAMA_GPU=0
+OLLAMA_NUM_PARALLEL=2
+OLLAMA_NUM_THREAD=${TOTAL_CPU_CORES}
+
+EOF
+    fi
+
+    # Set permissions
+    chmod 600 "$ENV_FILE"
+    chown "${REAL_UID}:${REAL_GID}" "$ENV_FILE"
+    
+    log_success ".env file generated: ${ENV_FILE}"
+    
+    save_state "env"
+}
+
+#==============================================================================
+# PHASE 14: GENERATE DOCKER COMPOSE SKELETON
+#==============================================================================
+
+generate_docker_compose() {
+    log_phase "PHASE 14: Generating Docker Compose Configuration"
+    
+    if [ "${SETUP_PHASES[compose]}" -eq 1 ]; then
+        log_info "Docker Compose file already generated - skipping"
+        return 0
+    fi
+    
+    log_info "Generating docker-compose.yml skeleton..."
+    
+    cat > "$COMPOSE_FILE" <<'EOF'
+version: '3.8'
+
+# AI Platform - Main Docker Compose Configuration
+# This is a skeleton file - services will be added by deployment scripts
+
+networks:
+  ai-platform:
+    name: ai-platform
+    driver: bridge
+  ai-platform-internal:
+    name: ai-platform-internal
+    driver: bridge
+    internal: true
+  ai-platform-monitoring:
+    name: ai-platform-monitoring
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  ollama_data:
+
+services:
+  # Core services will be added here by 2-deploy-platform.sh
+  # Service deployment is modular based on .env configuration
+  
+  placeholder:
+    image: hello-world
+    networks:
+      - ai-platform
+    restart: "no"
+
+EOF
+
+    chmod 644 "$COMPOSE_FILE"
+    chown "${REAL_UID}:${REAL_GID}" "$COMPOSE_FILE"
+    
+    log_success "Docker Compose skeleton created: ${COMPOSE_FILE}"
+    log_info "Services will be added during deployment (2-deploy-platform.sh)"
+    
+    save_state "compose"
+}
+
+#==============================================================================
+# PHASE 15: GENERATE LITELLM CONFIG
+#==============================================================================
+
+generate_litellm_config() {
+    if [ "$ENABLE_LITELLM" = false ]; then
+        log_info "LiteLLM not enabled - skipping config generation"
+        return 0
+    fi
+    
+    log_phase "PHASE 15: Generating LiteLLM Configuration"
+    
+    if [ "${SETUP_PHASES[litellm]}" -eq 1 ]; then
+        log_info "LiteLLM config already generated - skipping"
+        return 0
+    fi
+    
+    mkdir -p "${CONFIG_DIR}/litellm"
+    
+    log_info "Generating LiteLLM config.yaml..."
+    
+    cat > "${CONFIG_DIR}/litellm/config.yaml" <<'EOF'
+# LiteLLM Configuration
+# Auto-generated by setup script
+
+model_list:
+  # Ollama models (local)
+  - model_name: llama2
+    litellm_params:
+      model: ollama/llama2
+      api_base: http://ollama:11434
+
+  - model_name: mistral
+    litellm_params:
+      model: ollama/mistral
+      api_base: http://ollama:11434
+
+  - model_name: codellama
+    litellm_params:
+      model: ollama/codellama
+      api_base: http://ollama:11434
+
+EOF
+
+    # Add API-based models if keys are provided
+    if [ -n "$OPENAI_API_KEY" ]; then
+        cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
+
+  # OpenAI models
+  - model_name: gpt-4
+    litellm_params:
+      model: gpt-4
+      api_key: \${OPENAI_API_KEY}
+
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: \${OPENAI_API_KEY}
+
+EOF
+    fi
+
+    if [ -n "$ANTHROPIC_API_KEY" ]; then
+        cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
+
+  # Anthropic models
+  - model_name: claude-3-opus
+    litellm_params:
+      model: claude-3-opus-20240229
+      api_key: \${ANTHROPIC_API_KEY}
+
+  - model_name: claude-3-sonnet
+    litellm_params:
+      model: claude-3-sonnet-20240229
+      api_key: \${ANTHROPIC_API_KEY}
+
+EOF
+    fi
+
+    cat >> "${CONFIG_DIR}/litellm/config.yaml" <<'EOF'
+
+# General settings
+general_settings:
+  master_key: ${LITELLM_MASTER_KEY}
+  database_url: ${LITELLM_DATABASE_URL}
+  
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  
+EOF
+
+    chown -R "${REAL_UID}:${REAL_GID}" "${CONFIG_DIR}/litellm"
+    
+    log_success "LiteLLM configuration generated"
+    
+    save_state "litellm"
+}
+
+#==============================================================================
+# PHASE 16: GENERATE POSTGRES INIT SCRIPT
+#==============================================================================
+
+generate_postgres_init() {
+    log_phase "PHASE 16: Generating Database Initialization"
+    
+    if [ "${SETUP_PHASES[postgres_init]}" -eq 1 ]; then
+        log_info "Postgres init already generated - skipping"
+        return 0
+    fi
+    
+    mkdir -p "${CONFIG_DIR}/postgres"
+    
+    cat > "${CONFIG_DIR}/postgres/init.sql" <<EOF
+-- AI Platform Database Initialization
+-- Generated: $(date)
+
+-- Create extensions
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- Create schemas
+CREATE SCHEMA IF NOT EXISTS aiplatform;
+CREATE SCHEMA IF NOT EXISTS monitoring;
+
+-- Grant permissions
+GRANT ALL PRIVILEGES ON SCHEMA aiplatform TO aiplatform;
+GRANT ALL PRIVILEGES ON SCHEMA monitoring TO aiplatform;
+
+-- Create basic tables for LiteLLM (if enabled)
+EOF
+
+    if [ "$ENABLE_LITELLM" = true ]; then
+        cat >> "${CONFIG_DIR}/postgres/init.sql" <<'EOF'
+
+CREATE TABLE IF NOT EXISTS aiplatform.api_keys (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    key_hash TEXT NOT NULL UNIQUE,
+    key_name TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP,
+    is_active BOOLEAN DEFAULT TRUE
+);
+
+CREATE TABLE IF NOT EXISTS aiplatform.usage_logs (
+    id SERIAL PRIMARY KEY,
+    api_key_id UUID REFERENCES aiplatform.api_keys(id),
+    model TEXT NOT NULL,
+    tokens_used INTEGER,
+    cost DECIMAL(10, 6),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_usage_logs_created_at ON aiplatform.usage_logs(created_at);
+CREATE INDEX idx_usage_logs_api_key_id ON aiplatform.usage_logs(api_key_id);
+
+EOF
+    fi
+
+    chown -R "${REAL_UID}:${REAL_GID}" "${CONFIG_DIR}/postgres"
+    
+    log_success "Database initialization script generated"
+    
+    save_state "postgres_init"
+}
+
+#==============================================================================
+# VERIFICATION
+#==============================================================================
+
+verify_setup() {
+    log_phase "VERIFICATION: Setup Validation"
+    
+    local errors=0
+    
+    echo "▶ Verifying installation..."
+    
+    # Check Docker
+    if docker --version &> /dev/null; then
+        log_success "Docker is installed and running"
+    else
+        log_error "Docker verification failed"
+        errors=$((errors + 1))
+    fi
+    
+    # Check Docker Compose
+    if docker compose version &> /dev/null; then
+        log_success "Docker Compose is available"
+    else
+        log_error "Docker Compose verification failed"
+        errors=$((errors + 1))
+    fi
+    
+    # Check directory structure
+    if [ -d "$BASE_DIR" ] && [ -d "$CONFIG_DIR" ] && [ -d "$DATA_DIR" ]; then
+        log_success "Directory structure created"
+    else
+        log_error "Directory structure incomplete"
+        errors=$((errors + 1))
+    fi
+    
+    # Check networks
+    if docker network inspect ai-platform &> /dev/null; then
+        log_success "Docker networks configured"
+    else
+        log_error "Docker networks missing"
+        errors=$((errors + 1))
+    fi
+    
+    # Check configuration files
     if [ -f "$ENV_FILE" ]; then
-        log_info "Config file: ${ENV_FILE} exists"
-        checks_passed=$((checks_passed + 1))
+        log_success ".env file generated"
     else
-        log_error "Config file: missing"
-        checks_failed=$((checks_failed + 1))
+        log_error ".env file missing"
+        errors=$((errors + 1))
     fi
-
-    # LiteLLM config
-    if [ -n "${SELECTED_SERVICES[litellm]+x}" ]; then
-        if [ -f "$LITELLM_CONFIG" ]; then
-            log_info "LiteLLM config: ${LITELLM_CONFIG} exists"
-            checks_passed=$((checks_passed + 1))
-        else
-            log_error "LiteLLM config: missing"
-            checks_failed=$((checks_failed + 1))
-        fi
+    
+    if [ -f "$COMPOSE_FILE" ]; then
+        log_success "docker-compose.yml generated"
+    else
+        log_error "docker-compose.yml missing"
+        errors=$((errors + 1))
     fi
-
-    # Tailscale
-    if [ "$TAILSCALE_ENABLED" = "yes" ]; then
-        if command -v tailscale >/dev/null 2>&1; then
-            local ts_status=""
-            ts_status=$(tailscale status 2>/dev/null | head -1 || echo "unknown")
-            log_info "Tailscale: ${ts_status}"
-            checks_passed=$((checks_passed + 1))
-        else
-            log_warn "Tailscale: not installed"
-            checks_failed=$((checks_failed + 1))
-        fi
+    
+    if [ -f "$SECRETS_FILE" ]; then
+        log_success "Secrets file generated"
+    else
+        log_error "Secrets file missing"
+        errors=$((errors + 1))
     fi
-
-    # UFW
-    if command -v ufw >/dev/null 2>&1; then
-        local ufw_status=""
-        ufw_status=$(ufw status 2>/dev/null | head -1 || echo "unknown")
-        log_info "Firewall: ${ufw_status}"
-        checks_passed=$((checks_passed + 1))
-    fi
-
+    
     echo ""
-    log_info "Health check: ${checks_passed} passed, ${checks_failed} failed"
+    
+    if [ $errors -eq 0 ]; then
+        log_success "All verification checks passed!"
+        return 0
+    else
+        log_error "Verification failed with ${errors} error(s)"
+        return 1
+    fi
 }
 
-# ============================================================
-# PHASE 13: Summary
-# ============================================================
+#==============================================================================
+# SUMMARY
+#==============================================================================
+
 print_summary() {
-    local svc_count="${#SELECTED_SERVICES[@]}"
-    local model_count="${#SELECTED_MODELS[@]}"
-    local provider_count="${#LLM_PROVIDERS[@]}"
-
     echo ""
-    echo "============================================================"
-    echo "  SCRIPT 1 COMPLETE — System Setup Finished"
-    echo "============================================================"
+    echo -e "${CYAN}╔════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC}                                                                    ${CYAN}║${NC}"
+    echo -e "${CYAN}║${NC}                ${GREEN}✓ SETUP COMPLETED SUCCESSFULLY!${NC}                   ${CYAN}║${NC}"
+    echo -e "${CYAN}║${NC}                                                                    ${CYAN}║${NC}"
+    echo -e "${CYAN}╚════════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo "  Domain       : ${DOMAIN}"
-    echo "  Proxy        : ${REVERSE_PROXY}"
-    echo "  Vector DB    : ${VECTOR_DB}"
-    echo "  Services     : ${svc_count} selected"
-    echo "  Models       : ${model_count} selected"
-    echo "  LLM Providers: ${provider_count} configured"
-    echo "  Tailscale    : ${TAILSCALE_ENABLED}"
-    echo "  GDrive Sync  : ${GDRIVE_SYNC}"
-    echo "  Signal API   : ${SIGNAL_API}"
-    echo "  OpenClaw     : ${OPENCLAW}"
+    echo "📋 Configuration Summary"
+    echo "────────────────────────────────────────────────────────────────────"
     echo ""
-    echo "  Config file  : ${ENV_FILE}"
-    echo "  LiteLLM conf : ${LITELLM_CONFIG}"
-    echo "  Log file     : ${LOGFILE}"
+    echo "  System Information:"
+    echo "    • Hardware: ${HARDWARE_TYPE}"
+    echo "    • GPU: ${GPU_TYPE} (${GPU_COUNT} devices)"
+    echo "    • CPU: ${TOTAL_CPU_CORES} cores"
+    echo "    • RAM: ${TOTAL_RAM_GB}GB"
+    echo "    • OS: ${OS} ${OS_VERSION}"
+    echo "    • Architecture: ${ARCH}"
     echo ""
-    echo "  Selected services:"
-    for svc in $(echo "${!SELECTED_SERVICES[@]}" | tr ' ' '\n' | sort); do
-        echo "    • ${svc} (port ${SERVICE_PORTS[$svc]})"
-    done
+    echo "  Configuration:"
+    echo "    • Base Domain: ${BASE_DOMAIN}"
+    echo "    • SSL: $([ "$USE_LETSENCRYPT" = true ] && echo "Let's Encrypt" || echo "Self-signed")"
+    echo "    • Base Directory: ${BASE_DIR}"
     echo ""
-    if [ "${#SELECTED_MODELS[@]}" -gt 0 ]; then
-        echo "  Selected models:"
-        for m in "${SELECTED_MODELS[@]}"; do
-            echo "    • ${m}"
-        done
-        echo ""
-    fi
-    if [ "${#LLM_PROVIDERS[@]}" -gt 0 ]; then
-        echo "  LLM Providers:"
-        for p in $(echo "${!LLM_PROVIDERS[@]}" | tr ' ' '\n' | sort); do
-            echo "    • ${p}"
-        done
-        echo ""
-    fi
-    echo "  ▸ Next step: Run ./2-deploy-stack.sh"
-    echo "============================================================"
+    echo "  Selected Services:"
+    [ "$ENABLE_LITELLM" = true ] && echo "    ✓ LiteLLM (AI Gateway)"
+    [ "$ENABLE_OLLAMA" = true ] && echo "    ✓ Ollama (Local LLMs)"
+    [ "$ENABLE_OPENWEBUI" = true ] && echo "    ✓ Open WebUI"
+    [ "$ENABLE_ANYTHINGLLM" = true ] && echo "    ✓ AnythingLLM"
+    [ "$ENABLE_DIFY" = true ] && echo "    ✓ Dify"
+    [ "$ENABLE_N8N" = true ] && echo "    ✓ n8n"
+    [ "$ENABLE_FLOWISE" = true ] && echo "    ✓ Flowise"
+    [ "$ENABLE_AIRFLOW" = true ] && echo "    ✓ Apache Airflow"
+    [ "$ENABLE_WEAVIATE" = true ] && echo "    ✓ Weaviate"
+    [ "$ENABLE_QDRANT" = true ] && echo "    ✓ Qdrant"
+    [ "$ENABLE_MILVUS" = true ] && echo "    ✓ Milvus"
+    [ "$ENABLE_JUPYTERHUB" = true ] && echo "    ✓ JupyterHub"
+    [ "$ENABLE_MLFLOW" = true ] && echo "    ✓ MLflow"
+    [ "$ENABLE_MONGODB" = true ] && echo "    ✓ MongoDB"
+    [ "$ENABLE_NEO4J" = true ] && echo "    ✓ Neo4j"
+    [ "$ENABLE_METABASE" = true ] && echo "    ✓ Metabase"
+    [ "$ENABLE_MONITORING" = true ] && echo "    ✓ Prometheus + Grafana"
+    echo ""
+    echo "  Generated Files:"
+    echo "    • .env file: ${ENV_FILE}"
+    echo "    • Docker Compose: ${COMPOSE_FILE}"
+    echo "    • Secrets: ${SECRETS_FILE}"
+    [ "$ENABLE_LITELLM" = true ] && echo "    • LiteLLM Config: ${CONFIG_DIR}/litellm/config.yaml"
+    echo ""
+    echo "────────────────────────────────────────────────────────────────────"
+    echo ""
+    echo "🚀 Next Steps:"
+    echo ""
+    echo "  1. Review configuration:"
+    echo "     cat ${ENV_FILE}"
+    echo ""
+    echo "  2. Deploy the platform:"
+    echo "     sudo ./2-deploy-platform.sh"
+    echo ""
+    echo "  3. Configure services:"
+    echo "     sudo ./3-configure-services.sh"
+    echo ""
+    echo "  4. Add more services (optional):"
+    echo "     sudo ./4-add-service.sh"
+    echo ""
+    echo "────────────────────────────────────────────────────────────────────"
+    echo ""
+    echo "📄 Important Files:"
+    echo "  • Setup log: ${LOGFILE}"
+    echo "  • Error log: ${ERROR_LOG}"
+    echo "  • Secrets (BACK THIS UP!): ${SECRETS_FILE}"
+    echo ""
+    echo "⚠️  Security Notes:"
+    echo "  • Your secrets file contains sensitive passwords"
+    echo "  • Back up ${SECRETS_FILE} to a secure location"
+    echo "  • User ${REAL_USER} has been added to docker group"
+    echo "  • You may need to log out and back in for group changes"
+    echo ""
 }
 
-# ============================================================
-# MAIN
-# ============================================================
-main() {
-    echo ""
-    echo "============================================================"
-    echo "  AI Platform Setup — Script 1: System Configuration"
-    echo "  Version 99.0.0"
-    echo "============================================================"
+#==============================================================================
+# MAIN EXECUTION
+#==============================================================================
 
+main() {
+    print_banner
+    
+    # Check if running as root
+    if [ "$EUID" -ne 0 ]; then
+        echo "❌ This script must be run as root (use sudo)"
+        exit 1
+    fi
+    
+    # Create initial log directory
+    mkdir -p "$LOGS_DIR" 2>/dev/null || mkdir -p "/tmp/ai-platform-logs"
+    LOGS_DIR="${LOGS_DIR:-/tmp/ai-platform-logs}"
+    LOGFILE="${LOGS_DIR}/setup-$(date +%Y%m%d-%H%M%S).log"
+    ERROR_LOG="${LOGS_DIR}/setup-errors-$(date +%Y%m%d-%H%M%S).log"
+    
+    # Load state if exists
+    load_state
+    
+    log_info "Starting AI Platform Setup v3.1.0"
+    log_info "Executed by: ${REAL_USER} (UID: ${REAL_UID})"
+    log_info "Script directory: ${SCRIPT_DIR}"
+    
+    # Execute setup phases
     preflight_checks
     port_health_check
     install_system_packages
     install_docker
-    collect_domain
-    collect_reverse_proxy
-    collect_vector_db
-    collect_services
-    assign_ports
-    collect_llm_providers
-    collect_models
-    collect_tailscale
-    collect_extras
-    generate_credentials
-    write_env_file
+    create_directory_structure
+    create_docker_networks
+    configure_security
+    install_tailscale
+    generate_secrets
+    collect_domain_config
+    select_services
+    collect_api_keys
+    generate_env_file
+    generate_docker_compose
     generate_litellm_config
-    harden_system
-    final_health_check
-    print_summary
+    generate_postgres_init
+    
+    # Verification
+    if verify_setup; then
+        print_summary
+        
+        log_success "Setup completed successfully!"
+        echo ""
+        echo "You can now proceed with deployment:"
+        echo "  sudo ./2-deploy-platform.sh"
+        echo ""
+        exit 0
+    else
+        log_error "Setup completed with errors - please review logs"
+        echo ""
+        echo "Log files:"
+        echo "  • Full log: ${LOGFILE}"
+        echo "  • Errors: ${ERROR_LOG}"
+        echo ""
+        exit 1
+    fi
 }
 
+# Trap errors
+trap 'log_error "Script failed at line $LINENO with exit code $?"' ERR
+
+# Run main function
 main "$@"
-
-cd ~/AIPlatformAutomation/scripts
-
-# Backup
-cp 1-setup-system.sh 1-setup-system.sh.bak.$(date +%s)
-
-# Create the new file - paste ALL 6 parts above in order into nano:
-nano 1-setup-system.sh
-# Paste Part 1, then Part 2, then 3, 4, 5, 6 — in sequence
-# Save with Ctrl+O, Enter, Ctrl+X
-
-# Make executable
-chmod +x 1-setup-system.sh
-
-# Syntax check
-bash -n 1-setup-system.sh && echo "✅ SYNTAX OK" || echo "❌ SYNTAX ERROR"
-
-# Run
-sudo bash 1-setup-system.sh
-

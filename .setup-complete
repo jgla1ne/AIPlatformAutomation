@@ -1,0 +1,13 @@
+SETUP_COMPLETE=true
+SETUP_DATE=2026-02-08T11:54:22+00:00
+SETUP_VERSION=2.0.0
+REVERSE_PROXY=caddy
+VECTOR_DB=qdrant
+DOMAIN=ai.datasquiz.net
+ENABLE_TAILSCALE=yes
+ENABLE_GDRIVE_SYNC=yes
+ENABLE_SIGNAL=yes
+ENABLE_OPENCLAW=yes
+SELECTED_SERVICES=ollama,open-webui,litellm,supabase,redis,qdrant,flowise,langfuse,whisper,kokoro-tts,searxng,docling,neo4j,monitoring,backup,portainer,tailscale,signal-api,openclaw
+SELECTED_MODELS=llama3.1:8b
+LITELLM_PROVIDERS=google,groq
