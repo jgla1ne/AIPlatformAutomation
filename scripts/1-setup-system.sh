@@ -2789,4 +2789,522 @@ main_part5() {
 
 # Don't run yet - wait for all parts
 # main_part5 "$@"
+################################################################################
+# DEPLOYMENT SUMMARY GENERATION
+################################################################################
 
+generate_deployment_summary() {
+    log_step "26" "$TOTAL_STEPS" "GENERATING DEPLOYMENT SUMMARY"
+    
+    local summary_file="${CONFIG_DIR}/deployment-summary.txt"
+    local json_file="${CONFIG_DIR}/deployment-manifest.json"
+    
+    log_info "Creating deployment summary..."
+    
+    cat > "$summary_file" << EOF
+═══════════════════════════════════════════════════════════════════════════════
+                    AI PLATFORM DEPLOYMENT SUMMARY
+═══════════════════════════════════════════════════════════════════════════════
+
+Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+Script Version: v101.0.0
+Deployment ID: $(uuidgen 2>/dev/null || echo "$(date +%s)-${RANDOM}")
+
+═══════════════════════════════════════════════════════════════════════════════
+SYSTEM INFORMATION
+═══════════════════════════════════════════════════════════════════════════════
+
+Hostname:           ${HOSTNAME}
+Operating System:   ${OS_NAME}
+Architecture:       $(uname -m)
+Kernel:             $(uname -r)
+Timezone:           ${TIMEZONE}
+
+Hardware:
+  CPU Cores:        ${CPU_CORES}
+  Total RAM:        ${TOTAL_RAM_GB} GB
+  GPU Detected:     ${HAS_GPU}
+EOF
+
+    if [[ "$HAS_GPU" == "true" ]]; then
+        cat >> "$summary_file" << EOF
+  GPU Type:         ${GPU_TYPE}
+  GPU Driver:       $(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null || echo "N/A")
+EOF
+    fi
+
+    cat >> "$summary_file" << EOF
+
+Network:
+  Tailscale:        ${TAILNET_NAME:-Not configured}
+  Domain Name:      ${DOMAIN_NAME:-Not configured}
+  Reverse Proxy:    ${REVERSE_PROXY}
+
+═══════════════════════════════════════════════════════════════════════════════
+DIRECTORY STRUCTURE
+═══════════════════════════════════════════════════════════════════════════════
+
+Base Directory:     ${DATA_DIR}
+Configuration:      ${CONFIG_DIR}
+Logs:               ${LOG_DIR}
+
+Service Data Directories:
+EOF
+
+    # List data directories for enabled services
+    for service in ollama litellm webui postgres redis qdrant weaviate chromadb milvus \
+                   dify anythingllm openclaw n8n langfuse prometheus grafana loki minio portainer; do
+        if [[ "${SERVICE_ENABLED[$service]}" == "true" ]]; then
+            echo "  - ${DATA_DIR}/${service}" >> "$summary_file"
+        fi
+    done
+
+    cat >> "$summary_file" << EOF
+
+═══════════════════════════════════════════════════════════════════════════════
+ENABLED SERVICES
+═══════════════════════════════════════════════════════════════════════════════
+
+Core Services:
+EOF
+
+    [[ "${SERVICE_ENABLED[ollama]}" == "true" ]] && echo "  ✓ Ollama               (Port ${SERVICE_PORTS[ollama]})" >> "$summary_file"
+    [[ "${SERVICE_ENABLED[litellm]}" == "true" ]] && echo "  ✓ LiteLLM              (Port ${SERVICE_PORTS[litellm]})" >> "$summary_file"
+    [[ "${SERVICE_ENABLED[webui]}" == "true" ]] && echo "  ✓ Open WebUI           (Port ${SERVICE_PORTS[webui]})" >> "$summary_file"
+
+    cat >> "$summary_file" << EOF
+
+Databases:
+EOF
+
+    [[ "${SERVICE_ENABLED[postgres]}" == "true" ]] && echo "  ✓ PostgreSQL           (Port ${SERVICE_PORTS[postgres]})" >> "$summary_file"
+    [[ "${SERVICE_ENABLED[redis]}" == "true" ]] && echo "  ✓ Redis                (Port ${SERVICE_PORTS[redis]})" >> "$summary_file"
+
+    cat >> "$summary_file" << EOF
+
+Vector Database:
+EOF
+
+    [[ "${SERVICE_ENABLED[qdrant]}" == "true" ]] && echo "  ✓ Qdrant               (Port ${SERVICE_PORTS[qdrant]})" >> "$summary_file"
+    [[ "${SERVICE_ENABLED[weaviate]}" == "true" ]] && echo "  ✓ Weaviate             (Port ${SERVICE_PORTS[weaviate]})" >> "$summary_file"
+    [[ "${SERVICE_ENABLED[chromadb]}" == "true" ]] && echo "  ✓ ChromaDB             (Port ${SERVICE_PORTS[chromadb]})" >> "$summary_file"
+    [[ "${SERVICE_ENABLED[milvus]}" == "true" ]] && echo "  ✓ Milvus               (Port ${SERVICE_PORTS[milvus]})" >> "$summary_file"
+
+    cat >> "$summary_file" << EOF
+
+AI Platforms:
+EOF
+
+    [[ "${SERVICE_ENABLED[dify]}" == "true" ]] && echo "  ✓ Dify                 (Port ${SERVICE_PORTS[dify]})" >> "$summary_file"
+    [[ "${SERVICE_ENABLED[anythingllm]}" == "true" ]] && echo "  ✓ AnythingLLM          (Port ${SERVICE_PORTS[anythingllm]})" >> "$summary_file"
+    [[ "${SERVICE_ENABLED[openclaw]}" == "true" ]] && echo "  ✓ OpenClaw             (Port ${SERVICE_PORTS[openclaw]})" >> "$summary_file"
+
+    cat >> "$summary_file" << EOF
+
+Automation:
+EOF
+
+    [[ "${SERVICE_ENABLED[n8n]}" == "true" ]] && echo "  ✓ n8n                  (Port ${SERVICE_PORTS[n8n]})" >> "$summary_file"
+    [[ "${SERVICE_ENABLED[signal_api]}" == "true" ]] && echo "  ✓ Signal API           (Port ${SERVICE_PORTS[signal_api]})" >> "$summary_file"
+
+    cat >> "$summary_file" << EOF
+
+Observability:
+EOF
+
+    [[ "${SERVICE_ENABLED[langfuse]}" == "true" ]] && echo "  ✓ Langfuse             (Port ${SERVICE_PORTS[langfuse]})" >> "$summary_file"
+    [[ "${SERVICE_ENABLED[prometheus]}" == "true" ]] && echo "  ✓ Prometheus           (Port ${SERVICE_PORTS[prometheus]})" >> "$summary_file"
+    [[ "${SERVICE_ENABLED[grafana]}" == "true" ]] && echo "  ✓ Grafana              (Port ${SERVICE_PORTS[grafana]})" >> "$summary_file"
+    [[ "${SERVICE_ENABLED[loki]}" == "true" ]] && echo "  ✓ Loki                 (Port ${SERVICE_PORTS[loki]})" >> "$summary_file"
+
+    cat >> "$summary_file" << EOF
+
+Infrastructure:
+EOF
+
+    [[ "${SERVICE_ENABLED[minio]}" == "true" ]] && echo "  ✓ MinIO                (Port ${SERVICE_PORTS[minio]}, Console ${SERVICE_PORTS[minio_console]})" >> "$summary_file"
+    [[ "${SERVICE_ENABLED[portainer]}" == "true" ]] && echo "  ✓ Portainer            (Port ${SERVICE_PORTS[portainer]})" >> "$summary_file"
+    [[ "$REVERSE_PROXY" == "caddy" ]] && echo "  ✓ Caddy                (Ports ${SERVICE_PORTS[caddy_http]}, ${SERVICE_PORTS[caddy_https]})" >> "$summary_file"
+    [[ "$REVERSE_PROXY" == "nginx" ]] && echo "  ✓ Nginx                (Ports ${SERVICE_PORTS[nginx_http]}, ${SERVICE_PORTS[nginx_https]})" >> "$summary_file"
+
+    cat >> "$summary_file" << EOF
+
+═══════════════════════════════════════════════════════════════════════════════
+OLLAMA MODELS SELECTED
+═══════════════════════════════════════════════════════════════════════════════
+
+EOF
+
+    if [[ ${#SELECTED_OLLAMA_MODELS[@]} -eq 0 ]]; then
+        echo "  No models selected (will be pulled manually)" >> "$summary_file"
+    else
+        for model in "${SELECTED_OLLAMA_MODELS[@]}"; do
+            echo "  • $model" >> "$summary_file"
+        done
+    fi
+
+    cat >> "$summary_file" << EOF
+
+Total Models: ${#SELECTED_OLLAMA_MODELS[@]}
+
+═══════════════════════════════════════════════════════════════════════════════
+API KEYS CONFIGURED
+═══════════════════════════════════════════════════════════════════════════════
+
+EOF
+
+    local key_count=0
+    for provider in openai anthropic google groq cohere together perplexity replicate huggingface; do
+        if [[ -n "${API_KEYS[$provider]}" ]]; then
+            echo "  ✓ ${provider^}" >> "$summary_file"
+            ((key_count++))
+        fi
+    done
+    
+    [[ $key_count -eq 0 ]] && echo "  No external API keys configured" >> "$summary_file"
+    echo "" >> "$summary_file"
+    echo "Total Providers: $key_count" >> "$summary_file"
+
+    cat >> "$summary_file" << EOF
+
+═══════════════════════════════════════════════════════════════════════════════
+GOOGLE DRIVE SYNC
+═══════════════════════════════════════════════════════════════════════════════
+
+Enabled:            ${GDRIVE_ENABLED:-false}
+EOF
+
+    if [[ "${GDRIVE_ENABLED}" == "true" ]]; then
+        cat >> "$summary_file" << EOF
+Folder Name:        ${GDRIVE_FOLDER}
+Sync Interval:      ${GDRIVE_SYNC_INTERVAL} minutes
+Sync Directory:     ${DATA_DIR}/gdrive
+EOF
+    fi
+
+    cat >> "$summary_file" << EOF
+
+═══════════════════════════════════════════════════════════════════════════════
+SECURITY NOTES
+═══════════════════════════════════════════════════════════════════════════════
+
+✓ All secrets generated with 32-48 character random strings
+✓ Individual secret files created in: ${CONFIG_DIR}/secrets/
+✓ Environment file secured with permissions: 600
+✓ Secrets directory secured with permissions: 700
+
+Default Credentials:
+  PostgreSQL User:     ${POSTGRES_USER}
+  PostgreSQL Password: [Saved in ${CONFIG_DIR}/secrets/postgres_password]
+  
+  Grafana User:        admin
+  Grafana Password:    [Saved in ${CONFIG_DIR}/secrets/grafana_password]
+  
+  MinIO User:          ${MINIO_ROOT_USER}
+  MinIO Password:      [Saved in ${CONFIG_DIR}/secrets/minio_password]
+
+IMPORTANT: Change default passwords after first login!
+
+═══════════════════════════════════════════════════════════════════════════════
+CONFIGURATION FILES GENERATED
+═══════════════════════════════════════════════════════════════════════════════
+
+  ✓ ${CONFIG_DIR}/.env
+  ✓ ${CONFIG_DIR}/litellm/config.yaml
+EOF
+
+    [[ "${SERVICE_ENABLED[prometheus]}" == "true" ]] && echo "  ✓ ${CONFIG_DIR}/prometheus/prometheus.yml" >> "$summary_file"
+    [[ "${SERVICE_ENABLED[grafana]}" == "true" ]] && echo "  ✓ ${CONFIG_DIR}/grafana/provisioning/datasources/datasources.yml" >> "$summary_file"
+    [[ "$REVERSE_PROXY" == "caddy" ]] && echo "  ✓ ${CONFIG_DIR}/caddy/Caddyfile" >> "$summary_file"
+    [[ "$REVERSE_PROXY" == "nginx" ]] && echo "  ✓ ${CONFIG_DIR}/nginx/nginx.conf" >> "$summary_file"
+
+    cat >> "$summary_file" << EOF
+
+═══════════════════════════════════════════════════════════════════════════════
+NEXT STEPS
+═══════════════════════════════════════════════════════════════════════════════
+
+1. Review this summary and verify all settings
+2. Review generated configuration files in: ${CONFIG_DIR}/
+3. If using Google Drive sync, complete OAuth2 setup:
+   https://rclone.org/drive/
+
+4. Run Script 2 to generate Docker Compose files:
+   sudo bash /opt/ai-platform/scripts/script2-generate-compose.sh
+
+5. After Script 2 completes, deploy services:
+   cd ${CONFIG_DIR}
+   docker compose up -d
+
+6. Monitor deployment:
+   docker compose logs -f
+
+7. Access services at:
+EOF
+
+    # Generate access URLs
+    if [[ -n "$DOMAIN_NAME" ]]; then
+        cat >> "$summary_file" << EOF
+   Open WebUI:       https://${DOMAIN_NAME}
+   LiteLLM API:      https://api.${DOMAIN_NAME}
+   Ollama API:       https://ollama.${DOMAIN_NAME}
+EOF
+        [[ "${SERVICE_ENABLED[dify]}" == "true" ]] && echo "   Dify:             https://dify.${DOMAIN_NAME}" >> "$summary_file"
+        [[ "${SERVICE_ENABLED[grafana]}" == "true" ]] && echo "   Grafana:          https://grafana.${DOMAIN_NAME}" >> "$summary_file"
+        [[ "${SERVICE_ENABLED[portainer]}" == "true" ]] && echo "   Portainer:        https://portainer.${DOMAIN_NAME}" >> "$summary_file"
+    else
+        cat >> "$summary_file" << EOF
+   Open WebUI:       http://${HOSTNAME}:${SERVICE_PORTS[webui]}
+   LiteLLM API:      http://${HOSTNAME}:${SERVICE_PORTS[litellm]}
+   Ollama API:       http://${HOSTNAME}:${SERVICE_PORTS[ollama]}
+EOF
+        [[ "${SERVICE_ENABLED[dify]}" == "true" ]] && echo "   Dify:             http://${HOSTNAME}:${SERVICE_PORTS[dify]}" >> "$summary_file"
+        [[ "${SERVICE_ENABLED[grafana]}" == "true" ]] && echo "   Grafana:          http://${HOSTNAME}:${SERVICE_PORTS[grafana]}" >> "$summary_file"
+        [[ "${SERVICE_ENABLED[portainer]}" == "true" ]] && echo "   Portainer:        http://${HOSTNAME}:${SERVICE_PORTS[portainer]}" >> "$summary_file"
+    fi
+
+    cat >> "$summary_file" << EOF
+
+8. Check service health:
+   cd ${CONFIG_DIR}
+   docker compose ps
+
+═══════════════════════════════════════════════════════════════════════════════
+TROUBLESHOOTING
+═══════════════════════════════════════════════════════════════════════════════
+
+View logs:
+  All services:    docker compose logs -f
+  Specific:        docker compose logs -f <service-name>
+
+Restart service:   docker compose restart <service-name>
+Stop all:          docker compose down
+Start all:         docker compose up -d
+
+Check resources:
+  docker stats
+
+Documentation:     ${CONFIG_DIR}/docs/
+Support:           Create issue at project repository
+
+═══════════════════════════════════════════════════════════════════════════════
+IMPORTANT FILES
+═══════════════════════════════════════════════════════════════════════════════
+
+Configuration:     ${CONFIG_DIR}/.env
+Secrets:           ${CONFIG_DIR}/secrets/
+This Summary:      ${CONFIG_DIR}/deployment-summary.txt
+Deployment Log:    ${LOG_DIR}/script1-$(date +%Y%m%d-%H%M%S).log
+
+BACKUP THESE FILES BEFORE MAKING CHANGES!
+
+═══════════════════════════════════════════════════════════════════════════════
+                           DEPLOYMENT COMPLETE
+═══════════════════════════════════════════════════════════════════════════════
+
+Configuration phase completed successfully!
+Ready to proceed with Script 2 for Docker Compose generation.
+
+EOF
+
+    log_success "Deployment summary created: $summary_file"
+    
+    # Generate JSON manifest for automation
+    generate_json_manifest "$json_file"
+    
+    echo ""
+}
+
+generate_json_manifest() {
+    local json_file="$1"
+    
+    log_info "Creating deployment manifest (JSON)..."
+    
+    # Build services array
+    local services_json="["
+    local first=true
+    for service in "${!SERVICE_ENABLED[@]}"; do
+        if [[ "${SERVICE_ENABLED[$service]}" == "true" ]]; then
+            [[ "$first" == false ]] && services_json+=","
+            services_json+="{\"name\":\"$service\",\"port\":${SERVICE_PORTS[$service]:-0}}"
+            first=false
+        fi
+    done
+    services_json+="]"
+    
+    # Build models array
+    local models_json="["
+    first=true
+    for model in "${SELECTED_OLLAMA_MODELS[@]}"; do
+        [[ "$first" == false ]] && models_json+=","
+        models_json+="\"$model\""
+        first=false
+    done
+    models_json+="]"
+    
+    # Build API keys array
+    local api_keys_json="["
+    first=true
+    for provider in "${!API_KEYS[@]}"; do
+        if [[ -n "${API_KEYS[$provider]}" ]]; then
+            [[ "$first" == false ]] && api_keys_json+=","
+            api_keys_json+="\"$provider\""
+            first=false
+        fi
+    done
+    api_keys_json+="]"
+    
+    cat > "$json_file" << EOF
+{
+  "version": "v101.0.0",
+  "generated_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "deployment_id": "$(uuidgen 2>/dev/null || echo "$(date +%s)-${RANDOM}")",
+  "system": {
+    "hostname": "${HOSTNAME}",
+    "os": "${OS_NAME}",
+    "architecture": "$(uname -m)",
+    "timezone": "${TIMEZONE}",
+    "cpu_cores": ${CPU_CORES},
+    "ram_gb": ${TOTAL_RAM_GB},
+    "has_gpu": ${HAS_GPU},
+    "gpu_type": "${GPU_TYPE:-none}"
+  },
+  "network": {
+    "tailnet": "${TAILNET_NAME:-}",
+    "domain": "${DOMAIN_NAME:-}",
+    "reverse_proxy": "${REVERSE_PROXY}"
+  },
+  "directories": {
+    "data": "${DATA_DIR}",
+    "config": "${CONFIG_DIR}",
+    "logs": "${LOG_DIR}"
+  },
+  "services": ${services_json},
+  "ollama_models": ${models_json},
+  "api_providers": ${api_keys_json},
+  "vector_db": "${SELECTED_VECTOR_DB:-qdrant}",
+  "gdrive_sync": ${GDRIVE_ENABLED:-false}
+}
+EOF
+
+    chmod 644 "$json_file"
+    log_success "Deployment manifest created: $json_file"
+}
+
+display_final_summary() {
+    echo ""
+    echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}           🎉 SCRIPT 1 COMPLETED SUCCESSFULLY 🎉${NC}"
+    echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "${CYAN}Configuration Phase Complete!${NC}"
+    echo ""
+    echo "Summary:"
+    echo "  • Services configured: $(count_enabled_services)"
+    echo "  • Ollama models selected: ${#SELECTED_OLLAMA_MODELS[@]}"
+    echo "  • API providers configured: $(count_api_keys)"
+    echo "  • Configuration files generated: ✓"
+    echo ""
+    echo -e "${YELLOW}Important Files:${NC}"
+    echo "  📄 Deployment Summary:  ${CONFIG_DIR}/deployment-summary.txt"
+    echo "  📄 Environment Config:  ${CONFIG_DIR}/.env"
+    echo "  📄 JSON Manifest:       ${CONFIG_DIR}/deployment-manifest.json"
+    echo "  📁 Secrets Directory:   ${CONFIG_DIR}/secrets/"
+    echo ""
+    echo -e "${YELLOW}Next Steps:${NC}"
+    echo ""
+    echo "  1️⃣  Review the deployment summary:"
+    echo "      ${CYAN}cat ${CONFIG_DIR}/deployment-summary.txt${NC}"
+    echo ""
+    echo "  2️⃣  Run Script 2 to generate Docker Compose files:"
+    echo "      ${CYAN}sudo bash /opt/ai-platform/scripts/script2-generate-compose.sh${NC}"
+    echo ""
+    echo "  3️⃣  After Script 2, deploy the platform:"
+    echo "      ${CYAN}cd ${CONFIG_DIR} && docker compose up -d${NC}"
+    echo ""
+    
+    if [[ -n "$DOMAIN_NAME" ]]; then
+        echo -e "${YELLOW}Access URLs (after deployment):${NC}"
+        echo "  🌐 Open WebUI:    https://${DOMAIN_NAME}"
+        echo "  🔌 LiteLLM API:   https://api.${DOMAIN_NAME}"
+        echo "  🤖 Ollama API:    https://ollama.${DOMAIN_NAME}"
+        [[ "${SERVICE_ENABLED[grafana]}" == "true" ]] && echo "  📊 Grafana:       https://grafana.${DOMAIN_NAME}"
+        [[ "${SERVICE_ENABLED[portainer]}" == "true" ]] && echo "  🐳 Portainer:     https://portainer.${DOMAIN_NAME}"
+    else
+        echo -e "${YELLOW}Access URLs (after deployment):${NC}"
+        echo "  🌐 Open WebUI:    http://${HOSTNAME}:${SERVICE_PORTS[webui]}"
+        echo "  🔌 LiteLLM API:   http://${HOSTNAME}:${SERVICE_PORTS[litellm]}"
+        echo "  🤖 Ollama API:    http://${HOSTNAME}:${SERVICE_PORTS[ollama]}"
+        [[ "${SERVICE_ENABLED[grafana]}" == "true" ]] && echo "  📊 Grafana:       http://${HOSTNAME}:${SERVICE_PORTS[grafana]}"
+        [[ "${SERVICE_ENABLED[portainer]}" == "true" ]] && echo "  🐳 Portainer:     http://${HOSTNAME}:${SERVICE_PORTS[portainer]}"
+    fi
+    
+    echo ""
+    echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}  Thank you for using AI Platform Setup v101.0.0!${NC}"
+    echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+}
+
+count_enabled_services() {
+    local count=0
+    for service in "${!SERVICE_ENABLED[@]}"; do
+        [[ "${SERVICE_ENABLED[$service]}" == "true" ]] && ((count++))
+    done
+    echo "$count"
+}
+
+count_api_keys() {
+    local count=0
+    for key in "${!API_KEYS[@]}"; do
+        [[ -n "${API_KEYS[$key]}" ]] && ((count++))
+    done
+    echo "$count"
+}
+
+################################################################################
+# MAIN EXECUTION - FINAL
+################################################################################
+
+main_part6() {
+    # Generate deployment summary
+    generate_deployment_summary
+    
+    # Display final summary
+    display_final_summary
+    
+    # Log completion
+    log_success "Script 1 v101.0.0 completed successfully"
+    log_info "Total execution time: $SECONDS seconds"
+    
+    # Save final log
+    local final_log="${LOG_DIR}/script1-$(date +%Y%m%d-%H%M%S).log"
+    if command -v script &>/dev/null; then
+        log_info "Session log saved to: $final_log"
+    fi
+    
+    echo ""
+    echo -e "${CYAN}Ready to proceed with Script 2!${NC}"
+    echo ""
+    
+    exit 0
+}
+
+################################################################################
+# SCRIPT EXECUTION ENTRY POINT (ALL PARTS COMBINED)
+################################################################################
+
+main() {
+    # Execute all parts in sequence
+    main_part1 "$@"  # System detection & validation
+    main_part2 "$@"  # Directory setup & dependencies
+    main_part3 "$@"  # Service selection
+    main_part4 "$@"  # Ollama models & API keys
+    main_part5 "$@"  # Configuration generation
+    main_part6 "$@"  # Summary & completion
+}
+
+# Only execute if script is run directly (not sourced)
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
