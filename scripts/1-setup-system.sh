@@ -1,1602 +1,2792 @@
 #!/usr/bin/env bash
 
 ################################################################################
-# SCRIPT 1 v100.0.0 - SYSTEM SETUP & CONFIGURATION GENERATION
-# PURPOSE: Prepare system, collect choices, generate configs (NO DEPLOYMENT)
+# AI Platform Automation - Script 1: Interactive Setup
+# Version: 101.0.0
+# Purpose: Collect configuration, generate files, NO DEPLOYMENT
+# 
+# What this script does:
+# - Pre-flight checks (root, OS, connectivity)
+# - System health assessment
+# - Install packages (Docker, Tailscale, NVIDIA if GPU)
+# - Interactive service selection (ALL ports!)
+# - API key collection
+# - Secret generation (with confirmation)
+# - Generate ALL config files
+# - Generate systemd services
+# - Generate helper scripts
+# - Display summary
+#
+# What this script does NOT do:
+# - Deploy Docker containers (that's Script 2)
+# - Pull Ollama models (that's Script 2)
+# - Run migrations (that's Script 2)
+#
+# Output Files:
+# - /mnt/data/logs/script1_YYYYMMDD-HHMMSS.log (previous deleted)
+# - /opt/ai-platform/.env (ALL variables)
+# - /opt/ai-platform/secrets/credentials.txt
+# - /opt/ai-platform/config/litellm/config.yaml
+# - /opt/ai-platform/config/openclaw/config.yaml
+# - /opt/ai-platform/config/gdrive/rclone.conf
+# - /opt/ai-platform/stacks/core.yml
+# - /opt/ai-platform/stacks/automation.yml
+# - /opt/ai-platform/stacks/optional.yml
+# - /etc/systemd/system/ai-platform-*.service
+# - /opt/ai-platform/scripts/health-check.sh
+# - /opt/ai-platform/scripts/backup.sh
+# - /opt/ai-platform/scripts/update.sh
+#
+# Exit Codes:
+#   0 - Success
+#   1 - General error
+#   2 - Pre-flight check failed
+#   3 - Package installation failed
+#   4 - Configuration generation failed
+#
 ################################################################################
 
 set -euo pipefail
 
-# ============================================================================
-# CONSTANTS
-# ============================================================================
+################################################################################
+# CONSTANTS & CONFIGURATION
+################################################################################
 
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly ROOT_PATH="$(dirname "$SCRIPT_DIR")"
-readonly ACTUAL_USER="${SUDO_USER:-$USER}"
-readonly ACTUAL_HOME=$(eval echo "~$ACTUAL_USER")
+readonly SCRIPT_VERSION="101.0.0"
+readonly SCRIPT_NAME="setup-system.sh"
+readonly TOTAL_STEPS=28
 
-# Default paths
-readonly DATA_DIR="${ROOT_PATH}/data"
+# System paths (CORRECTED per gap analysis)
+readonly ROOT_PATH="/opt/ai-platform"
+readonly DATA_DIR="/mnt/data/ai-platform"
 readonly CONFIG_DIR="${ROOT_PATH}/config"
 readonly STACK_DIR="${ROOT_PATH}/stacks"
-readonly LOG_DIR="${ROOT_PATH}/logs"
+readonly SECRETS_DIR="${ROOT_PATH}/secrets"
+readonly SCRIPTS_DIR="${ROOT_PATH}/scripts"
+readonly LOG_DIR="/mnt/data/logs"                    # ✅ CORRECTED
+readonly BACKUP_DIR="/mnt/data/backups"
+readonly GDRIVE_LOCAL_PATH="/mnt/data/gdrive"        # ✅ CORRECTED
 
-# Log file
-readonly LOG_FILE="${LOG_DIR}/setup-$(date +%Y%m%d-%H%M%S).log"
+# Log file with timestamp (previous deleted)
+readonly TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+readonly LOG_FILE="${LOG_DIR}/script1_${TIMESTAMP}.log"
 
-# Colors
+# Colors for output
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
 readonly BLUE='\033[0;34m'
+readonly MAGENTA='\033[0;35m'
 readonly CYAN='\033[0;36m'
-readonly BOLD='\033[1m'
-readonly NC='\033[0m'
+readonly NC='\033[0m' # No Color
 
-# Service selections (will be populated by user)
+# Timeouts
+readonly APT_LOCK_TIMEOUT=300
+readonly APT_RETRY_DELAY=5
+readonly CONNECTIVITY_TIMEOUT=10
+
+# Required minimum resources
+readonly MIN_DISK_GB=100
+readonly MIN_RAM_GB=8
+readonly MIN_SWAP_GB=2
+
+################################################################################
+# GLOBAL VARIABLES
+################################################################################
+
+# Associative arrays for configuration
 declare -A SERVICE_ENABLED
 declare -A SERVICE_PORTS
 declare -A SERVICE_CONFIGS
+declare -A SECRETS
+declare -A API_KEYS
 
-# ============================================================================
-# LOGGING
-# ============================================================================
+# System state
+GPU_AVAILABLE=false
+GPU_TYPE=""
+CURRENT_STEP=0
 
-setup_logging() {
-    mkdir -p "$LOG_DIR"
-    chown "$ACTUAL_USER:$ACTUAL_USER" "$LOG_DIR"
-    touch "$LOG_FILE"
-    chown "$ACTUAL_USER:$ACTUAL_USER" "$LOG_FILE"
-    exec > >(tee -a "$LOG_FILE")
-    exec 2>&1
+# User selections
+OLLAMA_MODELS=""
+REVERSE_PROXY=""
+SELECTED_VECTOR_DB=""
+
+################################################################################
+# LOGGING & OUTPUT FUNCTIONS
+################################################################################
+
+# Initialize logging
+init_logging() {
+    # Create log directory
+    mkdir -p "${LOG_DIR}"
+    
+    # Delete previous script1 logs
+    find "${LOG_DIR}" -name "script1_*.log" -type f -delete 2>/dev/null || true
+    
+    # Create new log file
+    touch "${LOG_FILE}"
+    chmod 644 "${LOG_FILE}"
+    
+    log_info "=== AI Platform Setup - Script 1 v${SCRIPT_VERSION} ==="
+    log_info "Started at: $(date)"
+    log_info "Log file: ${LOG_FILE}"
 }
 
+# Logging function
 log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*"
+    local level=$1
+    shift
+    local message="$*"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[${timestamp}] [${level}] ${message}" | tee -a "${LOG_FILE}"
 }
 
-log_step() {
-    echo ""
-    echo -e "${BOLD}${CYAN}▶ STEP $1/${2}: ${3}${NC}"
-    log "STEP $1/$2: $3"
+log_info() {
+    log "INFO" "$@"
+    echo -e "${CYAN}ℹ ${NC}$*"
 }
 
 log_success() {
-    echo -e "${GREEN}✓ $*${NC}"
-    log "SUCCESS: $*"
+    log "SUCCESS" "$@"
+    echo -e "${GREEN}✓ ${NC}$*"
 }
 
 log_warning() {
-    echo -e "${YELLOW}⚠ $*${NC}"
-    log "WARNING: $*"
+    log "WARNING" "$@"
+    echo -e "${YELLOW}⚠ ${NC}$*"
 }
 
 log_error() {
-    echo -e "${RED}✗ ERROR: $*${NC}"
-    log "ERROR: $*"
+    log "ERROR" "$@"
+    echo -e "${RED}✗ ${NC}$*" >&2
 }
 
-# ============================================================================
-# PRINT HEADER
-# ============================================================================
-
-print_header() {
+log_step() {
+    local step=$1
+    local total=$2
+    local message=$3
+    CURRENT_STEP=$step
+    
+    log "STEP" "[$step/$total] $message"
     echo ""
-    echo -e "${BOLD}${CYAN}╔════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}${CYAN}║                                                                ║${NC}"
-    echo -e "${BOLD}${CYAN}║         AI PLATFORM SETUP v100.0.0 - CONFIGURATION             ║${NC}"
-    echo -e "${BOLD}${CYAN}║         (System Prep + Config Generation - No Deployment)      ║${NC}"
-    echo -e "${BOLD}${CYAN}║                                                                ║${NC}"
-    echo -e "${BOLD}${CYAN}╚════════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "${MAGENTA}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${MAGENTA}  STEP $step/$total: $message${NC}"
+    echo -e "${MAGENTA}═══════════════════════════════════════════════════════════════${NC}"
     echo ""
 }
 
-# ============================================================================
-# STEP 1: PREREQUISITES CHECK
-# ============================================================================
+# Progress spinner
+spinner() {
+    local pid=$1
+    local message=$2
+    local spinstr='|/-\'
+    local temp
+    
+    echo -n "$message "
+    while kill -0 $pid 2>/dev/null; do
+        temp=${spinstr#?}
+        printf " [%c]  " "$spinstr"
+        spinstr=$temp${spinstr%"$temp"}
+        sleep 0.1
+        printf "\b\b\b\b\b\b"
+    done
+    printf "    \b\b\b\b"
+    wait $pid
+    return $?
+}
 
-check_prerequisites() {
-    log_step "1" "25" "CHECKING PREREQUISITES"
+################################################################################
+# ERROR HANDLING
+################################################################################
+
+# Error handler
+error_exit() {
+    local message=$1
+    local exit_code=${2:-1}
+    
+    log_error "$message"
+    log_error "Setup failed at step ${CURRENT_STEP}/${TOTAL_STEPS}"
+    log_error "Check log file: ${LOG_FILE}"
+    
+    echo ""
+    echo -e "${RED}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${RED}  SETUP FAILED${NC}"
+    echo -e "${RED}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${RED}Error: $message${NC}"
+    echo -e "${RED}Step: ${CURRENT_STEP}/${TOTAL_STEPS}${NC}"
+    echo -e "${RED}Log: ${LOG_FILE}${NC}"
+    echo -e "${RED}═══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    
+    exit "$exit_code"
+}
+
+# Trap errors
+trap 'error_exit "Unexpected error at line $LINENO" 1' ERR
+
+################################################################################
+# UTILITY FUNCTIONS
+################################################################################
+
+# Prompt yes/no question
+prompt_yes_no() {
+    local question=$1
+    local default=${2:-n}
+    local answer
+    
+    if [[ "$default" == "y" ]]; then
+        read -p "$question [Y/n]: " answer
+        answer=${answer:-y}
+    else
+        read -p "$question [y/N]: " answer
+        answer=${answer:-n}
+    fi
+    
+    [[ "$answer" =~ ^[Yy] ]]
+}
+
+# Wait for APT lock with timeout
+wait_for_apt() {
+    local timeout=$APT_LOCK_TIMEOUT
+    local elapsed=0
+    
+    log_info "Checking for APT locks..."
+    
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
+          fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
+          fuser /var/cache/apt/archives/lock >/dev/null 2>&1; do
+        
+        if [ $elapsed -ge $timeout ]; then
+            error_exit "APT lock timeout after ${timeout}s. Another package manager is running." 3
+        fi
+        
+        echo -n "."
+        sleep $APT_RETRY_DELAY
+        elapsed=$((elapsed + APT_RETRY_DELAY))
+    done
+    
+    echo ""
+    log_success "APT is available"
+}
+
+# Generate random password
+generate_password() {
+    local length=${1:-32}
+    openssl rand -base64 48 | tr -d "=+/" | cut -c1-${length}
+}
+
+# Generate API key
+generate_api_key() {
+    echo "sk-$(openssl rand -hex 24)"
+}
+
+# Check if command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Check if port is available
+is_port_available() {
+    local port=$1
+    ! ss -tuln | grep -q ":${port} "
+}
+
+# Validate IP address
+is_valid_ip() {
+    local ip=$1
+    [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]
+}
+
+# Convert GB to bytes
+gb_to_bytes() {
+    echo $(($1 * 1024 * 1024 * 1024))
+}
+
+################################################################################
+# PRE-FLIGHT CHECKS
+################################################################################
+
+check_root() {
+    log_step "1" "$TOTAL_STEPS" "PRE-FLIGHT CHECKS"
     
     if [[ $EUID -ne 0 ]]; then
-        log_error "This script must be run with sudo"
-        exit 1
+        error_exit "This script must be run as root" 2
     fi
-    
-    if [[ -z "$ACTUAL_USER" || "$ACTUAL_USER" == "root" ]]; then
-        log_error "Cannot determine actual user. Do not run as root directly."
-        exit 1
-    fi
-    
-    log_success "Running as: $ACTUAL_USER (sudo)"
+    log_success "Running as root"
 }
 
-# ============================================================================
-# STEP 2: SYSTEM HEALTH CHECK
-# ============================================================================
-
-system_health_check() {
-    log_step "2" "25" "SYSTEM HEALTH CHECK"
+check_os() {
+    log_info "Checking operating system..."
     
-    echo ""
-    echo -e "${CYAN}Checking system requirements...${NC}"
-    
-    # Check OS
     if [[ ! -f /etc/os-release ]]; then
-        log_error "Cannot detect OS"
-        exit 1
+        error_exit "Cannot determine OS - /etc/os-release not found" 2
     fi
     
     source /etc/os-release
-    if [[ "$ID" != "ubuntu" ]]; then
-        log_warning "OS is $ID (recommended: Ubuntu 22.04+)"
-    else
-        log_success "OS: Ubuntu $VERSION_ID"
-    fi
     
-    # Check RAM
-    local total_ram=$(free -g | awk '/^Mem:/{print $2}')
-    if [[ $total_ram -lt 8 ]]; then
-        log_warning "RAM: ${total_ram}GB (recommended: 16GB+)"
-    else
-        log_success "RAM: ${total_ram}GB"
-    fi
+    case "$ID" in
+        ubuntu)
+            if [[ ! "$VERSION_ID" =~ ^(20.04|22.04|24.04)$ ]]; then
+                log_warning "Ubuntu $VERSION_ID detected. Recommended: 20.04, 22.04, or 24.04"
+                if ! prompt_yes_no "Continue anyway?"; then
+                    error_exit "Unsupported Ubuntu version" 2
+                fi
+            fi
+            ;;
+        debian)
+            if [[ ! "$VERSION_ID" =~ ^(11|12)$ ]]; then
+                log_warning "Debian $VERSION_ID detected. Recommended: 11 or 12"
+                if ! prompt_yes_no "Continue anyway?"; then
+                    error_exit "Unsupported Debian version" 2
+                fi
+            fi
+            ;;
+        *)
+            error_exit "Unsupported OS: $ID. Only Ubuntu and Debian are supported." 2
+            ;;
+    esac
     
-    # Check disk space
-    local free_space=$(df -BG "$ROOT_PATH" | awk 'NR==2 {print $4}' | sed 's/G//')
-    if [[ $free_space -lt 50 ]]; then
-        log_warning "Free space: ${free_space}GB (recommended: 100GB+)"
-    else
-        log_success "Free space: ${free_space}GB"
-    fi
+    log_success "OS: $PRETTY_NAME"
+}
+
+check_connectivity() {
+    log_info "Checking internet connectivity..."
     
-    # Check GPU
-    if command -v nvidia-smi &>/dev/null; then
-        local gpu_info=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
-        log_success "GPU: $gpu_info"
-        HAS_GPU=true
-    else
-        log_warning "No NVIDIA GPU detected (CPU-only mode)"
-        HAS_GPU=false
-    fi
+    local test_urls=(
+        "https://github.com"
+        "https://download.docker.com"
+        "https://tailscale.com"
+    )
     
-    # Check ports in use
-    echo ""
-    echo -e "${CYAN}Checking port availability...${NC}"
-    
-    local common_ports=(80 443 5432 6379 8080 8443 11434)
-    local ports_in_use=()
-    
-    for port in "${common_ports[@]}"; do
-        if ss -tuln | grep -q ":$port "; then
-            ports_in_use+=("$port")
+    local failed=0
+    for url in "${test_urls[@]}"; do
+        if ! curl -s --connect-timeout $CONNECTIVITY_TIMEOUT "$url" >/dev/null; then
+            log_warning "Cannot reach: $url"
+            ((failed++))
         fi
     done
     
-    if [[ ${#ports_in_use[@]} -gt 0 ]]; then
-        log_warning "Ports already in use: ${ports_in_use[*]}"
-        echo "  (You'll be able to choose alternative ports)"
+    if [[ $failed -gt 0 ]]; then
+        log_warning "$failed/$((${#test_urls[@]})) connectivity checks failed"
+        if ! prompt_yes_no "Continue anyway?"; then
+            error_exit "Internet connectivity required" 2
+        fi
     else
-        log_success "All common ports available"
-    fi
-    
-    echo ""
-    read -p "Continue with setup? (y/n): " confirm
-    if [[ "$confirm" != "y" ]]; then
-        log_error "Setup cancelled by user"
-        exit 0
+        log_success "Internet connectivity OK"
     fi
 }
 
-# ============================================================================
-# STEP 3: INSTALL SYSTEM PACKAGES
-# ============================================================================
+check_system_resources() {
+    log_step "2" "$TOTAL_STEPS" "SYSTEM HEALTH ASSESSMENT"
+    
+    # Check disk space
+    log_info "Checking disk space..."
+    local disk_avail_gb=$(df -BG /opt | tail -1 | awk '{print $4}' | sed 's/G//')
+    log_info "Available disk space: ${disk_avail_gb}GB"
+    
+    if [[ $disk_avail_gb -lt $MIN_DISK_GB ]]; then
+        log_warning "Low disk space. Recommended: ${MIN_DISK_GB}GB, Available: ${disk_avail_gb}GB"
+        if ! prompt_yes_no "Continue anyway?"; then
+            error_exit "Insufficient disk space" 2
+        fi
+    else
+        log_success "Disk space: ${disk_avail_gb}GB available"
+    fi
+    
+    # Check RAM
+    log_info "Checking RAM..."
+    local ram_total_gb=$(free -g | awk '/^Mem:/{print $2}')
+    log_info "Total RAM: ${ram_total_gb}GB"
+    
+    if [[ $ram_total_gb -lt $MIN_RAM_GB ]]; then
+        log_warning "Low RAM. Recommended: ${MIN_RAM_GB}GB, Available: ${ram_total_gb}GB"
+        if ! prompt_yes_no "Continue anyway?"; then
+            error_exit "Insufficient RAM" 2
+        fi
+    else
+        log_success "RAM: ${ram_total_gb}GB available"
+    fi
+    
+    # Check swap
+    log_info "Checking swap..."
+    local swap_total_gb=$(free -g | awk '/^Swap:/{print $2}')
+    log_info "Total swap: ${swap_total_gb}GB"
+    
+    if [[ $swap_total_gb -lt $MIN_SWAP_GB ]]; then
+        log_warning "Low swap. Recommended: ${MIN_SWAP_GB}GB, Available: ${swap_total_gb}GB"
+    else
+        log_success "Swap: ${swap_total_gb}GB configured"
+    fi
+    
+    # Check CPU
+    log_info "Checking CPU..."
+    local cpu_count=$(nproc)
+    local cpu_model=$(lscpu | grep "Model name" | cut -d':' -f2 | xargs)
+    log_info "CPU: $cpu_model"
+    log_success "CPU cores: $cpu_count"
+    
+    # Check GPU
+    log_info "Checking GPU..."
+    if command_exists nvidia-smi; then
+        GPU_AVAILABLE=true
+        GPU_TYPE="NVIDIA"
+        local gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
+        log_success "GPU detected: $gpu_name"
+    elif lspci | grep -i "amd.*vga" >/dev/null; then
+        GPU_AVAILABLE=true
+        GPU_TYPE="AMD"
+        log_success "AMD GPU detected"
+        log_warning "AMD GPU support limited. NVIDIA recommended for full acceleration."
+    else
+        GPU_AVAILABLE=false
+        log_warning "No GPU detected. CPU-only mode will be used."
+    fi
+}
+
+################################################################################
+# MAIN EXECUTION (placeholder)
+################################################################################
+
+main() {
+    # Initialize logging first
+    init_logging
+    
+    # Run pre-flight checks
+    check_root
+    check_os
+    check_connectivity
+    check_system_resources
+    
+    log_success "Pre-flight checks completed"
+    
+    # TO BE CONTINUED IN NEXT PARTS...
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  Part 1 of Script 1 v101.0.0 loaded successfully${NC}"
+    echo -e "${CYAN}  Ready for Part 2: Package Installation${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+}
+
+# Don't run main yet - wait for all parts
+# main "$@"
+################################################################################
+# PACKAGE INSTALLATION
+################################################################################
 
 install_system_packages() {
-    log_step "3" "25" "INSTALLING SYSTEM PACKAGES"
+    log_step "3" "$TOTAL_STEPS" "INSTALLING SYSTEM PACKAGES"
     
-    export DEBIAN_FRONTEND=noninteractive
+    wait_for_apt
     
-    apt-get update
-    apt-get install -y \
-        curl \
-        wget \
-        git \
-        jq \
-        gnupg \
-        lsb-release \
-        ca-certificates \
-        software-properties-common \
-        apt-transport-https \
-        apparmor \
-        apparmor-utils \
-        rsync \
+    log_info "Updating package lists..."
+    apt-get update -qq 2>&1 | tee -a "${LOG_FILE}" || error_exit "Failed to update package lists" 3
+    log_success "Package lists updated"
+    
+    log_info "Installing required packages..."
+    local packages=(
+        curl
+        wget
+        git
+        jq
+        ca-certificates
+        gnupg
+        lsb-release
+        apt-transport-https
+        software-properties-common
+        net-tools
+        htop
+        ncdu
         unzip
+        openssl
+        rsync
+    )
     
+    apt-get install -y -qq "${packages[@]}" 2>&1 | tee -a "${LOG_FILE}" || error_exit "Failed to install system packages" 3
     log_success "System packages installed"
 }
 
-# ============================================================================
-# STEP 4: INSTALL DOCKER
-# ============================================================================
-
 install_docker() {
-    log_step "4" "25" "INSTALLING DOCKER"
+    log_step "4" "$TOTAL_STEPS" "INSTALLING DOCKER"
     
-    if command -v docker &>/dev/null; then
-        local docker_version=$(docker --version | awk '{print $3}' | sed 's/,//')
-        log_warning "Docker already installed (version $docker_version)"
-        return 0
+    if command_exists docker; then
+        local docker_version=$(docker --version | awk '{print $3}' | tr -d ',')
+        log_warning "Docker already installed: $docker_version"
+        if prompt_yes_no "Reinstall Docker?"; then
+            log_info "Removing existing Docker installation..."
+            apt-get remove -y docker docker-engine docker.io containerd runc 2>&1 | tee -a "${LOG_FILE}" || true
+            apt-get purge -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin 2>&1 | tee -a "${LOG_FILE}" || true
+            rm -rf /var/lib/docker
+            rm -rf /var/lib/containerd
+            log_success "Existing Docker removed"
+        else
+            log_info "Skipping Docker installation"
+            return 0
+        fi
     fi
     
-    # Add Docker repository
+    wait_for_apt
+    
+    log_info "Adding Docker GPG key..."
     install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
-        gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
     chmod a+r /etc/apt/keyrings/docker.gpg
+    log_success "Docker GPG key added"
     
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | \
-        tee /etc/apt/sources.list.d/docker.list > /dev/null
+    log_info "Adding Docker repository..."
+    echo \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+      $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+    log_success "Docker repository added"
     
-    apt-get update
-    apt-get install -y \
-        docker-ce \
-        docker-ce-cli \
-        containerd.io \
-        docker-buildx-plugin \
-        docker-compose-plugin
+    wait_for_apt
     
-    systemctl enable docker
-    systemctl start docker
-    
+    log_info "Installing Docker packages..."
+    apt-get update -qq 2>&1 | tee -a "${LOG_FILE}"
+    apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin 2>&1 | tee -a "${LOG_FILE}" || error_exit "Failed to install Docker" 3
     log_success "Docker installed"
-}
-
-# ============================================================================
-# STEP 5: CONFIGURE DOCKER FOR USER
-# ============================================================================
-
-configure_docker_user() {
-    log_step "5" "25" "CONFIGURING DOCKER FOR USER"
     
-    if ! getent group docker > /dev/null; then
-        groupadd docker
+    log_info "Starting Docker service..."
+    systemctl start docker
+    systemctl enable docker
+    log_success "Docker service started and enabled"
+    
+    # Verify Docker installation
+    if docker --version >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+        local docker_version=$(docker --version | awk '{print $3}' | tr -d ',')
+        local compose_version=$(docker compose version | awk '{print $4}')
+        log_success "Docker $docker_version installed"
+        log_success "Docker Compose $compose_version installed"
+    else
+        error_exit "Docker installation verification failed" 3
     fi
-    
-    usermod -aG docker "$ACTUAL_USER"
-    
-    log_success "User added to docker group"
-    log_warning "User must logout/login for docker group to take effect"
 }
 
-# ============================================================================
-# STEP 6: INSTALL NVIDIA CONTAINER TOOLKIT (IF GPU)
-# ============================================================================
+configure_docker_non_root() {
+    log_info "Configuring Docker for non-root access..."
+    
+    # Get the user who invoked sudo (if any)
+    local actual_user="${SUDO_USER:-root}"
+    
+    if [[ "$actual_user" != "root" ]]; then
+        if ! getent group docker >/dev/null; then
+            groupadd docker
+        fi
+        usermod -aG docker "$actual_user"
+        log_success "User '$actual_user' added to docker group"
+        log_warning "User needs to log out and back in for group changes to take effect"
+    else
+        log_warning "Running as root, skipping non-root Docker configuration"
+    fi
+}
 
 install_nvidia_toolkit() {
-    log_step "6" "25" "INSTALLING NVIDIA CONTAINER TOOLKIT"
+    log_step "5" "$TOTAL_STEPS" "INSTALLING NVIDIA CONTAINER TOOLKIT"
     
-    if [[ "$HAS_GPU" != "true" ]]; then
-        log_warning "No GPU detected, skipping NVIDIA toolkit"
+    if [[ "$GPU_AVAILABLE" != "true" ]] || [[ "$GPU_TYPE" != "NVIDIA" ]]; then
+        log_info "No NVIDIA GPU detected, skipping NVIDIA toolkit installation"
         return 0
     fi
     
-    if docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi &>/dev/null; then
-        log_warning "NVIDIA Container Toolkit already configured"
+    log_info "Installing NVIDIA Container Toolkit..."
+    
+    # Check if nvidia-smi is available
+    if ! command_exists nvidia-smi; then
+        log_warning "nvidia-smi not found. Install NVIDIA drivers first."
+        if ! prompt_yes_no "Skip NVIDIA toolkit installation?"; then
+            error_exit "NVIDIA drivers required" 3
+        fi
         return 0
     fi
     
-    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
-        gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+    wait_for_apt
     
+    log_info "Adding NVIDIA Container Toolkit repository..."
+    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
     curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
         sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
         tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+    log_success "NVIDIA repository added"
     
-    apt-get update
-    apt-get install -y nvidia-container-toolkit
+    wait_for_apt
     
+    log_info "Installing NVIDIA Container Toolkit packages..."
+    apt-get update -qq 2>&1 | tee -a "${LOG_FILE}"
+    apt-get install -y -qq nvidia-container-toolkit 2>&1 | tee -a "${LOG_FILE}" || error_exit "Failed to install NVIDIA toolkit" 3
+    log_success "NVIDIA Container Toolkit installed"
+    
+    log_info "Configuring Docker for NVIDIA runtime..."
     nvidia-ctk runtime configure --runtime=docker
     systemctl restart docker
+    log_success "Docker configured for NVIDIA GPU"
     
-    log_success "NVIDIA Container Toolkit installed"
+    # Verify NVIDIA toolkit
+    if docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi >/dev/null 2>&1; then
+        log_success "NVIDIA Container Toolkit verified"
+    else
+        log_warning "NVIDIA toolkit verification failed, but continuing..."
+    fi
 }
-
-# ============================================================================
-# STEP 7: INSTALL TAILSCALE
-# ============================================================================
 
 install_tailscale() {
-    log_step "7" "25" "INSTALLING TAILSCALE"
+    log_step "6" "$TOTAL_STEPS" "INSTALLING TAILSCALE"
     
-    if command -v tailscale &>/dev/null; then
-        local ts_version=$(tailscale version | head -1)
-        log_warning "Tailscale already installed ($ts_version)"
-        return 0
+    if command_exists tailscale; then
+        local ts_version=$(tailscale version | head -1 | awk '{print $1}')
+        log_warning "Tailscale already installed: $ts_version"
+        if ! prompt_yes_no "Reinstall Tailscale?"; then
+            log_info "Skipping Tailscale installation"
+            return 0
+        fi
+        
+        log_info "Removing existing Tailscale installation..."
+        apt-get remove -y tailscale 2>&1 | tee -a "${LOG_FILE}" || true
+        rm -f /etc/apt/sources.list.d/tailscale.list
+        rm -f /usr/share/keyrings/tailscale-archive-keyring.gpg
+        log_success "Existing Tailscale removed"
     fi
     
-    curl -fsSL https://tailscale.com/install.sh | sh
+    wait_for_apt
     
+    log_info "Adding Tailscale GPG key..."
+    curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/$(lsb_release -cs).noarmor.gpg | tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+    log_success "Tailscale GPG key added"
+    
+    log_info "Adding Tailscale repository..."
+    echo "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu $(lsb_release -cs) main" | \
+        tee /etc/apt/sources.list.d/tailscale.list
+    log_success "Tailscale repository added"
+    
+    wait_for_apt
+    
+    log_info "Installing Tailscale..."
+    apt-get update -qq 2>&1 | tee -a "${LOG_FILE}"
+    apt-get install -y -qq tailscale 2>&1 | tee -a "${LOG_FILE}" || error_exit "Failed to install Tailscale" 3
     log_success "Tailscale installed"
-    log_warning "Run 'sudo tailscale up' after setup to configure"
+    
+    # Verify Tailscale installation
+    if tailscale version >/dev/null 2>&1; then
+        local ts_version=$(tailscale version | head -1 | awk '{print $1}')
+        log_success "Tailscale $ts_version installed"
+    else
+        error_exit "Tailscale installation verification failed" 3
+    fi
+    
+    log_info "Enabling Tailscale service..."
+    systemctl enable tailscaled
+    systemctl start tailscaled
+    log_success "Tailscale service started and enabled"
 }
-
-# ============================================================================
-# STEP 8: CONFIGURE APPARMOR
-# ============================================================================
 
 configure_apparmor() {
-    log_step "8" "25" "CONFIGURING APPARMOR"
+    log_step "7" "$TOTAL_STEPS" "CONFIGURING APPARMOR"
     
-    if ! systemctl is-active --quiet apparmor; then
-        log_warning "AppArmor is not active, skipping"
+    if ! command_exists aa-status; then
+        log_warning "AppArmor not available on this system"
         return 0
     fi
     
-    log "AppArmor is active"
-    
-    systemctl stop docker 2>/dev/null || true
-    
-    aa-remove-unknown 2>/dev/null || true
-    
-    systemctl restart apparmor
-    
-    systemctl start docker
-    
-    if systemctl is-active --quiet docker; then
-        log_success "AppArmor configured, Docker restarted"
-    else
-        log_error "Docker failed to start after AppArmor configuration"
-        return 1
+    log_info "Checking AppArmor status..."
+    if ! systemctl is-active --quiet apparmor; then
+        log_warning "AppArmor service not active"
+        if prompt_yes_no "Enable AppArmor?"; then
+            systemctl enable apparmor
+            systemctl start apparmor
+            log_success "AppArmor enabled"
+        else
+            log_warning "Continuing without AppArmor"
+            return 0
+        fi
     fi
-}
+    
+    log_info "Creating AppArmor profile for Docker..."
+    cat > /etc/apparmor.d/docker-default <<'EOF'
+#include <tunables/global>
 
-# ============================================================================
-# STEP 9: CREATE DIRECTORY STRUCTURE
-# ============================================================================
+profile docker-default flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  network,
+  capability,
+  file,
+  umount,
+
+  deny @{PROC}/* w,   # deny write for all files directly in /proc (not in a subdir)
+  deny @{PROC}/{[^1-9],[^1-9][^0-9],[^1-9s][^0-9y][^0-9s],[^1-9][^0-9][^0-9][^0-9]*}/** w,
+  deny @{PROC}/sys/[^k]** w,  # deny /proc/sys except /proc/sys/k* (effectively /proc/sys/kernel)
+  deny @{PROC}/sys/kernel/{?,??,[^s][^h][^m]**} w,  # deny everything except shm* in /proc/sys/kernel/
+  deny @{PROC}/sysrq-trigger rwklx,
+  deny @{PROC}/mem rwklx,
+  deny @{PROC}/kmem rwklx,
+  deny @{PROC}/kcore rwklx,
+
+  deny mount,
+
+  deny /sys/[^f]*/** wklx,
+  deny /sys/f[^s]*/** wklx,
+  deny /sys/fs/[^c]*/** wklx,
+  deny /sys/fs/c[^g]*/** wklx,
+  deny /sys/fs/cg[^r]*/** wklx,
+  deny /sys/firmware/** rwklx,
+  deny /sys/kernel/security/** rwklx,
+}
+EOF
+    
+    log_info "Reloading AppArmor profiles..."
+    apparmor_parser -r /etc/apparmor.d/docker-default 2>&1 | tee -a "${LOG_FILE}" || log_warning "Failed to load AppArmor profile"
+    log_success "AppArmor configured"
+}
 
 create_directory_structure() {
-    log_step "9" "25" "CREATING DIRECTORY STRUCTURE"
+    log_step "8" "$TOTAL_STEPS" "CREATING DIRECTORY STRUCTURE"
     
-    # Core directories
-    sudo -u "$ACTUAL_USER" mkdir -p \
-        "$DATA_DIR" \
-        "$CONFIG_DIR" \
-        "$STACK_DIR"/{core,automation,optional} \
-        "$LOG_DIR"
+    log_info "Creating directory structure..."
     
-    # Service-specific data directories (will create only for enabled services later)
-    sudo -u "$ACTUAL_USER" mkdir -p \
-        "$DATA_DIR"/.tmp
+    # Root directories
+    mkdir -p "${ROOT_PATH}"
+    mkdir -p "${DATA_DIR}"
+    mkdir -p "${CONFIG_DIR}"
+    mkdir -p "${STACK_DIR}"
+    mkdir -p "${SECRETS_DIR}"
+    mkdir -p "${SCRIPTS_DIR}"
+    mkdir -p "${LOG_DIR}"
+    mkdir -p "${BACKUP_DIR}"
+    mkdir -p "${GDRIVE_LOCAL_PATH}"
     
-    # Set ownership
-    chown -R "$ACTUAL_USER:$ACTUAL_USER" \
-        "$DATA_DIR" \
-        "$CONFIG_DIR" \
-        "$STACK_DIR" \
-        "$LOG_DIR"
+    # Config subdirectories
+    mkdir -p "${CONFIG_DIR}/ollama"
+    mkdir -p "${CONFIG_DIR}/litellm"
+    mkdir -p "${CONFIG_DIR}/openclaw"
+    mkdir -p "${CONFIG_DIR}/webui"
+    mkdir -p "${CONFIG_DIR}/dify"
+    mkdir -p "${CONFIG_DIR}/anythingllm"
+    mkdir -p "${CONFIG_DIR}/qdrant"
+    mkdir -p "${CONFIG_DIR}/weaviate"
+    mkdir -p "${CONFIG_DIR}/chromadb"
+    mkdir -p "${CONFIG_DIR}/milvus"
+    mkdir -p "${CONFIG_DIR}/signal-api"
+    mkdir -p "${CONFIG_DIR}/gdrive"
+    mkdir -p "${CONFIG_DIR}/n8n"
+    mkdir -p "${CONFIG_DIR}/langfuse"
+    mkdir -p "${CONFIG_DIR}/prometheus"
+    mkdir -p "${CONFIG_DIR}/grafana"
+    mkdir -p "${CONFIG_DIR}/loki"
+    mkdir -p "${CONFIG_DIR}/minio"
+    mkdir -p "${CONFIG_DIR}/caddy"
+    mkdir -p "${CONFIG_DIR}/nginx"
+    
+    # Data subdirectories (in /mnt/data)
+    mkdir -p "${DATA_DIR}/ollama"
+    mkdir -p "${DATA_DIR}/postgres"
+    mkdir -p "${DATA_DIR}/redis"
+    mkdir -p "${DATA_DIR}/qdrant"
+    mkdir -p "${DATA_DIR}/weaviate"
+    mkdir -p "${DATA_DIR}/chromadb"
+    mkdir -p "${DATA_DIR}/milvus"
+    mkdir -p "${DATA_DIR}/dify"
+    mkdir -p "${DATA_DIR}/anythingllm"
+    mkdir -p "${DATA_DIR}/openclaw"
+    mkdir -p "${DATA_DIR}/n8n"
+    mkdir -p "${DATA_DIR}/langfuse"
+    mkdir -p "${DATA_DIR}/prometheus"
+    mkdir -p "${DATA_DIR}/grafana"
+    mkdir -p "${DATA_DIR}/loki"
+    mkdir -p "${DATA_DIR}/minio"
+    
+    # Log subdirectories (in /mnt/data/logs)
+    mkdir -p "${LOG_DIR}/docker"
+    mkdir -p "${LOG_DIR}/services"
+    mkdir -p "${LOG_DIR}/ollama"
+    mkdir -p "${LOG_DIR}/litellm"
+    mkdir -p "${LOG_DIR}/openclaw"
+    mkdir -p "${LOG_DIR}/nginx"
+    mkdir -p "${LOG_DIR}/caddy"
+    
+    # Backup subdirectories
+    mkdir -p "${BACKUP_DIR}/daily"
+    mkdir -p "${BACKUP_DIR}/weekly"
+    mkdir -p "${BACKUP_DIR}/monthly"
+    
+    # Set permissions
+    chmod 755 "${ROOT_PATH}"
+    chmod 755 "${CONFIG_DIR}"
+    chmod 755 "${STACK_DIR}"
+    chmod 700 "${SECRETS_DIR}"
+    chmod 755 "${SCRIPTS_DIR}"
+    chmod 755 "${LOG_DIR}"
+    chmod 755 "${BACKUP_DIR}"
+    chmod 755 "${GDRIVE_LOCAL_PATH}"
     
     log_success "Directory structure created"
+    
+    # Display structure
+    log_info "Directory structure:"
+    cat <<EOF | tee -a "${LOG_FILE}"
+/opt/ai-platform/          # Root installation directory
+├── config/                # Configuration files
+├── stacks/                # Docker Compose files
+├── secrets/               # Sensitive data (700 permissions)
+└── scripts/               # Helper scripts
+
+/mnt/data/                 # Persistent data storage
+├── ai-platform/           # Service data volumes
+├── gdrive/                # Google Drive sync target
+├── logs/                  # All logs (growing)
+│   ├── script0.log       # Cleanup logs
+│   ├── script1.log       # Setup logs
+│   ├── script2.log       # Deploy logs
+│   ├── docker/           # Container logs
+│   └── services/         # Service-specific logs
+└── backups/              # Backup storage
+    ├── daily/
+    ├── weekly/
+    └── monthly/
+EOF
 }
 
-# ============================================================================
-# STEP 10: SELECT REVERSE PROXY
-# ============================================================================
+################################################################################
+# MAIN EXECUTION CONTINUATION
+################################################################################
 
-select_reverse_proxy() {
-    log_step "10" "25" "SELECT REVERSE PROXY"
+main_part2() {
+    # Package installation phase
+    install_system_packages
+    install_docker
+    configure_docker_non_root
+    install_nvidia_toolkit
+    install_tailscale
+    configure_apparmor
+    create_directory_structure
+    
+    log_success "Package installation phase completed"
+    
+    # TO BE CONTINUED IN NEXT PARTS...
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  Part 2 of Script 1 v101.0.0 loaded successfully${NC}"
+    echo -e "${CYAN}  Ready for Part 3: Service Selection${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+}
+
+# Don't run yet - wait for all parts
+# main_part2 "$@"
+################################################################################
+# SERVICE SELECTION & PORT CONFIGURATION
+################################################################################
+
+# Service definitions with defaults
+declare -A SERVICE_DEFAULTS=(
+    # Core Services
+    [ollama_port]="11434"
+    [litellm_port]="4000"
+    [webui_port]="3000"
+    
+    # Databases
+    [postgres_port]="5432"
+    [redis_port]="6379"
+    
+    # Vector Databases
+    [qdrant_port]="6333"
+    [weaviate_port]="8080"
+    [chromadb_port]="8000"
+    [milvus_port]="19530"
+    
+    # AI Platforms
+    [dify_port]="3001"
+    [anythingllm_port]="3002"
+    [openclaw_port]="8090"
+    
+    # Automation
+    [n8n_port]="5678"
+    
+    # Observability
+    [langfuse_port]="3003"
+    [prometheus_port]="9090"
+    [grafana_port]="3004"
+    [loki_port]="3100"
+    
+    # Infrastructure
+    [minio_port]="9000"
+    [minio_console_port]="9001"
+    [portainer_port]="9443"
+    [caddy_http_port]="80"
+    [caddy_https_port]="443"
+    [nginx_http_port]="8080"
+    [nginx_https_port]="8443"
+    [tailscale_port]="41641"
+    [signal_api_port]="8082"
+)
+
+display_service_selection_header() {
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  SERVICE SELECTION & PORT CONFIGURATION${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo "Select which services to deploy. Each service will prompt for:"
+    echo "  • Whether to enable the service"
+    echo "  • Port configuration"
+    echo "  • Service-specific settings"
+    echo ""
+    echo "Note: Some services have dependencies that will be auto-enabled."
+    echo ""
+}
+
+select_core_services() {
+    log_step "9" "$TOTAL_STEPS" "SELECTING CORE SERVICES"
     
     echo ""
-    echo -e "${BOLD}${CYAN}Choose Reverse Proxy:${NC}"
-    echo "  1. Caddy  (automatic HTTPS, simpler config)"
-    echo "  2. Nginx  (more control, manual SSL)"
-    echo "  3. None   (direct access, no proxy)"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}  CORE SERVICES (Required)${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    
+    # Ollama (Required)
+    echo -e "${CYAN}[1/3] Ollama - Local LLM Runtime${NC}"
+    echo "Purpose: Run local language models (Llama, Mistral, etc.)"
+    SERVICE_ENABLED[ollama]=true
+    log_success "Ollama: ENABLED (required)"
+    
+    read -p "Port for Ollama API [${SERVICE_DEFAULTS[ollama_port]}]: " input
+    SERVICE_PORTS[ollama]="${input:-${SERVICE_DEFAULTS[ollama_port]}}"
+    log_info "Ollama port: ${SERVICE_PORTS[ollama]}"
+    
+    echo ""
+    
+    # LiteLLM (Required)
+    echo -e "${CYAN}[2/3] LiteLLM - Unified LLM Gateway${NC}"
+    echo "Purpose: Unified API for all LLM providers (Ollama, OpenAI, Anthropic, etc.)"
+    SERVICE_ENABLED[litellm]=true
+    log_success "LiteLLM: ENABLED (required)"
+    
+    read -p "Port for LiteLLM API [${SERVICE_DEFAULTS[litellm_port]}]: " input
+    SERVICE_PORTS[litellm]="${input:-${SERVICE_DEFAULTS[litellm_port]}}"
+    log_info "LiteLLM port: ${SERVICE_PORTS[litellm]}"
+    
+    echo ""
+    
+    # Open WebUI (Required)
+    echo -e "${CYAN}[3/3] Open WebUI - Chat Interface${NC}"
+    echo "Purpose: ChatGPT-style web interface for local LLMs"
+    SERVICE_ENABLED[webui]=true
+    log_success "Open WebUI: ENABLED (required)"
+    
+    read -p "Port for Open WebUI [${SERVICE_DEFAULTS[webui_port]}]: " input
+    SERVICE_PORTS[webui]="${input:-${SERVICE_DEFAULTS[webui_port]}}"
+    log_info "Open WebUI port: ${SERVICE_PORTS[webui]}"
+    
+    echo ""
+}
+
+select_database_services() {
+    log_step "10" "$TOTAL_STEPS" "SELECTING DATABASE SERVICES"
+    
+    echo ""
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}  DATABASE SERVICES${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    
+    # PostgreSQL
+    echo -e "${CYAN}[1/2] PostgreSQL - Relational Database${NC}"
+    echo "Purpose: Primary database for Dify, n8n, Langfuse, and other services"
+    echo "Required by: Dify, n8n, Langfuse"
+    if prompt_yes_no "Enable PostgreSQL?" "y"; then
+        SERVICE_ENABLED[postgres]=true
+        log_success "PostgreSQL: ENABLED"
+        
+        read -p "Port for PostgreSQL [${SERVICE_DEFAULTS[postgres_port]}]: " input
+        SERVICE_PORTS[postgres]="${input:-${SERVICE_DEFAULTS[postgres_port]}}"
+        log_info "PostgreSQL port: ${SERVICE_PORTS[postgres]}"
+    else
+        SERVICE_ENABLED[postgres]=false
+        log_warning "PostgreSQL: DISABLED (some services will not work)"
+    fi
+    
+    echo ""
+    
+    # Redis
+    echo -e "${CYAN}[2/2] Redis - In-Memory Cache${NC}"
+    echo "Purpose: Caching and session storage for web services"
+    echo "Required by: Dify, Open WebUI"
+    if prompt_yes_no "Enable Redis?" "y"; then
+        SERVICE_ENABLED[redis]=true
+        log_success "Redis: ENABLED"
+        
+        read -p "Port for Redis [${SERVICE_DEFAULTS[redis_port]}]: " input
+        SERVICE_PORTS[redis]="${input:-${SERVICE_DEFAULTS[redis_port]}}"
+        log_info "Redis port: ${SERVICE_PORTS[redis]}"
+    else
+        SERVICE_ENABLED[redis]=false
+        log_warning "Redis: DISABLED (some services will not work)"
+    fi
+    
+    echo ""
+}
+
+select_vector_database() {
+    log_step "11" "$TOTAL_STEPS" "SELECTING VECTOR DATABASE"
+    
+    echo ""
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}  VECTOR DATABASE (Choose ONE)${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo "Vector databases store embeddings for RAG (Retrieval Augmented Generation)."
+    echo "Select ONE vector database for your deployment:"
+    echo ""
+    echo "  1) Qdrant      - Fast, Rust-based, excellent for production"
+    echo "  2) Weaviate    - Feature-rich, GraphQL API, strong ecosystem"
+    echo "  3) ChromaDB    - Simple, Python-based, easy to use"
+    echo "  4) Milvus      - Enterprise-grade, highly scalable"
+    echo "  5) None        - Skip vector database (RAG features disabled)"
     echo ""
     
     while true; do
-        read -p "Enter choice [1-3] (default: 1): " proxy_choice
-        proxy_choice="${proxy_choice:-1}"
-        
-        case "$proxy_choice" in
+        read -p "Select vector database [1-5]: " choice
+        case $choice in
             1)
-                REVERSE_PROXY="caddy"
-                SERVICE_ENABLED[caddy]=true
-                log_success "Selected: Caddy"
+                SELECTED_VECTOR_DB="qdrant"
+                SERVICE_ENABLED[qdrant]=true
+                log_success "Selected: Qdrant"
+                
+                read -p "Port for Qdrant [${SERVICE_DEFAULTS[qdrant_port]}]: " input
+                SERVICE_PORTS[qdrant]="${input:-${SERVICE_DEFAULTS[qdrant_port]}}"
+                log_info "Qdrant port: ${SERVICE_PORTS[qdrant]}"
                 break
                 ;;
             2)
-                REVERSE_PROXY="nginx"
-                SERVICE_ENABLED[nginx]=true
-                log_success "Selected: Nginx"
+                SELECTED_VECTOR_DB="weaviate"
+                SERVICE_ENABLED[weaviate]=true
+                log_success "Selected: Weaviate"
+                
+                read -p "Port for Weaviate [${SERVICE_DEFAULTS[weaviate_port]}]: " input
+                SERVICE_PORTS[weaviate]="${input:-${SERVICE_DEFAULTS[weaviate_port]}}"
+                log_info "Weaviate port: ${SERVICE_PORTS[weaviate]}"
                 break
                 ;;
             3)
-                REVERSE_PROXY="none"
-                log_success "Selected: No reverse proxy"
+                SELECTED_VECTOR_DB="chromadb"
+                SERVICE_ENABLED[chromadb]=true
+                log_success "Selected: ChromaDB"
+                
+                read -p "Port for ChromaDB [${SERVICE_DEFAULTS[chromadb_port]}]: " input
+                SERVICE_PORTS[chromadb]="${input:-${SERVICE_DEFAULTS[chromadb_port]}}"
+                log_info "ChromaDB port: ${SERVICE_PORTS[chromadb]}"
+                break
+                ;;
+            4)
+                SELECTED_VECTOR_DB="milvus"
+                SERVICE_ENABLED[milvus]=true
+                log_success "Selected: Milvus"
+                
+                read -p "Port for Milvus [${SERVICE_DEFAULTS[milvus_port]}]: " input
+                SERVICE_PORTS[milvus]="${input:-${SERVICE_DEFAULTS[milvus_port]}}"
+                log_info "Milvus port: ${SERVICE_PORTS[milvus]}"
+                
+                read -p "Port for Milvus Web UI [19121]: " input
+                SERVICE_PORTS[milvus_web]="${input:-19121}"
+                log_info "Milvus Web UI port: ${SERVICE_PORTS[milvus_web]}"
+                break
+                ;;
+            5)
+                SELECTED_VECTOR_DB="none"
+                log_warning "No vector database selected (RAG features will be disabled)"
                 break
                 ;;
             *)
-                log_error "Invalid choice"
+                echo -e "${RED}Invalid choice. Please select 1-5.${NC}"
                 ;;
         esac
     done
     
-    # Proxy port configuration
-    if [[ "$REVERSE_PROXY" != "none" ]]; then
-        echo ""
-        echo -e "${CYAN}Configure proxy ports (80/443 will be used by $REVERSE_PROXY):${NC}"
-        
-        read -p "HTTP port [80]: " http_port
-        SERVICE_PORTS[proxy_http]="${http_port:-80}"
-        
-        read -p "HTTPS port [443]: " https_port
-        SERVICE_PORTS[proxy_https]="${https_port:-443}"
-    fi
+    echo ""
 }
 
-# ============================================================================
-# STEP 11: SELECT CORE SERVICES
-# ============================================================================
-
-select_core_services() {
-    log_step "11" "25" "SELECT CORE SERVICES"
+select_ai_platforms() {
+    log_step "12" "$TOTAL_STEPS" "SELECTING AI PLATFORMS"
     
     echo ""
-    echo -e "${BOLD}${CYAN}Core Services (LLM Stack):${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}  AI PLATFORMS (Optional)${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     
-    # Ollama (required)
-    SERVICE_ENABLED[ollama]=true
-    read -p "Ollama port [11434]: " port
-    SERVICE_PORTS[ollama]="${port:-11434}"
-    log_success "Ollama enabled on port ${SERVICE_PORTS[ollama]}"
-    
-    # Open WebUI (required)
-    SERVICE_ENABLED[webui]=true
-    read -p "Open WebUI port [8080]: " port
-    SERVICE_PORTS[webui]="${port:-8080}"
-    log_success "Open WebUI enabled on port ${SERVICE_PORTS[webui]}"
-    
-    # LiteLLM
-    read -p "Enable LiteLLM proxy? (y/n) [y]: " enable
-    if [[ "${enable:-y}" == "y" ]]; then
-        SERVICE_ENABLED[litellm]=true
-        read -p "LiteLLM port [4000]: " port
-        SERVICE_PORTS[litellm]="${port:-4000}"
-        log_success "LiteLLM enabled on port ${SERVICE_PORTS[litellm]}"
+    # Dify
+    echo -e "${CYAN}[1/3] Dify - LLMOps Platform${NC}"
+    echo "Purpose: Build and operate AI applications with workflow editor"
+    echo "Dependencies: PostgreSQL, Redis"
+    if prompt_yes_no "Enable Dify?"; then
+        SERVICE_ENABLED[dify]=true
+        log_success "Dify: ENABLED"
+        
+        # Auto-enable dependencies
+        if [[ "${SERVICE_ENABLED[postgres]}" != "true" ]]; then
+            log_warning "Enabling PostgreSQL (required by Dify)"
+            SERVICE_ENABLED[postgres]=true
+            SERVICE_PORTS[postgres]="${SERVICE_DEFAULTS[postgres_port]}"
+        fi
+        if [[ "${SERVICE_ENABLED[redis]}" != "true" ]]; then
+            log_warning "Enabling Redis (required by Dify)"
+            SERVICE_ENABLED[redis]=true
+            SERVICE_PORTS[redis]="${SERVICE_DEFAULTS[redis_port]}"
+        fi
+        
+        read -p "Port for Dify Web [${SERVICE_DEFAULTS[dify_port]}]: " input
+        SERVICE_PORTS[dify]="${input:-${SERVICE_DEFAULTS[dify_port]}}"
+        log_info "Dify port: ${SERVICE_PORTS[dify]}"
+        
+        read -p "Port for Dify API [3002]: " input
+        SERVICE_PORTS[dify_api]="${input:-3002}"
+        log_info "Dify API port: ${SERVICE_PORTS[dify_api]}"
+    else
+        SERVICE_ENABLED[dify]=false
+        log_info "Dify: DISABLED"
     fi
     
-    # PostgreSQL
-    read -p "Enable PostgreSQL? (y/n) [y]: " enable
-    if [[ "${enable:-y}" == "y" ]]; then
-        SERVICE_ENABLED[postgres]=true
-        read -p "PostgreSQL port [5432]: " port
-        SERVICE_PORTS[postgres]="${port:-5432}"
-        log_success "PostgreSQL enabled on port ${SERVICE_PORTS[postgres]}"
+    echo ""
+    
+    # AnythingLLM
+    echo -e "${CYAN}[2/3] AnythingLLM - Document Chat Platform${NC}"
+    echo "Purpose: Chat with documents using RAG"
+    echo "Dependencies: Vector database (recommended)"
+    if prompt_yes_no "Enable AnythingLLM?"; then
+        SERVICE_ENABLED[anythingllm]=true
+        log_success "AnythingLLM: ENABLED"
+        
+        read -p "Port for AnythingLLM [${SERVICE_DEFAULTS[anythingllm_port]}]: " input
+        SERVICE_PORTS[anythingllm]="${input:-${SERVICE_DEFAULTS[anythingllm_port]}}"
+        log_info "AnythingLLM port: ${SERVICE_PORTS[anythingllm]}"
+    else
+        SERVICE_ENABLED[anythingllm]=false
+        log_info "AnythingLLM: DISABLED"
     fi
     
-    # Redis
-    read -p "Enable Redis? (y/n) [y]: " enable
-    if [[ "${enable:-y}" == "y" ]]; then
-        SERVICE_ENABLED[redis]=true
-        read -p "Redis port [6379]: " port
-        SERVICE_PORTS[redis]="${port:-6379}"
-        log_success "Redis enabled on port ${SERVICE_PORTS[redis]}"
+    echo ""
+    
+    # OpenClaw
+    echo -e "${CYAN}[3/3] OpenClaw - AI Automation Platform${NC}"
+    echo "Purpose: Advanced AI workflows with vector search integration"
+    echo "Dependencies: Vector database, LiteLLM"
+    if prompt_yes_no "Enable OpenClaw?"; then
+        SERVICE_ENABLED[openclaw]=true
+        log_success "OpenClaw: ENABLED"
+        
+        if [[ "$SELECTED_VECTOR_DB" == "none" ]]; then
+            log_warning "OpenClaw works best with a vector database"
+            log_warning "Consider going back and selecting one"
+        fi
+        
+        read -p "Port for OpenClaw [${SERVICE_DEFAULTS[openclaw_port]}]: " input
+        SERVICE_PORTS[openclaw]="${input:-${SERVICE_DEFAULTS[openclaw_port]}}"
+        log_info "OpenClaw port: ${SERVICE_PORTS[openclaw]}"
+    else
+        SERVICE_ENABLED[openclaw]=false
+        log_info "OpenClaw: DISABLED"
     fi
+    
+    echo ""
 }
-
-# ============================================================================
-# STEP 12: SELECT AUTOMATION SERVICES
-# ============================================================================
 
 select_automation_services() {
-    log_step "12" "25" "SELECT AUTOMATION SERVICES"
+    log_step "13" "$TOTAL_STEPS" "SELECTING AUTOMATION SERVICES"
     
     echo ""
-    echo -e "${BOLD}${CYAN}Automation Services:${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}  AUTOMATION SERVICES${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     
-    # Tailscale (already installed, just configure)
+    # n8n
+    echo -e "${CYAN}[1/2] n8n - Workflow Automation${NC}"
+    echo "Purpose: Build complex workflows and integrations"
+    echo "Dependencies: PostgreSQL (recommended)"
+    if prompt_yes_no "Enable n8n?"; then
+        SERVICE_ENABLED[n8n]=true
+        log_success "n8n: ENABLED"
+        
+        if [[ "${SERVICE_ENABLED[postgres]}" != "true" ]]; then
+            if prompt_yes_no "Enable PostgreSQL for n8n (recommended)?"; then
+                SERVICE_ENABLED[postgres]=true
+                SERVICE_PORTS[postgres]="${SERVICE_DEFAULTS[postgres_port]}"
+                log_success "PostgreSQL enabled for n8n"
+            fi
+        fi
+        
+        read -p "Port for n8n [${SERVICE_DEFAULTS[n8n_port]}]: " input
+        SERVICE_PORTS[n8n]="${input:-${SERVICE_DEFAULTS[n8n_port]}}"
+        log_info "n8n port: ${SERVICE_PORTS[n8n]}"
+    else
+        SERVICE_ENABLED[n8n]=false
+        log_info "n8n: DISABLED"
+    fi
+    
     echo ""
-    echo -e "${CYAN}Tailscale Configuration:${NC}"
-    read -p "Tailscale HTTPS port [8443]: " ts_port
-    SERVICE_PORTS[tailscale_https]="${ts_port:-8443}"
-    log_success "Tailscale will use port ${SERVICE_PORTS[tailscale_https]} for HTTPS"
     
     # Signal-API
-    read -p "Enable Signal-API notifications? (y/n) [n]: " enable
-    if [[ "${enable:-n}" == "y" ]]; then
+    echo -e "${CYAN}[2/2] Signal-API - Signal Messenger Integration${NC}"
+    echo "Purpose: Send/receive Signal messages (for notifications, automation)"
+    if prompt_yes_no "Enable Signal-API?"; then
         SERVICE_ENABLED[signal_api]=true
-        read -p "Signal-API port [8082]: " port
-        SERVICE_PORTS[signal_api]="${port:-8082}"
-        read -p "Signal phone number (with country code, e.g., +1234567890): " phone
-        SERVICE_CONFIGS[signal_phone]="$phone"
-        log_success "Signal-API enabled on port ${SERVICE_PORTS[signal_api]}"
+        log_success "Signal-API: ENABLED"
+        
+        read -p "Port for Signal-API [${SERVICE_DEFAULTS[signal_api_port]}]: " input
+        SERVICE_PORTS[signal_api]="${input:-${SERVICE_DEFAULTS[signal_api_port]}}"
+        log_info "Signal-API port: ${SERVICE_PORTS[signal_api]}"
+        
+        read -p "Signal phone number (with country code, e.g., +1234567890): " signal_phone
+        SERVICE_CONFIGS[signal_phone]="$signal_phone"
+        log_info "Signal phone: $signal_phone"
+    else
+        SERVICE_ENABLED[signal_api]=false
+        log_info "Signal-API: DISABLED"
     fi
-    
-    # Google Drive Sync
-    read -p "Enable Google Drive backup sync? (y/n) [n]: " enable
-    if [[ "${enable:-n}" == "y" ]]; then
-        SERVICE_ENABLED[gdrive_sync]=true
-        read -p "Google Drive folder ID: " folder_id
-        SERVICE_CONFIGS[gdrive_folder_id]="$folder_id"
-        read -p "Service account JSON path (leave empty to configure later): " json_path
-        SERVICE_CONFIGS[gdrive_json_path]="$json_path"
-        log_success "Google Drive sync enabled"
-    fi
-    
-    # Platform Health Monitoring
-    read -p "Enable platform health monitoring? (y/n) [y]: " enable
-    if [[ "${enable:-y}" == "y" ]]; then
-        SERVICE_ENABLED[health_monitor]=true
-        log_success "Health monitoring enabled"
-    fi
-}
-
-# ============================================================================
-# STEP 13: SELECT OPTIONAL SERVICES
-# ============================================================================
-
-select_optional_services() {
-    log_step "13" "25" "SELECT OPTIONAL SERVICES"
     
     echo ""
-    echo -e "${BOLD}${CYAN}Optional Services:${NC}"
+}
+
+select_observability_services() {
+    log_step "14" "$TOTAL_STEPS" "SELECTING OBSERVABILITY SERVICES"
+    
+    echo ""
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}  OBSERVABILITY & MONITORING${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     
     # Langfuse
-    read -p "Enable Langfuse (LLM observability)? (y/n) [n]: " enable
-    if [[ "${enable:-n}" == "y" ]]; then
+    echo -e "${CYAN}[1/4] Langfuse - LLM Observability${NC}"
+    echo "Purpose: Track LLM calls, costs, and performance"
+    echo "Dependencies: PostgreSQL"
+    if prompt_yes_no "Enable Langfuse?"; then
         SERVICE_ENABLED[langfuse]=true
-        read -p "Langfuse port [3000]: " port
-        SERVICE_PORTS[langfuse]="${port:-3000}"
-        log_success "Langfuse enabled on port ${SERVICE_PORTS[langfuse]}"
+        log_success "Langfuse: ENABLED"
+        
+        if [[ "${SERVICE_ENABLED[postgres]}" != "true" ]]; then
+            log_warning "Enabling PostgreSQL (required by Langfuse)"
+            SERVICE_ENABLED[postgres]=true
+            SERVICE_PORTS[postgres]="${SERVICE_DEFAULTS[postgres_port]}"
+        fi
+        
+        read -p "Port for Langfuse [${SERVICE_DEFAULTS[langfuse_port]}]: " input
+        SERVICE_PORTS[langfuse]="${input:-${SERVICE_DEFAULTS[langfuse_port]}}"
+        log_info "Langfuse port: ${SERVICE_PORTS[langfuse]}"
+    else
+        SERVICE_ENABLED[langfuse]=false
+        log_info "Langfuse: DISABLED"
     fi
     
-    # N8N
-    read -p "Enable N8N (workflow automation)? (y/n) [n]: " enable
-    if [[ "${enable:-n}" == "y" ]]; then
-        SERVICE_ENABLED[n8n]=true
-        read -p "N8N port [5678]: " port
-        SERVICE_PORTS[n8n]="${port:-5678}"
-        log_success "N8N enabled on port ${SERVICE_PORTS[n8n]}"
+    echo ""
+    
+    # Prometheus
+    echo -e "${CYAN}[2/4] Prometheus - Metrics Collection${NC}"
+    echo "Purpose: Collect and store system and service metrics"
+    if prompt_yes_no "Enable Prometheus?"; then
+        SERVICE_ENABLED[prometheus]=true
+        log_success "Prometheus: ENABLED"
+        
+        read -p "Port for Prometheus [${SERVICE_DEFAULTS[prometheus_port]}]: " input
+        SERVICE_PORTS[prometheus]="${input:-${SERVICE_DEFAULTS[prometheus_port]}}"
+        log_info "Prometheus port: ${SERVICE_PORTS[prometheus]}"
+    else
+        SERVICE_ENABLED[prometheus]=false
+        log_info "Prometheus: DISABLED"
     fi
     
-    # Qdrant
-    read -p "Enable Qdrant (vector database)? (y/n) [n]: " enable
-    if [[ "${enable:-n}" == "y" ]]; then
-        SERVICE_ENABLED[qdrant]=true
-        read -p "Qdrant port [6333]: " port
-        SERVICE_PORTS[qdrant]="${port:-6333}"
-        log_success "Qdrant enabled on port ${SERVICE_PORTS[qdrant]}"
+    echo ""
+    
+    # Grafana
+    echo -e "${CYAN}[3/4] Grafana - Visualization Dashboard${NC}"
+    echo "Purpose: Visualize metrics from Prometheus"
+    echo "Dependencies: Prometheus (recommended)"
+    if prompt_yes_no "Enable Grafana?"; then
+        SERVICE_ENABLED[grafana]=true
+        log_success "Grafana: ENABLED"
+        
+        if [[ "${SERVICE_ENABLED[prometheus]}" != "true" ]]; then
+            if prompt_yes_no "Enable Prometheus for Grafana (recommended)?"; then
+                SERVICE_ENABLED[prometheus]=true
+                SERVICE_PORTS[prometheus]="${SERVICE_DEFAULTS[prometheus_port]}"
+                log_success "Prometheus enabled for Grafana"
+            fi
+        fi
+        
+        read -p "Port for Grafana [${SERVICE_DEFAULTS[grafana_port]}]: " input
+        SERVICE_PORTS[grafana]="${input:-${SERVICE_DEFAULTS[grafana_port]}}"
+        log_info "Grafana port: ${SERVICE_PORTS[grafana]}"
+    else
+        SERVICE_ENABLED[grafana]=false
+        log_info "Grafana: DISABLED"
     fi
+    
+    echo ""
+    
+    # Loki
+    echo -e "${CYAN}[4/4] Loki - Log Aggregation${NC}"
+    echo "Purpose: Collect and query logs from all services"
+    if prompt_yes_no "Enable Loki?"; then
+        SERVICE_ENABLED[loki]=true
+        log_success "Loki: ENABLED"
+        
+        read -p "Port for Loki [${SERVICE_DEFAULTS[loki_port]}]: " input
+        SERVICE_PORTS[loki]="${input:-${SERVICE_DEFAULTS[loki_port]}}"
+        log_info "Loki port: ${SERVICE_PORTS[loki]}"
+    else
+        SERVICE_ENABLED[loki]=false
+        log_info "Loki: DISABLED"
+    fi
+    
+    echo ""
 }
 
-# ============================================================================
-# STEP 14: SELECT OLLAMA MODELS
-# ============================================================================
+select_infrastructure_services() {
+    log_step "15" "$TOTAL_STEPS" "SELECTING INFRASTRUCTURE SERVICES"
+    
+    echo ""
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}  INFRASTRUCTURE SERVICES${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    
+    # MinIO
+    echo -e "${CYAN}[1/3] MinIO - S3-Compatible Object Storage${NC}"
+    echo "Purpose: Store files, backups, and model artifacts"
+    if prompt_yes_no "Enable MinIO?"; then
+        SERVICE_ENABLED[minio]=true
+        log_success "MinIO: ENABLED"
+        
+        read -p "Port for MinIO API [${SERVICE_DEFAULTS[minio_port]}]: " input
+        SERVICE_PORTS[minio]="${input:-${SERVICE_DEFAULTS[minio_port]}}"
+        log_info "MinIO API port: ${SERVICE_PORTS[minio]}"
+        
+        read -p "Port for MinIO Console [${SERVICE_DEFAULTS[minio_console_port]}]: " input
+        SERVICE_PORTS[minio_console]="${input:-${SERVICE_DEFAULTS[minio_console_port]}}"
+        log_info "MinIO Console port: ${SERVICE_PORTS[minio_console]}"
+    else
+        SERVICE_ENABLED[minio]=false
+        log_info "MinIO: DISABLED"
+    fi
+    
+    echo ""
+    
+    # Portainer
+    echo -e "${CYAN}[2/3] Portainer - Docker Management UI${NC}"
+    echo "Purpose: Manage Docker containers via web interface"
+    if prompt_yes_no "Enable Portainer?"; then
+        SERVICE_ENABLED[portainer]=true
+        log_success "Portainer: ENABLED"
+        
+        read -p "Port for Portainer [${SERVICE_DEFAULTS[portainer_port]}]: " input
+        SERVICE_PORTS[portainer]="${input:-${SERVICE_DEFAULTS[portainer_port]}}"
+        log_info "Portainer port: ${SERVICE_PORTS[portainer]}"
+    else
+        SERVICE_ENABLED[portainer]=false
+        log_info "Portainer: DISABLED"
+    fi
+    
+    echo ""
+    
+    # Reverse Proxy
+    echo -e "${CYAN}[3/3] Reverse Proxy${NC}"
+    echo "Purpose: Expose services via domain names with SSL"
+    echo ""
+    echo "  1) Caddy  - Automatic HTTPS, simpler configuration"
+    echo "  2) Nginx  - More control, traditional configuration"
+    echo "  3) None   - Direct port access only (Tailscale recommended)"
+    echo ""
+    
+    while true; do
+        read -p "Select reverse proxy [1-3]: " choice
+        case $choice in
+            1)
+                SERVICE_ENABLED[caddy]=true
+                SELECTED_PROXY="caddy"
+                log_success "Selected: Caddy"
+                
+                read -p "Port for Caddy HTTP [${SERVICE_DEFAULTS[caddy_http_port]}]: " input
+                SERVICE_PORTS[caddy_http]="${input:-${SERVICE_DEFAULTS[caddy_http_port]}}"
+                
+                read -p "Port for Caddy HTTPS [${SERVICE_DEFAULTS[caddy_https_port]}]: " input
+                SERVICE_PORTS[caddy_https]="${input:-${SERVICE_DEFAULTS[caddy_https_port]}}"
+                
+                read -p "Domain name (e.g., ai.example.com) [optional]: " domain
+                SERVICE_CONFIGS[domain]="$domain"
+                
+                log_info "Caddy HTTP port: ${SERVICE_PORTS[caddy_http]}"
+                log_info "Caddy HTTPS port: ${SERVICE_PORTS[caddy_https]}"
+                [[ -n "$domain" ]] && log_info "Domain: $domain"
+                break
+                ;;
+            2)
+                SERVICE_ENABLED[nginx]=true
+                SELECTED_PROXY="nginx"
+                log_success "Selected: Nginx"
+                
+                read -p "Port for Nginx HTTP [${SERVICE_DEFAULTS[nginx_http_port]}]: " input
+                SERVICE_PORTS[nginx_http]="${input:-${SERVICE_DEFAULTS[nginx_http_port]}}"
+                
+                read -p "Port for Nginx HTTPS [${SERVICE_DEFAULTS[nginx_https_port]}]: " input
+                SERVICE_PORTS[nginx_https]="${input:-${SERVICE_DEFAULTS[nginx_https_port]}}"
+                
+                read -p "Domain name (e.g., ai.example.com) [optional]: " domain
+                SERVICE_CONFIGS[domain]="$domain"
+                
+                log_info "Nginx HTTP port: ${SERVICE_PORTS[nginx_http]}"
+                log_info "Nginx HTTPS port: ${SERVICE_PORTS[nginx_https]}"
+                [[ -n "$domain" ]] && log_info "Domain: $domain"
+                break
+                ;;
+            3)
+                SELECTED_PROXY="none"
+                log_warning "No reverse proxy selected"
+                log_info "Services will be accessed via direct ports"
+                break
+                ;;
+            *)
+                echo -e "${RED}Invalid choice. Please select 1-3.${NC}"
+                ;;
+        esac
+    done
+    
+    echo ""
+}
+
+################################################################################
+# MAIN EXECUTION CONTINUATION
+################################################################################
+
+main_part3() {
+    # Service selection phase
+    display_service_selection_header
+    select_core_services
+    select_database_services
+    select_vector_database
+    select_ai_platforms
+    select_automation_services
+    select_observability_services
+    select_infrastructure_services
+    
+    log_success "Service selection completed"
+    
+    # TO BE CONTINUED IN NEXT PARTS...
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  Part 3 of Script 1 v101.0.0 loaded successfully${NC}"
+    echo -e "${CYAN}  Ready for Part 4: Ollama Models & API Keys${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+}
+
+# Don't run yet - wait for all parts
+# main_part3 "$@"
+################################################################################
+# OLLAMA MODEL SELECTION
+################################################################################
 
 select_ollama_models() {
-    log_step "14" "25" "SELECT OLLAMA MODELS"
+    log_step "16" "$TOTAL_STEPS" "SELECTING OLLAMA MODELS"
     
     echo ""
-    echo -e "${BOLD}${CYAN}Available Ollama models (type name or number):${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}  OLLAMA MODEL SELECTION${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
-    echo "  1. llama3.2       - Meta Llama 3.2 (3B)"
-    echo "  2. llama3.2:1b    - Meta Llama 3.2 (1B)"
-    echo "  3. llama3.1       - Meta Llama 3.1 (8B)"
-    echo "  4. qwen2.5-coder  - Qwen 2.5 Coder (7B)"
-    echo "  5. mistral        - Mistral 7B"
-    echo "  6. phi3           - Microsoft Phi-3 (3.8B)"
-    echo "  7. gemma2         - Google Gemma 2 (9B)"
-    echo "  8. deepseek-coder - DeepSeek Coder (6.7B)"
+    echo "Select models to download. Models will be pulled during Script 2 deployment."
+    echo ""
+    echo "Available models:"
+    echo ""
+    echo -e "${CYAN}Small Models (< 5GB):${NC}"
+    echo "  1) llama3.2:3b              - Fast, efficient, good for chat (2GB)"
+    echo "  2) phi3:mini                - Microsoft's small model (2.3GB)"
+    echo "  3) gemma2:2b                - Google's compact model (1.6GB)"
+    echo "  4) qwen2.5:3b               - Alibaba's multilingual model (2.3GB)"
+    echo ""
+    echo -e "${CYAN}Medium Models (5-15GB):${NC}"
+    echo "  5) llama3.2:8b              - Balanced performance (4.7GB)"
+    echo "  6) llama3.1:8b              - Previous gen, very capable (4.7GB)"
+    echo "  7) mistral:7b               - Excellent general purpose (4.1GB)"
+    echo "  8) gemma2:9b                - Google's medium model (5.4GB)"
+    echo "  9) qwen2.5:7b               - Alibaba 7B (4.7GB)"
+    echo " 10) codellama:7b             - Code-specialized (3.8GB)"
+    echo ""
+    echo -e "${CYAN}Large Models (15-40GB):${NC}"
+    echo " 11) llama3.1:70b             - High performance (40GB) ${RED}*GPU recommended${NC}"
+    echo " 12) mixtral:8x7b             - MoE architecture (26GB) ${RED}*GPU recommended${NC}"
+    echo " 13) qwen2.5:14b              - Large multilingual (8.7GB)"
+    echo " 14) codellama:13b            - Advanced code model (7.4GB)"
+    echo ""
+    echo -e "${CYAN}Specialized Models:${NC}"
+    echo " 15) llava:7b                 - Vision + Language (4.7GB)"
+    echo " 16) llama3.2-vision:11b      - Latest vision model (7.9GB)"
+    echo " 17) deepseek-coder-v2:16b    - Advanced coding (8.9GB)"
+    echo " 18) nomic-embed-text         - Embeddings for RAG (274MB)"
+    echo ""
+    echo " 19) Custom model name        - Enter any Ollama model"
+    echo "  0) Done selecting models"
     echo ""
     
-    read -p "Enter model names or numbers (space-separated) [1 4]: " model_input
-    model_input="${model_input:-1 4}"
+    SELECTED_OLLAMA_MODELS=()
     
-    # Convert numbers to names
-    declare -A model_map=(
-        ["1"]="llama3.2"
-        ["2"]="llama3.2:1b"
-        ["3"]="llama3.1"
-        ["4"]="qwen2.5-coder"
-        ["5"]="mistral"
-        ["6"]="phi3"
-        ["7"]="gemma2"
-        ["8"]="deepseek-coder"
-    )
-    
-    OLLAMA_MODELS=""
-    for item in $model_input; do
-        if [[ -n "${model_map[$item]:-}" ]]; then
-            OLLAMA_MODELS="$OLLAMA_MODELS ${model_map[$item]}"
+    while true; do
+        echo ""
+        echo -e "${GREEN}Currently selected (${#SELECTED_OLLAMA_MODELS[@]} models):${NC}"
+        if [[ ${#SELECTED_OLLAMA_MODELS[@]} -eq 0 ]]; then
+            echo "  (none)"
         else
-            OLLAMA_MODELS="$OLLAMA_MODELS $item"
+            for model in "${SELECTED_OLLAMA_MODELS[@]}"; do
+                echo "  - $model"
+            done
+        fi
+        echo ""
+        
+        read -p "Select model [0-19]: " choice
+        
+        case $choice in
+            0)
+                if [[ ${#SELECTED_OLLAMA_MODELS[@]} -eq 0 ]]; then
+                    log_warning "No models selected. At least one model is recommended."
+                    if ! prompt_yes_no "Continue without models?"; then
+                        continue
+                    fi
+                fi
+                log_success "Model selection completed: ${#SELECTED_OLLAMA_MODELS[@]} models"
+                break
+                ;;
+            1) add_ollama_model "llama3.2:3b" ;;
+            2) add_ollama_model "phi3:mini" ;;
+            3) add_ollama_model "gemma2:2b" ;;
+            4) add_ollama_model "qwen2.5:3b" ;;
+            5) add_ollama_model "llama3.2:8b" ;;
+            6) add_ollama_model "llama3.1:8b" ;;
+            7) add_ollama_model "mistral:7b" ;;
+            8) add_ollama_model "gemma2:9b" ;;
+            9) add_ollama_model "qwen2.5:7b" ;;
+            10) add_ollama_model "codellama:7b" ;;
+            11)
+                if [[ "$HAS_GPU" != "true" ]]; then
+                    log_warning "This model is very large (40GB) and runs slowly on CPU"
+                    if ! prompt_yes_no "Add llama3.1:70b anyway?"; then
+                        continue
+                    fi
+                fi
+                add_ollama_model "llama3.1:70b"
+                ;;
+            12)
+                if [[ "$HAS_GPU" != "true" ]]; then
+                    log_warning "This model is very large (26GB) and runs slowly on CPU"
+                    if ! prompt_yes_no "Add mixtral:8x7b anyway?"; then
+                        continue
+                    fi
+                fi
+                add_ollama_model "mixtral:8x7b"
+                ;;
+            13) add_ollama_model "qwen2.5:14b" ;;
+            14) add_ollama_model "codellama:13b" ;;
+            15) add_ollama_model "llava:7b" ;;
+            16) add_ollama_model "llama3.2-vision:11b" ;;
+            17) add_ollama_model "deepseek-coder-v2:16b" ;;
+            18) add_ollama_model "nomic-embed-text" ;;
+            19)
+                read -p "Enter custom model name (e.g., mistral:latest): " custom_model
+                if [[ -n "$custom_model" ]]; then
+                    add_ollama_model "$custom_model"
+                else
+                    log_error "Invalid model name"
+                fi
+                ;;
+            *)
+                echo -e "${RED}Invalid choice. Please select 0-19.${NC}"
+                ;;
+        esac
+    done
+    
+    # Store models in config
+    OLLAMA_MODELS_STRING=$(IFS=,; echo "${SELECTED_OLLAMA_MODELS[*]}")
+    
+    echo ""
+}
+
+add_ollama_model() {
+    local model="$1"
+    
+    # Check if already selected
+    for existing in "${SELECTED_OLLAMA_MODELS[@]}"; do
+        if [[ "$existing" == "$model" ]]; then
+            log_warning "Model '$model' already selected"
+            return
         fi
     done
     
-    OLLAMA_MODELS=$(echo "$OLLAMA_MODELS" | xargs)
-    
-    log_success "Selected models: $OLLAMA_MODELS"
+    SELECTED_OLLAMA_MODELS+=("$model")
+    log_success "Added: $model"
 }
 
-# ============================================================================
-# STEP 15: COLLECT EXTERNAL API KEYS
-# ============================================================================
+################################################################################
+# API KEY COLLECTION
+################################################################################
 
 collect_api_keys() {
-    log_step "15" "25" "COLLECT EXTERNAL API KEYS"
+    log_step "17" "$TOTAL_STEPS" "COLLECTING API KEYS"
     
     echo ""
-    echo -e "${BOLD}${CYAN}External LLM Provider API Keys (leave empty to skip):${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}  API KEY COLLECTION${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo "Provide API keys for external LLM providers (optional)."
+    echo "These will be configured in LiteLLM for unified access."
+    echo ""
+    echo "Press ENTER to skip any provider you don't need."
     echo ""
     
-    read -sp "OpenAI API Key: " openai_key
+    # OpenAI
+    echo -e "${CYAN}OpenAI API Key${NC}"
+    echo "Get your key from: https://platform.openai.com/api-keys"
+    read -p "OpenAI API Key: " -s openai_key
     echo ""
-    API_KEYS[openai]="$openai_key"
-    
-    read -sp "Anthropic API Key: " anthropic_key
+    if [[ -n "$openai_key" ]]; then
+        API_KEYS[openai]="$openai_key"
+        log_success "OpenAI API key collected"
+    else
+        log_info "OpenAI: Skipped"
+    fi
     echo ""
-    API_KEYS[anthropic]="$anthropic_key"
     
-    read -sp "Google AI (Gemini) API Key: " google_key
+    # Anthropic
+    echo -e "${CYAN}Anthropic (Claude) API Key${NC}"
+    echo "Get your key from: https://console.anthropic.com/settings/keys"
+    read -p "Anthropic API Key: " -s anthropic_key
     echo ""
-    API_KEYS[google]="$google_key"
-    
-    read -sp "Groq API Key: " groq_key
+    if [[ -n "$anthropic_key" ]]; then
+        API_KEYS[anthropic]="$anthropic_key"
+        log_success "Anthropic API key collected"
+    else
+        log_info "Anthropic: Skipped"
+    fi
     echo ""
-    API_KEYS[groq]="$groq_key"
     
-    read -sp "DeepSeek API Key: " deepseek_key
+    # Google AI
+    echo -e "${CYAN}Google AI (Gemini) API Key${NC}"
+    echo "Get your key from: https://makersuite.google.com/app/apikey"
+    read -p "Google AI API Key: " -s google_key
     echo ""
-    API_KEYS[deepseek]="$deepseek_key"
-    
-    read -sp "OpenRouter API Key: " openrouter_key
+    if [[ -n "$google_key" ]]; then
+        API_KEYS[google]="$google_key"
+        log_success "Google AI API key collected"
+    else
+        log_info "Google AI: Skipped"
+    fi
     echo ""
-    API_KEYS[openrouter]="$openrouter_key"
     
-    log_success "API keys collected (can be added later to .env)"
+    # Groq
+    echo -e "${CYAN}Groq API Key${NC}"
+    echo "Get your key from: https://console.groq.com/keys"
+    read -p "Groq API Key: " -s groq_key
+    echo ""
+    if [[ -n "$groq_key" ]]; then
+        API_KEYS[groq]="$groq_key"
+        log_success "Groq API key collected"
+    else
+        log_info "Groq: Skipped"
+    fi
+    echo ""
+    
+    # Cohere
+    echo -e "${CYAN}Cohere API Key${NC}"
+    echo "Get your key from: https://dashboard.cohere.com/api-keys"
+    read -p "Cohere API Key: " -s cohere_key
+    echo ""
+    if [[ -n "$cohere_key" ]]; then
+        API_KEYS[cohere]="$cohere_key"
+        log_success "Cohere API key collected"
+    else
+        log_info "Cohere: Skipped"
+    fi
+    echo ""
+    
+    # Together AI
+    echo -e "${CYAN}Together AI API Key${NC}"
+    echo "Get your key from: https://api.together.xyz/settings/api-keys"
+    read -p "Together AI API Key: " -s together_key
+    echo ""
+    if [[ -n "$together_key" ]]; then
+        API_KEYS[together]="$together_key"
+        log_success "Together AI API key collected"
+    else
+        log_info "Together AI: Skipped"
+    fi
+    echo ""
+    
+    # Perplexity
+    echo -e "${CYAN}Perplexity API Key${NC}"
+    echo "Get your key from: https://www.perplexity.ai/settings/api"
+    read -p "Perplexity API Key: " -s perplexity_key
+    echo ""
+    if [[ -n "$perplexity_key" ]]; then
+        API_KEYS[perplexity]="$perplexity_key"
+        log_success "Perplexity API key collected"
+    else
+        log_info "Perplexity: Skipped"
+    fi
+    echo ""
+    
+    # Replicate
+    echo -e "${CYAN}Replicate API Key${NC}"
+    echo "Get your key from: https://replicate.com/account/api-tokens"
+    read -p "Replicate API Key: " -s replicate_key
+    echo ""
+    if [[ -n "$replicate_key" ]]; then
+        API_KEYS[replicate]="$replicate_key"
+        log_success "Replicate API key collected"
+    else
+        log_info "Replicate: Skipped"
+    fi
+    echo ""
+    
+    # Hugging Face
+    echo -e "${CYAN}Hugging Face API Key${NC}"
+    echo "Get your key from: https://huggingface.co/settings/tokens"
+    read -p "Hugging Face API Key: " -s huggingface_key
+    echo ""
+    if [[ -n "$huggingface_key" ]]; then
+        API_KEYS[huggingface]="$huggingface_key"
+        log_success "Hugging Face API key collected"
+    else
+        log_info "Hugging Face: Skipped"
+    fi
+    echo ""
+    
+    local key_count=${#API_KEYS[@]}
+    log_success "API key collection completed: $key_count providers configured"
+    
+    echo ""
 }
 
-# ============================================================================
-# STEP 16: GENERATE SECRETS
-# ============================================================================
+################################################################################
+# GOOGLE DRIVE CONFIGURATION
+################################################################################
+
+configure_google_drive() {
+    log_step "18" "$TOTAL_STEPS" "CONFIGURING GOOGLE DRIVE SYNC"
+    
+    echo ""
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}  GOOGLE DRIVE CONFIGURATION${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo "Configure automated Google Drive synchronization."
+    echo "This will sync files bidirectionally with your Drive."
+    echo ""
+    
+    if prompt_yes_no "Configure Google Drive sync?"; then
+        GDRIVE_ENABLED=true
+        log_success "Google Drive sync: ENABLED"
+        
+        echo ""
+        echo "Google Drive authentication requires OAuth2."
+        echo "You'll need to:"
+        echo "  1. Visit the OAuth URL (displayed after setup)"
+        echo "  2. Authorize the application"
+        echo "  3. Paste the verification code"
+        echo ""
+        
+        read -p "Google Drive folder name to sync [AI-Platform]: " gdrive_folder
+        GDRIVE_FOLDER="${gdrive_folder:-AI-Platform}"
+        log_info "Google Drive folder: $GDRIVE_FOLDER"
+        
+        read -p "Sync interval in minutes [30]: " sync_interval
+        GDRIVE_SYNC_INTERVAL="${sync_interval:-30}"
+        log_info "Sync interval: $GDRIVE_SYNC_INTERVAL minutes"
+        
+        echo ""
+        echo -e "${CYAN}Google Drive will be configured during Script 2 deployment.${NC}"
+        echo -e "${CYAN}You'll be prompted to authorize access when services start.${NC}"
+        echo ""
+    else
+        GDRIVE_ENABLED=false
+        log_info "Google Drive sync: DISABLED"
+    fi
+    
+    echo ""
+}
+
+################################################################################
+# SECRET GENERATION
+################################################################################
 
 generate_secrets() {
-    log_step "16" "25" "GENERATING SECRETS"
+    log_step "19" "$TOTAL_STEPS" "GENERATING SECRETS"
     
-    SECRETS[postgres_password]=$(openssl rand -hex 32)
-    SECRETS[litellm_master_key]=$(openssl rand -hex 32)
-    SECRETS[litellm_salt_key]=$(openssl rand -hex 16)
-    SECRETS[webui_secret_key]=$(openssl rand -hex 32)
-    SECRETS[webui_jwt_secret]=$(openssl rand -hex 32)
-    SECRETS[redis_password]=$(openssl rand -hex 32)
+    echo ""
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}  SECRET GENERATION${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo "Generating secure random secrets for all services..."
+    echo ""
     
-    if [[ "${SERVICE_ENABLED[n8n]:-false}" == "true" ]]; then
-        SECRETS[n8n_encryption_key]=$(openssl rand -hex 32)
+    # Generate secrets
+    POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+    POSTGRES_USER="aiplatform"
+    POSTGRES_DB="aiplatform"
+    
+    REDIS_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+    
+    MINIO_ROOT_USER="minioadmin"
+    MINIO_ROOT_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+    
+    DIFY_SECRET_KEY=$(openssl rand -base64 48 | tr -d "=+/" | cut -c1-32)
+    
+    N8N_ENCRYPTION_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+    
+    LANGFUSE_SALT=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+    LANGFUSE_SECRET=$(openssl rand -base64 48 | tr -d "=+/" | cut -c1-32)
+    
+    JWT_SECRET=$(openssl rand -base64 48 | tr -d "=+/" | cut -c1-32)
+    
+    ANYTHINGLLM_JWT=$(openssl rand -base64 48 | tr -d "=+/" | cut -c1-32)
+    
+    GRAFANA_ADMIN_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+    
+    log_success "All secrets generated successfully"
+    
+    # Display secrets for confirmation
+    echo ""
+    echo -e "${CYAN}Generated secrets (will be saved to /opt/ai-platform/secrets/):${NC}"
+    echo ""
+    echo "PostgreSQL:"
+    echo "  User:     $POSTGRES_USER"
+    echo "  Password: ${POSTGRES_PASSWORD:0:5}...${POSTGRES_PASSWORD: -5}"
+    echo "  Database: $POSTGRES_DB"
+    echo ""
+    echo "Redis:"
+    echo "  Password: ${REDIS_PASSWORD:0:5}...${REDIS_PASSWORD: -5}"
+    echo ""
+    echo "MinIO:"
+    echo "  User:     $MINIO_ROOT_USER"
+    echo "  Password: ${MINIO_ROOT_PASSWORD:0:5}...${MINIO_ROOT_PASSWORD: -5}"
+    echo ""
+    echo "Grafana:"
+    echo "  Admin Password: ${GRAFANA_ADMIN_PASSWORD:0:5}...${GRAFANA_ADMIN_PASSWORD: -5}"
+    echo ""
+    echo -e "${GREEN}All other secrets generated and will be saved securely.${NC}"
+    echo ""
+    
+    if ! prompt_yes_no "Confirm secret generation?"; then
+        log_warning "Secret generation rejected. Regenerating..."
+        generate_secrets
+        return
     fi
     
-    if [[ "${SERVICE_ENABLED[langfuse]:-false}" == "true" ]]; then
-        SECRETS[langfuse_salt]=$(openssl rand -hex 32)
-        SECRETS[nextauth_secret]=$(openssl rand -hex 32)
-    fi
-    
-    log_success "All secrets generated"
+    log_success "Secrets confirmed"
+    echo ""
 }
 
-# ============================================================================
-# STEP 17: GENERATE ENVIRONMENT FILE
-# ============================================================================
+################################################################################
+# MAIN EXECUTION CONTINUATION
+################################################################################
 
-generate_env_file() {
-    log_step "17" "25" "GENERATING ENVIRONMENT FILE"
+main_part4() {
+    # Ollama models and API keys
+    select_ollama_models
+    collect_api_keys
+    configure_google_drive
+    generate_secrets
     
-    local env_file="${ROOT_PATH}/.env"
+    log_success "Ollama models, API keys, and secrets configured"
     
-    sudo -u "$ACTUAL_USER" touch "$env_file"
-    
-    cat > "$env_file" <<EOF
-# AI Platform Environment Configuration v100.0.0
-# Auto-generated on $(date)
-# WARNING: Contains sensitive secrets - protect this file (chmod 600)
+    # TO BE CONTINUED IN NEXT PARTS...
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  Part 4 of Script 1 v101.0.0 loaded successfully${NC}"
+    echo -e "${CYAN}  Ready for Part 5: Configuration File Generation${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+}
 
-# ============================================================================
-# SYSTEM PATHS
-# ============================================================================
-ROOT_PATH=${ROOT_PATH}
+# Don't run yet - wait for all parts
+# main_part4 "$@"
+################################################################################
+# CONFIGURATION FILE GENERATION
+################################################################################
+
+generate_master_env() {
+    log_step "20" "$TOTAL_STEPS" "GENERATING MASTER ENVIRONMENT FILE"
+    
+    local env_file="${CONFIG_DIR}/.env"
+    
+    log_info "Creating master .env file..."
+    
+    cat > "$env_file" << EOF
+################################################################################
+# AI PLATFORM MASTER CONFIGURATION
+# Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+# Script Version: v101.0.0
+################################################################################
+
+# System Configuration
+PLATFORM_VERSION=v101.0.0
+HOSTNAME=${HOSTNAME}
+TIMEZONE=${TIMEZONE}
 DATA_DIR=${DATA_DIR}
 CONFIG_DIR=${CONFIG_DIR}
-STACK_DIR=${STACK_DIR}
 LOG_DIR=${LOG_DIR}
 
-# ============================================================================
-# REVERSE PROXY CONFIGURATION
-# ============================================================================
-REVERSE_PROXY=${REVERSE_PROXY}
-PROXY_HTTP_PORT=${SERVICE_PORTS[proxy_http]:-80}
-PROXY_HTTPS_PORT=${SERVICE_PORTS[proxy_https]:-443}
+# Hardware Detection
+HAS_GPU=${HAS_GPU}
+GPU_TYPE=${GPU_TYPE:-none}
+TOTAL_RAM_GB=${TOTAL_RAM_GB}
+CPU_CORES=${CPU_CORES}
 
-# ============================================================================
-# CORE SERVICES - PORTS
-# ============================================================================
-OLLAMA_PORT=${SERVICE_PORTS[ollama]}
-WEBUI_PORT=${SERVICE_PORTS[webui]}
-LITELLM_PORT=${SERVICE_PORTS[litellm]:-4000}
-POSTGRES_PORT=${SERVICE_PORTS[postgres]:-5432}
-REDIS_PORT=${SERVICE_PORTS[redis]:-6379}
+# Network Configuration
+TAILNET_NAME=${TAILNET_NAME:-}
+DOMAIN_NAME=${DOMAIN_NAME:-}
+REVERSE_PROXY=${REVERSE_PROXY:-none}
 
-# ============================================================================
-# AUTOMATION SERVICES - PORTS
-# ============================================================================
-TAILSCALE_HTTPS_PORT=${SERVICE_PORTS[tailscale_https]}
-SIGNAL_API_PORT=${SERVICE_PORTS[signal_api]:-8082}
-
-# ============================================================================
-# OPTIONAL SERVICES - PORTS
-# ============================================================================
-LANGFUSE_PORT=${SERVICE_PORTS[langfuse]:-3000}
-N8N_PORT=${SERVICE_PORTS[n8n]:-5678}
-QDRANT_PORT=${SERVICE_PORTS[qdrant]:-6333}
-
-# ============================================================================
-# SERVICE ENABLEMENT FLAGS
-# ============================================================================
+# Service Enablement
+ENABLE_OLLAMA=${SERVICE_ENABLED[ollama]:-false}
 ENABLE_LITELLM=${SERVICE_ENABLED[litellm]:-false}
+ENABLE_WEBUI=${SERVICE_ENABLED[webui]:-false}
 ENABLE_POSTGRES=${SERVICE_ENABLED[postgres]:-false}
 ENABLE_REDIS=${SERVICE_ENABLED[redis]:-false}
-ENABLE_CADDY=${SERVICE_ENABLED[caddy]:-false}
-ENABLE_NGINX=${SERVICE_ENABLED[nginx]:-false}
-ENABLE_SIGNAL_API=${SERVICE_ENABLED[signal_api]:-false}
-ENABLE_GDRIVE_SYNC=${SERVICE_ENABLED[gdrive_sync]:-false}
-ENABLE_HEALTH_MONITOR=${SERVICE_ENABLED[health_monitor]:-false}
-ENABLE_LANGFUSE=${SERVICE_ENABLED[langfuse]:-false}
-ENABLE_N8N=${SERVICE_ENABLED[n8n]:-false}
 ENABLE_QDRANT=${SERVICE_ENABLED[qdrant]:-false}
+ENABLE_WEAVIATE=${SERVICE_ENABLED[weaviate]:-false}
+ENABLE_CHROMADB=${SERVICE_ENABLED[chromadb]:-false}
+ENABLE_MILVUS=${SERVICE_ENABLED[milvus]:-false}
+ENABLE_DIFY=${SERVICE_ENABLED[dify]:-false}
+ENABLE_ANYTHINGLLM=${SERVICE_ENABLED[anythingllm]:-false}
+ENABLE_OPENCLAW=${SERVICE_ENABLED[openclaw]:-false}
+ENABLE_N8N=${SERVICE_ENABLED[n8n]:-false}
+ENABLE_SIGNAL_API=${SERVICE_ENABLED[signal_api]:-false}
+ENABLE_LANGFUSE=${SERVICE_ENABLED[langfuse]:-false}
+ENABLE_PROMETHEUS=${SERVICE_ENABLED[prometheus]:-false}
+ENABLE_GRAFANA=${SERVICE_ENABLED[grafana]:-false}
+ENABLE_LOKI=${SERVICE_ENABLED[loki]:-false}
+ENABLE_MINIO=${SERVICE_ENABLED[minio]:-false}
+ENABLE_PORTAINER=${SERVICE_ENABLED[portainer]:-false}
 
-# ============================================================================
-# POSTGRESQL CONFIGURATION
-# ============================================================================
-POSTGRES_USER=aiplatform
-POSTGRES_PASSWORD=${SECRETS[postgres_password]}
-POSTGRES_DB=aiplatform
-DATABASE_URL=postgresql://aiplatform:${SECRETS[postgres_password]}@postgres:${SERVICE_PORTS[postgres]:-5432}/aiplatform
-
-# ============================================================================
-# REDIS CONFIGURATION
-# ============================================================================
-REDIS_HOST=redis
+# Port Configuration
+OLLAMA_PORT=${SERVICE_PORTS[ollama]:-11434}
+LITELLM_PORT=${SERVICE_PORTS[litellm]:-4000}
+WEBUI_PORT=${SERVICE_PORTS[webui]:-3000}
+POSTGRES_PORT=${SERVICE_PORTS[postgres]:-5432}
 REDIS_PORT=${SERVICE_PORTS[redis]:-6379}
-REDIS_PASSWORD=${SECRETS[redis_password]}
+QDRANT_PORT=${SERVICE_PORTS[qdrant]:-6333}
+WEAVIATE_PORT=${SERVICE_PORTS[weaviate]:-8080}
+CHROMADB_PORT=${SERVICE_PORTS[chromadb]:-8000}
+MILVUS_PORT=${SERVICE_PORTS[milvus]:-19530}
+DIFY_PORT=${SERVICE_PORTS[dify]:-3001}
+ANYTHINGLLM_PORT=${SERVICE_PORTS[anythingllm]:-3002}
+OPENCLAW_PORT=${SERVICE_PORTS[openclaw]:-8090}
+N8N_PORT=${SERVICE_PORTS[n8n]:-5678}
+SIGNAL_API_PORT=${SERVICE_PORTS[signal_api]:-8082}
+LANGFUSE_PORT=${SERVICE_PORTS[langfuse]:-3003}
+PROMETHEUS_PORT=${SERVICE_PORTS[prometheus]:-9090}
+GRAFANA_PORT=${SERVICE_PORTS[grafana]:-3004}
+LOKI_PORT=${SERVICE_PORTS[loki]:-3100}
+MINIO_PORT=${SERVICE_PORTS[minio]:-9000}
+MINIO_CONSOLE_PORT=${SERVICE_PORTS[minio_console]:-9001}
+PORTAINER_PORT=${SERVICE_PORTS[portainer]:-9443}
+CADDY_HTTP_PORT=${SERVICE_PORTS[caddy_http]:-80}
+CADDY_HTTPS_PORT=${SERVICE_PORTS[caddy_https]:-443}
+NGINX_HTTP_PORT=${SERVICE_PORTS[nginx_http]:-8080}
+NGINX_HTTPS_PORT=${SERVICE_PORTS[nginx_https]:-8443}
 
-# ============================================================================
-# LITELLM CONFIGURATION
-# ============================================================================
-LITELLM_MASTER_KEY=${SECRETS[litellm_master_key]}
-LITELLM_SALT_KEY=${SECRETS[litellm_salt_key]}
-LITELLM_DATABASE_URL=postgresql://aiplatform:${SECRETS[postgres_password]}@postgres:${SERVICE_PORTS[postgres]:-5432}/aiplatform
+################################################################################
+# DATABASE CREDENTIALS
+################################################################################
 
-# ============================================================================
-# OPEN WEBUI CONFIGURATION
-# ============================================================================
-WEBUI_SECRET_KEY=${SECRETS[webui_secret_key]}
-WEBUI_JWT_SECRET_KEY=${SECRETS[webui_jwt_secret]}
-OLLAMA_BASE_URL=http://ollama:${SERVICE_PORTS[ollama]}
+# PostgreSQL
+POSTGRES_USER=${POSTGRES_USER}
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+POSTGRES_DB=${POSTGRES_DB}
+POSTGRES_HOST=postgres
+POSTGRES_URL=postgresql://\${POSTGRES_USER}:\${POSTGRES_PASSWORD}@\${POSTGRES_HOST}:\${POSTGRES_PORT}/\${POSTGRES_DB}
 
-# ============================================================================
-# EXTERNAL LLM PROVIDER API KEYS
-# ============================================================================
+# Redis
+REDIS_PASSWORD=${REDIS_PASSWORD}
+REDIS_HOST=redis
+REDIS_URL=redis://:\${REDIS_PASSWORD}@\${REDIS_HOST}:\${REDIS_PORT}/0
+
+################################################################################
+# STORAGE CREDENTIALS
+################################################################################
+
+# MinIO
+MINIO_ROOT_USER=${MINIO_ROOT_USER}
+MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+MINIO_ENDPOINT=minio:\${MINIO_PORT}
+MINIO_BROWSER_REDIRECT_URL=http://\${HOSTNAME}:\${MINIO_CONSOLE_PORT}
+
+################################################################################
+# SERVICE SECRETS
+################################################################################
+
+# Dify
+DIFY_SECRET_KEY=${DIFY_SECRET_KEY}
+
+# n8n
+N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+N8N_USER_MANAGEMENT_JWT_SECRET=${JWT_SECRET}
+
+# Langfuse
+LANGFUSE_SALT=${LANGFUSE_SALT}
+LANGFUSE_NEXTAUTH_SECRET=${LANGFUSE_SECRET}
+LANGFUSE_NEXTAUTH_URL=http://\${HOSTNAME}:\${LANGFUSE_PORT}
+
+# AnythingLLM
+ANYTHINGLLM_JWT_SECRET=${ANYTHINGLLM_JWT}
+ANYTHINGLLM_STORAGE_DIR=\${DATA_DIR}/anythingllm
+
+# Grafana
+GRAFANA_ADMIN_USER=admin
+GRAFANA_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+
+# Signal API
+SIGNAL_PHONE_NUMBER=${SIGNAL_PHONE_NUMBER:-}
+
+################################################################################
+# API KEYS (External LLM Providers)
+################################################################################
+
 OPENAI_API_KEY=${API_KEYS[openai]:-}
 ANTHROPIC_API_KEY=${API_KEYS[anthropic]:-}
 GOOGLE_API_KEY=${API_KEYS[google]:-}
 GROQ_API_KEY=${API_KEYS[groq]:-}
-DEEPSEEK_API_KEY=${API_KEYS[deepseek]:-}
-OPENROUTER_API_KEY=${API_KEYS[openrouter]:-}
+COHERE_API_KEY=${API_KEYS[cohere]:-}
+TOGETHER_API_KEY=${API_KEYS[together]:-}
+PERPLEXITY_API_KEY=${API_KEYS[perplexity]:-}
+REPLICATE_API_KEY=${API_KEYS[replicate]:-}
+HUGGINGFACE_API_KEY=${API_KEYS[huggingface]:-}
 
-# ============================================================================
-# OLLAMA MODELS
-# ============================================================================
-OLLAMA_MODELS="${OLLAMA_MODELS}"
+################################################################################
+# OLLAMA CONFIGURATION
+################################################################################
 
-# ============================================================================
-# TAILSCALE CONFIGURATION
-# ============================================================================
-TAILSCALE_HOSTNAME=${TAILSCALE_HOSTNAME:-ai-platform}
-TAILSCALE_AUTH_KEY=
+OLLAMA_MODELS=${OLLAMA_MODELS_STRING:-}
+OLLAMA_HOST=http://ollama:\${OLLAMA_PORT}
+OLLAMA_BASE_URL=\${OLLAMA_HOST}
 
-# ============================================================================
-# SIGNAL-API CONFIGURATION
-# ============================================================================
-SIGNAL_PHONE_NUMBER=${SERVICE_CONFIGS[signal_phone]:-}
+################################################################################
+# GOOGLE DRIVE SYNC
+################################################################################
 
-# ============================================================================
-# GOOGLE DRIVE BACKUP CONFIGURATION
-# ============================================================================
-GDRIVE_FOLDER_ID=${SERVICE_CONFIGS[gdrive_folder_id]:-}
-GDRIVE_SERVICE_ACCOUNT_JSON=${SERVICE_CONFIGS[gdrive_json_path]:-}
+GDRIVE_ENABLED=${GDRIVE_ENABLED:-false}
+GDRIVE_FOLDER=${GDRIVE_FOLDER:-AI-Platform}
+GDRIVE_SYNC_INTERVAL=${GDRIVE_SYNC_INTERVAL:-30}
+GDRIVE_SYNC_DIR=\${DATA_DIR}/gdrive
 
-# ============================================================================
-# LANGFUSE CONFIGURATION (if enabled)
-# ============================================================================
-LANGFUSE_PUBLIC_KEY=
-LANGFUSE_SECRET_KEY=
-LANGFUSE_HOST=https://cloud.langfuse.com
-SALT=${SECRETS[langfuse_salt]:-}
-NEXTAUTH_SECRET=${SECRETS[nextauth_secret]:-}
-NEXTAUTH_URL=http://localhost:${SERVICE_PORTS[langfuse]:-3000}
+################################################################################
+# VECTOR DATABASE CONFIGURATION
+################################################################################
 
-# ============================================================================
-# N8N CONFIGURATION (if enabled)
-# ============================================================================
-N8N_ENCRYPTION_KEY=${SECRETS[n8n_encryption_key]:-}
-N8N_HOST=localhost
-N8N_PORT=${SERVICE_PORTS[n8n]:-5678}
-N8N_PROTOCOL=http
+VECTOR_DB=${SELECTED_VECTOR_DB:-qdrant}
+QDRANT_URL=http://qdrant:\${QDRANT_PORT}
+WEAVIATE_URL=http://weaviate:\${WEAVIATE_PORT}
+CHROMADB_URL=http://chromadb:\${CHROMADB_PORT}
+MILVUS_URL=http://milvus:\${MILVUS_PORT}
 
-# ============================================================================
-# DOCKER COMPOSE SETTINGS
-# ============================================================================
+################################################################################
+# LOGGING & OBSERVABILITY
+################################################################################
+
+LOG_LEVEL=info
+LOKI_URL=http://loki:\${LOKI_PORT}
+PROMETHEUS_URL=http://prometheus:\${PROMETHEUS_PORT}
+
+################################################################################
+# DOCKER CONFIGURATION
+################################################################################
+
 COMPOSE_PROJECT_NAME=ai-platform
 DOCKER_BUILDKIT=1
 COMPOSE_DOCKER_CLI_BUILD=1
 
-# ============================================================================
-# GPU CONFIGURATION
-# ============================================================================
-HAS_GPU=${HAS_GPU}
 EOF
-    
-    chown "$ACTUAL_USER:$ACTUAL_USER" "$env_file"
+
     chmod 600 "$env_file"
+    log_success "Master .env file created: $env_file"
     
-    log_success "Environment file created: $env_file"
+    # Create secrets directory and save individual secrets
+    mkdir -p "${CONFIG_DIR}/secrets"
+    chmod 700 "${CONFIG_DIR}/secrets"
+    
+    echo "$POSTGRES_PASSWORD" > "${CONFIG_DIR}/secrets/postgres_password"
+    echo "$REDIS_PASSWORD" > "${CONFIG_DIR}/secrets/redis_password"
+    echo "$MINIO_ROOT_PASSWORD" > "${CONFIG_DIR}/secrets/minio_password"
+    echo "$DIFY_SECRET_KEY" > "${CONFIG_DIR}/secrets/dify_secret"
+    echo "$N8N_ENCRYPTION_KEY" > "${CONFIG_DIR}/secrets/n8n_encryption"
+    echo "$LANGFUSE_SECRET" > "${CONFIG_DIR}/secrets/langfuse_secret"
+    echo "$JWT_SECRET" > "${CONFIG_DIR}/secrets/jwt_secret"
+    echo "$GRAFANA_ADMIN_PASSWORD" > "${CONFIG_DIR}/secrets/grafana_password"
+    
+    chmod 600 "${CONFIG_DIR}/secrets/"*
+    log_success "Individual secrets saved to ${CONFIG_DIR}/secrets/"
+    
+    echo ""
 }
 
-# ============================================================================
-# STEP 18: GENERATE LITELLM CONFIG
-# ============================================================================
-
 generate_litellm_config() {
-    log_step "18" "25" "GENERATING LITELLM CONFIGURATION"
+    log_step "21" "$TOTAL_STEPS" "GENERATING LITELLM CONFIGURATION"
     
-    if [[ "${SERVICE_ENABLED[litellm]:-false}" != "true" ]]; then
-        log_warning "LiteLLM not enabled, skipping config"
-        return 0
-    fi
-    
-    sudo -u "$ACTUAL_USER" mkdir -p "${CONFIG_DIR}/litellm"
     local config_file="${CONFIG_DIR}/litellm/config.yaml"
+    mkdir -p "${CONFIG_DIR}/litellm"
     
-    cat > "$config_file" <<EOF
-# LiteLLM Configuration v100.0.0
-# Auto-generated on $(date)
+    log_info "Creating LiteLLM config.yaml..."
+    
+    cat > "$config_file" << 'EOF'
+# LiteLLM Configuration
+# Generated by AI Platform Setup v101.0.0
 
 model_list:
-EOF
-    
-    # Add Ollama models
-    for model in $OLLAMA_MODELS; do
-        local clean_name="${model//:/-}"
-        cat >> "$config_file" <<EOF
-  - model_name: ollama/${clean_name}
+  # Ollama Models (Local)
+  - model_name: ollama/*
     litellm_params:
-      model: ollama/${model}
-      api_base: http://ollama:${SERVICE_PORTS[ollama]}
+      model: ollama/*
+      api_base: ${OLLAMA_BASE_URL}
       stream: true
-      max_tokens: 4096
       
 EOF
-    done
-    
-    # Add external providers (only if API keys provided)
-    if [[ -n "${API_KEYS[openai]:-}" ]]; then
-        cat >> "$config_file" <<EOF
-  - model_name: gpt-4o
-    litellm_params:
-      model: openai/gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
-      max_tokens: 16384
-      
-  - model_name: gpt-4o-mini
-    litellm_params:
-      model: openai/gpt-4o-mini
-      api_key: os.environ/OPENAI_API_KEY
-      max_tokens: 16384
-      
-EOF
-    fi
-    
-    if [[ -n "${API_KEYS[anthropic]:-}" ]]; then
-        cat >> "$config_file" <<EOF
-  - model_name: claude-3-5-sonnet
-    litellm_params:
-      model: anthropic/claude-3-5-sonnet-20241022
-      api_key: os.environ/ANTHROPIC_API_KEY
-      max_tokens: 8192
-      
-  - model_name: claude-3-5-haiku
-    litellm_params:
-      model: anthropic/claude-3-5-haiku-20241022
-      api_key: os.environ/ANTHROPIC_API_KEY
-      max_tokens: 8192
-      
-EOF
-    fi
-    
-    if [[ -n "${API_KEYS[google]:-}" ]]; then
-        cat >> "$config_file" <<EOF
-  - model_name: gemini-2.0-flash
-    litellm_params:
-      model: gemini/gemini-2.0-flash-exp
-      api_key: os.environ/GOOGLE_API_KEY
-      max_tokens: 8192
-      
-EOF
-    fi
-    
-    if [[ -n "${API_KEYS[groq]:-}" ]]; then
-        cat >> "$config_file" <<EOF
-  - model_name: llama-3.3-70b
-    litellm_params:
-      model: groq/llama-3.3-70b-versatile
-      api_key: os.environ/GROQ_API_KEY
-      max_tokens: 32768
-      
-EOF
-    fi
-    
-    if [[ -n "${API_KEYS[deepseek]:-}" ]]; then
-        cat >> "$config_file" <<EOF
-  - model_name: deepseek-chat
-    litellm_params:
-      model: deepseek/deepseek-chat
-      api_key: os.environ/DEEPSEEK_API_KEY
-      max_tokens: 8192
-      
-EOF
-    fi
-    
-    if [[ -n "${API_KEYS[openrouter]:-}" ]]; then
-        cat >> "$config_file" <<EOF
-  - model_name: openrouter-auto
-    litellm_params:
-      model: openrouter/auto
-      api_key: os.environ/OPENROUTER_API_KEY
-      max_tokens: 4096
-      
-EOF
-    fi
-    
-    # Add router settings
-    cat >> "$config_file" <<EOF
 
-router_settings:
-  routing_strategy: simple-shuffle
-EOF
-    
-    if [[ "${SERVICE_ENABLED[redis]:-false}" == "true" ]]; then
-        cat >> "$config_file" <<EOF
-  redis_host: redis
-  redis_port: ${SERVICE_PORTS[redis]}
+    # Add external providers if API keys exist
+    if [[ -n "${API_KEYS[openai]}" ]]; then
+        cat >> "$config_file" << 'EOF'
+  # OpenAI Models
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+      api_key: ${OPENAI_API_KEY}
+      
+  - model_name: gpt-4-turbo
+    litellm_params:
+      model: openai/gpt-4-turbo-preview
+      api_key: ${OPENAI_API_KEY}
+      
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: ${OPENAI_API_KEY}
+      
 EOF
     fi
     
-    cat >> "$config_file" <<EOF
-  num_retries: 3
-  timeout: 600
-  fallbacks:
-    - ollama/${OLLAMA_MODELS%% *}
+    if [[ -n "${API_KEYS[anthropic]}" ]]; then
+        cat >> "$config_file" << 'EOF'
+  # Anthropic Models
+  - model_name: claude-3-opus
+    litellm_params:
+      model: anthropic/claude-3-opus-20240229
+      api_key: ${ANTHROPIC_API_KEY}
+      
+  - model_name: claude-3-sonnet
+    litellm_params:
+      model: anthropic/claude-3-sonnet-20240229
+      api_key: ${ANTHROPIC_API_KEY}
+      
+  - model_name: claude-3-haiku
+    litellm_params:
+      model: anthropic/claude-3-haiku-20240307
+      api_key: ${ANTHROPIC_API_KEY}
+      
+EOF
+    fi
+    
+    if [[ -n "${API_KEYS[google]}" ]]; then
+        cat >> "$config_file" << 'EOF'
+  # Google AI Models
+  - model_name: gemini-pro
+    litellm_params:
+      model: gemini/gemini-pro
+      api_key: ${GOOGLE_API_KEY}
+      
+  - model_name: gemini-pro-vision
+    litellm_params:
+      model: gemini/gemini-pro-vision
+      api_key: ${GOOGLE_API_KEY}
+      
+EOF
+    fi
+    
+    if [[ -n "${API_KEYS[groq]}" ]]; then
+        cat >> "$config_file" << 'EOF'
+  # Groq Models (Ultra-fast inference)
+  - model_name: mixtral-8x7b-groq
+    litellm_params:
+      model: groq/mixtral-8x7b-32768
+      api_key: ${GROQ_API_KEY}
+      
+  - model_name: llama3-70b-groq
+    litellm_params:
+      model: groq/llama3-70b-8192
+      api_key: ${GROQ_API_KEY}
+      
+EOF
+    fi
+    
+    if [[ -n "${API_KEYS[cohere]}" ]]; then
+        cat >> "$config_file" << 'EOF'
+  # Cohere Models
+  - model_name: command
+    litellm_params:
+      model: cohere/command
+      api_key: ${COHERE_API_KEY}
+      
+  - model_name: command-light
+    litellm_params:
+      model: cohere/command-light
+      api_key: ${COHERE_API_KEY}
+      
+EOF
+    fi
+    
+    # Add general settings
+    cat >> "$config_file" << 'EOF'
 
+# General Settings
 general_settings:
-  master_key: os.environ/LITELLM_MASTER_KEY
-EOF
-    
-    if [[ "${SERVICE_ENABLED[postgres]:-false}" == "true" ]]; then
-        cat >> "$config_file" <<EOF
-  database_url: os.environ/LITELLM_DATABASE_URL
-  store_model_in_db: true
-EOF
-    fi
-    
-    if [[ "${SERVICE_ENABLED[redis]:-false}" == "true" ]]; then
-        cat >> "$config_file" <<EOF
+  master_key: ${JWT_SECRET}
+  database_url: ${POSTGRES_URL}
+  
+  # Logging
+  set_verbose: false
+  json_logs: true
+  
+  # Caching
   cache: true
   cache_params:
     type: redis
-    host: redis
-    port: ${SERVICE_PORTS[redis]}
-    password: os.environ/REDIS_PASSWORD
-    ttl: 3600
+    host: ${REDIS_HOST}
+    port: ${REDIS_PORT}
+    password: ${REDIS_PASSWORD}
+    
+  # Rate Limiting
+  litellm_settings:
+    success_callback: ["langfuse"]
+    failure_callback: ["langfuse"]
+    
+# Router Settings
+router_settings:
+  routing_strategy: simple-shuffle
+  model_group_alias:
+    gpt-4: [gpt-4, gpt-4-turbo]
+    claude: [claude-3-opus, claude-3-sonnet]
+  num_retries: 3
+  timeout: 600
+  fallbacks: []
+  context_window_fallbacks: []
+  
+EOF
+
+    log_success "LiteLLM configuration created: $config_file"
+    echo ""
+}
+
+generate_prometheus_config() {
+    log_step "22" "$TOTAL_STEPS" "GENERATING PROMETHEUS CONFIGURATION"
+    
+    if [[ "${SERVICE_ENABLED[prometheus]}" != "true" ]]; then
+        log_info "Prometheus disabled, skipping configuration"
+        return
+    fi
+    
+    local config_file="${CONFIG_DIR}/prometheus/prometheus.yml"
+    mkdir -p "${CONFIG_DIR}/prometheus"
+    
+    log_info "Creating Prometheus configuration..."
+    
+    cat > "$config_file" << EOF
+# Prometheus Configuration
+# Generated by AI Platform Setup v101.0.0
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'ai-platform'
+    hostname: '${HOSTNAME}'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+# Load rules once and periodically evaluate them
+rule_files:
+  # - "rules/*.yml"
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+  
+  # Docker daemon metrics (if enabled)
+  - job_name: 'docker'
+    static_configs:
+      - targets: ['host.docker.internal:9323']
+    metrics_path: /metrics
+  
+  # Node Exporter (system metrics)
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+  
+  # cAdvisor (container metrics)
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+EOF
+
+    # Add LiteLLM metrics if enabled
+    if [[ "${SERVICE_ENABLED[litellm]}" == "true" ]]; then
+        cat >> "$config_file" << EOF
+  
+  # LiteLLM metrics
+  - job_name: 'litellm'
+    static_configs:
+      - targets: ['litellm:${SERVICE_PORTS[litellm]}']
+    metrics_path: /metrics
 EOF
     fi
     
-    cat >> "$config_file" <<EOF
-
-litellm_settings:
-  drop_params: true
-  set_verbose: false
-  json_logs: true
-  request_timeout: 600
-  telemetry: false
+    # Add MinIO metrics if enabled
+    if [[ "${SERVICE_ENABLED[minio]}" == "true" ]]; then
+        cat >> "$config_file" << EOF
+  
+  # MinIO metrics
+  - job_name: 'minio'
+    static_configs:
+      - targets: ['minio:${SERVICE_PORTS[minio]}']
+    metrics_path: /minio/v2/metrics/cluster
 EOF
-    
-    chown "$ACTUAL_USER:$ACTUAL_USER" "$config_file"
-    chmod 644 "$config_file"
-    
-    log_success "LiteLLM configuration created"
-}
-
-# ============================================================================
-# STEP 19: GENERATE PROXY CONFIG
-# ============================================================================
-
-generate_proxy_config() {
-    log_step "19" "25" "GENERATING REVERSE PROXY CONFIGURATION"
-    
-    if [[ "$REVERSE_PROXY" == "none" ]]; then
-        log_warning "No reverse proxy selected, skipping"
-        return 0
     fi
     
-    if [[ "$REVERSE_PROXY" == "caddy" ]]; then
-        sudo -u "$ACTUAL_USER" mkdir -p "${CONFIG_DIR}/caddy"
-        local config_file="${CONFIG_DIR}/caddy/Caddyfile"
-        
-        cat > "$config_file" <<EOF
-# Caddy Configuration v100.0.0
-# Auto-generated on $(date)
+    # Add PostgreSQL metrics if enabled
+    if [[ "${SERVICE_ENABLED[postgres]}" == "true" ]]; then
+        cat >> "$config_file" << EOF
+  
+  # PostgreSQL metrics
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+EOF
+    fi
+    
+    # Add Redis metrics if enabled
+    if [[ "${SERVICE_ENABLED[redis]}" == "true" ]]; then
+        cat >> "$config_file" << EOF
+  
+  # Redis metrics
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+EOF
+    fi
+    
+    log_success "Prometheus configuration created: $config_file"
+    echo ""
+}
 
-:${SERVICE_PORTS[proxy_http]} {
-    # Open WebUI
-    handle /webui/* {
-        uri strip_prefix /webui
-        reverse_proxy webui:${SERVICE_PORTS[webui]}
-    }
+generate_grafana_config() {
+    log_step "23" "$TOTAL_STEPS" "GENERATING GRAFANA CONFIGURATION"
     
-    # LiteLLM API
-    handle /api/* {
-        reverse_proxy litellm:${SERVICE_PORTS[litellm]:-4000}
-    }
+    if [[ "${SERVICE_ENABLED[grafana]}" != "true" ]]; then
+        log_info "Grafana disabled, skipping configuration"
+        return
+    fi
     
-    # Ollama API
-    handle /ollama/* {
-        uri strip_prefix /ollama
-        reverse_proxy ollama:${SERVICE_PORTS[ollama]}
-    }
+    mkdir -p "${CONFIG_DIR}/grafana/provisioning/datasources"
+    mkdir -p "${CONFIG_DIR}/grafana/provisioning/dashboards"
     
-    # Default to WebUI
-    handle {
-        reverse_proxy webui:${SERVICE_PORTS[webui]}
+    # Datasources configuration
+    local datasources_file="${CONFIG_DIR}/grafana/provisioning/datasources/datasources.yml"
+    
+    log_info "Creating Grafana datasources configuration..."
+    
+    cat > "$datasources_file" << EOF
+# Grafana Datasources
+# Generated by AI Platform Setup v101.0.0
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:${SERVICE_PORTS[prometheus]}
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: 15s
+EOF
+
+    if [[ "${SERVICE_ENABLED[loki]}" == "true" ]]; then
+        cat >> "$datasources_file" << EOF
+  
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:${SERVICE_PORTS[loki]}
+    editable: true
+    jsonData:
+      maxLines: 1000
+EOF
+    fi
+    
+    if [[ "${SERVICE_ENABLED[postgres]}" == "true" ]]; then
+        cat >> "$datasources_file" << EOF
+  
+  - name: PostgreSQL
+    type: postgres
+    access: proxy
+    url: postgres:${SERVICE_PORTS[postgres]}
+    user: ${POSTGRES_USER}
+    secureJsonData:
+      password: ${POSTGRES_PASSWORD}
+    jsonData:
+      database: ${POSTGRES_DB}
+      sslmode: disable
+    editable: true
+EOF
+    fi
+    
+    # Dashboard provisioning
+    local dashboards_file="${CONFIG_DIR}/grafana/provisioning/dashboards/dashboards.yml"
+    
+    cat > "$dashboards_file" << EOF
+# Grafana Dashboard Provisioning
+# Generated by AI Platform Setup v101.0.0
+
+apiVersion: 1
+
+providers:
+  - name: 'AI Platform'
+    orgId: 1
+    folder: ''
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards/json
+EOF
+    
+    log_success "Grafana configuration created"
+    echo ""
+}
+
+generate_caddy_config() {
+    log_step "24" "$TOTAL_STEPS" "GENERATING CADDY CONFIGURATION"
+    
+    if [[ "$REVERSE_PROXY" != "caddy" ]]; then
+        log_info "Caddy not selected, skipping configuration"
+        return
+    fi
+    
+    local config_file="${CONFIG_DIR}/caddy/Caddyfile"
+    mkdir -p "${CONFIG_DIR}/caddy"
+    
+    log_info "Creating Caddyfile..."
+    
+    cat > "$config_file" << EOF
+# Caddyfile - AI Platform Reverse Proxy
+# Generated by AI Platform Setup v101.0.0
+# Domain: ${DOMAIN_NAME}
+
+{
+    # Global options
+    email admin@${DOMAIN_NAME}
+    admin off
+}
+
+# Main domain
+${DOMAIN_NAME} {
+    # Open WebUI (main interface)
+    reverse_proxy webui:${SERVICE_PORTS[webui]}
+    
+    encode gzip
+    log {
+        output file /var/log/caddy/access.log
+        format json
+    }
+}
+
+# LiteLLM API
+api.${DOMAIN_NAME} {
+    reverse_proxy litellm:${SERVICE_PORTS[litellm]}
+    
+    encode gzip
+    log {
+        output file /var/log/caddy/api.log
+        format json
+    }
+}
+
+# Ollama API
+ollama.${DOMAIN_NAME} {
+    reverse_proxy ollama:${SERVICE_PORTS[ollama]}
+    
+    encode gzip
+    log {
+        output file /var/log/caddy/ollama.log
+        format json
     }
 }
 EOF
-        
-        chown "$ACTUAL_USER:$ACTUAL_USER" "$config_file"
-        chmod 644 "$config_file"
-        
-        log_success "Caddy configuration created"
-        
-    elif [[ "$REVERSE_PROXY" == "nginx" ]]; then
-        sudo -u "$ACTUAL_USER" mkdir -p "${CONFIG_DIR}/nginx"
-        local config_file="${CONFIG_DIR}/nginx/nginx.conf"
-        
-        cat > "$config_file" <<EOF
-# Nginx Configuration v100.0.0
-# Auto-generated on $(date)
+
+    # Add service-specific subdomains
+    if [[ "${SERVICE_ENABLED[dify]}" == "true" ]]; then
+        cat >> "$config_file" << EOF
+
+# Dify
+dify.${DOMAIN_NAME} {
+    reverse_proxy dify:${SERVICE_PORTS[dify]}
+    encode gzip
+}
+EOF
+    fi
+    
+    if [[ "${SERVICE_ENABLED[anythingllm]}" == "true" ]]; then
+        cat >> "$config_file" << EOF
+
+# AnythingLLM
+anything.${DOMAIN_NAME} {
+    reverse_proxy anythingllm:${SERVICE_PORTS[anythingllm]}
+    encode gzip
+}
+EOF
+    fi
+    
+    if [[ "${SERVICE_ENABLED[n8n]}" == "true" ]]; then
+        cat >> "$config_file" << EOF
+
+# n8n
+n8n.${DOMAIN_NAME} {
+    reverse_proxy n8n:${SERVICE_PORTS[n8n]}
+    encode gzip
+}
+EOF
+    fi
+    
+    if [[ "${SERVICE_ENABLED[langfuse]}" == "true" ]]; then
+        cat >> "$config_file" << EOF
+
+# Langfuse
+langfuse.${DOMAIN_NAME} {
+    reverse_proxy langfuse:${SERVICE_PORTS[langfuse]}
+    encode gzip
+}
+EOF
+    fi
+    
+    if [[ "${SERVICE_ENABLED[grafana]}" == "true" ]]; then
+        cat >> "$config_file" << EOF
+
+# Grafana
+grafana.${DOMAIN_NAME} {
+    reverse_proxy grafana:${SERVICE_PORTS[grafana]}
+    encode gzip
+}
+EOF
+    fi
+    
+    if [[ "${SERVICE_ENABLED[portainer]}" == "true" ]]; then
+        cat >> "$config_file" << EOF
+
+# Portainer
+portainer.${DOMAIN_NAME} {
+    reverse_proxy portainer:${SERVICE_PORTS[portainer]}
+    encode gzip
+}
+EOF
+    fi
+    
+    if [[ "${SERVICE_ENABLED[minio]}" == "true" ]]; then
+        cat >> "$config_file" << EOF
+
+# MinIO Console
+minio.${DOMAIN_NAME} {
+    reverse_proxy minio:${SERVICE_PORTS[minio_console]}
+    encode gzip
+}
+
+# MinIO API
+minio-api.${DOMAIN_NAME} {
+    reverse_proxy minio:${SERVICE_PORTS[minio]}
+    encode gzip
+}
+EOF
+    fi
+    
+    log_success "Caddyfile created: $config_file"
+    echo ""
+}
+
+generate_nginx_config() {
+    log_step "25" "$TOTAL_STEPS" "GENERATING NGINX CONFIGURATION"
+    
+    if [[ "$REVERSE_PROXY" != "nginx" ]]; then
+        log_info "Nginx not selected, skipping configuration"
+        return
+    fi
+    
+    local config_file="${CONFIG_DIR}/nginx/nginx.conf"
+    mkdir -p "${CONFIG_DIR}/nginx/conf.d"
+    
+    log_info "Creating nginx.conf..."
+    
+    cat > "$config_file" << EOF
+# Nginx Configuration - AI Platform
+# Generated by AI Platform Setup v101.0.0
+
+user nginx;
+worker_processes auto;
+error_log /var/log/nginx/error.log warn;
+pid /var/run/nginx.pid;
 
 events {
-    worker_connections 1024;
+    worker_connections 4096;
+    use epoll;
+    multi_accept on;
 }
 
 http {
-    upstream webui {
-        server webui:${SERVICE_PORTS[webui]};
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    log_format main '\$remote_addr - \$remote_user [\$time_local] "\$request" '
+                    '\$status \$body_bytes_sent "\$http_referer" '
+                    '"\$http_user_agent" "\$http_x_forwarded_for"';
+
+    access_log /var/log/nginx/access.log main;
+
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+    client_max_body_size 100M;
+
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_types text/plain text/css text/xml text/javascript 
+               application/json application/javascript application/xml+rss;
+
+    # Include all virtual host configs
+    include /etc/nginx/conf.d/*.conf;
+}
+EOF
+
+    # Create main site config
+    local site_config="${CONFIG_DIR}/nginx/conf.d/ai-platform.conf"
+    
+    cat > "$site_config" << EOF
+# AI Platform - Main Configuration
+# Domain: ${DOMAIN_NAME}
+
+# Open WebUI (main interface)
+server {
+    listen 80;
+    server_name ${DOMAIN_NAME};
+    
+    location / {
+        proxy_pass http://webui:${SERVICE_PORTS[webui]};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_cache_bypass \$http_upgrade;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
     }
+}
+
+# LiteLLM API
+server {
+    listen 80;
+    server_name api.${DOMAIN_NAME};
     
-    upstream litellm {
-        server litellm:${SERVICE_PORTS[litellm]:-4000};
+    location / {
+        proxy_pass http://litellm:${SERVICE_PORTS[litellm]};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
     }
+}
+
+# Ollama API
+server {
+    listen 80;
+    server_name ollama.${DOMAIN_NAME};
     
-    upstream ollama {
-        server ollama:${SERVICE_PORTS[ollama]};
-    }
-    
-    server {
-        listen ${SERVICE_PORTS[proxy_http]};
-        
-        location /webui/ {
-            proxy_pass http://webui/;
-            proxy_set_header Host \$host;
-            proxy_set_header X-Real-IP \$remote_addr;
-        }
-        
-        location /api/ {
-            proxy_pass http://litellm/;
-            proxy_set_header Host \$host;
-            proxy_set_header X-Real-IP \$remote_addr;
-        }
-        
-        location /ollama/ {
-            proxy_pass http://ollama/;
-            proxy_set_header Host \$host;
-            proxy_set_header X-Real-IP \$remote_addr;
-        }
-        
-        location / {
-            proxy_pass http://webui;
-            proxy_set_header Host \$host;
-            proxy_set_header X-Real-IP \$remote_addr;
-        }
+    location / {
+        proxy_pass http://ollama:${SERVICE_PORTS[ollama]};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
     }
 }
 EOF
-        
-        chown "$ACTUAL_USER:$ACTUAL_USER" "$config_file"
-        chmod 644 "$config_file"
-        
-        log_success "Nginx configuration created"
-    fi
+
+    # Add other services as needed
+    if [[ "${SERVICE_ENABLED[grafana]}" == "true" ]]; then
+        cat >> "$site_config" << EOF
+
+# Grafana
+server {
+    listen 80;
+    server_name grafana.${DOMAIN_NAME};
+    
+    location / {
+        proxy_pass http://grafana:${SERVICE_PORTS[grafana]};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_cache_bypass \$http_upgrade;
+    }
 }
-
-# ============================================================================
-# STEP 20: GENERATE TAILSCALE CONFIG
-# ============================================================================
-
-generate_tailscale_config() {
-    log_step "20" "25" "GENERATING TAILSCALE CONFIGURATION"
-    
-    sudo -u "$ACTUAL_USER" mkdir -p "${CONFIG_DIR}/tailscale"
-    local config_file="${CONFIG_DIR}/tailscale/config.sh"
-    
-    cat > "$config_file" <<EOF
-#!/usr/bin/env bash
-# Tailscale Configuration Script v100.0.0
-# Run this after initial setup to configure Tailscale
-
-# Configure Tailscale with HTTPS on port ${SERVICE_PORTS[tailscale_https]}
-sudo tailscale up \\
-    --hostname="${TAILSCALE_HOSTNAME:-ai-platform}" \\
-    --accept-routes \\
-    --accept-dns \\
-    --ssh \\
-    --operator="$ACTUAL_USER"
-
-# Enable HTTPS (requires Tailscale configured domain)
-sudo tailscale serve https:${SERVICE_PORTS[tailscale_https]} / http://localhost:${SERVICE_PORTS[webui]}
-
-echo "Tailscale configured!"
-echo "Access your platform at: https://\$(tailscale status | grep '${TAILSCALE_HOSTNAME:-ai-platform}' | awk '{print \$1}'):${SERVICE_PORTS[tailscale_https]}"
 EOF
-    
-    chmod +x "$config_file"
-    chown "$ACTUAL_USER:$ACTUAL_USER" "$config_file"
-    
-    log_success "Tailscale configuration script created"
-    log_warning "Run: bash ${config_file} after setup completes"
-}
-
-# ============================================================================
-# STEP 21: GENERATE GDRIVE SYNC CONFIG
-# ============================================================================
-
-generate_gdrive_config() {
-    log_step "21" "25" "GENERATING GOOGLE DRIVE SYNC CONFIGURATION"
-    
-    if [[ "${SERVICE_ENABLED[gdrive_sync]:-false}" != "true" ]]; then
-        log_warning "Google Drive sync not enabled, skipping"
-        return 0
     fi
     
-    sudo -u "$ACTUAL_USER" mkdir -p "${CONFIG_DIR}/gdrive"
-    local config_file="${CONFIG_DIR}/gdrive/rclone.conf"
-    
-    cat > "$config_file" <<EOF
-# Rclone Configuration for Google Drive Backup
-# Configure manually with: rclone config
-# Or place your service account JSON and configure programmatically
-
-[gdrive]
-type = drive
-scope = drive
-service_account_file = ${SERVICE_CONFIGS[gdrive_json_path]:-/path/to/service-account.json}
-EOF
-    
-    chown "$ACTUAL_USER:$ACTUAL_USER" "$config_file"
-    chmod 600 "$config_file"
-    
-    # Create sync script
-    local sync_script="${ROOT_PATH}/scripts/gdrive-sync.sh"
-    
-    cat > "$sync_script" <<'SYNCEOF'
-#!/usr/bin/env bash
-# Google Drive Backup Sync Script v100.0.0
-
-source "$(dirname "$0")/../.env"
-
-LOG_FILE="${LOG_DIR}/gdrive-sync-$(date +%Y%m%d-%H%M%S).log"
-
-log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
-}
-
-log "Starting Google Drive backup sync..."
-
-if [[ -z "$GDRIVE_FOLDER_ID" ]]; then
-    log "ERROR: GDRIVE_FOLDER_ID not configured"
-    exit 1
-fi
-
-# Backup data directory
-rclone sync \
-    --config="${CONFIG_DIR}/gdrive/rclone.conf" \
-    --drive-shared-with-me \
-    --exclude=".tmp/**" \
-    --log-file="$LOG_FILE" \
-    "${DATA_DIR}" \
-    "gdrive:${GDRIVE_FOLDER_ID}"
-
-log "Backup sync complete"
-SYNCEOF
-    
-    chmod +x "$sync_script"
-    chown "$ACTUAL_USER:$ACTUAL_USER" "$sync_script"
-    
-    log_success "Google Drive sync configuration created"
-}
-
-# ============================================================================
-# STEP 22: GENERATE SYSTEMD SERVICES
-# ============================================================================
-
-generate_systemd_services() {
-    log_step "22" "25" "GENERATING SYSTEMD SERVICE FILES"
-    
-    # Health Monitor Service
-    if [[ "${SERVICE_ENABLED[health_monitor]:-false}" == "true" ]]; then
-        cat > /etc/systemd/system/ai-platform-health.service <<EOF
-[Unit]
-Description=AI Platform Health Check
-After=network-online.target docker.service
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-User=${ACTUAL_USER}
-WorkingDirectory=${ROOT_PATH}
-ExecStart=/usr/bin/bash ${ROOT_PATH}/scripts/health-check.sh
-StandardOutput=append:${LOG_DIR}/health-check.log
-StandardError=append:${LOG_DIR}/health-check.log
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-        cat > /etc/systemd/system/ai-platform-health.timer <<EOF
-[Unit]
-Description=AI Platform Health Check Timer
-Requires=ai-platform-health.service
-
-[Timer]
-OnBootSec=2min
-OnUnitActiveSec=15min
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
-        
-        log_success "Health monitor systemd service created"
-    fi
-    
-    # GDrive Sync Service
-    if [[ "${SERVICE_ENABLED[gdrive_sync]:-false}" == "true" ]]; then
-        cat > /etc/systemd/system/gdrive-sync.service <<EOF
-[Unit]
-Description=Google Drive Backup Sync
-After=network-online.target docker.service
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-User=${ACTUAL_USER}
-WorkingDirectory=${ROOT_PATH}
-ExecStart=/usr/bin/bash ${ROOT_PATH}/scripts/gdrive-sync.sh
-StandardOutput=append:${LOG_DIR}/gdrive-sync.log
-StandardError=append:${LOG_DIR}/gdrive-sync.log
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-        cat > /etc/systemd/system/gdrive-sync.timer <<EOF
-[Unit]
-Description=Google Drive Backup Sync Timer
-Requires=gdrive-sync.service
-
-[Timer]
-OnBootSec=5min
-OnUnitActiveSec=1h
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
-        
-        log_success "GDrive sync systemd service created"
-    fi
-    
-    systemctl daemon-reload
-}
-
-# ============================================================================
-# STEP 23: CREATE HELPER SCRIPTS
-# ============================================================================
-
-create_helper_scripts() {
-    log_step "23" "25" "CREATING HELPER SCRIPTS"
-    
-    sudo -u "$ACTUAL_USER" mkdir -p "${ROOT_PATH}/scripts"
-    
-    # Health Check Script
-    cat > "${ROOT_PATH}/scripts/health-check.sh" <<'HEALTHEOF'
-#!/usr/bin/env bash
-# Health Check Script v100.0.0
-
-source "$(dirname "$0")/../.env"
-
-log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*"
-}
-
-log "=== AI Platform Health Check ==="
-
-# Check Docker daemon
-if ! docker info &>/dev/null; then
-    log "ERROR: Docker daemon not running"
-    exit 1
-fi
-
-# Check containers
-declare -a required_containers=("ollama" "webui")
-
-if [[ "$ENABLE_LITELLM" == "true" ]]; then
-    required_containers+=("litellm")
-fi
-
-if [[ "$ENABLE_POSTGRES" == "true" ]]; then
-    required_containers+=("postgres")
-fi
-
-if [[ "$ENABLE_REDIS" == "true" ]]; then
-    required_containers+=("redis")
-fi
-
-if [[ "$ENABLE_CADDY" == "true" ]]; then
-    required_containers+=("caddy")
-fi
-
-if [[ "$ENABLE_NGINX" == "true" ]]; then
-    required_containers+=("nginx")
-fi
-
-if [[ "$ENABLE_SIGNAL_API" == "true" ]]; then
-    required_containers+=("signal-api")
-fi
-
-all_healthy=true
-
-for container in "${required_containers[@]}"; do
-    if docker ps --filter "name=ai-platform-${container}" --filter "status=running" | grep -q "${container}"; then
-        log "✓ ${container} is running"
-    else
-        log "✗ ${container} is NOT running"
-        all_healthy=false
-    fi
-done
-
-# Check disk space
-free_space=$(df -BG "${ROOT_PATH}" | awk 'NR==2 {print $4}' | sed 's/G//')
-if [[ $free_space -lt 10 ]]; then
-    log "WARNING: Low disk space: ${free_space}GB remaining"
-fi
-
-if $all_healthy; then
-    log "=== All services healthy ==="
-    exit 0
-else
-    log "=== Some services unhealthy ==="
-    exit 1
-fi
-HEALTHEOF
-    
-    chmod +x "${ROOT_PATH}/scripts/health-check.sh"
-    chown "$ACTUAL_USER:$ACTUAL_USER" "${ROOT_PATH}/scripts/health-check.sh"
-    
-    log_success "Helper scripts created"
-}
-
-# ============================================================================
-# STEP 24: CREATE SERVICE DATA DIRECTORIES
-# ============================================================================
-
-create_service_directories() {
-    log_step "24" "25" "CREATING SERVICE-SPECIFIC DIRECTORIES"
-    
-    # Create data directories only for enabled services
-    sudo -u "$ACTUAL_USER" mkdir -p "${DATA_DIR}/ollama"
-    sudo -u "$ACTUAL_USER" mkdir -p "${DATA_DIR}/open-webui"
-    
-    if [[ "${SERVICE_ENABLED[litellm]:-false}" == "true" ]]; then
-        sudo -u "$ACTUAL_USER" mkdir -p "${DATA_DIR}/litellm"
-    fi
-    
-    if [[ "${SERVICE_ENABLED[postgres]:-false}" == "true" ]]; then
-        sudo -u "$ACTUAL_USER" mkdir -p "${DATA_DIR}/postgres"
-    fi
-    
-    if [[ "${SERVICE_ENABLED[redis]:-false}" == "true" ]]; then
-        sudo -u "$ACTUAL_USER" mkdir -p "${DATA_DIR}/redis"
-    fi
-    
-    if [[ "${SERVICE_ENABLED[caddy]:-false}" == "true" ]]; then
-        sudo -u "$ACTUAL_USER" mkdir -p "${DATA_DIR}/caddy"
-    fi
-    
-    if [[ "${SERVICE_ENABLED[nginx]:-false}" == "true" ]]; then
-        sudo -u "$ACTUAL_USER" mkdir -p "${DATA_DIR}/nginx"
-    fi
-    
-    if [[ "${SERVICE_ENABLED[signal_api]:-false}" == "true" ]]; then
-        sudo -u "$ACTUAL_USER" mkdir -p "${DATA_DIR}/signal-api"
-    fi
-    
-    if [[ "${SERVICE_ENABLED[langfuse]:-false}" == "true" ]]; then
-        sudo -u "$ACTUAL_USER" mkdir -p "${DATA_DIR}/langfuse"
-    fi
-    
-    if [[ "${SERVICE_ENABLED[n8n]:-false}" == "true" ]]; then
-        sudo -u "$ACTUAL_USER" mkdir -p "${DATA_DIR}/n8n"
-    fi
-    
-    if [[ "${SERVICE_ENABLED[qdrant]:-false}" == "true" ]]; then
-        sudo -u "$ACTUAL_USER" mkdir -p "${DATA_DIR}/qdrant"
-    fi
-    
-    log_success "Service directories created"
-}
-
-# ============================================================================
-# STEP 25: FINAL SUMMARY
-# ============================================================================
-
-show_configuration_summary() {
-    log_step "25" "25" "CONFIGURATION SUMMARY"
-    
-    echo ""
-    echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}${GREEN}║                                                                  ║${NC}"
-    echo -e "${BOLD}${GREEN}║       🎉 AI PLATFORM CONFIGURATION COMPLETE 🎉                   ║${NC}"
-    echo -e "${BOLD}${GREEN}║                                                                  ║${NC}"
-    echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    
-    echo -e "${CYAN}${BOLD}📋 CONFIGURATION SUMMARY:${NC}"
-    echo ""
-    
-    echo -e "${BOLD}Reverse Proxy:${NC} $REVERSE_PROXY"
-    if [[ "$REVERSE_PROXY" != "none" ]]; then
-        echo "  • HTTP Port: ${SERVICE_PORTS[proxy_http]}"
-        echo "  • HTTPS Port: ${SERVICE_PORTS[proxy_https]}"
-    fi
-    echo ""
-    
-    echo -e "${BOLD}Core Services:${NC}"
-    echo "  • Ollama (port ${SERVICE_PORTS[ollama]})"
-    echo "  • Open WebUI (port ${SERVICE_PORTS[webui]})"
-    [[ "${SERVICE_ENABLED[litellm]:-false}" == "true" ]] && echo "  • LiteLLM (port ${SERVICE_PORTS[litellm]})"
-    [[ "${SERVICE_ENABLED[postgres]:-false}" == "true" ]] && echo "  • PostgreSQL (port ${SERVICE_PORTS[postgres]})"
-    [[ "${SERVICE_ENABLED[redis]:-false}" == "true" ]] && echo "  • Redis (port ${SERVICE_PORTS[redis]})"
-    echo ""
-    
-    echo -e "${BOLD}Automation Services:${NC}"
-    echo "  • Tailscale (HTTPS port ${SERVICE_PORTS[tailscale_https]})"
-    [[ "${SERVICE_ENABLED[signal_api]:-false}" == "true" ]] && echo "  • Signal-API (port ${SERVICE_PORTS[signal_api]})"
-    [[ "${SERVICE_ENABLED[gdrive_sync]:-false}" == "true" ]] && echo "  • Google Drive Sync (enabled)"
-    [[ "${SERVICE_ENABLED[health_monitor]:-false}" == "true" ]] && echo "  • Health Monitor (enabled)"
-    echo ""
-    
-    if [[ "${SERVICE_ENABLED[langfuse]:-false}" == "true" ]] || \
-       [[ "${SERVICE_ENABLED[n8n]:-false}" == "true" ]] || \
-       [[ "${SERVICE_ENABLED[qdrant]:-false}" == "true" ]]; then
-        echo -e "${BOLD}Optional Services:${NC}"
-        [[ "${SERVICE_ENABLED[langfuse]:-false}" == "true" ]] && echo "  • Langfuse (port ${SERVICE_PORTS[langfuse]})"
-        [[ "${SERVICE_ENABLED[n8n]:-false}" == "true" ]] && echo "  • N8N (port ${SERVICE_PORTS[n8n]})"
-        [[ "${SERVICE_ENABLED[qdrant]:-false}" == "true" ]] && echo "  • Qdrant (port ${SERVICE_PORTS[qdrant]})"
-        echo ""
-    fi
-    
-    echo -e "${BOLD}Ollama Models Selected:${NC}"
-    for model in $OLLAMA_MODELS; do
-        echo "  • $model"
-    done
-    echo ""
-    
-    echo -e "${CYAN}${BOLD}📁 KEY FILES GENERATED:${NC}"
-    echo "  • Environment:        ${ROOT_PATH}/.env"
-    [[ "${SERVICE_ENABLED[litellm]:-false}" == "true" ]] && echo "  • LiteLLM Config:     ${CONFIG_DIR}/litellm/config.yaml"
-    [[ "$REVERSE_PROXY" == "caddy" ]] && echo "  • Caddy Config:       ${CONFIG_DIR}/caddy/Caddyfile"
-    [[ "$REVERSE_PROXY" == "nginx" ]] && echo "  • Nginx Config:       ${CONFIG_DIR}/nginx/nginx.conf"
-    echo "  • Tailscale Setup:    ${CONFIG_DIR}/tailscale/config.sh"
-    [[ "${SERVICE_ENABLED[gdrive_sync]:-false}" == "true" ]] && echo "  • GDrive Sync Script: ${ROOT_PATH}/scripts/gdrive-sync.sh"
-    echo "  • Health Check:       ${ROOT_PATH}/scripts/health-check.sh"
-    echo "  • Logs:               ${LOG_DIR}/"
-    echo ""
-    
-    echo -e "${CYAN}${BOLD}🚀 NEXT STEP:${NC}"
-    echo "  Run deployment script:"
-    echo "  ${BOLD}sudo bash scripts/2-deploy-services.sh${NC}"
-    echo ""
-    
-    echo -e "${YELLOW}${BOLD}⚠️  BEFORE DEPLOYMENT:${NC}"
-    echo "  1. Review generated .env file"
-    echo "  2. Add any missing API keys to .env"
-    echo "  3. Configure Tailscale auth key in .env (if needed)"
-    echo "  4. Review service configurations in ${CONFIG_DIR}/"
-    echo ""
-    
-    echo -e "${CYAN}Setup log: ${LOG_FILE}${NC}"
+    log_success "Nginx configuration created: $config_file"
     echo ""
 }
 
-# ============================================================================
-# MAIN EXECUTION
-# ============================================================================
+################################################################################
+# MAIN EXECUTION CONTINUATION
+################################################################################
 
-main() {
-    # Initialize
-    declare -A API_KEYS
-    declare -A SECRETS
+main_part5() {
+    # Configuration file generation
+    generate_master_env
+    generate_litellm_config
+    generate_prometheus_config
+    generate_grafana_config
+    generate_caddy_config
+    generate_nginx_config
     
-    setup_logging
-    print_header
+    log_success "All configuration files generated"
     
-    # Execute all steps
-    check_prerequisites                  # Step 1
-    system_health_check                  # Step 2
-    install_system_packages              # Step 3
-    install_docker                       # Step 4
-    configure_docker_user                # Step 5
-    install_nvidia_toolkit               # Step 6
-    install_tailscale                    # Step 7
-    configure_apparmor                   # Step 8
-    create_directory_structure           # Step 9
-    select_reverse_proxy                 # Step 10
-    select_core_services                 # Step 11
-    select_automation_services           # Step 12
-    select_optional_services             # Step 13
-    select_ollama_models                 # Step 14
-    collect_api_keys                     # Step 15
-    generate_secrets                     # Step 16
-    generate_env_file                    # Step 17
-    generate_litellm_config              # Step 18
-    generate_proxy_config                # Step 19
-    generate_tailscale_config            # Step 20
-    generate_gdrive_config               # Step 21
-    generate_systemd_services            # Step 22
-    create_helper_scripts                # Step 23
-    create_service_directories           # Step 24
-    show_configuration_summary           # Step 25
-    
-    log_success "Configuration completed successfully!"
-    log_warning "User must logout/login for docker group changes"
-    log_warning "Run Script 2 to deploy services"
-    
-    exit 0
+    # TO BE CONTINUED IN FINAL PART...
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  Part 5 of Script 1 v101.0.0 loaded successfully${NC}"
+    echo -e "${CYAN}  Ready for Part 6 (FINAL): Summary & Completion${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    echo ""
 }
 
-# Error handling
-trap 'log_error "Script failed at line $LINENO. Check log: $LOG_FILE"' ERR
+# Don't run yet - wait for all parts
+# main_part5 "$@"
 
-# Run main
-main "$@"
