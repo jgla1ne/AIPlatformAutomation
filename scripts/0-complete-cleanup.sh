@@ -1,20 +1,20 @@
 #!/bin/bash
 ################################################################################
 # SCRIPT 0: NUCLEAR CLEANUP & RESET
-# Version: v101.0.0
+# Version: v102.0.0
 # Purpose: Complete system reset - removes ALL traces of AI Platform
 # 
 # This script performs a COMPLETE cleanup:
 # - Stops and removes all Docker containers, networks, volumes
 # - Removes all configuration files and data directories
 # - Cleans up Docker images (optional)
-# - Removes installed dependencies (optional)
+# - Does NOT remove essential system packages (git, curl remain)
 # - Resets system to pre-installation state
 #
 # WARNING: THIS IS DESTRUCTIVE AND IRREVERSIBLE!
 #
 # Reference: AI PLATFORM DEPLOYMENT v75.2.0
-# Compatible with: Script 1 v101.0.0
+# Compatible with: Script 1 v102.0.0
 ################################################################################
 
 set -euo pipefail
@@ -23,7 +23,7 @@ set -euo pipefail
 # SCRIPT METADATA
 ################################################################################
 
-readonly SCRIPT_VERSION="v101.0.0"
+readonly SCRIPT_VERSION="v102.0.0"
 readonly SCRIPT_NAME="Nuclear Cleanup & Reset"
 readonly TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
 readonly LOG_FILE="/var/log/ai-platform-cleanup-${TIMESTAMP}.log"
@@ -95,6 +95,8 @@ show_banner() {
     echo -e "${RED}║  • All downloaded models and embeddings                      ║${NC}"
     echo -e "${RED}║  • All logs and temporary files                              ║${NC}"
     echo -e "${RED}║                                                               ║${NC}"
+    echo -e "${RED}║  ${GREEN}✓${NC}${RED} Essential packages (git, curl) will be preserved      ║${NC}"
+    echo -e "${RED}║                                                               ║${NC}"
     echo -e "${RED}║            ${BOLD}THIS ACTION IS IRREVERSIBLE!${NC}${RED}                  ║${NC}"
     echo -e "${RED}║                                                               ║${NC}"
     echo -e "${RED}╚═══════════════════════════════════════════════════════════════╝${NC}"
@@ -116,6 +118,11 @@ confirm_cleanup() {
     echo "  • Docker containers with label: ai-platform"
     echo "  • Docker networks: ai-platform-network"
     echo "  • Docker volumes starting with: aiplatform-*"
+    echo ""
+    echo "This will PRESERVE:"
+    echo "  • git, curl, wget (essential tools)"
+    echo "  • Docker & Docker Compose"
+    echo "  • System configuration"
     echo ""
     
     read -p "Type 'DELETE EVERYTHING' to confirm (case-sensitive): " confirmation
@@ -146,7 +153,7 @@ confirm_cleanup() {
 ################################################################################
 
 stop_all_containers() {
-    log_step "1" "10" "STOPPING ALL AI PLATFORM CONTAINERS"
+    log_step "1" "9" "STOPPING ALL AI PLATFORM CONTAINERS"
     
     local containers=$(docker ps -a --filter "label=ai-platform" --format "{{.ID}}" 2>/dev/null || true)
     
@@ -160,9 +167,9 @@ stop_all_containers() {
     
     echo "$containers" | while read -r container_id; do
         if [[ -n "$container_id" ]]; then
-            local name=$(docker inspect --format='{{.Name}}' "$container_id" 2>/dev/null | sed 's/^.\///' || echo "unknown")
+            local name=$(docker inspect --format='{{.Name}}' "$container_id" 2>/dev/null | sed 's/^\///' || echo "unknown")
             log_info "Stopping container: ${name} (${container_id:0:12})"
-            docker stop "$container_id" 2>/dev/null || log_warning "Failed to stop ${container_id:0:12}"
+            docker stop "$container_id" >/dev/null 2>&1 || log_warning "Failed to stop ${container_id:0:12}"
         fi
     done
     
@@ -170,7 +177,7 @@ stop_all_containers() {
 }
 
 remove_all_containers() {
-    log_step "2" "10" "REMOVING ALL AI PLATFORM CONTAINERS"
+    log_step "2" "9" "REMOVING ALL AI PLATFORM CONTAINERS"
     
     local containers=$(docker ps -a --filter "label=ai-platform" --format "{{.ID}}" 2>/dev/null || true)
     
@@ -181,9 +188,9 @@ remove_all_containers() {
     
     echo "$containers" | while read -r container_id; do
         if [[ -n "$container_id" ]]; then
-            local name=$(docker inspect --format='{{.Name}}' "$container_id" 2>/dev/null | sed 's/^.\///' || echo "unknown")
+            local name=$(docker inspect --format='{{.Name}}' "$container_id" 2>/dev/null | sed 's/^\///' || echo "unknown")
             log_info "Removing container: ${name} (${container_id:0:12})"
-            docker rm -f "$container_id" 2>/dev/null || log_warning "Failed to remove ${container_id:0:12}"
+            docker rm -f "$container_id" >/dev/null 2>&1 || log_warning "Failed to remove ${container_id:0:12}"
         fi
     done
     
@@ -191,14 +198,14 @@ remove_all_containers() {
 }
 
 remove_docker_networks() {
-    log_step "3" "10" "REMOVING AI PLATFORM NETWORKS"
+    log_step "3" "9" "REMOVING AI PLATFORM NETWORKS"
     
     local networks=("ai-platform-network" "aiplatform-network" "ai_platform_network")
     
     for network in "${networks[@]}"; do
         if docker network ls --format "{{.Name}}" | grep -q "^${network}$"; then
             log_info "Removing network: ${network}"
-            docker network rm "$network" 2>/dev/null || log_warning "Failed to remove network: ${network}"
+            docker network rm "$network" >/dev/null 2>&1 || log_warning "Failed to remove network: ${network}"
         fi
     done
     
@@ -206,9 +213,9 @@ remove_docker_networks() {
 }
 
 remove_docker_volumes() {
-    log_step "4" "10" "REMOVING AI PLATFORM VOLUMES"
+    log_step "4" "9" "REMOVING AI PLATFORM VOLUMES"
     
-    local volumes=$(docker volume ls --format "{{.Name}}" | grep -E "^aiplatform-|^ai-platform-|^ai_platform_" || true)
+    local volumes=$(docker volume ls --format "{{.Name}}" | grep -E "^aiplatform-|^ai-platform-|^ai_platform_" 2>/dev/null || true)
     
     if [[ -z "$volumes" ]]; then
         log_info "No AI Platform volumes found"
@@ -221,7 +228,7 @@ remove_docker_volumes() {
     echo "$volumes" | while read -r volume; do
         if [[ -n "$volume" ]]; then
             log_info "Removing volume: ${volume}"
-            docker volume rm "$volume" 2>/dev/null || log_warning "Failed to remove volume: ${volume}"
+            docker volume rm "$volume" >/dev/null 2>&1 || log_warning "Failed to remove volume: ${volume}"
         fi
     done
     
@@ -229,18 +236,17 @@ remove_docker_volumes() {
 }
 
 cleanup_docker_images() {
-    log_step "5" "10" "CLEANING UP DOCKER IMAGES (OPTIONAL)"
+    log_step "5" "9" "CLEANING UP DOCKER IMAGES (OPTIONAL)"
     
     echo ""
     echo -e "${YELLOW}Docker images can consume significant disk space.${NC}"
     echo "Options:"
-    echo "  1) Keep all images (default)"
+    echo "  1) Keep all images (default - recommended)"
     echo "  2) Remove AI Platform images only"
     echo "  3) Remove all unused images (prune)"
-    echo "  4) Remove ALL images (nuclear)"
     echo ""
     
-    read -p "Select option [1-4]: " image_option
+    read -p "Select option [1-3] (Enter for default): " image_option
     image_option=${image_option:-1}
     
     case $image_option in
@@ -251,7 +257,7 @@ cleanup_docker_images() {
             log_info "Removing AI Platform specific images..."
             local images=(
                 "ollama/ollama"
-                "open-webui/open-webui"
+                "ghcr.io/open-webui/open-webui"
                 "ghcr.io/berriai/litellm"
                 "langfuse/langfuse"
                 "postgres"
@@ -263,7 +269,7 @@ cleanup_docker_images() {
                 "langgenius/dify-api"
                 "langgenius/dify-web"
                 "n8nio/n8n"
-                "prometheus/prometheus"
+                "prom/prometheus"
                 "grafana/grafana"
                 "grafana/loki"
                 "minio/minio"
@@ -273,7 +279,8 @@ cleanup_docker_images() {
             )
             
             for image in "${images[@]}"; do
-                if docker images --format "{{.Repository}}" | grep -q "^${image}$"; then
+                local found=$(docker images --format "{{.Repository}}" | grep -c "^${image}$" || true)
+                if [[ $found -gt 0 ]]; then
                     log_info "Removing image: ${image}"
                     docker rmi -f $(docker images --format "{{.Repository}}:{{.Tag}}" | grep "^${image}") 2>/dev/null || true
                 fi
@@ -284,16 +291,6 @@ cleanup_docker_images() {
             log_info "Pruning unused Docker images..."
             docker image prune -a -f
             log_success "Unused images pruned"
-            ;;
-        4)
-            log_warning "Removing ALL Docker images..."
-            read -p "Are you SURE? This removes all images on the system [y/N]: " confirm
-            if [[ "$confirm" =~ ^[Yy]$ ]]; then
-                docker rmi -f $(docker images -q) 2>/dev/null || true
-                log_success "All images removed"
-            else
-                log_info "Skipped removing all images"
-            fi
             ;;
         *)
             log_warning "Invalid option. Keeping all images."
@@ -306,7 +303,7 @@ cleanup_docker_images() {
 ################################################################################
 
 remove_data_directories() {
-    log_step "6" "10" "REMOVING DATA DIRECTORIES"
+    log_step "6" "9" "REMOVING DATA DIRECTORIES"
     
     local base_dir="/opt/ai-platform"
     
@@ -321,11 +318,19 @@ remove_data_directories() {
     local dir_size=$(du -sh "$base_dir" 2>/dev/null | cut -f1 || echo "unknown")
     log_info "Directory size: ${dir_size}"
     
-    # List subdirectories
+    # List subdirectories with sizes
     log_info "Contents:"
-    find "$base_dir" -maxdepth 1 -type d -exec du -sh {} \; 2>/dev/null | sed 's/^/  /' || true
+    if [[ -d "$base_dir" ]]; then
+        find "$base_dir" -maxdepth 1 -type d 2>/dev/null | while read -r dir; do
+            if [[ "$dir" != "$base_dir" ]]; then
+                local size=$(du -sh "$dir" 2>/dev/null | cut -f1 || echo "?")
+                echo "  ${size}  $(basename "$dir")" | tee -a "$LOG_FILE"
+            fi
+        done
+    fi
     
     echo ""
+    log_warning "This will delete ALL data including models, databases, and configurations!"
     read -p "Remove ${base_dir} and ALL contents? [y/N]: " confirm
     
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
@@ -338,13 +343,12 @@ remove_data_directories() {
 }
 
 remove_configuration_files() {
-    log_step "7" "10" "REMOVING CONFIGURATION FILES"
+    log_step "7" "9" "REMOVING CONFIGURATION FILES"
     
     local config_locations=(
         "/etc/ai-platform"
         "/etc/systemd/system/ai-platform-*.service"
         "/etc/docker/daemon.json.ai-platform-backup"
-        "$HOME/.ai-platform"
     )
     
     for location in "${config_locations[@]}"; do
@@ -354,17 +358,28 @@ remove_configuration_files() {
         fi
     done
     
+    # Check user home directory (but preserve other configs)
+    if [[ -d "$HOME/.ai-platform" ]]; then
+        log_info "Found user config: $HOME/.ai-platform"
+        read -p "Remove user configuration directory? [y/N]: " confirm
+        if [[ "$confirm" =~ ^[Yy]$ ]]; then
+            rm -rf "$HOME/.ai-platform"
+            log_success "User configuration removed"
+        else
+            log_info "Skipped user configuration"
+        fi
+    fi
+    
     log_success "Configuration files removed"
 }
 
 remove_log_files() {
-    log_step "8" "10" "REMOVING LOG FILES"
+    log_step "8" "9" "REMOVING LOG FILES"
     
     local log_patterns=(
         "/var/log/ai-platform*.log"
         "/var/log/ollama*.log"
         "/var/log/litellm*.log"
-        "/var/log/docker-compose-ai-platform*.log"
     )
     
     log_info "Searching for log files..."
@@ -374,8 +389,11 @@ remove_log_files() {
         if compgen -G "$pattern" > /dev/null 2>&1; then
             found_logs=true
             for log in $pattern; do
-                log_info "Removing: ${log}"
-                rm -f "$log" 2>/dev/null || log_warning "Failed to remove: ${log}"
+                # Don't delete the current cleanup log
+                if [[ "$log" != "$LOG_FILE" ]]; then
+                    log_info "Removing: ${log}"
+                    rm -f "$log" 2>/dev/null || log_warning "Failed to remove: ${log}"
+                fi
             done
         fi
     done
@@ -383,56 +401,8 @@ remove_log_files() {
     if [[ "$found_logs" == false ]]; then
         log_info "No AI Platform log files found"
     else
-        log_success "Log files removed"
+        log_success "Log files removed (current cleanup log preserved)"
     fi
-}
-
-cleanup_dependencies() {
-    log_step "9" "10" "CLEANING UP DEPENDENCIES (OPTIONAL)"
-    
-    echo ""
-    echo -e "${YELLOW}Remove packages installed by Script 1?${NC}"
-    echo "This includes: curl, git, jq, wget, net-tools, dnsutils, etc."
-    echo ""
-    read -p "Remove dependencies? [y/N]: " confirm
-    
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-        log_info "Keeping installed dependencies"
-        return 0
-    fi
-    
-    log_info "Removing dependencies..."
-    
-    local packages=(
-        "curl"
-        "git"
-        "jq"
-        "wget"
-        "net-tools"
-        "dnsutils"
-        "apt-transport-https"
-        "ca-certificates"
-        "gnupg"
-        "lsb-release"
-    )
-    
-    # Detect OS
-    if command -v apt-get &>/dev/null; then
-        log_info "Removing packages (apt)..."
-        apt-get remove -y "${packages[@]}" 2>/dev/null || true
-        apt-get autoremove -y
-    elif command -v yum &>/dev/null; then
-        log_info "Removing packages (yum)..."
-        yum remove -y "${packages[@]}" 2>/dev/null || true
-    elif command -v dnf &>/dev/null; then
-        log_info "Removing packages (dnf)..."
-        dnf remove -y "${packages[@]}" 2>/dev/null || true
-    elif command -v pacman &>/dev/null; then
-        log_info "Removing packages (pacman)..."
-        pacman -Rs --noconfirm "${packages[@]}" 2>/dev/null || true
-    fi
-    
-    log_success "Dependencies removed"
 }
 
 ################################################################################
@@ -440,14 +410,19 @@ cleanup_dependencies() {
 ################################################################################
 
 verify_cleanup() {
-    log_step "10" "10" "VERIFYING CLEANUP"
+    log_step "9" "9" "VERIFYING CLEANUP"
     
     local issues_found=false
+    
+    echo ""
+    log_info "Checking cleanup status..."
+    echo ""
     
     # Check Docker containers
     local containers=$(docker ps -a --filter "label=ai-platform" --format "{{.ID}}" 2>/dev/null || true)
     if [[ -n "$containers" ]]; then
-        log_warning "Some containers still exist"
+        log_warning "Some containers still exist:"
+        docker ps -a --filter "label=ai-platform" --format "  {{.Names}} ({{.ID}})" | tee -a "$LOG_FILE"
         issues_found=true
     else
         log_success "No AI Platform containers found"
@@ -455,16 +430,18 @@ verify_cleanup() {
     
     # Check Docker networks
     if docker network ls --format "{{.Name}}" | grep -qE "ai-platform|aiplatform"; then
-        log_warning "Some networks still exist"
+        log_warning "Some networks still exist:"
+        docker network ls --format "  {{.Name}}" | grep -E "ai-platform|aiplatform" | tee -a "$LOG_FILE"
         issues_found=true
     else
         log_success "No AI Platform networks found"
     fi
     
     # Check Docker volumes
-    local volumes=$(docker volume ls --format "{{.Name}}" | grep -E "^aiplatform-|^ai-platform-" || true)
+    local volumes=$(docker volume ls --format "{{.Name}}" | grep -E "^aiplatform-|^ai-platform-" 2>/dev/null || true)
     if [[ -n "$volumes" ]]; then
-        log_warning "Some volumes still exist"
+        log_warning "Some volumes still exist:"
+        echo "$volumes" | sed 's/^/  /' | tee -a "$LOG_FILE"
         issues_found=true
     else
         log_success "No AI Platform volumes found"
@@ -473,6 +450,7 @@ verify_cleanup() {
     # Check data directory
     if [[ -d "/opt/ai-platform" ]]; then
         log_warning "Data directory still exists: /opt/ai-platform"
+        log_info "Size: $(du -sh /opt/ai-platform 2>/dev/null | cut -f1 || echo 'unknown')"
         issues_found=true
     else
         log_success "Data directory removed"
@@ -485,6 +463,18 @@ verify_cleanup() {
     else
         log_success "Configuration directory removed"
     fi
+    
+    # Verify essential tools are still present
+    echo ""
+    log_info "Verifying essential tools..."
+    local essential_tools=("git" "curl" "wget" "docker")
+    for tool in "${essential_tools[@]}"; do
+        if command -v "$tool" &>/dev/null; then
+            log_success "${tool} is available"
+        else
+            log_warning "${tool} is NOT available (may need reinstall)"
+        fi
+    done
     
     echo ""
     if [[ "$issues_found" == true ]]; then
@@ -510,16 +500,19 @@ show_summary() {
     echo "  ✓ Removed data directories (if confirmed)"
     echo "  ✓ Removed configuration files"
     echo "  ✓ Removed log files"
-    echo "  ✓ Removed dependencies (if selected)"
+    echo "  ✓ Preserved essential packages (git, curl, wget, docker)"
     echo "  ✓ Verification completed"
     echo ""
     echo -e "${CYAN}Log file saved to: ${LOG_FILE}${NC}"
     echo ""
     echo -e "${YELLOW}Next Steps:${NC}"
     echo "  1. Review the log file for any warnings"
-    echo "  2. Reboot the system (recommended): sudo reboot"
-    echo "  3. Run Script 1 for fresh installation:"
-    echo "     ${CYAN}sudo bash /path/to/script1-system-config.sh${NC}"
+    echo "  2. Reboot the system (optional but recommended):"
+    echo "     ${CYAN}sudo reboot${NC}"
+    echo ""
+    echo "  3. After reboot, run Script 1 for fresh installation:"
+    echo "     ${CYAN}cd ~/AIPlatformAutomation/scripts${NC}"
+    echo "     ${CYAN}sudo ./1-setup-system.sh${NC}"
     echo ""
     echo -e "${GREEN}System is ready for fresh AI Platform installation!${NC}"
     echo ""
@@ -535,11 +528,24 @@ main() {
     touch "$LOG_FILE"
     chmod 644 "$LOG_FILE"
     
+    # Log start
+    echo "AI Platform Cleanup Log - $(date)" >> "$LOG_FILE"
+    echo "Script Version: ${SCRIPT_VERSION}" >> "$LOG_FILE"
+    echo "═══════════════════════════════════════════════════════════════" >> "$LOG_FILE"
+    echo "" >> "$LOG_FILE"
+    
     # Check root
     if [[ $EUID -ne 0 ]]; then
         log_error "This script must be run as root"
+        echo ""
         echo "Usage: sudo bash $0"
         exit 1
+    fi
+    
+    # Check if Docker is available
+    if ! command -v docker &>/dev/null; then
+        log_warning "Docker is not installed or not in PATH"
+        log_info "Skipping Docker-related cleanup steps"
     fi
     
     # Show banner
@@ -549,22 +555,29 @@ main() {
     confirm_cleanup
     
     # Execute cleanup steps
-    stop_all_containers
-    remove_all_containers
-    remove_docker_networks
-    remove_docker_volumes
-    cleanup_docker_images
+    if command -v docker &>/dev/null; then
+        stop_all_containers
+        remove_all_containers
+        remove_docker_networks
+        remove_docker_volumes
+        cleanup_docker_images
+    else
+        log_warning "Skipping Docker cleanup (Docker not found)"
+    fi
+    
     remove_data_directories
     remove_configuration_files
     remove_log_files
-    cleanup_dependencies
     verify_cleanup
     
     # Show summary
     show_summary
     
     log_success "Script 0 v${SCRIPT_VERSION} completed"
+    echo "" >> "$LOG_FILE"
+    echo "Cleanup completed at: $(date)" >> "$LOG_FILE"
 }
 
 # Execute
 main "$@"
+
