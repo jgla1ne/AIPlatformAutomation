@@ -114,7 +114,7 @@ confirm_cleanup() {
     echo -e "${YELLOW}${BOLD}FINAL WARNING:${NC} You are about to perform a complete system cleanup."
     echo ""
     echo "This will remove:"
-    echo "  • /opt/ai-platform/ (if exists)"
+    echo "  • /mnt/data/ai-platform/ (if exists)"
     echo "  • Docker containers with label: ai-platform"
     echo "  • Docker networks: ai-platform-network"
     echo "  • Docker volumes starting with: aiplatform-*"
@@ -305,7 +305,7 @@ cleanup_docker_images() {
 remove_data_directories() {
     log_step "6" "9" "REMOVING DATA DIRECTORIES"
     
-    local base_dir="/opt/ai-platform"
+    local base_dir="/mnt/data/ai-platform"
     
     if [[ ! -d "$base_dir" ]]; then
         log_info "Data directory does not exist: ${base_dir}"
