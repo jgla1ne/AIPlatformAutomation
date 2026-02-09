@@ -6,7 +6,7 @@
 # Version: 3.2.0 - FIXED - Ollama Installation Added
 # Purpose: Prepares system, collects config, generates .env and compose skeleton
 # Flow: 0-cleanup → 1-setup → 2-deploy → 3-configure → 4-add-service
-#
+
 # CHANGELOG v3.2.0:
 # - Added NVIDIA Container Toolkit installation (Phase 4.5)
 # - Added Ollama installation with systemd configuration (Phase 12.5)
