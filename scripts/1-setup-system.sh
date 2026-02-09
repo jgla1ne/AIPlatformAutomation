@@ -3,10 +3,10 @@ set -euo pipefail
 
 # =====================================================
 # Script 1 — Refined Full System Setup & Configuration Collection
-# UX improvements, icon-based menus, Google rsync, Tailscale API/auth
+# Enhanced UX: icons, numbered routing, domain/IP check, port assignment & health
 # =====================================================
 
-SCRIPT_NAME="1-setup-system-refined"
+SCRIPT_NAME="1-setup-system-refined-v2"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_DIR="$ROOT_DIR/config"
 LOG_DIR="/mnt/data/logs"
@@ -66,9 +66,21 @@ prompt_select_numbers() {
   done
 }
 
-# =====================================================
+# -----------------------------
+# Check if a port is free
+# -----------------------------
+check_port_free() {
+  local port=$1
+  if ss -tulpn | grep -q ":$port\b"; then
+    return 1
+  else
+    return 0
+  fi
+}
+
+# -----------------------------
 # STEP 1 — Hardware Detection
-# =====================================================
+# -----------------------------
 log "STEP 1 — Hardware Detection"
 CPU_CORES=$(nproc)
 RAM_GB=$(awk '/MemTotal/ {printf "%.0f", $2/1024/1024}' /proc/meminfo)
@@ -82,14 +94,14 @@ fi
 log "Detected hardware: CPU=${CPU_CORES} cores, RAM=${RAM_GB}GB, Disk=${DISK_GB}GB, GPU=$GPU_PRESENT ($GPU_MODEL)"
 pause
 
-# =====================================================
-# STEP 2 — Core, AI, Optional Services Selection
-# =====================================================
-log "STEP 2 — Service Selection"
+# -----------------------------
+# STEP 2 — Service Selection (Core / AI / Optional)
+# -----------------------------
+log "STEP 2 — Service Selection with icons"
 
 CORE_COMPONENTS=("Ollama" "AnythingLLM" "LiteLLM")
 SELECTED_CORE=()
-prompt_select_numbers "Select Core Components (required for AI runtime)" CORE_COMPONENTS SELECTED_CORE
+prompt_select_numbers "Select Core Components" CORE_COMPONENTS SELECTED_CORE
 
 AI_STACK=("Dify" "ComfyUI" "OpenWebUI" "OpenClaw UI" "Flowise" "n8n" "SuperTokens")
 SELECTED_AI=()
@@ -102,38 +114,40 @@ prompt_select_numbers "Select Optional / Monitoring services" OPTIONAL_SERVICES 
 declare -A SERVICES_SELECTED
 for svc in "${CORE_COMPONENTS[@]}" "${AI_STACK[@]}" "${OPTIONAL_SERVICES[@]}"; do SERVICES_SELECTED[$svc]=false; done
 for svc in "${SELECTED_CORE[@]}" "${SELECTED_AI[@]}" "${SELECTED_OPTIONAL[@]}"; do SERVICES_SELECTED[$svc]=true; done
+
+# -----------------------------
+# STEP 3 — Domain Name + IP Validation
+# -----------------------------
+log "STEP 3 — Domain name collection and public IP resolution"
+while true; do
+  read -rp "Enter the main domain/subdomain (example: sub.example.com): " DOMAIN_NAME
+  DOMAIN_IP=$(dig +short "$DOMAIN_NAME" | head -n1 || true)
+  if [[ -n "$DOMAIN_IP" ]]; then
+    log "Domain $DOMAIN_NAME resolves to $DOMAIN_IP"
+    break
+  else
+    echo "Cannot resolve $DOMAIN_NAME. Please enter a valid domain."
+  fi
+done
 pause
 
-# =====================================================
-# STEP 3 — Proxy & Domain Configuration
-# =====================================================
-log "STEP 3 — Proxy & Domain Configuration"
-PROXIES=("Nginx" "Traefik" "Caddy" "None")
-SELECTED_PROXY=()
-prompt_select_numbers "Select reverse proxy" PROXIES SELECTED_PROXY
-PROXY="${SELECTED_PROXY[0]:-None}"
-read -rp "Enter main domain for public IP / certificates (example: example.com): " DOMAIN_NAME
-pause
-
-# =====================================================
+# -----------------------------
 # STEP 4 — Internal LLM Selection
-# =====================================================
+# -----------------------------
 log "STEP 4 — Internal LLM Selection"
 INTERNAL_LLMS=("Llama2" "Llama3" "MPT-7B" "Falcon" "Google Gemini" "Mistral")
 SELECTED_INTERNAL_LLMS=()
 prompt_select_numbers "Select Internal LLMs to include" INTERNAL_LLMS SELECTED_INTERNAL_LLMS
 declare -A INTERNAL_LLM_KEYS
-if [[ ${#SELECTED_INTERNAL_LLMS[@]} -gt 0 ]]; then
-  for llm in "${SELECTED_INTERNAL_LLMS[@]}"; do
-    INTERNAL_LLM_KEYS[$llm]=$(openssl rand -hex 16)
-    log "Generated auth key for $llm"
-  done
-fi
+for llm in "${SELECTED_INTERNAL_LLMS[@]}"; do
+  INTERNAL_LLM_KEYS[$llm]=$(openssl rand -hex 16)
+  log "Generated auth key for $llm"
+done
 pause
 
-# =====================================================
+# -----------------------------
 # STEP 5 — External LLM Providers
-# =====================================================
+# -----------------------------
 log "STEP 5 — External LLM Providers"
 EXTERNAL_PROVIDERS=("OpenAI" "Cohere" "Anthropic" "GoogleVertex" "OpenRouter" "GROQ" "Google Gemini")
 declare -A PROVIDER_KEYS
@@ -145,144 +159,129 @@ for provider in "${EXTERNAL_PROVIDERS[@]}"; do
 done
 pause
 
-# =====================================================
-# STEP 6 — Vector DB Selection
-# =====================================================
-log "STEP 6 — Vector DB Selection"
+# -----------------------------
+# STEP 6 — Vector DB & OpenClaw
+# -----------------------------
+log "STEP 6 — Vector DB selection & OpenClaw config"
 VECTOR_DBS=("Postgres" "Redis" "Milvus" "Weaviate" "Qdrant" "Chroma" "None")
 SELECTED_VECTOR_DB=()
 prompt_select_numbers "Select Vector DB for embeddings / OpenClaw integration" VECTOR_DBS SELECTED_VECTOR_DB
 VECTOR_DB="${SELECTED_VECTOR_DB[0]:-None}"
-read -rp "Enter Vector DB username (default: vectoruser): " VECTOR_DB_USER
+read -rp "Vector DB username (default: vectoruser): " VECTOR_DB_USER
 VECTOR_DB_USER="${VECTOR_DB_USER:-vectoruser}"
 VECTOR_DB_PASS=$(openssl rand -hex 12)
-log "Generated Vector DB credentials"
-pause
 
-# =====================================================
-# STEP 7 — Google rsync / OAuth
-# =====================================================
-log "STEP 7 — Google rsync authentication"
-RSYNC_METHODS=("Project ID + Secret" "OAuth URL")
-SELECTED_RSYNC=()
-prompt_select_numbers "Select Google rsync authentication method" RSYNC_METHODS SELECTED_RSYNC
-RSYNC_METHOD="${SELECTED_RSYNC[0]}"
-if [[ "$RSYNC_METHOD" == "Project ID + Secret" ]]; then
-  read -rp "Enter Google Project ID: " GOOGLE_PROJECT_ID
-  read -rp "Enter Google Secret: " GOOGLE_SECRET
-else
-  read -rp "Enter OAuth URL: " GOOGLE_OAUTH_URL
-fi
-pause
-
-# =====================================================
-# STEP 8 — Tailscale Auth / API key
-# =====================================================
-log "STEP 8 — Tailscale configuration"
-TAILSCALE_PORT=8443
-read -rp "Enter Tailscale HTTPS port (default 8443): " input_port
-TAILSCALE_PORT="${input_port:-$TAILSCALE_PORT}"
-TAILSCALE_AUTH_KEY=$(openssl rand -hex 16)
-TAILSCALE_API_KEY=$(openssl rand -hex 16)
-log "Generated Tailscale auth key and API key"
-pause
-
-# =====================================================
-# STEP 9 — LiteLLM Routing
-# =====================================================
-log "STEP 9 — LiteLLM routing strategy"
-read -rp "Enter LiteLLM routing strategy (round-robin / priority / weighted): " LITELLM_ROUTING
-pause
-
-# =====================================================
-# STEP 10 — OpenClaw Configuration
-# =====================================================
-log "STEP 10 — OpenClaw Configuration"
-read -rp "Enter OpenClaw additional settings (optional): " OPENCLAW_CONFIG
-DB_USER="dbuser"
-DB_PASS=$(openssl rand -hex 12)
+# OpenClaw configuration file
 OPENCLAW_CONF_FILE="$CONFIG_DIR/openclaw_config.json"
 cat > "$OPENCLAW_CONF_FILE" <<EOF
 {
   "vector_db": "$VECTOR_DB",
   "db_user": "$VECTOR_DB_USER",
   "db_pass": "$VECTOR_DB_PASS",
-  "api_key": "$(openssl rand -hex 16)",
-  "settings": "$OPENCLAW_CONFIG"
+  "api_key": "$(openssl rand -hex 16)"
 }
 EOF
-log "OpenClaw configuration file written: $OPENCLAW_CONF_FILE"
+log "OpenClaw configuration created: $OPENCLAW_CONF_FILE"
 pause
 
-# =====================================================
-# STEP 11 — Write .env, credentials, secrets
-# =====================================================
-log "STEP 11 — Writing configuration files"
+# -----------------------------
+# STEP 7 — Service Ports (with availability check)
+# -----------------------------
+log "STEP 7 — Assigning service ports"
+declare -A SERVICE_PORTS
+for svc in "${!SERVICES_SELECTED[@]}"; do
+  if [[ "${SERVICES_SELECTED[$svc]}" == true ]]; then
+    while true; do
+      default_port=0
+      case "$svc" in
+        Ollama) default_port=11400 ;;
+        LiteLLM) default_port=8000 ;;
+        Dify) default_port=3000 ;;
+        OpenWebUI) default_port=8080 ;;
+        OpenClaw\ UI) default_port=8081 ;;
+        Flowise) default_port=5000 ;;
+        n8n) default_port=5678 ;;
+        SuperTokens) default_port=3567 ;;
+        Grafana) default_port=3001 ;;
+        Prometheus) default_port=9090 ;;
+        ELK) default_port=5601 ;;
+        Portainer) default_port=9000 ;;
+        *) default_port=10000 ;;
+      esac
+      read -rp "Assign port for $svc (default $default_port): " input_port
+      port="${input_port:-$default_port}"
+      if check_port_free "$port"; then
+        SERVICE_PORTS[$svc]=$port
+        log "$svc port set to $port"
+        break
+      else
+        echo "Port $port is already in use. Please choose another port."
+      fi
+    done
+  fi
+done
+pause
+
+# -----------------------------
+# STEP 8 — LiteLLM routing (numbered)
+# -----------------------------
+log "STEP 8 — LiteLLM routing selection"
+ROUTING_OPTIONS=("Round-robin" "Priority" "Weighted")
+for i in "${!ROUTING_OPTIONS[@]}"; do echo "$((i+1))) ${ROUTING_OPTIONS[$i]}"; done
+while true; do
+  read -rp "Select LiteLLM routing strategy by number: " choice
+  if [[ "$choice" =~ ^[1-3]$ ]]; then
+    LITELLM_ROUTING="${ROUTING_OPTIONS[$((choice-1))]}"
+    log "LiteLLM routing selected: $LITELLM_ROUTING"
+    break
+  else
+    echo "Invalid selection. Enter 1, 2, or 3."
+  fi
+done
+pause
+
+# -----------------------------
+# STEP 9 — Write .env & credentials
+# -----------------------------
 {
-  echo "# Auto-generated config by $SCRIPT_NAME"
   echo "DOMAIN_NAME=\"$DOMAIN_NAME\""
-  echo "PROXY=\"$PROXY\""
   echo "VECTOR_DB=\"$VECTOR_DB\""
   echo "VECTOR_DB_USER=\"$VECTOR_DB_USER\""
   echo "VECTOR_DB_PASS=\"$VECTOR_DB_PASS\""
-  echo "TAILSCALE_PORT=\"$TAILSCALE_PORT\""
-  echo "TAILSCALE_AUTH_KEY=\"$TAILSCALE_AUTH_KEY\""
-  echo "TAILSCALE_API_KEY=\"$TAILSCALE_API_KEY\""
-  echo "LITELLM_ROUTING=\"$LITELLM_ROUTING\""
-  echo "OPENCLAW_CONFIG=\"$OPENCLAW_CONFIG\""
-  [[ -n "${GOOGLE_PROJECT_ID:-}" ]] && echo "GOOGLE_PROJECT_ID=\"$GOOGLE_PROJECT_ID\""
-  [[ -n "${GOOGLE_SECRET:-}" ]] && echo "GOOGLE_SECRET=\"$GOOGLE_SECRET\""
-  [[ -n "${GOOGLE_OAUTH_URL:-}" ]] && echo "GOOGLE_OAUTH_URL=\"$GOOGLE_OAUTH_URL\""
   for svc in "${!SERVICES_SELECTED[@]}"; do echo "SERVICE_${svc^^}=${SERVICES_SELECTED[$svc]}"; done
+  for svc in "${!SERVICE_PORTS[@]}"; do echo "PORT_${svc^^}=${SERVICE_PORTS[$svc]}"; done
+  echo "LITELLM_ROUTING=\"$LITELLM_ROUTING\""
   for llm in "${!INTERNAL_LLM_KEYS[@]}"; do echo "INTERNAL_LLM_${llm^^}=${INTERNAL_LLM_KEYS[$llm]}"; done
   for provider in "${!PROVIDER_KEYS[@]}"; do echo "EXTERNAL_PROVIDER_${provider^^}=${PROVIDER_KEYS[$provider]}"; done
 } > "$ENV_FILE"
 
-# Write credentials
 {
-  echo "DB_USER=$DB_USER"
-  echo "DB_PASS=$DB_PASS"
   echo "VECTOR_DB_USER=$VECTOR_DB_USER"
   echo "VECTOR_DB_PASS=$VECTOR_DB_PASS"
   for llm in "${!INTERNAL_LLM_KEYS[@]}"; do echo "INTERNAL_LLM_${llm^^}=${INTERNAL_LLM_KEYS[$llm]}"; done
 } > "$CREDENTIALS_FILE"
 
-log "Configuration files written:"
-log "  ENV: $ENV_FILE"
-log "  Credentials: $CREDENTIALS_FILE"
-log "  OpenClaw: $OPENCLAW_CONF_FILE"
-log "  Secrets file: $SECRETS_FILE (if generated later)"
+log "Configuration files written: $ENV_FILE, $CREDENTIALS_FILE, $OPENCLAW_CONF_FILE"
 pause
 
-# =====================================================
-# STEP 12 — Post-Script Summary with Icons
-# =====================================================
-log "STEP 12 — Configuration Summary"
+# -----------------------------
+# STEP 10 — Post-setup summary with icons and health
+# -----------------------------
+log "STEP 10 — Post-deployment summary"
 echo
-echo "==================== SUMMARY ===================="
-echo "Core Stack:"
-for svc in "${CORE_COMPONENTS[@]}"; do
-  [[ "${SERVICES_SELECTED[$svc]}" == true ]] && icon="✅" || icon="❌"
-  echo "$icon $svc"
+echo "==================== POST-DEPLOYMENT STATUS ===================="
+printf "%-15s %-8s %-8s\n" "Service" "Port" "Status"
+for svc in "${!SERVICES_SELECTED[@]}"; do
+  [[ "${SERVICES_SELECTED[$svc]}" == true ]] || continue
+  port="${SERVICE_PORTS[$svc]}"
+  if ss -tulpn | grep -q ":$port\b"; then
+    icon="✅"
+    status="Running"
+  else
+    icon="⚙️"
+    status="Pending"
+  fi
+  printf "%-15s %-8s %-8s %s\n" "$svc" "$port" "$status" "$icon"
 done
-echo "AI Stack:"
-for svc in "${AI_STACK[@]}"; do
-  [[ "${SERVICES_SELECTED[$svc]}" == true ]] && icon="⚙️" || icon="❌"
-  echo "$icon $svc"
-done
-echo "Optional Services:"
-for svc in "${OPTIONAL_SERVICES[@]}"; do
-  [[ "${SERVICES_SELECTED[$svc]}" == true ]] && icon="⚙️" || icon="❌"
-  echo "$icon $svc"
-done
-echo "Internal LLMs:"
-for llm in "${SELECTED_INTERNAL_LLMS[@]}"; do echo "✅ $llm"; done
-echo "External LLM Providers:"
-for provider in "${!PROVIDER_KEYS[@]}"; do echo "✅ $provider"; done
-echo "Vector DB: $VECTOR_DB"
-echo "Tailscale HTTPS Port: $TAILSCALE_PORT"
-echo "Signal phone: ${SIGNAL_PHONE:-Not set}"
-echo "LiteLLM routing: $LITELLM_ROUTING"
-echo "Configuration written to .env, credentials.txt, openclaw_config.json"
-echo "================================================"
+echo "=============================================================="
 
