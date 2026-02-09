@@ -1,0 +1,6 @@
+{
+  "vector_db": "Qdrant",
+  "db_user": "ds-admin",
+  "db_pass": "c77c92cbd9bb88926fd90703",
+  "api_key": "415f08445419c7e37ccced6c397a4e02"
+}
