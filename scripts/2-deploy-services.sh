@@ -1,24 +1,20 @@
 #!/usr/bin/env bash
 #############################################################################
-# Script 2 — Deploy Services
-# Reads configuration from Script 1 (.env) and deploys the selected stack
-# Includes logging, health checks, stepwise installation, summary
+# Script 2 — Deploy Services (Modular Docker Compose)
+# Collects individual service YML fragments, builds a full stack, deploys
+# Stepwise deployment with health checks, logs, summary
 #############################################################################
 
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_DIR="$ROOT_DIR/config"
-ENV_FILE="$CONFIG_DIR/.env"
-CREDENTIALS_FILE="$CONFIG_DIR/credentials.txt"
-OPENCLAW_CONF_FILE="$CONFIG_DIR/openclaw_config.json"
-DATA_DIR="/mnt/data"
-LOG_DIR="$DATA_DIR/logs"
-DEPLOY_LOG="$LOG_DIR/deploy.log"
+COMPOSE_DIR="$ROOT_DIR/compose"
+DEPLOY_LOG_DIR="/mnt/data/logs"
+DEPLOY_LOG="$DEPLOY_LOG_DIR/deploy.log"
 SUMMARY_FILE="$CONFIG_DIR/service_deploy_summary.txt"
 
-# Create logs if missing
-mkdir -p "$LOG_DIR"
+mkdir -p "$DEPLOY_LOG_DIR"
 touch "$DEPLOY_LOG"
 touch "$SUMMARY_FILE"
 
@@ -27,62 +23,79 @@ fail() { log "ERROR: $*"; exit 1; }
 pause() { read -rp "Press ENTER to continue..."; }
 
 # --------------------------------------------------
-# STEP 0 — Load Environment
+# STEP 0 — Load environment
 # --------------------------------------------------
-[[ -f "$ENV_FILE" ]] || fail ".env file not found! Run Script 1 first."
+[[ -f "$CONFIG_DIR/.env" ]] || fail ".env file missing! Run Script 1 first."
 set -o allexport
-source "$ENV_FILE"
+source "$CONFIG_DIR/.env"
 set +o allexport
-log "Environment loaded from $ENV_FILE"
+log "Loaded configuration from $CONFIG_DIR/.env"
 
 # --------------------------------------------------
 # STEP 1 — Define service categories
 # --------------------------------------------------
-CORE=("Ollama" "AnythingLLM" "LiteLLM")
-AISTACK=("Dify" "ComfyUI" "OpenWebUI" "OpenClaw_UI" "Flowise" "n8n" "SuperTokens")
-OPTIONAL=("Grafana" "Prometheus" "ELK" "Portainer")
+CORE_SERVICES=("Ollama" "AnythingLLM" "LiteLLM")
+AI_STACK=("Dify" "ComfyUI" "OpenWebUI" "OpenClaw_UI" "Flowise" "n8n" "SuperTokens")
+OPTIONAL_SERVICES=("Grafana" "Prometheus" "ELK" "Portainer")
 
-ALL_SERVICES=("${CORE[@]}" "${AISTACK[@]}" "${OPTIONAL[@]}")
+ALL_SERVICES=("${CORE_SERVICES[@]}" "${AI_STACK[@]}" "${OPTIONAL_SERVICES[@]}")
+
+# Compose output
+FINAL_COMPOSE="$COMPOSE_DIR/docker-compose.yml"
+echo "version: '3.9'" > "$FINAL_COMPOSE"
+echo "services:" >> "$FINAL_COMPOSE"
 
 # --------------------------------------------------
-# STEP 2 — Deploy Services Stepwise
+# STEP 2 — Merge individual service YML fragments
 # --------------------------------------------------
-log "STEP 2 — Deploying services one by one"
-
+log "Collecting individual service compose files..."
 for svc in "${ALL_SERVICES[@]}"; do
     if [[ "${!SERVICE_$svc:-false}" != true ]]; then
         log "Skipping $svc (not selected)"
         continue
     fi
 
-    PORT="${!PORT_$svc:-10000}"
-    IMAGE_VAR="IMAGE_$svc"
-    IMAGE="${!IMAGE_VAR:-$svc:latest}"
-
-    log "Deploying $svc → image: $IMAGE, port: $PORT"
-
-    # Run container
-    if [[ "$svc" == "LiteLLM" ]]; then
-        docker compose -f "$ROOT_DIR/compose/docker-compose.yml" up -d litellm
-    else
-        docker compose -f "$ROOT_DIR/compose/docker-compose.yml" up -d "$svc"
+    FRAGMENT_FILE="$COMPOSE_DIR/services/${svc}.yml"
+    if [[ ! -f "$FRAGMENT_FILE" ]]; then
+        log "WARNING: Compose fragment missing for $svc → $FRAGMENT_FILE"
+        continue
     fi
 
-    # Health check loop (5 retries, 5s interval)
-    RETRIES=5
+    log "Merging $svc compose fragment..."
+    # Indent fragment and append to final compose
+    sed 's/^/  /' "$FRAGMENT_FILE" >> "$FINAL_COMPOSE"
+done
+
+log "Merged compose file written to $FINAL_COMPOSE"
+
+# --------------------------------------------------
+# STEP 3 — Deploy services one by one with health check
+# --------------------------------------------------
+log "Deploying services stepwise..."
+for svc in "${ALL_SERVICES[@]}"; do
+    if [[ "${!SERVICE_$svc:-false}" != true ]]; then
+        continue
+    fi
+
+    PORT="${!PORT_$svc:-10000}"
+    log "Deploying $svc on port $PORT..."
+    docker compose -f "$FINAL_COMPOSE" up -d "$svc"
+
+    # Health check (5 retries)
     SUCCESS=false
-    for ((i=1;i<=RETRIES;i++)); do
+    for ((i=1;i<=5;i++)); do
         if docker ps | grep -q "$svc"; then
             log "$svc is running (attempt $i)"
             SUCCESS=true
             break
         else
-            log "$svc not running yet, retry $i/$RETRIES"
+            log "$svc not running yet, retry $i/5..."
             sleep 5
         fi
     done
+
     if ! $SUCCESS; then
-        log "WARNING: $svc failed to start after $RETRIES attempts"
+        log "WARNING: $svc failed to start after 5 attempts"
     fi
 
     # Update summary
@@ -90,9 +103,9 @@ for svc in "${ALL_SERVICES[@]}"; do
 done
 
 # --------------------------------------------------
-# STEP 3 — Final Deployment Summary
+# STEP 4 — Deployment summary
 # --------------------------------------------------
-log "Deployment summary:"
+log "=== Deployment Summary ==="
 cat "$SUMMARY_FILE"
 log "STEP 2 complete — All selected services attempted."
 pause
