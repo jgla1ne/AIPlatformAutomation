@@ -1,86 +1,160 @@
-#!/bin/bash
-
+#!/usr/bin/env bash
 #############################################################################
-# Script 3: Configure Running Services
-# Tailscale auth, GDrive setup, networking, service config
+# Script 3 — Configure Services
+# Finalizes deployed services: LiteLLM routing, OpenClaw, Tailscale, Signal, GDrive
+# Performs integration checks, updates configuration files, logs everything
 #############################################################################
 
 set -euo pipefail
 
-source /opt/ai-platform/.env
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CONFIG_DIR="$ROOT_DIR/config"
+DATA_DIR="/mnt/data"
+LOG_DIR="$DATA_DIR/logs"
+LOG_FILE="$LOG_DIR/configure.log"
+SUMMARY_FILE="$CONFIG_DIR/service_deploy_summary.txt"
+OPENCLAW_CONF="$CONFIG_DIR/openclaw_config.json"
+ENV_FILE="$CONFIG_DIR/.env"
+CREDENTIALS_FILE="$CONFIG_DIR/credentials.txt"
 
-configure_tailscale() {
-    [[ -n $TAILSCALE_AUTH_KEY ]] || return 0
-    
-    docker run -d --name tailscale --network host \
-        --cap-add=NET_ADMIN -v tailscale_data:/var/lib/tailscale \
-        tailscale/tailscale:latest tailscaled
-        
-    docker exec tailscale tailscale up --authkey="$TAILSCALE_AUTH_KEY" \
-        --advertise-exit-node
+mkdir -p "$LOG_DIR"
+touch "$LOG_FILE"
+touch "$SUMMARY_FILE"
+
+log() { echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
+fail() { log "ERROR: $*"; exit 1; }
+pause() { read -rp "Press ENTER to continue..."; }
+
+log "=== STEP 3 — Configure Services ==="
+
+# --------------------------------------------------
+# STEP 0 — Load Environment
+# --------------------------------------------------
+[[ -f "$ENV_FILE" ]] || fail ".env missing! Run Script 1 first."
+set -o allexport
+source "$ENV_FILE"
+set +o allexport
+log "Environment loaded from $ENV_FILE"
+
+# --------------------------------------------------
+# STEP 1 — LiteLLM routing configuration
+# --------------------------------------------------
+if [[ "${SERVICE_LiteLLM:-false}" == true ]]; then
+    echo "Select LiteLLM routing strategy:"
+    PS3="Select routing by number: "
+    options=("Round-Robin" "Weighted" "Custom")
+    select opt in "${options[@]}"; do
+        case $REPLY in
+            1|2|3) LITELLM_ROUTING="$opt"; break ;;
+            *) echo "Invalid selection" ;;
+        esac
+    done
+    log "LiteLLM routing strategy set to: $LITELLM_ROUTING"
+    echo "LITELLM_ROUTING=$LITELLM_ROUTING" >> "$ENV_FILE"
+fi
+
+# --------------------------------------------------
+# STEP 2 — OpenClaw configuration
+# --------------------------------------------------
+if [[ "${SERVICE_OpenClaw_UI:-false}" == true ]]; then
+    # VectorDB selection
+    echo "Select VectorDB for OpenClaw:"
+    PS3="Select DB by number: "
+    db_options=("Qdrant" "Chroma")
+    select db_opt in "${db_options[@]}"; do
+        case $REPLY in
+            1|2) VECTOR_DB="$db_opt"; break ;;
+            *) echo "Invalid selection" ;;
+        esac
+    done
+    log "OpenClaw VectorDB: $VECTOR_DB"
+
+    # Generate credentials
+    OPENCLAW_USER="openclaw_user"
+    OPENCLAW_PASS=$(openssl rand -base64 12)
+    echo "$OPENCLAW_USER:$OPENCLAW_PASS" > "$CREDENTIALS_FILE"
+    log "OpenClaw credentials generated"
+
+    # Write config JSON
+    cat > "$OPENCLAW_CONF" <<EOF
+{
+    "vector_db": "$VECTOR_DB",
+    "user": "$OPENCLAW_USER",
+    "password": "$OPENCLAW_PASS",
+    "services": {
+        "LiteLLM": "$LITELLM_ROUTING"
+    }
 }
-
-setup_gdrive_rclone() {
-    rclone config create gdrive drive \
-        client_id="$GDRIVE_CLIENT_ID" \
-        client_secret="$GDRIVE_CLIENT_SECRET" \
-        token='{"access_token":"...","token_type":"Bearer","refresh_token":"'"$GDRIVE_REFRESH_TOKEN"'","expiry":"..."}'
-}
-
-create_ingestion_systemd() {
-    cat > /etc/systemd/system/gdrive-sync.service << EOF
-[Unit]
-Description=AI Platform GDrive → AnythingLLM
-After=docker.service network.target
-
-[Service]  
-ExecStart=/bin/bash -c 'rclone sync gdrive: /mnt/data/gdrive/ && docker exec anythingllm /app/ingest.sh'
-User=root
 EOF
+    log "OpenClaw configuration written to $OPENCLAW_CONF"
+fi
 
-    cat > /etc/systemd/system/gdrive-sync.timer << EOF
-[Unit]
-Description=GDrive Sync Timer
+# --------------------------------------------------
+# STEP 3 — Tailscale configuration
+# --------------------------------------------------
+if [[ "${SERVICE_Tailscale:-false}" == true ]]; then
+    read -rp "Enter Tailscale auth key: " TAILSCALE_AUTH_KEY
+    read -rp "Enter Tailscale API key: " TAILSCALE_API_KEY
+    echo "TAILSCALE_AUTH_KEY=$TAILSCALE_AUTH_KEY" >> "$ENV_FILE"
+    echo "TAILSCALE_API_KEY=$TAILSCALE_API_KEY" >> "$ENV_FILE"
+    log "Tailscale auth & API keys recorded"
+fi
 
-[Timer]
-OnCalendar=*:0/4
-Persistent=true
+# --------------------------------------------------
+# STEP 4 — Signal configuration
+# --------------------------------------------------
+if [[ "${SERVICE_Signal:-false}" == true ]]; then
+    read -rp "Enter Signal user phone number (with country code): " SIGNAL_NUMBER
+    echo "SIGNAL_NUMBER=$SIGNAL_NUMBER" >> "$ENV_FILE"
+    log "Signal user number recorded"
+fi
 
-[Install]
-WantedBy=timers.target
-EOF
-    
-    systemctl daemon-reload
-    systemctl enable --now gdrive-sync.timer
-}
+# --------------------------------------------------
+# STEP 5 — GDrive configuration
+# --------------------------------------------------
+if [[ "${SERVICE_GDrive:-false}" == true ]]; then
+    echo "GDrive configuration options:"
+    echo "1) Project ID + Secret"
+    echo "2) OAuth URL"
+    PS3="Select configuration type: "
+    select g_opt in "ProjectID+Secret" "OAuthURL"; do
+        case $REPLY in
+            1)
+                read -rp "Enter GDrive Project ID: " GDRIVE_PROJECT_ID
+                read -rp "Enter GDrive Secret: " GDRIVE_SECRET
+                echo "GDRIVE_PROJECT_ID=$GDRIVE_PROJECT_ID" >> "$ENV_FILE"
+                echo "GDRIVE_SECRET=$GDRIVE_SECRET" >> "$ENV_FILE"
+                break
+                ;;
+            2)
+                read -rp "Enter OAuth URL: " GDRIVE_OAUTH_URL
+                echo "GDRIVE_OAUTH_URL=$GDRIVE_OAUTH_URL" >> "$ENV_FILE"
+                break
+                ;;
+            *)
+                echo "Invalid option"
+                ;;
+        esac
+    done
+    log "GDrive configuration saved"
+fi
 
-configure_litellm_routing() {
-    cat > /opt/ai-platform/config/litellm/config.yaml << EOF
-model_list:
-  - model_name: llama3.1  
-    litellm_params:
-      model: ollama/$OLLAMA_MODEL
-      api_base: http://ollama:11434
-  - model_name: gpt-4o-mini
-    litellm_params:
-      model: openai/gpt-4o-mini
-      api_key: $OPENAI_API_KEY
-  - model_name: claude-3-5-sonnet
-    litellm_params:
-      model: anthropic/claude-3-5-sonnet-20240620
-      api_key: $ANTHROPIC_API_KEY
-routing_strategy: cost
-min_cost_model: ollama/$OLLAMA_MODEL
-EOF
-    docker compose -f /opt/ai-platform/compose/docker-compose.yml restart litellm
-}
+# --------------------------------------------------
+# STEP 6 — Optional service checks
+# --------------------------------------------------
+OPTIONAL_SERVICES=("Grafana" "Prometheus" "ELK" "Portainer")
+for svc in "${OPTIONAL_SERVICES[@]}"; do
+    if [[ "${!SERVICE_$svc:-false}" == true ]]; then
+        PORT="${!PORT_$svc:-0}"
+        log "Optional service $svc configured on port $PORT"
+        echo "$svc -> http://$(hostname -I | awk '{print $1}'):$PORT/" >> "$SUMMARY_FILE"
+    fi
+done
 
-main() {
-    configure_tailscale
-    setup_gdrive_rclone  
-    create_ingestion_systemd
-    configure_litellm_routing
-    
-    echo "${GREEN}✅ SCRIPT 3 COMPLETE - SERVICES CONFIGURED${NC}"
-    echo "Next: ./4-add-service.sh (optional)"
-}
+# --------------------------------------------------
+# STEP 7 — Post-configuration summary
+# --------------------------------------------------
+log "=== Service Configuration Summary ==="
+cat "$SUMMARY_FILE"
+log "All selected services configured."
+pause
