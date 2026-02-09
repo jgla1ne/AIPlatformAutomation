@@ -1,1304 +1,2332 @@
 #!/bin/bash
 ################################################################################
-# AI Platform System Setup Script
-# Version: 1.0.0
-# Description: Interactive installation wizard for AI platform stack
+# AI Platform Automation - System Setup Script
+# Part 1/4: Foundation - Constants, Logging, and Core Utilities
 ################################################################################
 
 set -euo pipefail
 IFS=$'\n\t'
 
-################################################################################
-# CONSTANTS AND GLOBALS
-################################################################################
-
+#==============================================================================
+# SCRIPT METADATA
+#==============================================================================
+readonly SCRIPT_VERSION="2.0.0"
+readonly SCRIPT_NAME="AI Platform System Setup"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+readonly TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+
+#==============================================================================
+# CONFIGURATION PATHS
+#==============================================================================
 readonly CONFIG_DIR="${PROJECT_ROOT}/config"
-readonly LOG_DIR="${PROJECT_ROOT}/logs"
+readonly ENV_FILE="${CONFIG_DIR}/.env"
+readonly DOCKER_COMPOSE_FILE="${CONFIG_DIR}/docker-compose.yml"
 readonly BACKUP_DIR="${PROJECT_ROOT}/backups"
-readonly TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+readonly LOG_DIR="${PROJECT_ROOT}/logs"
 readonly LOG_FILE="${LOG_DIR}/setup_${TIMESTAMP}.log"
 
-# Version information
-readonly VERSION="1.0.0"
-readonly MIN_DOCKER_VERSION="20.10.0"
-readonly MIN_COMPOSE_VERSION="2.0.0"
+#==============================================================================
+# DEFAULT CONFIGURATION VALUES
+#==============================================================================
+declare -gA CONFIG_VALUES=(
+    # Environment
+    [ENVIRONMENT]="production"
+    [COMPOSE_PROJECT_NAME]="aiplatform"
+    [BASE_DOMAIN]="localhost"
+    
+    # Core Services
+    [INSTALL_OLLAMA]="true"
+    [INSTALL_OPEN_WEBUI]="true"
+    [INSTALL_N8N]="true"
+    [INSTALL_NGINX]="true"
+    [INSTALL_POSTGRES]="true"
+    [INSTALL_REDIS]="true"
+    
+    # Optional Services
+    [INSTALL_PROMETHEUS]="false"
+    [INSTALL_GRAFANA]="false"
+    [INSTALL_PORTAINER]="false"
+    [INSTALL_WATCHTOWER]="false"
+    
+    # Ports (defaults)
+    [OLLAMA_PORT]="11434"
+    [OPEN_WEBUI_PORT]="3000"
+    [N8N_PORT]="5678"
+    [NGINX_HTTP_PORT]="80"
+    [NGINX_HTTPS_PORT]="443"
+    [POSTGRES_PORT]="5432"
+    [REDIS_PORT]="6379"
+    [PROMETHEUS_PORT]="9090"
+    [GRAFANA_PORT]="3001"
+    [PORTAINER_PORT]="9000"
+    
+    # Storage
+    [DATA_ROOT]="/opt/aiplatform"
+    [OLLAMA_MODELS_DIR]="/opt/aiplatform/ollama/models"
+    [BACKUP_ENABLED]="true"
+    [BACKUP_RETENTION_DAYS]="30"
+    
+    # Resource Limits
+    [OLLAMA_MAX_MEMORY]="8g"
+    [N8N_MAX_MEMORY]="2g"
+    [POSTGRES_MAX_MEMORY]="2g"
+    [ENABLE_GPU]="false"
+    
+    # Security
+    [ENABLE_SSL]="false"
+    [SSL_EMAIL]=""
+    [FORCE_HTTPS]="false"
+    
+    # Timezone
+    [TIMEZONE]="UTC"
+)
 
-# Color codes for output
+#==============================================================================
+# COLOR CODES FOR OUTPUT
+#==============================================================================
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
 readonly BLUE='\033[0;34m'
 readonly MAGENTA='\033[0;35m'
 readonly CYAN='\033[0;36m'
-readonly NC='\033[0m'
+readonly WHITE='\033[1;37m'
 readonly BOLD='\033[1m'
+readonly NC='\033[0m' # No Color
 
-# Configuration storage
-declare -A CONFIG_VALUES
-
-################################################################################
+#==============================================================================
 # LOGGING FUNCTIONS
-################################################################################
+#==============================================================================
+
+setup_logging() {
+    mkdir -p "$LOG_DIR"
+    touch "$LOG_FILE"
+    log_info "Logging initialized: $LOG_FILE"
+}
+
+log() {
+    local level=$1
+    shift
+    local message="$*"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[${timestamp}] [${level}] ${message}" >> "$LOG_FILE"
+}
 
 log_info() {
-    echo -e "${BLUE}[INFO]${NC} $*" | tee -a "$LOG_FILE"
+    log "INFO" "$@"
+    echo -e "${BLUE}ℹ${NC} $*"
 }
 
 log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $*" | tee -a "$LOG_FILE"
+    log "SUCCESS" "$@"
+    echo -e "${GREEN}✓${NC} $*"
 }
 
 log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $*" | tee -a "$LOG_FILE"
+    log "WARNING" "$@"
+    echo -e "${YELLOW}⚠${NC} $*"
 }
 
 log_error() {
-    echo -e "${RED}[ERROR]${NC} $*" | tee -a "$LOG_FILE"
+    log "ERROR" "$@"
+    echo -e "${RED}✗${NC} $*" >&2
 }
 
 log_step() {
-    echo -e "\n${CYAN}${BOLD}=== $* ===${NC}\n" | tee -a "$LOG_FILE"
+    log "STEP" "$@"
+    echo -e "${CYAN}▶${NC} ${BOLD}$*${NC}"
 }
 
-################################################################################
-# UTILITY FUNCTIONS
-################################################################################
-
-prompt_yes_no() {
-    local prompt="$1"
-    local default="${2:-n}"
-    local response
-    
-    if [[ "$default" == "y" ]]; then
-        prompt="$prompt [Y/n]: "
-    else
-        prompt="$prompt [y/N]: "
+log_debug() {
+    if [[ "${DEBUG:-false}" == "true" ]]; then
+        log "DEBUG" "$@"
+        echo -e "${MAGENTA}[DEBUG]${NC} $*"
     fi
-    
-    read -rp "$prompt" response
-    response=${response:-$default}
-    
-    [[ "$response" =~ ^[Yy]$ ]]
 }
+
+#==============================================================================
+# UI/DISPLAY FUNCTIONS
+#==============================================================================
+
+print_header() {
+    clear
+    echo "╔════════════════════════════════════════════════════════════════╗"
+    echo "║                                                                ║"
+    echo "║           AI PLATFORM AUTOMATION - SYSTEM SETUP                ║"
+    echo "║                                                                ║"
+    echo "║  Automated installation and configuration for:                 ║"
+    echo "║  • Ollama (LLM Runtime)                                        ║"
+    echo "║  • Open WebUI (Chat Interface)                                 ║"
+    echo "║  • n8n (Workflow Automation)                                   ║"
+    echo "║  • Nginx (Reverse Proxy)                                       ║"
+    echo "║  • PostgreSQL + Redis (Data Layer)                             ║"
+    echo "║  • Prometheus + Grafana (Monitoring)                           ║"
+    echo "║                                                                ║"
+    echo "╚════════════════════════════════════════════════════════════════╝"
+    echo
+    echo "Version: ${SCRIPT_VERSION}"
+    echo "Documentation: https://github.com/jgla1ne/AIPlatformAutomation"
+    echo
+}
+
+print_step_header() {
+    local step_num=$1
+    local step_title=$2
+    echo
+    echo "┌─────────────────────────────────────────────────────────────┐"
+    printf "│ ${BOLD}Step %2d/27:${NC} %-48s │\n" "$step_num" "$step_title"
+    echo "└─────────────────────────────────────────────────────────────┘"
+    echo
+}
+
+print_section_break() {
+    echo
+    echo "================================================================"
+    echo
+}
+
+print_success_box() {
+    local message=$1
+    echo
+    echo "╔════════════════════════════════════════════════════════════════╗"
+    echo "║  ${GREEN}✓ SUCCESS${NC}                                                     ║"
+    echo "╠════════════════════════════════════════════════════════════════╣"
+    printf "║  %-60s  ║\n" "$message"
+    echo "╚════════════════════════════════════════════════════════════════╝"
+    echo
+}
+
+print_error_box() {
+    local message=$1
+    echo
+    echo "╔════════════════════════════════════════════════════════════════╗"
+    echo "║  ${RED}✗ ERROR${NC}                                                       ║"
+    echo "╠════════════════════════════════════════════════════════════════╣"
+    printf "║  %-60s  ║\n" "$message"
+    echo "╚════════════════════════════════════════════════════════════════╝"
+    echo
+}
+
+print_warning_box() {
+    local message=$1
+    echo
+    echo "╔════════════════════════════════════════════════════════════════╗"
+    echo "║  ${YELLOW}⚠ WARNING${NC}                                                    ║"
+    echo "╠════════════════════════════════════════════════════════════════╣"
+    printf "║  %-60s  ║\n" "$message"
+    echo "╚════════════════════════════════════════════════════════════════╝"
+    echo
+}
+
+#==============================================================================
+# USER INPUT FUNCTIONS
+#==============================================================================
 
 prompt_with_default() {
-    local prompt="$1"
-    local default="$2"
+    local prompt=$1
+    local default=$2
     local response
     
-    read -rp "$prompt [$default]: " response
+    read -rp "$(echo -e "${CYAN}?${NC} ${prompt} [${default}]: ")" response
     echo "${response:-$default}"
 }
 
-validate_email() {
-    local email="$1"
+prompt_yes_no() {
+    local prompt=$1
+    local default=${2:-n}
+    local response
+    
+    while true; do
+        if [[ "$default" == "y" ]]; then
+            read -rp "$(echo -e "${CYAN}?${NC} ${prompt} [Y/n]: ")" response
+            response=${response:-y}
+        else
+            read -rp "$(echo -e "${CYAN}?${NC} ${prompt} [y/N]: ")" response
+            response=${response:-n}
+        fi
+        
+        case "${response,,}" in
+            y|yes) return 0 ;;
+            n|no) return 1 ;;
+            *) log_warning "Please answer yes or no." ;;
+        esac
+    done
+}
+
+prompt_password() {
+    local prompt=$1
+    local password
+    local password_confirm
+    
+    while true; do
+        read -rsp "$(echo -e "${CYAN}?${NC} ${prompt}: ")" password
+        echo
+        read -rsp "$(echo -e "${CYAN}?${NC} Confirm password: ")" password_confirm
+        echo
+        
+        if [[ "$password" == "$password_confirm" ]]; then
+            if [[ ${#password} -ge 8 ]]; then
+                echo "$password"
+                return 0
+            else
+                log_warning "Password must be at least 8 characters"
+            fi
+        else
+            log_warning "Passwords do not match"
+        fi
+    done
+}
+
+prompt_choice() {
+    local prompt=$1
+    shift
+    local options=("$@")
+    local choice
+    
+    echo -e "${CYAN}?${NC} ${prompt}"
+    for i in "${!options[@]}"; do
+        echo "  $((i+1))) ${options[$i]}"
+    done
+    
+    while true; do
+        read -rp "Enter choice [1-${#options[@]}]: " choice
+        if [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#options[@]})); then
+            echo "${options[$((choice-1))]}"
+            return 0
+        else
+            log_warning "Invalid choice. Please select 1-${#options[@]}"
+        fi
+    done
+}
+
+#==============================================================================
+# UTILITY FUNCTIONS
+#==============================================================================
+
+generate_random_password() {
+    local length=${1:-32}
+    LC_ALL=C tr -dc 'A-Za-z0-9!@#$%^&*' < /dev/urandom | head -c "$length"
+}
+
+generate_random_string() {
+    local length=${1:-16}
+    LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c "$length"
+}
+
+is_port_available() {
+    local port=$1
+    ! netstat -tuln 2>/dev/null | grep -q ":${port} " && \
+    ! ss -tuln 2>/dev/null | grep -q ":${port} "
+}
+
+is_valid_email() {
+    local email=$1
     [[ "$email" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]
 }
 
-validate_port() {
-    local port="$1"
-    [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]
+is_valid_domain() {
+    local domain=$1
+    [[ "$domain" =~ ^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$ ]]
 }
 
-validate_domain() {
-    local domain="$1"
-    [[ "$domain" =~ ^([a-zA-Z0-9]([-a-zA-Z0-9]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$ ]]
+is_valid_ip() {
+    local ip=$1
+    [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
 }
 
-generate_random_password() {
-    local length="${1:-32}"
-    openssl rand -base64 "$length" | tr -d "=+/" | cut -c1-"$length"
-}
-
-version_gt() {
-    test "$(printf '%s\n' "$@" | sort -V | head -n 1)" != "$1"
-}
-
-################################################################################
-# SYSTEM CHECKS
-################################################################################
-
-check_system_requirements() {
-    log_step "Checking System Requirements"
+check_disk_space() {
+    local required_gb=${1:-20}
+    local available_gb=$(df -BG "$PROJECT_ROOT" | awk 'NR==2 {print $4}' | sed 's/G//')
     
-    # Check if running as root
-    if [[ $EUID -eq 0 ]]; then
-        log_warning "Running as root. This is not recommended for production."
-        if ! prompt_yes_no "Continue anyway?" "n"; then
-            exit 1
-        fi
-    fi
-    
-    # Check OS
-    if [[ ! -f /etc/os-release ]]; then
-        log_error "Cannot determine OS. /etc/os-release not found."
-        exit 1
-    fi
-    
-    source /etc/os-release
-    log_info "Detected OS: $PRETTY_NAME"
-    
-    # Check architecture
-    local arch=$(uname -m)
-    if [[ "$arch" != "x86_64" ]] && [[ "$arch" != "aarch64" ]]; then
-        log_warning "Unsupported architecture: $arch"
-    fi
-    
-    # Check disk space (minimum 20GB free)
-    local free_space=$(df -BG "$PROJECT_ROOT" | awk 'NR==2 {print $4}' | sed 's/G//')
-    if [[ "$free_space" -lt 20 ]]; then
-        log_warning "Low disk space: ${free_space}GB available (20GB+ recommended)"
-        if ! prompt_yes_no "Continue anyway?" "n"; then
-            exit 1
-        fi
-    fi
-    
-    # Check memory (minimum 4GB)
-    local total_mem=$(free -g | awk '/^Mem:/{print $2}')
-    if [[ "$total_mem" -lt 4 ]]; then
-        log_warning "Low memory: ${total_mem}GB available (4GB+ recommended)"
-        if ! prompt_yes_no "Continue anyway?" "n"; then
-            exit 1
-        fi
-    fi
-    
-    # Check required commands
-    local required_cmds=("curl" "git" "openssl" "awk" "sed")
-    for cmd in "${required_cmds[@]}"; do
-        if ! command -v "$cmd" &> /dev/null; then
-            log_error "Required command not found: $cmd"
-            exit 1
-        fi
-    done
-    
-    log_success "System requirements check completed"
-}
-
-check_docker() {
-    if ! command -v docker &> /dev/null; then
+    if ((available_gb < required_gb)); then
+        log_error "Insufficient disk space. Required: ${required_gb}GB, Available: ${available_gb}GB"
         return 1
     fi
-    
-    if ! docker ps &> /dev/null; then
-        log_warning "Docker is installed but not accessible. May need sudo or user group configuration."
-        return 1
-    fi
-    
-    local docker_version=$(docker version --format '{{.Server.Version}}' 2>/dev/null)
-    if version_gt "$MIN_DOCKER_VERSION" "$docker_version"; then
-        log_warning "Docker version $docker_version is below minimum $MIN_DOCKER_VERSION"
-        return 1
-    fi
-    
-    if ! docker compose version &> /dev/null; then
-        log_warning "Docker Compose plugin not found"
-        return 1
-    fi
-    
-    log_success "Docker check passed (version: $docker_version)"
     return 0
 }
 
-install_docker() {
-    log_step "Installing Docker"
+check_memory() {
+    local required_gb=${1:-4}
+    local available_gb=$(free -g | awk 'NR==2 {print $7}')
     
-    source /etc/os-release
-    
-    case "$ID" in
-        ubuntu|debian)
-            sudo apt-get update
-            sudo apt-get install -y ca-certificates curl gnupg
-            sudo install -m 0755 -d /etc/apt/keyrings
-            curl -fsSL https://download.docker.com/linux/$ID/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-            sudo chmod a+r /etc/apt/keyrings/docker.gpg
-            
-            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$ID $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-                sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-            
-            sudo apt-get update
-            sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-            ;;
-        centos|rhel|fedora)
-            sudo yum install -y yum-utils
-            sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-            sudo yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-            sudo systemctl start docker
-            sudo systemctl enable docker
-            ;;
-        *)
-            log_error "Unsupported OS for automatic Docker installation: $ID"
-            log_info "Please install Docker manually: https://docs.docker.com/engine/install/"
-            exit 1
-            ;;
-    esac
-    
-    # Add user to docker group if not root
-    if [[ $EUID -ne 0 ]]; then
-        sudo usermod -aG docker "$USER"
-        log_warning "User added to docker group. You may need to log out and back in for this to take effect."
-        log_info "Or run: newgrp docker"
+    if ((available_gb < required_gb)); then
+        log_warning "Low memory. Required: ${required_gb}GB, Available: ${available_gb}GB"
+        return 1
     fi
-    
-    log_success "Docker installed successfully"
+    return 0
 }
 
-################################################################################
-# CONFIGURATION STEPS
-################################################################################
-
-step_01_installation_type() {
-    log_step "Step 1/27: Installation Type"
+create_directory_structure() {
+    log_info "Creating directory structure..."
     
-    echo "Select installation type:"
-    echo "1) Quick Start (Recommended defaults)"
-    echo "2) Custom Installation (Full configuration)"
-    echo "3) Minimal (Ollama + WebUI only)"
-    echo "4) Development (All services with debug enabled)"
+    local dirs=(
+        "$CONFIG_DIR"
+        "$BACKUP_DIR"
+        "$LOG_DIR"
+        "${CONFIG_VALUES[DATA_ROOT]}"
+        "${CONFIG_VALUES[DATA_ROOT]}/ollama"
+        "${CONFIG_VALUES[DATA_ROOT]}/open-webui"
+        "${CONFIG_VALUES[DATA_ROOT]}/n8n"
+        "${CONFIG_VALUES[DATA_ROOT]}/postgres"
+        "${CONFIG_VALUES[DATA_ROOT]}/redis"
+        "${CONFIG_VALUES[DATA_ROOT]}/nginx/conf.d"
+        "${CONFIG_VALUES[DATA_ROOT]}/nginx/ssl"
+        "${CONFIG_VALUES[DATA_ROOT]}/prometheus"
+        "${CONFIG_VALUES[DATA_ROOT]}/grafana"
+    )
     
-    local choice
-    read -rp "Enter choice [1-4]: " choice
-    
-    case "$choice" in
-        1)
-            CONFIG_VALUES[INSTALL_TYPE]="quick"
-            CONFIG_VALUES[INSTALL_OLLAMA]="true"
-            CONFIG_VALUES[INSTALL_WEBUI]="true"
-            CONFIG_VALUES[INSTALL_N8N]="true"
-            CONFIG_VALUES[INSTALL_POSTGRES]="true"
-            CONFIG_VALUES[INSTALL_REDIS]="false"
-            CONFIG_VALUES[INSTALL_NGINX]="true"
-            CONFIG_VALUES[INSTALL_MONITORING]="false"
-            ;;
-        2)
-            CONFIG_VALUES[INSTALL_TYPE]="custom"
-            ;;
-        3)
-            CONFIG_VALUES[INSTALL_TYPE]="minimal"
-            CONFIG_VALUES[INSTALL_OLLAMA]="true"
-            CONFIG_VALUES[INSTALL_WEBUI]="true"
-            CONFIG_VALUES[INSTALL_N8N]="false"
-            CONFIG_VALUES[INSTALL_POSTGRES]="false"
-            CONFIG_VALUES[INSTALL_REDIS]="false"
-            CONFIG_VALUES[INSTALL_NGINX]="false"
-            CONFIG_VALUES[INSTALL_MONITORING]="false"
-            ;;
-        4)
-            CONFIG_VALUES[INSTALL_TYPE]="development"
-            CONFIG_VALUES[INSTALL_OLLAMA]="true"
-            CONFIG_VALUES[INSTALL_WEBUI]="true"
-            CONFIG_VALUES[INSTALL_N8N]="true"
-            CONFIG_VALUES[INSTALL_POSTGRES]="true"
-            CONFIG_VALUES[INSTALL_REDIS]="true"
-            CONFIG_VALUES[INSTALL_NGINX]="true"
-            CONFIG_VALUES[INSTALL_MONITORING]="true"
-            CONFIG_VALUES[DEBUG_MODE]="true"
-            ;;
-        *)
-            log_error "Invalid choice"
-            step_01_installation_type
-            return
-            ;;
-    esac
-    
-    log_success "Installation type: ${CONFIG_VALUES[INSTALL_TYPE]}"
-}
-
-step_02_project_info() {
-    log_step "Step 2/27: Project Information"
-    
-    CONFIG_VALUES[PROJECT_NAME]=$(prompt_with_default "Project name" "aiplatform")
-    CONFIG_VALUES[ENVIRONMENT]=$(prompt_with_default "Environment (dev/staging/prod)" "prod")
-    CONFIG_VALUES[ADMIN_EMAIL]=$(prompt_with_default "Administrator email" "admin@example.com")
-    
-    while ! validate_email "${CONFIG_VALUES[ADMIN_EMAIL]}"; do
-        log_warning "Invalid email format"
-        CONFIG_VALUES[ADMIN_EMAIL]=$(prompt_with_default "Administrator email" "admin@example.com")
+    for dir in "${dirs[@]}"; do
+        if ! mkdir -p "$dir"; then
+            log_error "Failed to create directory: $dir"
+            return 1
+        fi
     done
     
-    log_success "Project info configured"
+    log_success "Directory structure created"
+    return 0
 }
 
-step_03_stack_selection() {
-    if [[ "${CONFIG_VALUES[INSTALL_TYPE]}" != "custom" ]]; then
-        return
+#==============================================================================
+# VALIDATION FUNCTIONS
+#==============================================================================
+
+validate_prerequisites() {
+    log_step "Validating prerequisites..."
+    
+    local missing_tools=()
+    
+    # Check required commands
+    local required_commands=(
+        "docker:Docker"
+        "docker-compose:Docker Compose"
+        "curl:cURL"
+        "jq:jq"
+        "openssl:OpenSSL"
+    )
+    
+    for cmd_info in "${required_commands[@]}"; do
+        IFS=: read -r cmd name <<< "$cmd_info"
+        if ! command -v "$cmd" &>/dev/null; then
+            missing_tools+=("$name")
+            log_error "$name is not installed"
+        fi
+    done
+    
+    if [[ ${#missing_tools[@]} -gt 0 ]]; then
+        print_error_box "Missing required tools: ${missing_tools[*]}"
+        log_error "Please install missing tools and run again"
+        return 1
     fi
     
-    log_step "Step 3/27: Stack Component Selection"
+    # Check Docker daemon
+    if ! docker ps &>/dev/null; then
+        log_error "Docker daemon is not running"
+        return 1
+    fi
     
-    CONFIG_VALUES[INSTALL_OLLAMA]=$(prompt_yes_no "Install Ollama?" "y" && echo "true" || echo "false")
-    CONFIG_VALUES[INSTALL_WEBUI]=$(prompt_yes_no "Install Open WebUI?" "y" && echo "true" || echo "false")
-    CONFIG_VALUES[INSTALL_N8N]=$(prompt_yes_no "Install n8n?" "y" && echo "true" || echo "false")
-    CONFIG_VALUES[INSTALL_POSTGRES]=$(prompt_yes_no "Install PostgreSQL?" "y" && echo "true" || echo "false")
-    CONFIG_VALUES[INSTALL_REDIS]=$(prompt_yes_no "Install Redis?" "n" && echo "true" || echo "false")
-    CONFIG_VALUES[INSTALL_NGINX]=$(prompt_yes_no "Install Nginx reverse proxy?" "y" && echo "true" || echo "false")
-    CONFIG_VALUES[INSTALL_MONITORING]=$(prompt_yes_no "Install monitoring stack (Prometheus/Grafana)?" "n" && echo "true" || echo "false")
+    # Check Docker Compose version
+    local compose_version=$(docker-compose version --short 2>/dev/null || echo "0")
+    log_info "Docker Compose version: $compose_version"
     
-    log_success "Stack components selected"
+    # Check user permissions
+    if [[ $EUID -eq 0 ]]; then
+        log_error "This script should NOT be run as root"
+        log_info "Please run as regular user with docker group membership"
+        return 1
+    fi
+    
+    # Check docker group membership
+    if ! groups | grep -q docker; then
+        log_warning "User not in docker group"
+        log_info "Run: sudo usermod -aG docker $USER && newgrp docker"
+    fi
+    
+    # Check disk space
+    if ! check_disk_space 20; then
+        return 1
+    fi
+    
+    # Check memory
+    check_memory 4 || log_warning "System has limited memory"
+    
+    log_success "All prerequisites validated"
+    return 0
 }
 
-step_04_service_ports() {
-    log_step "Step 4/27: Service Ports Configuration"
+validate_configuration() {
+    log_step "Validating configuration..."
     
-    if [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" == "true" ]]; then
-        CONFIG_VALUES[OLLAMA_PORT]=$(prompt_with_default "Ollama API port" "11434")
-    fi
+    local errors=0
     
-    if [[ "${CONFIG_VALUES[INSTALL_WEBUI]}" == "true" ]]; then
-        CONFIG_VALUES[WEBUI_PORT]=$(prompt_with_default "WebUI port" "3000")
-    fi
+    # Validate ports
+    for key in "${!CONFIG_VALUES[@]}"; do
+        if [[ "$key" =~ _PORT$ ]]; then
+            local port="${CONFIG_VALUES[$key]}"
+            if ! [[ "$port" =~ ^[0-9]+$ ]] || ((port < 1 || port > 65535)); then
+                log_error "Invalid port for $key: $port"
+                ((errors++))
+            fi
+        fi
+    done
     
-    if [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]]; then
-        CONFIG_VALUES[N8N_PORT]=$(prompt_with_default "n8n port" "5678")
-    fi
-    
-    if [[ "${CONFIG_VALUES[INSTALL_POSTGRES]}" == "true" ]]; then
-        CONFIG_VALUES[POSTGRES_PORT]=$(prompt_with_default "PostgreSQL port" "5432")
-    fi
-    
-    if [[ "${CONFIG_VALUES[INSTALL_REDIS]}" == "true" ]]; then
-        CONFIG_VALUES[REDIS_PORT]=$(prompt_with_default "Redis port" "6379")
-    fi
-    
-    if [[ "${CONFIG_VALUES[INSTALL_NGINX]}" == "true" ]]; then
-        CONFIG_VALUES[NGINX_HTTP_PORT]=$(prompt_with_default "Nginx HTTP port" "80")
-        CONFIG_VALUES[NGINX_HTTPS_PORT]=$(prompt_with_default "Nginx HTTPS port" "443")
-    fi
-    
-    if [[ "${CONFIG_VALUES[INSTALL_MONITORING]}" == "true" ]]; then
-        CONFIG_VALUES[PROMETHEUS_PORT]=$(prompt_with_default "Prometheus port" "9090")
-        CONFIG_VALUES[GRAFANA_PORT]=$(prompt_with_default "Grafana port" "3001")
-    fi
-    
-    log_success "Service ports configured"
-}
-
-step_05_storage_config() {
-    log_step "Step 5/27: Storage Configuration"
-    
-    CONFIG_VALUES[DATA_DIR]=$(prompt_with_default "Data directory path" "/var/lib/aiplatform")
-    CONFIG_VALUES[BACKUP_ENABLED]=$(prompt_yes_no "Enable automated backups?" "y" && echo "true" || echo "false")
-    
-    if [[ "${CONFIG_VALUES[BACKUP_ENABLED]}" == "true" ]]; then
-        CONFIG_VALUES[BACKUP_RETENTION_DAYS]=$(prompt_with_default "Backup retention days" "7")
-        CONFIG_VALUES[BACKUP_SCHEDULE]=$(prompt_with_default "Backup cron schedule" "0 2 * * *")
-    fi
-    
-    CONFIG_VALUES[LOG_RETENTION_DAYS]=$(prompt_with_default "Log retention days" "30")
-    
-    log_success "Storage configured"
-}
-step_06_database_config() {
-    if [[ "${CONFIG_VALUES[INSTALL_POSTGRES]}" != "true" ]]; then
-        return
-    fi
-    
-    log_step "Step 6/27: Database Configuration"
-    
-    CONFIG_VALUES[POSTGRES_DB]=$(prompt_with_default "PostgreSQL database name" "aiplatform")
-    CONFIG_VALUES[POSTGRES_USER]=$(prompt_with_default "PostgreSQL username" "aiplatform")
-    
-    if prompt_yes_no "Auto-generate PostgreSQL password?" "y"; then
-        CONFIG_VALUES[POSTGRES_PASSWORD]=$(generate_random_password 32)
-        log_info "Generated password: ${CONFIG_VALUES[POSTGRES_PASSWORD]}"
-    else
-        read -rsp "Enter PostgreSQL password: " pg_pass
-        echo
-        CONFIG_VALUES[POSTGRES_PASSWORD]="$pg_pass"
-    fi
-    
-    CONFIG_VALUES[POSTGRES_MAX_CONNECTIONS]=$(prompt_with_default "Max database connections" "100")
-    CONFIG_VALUES[POSTGRES_SHARED_BUFFERS]=$(prompt_with_default "Shared buffers (MB)" "256")
-    
-    log_success "Database configured"
-}
-
-step_07_proxy_config() {
-    if [[ "${CONFIG_VALUES[INSTALL_NGINX]}" != "true" ]]; then
-        return
-    fi
-    
-    log_step "Step 7/27: Reverse Proxy Configuration"
-    
-    CONFIG_VALUES[ENABLE_SSL]=$(prompt_yes_no "Enable SSL/TLS?" "y" && echo "true" || echo "false")
-    
+    # Validate email if SSL is enabled
     if [[ "${CONFIG_VALUES[ENABLE_SSL]}" == "true" ]]; then
-        CONFIG_VALUES[SSL_METHOD]="letsencrypt"
-        if prompt_yes_no "Use Let's Encrypt for SSL?" "y"; then
-            CONFIG_VALUES[SSL_METHOD]="letsencrypt"
-            CONFIG_VALUES[SSL_EMAIL]=$(prompt_with_default "Email for Let's Encrypt" "${CONFIG_VALUES[ADMIN_EMAIL]}")
-        else
-            CONFIG_VALUES[SSL_METHOD]="custom"
-            log_info "You'll need to provide SSL certificate files later"
+        if ! is_valid_email "${CONFIG_VALUES[SSL_EMAIL]:-}"; then
+            log_error "Invalid email address for SSL"
+            ((errors++))
         fi
     fi
     
-    if [[ "${CONFIG_VALUES[INSTALL_WEBUI]}" == "true" ]]; then
-        CONFIG_VALUES[WEBUI_DOMAIN]=$(prompt_with_default "WebUI domain (optional, blank for IP)" "")
+    # Validate domain
+    if [[ "${CONFIG_VALUES[BASE_DOMAIN]}" != "localhost" ]]; then
+        if ! is_valid_domain "${CONFIG_VALUES[BASE_DOMAIN]}"; then
+            log_error "Invalid domain: ${CONFIG_VALUES[BASE_DOMAIN]}"
+            ((errors++))
+        fi
     fi
     
-    if [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]]; then
-        CONFIG_VALUES[N8N_DOMAIN]=$(prompt_with_default "n8n domain (optional, blank for IP)" "")
+    if ((errors > 0)); then
+        log_error "Configuration validation failed with $errors error(s)"
+        return 1
     fi
     
-    CONFIG_VALUES[CLIENT_MAX_BODY_SIZE]=$(prompt_with_default "Max upload size (MB)" "100")
-    
-    log_success "Proxy configured"
+    log_success "Configuration validated"
+    return 0
 }
 
-step_08_backup_config() {
-    if [[ "${CONFIG_VALUES[BACKUP_ENABLED]}" != "true" ]]; then
-        return
+#==============================================================================
+# END OF PART 1/4
+#==============================================================================
+#
+#!/bin/bash
+################################################################################
+# AI Platform Automation - System Setup Script
+# Part 2/4: Configuration Wizard Steps 1-10
+################################################################################
+
+#==============================================================================
+# STEP 1: WELCOME AND OVERVIEW
+#==============================================================================
+
+step_01_welcome() {
+    print_step_header 1 "Welcome and Overview"
+    
+    log_info "Starting AI Platform setup wizard"
+    
+    cat << 'EOF'
+Welcome to the AI Platform Automation setup wizard!
+
+This wizard will guide you through configuring:
+  
+  CORE SERVICES:
+  • Ollama - Local LLM runtime for AI models
+  • Open WebUI - Modern chat interface for Ollama
+  • n8n - Workflow automation platform
+  • Nginx - Reverse proxy and SSL termination
+  
+  DATA LAYER:
+  • PostgreSQL - Primary database
+  • Redis - Caching and session storage
+  
+  MONITORING (Optional):
+  • Prometheus - Metrics collection
+  • Grafana - Visualization dashboards
+  • Portainer - Docker management UI
+  
+  FEATURES:
+  • Automated SSL with Let's Encrypt
+  • Backup and restore functionality
+  • Resource monitoring and alerts
+  • Multi-model support
+  • API key management
+
+The wizard takes approximately 5-10 minutes to complete.
+All services will be containerized using Docker Compose.
+
+EOF
+
+    log_info "System Information:"
+    log_info "  OS: $(uname -s) $(uname -r)"
+    log_info "  User: $USER"
+    log_info "  Project Root: $PROJECT_ROOT"
+    log_info "  Data Root: ${CONFIG_VALUES[DATA_ROOT]}"
+    
+    echo
+    if ! prompt_yes_no "Ready to begin setup?" "y"; then
+        log_warning "Setup cancelled by user"
+        exit 0
     fi
     
-    log_step "Step 8/27: Backup Strategy"
+    log_success "Step 1 completed: Welcome acknowledged"
+}
+
+#==============================================================================
+# STEP 2: ENVIRONMENT SELECTION
+#==============================================================================
+
+step_02_environment() {
+    print_step_header 2 "Environment Selection"
     
-    echo "Select backup storage:"
-    echo "1) Local filesystem"
-    echo "2) AWS S3"
-    echo "3) MinIO"
-    echo "4) Both local and remote"
+    cat << 'EOF'
+Select your deployment environment:
+
+  1) Production  - Full security, optimized performance
+  2) Development - Debug logging, relaxed security
+  3) Testing     - Isolated environment, mock services
+
+EOF
+
+    local env=$(prompt_choice "Select environment:" "production" "development" "testing")
+    CONFIG_VALUES[ENVIRONMENT]="$env"
     
-    local choice
-    read -rp "Enter choice [1-4]: " choice
+    log_info "Environment selected: $env"
     
-    case "$choice" in
-        1) CONFIG_VALUES[BACKUP_STORAGE]="local" ;;
-        2) 
-            CONFIG_VALUES[BACKUP_STORAGE]="s3"
-            CONFIG_VALUES[S3_BUCKET]=$(prompt_with_default "S3 bucket name" "")
-            CONFIG_VALUES[S3_REGION]=$(prompt_with_default "S3 region" "us-east-1")
-            read -rp "AWS Access Key ID: " CONFIG_VALUES[AWS_ACCESS_KEY_ID]
-            read -rsp "AWS Secret Access Key: " CONFIG_VALUES[AWS_SECRET_ACCESS_KEY]
-            echo
+    # Set environment-specific defaults
+    case "$env" in
+        production)
+            CONFIG_VALUES[DEBUG]="false"
+            CONFIG_VALUES[LOG_LEVEL]="info"
+            CONFIG_VALUES[ENABLE_SSL]="true"
             ;;
-        3)
-            CONFIG_VALUES[BACKUP_STORAGE]="minio"
-            CONFIG_VALUES[MINIO_ENDPOINT]=$(prompt_with_default "MinIO endpoint" "")
-            CONFIG_VALUES[MINIO_BUCKET]=$(prompt_with_default "MinIO bucket" "backups")
-            read -rp "MinIO Access Key: " CONFIG_VALUES[MINIO_ACCESS_KEY]
-            read -rsp "MinIO Secret Key: " CONFIG_VALUES[MINIO_SECRET_KEY]
-            echo
+        development)
+            CONFIG_VALUES[DEBUG]="true"
+            CONFIG_VALUES[LOG_LEVEL]="debug"
+            CONFIG_VALUES[ENABLE_SSL]="false"
             ;;
-        4)
-            CONFIG_VALUES[BACKUP_STORAGE]="both"
-            CONFIG_VALUES[S3_BUCKET]=$(prompt_with_default "S3 bucket name" "")
-            CONFIG_VALUES[S3_REGION]=$(prompt_with_default "S3 region" "us-east-1")
-            read -rp "AWS Access Key ID: " CONFIG_VALUES[AWS_ACCESS_KEY_ID]
-            read -rsp "AWS Secret Access Key: " CONFIG_VALUES[AWS_SECRET_ACCESS_KEY]
-            echo
-            ;;
-        *)
-            log_error "Invalid choice"
-            step_08_backup_config
-            return
+        testing)
+            CONFIG_VALUES[DEBUG]="true"
+            CONFIG_VALUES[LOG_LEVEL]="debug"
+            CONFIG_VALUES[ENABLE_SSL]="false"
+            CONFIG_VALUES[COMPOSE_PROJECT_NAME]="aiplatform-test"
             ;;
     esac
     
-    CONFIG_VALUES[BACKUP_COMPRESSION]=$(prompt_yes_no "Enable backup compression?" "y" && echo "true" || echo "false")
-    CONFIG_VALUES[BACKUP_ENCRYPTION]=$(prompt_yes_no "Enable backup encryption?" "y" && echo "true" || echo "false")
+    # Project name
+    local project_name=$(prompt_with_default "Project name" "${CONFIG_VALUES[COMPOSE_PROJECT_NAME]}")
+    CONFIG_VALUES[COMPOSE_PROJECT_NAME]="$project_name"
     
-    if [[ "${CONFIG_VALUES[BACKUP_ENCRYPTION]}" == "true" ]]; then
-        if prompt_yes_no "Auto-generate encryption key?" "y"; then
-            CONFIG_VALUES[BACKUP_ENCRYPTION_KEY]=$(generate_random_password 32)
-            log_warning "SAVE THIS KEY: ${CONFIG_VALUES[BACKUP_ENCRYPTION_KEY]}"
-        else
-            read -rsp "Enter encryption key: " CONFIG_VALUES[BACKUP_ENCRYPTION_KEY]
-            echo
-        fi
-    fi
-    
-    log_success "Backup strategy configured"
+    log_success "Step 2 completed: Environment configured as $env"
 }
 
-step_09_logging_config() {
-    log_step "Step 9/27: Logging Configuration"
-    
-    echo "Select log level:"
-    echo "1) ERROR (minimal)"
-    echo "2) WARNING"
-    echo "3) INFO (recommended)"
-    echo "4) DEBUG (verbose)"
-    
-    local choice
-    read -rp "Enter choice [1-4]: " choice
-    
-    case "$choice" in
-        1) CONFIG_VALUES[LOG_LEVEL]="ERROR" ;;
-        2) CONFIG_VALUES[LOG_LEVEL]="WARNING" ;;
-        3) CONFIG_VALUES[LOG_LEVEL]="INFO" ;;
-        4) CONFIG_VALUES[LOG_LEVEL]="DEBUG" ;;
-        *) CONFIG_VALUES[LOG_LEVEL]="INFO" ;;
-    esac
-    
-    CONFIG_VALUES[LOG_FORMAT]=$(prompt_with_default "Log format (json/text)" "json")
-    CONFIG_VALUES[LOG_MAX_SIZE]=$(prompt_with_default "Max log file size (MB)" "100")
-    CONFIG_VALUES[LOG_MAX_FILES]=$(prompt_with_default "Max log files to keep" "10")
-    
-    CONFIG_VALUES[ENABLE_ACCESS_LOGS]=$(prompt_yes_no "Enable access logs?" "y" && echo "true" || echo "false")
-    CONFIG_VALUES[ENABLE_AUDIT_LOGS]=$(prompt_yes_no "Enable audit logs?" "y" && echo "true" || echo "false")
-    
-    log_success "Logging configured"
-}
+#==============================================================================
+# STEP 3: SERVICE SELECTION
+#==============================================================================
 
-step_10_resource_limits() {
-    log_step "Step 10/27: Resource Limits"
+step_03_services() {
+    print_step_header 3 "Service Selection"
     
-    if [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" == "true" ]]; then
-        CONFIG_VALUES[OLLAMA_MEMORY_LIMIT]=$(prompt_with_default "Ollama memory limit (GB)" "8")
-        CONFIG_VALUES[OLLAMA_CPU_LIMIT]=$(prompt_with_default "Ollama CPU cores" "4")
-    fi
-    
-    if [[ "${CONFIG_VALUES[INSTALL_WEBUI]}" == "true" ]]; then
-        CONFIG_VALUES[WEBUI_MEMORY_LIMIT]=$(prompt_with_default "WebUI memory limit (GB)" "2")
-        CONFIG_VALUES[WEBUI_CPU_LIMIT]=$(prompt_with_default "WebUI CPU cores" "2")
-    fi
-    
-    if [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]]; then
-        CONFIG_VALUES[N8N_MEMORY_LIMIT]=$(prompt_with_default "n8n memory limit (GB)" "2")
-        CONFIG_VALUES[N8N_CPU_LIMIT]=$(prompt_with_default "n8n CPU cores" "2")
-    fi
-    
-    if [[ "${CONFIG_VALUES[INSTALL_POSTGRES]}" == "true" ]]; then
-        CONFIG_VALUES[POSTGRES_MEMORY_LIMIT]=$(prompt_with_default "PostgreSQL memory limit (GB)" "2")
-        CONFIG_VALUES[POSTGRES_CPU_LIMIT]=$(prompt_with_default "PostgreSQL CPU cores" "2")
-    fi
-    
-    log_success "Resource limits configured"
-}
+    cat << 'EOF'
+Select which services to install:
 
-step_11_network_config() {
-    log_step "Step 11/27: Network Configuration"
-    
-    CONFIG_VALUES[DOCKER_NETWORK]=$(prompt_with_default "Docker network name" "aiplatform_network")
-    CONFIG_VALUES[NETWORK_SUBNET]=$(prompt_with_default "Network subnet" "172.28.0.0/16")
-    
-    CONFIG_VALUES[ENABLE_IPV6]=$(prompt_yes_no "Enable IPv6?" "n" && echo "true" || echo "false")
-    
-    if [[ "${CONFIG_VALUES[ENABLE_IPV6]}" == "true" ]]; then
-        CONFIG_VALUES[IPV6_SUBNET]=$(prompt_with_default "IPv6 subnet" "fd00::/80")
-    fi
-    
-    CONFIG_VALUES[DNS_SERVERS]=$(prompt_with_default "Custom DNS servers (comma-separated, blank for default)" "")
-    
-    log_success "Network configured"
-}
+CORE SERVICES (Required):
+EOF
 
-step_12_timezone_config() {
-    log_step "Step 12/27: Timezone & Localization"
-    
-    local system_tz=$(timedatectl show -p Timezone --value 2>/dev/null || echo "UTC")
-    CONFIG_VALUES[TIMEZONE]=$(prompt_with_default "Timezone" "$system_tz")
-    
-    CONFIG_VALUES[DEFAULT_LANGUAGE]=$(prompt_with_default "Default language" "en-US")
-    
-    log_success "Timezone configured"
-}
-
-step_13_auth_config() {
-    log_step "Step 13/27: Authentication Configuration"
-    
-    if [[ "${CONFIG_VALUES[INSTALL_WEBUI]}" == "true" ]]; then
-        CONFIG_VALUES[WEBUI_AUTH_METHOD]="local"
-        
-        if prompt_yes_no "Enable OAuth authentication?" "n"; then
-            CONFIG_VALUES[ENABLE_OAUTH]="true"
-            
-            echo "Select OAuth provider:"
-            echo "1) Google"
-            echo "2) GitHub"
-            echo "3) Microsoft"
-            echo "4) Generic OIDC"
-            
-            read -rp "Enter choice [1-4]: " oauth_choice
-            
-            case "$oauth_choice" in
-                1) CONFIG_VALUES[OAUTH_PROVIDER]="google" ;;
-                2) CONFIG_VALUES[OAUTH_PROVIDER]="github" ;;
-                3) CONFIG_VALUES[OAUTH_PROVIDER]="microsoft" ;;
-                4) CONFIG_VALUES[OAUTH_PROVIDER]="oidc" ;;
-            esac
-            
-            read -rp "OAuth Client ID: " CONFIG_VALUES[OAUTH_CLIENT_ID]
-            read -rsp "OAuth Client Secret: " CONFIG_VALUES[OAUTH_CLIENT_SECRET]
-            echo
-            
-            if [[ "${CONFIG_VALUES[OAUTH_PROVIDER]}" == "oidc" ]]; then
-                CONFIG_VALUES[OAUTH_ISSUER_URL]=$(prompt_with_default "OIDC Issuer URL" "")
-            fi
-        else
-            CONFIG_VALUES[ENABLE_OAUTH]="false"
-        fi
-        
-        CONFIG_VALUES[WEBUI_SIGNUP_ENABLED]=$(prompt_yes_no "Allow user self-registration?" "y" && echo "true" || echo "false")
-        
-        if [[ "${CONFIG_VALUES[WEBUI_SIGNUP_ENABLED]}" == "true" ]]; then
-            CONFIG_VALUES[WEBUI_REQUIRE_EMAIL_VERIFICATION]=$(prompt_yes_no "Require email verification?" "y" && echo "true" || echo "false")
-        fi
-    fi
-    
-    if [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]]; then
-        CONFIG_VALUES[N8N_BASIC_AUTH_ACTIVE]=$(prompt_yes_no "Enable n8n basic auth?" "y" && echo "true" || echo "false")
-        
-        if [[ "${CONFIG_VALUES[N8N_BASIC_AUTH_ACTIVE]}" == "true" ]]; then
-            CONFIG_VALUES[N8N_BASIC_AUTH_USER]=$(prompt_with_default "n8n username" "admin")
-            
-            if prompt_yes_no "Auto-generate n8n password?" "y"; then
-                CONFIG_VALUES[N8N_BASIC_AUTH_PASSWORD]=$(generate_random_password 16)
-                log_info "Generated n8n password: ${CONFIG_VALUES[N8N_BASIC_AUTH_PASSWORD]}"
-            else
-                read -rsp "Enter n8n password: " CONFIG_VALUES[N8N_BASIC_AUTH_PASSWORD]
-                echo
-            fi
-        fi
-    fi
-    
-    # Generate encryption key for WebUI
-    if [[ "${CONFIG_VALUES[INSTALL_WEBUI]}" == "true" ]]; then
-        CONFIG_VALUES[WEBUI_SECRET_KEY]=$(generate_random_password 32)
-    fi
-    
-    # Generate encryption key for n8n
-    if [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]]; then
-        CONFIG_VALUES[N8N_ENCRYPTION_KEY]=$(generate_random_password 32)
-    fi
-    
-    log_success "Authentication configured"
-}
-
-step_14_model_selection() {
-    if [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" != "true" ]]; then
-        return
-    fi
-    
-    log_step "Step 14/27: AI Model Selection"
-    
-    echo "Select models to download (comma-separated numbers):"
-    echo "1) llama3.2 (3B) - Fast, general purpose"
-    echo "2) llama3.2:1b - Very fast, lightweight"
-    echo "3) phi3 (3.8B) - Microsoft's efficient model"
-    echo "4) mistral (7B) - Balanced performance"
-    echo "5) llama3.1:8b - Latest LLaMA, good quality"
-    echo "6) codellama (7B) - Code generation"
-    echo "7) qwen2.5:7b - Multilingual support"
-    echo "8) gemma2:9b - Google's latest"
-    echo "9) Custom (specify manually)"
-    echo "0) Skip (download later)"
-    
-    read -rp "Enter selections: " model_choices
-    
-    local models=()
-    IFS=',' read -ra CHOICES <<< "$model_choices"
-    
-    for choice in "${CHOICES[@]}"; do
-        choice=$(echo "$choice" | tr -d ' ')
-        case "$choice" in
-            1) models+=("llama3.2") ;;
-            2) models+=("llama3.2:1b") ;;
-            3) models+=("phi3") ;;
-            4) models+=("mistral") ;;
-            5) models+=("llama3.1:8b") ;;
-            6) models+=("codellama") ;;
-            7) models+=("qwen2.5:7b") ;;
-            8) models+=("gemma2:9b") ;;
-            9) 
-                read -rp "Enter custom model names (comma-separated): " custom_models
-                IFS=',' read -ra CUSTOM <<< "$custom_models"
-                for model in "${CUSTOM[@]}"; do
-                    models+=("$(echo "$model" | tr -d ' ')")
-                done
-                ;;
-            0) ;;
-            *) log_warning "Invalid choice: $choice" ;;
-        esac
-    done
-    
-    CONFIG_VALUES[OLLAMA_MODELS]=$(IFS=,; echo "${models[*]}")
-    
-    if [[ -n "${CONFIG_VALUES[OLLAMA_MODELS]}" ]]; then
-        log_info "Selected models: ${CONFIG_VALUES[OLLAMA_MODELS]}"
-    fi
-    
-    log_success "Model selection configured"
-}
-
-step_15_model_settings() {
-    if [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" != "true" ]]; then
-        return
-    fi
-    
-    log_step "Step 15/27: AI Model Settings"
-    
-    # GPU Configuration
-    CONFIG_VALUES[OLLAMA_GPU_ENABLED]=$(prompt_yes_no "Enable GPU acceleration?" "n" && echo "true" || echo "false")
-    
-    if [[ "${CONFIG_VALUES[OLLAMA_GPU_ENABLED]}" == "true" ]]; then
-        echo "Select GPU type:"
-        echo "1) NVIDIA (CUDA)"
-        echo "2) AMD (ROCm)"
-        echo "3) Apple Silicon (Metal)"
-        
-        local gpu_choice
-        read -rp "Enter choice [1-3]: " gpu_choice
-        
-        case "$gpu_choice" in
-            1) CONFIG_VALUES[OLLAMA_GPU_TYPE]="nvidia" ;;
-            2) CONFIG_VALUES[OLLAMA_GPU_TYPE]="amd" ;;
-            3) CONFIG_VALUES[OLLAMA_GPU_TYPE]="metal" ;;
-            *) CONFIG_VALUES[OLLAMA_GPU_TYPE]="nvidia" ;;
-        esac
-        
-        if [[ "${CONFIG_VALUES[OLLAMA_GPU_TYPE]}" == "nvidia" ]]; then
-            CONFIG_VALUES[OLLAMA_GPU_LAYERS]=$(prompt_with_default "Number of layers to offload to GPU (-1 for all)" "-1")
-        fi
-    fi
-    
-    # Model Performance Settings
-    CONFIG_VALUES[OLLAMA_NUM_PARALLEL]=$(prompt_with_default "Number of parallel model loads" "1")
-    CONFIG_VALUES[OLLAMA_MAX_LOADED_MODELS]=$(prompt_with_default "Max models to keep in memory" "1")
-    CONFIG_VALUES[OLLAMA_KEEP_ALIVE]=$(prompt_with_default "Model keep-alive duration (e.g., 5m, 1h)" "5m")
-    
-    # Context Settings
-    CONFIG_VALUES[OLLAMA_NUM_CTX]=$(prompt_with_default "Default context window size" "2048")
-    CONFIG_VALUES[OLLAMA_NUM_THREAD]=$(prompt_with_default "Number of CPU threads" "4")
-    
-    log_success "Model settings configured"
-}
-step_16_monitoring_config() {
-    if [[ "${CONFIG_VALUES[INSTALL_MONITORING]}" != "true" ]]; then
-        return
-    fi
-    
-    log_step "Step 16/27: Monitoring Configuration"
-    
-    CONFIG_VALUES[PROMETHEUS_RETENTION]=$(prompt_with_default "Prometheus retention period (days)" "15")
-    CONFIG_VALUES[PROMETHEUS_SCRAPE_INTERVAL]=$(prompt_with_default "Metrics scrape interval (seconds)" "15")
-    
-    CONFIG_VALUES[GRAFANA_ADMIN_USER]=$(prompt_with_default "Grafana admin username" "admin")
-    
-    if prompt_yes_no "Auto-generate Grafana admin password?" "y"; then
-        CONFIG_VALUES[GRAFANA_ADMIN_PASSWORD]=$(generate_random_password 16)
-        log_info "Generated Grafana password: ${CONFIG_VALUES[GRAFANA_ADMIN_PASSWORD]}"
+    # Core services with dependencies
+    if prompt_yes_no "Install Ollama (LLM Runtime)?" "y"; then
+        CONFIG_VALUES[INSTALL_OLLAMA]="true"
+        log_info "Ollama will be installed"
     else
-        read -rsp "Enter Grafana admin password: " CONFIG_VALUES[GRAFANA_ADMIN_PASSWORD]
-        echo
+        CONFIG_VALUES[INSTALL_OLLAMA]="false"
+        log_warning "Ollama disabled - AI features will not work"
     fi
     
-    CONFIG_VALUES[ENABLE_ALERTING]=$(prompt_yes_no "Enable alerting?" "y" && echo "true" || echo "false")
-    
-    if [[ "${CONFIG_VALUES[ENABLE_ALERTING]}" == "true" ]]; then
-        echo "Select alert notification method:"
-        echo "1) Email"
-        echo "2) Slack"
-        echo "3) Discord"
-        echo "4) Webhook"
-        echo "5) Multiple"
+    if prompt_yes_no "Install Open WebUI (Chat Interface)?" "y"; then
+        CONFIG_VALUES[INSTALL_OPEN_WEBUI]="true"
+        log_info "Open WebUI will be installed"
         
-        local alert_choice
-        read -rp "Enter choice [1-5]: " alert_choice
-        
-        case "$alert_choice" in
-            1)
-                CONFIG_VALUES[ALERT_METHOD]="email"
-                CONFIG_VALUES[ALERT_EMAIL_TO]=$(prompt_with_default "Alert recipient email" "${CONFIG_VALUES[ADMIN_EMAIL]}")
-                CONFIG_VALUES[ALERT_EMAIL_FROM]=$(prompt_with_default "Alert sender email" "alerts@${CONFIG_VALUES[DOMAIN]:-localhost}")
-                CONFIG_VALUES[SMTP_HOST]=$(prompt_with_default "SMTP host" "smtp.gmail.com")
-                CONFIG_VALUES[SMTP_PORT]=$(prompt_with_default "SMTP port" "587")
-                read -rp "SMTP username: " CONFIG_VALUES[SMTP_USER]
-                read -rsp "SMTP password: " CONFIG_VALUES[SMTP_PASSWORD]
-                echo
-                ;;
-            2)
-                CONFIG_VALUES[ALERT_METHOD]="slack"
-                read -rp "Slack webhook URL: " CONFIG_VALUES[SLACK_WEBHOOK_URL]
-                CONFIG_VALUES[SLACK_CHANNEL]=$(prompt_with_default "Slack channel" "#alerts")
-                ;;
-            3)
-                CONFIG_VALUES[ALERT_METHOD]="discord"
-                read -rp "Discord webhook URL: " CONFIG_VALUES[DISCORD_WEBHOOK_URL]
-                ;;
-            4)
-                CONFIG_VALUES[ALERT_METHOD]="webhook"
-                read -rp "Webhook URL: " CONFIG_VALUES[ALERT_WEBHOOK_URL]
-                ;;
-            5)
-                CONFIG_VALUES[ALERT_METHOD]="multiple"
-                log_info "You can configure multiple methods in alertmanager.yml later"
-                ;;
-        esac
-        
-        CONFIG_VALUES[ALERT_CPU_THRESHOLD]=$(prompt_with_default "CPU usage alert threshold (%)" "80")
-        CONFIG_VALUES[ALERT_MEMORY_THRESHOLD]=$(prompt_with_default "Memory usage alert threshold (%)" "85")
-        CONFIG_VALUES[ALERT_DISK_THRESHOLD]=$(prompt_with_default "Disk usage alert threshold (%)" "90")
+        if [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" == "false" ]]; then
+            log_warning "Open WebUI requires Ollama - enabling Ollama"
+            CONFIG_VALUES[INSTALL_OLLAMA]="true"
+        fi
+    else
+        CONFIG_VALUES[INSTALL_OPEN_WEBUI]="false"
     fi
     
-    log_success "Monitoring configured"
+    if prompt_yes_no "Install n8n (Workflow Automation)?" "y"; then
+        CONFIG_VALUES[INSTALL_N8N]="true"
+        log_info "n8n will be installed"
+    else
+        CONFIG_VALUES[INSTALL_N8N]="false"
+    fi
+    
+    echo
+    echo "DATA SERVICES:"
+    
+    if prompt_yes_no "Install PostgreSQL (Database)?" "y"; then
+        CONFIG_VALUES[INSTALL_POSTGRES]="true"
+        log_info "PostgreSQL will be installed"
+    else
+        CONFIG_VALUES[INSTALL_POSTGRES]="false"
+        if [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]]; then
+            log_warning "n8n requires PostgreSQL - enabling PostgreSQL"
+            CONFIG_VALUES[INSTALL_POSTGRES]="true"
+        fi
+    fi
+    
+    if prompt_yes_no "Install Redis (Cache/Sessions)?" "y"; then
+        CONFIG_VALUES[INSTALL_REDIS]="true"
+        log_info "Redis will be installed"
+    else
+        CONFIG_VALUES[INSTALL_REDIS]="false"
+    fi
+    
+    echo
+    echo "INFRASTRUCTURE:"
+    
+    if prompt_yes_no "Install Nginx (Reverse Proxy)?" "y"; then
+        CONFIG_VALUES[INSTALL_NGINX]="true"
+        log_info "Nginx will be installed"
+    else
+        CONFIG_VALUES[INSTALL_NGINX]="false"
+    fi
+    
+    echo
+    echo "MONITORING (Optional):"
+    
+    if prompt_yes_no "Install Prometheus + Grafana?" "n"; then
+        CONFIG_VALUES[INSTALL_PROMETHEUS]="true"
+        CONFIG_VALUES[INSTALL_GRAFANA]="true"
+        log_info "Monitoring stack will be installed"
+    else
+        CONFIG_VALUES[INSTALL_PROMETHEUS]="false"
+        CONFIG_VALUES[INSTALL_GRAFANA]="false"
+    fi
+    
+    if prompt_yes_no "Install Portainer (Docker UI)?" "n"; then
+        CONFIG_VALUES[INSTALL_PORTAINER]="true"
+        log_info "Portainer will be installed"
+    else
+        CONFIG_VALUES[INSTALL_PORTAINER]="false"
+    fi
+    
+    if prompt_yes_no "Install Watchtower (Auto-updates)?" "n"; then
+        CONFIG_VALUES[INSTALL_WATCHTOWER]="true"
+        log_info "Watchtower will be installed"
+    else
+        CONFIG_VALUES[INSTALL_WATCHTOWER]="false"
+    fi
+    
+    log_success "Step 3 completed: Services selected"
 }
 
-step_17_email_config() {
-    log_step "Step 17/27: Email Configuration"
+#==============================================================================
+# STEP 4: PORT CONFIGURATION
+#==============================================================================
+
+step_04_ports() {
+    print_step_header 4 "Port Configuration"
     
-    CONFIG_VALUES[ENABLE_EMAIL]=$(prompt_yes_no "Enable email functionality?" "y" && echo "true" || echo "false")
+    cat << 'EOF'
+Configure network ports for services.
+Press Enter to accept defaults.
+
+EOF
+
+    # Ollama
+    if [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" == "true" ]]; then
+        local ollama_port=$(prompt_with_default "Ollama API port" "${CONFIG_VALUES[OLLAMA_PORT]}")
+        if is_port_available "$ollama_port"; then
+            CONFIG_VALUES[OLLAMA_PORT]="$ollama_port"
+        else
+            log_warning "Port $ollama_port is in use, using default ${CONFIG_VALUES[OLLAMA_PORT]}"
+        fi
+    fi
     
-    if [[ "${CONFIG_VALUES[ENABLE_EMAIL]}" == "true" ]]; then
-        if [[ -z "${CONFIG_VALUES[SMTP_HOST]:-}" ]]; then
-            CONFIG_VALUES[SMTP_HOST]=$(prompt_with_default "SMTP host" "smtp.gmail.com")
-            CONFIG_VALUES[SMTP_PORT]=$(prompt_with_default "SMTP port" "587")
-            read -rp "SMTP username: " CONFIG_VALUES[SMTP_USER]
-            read -rsp "SMTP password: " CONFIG_VALUES[SMTP_PASSWORD]
-            echo
+    # Open WebUI
+    if [[ "${CONFIG_VALUES[INSTALL_OPEN_WEBUI]}" == "true" ]]; then
+        local webui_port=$(prompt_with_default "Open WebUI port" "${CONFIG_VALUES[OPEN_WEBUI_PORT]}")
+        if is_port_available "$webui_port"; then
+            CONFIG_VALUES[OPEN_WEBUI_PORT]="$webui_port"
+        else
+            log_warning "Port $webui_port is in use, using default ${CONFIG_VALUES[OPEN_WEBUI_PORT]}"
+        fi
+    fi
+    
+    # n8n
+    if [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]]; then
+        local n8n_port=$(prompt_with_default "n8n port" "${CONFIG_VALUES[N8N_PORT]}")
+        if is_port_available "$n8n_port"; then
+            CONFIG_VALUES[N8N_PORT]="$n8n_port"
+        else
+            log_warning "Port $n8n_port is in use, using default ${CONFIG_VALUES[N8N_PORT]}"
+        fi
+    fi
+    
+    # Nginx
+    if [[ "${CONFIG_VALUES[INSTALL_NGINX]}" == "true" ]]; then
+        local http_port=$(prompt_with_default "Nginx HTTP port" "${CONFIG_VALUES[NGINX_HTTP_PORT]}")
+        local https_port=$(prompt_with_default "Nginx HTTPS port" "${CONFIG_VALUES[NGINX_HTTPS_PORT]}")
+        
+        if is_port_available "$http_port"; then
+            CONFIG_VALUES[NGINX_HTTP_PORT]="$http_port"
+        else
+            log_warning "Port $http_port is in use"
         fi
         
-        CONFIG_VALUES[SMTP_FROM_NAME]=$(prompt_with_default "Email sender name" "AI Platform")
-        CONFIG_VALUES[SMTP_FROM_EMAIL]=$(prompt_with_default "Email sender address" "noreply@${CONFIG_VALUES[DOMAIN]:-localhost}")
-        CONFIG_VALUES[SMTP_USE_TLS]=$(prompt_yes_no "Use TLS?" "y" && echo "true" || echo "false")
+        if is_port_available "$https_port"; then
+            CONFIG_VALUES[NGINX_HTTPS_PORT]="$https_port"
+        else
+            log_warning "Port $https_port is in use"
+        fi
     fi
     
-    log_success "Email configured"
+    # PostgreSQL
+    if [[ "${CONFIG_VALUES[INSTALL_POSTGRES]}" == "true" ]]; then
+        local pg_port=$(prompt_with_default "PostgreSQL port" "${CONFIG_VALUES[POSTGRES_PORT]}")
+        if is_port_available "$pg_port"; then
+            CONFIG_VALUES[POSTGRES_PORT]="$pg_port"
+        else
+            log_warning "Port $pg_port is in use"
+        fi
+    fi
+    
+    # Redis
+    if [[ "${CONFIG_VALUES[INSTALL_REDIS]}" == "true" ]]; then
+        local redis_port=$(prompt_with_default "Redis port" "${CONFIG_VALUES[REDIS_PORT]}")
+        if is_port_available "$redis_port"; then
+            CONFIG_VALUES[REDIS_PORT]="$redis_port"
+        else
+            log_warning "Port $redis_port is in use"
+        fi
+    fi
+    
+    # Monitoring
+    if [[ "${CONFIG_VALUES[INSTALL_PROMETHEUS]}" == "true" ]]; then
+        local prom_port=$(prompt_with_default "Prometheus port" "${CONFIG_VALUES[PROMETHEUS_PORT]}")
+        CONFIG_VALUES[PROMETHEUS_PORT]="$prom_port"
+    fi
+    
+    if [[ "${CONFIG_VALUES[INSTALL_GRAFANA]}" == "true" ]]; then
+        local grafana_port=$(prompt_with_default "Grafana port" "${CONFIG_VALUES[GRAFANA_PORT]}")
+        CONFIG_VALUES[GRAFANA_PORT]="$grafana_port"
+    fi
+    
+    if [[ "${CONFIG_VALUES[INSTALL_PORTAINER]}" == "true" ]]; then
+        local portainer_port=$(prompt_with_default "Portainer port" "${CONFIG_VALUES[PORTAINER_PORT]}")
+        CONFIG_VALUES[PORTAINER_PORT]="$portainer_port"
+    fi
+    
+    log_success "Step 4 completed: Ports configured"
 }
 
-step_18_security_config() {
-    log_step "Step 18/27: Security Configuration"
-    
-    CONFIG_VALUES[ENABLE_RATE_LIMITING]=$(prompt_yes_no "Enable rate limiting?" "y" && echo "true" || echo "false")
-    
-    if [[ "${CONFIG_VALUES[ENABLE_RATE_LIMITING]}" == "true" ]]; then
-        CONFIG_VALUES[RATE_LIMIT_REQUESTS]=$(prompt_with_default "Max requests per minute" "60")
-        CONFIG_VALUES[RATE_LIMIT_BURST]=$(prompt_with_default "Burst size" "20")
-    fi
-    
-    CONFIG_VALUES[ENABLE_CORS]=$(prompt_yes_no "Enable CORS?" "y" && echo "true" || echo "false")
-    
-    if [[ "${CONFIG_VALUES[ENABLE_CORS]}" == "true" ]]; then
-        CONFIG_VALUES[CORS_ORIGINS]=$(prompt_with_default "Allowed CORS origins (comma-separated)" "*")
-    fi
-    
-    CONFIG_VALUES[ENABLE_FIREWALL]=$(prompt_yes_no "Configure UFW firewall rules?" "y" && echo "true" || echo "false")
-    
-    CONFIG_VALUES[ENABLE_FAIL2BAN]=$(prompt_yes_no "Install and configure Fail2ban?" "y" && echo "true" || echo "false")
-    
-    CONFIG_VALUES[ENABLE_SECURITY_HEADERS]=$(prompt_yes_no "Enable security headers?" "y" && echo "true" || echo "false")
-    
-    log_success "Security configured"
-}
+#==============================================================================
+# STEP 5: STORAGE CONFIGURATION
+#==============================================================================
 
-step_19_performance_config() {
-    log_step "Step 19/27: Performance Tuning"
+step_05_storage() {
+    print_step_header 5 "Storage Configuration"
     
-    CONFIG_VALUES[ENABLE_CACHING]=$(prompt_yes_no "Enable Redis caching?" "y" && echo "true" || echo "false")
-    
-    if [[ "${CONFIG_VALUES[ENABLE_CACHING]}" == "true" ]]; then
-        CONFIG_VALUES[CACHE_TTL]=$(prompt_with_default "Cache TTL (seconds)" "3600")
-        CONFIG_VALUES[REDIS_MAX_MEMORY]=$(prompt_with_default "Redis max memory (MB)" "256")
-        
-        echo "Select Redis eviction policy:"
-        echo "1) allkeys-lru (recommended)"
-        echo "2) volatile-lru"
-        echo "3) allkeys-lfu"
-        echo "4) volatile-lfu"
-        
-        local eviction_choice
-        read -rp "Enter choice [1-4]: " eviction_choice
-        
-        case "$eviction_choice" in
-            1) CONFIG_VALUES[REDIS_EVICTION_POLICY]="allkeys-lru" ;;
-            2) CONFIG_VALUES[REDIS_EVICTION_POLICY]="volatile-lru" ;;
-            3) CONFIG_VALUES[REDIS_EVICTION_POLICY]="allkeys-lfu" ;;
-            4) CONFIG_VALUES[REDIS_EVICTION_POLICY]="volatile-lfu" ;;
-            *) CONFIG_VALUES[REDIS_EVICTION_POLICY]="allkeys-lru" ;;
-        esac
-    fi
-    
-    CONFIG_VALUES[ENABLE_COMPRESSION]=$(prompt_yes_no "Enable response compression?" "y" && echo "true" || echo "false")
-    
-    if [[ "${CONFIG_VALUES[ENABLE_COMPRESSION]}" == "true" ]]; then
-        CONFIG_VALUES[COMPRESSION_LEVEL]=$(prompt_with_default "Compression level (1-9)" "6")
-    fi
-    
-    CONFIG_VALUES[CONNECTION_POOL_SIZE]=$(prompt_with_default "Database connection pool size" "20")
-    CONFIG_VALUES[WORKER_PROCESSES]=$(prompt_with_default "Number of worker processes" "auto")
-    
-    log_success "Performance configured"
-}
+    cat << 'EOF'
+Configure storage paths and volumes.
 
-step_20_update_config() {
-    log_step "Step 20/27: Update Strategy"
+All data will be stored in a centralized location for easy backup.
+
+EOF
+
+    # Data root directory
+    local data_root=$(prompt_with_default "Data root directory" "${CONFIG_VALUES[DATA_ROOT]}")
+    CONFIG_VALUES[DATA_ROOT]="$data_root"
     
-    CONFIG_VALUES[AUTO_UPDATE]=$(prompt_yes_no "Enable automatic updates?" "n" && echo "true" || echo "false")
+    # Ollama models directory
+    if [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" == "true" ]]; then
+        local models_dir=$(prompt_with_default "Ollama models directory" "${data_root}/ollama/models")
+        CONFIG_VALUES[OLLAMA_MODELS_DIR]="$models_dir"
+        
+        log_info "Estimated space for models: 10-50GB depending on selection"
+    fi
     
-    if [[ "${CONFIG_VALUES[AUTO_UPDATE]}" == "true" ]]; then
-        echo "Select update schedule:"
-        echo "1) Daily at 2 AM"
-        echo "2) Weekly on Sunday at 2 AM"
-        echo "3) Monthly on 1st at 2 AM"
-        echo "4) Custom cron"
+    # Check available space
+    log_info "Checking disk space..."
+    local available_space=$(df -BG "$data_root" 2>/dev/null | awk 'NR==2 {print $4}' | sed 's/G//' || echo "unknown")
+    
+    if [[ "$available_space" != "unknown" ]]; then
+        log_info "Available space: ${available_space}GB"
         
-        local update_choice
-        read -rp "Enter choice [1-4]: " update_choice
+        if ((available_space < 20)); then
+            log_warning "Low disk space detected"
+            if ! prompt_yes_no "Continue anyway?" "n"; then
+                log_error "Setup cancelled due to insufficient disk space"
+                exit 1
+            fi
+        fi
+    fi
+    
+    # Backup configuration
+    if prompt_yes_no "Enable automated backups?" "y"; then
+        CONFIG_VALUES[BACKUP_ENABLED]="true"
         
-        case "$update_choice" in
-            1) CONFIG_VALUES[UPDATE_SCHEDULE]="0 2 * * *" ;;
-            2) CONFIG_VALUES[UPDATE_SCHEDULE]="0 2 * * 0" ;;
-            3) CONFIG_VALUES[UPDATE_SCHEDULE]="0 2 1 * *" ;;
-            4) 
-                read -rp "Enter cron expression: " CONFIG_VALUES[UPDATE_SCHEDULE]
+        local backup_retention=$(prompt_with_default "Backup retention (days)" "${CONFIG_VALUES[BACKUP_RETENTION_DAYS]}")
+        CONFIG_VALUES[BACKUP_RETENTION_DAYS]="$backup_retention"
+        
+        local backup_schedule=$(prompt_choice "Backup schedule:" "Daily at 2 AM" "Weekly on Sunday" "Custom cron")
+        case "$backup_schedule" in
+            "Daily at 2 AM")
+                CONFIG_VALUES[BACKUP_SCHEDULE]="0 2 * * *"
                 ;;
-            *) CONFIG_VALUES[UPDATE_SCHEDULE]="0 2 * * 0" ;;
+            "Weekly on Sunday")
+                CONFIG_VALUES[BACKUP_SCHEDULE]="0 2 * * 0"
+                ;;
+            "Custom cron")
+                read -rp "Enter cron expression: " custom_cron
+                CONFIG_VALUES[BACKUP_SCHEDULE]="$custom_cron"
+                ;;
         esac
         
-        CONFIG_VALUES[UPDATE_NOTIFICATION]=$(prompt_yes_no "Send update notifications?" "y" && echo "true" || echo "false")
+        log_info "Backups enabled: ${CONFIG_VALUES[BACKUP_SCHEDULE]}"
+    else
+        CONFIG_VALUES[BACKUP_ENABLED]="false"
     fi
     
-    CONFIG_VALUES[BACKUP_BEFORE_UPDATE]=$(prompt_yes_no "Backup before updates?" "y" && echo "true" || echo "false")
-    
-    log_success "Update strategy configured"
+    log_success "Step 5 completed: Storage configured"
 }
 
-step_21_development_config() {
-    log_step "Step 21/27: Development Settings"
+#==============================================================================
+# STEP 6: DATABASE CONFIGURATION
+#==============================================================================
+
+step_06_database() {
+    print_step_header 6 "Database Configuration"
     
-    CONFIG_VALUES[ENABLE_DEBUG_MODE]=$(prompt_yes_no "Enable debug mode?" "n" && echo "true" || echo "false")
-    CONFIG_VALUES[ENABLE_HOT_RELOAD]=$(prompt_yes_no "Enable hot reload (dev only)?" "n" && echo "true" || echo "false")
-    CONFIG_VALUES[ENABLE_API_DOCS]=$(prompt_yes_no "Enable API documentation?" "y" && echo "true" || echo "false")
-    
-    if [[ "${CONFIG_VALUES[ENABLE_API_DOCS]}" == "true" ]]; then
-        CONFIG_VALUES[API_DOCS_PATH]=$(prompt_with_default "API docs path" "/api/docs")
+    if [[ "${CONFIG_VALUES[INSTALL_POSTGRES]}" != "true" ]]; then
+        log_info "PostgreSQL not selected, skipping database configuration"
+        return 0
     fi
     
-    log_success "Development settings configured"
-}
+    cat << 'EOF'
+Configure PostgreSQL database settings.
 
-step_22_webhook_config() {
-    log_step "Step 22/27: Webhook Configuration"
+Secure passwords will be generated automatically.
+You can customize them if needed.
+
+EOF
+
+    # PostgreSQL credentials
+    local pg_user=$(prompt_with_default "PostgreSQL username" "aiplatform")
+    CONFIG_VALUES[POSTGRES_USER]="$pg_user"
     
-    CONFIG_VALUES[ENABLE_WEBHOOKS]=$(prompt_yes_no "Enable webhooks?" "n" && echo "true" || echo "false")
+    local pg_db=$(prompt_with_default "PostgreSQL database name" "aiplatform")
+    CONFIG_VALUES[POSTGRES_DB]="$pg_db"
     
-    if [[ "${CONFIG_VALUES[ENABLE_WEBHOOKS]}" == "true" ]]; then
-        CONFIG_VALUES[WEBHOOK_TIMEOUT]=$(prompt_with_default "Webhook timeout (seconds)" "30")
-        CONFIG_VALUES[WEBHOOK_RETRY_COUNT]=$(prompt_with_default "Webhook retry attempts" "3")
-        CONFIG_VALUES[WEBHOOK_RETRY_DELAY]=$(prompt_with_default "Webhook retry delay (seconds)" "5")
+    if prompt_yes_no "Generate random PostgreSQL password?" "y"; then
+        CONFIG_VALUES[POSTGRES_PASSWORD]="$(generate_random_password 32)"
+        log_info "Random password generated"
+    else
+        CONFIG_VALUES[POSTGRES_PASSWORD]="$(prompt_password "Enter PostgreSQL password")"
     fi
     
-    log_success "Webhook configured"
-}
-
-step_23_api_keys() {
-    log_step "Step 23/27: API Keys & External Services"
-    
-    if prompt_yes_no "Configure external API keys?" "n"; then
-        read -rp "OpenAI API Key (optional): " CONFIG_VALUES[OPENAI_API_KEY]
-        read -rp "Anthropic API Key (optional): " CONFIG_VALUES[ANTHROPIC_API_KEY]
-        read -rp "Google AI API Key (optional): " CONFIG_VALUES[GOOGLE_AI_API_KEY]
-        read -rp "Hugging Face API Key (optional): " CONFIG_VALUES[HUGGINGFACE_API_KEY]
+    # Additional databases for services
+    if [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]]; then
+        CONFIG_VALUES[N8N_DB_NAME]="n8n"
+        log_info "n8n database will be created: n8n"
     fi
     
-    log_success "API keys configured"
+    if [[ "${CONFIG_VALUES[INSTALL_OPEN_WEBUI]}" == "true" ]]; then
+        CONFIG_VALUES[OPEN_WEBUI_DB_NAME]="openwebui"
+        log_info "Open WebUI database will be created: openwebui"
+    fi
+    
+    # PostgreSQL performance tuning
+    local available_memory=$(free -g | awk 'NR==2 {print $2}')
+    local pg_memory=$((available_memory / 4))
+    
+    if ((pg_memory > 4)); then
+        pg_memory=4
+    fi
+    
+    CONFIG_VALUES[POSTGRES_MAX_MEMORY]="${pg_memory}g"
+    log_info "PostgreSQL memory limit: ${pg_memory}GB"
+    
+    log_success "Step 6 completed: Database configured"
 }
 
-step_24_custom_env() {
-    log_step "Step 24/27: Custom Environment Variables"
+#==============================================================================
+# STEP 7: REVERSE PROXY CONFIGURATION
+#==============================================================================
+
+step_07_proxy() {
+    print_step_header 7 "Reverse Proxy Configuration"
     
-    if prompt_yes_no "Add custom environment variables?" "n"; then
-        echo "Enter custom variables (format: KEY=VALUE, one per line, empty line to finish):"
+    if [[ "${CONFIG_VALUES[INSTALL_NGINX]}" != "true" ]]; then
+        log_info "Nginx not selected, skipping proxy configuration"
+        return 0
+    fi
+    
+    cat << 'EOF'
+Configure Nginx reverse proxy and domain settings.
+
+You can use:
+  • localhost (default, no SSL)
+  • IP address (your server IP)
+  • Domain name (requires DNS configuration)
+
+EOF
+
+    # Domain configuration
+    local base_domain=$(prompt_with_default "Base domain or IP" "${CONFIG_VALUES[BASE_DOMAIN]}")
+    CONFIG_VALUES[BASE_DOMAIN]="$base_domain"
+    
+    # Service subdomains
+    if [[ "$base_domain" != "localhost" ]]; then
+        if prompt_yes_no "Use subdomains for services?" "y"; then
+            CONFIG_VALUES[USE_SUBDOMAINS]="true"
+            
+            local ollama_subdomain=$(prompt_with_default "Ollama subdomain" "ollama")
+            CONFIG_VALUES[OLLAMA_SUBDOMAIN]="$ollama_subdomain"
+            CONFIG_VALUES[OLLAMA_URL]="https://${ollama_subdomain}.${base_domain}"
+            
+            local webui_subdomain=$(prompt_with_default "Open WebUI subdomain" "chat")
+            CONFIG_VALUES[WEBUI_SUBDOMAIN]="$webui_subdomain"
+            CONFIG_VALUES[WEBUI_URL]="https://${webui_subdomain}.${base_domain}"
+            
+            if [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]]; then
+                local n8n_subdomain=$(prompt_with_default "n8n subdomain" "n8n")
+                CONFIG_VALUES[N8N_SUBDOMAIN]="$n8n_subdomain"
+                CONFIG_VALUES[N8N_URL]="https://${n8n_subdomain}.${base_domain}"
+            fi
+        else
+            CONFIG_VALUES[USE_SUBDOMAINS]="false"
+            CONFIG_VALUES[OLLAMA_URL]="https://${base_domain}:${CONFIG_VALUES[OLLAMA_PORT]}"
+            CONFIG_VALUES[WEBUI_URL]="https://${base_domain}:${CONFIG_VALUES[OPEN_WEBUI_PORT]}"
+            CONFIG_VALUES[N8N_URL]="https://${base_domain}:${CONFIG_VALUES[N8N_PORT]}"
+        fi
+    else
+        CONFIG_VALUES[USE_SUBDOMAINS]="false"
+        CONFIG_VALUES[OLLAMA_URL]="http://localhost:${CONFIG_VALUES[OLLAMA_PORT]}"
+        CONFIG_VALUES[WEBUI_URL]="http://localhost:${CONFIG_VALUES[OPEN_WEBUI_PORT]}"
+        CONFIG_VALUES[N8N_URL]="http://localhost:${CONFIG_VALUES[N8N_PORT]}"
+    fi
+    
+    log_success "Step 7 completed: Proxy configured"
+}
+
+#==============================================================================
+# STEP 8: BACKUP AND RESTORE
+#==============================================================================
+
+step_08_backup() {
+    print_step_header 8 "Backup and Restore Configuration"
+    
+    if [[ "${CONFIG_VALUES[BACKUP_ENABLED]}" != "true" ]]; then
+        log_info "Backups disabled, skipping backup configuration"
+        return 0
+    fi
+    
+    cat << 'EOF'
+Configure backup settings.
+
+Backups will include:
+  • All configuration files
+  • PostgreSQL databases
+  • Redis data
+  • Ollama models (optional)
+  • Application data
+
+EOF
+
+    # Backup location
+    local backup_dir=$(prompt_with_default "Backup directory" "$BACKUP_DIR")
+    CONFIG_VALUES[BACKUP_DIR]="$backup_dir"
+    
+    # What to backup
+    if [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" == "true" ]]; then
+        if prompt_yes_no "Include Ollama models in backups? (requires significant space)" "n"; then
+            CONFIG_VALUES[BACKUP_OLLAMA_MODELS]="true"
+        else
+            CONFIG_VALUES[BACKUP_OLLAMA_MODELS]="false"
+        fi
+    fi
+    
+    # Compression
+    if prompt_yes_no "Compress backups?" "y"; then
+        CONFIG_VALUES[BACKUP_COMPRESSION]="true"
+        local compression_level=$(prompt_choice "Compression level:" "Fast (1)" "Balanced (6)" "Best (9)")
+        case "$compression_level" in
+            "Fast (1)") CONFIG_VALUES[BACKUP_COMPRESSION_LEVEL]="1" ;;
+            "Balanced (6)") CONFIG_VALUES[BACKUP_COMPRESSION_LEVEL]="6" ;;
+            "Best (9)") CONFIG_VALUES[BACKUP_COMPRESSION_LEVEL]="9" ;;
+        esac
+    else
+        CONFIG_VALUES[BACKUP_COMPRESSION]="false"
+    fi
+    
+    # Remote backup
+    if prompt_yes_no "Configure remote backup location?" "n"; then
+        CONFIG_VALUES[REMOTE_BACKUP_ENABLED]="true"
         
-        local custom_vars=()
+        local remote_type=$(prompt_choice "Remote backup type:" "S3" "SFTP" "Rsync")
+        CONFIG_VALUES[REMOTE_BACKUP_TYPE]="$remote_type"
+        
+        case "$remote_type" in
+            "S3")
+                read -rp "S3 bucket name: " s3_bucket
+                CONFIG_VALUES[S3_BUCKET]="$s3_bucket"
+                read -rp "AWS region: " aws_region
+                CONFIG_VALUES[AWS_REGION]="$aws_region"
+                read -rp "AWS access key: " aws_key
+                CONFIG_VALUES[AWS_ACCESS_KEY]="$aws_key"
+                CONFIG_VALUES[AWS_SECRET_KEY]="$(prompt_password "AWS secret key")"
+                ;;
+            "SFTP")
+                read -rp "SFTP host: " sftp_host
+                CONFIG_VALUES[SFTP_HOST]="$sftp_host"
+                read -rp "SFTP user: " sftp_user
+                CONFIG_VALUES[SFTP_USER]="$sftp_user"
+                read -rp "SFTP path: " sftp_path
+                CONFIG_VALUES[SFTP_PATH]="$sftp_path"
+                ;;
+            "Rsync")
+                read -rp "Rsync destination (user@host:/path): " rsync_dest
+                CONFIG_VALUES[RSYNC_DEST]="$rsync_dest"
+                ;;
+        esac
+    else
+        CONFIG_VALUES[REMOTE_BACKUP_ENABLED]="false"
+    fi
+    
+    log_success "Step 8 completed: Backup configured"
+}
+
+#==============================================================================
+# STEP 9: LOGGING AND MONITORING
+#==============================================================================
+
+step_09_logging() {
+    print_step_header 9 "Logging and Monitoring Configuration"
+    
+    cat << 'EOF'
+Configure logging and monitoring settings.
+
+EOF
+
+    # Log level
+    local log_level=$(prompt_choice "Log level:" "info" "debug" "warning" "error")
+    CONFIG_VALUES[LOG_LEVEL]="$log_level"
+    
+    # Log retention
+    local log_retention=$(prompt_with_default "Log retention (days)" "30")
+    CONFIG_VALUES[LOG_RETENTION_DAYS]="$log_retention"
+    
+    # Structured logging
+    if prompt_yes_no "Enable JSON structured logging?" "n"; then
+        CONFIG_VALUES[JSON_LOGS]="true"
+    else
+        CONFIG_VALUES[JSON_LOGS]="false"
+    fi
+    
+    # Monitoring configuration
+    if [[ "${CONFIG_VALUES[INSTALL_PROMETHEUS]}" == "true" ]]; then
+        log_info "Configuring Prometheus monitoring..."
+        
+        local scrape_interval=$(prompt_with_default "Metrics scrape interval (seconds)" "15")
+        CONFIG_VALUES[PROMETHEUS_SCRAPE_INTERVAL]="${scrape_interval}s"
+        
+        local retention=$(prompt_with_default "Metrics retention (days)" "15")
+        CONFIG_VALUES[PROMETHEUS_RETENTION]="${retention}d"
+    fi
+    
+    # Alerting
+    if [[ "${CONFIG_VALUES[INSTALL_PROMETHEUS]}" == "true" ]]; then
+        if prompt_yes_no "Configure alerting?" "n"; then
+            CONFIG_VALUES[ALERTING_ENABLED]="true"
+            
+            read -rp "Alert email address: " alert_email
+            CONFIG_VALUES[ALERT_EMAIL]="$alert_email"
+            
+            # Alert thresholds
+            local cpu_threshold=$(prompt_with_default "CPU alert threshold (%)" "80")
+            CONFIG_VALUES[ALERT_CPU_THRESHOLD]="$cpu_threshold"
+            
+            local memory_threshold=$(prompt_with_default "Memory alert threshold (%)" "85")
+            CONFIG_VALUES[ALERT_MEMORY_THRESHOLD]="$memory_threshold"
+            
+            local disk_threshold=$(prompt_with_default "Disk alert threshold (%)" "90")
+            CONFIG_VALUES[ALERT_DISK_THRESHOLD]="$disk_threshold"
+        else
+            CONFIG_VALUES[ALERTING_ENABLED]="false"
+        fi
+    fi
+    
+    log_success "Step 9 completed: Logging and monitoring configured"
+}
+
+#==============================================================================
+# STEP 10: RESOURCE LIMITS
+#==============================================================================
+
+step_10_resources() {
+    print_step_header 10 "Resource Limits Configuration"
+    
+    cat << 'EOF'
+Configure resource limits for containers.
+
+This helps prevent any single service from consuming all system resources.
+
+EOF
+
+    # Get total system resources
+    local total_memory=$(free -g | awk 'NR==2 {print $2}')
+    local total_cpus=$(nproc)
+    
+    log_info "System resources: ${total_memory}GB RAM, ${total_cpus} CPUs"
+    
+    # Ollama resources (most important)
+    if [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" == "true" ]]; then
+        echo
+        echo "Ollama Configuration:"
+        
+        local ollama_memory=$(prompt_with_default "Ollama memory limit (GB)" "8")
+        CONFIG_VALUES[OLLAMA_MAX_MEMORY]="${ollama_memory}g"
+        
+        local ollama_cpus=$(prompt_with_default "Ollama CPU limit (cores)" "$((total_cpus / 2))")
+        CONFIG_VALUES[OLLAMA_MAX_CPUS]="$ollama_cpus"
+        
+        # GPU support
+        if prompt_yes_no "Enable GPU support for Ollama?" "n"; then
+            CONFIG_VALUES[ENABLE_GPU]="true"
+            
+            # Detect GPU
+            if command -v nvidia-smi &>/dev/null; then
+                log_info "NVIDIA GPU detected"
+                CONFIG_VALUES[GPU_TYPE]="nvidia"
+            elif command -v rocm-smi &>/dev/null; then
+                log_info "AMD GPU detected"
+                CONFIG_VALUES[GPU_TYPE]="amd"
+            else
+                log_warning "No GPU detected, but GPU support enabled"
+                CONFIG_VALUES[GPU_TYPE]="none"
+            fi
+        else
+            CONFIG_VALUES[ENABLE_GPU]="false"
+        fi
+    fi
+    
+    # n8n resources
+    if [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]]; then
+        echo
+        echo "n8n Configuration:"
+        local n8n_memory=$(prompt_with_default "n8n memory limit (GB)" "2")
+        CONFIG_VALUES[N8N_MAX_MEMORY]="${n8n_memory}g"
+    fi
+    
+    # PostgreSQL resources
+    if [[ "${CONFIG_VALUES[INSTALL_POSTGRES]}" == "true" ]]; then
+        echo
+        echo "PostgreSQL Configuration:"
+        local pg_memory=$(prompt_with_default "PostgreSQL memory limit (GB)" "${CONFIG_VALUES[POSTGRES_MAX_MEMORY]}")
+        CONFIG_VALUES[POSTGRES_MAX_MEMORY]="${pg_memory}"
+        
+        # Connection limits
+        local max_connections=$(prompt_with_default "Max connections" "100")
+        CONFIG_VALUES[POSTGRES_MAX_CONNECTIONS]="$max_connections"
+    fi
+    
+    # Redis resources
+    if [[ "${CONFIG_VALUES[INSTALL_REDIS]}" == "true" ]]; then
+        echo
+        echo "Redis Configuration:"
+        local redis_memory=$(prompt_with_default "Redis memory limit (MB)" "512")
+        CONFIG_VALUES[REDIS_MAX_MEMORY]="${redis_memory}mb"
+        
+        local eviction_policy=$(prompt_choice "Memory eviction policy:" "allkeys-lru" "volatile-lru" "noeviction")
+        CONFIG_VALUES[REDIS_EVICTION_POLICY]="$eviction_policy"
+    fi
+    
+    log_success "Step 10 completed: Resource limits configured"
+}
+
+#==============================================================================
+# END OF PART 2/4
+#==============================================================================
+#!/bin/bash
+################################################################################
+# AI Platform Automation - System Setup Script
+# Part 3/4: Wizard Steps 11-20 + Configuration Generation
+################################################################################
+
+#==============================================================================
+# STEP 11: SSL/TLS CONFIGURATION
+#==============================================================================
+
+step_11_ssl() {
+    print_step_header 11 "SSL/TLS Configuration"
+    
+    if [[ "${CONFIG_VALUES[BASE_DOMAIN]}" == "localhost" ]]; then
+        log_info "Localhost deployment - SSL not required"
+        CONFIG_VALUES[ENABLE_SSL]="false"
+        return 0
+    fi
+    
+    cat << 'EOF'
+Configure SSL/TLS certificates.
+
+Options:
+  1) Let's Encrypt - Free automated certificates
+  2) Self-signed - For testing/development
+  3) Custom - Provide your own certificates
+  4) None - HTTP only (not recommended for production)
+
+EOF
+
+    local ssl_option=$(prompt_choice "SSL configuration:" "Let's Encrypt" "Self-signed" "Custom" "None")
+    
+    case "$ssl_option" in
+        "Let's Encrypt")
+            CONFIG_VALUES[ENABLE_SSL]="true"
+            CONFIG_VALUES[SSL_TYPE]="letsencrypt"
+            
+            # Email for Let's Encrypt
+            local ssl_email
+            while true; do
+                read -rp "Email for SSL notifications: " ssl_email
+                if is_valid_email "$ssl_email"; then
+                    CONFIG_VALUES[SSL_EMAIL]="$ssl_email"
+                    break
+                else
+                    log_error "Invalid email address"
+                fi
+            done
+            
+            # Staging for testing
+            if [[ "${CONFIG_VALUES[ENVIRONMENT]}" != "production" ]]; then
+                if prompt_yes_no "Use Let's Encrypt staging (for testing)?" "y"; then
+                    CONFIG_VALUES[LETSENCRYPT_STAGING]="true"
+                else
+                    CONFIG_VALUES[LETSENCRYPT_STAGING]="false"
+                fi
+            else
+                CONFIG_VALUES[LETSENCRYPT_STAGING]="false"
+            fi
+            
+            log_info "Let's Encrypt will automatically obtain certificates"
+            log_warning "Ensure DNS is configured and port 80/443 are accessible"
+            ;;
+            
+        "Self-signed")
+            CONFIG_VALUES[ENABLE_SSL]="true"
+            CONFIG_VALUES[SSL_TYPE]="self-signed"
+            
+            log_warning "Self-signed certificates will generate browser warnings"
+            log_info "Use this for development/testing only"
+            
+            # Certificate details
+            read -rp "Organization name: " ssl_org
+            CONFIG_VALUES[SSL_ORG]="$ssl_org"
+            
+            local ssl_country=$(prompt_with_default "Country code (2 letters)" "US")
+            CONFIG_VALUES[SSL_COUNTRY]="$ssl_country"
+            
+            local ssl_validity=$(prompt_with_default "Certificate validity (days)" "365")
+            CONFIG_VALUES[SSL_VALIDITY_DAYS]="$ssl_validity"
+            ;;
+            
+        "Custom")
+            CONFIG_VALUES[ENABLE_SSL]="true"
+            CONFIG_VALUES[SSL_TYPE]="custom"
+            
+            log_info "You will need to provide certificate files later"
+            
+            read -rp "Path to certificate file (.crt): " ssl_cert
+            CONFIG_VALUES[SSL_CERT_PATH]="$ssl_cert"
+            
+            read -rp "Path to private key file (.key): " ssl_key
+            CONFIG_VALUES[SSL_KEY_PATH]="$ssl_key"
+            
+            read -rp "Path to CA bundle (optional): " ssl_ca
+            CONFIG_VALUES[SSL_CA_PATH]="$ssl_ca"
+            
+            # Validate files exist
+            for file in "$ssl_cert" "$ssl_key"; do
+                if [[ ! -f "$file" ]]; then
+                    log_error "File not found: $file"
+                    return 1
+                fi
+            done
+            ;;
+            
+        "None")
+            CONFIG_VALUES[ENABLE_SSL]="false"
+            log_warning "SSL disabled - connections will not be encrypted"
+            
+            if [[ "${CONFIG_VALUES[ENVIRONMENT]}" == "production" ]]; then
+                log_error "SSL is strongly recommended for production"
+                if ! prompt_yes_no "Continue without SSL?" "n"; then
+                    return 1
+                fi
+            fi
+            ;;
+    esac
+    
+    # HSTS configuration
+    if [[ "${CONFIG_VALUES[ENABLE_SSL]}" == "true" ]]; then
+        if prompt_yes_no "Enable HSTS (HTTP Strict Transport Security)?" "y"; then
+            CONFIG_VALUES[ENABLE_HSTS]="true"
+            local hsts_age=$(prompt_with_default "HSTS max-age (seconds)" "31536000")
+            CONFIG_VALUES[HSTS_MAX_AGE]="$hsts_age"
+        else
+            CONFIG_VALUES[ENABLE_HSTS]="false"
+        fi
+    fi
+    
+    log_success "Step 11 completed: SSL configured"
+}
+
+#==============================================================================
+# STEP 12: AUTHENTICATION AND SECURITY
+#==============================================================================
+
+step_12_security() {
+    print_step_header 12 "Authentication and Security"
+    
+    cat << 'EOF'
+Configure authentication and security settings.
+
+EOF
+
+    # Admin credentials
+    echo "Admin User Configuration:"
+    
+    local admin_user=$(prompt_with_default "Admin username" "admin")
+    CONFIG_VALUES[ADMIN_USERNAME]="$admin_user"
+    
+    if prompt_yes_no "Generate random admin password?" "y"; then
+        CONFIG_VALUES[ADMIN_PASSWORD]="$(generate_random_password 24)"
+        log_info "Random password generated (will be shown at end of setup)"
+    else
+        CONFIG_VALUES[ADMIN_PASSWORD]="$(prompt_password "Enter admin password")"
+    fi
+    
+    # API key generation
+    echo
+    echo "API Key Configuration:"
+    
+    if [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]]; then
+        CONFIG_VALUES[N8N_ENCRYPTION_KEY]="$(generate_random_password 32)"
+        log_info "n8n encryption key generated"
+    fi
+    
+    if [[ "${CONFIG_VALUES[INSTALL_OPEN_WEBUI]}" == "true" ]]; then
+        CONFIG_VALUES[WEBUI_JWT_SECRET]="$(generate_random_password 64)"
+        log_info "Open WebUI JWT secret generated"
+    fi
+    
+    # Security features
+    echo
+    echo "Security Features:"
+    
+    if prompt_yes_no "Enable rate limiting?" "y"; then
+        CONFIG_VALUES[RATE_LIMIT_ENABLED]="true"
+        
+        local rate_limit=$(prompt_with_default "Requests per minute (per IP)" "60")
+        CONFIG_VALUES[RATE_LIMIT_RPM]="$rate_limit"
+    else
+        CONFIG_VALUES[RATE_LIMIT_ENABLED]="false"
+    fi
+    
+    if prompt_yes_no "Enable IP whitelist?" "n"; then
+        CONFIG_VALUES[IP_WHITELIST_ENABLED]="true"
+        
+        echo "Enter allowed IP addresses (one per line, empty line to finish):"
+        local ips=()
         while true; do
-            read -rp "> " custom_var
-            [[ -z "$custom_var" ]] && break
-            custom_vars+=("$custom_var")
+            read -rp "IP address: " ip
+            [[ -z "$ip" ]] && break
+            if is_valid_ip "$ip"; then
+                ips+=("$ip")
+            else
+                log_warning "Invalid IP address: $ip"
+            fi
+        done
+        CONFIG_VALUES[ALLOWED_IPS]="${ips[*]}"
+    else
+        CONFIG_VALUES[IP_WHITELIST_ENABLED]="false"
+    fi
+    
+    # Fail2ban
+    if prompt_yes_no "Enable fail2ban integration?" "n"; then
+        CONFIG_VALUES[FAIL2BAN_ENABLED]="true"
+        
+        local max_retry=$(prompt_with_default "Max login attempts" "5")
+        CONFIG_VALUES[FAIL2BAN_MAX_RETRY]="$max_retry"
+        
+        local ban_time=$(prompt_with_default "Ban time (seconds)" "3600")
+        CONFIG_VALUES[FAIL2BAN_BAN_TIME]="$ban_time"
+    else
+        CONFIG_VALUES[FAIL2BAN_ENABLED]="false"
+    fi
+    
+    # Session configuration
+    echo
+    echo "Session Configuration:"
+    
+    local session_timeout=$(prompt_with_default "Session timeout (minutes)" "60")
+    CONFIG_VALUES[SESSION_TIMEOUT]="$session_timeout"
+    
+    if prompt_yes_no "Enable remember me functionality?" "y"; then
+        CONFIG_VALUES[REMEMBER_ME_ENABLED]="true"
+        local remember_duration=$(prompt_with_default "Remember me duration (days)" "30")
+        CONFIG_VALUES[REMEMBER_ME_DURATION]="$remember_duration"
+    else
+        CONFIG_VALUES[REMEMBER_ME_ENABLED]="false"
+    fi
+    
+    log_success "Step 12 completed: Security configured"
+}
+
+#==============================================================================
+# STEP 13: MODEL CONFIGURATION
+#==============================================================================
+
+step_13_models() {
+    print_step_header 13 "AI Model Configuration"
+    
+    if [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" != "true" ]]; then
+        log_info "Ollama not installed, skipping model configuration"
+        return 0
+    fi
+    
+    cat << 'EOF'
+Configure which AI models to download.
+
+Available models:
+  • llama3.2:3b    - Fast, efficient, good for most tasks (2GB)
+  • llama3.2:1b    - Ultra-fast, minimal resources (1GB)
+  • qwen2.5:7b     - Excellent reasoning and coding (4GB)
+  • mistral:7b     - Balanced performance (4GB)
+  • codellama:7b   - Specialized for code (4GB)
+  • phi3:mini      - Microsoft's efficient model (2GB)
+
+Custom models can be added later via Ollama CLI.
+
+EOF
+
+    # Default models
+    local -a selected_models=()
+    
+    if prompt_yes_no "Install llama3.2:3b (recommended)?" "y"; then
+        selected_models+=("llama3.2:3b")
+    fi
+    
+    if prompt_yes_no "Install qwen2.5:7b (good for coding)?" "n"; then
+        selected_models+=("qwen2.5:7b")
+    fi
+    
+    if prompt_yes_no "Install mistral:7b?" "n"; then
+        selected_models+=("mistral:7b")
+    fi
+    
+    if prompt_yes_no "Install codellama:7b (specialized for code)?" "n"; then
+        selected_models+=("codellama:7b")
+    fi
+    
+    if prompt_yes_no "Install phi3:mini (lightweight)?" "n"; then
+        selected_models+=("phi3:mini")
+    fi
+    
+    # Custom models
+    if prompt_yes_no "Add custom models?" "n"; then
+        echo "Enter model names (format: name:tag), empty line to finish:"
+        while true; do
+            read -rp "Model: " custom_model
+            [[ -z "$custom_model" ]] && break
+            selected_models+=("$custom_model")
+        done
+    fi
+    
+    if ((${#selected_models[@]} == 0)); then
+        log_warning "No models selected - you can download them later"
+    else
+        CONFIG_VALUES[OLLAMA_MODELS]="${selected_models[*]}"
+        log_info "Selected models: ${selected_models[*]}"
+        
+        # Estimate storage
+        local estimated_size=0
+        for model in "${selected_models[@]}"; do
+            case "$model" in
+                *:1b) ((estimated_size += 1)) ;;
+                *:3b) ((estimated_size += 2)) ;;
+                *:7b) ((estimated_size += 4)) ;;
+                *:13b) ((estimated_size += 8)) ;;
+                *:34b) ((estimated_size += 20)) ;;
+                *:70b) ((estimated_size += 40)) ;;
+                *) ((estimated_size += 5)) ;;
+            esac
         done
         
-        CONFIG_VALUES[CUSTOM_ENV_VARS]=$(IFS=$'\n'; echo "${custom_vars[*]}")
+        log_info "Estimated storage required: ${estimated_size}GB"
     fi
     
-    log_success "Custom variables configured"
+    # Model download timing
+    if ((${#selected_models[@]} > 0)); then
+        local download_timing=$(prompt_choice "When to download models:" "During setup" "After setup" "Manual")
+        CONFIG_VALUES[MODEL_DOWNLOAD_TIMING]="$download_timing"
+    fi
+    
+    # Default model
+    if ((${#selected_models[@]} > 0)); then
+        echo
+        echo "Select default model:"
+        select default_model in "${selected_models[@]}"; do
+            if [[ -n "$default_model" ]]; then
+                CONFIG_VALUES[DEFAULT_MODEL]="$default_model"
+                log_info "Default model: $default_model"
+                break
+            fi
+        done
+    fi
+    
+    log_success "Step 13 completed: Models configured"
 }
 
-step_25_experimental_features() {
-    log_step "Step 25/27: Experimental Features"
+#==============================================================================
+# STEP 14: NETWORK CONFIGURATION
+#==============================================================================
+
+step_14_network() {
+    print_step_header 14 "Network Configuration"
     
-    CONFIG_VALUES[ENABLE_EXPERIMENTAL]=$(prompt_yes_no "Enable experimental features?" "n" && echo "true" || echo "false")
+    cat << 'EOF'
+Configure Docker networking settings.
+
+EOF
+
+    # Docker network name
+    local network_name=$(prompt_with_default "Docker network name" "aiplatform-network")
+    CONFIG_VALUES[DOCKER_NETWORK_NAME]="$network_name"
     
-    if [[ "${CONFIG_VALUES[ENABLE_EXPERIMENTAL]}" == "true" ]]; then
-        log_warning "Experimental features may be unstable"
+    # Network driver
+    local network_driver=$(prompt_choice "Network driver:" "bridge" "overlay" "host")
+    CONFIG_VALUES[DOCKER_NETWORK_DRIVER]="$network_driver"
+    
+    if [[ "$network_driver" == "overlay" ]]; then
+        log_info "Overlay network selected - Docker Swarm required"
+        CONFIG_VALUES[DOCKER_SWARM_MODE]="true"
+    fi
+    
+    # Subnet configuration
+    if prompt_yes_no "Configure custom subnet?" "n"; then
+        read -rp "Subnet (CIDR notation, e.g., 172.28.0.0/16): " subnet
+        CONFIG_VALUES[DOCKER_SUBNET]="$subnet"
         
-        CONFIG_VALUES[EXPERIMENTAL_VISION]=$(prompt_yes_no "Enable vision models?" "n" && echo "true" || echo "false")
-        CONFIG_VALUES[EXPERIMENTAL_EMBEDDINGS]=$(prompt_yes_no "Enable embeddings service?" "n" && echo "true" || echo "false")
-        CONFIG_VALUES[EXPERIMENTAL_VECTOR_DB]=$(prompt_yes_no "Enable vector database?" "n" && echo "true" || echo "false")
+        read -rp "Gateway (e.g., 172.28.0.1): " gateway
+        CONFIG_VALUES[DOCKER_GATEWAY]="$gateway"
+    else
+        CONFIG_VALUES[DOCKER_SUBNET]="172.28.0.0/16"
+        CONFIG_VALUES[DOCKER_GATEWAY]="172.28.0.1"
+    fi
+    
+    # DNS configuration
+    if prompt_yes_no "Configure custom DNS servers?" "n"; then
+        echo "Enter DNS servers (one per line, empty to finish):"
+        local dns_servers=()
+        while true; do
+            read -rp "DNS server: " dns
+            [[ -z "$dns" ]] && break
+            if is_valid_ip "$dns"; then
+                dns_servers+=("$dns")
+            else
+                log_warning "Invalid IP address: $dns"
+            fi
+        done
+        CONFIG_VALUES[DOCKER_DNS]="${dns_servers[*]}"
+    fi
+    
+    # MTU configuration
+    if prompt_yes_no "Configure custom MTU?" "n"; then
+        local mtu=$(prompt_with_default "MTU value" "1500")
+        CONFIG_VALUES[DOCKER_MTU]="$mtu"
+    fi
+    
+    log_success "Step 14 completed: Network configured"
+}
+
+#==============================================================================
+# STEP 15: PERFORMANCE TUNING
+#==============================================================================
+
+step_15_performance() {
+    print_step_header 15 "Performance Tuning"
+    
+    cat << 'EOF'
+Configure performance optimization settings.
+
+EOF
+
+    # Performance profile
+    local perf_profile=$(prompt_choice "Performance profile:" "Balanced" "Performance" "Resource-saving")
+    
+    case "$perf_profile" in
+        "Balanced")
+            CONFIG_VALUES[PERF_PROFILE]="balanced"
+            CONFIG_VALUES[WORKER_PROCESSES]="auto"
+            CONFIG_VALUES[MAX_CONNECTIONS]="1024"
+            ;;
+        "Performance")
+            CONFIG_VALUES[PERF_PROFILE]="performance"
+            CONFIG_VALUES[WORKER_PROCESSES]="$(nproc)"
+            CONFIG_VALUES[MAX_CONNECTIONS]="4096"
+            ;;
+        "Resource-saving")
+            CONFIG_VALUES[PERF_PROFILE]="resource-saving"
+            CONFIG_VALUES[WORKER_PROCESSES]="2"
+            CONFIG_VALUES[MAX_CONNECTIONS]="512"
+            ;;
+    esac
+    
+    log_info "Performance profile: ${CONFIG_VALUES[PERF_PROFILE]}"
+    
+    # Nginx tuning
+    if [[ "${CONFIG_VALUES[INSTALL_NGINX]}" == "true" ]]; then
+        echo
+        echo "Nginx Performance:"
         
-        if [[ "${CONFIG_VALUES[EXPERIMENTAL_VECTOR_DB]}" == "true" ]]; then
-            echo "Select vector database:"
-            echo "1) Qdrant"
-            echo "2) Weaviate"
-            echo "3) Milvus"
+        if prompt_yes_no "Enable Nginx caching?" "y"; then
+            CONFIG_VALUES[NGINX_CACHE_ENABLED]="true"
             
-            local vdb_choice
-            read -rp "Enter choice [1-3]: " vdb_choice
+            local cache_size=$(prompt_with_default "Cache size (MB)" "500")
+            CONFIG_VALUES[NGINX_CACHE_SIZE]="${cache_size}m"
             
-            case "$vdb_choice" in
-                1) CONFIG_VALUES[VECTOR_DB_TYPE]="qdrant" ;;
-                2) CONFIG_VALUES[VECTOR_DB_TYPE]="weaviate" ;;
-                3) CONFIG_VALUES[VECTOR_DB_TYPE]="milvus" ;;
-                *) CONFIG_VALUES[VECTOR_DB_TYPE]="qdrant" ;;
-            esac
+            local cache_time=$(prompt_with_default "Cache time (minutes)" "60")
+            CONFIG_VALUES[NGINX_CACHE_TIME]="${cache_time}m"
+        else
+            CONFIG_VALUES[NGINX_CACHE_ENABLED]="false"
+        fi
+        
+        if prompt_yes_no "Enable Nginx compression?" "y"; then
+            CONFIG_VALUES[NGINX_GZIP_ENABLED]="true"
+            local gzip_level=$(prompt_with_default "Gzip compression level (1-9)" "6")
+            CONFIG_VALUES[NGINX_GZIP_LEVEL]="$gzip_level"
+        else
+            CONFIG_VALUES[NGINX_GZIP_ENABLED]="false"
         fi
     fi
     
-    log_success "Experimental features configured"
-}
-
-step_26_review_config() {
-    log_step "Step 26/27: Configuration Review"
-    
-    echo "=========================================="
-    echo "Configuration Summary"
-    echo "=========================================="
-    echo
-    echo "Environment: ${CONFIG_VALUES[ENVIRONMENT]}"
-    echo "Domain: ${CONFIG_VALUES[DOMAIN]:-N/A}"
-    echo "Admin Email: ${CONFIG_VALUES[ADMIN_EMAIL]}"
-    echo
-    echo "Services:"
-    [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" == "true" ]] && echo "  ✓ Ollama"
-    [[ "${CONFIG_VALUES[INSTALL_WEBUI]}" == "true" ]] && echo "  ✓ Open WebUI"
-    [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]] && echo "  ✓ n8n"
-    [[ "${CONFIG_VALUES[INSTALL_POSTGRES]}" == "true" ]] && echo "  ✓ PostgreSQL"
-    [[ "${CONFIG_VALUES[INSTALL_REDIS]}" == "true" ]] && echo "  ✓ Redis"
-    [[ "${CONFIG_VALUES[INSTALL_NGINX]}" == "true" ]] && echo "  ✓ Nginx"
-    [[ "${CONFIG_VALUES[INSTALL_MONITORING]}" == "true" ]] && echo "  ✓ Monitoring Stack"
-    echo
-    echo "Features:"
-    [[ "${CONFIG_VALUES[ENABLE_SSL]}" == "true" ]] && echo "  ✓ SSL/TLS"
-    [[ "${CONFIG_VALUES[BACKUP_ENABLED]}" == "true" ]] && echo "  ✓ Automated Backups"
-    [[ "${CONFIG_VALUES[ENABLE_ALERTING]}" == "true" ]] && echo "  ✓ Alerting"
-    [[ "${CONFIG_VALUES[ENABLE_OAUTH]}" == "true" ]] && echo "  ✓ OAuth"
-    [[ "${CONFIG_VALUES[ENABLE_FIREWALL]}" == "true" ]] && echo "  ✓ Firewall"
-    echo
-    echo "AI Models: ${CONFIG_VALUES[OLLAMA_MODELS]:-None selected}"
-    [[ "${CONFIG_VALUES[OLLAMA_GPU_ENABLED]}" == "true" ]] && echo "GPU: ${CONFIG_VALUES[OLLAMA_GPU_TYPE]}"
-    echo
-    echo "=========================================="
-    
-    if ! prompt_yes_no "Proceed with this configuration?" "y"; then
-        log_error "Configuration cancelled by user"
-        exit 1
+    # Database tuning
+    if [[ "${CONFIG_VALUES[INSTALL_POSTGRES]}" == "true" ]]; then
+        echo
+        echo "PostgreSQL Performance:"
+        
+        if prompt_yes_no "Enable PostgreSQL performance tuning?" "y"; then
+            CONFIG_VALUES[POSTGRES_TUNING_ENABLED]="true"
+            
+            # Calculate based on available memory
+            local total_mem=$(free -m | awk 'NR==2 {print $2}')
+            local shared_buffers=$((total_mem / 4))
+            local effective_cache=$((total_mem / 2))
+            
+            log_info "Recommended PostgreSQL settings (based on ${total_mem}MB RAM):"
+            log_info "  shared_buffers: ${shared_buffers}MB"
+            log_info "  effective_cache_size: ${effective_cache}MB"
+            
+            if prompt_yes_no "Use recommended settings?" "y"; then
+                CONFIG_VALUES[POSTGRES_SHARED_BUFFERS]="${shared_buffers}MB"
+                CONFIG_VALUES[POSTGRES_EFFECTIVE_CACHE]="${effective_cache}MB"
+            else
+                local custom_shared=$(prompt_with_default "shared_buffers (MB)" "$shared_buffers")
+                CONFIG_VALUES[POSTGRES_SHARED_BUFFERS]="${custom_shared}MB"
+                
+                local custom_cache=$(prompt_with_default "effective_cache_size (MB)" "$effective_cache")
+                CONFIG_VALUES[POSTGRES_EFFECTIVE_CACHE]="${custom_cache}MB"
+            fi
+        else
+            CONFIG_VALUES[POSTGRES_TUNING_ENABLED]="false"
+        fi
     fi
     
-    log_success "Configuration approved"
+    # Redis tuning
+    if [[ "${CONFIG_VALUES[INSTALL_REDIS]}" == "true" ]]; then
+        echo
+        echo "Redis Performance:"
+        
+        if prompt_yes_no "Enable Redis persistence?" "y"; then
+            CONFIG_VALUES[REDIS_PERSISTENCE_ENABLED]="true"
+            
+            local persistence_type=$(prompt_choice "Persistence type:" "RDB (snapshots)" "AOF (append-only)" "Both")
+            case "$persistence_type" in
+                "RDB (snapshots)")
+                    CONFIG_VALUES[REDIS_PERSISTENCE]="rdb"
+                    ;;
+                "AOF (append-only)")
+                    CONFIG_VALUES[REDIS_PERSISTENCE]="aof"
+                    ;;
+                "Both")
+                    CONFIG_VALUES[REDIS_PERSISTENCE]="both"
+                    ;;
+            esac
+        else
+            CONFIG_VALUES[REDIS_PERSISTENCE_ENABLED]="false"
+        fi
+    fi
+    
+    log_success "Step 15 completed: Performance tuning configured"
 }
 
-step_27_save_config() {
-    log_step "Step 27/27: Saving Configuration"
+#==============================================================================
+# STEP 16: MAINTENANCE AND UPDATES
+#==============================================================================
+
+step_16_maintenance() {
+    print_step_header 16 "Maintenance and Updates"
     
-    local config_backup="${CONFIG_DIR}/config_${TIMESTAMP}.bak"
-    
-    # Backup existing config if present
-    if [[ -f "${CONFIG_DIR}/.env" ]]; then
-        cp "${CONFIG_DIR}/.env" "$config_backup"
-        log_info "Backed up existing config to $config_backup"
+    cat << 'EOF'
+Configure maintenance and update settings.
+
+EOF
+
+    # Automatic updates
+    if prompt_yes_no "Enable automatic container updates?" "n"; then
+        CONFIG_VALUES[AUTO_UPDATE_ENABLED]="true"
+        
+        if [[ "${CONFIG_VALUES[INSTALL_WATCHTOWER]}" != "true" ]]; then
+            log_info "Watchtower will be enabled for automatic updates"
+            CONFIG_VALUES[INSTALL_WATCHTOWER]="true"
+        fi
+        
+        local update_schedule=$(prompt_choice "Update schedule:" "Daily at 3 AM" "Weekly on Sunday" "Custom")
+        case "$update_schedule" in
+            "Daily at 3 AM")
+                CONFIG_VALUES[UPDATE_SCHEDULE]="0 0 3 * * *"
+                ;;
+            "Weekly on Sunday")
+                CONFIG_VALUES[UPDATE_SCHEDULE]="0 0 3 * * 0"
+                ;;
+            "Custom")
+                read -rp "Enter cron expression: " custom_schedule
+                CONFIG_VALUES[UPDATE_SCHEDULE]="$custom_schedule"
+                ;;
+        esac
+    else
+        CONFIG_VALUES[AUTO_UPDATE_ENABLED]="false"
     fi
+    
+    # Health checks
+    if prompt_yes_no "Enable health check monitoring?" "y"; then
+        CONFIG_VALUES[HEALTH_CHECK_ENABLED]="true"
+        
+        local check_interval=$(prompt_with_default "Health check interval (seconds)" "30")
+        CONFIG_VALUES[HEALTH_CHECK_INTERVAL]="${check_interval}s"
+        
+        local check_timeout=$(prompt_with_default "Health check timeout (seconds)" "10")
+        CONFIG_VALUES[HEALTH_CHECK_TIMEOUT]="${check_timeout}s"
+        
+        local check_retries=$(prompt_with_default "Health check retries" "3")
+        CONFIG_VALUES[HEALTH_CHECK_RETRIES]="$check_retries"
+    else
+        CONFIG_VALUES[HEALTH_CHECK_ENABLED]="false"
+    fi
+    
+    # Cleanup policies
+    if prompt_yes_no "Enable automatic cleanup of old data?" "y"; then
+        CONFIG_VALUES[AUTO_CLEANUP_ENABLED]="true"
+        
+        local cleanup_schedule=$(prompt_with_default "Cleanup schedule (cron)" "0 0 2 * * *")
+        CONFIG_VALUES[CLEANUP_SCHEDULE]="$cleanup_schedule"
+        
+        # Log cleanup
+        local log_retention=$(prompt_with_default "Keep logs for (days)" "${CONFIG_VALUES[LOG_RETENTION_DAYS]}")
+        CONFIG_VALUES[LOG_RETENTION_DAYS]="$log_retention"
+        
+        # Docker cleanup
+        if prompt_yes_no "Cleanup unused Docker images/volumes?" "y"; then
+            CONFIG_VALUES[DOCKER_CLEANUP_ENABLED]="true"
+        else
+            CONFIG_VALUES[DOCKER_CLEANUP_ENABLED]="false"
+        fi
+    else
+        CONFIG_VALUES[AUTO_CLEANUP_ENABLED]="false"
+    fi
+    
+    log_success "Step 16 completed: Maintenance configured"
+}
+
+#==============================================================================
+# STEP 17: NOTIFICATION CONFIGURATION
+#==============================================================================
+
+step_17_notifications() {
+    print_step_header 17 "Notification Configuration"
+    
+    cat << 'EOF'
+Configure notifications for system events.
+
+EOF
+
+    if prompt_yes_no "Enable notifications?" "n"; then
+        CONFIG_VALUES[NOTIFICATIONS_ENABLED]="true"
+        
+        # Notification methods
+        echo "Select notification methods (multiple allowed):"
+        
+        if prompt_yes_no "  Email notifications?" "y"; then
+            CONFIG_VALUES[NOTIFY_EMAIL]="true"
+            
+            read -rp "SMTP server: " smtp_server
+            CONFIG_VALUES[SMTP_SERVER]="$smtp_server"
+            
+            read -rp "SMTP port: " smtp_port
+            CONFIG_VALUES[SMTP_PORT]="$smtp_port"
+            
+            read -rp "SMTP username: " smtp_user
+            CONFIG_VALUES[SMTP_USER]="$smtp_user"
+            
+            CONFIG_VALUES[SMTP_PASSWORD]="$(prompt_password "SMTP password")"
+            
+            read -rp "Notification email (recipient): " notify_email
+            CONFIG_VALUES[NOTIFICATION_EMAIL]="$notify_email"
+            
+            read -rp "From email address: " from_email
+            CONFIG_VALUES[SMTP_FROM]="$from_email"
+        else
+            CONFIG_VALUES[NOTIFY_EMAIL]="false"
+        fi
+        
+        if prompt_yes_no "  Slack notifications?" "n"; then
+            CONFIG_VALUES[NOTIFY_SLACK]="true"
+            read -rp "Slack webhook URL: " slack_webhook
+            CONFIG_VALUES[SLACK_WEBHOOK]="$slack_webhook"
+        else
+            CONFIG_VALUES[NOTIFY_SLACK]="false"
+        fi
+        
+        if prompt_yes_no "  Discord notifications?" "n"; then
+            CONFIG_VALUES[NOTIFY_DISCORD]="true"
+            read -rp "Discord webhook URL: " discord_webhook
+            CONFIG_VALUES[DISCORD_WEBHOOK]="$discord_webhook"
+        else
+            CONFIG_VALUES[NOTIFY_DISCORD]="false"
+        fi
+        
+        if prompt_yes_no "  Telegram notifications?" "n"; then
+            CONFIG_VALUES[NOTIFY_TELEGRAM]="true"
+            read -rp "Telegram bot token: " telegram_token
+            CONFIG_VALUES[TELEGRAM_TOKEN]="$telegram_token"
+            read -rp "Telegram chat ID: " telegram_chat
+            CONFIG_VALUES[TELEGRAM_CHAT_ID]="$telegram_chat"
+        else
+            CONFIG_VALUES[NOTIFY_TELEGRAM]="false"
+        fi
+        
+        # Notification events
+        echo
+        echo "Select events to notify about:"
+        
+        if prompt_yes_no "  Service failures?" "y"; then
+            CONFIG_VALUES[NOTIFY_ON_FAILURE]="true"
+        else
+            CONFIG_VALUES[NOTIFY_ON_FAILURE]="false"
+        fi
+        
+        if prompt_yes_no "  Successful backups?" "n"; then
+            CONFIG_VALUES[NOTIFY_ON_BACKUP]="true"
+        else
+            CONFIG_VALUES[NOTIFY_ON_BACKUP]="false"
+        fi
+        
+        if prompt_yes_no "  System updates?" "y"; then
+            CONFIG_VALUES[NOTIFY_ON_UPDATE]="true"
+        else
+            CONFIG_VALUES[NOTIFY_ON_UPDATE]="false"
+        fi
+        
+        if prompt_yes_no "  Resource alerts?" "y"; then
+            CONFIG_VALUES[NOTIFY_ON_RESOURCE_ALERT]="true"
+        else
+            CONFIG_VALUES[NOTIFY_ON_RESOURCE_ALERT]="false"
+        fi
+    else
+        CONFIG_VALUES[NOTIFICATIONS_ENABLED]="false"
+    fi
+    
+    log_success "Step 17 completed: Notifications configured"
+}
+
+#==============================================================================
+# STEP 18: INTEGRATION CONFIGURATION
+#==============================================================================
+
+step_18_integrations() {
+    print_step_header 18 "External Integrations"
+    
+    cat << 'EOF'
+Configure external service integrations.
+
+EOF
+
+    # OpenAI API (for hybrid approach)
+    if prompt_yes_no "Configure OpenAI API integration?" "n"; then
+        CONFIG_VALUES[OPENAI_ENABLED]="true"
+        
+        read -rp "OpenAI API key: " openai_key
+        CONFIG_VALUES[OPENAI_API_KEY]="$openai_key"
+        
+        local openai_model=$(prompt_with_default "Default OpenAI model" "gpt-4")
+        CONFIG_VALUES[OPENAI_DEFAULT_MODEL]="$openai_model"
+    else
+        CONFIG_VALUES[OPENAI_ENABLED]="false"
+    fi
+    
+    # Anthropic Claude
+    if prompt_yes_no "Configure Anthropic Claude integration?" "n"; then
+        CONFIG_VALUES[ANTHROPIC_ENABLED]="true"
+        read -rp "Anthropic API key: " anthropic_key
+        CONFIG_VALUES[ANTHROPIC_API_KEY]="$anthropic_key"
+    else
+        CONFIG_VALUES[ANTHROPIC_ENABLED]="false"
+    fi
+    
+    # AWS integration (for S3, etc.)
+    if prompt_yes_no "Configure AWS integration?" "n"; then
+        CONFIG_VALUES[AWS_ENABLED]="true"
+        read -rp "AWS access key ID: " aws_key
+        CONFIG_VALUES[AWS_ACCESS_KEY_ID]="$aws_key"
+        CONFIG_VALUES[AWS_SECRET_ACCESS_KEY]="$(prompt_password "AWS secret access key")"
+        read -rp "AWS region: " aws_region
+        CONFIG_VALUES[AWS_REGION]="$aws_region"
+    else
+        CONFIG_VALUES[AWS_ENABLED]="false"
+    fi
+    
+    # Git integration (for backups/sync)
+    if prompt_yes_no "Configure Git integration?" "n"; then
+        CONFIG_VALUES[GIT_ENABLED]="true"
+        read -rp "Git repository URL: " git_repo
+        CONFIG_VALUES[GIT_REPO]="$git_repo"
+        read -rp "Git branch: " git_branch
+        CONFIG_VALUES[GIT_BRANCH]="$git_branch"
+        
+        if prompt_yes_no "Use SSH key for authentication?" "y"; then
+            read -rp "Path to SSH private key: " ssh_key
+            CONFIG_VALUES[GIT_SSH_KEY]="$ssh_key"
+        else
+            read -rp "Git username: " git_user
+            CONFIG_VALUES[GIT_USERNAME]="$git_user"
+            CONFIG_VALUES[GIT_PASSWORD]="$(prompt_password "Git password/token")"
+        fi
+    else
+        CONFIG_VALUES[GIT_ENABLED]="false"
+    fi
+    
+    log_success "Step 18 completed: Integrations configured"
+}
+
+#==============================================================================
+# STEP 19: REVIEW CONFIGURATION
+#==============================================================================
+
+step_19_review() {
+    print_step_header 19 "Configuration Review"
+    
+    cat << 'EOF'
+Please review your configuration before proceeding.
+
+EOF
+
+    print_section_break
+    echo "ENVIRONMENT:"
+    echo "  Environment: ${CONFIG_VALUES[ENVIRONMENT]}"
+    echo "  Project Name: ${CONFIG_VALUES[COMPOSE_PROJECT_NAME]}"
+    echo "  Base Domain: ${CONFIG_VALUES[BASE_DOMAIN]}"
+    echo "  Data Root: ${CONFIG_VALUES[DATA_ROOT]}"
+    
+    print_section_break
+    echo "SERVICES:"
+    echo "  Ollama: ${CONFIG_VALUES[INSTALL_OLLAMA]}"
+    echo "  Open WebUI: ${CONFIG_VALUES[INSTALL_OPEN_WEBUI]}"
+    echo "  n8n: ${CONFIG_VALUES[INSTALL_N8N]}"
+    echo "  PostgreSQL: ${CONFIG_VALUES[INSTALL_POSTGRES]}"
+    echo "  Redis: ${CONFIG_VALUES[INSTALL_REDIS]}"
+    echo "  Nginx: ${CONFIG_VALUES[INSTALL_NGINX]}"
+    echo "  Prometheus: ${CONFIG_VALUES[INSTALL_PROMETHEUS]}"
+    echo "  Grafana: ${CONFIG_VALUES[INSTALL_GRAFANA]}"
+    echo "  Portainer: ${CONFIG_VALUES[INSTALL_PORTAINER]}"
+    
+    print_section_break
+    echo "PORTS:"
+    [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" == "true" ]] && echo "  Ollama: ${CONFIG_VALUES[OLLAMA_PORT]}"
+    [[ "${CONFIG_VALUES[INSTALL_OPEN_WEBUI]}" == "true" ]] && echo "  Open WebUI: ${CONFIG_VALUES[OPEN_WEBUI_PORT]}"
+    [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]] && echo "  n8n: ${CONFIG_VALUES[N8N_PORT]}"
+    [[ "${CONFIG_VALUES[INSTALL_NGINX]}" == "true" ]] && echo "  Nginx HTTP: ${CONFIG_VALUES[NGINX_HTTP_PORT]}"
+    [[ "${CONFIG_VALUES[INSTALL_NGINX]}" == "true" ]] && echo "  Nginx HTTPS: ${CONFIG_VALUES[NGINX_HTTPS_PORT]}"
+    
+    print_section_break
+    echo "SECURITY:"
+    echo "  SSL Enabled: ${CONFIG_VALUES[ENABLE_SSL]}"
+    [[ "${CONFIG_VALUES[ENABLE_SSL]}" == "true" ]] && echo "  SSL Type: ${CONFIG_VALUES[SSL_TYPE]}"
+    echo "  Rate Limiting: ${CONFIG_VALUES[RATE_LIMIT_ENABLED]}"
+    echo "  IP Whitelist: ${CONFIG_VALUES[IP_WHITELIST_ENABLED]}"
+    
+    print_section_break
+    echo "FEATURES:"
+    echo "  Backups: ${CONFIG_VALUES[BACKUP_ENABLED]}"
+    echo "  Monitoring: ${CONFIG_VALUES[INSTALL_PROMETHEUS]}"
+    echo "  Notifications: ${CONFIG_VALUES[NOTIFICATIONS_ENABLED]}"
+    echo "  Auto Updates: ${CONFIG_VALUES[AUTO_UPDATE_ENABLED]}"
+    
+    if [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" == "true" ]] && [[ -n "${CONFIG_VALUES[OLLAMA_MODELS]:-}" ]]; then
+        print_section_break
+        echo "AI MODELS:"
+        echo "  ${CONFIG_VALUES[OLLAMA_MODELS]}"
+        echo "  Default: ${CONFIG_VALUES[DEFAULT_MODEL]:-None}"
+    fi
+    
+    print_section_break
+    
+    if ! prompt_yes_no "Configuration looks good?" "y"; then
+        log_warning "Configuration review failed"
+        
+        if prompt_yes_no "Start wizard over?" "y"; then
+            log_info "Restarting wizard..."
+            return 2  # Special return code to restart
+        else
+            log_error "Setup cancelled by user"
+            exit 0
+        fi
+    fi
+    
+    log_success "Step 19 completed: Configuration reviewed and approved"
+}
+
+#==============================================================================
+# STEP 20: GENERATE CONFIGURATION FILES
+#==============================================================================
+
+step_20_generate_configs() {
+    print_step_header 20 "Generate Configuration Files"
+    
+    log_step "Generating configuration files..."
+    
+    # Create directories
+    log_info "Creating directory structure..."
+    mkdir -p "$CONFIG_DIR"
+    mkdir -p "$BACKUP_DIR"
+    mkdir -p "$LOG_DIR"
+    mkdir -p "${CONFIG_VALUES[DATA_ROOT]}"
+    mkdir -p "${CONFIG_DIR}/nginx/conf.d"
+    mkdir -p "${CONFIG_DIR}/nginx/ssl"
+    mkdir -p "${CONFIG_DIR}/postgres"
+    mkdir -p "${CONFIG_VALUES[DATA_ROOT]}/postgres"
+    mkdir -p "${CONFIG_VALUES[DATA_ROOT]}/redis"
+    
+    if [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" == "true" ]]; then
+        mkdir -p "${CONFIG_VALUES[OLLAMA_MODELS_DIR]}"
+    fi
+    
+    # Generate .env file
+    log_info "Generating .env file..."
+    if ! generate_env_file; then
+        log_error "Failed to generate .env file"
+        return 1
+    fi
+    
+    # Generate docker-compose.yml
+    log_info "Generating docker-compose.yml..."
+    if ! generate_docker_compose; then
+        log_error "Failed to generate docker-compose.yml"
+        return 1
+    fi
+    
+    # Generate Nginx config
+    if [[ "${CONFIG_VALUES[INSTALL_NGINX]}" == "true" ]]; then
+        log_info "Generating Nginx configuration..."
+        if ! generate_nginx_config; then
+            log_error "Failed to generate Nginx configuration"
+            return 1
+        fi
+    fi
+    
+    # Generate backup scripts
+    if [[ "${CONFIG_VALUES[BACKUP_ENABLED]}" == "true" ]]; then
+        log_info "Generating backup scripts..."
+        if ! generate_backup_scripts; then
+            log_error "Failed to generate backup scripts"
+            return 1
+        fi
+    fi
+    
+    # Set permissions
+    log_info "Setting permissions..."
+    chmod 600 "$ENV_FILE"
+    chmod 644 "$DOCKER_COMPOSE_FILE"
+    
+    if [[ -f "${SCRIPT_DIR}/backup.sh" ]]; then
+        chmod +x "${SCRIPT_DIR}/backup.sh"
+    fi
+    
+    if [[ -f "${SCRIPT_DIR}/restore.sh" ]]; then
+        chmod +x "${SCRIPT_DIR}/restore.sh"
+    fi
+    
+    log_success "Step 20 completed: Configuration files generated"
     
     # Save configuration summary
-    {
-        echo "# AI Platform Configuration"
-        echo "# Generated: $(date)"
-        echo "# Version: ${VERSION}"
-        echo
-        for key in "${!CONFIG_VALUES[@]}"; do
-            echo "${key}=${CONFIG_VALUES[$key]}"
-        done
-    } > "${CONFIG_DIR}/config_summary.txt"
-    
-    log_success "Configuration saved"
+    save_config_summary
 }
 
-################################################################################
-# CONFIGURATION FILE GENERATION FUNCTIONS
-################################################################################
+#==============================================================================
+# CONFIGURATION GENERATION FUNCTIONS
+#==============================================================================
 
 generate_env_file() {
-    log_info "Generating .env file..."
+    local env_content=""
     
-    cat > "${CONFIG_DIR}/.env" <<EOF
-# AI Platform Environment Configuration
-# Generated: $(date)
-# Version: ${VERSION}
-
-# ==================== GENERAL ====================
-ENVIRONMENT=${CONFIG_VALUES[ENVIRONMENT]}
-PROJECT_NAME=aiplatform
-COMPOSE_PROJECT_NAME=aiplatform
-TZ=${CONFIG_VALUES[TIMEZONE]}
-PUID=1000
-PGID=1000
-
-# ==================== DOMAIN & EMAIL ====================
-DOMAIN=${CONFIG_VALUES[DOMAIN]:-localhost}
-ADMIN_EMAIL=${CONFIG_VALUES[ADMIN_EMAIL]}
-
-# ==================== OLLAMA ====================
-EOF
-
-    if [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" == "true" ]]; then
-        cat >> "${CONFIG_DIR}/.env" <<EOF
-OLLAMA_HOST=0.0.0.0:${CONFIG_VALUES[OLLAMA_PORT]}
-OLLAMA_PORT=${CONFIG_VALUES[OLLAMA_PORT]}
-OLLAMA_MODELS=${CONFIG_VALUES[OLLAMA_MODELS]:-}
-OLLAMA_NUM_PARALLEL=${CONFIG_VALUES[OLLAMA_NUM_PARALLEL]:-1}
-OLLAMA_MAX_LOADED_MODELS=${CONFIG_VALUES[OLLAMA_MAX_LOADED_MODELS]:-1}
-OLLAMA_KEEP_ALIVE=${CONFIG_VALUES[OLLAMA_KEEP_ALIVE]:-5m}
-OLLAMA_NUM_CTX=${CONFIG_VALUES[OLLAMA_NUM_CTX]:-2048}
-OLLAMA_NUM_THREAD=${CONFIG_VALUES[OLLAMA_NUM_THREAD]:-4}
-EOF
-
-        if [[ "${CONFIG_VALUES[OLLAMA_GPU_ENABLED]}" == "true" ]]; then
-            cat >> "${CONFIG_DIR}/.env" <<EOF
-OLLAMA_GPU_ENABLED=true
-OLLAMA_GPU_TYPE=${CONFIG_VALUES[OLLAMA_GPU_TYPE]}
-OLLAMA_GPU_LAYERS=${CONFIG_VALUES[OLLAMA_GPU_LAYERS]:--1}
-EOF
-        fi
-    fi
-
-    if [[ "${CONFIG_VALUES[INSTALL_WEBUI]}" == "true" ]]; then
-        cat >> "${CONFIG_DIR}/.env" <<EOF
-
-# ==================== OPEN WEBUI ====================
-WEBUI_PORT=${CONFIG_VALUES[WEBUI_PORT]}
-WEBUI_SECRET_KEY=${CONFIG_VALUES[WEBUI_SECRET_KEY]}
-WEBUI_AUTH_METHOD=${CONFIG_VALUES[WEBUI_AUTH_METHOD]:-local}
-WEBUI_SIGNUP_ENABLED=${CONFIG_VALUES[WEBUI_SIGNUP_ENABLED]:-true}
-WEBUI_DOMAIN=${CONFIG_VALUES[WEBUI_DOMAIN]:-}
-EOF
-
-        if [[ "${CONFIG_VALUES[ENABLE_OAUTH]}" == "true" ]]; then
-            cat >> "${CONFIG_DIR}/.env" <<EOF
-OAUTH_CLIENT_ID=${CONFIG_VALUES[OAUTH_CLIENT_ID]}
-OAUTH_CLIENT_SECRET=${CONFIG_VALUES[OAUTH_CLIENT_SECRET]}
-OAUTH_PROVIDER=${CONFIG_VALUES[OAUTH_PROVIDER]}
-EOF
-            if [[ "${CONFIG_VALUES[OAUTH_PROVIDER]}" == "oidc" ]]; then
-                echo "OAUTH_ISSUER_URL=${CONFIG_VALUES[OAUTH_ISSUER_URL]}" >> "${CONFIG_DIR}/.env"
-            fi
-        fi
-    fi
-
-    if [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]]; then
-        cat >> "${CONFIG_DIR}/.env" <<EOF
-
-# ==================== N8N ====================
-N8N_PORT=${CONFIG_VALUES[N8N_PORT]}
-N8N_ENCRYPTION_KEY=${CONFIG_VALUES[N8N_ENCRYPTION_KEY]}
-N8N_BASIC_AUTH_ACTIVE=${CONFIG_VALUES[N8N_BASIC_AUTH_ACTIVE]:-false}
-EOF
-        if [[ "${CONFIG_VALUES[N8N_BASIC_AUTH_ACTIVE]}" == "true" ]]; then
-            cat >> "${CONFIG_DIR}/.env" <<EOF
-N8N_BASIC_AUTH_USER=${CONFIG_VALUES[N8N_BASIC_AUTH_USER]}
-N8N_BASIC_AUTH_PASSWORD=${CONFIG_VALUES[N8N_BASIC_AUTH_PASSWORD]}
-EOF
-        fi
-        
-        cat >> "${CONFIG_DIR}/.env" <<EOF
-N8N_DOMAIN=${CONFIG_VALUES[N8N_DOMAIN]:-}
-N8N_PROTOCOL=${CONFIG_VALUES[ENABLE_SSL]:+https}${CONFIG_VALUES[ENABLE_SSL]:-http}
-N8N_HOST=\${N8N_DOMAIN:-localhost}
-EOF
-    fi
-
+    # Header
+    env_content+="# AI Platform Configuration\n"
+    env_content+="# Generated: $(date)\n"
+    env_content+="# DO NOT COMMIT THIS FILE TO VERSION CONTROL\n\n"
+    
+    # Environment
+    env_content+="# Environment Settings\n"
+    env_content+="ENVIRONMENT=${CONFIG_VALUES[ENVIRONMENT]}\n"
+    env_content+="COMPOSE_PROJECT_NAME=${CONFIG_VALUES[COMPOSE_PROJECT_NAME]}\n"
+    env_content+="BASE_DOMAIN=${CONFIG_VALUES[BASE_DOMAIN]}\n"
+    env_content+="DATA_ROOT=${CONFIG_VALUES[DATA_ROOT]}\n"
+    env_content+="DEBUG=${CONFIG_VALUES[DEBUG]:-false}\n"
+    env_content+="LOG_LEVEL=${CONFIG_VALUES[LOG_LEVEL]:-info}\n\n"
+    
+    # Ports
+    env_content+="# Service Ports\n"
+    env_content+="OLLAMA_PORT=${CONFIG_VALUES[OLLAMA_PORT]}\n"
+    env_content+="OPEN_WEBUI_PORT=${CONFIG_VALUES[OPEN_WEBUI_PORT]}\n"
+    env_content+="N8N_PORT=${CONFIG_VALUES[N8N_PORT]}\n"
+    env_content+="NGINX_HTTP_PORT=${CONFIG_VALUES[NGINX_HTTP_PORT]}\n"
+    env_content+="NGINX_HTTPS_PORT=${CONFIG_VALUES[NGINX_HTTPS_PORT]}\n"
+    env_content+="POSTGRES_PORT=${CONFIG_VALUES[POSTGRES_PORT]}\n"
+    env_content+="REDIS_PORT=${CONFIG_VALUES[REDIS_PORT]}\n\n"
+    
+    # Database
     if [[ "${CONFIG_VALUES[INSTALL_POSTGRES]}" == "true" ]]; then
-        cat >> "${CONFIG_DIR}/.env" <<EOF
-
-# ==================== POSTGRESQL ====================
-POSTGRES_PORT=${CONFIG_VALUES[POSTGRES_PORT]}
-POSTGRES_DB=${CONFIG_VALUES[POSTGRES_DB]}
-POSTGRES_USER=${CONFIG_VALUES[POSTGRES_USER]}
-POSTGRES_PASSWORD=${CONFIG_VALUES[POSTGRES_PASSWORD]}
-POSTGRES_MAX_CONNECTIONS=${CONFIG_VALUES[POSTGRES_MAX_CONNECTIONS]:-100}
-POSTGRES_SHARED_BUFFERS=${CONFIG_VALUES[POSTGRES_SHARED_BUFFERS]:-256MB}
-DATABASE_URL=postgresql://\${POSTGRES_USER}:\${POSTGRES_PASSWORD}@postgres:\${POSTGRES_PORT}/\${POSTGRES_DB}
-EOF
+        env_content+="# PostgreSQL Configuration\n"
+        env_content+="POSTGRES_USER=${CONFIG_VALUES[POSTGRES_USER]}\n"
+        env_content+="POSTGRES_PASSWORD=${CONFIG_VALUES[POSTGRES_PASSWORD]}\n"
+        env_content+="POSTGRES_DB=${CONFIG_VALUES[POSTGRES_DB]}\n"
+        env_content+="POSTGRES_MAX_CONNECTIONS=${CONFIG_VALUES[POSTGRES_MAX_CONNECTIONS]:-100}\n"
+        env_content+="POSTGRES_SHARED_BUFFERS=${CONFIG_VALUES[POSTGRES_SHARED_BUFFERS]:-256MB}\n"
+        env_content+="POSTGRES_EFFECTIVE_CACHE=${CONFIG_VALUES[POSTGRES_EFFECTIVE_CACHE]:-1GB}\n\n"
     fi
-
-    if [[ "${CONFIG_VALUES[INSTALL_REDIS]}" == "true" ]]; then
-        cat >> "${CONFIG_DIR}/.env" <<EOF
-
-# ==================== REDIS ====================
-REDIS_PORT=${CONFIG_VALUES[REDIS_PORT]}
-REDIS_MAX_MEMORY=${CONFIG_VALUES[REDIS_MAX_MEMORY]:-256}mb
-REDIS_EVICTION_POLICY=${CONFIG_VALUES[REDIS_EVICTION_POLICY]:-allkeys-lru}
-EOF
-    fi
-
-    if [[ "${CONFIG_VALUES[INSTALL_NGINX]}" == "true" ]]; then
-        cat >> "${CONFIG_DIR}/.env" <<EOF
-
-# ==================== NGINX ====================
-NGINX_HTTP_PORT=${CONFIG_VALUES[NGINX_HTTP_PORT]}
-NGINX_HTTPS_PORT=${CONFIG_VALUES[NGINX_HTTPS_PORT]}
-CLIENT_MAX_BODY_SIZE=${CONFIG_VALUES[CLIENT_MAX_BODY_SIZE]:-100}m
-EOF
-        
-        if [[ "${CONFIG_VALUES[ENABLE_SSL]}" == "true" ]]; then
-            cat >> "${CONFIG_DIR}/.env" <<EOF
-SSL_ENABLED=true
-SSL_METHOD=${CONFIG_VALUES[SSL_METHOD]}
-EOF
-            if [[ "${CONFIG_VALUES[SSL_METHOD]}" == "letsencrypt" ]]; then
-                echo "SSL_EMAIL=${CONFIG_VALUES[SSL_EMAIL]}" >> "${CONFIG_DIR}/.env"
-            fi
-        fi
-    fi
-
-    if [[ "${CONFIG_VALUES[INSTALL_MONITORING]}" == "true" ]]; then
-        cat >> "${CONFIG_DIR}/.env" <<EOF
-
-# ==================== MONITORING ====================
-PROMETHEUS_PORT=${CONFIG_VALUES[PROMETHEUS_PORT]}
-GRAFANA_PORT=${CONFIG_VALUES[GRAFANA_PORT]}
-GRAFANA_ADMIN_USER=${CONFIG_VALUES[GRAFANA_ADMIN_USER]}
-GRAFANA_ADMIN_PASSWORD=${CONFIG_VALUES[GRAFANA_ADMIN_PASSWORD]}
-PROMETHEUS_RETENTION=${CONFIG_VALUES[PROMETHEUS_RETENTION]:-15d}
-PROMETHEUS_SCRAPE_INTERVAL=${CONFIG_VALUES[PROMETHEUS_SCRAPE_INTERVAL]:-15s}
-EOF
-    fi
-
-    cat >> "${CONFIG_DIR}/.env" <<EOF
-
-# ==================== LOGGING ====================
-LOG_LEVEL=${CONFIG_VALUES[LOG_LEVEL]:-INFO}
-LOG_FORMAT=${CONFIG_VALUES[LOG_FORMAT]:-json}
-
-# ==================== NETWORK ====================
-DOCKER_NETWORK=${CONFIG_VALUES[DOCKER_NETWORK]}
-NETWORK_SUBNET=${CONFIG_VALUES[NETWORK_SUBNET]}
-
-# ==================== STORAGE ====================
-DATA_DIR=${CONFIG_VALUES[DATA_DIR]}
-
-# ==================== EXTERNAL APIS ====================
-EOF
-
-    for api_key in OPENAI_API_KEY ANTHROPIC_API_KEY GOOGLE_AI_API_KEY HUGGINGFACE_API_KEY; do
-        if [[ -n "${CONFIG_VALUES[$api_key]:-}" ]]; then
-            echo "${api_key}=${CONFIG_VALUES[$api_key]}" >> "${CONFIG_DIR}/.env"
-        fi
-    done
-
-    if [[ -n "${CONFIG_VALUES[CUSTOM_ENV_VARS]:-}" ]]; then
-        cat >> "${CONFIG_DIR}/.env" <<EOF
-
-# ==================== CUSTOM ====================
-${CONFIG_VALUES[CUSTOM_ENV_VARS]}
-EOF
-    fi
-
-    log_success ".env file generated"
-}
-generate_docker_compose() {
-    log_info "Generating docker-compose.yml..."
     
-    cat > "${PROJECT_ROOT}/docker-compose.yml" <<'EOF'
+    # Redis
+    if [[ "${CONFIG_VALUES[INSTALL_REDIS]}" == "true" ]]; then
+        env_content+="# Redis Configuration\n"
+        env_content+="REDIS_MAX_MEMORY=${CONFIG_VALUES[REDIS_MAX_MEMORY]:-512mb}\n"
+        env_content+="REDIS_EVICTION_POLICY=${CONFIG_VALUES[REDIS_EVICTION_POLICY]:-allkeys-lru}\n\n"
+    fi
+    
+    # Security
+    env_content+="# Security\n"
+    env_content+="ADMIN_USERNAME=${CONFIG_VALUES[ADMIN_USERNAME]}\n"
+    env_content+="ADMIN_PASSWORD=${CONFIG_VALUES[ADMIN_PASSWORD]}\n"
+    
+    if [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]]; then
+        env_content+="N8N_ENCRYPTION_KEY=${CONFIG_VALUES[N8N_ENCRYPTION_KEY]}\n"
+    fi
+    
+    if [[ "${CONFIG_VALUES[INSTALL_OPEN_WEBUI]}" == "true" ]]; then
+        env_content+="WEBUI_JWT_SECRET=${CONFIG_VALUES[WEBUI_JWT_SECRET]}\n"
+    fi
+    
+    env_content+="\n"
+    
+    # SSL
+    if [[ "${CONFIG_VALUES[ENABLE_SSL]}" == "true" ]]; then
+        env_content+="# SSL Configuration\n"
+        env_content+="ENABLE_SSL=true\n"
+        env_content+="SSL_TYPE=${CONFIG_VALUES[SSL_TYPE]}\n"
+        
+        if [[ "${CONFIG_VALUES[SSL_TYPE]}" == "letsencrypt" ]]; then
+            env_content+="SSL_EMAIL=${CONFIG_VALUES[SSL_EMAIL]}\n"
+            env_content+="LETSENCRYPT_STAGING=${CONFIG_VALUES[LETSENCRYPT_STAGING]:-false}\n"
+        fi
+        
+        env_content+="\n"
+    fi
+    
+    # Ollama
+    if [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" == "true" ]]; then
+        env_content+="# Ollama Configuration\n"
+        env_content+="OLLAMA_MODELS_DIR=${CONFIG_VALUES[OLLAMA_MODELS_DIR]}\n"
+        env_content+="OLLAMA_MAX_MEMORY=${CONFIG_VALUES[OLLAMA_MAX_MEMORY]:-8g}\n"
+        env_content+="OLLAMA_MAX_CPUS=${CONFIG_VALUES[OLLAMA_MAX_CPUS]:-4}\n"
+        env_content+="ENABLE_GPU=${CONFIG_VALUES[ENABLE_GPU]:-false}\n"
+        
+        if [[ -n "${CONFIG_VALUES[OLLAMA_MODELS]:-}" ]]; then
+            env_content+="OLLAMA_MODELS=${CONFIG_VALUES[OLLAMA_MODELS]}\n"
+        fi
+        
+        if [[ -n "${CONFIG_VALUES[DEFAULT_MODEL]:-}" ]]; then
+            env_content+="DEFAULT_MODEL=${CONFIG_VALUES[DEFAULT_MODEL]}\n"
+        fi
+        
+        env_content+="\n"
+    fi
+    
+    # Network
+    env_content+="# Network Configuration\n"
+    env_content+="DOCKER_NETWORK_NAME=${CONFIG_VALUES[DOCKER_NETWORK_NAME]}\n"
+    env_content+="DOCKER_SUBNET=${CONFIG_VALUES[DOCKER_SUBNET]}\n"
+    env_content+="DOCKER_GATEWAY=${CONFIG_VALUES[DOCKER_GATEWAY]}\n\n"
+    
+    # Write to file
+    echo -e "$env_content" > "$ENV_FILE"
+    
+    return 0
+}
+
+save_config_summary() {
+    local summary_file="${CONFIG_DIR}/setup-summary.txt"
+    
+    {
+        echo "================================"
+        echo "AI Platform Setup Summary"
+        echo "================================"
+        echo "Generated: $(date)"
+        echo ""
+        echo "Environment: ${CONFIG_VALUES[ENVIRONMENT]}"
+        echo "Project: ${CONFIG_VALUES[COMPOSE_PROJECT_NAME]}"
+        echo "Domain: ${CONFIG_VALUES[BASE_DOMAIN]}"
+        echo ""
+        echo "Services Installed:"
+        [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" == "true" ]] && echo "  ✓ Ollama"
+        [[ "${CONFIG_VALUES[INSTALL_OPEN_WEBUI]}" == "true" ]] && echo "  ✓ Open WebUI"
+        [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]] && echo "  ✓ n8n"
+        [[ "${CONFIG_VALUES[INSTALL_POSTGRES]}" == "true" ]] && echo "  ✓ PostgreSQL"
+        [[ "${CONFIG_VALUES[INSTALL_REDIS]}" == "true" ]] && echo "  ✓ Redis"
+        [[ "${CONFIG_VALUES[INSTALL_NGINX]}" == "true" ]] && echo "  ✓ Nginx"
+        echo ""
+        echo "Access URLs:"
+        [[ "${CONFIG_VALUES[INSTALL_OPEN_WEBUI]}" == "true" ]] && echo "  Open WebUI: ${CONFIG_VALUES[WEBUI_URL]}"
+        [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]] && echo "  n8n: ${CONFIG_VALUES[N8N_URL]}"
+        [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" == "true" ]] && echo "  Ollama API: ${CONFIG_VALUES[OLLAMA_URL]}"
+        echo ""
+        echo "Credentials:"
+        echo "  Admin Username: ${CONFIG_VALUES[ADMIN_USERNAME]}"
+        echo "  Admin Password: ${CONFIG_VALUES[ADMIN_PASSWORD]}"
+        echo ""
+        echo "Configuration files:"
+        echo "  .env: $ENV_FILE"
+        echo "  docker-compose.yml: $DOCKER_COMPOSE_FILE"
+        echo ""
+    } > "$summary_file"
+    
+    log_success "Setup summary saved to: $summary_file"
+}
+
+#==============================================================================
+# END OF PART 3/4
+#==============================================================================
+#!/bin/bash
+################################################################################
+# AI Platform Automation - System Setup Script
+# Part 4/4: Docker Compose Generation, Deployment & Main Execution
+################################################################################
+
+#==============================================================================
+# DOCKER COMPOSE GENERATION
+#==============================================================================
+
+generate_docker_compose() {
+    local compose_file="$DOCKER_COMPOSE_FILE"
+    
+    cat > "$compose_file" << 'EOF'
 version: '3.8'
 
 networks:
@@ -1306,47 +2334,47 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: ${NETWORK_SUBNET:-172.28.0.0/16}
+        - subnet: ${DOCKER_SUBNET:-172.28.0.0/16}
+          gateway: ${DOCKER_GATEWAY:-172.28.0.1}
 
 volumes:
-  ollama_data:
-  webui_data:
-  n8n_data:
   postgres_data:
   redis_data:
-  prometheus_data:
+  ollama_data:
+  n8n_data:
   grafana_data:
-  nginx_conf:
-  nginx_ssl:
+  prometheus_data:
 
 services:
 EOF
 
-    # Ollama Service
+    # Add Ollama service
     if [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" == "true" ]]; then
-        cat >> "${PROJECT_ROOT}/docker-compose.yml" <<'EOF'
+        cat >> "$compose_file" << 'EOF'
 
   ollama:
     image: ollama/ollama:latest
-    container_name: ollama
+    container_name: ${COMPOSE_PROJECT_NAME}_ollama
     restart: unless-stopped
+    networks:
+      - aiplatform
     ports:
       - "${OLLAMA_PORT:-11434}:11434"
     volumes:
       - ollama_data:/root/.ollama
+      - ${OLLAMA_MODELS_DIR:-./data/ollama/models}:/models
     environment:
-      - OLLAMA_HOST=${OLLAMA_HOST:-0.0.0.0:11434}
-      - OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL:-1}
-      - OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS:-1}
-      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-5m}
-      - OLLAMA_NUM_CTX=${OLLAMA_NUM_CTX:-2048}
-      - OLLAMA_NUM_THREAD=${OLLAMA_NUM_THREAD:-4}
-EOF
-
-        if [[ "${CONFIG_VALUES[OLLAMA_GPU_ENABLED]}" == "true" && "${CONFIG_VALUES[OLLAMA_GPU_TYPE]}" == "nvidia" ]]; then
-            cat >> "${PROJECT_ROOT}/docker-compose.yml" <<'EOF'
+      - OLLAMA_HOST=0.0.0.0:11434
+      - OLLAMA_ORIGINS=*
     deploy:
       resources:
+        limits:
+          memory: ${OLLAMA_MAX_MEMORY:-8g}
+          cpus: '${OLLAMA_MAX_CPUS:-4}'
+EOF
+
+        if [[ "${CONFIG_VALUES[ENABLE_GPU]}" == "true" ]] && [[ "${CONFIG_VALUES[GPU_TYPE]}" == "nvidia" ]]; then
+            cat >> "$compose_file" << 'EOF'
         reservations:
           devices:
             - driver: nvidia
@@ -1355,11 +2383,149 @@ EOF
 EOF
         fi
 
-        cat >> "${PROJECT_ROOT}/docker-compose.yml" <<'EOF'
+        cat >> "$compose_file" << 'EOF'
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+EOF
+    fi
+
+    # Add PostgreSQL service
+    if [[ "${CONFIG_VALUES[INSTALL_POSTGRES]}" == "true" ]]; then
+        cat >> "$compose_file" << 'EOF'
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: ${COMPOSE_PROJECT_NAME}_postgres
+    restart: unless-stopped
     networks:
       - aiplatform
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./config/postgres/init:/docker-entrypoint-initdb.d
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-aiplatform}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-aiplatform}
+      - POSTGRES_INITDB_ARGS=-E UTF8 --locale=en_US.utf8
+    command: >
+      postgres
+      -c max_connections=${POSTGRES_MAX_CONNECTIONS:-100}
+      -c shared_buffers=${POSTGRES_SHARED_BUFFERS:-256MB}
+      -c effective_cache_size=${POSTGRES_EFFECTIVE_CACHE:-1GB}
+      -c maintenance_work_mem=64MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=4MB
+      -c min_wal_size=1GB
+      -c max_wal_size=4GB
+    deploy:
+      resources:
+        limits:
+          memory: ${POSTGRES_MAX_MEMORY:-2g}
+          cpus: '2'
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aiplatform}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+EOF
+    fi
+
+    # Add Redis service
+    if [[ "${CONFIG_VALUES[INSTALL_REDIS]}" == "true" ]]; then
+        cat >> "$compose_file" << 'EOF'
+
+  redis:
+    image: redis:7-alpine
+    container_name: ${COMPOSE_PROJECT_NAME}_redis
+    restart: unless-stopped
+    networks:
+      - aiplatform
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --maxmemory ${REDIS_MAX_MEMORY:-512mb}
+      --maxmemory-policy ${REDIS_EVICTION_POLICY:-allkeys-lru}
+      --appendonly yes
+      --appendfsync everysec
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+    deploy:
+      resources:
+        limits:
+          memory: ${REDIS_MAX_MEMORY:-512mb}
+          cpus: '1'
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+EOF
+    fi
+
+    # Add Open WebUI service
+    if [[ "${CONFIG_VALUES[INSTALL_OPEN_WEBUI]}" == "true" ]]; then
+        cat >> "$compose_file" << 'EOF'
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: ${COMPOSE_PROJECT_NAME}_webui
+    restart: unless-stopped
+    networks:
+      - aiplatform
+    ports:
+      - "${OPEN_WEBUI_PORT:-3000}:8080"
+    volumes:
+      - ${DATA_ROOT:-./data}/webui:/app/backend/data
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_SECRET_KEY=${WEBUI_JWT_SECRET}
+      - WEBUI_NAME=AI Platform
+      - DEFAULT_USER_ROLE=user
+      - ENABLE_SIGNUP=${ENABLE_SIGNUP:-false}
+      - ENABLE_API_KEY=true
+EOF
+
+        if [[ "${CONFIG_VALUES[INSTALL_POSTGRES]}" == "true" ]]; then
+            cat >> "$compose_file" << 'EOF'
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+EOF
+        fi
+
+        cat >> "$compose_file" << 'EOF'
+    depends_on:
+      ollama:
+        condition: service_healthy
+EOF
+
+        if [[ "${CONFIG_VALUES[INSTALL_POSTGRES]}" == "true" ]]; then
+            cat >> "$compose_file" << 'EOF'
+      postgres:
+        condition: service_healthy
+EOF
+        fi
+
+        cat >> "$compose_file" << 'EOF'
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: '2'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -1367,142 +2533,35 @@ EOF
 EOF
     fi
 
-    # PostgreSQL Service
-    if [[ "${CONFIG_VALUES[INSTALL_POSTGRES]}" == "true" ]]; then
-        cat >> "${PROJECT_ROOT}/docker-compose.yml" <<'EOF'
-
-  postgres:
-    image: postgres:16-alpine
-    container_name: postgres
-    restart: unless-stopped
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./config/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    environment:
-      - POSTGRES_DB=${POSTGRES_DB}
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_MAX_CONNECTIONS=${POSTGRES_MAX_CONNECTIONS:-100}
-      - POSTGRES_SHARED_BUFFERS=${POSTGRES_SHARED_BUFFERS:-256MB}
-    networks:
-      - aiplatform
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-EOF
-    fi
-
-    # Redis Service
-    if [[ "${CONFIG_VALUES[INSTALL_REDIS]}" == "true" ]]; then
-        cat >> "${PROJECT_ROOT}/docker-compose.yml" <<'EOF'
-
-  redis:
-    image: redis:7-alpine
-    container_name: redis
-    restart: unless-stopped
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    volumes:
-      - redis_data:/data
-      - ./config/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
-    command: redis-server /usr/local/etc/redis/redis.conf
-    networks:
-      - aiplatform
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-EOF
-    fi
-
-    # Open WebUI Service
-    if [[ "${CONFIG_VALUES[INSTALL_WEBUI]}" == "true" ]]; then
-        cat >> "${PROJECT_ROOT}/docker-compose.yml" <<'EOF'
-
-  webui:
-    image: ghcr.io/open-webui/open-webui:main
-    container_name: open-webui
-    restart: unless-stopped
-    ports:
-      - "${WEBUI_PORT:-3000}:8080"
-    volumes:
-      - webui_data:/app/backend/data
-    environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
-      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
-      - WEBUI_AUTH=${WEBUI_AUTH_METHOD:-local}
-      - ENABLE_SIGNUP=${WEBUI_SIGNUP_ENABLED:-true}
-EOF
-
-        if [[ "${CONFIG_VALUES[INSTALL_POSTGRES]}" == "true" ]]; then
-            cat >> "${PROJECT_ROOT}/docker-compose.yml" <<'EOF'
-      - DATABASE_URL=${DATABASE_URL}
-EOF
-        fi
-
-        if [[ "${CONFIG_VALUES[ENABLE_OAUTH]}" == "true" ]]; then
-            cat >> "${PROJECT_ROOT}/docker-compose.yml" <<'EOF'
-      - OAUTH_CLIENT_ID=${OAUTH_CLIENT_ID}
-      - OAUTH_CLIENT_SECRET=${OAUTH_CLIENT_SECRET}
-      - OAUTH_PROVIDER=${OAUTH_PROVIDER}
-EOF
-            if [[ "${CONFIG_VALUES[OAUTH_PROVIDER]}" == "oidc" ]]; then
-                echo "      - OAUTH_ISSUER_URL=\${OAUTH_ISSUER_URL}" >> "${PROJECT_ROOT}/docker-compose.yml"
-            fi
-        fi
-
-        cat >> "${PROJECT_ROOT}/docker-compose.yml" <<'EOF'
-    networks:
-      - aiplatform
-    depends_on:
-      ollama:
-        condition: service_healthy
-EOF
-
-        if [[ "${CONFIG_VALUES[INSTALL_POSTGRES]}" == "true" ]]; then
-            cat >> "${PROJECT_ROOT}/docker-compose.yml" <<'EOF'
-      postgres:
-        condition: service_healthy
-EOF
-        fi
-
-        cat >> "${PROJECT_ROOT}/docker-compose.yml" <<'EOF'
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 45s
-EOF
-    fi
-
-    # n8n Service
+    # Add n8n service
     if [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]]; then
-        cat >> "${PROJECT_ROOT}/docker-compose.yml" <<'EOF'
+        cat >> "$compose_file" << 'EOF'
 
   n8n:
     image: n8nio/n8n:latest
-    container_name: n8n
+    container_name: ${COMPOSE_PROJECT_NAME}_n8n
     restart: unless-stopped
+    networks:
+      - aiplatform
     ports:
       - "${N8N_PORT:-5678}:5678"
     volumes:
       - n8n_data:/home/node/.n8n
+      - ${DATA_ROOT:-./data}/n8n:/files
     environment:
-      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
-      - N8N_HOST=${N8N_HOST:-localhost}
+      - N8N_HOST=${BASE_DOMAIN}
       - N8N_PORT=5678
       - N8N_PROTOCOL=${N8N_PROTOCOL:-http}
-      - WEBHOOK_URL=${N8N_PROTOCOL}://${N8N_HOST}
+      - WEBHOOK_URL=${N8N_WEBHOOK_URL:-http://localhost:5678}
+      - GENERIC_TIMEZONE=${TIMEZONE:-UTC}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - EXECUTIONS_DATA_SAVE_ON_ERROR=all
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=all
+      - EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=true
 EOF
 
         if [[ "${CONFIG_VALUES[INSTALL_POSTGRES]}" == "true" ]]; then
-            cat >> "${PROJECT_ROOT}/docker-compose.yml" <<'EOF'
+            cat >> "$compose_file" << 'EOF'
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=postgres
       - DB_POSTGRESDB_PORT=5432
@@ -1512,63 +2571,84 @@ EOF
 EOF
         fi
 
-        if [[ "${CONFIG_VALUES[N8N_BASIC_AUTH_ACTIVE]}" == "true" ]]; then
-            cat >> "${PROJECT_ROOT}/docker-compose.yml" <<'EOF'
-      - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}
-      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
-EOF
-        fi
-
-        cat >> "${PROJECT_ROOT}/docker-compose.yml" <<'EOF'
-    networks:
-      - aiplatform
+        cat >> "$compose_file" << 'EOF'
+    depends_on:
 EOF
 
         if [[ "${CONFIG_VALUES[INSTALL_POSTGRES]}" == "true" ]]; then
-            cat >> "${PROJECT_ROOT}/docker-compose.yml" <<'EOF'
-    depends_on:
+            cat >> "$compose_file" << 'EOF'
       postgres:
         condition: service_healthy
 EOF
         fi
 
-        cat >> "${PROJECT_ROOT}/docker-compose.yml" <<'EOF'
+        if [[ "${CONFIG_VALUES[INSTALL_REDIS]}" == "true" ]]; then
+            cat >> "$compose_file" << 'EOF'
+      redis:
+        condition: service_healthy
+EOF
+        fi
+
+        cat >> "$compose_file" << 'EOF'
+    deploy:
+      resources:
+        limits:
+          memory: ${N8N_MAX_MEMORY:-2g}
+          cpus: '2'
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:5678/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 60s
 EOF
     fi
 
-    # Nginx Service
+    # Add Nginx service
     if [[ "${CONFIG_VALUES[INSTALL_NGINX]}" == "true" ]]; then
-        cat >> "${PROJECT_ROOT}/docker-compose.yml" <<'EOF'
+        cat >> "$compose_file" << 'EOF'
 
   nginx:
     image: nginx:alpine
-    container_name: nginx
+    container_name: ${COMPOSE_PROJECT_NAME}_nginx
     restart: unless-stopped
+    networks:
+      - aiplatform
     ports:
       - "${NGINX_HTTP_PORT:-80}:80"
       - "${NGINX_HTTPS_PORT:-443}:443"
     volumes:
-      - ./config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./config/nginx/conf.d:/etc/nginx/conf.d:ro
-      - nginx_ssl:/etc/nginx/ssl
-      - ./logs/nginx:/var/log/nginx
-    networks:
-      - aiplatform
+      - ./config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/nginx/ssl:/etc/nginx/ssl:ro
+      - ${DATA_ROOT:-./data}/nginx/cache:/var/cache/nginx
+      - ${DATA_ROOT:-./data}/nginx/logs:/var/log/nginx
+EOF
+
+        if [[ "${CONFIG_VALUES[SSL_TYPE]}" == "letsencrypt" ]]; then
+            cat >> "$compose_file" << 'EOF'
+      - ./config/certbot/conf:/etc/letsencrypt:ro
+      - ./config/certbot/www:/var/www/certbot:ro
+EOF
+        fi
+
+        cat >> "$compose_file" << 'EOF'
     depends_on:
 EOF
 
-        [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" == "true" ]] && echo "      - ollama" >> "${PROJECT_ROOT}/docker-compose.yml"
-        [[ "${CONFIG_VALUES[INSTALL_WEBUI]}" == "true" ]] && echo "      - webui" >> "${PROJECT_ROOT}/docker-compose.yml"
-        [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]] && echo "      - n8n" >> "${PROJECT_ROOT}/docker-compose.yml"
+        if [[ "${CONFIG_VALUES[INSTALL_OPEN_WEBUI]}" == "true" ]]; then
+            cat >> "$compose_file" << 'EOF'
+      - open-webui
+EOF
+        fi
 
-        cat >> "${PROJECT_ROOT}/docker-compose.yml" <<'EOF'
+        if [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]]; then
+            cat >> "$compose_file" << 'EOF'
+      - n8n
+EOF
+        fi
+
+        cat >> "$compose_file" << 'EOF'
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost/health"]
       interval: 30s
@@ -1577,134 +2657,177 @@ EOF
 EOF
     fi
 
-    # Monitoring Services
-    if [[ "${CONFIG_VALUES[INSTALL_MONITORING]}" == "true" ]]; then
-        cat >> "${PROJECT_ROOT}/docker-compose.yml" <<'EOF'
+    # Add Certbot for Let's Encrypt
+    if [[ "${CONFIG_VALUES[SSL_TYPE]}" == "letsencrypt" ]]; then
+        cat >> "$compose_file" << 'EOF'
+
+  certbot:
+    image: certbot/certbot:latest
+    container_name: ${COMPOSE_PROJECT_NAME}_certbot
+    volumes:
+      - ./config/certbot/conf:/etc/letsencrypt
+      - ./config/certbot/www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+    depends_on:
+      - nginx
+EOF
+    fi
+
+    # Add Prometheus
+    if [[ "${CONFIG_VALUES[INSTALL_PROMETHEUS]}" == "true" ]]; then
+        cat >> "$compose_file" << 'EOF'
 
   prometheus:
     image: prom/prometheus:latest
-    container_name: prometheus
+    container_name: ${COMPOSE_PROJECT_NAME}_prometheus
     restart: unless-stopped
+    networks:
+      - aiplatform
     ports:
       - "${PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./config/prometheus/alerts:/etc/prometheus/alerts:ro
       - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
-      - '--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
-    networks:
-      - aiplatform
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: '1'
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
       interval: 30s
       timeout: 10s
       retries: 3
+EOF
+    fi
+
+    # Add Grafana
+    if [[ "${CONFIG_VALUES[INSTALL_GRAFANA]}" == "true" ]]; then
+        cat >> "$compose_file" << 'EOF'
 
   grafana:
     image: grafana/grafana:latest
-    container_name: grafana
+    container_name: ${COMPOSE_PROJECT_NAME}_grafana
     restart: unless-stopped
+    networks:
+      - aiplatform
     ports:
       - "${GRAFANA_PORT:-3001}:3000"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
     environment:
-      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
-      - GF_INSTALL_PLUGINS=
-      - GF_SERVER_ROOT_URL=http://localhost:${GRAFANA_PORT:-3001}
-    networks:
-      - aiplatform
+      - GF_SECURITY_ADMIN_USER=${ADMIN_USERNAME}
+      - GF_SECURITY_ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+      - GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s:%(http_port)s/grafana/
+EOF
+
+        if [[ "${CONFIG_VALUES[INSTALL_PROMETHEUS]}" == "true" ]]; then
+            cat >> "$compose_file" << 'EOF'
     depends_on:
       - prometheus
+EOF
+        fi
+
+        cat >> "$compose_file" << 'EOF'
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '1'
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-
-  node-exporter:
-    image: prom/node-exporter:latest
-    container_name: node-exporter
-    restart: unless-stopped
-    ports:
-      - "9100:9100"
-    command:
-      - '--path.procfs=/host/proc'
-      - '--path.sysfs=/host/sys'
-      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
-    volumes:
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-      - /:/rootfs:ro
-    networks:
-      - aiplatform
-
-  cadvisor:
-    image: gcr.io/cadvisor/cadvisor:latest
-    container_name: cadvisor
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-    volumes:
-      - /:/rootfs:ro
-      - /var/run:/var/run:ro
-      - /sys:/sys:ro
-      - /var/lib/docker/:/var/lib/docker:ro
-      - /dev/disk/:/dev/disk:ro
-    privileged: true
-    devices:
-      - /dev/kmsg
-    networks:
-      - aiplatform
 EOF
+    fi
 
-        if [[ "${CONFIG_VALUES[ENABLE_ALERTING]}" == "true" ]]; then
-            cat >> "${PROJECT_ROOT}/docker-compose.yml" <<'EOF'
+    # Add Portainer
+    if [[ "${CONFIG_VALUES[INSTALL_PORTAINER]}" == "true" ]]; then
+        cat >> "$compose_file" << 'EOF'
 
-  alertmanager:
-    image: prom/alertmanager:latest
-    container_name: alertmanager
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: ${COMPOSE_PROJECT_NAME}_portainer
     restart: unless-stopped
-    ports:
-      - "9093:9093"
-    volumes:
-      - ./config/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-    command:
-      - '--config.file=/etc/alertmanager/alertmanager.yml'
-      - '--storage.path=/alertmanager'
     networks:
       - aiplatform
+    ports:
+      - "${PORTAINER_PORT:-9443}:9443"
+      - "${PORTAINER_HTTP_PORT:-9000}:9000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${DATA_ROOT:-./data}/portainer:/data
+    command: --admin-password-file /data/portainer_password
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: '0.5'
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9093/-/healthy"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9000/api/status"]
       interval: 30s
       timeout: 10s
       retries: 3
 EOF
+    fi
+
+    # Add Watchtower for auto-updates
+    if [[ "${CONFIG_VALUES[INSTALL_WATCHTOWER]}" == "true" ]]; then
+        cat >> "$compose_file" << 'EOF'
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: ${COMPOSE_PROJECT_NAME}_watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_POLL_INTERVAL=86400
+      - WATCHTOWER_INCLUDE_RESTARTING=true
+      - WATCHTOWER_ROLLING_RESTART=true
+      - TZ=${TIMEZONE:-UTC}
+EOF
+
+        if [[ "${CONFIG_VALUES[NOTIFICATIONS_ENABLED]}" == "true" ]]; then
+            if [[ "${CONFIG_VALUES[NOTIFY_EMAIL]}" == "true" ]]; then
+                cat >> "$compose_file" << 'EOF'
+      - WATCHTOWER_NOTIFICATIONS=email
+      - WATCHTOWER_NOTIFICATION_EMAIL_FROM=${SMTP_FROM}
+      - WATCHTOWER_NOTIFICATION_EMAIL_TO=${NOTIFICATION_EMAIL}
+      - WATCHTOWER_NOTIFICATION_EMAIL_SERVER=${SMTP_SERVER}
+      - WATCHTOWER_NOTIFICATION_EMAIL_SERVER_PORT=${SMTP_PORT}
+      - WATCHTOWER_NOTIFICATION_EMAIL_SERVER_USER=${SMTP_USER}
+      - WATCHTOWER_NOTIFICATION_EMAIL_SERVER_PASSWORD=${SMTP_PASSWORD}
+EOF
+            fi
         fi
     fi
 
-    log_success "docker-compose.yml generated"
+    log_success "docker-compose.yml generated successfully"
+    return 0
 }
 
+#==============================================================================
+# NGINX CONFIGURATION GENERATION
+#==============================================================================
+
 generate_nginx_config() {
-    if [[ "${CONFIG_VALUES[INSTALL_NGINX]}" != "true" ]]; then
-        return
-    fi
-    
-    log_info "Generating Nginx configuration..."
-    
-    mkdir -p "${CONFIG_DIR}/nginx/conf.d"
+    local nginx_conf_dir="${CONFIG_DIR}/nginx"
+    mkdir -p "${nginx_conf_dir}/conf.d"
     
     # Main nginx.conf
-    cat > "${CONFIG_DIR}/nginx/nginx.conf" <<'EOF'
+    cat > "${nginx_conf_dir}/nginx.conf" << 'EOF'
 user nginx;
 worker_processes auto;
 error_log /var/log/nginx/error.log warn;
@@ -1713,6 +2836,7 @@ pid /var/run/nginx.pid;
 events {
     worker_connections 1024;
     use epoll;
+    multi_accept on;
 }
 
 http {
@@ -1730,937 +2854,634 @@ http {
     tcp_nodelay on;
     keepalive_timeout 65;
     types_hash_max_size 2048;
-    client_max_body_size ${CLIENT_MAX_BODY_SIZE:-100m};
+    server_tokens off;
 
+    # Gzip compression
     gzip on;
     gzip_vary on;
-    gzip_min_length 1000;
+    gzip_proxied any;
     gzip_comp_level 6;
-    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
+    gzip_types text/plain text/css text/xml text/javascript 
+               application/json application/javascript application/xml+rss 
+               application/rss+xml font/truetype font/opentype 
+               application/vnd.ms-fontobject image/svg+xml;
 
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "no-referrer-when-downgrade" always;
+
+    # Rate limiting
+    limit_req_zone $binary_remote_addr zone=general:10m rate=10r/s;
+    limit_req_zone $binary_remote_addr zone=api:10m rate=30r/s;
+
+    # Include server configs
     include /etc/nginx/conf.d/*.conf;
 }
 EOF
 
-    # Health check endpoint
-    cat > "${CONFIG_DIR}/nginx/conf.d/health.conf" <<'EOF'
+    # Generate site configuration
+    local site_conf="${nginx_conf_dir}/conf.d/default.conf"
+    
+    cat > "$site_conf" << EOF
+# Upstream definitions
+upstream ollama {
+    server ollama:11434;
+    keepalive 32;
+}
+
+upstream webui {
+    server open-webui:8080;
+    keepalive 32;
+}
+
+upstream n8n {
+    server n8n:5678;
+    keepalive 32;
+}
+
+# Health check endpoint
 server {
     listen 80;
     server_name _;
-
+    
     location /health {
         access_log off;
         return 200 "healthy\n";
         add_header Content-Type text/plain;
     }
 }
-EOF
 
-    # WebUI configuration
-    if [[ "${CONFIG_VALUES[INSTALL_WEBUI]}" == "true" ]]; then
-        local webui_server_name="${CONFIG_VALUES[WEBUI_DOMAIN]:-_}"
-        
-        cat > "${CONFIG_DIR}/nginx/conf.d/webui.conf" <<EOF
+# HTTP server
 server {
     listen 80;
-    server_name ${webui_server_name};
-
-    location / {
-        proxy_pass http://webui:8080;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        
-        # WebSocket support
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        
-        proxy_connect_timeout 60s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
+    server_name ${CONFIG_VALUES[BASE_DOMAIN]};
+    
+    # Let's Encrypt challenge
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
     }
-}
 EOF
 
-        if [[ "${CONFIG_VALUES[ENABLE_SSL]}" == "true" ]]; then
-            cat >> "${CONFIG_DIR}/nginx/conf.d/webui.conf" <<EOF
+    if [[ "${CONFIG_VALUES[ENABLE_SSL]}" == "true" ]]; then
+        cat >> "$site_conf" << 'EOF'
+    
+    # Redirect to HTTPS
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
 
+# HTTPS server
 server {
     listen 443 ssl http2;
-    server_name ${webui_server_name};
-
-    ssl_certificate /etc/nginx/ssl/${webui_server_name}/fullchain.pem;
-    ssl_certificate_key /etc/nginx/ssl/${webui_server_name}/privkey.pem;
+    server_name ${BASE_DOMAIN};
+    
+    # SSL configuration
+    ssl_certificate /etc/nginx/ssl/cert.pem;
+    ssl_certificate_key /etc/nginx/ssl/key.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+EOF
 
-    location / {
-        proxy_pass http://webui:8080;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }
-}
+        if [[ "${CONFIG_VALUES[ENABLE_HSTS]}" == "true" ]]; then
+            cat >> "$site_conf" << EOF
+    
+    # HSTS
+    add_header Strict-Transport-Security "max-age=${CONFIG_VALUES[HSTS_MAX_AGE]:-31536000}; includeSubDomains" always;
 EOF
         fi
     fi
 
-    # n8n configuration
-    if [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]]; then
-        local n8n_server_name="${CONFIG_VALUES[N8N_DOMAIN]:-_}"
-        
-        cat > "${CONFIG_DIR}/nginx/conf.d/n8n.conf" <<EOF
-server {
-    listen 80;
-    server_name ${n8n_server_name};
-
+    # Add service proxies
+    if [[ "${CONFIG_VALUES[INSTALL_OPEN_WEBUI]}" == "true" ]]; then
+        cat >> "$site_conf" << 'EOF'
+    
+    # Open WebUI
     location / {
-        proxy_pass http://n8n:5678;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        
+        proxy_pass http://webui;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
-        
-        chunked_transfer_encoding off;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
         proxy_buffering off;
-        proxy_cache off;
-    }
-}
-EOF
-
-        if [[ "${CONFIG_VALUES[ENABLE_SSL]}" == "true" ]]; then
-            cat >> "${CONFIG_DIR}/nginx/conf.d/n8n.conf" <<EOF
-
-server {
-    listen 443 ssl http2;
-    server_name ${n8n_server_name};
-
-    ssl_certificate /etc/nginx/ssl/${n8n_server_name}/fullchain.pem;
-    ssl_certificate_key /etc/nginx/ssl/${n8n_server_name}/privkey.pem;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
-    ssl_prefer_server_ciphers on;
-
-    location / {
-        proxy_pass http://n8n:5678;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 300s;
+        proxy_connect_timeout 75s;
         
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
+        limit_req zone=general burst=20 nodelay;
     }
-}
-EOF
-        fi
-    fi
-
-    log_success "Nginx configuration generated"
-}
-
-generate_prometheus_config() {
-    if [[ "${CONFIG_VALUES[INSTALL_MONITORING]}" != "true" ]]; then
-        return
-    fi
-    
-    log_info "Generating Prometheus configuration..."
-    
-    mkdir -p "${CONFIG_DIR}/prometheus/alerts"
-    
-    cat > "${CONFIG_DIR}/prometheus/prometheus.yml" <<EOF
-global:
-  scrape_interval: ${CONFIG_VALUES[PROMETHEUS_SCRAPE_INTERVAL]:-15s}
-  evaluation_interval: 15s
-  external_labels:
-    cluster: 'aiplatform'
-    environment: '${CONFIG_VALUES[ENVIRONMENT]}'
-
-alerting:
-EOF
-
-    if [[ "${CONFIG_VALUES[ENABLE_ALERTING]}" == "true" ]]; then
-        cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" <<'EOF'
-  alertmanagers:
-    - static_configs:
-        - targets:
-            - alertmanager:9093
 EOF
     fi
-
-    cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" <<'EOF'
-
-rule_files:
-  - '/etc/prometheus/alerts/*.yml'
-
-scrape_configs:
-  - job_name: 'prometheus'
-    static_configs:
-      - targets: ['localhost:9090']
-
-  - job_name: 'node-exporter'
-    static_configs:
-      - targets: ['node-exporter:9100']
-
-  - job_name: 'cadvisor'
-    static_configs:
-      - targets: ['cadvisor:8080']
-EOF
 
     if [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" == "true" ]]; then
-        cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" <<'EOF'
-
-  - job_name: 'ollama'
-    static_configs:
-      - targets: ['ollama:11434']
-EOF
-    fi
-
-    # Alert rules
-    if [[ "${CONFIG_VALUES[ENABLE_ALERTING]}" == "true" ]]; then
-        cat > "${CONFIG_DIR}/prometheus/alerts/general.yml" <<EOF
-groups:
-  - name: general
-    interval: 30s
-    rules:
-      - alert: HighCPUUsage
-        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > ${CONFIG_VALUES[ALERT_CPU_THRESHOLD]:-80}
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High CPU usage detected"
-          description: "CPU usage is above ${CONFIG_VALUES[ALERT_CPU_THRESHOLD]:-80}% (current: {{ \$value }}%)"
-
-      - alert: HighMemoryUsage
-        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > ${CONFIG_VALUES[ALERT_MEMORY_THRESHOLD]:-85}
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High memory usage detected"
-          description: "Memory usage is above ${CONFIG_VALUES[ALERT_MEMORY_THRESHOLD]:-85}% (current: {{ \$value }}%)"
-
-      - alert: HighDiskUsage
-        expr: (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|fuse.lxcfs"} / node_filesystem_size_bytes)) * 100 > ${CONFIG_VALUES[ALERT_DISK_THRESHOLD]:-90}
-        for: 5m
-        labels:
-          severity: critical
-        annotations:
-          summary: "High disk usage detected"
-          description: "Disk usage is above ${CONFIG_VALUES[ALERT_DISK_THRESHOLD]:-90}% (current: {{ \$value }}%)"
-
-      - alert: ServiceDown
-        expr: up == 0
-        for: 2m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Service {{ \$labels.job }} is down"
-          description: "{{ \$labels.instance }} of job {{ \$labels.job }} has been down for more than 2 minutes"
-EOF
-    fi
-
-    log_success "Prometheus configuration generated"
-}
-
-generate_grafana_config() {
-    if [[ "${CONFIG_VALUES[INSTALL_MONITORING]}" != "true" ]]; then
-        return
-    fi
+        cat >> "$site_conf" << 'EOF'
     
-    log_info "Generating Grafana configuration..."
-    
-    mkdir -p "${CONFIG_DIR}/grafana/provisioning/datasources"
-    mkdir -p "${CONFIG_DIR}/grafana/provisioning/dashboards"
-    mkdir -p "${CONFIG_DIR}/grafana/dashboards"
-    
-    # Datasource configuration
-    cat > "${CONFIG_DIR}/grafana/provisioning/datasources/prometheus.yml" <<'EOF'
-apiVersion: 1
-
-datasources:
-  - name: Prometheus
-    type: prometheus
-    access: proxy
-    url: http://prometheus:9090
-    isDefault: true
-    editable: false
-    jsonData:
-      timeInterval: 15s
-EOF
-
-    # Dashboard provisioning
-    cat > "${CONFIG_DIR}/grafana/provisioning/dashboards/default.yml" <<'EOF'
-apiVersion: 1
-
-providers:
-  - name: 'default'
-    orgId: 1
-    folder: ''
-    type: file
-    disableDeletion: false
-    updateIntervalSeconds: 10
-    allowUiUpdates: true
-    options:
-      path: /var/lib/grafana/dashboards
-EOF
-
-    log_success "Grafana configuration generated"
-}
-
-generate_redis_config() {
-    if [[ "${CONFIG_VALUES[INSTALL_REDIS]}" != "true" ]]; then
-        return
-    fi
-    
-    log_info "Generating Redis configuration..."
-    
-    mkdir -p "${CONFIG_DIR}/redis"
-    
-    cat > "${CONFIG_DIR}/redis/redis.conf" <<EOF
-# Redis Configuration
-bind 0.0.0.0
-protected-mode yes
-port 6379
-tcp-backlog 511
-timeout 0
-tcp-keepalive 300
-
-daemonize no
-supervised no
-pidfile /var/run/redis_6379.pid
-loglevel notice
-logfile ""
-
-databases 16
-always-show-logo yes
-
-save 900 1
-save 300 10
-save 60 10000
-
-stop-writes-on-bgsave-error yes
-rdbcompression yes
-rdbchecksum yes
-dbfilename dump.rdb
-dir /data
-
-maxmemory ${CONFIG_VALUES[REDIS_MAX_MEMORY]:-256}mb
-maxmemory-policy ${CONFIG_VALUES[REDIS_EVICTION_POLICY]:-allkeys-lru}
-
-appendonly no
-appendfsync everysec
-no-appendfsync-on-rewrite no
-auto-aof-rewrite-percentage 100
-auto-aof-rewrite-min-size 64mb
-EOF
-
-    log_success "Redis configuration generated"
-}
-
-generate_postgres_init() {
-    if [[ "${CONFIG_VALUES[INSTALL_POSTGRES]}" != "true" ]]; then
-        return
-    fi
-    
-    log_info "Generating PostgreSQL initialization script..."
-    
-    mkdir -p "${CONFIG_DIR}/postgres"
-    
-    cat > "${CONFIG_DIR}/postgres/init.sql" <<EOF
--- AI Platform Database Initialization
--- Generated: $(date)
-
--- Create extensions
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
-
--- Create schemas if needed
-CREATE SCHEMA IF NOT EXISTS public;
-
--- Grant permissions
-GRANT ALL ON SCHEMA public TO ${CONFIG_VALUES[POSTGRES_USER]};
-
--- Create initial tables (customize as needed)
-CREATE TABLE IF NOT EXISTS system_info (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    key VARCHAR(255) UNIQUE NOT NULL,
-    value TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Insert system metadata
-INSERT INTO system_info (key, value) VALUES 
-    ('version', '${VERSION}'),
-    ('installed_at', NOW()::TEXT),
-    ('environment', '${CONFIG_VALUES[ENVIRONMENT]}')
-ON CONFLICT (key) DO NOTHING;
-
--- Create indexes
-CREATE INDEX IF NOT EXISTS idx_system_info_key ON system_info(key);
-
-COMMENT ON TABLE system_info IS 'System configuration and metadata';
-EOF
-
-    log_success "PostgreSQL initialization script generated"
-}
-
-generate_alertmanager_config() {
-    if [[ "${CONFIG_VALUES[INSTALL_MONITORING]}" != "true" || "${CONFIG_VALUES[ENABLE_ALERTING]}" != "true" ]]; then
-        return
-    fi
-    
-    log_info "Generating Alertmanager configuration..."
-    
-    mkdir -p "${CONFIG_DIR}/alertmanager"
-    
-    cat > "${CONFIG_DIR}/alertmanager/alertmanager.yml" <<EOF
-global:
-  resolve_timeout: 5m
-EOF
-
-    case "${CONFIG_VALUES[ALERT_METHOD]}" in
-        email)
-            cat >> "${CONFIG_DIR}/alertmanager/alertmanager.yml" <<EOF
-  smtp_from: '${CONFIG_VALUES[ALERT_EMAIL_FROM]}'
-  smtp_smarthost: '${CONFIG_VALUES[SMTP_HOST]}:${CONFIG_VALUES[SMTP_PORT]}'
-  smtp_auth_username: '${CONFIG_VALUES[SMTP_USER]}'
-  smtp_auth_password: '${CONFIG_VALUES[SMTP_PASSWORD]}'
-  smtp_require_tls: true
-EOF
-            ;;
-    esac
-
-    cat >> "${CONFIG_DIR}/alertmanager/alertmanager.yml" <<'EOF'
-
-route:
-  group_by: ['alertname', 'cluster', 'service']
-  group_wait: 10s
-  group_interval: 10s
-  repeat_interval: 12h
-  receiver: 'default'
-
-receivers:
-  - name: 'default'
-EOF
-
-    case "${CONFIG_VALUES[ALERT_METHOD]}" in
-        email)
-            cat >> "${CONFIG_DIR}/alertmanager/alertmanager.yml" <<EOF
-    email_configs:
-      - to: '${CONFIG_VALUES[ALERT_EMAIL_TO]}'
-        headers:
-          Subject: '[AI Platform Alert] {{ .GroupLabels.alertname }}'
-EOF
-            ;;
-        slack)
-            cat >> "${CONFIG_DIR}/alertmanager/alertmanager.yml" <<EOF
-    slack_configs:
-      - api_url: '${CONFIG_VALUES[SLACK_WEBHOOK_URL]}'
-        channel: '${CONFIG_VALUES[SLACK_CHANNEL]}'
-        title: '[AI Platform Alert] {{ .GroupLabels.alertname }}'
-        text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
-EOF
-            ;;
-        discord)
-            cat >> "${CONFIG_DIR}/alertmanager/alertmanager.yml" <<EOF
-    webhook_configs:
-      - url: '${CONFIG_VALUES[DISCORD_WEBHOOK_URL]}'
-EOF
-            ;;
-        webhook)
-            cat >> "${CONFIG_DIR}/alertmanager/alertmanager.yml" <<EOF
-    webhook_configs:
-      - url: '${CONFIG_VALUES[ALERT_WEBHOOK_URL]}'
-EOF
-            ;;
-    esac
-
-    cat >> "${CONFIG_DIR}/alertmanager/alertmanager.yml" <<'EOF'
-
-inhibit_rules:
-  - source_match:
-      severity: 'critical'
-    target_match:
-      severity: 'warning'
-    equal: ['alertname', 'cluster', 'service']
-EOF
-
-    log_success "Alertmanager configuration generated"
-}
-
-################################################################################
-# DEPLOYMENT FUNCTIONS
-################################################################################
-
-pull_docker_images() {
-    log_info "Pulling Docker images..."
-    
-    cd "$PROJECT_ROOT"
-    docker-compose pull || {
-        log_error "Failed to pull Docker images"
-        return 1
+    # Ollama API
+    location /ollama/ {
+        proxy_pass http://ollama/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_read_timeout 600s;
+        proxy_connect_timeout 75s;
+        
+        limit_req zone=api burst=50 nodelay;
     }
+EOF
+    fi
+
+    if [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]]; then
+        cat >> "$site_conf" << 'EOF'
     
-    log_success "Docker images pulled successfully"
+    # n8n
+    location /n8n/ {
+        proxy_pass http://n8n/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+        proxy_connect_timeout 75s;
+        
+        limit_req zone=general burst=20 nodelay;
+    }
+EOF
+    fi
+
+    cat >> "$site_conf" << 'EOF'
+}
+EOF
+
+    log_success "Nginx configuration generated"
+    return 0
 }
 
-create_directories() {
-    log_info "Creating directory structure..."
+#==============================================================================
+# BACKUP SCRIPT GENERATION
+#==============================================================================
+
+generate_backup_scripts() {
+    local backup_script="${SCRIPT_DIR}/backup.sh"
     
-    local dirs=(
-        "${CONFIG_VALUES[DATA_DIR]}"
-        "${CONFIG_DIR}"
-        "${LOG_DIR}"
-        "${BACKUP_DIR}"
-        "${CONFIG_DIR}/nginx/conf.d"
-        "${CONFIG_DIR}/prometheus/alerts"
-        "${CONFIG_DIR}/grafana/provisioning"
-        "${CONFIG_DIR}/redis"
-        "${CONFIG_DIR}/postgres"
-        "${CONFIG_DIR}/alertmanager"
-    )
+    cat > "$backup_script" << 'BACKUP_EOF'
+#!/bin/bash
+################################################################################
+# AI Platform Backup Script
+# Generated automatically - do not edit manually
+################################################################################
+
+set -euo pipefail
+
+BACKUP_DIR="${BACKUP_DIR:-./backups}"
+TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+BACKUP_NAME="aiplatform_backup_${TIMESTAMP}"
+BACKUP_PATH="${BACKUP_DIR}/${BACKUP_NAME}"
+
+echo "Starting backup: ${BACKUP_NAME}"
+
+# Create backup directory
+mkdir -p "$BACKUP_PATH"
+
+# Backup configurations
+echo "Backing up configurations..."
+cp -r ./config "$BACKUP_PATH/"
+
+# Backup .env
+cp .env "$BACKUP_PATH/"
+
+# Backup PostgreSQL
+if docker ps --format '{{.Names}}' | grep -q postgres; then
+    echo "Backing up PostgreSQL..."
+    docker exec aiplatform_postgres pg_dumpall -U ${POSTGRES_USER:-aiplatform} > "$BACKUP_PATH/postgres.sql"
+fi
+
+# Backup volumes
+echo "Backing up Docker volumes..."
+docker run --rm \
+    -v aiplatform_postgres_data:/data \
+    -v "$BACKUP_PATH:/backup" \
+    alpine tar czf /backup/postgres_data.tar.gz -C /data .
+
+# Create archive
+echo "Creating backup archive..."
+cd "$BACKUP_DIR"
+tar czf "${BACKUP_NAME}.tar.gz" "$BACKUP_NAME"
+rm -rf "$BACKUP_NAME"
+
+echo "Backup completed: ${BACKUP_DIR}/${BACKUP_NAME}.tar.gz"
+
+# Cleanup old backups (keep last 7)
+echo "Cleaning up old backups..."
+ls -t aiplatform_backup_*.tar.gz | tail -n +8 | xargs -r rm --
+
+echo "Backup process finished successfully"
+BACKUP_EOF
+
+    chmod +x "$backup_script"
     
-    for dir in "${dirs[@]}"; do
-        mkdir -p "$dir"
-        log_info "Created directory: $dir"
-    done
+    # Generate restore script
+    local restore_script="${SCRIPT_DIR}/restore.sh"
     
-    log_success "Directories created"
+    cat > "$restore_script" << 'RESTORE_EOF'
+#!/bin/bash
+################################################################################
+# AI Platform Restore Script
+# Generated automatically - do not edit manually
+################################################################################
+
+set -euo pipefail
+
+if [ $# -eq 0 ]; then
+    echo "Usage: $0 <backup_file.tar.gz>"
+    echo ""
+    echo "Available backups:"
+    ls -lh ./backups/aiplatform_backup_*.tar.gz 2>/dev/null || echo "No backups found"
+    exit 1
+fi
+
+BACKUP_FILE="$1"
+RESTORE_DIR="./restore_temp"
+
+if [ ! -f "$BACKUP_FILE" ]; then
+    echo "Error: Backup file not found: $BACKUP_FILE"
+    exit 1
+fi
+
+echo "WARNING: This will restore from backup and may overwrite current data!"
+read -p "Continue? (yes/no): " confirm
+
+if [ "$confirm" != "yes" ]; then
+    echo "Restore cancelled"
+    exit 0
+fi
+
+# Extract backup
+echo "Extracting backup..."
+mkdir -p "$RESTORE_DIR"
+tar xzf "$BACKUP_FILE" -C "$RESTORE_DIR"
+
+BACKUP_NAME=$(basename "$BACKUP_FILE" .tar.gz)
+BACKUP_PATH="$RESTORE_DIR/$BACKUP_NAME"
+
+# Stop services
+echo "Stopping services..."
+docker-compose down
+
+# Restore configurations
+echo "Restoring configurations..."
+cp -r "$BACKUP_PATH/config/"* ./config/
+cp "$BACKUP_PATH/.env" ./
+
+# Restore PostgreSQL
+if [ -f "$BACKUP_PATH/postgres.sql" ]; then
+    echo "Restoring PostgreSQL..."
+    docker-compose up -d postgres
+    sleep 10
+    docker exec -i aiplatform_postgres psql -U ${POSTGRES_USER:-aiplatform} < "$BACKUP_PATH/postgres.sql"
+fi
+
+# Cleanup
+echo "Cleaning up..."
+rm -rf "$RESTORE_DIR"
+
+# Restart services
+echo "Starting services..."
+docker-compose up -d
+
+echo "Restore completed successfully"
+echo "Please verify your services are running correctly"
+RESTORE_EOF
+
+    chmod +x "$restore_script"
+    
+    log_success "Backup and restore scripts generated"
+    return 0
 }
 
-set_permissions() {
-    log_info "Setting permissions..."
-    
-    # Set ownership for data directories
-    if [[ -d "${CONFIG_VALUES[DATA_DIR]}" ]]; then
-        sudo chown -R 1000:1000 "${CONFIG_VALUES[DATA_DIR]}" || true
-    fi
-    
-    # Set permissions for config files
-    chmod 600 "${CONFIG_DIR}/.env" 2>/dev/null || true
-    chmod 644 "${CONFIG_DIR}"/*.conf 2>/dev/null || true
-    
-    log_success "Permissions set"
-}
+#==============================================================================
+# DEPLOYMENT FUNCTIONS
+#==============================================================================
 
-configure_firewall() {
-    if [[ "${CONFIG_VALUES[ENABLE_FIREWALL]}" != "true" ]]; then
-        return
+deploy_stack() {
+    print_header "Deploying AI Platform"
+    
+    log_step "Starting deployment process..."
+    
+    # Validate Docker
+    if ! command -v docker &>/dev/null; then
+        log_error "Docker is not installed"
+        return 1
     fi
     
-    log_info "Configuring UFW firewall..."
-    
-    if ! command_exists ufw; then
-        log_warning "UFW not installed, skipping firewall configuration"
-        return
+    if ! command -v docker-compose &>/dev/null && ! docker compose version &>/dev/null; then
+        log_error "Docker Compose is not installed"
+        return 1
     fi
     
-    # Enable UFW
-    sudo ufw --force enable
-    
-    # Allow SSH
-    sudo ufw allow 22/tcp
-    
-    # Allow configured ports
-    [[ -n "${CONFIG_VALUES[NGINX_HTTP_PORT]:-}" ]] && sudo ufw allow "${CONFIG_VALUES[NGINX_HTTP_PORT]}/tcp"
-    [[ -n "${CONFIG_VALUES[NGINX_HTTPS_PORT]:-}" ]] && sudo ufw allow "${CONFIG_VALUES[NGINX_HTTPS_PORT]}/tcp"
-    
-    # Allow monitoring ports (restricted to localhost in production)
-    if [[ "${CONFIG_VALUES[ENVIRONMENT]}" == "development" ]]; then
-        [[ -n "${CONFIG_VALUES[PROMETHEUS_PORT]:-}" ]] && sudo ufw allow "${CONFIG_VALUES[PROMETHEUS_PORT]}/tcp"
-        [[ -n "${CONFIG_VALUES[GRAFANA_PORT]:-}" ]] && sudo ufw allow "${CONFIG_VALUES[GRAFANA_PORT]}/tcp"
+    # Load environment
+    if [ -f "$ENV_FILE" ]; then
+        set -a
+        source "$ENV_FILE"
+        set +a
     fi
     
-    sudo ufw reload
+    # Pull images
+    log_step "Pulling Docker images..."
+    if docker compose version &>/dev/null; then
+        docker compose -f "$DOCKER_COMPOSE_FILE" pull
+    else
+        docker-compose -f "$DOCKER_COMPOSE_FILE" pull
+    fi
     
-    log_success "Firewall configured"
-}
-
-start_services() {
-    log_info "Starting services..."
-    
-    cd "$PROJECT_ROOT"
+    # Create network
+    log_step "Creating Docker network..."
+    docker network create "${CONFIG_VALUES[DOCKER_NETWORK_NAME]}" 2>/dev/null || true
     
     # Start services
-    if ! docker-compose up -d; then
-        log_error "Failed to start services"
-        return 1
+    log_step "Starting services..."
+    if docker compose version &>/dev/null; then
+        docker compose -f "$DOCKER_COMPOSE_FILE" up -d
+    else
+        docker-compose -f "$DOCKER_COMPOSE_FILE" up -d
     fi
     
-    log_success "Services started"
-    
     # Wait for services to be healthy
-    log_info "Waiting for services to be healthy..."
-    sleep 10
-    
-    local max_wait=120
+    log_step "Waiting for services to become healthy..."
+    local max_wait=300
     local waited=0
     
-    while [[ $waited -lt $max_wait ]]; do
-        if docker-compose ps | grep -q "unhealthy"; then
-            log_warning "Some services are still starting... ($waited/$max_wait seconds)"
-            sleep 10
-            ((waited+=10))
-        else
+    while [ $waited -lt $max_wait ]; do
+        local unhealthy=$(docker ps --filter health=unhealthy --format '{{.Names}}' | wc -l)
+        local starting=$(docker ps --filter health=starting --format '{{.Names}}' | wc -l)
+        
+        if [ "$unhealthy" -eq 0 ] && [ "$starting" -eq 0 ]; then
+            log_success "All services are healthy"
             break
         fi
+        
+        echo -n "."
+        sleep 5
+        waited=$((waited + 5))
     done
     
-    # Show service status
-    docker-compose ps
+    if [ $waited -ge $max_wait ]; then
+        log_warning "Timeout waiting for services. Check 'docker ps' for status"
+    fi
+    
+    # Download Ollama models if configured
+    if [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" == "true" ]] && [[ -n "${CONFIG_VALUES[OLLAMA_MODELS]:-}" ]]; then
+        if [[ "${CONFIG_VALUES[MODEL_DOWNLOAD_TIMING]}" == "During setup" ]]; then
+            download_ollama_models
+        fi
+    fi
+    
+    log_success "Deployment completed successfully"
+    return 0
 }
 
 download_ollama_models() {
-    if [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" != "true" || -z "${CONFIG_VALUES[OLLAMA_MODELS]:-}" ]]; then
-        return
-    fi
+    log_step "Downloading Ollama models..."
     
-    log_info "Downloading Ollama models..."
-    
-    IFS=',' read -ra models <<< "${CONFIG_VALUES[OLLAMA_MODELS]}"
+    IFS=' ' read -ra models <<< "${CONFIG_VALUES[OLLAMA_MODELS]}"
     
     for model in "${models[@]}"; do
-        model=$(echo "$model" | tr -d ' ')
-        log_info "Pulling model: $model"
-        
-        docker exec ollama ollama pull "$model" || {
-            log_warning "Failed to pull model: $model"
-            continue
-        }
-        
-        log_success "Model pulled: $model"
+        log_info "Downloading model: $model"
+        if ! docker exec aiplatform_ollama ollama pull "$model"; then
+            log_warning "Failed to download model: $model"
+        else
+            log_success "Model downloaded: $model"
+        fi
     done
-    
-    log_success "All models downloaded"
 }
 
-setup_ssl_certificates() {
-    if [[ "${CONFIG_VALUES[ENABLE_SSL]}" != "true" || "${CONFIG_VALUES[SSL_METHOD]}" != "letsencrypt" ]]; then
-        return
+#==============================================================================
+# POST-DEPLOYMENT FUNCTIONS
+#==============================================================================
+
+post_deployment_setup() {
+    print_header "Post-Deployment Setup"
+    
+    # Set Portainer password if installed
+    if [[ "${CONFIG_VALUES[INSTALL_PORTAINER]}" == "true" ]]; then
+        log_step "Setting up Portainer..."
+        echo -n "${CONFIG_VALUES[ADMIN_PASSWORD]}" | docker run --rm -i portainer/portainer-ce htpasswd -nbi admin > "${CONFIG_VALUES[DATA_ROOT]}/portainer/portainer_password"
     fi
     
-    log_info "Setting up SSL certificates with Let's Encrypt..."
-    
-    if ! command_exists certbot; then
-        log_info "Installing certbot..."
-        sudo apt-get update
-        sudo apt-get install -y certbot python3-certbot-nginx
-    fi
-    
-    local domains=()
-    [[ -n "${CONFIG_VALUES[WEBUI_DOMAIN]:-}" && "${CONFIG_VALUES[WEBUI_DOMAIN]}" != "_" ]] && domains+=("${CONFIG_VALUES[WEBUI_DOMAIN]}")
-    [[ -n "${CONFIG_VALUES[N8N_DOMAIN]:-}" && "${CONFIG_VALUES[N8N_DOMAIN]}" != "_" ]] && domains+=("${CONFIG_VALUES[N8N_DOMAIN]}")
-    
-    if [[ ${#domains[@]} -eq 0 ]]; then
-        log_warning "No domains configured for SSL certificates"
-        return
-    fi
-    
-    for domain in "${domains[@]}"; do
-        log_info "Obtaining certificate for: $domain"
+    # Initialize SSL if Let's Encrypt
+    if [[ "${CONFIG_VALUES[SSL_TYPE]}" == "letsencrypt" ]]; then
+        log_step "Initializing Let's Encrypt SSL..."
         
-        sudo certbot certonly --standalone \
-            --non-interactive \
-            --agree-tos \
+        local staging_arg=""
+        if [[ "${CONFIG_VALUES[LETSENCRYPT_STAGING]}" == "true" ]]; then
+            staging_arg="--staging"
+        fi
+        
+        docker run --rm \
+            -v "${CONFIG_DIR}/certbot/conf:/etc/letsencrypt" \
+            -v "${CONFIG_DIR}/certbot/www:/var/www/certbot" \
+            certbot/certbot certonly \
+            --webroot \
+            --webroot-path=/var/www/certbot \
             --email "${CONFIG_VALUES[SSL_EMAIL]}" \
-            -d "$domain" \
-            --pre-hook "docker-compose stop nginx" \
-            --post-hook "docker-compose start nginx" || {
-            log_warning "Failed to obtain certificate for: $domain"
-            continue
-        }
+            --agree-tos \
+            --no-eff-email \
+            $staging_arg \
+            -d "${CONFIG_VALUES[BASE_DOMAIN]}"
         
-        # Copy certificates to nginx volume
-        sudo mkdir -p "${PROJECT_ROOT}/nginx_ssl/${domain}"
-        sudo cp "/etc/letsencrypt/live/${domain}/fullchain.pem" "${PROJECT_ROOT}/nginx_ssl/${domain}/"
-        sudo cp "/etc/letsencrypt/live/${domain}/privkey.pem" "${PROJECT_ROOT}/nginx_ssl/${domain}/"
-        
-        log_success "Certificate obtained for: $domain"
-    done
-    
-    # Setup auto-renewal
-    if ! sudo crontab -l 2>/dev/null | grep -q certbot; then
-        (sudo crontab -l 2>/dev/null; echo "0 0,12 * * * certbot renew --quiet --post-hook 'cd $PROJECT_ROOT && docker-compose restart nginx'") | sudo crontab -
-        log_success "SSL certificate auto-renewal configured"
+        # Reload Nginx
+        docker exec aiplatform_nginx nginx -s reload
     fi
+    
+    log_success "Post-deployment setup completed"
 }
 
-create_backup_script() {
-    if [[ "${CONFIG_VALUES[BACKUP_ENABLED]}" != "true" ]]; then
-        return
-    fi
+#==============================================================================
+# DISPLAY FINAL INFORMATION
+#==============================================================================
+
+display_completion_info() {
+    clear
+    print_header "Setup Complete! 🎉"
     
-    log_info "Creating backup script..."
-    
-    cat > "${PROJECT_ROOT}/scripts/backup.sh" <<'BACKUP_SCRIPT'
-#!/bin/bash
-set -euo pipefail
-
-BACKUP_DIR="/var/backups/aiplatform"
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-BACKUP_NAME="aiplatform_${TIMESTAMP}"
-
-mkdir -p "$BACKUP_DIR"
-
-echo "Starting backup: $BACKUP_NAME"
-
-# Backup Docker volumes
-docker-compose -f "$(dirname "$0")/../docker-compose.yml" stop
-
-tar -czf "${BACKUP_DIR}/${BACKUP_NAME}_volumes.tar.gz" \
-    -C / \
-    var/lib/docker/volumes/aiplatform_* 2>/dev/null || true
-
-# Backup configuration
-tar -czf "${BACKUP_DIR}/${BACKUP_NAME}_config.tar.gz" \
-    -C "$(dirname "$0")/.." \
-    config/ .env 2>/dev/null || true
-
-# Backup databases
-if docker ps -a | grep -q postgres; then
-    docker exec postgres pg_dumpall -U "${POSTGRES_USER:-postgres}" | \
-        gzip > "${BACKUP_DIR}/${BACKUP_NAME}_postgres.sql.gz"
-fi
-
-docker-compose -f "$(dirname "$0")/../docker-compose.yml" start
-
-echo "Backup completed: ${BACKUP_DIR}/${BACKUP_NAME}_*"
-
-# Cleanup old backups
-find "$BACKUP_DIR" -name "aiplatform_*" -mtime +${RETENTION_DAYS:-7} -delete
-
-echo "Old backups cleaned up"
-BACKUP_SCRIPT
-
-    chmod +x "${PROJECT_ROOT}/scripts/backup.sh"
-    
-    # Setup backup cron job
-    if [[ -n "${CONFIG_VALUES[BACKUP_SCHEDULE]:-}" ]]; then
-        (crontab -l 2>/dev/null | grep -v "aiplatform.*backup"; \
-         echo "${CONFIG_VALUES[BACKUP_SCHEDULE]} ${PROJECT_ROOT}/scripts/backup.sh >> ${LOG_DIR}/backup.log 2>&1") | crontab -
-        log_success "Backup cron job configured"
-    fi
-    
-    log_success "Backup script created"
-}
-
-create_helper_scripts() {
-    log_info "Creating helper scripts..."
-    
-    mkdir -p "${PROJECT_ROOT}/scripts"
-    
-    # Start script
-    cat > "${PROJECT_ROOT}/scripts/start.sh" <<'EOF'
-#!/bin/bash
-cd "$(dirname "$0")/.."
-docker-compose up -d
-docker-compose ps
-EOF
-
-    # Stop script
-    cat > "${PROJECT_ROOT}/scripts/stop.sh" <<'EOF'
-#!/bin/bash
-cd "$(dirname "$0")/.."
-docker-compose down
-EOF
-
-    # Restart script
-    cat > "${PROJECT_ROOT}/scripts/restart.sh" <<'EOF'
-#!/bin/bash
-cd "$(dirname "$0")/.."
-docker-compose restart
-docker-compose ps
-EOF
-
-    # Logs script
-    cat > "${PROJECT_ROOT}/scripts/logs.sh" <<'EOF'
-#!/bin/bash
-cd "$(dirname "$0")/.."
-docker-compose logs -f "$@"
-EOF
-
-    # Status script
-    cat > "${PROJECT_ROOT}/scripts/status.sh" <<'EOF'
-#!/bin/bash
-cd "$(dirname "$0")/.."
-echo "=== Service Status ==="
-docker-compose ps
-echo
-echo "=== Resource Usage ==="
-docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}"
-EOF
-
-    # Update script
-    cat > "${PROJECT_ROOT}/scripts/update.sh" <<'EOF'
-#!/bin/bash
-set -e
-cd "$(dirname "$0")/.."
-echo "Pulling latest images..."
-docker-compose pull
-echo "Restarting services..."
-docker-compose up -d
-echo "Update complete!"
-docker-compose ps
-EOF
-
-    chmod +x "${PROJECT_ROOT}"/scripts/*.sh
-    
-    log_success "Helper scripts created"
-}
-
-display_success_message() {
     echo
-    echo "=========================================="
-    echo -e "${GREEN}${BOLD}Installation Complete!${NC}"
-    echo "=========================================="
-    echo
-    echo "Services are running:"
+    print_section_break
+    echo "✓ AI Platform has been successfully deployed!"
+    print_section_break
     echo
     
-    if [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" == "true" ]]; then
-        echo -e "${CYAN}Ollama:${NC} http://localhost:${CONFIG_VALUES[OLLAMA_PORT]}"
+    echo "ACCESS INFORMATION:"
+    echo "==================="
+    
+    local protocol="http"
+    if [[ "${CONFIG_VALUES[ENABLE_SSL]}" == "true" ]]; then
+        protocol="https"
     fi
     
-    if [[ "${CONFIG_VALUES[INSTALL_WEBUI]}" == "true" ]]; then
-        local webui_url="http://localhost:${CONFIG_VALUES[WEBUI_PORT]}"
-        [[ -n "${CONFIG_VALUES[WEBUI_DOMAIN]:-}" && "${CONFIG_VALUES[WEBUI_DOMAIN]}" != "_" ]] && webui_url="http://${CONFIG_VALUES[WEBUI_DOMAIN]}"
-        echo -e "${CYAN}Open WebUI:${NC} $webui_url"
+    if [[ "${CONFIG_VALUES[INSTALL_OPEN_WEBUI]}" == "true" ]]; then
+        echo "🌐 Open WebUI:    ${protocol}://${CONFIG_VALUES[BASE_DOMAIN]}"
     fi
     
     if [[ "${CONFIG_VALUES[INSTALL_N8N]}" == "true" ]]; then
-        local n8n_url="http://localhost:${CONFIG_VALUES[N8N_PORT]}"
-        [[ -n "${CONFIG_VALUES[N8N_DOMAIN]:-}" && "${CONFIG_VALUES[N8N_DOMAIN]}" != "_" ]] && n8n_url="http://${CONFIG_VALUES[N8N_DOMAIN]}"
-        echo -e "${CYAN}n8n:${NC} $n8n_url"
+        echo "🔧 n8n:           ${protocol}://${CONFIG_VALUES[BASE_DOMAIN]}/n8n"
     fi
     
-    if [[ "${CONFIG_VALUES[INSTALL_MONITORING]}" == "true" ]]; then
-        echo -e "${CYAN}Prometheus:${NC} http://localhost:${CONFIG_VALUES[PROMETHEUS_PORT]}"
-        echo -e "${CYAN}Grafana:${NC} http://localhost:${CONFIG_VALUES[GRAFANA_PORT]}"
-        echo -e "  ${YELLOW}Username:${NC} ${CONFIG_VALUES[GRAFANA_ADMIN_USER]}"
-        echo -e "  ${YELLOW}Password:${NC} ${CONFIG_VALUES[GRAFANA_ADMIN_PASSWORD]}"
+    if [[ "${CONFIG_VALUES[INSTALL_OLLAMA]}" == "true" ]]; then
+        echo "🤖 Ollama API:    ${protocol}://${CONFIG_VALUES[BASE_DOMAIN]}/ollama"
     fi
     
-    echo
-    echo "Useful commands:"
-    echo -e "  ${CYAN}Start services:${NC} ./scripts/start.sh"
-    echo -e "  ${CYAN}Stop services:${NC} ./scripts/stop.sh"
-    echo -e "  ${CYAN}View logs:${NC} ./scripts/logs.sh"
-    echo -e "  ${CYAN}Check status:${NC} ./scripts/status.sh"
+    if [[ "${CONFIG_VALUES[INSTALL_PORTAINER]}" == "true" ]]; then
+        echo "🐳 Portainer:     https://${CONFIG_VALUES[BASE_DOMAIN]}:${CONFIG_VALUES[PORTAINER_PORT]}"
+    fi
     
-    if [[ "${CONFIG_VALUES[BACKUP_ENABLED]}" == "true" ]]; then
-        echo -e "  ${CYAN}Manual backup:${NC} ./scripts/backup.sh"
+    if [[ "${CONFIG_VALUES[INSTALL_GRAFANA]}" == "true" ]]; then
+        echo "📊 Grafana:       ${protocol}://${CONFIG_VALUES[BASE_DOMAIN]}/grafana"
     fi
     
     echo
-    echo "Configuration saved to: ${CONFIG_DIR}"
-    echo "Logs available at: ${LOG_DIR}"
+    echo "CREDENTIALS:"
+    echo "============"
+    echo "Username: ${CONFIG_VALUES[ADMIN_USERNAME]}"
+    echo "Password: ${CONFIG_VALUES[ADMIN_PASSWORD]}"
     echo
-    echo "=========================================="
+    
+    if [[ -n "${CONFIG_VALUES[OLLAMA_MODELS]:-}" ]]; then
+        echo "INSTALLED MODELS:"
+        echo "================="
+        for model in ${CONFIG_VALUES[OLLAMA_MODELS]}; do
+            echo "  • $model"
+        done
+        echo
+    fi
+    
+    echo "USEFUL COMMANDS:"
+    echo "================"
+    echo "View logs:        docker-compose logs -f [service]"
+    echo "Restart services: docker-compose restart"
+    echo "Stop platform:    docker-compose down"
+    echo "Start platform:   docker-compose up -d"
+    echo "Backup data:      ./scripts/backup.sh"
+    echo "Restore data:     ./scripts/restore.sh <backup_file>"
+    echo
+    
+    echo "CONFIGURATION FILES:"
+    echo "===================="
+    echo "Environment:      $ENV_FILE"
+    echo "Docker Compose:   $DOCKER_COMPOSE_FILE"
+    echo "Setup Summary:    ${CONFIG_DIR}/setup-summary.txt"
+    echo "Logs:             $LOG_FILE"
+    echo
+    
+    echo "NEXT STEPS:"
+    echo "==========="
+    echo "1. Visit Open WebUI and create your first account"
+    echo "2. Configure n8n workflows if installed"
+    echo "3. Review Grafana dashboards if monitoring is enabled"
+    echo "4. Set up regular backups (backup.sh)"
+    echo "5. Review security settings and firewall rules"
+    echo
+    
+    if [[ "${CONFIG_VALUES[ENABLE_SSL]}" != "true" ]]; then
+        echo "⚠️  WARNING: SSL is not enabled. Consider enabling it for production use."
+        echo
+    fi
+    
+    print_section_break
+    echo "Thank you for using AI Platform Automation!"
+    echo "For support and documentation, visit: https://github.com/yourusername/ai-platform"
+    print_section_break
+    echo
 }
 
-################################################################################
-# MAIN EXECUTION
-################################################################################
+#==============================================================================
+# MAIN FUNCTION
+#==============================================================================
 
 main() {
-    print_header
+    # Trap errors
+    trap 'log_error "Script failed at line $LINENO"' ERR
     
     # Initialize
-    create_directories
+    initialize_logging
     
-    # System checks
-    check_os
-    check_system_requirements
-    
-    # Docker setup
-    if ! command_exists docker; then
-        if prompt_yes_no "Docker not found. Install Docker?" "y"; then
-            install_docker
-        else
-            log_error "Docker is required"
-            exit 1
-        fi
-    fi
-    
-    check_docker_compose
-    
-    # Configuration wizard
-    log_info "Starting configuration wizard..."
-    echo
-    
+    # Run wizard steps
     step_01_welcome
     step_02_environment
     step_03_services
-    step_04_ports
-    step_05_storage_config
-    step_06_database_config
-    step_07_proxy_config
-    step_08_backup_config
-    step_09_logging_config
-    step_10_resource_config
-    step_11_network_config
-    step_12_timezone_config
-    step_13_auth_config
-    step_14_model_selection
-    step_15_model_settings
-    step_16_monitoring_config
-    step_17_email_config
-    step_18_security_config
-    step_19_performance_config
-    step_20_update_config
-    step_21_development_config
-    step_22_webhook_config
-    step_23_api_keys
-    step_24_custom_env
-    step_25_experimental_features
-    step_26_review_config
-    step_27_save_config
+    step_04_domain_ports
+    step_05_database
+    step_06_data_storage
+    step_07_monitoring
+    step_08_backup
+    step_09_timezone
+    step_10_resources
+    step_11_ssl
+    step_12_security
+    step_13_models
+    step_14_network
+    step_15_performance
+    step_16_maintenance
+    step_17_notifications
+    step_18_integrations
     
-    # Generate configuration files
-    log_info "Generating configuration files..."
-    generate_env_file
-    generate_docker_compose
-    generate_nginx_config
-    generate_prometheus_config
-    generate_grafana_config
-    generate_redis_config
-    generate_postgres_init
-    generate_alertmanager_config
+    # Review and generate
+    while true; do
+        step_19_review
+        local review_result=$?
+        
+        if [ $review_result -eq 2 ]; then
+            # Restart wizard
+            continue
+        elif [ $review_result -eq 0 ]; then
+            break
+        else
+            log_error "Configuration review failed"
+            exit 1
+        fi
+    done
+    
+    step_20_generate_configs
     
     # Deploy
-    log_info "Deploying services..."
-    pull_docker_images
-    set_permissions
-    configure_firewall
-    start_services
+    if prompt_yes_no "Deploy the platform now?" "y"; then
+        deploy_stack
+        post_deployment_setup
+        display_completion_info
+    else
+        log_info "Configuration saved. Run 'docker-compose up -d' when ready to deploy"
+        echo
+        echo "Configuration files have been generated:"
+        echo "  • $ENV_FILE"
+        echo "  • $DOCKER_COMPOSE_FILE"
+        echo
+        echo "To deploy later, run: docker-compose up -d"
+    fi
     
-    # Post-deployment
-    download_ollama_models
-    setup_ssl_certificates
-    create_backup_script
-    create_helper_scripts
-    
-    # Finish
-    display_success_message
-    
-    log_success "Setup completed successfully!"
+    log_success "Setup script completed successfully"
 }
+
+#==============================================================================
+# SCRIPT EXECUTION
+#==============================================================================
 
 # Run main function
 main "$@"
+
+exit 0
+
+#==============================================================================
+# END OF SCRIPT
+#==============================================================================
