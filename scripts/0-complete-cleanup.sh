@@ -1,91 +1,58 @@
 #!/usr/bin/env bash
-#############################################################################
-# Script 0 — Complete Nuclear Cleanup
-# Safely remove all AIPlatformAutomation artifacts and reset environment
-# Preserves /scripts/ folder
-#############################################################################
-
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DATA_DIR="/mnt/data"
-CONFIG_DIR="$HOME/config"
-LOG_DIR="$DATA_DIR/logs"
-DEPLOY_LOG="$LOG_DIR/cleanup.log"
+LOG="/tmp/complete-cleanup.log"
+exec > >(tee -a "$LOG") 2>&1
 
-mkdir -p "$LOG_DIR"
-touch "$DEPLOY_LOG"
+echo "=== NUCLEAR CLEANUP STARTED ==="
 
-log() { echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$DEPLOY_LOG"; }
-fail() { log "ERROR: $*"; exit 1; }
-pause() { read -rp "Press ENTER to continue..."; }
+# 1) Stop Docker if installed/running
+if command -v docker >/dev/null 2>&1; then
+  echo "[CLEANUP] Stopping any running containers..."
+  docker ps -q | xargs -r docker stop || true
+else
+  echo "[CLEANUP] Docker not found, skipping container stop"
+fi
 
-log "=== AIPlatformAutomation NUCLEAR CLEANUP START ==="
+# 2) Remove Docker artifacts if docker exists
+if command -v docker >/dev/null 2>&1; then
+  echo "[CLEANUP] Removing Docker containers..."
+  docker ps -aq | xargs -r docker rm -f || true
 
-# --------------------------------------------------
-# STEP 1 — Stop and remove all Docker containers, volumes, networks, images
-# --------------------------------------------------
-log "Stopping all Docker containers..."
-docker ps -aq | xargs -r docker stop >> "$DEPLOY_LOG" 2>&1 || true
+  echo "[CLEANUP] Removing Docker images..."
+  docker images -q | xargs -r docker rmi -f || true
 
-log "Removing all Docker containers..."
-docker ps -aq | xargs -r docker rm -f >> "$DEPLOY_LOG" 2>&1 || true
+  echo "[CLEANUP] Removing Docker volumes..."
+  docker volume ls -q | xargs -r docker volume rm -f || true
 
-log "Removing all Docker images..."
-docker images -q | xargs -r docker rmi -f >> "$DEPLOY_LOG" 2>&1 || true
+  echo "[CLEANUP] Pruning Docker networks..."
+  docker network prune -f || true
+else
+  echo "[CLEANUP] Docker not found, skipping Docker cleanup"
+fi
 
-log "Removing all Docker volumes..."
-docker volume ls -q | xargs -r docker volume rm >> "$DEPLOY_LOG" 2>&1 || true
+# 3) Remove config directories
+HOME_PATH="$(eval echo ~${SUDO_USER:-$USER})"
+REPO_PATH="$HOME_PATH/AIPlatformAutomation"
 
-log "Pruning Docker networks..."
-docker network prune -f >> "$DEPLOY_LOG" 2>&1 || true
+echo "[CLEANUP] Removing user config folder: $HOME_PATH/config"
+rm -rf "$HOME_PATH/config" || true
 
-log "Docker cleanup complete."
+echo "[CLEANUP] Removing repo config folder: $REPO_PATH/config"
+rm -rf "$REPO_PATH/config" || true
 
-# --------------------------------------------------
-# STEP 2 — Remove systemd timers/services created by AIPlatformAutomation
-# --------------------------------------------------
-log "Removing systemd timers/services..."
-SYSTEMD_SERVICES=("gdrive-sync.service" "gdrive-sync.timer" "openclaw-sync.service" "openclaw-sync.timer" "tailscale.service")
-for svc in "${SYSTEMD_SERVICES[@]}"; do
-    if systemctl list-unit-files | grep -q "$svc"; then
-        log "Stopping and disabling $svc..."
-        systemctl stop "$svc" 2>/dev/null || true
-        systemctl disable "$svc" 2>/dev/null || true
-        rm -f "/etc/systemd/system/$svc" 2>/dev/null || true
-    fi
-done
-systemctl daemon-reload
+# 4) Unmount and remove /mnt/data
+if mountpoint -q /mnt/data; then
+  echo "[CLEANUP] Unmounting /mnt/data..."
+  umount -lf /mnt/data || true
+fi
 
-# --------------------------------------------------
-# STEP 3 — Remove configuration and credential files
-# --------------------------------------------------
-log "Removing $CONFIG_DIR (user config)..."
-rm -rf "$CONFIG_DIR"
+echo "[CLEANUP] Removing /mnt/data..."
+rm -rf /mnt/data || true
 
-log "Removing AIPlatformAutomation data in $DATA_DIR..."
-# Preserve /scripts/, remove everything else
-shopt -s extglob
-rm -rf "$DATA_DIR"/!(logs|scripts)
-shopt -u extglob
+# 5) Leave scripts in place
+echo "[CLEANUP] Preserving /scripts folder"
 
-# Fix ownership
-log "Resetting ownership for $DATA_DIR..."
-chown -R "$USER":"$USER" "$DATA_DIR" || true
+echo "=== NUCLEAR CLEANUP COMPLETE ==="
+echo "Log: $LOG"
 
-# --------------------------------------------------
-# STEP 4 — Remove APT packages installed by platform
-# --------------------------------------------------
-log "Removing APT packages..."
-APT_PKGS=("nginx" "docker.io" "docker-compose" "python3-pip" "python3-venv")
-apt-get remove --purge -y "${APT_PKGS[@]}" >> "$DEPLOY_LOG" 2>&1 || true
-apt-get autoremove -y >> "$DEPLOY_LOG" 2>&1 || true
-
-# --------------------------------------------------
-# STEP 5 — Final cleanup
-# --------------------------------------------------
-log "Cleanup complete! System is now reset."
-log "Reboot recommended to clear remaining mounts or sessions."
-pause
-
-log "=== NUCLEAR CLEANUP END ==="
