@@ -1,96 +1,91 @@
 #!/usr/bin/env bash
+#############################################################################
+# Script 0 — Complete Nuclear Cleanup
+# Safely remove all AIPlatformAutomation artifacts and reset environment
+# Preserves /scripts/ folder
+#############################################################################
+
 set -euo pipefail
 
-SCRIPT_NAME="0-complete-cleanup"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HOME_PATH="$ROOT_DIR"
-CONFIG_DIR="$HOME_PATH/config"
-LOG_DIR="/mnt/data/logs"
 DATA_DIR="/mnt/data"
+CONFIG_DIR="$HOME/config"
+LOG_DIR="$DATA_DIR/logs"
+DEPLOY_LOG="$LOG_DIR/cleanup.log"
 
 mkdir -p "$LOG_DIR"
-SCRIPT_LOG="$LOG_DIR/${SCRIPT_NAME}.log"
-touch "$SCRIPT_LOG"
+touch "$DEPLOY_LOG"
 
-log() { echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$SCRIPT_LOG"; }
+log() { echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$DEPLOY_LOG"; }
 fail() { log "ERROR: $*"; exit 1; }
-prompt_yn() { local prompt="$1"; local default="${2:-y}"; local choice; while true; do read -rp "$prompt [y/n] (default: $default): " choice; choice="${choice:-$default}"; case "$choice" in y|Y) return 0 ;; n|N) return 1 ;; *) echo "Please answer y or n." ;; esac; done; }
+pause() { read -rp "Press ENTER to continue..."; }
 
-require_root() { [[ $EUID -eq 0 ]] || fail "Run as root"; }
-require_root
+log "=== AIPlatformAutomation NUCLEAR CLEANUP START ==="
 
-log "STEP 0 — Confirm Nuclear Cleanup"
-if ! prompt_yn "This will remove ALL previous data, config, docker containers, images, volumes, apt packages for AI Platform. Proceed?"; then
-    log "Cleanup cancelled by user."
-    exit 0
-fi
-
-# -----------------------------
-# STEP 1 — Stop all running containers
-# -----------------------------
+# --------------------------------------------------
+# STEP 1 — Stop and remove all Docker containers, volumes, networks, images
+# --------------------------------------------------
 log "Stopping all Docker containers..."
-docker ps -q | xargs -r docker stop
-docker ps -aq | xargs -r docker rm
-log "All containers stopped and removed."
+docker ps -aq | xargs -r docker stop >> "$DEPLOY_LOG" 2>&1 || true
 
-# -----------------------------
-# STEP 2 — Remove Docker images/volumes/networks
-# -----------------------------
-log "Removing Docker images..."
-docker images -q | xargs -r docker rmi -f || true
-log "Removing Docker volumes..."
-docker volume ls -q | xargs -r docker volume rm || true
-log "Removing Docker networks..."
-docker network ls -q | xargs -r docker network rm || true
+log "Removing all Docker containers..."
+docker ps -aq | xargs -r docker rm -f >> "$DEPLOY_LOG" 2>&1 || true
 
-# -----------------------------
-# STEP 3 — Clean apt / snap / cached packages (optional)
-# -----------------------------
-log "Cleaning up apt and snap packages..."
-apt-get autoremove -y
-apt-get purge -y docker docker-engine docker.io containerd runc || true
-apt-get clean
+log "Removing all Docker images..."
+docker images -q | xargs -r docker rmi -f >> "$DEPLOY_LOG" 2>&1 || true
 
-# -----------------------------
-# STEP 4 — Remove configuration folder
-# -----------------------------
-if [ -d "$CONFIG_DIR" ]; then
-    log "Removing previous configuration: $CONFIG_DIR"
-    rm -rf "$CONFIG_DIR"
-fi
+log "Removing all Docker volumes..."
+docker volume ls -q | xargs -r docker volume rm >> "$DEPLOY_LOG" 2>&1 || true
 
-# -----------------------------
-# STEP 5 — Remove /mnt/data safely (but keep scripts folder)
-# -----------------------------
-if [ -d "$DATA_DIR" ]; then
-    log "Removing previous data in $DATA_DIR..."
-    # preserve scripts if accidentally mounted inside /mnt/data
-    find "$DATA_DIR" -mindepth 1 -maxdepth 1 ! -name 'scripts' -exec rm -rf {} +
-fi
+log "Pruning Docker networks..."
+docker network prune -f >> "$DEPLOY_LOG" 2>&1 || true
 
-# -----------------------------
-# STEP 6 — Re-create directory structure
-# -----------------------------
-log "Re-creating necessary directory structure..."
-mkdir -p "$CONFIG_DIR"
-mkdir -p "$DATA_DIR/logs"
-mkdir -p "$DATA_DIR/volumes"
-mkdir -p "$DATA_DIR/backups"
-mkdir -p "$DATA_DIR/tmp"
+log "Docker cleanup complete."
 
-# Ensure proper permissions
-chmod -R 755 "$DATA_DIR"
-chmod -R 755 "$CONFIG_DIR"
+# --------------------------------------------------
+# STEP 2 — Remove systemd timers/services created by AIPlatformAutomation
+# --------------------------------------------------
+log "Removing systemd timers/services..."
+SYSTEMD_SERVICES=("gdrive-sync.service" "gdrive-sync.timer" "openclaw-sync.service" "openclaw-sync.timer" "tailscale.service")
+for svc in "${SYSTEMD_SERVICES[@]}"; do
+    if systemctl list-unit-files | grep -q "$svc"; then
+        log "Stopping and disabling $svc..."
+        systemctl stop "$svc" 2>/dev/null || true
+        systemctl disable "$svc" 2>/dev/null || true
+        rm -f "/etc/systemd/system/$svc" 2>/dev/null || true
+    fi
+done
+systemctl daemon-reload
 
-# -----------------------------
-# STEP 7 — Reboot if desired
-# -----------------------------
-if prompt_yn "Cleanup complete. Do you want to reboot now?"; then
-    log "Rebooting system..."
-    reboot
-else
-    log "Reboot skipped. You can now run Script 1 to set up the system."
-fi
+# --------------------------------------------------
+# STEP 3 — Remove configuration and credential files
+# --------------------------------------------------
+log "Removing $CONFIG_DIR (user config)..."
+rm -rf "$CONFIG_DIR"
 
-log "Nuclear cleanup complete."
+log "Removing AIPlatformAutomation data in $DATA_DIR..."
+# Preserve /scripts/, remove everything else
+shopt -s extglob
+rm -rf "$DATA_DIR"/!(logs|scripts)
+shopt -u extglob
 
+# Fix ownership
+log "Resetting ownership for $DATA_DIR..."
+chown -R "$USER":"$USER" "$DATA_DIR" || true
+
+# --------------------------------------------------
+# STEP 4 — Remove APT packages installed by platform
+# --------------------------------------------------
+log "Removing APT packages..."
+APT_PKGS=("nginx" "docker.io" "docker-compose" "python3-pip" "python3-venv")
+apt-get remove --purge -y "${APT_PKGS[@]}" >> "$DEPLOY_LOG" 2>&1 || true
+apt-get autoremove -y >> "$DEPLOY_LOG" 2>&1 || true
+
+# --------------------------------------------------
+# STEP 5 — Final cleanup
+# --------------------------------------------------
+log "Cleanup complete! System is now reset."
+log "Reboot recommended to clear remaining mounts or sessions."
+pause
+
+log "=== NUCLEAR CLEANUP END ==="
