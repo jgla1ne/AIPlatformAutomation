@@ -1929,52 +1929,6 @@ validate_port() {
 }
 
 # ==============================================================================
-# DIRECTORY STRUCTURE SETUP
-# ==============================================================================
-
-create_directory_structure() {
-    log_step "Creating directory structure..."
-    
-    local directories=(
-        "${BASE_DIR}"
-        "${DATA_DIR}"
-        "${BACKUP_DIR}"
-        "${LOG_DIR}"
-        "${POSTGRES_DATA}"
-        "${OLLAMA_DATA}"
-        "${N8N_DATA}"
-        "${QDRANT_DATA}"
-        "${BASE_DIR}/ssl"
-        "${BASE_DIR}/scripts"
-        "${BACKUP_DIR}/postgresql"
-        "${BACKUP_DIR}/n8n"
-        "${BACKUP_DIR}/qdrant"
-        "${LOG_DIR}/postgresql"
-        "${LOG_DIR}/ollama"
-        "${LOG_DIR}/n8n"
-        "${LOG_DIR}/qdrant"
-        "${LOG_DIR}/nginx"
-    )
-    
-    local total=${#directories[@]}
-    local current=0
-    
-    for dir in "${directories[@]}"; do
-        current=$((current + 1))
-        if [ ! -d "$dir" ]; then
-            mkdir -p "$dir" || error_exit "Failed to create directory: $dir"
-            log_debug "Created directory: $dir"
-        fi
-        show_progress $current $total "Creating directories..."
-    done
-    
-    # Set proper permissions
-    chmod 755 "${BASE_DIR}"
-    chmod 700 "${DATA_DIR}"
-    chmod 700 "${BACKUP_DIR}"
-    chmod 755 "${LOG_DIR}"
-    
-    # ==============================================================================
 # SCRIPT ENTRY POINT
 # ==============================================================================
 
@@ -1985,18 +1939,6 @@ trap 'error_exit "Script interrupted at line $LINENO"' ERR INT TERM
 main "$@"
 
 exit 0
-# USER INPUT AND CONFIGURATION
-# ==============================================================================
-
-get_user_input() {
-    log_step "Gathering configuration information..."
-    
-    echo ""
-    echo -e "${YELLOW}Please provide the following information:${NC}"
-    echo ""
-    
-    # Domain name
-    while true; do
         read -p "Enter your domain name (e.g., example.com): " DOMAIN_NAME
         if validate_domain "$DOMAIN_NAME"; then
             break
