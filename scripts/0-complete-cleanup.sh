@@ -1,192 +1,326 @@
 #!/bin/bash
-
-#############################################
-# Script 0: Complete System Cleanup
-# Purpose: Remove all Docker resources and reset system state
-# Usage: ./0-complete-cleanup.sh
-#############################################
+# ==============================================================================
+# Script 0: Nuclear Cleanup Script ☢️
+# Version: 3.0
+# Purpose: Complete system reset for fresh deployment
+# WARNING: This script destroys ALL data and configurations
+# ==============================================================================
 
 set -euo pipefail
 
-# Source common utilities
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/../lib/common.sh"
+# Colors for output
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+NC='\033[0m' # No Color
 
-#############################################
-# Configuration
-#############################################
+# Logging
+LOG_FILE="/var/log/nuclear_cleanup_$(date +%Y%m%d_%H%M%S).log"
+exec 1> >(tee -a "$LOG_FILE")
+exec 2>&1
 
-readonly CLEANUP_TIMEOUT=30
-readonly FORCE_REMOVAL=true
+# ==============================================================================
+# SAFETY CHECKS
+# ==============================================================================
 
-#############################################
-# Cleanup Functions
-#############################################
+echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${RED}║           ☢️  NUCLEAR CLEANUP SCRIPT v3.0 ☢️              ║${NC}"
+echo -e "${RED}║                                                            ║${NC}"
+echo -e "${RED}║  THIS SCRIPT WILL PERMANENTLY DESTROY:                    ║${NC}"
+echo -e "${RED}║  • All Docker containers, images, and volumes             ║${NC}"
+echo -e "${RED}║  • All data in /mnt/data/*                                ║${NC}"
+echo -e "${RED}║  • All configurations in /root/scripts/                   ║${NC}"
+echo -e "${RED}║  • PostgreSQL databases                                   ║${NC}"
+echo -e "${RED}║  • Ollama models                                          ║${NC}"
+echo -e "${RED}║  • n8n workflows                                          ║${NC}"
+echo -e "${RED}║  • Qdrant collections                                     ║${NC}"
+echo -e "${RED}║  • SSL certificates                                       ║${NC}"
+echo -e "${RED}║  • Systemd services                                       ║${NC}"
+echo -e "${RED}║  • Network configurations                                 ║${NC}"
+echo -e "${RED}║                                                            ║${NC}"
+echo -e "${RED}║  ⚠️  DATA LOSS IS IRREVERSIBLE ⚠️                         ║${NC}"
+echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
+echo ""
 
-cleanup_docker_containers() {
-    log_info "Stopping and removing all Docker containers..."
-    
-    local containers
-    containers=$(docker ps -aq 2>/dev/null || true)
-    
-    if [[ -n "$containers" ]]; then
-        log_info "Found containers to remove"
-        docker stop $containers 2>/dev/null || true
-        docker rm -f $containers 2>/dev/null || true
-        log_success "Containers removed"
-    else
-        log_info "No containers to remove"
-    fi
+# Require explicit confirmation
+read -p "Type 'DESTROY EVERYTHING' to proceed: " confirmation
+if [ "$confirmation" != "DESTROY EVERYTHING" ]; then
+    echo -e "${GREEN}Cleanup cancelled. System unchanged.${NC}"
+    exit 0
+fi
+
+echo ""
+read -p "Are you ABSOLUTELY SURE? Type 'YES' to continue: " final_confirm
+if [ "$final_confirm" != "YES" ]; then
+    echo -e "${GREEN}Cleanup cancelled. System unchanged.${NC}"
+    exit 0
+fi
+
+echo -e "${RED}Starting nuclear cleanup in 5 seconds... Press Ctrl+C to abort${NC}"
+sleep 5
+
+# ==============================================================================
+# CLEANUP FUNCTIONS
+# ==============================================================================
+
+log_step() {
+    echo -e "${YELLOW}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1"
 }
 
-cleanup_docker_networks() {
-    log_info "Removing Docker networks..."
-    
-    local networks
-    networks=$(docker network ls --filter "name=ai_platform" -q 2>/dev/null || true)
-    
-    if [[ -n "$networks" ]]; then
-        log_info "Found networks to remove"
-        docker network rm $networks 2>/dev/null || true
-        log_success "Networks removed"
-    else
-        log_info "No custom networks to remove"
-    fi
+log_success() {
+    echo -e "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')] ✓${NC} $1"
 }
 
-cleanup_docker_volumes() {
-    log_info "Removing Docker volumes..."
-    
-    if confirm_action "Remove all Docker volumes? (This will delete all data)"; then
-        local volumes
-        volumes=$(docker volume ls -q 2>/dev/null || true)
-        
-        if [[ -n "$volumes" ]]; then
-            log_info "Found volumes to remove"
-            docker volume rm $volumes 2>/dev/null || true
-            log_success "Volumes removed"
-        else
-            log_info "No volumes to remove"
-        fi
-    else
-        log_warning "Skipping volume removal"
-    fi
+log_error() {
+    echo -e "${RED}[$(date '+%Y-%m-%d %H:%M:%S')] ✗${NC} $1"
 }
 
-cleanup_docker_images() {
-    log_info "Removing Docker images..."
-    
-    if confirm_action "Remove all Docker images?"; then
-        local images
-        images=$(docker images -q 2>/dev/null || true)
-        
-        if [[ -n "$images" ]]; then
-            log_info "Found images to remove"
-            docker rmi -f $images 2>/dev/null || true
-            log_success "Images removed"
-        else
-            log_info "No images to remove"
-        fi
-    else
-        log_warning "Skipping image removal"
-    fi
-}
+# ==============================================================================
+# STEP 1: Stop All Services
+# ==============================================================================
 
-cleanup_project_files() {
-    log_info "Cleaning up project files..."
-    
-    local project_root="${SCRIPT_DIR}/.."
-    
-    # Remove generated configuration files
-    if [[ -f "${project_root}/.env" ]]; then
-        log_info "Removing .env file"
-        rm -f "${project_root}/.env"
-    fi
-    
-    # Remove log files
-    if [[ -d "${project_root}/logs" ]]; then
-        log_info "Removing log files"
-        rm -rf "${project_root}/logs"
-    fi
-    
-    # Remove temporary files
-    find "${project_root}" -type f -name "*.tmp" -delete 2>/dev/null || true
-    find "${project_root}" -type f -name "*.log" -delete 2>/dev/null || true
-    
-    log_success "Project files cleaned"
-}
+log_step "Stopping all Docker services..."
+if command -v docker &> /dev/null; then
+    docker compose -f /root/scripts/docker-compose.yml down --remove-orphans 2>/dev/null || true
+    docker stop $(docker ps -aq) 2>/dev/null || true
+    log_success "Docker services stopped"
+else
+    log_error "Docker not found, skipping"
+fi
 
-prune_docker_system() {
-    log_info "Pruning Docker system..."
+# ==============================================================================
+# STEP 2: Stop Systemd Services
+# ==============================================================================
+
+log_step "Stopping and disabling systemd services..."
+SERVICES=(
+    "ai-platform"
+    "ollama"
+    "qdrant"
+    "n8n"
+    "postgresql"
+)
+
+for service in "${SERVICES[@]}"; do
+    if systemctl is-active --quiet "$service" 2>/dev/null; then
+        systemctl stop "$service" 2>/dev/null || true
+        systemctl disable "$service" 2>/dev/null || true
+        log_success "Stopped and disabled $service"
+    fi
+done
+
+# Remove service files
+rm -f /etc/systemd/system/ai-platform.service
+rm -f /etc/systemd/system/ollama.service
+rm -f /etc/systemd/system/qdrant.service
+systemctl daemon-reload
+log_success "Systemd services removed"
+
+# ==============================================================================
+# STEP 3: Remove Docker Resources
+# ==============================================================================
+
+log_step "Removing all Docker containers..."
+if command -v docker &> /dev/null; then
+    docker rm -f $(docker ps -aq) 2>/dev/null || true
+    log_success "Docker containers removed"
     
+    log_step "Removing all Docker images..."
+    docker rmi -f $(docker images -aq) 2>/dev/null || true
+    log_success "Docker images removed"
+    
+    log_step "Removing all Docker volumes..."
+    docker volume rm -f $(docker volume ls -q) 2>/dev/null || true
+    log_success "Docker volumes removed"
+    
+    log_step "Removing all Docker networks..."
+    docker network rm $(docker network ls -q) 2>/dev/null || true
+    log_success "Docker networks removed"
+    
+    log_step "Pruning Docker system..."
     docker system prune -af --volumes 2>/dev/null || true
-    
     log_success "Docker system pruned"
-}
+fi
 
-verify_cleanup() {
-    log_info "Verifying cleanup..."
-    
-    local containers
-    local networks
-    local volumes
-    local images
-    
-    containers=$(docker ps -aq 2>/dev/null | wc -l)
-    networks=$(docker network ls --filter "name=ai_platform" -q 2>/dev/null | wc -l)
-    volumes=$(docker volume ls -q 2>/dev/null | wc -l)
-    images=$(docker images -q 2>/dev/null | wc -l)
-    
-    log_info "Remaining resources:"
-    log_info "  Containers: $containers"
-    log_info "  Networks: $networks"
-    log_info "  Volumes: $volumes"
-    log_info "  Images: $images"
-    
-    if [[ $containers -eq 0 && $networks -eq 0 ]]; then
-        log_success "Cleanup verified successfully"
-        return 0
-    else
-        log_warning "Some resources may still remain"
-        return 1
+# ==============================================================================
+# STEP 4: Remove Data Directories
+# ==============================================================================
+
+log_step "Removing data directories..."
+DATA_DIRS=(
+    "/mnt/data/postgresql"
+    "/mnt/data/ollama"
+    "/mnt/data/n8n"
+    "/mnt/data/qdrant"
+    "/mnt/data/backups"
+    "/mnt/data/logs"
+)
+
+for dir in "${DATA_DIRS[@]}"; do
+    if [ -d "$dir" ]; then
+        rm -rf "$dir"
+        log_success "Removed $dir"
     fi
-}
+done
 
-#############################################
-# Main Execution
-#############################################
+# Recreate empty structure
+mkdir -p /mnt/data/{postgresql,ollama,n8n,qdrant,backups,logs}
+log_success "Recreated empty data structure"
 
-main() {
-    log_header "AI Platform - Complete Cleanup"
-    
-    # Verify Docker is available
-    if ! check_docker; then
-        log_error "Docker is not available"
-        exit 1
+# ==============================================================================
+# STEP 5: Remove Configuration Files
+# ==============================================================================
+
+log_step "Removing configuration files..."
+CONFIG_FILES=(
+    "/root/scripts/config.env"
+    "/root/scripts/docker-compose.yml"
+    "/root/scripts/.env"
+    "/root/scripts/nginx.conf"
+    "/root/scripts/postgres-init.sql"
+)
+
+for file in "${CONFIG_FILES[@]}"; do
+    if [ -f "$file" ]; then
+        rm -f "$file"
+        log_success "Removed $file"
     fi
-    
-    # Confirm cleanup
-    log_warning "This will remove ALL Docker resources and project data!"
-    if ! confirm_action "Continue with complete cleanup?"; then
-        log_info "Cleanup cancelled"
-        exit 0
-    fi
-    
-    # Execute cleanup steps
-    cleanup_docker_containers
-    cleanup_docker_networks
-    cleanup_docker_volumes
-    cleanup_docker_images
-    cleanup_project_files
-    prune_docker_system
-    
-    # Verify cleanup
-    verify_cleanup
-    
-    log_success "Complete cleanup finished"
-    log_info "System is ready for fresh installation"
-}
+done
 
-# Execute main function
-main "$@"
+# ==============================================================================
+# STEP 6: Remove SSL Certificates
+# ==============================================================================
+
+log_step "Removing SSL certificates..."
+if [ -d "/etc/letsencrypt" ]; then
+    rm -rf /etc/letsencrypt
+    log_success "Removed Let's Encrypt certificates"
+fi
+
+if [ -d "/root/scripts/ssl" ]; then
+    rm -rf /root/scripts/ssl
+    log_success "Removed local SSL certificates"
+fi
+
+# ==============================================================================
+# STEP 7: Clean Package Managers
+# ==============================================================================
+
+log_step "Cleaning package manager caches..."
+if command -v apt-get &> /dev/null; then
+    apt-get clean
+    apt-get autoclean
+    apt-get autoremove -y
+    log_success "APT cache cleaned"
+fi
+
+# ==============================================================================
+# STEP 8: Remove Temporary Files
+# ==============================================================================
+
+log_step "Removing temporary files..."
+rm -rf /tmp/ai-platform-* 2>/dev/null || true
+rm -rf /var/tmp/ai-platform-* 2>/dev/null || true
+log_success "Temporary files removed"
+
+# ==============================================================================
+# STEP 9: Clean Logs
+# ==============================================================================
+
+log_step "Cleaning system logs..."
+journalctl --vacuum-time=1s 2>/dev/null || true
+rm -rf /var/log/ai-platform-* 2>/dev/null || true
+log_success "System logs cleaned"
+
+# ==============================================================================
+# STEP 10: Remove Firewall Rules
+# ==============================================================================
+
+log_step "Resetting firewall rules..."
+if command -v ufw &> /dev/null; then
+    ufw --force reset 2>/dev/null || true
+    ufw --force disable 2>/dev/null || true
+    log_success "UFW reset"
+fi
+
+# ==============================================================================
+# STEP 11: Clean User Profiles
+# ==============================================================================
+
+log_step "Cleaning user profiles..."
+rm -f /root/.n8n_* 2>/dev/null || true
+rm -f /root/.ollama_* 2>/dev/null || true
+rm -rf /root/.config/qdrant 2>/dev/null || true
+log_success "User profiles cleaned"
+
+# ==============================================================================
+# STEP 12: Verify Cleanup
+# ==============================================================================
+
+log_step "Verifying cleanup..."
+
+VERIFICATION_PASSED=true
+
+# Check Docker
+if [ "$(docker ps -aq 2>/dev/null | wc -l)" -gt 0 ]; then
+    log_error "Docker containers still exist"
+    VERIFICATION_PASSED=false
+fi
+
+# Check data directories
+for dir in "${DATA_DIRS[@]}"; do
+    if [ -n "$(ls -A $dir 2>/dev/null)" ]; then
+        log_error "$dir is not empty"
+        VERIFICATION_PASSED=false
+    fi
+done
+
+# Check systemd services
+for service in "${SERVICES[@]}"; do
+    if systemctl is-enabled --quiet "$service" 2>/dev/null; then
+        log_error "$service is still enabled"
+        VERIFICATION_PASSED=false
+    fi
+done
+
+if [ "$VERIFICATION_PASSED" = true ]; then
+    log_success "All verification checks passed"
+else
+    log_error "Some verification checks failed"
+fi
+
+# ==============================================================================
+# FINAL REPORT
+# ==============================================================================
+
+echo ""
+echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║              Nuclear Cleanup Complete ✓                   ║${NC}"
+echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
+echo ""
+echo "Cleanup Summary:"
+echo "  • Docker containers: Removed"
+echo "  • Docker images: Removed"
+echo "  • Docker volumes: Removed"
+echo "  • Data directories: Cleaned"
+echo "  • Configuration files: Removed"
+echo "  • SSL certificates: Removed"
+echo "  • Systemd services: Disabled and removed"
+echo "  • System logs: Cleaned"
+echo ""
+echo "Log file saved to: $LOG_FILE"
+echo ""
+echo -e "${YELLOW}System is ready for fresh deployment.${NC}"
+echo -e "${YELLOW}Reboot recommended: sudo reboot${NC}"
+echo ""
+
+# Optional automatic reboot
+read -p "Reboot now? (y/N): " reboot_confirm
+if [[ "$reboot_confirm" =~ ^[Yy]$ ]]; then
+    echo "Rebooting in 5 seconds..."
+    sleep 5
+    reboot
+fi
+
+exit 0
 
