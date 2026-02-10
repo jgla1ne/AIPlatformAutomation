@@ -1974,11 +1974,17 @@ create_directory_structure() {
     chmod 700 "${BACKUP_DIR}"
     chmod 755 "${LOG_DIR}"
     
-    log_success "Directory structure created successfully"
-    save_state 1
-}
-
+    # ==============================================================================
+# SCRIPT ENTRY POINT
 # ==============================================================================
+
+# Trap errors and cleanup
+trap 'error_exit "Script interrupted at line $LINENO"' ERR INT TERM
+
+# Run main function
+main "$@"
+
+exit 0
 # USER INPUT AND CONFIGURATION
 # ==============================================================================
 
@@ -4776,8 +4782,8 @@ display_summary() {
     echo ""
 
     # Save completion marker
-    echo "SETUP_COMPLETE=true" >> "$STATE_FILE"
-    echo "SETUP_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> "$STATE_FILE"
+    echo "SETUP_COMPLETE=true" > "${CONFIG_DIR}/setup_complete"
+    echo "SETUP_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> "${CONFIG_DIR}/setup_complete"
 
     log_success "Setup completed successfully!"
     log_info "System is ready for configuration (Script 2)"
@@ -4788,7 +4794,7 @@ display_summary() {
 # ==============================================================================
 
 main() {
-    log_step "Starting AI Platform Setup (Script 1)..."
+    log_step "Starting AI Platform Configuration Collection (Script 1)..."
     log_info "Script Version: $SCRIPT_VERSION"
     log_info "Execution Time: $(date)"
 
@@ -4797,47 +4803,43 @@ main() {
         error_exit "This script must be run as root"
     fi
 
-    # Check system requirements
-    check_system_requirements
+    # Phase 1: System Validation (NO INSTALLATION)
+    check_root
+    check_dependencies
+    check_disk_space
+    detect_public_ip
+    detect_gpu
+    check_port_conflicts
 
-    # Collect service selection and hardware profile
-    collect_service_selection
-    detect_hardware_profile
+    # Phase 2: Network Configuration
+    configure_network
+    select_reverse_proxy
 
-    # Collect user configuration
-    collect_user_input
+    # Phase 3: Service Selection
+    select_core_services
+    select_ai_services
+    select_optional_services
 
-    # Load or create state
-    if [ -f "$STATE_FILE" ]; then
-        source "$STATE_FILE"
-        log_info "Resuming from step ${CURRENT_STEP:-1}"
-    else
-        CURRENT_STEP=1
-    fi
+    # Phase 4: Service Configuration
+    configure_postgresql
+    configure_ollama
+    configure_n8n
+    configure_qdrant
 
-    # Execute setup steps
-    [ "${CURRENT_STEP:-1}" -le 1 ] && { step_1_hardware_detection; save_state 1; }
-    [ "${CURRENT_STEP:-1}" -le 2 ] && { step_2_docker_installation; save_state 2; }
-    [ "${CURRENT_STEP:-1}" -le 3 ] && { step_3_nvidia_toolkit; save_state 3; }
-    [ "${CURRENT_STEP:-1}" -le 4 ] && { step_4_ollama_installation; save_state 4; }
-    [ "${CURRENT_STEP:-1}" -le 5 ] && { step_5_validation; save_state 5; }
-    [ "${CURRENT_STEP:-1}" -le 6 ] && { step_6_interactive_questionnaire; save_state 6; }
-    [ "${CURRENT_STEP:-1}" -le 7 ] && { step_7_generate_master_env; save_state 7; }
-    [ "${CURRENT_STEP:-1}" -le 8 ] && { step_8_service_env_files; save_state 8; }
-    [ "${CURRENT_STEP:-1}" -le 9 ] && { step_9_postgresql_init; save_state 9; }
-    [ "${CURRENT_STEP:-1}" -le 10 ] && { step_10_redis_config; save_state 10; }
-    [ "${CURRENT_STEP:-1}" -le 11 ] && { step_11_litellm_config; save_state 11; }
-    [ "${CURRENT_STEP:-1}" -le 12 ] && { step_12_dify_config; save_state 12; }
-    [ "${CURRENT_STEP:-1}" -le 13 ] && { step_13_caddyfile_gen; save_state 13; }
-    [ "${CURRENT_STEP:-1}" -le 14 ] && { step_14_monitoring_config; save_state 14; }
-    [ "${CURRENT_STEP:-1}" -le 15 ] && { step_15_convenience_scripts; save_state 15; }
-    [ "${CURRENT_STEP:-1}" -le 16 ] && { step_16_deploy_services; save_state 16; }
-    [ "${CURRENT_STEP:-1}" -le 17 ] && { step_17_verification_summary; save_state 17; }
+    # Phase 5: Integration Configuration
+    configure_gdrive
+    configure_llm_providers
+    configure_backups
 
-    log_info "All setup steps completed successfully!"
+    # Phase 6: Review & Save
+    review_configuration
+    save_configuration
 
-    # Clean up
-    rm -f "$STATE_FILE"
+    # Phase 7: Summary
+    print_summary
+
+    print_success "Configuration collection complete!"
+    print_info "Next step: Run Script 2 to deploy services"
 
     return 0
 }
