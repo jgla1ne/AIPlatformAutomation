@@ -1857,4 +1857,3 @@ trap 'log_error "Script failed at line $LINENO with exit code $?"' ERR
 
 # Run main function
 main "$@"
-
