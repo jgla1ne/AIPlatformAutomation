@@ -151,7 +151,8 @@ save_state() {
 
 load_state() {
     if [ -f "$STATE_FILE" ]; then
-        cat "$STATE_FILE"
+        source "$STATE_FILE"
+        echo "${CURRENT_STEP:-0}"
     else
         echo "0"
     fi
