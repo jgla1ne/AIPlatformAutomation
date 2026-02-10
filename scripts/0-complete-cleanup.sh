@@ -1,58 +1,146 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
-LOG="/tmp/complete-cleanup.log"
-exec > >(tee -a "$LOG") 2>&1
+echo "╔════════════════════════════════════════════════════════════╗"
+echo "║          ☢️  NUCLEAR CLEANUP - LAST WARNING  ☢️            ║"
+echo "╚════════════════════════════════════════════════════════════╝"
+echo ""
+echo "This will PERMANENTLY DESTROY:"
+echo "  • All Docker containers, images, volumes, networks"
+echo "  • All services: n8n, flowise, litellm, langfuse, postgresql"
+echo "  • All data in /mnt/data/"
+echo "  • All application files in /root/"
+echo "  • All systemd service files"
+echo "  • Network configurations"
+echo ""
+echo "The system will REBOOT after cleanup."
+echo ""
+read -p "Type 'DESTROY' to continue: " confirm
 
-echo "=== NUCLEAR CLEANUP STARTED ==="
-
-# 1) Stop Docker if installed/running
-if command -v docker >/dev/null 2>&1; then
-  echo "[CLEANUP] Stopping any running containers..."
-  docker ps -q | xargs -r docker stop || true
-else
-  echo "[CLEANUP] Docker not found, skipping container stop"
+if [ "$confirm" != "DESTROY" ]; then
+    echo "Cleanup cancelled."
+    exit 0
 fi
 
-# 2) Remove Docker artifacts if docker exists
-if command -v docker >/dev/null 2>&1; then
-  echo "[CLEANUP] Removing Docker containers..."
-  docker ps -aq | xargs -r docker rm -f || true
+echo ""
+echo "Starting nuclear cleanup in 5 seconds... Press Ctrl+C to abort!"
+sleep 5
 
-  echo "[CLEANUP] Removing Docker images..."
-  docker images -q | xargs -r docker rmi -f || true
+# Stop all services immediately
+echo "⏹  Stopping all services..."
+systemctl stop n8n flowise litellm langfuse nginx postgresql docker 2>/dev/null || true
+killall -9 node npm npx python3 nginx postgres docker dockerd containerd 2>/dev/null || true
 
-  echo "[CLEANUP] Removing Docker volumes..."
-  docker volume ls -q | xargs -r docker volume rm -f || true
-
-  echo "[CLEANUP] Pruning Docker networks..."
-  docker network prune -f || true
-else
-  echo "[CLEANUP] Docker not found, skipping Docker cleanup"
+# Docker complete removal
+echo "🐳 Removing Docker..."
+if command -v docker &> /dev/null; then
+    docker stop $(docker ps -aq) 2>/dev/null || true
+    docker rm -f $(docker ps -aq) 2>/dev/null || true
+    docker rmi -f $(docker images -q) 2>/dev/null || true
+    docker volume rm -f $(docker volume ls -q) 2>/dev/null || true
+    docker network rm $(docker network ls -q) 2>/dev/null || true
+    docker system prune -af --volumes 2>/dev/null || true
 fi
 
-# 3) Remove config directories
-HOME_PATH="$(eval echo ~${SUDO_USER:-$USER})"
-REPO_PATH="$HOME_PATH/AIPlatformAutomation"
+# Purge Docker packages
+apt-get purge -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin 2>/dev/null || true
+apt-get autoremove -y 2>/dev/null || true
+rm -rf /var/lib/docker
+rm -rf /var/lib/containerd
+rm -rf /etc/docker
 
-echo "[CLEANUP] Removing user config folder: $HOME_PATH/config"
-rm -rf "$HOME_PATH/config" || true
+# Remove all systemd services
+echo "🗑️  Removing systemd services..."
+for service in n8n flowise litellm langfuse; do
+    systemctl stop $service 2>/dev/null || true
+    systemctl disable $service 2>/dev/null || true
+    rm -f /etc/systemd/system/${service}.service
+done
+systemctl daemon-reload
+systemctl reset-failed
 
-echo "[CLEANUP] Removing repo config folder: $REPO_PATH/config"
-rm -rf "$REPO_PATH/config" || true
+# PostgreSQL complete removal
+echo "🗄️  Removing PostgreSQL..."
+systemctl stop postgresql 2>/dev/null || true
+apt-get purge -y postgresql* 2>/dev/null || true
+rm -rf /etc/postgresql
+rm -rf /var/lib/postgresql
+rm -rf /var/log/postgresql
 
-# 4) Unmount and remove /mnt/data
-if mountpoint -q /mnt/data; then
-  echo "[CLEANUP] Unmounting /mnt/data..."
-  umount -lf /mnt/data || true
+# Nginx removal
+echo "🌐 Removing Nginx..."
+systemctl stop nginx 2>/dev/null || true
+apt-get purge -y nginx* 2>/dev/null || true
+rm -rf /etc/nginx
+rm -rf /var/log/nginx
+rm -rf /var/www
+
+# Remove all application directories
+echo "📁 Removing application files..."
+rm -rf /root/n8n
+rm -rf /root/flowise
+rm -rf /root/litellm
+rm -rf /root/langfuse
+rm -rf /root/.n8n
+rm -rf /root/.npm
+rm -rf /root/.cache
+
+# Clean data directory (preserve structure)
+echo "💾 Cleaning data directory..."
+if [ -d "/mnt/data" ]; then
+    rm -rf /mnt/data/postgresql
+    rm -rf /mnt/data/n8n
+    rm -rf /mnt/data/flowise
+    rm -rf /mnt/data/nginx
+    rm -rf /mnt/data/logs
+    rm -rf /mnt/data/backups
+    rm -rf /mnt/data/uploads
 fi
 
-echo "[CLEANUP] Removing /mnt/data..."
-rm -rf /mnt/data || true
+# Clean Node.js global packages
+echo "📦 Cleaning Node.js packages..."
+if command -v npm &> /dev/null; then
+    npm cache clean --force 2>/dev/null || true
+fi
 
-# 5) Leave scripts in place
-echo "[CLEANUP] Preserving /scripts folder"
+# Clean Python packages
+echo "🐍 Cleaning Python packages..."
+if command -v pip3 &> /dev/null; then
+    pip3 freeze | xargs pip3 uninstall -y 2>/dev/null || true
+    rm -rf /root/.cache/pip
+fi
 
-echo "=== NUCLEAR CLEANUP COMPLETE ==="
-echo "Log: $LOG"
+# Remove network configurations
+echo "🔌 Resetting network configurations..."
+rm -f /etc/nginx/sites-enabled/*
+rm -f /etc/nginx/sites-available/ai-platform
+
+# Clean logs
+echo "📝 Cleaning logs..."
+rm -rf /var/log/n8n*
+rm -rf /var/log/flowise*
+rm -rf /var/log/litellm*
+rm -rf /var/log/langfuse*
+journalctl --vacuum-time=1s 2>/dev/null || true
+
+# Clean temp files
+echo "🧹 Cleaning temporary files..."
+rm -rf /tmp/n8n*
+rm -rf /tmp/flowise*
+rm -rf /tmp/npm*
+rm -rf /tmp/pip*
+
+# Final cleanup
+apt-get autoremove -y
+apt-get autoclean -y
+
+echo ""
+echo "✅ Nuclear cleanup complete!"
+echo ""
+echo "System will REBOOT in 10 seconds..."
+echo "Press Ctrl+C to cancel reboot"
+sleep 10
+
+echo "🔄 Rebooting now..."
+reboot
 
