@@ -310,11 +310,18 @@ collect_service_selection() {
     echo "10) Flowise (Visual LLM flow builder)"
     echo "11) AnythingLLM (Document-centric RAG)"
     echo "12) OpenClaw (RAG + Tailscale isolation)"
+    echo "all) Install ALL AI services (recommended for full platform)"
     echo ""
     
     # AI Services Selection
     while true; do
-        read -p "Select AI services (comma-separated, 7-12): " ai_choices
+        read -p "Select AI services (comma-separated, 7-12, or 'all'): " ai_choices
+        
+        if [ "$ai_choices" = "all" ]; then
+            SELECTED_AI_SERVICES=("dify" "n8n" "open-webui" "flowise" "anythingllm" "openclaw")
+            break
+        fi
+        
         IFS=',' read -ra CHOSEN_AI <<< "$ai_choices"
         valid=true
         
@@ -334,7 +341,7 @@ collect_service_selection() {
         if [ "$valid" = true ]; then
             break
         else
-            echo -e "${RED}Invalid choices. Please select numbers 7-12 separated by commas.${NC}"
+            echo -e "${RED}Invalid choices. Please select numbers 7-12 separated by commas, or 'all'.${NC}"
         fi
     done
     
@@ -365,11 +372,18 @@ collect_service_selection() {
     echo "20) Authentication (SuperTokens)"
     echo "21) Communication (Signal)"
     echo "22) Networking (Tailscale VPN)"
+    echo "all) Install ALL optional services (recommended for full platform)"
     echo ""
     
     # Optional Services Selection
     while true; do
-        read -p "Select optional services (comma-separated, 17-22): " optional_choices
+        read -p "Select optional services (comma-separated, 17-22, or 'all'): " optional_choices
+        
+        if [ "$optional_choices" = "all" ]; then
+            SELECTED_OPTIONAL_SERVICES=("monitoring" "minio" "development" "supertokens" "signal" "tailscale")
+            break
+        fi
+        
         IFS=',' read -ra CHOSEN_OPTIONAL <<< "$optional_choices"
         valid=true
         
@@ -389,7 +403,7 @@ collect_service_selection() {
         if [ "$valid" = true ]; then
             break
         else
-            echo -e "${RED}Invalid choices. Please select numbers 17-22 separated by commas.${NC}"
+            echo -e "${RED}Invalid choices. Please select numbers 17-22 separated by commas, or 'all'.${NC}"
         fi
     done
     
@@ -462,6 +476,61 @@ HARDWARE_PROFILE=${HARDWARE_PROFILE}
 EOF
     
     log_success "Hardware profile: ${HARDWARE_PROFILE}"
+}
+
+# ==============================================================================
+# USER INPUT COLLECTION
+# ==============================================================================
+
+collect_user_input() {
+    log_step "Collecting user configuration..."
+    
+    echo ""
+    print_section "DOMAIN AND NETWORK CONFIGURATION"
+    
+    # Domain name
+    while true; do
+        read -p "Enter your domain name (e.g., example.com): " DOMAIN_NAME
+        if validate_domain "$DOMAIN_NAME"; then
+            break
+        else
+            echo -e "${RED}Invalid domain name. Please try again.${NC}"
+        fi
+    done
+    
+    # SSL email
+    while true; do
+        read -p "Enter SSL certificate email: " SSL_EMAIL
+        if validate_email "$SSL_EMAIL"; then
+            break
+        else
+            echo -e "${RED}Invalid email address. Please try again.${NC}"
+        fi
+    done
+    
+    # PostgreSQL password
+    while true; do
+        read -sp "Enter PostgreSQL password (min 12 chars): " POSTGRES_PASSWORD
+        echo ""
+        if [ ${#POSTGRES_PASSWORD} -ge 12 ]; then
+            read -sp "Confirm PostgreSQL password: " POSTGRES_PASSWORD_CONFIRM
+            echo ""
+            if [ "$POSTGRES_PASSWORD" = "$POSTGRES_PASSWORD_CONFIRM" ]; then
+                break
+            else
+                echo -e "${RED}Passwords do not match. Please try again.${NC}"
+            fi
+        else
+            echo -e "${RED}Password must be at least 12 characters. Please try again.${NC}"
+        fi
+    done
+    
+    # Generate additional passwords
+    REDIS_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+    LITELLM_MASTER_KEY=$(openssl rand -hex 32)
+    LITELLM_SALT_KEY=$(openssl rand -hex 32)
+    
+    log_success "User configuration collected"
 }
 
 validate_email() {
@@ -3355,6 +3424,9 @@ main() {
     # Collect service selection and hardware profile
     collect_service_selection
     detect_hardware_profile
+
+    # Collect user configuration
+    collect_user_input
 
     # Load or create state
     if [ -f "$STATE_FILE" ]; then
