@@ -1,23 +1,57 @@
 #!/bin/bash
-
-#############################################
+# ==============================================================================
 # Script 2: Deploy Services
-# Purpose: Deploy all AI platform services using Docker Compose
+# Version: 2.0 - Modular Architecture Support
+# Purpose: Deploy all AI platform services using modular Docker Compose
 # Usage: ./2-deploy-services.sh [--skip-build] [--service SERVICE_NAME]
-#############################################
+# Features: Self-contained, modular compose generation, service selection
+# ==============================================================================
 
 set -euo pipefail
 
-# Source common utilities
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/../lib/common.sh"
+# ==============================================================================
+# SELF-CONTAINED LOGGING FUNCTIONS
+# ==============================================================================
 
-#############################################
-# Configuration
-#############################################
+# Colors for output
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly NC='\033[0m' # No Color
 
+# Logging functions
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} [$(date '+%Y-%m-%d %H:%M:%S')] $*"
+}
+
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} [$(date '+%Y-%m-%d %H:%M:%S')] ✓ $*"
+}
+
+log_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} [$(date '+%Y-%m-%d %H:%M:%S')] ⚠ $*"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} [$(date '+%Y-%m-%d %H:%M:%S')] ✗ $*"
+}
+
+log_step() {
+    echo -e "${BLUE}[STEP]${NC} [$(date '+%Y-%m-%d %H:%M:%S')] $*"
+}
+
+# ==============================================================================
+# CONFIGURATION
+# ==============================================================================
+
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly PROJECT_ROOT="${SCRIPT_DIR}/.."
-readonly DOCKER_COMPOSE_FILE="${PROJECT_ROOT}/docker-compose.yml"
+readonly AI_PLATFORM_DIR="/mnt/data/ai-platform"
+readonly CONFIG_DIR="${AI_PLATFORM_DIR}/config"
+readonly DOCKER_DIR="${AI_PLATFORM_DIR}/docker"
+readonly DATA_DIR="${AI_PLATFORM_DIR}/data"
+readonly LOGS_DIR="${AI_PLATFORM_DIR}/logs"
 readonly ENV_FILE="${PROJECT_ROOT}/.env"
 readonly DEPLOYMENT_TIMEOUT=300
 readonly HEALTH_CHECK_RETRIES=30
@@ -27,15 +61,15 @@ readonly HEALTH_CHECK_INTERVAL=10
 SKIP_BUILD=false
 SPECIFIC_SERVICE=""
 
-#############################################
-# Validation Functions
-#############################################
+# ==============================================================================
+# VALIDATION FUNCTIONS
+# ==============================================================================
 
 validate_prerequisites() {
-    log_info "Validating prerequisites..."
+    log_step "Validating prerequisites..."
     
     # Check Docker
-    if ! check_docker; then
+    if ! command -v docker &> /dev/null; then
         log_error "Docker is not available"
         return 1
     fi
@@ -46,15 +80,15 @@ validate_prerequisites() {
         return 1
     fi
     
-    # Check docker-compose.yml exists
-    if [[ ! -f "$DOCKER_COMPOSE_FILE" ]]; then
-        log_error "docker-compose.yml not found at $DOCKER_COMPOSE_FILE"
+    # Check service selection file exists
+    if [[ ! -f "${CONFIG_DIR}/service-selection.env" ]]; then
+        log_error "Service selection file not found. Please run script 1 first."
         return 1
     fi
     
-    # Check .env file exists
-    if [[ ! -f "$ENV_FILE" ]]; then
-        log_error ".env file not found. Please run script 1 first."
+    # Check master env file exists
+    if [[ ! -f "${CONFIG_DIR}/master.env" ]]; then
+        log_error "Master configuration file not found. Please run script 1 first."
         return 1
     fi
     
@@ -62,29 +96,62 @@ validate_prerequisites() {
     return 0
 }
 
-validate_compose_file() {
-    log_info "Validating Docker Compose file..."
+validate_service_selection() {
+    log_step "Loading service selection..."
     
-    if docker-compose -f "$DOCKER_COMPOSE_FILE" config > /dev/null 2>&1; then
-        log_success "Docker Compose file is valid"
-        return 0
-    elif docker compose -f "$DOCKER_COMPOSE_FILE" config > /dev/null 2>&1; then
-        log_success "Docker Compose file is valid"
-        return 0
-    else
-        log_error "Docker Compose file validation failed"
+    # Source service selection
+    source "${CONFIG_DIR}/service-selection.env"
+    
+    # Validate required selections
+    if [[ -z "${SELECTED_PROXY:-}" ]]; then
+        log_error "No proxy selected"
         return 1
     fi
+    
+    if [[ -z "${SELECTED_VECTOR_DB:-}" ]]; then
+        log_error "No vector database selected"
+        return 1
+    fi
+    
+    log_success "Service selection loaded"
+    log_info "Selected proxy: ${SELECTED_PROXY}"
+    log_info "Selected vector DB: ${SELECTED_VECTOR_DB}"
+    return 0
 }
 
-#############################################
-# Deployment Functions
-#############################################
+validate_compose_files() {
+    log_step "Validating Docker Compose files..."
+    
+    local failed_files=()
+    
+    for compose_file in "${DOCKER_DIR}"/docker-compose.*.yml; do
+        if [[ -f "$compose_file" ]]; then
+            if docker compose -f "$compose_file" config > /dev/null 2>&1; then
+                log_success "$(basename "$compose_file") is valid"
+            else
+                log_error "$(basename "$compose_file") validation failed"
+                failed_files+=("$(basename "$compose_file")")
+            fi
+        fi
+    done
+    
+    if [[ ${#failed_files[@]} -gt 0 ]]; then
+        log_error "Failed compose files: ${failed_files[*]}"
+        return 1
+    fi
+    
+    log_success "All Docker Compose files are valid"
+    return 0
+}
+
+# ==============================================================================
+# DEPLOYMENT FUNCTIONS
+# ==============================================================================
 
 create_networks() {
-    log_info "Creating Docker networks..."
+    log_step "Creating Docker networks..."
     
-    local networks=("ai_platform_network")
+    local networks=("ai-platform-network" "ai-backend-network")
     
     for network in "${networks[@]}"; do
         if ! docker network inspect "$network" &> /dev/null; then
@@ -92,6 +159,202 @@ create_networks() {
             docker network create "$network" || {
                 log_error "Failed to create network: $network"
                 return 1
+            }
+        else
+            log_info "Network $network already exists"
+        fi
+    done
+    
+    log_success "Docker networks created"
+}
+
+generate_modular_composes() {
+    log_step "Generating modular Docker Compose files..."
+    
+    # Source service selection and hardware profile
+    source "${CONFIG_DIR}/service-selection.env"
+    source "${CONFIG_DIR}/hardware-profile.env"
+    
+    # Create Docker directory
+    mkdir -p "${DOCKER_DIR}"
+    
+    # Generate core infrastructure compose files
+    generate_postgres_compose
+    generate_redis_compose
+    generate_litellm_compose
+    generate_proxy_compose
+    
+    # Generate vector database compose file
+    case "$SELECTED_VECTOR_DB" in
+        qdrant) generate_qdrant_compose ;;
+        chromadb) generate_chromadb_compose ;;
+        redis) generate_redis_vector_compose ;;
+        weaviate) generate_weaviate_compose ;;
+    esac
+    
+    # Generate AI service compose files
+    for service in "${SELECTED_AI_SERVICES[@]}"; do
+        case "$service" in
+            dify) generate_dify_compose ;;
+            n8n) generate_n8n_compose ;;
+            open-webui) generate_openwebui_compose ;;
+            flowise) generate_flowise_compose ;;
+            anythingllm) generate_anythingllm_compose ;;
+            openclaw) generate_openclaw_compose ;;
+        esac
+    done
+    
+    # Generate optional service compose files
+    for service in "${SELECTED_OPTIONAL_SERVICES[@]}"; do
+        case "$service" in
+            monitoring) generate_monitoring_compose ;;
+            minio) generate_minio_compose ;;
+            development) generate_development_compose ;;
+            supertokens) generate_supertokens_compose ;;
+            signal) generate_signal_compose ;;
+            tailscale) generate_tailscale_compose ;;
+        esac
+    done
+    
+    log_success "Modular compose files generated"
+}
+
+# ==============================================================================
+# COMPOSE GENERATION FUNCTIONS
+# ==============================================================================
+
+generate_postgres_compose() {
+    cat > "${DOCKER_DIR}/docker-compose.postgres.yml" << EOF
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ai-platform-postgres
+    restart: unless-stopped
+    networks:
+      - ai-backend-network
+    ports:
+      - "127.0.0.1:\${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_DB: aiplatform
+      POSTGRES_USER: aiplatform
+      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - ${DATA_DIR}/postgresql:/var/lib/postgresql/data
+      - ${CONFIG_DIR}/postgres:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER} -d \${POSTGRES_DB}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: \${POSTGRES_MEM_LIMIT:-2g}
+        reservations:
+          memory: \${POSTGRES_MEM_RESERVATION:-1g}
+    logging:
+      driver: "json-file"
+      options:
+        max-file: "3"
+        max-size: "10m"
+
+networks:
+  ai-backend-network:
+    driver: bridge
+EOF
+}
+
+generate_redis_compose() {
+    cat > "${DOCKER_DIR}/docker-compose.redis.yml" << EOF
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: ai-platform-redis
+    restart: unless-stopped
+    networks:
+      - ai-backend-network
+    ports:
+      - "127.0.0.1:\${REDIS_PORT:-6379}:6379"
+    command: redis-server --appendonly yes --requirepass \${REDIS_PASSWORD}
+    volumes:
+      - ${DATA_DIR}/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: \${REDIS_MEM_LIMIT:-1g}
+        reservations:
+          memory: \${REDIS_MEM_RESERVATION:-512m}
+    logging:
+      driver: "json-file"
+      options:
+        max-file: "3"
+        max-size: "10m"
+
+networks:
+  ai-backend-network:
+    driver: bridge
+EOF
+}
+
+generate_litellm_compose() {
+    cat > "${DOCKER_DIR}/docker-compose.litellm.yml" << EOF
+version: '3.8'
+
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: ai-platform-litellm
+    restart: unless-stopped
+    networks:
+      - ai-platform-network
+      - ai-backend-network
+    ports:
+      - "127.0.0.1:\${LITELLM_PORT:-4000}:4000"
+    environment:
+      DATABASE_URL: postgresql://\${POSTGRES_USER}:\${POSTGRES_PASSWORD}@postgres:5432/\${POSTGRES_DB}
+      REDIS_URL: redis://:\${REDIS_PASSWORD}@redis:6379
+      LITELLM_MASTER_KEY: \${LITELLM_MASTER_KEY}
+      LITELLM_SALT_KEY: \${LITELLM_SALT_KEY}
+    volumes:
+      - ${CONFIG_DIR}/litellm:/app/config
+      - ${LOGS_DIR}/litellm:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    depends_on:
+      - postgres
+      - redis
+    deploy:
+      resources:
+        limits:
+          memory: \${LITELLM_MEM_LIMIT:-2g}
+        reservations:
+          memory: \${LITELLM_MEM_RESERVATION:-1g}
+    logging:
+      driver: "json-file"
+      options:
+        max-file: "3"
+        max-size: "10m"
+
+networks:
+  ai-platform-network:
+    driver: bridge
+  ai-backend-network:
+    driver: bridge
+EOF
+}
             }
         else
             log_info "Network already exists: $network"
@@ -352,43 +615,70 @@ parse_arguments() {
     done
 }
 
-#############################################
-# Main Execution
-#############################################
+# ==============================================================================
+# MAIN EXECUTION
+# ==============================================================================
 
 main() {
-    log_header "AI Platform - Deploy Services"
+    log_step "Starting AI Platform Deployment (Script 2)..."
+    log_info "Script Version: 2.0 - Modular Architecture"
+    log_info "Execution Time: $(date)"
     
     # Parse arguments
     parse_arguments "$@"
     
-    # Validate prerequisites
+    # Validate prerequisites and service selection
     validate_prerequisites || exit 1
-    validate_compose_file || exit 1
+    validate_service_selection || exit 1
     
-    # Create infrastructure
+    # Generate modular compose files
+    generate_modular_composes || exit 1
+    
+    # Validate generated compose files
+    validate_compose_files || exit 1
+    
+    # Create Docker networks
     create_networks || exit 1
-    create_volumes || exit 1
     
     # Deploy services
-    pull_images || exit 1
-    build_services || exit 1
-    deploy_services || exit 1
+    if [ "$SKIP_BUILD" = false ]; then
+        log_step "Building and starting services..."
+        for compose_file in "${DOCKER_DIR}"/docker-compose.*.yml; do
+            if [ -f "$compose_file" ]; then
+                service_name=$(basename "$compose_file" | sed 's/docker-compose\.//; s/\.yml//')
+                log_info "Deploying $service_name..."
+                docker compose -f "$compose_file" up -d --build || {
+                    log_error "Failed to deploy $service_name"
+                    return 1
+                }
+                log_success "$service_name deployed"
+            fi
+        done
+    else
+        log_step "Starting existing services..."
+        for compose_file in "${DOCKER_DIR}"/docker-compose.*.yml; do
+            if [ -f "$compose_file" ]; then
+                service_name=$(basename "$compose_file" | sed 's/docker-compose\.//; s/\.yml//')
+                log_info "Starting $service_name..."
+                docker compose -f "$compose_file" up -d || {
+                    log_error "Failed to start $service_name"
+                    return 1
+                }
+                log_success "$service_name started"
+            fi
+        done
+    fi
     
-    # Verify deployment
-    log_info "Waiting for services to stabilize..."
-    sleep 10
+    # Wait for services to stabilize
+    log_step "Waiting for services to stabilize..."
+    sleep 30
     
-    verify_deployment || {
-        log_error "Deployment verification failed"
-        log_info "Check logs with: docker-compose logs"
-        exit 1
-    }
+    # Health check
+    perform_health_checks || exit 1
     
-    # Display information
-    display_service_info
-    
-    log_success "Service deployment completed successfully"
+    log_success "All services deployed successfully!"
+    log_info "Service logs available in: ${LOGS_DIR}"
+    log_info "Manage services with: docker compose -f ${DOCKER_DIR}/docker-compose.<service>.yml [up|down|restart|logs]"
 }
 
 # Execute main function

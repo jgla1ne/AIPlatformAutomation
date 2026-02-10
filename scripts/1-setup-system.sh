@@ -1,8 +1,9 @@
 #!/bin/bash
 # ==============================================================================
 # Script 1: System Setup and Base Configuration
-# Version: 4.0 - Comprehensive Audit Remediation
+# Version: 5.0 - Interactive Service Selection Framework
 # Purpose: Complete system preparation for AI platform deployment
+# Features: Service selection, proxy selection, vector DB selection, CPU/GPU handling
 # ==============================================================================
 
 set -euo pipefail
@@ -12,18 +13,20 @@ set -euo pipefail
 # ==============================================================================
 
 # Script metadata
-readonly SCRIPT_VERSION="4.0"
+readonly SCRIPT_VERSION="5.0"
 readonly SCRIPT_NAME="1-setup-system.sh"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# Paths (CORRECTED per audit findings)
+# Paths (Updated for modular architecture)
 readonly BASE_DIR="/root/scripts"
 readonly DATA_DIR="/mnt/data"
-readonly BACKUP_DIR="${DATA_DIR}/backups"
-readonly LOG_DIR="${DATA_DIR}/logs"
-readonly CONFIG_FILE="${BASE_DIR}/config.env"
-readonly DOCKER_COMPOSE_FILE="${BASE_DIR}/docker-compose.yml"
+readonly AI_PLATFORM_DIR="${DATA_DIR}/ai-platform"
+readonly BACKUP_DIR="${AI_PLATFORM_DIR}/backups"
+readonly LOG_DIR="${AI_PLATFORM_DIR}/logs"
+readonly CONFIG_DIR="${AI_PLATFORM_DIR}/config"
+readonly DOCKER_DIR="${AI_PLATFORM_DIR}/docker"
+readonly CONFIG_FILE="${CONFIG_DIR}/master.env"
 readonly STATE_FILE="${BASE_DIR}/.setup_state"
 
 # Service data directories
@@ -253,6 +256,212 @@ validate_domain() {
         return 1
     fi
     return 0
+}
+
+# ==============================================================================
+# SERVICE SELECTION FRAMEWORK
+# ==============================================================================
+
+collect_service_selection() {
+    log_step "Collecting service selection..."
+    
+    # Create service selection directory
+    mkdir -p "/mnt/data/ai-platform/config"
+    
+    # Initialize selection variables
+    SELECTED_CORE_SERVICES=()
+    SELECTED_AI_SERVICES=()
+    SELECTED_OPTIONAL_SERVICES=()
+    SELECTED_PROXY=""
+    SELECTED_VECTOR_DB=""
+    
+    echo ""
+    print_section "SERVICE SELECTION"
+    
+    # Core Infrastructure Selection
+    echo -e "${CYAN}=== CORE INFRASTRUCTURE ===${NC}"
+    echo "1) PostgreSQL (Database) - ${GREEN}[AUTO-SELECTED]${NC}"
+    echo "2) Redis (Cache) - ${GREEN}[AUTO-SELECTED]${NC}"
+    echo "3) LiteLLM (AI Gateway) - ${GREEN}[AUTO-SELECTED]${NC}"
+    echo ""
+    
+    # Proxy Selection
+    echo -e "${CYAN}=== REVERSE PROXY SELECTION ===${NC}"
+    echo "4) Nginx (Traditional, battle-tested)"
+    echo "5) Caddy (Automatic HTTPS, modern)"
+    echo "6) Traefik (Advanced routing, containers)"
+    echo ""
+    
+    while true; do
+        read -p "Select reverse proxy (4-6): " proxy_choice
+        case $proxy_choice in
+            4) SELECTED_PROXY="nginx"; break ;;
+            5) SELECTED_PROXY="caddy"; break ;;
+            6) SELECTED_PROXY="traefik"; break ;;
+            *) echo -e "${RED}Invalid choice. Please select 4-6.${NC}" ;;
+        esac
+    done
+    
+    echo ""
+    echo -e "${CYAN}=== AI STACK SELECTION ===${NC}"
+    echo "7) Dify (AI Platform - 4 services)"
+    echo "8) n8n (Workflow automation)"
+    echo "9) Open WebUI (Chat interface)"
+    echo "10) Flowise (Visual LLM flow builder)"
+    echo "11) AnythingLLM (Document-centric RAG)"
+    echo "12) OpenClaw (RAG + Tailscale isolation)"
+    echo ""
+    
+    # AI Services Selection
+    while true; do
+        read -p "Select AI services (comma-separated, 7-12): " ai_choices
+        IFS=',' read -ra CHOSEN_AI <<< "$ai_choices"
+        valid=true
+        
+        for choice in "${CHOSEN_AI[@]}"; do
+            choice=$(echo "$choice" | xargs) # trim whitespace
+            case $choice in
+                7) SELECTED_AI_SERVICES+=("dify") ;;
+                8) SELECTED_AI_SERVICES+=("n8n") ;;
+                9) SELECTED_AI_SERVICES+=("open-webui") ;;
+                10) SELECTED_AI_SERVICES+=("flowise") ;;
+                11) SELECTED_AI_SERVICES+=("anythingllm") ;;
+                12) SELECTED_AI_SERVICES+=("openclaw") ;;
+                *) valid=false; break ;;
+            esac
+        done
+        
+        if [ "$valid" = true ]; then
+            break
+        else
+            echo -e "${RED}Invalid choices. Please select numbers 7-12 separated by commas.${NC}"
+        fi
+    done
+    
+    echo ""
+    echo -e "${CYAN}=== VECTOR DATABASE SELECTION ===${NC}"
+    echo "13) Qdrant (Performance-focused)"
+    echo "14) ChromaDB (Simplicity-focused)"
+    echo "15) Redis (as vector DB)"
+    echo "16) Weaviate (Advanced queries)"
+    echo ""
+    
+    while true; do
+        read -p "Select vector database (13-16): " vector_choice
+        case $vector_choice in
+            13) SELECTED_VECTOR_DB="qdrant"; break ;;
+            14) SELECTED_VECTOR_DB="chromadb"; break ;;
+            15) SELECTED_VECTOR_DB="redis"; break ;;
+            16) SELECTED_VECTOR_DB="weaviate"; break ;;
+            *) echo -e "${RED}Invalid choice. Please select 13-16.${NC}" ;;
+        esac
+    done
+    
+    echo ""
+    echo -e "${CYAN}=== OPTIONAL SERVICES ===${NC}"
+    echo "17) Monitoring (Prometheus + Grafana + Loki)"
+    echo "18) Storage (MinIO S3-compatible)"
+    echo "19) Development (Jupyter + Code Server)"
+    echo "20) Authentication (SuperTokens)"
+    echo "21) Communication (Signal)"
+    echo "22) Networking (Tailscale VPN)"
+    echo ""
+    
+    # Optional Services Selection
+    while true; do
+        read -p "Select optional services (comma-separated, 17-22): " optional_choices
+        IFS=',' read -ra CHOSEN_OPTIONAL <<< "$optional_choices"
+        valid=true
+        
+        for choice in "${CHOSEN_OPTIONAL[@]}"; do
+            choice=$(echo "$choice" | xargs) # trim whitespace
+            case $choice in
+                17) SELECTED_OPTIONAL_SERVICES+=("monitoring") ;;
+                18) SELECTED_OPTIONAL_SERVICES+=("minio") ;;
+                19) SELECTED_OPTIONAL_SERVICES+=("development") ;;
+                20) SELECTED_OPTIONAL_SERVICES+=("supertokens") ;;
+                21) SELECTED_OPTIONAL_SERVICES+=("signal") ;;
+                22) SELECTED_OPTIONAL_SERVICES+=("tailscale") ;;
+                *) valid=false; break ;;
+            esac
+        done
+        
+        if [ "$valid" = true ]; then
+            break
+        else
+            echo -e "${RED}Invalid choices. Please select numbers 17-22 separated by commas.${NC}"
+        fi
+    done
+    
+    # Save selections to file
+    cat > "/mnt/data/ai-platform/config/service-selection.env" << EOF
+# Service Selection Configuration
+SELECTED_PROXY=${SELECTED_PROXY}
+SELECTED_VECTOR_DB=${SELECTED_VECTOR_DB}
+SELECTED_AI_SERVICES=$(IFS=,; echo "${SELECTED_AI_SERVICES[*]}")
+SELECTED_OPTIONAL_SERVICES=$(IFS=,; echo "${SELECTED_OPTIONAL_SERVICES[*]}")
+AUTO_SELECTED_CORE_SERVICES=postgresql,redis,litellm
+EOF
+    
+    log_success "Service selections saved"
+    log_info "Selected proxy: ${SELECTED_PROXY}"
+    log_info "Selected vector DB: ${SELECTED_VECTOR_DB}"
+    log_info "Selected AI services: ${SELECTED_AI_SERVICES[*]}"
+    log_info "Selected optional services: ${SELECTED_OPTIONAL_SERVICES[*]}"
+}
+
+detect_hardware_profile() {
+    log_step "Detecting hardware profile..."
+    
+    # GPU Detection
+    GPU_AVAILABLE=false
+    GPU_TYPE=""
+    GPU_MEMORY=""
+    
+    if command -v nvidia-smi &> /dev/null; then
+        GPU_AVAILABLE=true
+        GPU_TYPE="nvidia"
+        GPU_MEMORY=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1)
+        log_success "NVIDIA GPU detected: ${GPU_MEMORY}MB"
+    elif command -v rocm-smi &> /dev/null; then
+        GPU_AVAILABLE=true
+        GPU_TYPE="amd"
+        log_success "AMD GPU detected"
+    else
+        log_info "No GPU detected - CPU-only mode"
+    fi
+    
+    # CPU Detection
+    CPU_CORES=$(nproc)
+    CPU_MEMORY=$(free -m | awk 'NR==2{printf "%.0f", $2}')
+    
+    # Determine hardware profile
+    if [ "$GPU_AVAILABLE" = true ]; then
+        if [ "$GPU_MEMORY" -gt 8000 ]; then
+            HARDWARE_PROFILE="high-gpu"
+        else
+            HARDWARE_PROFILE="standard-gpu"
+        fi
+    else
+        if [ "$CPU_MEMORY" -gt 16000 ]; then
+            HARDWARE_PROFILE="high-cpu"
+        else
+            HARDWARE_PROFILE="standard-cpu"
+        fi
+    fi
+    
+    # Save hardware profile
+    cat > "/mnt/data/ai-platform/config/hardware-profile.env" << EOF
+# Hardware Profile Configuration
+GPU_AVAILABLE=${GPU_AVAILABLE}
+GPU_TYPE=${GPU_TYPE}
+GPU_MEMORY=${GPU_MEMORY}
+CPU_CORES=${CPU_CORES}
+CPU_MEMORY=${CPU_MEMORY}
+HARDWARE_PROFILE=${HARDWARE_PROFILE}
+EOF
+    
+    log_success "Hardware profile: ${HARDWARE_PROFILE}"
 }
 
 validate_email() {
@@ -3142,6 +3351,10 @@ main() {
 
     # Check system requirements
     check_system_requirements
+
+    # Collect service selection and hardware profile
+    collect_service_selection
+    detect_hardware_profile
 
     # Load or create state
     if [ -f "$STATE_FILE" ]; then

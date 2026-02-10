@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # Script 0: Nuclear Cleanup Script ☢️
-# Version: 3.0
+# Version: 4.0 - Modular Architecture Support
 # Purpose: Complete system reset for fresh deployment
 # WARNING: This script destroys ALL data and configurations
 # ==============================================================================
@@ -81,6 +81,17 @@ log_error() {
 
 log_step "Stopping all Docker services..."
 if command -v docker &> /dev/null; then
+    # Stop modular compose files first
+    if [ -d "/mnt/data/ai-platform/docker" ]; then
+        for compose_file in /mnt/data/ai-platform/docker/docker-compose.*.yml; do
+            if [ -f "$compose_file" ]; then
+                log_step "Stopping services from $(basename "$compose_file")..."
+                docker compose -f "$compose_file" down --remove-orphans 2>/dev/null || true
+            fi
+        done
+    fi
+    
+    # Legacy monolithic compose (backwards compatibility)
     docker compose -f /root/scripts/docker-compose.yml down --remove-orphans 2>/dev/null || true
     docker stop $(docker ps -aq) 2>/dev/null || true
     log_success "Docker services stopped"
@@ -99,6 +110,28 @@ SERVICES=(
     "qdrant"
     "n8n"
     "postgresql"
+    "redis"
+    "litellm"
+    "dify-api"
+    "dify-web"
+    "dify-worker"
+    "dify-sandbox"
+    "open-webui"
+    "flowise"
+    "anythingllm"
+    "openclaw"
+    "prometheus"
+    "grafana"
+    "loki"
+    "minio"
+    "tailscale"
+    "supertokens"
+    "signal"
+    "chromadb"
+    "weaviate"
+    "caddy"
+    "traefik"
+    "portainer"
 )
 
 for service in "${SERVICES[@]}"; do
@@ -110,9 +143,9 @@ for service in "${SERVICES[@]}"; do
 done
 
 # Remove service files
-rm -f /etc/systemd/system/ai-platform.service
-rm -f /etc/systemd/system/ollama.service
-rm -f /etc/systemd/system/qdrant.service
+for service in "${SERVICES[@]}"; do
+    rm -f "/etc/systemd/system/${service}.service"
+done
 systemctl daemon-reload
 log_success "Systemd services removed"
 
@@ -148,7 +181,8 @@ fi
 
 log_step "Removing data directories..."
 DATA_DIRS=(
-    "/mnt/data/postgresql"
+    "/mnt/data/ai-platform"           # New modular structure
+    "/mnt/data/postgresql"            # Legacy structure
     "/mnt/data/ollama"
     "/mnt/data/n8n"
     "/mnt/data/qdrant"
@@ -163,9 +197,9 @@ for dir in "${DATA_DIRS[@]}"; do
     fi
 done
 
-# Recreate empty structure
-mkdir -p /mnt/data/{postgresql,ollama,n8n,qdrant,backups,logs}
-log_success "Recreated empty data structure"
+# Recreate empty structure for new architecture
+mkdir -p /mnt/data/ai-platform/{docker,config,data,logs,scripts,backups}
+log_success "Recreated empty modular data structure"
 
 # ==============================================================================
 # STEP 5: Remove Configuration Files
@@ -178,6 +212,9 @@ CONFIG_FILES=(
     "/root/scripts/.env"
     "/root/scripts/nginx.conf"
     "/root/scripts/postgres-init.sql"
+    "/mnt/data/ai-platform/config/master.env"        # New structure
+    "/mnt/data/ai-platform/config/service-selection.env"
+    "/mnt/data/ai-platform/config/hardware-profile.env"
 )
 
 for file in "${CONFIG_FILES[@]}"; do

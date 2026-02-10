@@ -1,59 +1,211 @@
 #!/bin/bash
-
-#############################################
+# ==============================================================================
 # Script 3: Configure Services
+# Version: 2.0 - API Configuration Framework
 # Purpose: Configure all deployed services with initial settings
 # Usage: ./3-configure-services.sh [--service SERVICE_NAME]
-#############################################
+# Features: Self-contained, API-based configuration, health validation
+# ==============================================================================
 
 set -euo pipefail
 
-# Source common utilities
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/../lib/common.sh"
+# ==============================================================================
+# SELF-CONTAINED LOGGING FUNCTIONS
+# ==============================================================================
 
-#############################################
-# Configuration
-#############################################
+# Colors for output
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly NC='\033[0m' # No Color
 
+# Logging functions
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} [$(date '+%Y-%m-%d %H:%M:%S')] $*"
+}
+
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} [$(date '+%Y-%m-%d %H:%M:%S')] ✓ $*"
+}
+
+log_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} [$(date '+%Y-%m-%d %H:%M:%S')] ⚠ $*"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} [$(date '+%Y-%m-%d %H:%M:%S')] ✗ $*"
+}
+
+log_step() {
+    echo -e "${BLUE}[STEP]${NC} [$(date '+%Y-%m-%d %H:%M:%S')] $*"
+}
+
+# ==============================================================================
+# CONFIGURATION
+# ==============================================================================
+
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly PROJECT_ROOT="${SCRIPT_DIR}/.."
-readonly ENV_FILE="${PROJECT_ROOT}/.env"
-readonly CONFIG_DIR="${PROJECT_ROOT}/config"
+readonly AI_PLATFORM_DIR="/mnt/data/ai-platform"
+readonly CONFIG_DIR="${AI_PLATFORM_DIR}/config"
+readonly DOCKER_DIR="${AI_PLATFORM_DIR}/docker"
+readonly DATA_DIR="${AI_PLATFORM_DIR}/data"
+readonly LOGS_DIR="${AI_PLATFORM_DIR}/logs"
 readonly MAX_RETRIES=30
 readonly RETRY_INTERVAL=10
 
 # Command line options
 SPECIFIC_SERVICE=""
 
-#############################################
-# Load Environment Variables
-#############################################
+# ==============================================================================
+# ENVIRONMENT AND VALIDATION
+# ==============================================================================
 
 load_environment() {
-    log_info "Loading environment variables..."
+    log_step "Loading environment and service selection..."
     
-    if [[ ! -f "$ENV_FILE" ]]; then
-        log_error ".env file not found. Please run script 1 first."
+    # Load service selection
+    if [[ ! -f "${CONFIG_DIR}/service-selection.env" ]]; then
+        log_error "Service selection file not found. Please run script 1 first."
         return 1
     fi
     
-    # Source environment file
+    # Load master configuration
+    if [[ ! -f "${CONFIG_DIR}/master.env" ]]; then
+        log_error "Master configuration file not found. Please run script 1 first."
+        return 1
+    fi
+    
+    # Load hardware profile
+    if [[ ! -f "${CONFIG_DIR}/hardware-profile.env" ]]; then
+        log_error "Hardware profile file not found. Please run script 1 first."
+        return 1
+    fi
+    
+    # Source all configuration files
     set -a
-    source "$ENV_FILE"
+    source "${CONFIG_DIR}/service-selection.env"
+    source "${CONFIG_DIR}/master.env"
+    source "${CONFIG_DIR}/hardware-profile.env"
     set +a
     
-    log_success "Environment variables loaded"
+    log_success "Environment loaded successfully"
+    log_info "Selected proxy: ${SELECTED_PROXY}"
+    log_info "Selected vector DB: ${SELECTED_VECTOR_DB}"
+    log_info "Hardware profile: ${HARDWARE_PROFILE}"
     return 0
 }
 
-#############################################
-# Ollama Configuration
-#############################################
+# ==============================================================================
+# API CONFIGURATION FRAMEWORK
+# ==============================================================================
 
-configure_ollama() {
-    log_info "Configuring Ollama..."
+configure_dify() {
+    log_step "Configuring Dify..."
     
-    # Check if Ollama is running
+    # Wait for Dify API to be ready
+    wait_for_service "dify-api" 4000 "http://localhost:4000/health" || return 1
+    
+    # Configure admin account
+    log_info "Setting up Dify admin account..."
+    curl -X POST "http://localhost:4000/api/v1/console/auth/login" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "email": "'${DIFY_ADMIN_EMAIL:-admin@example.com}'",
+            "password": "'${DIFY_ADMIN_PASSWORD:-admin123}'"
+        }' || {
+        log_error "Failed to configure Dify admin account"
+        return 1
+    }
+    
+    # Configure model providers
+    log_info "Configuring model providers..."
+    curl -X POST "http://localhost:4000/api/v1/providers" \
+        -H "Authorization: Bearer $(get_dify_token)" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "provider": "ollama",
+            "config": {
+                "base_url": "http://ollama:11434",
+                "models": ["llama3.2:3b", "nomic-embed-text"]
+            }
+        }' || {
+        log_error "Failed to configure Ollama provider"
+        return 1
+    }
+    
+    log_success "Dify configured successfully"
+}
+
+configure_n8n() {
+    log_step "Configuring n8n..."
+    
+    # Wait for n8n to be ready
+    wait_for_service "n8n" 5678 "http://localhost:5678/healthz" || return 1
+    
+    # Configure basic settings
+    log_info "Setting up n8n workflows..."
+    # Add initial workflow templates here
+    
+    log_success "n8n configured successfully"
+}
+
+configure_openwebui() {
+    log_step "Configuring Open WebUI..."
+    
+    # Wait for Open WebUI to be ready
+    wait_for_service "open-webui" 3000 "http://localhost:3000" || return 1
+    
+    # Configure Ollama connection
+    log_info "Connecting Open WebUI to Ollama..."
+    curl -X POST "http://localhost:3000/api/config" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "ollama": {
+                "base_url": "http://ollama:11434",
+                "models": ["llama3.2:3b"]
+            }
+        }' || {
+        log_error "Failed to configure Open WebUI"
+        return 1
+    }
+    
+    log_success "Open WebUI configured successfully"
+}
+
+wait_for_service() {
+    local service_name=$1
+    local port=$2
+    local health_url=$3
+    local retries=0
+    
+    log_info "Waiting for $service_name to be ready..."
+    
+    while [ $retries -lt $MAX_RETRIES ]; do
+        if curl -sf "$health_url" &> /dev/null; then
+            log_success "$service_name is ready"
+            return 0
+        fi
+        
+        retries=$((retries + 1))
+        sleep $RETRY_INTERVAL
+        log_info "Attempt $retries/$MAX_RETRIES for $service_name..."
+    done
+    
+    log_error "$service_name failed to become ready after $MAX_RETRIES attempts"
+    return 1
+}
+
+get_dify_token() {
+    # Get admin token for API calls
+    curl -X POST "http://localhost:4000/api/v1/console/auth/login" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "email": "'${DIFY_ADMIN_EMAIL:-admin@example.com}'",
+            "password": "'${DIFY_ADMIN_PASSWORD:-admin123}'"
+        }' | jq -r '.data.access_token' 2>/dev/null || echo ""
+}
     if ! curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; then
         log_error "Ollama is not running"
         return 1

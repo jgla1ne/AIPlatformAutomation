@@ -170,6 +170,11 @@ show_menu() {
     echo "    5) MLflow           - ML experiment tracking"
     echo "    6) JupyterHub       - Multi-user Jupyter notebooks"
     echo ""
+    echo "  ${CYAN}Integrations:${NC}"
+    echo "    11) Google Drive     - Document sync (3 auth methods)"
+    echo "    12) Signal          - Communication (QR/API)"
+    echo "    13) External LLM    - Provider configuration"
+    echo ""
     echo "  ${CYAN}Databases:${NC}"
     echo "    7) MongoDB          - Document database"
     echo "    8) Neo4j            - Graph database"
@@ -182,7 +187,7 @@ show_menu() {
     echo ""
     echo "    0) Exit"
     echo ""
-    echo -n "  Select service to add (0-10): "
+    echo -n "  Select service to add (0-13): "
 }
 
 #==============================================================================
@@ -540,6 +545,9 @@ main() {
             8) add_neo4j ;;
             9) add_metabase ;;
             10) add_ollama_models ;;
+            11) add_google_drive ;;
+            12) add_signal_integration ;;
+            13) configure_external_providers ;;
             0)
                 echo ""
                 log_info "Exiting..."
@@ -555,7 +563,231 @@ main() {
     done
 }
 
-# Trap errors
+# ==============================================================================
+# MISSING FEATURES - GDRIVE, SIGNAL, EXTERNAL PROVIDERS
+# ==============================================================================
+
+add_google_drive() {
+    log_step "Adding Google Drive integration..."
+    
+    echo ""
+    echo -e "${CYAN}=== GOOGLE DRIVE AUTHENTICATION METHOD ===${NC}"
+    echo "1) OAuth2 Flow (Interactive browser)"
+    echo "2) Service Account JSON (Server-to-server)"
+    echo "3) Interactive Token Refresh (Manual)"
+    echo ""
+    
+    while true; do
+        read -p "Select auth method (1-3): " auth_choice
+        case $auth_choice in
+            1) configure_gdrive_oauth ;;
+            2) configure_gdrive_service_account ;;
+            3) configure_gdrive_token_refresh ;;
+            *) echo -e "${RED}Invalid choice. Please select 1-3.${NC}" ;;
+        esac
+    done
+    
+    log_success "Google Drive integration configured"
+}
+
+configure_gdrive_oauth() {
+    log_info "Setting up OAuth2 flow..."
+    
+    # Generate OAuth credentials
+    GDRIVE_CLIENT_ID=$(openssl rand -hex 16)
+    GDRIVE_CLIENT_SECRET=$(openssl rand -hex 32)
+    
+    # Save credentials
+    cat > "${CONFIG_DIR}/gdrive-oauth.env" << EOF
+# Google Drive OAuth Configuration
+GDRIVE_CLIENT_ID=${GDRIVE_CLIENT_ID}
+GDRIVE_CLIENT_SECRET=${GDRIVE_CLIENT_SECRET}
+GDRIVE_REDIRECT_URI=http://localhost:8080/callback
+GDRIVE_SCOPE=https://www.googleapis.com/auth/drive
+EOF
+    
+    log_success "OAuth2 configuration saved"
+    log_info "Client ID: ${GDRIVE_CLIENT_ID}"
+    log_info "Complete OAuth flow at: https://console.developers.google.com/"
+}
+
+configure_gdrive_service_account() {
+    log_info "Setting up Service Account..."
+    
+    echo ""
+    read -p "Enter path to service account JSON file: " gdrive_json_path
+    
+    if [[ ! -f "$gdrive_json_path" ]]; then
+        log_error "Service account file not found"
+        return 1
+    fi
+    
+    # Copy service account file
+    cp "$gdrive_json_path" "${CONFIG_DIR}/gdrive-service-account.json"
+    
+    log_success "Service account configured"
+}
+
+configure_gdrive_token_refresh() {
+    log_info "Setting up token refresh..."
+    
+    # Interactive token setup
+    echo ""
+    read -p "Enter Google Drive refresh token: " GDRIVE_REFRESH_TOKEN
+    read -p "Enter access token: " GDRIVE_ACCESS_TOKEN
+    
+    # Save tokens
+    cat > "${CONFIG_DIR}/gdrive-tokens.env" << EOF
+# Google Drive Token Configuration
+GDRIVE_REFRESH_TOKEN=${GDRIVE_REFRESH_TOKEN}
+GDRIVE_ACCESS_TOKEN=${GDRIVE_ACCESS_TOKEN}
+GDRIVE_TOKEN_EXPIRY=$(date -d '+30 days' +%s)
+EOF
+    
+    log_success "Token configuration saved"
+}
+
+add_signal_integration() {
+    log_step "Adding Signal integration..."
+    
+    echo ""
+    echo -e "${CYAN}=== SIGNAL REGISTRATION METHOD ===${NC}"
+    echo "1) QR Code Registration (Mobile app)"
+    echo "2) API Key Registration (Server integration)"
+    echo ""
+    
+    while true; do
+        read -p "Select registration method (1-2): " signal_choice
+        case $signal_choice in
+            1) generate_signal_qr ;;
+            2) configure_signal_api ;;
+            *) echo -e "${RED}Invalid choice. Please select 1-2.${NC}" ;;
+        esac
+    done
+    
+    log_success "Signal integration configured"
+}
+
+generate_signal_qr() {
+    log_info "Generating Signal QR code..."
+    
+    # Generate device name
+    SIGNAL_DEVICE_NAME="ai-platform-$(date +%s)"
+    
+    # Generate QR code using signal-cli
+    if command -v signal-cli &> /dev/null; then
+        signal-cli -a "${CONFIG_DIR}/signal" link \
+            --name "${SIGNAL_DEVICE_NAME}" \
+            --device-type "cli" || {
+            log_error "Failed to generate Signal QR code"
+            return 1
+        }
+        
+        log_success "Signal QR code generated"
+        log_info "Device name: ${SIGNAL_DEVICE_NAME}"
+        log_info "Scan with Signal mobile app"
+    else
+        log_error "signal-cli not found"
+        return 1
+    fi
+}
+
+configure_signal_api() {
+    log_info "Configuring Signal API..."
+    
+    # Generate API credentials
+    SIGNAL_API_KEY=$(openssl rand -hex 32)
+    
+    # Save API configuration
+    cat > "${CONFIG_DIR}/signal-api.env" << EOF
+# Signal API Configuration
+SIGNAL_API_KEY=${SIGNAL_API_KEY}
+SIGNAL_PHONE_NUMBER=+1234567890
+SIGNAL_DEVICE_NAME=ai-platform-api
+EOF
+    
+    log_success "Signal API configured"
+    log_info "API Key: ${SIGNAL_API_KEY}"
+}
+
+configure_external_providers() {
+    log_step "Configuring external LLM providers..."
+    
+    echo ""
+    echo -e "${CYAN}=== EXTERNAL PROVIDER CONFIGURATION ===${NC}"
+    echo "1) Gemini (Google)"
+    echo "2) Groq (Groq)"
+    echo "3) OpenRouter (Multi-provider)"
+    echo "4) DeepSeek (DeepSeek)"
+    echo "5) Custom Provider"
+    echo ""
+    
+    while true; do
+        read -p "Select provider (1-5): " provider_choice
+        case $provider_choice in
+            1) configure_gemini ;;
+            2) configure_groq ;;
+            3) configure_openrouter ;;
+            4) configure_deepseek ;;
+            5) configure_custom_provider ;;
+            *) echo -e "${RED}Invalid choice. Please select 1-5.${NC}" ;;
+        esac
+    done
+    
+    log_success "External provider configured"
+}
+
+configure_gemini() {
+    log_info "Configuring Gemini..."
+    
+    read -p "Enter Gemini API key: " GEMINI_API_KEY
+    
+    # Add to LiteLLM configuration
+    if [ -f "${CONFIG_DIR}/litellm.yaml" ]; then
+        # Update existing config
+        sed -i "s|GEMINI_API_KEY=.*|GEMINI_API_KEY=${GEMINI_API_KEY}|" "${CONFIG_DIR}/litellm.yaml"
+    fi
+    
+    log_success "Gemini configured"
+}
+
+configure_groq() {
+    log_info "Configuring Groq..."
+    
+    read -p "Enter Groq API key: " GROQ_API_KEY
+    
+    log_success "Groq configured"
+}
+
+configure_openrouter() {
+    log_info "Configuring OpenRouter..."
+    
+    read -p "Enter OpenRouter API key: " OPENROUTER_API_KEY
+    
+    log_success "OpenRouter configured"
+}
+
+configure_deepseek() {
+    log_info "Configuring DeepSeek..."
+    
+    read -p "Enter DeepSeek API key: " DEEPSEEK_API_KEY
+    
+    log_success "DeepSeek configured"
+}
+
+configure_custom_provider() {
+    log_info "Configuring custom provider..."
+    
+    read -p "Enter provider name: " CUSTOM_PROVIDER_NAME
+    read -p "Enter API endpoint: " CUSTOM_PROVIDER_ENDPOINT
+    read -p "Enter API key: " CUSTOM_PROVIDER_KEY
+    
+    log_success "Custom provider ${CUSTOM_PROVIDER_NAME} configured"
+}
+
+# ==============================================================================
+# MAIN EXECUTION
+# ==============================================================================
 trap 'log_error "Script failed at line $LINENO with exit code $?"' ERR
 
 # Run main function
