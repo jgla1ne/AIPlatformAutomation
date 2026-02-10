@@ -2855,70 +2855,72 @@ pull_model() {
     fi
 }
 
+# ==============================================================================
+# MAIN EXECUTION FLOW
+# ==============================================================================
+
 main() {
-    log "Starting Ollama initialization..."
-    
-    wait_for_ollama || exit 1
-    
-    # Pull essential models
-    pull_model "llama2:7b"
-    pull_model "mistral:7b"
-    pull_model "nomic-embed-text"
-    
-    # List available models
-    log "Available models:"
-    curl -s "$OLLAMA_HOST/api/tags" | jq -r '.models[].name' | tee -a "$LOG_FILE"
-    
-    log "Ollama initialization complete"
+    log_step "Starting AI Platform Configuration Collection (Script 1)..."
+    log_info "Script Version: $SCRIPT_VERSION"
+    log_info "Execution Time: $(date)"
+
+    # Check if running as root
+    if [ "$EUID" -ne 0 ]; then
+        error_exit "This script must be run as root"
+    fi
+
+    # Phase 1: System Validation (NO INSTALLATION)
+    check_root
+    check_dependencies
+    check_disk_space
+    detect_public_ip
+    detect_gpu
+    check_port_conflicts
+
+    # Phase 2: Network Configuration
+    configure_network
+    select_reverse_proxy
+
+    # Phase 3: Service Selection
+    select_core_services
+    select_ai_services
+    select_optional_services
+
+    # Phase 4: Service Configuration
+    configure_postgresql
+    configure_ollama
+    configure_n8n
+    configure_qdrant
+
+    # Phase 5: Integration Configuration
+    configure_gdrive
+    configure_llm_providers
+    configure_backups
+
+    # Phase 6: Review & Save
+    review_configuration
+    save_configuration
+
+    # Phase 7: Summary
+    print_summary
+
+    print_success "Configuration collection complete!"
+    print_info "Next step: Run Script 2 to deploy services"
+
+    return 0
 }
 
+# ==============================================================================
+# SCRIPT ENTRY POINT
+# ==============================================================================
+
+# Trap errors and cleanup
+trap 'error_exit "Script interrupted at line $LINENO"' ERR INT TERM
+
+# Run main function
 main "$@"
-EOF
 
-    chmod +x "${BASE_DIR}/ollama-init.sh"
-    log_success "Ollama initialization script created"
-    save_state 12
-}
-
-# ==============================================================================
-# QDRANT SETUP
-# ==============================================================================
-
-create_qdrant_init_script() {
-    log_step "Creating Qdrant initialization script..."
-    
-    cat > "${BASE_DIR}/qdrant-init.sh" << 'EOF'
-#!/bin/bash
-# ==============================================================================
-# Qdrant Initialization Script
-# Purpose: Create initial collections and configurations
-# ==============================================================================
-
-set -e
-
-QDRANT_HOST="${QDRANT_HOST:-http://localhost:6333}"
-LOG_FILE="/var/log/qdrant-init.log"
-
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
-}
-
-wait_for_qdrant() {
-    log "Waiting for Qdrant to be ready..."
-    local max_attempts=30
-    local attempt=0
-    
-    while [ $attempt -lt $max_attempts ]; do
-        if curl -s "$QDRANT_HOST/collections" > /dev/null 2>&1; then
-            log "Qdrant is ready"
-            return 0
-        fi
-        attempt=$((attempt + 1))
-        sleep 2
-    done
-    
-    log "ERROR: Qdrant failed to start"
-    return 1
+exit 0
 }
 
 create_collection() {
