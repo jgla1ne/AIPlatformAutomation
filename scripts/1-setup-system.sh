@@ -1,2607 +1,3195 @@
 #!/bin/bash
+# ==============================================================================
+# Script 1: System Setup and Base Configuration
+# Version: 4.0 - Comprehensive Audit Remediation
+# Purpose: Complete system preparation for AI platform deployment
+# ==============================================================================
 
-#############################################
-# AI Platform Setup Script
-# Version: 2.0.0
-# Purpose: Complete system setup with volume selection, 
-#          configuration generation, and service preparation
-#
-# Architecture:
-# - Standalone (no external dependencies)
-# - Data location: /mnt/data (user-selected volume)
-# - Config location: /mnt/data/config/ (generated here)
-# - Three configuration methods:
-#   1. Interactive (guided setup)
-#   2. Google Drive import
-#   3. Config file import (JSON/YAML/ENV)
-#
-# Generates:
-# - /mnt/data/config/docker-compose.yml
-# - /mnt/data/config/.env
-# - /mnt/data/config/postgres.env
-# - /mnt/data/config/qdrant.env
-# - /mnt/data/config/ollama.env
-# - /mnt/data/config/n8n.env
-# - /mnt/data/config/openwebui.env
-# - /mnt/data/config/litellm.env (if enabled)
-# - /mnt/data/config/litellm/config.yaml (if enabled)
-#############################################
+set -euo pipefail
 
-set -e  # Exit on error
+# ==============================================================================
+# CONFIGURATION AND CONSTANTS
+# ==============================================================================
 
-#############################################
-# COLOR DEFINITIONS
-#############################################
+# Script metadata
+readonly SCRIPT_VERSION="4.0"
+readonly SCRIPT_NAME="1-setup-system.sh"
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-MAGENTA='\033[0;35m'
-CYAN='\033[0;36m'
-WHITE='\033[1;37m'
-NC='\033[0m' # No Color
+# Paths (CORRECTED per audit findings)
+readonly BASE_DIR="/root/scripts"
+readonly DATA_DIR="/mnt/data"
+readonly BACKUP_DIR="${DATA_DIR}/backups"
+readonly LOG_DIR="${DATA_DIR}/logs"
+readonly CONFIG_FILE="${BASE_DIR}/config.env"
+readonly DOCKER_COMPOSE_FILE="${BASE_DIR}/docker-compose.yml"
+readonly STATE_FILE="${BASE_DIR}/.setup_state"
 
-#############################################
-# GLOBAL VARIABLES
-#############################################
+# Service data directories
+readonly POSTGRES_DATA="${DATA_DIR}/postgresql"
+readonly OLLAMA_DATA="${DATA_DIR}/ollama"
+readonly N8N_DATA="${DATA_DIR}/n8n"
+readonly QDRANT_DATA="${DATA_DIR}/qdrant"
 
-# Base path for all data (will be set by volume selection)
-BASE_PATH=""
+# Log files
+readonly SETUP_LOG="${LOG_DIR}/setup_$(date +%Y%m%d_%H%M%S).log"
+readonly ERROR_LOG="${LOG_DIR}/setup_errors_$(date +%Y%m%d_%H%M%S).log"
 
-# Configuration method (1=interactive, 2=gdrive, 3=file)
-CONFIG_METHOD=""
+# Network configuration
+readonly DOCKER_NETWORK="ai-platform-network"
+readonly SUBNET="172.20.0.0/16"
 
-# Service enablement flags
-POSTGRES_ENABLED="true"
-QDRANT_ENABLED="true"
-OLLAMA_ENABLED="true"
-N8N_ENABLED="true"
-OPENWEBUI_ENABLED="true"
-LITELLM_ENABLED="false"
-SIGNAL_ENABLED="false"
+# Colors for output
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly MAGENTA='\033[0;35m'
+readonly CYAN='\033[0;36m'
+readonly WHITE='\033[1;37m'
+readonly NC='\033[0m' # No Color
 
-# PostgreSQL configuration
-POSTGRES_PORT="5432"
-POSTGRES_USER="aiplatform"
-POSTGRES_PASSWORD=""
-POSTGRES_DB="aiplatform"
-POSTGRES_MAX_CONNECTIONS="100"
-POSTGRES_SHARED_BUFFERS="256MB"
-POSTGRES_WORK_MEM="4MB"
+# Timing
+readonly START_TIME=$(date +%s)
 
-# Qdrant configuration
-QDRANT_PORT="6333"
-QDRANT_GRPC_PORT="6334"
-QDRANT_API_KEY=""
-QDRANT_MAX_SEGMENT_SIZE_KB="100000"
-QDRANT_INDEXING_THRESHOLD_KB="20000"
+# ==============================================================================
+# LOGGING FUNCTIONS
+# ==============================================================================
 
-# Ollama configuration
-OLLAMA_PORT="11434"
-OLLAMA_GPU_ENABLED="false"
-OLLAMA_MODELS="llama2,mistral"
-OLLAMA_MAX_LOADED_MODELS="3"
-OLLAMA_KEEP_ALIVE="5m"
-OLLAMA_NUM_CTX="2048"
+setup_logging() {
+    mkdir -p "${LOG_DIR}"
+    exec 1> >(tee -a "$SETUP_LOG")
+    exec 2> >(tee -a "$ERROR_LOG" >&2)
+    log_info "Logging initialized - Setup: $SETUP_LOG, Errors: $ERROR_LOG"
+}
 
-# n8n configuration
-N8N_PORT="5678"
-N8N_ENCRYPTION_KEY=""
-N8N_BASIC_AUTH_USER="admin"
-N8N_BASIC_AUTH_PASSWORD=""
-N8N_EXECUTIONS_DATA_SAVE_ON_SUCCESS="true"
-N8N_EXECUTIONS_TIMEOUT="10"
-N8N_EXECUTIONS_TIMEOUT_MAX="60"
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} [$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$SETUP_LOG"
+}
 
-# Open WebUI configuration
-OPENWEBUI_PORT="8080"
-OPENWEBUI_SECRET_KEY=""
-OPENWEBUI_ENABLE_SEARCH="false"
-OPENWEBUI_ENABLE_RAG="true"
-OPENWEBUI_DEFAULT_PROMPT="You are a helpful AI assistant"
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} [$(date '+%Y-%m-%d %H:%M:%S')] ✓ $*" | tee -a "$SETUP_LOG"
+}
 
-# LiteLLM configuration
-LITELLM_PORT="4000"
-LITELLM_MASTER_KEY=""
-LITELLM_DATABASE_URL=""
-LITELLM_FALLBACK_ENABLED="true"
-LITELLM_CACHE_ENABLED="true"
-LITELLM_RATE_LIMIT="60"
+log_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} [$(date '+%Y-%m-%d %H:%M:%S')] ⚠ $*" | tee -a "$SETUP_LOG"
+}
 
-# Signal configuration
-SIGNAL_PHONE=""
-SIGNAL_ENDPOINT="http://localhost:8080"
-SIGNAL_RECIPIENT=""
+log_error() {
+    echo -e "${RED}[ERROR]${NC} [$(date '+%Y-%m-%d %H:%M:%S')] ✗ $*" | tee -a "$ERROR_LOG"
+}
 
-#############################################
-# UTILITY FUNCTIONS
-#############################################
+log_step() {
+    echo -e "${CYAN}[STEP]${NC} [$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$SETUP_LOG"
+}
 
-print_header() {
-    echo ""
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
-    echo -e "${WHITE}  $1${NC}"
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+log_debug() {
+    if [ "${DEBUG:-false}" = "true" ]; then
+        echo -e "${MAGENTA}[DEBUG]${NC} [$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$SETUP_LOG"
+    fi
+}
+
+# ==============================================================================
+# BANNER AND UI FUNCTIONS
+# ==============================================================================
+
+print_banner() {
+    clear
+    echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║                                                            ║${NC}"
+    echo -e "${CYAN}║         AI PLATFORM DEPLOYMENT AUTOMATION v${SCRIPT_VERSION}         ║${NC}"
+    echo -e "${CYAN}║                                                            ║${NC}"
+    echo -e "${CYAN}║              Script 1: System Setup                        ║${NC}"
+    echo -e "${CYAN}║                                                            ║${NC}"
+    echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
 
-print_success() {
-    echo -e "${GREEN}✓${NC} $1"
+print_section() {
+    local title="$1"
+    echo ""
+    echo -e "${WHITE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${WHITE}  $title${NC}"
+    echo -e "${WHITE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
 }
 
-print_error() {
-    echo -e "${RED}✗${NC} $1"
+show_progress() {
+    local current=$1
+    local total=$2
+    local message=$3
+    local percent=$((current * 100 / total))
+    local filled=$((percent / 2))
+    local empty=$((50 - filled))
+    
+    printf "\r${CYAN}Progress:${NC} ["
+    printf "%${filled}s" | tr ' ' '█'
+    printf "%${empty}s" | tr ' ' '░'
+    printf "] %3d%% - %s" "$percent" "$message"
+    
+    if [ "$current" -eq "$total" ]; then
+        echo ""
+    fi
 }
 
-print_warning() {
-    echo -e "${YELLOW}⚠${NC} $1"
+# ==============================================================================
+# STATE MANAGEMENT
+# ==============================================================================
+
+save_state() {
+    local step=$1
+    echo "$step" > "$STATE_FILE"
+    log_debug "State saved: $step"
 }
 
-print_info() {
-    echo -e "${BLUE}ℹ${NC} $1"
+load_state() {
+    if [ -f "$STATE_FILE" ]; then
+        cat "$STATE_FILE"
+    else
+        echo "0"
+    fi
 }
 
-print_step() {
-    echo -e "${MAGENTA}▶${NC} $1"
+clear_state() {
+    rm -f "$STATE_FILE"
+    log_debug "State cleared"
 }
 
-check_command() {
-    if ! command -v "$1" &> /dev/null; then
-        print_error "Required command not found: $1"
+is_step_completed() {
+    local step=$1
+    local current_state=$(load_state)
+    [ "$current_state" -ge "$step" ]
+}
+
+# ==============================================================================
+# ERROR HANDLING
+# ==============================================================================
+
+error_exit() {
+    local message=$1
+    local exit_code=${2:-1}
+    log_error "$message"
+    log_error "Setup failed at step: $(load_state)"
+    echo ""
+    echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║                    SETUP FAILED                            ║${NC}"
+    echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "${RED}Error: $message${NC}"
+    echo -e "${YELLOW}Check logs: $ERROR_LOG${NC}"
+    echo ""
+    exit "$exit_code"
+}
+
+cleanup_on_error() {
+    log_warning "Performing cleanup due to error..."
+    # Add any necessary cleanup here
+    log_info "Cleanup completed"
+}
+
+trap 'cleanup_on_error' ERR
+
+# ==============================================================================
+# VALIDATION FUNCTIONS
+# ==============================================================================
+
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+        error_exit "This script must be run as root. Use: sudo $0"
+    fi
+    log_success "Running as root"
+}
+
+check_system_requirements() {
+    log_step "Checking system requirements..."
+    
+    # Check OS
+    if [ ! -f /etc/os-release ]; then
+        error_exit "Cannot determine OS version"
+    fi
+    
+    . /etc/os-release
+    if [[ ! "$ID" =~ ^(ubuntu|debian)$ ]]; then
+        error_exit "Unsupported OS: $ID. This script supports Ubuntu/Debian only."
+    fi
+    log_success "OS: $PRETTY_NAME"
+    
+    # Check CPU cores
+    local cpu_cores=$(nproc)
+    if [ "$cpu_cores" -lt 4 ]; then
+        log_warning "System has only $cpu_cores CPU cores. Recommended: 4+"
+    else
+        log_success "CPU cores: $cpu_cores"
+    fi
+    
+    # Check RAM
+    local total_ram=$(free -g | awk '/^Mem:/{print $2}')
+    if [ "$total_ram" -lt 16 ]; then
+        log_warning "System has only ${total_ram}GB RAM. Recommended: 16GB+"
+    else
+        log_success "RAM: ${total_ram}GB"
+    fi
+    
+    # Check disk space
+    local disk_space=$(df -BG "$DATA_DIR" 2>/dev/null | awk 'NR==2 {print $4}' | sed 's/G//')
+    if [ "${disk_space:-0}" -lt 100 ]; then
+        log_warning "Only ${disk_space}GB available in $DATA_DIR. Recommended: 100GB+"
+    else
+        log_success "Disk space: ${disk_space}GB available"
+    fi
+    
+    # Check internet connectivity
+    if ! ping -c 1 8.8.8.8 &> /dev/null; then
+        error_exit "No internet connectivity detected"
+    fi
+    log_success "Internet connectivity: OK"
+    
+    log_success "System requirements check completed"
+}
+
+validate_domain() {
+    local domain=$1
+    if [[ ! "$domain" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}$ ]]; then
         return 1
     fi
     return 0
 }
 
-check_port_available() {
+validate_email() {
+    local email=$1
+    if [[ ! "$email" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+        return 1
+    fi
+    return 0
+}
+
+validate_port() {
     local port=$1
-    local service=$2
-    
-    if lsof -Pi :$port -sTCP:LISTEN -t >/dev/null 2>&1; then
-        print_warning "Port $port is already in use (needed for $service)"
-        read -p "Enter different port for $service: " new_port
-        echo "$new_port"
+    if [[ ! "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
         return 1
     fi
     return 0
 }
 
-generate_password() {
-    openssl rand -base64 32 | tr -d "=+/" | cut -c1-32
+# ==============================================================================
+# DIRECTORY STRUCTURE SETUP
+# ==============================================================================
+
+create_directory_structure() {
+    log_step "Creating directory structure..."
+    
+    local directories=(
+        "${BASE_DIR}"
+        "${DATA_DIR}"
+        "${BACKUP_DIR}"
+        "${LOG_DIR}"
+        "${POSTGRES_DATA}"
+        "${OLLAMA_DATA}"
+        "${N8N_DATA}"
+        "${QDRANT_DATA}"
+        "${BASE_DIR}/ssl"
+        "${BASE_DIR}/scripts"
+        "${BACKUP_DIR}/postgresql"
+        "${BACKUP_DIR}/n8n"
+        "${BACKUP_DIR}/qdrant"
+        "${LOG_DIR}/postgresql"
+        "${LOG_DIR}/ollama"
+        "${LOG_DIR}/n8n"
+        "${LOG_DIR}/qdrant"
+        "${LOG_DIR}/nginx"
+    )
+    
+    local total=${#directories[@]}
+    local current=0
+    
+    for dir in "${directories[@]}"; do
+        current=$((current + 1))
+        if [ ! -d "$dir" ]; then
+            mkdir -p "$dir" || error_exit "Failed to create directory: $dir"
+            log_debug "Created directory: $dir"
+        fi
+        show_progress $current $total "Creating directories..."
+    done
+    
+    # Set proper permissions
+    chmod 755 "${BASE_DIR}"
+    chmod 700 "${DATA_DIR}"
+    chmod 700 "${BACKUP_DIR}"
+    chmod 755 "${LOG_DIR}"
+    
+    log_success "Directory structure created successfully"
+    save_state 1
 }
 
-generate_key() {
-    openssl rand -hex 32
-}
+# ==============================================================================
+# USER INPUT AND CONFIGURATION
+# ==============================================================================
 
-#############################################
-# MAIN BANNER
-#############################################
-
-clear
-echo -e "${CYAN}"
-cat << "EOF"
-    ___    ____   ____  __      __  ____                 
-   /   |  /  _/  / __ \/ /___ _/ /_/ __/___  _________ ___
-  / /| |  / /   / /_/ / / __ `/ __/ /_/ __ \/ ___/ __ `__ \
- / ___ |_/ /   / ____/ / /_/ / /_/ __/ /_/ / /  / / / / / /
-/_/  |_/___/  /_/   /_/\__,_/\__/_/  \____/_/  /_/ /_/ /_/ 
-                                                            
-         Complete Setup & Configuration Script
-                    Version 2.0.0
-EOF
-echo -e "${NC}"
-
-print_info "This script will guide you through setting up the AI Platform"
-print_info "Estimated time: 10-15 minutes (interactive mode)"
-echo ""
-
-#############################################
-# PREREQUISITE CHECKS
-#############################################
-
-print_header "PREREQUISITE CHECKS"
-
-print_step "Checking required commands..."
-
-required_commands=("docker" "docker-compose" "openssl" "lsof" "lsblk")
-missing_commands=()
-
-for cmd in "${required_commands[@]}"; do
-    if check_command "$cmd"; then
-        print_success "$cmd found"
-    else
-        missing_commands+=("$cmd")
-    fi
-done
-
-if [ ${#missing_commands[@]} -ne 0 ]; then
-    print_error "Missing required commands: ${missing_commands[*]}"
-    echo ""
-    echo "Please install missing dependencies:"
-    echo "  sudo apt-get update"
-    echo "  sudo apt-get install -y docker.io docker-compose openssl lsof util-linux"
-    exit 1
-fi
-
-print_success "All prerequisites met"
-
-#############################################
-# VOLUME SELECTION & MOUNTING
-#############################################
-
-select_data_volume() {
-    print_header "DATA VOLUME SELECTION"
+get_user_input() {
+    log_step "Gathering configuration information..."
     
-    echo "The AI Platform stores all persistent data in a dedicated location."
-    echo "You need to select a volume/partition for this purpose."
     echo ""
-    print_warning "This volume will store:"
-    echo "  • All AI models (~10GB+)"
-    echo "  • Vector databases"
-    echo "  • PostgreSQL data"
-    echo "  • Workflow data"
-    echo "  • Logs and configurations"
-    echo ""
-    print_info "Recommended: 100GB+ of free space"
+    echo -e "${YELLOW}Please provide the following information:${NC}"
     echo ""
     
-    # Show available volumes
-    echo "Available volumes:"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINT,LABEL | grep -v "loop\|sr0" || true
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
+    # Domain name
+    while true; do
+        read -p "Enter your domain name (e.g., example.com): " DOMAIN_NAME
+        if validate_domain "$DOMAIN_NAME"; then
+            break
+        else
+            echo -e "${RED}Invalid domain name. Please try again.${NC}"
+        fi
+    done
     
-    echo "Options:"
-    echo "  1) Use existing /mnt/data (local filesystem)"
-    echo "  2) Mount a specific device to /mnt/data"
-    echo ""
-    read -p "Select option [1-2]: " volume_option
+    # Email for SSL
+    while true; do
+        read -p "Enter email for SSL certificates: " SSL_EMAIL
+        if validate_email "$SSL_EMAIL"; then
+            break
+        else
+            echo -e "${RED}Invalid email address. Please try again.${NC}"
+        fi
+    done
     
-    case $volume_option in
-        1)
-            BASE_PATH="/mnt/data"
-            print_info "Using /mnt/data (local filesystem)"
-            
-            # Create directory if doesn't exist
-            sudo mkdir -p "$BASE_PATH"
-            
-            # Check if writable
-            if [ ! -w "$BASE_PATH" ]; then
-                print_warning "$BASE_PATH is not writable"
-                read -p "Fix permissions? [Y/n]: " fix_perms
-                if [[ ! "$fix_perms" =~ ^[Nn]$ ]]; then
-                    sudo chown -R $USER:$USER "$BASE_PATH"
-                    print_success "Permissions fixed"
-                fi
-            fi
-            ;;
-            
-        2)
+    # PostgreSQL password
+    while true; do
+        read -sp "Enter PostgreSQL password (min 12 chars): " POSTGRES_PASSWORD
+        echo ""
+        if [ ${#POSTGRES_PASSWORD} -ge 12 ]; then
+            read -sp "Confirm PostgreSQL password: " POSTGRES_PASSWORD_CONFIRM
             echo ""
-            read -p "Enter device path (e.g., /dev/sdb1): " device_path
-            
-            # Validate device exists
-            if [ ! -b "$device_path" ]; then
-                print_error "Device $device_path does not exist"
-                exit 1
-            fi
-            
-            # Check if already mounted
-            mount_point=$(lsblk -no MOUNTPOINT "$device_path" 2>/dev/null || true)
-            
-            if [ -n "$mount_point" ]; then
-                echo "Device is already mounted at: $mount_point"
-                read -p "Use this mount point? [Y/n]: " use_existing
-                
-                if [[ ! "$use_existing" =~ ^[Nn]$ ]]; then
-                    BASE_PATH="$mount_point"
-                    print_success "Using existing mount: $BASE_PATH"
-                else
-                    # Unmount and remount to /mnt/data
-                    print_step "Unmounting $device_path..."
-                    sudo umount "$device_path"
-                    
-                    sudo mkdir -p /mnt/data
-                    print_step "Mounting $device_path to /mnt/data..."
-                    sudo mount "$device_path" /mnt/data
-                    
-                    BASE_PATH="/mnt/data"
-                    print_success "Mounted $device_path to $BASE_PATH"
-                fi
+            if [ "$POSTGRES_PASSWORD" = "$POSTGRES_PASSWORD_CONFIRM" ]; then
+                break
             else
-                # Not mounted, mount to /mnt/data
-                sudo mkdir -p /mnt/data
-                print_step "Mounting $device_path to /mnt/data..."
-                sudo mount "$device_path" /mnt/data
-                
-                BASE_PATH="/mnt/data"
-                print_success "Mounted $device_path to $BASE_PATH"
-                
-                # Ask about persistent mount
-                echo ""
-                read -p "Add to /etc/fstab for automatic mounting? [y/N]: " add_fstab
-                
-                if [[ "$add_fstab" =~ ^[Yy]$ ]]; then
-                    fs_type=$(lsblk -no FSTYPE "$device_path")
-                    device_uuid=$(sudo blkid -s UUID -o value "$device_path")
-                    
-                    if ! grep -q "$device_uuid" /etc/fstab 2>/dev/null; then
-                        echo "# AI Platform data volume - added by setup script $(date)" | sudo tee -a /etc/fstab
-                        echo "UUID=$device_uuid  /mnt/data  $fs_type  defaults  0  2" | sudo tee -a /etc/fstab
-                        print_success "Added to /etc/fstab"
-                    else
-                        print_info "Already in /etc/fstab"
-                    fi
-                fi
-            fi
-            ;;
-            
-        *)
-            print_error "Invalid option"
-            exit 1
-            ;;
-    esac
-    
-    # Verify we have space
-    available_space=$(df -BG "$BASE_PATH" | awk 'NR==2 {print $4}' | sed 's/G//')
-    
-    echo ""
-    print_success "Selected volume: $BASE_PATH"
-    print_info "Available space: ${available_space}GB"
-    
-    if [ "$available_space" -lt 50 ]; then
-        echo ""
-        print_warning "Less than 50GB available!"
-        print_warning "Recommended: 100GB+ for full AI platform deployment"
-        read -p "Continue anyway? [y/N]: " continue_low_space
-        
-        if [[ ! "$continue_low_space" =~ ^[Yy]$ ]]; then
-            print_error "Setup cancelled. Please use a volume with more space."
-            exit 1
-        fi
-    fi
-    
-    # Create config directory
-    mkdir -p "$BASE_PATH/config"
-    print_success "Created config directory: $BASE_PATH/config"
-}
-
-# Execute volume selection
-select_data_volume
-#############################################
-# CONFIGURATION METHOD SELECTION
-#############################################
-
-select_configuration_method() {
-    print_header "CONFIGURATION METHOD SELECTION"
-
-    echo "Choose how you want to configure the AI Platform:"
-    echo ""
-    echo "  ${GREEN}1) Interactive Setup${NC} (Recommended for first-time users)"
-    echo "     • Step-by-step guided configuration"
-    echo "     • All options explained"
-    echo "     • Takes 10-15 minutes"
-    echo ""
-    echo "  ${BLUE}2) Import from Google Drive${NC}"
-    echo "     • Load pre-saved configuration"
-    echo "     • Requires Google Drive folder ID"
-    echo "     • Instant setup with saved settings"
-    echo ""
-    echo "  ${YELLOW}3) Load from Configuration File${NC}"
-    echo "     • Import from local JSON/YAML/ENV file"
-    echo "     • Perfect for version-controlled configs"
-    echo "     • Supports multiple formats"
-    echo ""
-
-    read -p "Select option [1-3]: " CONFIG_METHOD
-
-    case $CONFIG_METHOD in
-        1)
-            print_success "Selected: Interactive Setup"
-            interactive_configuration
-            ;;
-        2)
-            print_success "Selected: Google Drive Import"
-            import_from_google_drive
-            ;;
-        3)
-            print_success "Selected: Configuration File Import"
-            import_from_config_file
-            ;;
-        *)
-            print_error "Invalid option"
-            exit 1
-            ;;
-    esac
-}
-
-#############################################
-# GOOGLE DRIVE IMPORT
-#############################################
-
-import_from_google_drive() {
-    print_header "GOOGLE DRIVE IMPORT"
-
-    echo "This will download your saved configuration from Google Drive."
-    echo ""
-    print_info "Requirements:"
-    echo "  • Google Drive folder ID"
-    echo "  • rclone installed and configured"
-    echo "  • Configuration file: ai-platform-config.json"
-    echo ""
-
-    # Check if rclone is installed
-    if ! check_command "rclone"; then
-        print_error "rclone is not installed"
-        echo ""
-        echo "Install rclone:"
-        echo "  curl https://rclone.org/install.sh | sudo bash"
-        echo ""
-        read -p "Install rclone now? [y/N]: " install_rclone
-
-        if [[ "$install_rclone" =~ ^[Yy]$ ]]; then
-            print_step "Installing rclone..."
-            curl https://rclone.org/install.sh | sudo bash
-
-            if ! check_command "rclone"; then
-                print_error "rclone installation failed"
-                exit 1
-            fi
-
-            print_success "rclone installed"
-        else
-            print_error "Cannot proceed without rclone"
-            exit 1
-        fi
-    fi
-
-    # Check if rclone is configured
-    if ! rclone listremotes | grep -q "gdrive:"; then
-        print_warning "rclone is not configured for Google Drive"
-        echo ""
-        echo "Configure rclone for Google Drive:"
-        echo "  1. Run: rclone config"
-        echo "  2. Select 'n' for new remote"
-        echo "  3. Name it 'gdrive'"
-        echo "  4. Select 'Google Drive' as storage type"
-        echo "  5. Follow the authentication steps"
-        echo ""
-        read -p "Configure rclone now? [y/N]: " config_rclone
-
-        if [[ "$config_rclone" =~ ^[Yy]$ ]]; then
-            rclone config
-
-            if ! rclone listremotes | grep -q "gdrive:"; then
-                print_error "rclone configuration incomplete"
-                exit 1
+                echo -e "${RED}Passwords do not match. Please try again.${NC}"
             fi
         else
-            print_error "Cannot proceed without rclone configuration"
-            exit 1
+            echo -e "${RED}Password must be at least 12 characters. Please try again.${NC}"
         fi
-    fi
-
-    print_success "rclone is configured"
-    echo ""
-
-    # Get Google Drive folder ID
-    echo "Enter your Google Drive folder ID:"
-    echo "(Found in the URL: https://drive.google.com/drive/folders/YOUR_FOLDER_ID)"
-    echo ""
-    read -p "Folder ID: " gdrive_folder_id
-
-    if [ -z "$gdrive_folder_id" ]; then
-        print_error "Folder ID cannot be empty"
-        exit 1
-    fi
-
-    # Create temporary directory for download
-    temp_dir=$(mktemp -d)
-
-    print_step "Downloading configuration from Google Drive..."
-
-    # Download the config file
-    if rclone copy "gdrive:$gdrive_folder_id/ai-platform-config.json" "$temp_dir/" --progress; then
-        print_success "Configuration downloaded"
-    else
-        print_error "Failed to download configuration"
-        rm -rf "$temp_dir"
-        exit 1
-    fi
-
-    # Verify file exists
-    if [ ! -f "$temp_dir/ai-platform-config.json" ]; then
-        print_error "Configuration file not found in Google Drive folder"
-        echo ""
-        echo "Expected file: ai-platform-config.json"
-        echo "Location: Google Drive folder ID $gdrive_folder_id"
-        rm -rf "$temp_dir"
-        exit 1
-    fi
-
-    # Parse and load configuration
-    print_step "Parsing configuration..."
-    parse_json_config "$temp_dir/ai-platform-config.json"
-
-    # Clean up
-    rm -rf "$temp_dir"
-
-    print_success "Configuration imported from Google Drive"
-
-    # Show summary
-    show_config_summary
-}
-
-#############################################
-# CONFIG FILE IMPORT
-#############################################
-
-import_from_config_file() {
-    print_header "CONFIGURATION FILE IMPORT"
-
-    echo "Supported formats:"
-    echo "  • JSON (.json)"
-    echo "  • YAML (.yaml, .yml)"
-    echo "  • ENV (.env)"
-    echo ""
-
-    read -p "Enter path to configuration file: " config_file_path
-
-    # Expand tilde and resolve path
-    config_file_path="${config_file_path/#\~/$HOME}"
-    config_file_path=$(realpath "$config_file_path" 2>/dev/null || echo "$config_file_path")
-
-    # Verify file exists
-    if [ ! -f "$config_file_path" ]; then
-        print_error "File not found: $config_file_path"
-        exit 1
-    fi
-
-    print_success "File found: $config_file_path"
-
-    # Detect file format
-    file_extension="${config_file_path##*.}"
-
-    print_step "Detected format: $file_extension"
-
-    case "$file_extension" in
-        json)
-            parse_json_config "$config_file_path"
-            ;;
-        yaml|yml)
-            parse_yaml_config "$config_file_path"
-            ;;
-        env)
-            parse_env_config "$config_file_path"
-            ;;
-        *)
-            print_error "Unsupported file format: $file_extension"
-            echo "Supported: .json, .yaml, .yml, .env"
-            exit 1
-            ;;
-    esac
-
-    print_success "Configuration imported from file"
-
-    # Show summary
-    show_config_summary
-}
-
-#############################################
-# CONFIG PARSERS
-#############################################
-
-parse_json_config() {
-    local config_file="$1"
-
-    # Check if jq is installed
-    if ! check_command "jq"; then
-        print_warning "jq not found, installing..."
-        sudo apt-get update && sudo apt-get install -y jq
-    fi
-
-    # Validate JSON
-    if ! jq empty "$config_file" 2>/dev/null; then
-        print_error "Invalid JSON file"
-        exit 1
-    fi
-
-    print_step "Parsing JSON configuration..."
-
-    # Service enablement
-    POSTGRES_ENABLED=$(jq -r '.services.postgresql.enabled // true' "$config_file")
-    QDRANT_ENABLED=$(jq -r '.services.qdrant.enabled // true' "$config_file")
-    OLLAMA_ENABLED=$(jq -r '.services.ollama.enabled // true' "$config_file")
-    N8N_ENABLED=$(jq -r '.services.n8n.enabled // true' "$config_file")
-    OPENWEBUI_ENABLED=$(jq -r '.services.openwebui.enabled // true' "$config_file")
-    LITELLM_ENABLED=$(jq -r '.services.litellm.enabled // false' "$config_file")
-    SIGNAL_ENABLED=$(jq -r '.notifications.signal.enabled // false' "$config_file")
-
-    # PostgreSQL
-    POSTGRES_PORT=$(jq -r '.services.postgresql.port // 5432' "$config_file")
-    POSTGRES_USER=$(jq -r '.services.postgresql.user // "aiplatform"' "$config_file")
-    POSTGRES_PASSWORD=$(jq -r '.services.postgresql.password // ""' "$config_file")
-    POSTGRES_DB=$(jq -r '.services.postgresql.database // "aiplatform"' "$config_file")
-    POSTGRES_MAX_CONNECTIONS=$(jq -r '.services.postgresql.max_connections // 100' "$config_file")
-    POSTGRES_SHARED_BUFFERS=$(jq -r '.services.postgresql.shared_buffers // "256MB"' "$config_file")
-
-    # Qdrant
-    QDRANT_PORT=$(jq -r '.services.qdrant.port // 6333' "$config_file")
-    QDRANT_GRPC_PORT=$(jq -r '.services.qdrant.grpc_port // 6334' "$config_file")
-    QDRANT_API_KEY=$(jq -r '.services.qdrant.api_key // ""' "$config_file")
-
-    # Ollama
-    OLLAMA_PORT=$(jq -r '.services.ollama.port // 11434' "$config_file")
-    OLLAMA_GPU_ENABLED=$(jq -r '.services.ollama.gpu_enabled // false' "$config_file")
-    OLLAMA_MODELS=$(jq -r '.services.ollama.models // "llama2,mistral"' "$config_file")
-    OLLAMA_NUM_CTX=$(jq -r '.services.ollama.num_ctx // 2048' "$config_file")
-
-    # n8n
-    N8N_PORT=$(jq -r '.services.n8n.port // 5678' "$config_file")
-    N8N_ENCRYPTION_KEY=$(jq -r '.services.n8n.encryption_key // ""' "$config_file")
-    N8N_BASIC_AUTH_USER=$(jq -r '.services.n8n.basic_auth.user // "admin"' "$config_file")
-    N8N_BASIC_AUTH_PASSWORD=$(jq -r '.services.n8n.basic_auth.password // ""' "$config_file")
-
-    # Open WebUI
-    OPENWEBUI_PORT=$(jq -r '.services.openwebui.port // 8080' "$config_file")
-    OPENWEBUI_SECRET_KEY=$(jq -r '.services.openwebui.secret_key // ""' "$config_file")
-    OPENWEBUI_ENABLE_RAG=$(jq -r '.services.openwebui.enable_rag // true' "$config_file")
-
-    # LiteLLM
-    if [ "$LITELLM_ENABLED" = "true" ]; then
-        LITELLM_PORT=$(jq -r '.services.litellm.port // 4000' "$config_file")
-        LITELLM_MASTER_KEY=$(jq -r '.services.litellm.master_key // ""' "$config_file")
-        LITELLM_DATABASE_URL=$(jq -r '.services.litellm.database_url // ""' "$config_file")
-    fi
-
-    # Signal
-    if [ "$SIGNAL_ENABLED" = "true" ]; then
-        SIGNAL_PHONE=$(jq -r '.notifications.signal.phone // ""' "$config_file")
-        SIGNAL_ENDPOINT=$(jq -r '.notifications.signal.endpoint // "http://localhost:8080"' "$config_file")
-        SIGNAL_RECIPIENT=$(jq -r '.notifications.signal.recipient // ""' "$config_file")
-    fi
-
-    # Generate missing passwords/keys
-    [ -z "$POSTGRES_PASSWORD" ] && POSTGRES_PASSWORD=$(generate_password)
-    [ -z "$QDRANT_API_KEY" ] && QDRANT_API_KEY=$(generate_key)
-    [ -z "$N8N_ENCRYPTION_KEY" ] && N8N_ENCRYPTION_KEY=$(generate_key)
-    [ -z "$N8N_BASIC_AUTH_PASSWORD" ] && N8N_BASIC_AUTH_PASSWORD=$(generate_password)
-    [ -z "$OPENWEBUI_SECRET_KEY" ] && OPENWEBUI_SECRET_KEY=$(generate_key)
-
-    if [ "$LITELLM_ENABLED" = "true" ]; then
-        [ -z "$LITELLM_MASTER_KEY" ] && LITELLM_MASTER_KEY=$(generate_key)
-        [ -z "$LITELLM_DATABASE_URL" ] && LITELLM_DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm"
-    fi
-
-    print_success "JSON configuration parsed"
-}
-
-parse_yaml_config() {
-    local config_file="$1"
-
-    # Check if yq is installed
-    if ! check_command "yq"; then
-        print_warning "yq not found, installing..."
-        sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-        sudo chmod +x /usr/local/bin/yq
-    fi
-
-    print_step "Parsing YAML configuration..."
-
-    # Service enablement
-    POSTGRES_ENABLED=$(yq e '.services.postgresql.enabled // true' "$config_file")
-    QDRANT_ENABLED=$(yq e '.services.qdrant.enabled // true' "$config_file")
-    OLLAMA_ENABLED=$(yq e '.services.ollama.enabled // true' "$config_file")
-    N8N_ENABLED=$(yq e '.services.n8n.enabled // true' "$config_file")
-    OPENWEBUI_ENABLED=$(yq e '.services.openwebui.enabled // true' "$config_file")
-    LITELLM_ENABLED=$(yq e '.services.litellm.enabled // false' "$config_file")
-    SIGNAL_ENABLED=$(yq e '.notifications.signal.enabled // false' "$config_file")
-
-    # PostgreSQL
-    POSTGRES_PORT=$(yq e '.services.postgresql.port // 5432' "$config_file")
-    POSTGRES_USER=$(yq e '.services.postgresql.user // "aiplatform"' "$config_file")
-    POSTGRES_PASSWORD=$(yq e '.services.postgresql.password // ""' "$config_file")
-    POSTGRES_DB=$(yq e '.services.postgresql.database // "aiplatform"' "$config_file")
-
-    # Qdrant
-    QDRANT_PORT=$(yq e '.services.qdrant.port // 6333' "$config_file")
-    QDRANT_API_KEY=$(yq e '.services.qdrant.api_key // ""' "$config_file")
-
-    # Ollama
-    OLLAMA_PORT=$(yq e '.services.ollama.port // 11434' "$config_file")
-    OLLAMA_GPU_ENABLED=$(yq e '.services.ollama.gpu_enabled // false' "$config_file")
-    OLLAMA_MODELS=$(yq e '.services.ollama.models // "llama2,mistral"' "$config_file")
-
-    # n8n
-    N8N_PORT=$(yq e '.services.n8n.port // 5678' "$config_file")
-    N8N_ENCRYPTION_KEY=$(yq e '.services.n8n.encryption_key // ""' "$config_file")
-    N8N_BASIC_AUTH_USER=$(yq e '.services.n8n.basic_auth.user // "admin"' "$config_file")
-    N8N_BASIC_AUTH_PASSWORD=$(yq e '.services.n8n.basic_auth.password // ""' "$config_file")
-
-    # Open WebUI
-    OPENWEBUI_PORT=$(yq e '.services.openwebui.port // 8080' "$config_file")
-    OPENWEBUI_SECRET_KEY=$(yq e '.services.openwebui.secret_key // ""' "$config_file")
-
-    # LiteLLM
-    if [ "$LITELLM_ENABLED" = "true" ]; then
-        LITELLM_PORT=$(yq e '.services.litellm.port // 4000' "$config_file")
-        LITELLM_MASTER_KEY=$(yq e '.services.litellm.master_key // ""' "$config_file")
-    fi
-
-    # Signal
-    if [ "$SIGNAL_ENABLED" = "true" ]; then
-        SIGNAL_PHONE=$(yq e '.notifications.signal.phone // ""' "$config_file")
-        SIGNAL_RECIPIENT=$(yq e '.notifications.signal.recipient // ""' "$config_file")
-    fi
-
-    # Generate missing passwords/keys
-    [ -z "$POSTGRES_PASSWORD" ] && POSTGRES_PASSWORD=$(generate_password)
-    [ -z "$QDRANT_API_KEY" ] && QDRANT_API_KEY=$(generate_key)
-    [ -z "$N8N_ENCRYPTION_KEY" ] && N8N_ENCRYPTION_KEY=$(generate_key)
-    [ -z "$N8N_BASIC_AUTH_PASSWORD" ] && N8N_BASIC_AUTH_PASSWORD=$(generate_password)
-    [ -z "$OPENWEBUI_SECRET_KEY" ] && OPENWEBUI_SECRET_KEY=$(generate_key)
-
-    if [ "$LITELLM_ENABLED" = "true" ]; then
-        [ -z "$LITELLM_MASTER_KEY" ] && LITELLM_MASTER_KEY=$(generate_key)
-        [ -z "$LITELLM_DATABASE_URL" ] && LITELLM_DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm"
-    fi
-
-    print_success "YAML configuration parsed"
-}
-
-parse_env_config() {
-    local config_file="$1"
-
-    print_step "Parsing ENV configuration..."
-
-    # Source the env file
-    set -a
-    source "$config_file"
-    set +a
-
-    print_success "ENV configuration loaded"
-}
-
-#############################################
-# CONFIGURATION SUMMARY
-#############################################
-
-show_config_summary() {
-    print_header "CONFIGURATION SUMMARY"
-
-    echo "Enabled Services:"
-    [ "$POSTGRES_ENABLED" = "true" ] && echo "  ${GREEN}✓${NC} PostgreSQL (port $POSTGRES_PORT)"
-    [ "$QDRANT_ENABLED" = "true" ] && echo "  ${GREEN}✓${NC} Qdrant (port $QDRANT_PORT)"
-    [ "$OLLAMA_ENABLED" = "true" ] && echo "  ${GREEN}✓${NC} Ollama (port $OLLAMA_PORT)"
-    [ "$N8N_ENABLED" = "true" ] && echo "  ${GREEN}✓${NC} n8n (port $N8N_PORT)"
-    [ "$OPENWEBUI_ENABLED" = "true" ] && echo "  ${GREEN}✓${NC} Open WebUI (port $OPENWEBUI_PORT)"
-    [ "$LITELLM_ENABLED" = "true" ] && echo "  ${GREEN}✓${NC} LiteLLM (port $LITELLM_PORT)"
-
-    echo ""
-    echo "Optional Features:"
-    [ "$SIGNAL_ENABLED" = "true" ] && echo "  ${GREEN}✓${NC} Signal Notifications"
-    [ "$OLLAMA_GPU_ENABLED" = "true" ] && echo "  ${GREEN}✓${NC} GPU Support (Ollama)"
-
-    echo ""
-    echo "Data Location: ${CYAN}$BASE_PATH${NC}"
-    echo ""
-
-    read -p "Proceed with this configuration? [Y/n]: " confirm
-
-    if [[ "$confirm" =~ ^[Nn]$ ]]; then
-        print_warning "Configuration cancelled"
-        exit 0
-    fi
-}
-
-# Execute configuration method selection
-select_configuration_method
-#############################################
-# INTERACTIVE CONFIGURATION
-#############################################
-
-interactive_configuration() {
-    print_header "INTERACTIVE CONFIGURATION"
-
-    echo "This wizard will guide you through configuring your AI Platform."
-    echo "Default values are shown in [brackets]. Press Enter to accept defaults."
-    echo ""
-    read -p "Press Enter to begin..."
-
-    # Service selection
-    configure_service_selection
-
+    done
+    
+    # n8n encryption key
+    N8N_ENCRYPTION_KEY=$(openssl rand -base64 32)
+    log_info "Generated n8n encryption key"
+    
+    # JWT secret
+    JWT_SECRET=$(openssl rand -base64 64)
+    log_info "Generated JWT secret"
+    
+    # Timezone
+    read -p "Enter timezone (default: UTC): " TIMEZONE
+    TIMEZONE=${TIMEZONE:-UTC}
+    
     # Port configuration
-    configure_ports
-
-    # Credentials and security
-    configure_credentials
-
-    # Advanced options
-    configure_advanced_options
-
-    # Optional features
-    configure_optional_features
-
-    # Show summary
-    show_config_summary
+    echo ""
+    echo -e "${YELLOW}Port Configuration (press Enter for defaults):${NC}"
+    
+    read -p "Ollama port (default: 11434): " OLLAMA_PORT
+    OLLAMA_PORT=${OLLAMA_PORT:-11434}
+    
+    read -p "n8n port (default: 5678): " N8N_PORT
+    N8N_PORT=${N8N_PORT:-5678}
+    
+    read -p "Qdrant HTTP port (default: 6333): " QDRANT_PORT
+    QDRANT_PORT=${QDRANT_PORT:-6333}
+    
+    read -p "Qdrant gRPC port (default: 6334): " QDRANT_GRPC_PORT
+    QDRANT_GRPC_PORT=${QDRANT_GRPC_PORT:-6334}
+    
+    read -p "PostgreSQL port (default: 5432): " POSTGRES_PORT
+    POSTGRES_PORT=${POSTGRES_PORT:-5432}
+    
+    # OpenAI API key (optional)
+    read -p "Enter OpenAI API key (optional, press Enter to skip): " OPENAI_API_KEY
+    
+    log_success "Configuration information collected"
 }
 
-#############################################
-# SERVICE SELECTION
-#############################################
+create_config_file() {
+    log_step "Creating configuration file..."
+    
+    cat > "$CONFIG_FILE" << EOF
+# ==============================================================================
+# AI Platform Configuration
+# Generated: $(date)
+# Version: ${SCRIPT_VERSION}
+# ==============================================================================
 
-configure_service_selection() {
-    print_header "SERVICE SELECTION"
+# Domain and Network
+DOMAIN_NAME="${DOMAIN_NAME}"
+SSL_EMAIL="${SSL_EMAIL}"
+DOCKER_NETWORK="${DOCKER_NETWORK}"
+SUBNET="${SUBNET}"
 
-    echo "Select which services to enable:"
-    echo ""
+# Paths
+BASE_DIR="${BASE_DIR}"
+DATA_DIR="${DATA_DIR}"
+BACKUP_DIR="${BACKUP_DIR}"
+LOG_DIR="${LOG_DIR}"
 
-    # PostgreSQL
-    echo "${CYAN}PostgreSQL${NC} - Relational database"
-    echo "  Required for: n8n, LiteLLM, Open WebUI (optional)"
-    read -p "Enable PostgreSQL? [Y/n]: " enable_postgres
-    POSTGRES_ENABLED=$( [[ "$enable_postgres" =~ ^[Nn]$ ]] && echo "false" || echo "true" )
+# PostgreSQL Configuration
+POSTGRES_VERSION=16
+POSTGRES_USER=aiplatform
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+POSTGRES_DB=aiplatform
+POSTGRES_PORT=${POSTGRES_PORT}
+POSTGRES_DATA=${POSTGRES_DATA}
+POSTGRES_MAX_CONNECTIONS=200
+POSTGRES_SHARED_BUFFERS=4GB
+POSTGRES_EFFECTIVE_CACHE_SIZE=12GB
+POSTGRES_MAINTENANCE_WORK_MEM=1GB
+POSTGRES_CHECKPOINT_COMPLETION_TARGET=0.9
+POSTGRES_WAL_BUFFERS=16MB
+POSTGRES_DEFAULT_STATISTICS_TARGET=100
+POSTGRES_RANDOM_PAGE_COST=1.1
+POSTGRES_EFFECTIVE_IO_CONCURRENCY=200
+POSTGRES_WORK_MEM=20MB
+POSTGRES_MIN_WAL_SIZE=1GB
+POSTGRES_MAX_WAL_SIZE=4GB
 
-    if [ "$POSTGRES_ENABLED" = "false" ]; then
-        print_warning "Some services may have limited functionality without PostgreSQL"
+# Ollama Configuration
+OLLAMA_VERSION=latest
+OLLAMA_PORT=${OLLAMA_PORT}
+OLLAMA_DATA=${OLLAMA_DATA}
+OLLAMA_HOST=0.0.0.0
+OLLAMA_ORIGINS=*
+OLLAMA_NUM_PARALLEL=4
+OLLAMA_MAX_LOADED_MODELS=3
+OLLAMA_KEEP_ALIVE=5m
+
+# n8n Configuration
+N8N_VERSION=latest
+N8N_PORT=${N8N_PORT}
+N8N_DATA=${N8N_DATA}
+N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+N8N_USER_MANAGEMENT_JWT_SECRET=${JWT_SECRET}
+N8N_PROTOCOL=https
+N8N_HOST=\${DOMAIN_NAME}
+N8N_EDITOR_BASE_URL=https://\${DOMAIN_NAME}
+N8N_WEBHOOK_URL=https://\${DOMAIN_NAME}
+WEBHOOK_URL=https://\${DOMAIN_NAME}
+N8N_METRICS=true
+N8N_LOG_LEVEL=info
+N8N_LOG_OUTPUT=console,file
+N8N_LOG_FILE_LOCATION=${LOG_DIR}/n8n
+EXECUTIONS_DATA_SAVE_ON_ERROR=all
+EXECUTIONS_DATA_SAVE_ON_SUCCESS=all
+EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=true
+
+# Qdrant Configuration
+QDRANT_VERSION=latest
+QDRANT_PORT=${QDRANT_PORT}
+QDRANT_GRPC_PORT=${QDRANT_GRPC_PORT}
+QDRANT_DATA=${QDRANT_DATA}
+QDRANT_INIT_FILE_PATH=./qdrant-init.sh
+QDRANT__LOG_LEVEL=INFO
+QDRANT__STORAGE__PERFORMANCE__MAX_SEARCH_THREADS=8
+
+# API Keys (Optional)
+OPENAI_API_KEY=${OPENAI_API_KEY:-}
+
+# System Configuration
+TZ=${TIMEZONE}
+COMPOSE_PROJECT_NAME=ai-platform
+
+# Resource Limits
+POSTGRES_MEM_LIMIT=8g
+OLLAMA_MEM_LIMIT=16g
+N8N_MEM_LIMIT=4g
+QDRANT_MEM_LIMIT=8g
+
+# Backup Configuration
+BACKUP_RETENTION_DAYS=30
+BACKUP_SCHEDULE="0 2 * * *"
+
+# Monitoring
+ENABLE_METRICS=true
+METRICS_PORT=9090
+
+EOF
+
+    chmod 600 "$CONFIG_FILE"
+    log_success "Configuration file created: $CONFIG_FILE"
+    save_state 2
+}
+
+# ==============================================================================
+# SYSTEM UPDATES AND PACKAGES
+# ==============================================================================
+
+update_system() {
+    log_step "Updating system packages..."
+    
+    export DEBIAN_FRONTEND=noninteractive
+    
+    apt-get update || error_exit "Failed to update package lists"
+    apt-get upgrade -y || error_exit "Failed to upgrade packages"
+    apt-get dist-upgrade -y || error_exit "Failed to dist-upgrade"
+    apt-get autoremove -y || log_warning "Failed to autoremove packages"
+    apt-get autoclean -y || log_warning "Failed to autoclean"
+    
+    log_success "System packages updated"
+    save_state 3
+}
+
+install_essential_packages() {
+    log_step "Installing essential packages..."
+    
+    local packages=(
+        curl
+        wget
+        git
+        vim
+        nano
+        htop
+        iotop
+        nethogs
+        net-tools
+        dnsutils
+        ca-certificates
+        gnupg
+        lsb-release
+        software-properties-common
+        apt-transport-https
+        build-essential
+        jq
+        unzip
+        zip
+        python3
+        python3-pip
+        python3-venv
+        certbot
+        python3-certbot-nginx
+        ufw
+        fail2ban
+        logrotate
+        rsync
+        screen
+        tmux
+    )
+    
+    local total=${#packages[@]}
+    local current=0
+    
+    for package in "${packages[@]}"; do
+        current=$((current + 1))
+        if ! dpkg -l | grep -q "^ii  $package "; then
+            apt-get install -y "$package" || log_warning "Failed to install $package"
+        fi
+        show_progress $current $total "Installing packages..."
+    done
+    
+    log_success "Essential packages installed"
+    save_state 4
+}
+
+# ==============================================================================
+# DOCKER INSTALLATION
+# ==============================================================================
+
+install_docker() {
+    log_step "Installing Docker..."
+    
+    if command -v docker &> /dev/null; then
+        log_info "Docker already installed: $(docker --version)"
+        return 0
     fi
-    echo ""
+    
+    # Remove old versions
+    apt-get remove -y docker docker-engine docker.io containerd runc 2>/dev/null || true
+    
+    # Add Docker GPG key
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    chmod a+r /etc/apt/keyrings/docker.gpg
+    
+    # Add Docker repository
+    echo \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+      $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+      tee /etc/apt/sources.list.d/docker.list > /dev/null
+    
+    # Install Docker
+    apt-get update
+    apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    
+    # Start and enable Docker
+    systemctl start docker
+    systemctl enable docker
+    
+    # Verify installation
+    if ! docker run hello-world &> /dev/null; then
+        error_exit "Docker installation verification failed"
+    fi
+    
+    log_success "Docker installed: $(docker --version)"
+    save_state 5
+}
 
-    # Qdrant
-    echo "${CYAN}Qdrant${NC} - Vector database"
-    echo "  Required for: RAG, embeddings, semantic search"
-    read -p "Enable Qdrant? [Y/n]: " enable_qdrant
-    QDRANT_ENABLED=$( [[ "$enable_qdrant" =~ ^[Nn]$ ]] && echo "false" || echo "true" )
-    echo ""
+configure_docker() {
+    log_step "Configuring Docker..."
+    
+    # Create Docker daemon configuration
+    mkdir -p /etc/docker
+    
+    cat > /etc/docker/daemon.json << EOF
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "100m",
+    "max-file": "3"
+  },
+  "storage-driver": "overlay2",
+  "userland-proxy": false,
+  "live-restore": true,
+  "default-address-pools": [
+    {
+      "base": "172.17.0.0/12",
+      "size": 24
+    }
+  ]
+}
+EOF
+    
+    # Restart Docker to apply configuration
+    systemctl restart docker
+    
+    log_success "Docker configured"
+    save_state 6
+}
 
-    # Ollama
-    echo "${CYAN}Ollama${NC} - Local LLM runtime"
-    echo "  Provides: llama2, mistral, codellama, and more"
-    read -p "Enable Ollama? [Y/n]: " enable_ollama
-    OLLAMA_ENABLED=$( [[ "$enable_ollama" =~ ^[Nn]$ ]] && echo "false" || echo "true" )
+create_docker_network() {
+    log_step "Creating Docker network..."
+    
+    if docker network ls | grep -q "$DOCKER_NETWORK"; then
+        log_info "Docker network already exists: $DOCKER_NETWORK"
+    else
+        docker network create \
+            --driver bridge \
+            --subnet "$SUBNET" \
+            "$DOCKER_NETWORK" || error_exit "Failed to create Docker network"
+        log_success "Docker network created: $DOCKER_NETWORK"
+    fi
+    
+    save_state 7
+}
 
-    if [ "$OLLAMA_ENABLED" = "true" ]; then
-        # GPU support check
-        if lspci | grep -i nvidia > /dev/null 2>&1; then
-            echo "  ${GREEN}✓${NC} NVIDIA GPU detected"
-            read -p "  Enable GPU acceleration? [Y/n]: " enable_gpu
-            OLLAMA_GPU_ENABLED=$( [[ "$enable_gpu" =~ ^[Nn]$ ]] && echo "false" || echo "true" )
+# ==============================================================================
+# FIREWALL CONFIGURATION
+# ==============================================================================
+
+configure_firewall() {
+    log_step "Configuring firewall..."
+    
+    # Reset UFW to default
+    ufw --force reset
+    
+    # Set default policies
+    ufw default deny incoming
+    ufw default allow outgoing
+    
+    # Allow SSH
+    ufw allow 22/tcp comment 'SSH'
+    
+    # Allow HTTP/HTTPS
+    ufw allow 80/tcp comment 'HTTP'
+    ufw allow 443/tcp comment 'HTTPS'
+    
+    # Allow service ports (only from localhost)
+    ufw allow from 127.0.0.1 to any port ${POSTGRES_PORT} proto tcp comment 'PostgreSQL local'
+    ufw allow from 127.0.0.1 to any port ${OLLAMA_PORT} proto tcp comment 'Ollama local'
+    ufw allow from 127.0.0.1 to any port ${N8N_PORT} proto tcp comment 'n8n local'
+    ufw allow from 127.0.0.1 to any port ${QDRANT_PORT} proto tcp comment 'Qdrant local'
+    
+    # Enable firewall
+    ufw --force enable
+    
+    log_success "Firewall configured and enabled"
+    save_state 8
+}
+
+# ==============================================================================
+# FAIL2BAN CONFIGURATION
+# ==============================================================================
+
+configure_fail2ban() {
+    log_step "Configuring Fail2ban..."
+    
+    # Create local jail configuration
+    cat > /etc/fail2ban/jail.local << 'EOF'
+[DEFAULT]
+bantime = 3600
+findtime = 600
+maxretry = 5
+destemail = ${SSL_EMAIL}
+sendername = Fail2Ban
+
+[sshd]
+enabled = true
+port = 22
+logpath = /var/log/auth.log
+
+[nginx-http-auth]
+enabled = true
+port = http,https
+logpath = /var/log/nginx/error.log
+
+[nginx-limit-req]
+enabled = true
+port = http,https
+logpath = /var/log/nginx/error.log
+
+[nginx-botsearch]
+enabled = true
+port = http,https
+logpath = /var/log/nginx/access.log
+EOF
+    
+    # Start and enable Fail2ban
+    systemctl restart fail2ban
+    systemctl enable fail2ban
+    
+    log_success "Fail2ban configured and enabled"
+    save_state 9
+}
+# ==============================================================================
+# SSL CERTIFICATE GENERATION
+# ==============================================================================
+
+generate_ssl_certificates() {
+    log_step "Generating SSL certificates..."
+    
+    local ssl_dir="${BASE_DIR}/ssl"
+    
+    # Check if domain resolves to this server
+    local server_ip=$(curl -s ifconfig.me)
+    local domain_ip=$(dig +short "$DOMAIN_NAME" | head -n1)
+    
+    if [ "$server_ip" != "$domain_ip" ]; then
+        log_warning "Domain does not resolve to this server ($server_ip vs $domain_ip)"
+        log_info "Generating self-signed certificates for development..."
+        
+        # Generate self-signed certificate
+        openssl req -x509 -nodes -days 365 -newkey rsa:4096 \
+            -keyout "${ssl_dir}/privkey.pem" \
+            -out "${ssl_dir}/fullchain.pem" \
+            -subj "/C=US/ST=State/L=City/O=Organization/CN=${DOMAIN_NAME}" \
+            2>/dev/null || error_exit "Failed to generate self-signed certificate"
+        
+        log_success "Self-signed certificates generated"
+    else
+        log_info "Domain resolves correctly. Requesting Let's Encrypt certificate..."
+        
+        # Stop any service that might be using port 80
+        systemctl stop nginx 2>/dev/null || true
+        
+        # Request certificate
+        certbot certonly --standalone \
+            --non-interactive \
+            --agree-tos \
+            --email "$SSL_EMAIL" \
+            -d "$DOMAIN_NAME" \
+            -d "*.${DOMAIN_NAME}" \
+            --preferred-challenges http \
+            || log_warning "Failed to obtain Let's Encrypt certificate, falling back to self-signed"
+        
+        if [ -f "/etc/letsencrypt/live/${DOMAIN_NAME}/fullchain.pem" ]; then
+            # Link certificates
+            ln -sf "/etc/letsencrypt/live/${DOMAIN_NAME}/fullchain.pem" "${ssl_dir}/fullchain.pem"
+            ln -sf "/etc/letsencrypt/live/${DOMAIN_NAME}/privkey.pem" "${ssl_dir}/privkey.pem"
+            
+            # Setup auto-renewal
+            cat > /etc/cron.d/certbot-renewal << EOF
+0 0,12 * * * root certbot renew --quiet --post-hook "systemctl reload nginx"
+EOF
+            
+            log_success "Let's Encrypt certificates obtained and configured"
         else
-            echo "  ${YELLOW}!${NC} No NVIDIA GPU detected (will run on CPU)"
-            OLLAMA_GPU_ENABLED="false"
-        fi
-
-        # Model selection
-        echo ""
-        echo "  Select models to download (comma-separated):"
-        echo "    - llama2 (7B, general purpose)"
-        echo "    - llama2:13b (13B, more capable)"
-        echo "    - mistral (7B, fast and efficient)"
-        echo "    - codellama (7B, code-focused)"
-        echo "    - phi (2.7B, small and fast)"
-        read -p "  Models [$OLLAMA_MODELS]: " models_input
-        [ -n "$models_input" ] && OLLAMA_MODELS="$models_input"
-    fi
-    echo ""
-
-    # n8n
-    echo "${CYAN}n8n${NC} - Workflow automation"
-    echo "  Provides: automation, integrations, scheduled tasks"
-    read -p "Enable n8n? [Y/n]: " enable_n8n
-    N8N_ENABLED=$( [[ "$enable_n8n" =~ ^[Nn]$ ]] && echo "false" || echo "true" )
-    echo ""
-
-    # Open WebUI
-    echo "${CYAN}Open WebUI${NC} - ChatGPT-like interface"
-    echo "  Provides: chat interface, RAG, model management"
-    read -p "Enable Open WebUI? [Y/n]: " enable_openwebui
-    OPENWEBUI_ENABLED=$( [[ "$enable_openwebui" =~ ^[Nn]$ ]] && echo "false" || echo "true" )
-
-    if [ "$OPENWEBUI_ENABLED" = "true" ]; then
-        read -p "  Enable RAG (Retrieval-Augmented Generation)? [Y/n]: " enable_rag
-        OPENWEBUI_ENABLE_RAG=$( [[ "$enable_rag" =~ ^[Nn]$ ]] && echo "false" || echo "true" )
-
-        if [ "$OPENWEBUI_ENABLE_RAG" = "true" ] && [ "$QDRANT_ENABLED" = "false" ]; then
-            print_warning "  RAG requires Qdrant. Consider enabling Qdrant for full RAG functionality."
+            # Fallback to self-signed
+            openssl req -x509 -nodes -days 365 -newkey rsa:4096 \
+                -keyout "${ssl_dir}/privkey.pem" \
+                -out "${ssl_dir}/fullchain.pem" \
+                -subj "/C=US/ST=State/L=City/O=Organization/CN=${DOMAIN_NAME}" \
+                2>/dev/null || error_exit "Failed to generate fallback certificate"
+            
+            log_success "Self-signed certificates generated as fallback"
         fi
     fi
-    echo ""
-
-    # LiteLLM
-    echo "${CYAN}LiteLLM${NC} - LLM proxy and unified API"
-    echo "  Provides: API compatibility, load balancing, fallbacks"
-    read -p "Enable LiteLLM? [y/N]: " enable_litellm
-    LITELLM_ENABLED=$( [[ "$enable_litellm" =~ ^[Yy]$ ]] && echo "true" || echo "false" )
-
-    if [ "$LITELLM_ENABLED" = "true" ] && [ "$POSTGRES_ENABLED" = "false" ]; then
-        print_warning "  LiteLLM works best with PostgreSQL for persistent storage."
-        read -p "  Enable PostgreSQL for LiteLLM? [Y/n]: " enable_postgres_litellm
-        if [[ ! "$enable_postgres_litellm" =~ ^[Nn]$ ]]; then
-            POSTGRES_ENABLED="true"
-            print_success "  PostgreSQL enabled"
-        fi
-    fi
-    echo ""
-
-    print_success "Service selection complete"
+    
+    # Set proper permissions
+    chmod 600 "${ssl_dir}/privkey.pem"
+    chmod 644 "${ssl_dir}/fullchain.pem"
+    
+    save_state 10
 }
 
-#############################################
-# PORT CONFIGURATION
-#############################################
+# ==============================================================================
+# POSTGRESQL INITIALIZATION SCRIPTS
+# ==============================================================================
 
-configure_ports() {
-    print_header "PORT CONFIGURATION"
+create_postgresql_init_script() {
+    log_step "Creating PostgreSQL initialization scripts..."
+    
+    local init_dir="${BASE_DIR}/postgresql-init"
+    mkdir -p "$init_dir"
+    
+    # Main initialization script
+    cat > "${init_dir}/01-init-database.sql" << 'EOF'
+-- ==============================================================================
+-- PostgreSQL Initialization Script
+-- Purpose: Create database structure for AI Platform
+-- ==============================================================================
 
-    echo "Configure service ports (press Enter for defaults):"
-    echo ""
+-- Create extensions
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+CREATE EXTENSION IF NOT EXISTS "vector";
 
-    if [ "$POSTGRES_ENABLED" = "true" ]; then
-        while true; do
-            read -p "PostgreSQL port [$POSTGRES_PORT]: " port_input
-            port_input=${port_input:-$POSTGRES_PORT}
+-- Create schemas
+CREATE SCHEMA IF NOT EXISTS ai_platform;
+CREATE SCHEMA IF NOT EXISTS n8n;
+CREATE SCHEMA IF NOT EXISTS qdrant_metadata;
 
-            if check_port_available "$port_input"; then
-                POSTGRES_PORT="$port_input"
-                print_success "PostgreSQL port: $POSTGRES_PORT"
-                break
-            else
-                print_error "Port $port_input is in use. Try another."
-            fi
-        done
-    fi
+-- Set search path
+ALTER DATABASE aiplatform SET search_path TO ai_platform, public;
 
-    if [ "$QDRANT_ENABLED" = "true" ]; then
-        while true; do
-            read -p "Qdrant HTTP port [$QDRANT_PORT]: " port_input
-            port_input=${port_input:-$QDRANT_PORT}
+-- ==============================================================================
+-- AI Platform Tables
+-- ==============================================================================
 
-            if check_port_available "$port_input"; then
-                QDRANT_PORT="$port_input"
-                print_success "Qdrant HTTP port: $QDRANT_PORT"
-                break
-            else
-                print_error "Port $port_input is in use. Try another."
-            fi
-        done
+-- Users table
+CREATE TABLE IF NOT EXISTS ai_platform.users (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    email VARCHAR(255) UNIQUE NOT NULL,
+    username VARCHAR(100) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    is_active BOOLEAN DEFAULT true,
+    is_admin BOOLEAN DEFAULT false,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    last_login TIMESTAMP WITH TIME ZONE
+);
 
-        while true; do
-            read -p "Qdrant gRPC port [$QDRANT_GRPC_PORT]: " port_input
-            port_input=${port_input:-$QDRANT_GRPC_PORT}
+-- API Keys table
+CREATE TABLE IF NOT EXISTS ai_platform.api_keys (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES ai_platform.users(id) ON DELETE CASCADE,
+    key_hash VARCHAR(255) NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    is_active BOOLEAN DEFAULT true,
+    expires_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    last_used_at TIMESTAMP WITH TIME ZONE
+);
 
-            if check_port_available "$port_input"; then
-                QDRANT_GRPC_PORT="$port_input"
-                print_success "Qdrant gRPC port: $QDRANT_GRPC_PORT"
-                break
-            else
-                print_error "Port $port_input is in use. Try another."
-            fi
-        done
-    fi
+-- Conversations table
+CREATE TABLE IF NOT EXISTS ai_platform.conversations (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES ai_platform.users(id) ON DELETE CASCADE,
+    title VARCHAR(255),
+    model VARCHAR(100),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
 
-    if [ "$OLLAMA_ENABLED" = "true" ]; then
-        while true; do
-            read -p "Ollama port [$OLLAMA_PORT]: " port_input
-            port_input=${port_input:-$OLLAMA_PORT}
+-- Messages table
+CREATE TABLE IF NOT EXISTS ai_platform.messages (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    conversation_id UUID REFERENCES ai_platform.conversations(id) ON DELETE CASCADE,
+    role VARCHAR(50) NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+    content TEXT NOT NULL,
+    metadata JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
 
-            if check_port_available "$port_input"; then
-                OLLAMA_PORT="$port_input"
-                print_success "Ollama port: $OLLAMA_PORT"
-                break
-            else
-                print_error "Port $port_input is in use. Try another."
-            fi
-        done
-    fi
+-- Embeddings table
+CREATE TABLE IF NOT EXISTS ai_platform.embeddings (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    content TEXT NOT NULL,
+    embedding vector(1536),
+    metadata JSONB,
+    source VARCHAR(255),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
 
-    if [ "$N8N_ENABLED" = "true" ]; then
-        while true; do
-            read -p "n8n port [$N8N_PORT]: " port_input
-            port_input=${port_input:-$N8N_PORT}
+-- Workflow executions table
+CREATE TABLE IF NOT EXISTS ai_platform.workflow_executions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    workflow_id VARCHAR(100) NOT NULL,
+    user_id UUID REFERENCES ai_platform.users(id) ON DELETE SET NULL,
+    status VARCHAR(50) NOT NULL,
+    input_data JSONB,
+    output_data JSONB,
+    error_message TEXT,
+    started_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    finished_at TIMESTAMP WITH TIME ZONE,
+    duration_ms INTEGER
+);
 
-            if check_port_available "$port_input"; then
-                N8N_PORT="$port_input"
-                print_success "n8n port: $N8N_PORT"
-                break
-            else
-                print_error "Port $port_input is in use. Try another."
-            fi
-        done
-    fi
+-- System metrics table
+CREATE TABLE IF NOT EXISTS ai_platform.system_metrics (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    metric_type VARCHAR(100) NOT NULL,
+    metric_value NUMERIC,
+    metadata JSONB,
+    recorded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
 
-    if [ "$OPENWEBUI_ENABLED" = "true" ]; then
-        while true; do
-            read -p "Open WebUI port [$OPENWEBUI_PORT]: " port_input
-            port_input=${port_input:-$OPENWEBUI_PORT}
+-- Audit log table
+CREATE TABLE IF NOT EXISTS ai_platform.audit_log (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES ai_platform.users(id) ON DELETE SET NULL,
+    action VARCHAR(100) NOT NULL,
+    resource_type VARCHAR(100),
+    resource_id UUID,
+    details JSONB,
+    ip_address INET,
+    user_agent TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
 
-            if check_port_available "$port_input"; then
-                OPENWEBUI_PORT="$port_input"
-                print_success "Open WebUI port: $OPENWEBUI_PORT"
-                break
-            else
-                print_error "Port $port_input is in use. Try another."
-            fi
-        done
-    fi
+-- ==============================================================================
+-- Indexes
+-- ==============================================================================
 
-    if [ "$LITELLM_ENABLED" = "true" ]; then
-        while true; do
-            read -p "LiteLLM port [$LITELLM_PORT]: " port_input
-            port_input=${port_input:-$LITELLM_PORT}
+-- Users indexes
+CREATE INDEX IF NOT EXISTS idx_users_email ON ai_platform.users(email);
+CREATE INDEX IF NOT EXISTS idx_users_username ON ai_platform.users(username);
+CREATE INDEX IF NOT EXISTS idx_users_active ON ai_platform.users(is_active);
 
-            if check_port_available "$port_input"; then
-                LITELLM_PORT="$port_input"
-                print_success "LiteLLM port: $LITELLM_PORT"
-                break
-            else
-                print_error "Port $port_input is in use. Try another."
-            fi
-        done
-    fi
+-- API Keys indexes
+CREATE INDEX IF NOT EXISTS idx_api_keys_user ON ai_platform.api_keys(user_id);
+CREATE INDEX IF NOT EXISTS idx_api_keys_active ON ai_platform.api_keys(is_active);
 
-    echo ""
-    print_success "Port configuration complete"
+-- Conversations indexes
+CREATE INDEX IF NOT EXISTS idx_conversations_user ON ai_platform.conversations(user_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_created ON ai_platform.conversations(created_at DESC);
+
+-- Messages indexes
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON ai_platform.messages(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_messages_created ON ai_platform.messages(created_at DESC);
+
+-- Embeddings indexes
+CREATE INDEX IF NOT EXISTS idx_embeddings_source ON ai_platform.embeddings(source);
+CREATE INDEX IF NOT EXISTS idx_embeddings_vector ON ai_platform.embeddings USING ivfflat (embedding vector_cosine_ops);
+
+-- Workflow executions indexes
+CREATE INDEX IF NOT EXISTS idx_workflow_executions_workflow ON ai_platform.workflow_executions(workflow_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_executions_user ON ai_platform.workflow_executions(user_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_executions_status ON ai_platform.workflow_executions(status);
+CREATE INDEX IF NOT EXISTS idx_workflow_executions_started ON ai_platform.workflow_executions(started_at DESC);
+
+-- System metrics indexes
+CREATE INDEX IF NOT EXISTS idx_system_metrics_type ON ai_platform.system_metrics(metric_type);
+CREATE INDEX IF NOT EXISTS idx_system_metrics_recorded ON ai_platform.system_metrics(recorded_at DESC);
+
+-- Audit log indexes
+CREATE INDEX IF NOT EXISTS idx_audit_log_user ON ai_platform.audit_log(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_action ON ai_platform.audit_log(action);
+CREATE INDEX IF NOT EXISTS idx_audit_log_created ON ai_platform.audit_log(created_at DESC);
+
+-- ==============================================================================
+-- Functions and Triggers
+-- ==============================================================================
+
+-- Updated timestamp trigger function
+CREATE OR REPLACE FUNCTION ai_platform.update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Apply updated_at trigger to relevant tables
+DROP TRIGGER IF EXISTS update_users_updated_at ON ai_platform.users;
+CREATE TRIGGER update_users_updated_at
+    BEFORE UPDATE ON ai_platform.users
+    FOR EACH ROW
+    EXECUTE FUNCTION ai_platform.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_conversations_updated_at ON ai_platform.conversations;
+CREATE TRIGGER update_conversations_updated_at
+    BEFORE UPDATE ON ai_platform.conversations
+    FOR EACH ROW
+    EXECUTE FUNCTION ai_platform.update_updated_at_column();
+
+-- Function to calculate conversation duration
+CREATE OR REPLACE FUNCTION ai_platform.calculate_workflow_duration()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.finished_at IS NOT NULL AND NEW.started_at IS NOT NULL THEN
+        NEW.duration_ms = EXTRACT(EPOCH FROM (NEW.finished_at - NEW.started_at)) * 1000;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS calculate_workflow_execution_duration ON ai_platform.workflow_executions;
+CREATE TRIGGER calculate_workflow_execution_duration
+    BEFORE UPDATE OF finished_at ON ai_platform.workflow_executions
+    FOR EACH ROW
+    EXECUTE FUNCTION ai_platform.calculate_workflow_duration();
+
+-- ==============================================================================
+-- Initial Data
+-- ==============================================================================
+
+-- Insert default admin user (password: ChangeMeImmediately123!)
+INSERT INTO ai_platform.users (email, username, password_hash, is_admin)
+VALUES (
+    'admin@localhost',
+    'admin',
+    crypt('ChangeMeImmediately123!', gen_salt('bf', 10)),
+    true
+) ON CONFLICT (email) DO NOTHING;
+
+-- ==============================================================================
+-- Permissions
+-- ==============================================================================
+
+-- Grant schema usage
+GRANT USAGE ON SCHEMA ai_platform TO aiplatform;
+GRANT USAGE ON SCHEMA n8n TO aiplatform;
+GRANT USAGE ON SCHEMA qdrant_metadata TO aiplatform;
+
+-- Grant table permissions
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA ai_platform TO aiplatform;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA n8n TO aiplatform;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA qdrant_metadata TO aiplatform;
+
+-- Grant sequence permissions
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA ai_platform TO aiplatform;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA n8n TO aiplatform;
+
+-- Set default privileges
+ALTER DEFAULT PRIVILEGES IN SCHEMA ai_platform GRANT ALL ON TABLES TO aiplatform;
+ALTER DEFAULT PRIVILEGES IN SCHEMA n8n GRANT ALL ON TABLES TO aiplatform;
+
+EOF
+
+    # Performance tuning script
+    cat > "${init_dir}/02-performance-tuning.sql" << EOF
+-- ==============================================================================
+-- PostgreSQL Performance Tuning
+-- ==============================================================================
+
+-- Adjust planner settings
+ALTER SYSTEM SET random_page_cost = '1.1';
+ALTER SYSTEM SET effective_io_concurrency = '200';
+ALTER SYSTEM SET default_statistics_target = '100';
+
+-- Memory settings (these should match docker-compose environment variables)
+ALTER SYSTEM SET shared_buffers = '${POSTGRES_SHARED_BUFFERS:-4GB}';
+ALTER SYSTEM SET effective_cache_size = '${POSTGRES_EFFECTIVE_CACHE_SIZE:-12GB}';
+ALTER SYSTEM SET maintenance_work_mem = '${POSTGRES_MAINTENANCE_WORK_MEM:-1GB}';
+ALTER SYSTEM SET work_mem = '${POSTGRES_WORK_MEM:-20MB}';
+
+-- WAL settings
+ALTER SYSTEM SET wal_buffers = '${POSTGRES_WAL_BUFFERS:-16MB}';
+ALTER SYSTEM SET min_wal_size = '${POSTGRES_MIN_WAL_SIZE:-1GB}';
+ALTER SYSTEM SET max_wal_size = '${POSTGRES_MAX_WAL_SIZE:-4GB}';
+ALTER SYSTEM SET checkpoint_completion_target = '${POSTGRES_CHECKPOINT_COMPLETION_TARGET:-0.9}';
+
+-- Connection settings
+ALTER SYSTEM SET max_connections = '${POSTGRES_MAX_CONNECTIONS:-200}';
+
+-- Logging
+ALTER SYSTEM SET log_statement = 'mod';
+ALTER SYSTEM SET log_duration = 'on';
+ALTER SYSTEM SET log_line_prefix = '%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h ';
+ALTER SYSTEM SET log_min_duration_statement = '1000';
+
+-- Enable auto vacuum
+ALTER SYSTEM SET autovacuum = 'on';
+ALTER SYSTEM SET autovacuum_max_workers = '4';
+ALTER SYSTEM SET autovacuum_naptime = '30s';
+
+SELECT pg_reload_conf();
+EOF
+
+    # Maintenance script
+    cat > "${init_dir}/03-maintenance-functions.sql" << 'EOF'
+-- ==============================================================================
+-- Maintenance Functions
+-- ==============================================================================
+
+-- Function to clean old audit logs
+CREATE OR REPLACE FUNCTION ai_platform.cleanup_old_audit_logs(days_to_keep INTEGER DEFAULT 90)
+RETURNS INTEGER AS $$
+DECLARE
+    deleted_count INTEGER;
+BEGIN
+    DELETE FROM ai_platform.audit_log
+    WHERE created_at < CURRENT_TIMESTAMP - (days_to_keep || ' days')::INTERVAL;
+    
+    GET DIAGNOSTICS deleted_count = ROW_COUNT;
+    RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to clean old metrics
+CREATE OR REPLACE FUNCTION ai_platform.cleanup_old_metrics(days_to_keep INTEGER DEFAULT 30)
+RETURNS INTEGER AS $$
+DECLARE
+    deleted_count INTEGER;
+BEGIN
+    DELETE FROM ai_platform.system_metrics
+    WHERE recorded_at < CURRENT_TIMESTAMP - (days_to_keep || ' days')::INTERVAL;
+    
+    GET DIAGNOSTICS deleted_count = ROW_COUNT;
+    RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to get database statistics
+CREATE OR REPLACE FUNCTION ai_platform.get_database_stats()
+RETURNS TABLE (
+    table_name TEXT,
+    row_count BIGINT,
+    total_size TEXT,
+    index_size TEXT
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        schemaname || '.' || tablename AS table_name,
+        n_live_tup AS row_count,
+        pg_size_pretty(pg_total_relation_size(schemaname || '.' || tablename)) AS total_size,
+        pg_size_pretty(pg_indexes_size(schemaname || '.' || tablename)) AS index_size
+    FROM pg_stat_user_tables
+    WHERE schemaname = 'ai_platform'
+    ORDER BY pg_total_relation_size(schemaname || '.' || tablename) DESC;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to analyze query performance
+CREATE OR REPLACE FUNCTION ai_platform.get_slow_queries()
+RETURNS TABLE (
+    query TEXT,
+    calls BIGINT,
+    total_time DOUBLE PRECISION,
+    mean_time DOUBLE PRECISION,
+    max_time DOUBLE PRECISION
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        substring(pg_stat_statements.query, 1, 100) AS query,
+        pg_stat_statements.calls,
+        pg_stat_statements.total_exec_time AS total_time,
+        pg_stat_statements.mean_exec_time AS mean_time,
+        pg_stat_statements.max_exec_time AS max_time
+    FROM pg_stat_statements
+    WHERE pg_stat_statements.mean_exec_time > 100
+    ORDER BY pg_stat_statements.mean_exec_time DESC
+    LIMIT 20;
+END;
+$$ LANGUAGE plpgsql;
+
+EOF
+
+    log_success "PostgreSQL initialization scripts created"
+    save_state 11
 }
 
-#############################################
-# CREDENTIALS CONFIGURATION
-#############################################
+# ==============================================================================
+# OLLAMA SETUP
+# ==============================================================================
 
-configure_credentials() {
-    print_header "CREDENTIALS & SECURITY"
+create_ollama_init_script() {
+    log_step "Creating Ollama initialization script..."
+    
+    cat > "${BASE_DIR}/ollama-init.sh" << 'EOF'
+#!/bin/bash
+# ==============================================================================
+# Ollama Initialization Script
+# Purpose: Download and configure initial models
+# ==============================================================================
 
-    echo "Configure authentication credentials:"
-    echo "Leave blank to auto-generate secure passwords."
-    echo ""
+set -e
 
-    # PostgreSQL
-    if [ "$POSTGRES_ENABLED" = "true" ]; then
-        echo "${CYAN}PostgreSQL${NC}"
-        read -p "  Database user [$POSTGRES_USER]: " user_input
-        [ -n "$user_input" ] && POSTGRES_USER="$user_input"
+OLLAMA_HOST="${OLLAMA_HOST:-http://localhost:11434}"
+LOG_FILE="/var/log/ollama-init.log"
 
-        read -p "  Database name [$POSTGRES_DB]: " db_input
-        [ -n "$db_input" ] && POSTGRES_DB="$db_input"
-
-        read -sp "  Database password [auto-generate]: " pass_input
-        echo ""
-        if [ -n "$pass_input" ]; then
-            POSTGRES_PASSWORD="$pass_input"
-        else
-            POSTGRES_PASSWORD=$(generate_password)
-            print_info "  Generated password: ${POSTGRES_PASSWORD:0:4}...${POSTGRES_PASSWORD: -4}"
-        fi
-        echo ""
-    fi
-
-    # Qdrant
-    if [ "$QDRANT_ENABLED" = "true" ]; then
-        echo "${CYAN}Qdrant${NC}"
-        read -sp "  API key [auto-generate]: " key_input
-        echo ""
-        if [ -n "$key_input" ]; then
-            QDRANT_API_KEY="$key_input"
-        else
-            QDRANT_API_KEY=$(generate_key)
-            print_info "  Generated API key: ${QDRANT_API_KEY:0:8}...${QDRANT_API_KEY: -8}"
-        fi
-        echo ""
-    fi
-
-    # n8n
-    if [ "$N8N_ENABLED" = "true" ]; then
-        echo "${CYAN}n8n${NC}"
-        read -p "  Basic auth username [$N8N_BASIC_AUTH_USER]: " user_input
-        [ -n "$user_input" ] && N8N_BASIC_AUTH_USER="$user_input"
-
-        read -sp "  Basic auth password [auto-generate]: " pass_input
-        echo ""
-        if [ -n "$pass_input" ]; then
-            N8N_BASIC_AUTH_PASSWORD="$pass_input"
-        else
-            N8N_BASIC_AUTH_PASSWORD=$(generate_password)
-            print_info "  Generated password: ${N8N_BASIC_AUTH_PASSWORD:0:4}...${N8N_BASIC_AUTH_PASSWORD: -4}"
-        fi
-
-        # Encryption key (always auto-generate for security)
-        N8N_ENCRYPTION_KEY=$(generate_key)
-        print_info "  Generated encryption key: ${N8N_ENCRYPTION_KEY:0:8}...${N8N_ENCRYPTION_KEY: -8}"
-        echo ""
-    fi
-
-    # Open WebUI
-    if [ "$OPENWEBUI_ENABLED" = "true" ]; then
-        echo "${CYAN}Open WebUI${NC}"
-        # Secret key (always auto-generate for security)
-        OPENWEBUI_SECRET_KEY=$(generate_key)
-        print_info "  Generated secret key: ${OPENWEBUI_SECRET_KEY:0:8}...${OPENWEBUI_SECRET_KEY: -8}"
-        echo ""
-    fi
-
-    # LiteLLM
-    if [ "$LITELLM_ENABLED" = "true" ]; then
-        echo "${CYAN}LiteLLM${NC}"
-        read -sp "  Master key [auto-generate]: " key_input
-        echo ""
-        if [ -n "$key_input" ]; then
-            LITELLM_MASTER_KEY="$key_input"
-        else
-            LITELLM_MASTER_KEY=$(generate_key)
-            print_info "  Generated master key: ${LITELLM_MASTER_KEY:0:8}...${LITELLM_MASTER_KEY: -8}"
-        fi
-
-        # Database URL
-        if [ "$POSTGRES_ENABLED" = "true" ]; then
-            LITELLM_DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm"
-            print_info "  Database: litellm (on PostgreSQL)"
-        fi
-        echo ""
-    fi
-
-    print_success "Credentials configured"
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
 }
 
-#############################################
-# ADVANCED OPTIONS
-#############################################
-
-configure_advanced_options() {
-    print_header "ADVANCED OPTIONS"
-
-    echo "Configure advanced settings? (recommended for production)"
-    read -p "Configure advanced options? [y/N]: " configure_advanced
-
-    if [[ ! "$configure_advanced" =~ ^[Yy]$ ]]; then
-        print_info "Using default advanced settings"
-        return
-    fi
-
-    echo ""
-
-    # PostgreSQL tuning
-    if [ "$POSTGRES_ENABLED" = "true" ]; then
-        echo "${CYAN}PostgreSQL Performance Tuning${NC}"
-        read -p "  Max connections [$POSTGRES_MAX_CONNECTIONS]: " input
-        [ -n "$input" ] && POSTGRES_MAX_CONNECTIONS="$input"
-
-        read -p "  Shared buffers [$POSTGRES_SHARED_BUFFERS]: " input
-        [ -n "$input" ] && POSTGRES_SHARED_BUFFERS="$input"
-
-        read -p "  Work memory [$POSTGRES_WORK_MEM]: " input
-        [ -n "$input" ] && POSTGRES_WORK_MEM="$input"
-
-        echo ""
-    fi
-
-    # Qdrant tuning
-    if [ "$QDRANT_ENABLED" = "true" ]; then
-        echo "${CYAN}Qdrant Performance Tuning${NC}"
-        read -p "  Max segment size (KB) [$QDRANT_MAX_SEGMENT_SIZE_KB]: " input
-        [ -n "$input" ] && QDRANT_MAX_SEGMENT_SIZE_KB="$input"
-
-        read -p "  Indexing threshold (KB) [$QDRANT_INDEXING_THRESHOLD_KB]: " input
-        [ -n "$input" ] && QDRANT_INDEXING_THRESHOLD_KB="$input"
-
-        echo ""
-    fi
-
-    # Ollama tuning
-    if [ "$OLLAMA_ENABLED" = "true" ]; then
-        echo "${CYAN}Ollama Performance Tuning${NC}"
-        read -p "  Max loaded models [$OLLAMA_MAX_LOADED_MODELS]: " input
-        [ -n "$input" ] && OLLAMA_MAX_LOADED_MODELS="$input"
-
-        read -p "  Keep alive duration [$OLLAMA_KEEP_ALIVE]: " input
-        [ -n "$input" ] && OLLAMA_KEEP_ALIVE="$input"
-
-        read -p "  Context size [$OLLAMA_NUM_CTX]: " input
-        [ -n "$input" ] && OLLAMA_NUM_CTX="$input"
-
-        echo ""
-    fi
-
-    # n8n tuning
-    if [ "$N8N_ENABLED" = "true" ]; then
-        echo "${CYAN}n8n Performance Tuning${NC}"
-        read -p "  Save successful executions? [$N8N_EXECUTIONS_DATA_SAVE_ON_SUCCESS]: " input
-        [ -n "$input" ] && N8N_EXECUTIONS_DATA_SAVE_ON_SUCCESS="$input"
-
-        read -p"  Execution timeout (minutes) [$N8N_EXECUTIONS_TIMEOUT]: " input
-        [ -n "$input" ] && N8N_EXECUTIONS_TIMEOUT="$input"
-
-        read -p "  Max execution timeout (minutes) [$N8N_EXECUTIONS_TIMEOUT_MAX]: " input
-        [ -n "$input" ] && N8N_EXECUTIONS_TIMEOUT_MAX="$input"
-
-        echo ""
-    fi
-
-    # Open WebUI tuning
-    if [ "$OPENWEBUI_ENABLED" = "true" ]; then
-        echo "${CYAN}Open WebUI Configuration${NC}"
-        read -p "  Enable signup? [$OPENWEBUI_ENABLE_SIGNUP]: " input
-        [ -n "$input" ] && OPENWEBUI_ENABLE_SIGNUP="$input"
-
-        read -p "  Default models [$OPENWEBUI_DEFAULT_MODELS]: " input
-        [ -n "$input" ] && OPENWEBUI_DEFAULT_MODELS="$input"
-
-        echo ""
-    fi
-
-    # LiteLLM tuning
-    if [ "$LITELLM_ENABLED" = "true" ]; then
-        echo "${CYAN}LiteLLM Configuration${NC}"
-        read -p "  Enable telemetry? [$LITELLM_TELEMETRY]: " input
-        [ -n "$input" ] && LITELLM_TELEMETRY="$input"
-
-        read -p "  Request timeout (seconds) [$LITELLM_REQUEST_TIMEOUT]: " input
-        [ -n "$input" ] && LITELLM_REQUEST_TIMEOUT="$input"
-
-        echo ""
-    fi
-
-    print_success "Advanced options configured"
+wait_for_ollama() {
+    log "Waiting for Ollama to be ready..."
+    local max_attempts=30
+    local attempt=0
+    
+    while [ $attempt -lt $max_attempts ]; do
+        if curl -s "$OLLAMA_HOST/api/tags" > /dev/null 2>&1; then
+            log "Ollama is ready"
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        sleep 2
+    done
+    
+    log "ERROR: Ollama failed to start"
+    return 1
 }
 
-#############################################
-# OPTIONAL FEATURES
-#############################################
-
-configure_optional_features() {
-    print_header "OPTIONAL FEATURES"
-
-    echo "Configure optional integrations:"
-    echo ""
-
-    # Signal notifications
-    echo "${CYAN}Signal Notifications${NC}"
-    echo "  Send deployment notifications via Signal messenger"
-    read -p "Enable Signal notifications? [y/N]: " enable_signal
-    SIGNAL_ENABLED=$( [[ "$enable_signal" =~ ^[Yy]$ ]] && echo "true" || echo "false" )
-
-    if [ "$SIGNAL_ENABLED" = "true" ]; then
-        echo ""
-        echo "  Signal CLI must be installed and registered."
-        echo "  See: https://github.com/AsamK/signal-cli"
-        echo ""
-
-        read -p "  Your Signal phone number (e.g., +1234567890): " signal_phone
-        SIGNAL_PHONE="$signal_phone"
-
-        read -p "  Recipient phone number (e.g., +1234567890): " signal_recipient
-        SIGNAL_RECIPIENT="$signal_recipient"
-
-        read -p "  Signal CLI endpoint [$SIGNAL_ENDPOINT]: " signal_endpoint
-        [ -n "$signal_endpoint" ] && SIGNAL_ENDPOINT="$signal_endpoint"
-
-        print_info "  Signal will be tested during deployment"
+pull_model() {
+    local model=$1
+    log "Pulling model: $model"
+    
+    if curl -s -X POST "$OLLAMA_HOST/api/pull" \
+        -H "Content-Type: application/json" \
+        -d "{\"name\": \"$model\"}" | grep -q "success"; then
+        log "Successfully pulled: $model"
+        return 0
+    else
+        log "WARNING: Failed to pull $model"
+        return 1
     fi
-
-    echo ""
-    print_success "Optional features configured"
 }
-#############################################
-# DOCKER COMPOSE FILE GENERATION
-#############################################
+
+main() {
+    log "Starting Ollama initialization..."
+    
+    wait_for_ollama || exit 1
+    
+    # Pull essential models
+    pull_model "llama2:7b"
+    pull_model "mistral:7b"
+    pull_model "nomic-embed-text"
+    
+    # List available models
+    log "Available models:"
+    curl -s "$OLLAMA_HOST/api/tags" | jq -r '.models[].name' | tee -a "$LOG_FILE"
+    
+    log "Ollama initialization complete"
+}
+
+main "$@"
+EOF
+
+    chmod +x "${BASE_DIR}/ollama-init.sh"
+    log_success "Ollama initialization script created"
+    save_state 12
+}
+
+# ==============================================================================
+# QDRANT SETUP
+# ==============================================================================
+
+create_qdrant_init_script() {
+    log_step "Creating Qdrant initialization script..."
+    
+    cat > "${BASE_DIR}/qdrant-init.sh" << 'EOF'
+#!/bin/bash
+# ==============================================================================
+# Qdrant Initialization Script
+# Purpose: Create initial collections and configurations
+# ==============================================================================
+
+set -e
+
+QDRANT_HOST="${QDRANT_HOST:-http://localhost:6333}"
+LOG_FILE="/var/log/qdrant-init.log"
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
+}
+
+wait_for_qdrant() {
+    log "Waiting for Qdrant to be ready..."
+    local max_attempts=30
+    local attempt=0
+    
+    while [ $attempt -lt $max_attempts ]; do
+        if curl -s "$QDRANT_HOST/collections" > /dev/null 2>&1; then
+            log "Qdrant is ready"
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        sleep 2
+    done
+    
+    log "ERROR: Qdrant failed to start"
+    return 1
+}
+
+create_collection() {
+    local name=$1
+    local vector_size=$2
+    local distance=${3:-Cosine}
+    
+    log "Creating collection: $name (size: $vector_size, distance: $distance)"
+    
+    if curl -s -X PUT "$QDRANT_HOST/collections/$name" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"vectors\": {
+                \"size\": $vector_size,
+                \"distance\": \"$distance\"
+            },
+            \"optimizers_config\": {
+                \"indexing_threshold\": 10000
+            },
+            \"replication_factor\": 1
+        }" | grep -q "true"; then
+        log "Successfully created collection: $name"
+        return 0
+    else
+        log "WARNING: Failed to create collection $name (may already exist)"
+        return 1
+    fi
+}
+
+main() {
+    log "Starting Qdrant initialization..."
+    
+    wait_for_qdrant || exit 1
+    
+    # Create collections for different embedding models
+    create_collection "embeddings_openai" 1536 "Cosine"
+    create_collection "embeddings_nomic" 768 "Cosine"
+    create_collection "embeddings_ollama" 4096 "Cosine"
+    create_collection "documents" 1536 "Cosine"
+    create_collection "conversations" 1536 "Cosine"
+    
+    # List collections
+    log "Available collections:"
+    curl -s "$QDRANT_HOST/collections" | jq -r '.result.collections[].name' | tee -a "$LOG_FILE"
+    
+    log "Qdrant initialization complete"
+}
+
+main "$@"
+EOF
+
+    chmod +x "${BASE_DIR}/qdrant-init.sh"
+    log_success "Qdrant initialization script created"
+    save_state 13
+}
+# ==============================================================================
+# N8N WORKFLOW INITIALIZATION
+# ==============================================================================
+
+create_n8n_workflows() {
+    log_step "Creating n8n workflow templates..."
+
+    local workflow_dir="${N8N_DATA}/workflows"
+    mkdir -p "$workflow_dir"
+
+    # Health check workflow
+    cat > "${workflow_dir}/health-check-workflow.json" << 'EOF'
+{
+  "name": "System Health Check",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "=http://ollama:11434/api/tags",
+        "options": {}
+      },
+      "name": "Check Ollama",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [450, 200]
+    },
+    {
+      "parameters": {
+        "url": "=http://qdrant:6333/collections",
+        "options": {}
+      },
+      "name": "Check Qdrant",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [450, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(*) as user_count FROM ai_platform.users;"
+      },
+      "name": "Check PostgreSQL",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [450, 600],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "PostgreSQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json.statusCode}}",
+              "operation": "equal",
+              "value2": 200
+            }
+          ]
+        }
+      },
+      "name": "All Healthy",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "ai_platform.system_metrics",
+        "columns": "metric_type, metric_value, metadata",
+        "additionalFields": {}
+      },
+      "name": "Log Health Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [850, 300],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "PostgreSQL account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Check Ollama",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check Qdrant",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check PostgreSQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Ollama": {
+      "main": [
+        [
+          {
+            "node": "All Healthy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "All Healthy": {
+      "main": [
+        [
+          {
+            "node": "Log Health Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {},
+  "id": "health-check-workflow"
+}
+EOF
+
+    # Backup workflow
+    cat > "${workflow_dir}/backup-workflow.json" << 'EOF'
+{
+  "name": "Automated Backup",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 24
+            }
+          ]
+        }
+      },
+      "name": "Daily Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "command": "/root/scripts/backup.sh"
+      },
+      "name": "Run Backup Script",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "ai_platform.audit_log",
+        "columns": "action, resource_type, details"
+      },
+      "name": "Log Backup",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [650, 300],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "PostgreSQL account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily Schedule": {
+      "main": [
+        [
+          {
+            "node": "Run Backup Script",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Backup Script": {
+      "main": [
+        [
+          {
+            "node": "Log Backup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {},
+  "id": "backup-workflow"
+}
+EOF
+
+    log_success "n8n workflow templates created"
+    save_state 14
+}
+
+# ==============================================================================
+# DOCKER COMPOSE FILE GENERATION (FULLY CORRECTED)
+# ==============================================================================
 
 generate_docker_compose() {
-    print_header "GENERATING DOCKER COMPOSE"
-    
-    local compose_file="$BASE_PATH/config/docker-compose.yml"
-    
-    print_step "Creating docker-compose.yml..."
-    
-    cat > "$compose_file" << 'EOF'
+    log_step "Generating Docker Compose configuration..."
+
+    cat > "$DOCKER_COMPOSE_FILE" << EOF
+# ==============================================================================
+# Docker Compose Configuration for AI Platform
+# Version: 4.0 - Comprehensive Audit Remediation
+# Generated: $(date)
+# ==============================================================================
+
 version: '3.8'
 
 networks:
-  ai-platform:
+  ${DOCKER_NETWORK}:
     driver: bridge
+    ipam:
+      config:
+        - subnet: ${SUBNET}
 
 volumes:
   postgres_data:
-  qdrant_data:
+    driver: local
+    driver_opts:
+      type: none
+      device: ${POSTGRES_DATA}
+      o: bind
   ollama_data:
+    driver: local
+    driver_opts:
+      type: none
+      device: ${OLLAMA_DATA}
+      o: bind
   n8n_data:
-  openwebui_data:
+    driver: local
+    driver_opts:
+      type: none
+      device: ${N8N_DATA}
+      o: bind
+  qdrant_data:
+    driver: local
+    driver_opts:
+      type: none
+      device: ${QDRANT_DATA}
+      o: bind
 
 services:
-EOF
-
-    # Add PostgreSQL service
-    if [ "$POSTGRES_ENABLED" = "true" ]; then
-        cat >> "$compose_file" << EOF
-
+  # ============================================================================
+  # PostgreSQL Database
+  # ============================================================================
   postgres:
-    image: postgres:16-alpine
-    container_name: ai-postgres
+    image: pgvector/pgvector:${POSTGRES_VERSION:-pg16}
+    container_name: ai-platform-postgres
     restart: unless-stopped
     networks:
-      - ai-platform
+      ${DOCKER_NETWORK}:
+        aliases:
+          - postgres
     ports:
-      - "${POSTGRES_PORT}:5432"
+      - "127.0.0.1:${POSTGRES_PORT}:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+      # Performance tuning
+      POSTGRES_SHARED_BUFFERS: ${POSTGRES_SHARED_BUFFERS:-4GB}
+      POSTGRES_EFFECTIVE_CACHE_SIZE: ${POSTGRES_EFFECTIVE_CACHE_SIZE:-12GB}
+      POSTGRES_MAINTENANCE_WORK_MEM: ${POSTGRES_MAINTENANCE_WORK_MEM:-1GB}
+      POSTGRES_WORK_MEM: ${POSTGRES_WORK_MEM:-20MB}
+      POSTGRES_WAL_BUFFERS: ${POSTGRES_WAL_BUFFERS:-16MB}
+      POSTGRES_MIN_WAL_SIZE: ${POSTGRES_MIN_WAL_SIZE:-1GB}
+      POSTGRES_MAX_WAL_SIZE: ${POSTGRES_MAX_WAL_SIZE:-4GB}
+      POSTGRES_CHECKPOINT_COMPLETION_TARGET: ${POSTGRES_CHECKPOINT_COMPLETION_TARGET:-0.9}
+      POSTGRES_MAX_CONNECTIONS: ${POSTGRES_MAX_CONNECTIONS:-200}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ${BASE_PATH}/backups/postgres:/backups
-    env_file:
-      - ${BASE_PATH}/config/postgres.env
+      - ${BASE_DIR}/postgresql-init:/docker-entrypoint-initdb.d:ro
+      - ${BACKUP_DIR}/postgres:/backups
+      - ${LOG_DIR}/postgres:/var/log/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER}"]
+      test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER} -d \${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-EOF
-    fi
-
-    # Add Qdrant service
-    if [ "$QDRANT_ENABLED" = "true" ]; then
-        cat >> "$compose_file" << EOF
-
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: ai-qdrant
-    restart: unless-stopped
-    networks:
-      - ai-platform
-    ports:
-      - "${QDRANT_PORT}:6333"
-      - "${QDRANT_GRPC_PORT}:6334"
-    volumes:
-      - qdrant_data:/qdrant/storage
-      - ${BASE_PATH}/backups/qdrant:/backups
-    env_file:
-      - ${BASE_PATH}/config/qdrant.env
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:6333/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-EOF
-    fi
-
-    # Add Ollama service
-    if [ "$OLLAMA_ENABLED" = "true" ]; then
-        cat >> "$compose_file" << EOF
-
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ai-ollama
-    restart: unless-stopped
-    networks:
-      - ai-platform
-    ports:
-      - "${OLLAMA_PORT}:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-      - ${BASE_PATH}/models:/models
-    env_file:
-      - ${BASE_PATH}/config/ollama.env
-EOF
-
-        # Add GPU support if enabled
-        if [ "$OLLAMA_GPU_ENABLED" = "true" ]; then
-            cat >> "$compose_file" << EOF
+      start_period: 30s
+    shm_size: 256mb
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
+      - "-c"
+      - "pg_stat_statements.track=all"
+      - "-c"
+      - "max_connections=\${POSTGRES_MAX_CONNECTIONS:-200}"
+      - "-c"
+      - "shared_buffers=\${POSTGRES_SHARED_BUFFERS:-4GB}"
+      - "-c"
+      - "effective_cache_size=\${POSTGRES_EFFECTIVE_CACHE_SIZE:-12GB}"
+      - "-c"
+      - "maintenance_work_mem=\${POSTGRES_MAINTENANCE_WORK_MEM:-1GB}"
+      - "-c"
+      - "work_mem=\${POSTGRES_WORK_MEM:-20MB}"
+      - "-c"
+      - "wal_buffers=\${POSTGRES_WAL_BUFFERS:-16MB}"
+      - "-c"
+      - "min_wal_size=\${POSTGRES_MIN_WAL_SIZE:-1GB}"
+      - "-c"
+      - "max_wal_size=\${POSTGRES_MAX_WAL_SIZE:-4GB}"
+      - "-c"
+      - "checkpoint_completion_target=\${POSTGRES_CHECKPOINT_COMPLETION_TARGET:-0.9}"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "effective_io_concurrency=200"
+      - "-c"
+      - "log_statement=mod"
+      - "-c"
+      - "log_duration=on"
+      - "-c"
+      - "log_line_prefix=%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h "
+      - "-c"
+      - "log_min_duration_statement=1000"
     deploy:
       resources:
+        limits:
+          cpus: '${POSTGRES_CPU_LIMIT:-4.0}'
+          memory: ${POSTGRES_MEMORY_LIMIT:-16G}
         reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-EOF
-        fi
+          cpus: '${POSTGRES_CPU_RESERVATION:-2.0}'
+          memory: ${POSTGRES_MEMORY_RESERVATION:-8G}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-        cat >> "$compose_file" << EOF
+  # ============================================================================
+  # Ollama LLM Service
+  # ============================================================================
+  ollama:
+    image: ollama/ollama:${OLLAMA_VERSION:-latest}
+    container_name: ai-platform-ollama
+    restart: unless-stopped
+    networks:
+      ${DOCKER_NETWORK}:
+        aliases:
+          - ollama
+    ports:
+      - "127.0.0.1:${OLLAMA_PORT}:11434"
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_ORIGINS: "*"
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-4}
+      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-3}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-5m}
+    volumes:
+      - ollama_data:/root/.ollama
+      - ${LOG_DIR}/ollama:/var/log/ollama
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '${OLLAMA_CPU_LIMIT:-8.0}'
+          memory: ${OLLAMA_MEMORY_LIMIT:-32G}
+        reservations:
+          cpus: '${OLLAMA_CPU_RESERVATION:-4.0}'
+          memory: ${OLLAMA_MEMORY_RESERVATION:-16G}
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
-EOF
-    fi
 
-    # Add n8n service
-    if [ "$N8N_ENABLED" = "true" ]; then
-        cat >> "$compose_file" << EOF
-
+  # ============================================================================
+  # n8n Workflow Automation
+  # ============================================================================
   n8n:
-    image: n8nio/n8n:latest
-    container_name: ai-n8n
+    image: n8nio/n8n:${N8N_VERSION:-latest}
+    container_name: ai-platform-n8n
     restart: unless-stopped
     networks:
-      - ai-platform
+      ${DOCKER_NETWORK}:
+        aliases:
+          - n8n
     ports:
-      - "${N8N_PORT}:5678"
+      - "127.0.0.1:${N8N_PORT}:5678"
+    environment:
+      # Basic configuration
+      N8N_HOST: ${DOMAIN_NAME}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: https
+      WEBHOOK_URL: https://${DOMAIN_NAME}/
+
+      # Security
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_BASIC_AUTH_PASSWORD}
+      N8N_JWT_AUTH_ACTIVE: "true"
+      N8N_JWT_AUTH_HEADER: "Authorization"
+      N8N_JWT_AUTH_HEADER_VALUE_PREFIX: "Bearer"
+
+      # Database connection
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_POSTGRESDB_SCHEMA: n8n
+
+      # Execution
+      EXECUTIONS_DATA_SAVE_ON_ERROR: "all"
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: "all"
+      EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS: "true"
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: 336  # 14 days
+
+      # Timezone
+      GENERIC_TIMEZONE: ${TIMEZONE:-America/New_York}
+      TZ: ${TIMEZONE:-America/New_York}
+
+      # Logging
+      N8N_LOG_LEVEL: ${N8N_LOG_LEVEL:-info}
+      N8N_LOG_OUTPUT: console,file
+      N8N_LOG_FILE_LOCATION: /home/node/.n8n/logs/
+      N8N_LOG_FILE_COUNT_MAX: 10
+      N8N_LOG_FILE_SIZE_MAX: 10
+
+      # Performance
+      N8N_CONCURRENCY_PRODUCTION_LIMIT: ${N8N_CONCURRENCY_LIMIT:-10}
+
+      # External services
+      N8N_METRICS: "true"
+      N8N_DIAGNOSTICS_ENABLED: "true"
     volumes:
       - n8n_data:/home/node/.n8n
-      - ${BASE_PATH}/workflows:/workflows
-    env_file:
-      - ${BASE_PATH}/config/n8n.env
-EOF
-
-        # Add PostgreSQL dependency if enabled
-        if [ "$POSTGRES_ENABLED" = "true" ]; then
-            cat >> "$compose_file" << EOF
-    depends_on:
-      postgres:
-        condition: service_healthy
-EOF
-        fi
-
-        cat >> "$compose_file" << EOF
+      - ${LOG_DIR}/n8n:/home/node/.n8n/logs
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5678/healthz"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5678/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-EOF
-    fi
-
-    # Add Open WebUI service
-    if [ "$OPENWEBUI_ENABLED" = "true" ]; then
-        cat >> "$compose_file" << EOF
-
-  openwebui:
-    image: ghcr.io/open-webui/open-webui:main
-    container_name: ai-openwebui
-    restart: unless-stopped
-    networks:
-      - ai-platform
-    ports:
-      - "${OPENWEBUI_PORT}:8080"
-    volumes:
-      - openwebui_data:/app/backend/data
-      - ${BASE_PATH}/uploads:/app/backend/uploads
-    env_file:
-      - ${BASE_PATH}/config/openwebui.env
-EOF
-
-        # Add dependencies
-        local deps_added=false
-        if [ "$OLLAMA_ENABLED" = "true" ] || [ "$POSTGRES_ENABLED" = "true" ]; then
-            cat >> "$compose_file" << EOF
+      start_period: 45s
     depends_on:
-EOF
-            deps_added=true
-        fi
-
-        if [ "$OLLAMA_ENABLED" = "true" ]; then
-            cat >> "$compose_file" << EOF
+      postgres:
+        condition: service_healthy
       ollama:
         condition: service_healthy
-EOF
-        fi
-
-        if [ "$POSTGRES_ENABLED" = "true" ]; then
-            cat >> "$compose_file" << EOF
-      postgres:
+      qdrant:
         condition: service_healthy
-EOF
-        fi
-
-        cat >> "$compose_file" << EOF
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '${N8N_CPU_LIMIT:-2.0}'
+          memory: ${N8N_MEMORY_LIMIT:-4G}
+        reservations:
+          cpus: '${N8N_CPU_RESERVATION:-1.0}'
+          memory: ${N8N_MEMORY_RESERVATION:-2G}
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
-EOF
-    fi
 
-    # Add LiteLLM service
-    if [ "$LITELLM_ENABLED" = "true" ]; then
-        cat >> "$compose_file" << EOF
-
-  litellm:
-    image: ghcr.io/berriai/litellm:main-latest
-    container_name: ai-litellm
+  # ============================================================================
+  # Qdrant Vector Database
+  # ============================================================================
+  qdrant:
+    image: qdrant/qdrant:${QDRANT_VERSION:-latest}
+    container_name: ai-platform-qdrant
     restart: unless-stopped
     networks:
-      - ai-platform
+      ${DOCKER_NETWORK}:
+        aliases:
+          - qdrant
     ports:
-      - "${LITELLM_PORT}:4000"
+      - "127.0.0.1:${QDRANT_PORT}:6333"
+      - "127.0.0.1:${QDRANT_GRPC_PORT:-6334}:6334"
+    environment:
+      QDRANT__SERVICE__GRPC_PORT: ${QDRANT_GRPC_PORT:-6334}
+      QDRANT__SERVICE__HTTP_PORT: 6333
+      QDRANT__LOG_LEVEL: ${QDRANT_LOG_LEVEL:-INFO}
+      QDRANT__STORAGE__STORAGE_PATH: /qdrant/storage
+      QDRANT__STORAGE__SNAPSHOTS_PATH: /qdrant/snapshots
+      QDRANT__STORAGE__ON_DISK_PAYLOAD: "true"
+      QDRANT__STORAGE__WAL__WAL_CAPACITY_MB: 32
+      QDRANT__STORAGE__OPTIMIZERS__DEFAULT_SEGMENT_NUMBER: 2
+      QDRANT__SERVICE__MAX_REQUEST_SIZE_MB: 32
+      QDRANT__SERVICE__MAX_WORKERS: ${QDRANT_MAX_WORKERS:-4}
     volumes:
-      - ${BASE_PATH}/config/litellm:/app/config
-      - ${BASE_PATH}/logs/litellm:/app/logs
-    env_file:
-      - ${BASE_PATH}/config/litellm.env
-    command: --config /app/config/config.yaml --port 4000
-EOF
-
-        # Add dependencies
-        if [ "$POSTGRES_ENABLED" = "true" ]; then
-            cat >> "$compose_file" << EOF
-    depends_on:
-      postgres:
-        condition: service_healthy
-EOF
-        fi
-
-        cat >> "$compose_file" << EOF
+      - qdrant_data:/qdrant/storage
+      - ${BACKUP_DIR}/qdrant:/qdrant/snapshots
+      - ${LOG_DIR}/qdrant:/qdrant/logs
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:6333/"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '${QDRANT_CPU_LIMIT:-4.0}'
+          memory: ${QDRANT_MEMORY_LIMIT:-8G}
+        reservations:
+          cpus: '${QDRANT_CPU_RESERVATION:-2.0}'
+          memory: ${QDRANT_MEMORY_RESERVATION:-4G}
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
-EOF
-    fi
 
-    print_success "docker-compose.yml created"
+  # ============================================================================
+  # Nginx Reverse Proxy
+  # ============================================================================
+  nginx:
+    image: nginx:${NGINX_VERSION:-alpine}
+    container_name: ai-platform-nginx
+    restart: unless-stopped
+    networks:
+      ${DOCKER_NETWORK}:
+        aliases:
+          - nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN_NAME: ${DOMAIN_NAME}
+      N8N_PORT: ${N8N_PORT}
+      OLLAMA_PORT: ${OLLAMA_PORT}
+      QDRANT_PORT: ${QDRANT_PORT}
+    volumes:
+      - ${BASE_DIR}/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${BASE_DIR}/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ${BASE_DIR}/ssl:/etc/nginx/ssl:ro
+      - ${LOG_DIR}/nginx:/var/log/nginx
+      - ${BASE_DIR}/nginx/html:/usr/share/nginx/html:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      - n8n
+      - ollama
+      - qdrant
+    deploy:
+      resources:
+        limits:
+          cpus: '${NGINX_CPU_LIMIT:-1.0}'
+          memory: ${NGINX_MEMORY_LIMIT:-512M}
+        reservations:
+          cpus: '${NGINX_CPU_RESERVATION:-0.5}'
+          memory: ${NGINX_MEMORY_RESERVATION:-256M}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ============================================================================
+  # Redis Cache (for session management and caching)
+  # ============================================================================
+  redis:
+    image: redis:${REDIS_VERSION:-alpine}
+    container_name: ai-platform-redis
+    restart: unless-stopped
+    networks:
+      ${DOCKER_NETWORK}:
+        aliases:
+          - redis
+    ports:
+      - "127.0.0.1:6379:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory ${REDIS_MAXMEMORY:-2gb}
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+    volumes:
+      - ${DATA_DIR}/redis:/data
+      - ${LOG_DIR}/redis:/var/log/redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '${REDIS_CPU_LIMIT:-1.0}'
+          memory: ${REDIS_MEMORY_LIMIT:-2G}
+        reservations:
+          cpus: '${REDIS_CPU_RESERVATION:-0.5}'
+          memory: ${REDIS_MEMORY_RESERVATION:-1G}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+EOF
+
+    log_success "Docker Compose configuration generated"
+    save_state 15
 }
 
-#############################################
-# MAIN .ENV FILE GENERATION
-#############################################
+# ==============================================================================
+# NGINX CONFIGURATION
+# ==============================================================================
 
-generate_main_env() {
-    print_header "GENERATING MAIN ENV FILE"
-    
-    local env_file="$BASE_PATH/config/.env"
-    
-    print_step "Creating .env..."
-    
-    cat > "$env_file" << EOF
-#############################################
-# AI Platform Configuration
-# Generated: $(date)
-# Base Path: $BASE_PATH
-#############################################
+generate_nginx_config() {
+    log_step "Generating Nginx configuration..."
 
-# Base configuration
-BASE_PATH=$BASE_PATH
-COMPOSE_PROJECT_NAME=ai-platform
+    local nginx_dir="${BASE_DIR}/nginx"
+    mkdir -p "${nginx_dir}/conf.d" "${nginx_dir}/html"
 
-# Service enablement
-POSTGRES_ENABLED=$POSTGRES_ENABLED
-QDRANT_ENABLED=$QDRANT_ENABLED
-OLLAMA_ENABLED=$OLLAMA_ENABLED
-N8N_ENABLED=$N8N_ENABLED
-OPENWEBUI_ENABLED=$OPENWEBUI_ENABLED
-LITELLM_ENABLED=$LITELLM_ENABLED
+    # Main nginx.conf
+    cat > "${nginx_dir}/nginx.conf" << 'EOF'
+user nginx;
+worker_processes auto;
+error_log /var/log/nginx/error.log warn;
+pid /var/run/nginx.pid;
 
-# Port configuration
-POSTGRES_PORT=$POSTGRES_PORT
-QDRANT_PORT=$QDRANT_PORT
-QDRANT_GRPC_PORT=$QDRANT_GRPC_PORT
-OLLAMA_PORT=$OLLAMA_PORT
-N8N_PORT=$N8N_PORT
-OPENWEBUI_PORT=$OPENWEBUI_PORT
-LITELLM_PORT=$LITELLM_PORT
-
-# Optional features
-SIGNAL_ENABLED=$SIGNAL_ENABLED
-EOF
-
-    if [ "$SIGNAL_ENABLED" = "true" ]; then
-        cat >> "$env_file" << EOF
-SIGNAL_PHONE=$SIGNAL_PHONE
-SIGNAL_RECIPIENT=$SIGNAL_RECIPIENT
-SIGNAL_ENDPOINT=$SIGNAL_ENDPOINT
-EOF
-    fi
-
-    print_success ".env created"
+events {
+    worker_connections 4096;
+    use epoll;
+    multi_accept on;
 }
 
-#############################################
-# POSTGRESQL ENV GENERATION
-#############################################
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
 
-generate_postgres_env() {
-    if [ "$POSTGRES_ENABLED" != "true" ]; then
-        return
-    fi
-    
-    print_step "Creating postgres.env..."
-    
-    local env_file="$BASE_PATH/config/postgres.env"
-    
-    cat > "$env_file" << EOF
-#############################################
-# PostgreSQL Configuration
-#############################################
+    # Logging
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" "$http_x_forwarded_for" '
+                    'rt=$request_time uct="$upstream_connect_time" '
+                    'uht="$upstream_header_time" urt="$upstream_response_time"';
 
-POSTGRES_USER=$POSTGRES_USER
-POSTGRES_PASSWORD=$POSTGRES_PASSWORD
-POSTGRES_DB=$POSTGRES_DB
+    access_log /var/log/nginx/access.log main;
 
-# Performance tuning
-POSTGRES_MAX_CONNECTIONS=$POSTGRES_MAX_CONNECTIONS
-POSTGRES_SHARED_BUFFERS=$POSTGRES_SHARED_BUFFERS
-POSTGRES_WORK_MEM=$POSTGRES_WORK_MEM
-POSTGRES_MAINTENANCE_WORK_MEM=$POSTGRES_MAINTENANCE_WORK_MEM
-POSTGRES_EFFECTIVE_CACHE_SIZE=$POSTGRES_EFFECTIVE_CACHE_SIZE
+    # Performance
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+    client_max_body_size 100M;
 
-# WAL configuration
-POSTGRES_WAL_LEVEL=replica
-POSTGRES_MAX_WAL_SENDERS=3
-POSTGRES_MAX_REPLICATION_SLOTS=3
+    # Buffers
+    client_body_buffer_size 128k;
+    client_header_buffer_size 1k;
+    large_client_header_buffers 4 16k;
+
+    # Timeouts
+    client_body_timeout 12;
+    client_header_timeout 12;
+    send_timeout 10;
+
+    # Compression
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1000;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_types text/plain text/css text/xml text/javascript
+               application/json application/javascript application/xml+rss
+               application/rss+xml application/atom+xml image/svg+xml
+               text/x-component text/x-cross-domain-policy;
+    gzip_disable "msie6";
+
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "no-referrer-when-downgrade" always;
+
+    # Rate limiting
+    limit_req_zone $binary_remote_addr zone=general:10m rate=10r/s;
+    limit_req_zone $binary_remote_addr zone=api:10m rate=100r/s;
+    limit_conn_zone $binary_remote_addr zone=addr:10m;
+
+    # Include site configurations
+    include /etc/nginx/conf.d/*.conf;
+}
+EOF
+
+    # Site configuration
+    cat > "${nginx_dir}/conf.d/default.conf" << EOF
+# ==============================================================================
+# AI Platform Nginx Configuration
+# ==============================================================================
+
+# Upstream definitions
+upstream n8n_backend {
+    server n8n:5678;
+    keepalive 32;
+}
+
+upstream ollama_backend {
+    server ollama:11434;
+    keepalive 32;
+}
+
+upstream qdrant_backend {
+    server qdrant:6333;
+    keepalive 32;
+}
+
+# HTTP to HTTPS redirect
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${DOMAIN_NAME};
+
+    # ACME challenge for Let's Encrypt
+    location /.well-known/acme-challenge/ {
+        root /usr/share/nginx/html;
+    }
+
+    # Health check endpoint
+    location /health {
+        access_log off;
+        return 200 "healthy\n";
+        add_header Content-Type text/plain;
+    }
+
+    # Redirect all other traffic to HTTPS
+    location / {
+        return 301 https://\$server_name\$request_uri;
+    }
+}
+
+# HTTPS server
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ${DOMAIN_NAME};
+
+    # SSL configuration
+    ssl_certificate /etc/nginx/ssl/fullchain.pem;
+    ssl_certificate_key /etc/nginx/ssl/privkey.pem;
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:SSL:50m;
+    ssl_session_tickets off;
+
+    # Modern SSL configuration
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384';
+    ssl_prefer_server_ciphers off;
+
+    # HSTS
+    add_header Strict-Transport-Security "max-age=63072000" always;
+
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "no-referrer-when-downgrade" always;
+
+    # Root location
+    location / {
+        root /usr/share/nginx/html;
+        index index.html;
+        try_files \$uri \$uri/ =404;
+    }
+
+    # n8n workflow automation
+    location /n8n/ {
+        limit_req zone=general burst=20 nodelay;
+        limit_conn addr 10;
+
+        proxy_pass http://n8n_backend/;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Port \$server_port;
+
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Upgrade \$http_upgrade;
+
+        proxy_buffering off;
+        proxy_cache_bypass \$http_upgrade;
+
+        proxy_connect_timeout 90s;
+        proxy_send_timeout 90s;
+        proxy_read_timeout 90s;
+    }
+
+    # Ollama API
+    location /ollama/ {
+        limit_req zone=api burst=50 nodelay;
+
+        proxy_pass http://ollama_backend/;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+
+        proxy_buffering off;
+        proxy_request_buffering off;
+
+        proxy_connect_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+
+        client_max_body_size 100M;
+    }
+
+    # Qdrant vector database
+    location /qdrant/ {
+        limit_req zone=api burst=100 nodelay;
+
+        proxy_pass http://qdrant_backend/;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+
+        proxy_buffering off;
+
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+    # Health check endpoint
+    location /health {
+        access_log off;
+        return 200 "healthy\n";
+        add_header Content-Type text/plain;
+    }
+
+    # Status endpoint (restricted to localhost)
+    location /nginx_status {
+        stub_status on;
+        access_log off;
+        allow 127.0.0.1;
+        deny all;
+    }
+}
+EOF
+
+    # Create default index.html
+    cat > "${nginx_dir}/html/index.html" << 'EOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Platform</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            text-align: center;
+            padding: 2rem;
+            max-width: 800px;
+        }
+        h1 {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        p {
+            font-size: 1.2rem;
+            margin-bottom: 2rem;
+            opacity: 0.9;
+        }
+        .services {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+            margin-top: 3rem;
+        }
+        .service {
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            padding: 2rem;
+            border-radius: 15px;
+            transition: transform 0.3s ease, background 0.3s ease;
+        }
+        .service:hover {
+            transform: translateY(-5px);
+            background: rgba(255,255,255,0.2);
+        }
+        .service h3 {
+            margin-bottom: 0.5rem;
+            font-size: 1.5rem;
+        }
+        .service p {
+            font-size: 0.9rem;
+            margin-bottom: 1rem;
+        }
+        .service a {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            background: rgba(255,255,255,0.2);
+            color: #fff;
+            text-decoration: none;
+            border-radius: 5px;
+            transition: background 0.3s ease;
+        }
+        .service a:hover {
+            background: rgba(255,255,255,0.3);
+        }
+        .status {
+            margin-top: 3rem;
+            padding: 1rem;
+            background: rgba(255,255,255,0.1);
+            border-radius: 10px;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #4ade80;
+            margin-right: 0.5rem;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 AI Platform</h1>
+        <p>Your comprehensive AI development and deployment environment</p>
+
+        <div class="services">
+            <div class="service">
+                <h3>n8n</h3>
+                <p>Workflow Automation</p>
+                <a href="/n8n/">Access n8n</a>
+            </div>
+            <div class="service">
+                <h3>Ollama</h3>
+                <p>LLM Service</p>
+                <a href="/ollama/api/tags">View Models</a>
+            </div>
+            <div class="service">
+                <h3>Qdrant</h3>
+                <p>Vector Database</p>
+                <a href="/qdrant/collections">View Collections</a>
+            </div>
+        </div>
+
+        <div class="status">
+            <span class="status-indicator"></span>
+            <span>All systems operational</span>
+        </div>
+    </div>
+</body>
+</html>
+EOF
+
+    log_success "Nginx configuration generated"
+    save_state 16
+}
+# ==============================================================================
+# SYSTEMD SERVICE CONFIGURATION
+# ==============================================================================
+
+create_systemd_service() {
+    log_step "Creating systemd service..."
+
+    cat > /etc/systemd/system/ai-platform.service << EOF
+[Unit]
+Description=AI Platform Docker Compose Services
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=${BASE_DIR}
+EnvironmentFile=${CONFIG_FILE}
+
+# Pre-start checks
+ExecStartPre=/usr/bin/docker network inspect ${DOCKER_NETWORK} || /usr/bin/docker network create --driver bridge --subnet ${SUBNET} ${DOCKER_NETWORK}
+ExecStartPre=/bin/sleep 2
+
+# Start services
+ExecStart=/usr/bin/docker compose -f ${DOCKER_COMPOSE_FILE} up -d
+
+# Health check after start
+ExecStartPost=/bin/sleep 10
+ExecStartPost=${BASE_DIR}/health-check.sh
+
+# Stop services
+ExecStop=/usr/bin/docker compose -f ${DOCKER_COMPOSE_FILE} down
+
+# Reload services
+ExecReload=/usr/bin/docker compose -f ${DOCKER_COMPOSE_FILE} restart
+
+# Restart policy
+Restart=on-failure
+RestartSec=30s
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
 
 # Logging
-POSTGRES_LOG_STATEMENT=none
-POSTGRES_LOG_DURATION=off
-POSTGRES_LOG_MIN_DURATION_STATEMENT=1000
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai-platform
+
+[Install]
+WantedBy=multi-user.target
 EOF
 
-    print_success "postgres.env created"
+    # Reload systemd and enable service
+    systemctl daemon-reload
+    systemctl enable ai-platform.service
+
+    log_success "Systemd service created and enabled"
+    save_state 17
 }
 
-#############################################
-# QDRANT ENV GENERATION
-#############################################
+# ==============================================================================
+# BACKUP SCRIPT GENERATION
+# ==============================================================================
 
-generate_qdrant_env() {
-    if [ "$QDRANT_ENABLED" != "true" ]; then
-        return
-    fi
-    
-    print_step "Creating qdrant.env..."
-    
-    local env_file="$BASE_PATH/config/qdrant.env"
-    
-    cat > "$env_file" << EOF
-#############################################
-# Qdrant Configuration
-#############################################
+create_backup_script() {
+    log_step "Creating backup script..."
 
-QDRANT__SERVICE__HTTP_PORT=6333
-QDRANT__SERVICE__GRPC_PORT=6334
+    cat > "${BASE_DIR}/backup.sh" << 'EOF'
+#!/bin/bash
+# ==============================================================================
+# AI Platform Backup Script
+# ==============================================================================
 
-# API Key
-QDRANT__SERVICE__API_KEY=$QDRANT_API_KEY
+set -euo pipefail
 
-# Performance tuning
-QDRANT__STORAGE__PERFORMANCE__MAX_SEARCH_THREADS=$QDRANT_MAX_SEARCH_THREADS
-QDRANT__STORAGE__OPTIMIZERS__DEFAULT_SEGMENT_NUMBER=$QDRANT_DEFAULT_SEGMENT_NUMBER
-QDRANT__STORAGE__OPTIMIZERS__INDEXING_THRESHOLD_KB=$QDRANT_INDEXING_THRESHOLD_KB
-QDRANT__STORAGE__OPTIMIZERS__MAX_SEGMENT_SIZE_KB=$QDRANT_MAX_SEGMENT_SIZE_KB
+# Configuration
+BACKUP_BASE="/mnt/data/backups"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+RETENTION_DAYS=30
 
-# WAL configuration
-QDRANT__STORAGE__WAL__WAL_CAPACITY_MB=$QDRANT_WAL_CAPACITY_MB
-QDRANT__STORAGE__WAL__WAL_SEGMENTS_AHEAD=$QDRANT_WAL_SEGMENTS_AHEAD
-
-# Snapshots
-QDRANT__STORAGE__SNAPSHOTS__ENABLED=true
-QDRANT__STORAGE__SNAPSHOTS__PATH=/qdrant/storage/snapshots
-
-# Telemetry
-QDRANT__TELEMETRY_DISABLED=$QDRANT_TELEMETRY_DISABLED
-EOF
-
-    print_success "qdrant.env created"
+# Logging
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "${BACKUP_BASE}/backup.log"
 }
 
-#############################################
-# OLLAMA ENV GENERATION
-#############################################
-
-generate_ollama_env() {
-    if [ "$OLLAMA_ENABLED" != "true" ]; then
-        return
-    fi
-    
-    print_step "Creating ollama.env..."
-    
-    local env_file="$BASE_PATH/config/ollama.env"
-    
-    cat > "$env_file" << EOF
-#############################################
-# Ollama Configuration
-#############################################
-
-OLLAMA_HOST=0.0.0.0:11434
-
-# Model configuration
-OLLAMA_MODELS=$OLLAMA_MODELS
-OLLAMA_KEEP_ALIVE=$OLLAMA_KEEP_ALIVE
-OLLAMA_MAX_LOADED_MODELS=$OLLAMA_MAX_LOADED_MODELS
-
-# Context and performance
-OLLAMA_NUM_PARALLEL=$OLLAMA_NUM_PARALLEL
-OLLAMA_NUM_CTX=$OLLAMA_NUM_CTX
-OLLAMA_NUM_THREAD=$OLLAMA_NUM_THREAD
-
-# GPU configuration
-OLLAMA_GPU_ENABLED=$OLLAMA_GPU_ENABLED
-EOF
-
-    if [ "$OLLAMA_GPU_ENABLED" = "true" ]; then
-        cat >> "$env_file" << EOF
-NVIDIA_VISIBLE_DEVICES=all
-NVIDIA_DRIVER_CAPABILITIES=compute,utility
-EOF
-    fi
-
-    print_success "ollama.env created"
+error_exit() {
+    log "ERROR: $1"
+    exit 1
 }
 
-#############################################
-# N8N ENV GENERATION
-#############################################
+# Create timestamped backup directory
+BACKUP_DIR="${BACKUP_BASE}/${TIMESTAMP}"
+mkdir -p "${BACKUP_DIR}"
 
-generate_n8n_env() {
-    if [ "$N8N_ENABLED" != "true" ]; then
-        return
+log "Starting backup to ${BACKUP_DIR}"
+
+# ==============================================================================
+# PostgreSQL Backup
+# ==============================================================================
+log "Backing up PostgreSQL..."
+docker exec ai-platform-postgres pg_dumpall -U "${POSTGRES_USER}" | \
+    gzip > "${BACKUP_DIR}/postgres_full_${TIMESTAMP}.sql.gz" || \
+    error_exit "PostgreSQL backup failed"
+
+# Individual database backup with custom format
+docker exec ai-platform-postgres pg_dump -U "${POSTGRES_USER}" \
+    -Fc -f "/backups/postgres_${POSTGRES_DB}_${TIMESTAMP}.dump" \
+    "${POSTGRES_DB}" || log "WARNING: Custom format backup failed"
+
+log "PostgreSQL backup completed"
+
+# ==============================================================================
+# Ollama Models Backup
+# ==============================================================================
+log "Backing up Ollama models..."
+OLLAMA_BACKUP="${BACKUP_DIR}/ollama_${TIMESTAMP}.tar.gz"
+tar czf "${OLLAMA_BACKUP}" -C /mnt/data/ollama . || \
+    log "WARNING: Ollama backup failed"
+
+log "Ollama backup completed"
+
+# ==============================================================================
+# n8n Data Backup
+# ==============================================================================
+log "Backing up n8n data..."
+N8N_BACKUP="${BACKUP_DIR}/n8n_${TIMESTAMP}.tar.gz"
+tar czf "${N8N_BACKUP}" -C /mnt/data/n8n . || \
+    log "WARNING: n8n backup failed"
+
+log "n8n backup completed"
+
+# ==============================================================================
+# Qdrant Snapshot
+# ==============================================================================
+log "Creating Qdrant snapshot..."
+docker exec ai-platform-qdrant curl -X POST \
+    "http://localhost:6333/snapshots" || \
+    log "WARNING: Qdrant snapshot failed"
+
+# Copy Qdrant data
+QDRANT_BACKUP="${BACKUP_DIR}/qdrant_${TIMESTAMP}.tar.gz"
+tar czf "${QDRANT_BACKUP}" -C /mnt/data/qdrant . || \
+    log "WARNING: Qdrant backup failed"
+
+log "Qdrant backup completed"
+
+# ==============================================================================
+# Configuration Backup
+# ==============================================================================
+log "Backing up configuration files..."
+CONFIG_BACKUP="${BACKUP_DIR}/config_${TIMESTAMP}.tar.gz"
+tar czf "${CONFIG_BACKUP}" \
+    /root/scripts/config.env \
+    /root/scripts/docker-compose.yml \
+    /root/scripts/nginx \
+    /root/scripts/ssl \
+    /root/scripts/postgresql-init \
+    2>/dev/null || log "WARNING: Config backup incomplete"
+
+log "Configuration backup completed"
+
+# ==============================================================================
+# Verification
+# ==============================================================================
+log "Verifying backups..."
+for file in "${BACKUP_DIR}"/*.{gz,dump}; do
+    if [ -f "$file" ]; then
+        size=$(du -h "$file" | cut -f1)
+        log "  - $(basename "$file"): $size"
     fi
-    
-    print_step "Creating n8n.env..."
-    
-    local env_file="$BASE_PATH/config/n8n.env"
-    
-    cat > "$env_file" << EOF
-#############################################
-# n8n Configuration
-#############################################
+done
 
-# Basic auth
-N8N_BASIC_AUTH_ACTIVE=true
-N8N_BASIC_AUTH_USER=$N8N_BASIC_AUTH_USER
-N8N_BASIC_AUTH_PASSWORD=$N8N_BASIC_AUTH_PASSWORD
+# Calculate total backup size
+TOTAL_SIZE=$(du -sh "${BACKUP_DIR}" | cut -f1)
+log "Total backup size: ${TOTAL_SIZE}"
 
-# Encryption
-N8N_ENCRYPTION_KEY=$N8N_ENCRYPTION_KEY
+# ==============================================================================
+# Cleanup Old Backups
+# ==============================================================================
+log "Cleaning up backups older than ${RETENTION_DAYS} days..."
+find "${BACKUP_BASE}" -maxdepth 1 -type d -mtime +${RETENTION_DAYS} -exec rm -rf {} \; 2>/dev/null || true
 
-# Webhook configuration
-N8N_HOST=0.0.0.0
-N8N_PORT=5678
-N8N_PROTOCOL=http
-WEBHOOK_URL=http://localhost:$N8N_PORT/
+REMAINING=$(find "${BACKUP_BASE}" -maxdepth 1 -type d | wc -l)
+log "Remaining backup sets: $((REMAINING - 1))"
 
-# Execution configuration
-N8N_EXECUTIONS_DATA_SAVE_ON_ERROR=$N8N_EXECUTIONS_DATA_SAVE_ON_ERROR
-N8N_EXECUTIONS_DATA_SAVE_ON_SUCCESS=$N8N_EXECUTIONS_DATA_SAVE_ON_SUCCESS
-N8N_EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=$N8N_EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS
+# ==============================================================================
+# Backup Completion
+# ==============================================================================
+log "Backup completed successfully"
 
-# Timeout configuration
-EXECUTIONS_TIMEOUT=$N8N_EXECUTIONS_TIMEOUT
-EXECUTIONS_TIMEOUT_MAX=$N8N_EXECUTIONS_TIMEOUT_MAX
+# Optional: Upload to remote storage
+if [ -n "${BACKUP_REMOTE_PATH:-}" ]; then
+    log "Uploading to remote storage..."
+    rsync -az --delete "${BACKUP_DIR}/" "${BACKUP_REMOTE_PATH}/" || \
+        log "WARNING: Remote upload failed"
+fi
 
-# Performance
-N8N_CONCURRENCY_PRODUCTION_LIMIT=$N8N_CONCURRENCY_PRODUCTION_LIMIT
+exit 0
 EOF
 
-    # Add PostgreSQL configuration if enabled
-    if [ "$POSTGRES_ENABLED" = "true" ]; then
-        cat >> "$env_file" << EOF
+    chmod +x "${BASE_DIR}/backup.sh"
 
-# Database configuration
-DB_TYPE=postgresdb
-DB_POSTGRESDB_HOST=postgres
-DB_POSTGRESDB_PORT=5432
-DB_POSTGRESDB_DATABASE=n8n
-DB_POSTGRESDB_USER=$POSTGRES_USER
-DB_POSTGRESDB_PASSWORD=$POSTGRES_PASSWORD
+    # Create backup cron job
+    cat > /etc/cron.d/ai-platform-backup << EOF
+# AI Platform automated backups
+0 2 * * * root ${BASE_DIR}/backup.sh >> ${LOG_DIR}/backup.log 2>&1
 EOF
-    fi
 
-    print_success "n8n.env created"
+    log_success "Backup script created with daily cron job"
+    save_state 18
 }
 
-#############################################
-# OPEN WEBUI ENV GENERATION
-#############################################
+# ==============================================================================
+# HEALTH CHECK SCRIPT
+# ==============================================================================
 
-generate_openwebui_env() {
-    if [ "$OPENWEBUI_ENABLED" != "true" ]; then
-        return
-    fi
-    
-    print_step "Creating openwebui.env..."
-    
-    local env_file="$BASE_PATH/config/openwebui.env"
-    
-    cat > "$env_file" << EOF
-#############################################
-# Open WebUI Configuration
-#############################################
+create_health_check_script() {
+    log_step "Creating health check script..."
 
-# Basic configuration
-WEBUI_SECRET_KEY=$OPENWEBUI_SECRET_KEY
-ENABLE_SIGNUP=$OPENWEBUI_ENABLE_SIGNUP
-DEFAULT_MODELS=$OPENWEBUI_DEFAULT_MODELS
+    cat > "${BASE_DIR}/health-check.sh" << 'EOF'
+#!/bin/bash
+# ==============================================================================
+# AI Platform Health Check Script
+# ==============================================================================
 
-# Ollama integration
-EOF
+set -euo pipefail
 
-    if [ "$OLLAMA_ENABLED" = "true" ]; then
-        cat >> "$env_file" << EOF
-OLLAMA_BASE_URL=http://ollama:11434
-EOF
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+# Configuration
+TIMEOUT=10
+ERRORS=0
+
+# Logging
+log_success() {
+    echo -e "${GREEN}✓${NC} $*"
+}
+
+log_error() {
+    echo -e "${RED}✗${NC} $*"
+    ERRORS=$((ERRORS + 1))
+}
+
+log_warning() {
+    echo -e "${YELLOW}⚠${NC} $*"
+}
+
+log_info() {
+    echo -e "ℹ $*"
+}
+
+echo "========================================"
+echo "AI Platform Health Check"
+echo "========================================"
+echo ""
+
+# ==============================================================================
+# Docker Status
+# ==============================================================================
+echo "Docker Status:"
+if systemctl is-active --quiet docker; then
+    log_success "Docker service is running"
+else
+    log_error "Docker service is not running"
+fi
+
+# ==============================================================================
+# Container Status
+# ==============================================================================
+echo ""
+echo "Container Status:"
+
+check_container() {
+    local name=$1
+    local port=$2
+
+    if docker ps --format '{{.Names}}' | grep -q "^${name}$"; then
+        local status=$(docker inspect --format='{{.State.Health.Status}}' "$name" 2>/dev/null || echo "unknown")
+        if [ "$status" = "healthy" ]; then
+            log_success "$name is running and healthy"
+        elif [ "$status" = "unknown" ]; then
+            log_warning "$name is running (no health check configured)"
+        else
+            log_error "$name is running but unhealthy (status: $status)"
+        fi
     else
-        cat >> "$env_file" << EOF
-OLLAMA_BASE_URL=
-EOF
+        log_error "$name is not running"
     fi
-
-    cat >> "$env_file" << EOF
-
-# RAG configuration
-ENABLE_RAG_WEB_SEARCH=$OPENWEBUI_ENABLE_RAG
-ENABLE_RAG_HYBRID_SEARCH=$OPENWEBUI_ENABLE_RAG
-EOF
-
-    # Add Qdrant configuration if enabled
-    if [ "$QDRANT_ENABLED" = "true" ] && [ "$OPENWEBUI_ENABLE_RAG" = "true" ]; then
-        cat >> "$env_file" << EOF
-
-# Vector database (Qdrant)
-VECTOR_DB=qdrant
-QDRANT_URI=http://qdrant:6333
-QDRANT_API_KEY=$QDRANT_API_KEY
-EOF
-    fi
-
-    # Add PostgreSQL configuration if enabled
-    if [ "$POSTGRES_ENABLED" = "true" ]; then
-        cat >> "$env_file" << EOF
-
-# Database configuration
-DATABASE_URL=postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@postgres:5432/openwebui
-EOF
-    fi
-
-    cat >> "$env_file" << EOF
-
-# File uploads
-ENABLE_IMAGE_GENERATION=true
-ENABLE_COMMUNITY_SHARING=false
-EOF
-
-    print_success "openwebui.env created"
 }
 
-#############################################
-# LITELLM ENV GENERATION
-#############################################
+check_container "ai-platform-postgres" "5432"
+check_container "ai-platform-ollama" "11434"
+check_container "ai-platform-n8n" "5678"
+check_container "ai-platform-qdrant" "6333"
+check_container "ai-platform-nginx" "443"
+check_container "ai-platform-redis" "6379"
 
-generate_litellm_env() {
-    if [ "$LITELLM_ENABLED" != "true" ]; then
-        return
-    fi
-    
-    print_step "Creating litellm.env..."
-    
-    local env_file="$BASE_PATH/config/litellm.env"
-    
-    cat > "$env_file" << EOF
-#############################################
-# LiteLLM Configuration
-#############################################
+# ==============================================================================
+# Service Endpoints
+# ==============================================================================
+echo ""
+echo "Service Endpoints:"
 
-# Master key
-LITELLM_MASTER_KEY=$LITELLM_MASTER_KEY
+check_endpoint() {
+    local name=$1
+    local url=$2
 
-# Database configuration
-EOF
-
-    if [ "$POSTGRES_ENABLED" = "true" ]; then
-        cat >> "$env_file" << EOF
-DATABASE_URL=$LITELLM_DATABASE_URL
-EOF
-    fi
-
-    cat >> "$env_file" << EOF
-
-# Proxy configuration
-LITELLM_PORT=4000
-LITELLM_DROP_PARAMS=true
-
-# Telemetry
-LITELLM_TELEMETRY=$LITELLM_TELEMETRY
-
-# Timeouts
-LITELLM_REQUEST_TIMEOUT=$LITELLM_REQUEST_TIMEOUT
-LITELLM_TIMEOUT=$LITELLM_TIMEOUT
-
-# Logging
-LITELLM_LOG=INFO
-SET_VERBOSE=false
-EOF
-
-    print_success "litellm.env created"
-}
-
-#############################################
-# LITELLM CONFIG.YAML GENERATION
-#############################################
-
-generate_litellm_config() {
-    if [ "$LITELLM_ENABLED" != "true" ]; then
-        return
-    fi
-    
-    print_step "Creating litellm/config.yaml..."
-    
-    # Create litellm config directory
-    mkdir -p "$BASE_PATH/config/litellm"
-    
-    local config_file="$BASE_PATH/config/litellm/config.yaml"
-    
-    cat > "$config_file" << EOF
-# LiteLLM Proxy Configuration
-# Generated: $(date)
-
-model_list:
-EOF
-
-    # Add Ollama models if enabled
-    if [ "$OLLAMA_ENABLED" = "true" ]; then
-        # Convert comma-separated models to array
-        IFS=',' read -ra MODELS <<< "$OLLAMA_MODELS"
-        
-        for model in "${MODELS[@]}"; do
-            model=$(echo "$model" | xargs)  # Trim whitespace
-            cat >> "$config_file" << EOF
-  - model_name: $model
-    litellm_params:
-      model: ollama/$model
-      api_base: http://ollama:11434
-      
-EOF
-        done
-    fi
-
-    cat >> "$config_file" << EOF
-
-# General settings
-general_settings:
-  master_key: $LITELLM_MASTER_KEY
-  
-  # Database (if PostgreSQL enabled)
-EOF
-
-    if [ "$POSTGRES_ENABLED" = "true" ]; then
-        cat >> "$config_file" << EOF
-  database_url: $LITELLM_DATABASE_URL
-  database_type: postgres
-EOF
-    fi
-
-    cat >> "$config_file" << EOF
-  
-  # Fallback & retry
-  num_retries: 3
-  request_timeout: $LITELLM_REQUEST_TIMEOUT
-  fallbacks: []
-  
-  # Rate limiting
-  max_parallel_requests: 100
-  
-  # Caching (disabled by default)
-  cache: false
-  
-  # Telemetry
-  telemetry: $LITELLM_TELEMETRY
-
-# Logging
-litellm_settings:
-  drop_params: true
-  set_verbose: false
-  json_logs: true
-EOF
-
-    print_success "litellm/config.yaml created"
-}
-
-#############################################
-# GENERATE ALL CONFIGURATION FILES
-#############################################
-
-generate_all_configs() {
-    print_header "CONFIGURATION FILE GENERATION"
-    
-    # Create necessary directories
-    print_step "Creating directory structure..."
-    mkdir -p "$BASE_PATH/config"
-    mkdir -p "$BASE_PATH/backups/postgres"
-    mkdir -p "$BASE_PATH/backups/qdrant"
-    mkdir -p "$BASE_PATH/models"
-    mkdir -p "$BASE_PATH/workflows"
-    mkdir -p "$BASE_PATH/uploads"
-    mkdir -p "$BASE_PATH/logs/litellm"
-    print_success "Directory structure created"
-    
-    # Generate all files
-    generate_docker_compose
-    generate_main_env
-    generate_postgres_env
-    generate_qdrant_env
-    generate_ollama_env
-    generate_n8n_env
-    generate_openwebui_env
-    generate_litellm_env
-    generate_litellm_config
-    
-    # Set permissions
-    print_step "Setting permissions..."
-    chmod 600 "$BASE_PATH/config"/*.env 2>/dev/null || true
-    chmod 600 "$BASE_PATH/config/litellm/config.yaml" 2>/dev/null || true
-    print_success "Permissions set"
-    
-    echo ""
-    print_success "All configuration files generated!"
-    print_info "Configuration location: $BASE_PATH/config/"
-}
-
-# Execute configuration generation
-generate_all_configs
-#############################################
-# CONFIGURATION BACKUP & EXPORT
-#############################################
-
-backup_configuration() {
-    print_header "BACKING UP CONFIGURATION"
-
-    local backup_dir="$BASE_PATH/config/backups"
-    local timestamp=$(date +%Y%m%d_%H%M%S)
-    local backup_name="config_backup_${timestamp}"
-
-    print_step "Creating backup: $backup_name"
-
-    mkdir -p "$backup_dir"
-
-    # Create backup archive
-    tar -czf "$backup_dir/${backup_name}.tar.gz" \
-        -C "$BASE_PATH/config" \
-        --exclude='backups' \
-        . 2>/dev/null
-
-    if [ $? -eq 0 ]; then
-        print_success "Configuration backed up to: $backup_dir/${backup_name}.tar.gz"
+    if curl -sf --max-time "$TIMEOUT" "$url" > /dev/null 2>&1; then
+        log_success "$name is accessible"
     else
-        print_warning "Backup creation failed (non-critical)"
+        log_error "$name is not accessible at $url"
     fi
-
-    # Keep only last 10 backups
-    ls -t "$backup_dir"/config_backup_*.tar.gz 2>/dev/null | tail -n +11 | xargs -r rm
 }
 
-#############################################
-# EXPORT TO GOOGLE DRIVE
-#############################################
+check_endpoint "Ollama API" "http://localhost:11434/api/tags"
+check_endpoint "Qdrant API" "http://localhost:6333/collections"
+check_endpoint "n8n Web" "http://localhost:5678/healthz"
+check_endpoint "Nginx" "http://localhost/health"
 
-export_to_google_drive() {
-    if [ ! -f "$HOME/.config/rclone/rclone.conf" ]; then
-        print_info "Skipping Google Drive export (rclone not configured)"
-        return
+# ==============================================================================
+# PostgreSQL Connection
+# ==============================================================================
+echo ""
+echo "PostgreSQL Status:"
+
+if docker exec ai-platform-postgres pg_isready -U "${POSTGRES_USER}" > /dev/null 2>&1; then
+    log_success "PostgreSQL is accepting connections"
+
+    # Check database
+    if docker exec ai-platform-postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "SELECT 1;" > /dev/null 2>&1; then
+        log_success "Database ${POSTGRES_DB} is accessible"
+    else
+        log_error "Cannot access database ${POSTGRES_DB}"
     fi
 
-    print_header "EXPORTING TO GOOGLE DRIVE"
-
-    read -p "Export configuration to Google Drive? [y/N]: " export_gdrive
-
-    if [[ ! "$export_gdrive" =~ ^[Yy]$ ]]; then
-        print_info "Skipping Google Drive export"
-        return
+    # Check extensions
+    EXTENSIONS=$(docker exec ai-platform-postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -t -c "SELECT COUNT(*) FROM pg_extension WHERE extname IN ('vector', 'pg_stat_statements', 'uuid-ossp');" | xargs)
+    if [ "$EXTENSIONS" -eq 3 ]; then
+        log_success "All required PostgreSQL extensions are installed"
+    else
+        log_warning "Some PostgreSQL extensions may be missing (found: $EXTENSIONS/3)"
     fi
+else
+    log_error "PostgreSQL is not accepting connections"
+fi
 
-    # Get remote name
-    local remotes=$(rclone listremotes 2>/dev/null | grep -i 'gdrive\|google')
+# ==============================================================================
+# Ollama Models
+# ==============================================================================
+echo ""
+echo "Ollama Models:"
 
-    if [ -z "$remotes" ]; then
-        print_warning "No Google Drive remote found in rclone"
-        return
+MODELS=$(docker exec ai-platform-ollama ollama list 2>/dev/null | tail -n +2 | wc -l || echo "0")
+if [ "$MODELS" -gt 0 ]; then
+    log_success "$MODELS model(s) installed"
+    docker exec ai-platform-ollama ollama list 2>/dev/null | tail -n +2 | while read -r line; do
+        echo "  - $(echo "$line" | awk '{print $1}')"
+    done
+else
+    log_warning "No Ollama models installed"
+fi
+
+# ==============================================================================
+# Qdrant Collections
+# ==============================================================================
+echo ""
+echo "Qdrant Collections:"
+
+COLLECTIONS=$(curl -sf "http://localhost:6333/collections" 2>/dev/null | jq -r '.result.collections | length' || echo "0")
+if [ "$COLLECTIONS" -gt 0 ]; then
+    log_success "$COLLECTIONS collection(s) configured"
+    curl -sf "http://localhost:6333/collections" 2>/dev/null | jq -r '.result.collections[].name' | while read -r collection; do
+        echo "  - $collection"
+    done
+else
+    log_warning "No Qdrant collections found"
+fi
+
+# ==============================================================================
+# Disk Space
+# ==============================================================================
+echo ""
+echo "Disk Space:"
+
+DISK_USAGE=$(df -h /mnt/data | tail -1 | awk '{print $5}' | sed 's/%//')
+if [ "$DISK_USAGE" -lt 80 ]; then
+    log_success "Disk usage: ${DISK_USAGE}%"
+elif [ "$DISK_USAGE" -lt 90 ]; then
+    log_warning "Disk usage: ${DISK_USAGE}% (consider cleanup)"
+else
+    log_error "Disk usage: ${DISK_USAGE}% (critical - cleanup required)"
+fi
+
+df -h /mnt/data | tail -1
+
+# ==============================================================================
+# Memory Usage
+# ==============================================================================
+echo ""
+echo "Memory Usage:"
+
+MEMORY_USAGE=$(free | grep Mem | awk '{printf("%.0f", $3/$2 * 100)}')
+if [ "$MEMORY_USAGE" -lt 80 ]; then
+    log_success "Memory usage: ${MEMORY_USAGE}%"
+elif [ "$MEMORY_USAGE" -lt 90 ]; then
+    log_warning "Memory usage: ${MEMORY_USAGE}%"
+else
+    log_error "Memory usage: ${MEMORY_USAGE}% (high)"
+fi
+
+free -h | grep -E "Mem|Swap"
+
+# ==============================================================================
+# Network Connectivity
+# ==============================================================================
+echo ""
+echo "Network:"
+
+if docker network inspect ai-platform-network > /dev/null 2>&1; then
+    CONTAINERS=$(docker network inspect ai-platform-network | jq -r '.[0].Containers | length')
+    log_success "Docker network configured ($CONTAINERS containers)"
+else
+    log_error "Docker network not found"
+fi
+
+# ==============================================================================
+# SSL Certificates
+# ==============================================================================
+echo ""
+echo "SSL Certificates:"
+
+if [ -f "/root/scripts/ssl/fullchain.pem" ]; then
+    EXPIRY=$(openssl x509 -enddate -noout -in /root/scripts/ssl/fullchain.pem | cut -d= -f2)
+    EXPIRY_EPOCH=$(date -d "$EXPIRY" +%s)
+    NOW_EPOCH=$(date +%s)
+    DAYS_LEFT=$(( ($EXPIRY_EPOCH - $NOW_EPOCH) / 86400 ))
+
+    if [ "$DAYS_LEFT" -gt 30 ]; then
+        log_success "SSL certificate valid (expires in $DAYS_LEFT days)"
+    elif [ "$DAYS_LEFT" -gt 7 ]; then
+        log_warning "SSL certificate expires in $DAYS_LEFT days"
+    else
+        log_error "SSL certificate expires in $DAYS_LEFT days (renewal needed)"
     fi
+else
+    log_error "SSL certificate not found"
+fi
 
-    local remote=$(echo "$remotes" | head -n1 | sed 's/:$//')
+# ==============================================================================
+# Recent Logs
+# ==============================================================================
+echo ""
+echo "Recent Errors (last 10):"
 
-    read -p "Enter destination folder ID (or press Enter for root): " folder_id
+if [ -f "/mnt/data/logs/setup_errors_"*.log ]; then
+    RECENT_ERRORS=$(tail -10 /mnt/data/logs/setup_errors_*.log 2>/dev/null | wc -l)
+    if [ "$RECENT_ERRORS" -eq 0 ]; then
+        log_success "No recent errors in logs"
+    else
+        log_warning "$RECENT_ERRORS recent error entries"
+        tail -5 /mnt/data/logs/setup_errors_*.log 2>/dev/null | sed 's/^/  /'
+    fi
+else
+    log_info "No error logs found"
+fi
 
-    local dest="${remote}:"
-    [ -n "$folder_id" ] && dest="${remote}:${folder_id}"
+# ==============================================================================
+# Summary
+# ==============================================================================
+echo ""
+echo "========================================"
+if [ $ERRORS -eq 0 ]; then
+    log_success "All health checks passed"
+    exit 0
+else
+    log_error "$ERRORS health check(s) failed"
+    exit 1
+fi
+EOF
 
-    print_step "Uploading configuration..."
+    chmod +x "${BASE_DIR}/health-check.sh"
 
-    # Create export package
-    local export_dir="/tmp/ai_platform_export_$$"
-    mkdir -p "$export_dir"
+    log_success "Health check script created"
+    save_state 19
+}
 
-    # Copy configuration files
-    cp -r "$BASE_PATH/config" "$export_dir/" 2>/dev/null
+# ==============================================================================
+# MONITORING SCRIPT
+# ==============================================================================
 
-    # Create metadata file
-    cat > "$export_dir/metadata.json" << EOF
+create_monitoring_script() {
+    log_step "Creating monitoring script..."
+
+    cat > "${BASE_DIR}/monitor.sh" << 'EOF'
+#!/bin/bash
+# ==============================================================================
+# AI Platform Monitoring Script
+# ==============================================================================
+
+set -euo pipefail
+
+# Configuration
+METRICS_FILE="/mnt/data/logs/metrics_$(date +%Y%m%d).json"
+ALERT_THRESHOLD_CPU=80
+ALERT_THRESHOLD_MEM=85
+ALERT_THRESHOLD_DISK=80
+
+# Collect metrics
+collect_metrics() {
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    # System metrics
+    local cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)
+    local mem_usage=$(free | grep Mem | awk '{printf("%.1f", $3/$2 * 100)}')
+    local disk_usage=$(df -h /mnt/data | tail -1 | awk '{print $5}' | sed 's/%//')
+
+    # Container metrics
+    local containers_running=$(docker ps --format '{{.Names}}' | wc -l)
+    local containers_total=$(docker ps -a --format '{{.Names}}' | wc -l)
+
+    # Service-specific metrics
+    local postgres_connections=$(docker exec ai-platform-postgres psql -U "${POSTGRES_USER}" -t -c "SELECT count(*) FROM pg_stat_activity;" 2>/dev/null | xargs || echo "0")
+    local ollama_models=$(docker exec ai-platform-ollama ollama list 2>/dev/null | tail -n +2 | wc -l || echo "0")
+    local qdrant_collections=$(curl -sf "http://localhost:6333/collections" 2>/dev/null | jq -r '.result.collections | length' || echo "0")
+
+    # Create JSON metrics
+    cat >> "$METRICS_FILE" << JSON
 {
-  "export_date": "$(date -Iseconds)",
-  "base_path": "$BASE_PATH",
-  "services": {
-    "postgres": $POSTGRES_ENABLED,
-    "qdrant": $QDRANT_ENABLED,
-    "ollama": $OLLAMA_ENABLED,
-    "n8n": $N8N_ENABLED,
-    "openwebui": $OPENWEBUI_ENABLED,
-    "litellm": $LITELLM_ENABLED
+  "timestamp": "$timestamp",
+  "system": {
+    "cpu_usage": $cpu_usage,
+    "memory_usage": $mem_usage,
+    "disk_usage": $disk_usage
   },
-  "ports": {
-    "postgres": $POSTGRES_PORT,
-    "qdrant": $QDRANT_PORT,
-    "ollama": $OLLAMA_PORT,
-    "n8n": $N8N_PORT,
-    "openwebui": $OPENWEBUI_PORT,
-    "litellm": $LITELLM_PORT
+  "containers": {
+    "running": $containers_running,
+    "total": $containers_total
+  },
+  "services": {
+    "postgres_connections": $postgres_connections,
+    "ollama_models": $ollama_models,
+    "qdrant_collections": $qdrant_collections
   }
 }
-EOF
+JSON
 
-    # Upload to Google Drive
-    if rclone copy "$export_dir" "$dest/ai-platform-config" --progress 2>&1 | grep -q "Transferred:"; then
-        print_success "Configuration exported to Google Drive"
-
-        # Get shareable link if possible
-        local folder_link=$(rclone link "$dest/ai-platform-config" 2>/dev/null)
-        if [ -n "$folder_link" ]; then
-            echo ""
-            echo "${CYAN}Shareable link:${NC} $folder_link"
-            echo ""
-        fi
-    else
-        print_error "Failed to export to Google Drive"
+    # Check thresholds and alert
+    if (( $(echo "$cpu_usage > $ALERT_THRESHOLD_CPU" | bc -l) )); then
+        echo "ALERT: High CPU usage: ${cpu_usage}%"
     fi
 
-    # Cleanup
-    rm -rf "$export_dir"
+    if (( $(echo "$mem_usage > $ALERT_THRESHOLD_MEM" | bc -l) )); then
+        echo "ALERT: High memory usage: ${mem_usage}%"
+    fi
+
+    if [ "$disk_usage" -gt "$ALERT_THRESHOLD_DISK" ]; then
+        echo "ALERT: High disk usage: ${disk_usage}%"
+    fi
 }
 
-#############################################
-# CONFIGURATION VALIDATION
-#############################################
+# Main execution
+collect_metrics
 
-validate_configuration() {
-    print_header "VALIDATING CONFIGURATION"
+# Cleanup old metrics (keep 30 days)
+find /mnt/data/logs -name "metrics_*.json" -mtime +30 -delete 2>/dev/null || true
 
-    local errors=0
+exit 0
+EOF
 
-    # Check docker-compose.yml syntax
-    print_step "Validating docker-compose.yml..."
-    if command -v docker-compose &> /dev/null; then
-        if docker-compose -f "$BASE_PATH/config/docker-compose.yml" config > /dev/null 2>&1; then
-            print_success "docker-compose.yml is valid"
-        else
-            print_error "docker-compose.yml has syntax errors"
-            ((errors++))
-        fi
-    else
-        print_warning "docker-compose not installed, skipping validation"
-    fi
+    chmod +x "${BASE_DIR}/monitor.sh"
 
-    # Check required files exist
-    print_step "Checking required files..."
+    # Create monitoring cron job
+    cat > /etc/cron.d/ai-platform-monitor << EOF
+# AI Platform monitoring (every 5 minutes)
+*/5 * * * * root ${BASE_DIR}/monitor.sh >> ${LOG_DIR}/monitor.log 2>&1
+EOF
+
+    log_success "Monitoring script created with cron job"
+    save_state 20
+}
+
+# ==============================================================================
+# FINAL VERIFICATION AND STARTUP
+# ==============================================================================
+
+verify_and_start_services() {
+    log_step "Verifying configuration and starting services..."
+
+    # Verify all required files exist
     local required_files=(
-        "$BASE_PATH/config/docker-compose.yml"
-        "$BASE_PATH/config/.env"
+        "$CONFIG_FILE"
+        "$DOCKER_COMPOSE_FILE"
+        "${BASE_DIR}/postgresql-init/01-init-db.sql"
+        "${BASE_DIR}/ollama-init.sh"
+        "${BASE_DIR}/qdrant-init.sh"
+        "${BASE_DIR}/backup.sh"
+        "${BASE_DIR}/health-check.sh"
+        "${BASE_DIR}/monitor.sh"
+        "${BASE_DIR}/nginx/nginx.conf"
+        "${BASE_DIR}/nginx/conf.d/default.conf"
     )
 
-    [ "$POSTGRES_ENABLED" = "true" ] && required_files+=("$BASE_PATH/config/postgres.env")
-    [ "$QDRANT_ENABLED" = "true" ] && required_files+=("$BASE_PATH/config/qdrant.env")
-    [ "$OLLAMA_ENABLED" = "true" ] && required_files+=("$BASE_PATH/config/ollama.env")
-    [ "$N8N_ENABLED" = "true" ] && required_files+=("$BASE_PATH/config/n8n.env")
-    [ "$OPENWEBUI_ENABLED" = "true" ] && required_files+=("$BASE_PATH/config/openwebui.env")
-    [ "$LITELLM_ENABLED" = "true" ] && required_files+=("$BASE_PATH/config/litellm.env")
-    [ "$LITELLM_ENABLED" = "true" ] && required_files+=("$BASE_PATH/config/litellm/config.yaml")
-
     for file in "${required_files[@]}"; do
-        if [ -f "$file" ]; then
-            print_success "Found: $(basename $file)"
-        else
-            print_error "Missing: $file"
-            ((errors++))
+        if [ ! -f "$file" ]; then
+            error_exit "Required file not found: $file"
         fi
     done
 
-    # Check port availability
-    print_step "Checking port availability..."
-    local ports_to_check=()
+    log_success "All required files verified"
 
-    [ "$POSTGRES_ENABLED" = "true" ] && ports_to_check+=($POSTGRES_PORT)
-    [ "$QDRANT_ENABLED" = "true" ] && ports_to_check+=($QDRANT_PORT $QDRANT_GRPC_PORT)
-    [ "$OLLAMA_ENABLED" = "true" ] && ports_to_check+=($OLLAMA_PORT)
-    [ "$N8N_ENABLED" = "true" ] && ports_to_check+=($N8N_PORT)
-    [ "$OPENWEBUI_ENABLED" = "true" ] && ports_to_check+=($OPENWEBUI_PORT)
-    [ "$LITELLM_ENABLED" = "true" ] && ports_to_check+=($LITELLM_PORT)
+    # Create Docker network if it doesn't exist
+    if ! docker network inspect "$DOCKER_NETWORK" &>/dev/null; then
+        log_info "Creating Docker network..."
+        docker network create --driver bridge --subnet "$SUBNET" "$DOCKER_NETWORK" || \
+            error_exit "Failed to create Docker network"
+    fi
 
-    for port in "${ports_to_check[@]}"; do
-        if netstat -tuln 2>/dev/null | grep -q ":$port "; then
-            print_warning "Port $port is already in use"
-            ((errors++))
-        else
-            print_success "Port $port is available"
-        fi
-    done
+    # Pull all required images
+    log_info "Pulling Docker images (this may take a while)..."
+    docker compose -f "$DOCKER_COMPOSE_FILE" pull || \
+        log_warning "Some images failed to pull, will try to use existing/build"
 
-    echo ""
-    if [ $errors -eq 0 ]; then
-        print_success "All validation checks passed!"
-        return 0
+    # Start services
+    log_info "Starting AI Platform services..."
+    if systemctl start ai-platform.service; then
+        log_success "Services started via systemd"
     else
-        print_error "Validation found $errors error(s)"
-        return 1
-    fi
-}
-
-#############################################
-# GENERATE DEPLOYMENT SUMMARY
-#############################################
-
-generate_deployment_summary() {
-    local summary_file="$BASE_PATH/DEPLOYMENT_SUMMARY.md"
-
-    print_step "Generating deployment summary..."
-
-    cat > "$summary_file" << EOF
-# AI Platform Deployment Summary
-
-**Generated:** $(date)
-**Base Path:** \`$BASE_PATH\`
-**Configuration:** Complete ✓
-
----
-
-## Enabled Services
-
-EOF
-
-    # List enabled services
-    [ "$POSTGRES_ENABLED" = "true" ] && echo "- **PostgreSQL** - Port $POSTGRES_PORT" >> "$summary_file"
-    [ "$QDRANT_ENABLED" = "true" ] && echo "- **Qdrant** - Port $QDRANT_PORT (gRPC: $QDRANT_GRPC_PORT)" >> "$summary_file"
-    [ "$OLLAMA_ENABLED" = "true" ] && echo "- **Ollama** - Port $OLLAMA_PORT" >> "$summary_file"
-    [ "$N8N_ENABLED" = "true" ] && echo "- **n8n** - Port $N8N_PORT" >> "$summary_file"
-    [ "$OPENWEBUI_ENABLED" = "true" ] && echo "- **Open WebUI** - Port $OPENWEBUI_PORT" >> "$summary_file"
-    [ "$LITELLM_ENABLED" = "true" ] && echo "- **LiteLLM** - Port $LITELLM_PORT" >> "$summary_file"
-
-    cat >> "$summary_file" << EOF
-
----
-
-## Access URLs (After Deployment)
-
-EOF
-
-    [ "$N8N_ENABLED" = "true" ] && echo "- **n8n:** http://localhost:$N8N_PORT" >> "$summary_file"
-    [ "$OPENWEBUI_ENABLED" = "true" ] && echo "- **Open WebUI:** http://localhost:$OPENWEBUI_PORT" >> "$summary_file"
-    [ "$LITELLM_ENABLED" = "true" ] && echo "- **LiteLLM:** http://localhost:$LITELLM_PORT" >> "$summary_file"
-    [ "$QDRANT_ENABLED" = "true" ] && echo "- **Qdrant Dashboard:** http://localhost:$QDRANT_PORT/dashboard" >> "$summary_file"
-
-    cat >> "$summary_file" << EOF
-
----
-
-## Credentials
-
-EOF
-
-    # Add credentials
-    [ "$POSTGRES_ENABLED" = "true" ] && cat >> "$summary_file" << EOF
-### PostgreSQL
-- **User:** \`$POSTGRES_USER\`
-- **Password:** \`$POSTGRES_PASSWORD\`
-- **Database:** \`$POSTGRES_DB\`
-
-EOF
-
-    [ "$QDRANT_ENABLED" = "true" ] && cat >> "$summary_file" << EOF
-### Qdrant
-- **API Key:** \`$QDRANT_API_KEY\`
-
-EOF
-
-    [ "$N8N_ENABLED" = "true" ] && cat >> "$summary_file" << EOF
-### n8n
-- **Username:** \`$N8N_BASIC_AUTH_USER\`
-- **Password:** \`$N8N_BASIC_AUTH_PASSWORD\`
-
-EOF
-
-    [ "$OPENWEBUI_ENABLED" = "true" ] && cat >> "$summary_file" << EOF
-### Open WebUI
-- **Secret Key:** \`$OPENWEBUI_SECRET_KEY\`
-- **Signup Enabled:** $OPENWEBUI_ENABLE_SIGNUP
-
-EOF
-
-    [ "$LITELLM_ENABLED" = "true" ] && cat >> "$summary_file" << EOF
-### LiteLLM
-- **Master Key:** \`$LITELLM_MASTER_KEY\`
-
-EOF
-
-    cat >> "$summary_file" << EOF
-
----
-
-## Next Steps
-
-1. **Deploy Services:**
-   \`\`\`bash
-   bash $BASE_PATH/scripts/02_deploy.sh
-   \`\`\`
-
-2. **Check Service Status:**
-   \`\`\`bash
-   cd $BASE_PATH/config
-   docker-compose ps
-   \`\`\`
-
-3. **View Logs:**
-   \`\`\`bash
-   cd $BASE_PATH/config
-   docker-compose logs -f [service_name]
-   \`\`\`
-
-4. **Stop Services:**
-   \`\`\`bash
-   cd $BASE_PATH/config
-   docker-compose down
-   \`\`\`
-
----
-
-## Directory Structure
-
-\`\`\`
-$BASE_PATH/
-├── config/              # Configuration files
-│   ├── docker-compose.yml
-│   ├── .env
-│   ├── *.env           # Service-specific env files
-│   └── litellm/        # LiteLLM configuration
-├── backups/            # Database backups
-│   ├── postgres/
-│   └── qdrant/
-├── models/             # Ollama models
-├── workflows/          # n8n workflows
-├── uploads/            # Open WebUI uploads
-├── logs/               # Application logs
-└── scripts/            # Deployment scripts
-    ├── 01_configure.sh  # This script
-    └── 02_deploy.sh     # Deployment script
-\`\`\`
-
----
-
-## Configuration Files
-
-- **Main Config:** \`$BASE_PATH/config/.env\`
-- **Docker Compose:** \`$BASE_PATH/config/docker-compose.yml\`
-- **Service Configs:** \`$BASE_PATH/config/*.env\`
-EOF
-
-    if [ "$OLLAMA_ENABLED" = "true" ]; then
-        cat >> "$summary_file" << EOF
-- **Ollama Models:** $OLLAMA_MODELS
-
-EOF
+        log_warning "Systemd start failed, trying docker compose directly..."
+        docker compose -f "$DOCKER_COMPOSE_FILE" up -d || \
+            error_exit "Failed to start services"
     fi
 
-    cat >> "$summary_file" << EOF
+    # Wait for services to be ready
+    log_info "Waiting for services to be ready (this may take a minute)..."
+    sleep 30
 
----
+    # Initialize services
+    log_info "Initializing Ollama models..."
+    "${BASE_DIR}/ollama-init.sh" || log_warning "Ollama initialization had issues"
 
-## Support & Documentation
+    log_info "Initializing Qdrant collections..."
+    "${BASE_DIR}/qdrant-init.sh" || log_warning "Qdrant initialization had issues"
 
-- **Project Repository:** [Add your repo URL]
-- **Documentation:** [Add docs URL]
-- **Issues:** [Add issues URL]
-
----
-
-**Configuration Complete!** 🎉
-
-Your AI Platform is ready for deployment. Review this summary and proceed to deployment when ready.
-
-EOF
-
-    print_success "Deployment summary created: $summary_file"
-}
-
-#############################################
-# PREPARE DEPLOYMENT SCRIPT
-#############################################
-
-prepare_deployment_script() {
-    print_step "Creating deployment script reference..."
-
-    local deploy_script="$BASE_PATH/scripts/02_deploy.sh"
-
-    # Check if deployment script exists
-    if [ ! -f "$deploy_script" ]; then
-        print_warning "Deployment script not found: $deploy_script"
-        echo ""
-        echo "You will need to run the deployment script separately once available."
-        return
-    fi
-
-    # Make it executable
-    chmod +x "$deploy_script"
-    print_success "Deployment script ready"
-}
-
-#############################################
-# FINAL SUMMARY & NEXT STEPS
-#############################################
-
-show_final_summary() {
-    clear
-    print_header "CONFIGURATION COMPLETE!"
-
-    echo "${GREEN}✓${NC} All configuration files have been generated"
-    echo "${GREEN}✓${NC} Configuration validated successfully"
-    echo "${GREEN}✓${NC} Backup created"
-    echo ""
-
-    echo "═══════════════════════════════════════════════════════"
-    echo "                   ${CYAN}DEPLOYMENT SUMMARY${NC}"
-    echo "═══════════════════════════════════════════════════════"
-    echo ""
-
-    echo "${BOLD}Base Path:${NC} $BASE_PATH"
-    echo ""
-
-    echo "${BOLD}Enabled Services:${NC}"
-    [ "$POSTGRES_ENABLED" = "true" ] && echo "  ${GREEN}✓${NC} PostgreSQL (port $POSTGRES_PORT)"
-    [ "$QDRANT_ENABLED" = "true" ] && echo "  ${GREEN}✓${NC} Qdrant (port $QDRANT_PORT)"
-    [ "$OLLAMA_ENABLED" = "true" ] && echo "  ${GREEN}✓${NC} Ollama (port $OLLAMA_PORT)"
-    [ "$N8N_ENABLED" = "true" ] && echo "  ${GREEN}✓${NC} n8n (port $N8N_PORT)"
-    [ "$OPENWEBUI_ENABLED" = "true" ] && echo "  ${GREEN}✓${NC} Open WebUI (port $OPENWEBUI_PORT)"
-    [ "$LITELLM_ENABLED" = "true" ] && echo "  ${GREEN}✓${NC} LiteLLM (port $LITELLM_PORT)"
-
-    echo ""
-    echo "${BOLD}Configuration Files:${NC}"
-    echo "  ${CYAN}→${NC} $BASE_PATH/config/docker-compose.yml"
-    echo "  ${CYAN}→${NC} $BASE_PATH/config/.env"
-    echo "  ${CYAN}→${NC} $BASE_PATH/config/*.env (service configs)"
-
-    echo ""
-    echo "${BOLD}Documentation:${NC}"
-    echo "  ${CYAN}→${NC} $BASE_PATH/DEPLOYMENT_SUMMARY.md"
-
-    echo ""
-    echo "═══════════════════════════════════════════════════════"
-    echo "                    ${CYAN}NEXT STEPS${NC}"
-    echo "═══════════════════════════════════════════════════════"
-    echo ""
-
-    echo "1. ${BOLD}Review Configuration${NC}"
-    echo "   ${CYAN}→${NC} cat $BASE_PATH/DEPLOYMENT_SUMMARY.md"
-    echo ""
-
-    echo "2. ${BOLD}Deploy Services${NC}"
-    if [ -f "$BASE_PATH/scripts/02_deploy.sh" ]; then
-        echo "   ${CYAN}→${NC} bash $BASE_PATH/scripts/02_deploy.sh"
+    # Run health check
+    log_info "Running health check..."
+    if "${BASE_DIR}/health-check.sh"; then
+        log_success "Health check passed"
     else
-        echo "   ${CYAN}→${NC} cd $BASE_PATH/config"
-        echo "   ${CYAN}→${NC} docker-compose up -d"
+        log_warning "Some health checks failed, review output above"
     fi
-    echo ""
 
-    echo "3. ${BOLD}Monitor Deployment${NC}"
-    echo "   ${CYAN}→${NC} cd $BASE_PATH/config"
-    echo "   ${CYAN}→${NC} docker-compose logs -f"
-    echo ""
-
-    echo "4. ${BOLD}Access Services${NC}"
-    [ "$N8N_ENABLED" = "true" ] && echo "   ${CYAN}→${NC} n8n: http://localhost:$N8N_PORT"
-    [ "$OPENWEBUI_ENABLED" = "true" ] && echo "   ${CYAN}→${NC} Open WebUI: http://localhost:$OPENWEBUI_PORT"
-    [ "$LITELLM_ENABLED" = "true" ] && echo "   ${CYAN}→${NC} LiteLLM: http://localhost:$LITELLM_PORT"
-
-    echo ""
-    echo "═══════════════════════════════════════════════════════"
-    echo ""
-
-    # Optional: Auto-proceed to deployment
-    if [ -f "$BASE_PATH/scripts/02_deploy.sh" ]; then
-        echo ""
-        read -p "Would you like to proceed with deployment now? [Y/n]: " proceed
-
-        if [[ ! "$proceed" =~ ^[Nn]$ ]]; then
-            echo ""
-            print_success "Starting deployment..."
-            sleep 2
-            bash "$BASE_PATH/scripts/02_deploy.sh"
-        else
-            echo ""
-            print_info "Run deployment later with: bash $BASE_PATH/scripts/02_deploy.sh"
-        fi
-    fi
+    save_state 21
 }
 
-#############################################
-# SIGNAL NOTIFICATION TEST
-#############################################
+# ==============================================================================
+# FINAL SUMMARY AND NEXT STEPS
+# ==============================================================================
 
-test_signal_notification() {
-    if [ "$SIGNAL_ENABLED" != "true" ]; then
-        return
+display_summary() {
+    log_step "Setup Complete!"
+
+    echo ""
+    echo "========================================"
+    echo "AI Platform Setup Summary"
+    echo "========================================"
+    echo ""
+    echo "Services:"
+    echo "  • PostgreSQL:  localhost:${POSTGRES_PORT}"
+    echo "  • Ollama:      localhost:${OLLAMA_PORT}"
+    echo "  • n8n:         https://${DOMAIN_NAME}/n8n/"
+    echo "  • Qdrant:      https://${DOMAIN_NAME}/qdrant/"
+    echo "  • Web Portal:  https://${DOMAIN_NAME}/"
+    echo ""
+    echo "Directories:"
+    echo "  • Base:        ${BASE_DIR}"
+    echo "  • Data:        ${DATA_DIR}"
+    echo "  • Logs:        ${LOG_DIR}"
+    echo "  • Backups:     ${BACKUP_DIR}"
+    echo ""
+    echo "Credentials:"
+    echo "  • PostgreSQL User:     ${POSTGRES_USER}"
+    echo "  • PostgreSQL Password: ${POSTGRES_PASSWORD}"
+    echo "  • PostgreSQL Database: ${POSTGRES_DB}"
+    echo "  • n8n User:            ${N8N_BASIC_AUTH_USER}"
+    echo "  • n8n Password:        ${N8N_BASIC_AUTH_PASSWORD}"
+    echo ""
+    echo "Management Commands:"
+    echo "  • Check status:   systemctl status ai-platform"
+    echo "  • View logs:      docker compose -f ${DOCKER_COMPOSE_FILE} logs -f"
+    echo "  • Health check:   ${BASE_DIR}/health-check.sh"
+    echo "  • Backup:         ${BASE_DIR}/backup.sh"
+    echo "  • Stop services:  systemctl stop ai-platform"
+    echo "  • Start services: systemctl start ai-platform"
+    echo ""
+    echo "Automated Tasks:"
+    echo "  • Daily backups at 2:00 AM"
+    echo "  • Metrics collection every 5 minutes"
+    echo "  • SSL certificate auto-renewal (if Let's Encrypt)"
+    echo ""
+    echo "Next Steps:"
+    echo "  1. Review the health check output above"
+    echo "  2. Access n8n web interface and import workflows"
+    echo "  3. Verify Ollama models are downloaded"
+    echo "  4. Test Qdrant collections"
+    echo "  5. Run: ${SCRIPT_DIR}/2-configure-services.sh"
+    echo ""
+    echo "Documentation:"
+    echo "  • Setup log:  ${SETUP_LOG}"
+    echo "  • Error log:  ${ERROR_LOG}"
+    echo ""
+    echo "========================================"
+    echo ""
+
+    # Save completion marker
+    echo "SETUP_COMPLETE=true" >> "$STATE_FILE"
+    echo "SETUP_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> "$STATE_FILE"
+
+    log_success "Setup completed successfully!"
+    log_info "System is ready for configuration (Script 2)"
+}
+
+# ==============================================================================
+# MAIN EXECUTION FLOW
+# ==============================================================================
+
+main() {
+    log_step "Starting AI Platform Setup (Script 1)..."
+    log_info "Script Version: $SCRIPT_VERSION"
+    log_info "Execution Time: $(date)"
+
+    # Check if running as root
+    if [ "$EUID" -ne 0 ]; then
+        error_exit "This script must be run as root"
     fi
 
-    print_step "Testing Signal notification..."
+    # Check system requirements
+    check_system_requirements
 
-    if command -v signal-cli &> /dev/null; then
-        local message="AI Platform: Configuration completed successfully on $(hostname)"
-
-        if signal-cli -u "$SIGNAL_PHONE" send -m "$message" "$SIGNAL_RECIPIENT" &> /dev/null; then
-            print_success "Signal notification sent"
-        else
-            print_warning "Signal notification failed (non-critical)"
-        fi
+    # Load or create state
+    if [ -f "$STATE_FILE" ]; then
+        source "$STATE_FILE"
+        log_info "Resuming from step ${CURRENT_STEP:-1}"
     else
-        print_warning "signal-cli not installed, skipping notification"
-    fi
-}
-
-#############################################
-# MAIN FINALIZATION WORKFLOW
-#############################################
-
-finalize_configuration() {
-    # Backup configuration
-    backup_configuration
-
-    # Export to Google Drive (optional)
-    export_to_google_drive
-
-    # Validate configuration
-    if ! validate_configuration; then
-        echo ""
-        read -p "Configuration has errors. Continue anyway? [y/N]: " continue_anyway
-        if [[ ! "$continue_anyway" =~ ^[Yy]$ ]]; then
-            print_error "Configuration aborted due to validation errors"
-            exit 1
-        fi
+        CURRENT_STEP=1
     fi
 
-    # Generate deployment summary
-    generate_deployment_summary
+    # Execute setup steps
+    [ "${CURRENT_STEP:-1}" -le 1 ] && update_system
+    [ "${CURRENT_STEP:-1}" -le 2 ] && install_docker
+    [ "${CURRENT_STEP:-1}" -le 3 ] && create_directory_structure
+    [ "${CURRENT_STEP:-1}" -le 4 ] && create_config_file
+    [ "${CURRENT_STEP:-1}" -le 5 ] && create_postgresql_init
+    [ "${CURRENT_STEP:-1}" -le 6 ] && create_ollama_init
+    [ "${CURRENT_STEP:-1}" -le 7 ] && configure_firewall
+    [ "${CURRENT_STEP:-1}" -le 8 ] && configure_fail2ban
+    [ "${CURRENT_STEP:-1}" -le 9 ] && generate_ssl_certificates
+    [ "${CURRENT_STEP:-1}" -le 10 ] && configure_postgresql_tuning
+    [ "${CURRENT_STEP:-1}" -le 11 ] && install_ollama_cli
+    [ "${CURRENT_STEP:-1}" -le 12 ] && create_qdrant_init
+    [ "${CURRENT_STEP:-1}" -le 13 ] && create_n8n_workflows
+    [ "${CURRENT_STEP:-1}" -le 14 ] && generate_docker_compose
+    [ "${CURRENT_STEP:-1}" -le 15 ] && generate_nginx_config
+    [ "${CURRENT_STEP:-1}" -le 16 ] && create_systemd_service
+    [ "${CURRENT_STEP:-1}" -le 17 ] && create_backup_script
+    [ "${CURRENT_STEP:-1}" -le 18 ] && create_health_check_script
+    [ "${CURRENT_STEP:-1}" -le 19 ] && create_monitoring_script
+    [ "${CURRENT_STEP:-1}" -le 20 ] && verify_and_start_services
+    [ "${CURRENT_STEP:-1}" -le 21 ] && display_summary
 
-    # Prepare deployment script
-    prepare_deployment_script
+    log_info "All setup steps completed successfully!"
 
-    # Test Signal notification
-    test_signal_notification
+    # Clean up
+    rm -f "$STATE_FILE"
 
-    # Show final summary
-    show_final_summary
+    return 0
 }
 
-#############################################
-# SCRIPT EXECUTION
-#############################################
+# ==============================================================================
+# SCRIPT ENTRY POINT
+# ==============================================================================
 
-# Execute finalization
-finalize_configuration
+# Trap errors and cleanup
+trap 'error_exit "Script interrupted at line $LINENO"' ERR INT TERM
 
-# Script complete
-print_success "Configuration script completed successfully!"
+# Run main function
+main "$@"
+
 exit 0
