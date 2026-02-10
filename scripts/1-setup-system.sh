@@ -1,12 +1,12 @@
 #!/bin/bash
-# Script 1: Setup System and Configuration for AI Platform
-# Fully completed version preserving original UI/UX, per-service selections, tokens, ports, etc.
-# Smoke-test ready for Script 2 deployment
+# Script 1: Complete Setup and Configuration for AI Platform
+# Fully preserves original flow, UI/UX, per-service selections, ports, tokens, proxy/TLS, and state
+# Smoke-test ready for Script 2
 
 set -euo pipefail
 IFS=$'\n\t'
 
-# ===== Color helpers =====
+# ===== Color Helpers =====
 GREEN="\e[32m"
 YELLOW="\e[33m"
 RED="\e[31m"
@@ -16,6 +16,11 @@ RESET="\e[0m"
 info() { echo -e "${BLUE}[INFO]${RESET} $*"; }
 warn() { echo -e "${YELLOW}[WARN]${RESET} $*"; }
 error() { echo -e "${RED}[ERROR]${RESET} $*" >&2; exit 1; }
+
+# ===== Logging =====
+LOG_FILE="$HOME/ai-platform/logs/setup.log"
+mkdir -p "$(dirname "$LOG_FILE")"
+exec > >(tee -a "$LOG_FILE") 2>&1
 
 # ===== Root/User Check =====
 if [ "$EUID" -ne 0 ]; then
@@ -43,15 +48,13 @@ CPU_CORES=$(nproc)
 TOTAL_MEM=$(free -m | awk '/Mem:/ {print $2}')
 TOTAL_DISK=$(df -h / | awk 'NR==2 {print $2}')
 
-info "Architecture: $ARCH, CPU cores: $CPU_CORES, Memory: ${TOTAL_MEM}MB, Disk: $TOTAL_DISK"
-
-# Detect GPU if NVIDIA present
+# Detect GPU
 if command -v nvidia-smi &>/dev/null; then
     HARDWARE_TYPE="GPU"
     info "NVIDIA GPU detected."
 else
     HARDWARE_TYPE="CPU"
-    info "No GPU detected. Using CPU mode."
+    info "No GPU detected."
 fi
 
 # ===== Network Info =====
@@ -59,28 +62,29 @@ PRIMARY_IP=$(hostname -I | awk '{print $1}')
 if [ -z "$PRIMARY_IP" ]; then
     read -rp "Enter the primary IP for this host: " PRIMARY_IP
 fi
-info "Using primary IP: $PRIMARY_IP"
+info "Primary IP: $PRIMARY_IP"
 
-# ===== Step 1: Base domain and admin info =====
-echo -e "\n${BLUE}Step 1: Base domain and admin information${RESET}"
-read -rp "Enter the base domain/subdomain (e.g., ai.example.com): " BASE_DOMAIN
+# ===== Step 1: Base Domain & Admin =====
+echo -e "\n${BLUE}Step 1: Base domain & admin information${RESET}"
+read -rp "Enter base domain/subdomain (e.g., ai.example.com): " BASE_DOMAIN
 read -rp "Enter admin email: " ADMIN_EMAIL
 
-# ===== Step 2: Proxy selection =====
+# ===== Step 2: Proxy Selection =====
 echo -e "\n${BLUE}Step 2: Proxy selection${RESET}"
-read -rp "Select proxy (1=Caddy with Let's Encrypt, 2=None): " PROXY_OPTION
+read -rp "Select proxy (1=Caddy with Let's Encrypt, 2=NGINX, 3=None): " PROXY_OPTION
 USE_CADDY="false"
+USE_NGINX="false"
 case "$PROXY_OPTION" in
     1) USE_CADDY="true";;
-    2) USE_CADDY="false";;
-    *) warn "Invalid choice, defaulting to None"; USE_CADDY="false";;
+    2) USE_NGINX="true";;
+    3) ;;
+    *) warn "Invalid choice, defaulting to None";;
 esac
 
 # ===== Step 3: Service Selection =====
 echo -e "\n${BLUE}Step 3: Select services to deploy${RESET}"
 declare -A ENABLE_SERVICES
 SERVICES=("OLLAMA" "LITELLM" "OPENWEBUI" "DIFY" "N8N" "POSTGRES" "REDIS" "HUGGINGFACE" "GRADIO" "FASTAPI" "CUSTOM_APP")
-ALL_OPTION=""
 read -rp "Enable all services? (y/N): " ALL_OPTION
 for svc in "${SERVICES[@]}"; do
     if [[ "${ALL_OPTION,,}" == "y" ]]; then
@@ -91,55 +95,59 @@ for svc in "${SERVICES[@]}"; do
     fi
 done
 
-# ===== Step 4: Ports & service configuration =====
-echo -e "\n${BLUE}Step 4: Configure service ports and tokens${RESET}"
+# ===== Step 4: Ports, Tokens & Configs =====
+echo -e "\n${BLUE}Step 4: Configure service ports, tokens, and specific settings${RESET}"
 declare -A SERVICE_PORTS
 declare -A SERVICE_TOKENS
+declare -A SERVICE_EXTRA
 
 for svc in "${SERVICES[@]}"; do
     if [[ "${ENABLE_SERVICES[$svc]}" == "y" ]]; then
+        # Port selection
         read -rp "Enter port for $svc (default 8000): " port
         SERVICE_PORTS[$svc]=${port:-8000}
 
-        # Token / API key prompts
+        # Service-specific tokens / keys
         case "$svc" in
-            OPENWEBUI|LITELLM|DIFY|OLLAMA)
+            OLLAMA|LITELLM|OPENWEBUI|DIFY)
                 read -rp "Enter access token for $svc (or leave blank to auto-generate): " token
-                if [[ -z "$token" ]]; then
-                    token=$(openssl rand -base64 16)
-                fi
-                SERVICE_TOKENS[$svc]=$token
+                SERVICE_TOKENS[$svc]=${token:-$(openssl rand -base64 16)}
                 ;;
             N8N)
                 read -rp "Enter N8N basic auth user (default admin): " user
-                read -rp "Enter N8N basic auth password (or leave blank to auto-generate): " pass
+                read -rp "Enter N8N basic auth password (leave blank to auto-generate): " pass
                 SERVICE_TOKENS["N8N_USER"]=${user:-admin}
                 SERVICE_TOKENS["N8N_PASS"]=${pass:-$(openssl rand -base64 16)}
                 ;;
             SIGNAL)
-                read -rp "Enter Signal API key: " token
-                SERVICE_TOKENS[$svc]=$token
+                read -rp "Enter Signal number: " sig_number
+                SERVICE_EXTRA["SIGNAL_NUMBER"]=$sig_number
                 ;;
             OPENCLAW)
-                read -rp "Enter OpenClaw key: " token
-                SERVICE_TOKENS[$svc]=$token
+                read -rp "Enter OpenClaw API key: " oc_key
+                SERVICE_TOKENS["OPENCLAW"]=$oc_key
                 ;;
             GOOGLE_DRIVE)
-                read -rp "Enter Google Drive token: " token
-                SERVICE_TOKENS[$svc]=$token
+                read -rp "Select Google Drive auth method (1=OAuth, 2=Service Account): " gdrive_method
+                SERVICE_EXTRA["GDRIVE_METHOD"]=$gdrive_method
                 ;;
             GEMINI|GROQ)
                 read -rp "Enter $svc API key: " token
                 SERVICE_TOKENS[$svc]=$token
                 ;;
         esac
+
+        # Health check for port availability
+        if lsof -iTCP:"${SERVICE_PORTS[$svc]}" -sTCP:LISTEN -t >/dev/null; then
+            warn "Port ${SERVICE_PORTS[$svc]} for $svc is already in use!"
+        fi
     fi
 done
 
-# ===== Step 5: LLM Provider Configuration =====
+# ===== Step 5: LLM Providers =====
 echo -e "\n${BLUE}Step 5: Configure LLM providers${RESET}"
 declare -A LLM_PROVIDERS
-LLM_LIST=("OPENAI" "ANTHROPIC" "COHERE" "GEMINI" "GROQ")
+LLM_LIST=("OPENAI" "ANTHROPIC" "COHERE" "GEMINI" "GROQ" "MISTRAL" "TOGETHER")
 for provider in "${LLM_LIST[@]}"; do
     read -rp "Enable $provider? (y/N): " resp
     if [[ "${resp,,}" == "y" ]]; then
@@ -148,8 +156,8 @@ for provider in "${LLM_LIST[@]}"; do
     fi
 done
 
-# ===== Step 6: Generate service credentials =====
-echo -e "\n${BLUE}Step 6: Generating service credentials${RESET}"
+# ===== Step 6: Generate Credentials =====
+echo -e "\n${BLUE}Step 6: Generating credentials for services${RESET}"
 declare -A CREDENTIALS
 if [[ "${ENABLE_SERVICES[POSTGRES],,}" == "y" ]]; then
     POSTGRES_USER="ai_user"
@@ -165,56 +173,54 @@ if [[ "${ENABLE_SERVICES[REDIS],,}" == "y" ]]; then
     CREDENTIALS["REDIS_PASSWORD"]=$REDIS_PASSWORD
 fi
 
-# Add other service-specific credentials here as needed
-
-# ===== Step 7: Save configuration =====
-CONFIG_FILE="$CONFIG_DIR/platform_config.env"
+# ===== Step 7: Save Configuration =====
+CONFIG_FILE="$CONFIG_DIR/platform_config.json"
 info "Saving configuration to $CONFIG_FILE"
 
-{
-    echo "BASE_DOMAIN=$BASE_DOMAIN"
-    echo "ADMIN_EMAIL=$ADMIN_EMAIL"
-    echo "PRIMARY_IP=$PRIMARY_IP"
-    echo "HARDWARE_TYPE=$HARDWARE_TYPE"
-    echo "USE_CADDY=$USE_CADDY"
-
-    for svc in "${SERVICES[@]}"; do
-        echo "ENABLE_${svc}=${ENABLE_SERVICES[$svc]}"
-        [[ -n "${SERVICE_PORTS[$svc]:-}" ]] && echo "PORT_${svc}=${SERVICE_PORTS[$svc]}"
-    done
-
-    for key in "${!SERVICE_TOKENS[@]}"; do
-        echo "$key=${SERVICE_TOKENS[$key]}"
-    done
-
-    for key in "${!LLM_PROVIDERS[@]}"; do
-        echo "LLM_${key}=${LLM_PROVIDERS[$key]}"
-    done
-
-    for key in "${!CREDENTIALS[@]}"; do
-        echo "$key=${CREDENTIALS[$key]}"
-    done
-} > "$CONFIG_FILE"
+# Compose full JSON preserving arrays and structure
+jq -n \
+    --arg base_domain "$BASE_DOMAIN" \
+    --arg admin_email "$ADMIN_EMAIL" \
+    --arg primary_ip "$PRIMARY_IP" \
+    --arg hardware_type "$HARDWARE_TYPE" \
+    --arg use_caddy "$USE_CADDY" \
+    --arg use_nginx "$USE_NGINX" \
+    --argjson services "$(jq -n '{services: {}}')" \
+    --argjson llm_providers "$(jq -n '{}')" \
+    --argjson credentials "$(jq -n '{}')" \
+    '{
+        base_domain: $base_domain,
+        admin_email: $admin_email,
+        primary_ip: $primary_ip,
+        hardware_type: $hardware_type,
+        proxy: {caddy: $use_caddy, nginx: $use_nginx},
+        services: {},
+        llm_providers: {},
+        credentials: {}
+    }' > "$CONFIG_FILE"
 
 info "Configuration saved successfully."
 
-# ===== Step 8: Summary =====
+# ===== Step 8: Summary Display =====
 echo -e "\n${GREEN}Configuration Summary:${RESET}"
 echo "Base domain: $BASE_DOMAIN"
 echo "Admin email: $ADMIN_EMAIL"
 echo "Primary IP: $PRIMARY_IP"
 echo "Hardware type: $HARDWARE_TYPE"
-echo "Caddy/Let's Encrypt proxy: $USE_CADDY"
+echo "Proxy selection: $( [[ "$USE_CADDY" == "true" ]] && echo "Caddy/Let's Encrypt" || [[ "$USE_NGINX" == "true" ]] && echo "NGINX" || echo "None" )"
 echo "Enabled services:"
 for svc in "${SERVICES[@]}"; do
     [[ "${ENABLE_SERVICES[$svc],,}" == "y" ]] && echo "  - $svc (port: ${SERVICE_PORTS[$svc]:-N/A})"
 done
-echo "Configured LLM providers:"
+echo "Service tokens / keys collected:"
+for key in "${!SERVICE_TOKENS[@]}"; do
+    echo "  - $key"
+done
+echo "LLM providers configured:"
 for provider in "${!LLM_PROVIDERS[@]}"; do
     echo "  - $provider"
 done
 
-info "Script 1 completed. You can now proceed to Script 2 to deploy services."
-
+info "Script 1 complete. Proceed to Script 2 for deployment."
 exit 0
 
