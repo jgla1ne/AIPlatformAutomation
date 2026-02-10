@@ -99,13 +99,16 @@ log_debug() {
 
 print_banner() {
     clear
-    echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║                                                            ║${NC}"
-    echo -e "${CYAN}║         AI PLATFORM DEPLOYMENT AUTOMATION v${SCRIPT_VERSION}         ║${NC}"
-    echo -e "${CYAN}║                                                            ║${NC}"
-    echo -e "${CYAN}║              Script 1: System Setup                        ║${NC}"
-    echo -e "${CYAN}║                                                            ║${NC}"
-    echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "${CYAN}"
+    cat << "EOF"
+╔══════════════════════════════════════════════════════════════╗
+║                                                                  ║
+║           AI PLATFORM CONFIGURATION COLLECTION v1.1.0              ║
+║                  Script 1 of 4 - CONFIG ONLY                     ║
+║                                                                  ║
+╚══════════════════════════════════════════════════════════════╝
+EOF
+    echo -e "${NC}"
     echo ""
 }
 
@@ -269,6 +272,386 @@ validate_domain() {
         return 1
     fi
     return 0
+}
+
+# ==============================================================================
+# PHASE 1: SYSTEM VALIDATION FUNCTIONS
+# ==============================================================================
+
+check_dependencies() {
+    print_section "SYSTEM DEPENDENCIES CHECK"
+    log_step "Checking and installing missing dependencies..."
+    
+    # Install missing dependencies only
+    local missing_deps=()
+    
+    if ! command -v curl &> /dev/null; then
+        missing_deps+=("curl")
+    fi
+    
+    if ! command -v wget &> /dev/null; then
+        missing_deps+=("wget")
+    fi
+    
+    if ! command -v jq &> /dev/null; then
+        missing_deps+=("jq")
+    fi
+    
+    if ! command -v openssl &> /dev/null; then
+        missing_deps+=("openssl")
+    fi
+    
+    if [ ${#missing_deps[@]} -gt 0 ]; then
+        log_info "Installing missing dependencies: ${missing_deps[*]}"
+        apt update
+        apt install -y "${missing_deps[@]}"
+    else
+        log_success "All dependencies are installed"
+    fi
+}
+
+check_disk_space() {
+    print_section "DISK SPACE VALIDATION"
+    log_step "Checking available disk space..."
+    
+    local disk_space=$(df -BG "$DATA_DIR" 2>/dev/null | awk 'NR==2 {print int($4/1024)}')
+    
+    if [ "$disk_space" -lt 100 ]; then
+        log_warning "Only ${disk_space}GB available. Recommended: 100GB+"
+        read -p "Continue anyway? (y/N): " continue
+        if [[ ! "$continue" =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+    else
+        log_success "Disk space: ${disk_space}GB available"
+    fi
+}
+
+detect_public_ip() {
+    print_section "PUBLIC IP DETECTION"
+    log_step "Detecting public IP address..."
+    
+    # Try multiple services for public IP
+    local public_ip=""
+    
+    if command -v curl &> /dev/null; then
+        public_ip=$(curl -s https://ipinfo.io/ip 2>/dev/null || curl -s https://api.ipify.org 2>/dev/null || curl -s https://icanhazip.com 2>/dev/null)
+    elif command -v wget &> /dev/null; then
+        public_ip=$(wget -qO- https://ipinfo.io/ip 2>/dev/null || wget -qO- https://api.ipify.org 2>/dev/null || wget -qO- https://icanhazip.com 2>/dev/null)
+    fi
+    
+    if [ -n "$public_ip" ]; then
+        PUBLIC_IP="$public_ip"
+        log_success "Public IP detected: $PUBLIC_IP"
+    else
+        log_warning "Could not detect public IP automatically"
+        read -p "Enter your public IP address: " PUBLIC_IP
+    fi
+}
+
+detect_gpu() {
+    print_section "GPU DETECTION"
+    log_step "Detecting GPU capabilities..."
+    
+    GPU_AVAILABLE=false
+    GPU_TYPE=""
+    GPU_MEMORY=""
+    
+    if command -v nvidia-smi &> /dev/null; then
+        GPU_AVAILABLE=true
+        GPU_TYPE="nvidia"
+        GPU_MEMORY=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1)
+        log_success "NVIDIA GPU detected: ${GPU_MEMORY}MB"
+    elif command -v rocm-smi &> /dev/null; then
+        GPU_AVAILABLE=true
+        GPU_TYPE="amd"
+        log_success "AMD GPU detected"
+    else
+        log_info "No GPU detected - CPU-only mode"
+    fi
+    
+    # Save GPU info
+    cat > "${CONFIG_DIR}/gpu-info.env" << EOF
+GPU_AVAILABLE=${GPU_AVAILABLE}
+GPU_TYPE=${GPU_TYPE}
+GPU_MEMORY=${GPU_MEMORY}
+EOF
+}
+
+check_port_conflicts() {
+    print_section "PORT CONFLICTS CHECK"
+    log_step "Checking for port conflicts..."
+    
+    local conflicts=()
+    local ports=(80 443 5432 6379 11434 4000 5678 6333)
+    
+    for port in "${ports[@]}"; do
+        if netstat -tuln 2>/dev/null | grep -q ":$port "; then
+            conflicts+=("$port")
+        fi
+    done
+    
+    if [ ${#conflicts[@]} -gt 0 ]; then
+        log_warning "Port conflicts detected: ${conflicts[*]}"
+        log_warning "Please stop services using these ports before continuing"
+        read -p "Continue anyway? (y/N): " continue
+        if [[ ! "$continue" =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+    else
+        log_success "No port conflicts detected"
+    fi
+}
+
+# ==============================================================================
+# PHASE 2: NETWORK CONFIGURATION FUNCTIONS
+# ==============================================================================
+
+configure_network() {
+    print_section "NETWORK CONFIGURATION"
+    log_step "Configuring network settings..."
+    
+    # Domain or IP selection
+    while true; do
+        read -p "Enter your domain or public IP (e.g., ai.example.com or $PUBLIC_IP): " DOMAIN_NAME
+        if validate_domain_or_ip "$DOMAIN_NAME"; then
+            break
+        else
+            echo -e "${RED}Invalid domain or IP. Please try again.${NC}"
+        fi
+    done
+    
+    # SSL mode selection
+    echo ""
+    echo -e "${CYAN}🔒 SSL Certificate Mode:${NC}"
+    echo "1) Let's Encrypt (automatic, requires domain)"
+    echo "2) Self-signed certificates"
+    echo "3) No SSL (development only)"
+    echo ""
+    
+    while true; do
+        read -p "Select SSL mode (1-3): " ssl_choice
+        case $ssl_choice in
+            1) 
+                if [[ "$DOMAIN_NAME" =~ ^[0-9] ]]; then
+                    echo -e "${RED}Let's Encrypt requires a domain name, not IP address${NC}"
+                    continue
+                fi
+                SSL_MODE="letsencrypt"
+                read -p "Enter SSL certificate email: " SSL_EMAIL
+                ;;
+            2) SSL_MODE="self-signed"; break ;;
+            3) SSL_MODE="none"; break ;;
+            *) echo -e "${RED}Invalid choice. Please select 1-3.${NC}" ;;
+        esac
+        [ "$ssl_choice" != "1" ] && break
+    done
+    
+    log_success "Network configuration completed"
+}
+
+select_reverse_proxy() {
+    print_section "REVERSE PROXY SELECTION"
+    log_step "Selecting reverse proxy..."
+    
+    echo -e "${CYAN}🌐 Available Reverse Proxies:${NC}"
+    echo "1) Nginx (Traditional, battle-tested)"
+    echo "2) Caddy (Automatic HTTPS, modern)"
+    echo "3) Traefik (Advanced routing, containers)"
+    echo ""
+    
+    while true; do
+        read -p "Select reverse proxy (1-3): " proxy_choice
+        case $proxy_choice in
+            1) 
+                SELECTED_PROXY="nginx"
+                PROXY_PORT=80
+                PROXY_SSL_PORT=443
+                break ;;
+            2) 
+                SELECTED_PROXY="caddy"
+                PROXY_PORT=80
+                PROXY_SSL_PORT=443
+                break ;;
+            3) 
+                SELECTED_PROXY="traefik"
+                PROXY_PORT=80
+                PROXY_SSL_PORT=443
+                break ;;
+            *) echo -e "${RED}Invalid choice. Please select 1-3.${NC}" ;;
+        esac
+    done
+    
+    # Proxy-specific configuration
+    case $SELECTED_PROXY in
+        nginx)
+            echo -e "${GREEN}Selected: Nginx${NC}"
+            echo "  - Manual SSL certificate management"
+            echo "  - High performance"
+            echo "  - Extensive configuration options"
+            ;;
+        caddy)
+            echo -e "${GREEN}Selected: Caddy${NC}"
+            echo "  - Automatic HTTPS with Let's Encrypt"
+            echo "  - Simple configuration"
+            echo "  - Modern HTTP/2 support"
+            ;;
+        traefik)
+            echo -e "${GREEN}Selected: Traefik${NC}"
+            echo "  - Container-native"
+            echo "  - Automatic service discovery"
+            echo "  - Advanced routing features"
+            ;;
+    esac
+    
+    log_success "Reverse proxy selected: $SELECTED_PROXY"
+}
+
+# ==============================================================================
+# PHASE 3: SERVICE SELECTION FUNCTIONS
+# ==============================================================================
+
+select_core_services() {
+    print_section "CORE SERVICES SELECTION"
+    log_step "Selecting core infrastructure services..."
+    
+    echo -e "${CYAN}🏗️ Core Infrastructure (Multi-select):${NC}"
+    echo "1) PostgreSQL + pgvector (Database)"
+    echo "2) Ollama (Local LLM server)"
+    echo "3) n8n (Workflow automation)"
+    echo "4) Qdrant (Vector database)"
+    echo "all) Select all core services (recommended)"
+    echo ""
+    
+    while true; do
+        read -p "Select core services (comma-separated, 1-4, or 'all'): " core_choices
+        
+        if [ "$core_choices" = "all" ]; then
+            SELECTED_CORE_SERVICES=("postgresql" "ollama" "n8n" "qdrant")
+            break
+        fi
+        
+        IFS=',' read -ra CHOSEN_CORE <<< "$core_choices"
+        valid=true
+        SELECTED_CORE_SERVICES=()
+        
+        for choice in "${CHOSEN_CORE[@]}"; do
+            choice=$(echo "$choice" | xargs) # trim whitespace
+            case $choice in
+                1) SELECTED_CORE_SERVICES+=("postgresql") ;;
+                2) SELECTED_CORE_SERVICES+=("ollama") ;;
+                3) SELECTED_CORE_SERVICES+=("n8n") ;;
+                4) SELECTED_CORE_SERVICES+=("qdrant") ;;
+                *) valid=false; break ;;
+            esac
+        done
+        
+        if [ "$valid" = true ]; then
+            break
+        else
+            echo -e "${RED}Invalid choices. Please select numbers 1-4 separated by commas, or 'all'.${NC}"
+        fi
+    done
+    
+    log_success "Core services selected: ${SELECTED_CORE_SERVICES[*]}"
+}
+
+select_ai_services() {
+    print_section "AI SERVICES SELECTION"
+    log_step "Selecting AI services..."
+    
+    echo -e "${CYAN}🤖 AI Services (Multi-select):${NC}"
+    echo "1) Flowise (Visual workflow builder)"
+    echo "2) LiteLLM (LLM gateway)"
+    echo "3) Langfuse (LLM observability)"
+    echo "4) Dify (AI platform)"
+    echo "5) Open WebUI (Chat interface)"
+    echo "6) AnythingLLM (Document-centric RAG)"
+    echo "7) OpenClaw (RAG + Tailscale isolation)"
+    echo "all) Select all AI services (recommended)"
+    echo ""
+    
+    while true; do
+        read -p "Select AI services (comma-separated, 1-7, or 'all'): " ai_choices
+        
+        if [ "$ai_choices" = "all" ]; then
+            SELECTED_AI_SERVICES=("flowise" "litellm" "langfuse" "dify" "open-webui" "anythingllm" "openclaw")
+            break
+        fi
+        
+        IFS=',' read -ra CHOSEN_AI <<< "$ai_choices"
+        valid=true
+        SELECTED_AI_SERVICES=()
+        
+        for choice in "${CHOSEN_AI[@]}"; do
+            choice=$(echo "$choice" | xargs) # trim whitespace
+            case $choice in
+                1) SELECTED_AI_SERVICES+=("flowise") ;;
+                2) SELECTED_AI_SERVICES+=("litellm") ;;
+                3) SELECTED_AI_SERVICES+=("langfuse") ;;
+                4) SELECTED_AI_SERVICES+=("dify") ;;
+                5) SELECTED_AI_SERVICES+=("open-webui") ;;
+                6) SELECTED_AI_SERVICES+=("anythingllm") ;;
+                7) SELECTED_AI_SERVICES+=("openclaw") ;;
+                *) valid=false; break ;;
+            esac
+        done
+        
+        if [ "$valid" = true ]; then
+            break
+        else
+            echo -e "${RED}Invalid choices. Please select numbers 1-7 separated by commas, or 'all'.${NC}"
+        fi
+    done
+    
+    log_success "AI services selected: ${SELECTED_AI_SERVICES[*]}"
+}
+
+select_optional_services() {
+    print_section "OPTIONAL SERVICES SELECTION"
+    log_step "Selecting optional services..."
+    
+    echo -e "${CYAN}🔧 Optional Services (Multi-select):${NC}"
+    echo "1) Minio (Object storage)"
+    echo "2) Redis (Caching layer)"
+    echo "3) Signal API (Notifications)"
+    echo "4) Tailscale (VPN networking)"
+    echo "5) Monitoring (Prometheus + Grafana)"
+    echo "all) Select all optional services"
+    echo ""
+    
+    while true; do
+        read -p "Select optional services (comma-separated, 1-5, or 'all'): " optional_choices
+        
+        if [ "$optional_choices" = "all" ]; then
+            SELECTED_OPTIONAL_SERVICES=("minio" "redis" "signal" "tailscale" "monitoring")
+            break
+        fi
+        
+        IFS=',' read -ra CHOSEN_OPTIONAL <<< "$optional_choices"
+        valid=true
+        SELECTED_OPTIONAL_SERVICES=()
+        
+        for choice in "${CHOSEN_OPTIONAL[@]}"; do
+            choice=$(echo "$choice" | xargs) # trim whitespace
+            case $choice in
+                1) SELECTED_OPTIONAL_SERVICES+=("minio") ;;
+                2) SELECTED_OPTIONAL_SERVICES+=("redis") ;;
+                3) SELECTED_OPTIONAL_SERVICES+=("signal") ;;
+                4) SELECTED_OPTIONAL_SERVICES+=("tailscale") ;;
+                5) SELECTED_OPTIONAL_SERVICES+=("monitoring") ;;
+                *) valid=false; break ;;
+            esac
+        done
+        
+        if [ "$valid" = true ]; then
+            break
+        else
+            echo -e "${RED}Invalid choices. Please select numbers 1-5 separated by commas, or 'all'.${NC}"
+        fi
+    done
+    
+    log_success "Optional services selected: ${SELECTED_OPTIONAL_SERVICES[*]}"
 }
 
 # ==============================================================================
