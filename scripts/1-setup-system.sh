@@ -142,7 +142,7 @@ show_progress() {
 
 save_state() {
     local step=$1
-    echo "$step" > "$STATE_FILE"
+    echo "CURRENT_STEP=$step" > "$STATE_FILE"
     log_debug "State saved: $step"
 }
 
@@ -248,6 +248,19 @@ check_system_requirements() {
     log_success "Internet connectivity: OK"
     
     log_success "System requirements check completed"
+}
+
+validate_domain_or_ip() {
+    local input=$1
+    # Check if it's an IP address
+    if [[ "$input" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        return 0
+    fi
+    # Check if it's a domain/subdomain
+    if [[ "$input" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
+        return 0
+    fi
+    return 1
 }
 
 validate_domain() {
@@ -488,13 +501,13 @@ collect_user_input() {
     echo ""
     print_section "DOMAIN AND NETWORK CONFIGURATION"
     
-    # Domain name
+    # Domain name (allow subdomain or IP)
     while true; do
-        read -p "Enter your domain name (e.g., example.com): " DOMAIN_NAME
-        if validate_domain "$DOMAIN_NAME"; then
+        read -p "Enter your domain or subdomain (e.g., ai.example.com or 192.168.1.100): " DOMAIN_NAME
+        if validate_domain_or_ip "$DOMAIN_NAME"; then
             break
         else
-            echo -e "${RED}Invalid domain name. Please try again.${NC}"
+            echo -e "${RED}Invalid domain or IP. Please try again.${NC}"
         fi
     done
     
@@ -508,29 +521,20 @@ collect_user_input() {
         fi
     done
     
-    # PostgreSQL password
-    while true; do
-        read -sp "Enter PostgreSQL password (min 12 chars): " POSTGRES_PASSWORD
-        echo ""
-        if [ ${#POSTGRES_PASSWORD} -ge 12 ]; then
-            read -sp "Confirm PostgreSQL password: " POSTGRES_PASSWORD_CONFIRM
-            echo ""
-            if [ "$POSTGRES_PASSWORD" = "$POSTGRES_PASSWORD_CONFIRM" ]; then
-                break
-            else
-                echo -e "${RED}Passwords do not match. Please try again.${NC}"
-            fi
-        else
-            echo -e "${RED}Password must be at least 12 characters. Please try again.${NC}"
-        fi
-    done
-    
-    # Generate additional passwords
+    # Auto-generate all passwords
+    log_info "Auto-generating secure passwords..."
+    POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+    POSTGRES_USER="aiplatform"  # Can be overridden if needed
     REDIS_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
     LITELLM_MASTER_KEY=$(openssl rand -hex 32)
     LITELLM_SALT_KEY=$(openssl rand -hex 32)
+    N8N_ENCRYPTION_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
     
     log_success "User configuration collected"
+    log_info "Domain: ${DOMAIN_NAME}"
+    log_info "SSL Email: ${SSL_EMAIL}"
+    log_info "PostgreSQL User: ${POSTGRES_USER}"
+    log_info "All passwords auto-generated securely"
 }
 
 validate_email() {
@@ -3437,27 +3441,27 @@ main() {
     fi
 
     # Execute setup steps
-    [ "${CURRENT_STEP:-1}" -le 1 ] && update_system
-    [ "${CURRENT_STEP:-1}" -le 2 ] && install_docker
-    [ "${CURRENT_STEP:-1}" -le 3 ] && create_directory_structure
-    [ "${CURRENT_STEP:-1}" -le 4 ] && create_config_file
-    [ "${CURRENT_STEP:-1}" -le 5 ] && create_postgresql_init
-    [ "${CURRENT_STEP:-1}" -le 6 ] && create_ollama_init
-    [ "${CURRENT_STEP:-1}" -le 7 ] && configure_firewall
-    [ "${CURRENT_STEP:-1}" -le 8 ] && configure_fail2ban
-    [ "${CURRENT_STEP:-1}" -le 9 ] && generate_ssl_certificates
-    [ "${CURRENT_STEP:-1}" -le 10 ] && configure_postgresql_tuning
-    [ "${CURRENT_STEP:-1}" -le 11 ] && install_ollama_cli
-    [ "${CURRENT_STEP:-1}" -le 12 ] && create_qdrant_init
-    [ "${CURRENT_STEP:-1}" -le 13 ] && create_n8n_workflows
-    [ "${CURRENT_STEP:-1}" -le 14 ] && generate_docker_compose
-    [ "${CURRENT_STEP:-1}" -le 15 ] && generate_nginx_config
-    [ "${CURRENT_STEP:-1}" -le 16 ] && create_systemd_service
-    [ "${CURRENT_STEP:-1}" -le 17 ] && create_backup_script
-    [ "${CURRENT_STEP:-1}" -le 18 ] && create_health_check_script
-    [ "${CURRENT_STEP:-1}" -le 19 ] && create_monitoring_script
-    [ "${CURRENT_STEP:-1}" -le 20 ] && verify_and_start_services
-    [ "${CURRENT_STEP:-1}" -le 21 ] && display_summary
+    [ "${CURRENT_STEP:-1}" -le 1 ] && { update_system; save_state 1; }
+    [ "${CURRENT_STEP:-1}" -le 2 ] && { install_docker; save_state 2; }
+    [ "${CURRENT_STEP:-1}" -le 3 ] && { create_directory_structure; save_state 3; }
+    [ "${CURRENT_STEP:-1}" -le 4 ] && { create_config_file; save_state 4; }
+    [ "${CURRENT_STEP:-1}" -le 5 ] && { create_postgresql_init; save_state 5; }
+    [ "${CURRENT_STEP:-1}" -le 6 ] && { create_ollama_init; save_state 6; }
+    [ "${CURRENT_STEP:-1}" -le 7 ] && { configure_firewall; save_state 7; }
+    [ "${CURRENT_STEP:-1}" -le 8 ] && { configure_fail2ban; save_state 8; }
+    [ "${CURRENT_STEP:-1}" -le 9 ] && { generate_ssl_certificates; save_state 9; }
+    [ "${CURRENT_STEP:-1}" -le 10 ] && { configure_postgresql_tuning; save_state 10; }
+    [ "${CURRENT_STEP:-1}" -le 11 ] && { install_ollama_cli; save_state 11; }
+    [ "${CURRENT_STEP:-1}" -le 12 ] && { create_qdrant_init; save_state 12; }
+    [ "${CURRENT_STEP:-1}" -le 13 ] && { create_n8n_workflows; save_state 13; }
+    [ "${CURRENT_STEP:-1}" -le 14 ] && { generate_docker_compose; save_state 14; }
+    [ "${CURRENT_STEP:-1}" -le 15 ] && { generate_nginx_config; save_state 15; }
+    [ "${CURRENT_STEP:-1}" -le 16 ] && { create_systemd_service; save_state 16; }
+    [ "${CURRENT_STEP:-1}" -le 17 ] && { create_backup_script; save_state 17; }
+    [ "${CURRENT_STEP:-1}" -le 18 ] && { create_health_check_script; save_state 18; }
+    [ "${CURRENT_STEP:-1}" -le 19 ] && { create_monitoring_script; save_state 19; }
+    [ "${CURRENT_STEP:-1}" -le 20 ] && { verify_and_start_services; save_state 20; }
+    [ "${CURRENT_STEP:-1}" -le 21 ] && { display_summary; save_state 21; }
 
     log_info "All setup steps completed successfully!"
 
