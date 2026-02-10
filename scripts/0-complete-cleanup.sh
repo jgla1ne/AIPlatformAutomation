@@ -24,7 +24,7 @@ exec 2>&1
 # ==============================================================================
 
 echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${RED}║           ☢️  NUCLEAR CLEANUP SCRIPT v3.0 ☢️              ║${NC}"
+echo -e "${RED}║           ☢️  NUCLEAR CLEANUP SCRIPT v4.0 ☢️              ║${NC}"
 echo -e "${RED}║                                                            ║${NC}"
 echo -e "${RED}║  THIS SCRIPT WILL PERMANENTLY DESTROY:                    ║${NC}"
 echo -e "${RED}║  • All Docker containers, images, and volumes             ║${NC}"

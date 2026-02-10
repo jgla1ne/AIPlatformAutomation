@@ -47,12 +47,13 @@ fi
 #==============================================================================
 
 # Must match Script 1
-BASE_DIR="/opt/ai-platform"
-CONFIG_DIR="${BASE_DIR}/config"
-DATA_DIR="${BASE_DIR}/data"
-LOGS_DIR="${BASE_DIR}/logs"
-ENV_FILE="${BASE_DIR}/.env"
-COMPOSE_FILE="${BASE_DIR}/docker-compose.yml"
+BASE_DIR="/root/scripts"
+AI_PLATFORM_DIR="/mnt/data/ai-platform"
+CONFIG_DIR="${AI_PLATFORM_DIR}/config"
+DATA_DIR="${AI_PLATFORM_DIR}/data"
+LOGS_DIR="${AI_PLATFORM_DIR}/logs"
+ENV_FILE="${CONFIG_DIR}/master.env"
+COMPOSE_FILE="${AI_PLATFORM_DIR}/docker/docker-compose.yml"
 
 # Logging
 LOGFILE="${LOGS_DIR}/add-service-$(date +%Y%m%d-%H%M%S).log"
@@ -123,9 +124,9 @@ preflight_checks() {
         exit 1
     fi
     
-    # Check if .env file exists
+    # Check if master.env file exists
     if [ ! -f "$ENV_FILE" ]; then
-        log_error ".env file not found at ${ENV_FILE}"
+        log_error "Master configuration file not found at ${ENV_FILE}"
         log_error "Please run ./1-setup-system.sh first"
         exit 1
     fi
