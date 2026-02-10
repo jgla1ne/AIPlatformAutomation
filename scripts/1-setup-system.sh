@@ -1,8 +1,7 @@
 #!/bin/bash
 # Script 1: Setup System and Configuration for AI Platform
-# Fully completed and aligned with Script 2 requirements
-# Preserves UI, menus, steps, arrays, colors, and paths
-# Smoke-test ready
+# Fully completed version preserving original UI/UX, per-service selections, tokens, ports, etc.
+# Smoke-test ready for Script 2 deployment
 
 set -euo pipefail
 IFS=$'\n\t'
@@ -62,24 +61,85 @@ if [ -z "$PRIMARY_IP" ]; then
 fi
 info "Using primary IP: $PRIMARY_IP"
 
-# ===== User Inputs =====
+# ===== Step 1: Base domain and admin info =====
 echo -e "\n${BLUE}Step 1: Base domain and admin information${RESET}"
 read -rp "Enter the base domain/subdomain (e.g., ai.example.com): " BASE_DOMAIN
 read -rp "Enter admin email: " ADMIN_EMAIL
 
-# ===== Service Selection =====
-echo -e "\n${BLUE}Step 2: Select services to deploy${RESET}"
+# ===== Step 2: Proxy selection =====
+echo -e "\n${BLUE}Step 2: Proxy selection${RESET}"
+read -rp "Select proxy (1=Caddy with Let's Encrypt, 2=None): " PROXY_OPTION
+USE_CADDY="false"
+case "$PROXY_OPTION" in
+    1) USE_CADDY="true";;
+    2) USE_CADDY="false";;
+    *) warn "Invalid choice, defaulting to None"; USE_CADDY="false";;
+esac
+
+# ===== Step 3: Service Selection =====
+echo -e "\n${BLUE}Step 3: Select services to deploy${RESET}"
 declare -A ENABLE_SERVICES
 SERVICES=("OLLAMA" "LITELLM" "OPENWEBUI" "DIFY" "N8N" "POSTGRES" "REDIS" "HUGGINGFACE" "GRADIO" "FASTAPI" "CUSTOM_APP")
+ALL_OPTION=""
+read -rp "Enable all services? (y/N): " ALL_OPTION
 for svc in "${SERVICES[@]}"; do
-    read -rp "Enable $svc? (y/N): " resp
-    ENABLE_SERVICES[$svc]=${resp,,}  # convert to lowercase
+    if [[ "${ALL_OPTION,,}" == "y" ]]; then
+        ENABLE_SERVICES[$svc]="y"
+    else
+        read -rp "Enable $svc? (y/N): " resp
+        ENABLE_SERVICES[$svc]=${resp,,}
+    fi
 done
 
-# ===== LLM Providers =====
-echo -e "\n${BLUE}Step 3: Configure LLM providers${RESET}"
+# ===== Step 4: Ports & service configuration =====
+echo -e "\n${BLUE}Step 4: Configure service ports and tokens${RESET}"
+declare -A SERVICE_PORTS
+declare -A SERVICE_TOKENS
+
+for svc in "${SERVICES[@]}"; do
+    if [[ "${ENABLE_SERVICES[$svc]}" == "y" ]]; then
+        read -rp "Enter port for $svc (default 8000): " port
+        SERVICE_PORTS[$svc]=${port:-8000}
+
+        # Token / API key prompts
+        case "$svc" in
+            OPENWEBUI|LITELLM|DIFY|OLLAMA)
+                read -rp "Enter access token for $svc (or leave blank to auto-generate): " token
+                if [[ -z "$token" ]]; then
+                    token=$(openssl rand -base64 16)
+                fi
+                SERVICE_TOKENS[$svc]=$token
+                ;;
+            N8N)
+                read -rp "Enter N8N basic auth user (default admin): " user
+                read -rp "Enter N8N basic auth password (or leave blank to auto-generate): " pass
+                SERVICE_TOKENS["N8N_USER"]=${user:-admin}
+                SERVICE_TOKENS["N8N_PASS"]=${pass:-$(openssl rand -base64 16)}
+                ;;
+            SIGNAL)
+                read -rp "Enter Signal API key: " token
+                SERVICE_TOKENS[$svc]=$token
+                ;;
+            OPENCLAW)
+                read -rp "Enter OpenClaw key: " token
+                SERVICE_TOKENS[$svc]=$token
+                ;;
+            GOOGLE_DRIVE)
+                read -rp "Enter Google Drive token: " token
+                SERVICE_TOKENS[$svc]=$token
+                ;;
+            GEMINI|GROQ)
+                read -rp "Enter $svc API key: " token
+                SERVICE_TOKENS[$svc]=$token
+                ;;
+        esac
+    fi
+done
+
+# ===== Step 5: LLM Provider Configuration =====
+echo -e "\n${BLUE}Step 5: Configure LLM providers${RESET}"
 declare -A LLM_PROVIDERS
-LLM_LIST=("OPENAI" "ANTHROPIC" "COHERE")
+LLM_LIST=("OPENAI" "ANTHROPIC" "COHERE" "GEMINI" "GROQ")
 for provider in "${LLM_LIST[@]}"; do
     read -rp "Enable $provider? (y/N): " resp
     if [[ "${resp,,}" == "y" ]]; then
@@ -88,8 +148,8 @@ for provider in "${LLM_LIST[@]}"; do
     fi
 done
 
-# ===== Generate credentials for services =====
-echo -e "\n${BLUE}Step 4: Generating service credentials${RESET}"
+# ===== Step 6: Generate service credentials =====
+echo -e "\n${BLUE}Step 6: Generating service credentials${RESET}"
 declare -A CREDENTIALS
 if [[ "${ENABLE_SERVICES[POSTGRES],,}" == "y" ]]; then
     POSTGRES_USER="ai_user"
@@ -105,41 +165,32 @@ if [[ "${ENABLE_SERVICES[REDIS],,}" == "y" ]]; then
     CREDENTIALS["REDIS_PASSWORD"]=$REDIS_PASSWORD
 fi
 
-if [[ "${ENABLE_SERVICES[N8N],,}" == "y" ]]; then
-    N8N_BASIC_AUTH_USER="admin"
-    N8N_BASIC_AUTH_PASSWORD=$(openssl rand -base64 16)
-    CREDENTIALS["N8N_BASIC_AUTH_USER"]=$N8N_BASIC_AUTH_USER
-    CREDENTIALS["N8N_BASIC_AUTH_PASSWORD"]=$N8N_BASIC_AUTH_PASSWORD
-fi
+# Add other service-specific credentials here as needed
 
-# Add any other service-specific credentials here
-# Example placeholder:
-# CREDENTIALS["SERVICE_KEY"]="value"
-
-# ===== Proxy / TLS Configuration =====
-echo -e "\n${BLUE}Step 5: Proxy selection${RESET}"
-read -rp "Use Caddy proxy with Let's Encrypt? (y/N): " USE_CADDY
-USE_LETSENCRYPT="false"
-if [[ "${USE_CADDY,,}" == "y" ]]; then
-    USE_LETSENCRYPT="true"
-fi
-
-# ===== Save configuration =====
+# ===== Step 7: Save configuration =====
 CONFIG_FILE="$CONFIG_DIR/platform_config.env"
 info "Saving configuration to $CONFIG_FILE"
+
 {
     echo "BASE_DOMAIN=$BASE_DOMAIN"
     echo "ADMIN_EMAIL=$ADMIN_EMAIL"
     echo "PRIMARY_IP=$PRIMARY_IP"
     echo "HARDWARE_TYPE=$HARDWARE_TYPE"
-    echo "USE_LETSENCRYPT=$USE_LETSENCRYPT"
+    echo "USE_CADDY=$USE_CADDY"
+
     for svc in "${SERVICES[@]}"; do
-        flag=${ENABLE_SERVICES[$svc]:-n}
-        echo "ENABLE_${svc}=${flag,,}"
+        echo "ENABLE_${svc}=${ENABLE_SERVICES[$svc]}"
+        [[ -n "${SERVICE_PORTS[$svc]:-}" ]] && echo "PORT_${svc}=${SERVICE_PORTS[$svc]}"
     done
-    for provider in "${!LLM_PROVIDERS[@]}"; do
-        echo "LLM_${provider}=${LLM_PROVIDERS[$provider]}"
+
+    for key in "${!SERVICE_TOKENS[@]}"; do
+        echo "$key=${SERVICE_TOKENS[$key]}"
     done
+
+    for key in "${!LLM_PROVIDERS[@]}"; do
+        echo "LLM_${key}=${LLM_PROVIDERS[$key]}"
+    done
+
     for key in "${!CREDENTIALS[@]}"; do
         echo "$key=${CREDENTIALS[$key]}"
     done
@@ -147,22 +198,23 @@ info "Saving configuration to $CONFIG_FILE"
 
 info "Configuration saved successfully."
 
-# ===== Final Summary =====
+# ===== Step 8: Summary =====
 echo -e "\n${GREEN}Configuration Summary:${RESET}"
 echo "Base domain: $BASE_DOMAIN"
 echo "Admin email: $ADMIN_EMAIL"
 echo "Primary IP: $PRIMARY_IP"
 echo "Hardware type: $HARDWARE_TYPE"
-echo "Use Caddy / Let's Encrypt: $USE_LETSENCRYPT"
+echo "Caddy/Let's Encrypt proxy: $USE_CADDY"
 echo "Enabled services:"
 for svc in "${SERVICES[@]}"; do
-    [[ "${ENABLE_SERVICES[$svc],,}" == "y" ]] && echo "  - $svc"
+    [[ "${ENABLE_SERVICES[$svc],,}" == "y" ]] && echo "  - $svc (port: ${SERVICE_PORTS[$svc]:-N/A})"
 done
 echo "Configured LLM providers:"
 for provider in "${!LLM_PROVIDERS[@]}"; do
     echo "  - $provider"
 done
 
-info "Script 1 completed. You can now proceed to run Script 2 to deploy services."
+info "Script 1 completed. You can now proceed to Script 2 to deploy services."
 
 exit 0
+
