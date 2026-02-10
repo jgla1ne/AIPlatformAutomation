@@ -1,0 +1,798 @@
+./1-setup-system.sh: line 101: syntax error near unexpected token `('
+[0;36m
+╔════════════════════════════════════════════════════════════════════╗
+║                                                                    ║
+║         🚀 AI PLATFORM AUTOMATION - SYSTEM SETUP                   ║
+║         Version 1.0.3-STABLE                                       ║
+║                                                                    ║
+╚════════════════════════════════════════════════════════════════════╝
+[0m
+
+[0;34m════════════════════════════════════════════════════════════════════[0m
+[1;37mSystem Information[0m
+[0;34m════════════════════════════════════════════════════════════════════[0m
+
+[0;36mℹ[0m Operating System: Ubuntu 24.04.3 LTS
+[0;36mℹ[0m Kernel: 6.14.0-1018-aws
+
+[0;34m════════════════════════════════════════════════════════════════════[0m
+[1;37mChecking Prerequisites[0m
+[0;34m════════════════════════════════════════════════════════════════════[0m
+
+[0;32m✓[0m docker is installed
+[0;32m✓[0m docker-compose is installed
+[0;32m✓[0m git is installed
+[0;32m✓[0m curl is installed
+[0;32m✓[0m openssl is installed
+[0;32m✓[0m jq is installed
+[0;32m✓[0m Docker daemon is running
+[0;32m✓[0m Disk space: 57GB available
+[0;32m✓[0m Docker already installed: Docker version 29.2.1, build a5c7197
+
+[0;34m════════════════════════════════════════════════════════════════════[0m
+[1;37mNetwork Configuration[0m
+[0;34m════════════════════════════════════════════════════════════════════[0m
+
+Choose network mode:
+  1) Domain-based (production, with SSL)
+  2) IP-based (development, simple)
+
+[0;36mEnter choice [1-2][0m [2]: [0;36mEnter domain name[0m [example.com]: [0;36mEnable HTTPS/SSL? [y/n][0m (default: y): [0;36mEmail for Let's Encrypt certificates[0m: [0;36mN8N subdomain[0m [n8n]: [0;36mFlowise subdomain[0m [flowise]: [0;36mDify subdomain[0m [dify]: [0;36mLangFuse subdomain[0m [langfuse]: [0;36mOpen WebUI subdomain[0m [chat]: [0;36mAnythingLLM subdomain[0m [anything]: [0;36mLiteLLM subdomain[0m [litellm]: [0;36mOpenClaw subdomain[0m [openclaw]: [0;32m✓[0m Network configuration saved
+
+[0;34m════════════════════════════════════════════════════════════════════[0m
+[1;37mService Selection[0m
+[0;34m════════════════════════════════════════════════════════════════════[0m
+
+[1;37mSelect services to install (grouped by platform):[0m
+
+[0;35m━━━ Platform 1: Automation & Workflows ━━━[0m
+[0;36m  Install N8N (Workflow Automation)? [y/n][0m (default: y): [0;36m  Install Flowise (Visual AI Flows)? [y/n][0m (default: y): 
+[0;35m━━━ Platform 2: AI Development & Observability ━━━[0m
+[0;36m  Install Dify (LLM App Builder)? [y/n][0m (default: y): [0;36m  Install LangFuse (LLM Monitoring)? [y/n][0m (default: y): 
+[0;35m━━━ Platform 3: Chat Interfaces ━━━[0m
+[0;36m  Install Open WebUI (ChatGPT-like UI)? [y/n][0m (default: y): [0;36m  Install AnythingLLM (Document Chat)? [y/n][0m (default: y): [0;36m  Install OpenClaw (AI Assistant)? [y/n][0m (default: y): 
+[0;35m━━━ Core Infrastructure ━━━[0m
+[0;36m  Install LiteLLM (LLM Gateway)? [y/n][0m (default: y): [0;36m  Install Ollama (Local LLMs)? [y/n][0m (default: y): 
+[0;32m✓[0m Services selected
+
+[0;34m════════════════════════════════════════════════════════════════════[0m
+[1;37mLLM Provider Configuration[0m
+[0;34m════════════════════════════════════════════════════════════════════[0m
+
+[0;36mConfigure OpenAI? [y/n][0m (default: y): [0;36mConfigure Anthropic (Claude)? [y/n][0m (default: y): [0;36mConfigure Google Gemini? [y/n][0m (default: y): [0;36mGoogle Gemini API key[0m: [0;32m✓[0m Gemini configured
+[0;36mConfigure OpenRouter? [y/n][0m (default: y): [0;36mOpenRouter API key[0m: [0;36mℹ[0m Fetching available models from OpenRouter...
+[1;33m⚠[0m API call failed, using default models
+[0;36mOllama models to pull (comma-separated)[0m [llama3.2,mistral,codellama]: [0;32m✓[0m Ollama configured
+
+[1;37mLiteLLM Routing Strategy:[0m
+  1) usage-based-routing (Recommended: Routes simple→local, complex→cloud)
+  2) simple-shuffle (Random model selection)
+  3) least-busy (Load balancing)
+  4) latency-based-routing (Lowest latency)
+
+[0;36mSelect strategy [1-4][0m [1]: [0;32m✓[0m LiteLLM routing: usage-based-routing
+[0;36mℹ[0m Simple queries will route to local Ollama, complex queries to cloud
+
+[0;34m════════════════════════════════════════════════════════════════════[0m
+[1;37mIntegration Configuration[0m
+[0;34m════════════════════════════════════════════════════════════════════[0m
+
+[0;36mConfigure Google Drive? [y/n][0m (default: n): [0;36mGoogle OAuth Client ID[0m: [0;36mGoogle OAuth Client Secret[0m: [0;36mOAuth Redirect URI[0m [http://localhost:5678/oauth/callback]: [0;32m✓[0m Google Drive configured
+[0;36mConfigure Signal? [y/n][0m (default: n): [0;36mSignal phone number (with country code)[0m: [0;32m✓[0m Signal configured
+[0;36mConfigure SMTP? [y/n][0m (default: n): [0;36mConfigure Brave Search API (for OpenClaw)? [y/n][0m (default: y): [0;36mBrave Search API key[0m: [0;32m✓[0m Brave Search configured
+
+[0;34m════════════════════════════════════════════════════════════════════[0m
+[1;37mDatabase Configuration[0m
+[0;34m════════════════════════════════════════════════════════════════════[0m
+
+[0;36mℹ[0m Auto-generated database credentials (saved to .env)
+[0;32m✓[0m Databases configured
+
+[0;34m════════════════════════════════════════════════════════════════════[0m
+[1;37mGenerating Configuration[0m
+[0;34m════════════════════════════════════════════════════════════════════[0m
+
+[0;32m✓[0m Configuration file created: /home/jglaine/AIPlatformAutomation/config/.env
+[0;32m✓[0m LiteLLM config created: /home/jglaine/AIPlatformAutomation/config/litellm-config.yaml
+
+[0;34m════════════════════════════════════════════════════════════════════[0m
+[1;37mGenerating Service URLs[0m
+[0;34m════════════════════════════════════════════════════════════════════[0m
+
+[0;32m✓[0m Service URLs saved: /home/jglaine/AIPlatformAutomation/service-urls.txt
+
+[0;34m════════════════════════════════════════════════════════════════════[0m
+[1;37m🎉 Setup Complete - Configuration Summary[0m
+[0;34m════════════════════════════════════════════════════════════════════[0m
+
+[1;37mNetwork Configuration:[0m
+  Mode: domain
+  Domain: datasquiz.net
+  HTTPS: true
+
+[1;37mServices to Deploy:[0m
+  ✓ N8N - Workflow Automation
+  ✓ Flowise - Visual AI Flows
+  ✓ Dify - LLM App Builder
+  ✓ LangFuse - LLM Observability
+  ✓ Open WebUI - Chat Interface
+  ✓ AnythingLLM - Document Chat
+  ✓ LiteLLM - LLM Gateway
+  ✓ Ollama - Local LLMs
+  ✓ OpenClaw - AI Assistant
+
+[1;37mLLM Providers Configured:[0m
+  ✓ Google Gemini
+  ✓ OpenRouter (3 models)
+  ✓ Ollama (llama3.2)
+
+[1;37mLiteLLM Routing:[0m
+  Strategy: usage-based-routing
+  Simple queries → Local Ollama models
+  Complex queries → Cloud providers
+
+[1;37mDatabase Credentials:[0m
+  PostgreSQL User: aiplatform
+  PostgreSQL Pass: 9h1TYPEPbqaoWwGfrjOwGZyO74ZiQF0x
+  Redis Pass: xuqD1u5ZSy7x8F1UobbxbgW6KZUuhq4c
+  Qdrant Key: fMpUrcHeYcdjjvthu6AbtnJiDBobrRJF
+
+[1;37mService Access URLs:[0m
+  ANYTHINGLLM: https://anything.datasquiz.net
+  N8N: https://n8n.datasquiz.net
+  FLOWISE: https://flowise.datasquiz.net
+  LANGFUSE: https://langfuse.datasquiz.net
+  OPENCLAW: https://openclaw.datasquiz.net
+  OPENWEBUI: https://chat.datasquiz.net
+  LITELLM: https://litellm.datasquiz.net
+  DIFY: https://dify.datasquiz.net
+
+[0;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+[1;37m📁 Configuration Files:[0m
+  • Environment: /home/jglaine/AIPlatformAutomation/config/.env
+  • Service URLs: /home/jglaine/AIPlatformAutomation/service-urls.txt
+  • LiteLLM Config: /home/jglaine/AIPlatformAutomation/config/litellm-config.yaml
+
+[1;33m⚠  IMPORTANT:[0m
+  • Keep credentials secure!
+  • Review configuration files before deployment
+  • Next: Run ./scripts/2-deploy-services.sh
+[0;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+
+[0;32m✓[0m Setup completed successfully!
+[0;36mℹ[0m Log saved to: /home/jglaine/AIPlatformAutomation/setup.log
+[H[2J[3J[0;36m
+[H[2J[3J[0;36m
+╔══════════════════════════════════════════════════════════════════╗
+║                                                                  ║
+║              AI Platform Automation Setup                        ║
+║              Version 1.1.0-COMPLETE                              ║
+║                                                                  ║
+╚══════════════════════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════════════════╗
+║                                                                  ║
+║              AI Platform Automation Setup                        ║
+║              Version 1.1.0-COMPLETE                              ║
+║                                                                  ║
+╚══════════════════════════════════════════════════════════════════╝
+[0m
+[0;34mℹ[0m Starting installation process...
+[0m
+[0;34mℹ[0m Starting installation process...
+[2026-02-10 05:49:10] [INFO] Starting installation process...
+[2026-02-10 05:49:10] [INFO] Starting installation process...
+[2026-02-10 05:49:10] [INFO] Starting installation process...
+
+
+
+
+[0;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+[0;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+[1;37m  CHECKING PREREQUISITES[0m
+[1;37m  CHECKING PREREQUISITES[0m
+[0;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+[0;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+
+
+[0;35m▶[0m Checking disk space...
+[0;35m▶[0m Checking disk space...
+[0;32m✓[0m Sufficient disk space: 58GB available
+[0;32m✓[0m Sufficient disk space: 58GB available
+[2026-02-10 05:49:10] [SUCCESS] Sufficient disk space: 58GB available
+[2026-02-10 05:49:10] [SUCCESS] Sufficient disk space: 58GB available
+[2026-02-10 05:49:10] [SUCCESS] Sufficient disk space: 58GB available
+[0;35m▶[0m Checking system memory...
+[0;35m▶[0m Checking system memory...
+[1;33m⚠[0m Low memory: 7GB total, 8GB recommended
+[1;33m⚠[0m Low memory: 7GB total, 8GB recommended
+Continue anyway? [y/N]: Continue anyway? [y/N]: [0;35m▶[0m Checking required commands...
+[0;35m▶[0m Checking required commands...
+[0;32m✓[0m All prerequisites checked
+[0;32m✓[0m All prerequisites checked
+[2026-02-10 05:49:13] [SUCCESS] All prerequisites checked
+[2026-02-10 05:49:13] [SUCCESS] All prerequisites checked
+[2026-02-10 05:49:13] [SUCCESS] All prerequisites checked
+
+
+[0;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+[1;37m  DOCKER INSTALLATION[0m
+[0;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+
+[0;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+[1;37m  DOCKER INSTALLATION[0m
+[0;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+
+[0;35m▶[0m Installing Docker...
+[0;35m▶[0m Installing Docker...
+# Executing docker install script, commit: f381ee68b32e515bb4dc034b339266aff1fbc460
+# Executing docker install script, commit: f381ee68b32e515bb4dc034b339266aff1fbc460
++ sh -c apt-get -qq update >/dev/null
++ sh -c apt-get -qq update >/dev/null
++ sh -c DEBIAN_FRONTEND=noninteractive apt-get -y -qq install ca-certificates curl >/dev/null
++ sh -c DEBIAN_FRONTEND=noninteractive apt-get -y -qq install ca-certificates curl >/dev/null
++ sh -c install -m 0755 -d /etc/apt/keyrings
++ sh -c install -m 0755 -d /etc/apt/keyrings
++ sh -c curl -fsSL "https://download.docker.com/linux/ubuntu/gpg" -o /etc/apt/keyrings/docker.asc
++ sh -c curl -fsSL "https://download.docker.com/linux/ubuntu/gpg" -o /etc/apt/keyrings/docker.asc
++ sh -c chmod a+r /etc/apt/keyrings/docker.asc
++ sh -c chmod a+r /etc/apt/keyrings/docker.asc
++ sh -c echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" > /etc/apt/sources.list.d/docker.list
++ sh -c echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" > /etc/apt/sources.list.d/docker.list
++ sh -c apt-get -qq update >/dev/null
++ sh -c apt-get -qq update >/dev/null
++ sh -c DEBIAN_FRONTEND=noninteractive apt-get -y -qq install docker-ce docker-ce-cli containerd.io docker-compose-plugin docker-ce-rootless-extras docker-buildx-plugin docker-model-plugin >/dev/null
++ sh -c DEBIAN_FRONTEND=noninteractive apt-get -y -qq install docker-ce docker-ce-cli containerd.io docker-compose-plugin docker-ce-rootless-extras docker-buildx-plugin docker-model-plugin >/dev/null
+Using systemd to manage Docker service
+Using systemd to manage Docker service
++ sh -c systemctl enable --now docker.service
++ sh -c systemctl enable --now docker.service
+  UNIT                                                                                      LOAD   ACTIVE     SUB          DESCRIPTION
+  proc-sys-fs-binfmt_misc.automount                                                         loaded active     running      Arbitrary Executable File Formats File System Automount Point
+  sys-devices-pci0000:00-0000:00:04.0-nvme-nvme0-nvme0n1-nvme0n1p1.device                   loaded active     plugged      Amazon Elastic Block Store cloudimg-rootfs
+  sys-devices-pci0000:00-0000:00:04.0-nvme-nvme0-nvme0n1-nvme0n1p14.device                  loaded active     plugged      Amazon Elastic Block Store 14
+  sys-devices-pci0000:00-0000:00:04.0-nvme-nvme0-nvme0n1-nvme0n1p15.device                  loaded active     plugged      Amazon Elastic Block Store UEFI
+  sys-devices-pci0000:00-0000:00:04.0-nvme-nvme0-nvme0n1-nvme0n1p16.device                  loaded active     plugged      Amazon Elastic Block Store BOOT
+  sys-devices-pci0000:00-0000:00:04.0-nvme-nvme0-nvme0n1.device                             loaded active     plugged      Amazon Elastic Block Store
+  sys-devices-pci0000:00-0000:00:05.0-net-ens5.device                                       loaded active     plugged      Elastic Network Adapter (ENA)
+  sys-devices-pci0000:00-0000:00:1f.0-nvme-nvme1-nvme1n1.device                             loaded active     plugged      Amazon Elastic Block Store
+  sys-devices-platform-serial8250-serial8250:0-serial8250:0.1-tty-ttyS1.device              loaded active     plugged      /sys/devices/platform/serial8250/serial8250:0/serial8250:0.1/tty/ttyS1
+  sys-devices-platform-serial8250-serial8250:0-serial8250:0.2-tty-ttyS2.device              loaded active     plugged      /sys/devices/platform/serial8250/serial8250:0/serial8250:0.2/tty/ttyS2
+  sys-devices-platform-serial8250-serial8250:0-serial8250:0.3-tty-ttyS3.device              loaded active     plugged      /sys/devices/platform/serial8250/serial8250:0/serial8250:0.3/tty/ttyS3
+  sys-devices-pnp0-00:04-00:04:0-00:04:0.0-tty-ttyS0.device                                 loaded active     plugged      /sys/devices/pnp0/00:04/00:04:0/00:04:0.0/tty/ttyS0
+  sys-devices-virtual-block-loop0.device                                                    loaded active     plugged      /sys/devices/virtual/block/loop0
+  sys-devices-virtual-block-loop1.device                                                    loaded active     plugged      /sys/devices/virtual/block/loop1
+  sys-devices-virtual-block-loop2.device                                                    loaded active     plugged      /sys/devices/virtual/block/loop2
+  sys-devices-virtual-block-loop3.device                                                    loaded active     plugged      /sys/devices/virtual/block/loop3
+  sys-devices-virtual-block-loop4.device                                                    loaded active     plugged      /sys/devices/virtual/block/loop4
+  sys-devices-virtual-block-loop5.device                                                    loaded active     plugged      /sys/devices/virtual/block/loop5
+  sys-devices-virtual-block-loop6.device                                                    loaded active     plugged      /sys/devices/virtual/block/loop6
+  sys-devices-virtual-block-loop7.device                                                    loaded active     plugged      /sys/devices/virtual/block/loop7
+  sys-devices-virtual-block-loop8.device                                                    loaded active     plugged      /sys/devices/virtual/block/loop8
+  sys-devices-virtual-misc-rfkill.device                                                    loaded active     plugged      /sys/devices/virtual/misc/rfkill
+  sys-devices-virtual-net-docker0.device                                                    loaded active     plugged      /sys/devices/virtual/net/docker0
+  sys-devices-virtual-net-tailscale0.device                                                 loaded active     plugged      /sys/devices/virtual/net/tailscale0
+  sys-devices-virtual-tty-ttyprintk.device                      UNIT                                                                                      LOAD   ACTIVE     SUB          DESCRIPTION
+  proc-sys-fs-binfmt_misc.automount                                                         loaded active     running      Arbitrary Executable File Formats File System Automount Point
+  sys-devices-pci0000:00-0000:00:04.0-nvme-nvme0-nvme0n1-nvme0n1p1.device                   loaded active     plugged      Amazon Elastic Block Store cloudimg-rootfs
+  sys-devices-pci0000:00-0000:00:04.0-nvme-nvme0-nvme0n1-nvme0n1p14.device                  loaded active     plugged      Amazon Elastic Block Store 14
+  sys-devices-pci0000:00-0000:00:04.0-nvme-nvme0-nvme0n1-nvme0n1p15.device                  loaded active     plugged      Amazon Elastic Block Store UEFI
+  sys-devices-pci0000:00-0000:00:04.0-nvme-nvme0-nvme0n1-nvme0n1p16.device                  loaded active     plugged      Amazon Elastic Block Store BOOT
+  sys-devices-pci0000:00-0000:00:04.0-nvme-nvme0-nvme0n1.device                             loaded active     plugged      Amazon Elastic Block Store
+  sys-devices-pci0000:00-0000:00:05.0-net-ens5.device                                       loaded active     plugged      Elastic Network Adapter (ENA)
+  sys-devices-pci0000:00-0000:00:1f.0-nvme-nvme1-nvme1n1.device                             loaded active     plugged      Amazon Elastic Block Store
+  sys-devices-platform-serial8250-serial8250:0-serial8250:0.1-tty-ttyS1.device              loaded active     plugged      /sys/devices/platform/serial8250/serial8250:0/serial8250:0.1/tty/ttyS1
+  sys-devices-platform-serial8250-serial8250:0-serial8250:0.2-tty-ttyS2.device              loaded active     plugged      /sys/devices/platform/serial8250/serial8250:0/serial8250:0.2/tty/ttyS2
+  sys-devices-platform-serial8250-serial8250:0-serial8250:0.3-tty-ttyS3.device              loaded active     plugged      /sys/devices/platform/serial8250/serial8250:0/serial8250:0.3/tty/ttyS3
+  sys-devices-pnp0-00:04-00:04:0-00:04:0.0-tty-ttyS0.device                                 loaded active     plugged      /sys/devices/pnp0/00:04/00:04:0/00:04:0.0/tty/ttyS0
+  sys-devices-virtual-block-loop0.device                                                    loaded active     plugged      /sys/devices/virtual/block/loop0
+  sys-devices-virtual-block-loop1.device                                                    loaded active     plugged      /sys/devices/virtual/block/loop1
+  sys-devices-virtual-block-loop2.device                                                    loaded active     plugged      /sys/devices/virtual/block/loop2
+  sys-devices-virtual-block-loop3.device                                                    loaded active     plugged      /sys/devices/virtual/block/loop3
+  sys-devices-virtual-block-loop4.device                                                    loaded active     plugged      /sys/devices/virtual/block/loop4
+  sys-devices-virtual-block-loop5.device                                                    loaded active     plugged      /sys/devices/virtual/block/loop5
+  sys-devices-virtual-block-loop6.device                                                    loaded active     plugged      /sys/devices/virtual/block/loop6
+  sys-devices-virtual-block-loop7.device                                                    loaded active     plugged      /sys/devices/virtual/block/loop7
+  sys-devices-virtual-block-loop8.device                                                    loaded active     plugged      /sys/devices/virtual/block/loop8
+  sys-devices-virtual-misc-rfkill.device                                                    loaded active     plugged      /sys/devices/virtual/misc/rfkill
+  sys-devices-virtual-net-docker0.device                                                    loaded active     plugged      /sys/devices/virtual/net/docker0
+  sys-devices-virtual-net-tailscale0.device                                                 loaded active     plugged      /sys/devices/virtual/net/tailscale0
+  sys-devices-virtual-tty-ttyprintk.device                                                  loaded active     plugged      /sys/devices/virtual/tty/ttyprintk
+  sys-module-configfs.device                                                                loaded active     plugged      /sys/module/configfs
+  sys-module-fuse.device                                                                    loaded active     plugged      /sys/module/fuse
+  sys-subsystem-net-devices-docker0.device                                                  loaded active     plugged      /sys/subsystem/net/devices/docker0
+  sys-subsystem-net-devices-ens5.device                                                     loaded active     plugged      Elastic Network Adapter (ENA)
+  sys-subsystem-net-devices-tailscale0.device                                               loaded active     plugged      /sys/subsystem/net/devices/tailscale0
+  -.mount                                                                                   loaded active     mounted      Root Mount
+  boot-efi.mount                                                                            loaded active     mounted      /boot/efi
+  boot.mount                                                                                loaded active     mounted      /boot
+  dev-hugepages.mount                                                                       loaded active     mounted      Huge Pages File System
+  dev-mqueue.mount                                                                          loaded active     mounted      POSIX Message Queue File System
+  mnt-data.mount                                                                            loaded active     mounted      /mnt/data
+  proc-sys-fs-binfmt_misc.mount                                                             loaded active     mounted      Arbitrary Executable File Formats File System
+  run-user-1001.mount                                                                       loaded active     mounted      /run/user/1001
+  snap-amazon\x2dssm\x2dagent-11797.mount                                                   loaded active     mounted      Mount unit for amazon-ssm-agent, revision 11797
+  snap-amazon\x2dssm\x2dagent-12322.mount                                                   loaded active     mounted      Mount unit for amazon-ssm-agent, revision 12322
+  snap-core22-2163.mount                                                                    loaded active     mounted      Mount unit for core22, revision 2163
+  snap-core22-2292.mount                                                                    loaded active     mounted      Mount unit for core22, revision 2292
+  snap-core24-1267.mount                                                                    loaded active     mounted      Mount unit for core24, revision 1267
+  snap-core24-1349.mount                                                                    loaded active     mounted      Mount unit for core24, revision 1349
+  snap-snapd-25577.mount                                                                    loaded active     mounted      Mount unit for snapd, revision 25577
+  snap-snapd-25935.mount                                                                    loaded active     mounted      Mount unit for snapd, revision 25935
+  snap-tailscale-154.mount                                                                  loaded active     mounted      Mount unit for tailscale, revision 154
+  sys-fs-fuse-connections.mount                                                             loaded active     mounted      FUSE Control File System
+  sys-kernel-config.mount                                                                   loaded active     mounted      Kernel Configuration File System
+  sys-kernel-debug.mount                                                                    loaded active     mounted      Kernel Debug File System
+  sys-kernel-tracing.mount                                                                  loaded active     mounted      Kernel Trace File System
+  acpid.path                                                                                loaded active     running      ACPI Events Check
+  systemd-ask-password-console.path                                                         loaded active     waiting      Dispatch Password Requests to Console Directory Watch
+  systemd-ask-password-wall.path                                                            loaded active     waiting      Forward Password Requests to Wall Directory Watch
+  init.scope                                                                                loaded active     running      System and Service Manager
+  session-1.scope                                                                           loaded active     running      Session 1 of User jglaine
+  session-3.scope                                                                           loaded active     running      Session 3 of User jglaine
+  acpid.service                                                                             loaded active     running      ACPI event daemon
+● apparmor.service                                                                          loaded failed     failed       Load AppArmor profiles
+  blk-availability.service                                                                  loaded active     exited       Availability of block devices
+  chrony.service                                                                            loaded active     running      chrony, an NTP client/server
+  console-setup.service                                                                     loaded active     exited       Set console font and keymap
+  containerd.service                                                                        loaded active     running      containerd container runtime
+  cron.service                                                                              loaded active     running      Regular background program processing daemon
+  dbus.service                                                                              loaded active     running      D-Bus System Message Bus
+  docker.service                                                                            loaded active     running      Docker Application Container Engine
+  fail2ban.service                                                                          loaded active     running      Fail2Ban Service
+  finalrd.service                                                                           loaded active     exited       Create final runtime dir for shutdown pivot root
+  getty@tty1.service                                                                        loaded active     running      Getty on tty1
+● hibinit-agent.service                                                                     loaded failed     failed       EC2 instance hibernation setup agent
+  irqbalance.service                                                                        loaded active     running      irqbalance daemon
+  keyboard-setup.service                                                                    loaded active     exited       Set the console keyboard layout
+  kmod-static-nodes.service                                                                 loaded active     exited       Create List of Static Device Nodes
+  lvm2-monitor.service                                                                      loaded active     exited       Monitoring of LVM2 mirrors, snapshots etc. using dmeventd or progress polling
+  ModemManager.service                                                                      loaded active     running      Modem Manager
+  multipathd.service                                                                        loaded active     running      Device-Mapper Multipath Device Controller
+  networkd-dispatcher.service                                                               loaded active     running      Dispatcher daemon for systemd-networkd
+  ollama.service                                                                            loaded activating auto-restart Ollama Service
+  packagekit.service                                                                        loaded active     running      PackageKit Daemon
+  plymouth-quit-wait.service                                                                loaded active     exited       Hold until boot process finishes up
+  plymouth-quit.service                                                                     loaded active     exited       Terminate Plymouth Boot Screen
+  plymouth-read-write.service                                                               loaded active     exited       Tell Plymouth To Write Out Runtime Data
+  polkit.service                                                                            loaded active     running      Authorization Manager
+  rsyslog.service                                                                           loaded active     running      System Logging Service
+  serial-getty@ttyS0.service                                                                loaded active     running      Serial Getty on ttyS0
+  setvtrgb.service                                                                          loaded active     exited       Set console scheme
+● snap.amazon-ssm-agent.amazon-ssm-agent.service                                            loaded failed     failed       Service for snap application amazon-ssm-agent.amazon-ssm-agent
+  ssh.service                                                                               loaded active     running      OpenBSD Secure Shell server
+  sysstat.service                                                                           loaded active     exited       Resets System Activity Logs
+  systemd-binfmt.service                                                                    loaded active     exited       Set Up Additional Binary Formats
+  systemd-fsck-root.service                                                                 loaded active     exited       File System Check on Root Device
+  systemd-fsck@dev-disk-by\x2dlabel-BOOT.service                                            loaded active     exited       File System Check on /dev/disk/by-label/BOOT
+  systemd-fsck@dev-disk-by\x2dlabel-UEFI.service                                            loaded active     exited       File System Check on /dev/disk/by-label/UEFI
+  systemd-fsck@dev-disk-by\x2duuid-5a12ab31\x2d29f9\x2d4067\x2daa4f\x2d7fb43e09b4de.service loaded active     exited       File System Check on /dev/disk/by-uuid/5a12ab31-29f9-4067-aa4f-7fb43e09b4de
+  systemd-journal-flush.service                                                             loaded active     exited       Flush Journal to Persistent Storage
+  systemd-journald.service                                                                  loaded active     running      Journal Service
+  systemd-logind.service                                                                    loaded active     running      User Login Management
+  systemd-modules-load.service                                                              loaded active     exited       Load Kernel Modules
+  systemd-networkd.service                                                                  loaded active     running      Network Configuration
+  systemd-random-seed.service                                                               loaded active     exited       Load/Save OS Random Seed
+  systemd-remount-fs.service                                                                loaded active     exited       Remount Root and Kernel File Systems
+  systemd-resolved.service                                                                  loaded active     running      Network Name Resolution
+  systemd-sysctl.service                                                                    loaded active     exited       Apply Kernel Variables
+  systemd-tmpfiles-setup-dev-early.service                                                  loaded active     exited       Create Static Device Nodes in /dev gracefully
+  systemd-tmpfiles-setup-dev.service                                                        loaded active     exited       Create Static Device Nodes in /dev
+  systemd-tmpfiles-setup.service                                                            loaded active     exited       Create Volatile Files and Directories
+  systemd-udev-trigger.service                                                              loaded active     exited       Coldplug All udev Devices
+  systemd-udevd.service                                                                     loaded active     running      Rule-based Manager for Device Events and Files
+  systemd-update-utmp.service                                                               loaded active     exited       Record System Boot/Shutdown in UTMP
+  systemd-user-sessions.service                                                             loaded active     exited       Permit User Sessions
+  tailscaled.service                                                                        loaded active     running      Tailscale node agent
+  unattended-upgrades.service                                                               loaded active     running      Unattended Upgrades Shutdown
+  user-runtime-dir@1001.service                                                             loaded active     exited       User Runtime Directory /run/user/1001
+  user@1001.service                                                                         loaded active     running      User Manager for UID 1001
+  -.slice                                                                                   loaded active     active       Root Slice
+  system-getty.slice                                                                        loaded active     active       Slice /system/getty
+  system-modprobe.slice                                                                     loaded active     active       Slice /system/modprobe
+  system-serial\x2dgetty.slice                                                              loaded active     active       Slice /system/serial-getty
+  system-systemd\x2dfsck.slice                                                              loaded active     active       Slice /system/systemd-fsck
+  system.slice                                                                              loaded active     active       System Slice
+  user-1001.slice                                                                           loaded active     active       User Slice of UID 1001
+  user.slice                                                                                loaded active     active       User and Session Slice
+  acpid.socket                                                                              loaded active     running      ACPID Listen Socket
+  dbus.socket                                                                               loaded active     running      D-Bus System Message Bus Socket
+  dm-event.socket                                                                           loaded active     listening    Device-mapper event daemon FIFOs
+  docker.socket                                                                             loaded active     running      Docker Socket for the API
+  iscsid.socket                                                                             loaded active     listening    Open-iSCSI iscsid Socket
+  lvm2-lvmpolld.socket                                                                      loaded active     listening    LVM2 poll daemon socket
+  lxd-installer.socket                                                                      loaded active     listening    Helper to install lxd snap on demand
+  multipathd.socket                                                                         loaded active     running      multipathd control socket
+  ssh.socket                                                                                loaded active     running      OpenBSD Secure Shell server socket
+  syslog.socket                                                                             loaded active     running      Syslog Socket
+  systemd-fsckd.socket                                                                      loaded active     listening    fsck to fsckd communication Socket
+  systemd-initctl.socket                                                                    loaded active     listening    initctl Compatibility Named Pipe
+  systemd-journald-dev-log.socket                                                           loaded active     running      Journal Socket (/dev/log)
+  systemd-journald.socket                                                                   loaded active     running      Journal Socket
+  systemd-networkd.socket                                                                   loaded active     running      Network Service Netlink Socket
+  systemd-rfkill.socket                                                                     loaded active     listening    Load/Save RF Kill Switch Status /dev/rfkill Watch
+  systemd-sysext.socket                                                                     loaded active     listening    System Extension Image Management (Varlink)
+  systemd-udevd-control.socket                                                              loaded active     running      udev Control Socket
+  systemd-udevd-kernel.socket                                                               loaded active     running      udev Kernel Socket
+  uuidd.socket                                                                              loaded active     listening    UUID daemon activation socket
+  swapfile.swap                                                                             loaded active     active       /swapfile
+  basic.target                                                                              loaded active     active       Basic System
+  cryptsetup.target                                                                         loaded active     active       Local Encrypted Volumes
+  getty.target                                                                              loaded active     active       Login Prompts
+  graphical.target                                                                          loaded active     active       Graphical Interface
+  integritysetup.target                                                                     loaded active     active       Local Integrity Protected Volumes
+  local-fs-pre.target                                                                       loaded active     active       Preparation for Local File Systems
+  local-fs.target                                                                           loaded active     active       Local File Systems
+  multi-user.target                                                                         loaded active     active       Multi-User System
+  network-online.target                                                                     loaded active     active       Network is Online
+  network-pre.target                                                                        loaded active     active       Preparation for Network
+  network.target                                                                            loaded active     active       Network
+  nss-lookup.target                                                                         loaded active     active       Host and Network Name Lookups
+  paths.target                                                                              loaded active     active       Path Units
+  remote-fs-pre.target                                                                      loaded active     active       Preparation for Remote File Systems
+  remote-fs.target                                                                          loaded active     active       Remote File Systems
+  slices.target                                                                             loaded active     active       Slice Units
+  sockets.target                                                                            loaded active     active       Socket Units
+  swap.target                                                                               loaded active     active       Swaps
+  sysinit.target                                                                            loaded active     active       System Initialization
+  time-set.target                                                                           loaded active     active       System Time Set
+  time-sync.target                                                                          loaded active     active       System Time Synchronized
+  timers.target                                                                             loaded active     active       Timer Units
+  veritysetup.target                                                                        loaded active     active       Local Verity Protected Volumes
+  apt-daily-upgrade.timer                                                                   loaded active     waiting      Daily apt upgrade and clean activities
+  apt-daily.timer                                                                           loaded active     waiting      Daily apt download activities
+  dpkg-db-backup.timer                                                                      loaded active     waiting      Daily dpkg database backup timer
+  e2scrub_all.timer                                                                         loaded active     waiting      Periodic ext4 Online Metadata Check for All Filesystems
+  fstrim.timer                                                                              loaded active     waiting      Discard unused filesystem blocks once a week
+  fwupd-refresh.timer                                                                       loaded active     waiting      Refresh fwupd metadata regularly
+  logrotate.timer                                                                           loaded active     waiting      Daily rotation of log files
+  man-db.timer                                                                              loaded active     waiting      Daily man-db regeneration
+  motd-news.timer                                                                           loaded active     waiting      Message of the Day
+  sysstat-collect.timer                                                                     loaded active     waiting      Run system activity accounting tool every 10 minutes
+  sysstat-summary.timer                                                                     loaded active     waiting      Generate summary of yesterday's process accounting
+  systemd-tmpfiles-clean.timer                                                              loaded active     waiting      Daily Cleanup of Temporary Directories
+
+Legend: LOAD   → Reflects whether the unit definition was properly loaded.
+        ACTIVE → The high-level unit activation state, i.e. generalization of SUB.
+        SUB    → The low-level unit activation state, values depend on unit type.
+
+178 loaded units listed. Pass --all to see loaded but inactive units, too.
+To show all installed unit files use 'systemctl list-unit-files'.
+                              loaded active     plugged      /sys/devices/virtual/tty/ttyprintk
+  sys-module-configfs.device                                                                loaded active     plugged      /sys/module/configfs
+  sys-module-fuse.device                                                                    loaded active     plugged      /sys/module/fuse
+  sys-subsystem-net-devices-docker0.device                                                  loaded active     plugged      /sys/subsystem/net/devices/docker0
+  sys-subsystem-net-devices-ens5.device                                                     loaded active     plugged      Elastic Network Adapter (ENA)
+  sys-subsystem-net-devices-tailscale0.device                                               loaded active     plugged      /sys/subsystem/net/devices/tailscale0
+  -.mount                                                                                   loaded active     mounted      Root Mount
+  boot-efi.mount                                                                            loaded active     mounted      /boot/efi
+  boot.mount                                                                                loaded active     mounted      /boot
+  dev-hugepages.mount                                                                       loaded active     mounted      Huge Pages File System
+  dev-mqueue.mount                                                                          loaded active     mounted      POSIX Message Queue File System
+  mnt-data.mount                                                                            loaded active     mounted      /mnt/data
+  proc-sys-fs-binfmt_misc.mount                                                             loaded active     mounted      Arbitrary Executable File Formats File System
+  run-user-1001.mount                                                                       loaded active     mounted      /run/user/1001
+  snap-amazon\x2dssm\x2dagent-11797.mount                                                   loaded active     mounted      Mount unit for amazon-ssm-agent, revision 11797
+  snap-amazon\x2dssm\x2dagent-12322.mount                                                   loaded active     mounted      Mount unit for amazon-ssm-agent, revision 12322
+  snap-core22-2163.mount                                                                    loaded active     mounted      Mount unit for core22, revision 2163
+  snap-core22-2292.mount                                                                    loaded active     mounted      Mount unit for core22, revision 2292
+  snap-core24-1267.mount                                                                    loaded active     mounted      Mount unit for core24, revision 1267
+  snap-core24-1349.mount                                                                    loaded active     mounted      Mount unit for core24, revision 1349
+  snap-snapd-25577.mount                                                                    loaded active     mounted      Mount unit for snapd, revision 25577
+  snap-snapd-25935.mount                                                                    loaded active     mounted      Mount unit for snapd, revision 25935
+  snap-tailscale-154.mount                                                                  loaded active     mounted      Mount unit for tailscale, revision 154
+  sys-fs-fuse-connections.mount                                                             loaded active     mounted      FUSE Control File System
+  sys-kernel-config.mount                                                                   loaded active     mounted      Kernel Configuration File System
+  sys-kernel-debug.mount                                                                    loaded active     mounted      Kernel Debug File System
+  sys-kernel-tracing.mount                                                                  loaded active     mounted      Kernel Trace File System
+  acpid.path                                                                                loaded active     running      ACPI Events Check
+  systemd-ask-password-console.path                                                         loaded active     waiting      Dispatch Password Requests to Console Directory Watch
+  systemd-ask-password-wall.path                                                            loaded active     waiting      Forward Password Requests to Wall Directory Watch
+  init.scope                                                                                loaded active     running      System and Service Manager
+  session-1.scope                                                                           loaded active     running      Session 1 of User jglaine
+  session-3.scope                                                                           loaded active     running      Session 3 of User jglaine
+  acpid.service                                                                             loaded active     running      ACPI event daemon
+● apparmor.service                                                                          loaded failed     failed       Load AppArmor profiles
+  blk-availability.service                                                                  loaded active     exited       Availability of block devices
+  chrony.service                                                                            loaded active     running      chrony, an NTP client/server
+  console-setup.service                                                                     loaded active     exited       Set console font and keymap
+  containerd.service                                                                        loaded active     running      containerd container runtime
+  cron.service                                                                              loaded active     running      Regular background program processing daemon
+  dbus.service                                                                              loaded active     running      D-Bus System Message Bus
+  docker.service                                                                            loaded active     running      Docker Application Container Engine
+  fail2ban.service                                                                          loaded active     running      Fail2Ban Service
+  finalrd.service                                                                           loaded active     exited       Create final runtime dir for shutdown pivot root
+  getty@tty1.service                                                                        loaded active     running      Getty on tty1
+● hibinit-agent.service                                                                     loaded failed     failed       EC2 instance hibernation setup agent
+  irqbalance.service                                                                        loaded active     running      irqbalance daemon
+  keyboard-setup.service                                                                    loaded active     exited       Set the console keyboard layout
+  kmod-static-nodes.service                                                                 loaded active     exited       Create List of Static Device Nodes
+  lvm2-monitor.service                                                                      loaded active     exited       Monitoring of LVM2 mirrors, snapshots etc. using dmeventd or progress polling
+  ModemManager.service                                                                      loaded active     running      Modem Manager
+  multipathd.service                                                                        loaded active     running      Device-Mapper Multipath Device Controller
+  networkd-dispatcher.service                                                               loaded active     running      Dispatcher daemon for systemd-networkd
+  ollama.service                                                                            loaded activating auto-restart Ollama Service
+  packagekit.service                                                                        loaded active     running      PackageKit Daemon
+  plymouth-quit-wait.service                                                                loaded active     exited       Hold until boot process finishes up
+  plymouth-quit.service                                                                     loaded active     exited       Terminate Plymouth Boot Screen
+  plymouth-read-write.service                                                               loaded active     exited       Tell Plymouth To Write Out Runtime Data
+  polkit.service                                                                            loaded active     running      Authorization Manager
+  rsyslog.service                                                                           loaded active     running      System Logging Service
+  serial-getty@ttyS0.service                                                                loaded active     running      Serial Getty on ttyS0
+  setvtrgb.service                                                                          loaded active     exited       Set console scheme
+● snap.amazon-ssm-agent.amazon-ssm-agent.service                                            loaded failed     failed       Service for snap application amazon-ssm-agent.amazon-ssm-agent
+  ssh.service                                                                               loaded active     running      OpenBSD Secure Shell server
+  sysstat.service                                                                           loaded active     exited       Resets System Activity Logs
+  systemd-binfmt.service                                                                    loaded active     exited       Set Up Additional Binary Formats
+  systemd-fsck-root.service                                                                 loaded active     exited       File System Check on Root Device
+  systemd-fsck@dev-disk-by\x2dlabel-BOOT.service                                            loaded active     exited       File System Check on /dev/disk/by-label/BOOT
+  systemd-fsck@dev-disk-by\x2dlabel-UEFI.service                                            loaded active     exited       File System Check on /dev/disk/by-label/UEFI
+  systemd-fsck@dev-disk-by\x2duuid-5a12ab31\x2d29f9\x2d4067\x2daa4f\x2d7fb43e09b4de.service loaded active     exited       File System Check on /dev/disk/by-uuid/5a12ab31-29f9-4067-aa4f-7fb43e09b4de
+  systemd-journal-flush.service                                                             loaded active     exited       Flush Journal to Persistent Storage
+  systemd-journald.service                                                                  loaded active     running      Journal Service
+  systemd-logind.service                                                                    loaded active     running      User Login Management
+  systemd-modules-load.service                                                              loaded active     exited       Load Kernel Modules
+  systemd-networkd.service                                                                  loaded active     running      Network Configuration
+  systemd-random-seed.service                                                               loaded active     exited       Load/Save OS Random Seed
+  systemd-remount-fs.service                                                                loaded active     exited       Remount Root and Kernel File Systems
+  systemd-resolved.service                                                                  loaded active     running      Network Name Resolution
+  systemd-sysctl.service                                                                    loaded active     exited       Apply Kernel Variables
+  systemd-tmpfiles-setup-dev-early.service                                                  loaded active     exited       Create Static Device Nodes in /dev gracefully
+  systemd-tmpfiles-setup-dev.service                                                        loaded active     exited       Create Static Device Nodes in /dev
+  systemd-tmpfiles-setup.service                                                            loaded active     exited       Create Volatile Files and Directories
+  systemd-udev-trigger.service                                                              loaded active     exited       Coldplug All udev Devices
+  systemd-udevd.service                                                                     loaded active     running      Rule-based Manager for Device Events and Files
+  systemd-update-utmp.service                                                               loaded active     exited       Record System Boot/Shutdown in UTMP
+  systemd-user-sessions.service                                                             loaded active     exited       Permit User Sessions
+  tailscaled.service                                                                        loaded active     running      Tailscale node agent
+  unattended-upgrades.service                                                               loaded active     running      Unattended Upgrades Shutdown
+  user-runtime-dir@1001.service                                                             loaded active     exited       User Runtime Directory /run/user/1001
+  user@1001.service                                                                         loaded active     running      User Manager for UID 1001
+  -.slice                                                                                   loaded active     active       Root Slice
+  system-getty.slice                                                                        loaded active     active       Slice /system/getty
+  system-modprobe.slice                                                                     loaded active     active       Slice /system/modprobe
+  system-serial\x2dgetty.slice                                                              loaded active     active       Slice /system/serial-getty
+  system-systemd\x2dfsck.slice                                                              loaded active     active       Slice /system/systemd-fsck
+  system.slice                                                                              loaded active     active       System Slice
+  user-1001.slice                                                                           loaded active     active       User Slice of UID 1001
+  user.slice                                                                                loaded active     active       User and Session Slice
+  acpid.socket                                                                              loaded active     running      ACPID Listen Socket
+  dbus.socket                                                                               loaded active     running      D-Bus System Message Bus Socket
+  dm-event.socket                                                                           loaded active     listening    Device-mapper event daemon FIFOs
+  docker.socket                                                                             loaded active     running      Docker Socket for the API
+  iscsid.socket                                                                             loaded active     listening    Open-iSCSI iscsid Socket
+  lvm2-lvmpolld.socket                                                                      loaded active     listening    LVM2 poll daemon socket
+  lxd-installer.socket                                                                      loaded active     listening    Helper to install lxd snap on demand
+  multipathd.socket                                                                         loaded active     running      multipathd control socket
+  ssh.socket                                                                                loaded active     running      OpenBSD Secure Shell server socket
+  syslog.socket                                         INFO: Docker daemon enabled and started
+
++ sh -c docker version
+                                    loaded active     running      Syslog Socket
+  systemd-fsckd.socket                                                                      loaded active     listening    fsck to fsckd communication Socket
+  systemd-initctl.socket                                                                    loaded active     listening    initctl Compatibility Named Pipe
+  systemd-journald-dev-log.socket                                                           loaded active     running      Journal Socket (/dev/log)
+  systemd-journald.socket                                                                   loaded active     running      Journal Socket
+  systemd-networkd.socket                                                                   loaded active     running      Network Service Netlink Socket
+  systemd-rfkill.socket                                                                     loaded active     listening    Load/Save RF Kill Switch Status /dev/rfkill Watch
+  systemd-sysext.socket                                                                     loaded active     listening    System Extension Image Management (Varlink)
+  systemd-udevd-control.socket                                                              loaded active     running      udev Control Socket
+  systemd-udevd-kernel.socket                                                               loaded active     running      udev Kernel Socket
+  uuidd.socket                                                                              loaded active     listening    UUID daemon activation socket
+  swapfile.swap                                                                             loaded active     active       /swapfile
+  basic.target                                                                              loaded active     active       Basic System
+  cryptsetup.target                                                                         loaded active     active       Local Encrypted Volumes
+  getty.target                                                                              loaded active     active       Login Prompts
+  graphical.target                                                                          loaded active     active       Graphical Interface
+  integritysetup.target                                                                     loaded active     active       Local Integrity Protected Volumes
+  local-fs-pre.target                                                                       loaded active     active       Preparation for Local File Systems
+  local-fs.target                                                                           loaded active     active       Local File Systems
+  multi-user.target                                                                         loaded active     active       Multi-User System
+  network-online.target                                                                     loaded active     active       Network is Online
+  network-pre.target                                                                        loaded active     active       Preparation for Network
+  network.target                                                                            loaded active     active       Network
+  nss-lookup.target                                                                         loaded active     active       Host and Network Name Lookups
+  paths.target                                                                              loaded active     active       Path Units
+  remote-fs-pre.target                                                                      loaded active     active       Preparation for Remote File Systems
+  remote-fs.target                                                                          loaded active     active       Remote File Systems
+  slices.target                                                                             loaded active     active       Slice Units
+  sockets.target                                                                            loaded active     active       Socket Units
+  swap.target                                                                               loaded active     active       Swaps
+  sysinit.target                                                                            loaded active     active       System Initialization
+  time-set.target                                                                           loaded active     active       System Time Set
+  time-sync.target                                                                          loaded active     active       System Time Synchronized
+  timers.target                                                                             loaded active     active       Timer Units
+  veritysetup.target                                                                        loaded active     active       Local Verity Protected Volumes
+  apt-daily-upgrade.timer                                                                   loaded active     waiting      Daily apt upgrade and clean activities
+  apt-daily.timer                                                                           loaded active     waiting      Daily apt download activities
+  dpkg-db-backup.timer                                                                      loaded active     waiting      Daily dpkg database backup timer
+  e2scrub_all.timer                                                                         loaded active     waiting      Periodic ext4 Online Metadata Check for All Filesystems
+  fstrim.timer                                                                              loaded active     waiting      Discard unused filesystem blocks once a week
+  fwupd-refresh.timer                                                                       loaded active     waiting      Refresh fwupd metadata regularly
+  logrotate.timer                                                                           loaded active     waiting      Daily rotation of log files
+  man-db.timer                                                                              loaded active     waiting      Daily man-db regeneration
+  motd-news.timer                                                                           loaded active     waiting      Message of the Day
+  sysstat-collect.timer                                                                     loaded active     waiting      Run system activity accounting tool every 10 minutes
+  sysstat-summary.timer                                                                     loaded active     waiting      Generate summary of yesterday's process accounting
+  systemd-tmpfiles-clean.timer                                                              loaded active     waiting      Daily Cleanup of Temporary Directories
+
+Legend: LOAD   → Reflects whether the unit definition was properly loaded.
+        ACTIVE → The high-level unit activation state, i.e. generalization of SUB.
+        SUB    → The low-level unit activation state, values depend on unit type.
+
+178 loaded units listed. Pass --all to see loaded but inactive units, too.
+To show all installed unit files use 'systemctl list-unit-files'.
+INFO: Docker daemon enabled and started
+
++ sh -c docker version
+Client: Docker Engine - Community
+Client: Docker Engine - Community
+ Version:           29.2.1
+ API version:       1.53
+ Go version:        go1.25.6
+ Git commit:        a5c7197
+ Built:             Mon Feb  2 17:17:26 2026
+ OS/Arch:           linux/amd64
+ Context:           default
+
+Server: Docker Engine - Community
+ Engine:
+  Version:          29.2.1
+  API version:      1.53 (minimum version 1.44)
+  Go version:       go1.25.6
+  Git commit:       6bc6209
+  Built:            Mon Feb  2 17:17:26 2026
+  OS/Arch:          linux/amd64
+  Experimental:     false
+ containerd:
+  Version:          v2.2.1
+  GitCommit:        dea7da592f5d1d2b7755e3a161be07f43fad8f75
+ runc:
+  Version:          1.3.4
+  GitCommit:        v1.3.4-0-gd6d73eb8
+ docker-init:
+  Version:          0.19.0
+  GitCommit:        de40ad0
+ Version:           29.2.1
+ API version:       1.53
+ Go version:        go1.25.6
+ Git commit:        a5c7197
+ Built:             Mon Feb  2 17:17:26 2026
+ OS/Arch:           linux/amd64
+ Context:           default
+
+Server: Docker Engine - Community
+ Engine:
+  Version:          29.2.1
+  API version:      1.53 (minimum version 1.44)
+  Go version:       go1.25.6
+  Git commit:       6bc6209
+  Built:            Mon Feb  2 17:17:26 2026
+  OS/Arch:          linux/amd64
+  Experimental:     false
+ containerd:
+  Version:          v2.2.1
+  GitCommit:        dea7da592f5d1d2b7755e3a161be07f43fad8f75
+ runc:
+  Version:          1.3.4
+  GitCommit:        v1.3.4-0-gd6d73eb8
+ docker-init:
+  Version:          0.19.0
+  GitCommit:        de40ad0
+
+================================================================================
+
+To run Docker as a non-privileged user, consider setting up the
+Docker daemon in rootless mode for your user:
+
+    dockerd-rootless-setuptool.sh install
+
+Visit https://docs.docker.com/go/rootless/ to learn about rootless mode.
+
+
+To run the Docker daemon as a fully privileged service, but granting non-root
+users access, refer to https://docs.docker.com/go/daemon-access/
+
+WARNING: Access to the remote API on a privileged Docker daemon is equivalent
+         to root access on the host. Refer to the 'Docker daemon attack surface'
+         documentation for details: https://docs.docker.com/go/attack-surface/
+
+
+================================================================================
+
+To run Docker as a non-privileged user, consider setting up the
+Docker daemon in rootless mode for your user:
+
+    dockerd-rootless-setuptool.sh install
+
+Visit https://docs.docker.com/go/rootless/ to learn about rootless mode.
+
+
+To run the Docker daemon as a fully privileged service, but granting non-root
+users access, refer to https://docs.docker.com/go/daemon-access/
+
+WARNING: Access to the remote API on a privileged Docker daemon is equivalent
+         to root access on the host. Refer to the 'Docker daemon attack surface'
+         documentation for details: https://docs.docker.com/go/attack-surface/
+
+================================================================================
+
+================================================================================
+
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0  0     0    0      0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0 0    0     0      0      0 --:--:-- --:--:-- --:--:--     0  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0
+  0
+ 51 58.1M   51 30.1M    0     0  23.8M      0  0:00:02  0:00:01  0:00:01 23.8M 51 58.1M   51 30.1M    0     0  23.8M      0  0:00:02  0:00:01  0:00:01 23.8M100 58.1M  100 58.1M    0     0  33.0M      0  0:00:01  0:00100 58.1M  100 58.1M    0     0  33.0M      0  0:00:01  0:00:01 --:--:-- 56.9M
+:01 --:--:-- 56.9M
+Synchronizing state of docker.service with SysV service script with /usr/lib/systemd/systemd-sysv-install.
+Executing: /usr/lib/systemd/systemd-sysv-install enable docker
+Synchronizing state of docker.service with SysV service script with /usr/lib/systemd/systemd-sysv-install.
+Executing: /usr/lib/systemd/systemd-sysv-install enable docker
+[0;32m✓[0m Docker installed successfully
+[0;32m✓[0m Docker installed successfully
+[2026-02-10 05:49:40] [SUCCESS] Docker installed successfully
+[2026-02-10 05:49:40] [SUCCESS] Docker installed successfully
+[2026-02-10 05:49:40] [SUCCESS] Docker installed successfully
+[0;32m✓[0m Docker Compose installed successfully
+[0;32m✓[0m Docker Compose installed successfully
+[2026-02-10 05:49:40] [SUCCESS] Docker Compose installed successfully
+[2026-02-10 05:49:40] [SUCCESS] Docker Compose installed successfully
+[2026-02-10 05:49:40] [SUCCESS] Docker Compose installed successfully
+
+
+[0;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+[1;37m  NETWORK CONFIGURATION[0m
+[0;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+[1;37m  NETWORK CONFIGURATION[0m
+[0;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+[0;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+
+[0;35m▶[0m Detecting network configuration...
+
+[0;35m▶[0m Detecting network configuration...
+[0;34mℹ[0m Primary interface: ens5
+[0;34mℹ[0m Primary interface: ens5
+[2026-02-10 05:49:40] [INFO] Primary interface: ens5
+[2026-02-10 05:49:40] [INFO] Primary interface: ens5
+[2026-02-10 05:49:40] [INFO] Primary interface: ens5
+[0;34mℹ[0m IP Address: 172.31.2.211
+[0;34mℹ[0m IP Address: 172.31.2.211
+[2026-02-10 05:49:40] [INFO] IP Address: 172.31.2.211
+[2026-02-10 05:49:40] [INFO] IP Address: 172.31.2.211
+[2026-02-10 05:49:40] [INFO] IP Address: 172.31.2.211
+
+
+[1;37mAvailable network options:[0m
+1) Use local IP: 172.31.2.211
+3) Use localhost (127.0.0.1)
+[1;37mAvailable network options:[0m
+1) Use local IP: 172.31.2.211
+3) Use localhost (127.0.0.1)
+4) Enter custom IP/hostname
+
+4) Enter custom IP/hostname
+
+Select network option [1]: Select network option [1]: [0;32m✓[0m Base URL configured: http://127.0.0.1
+[0;32m✓[0m Base URL configured: http://127.0.0.1
+[2026-02-10 05:49:46] [SUCCESS] Base URL configured: http://127.0.0.1
+[2026-02-10 05:49:46] [SUCCESS] Base URL configured: http://127.0.0.1
+[2026-02-10 05:49:46] [SUCCESS] Base URL configured: http://127.0.0.1
+
+
+[0;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+[1;37m  SERVICE SELECTION[0m
+[0;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+[1;37m  SERVICE SELECTION[0m
+[0;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+
+[0;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+
+[1;37mSelect services to install:[0m
+
+[0;36m━━━ CORE SERVICES ━━━[0m
+Install Core Services (N8N, PostgreSQL, Redis)? [y/N]: [1;37mSelect services to install:[0m
+
+[0;36m━━━ CORE SERVICES ━━━[0m
+Install Core Services (N8N, PostgreSQL, Redis)? [y/N]: 

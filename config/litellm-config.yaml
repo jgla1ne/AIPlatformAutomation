@@ -1,0 +1,51 @@
+model_list:
+  - model_name: gemini/gemini-2.0-flash-exp
+    litellm_params:
+      model: gemini-2.0-flash-exp
+      api_key: ${GEMINI_API_KEY}
+  - model_name: gemini/gemini-1.5-pro-latest
+    litellm_params:
+      model: gemini-1.5-pro-latest
+      api_key: ${GEMINI_API_KEY}
+  - model_name: gemini/gemini-1.5-flash-latest
+    litellm_params:
+      model: gemini-1.5-flash-latest
+      api_key: ${GEMINI_API_KEY}
+  - model_name: openai/gpt-4
+    litellm_params:
+      model: openrouter/openai/gpt-4
+      api_key: ${OPENROUTER_API_KEY}
+      api_base: https://openrouter.ai/api/v1
+  - model_name: anthropic/claude-3-opus
+    litellm_params:
+      model: openrouter/anthropic/claude-3-opus
+      api_key: ${OPENROUTER_API_KEY}
+      api_base: https://openrouter.ai/api/v1
+  - model_name: google/gemini-pro
+    litellm_params:
+      model: openrouter/google/gemini-pro
+      api_key: ${OPENROUTER_API_KEY}
+      api_base: https://openrouter.ai/api/v1
+  - model_name: ollama/llama3.2
+    litellm_params:
+      model: ollama/llama3.2
+      api_base: http://ollama:11434
+
+router_settings:
+  routing_strategy: usage-based-routing
+  num_retries: 3
+  timeout: 60
+  fallbacks:
+    - [ollama/*, openai/gpt-4o-mini]
+    - [openai/*, anthropic/claude-3-5-haiku-20241022]
+  
+  # Cost optimization: route simple queries to local, complex to cloud
+  model_group_alias:
+    simple: ollama/*
+    complex: openai/gpt-4o,anthropic/claude-3-5-sonnet-20241022
+
+litellm_settings:
+  success_callback: ["langfuse"]
+  failure_callback: ["langfuse"]
+  drop_params: true
+  
