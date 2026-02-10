@@ -27,7 +27,6 @@ readonly LOG_DIR="${AI_PLATFORM_DIR}/logs"
 readonly CONFIG_DIR="${AI_PLATFORM_DIR}/config"
 readonly DOCKER_DIR="${AI_PLATFORM_DIR}/docker"
 readonly CONFIG_FILE="${CONFIG_DIR}/master.env"
-readonly STATE_FILE="${BASE_DIR}/.setup_state"
 
 # Service data directories
 readonly POSTGRES_DATA="${DATA_DIR}/postgresql"
@@ -140,36 +139,6 @@ show_progress() {
 }
 
 # ==============================================================================
-# STATE MANAGEMENT
-# ==============================================================================
-
-save_state() {
-    local step=$1
-    echo "CURRENT_STEP=$step" > "$STATE_FILE"
-    log_debug "State saved: CURRENT_STEP=$step"
-}
-
-load_state() {
-    if [ -f "$STATE_FILE" ]; then
-        source "$STATE_FILE"
-        echo "${CURRENT_STEP:-0}"
-    else
-        echo "0"
-    fi
-}
-
-clear_state() {
-    rm -f "$STATE_FILE"
-    log_debug "State cleared"
-}
-
-is_step_completed() {
-    local step=$1
-    local current_state=$(load_state)
-    [ "$current_state" -ge "$step" ]
-}
-
-# ==============================================================================
 # ERROR HANDLING
 # ==============================================================================
 
@@ -177,7 +146,6 @@ error_exit() {
     local message=$1
     local exit_code=${2:-1}
     log_error "$message"
-    log_error "Setup failed at step: $(load_state)"
     echo ""
     echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${RED}║                    SETUP FAILED                            ║${NC}"
@@ -653,6 +621,455 @@ select_optional_services() {
     done
     
     log_success "Optional services selected: ${SELECTED_OPTIONAL_SERVICES[*]}"
+}
+
+# ==============================================================================
+# PHASE 4: SERVICE CONFIGURATION FUNCTIONS
+# ==============================================================================
+
+configure_postgresql() {
+    if [[ " ${SELECTED_CORE_SERVICES[*]} " =~ " postgresql " ]]; then
+        print_section "POSTGRESQL CONFIGURATION"
+        log_step "Configuring PostgreSQL settings..."
+        
+        # Generate secure password
+        POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+        POSTGRES_USER="aiplatform"
+        
+        echo -e "${GREEN}PostgreSQL Configuration:${NC}"
+        echo "  - User: ${POSTGRES_USER}"
+        echo "  - Password: [AUTO-GENERATED]"
+        echo "  - Database: aiplatform"
+        echo "  - Port: 5432"
+        
+        log_success "PostgreSQL configuration completed"
+    fi
+}
+
+configure_ollama() {
+    if [[ " ${SELECTED_CORE_SERVICES[*]} " =~ " ollama " ]]; then
+        print_section "OLLAMA CONFIGURATION"
+        log_step "Configuring Ollama settings..."
+        
+        echo -e "${CYAN}🦙 Ollama Model Selection (Multi-select):${NC}"
+        echo "1) llama2 (7B)"
+        echo "2) codellama (7B)"
+        echo "3) mistral (7B)"
+        echo "4) tinyllama (1.1B)"
+        echo "all) Install all models (recommended for full platform)"
+        echo ""
+        
+        while true; do
+            read -p "Select Ollama models (comma-separated, 1-4, or 'all'): " model_choices
+            
+            if [ "$model_choices" = "all" ]; then
+                OLLAMA_MODELS=("llama2" "codellama" "mistral" "tinyllama")
+                break
+            fi
+            
+            IFS=',' read -ra CHOSEN_MODELS <<< "$model_choices"
+            valid=true
+            OLLAMA_MODELS=()
+            
+            for choice in "${CHOSEN_MODELS[@]}"; do
+                choice=$(echo "$choice" | xargs) # trim whitespace
+                case $choice in
+                    1) OLLAMA_MODELS+=("llama2") ;;
+                    2) OLLAMA_MODELS+=("codellama") ;;
+                    3) OLLAMA_MODELS+=("mistral") ;;
+                    4) OLLAMA_MODELS+=("tinyllama") ;;
+                    *) valid=false; break ;;
+                esac
+            done
+            
+            if [ "$valid" = true ]; then
+                break
+            else
+                echo -e "${RED}Invalid choices. Please select numbers 1-4 separated by commas, or 'all'.${NC}"
+            fi
+        done
+        
+        # GPU settings if detected
+        if [ "$GPU_AVAILABLE" = true ]; then
+            echo -e "${GREEN}GPU detected - Ollama will use GPU acceleration${NC}"
+            OLLAMA_GPU_LAYERS=999
+        else
+            echo -e "${YELLOW}No GPU detected - Ollama will run in CPU mode${NC}"
+            OLLAMA_GPU_LAYERS=0
+        fi
+        
+        log_success "Ollama configuration completed"
+        log_info "Selected models: ${OLLAMA_MODELS[*]}"
+    fi
+}
+
+configure_n8n() {
+    if [[ " ${SELECTED_CORE_SERVICES[*]} " =~ " n8n " ]]; then
+        print_section "N8N CONFIGURATION"
+        log_step "Configuring n8n settings..."
+        
+        # Generate secure credentials
+        N8N_ENCRYPTION_KEY=$(openssl rand -base64 32)
+        N8N_USER_MANAGEMENT_JWT_SECRET=$(openssl rand -hex 32)
+        
+        echo -e "${GREEN}n8n Configuration:${NC}"
+        echo "  - Port: 5678"
+        echo "  - Encryption key: [AUTO-GENERATED]"
+        echo "  - JWT secret: [AUTO-GENERATED]"
+        
+        # Timezone selection
+        read -p "Enter timezone (default: UTC): " N8N_TIMEZONE
+        N8N_TIMEZONE=${N8N_TIMEZONE:-UTC}
+        
+        # Webhook URL
+        read -p "Enter webhook URL (optional): " N8N_WEBHOOK_URL
+        
+        log_success "n8n configuration completed"
+    fi
+}
+
+configure_qdrant() {
+    if [[ " ${SELECTED_CORE_SERVICES[*]} " =~ " qdrant " ]]; then
+        print_section "QDRANT CONFIGURATION"
+        log_step "Configuring Qdrant settings..."
+        
+        # Generate API key
+        QDRANT_API_KEY=$(openssl rand -hex 32)
+        
+        echo -e "${GREEN}Qdrant Configuration:${NC}"
+        echo "  - Port: 6333 (HTTP), 6334 (gRPC)"
+        echo "  - API key: [AUTO-GENERATED]"
+        echo "  - Performance mode: standard"
+        
+        log_success "Qdrant configuration completed"
+    fi
+}
+
+# ==============================================================================
+# PHASE 5: INTEGRATION CONFIGURATION FUNCTIONS
+# ==============================================================================
+
+configure_gdrive() {
+    print_section "GOOGLE DRIVE INTEGRATION"
+    log_step "Configuring Google Drive integration..."
+    
+    echo -e "${CYAN}📁 Google Drive Authentication Method:${NC}"
+    echo "1) OAuth2 (recommended for personal use)"
+    echo "2) Service Account (recommended for server applications)"
+    echo "3) Skip Google Drive integration"
+    echo ""
+    
+    while true; do
+        read -p "Select authentication method (1-3): " gdrive_choice
+        case $gdrive_choice in
+            1) 
+                GDRIVE_AUTH_METHOD="oauth2"
+                read -p "Enter Google Client ID: " GOOGLE_CLIENT_ID
+                read -p "Enter Google Client Secret: " GOOGLE_CLIENT_SECRET
+                break ;;
+            2) 
+                GDRIVE_AUTH_METHOD="service_account"
+                echo "Please provide the path to your service account JSON file:"
+                read -p "Service account JSON path: " GDRIVE_SERVICE_ACCOUNT_JSON
+                break ;;
+            3) 
+                GDRIVE_AUTH_METHOD="none"
+                log_info "Skipping Google Drive integration"
+                break ;;
+            *) echo -e "${RED}Invalid choice. Please select 1-3.${NC}" ;;
+        esac
+    done
+    
+    log_success "Google Drive configuration completed"
+}
+
+configure_llm_providers() {
+    print_section "LLM PROVIDERS CONFIGURATION"
+    log_step "Configuring external LLM providers..."
+    
+    echo -e "${CYAN}🤖 Configure External LLM Providers (Optional):${NC}"
+    echo "These will be used in addition to local Ollama models"
+    echo ""
+    
+    # OpenAI
+    read -p "Enter OpenAI API key (optional): " OPENAI_API_KEY
+    
+    # Anthropic
+    read -p "Enter Anthropic API key (optional): " ANTHROPIC_API_KEY
+    
+    # Google
+    read -p "Enter Google API key (optional): " GOOGLE_API_KEY
+    
+    # Groq
+    read -p "Enter Groq API key (optional): " GROQ_API_KEY
+    
+    # OpenRouter
+    read -p "Enter OpenRouter API key (optional): " OPENROUTER_API_KEY
+    
+    # DeepSeek
+    read -p "Enter DeepSeek API key (optional): " DEEPSEEK_API_KEY
+    
+    log_success "LLM providers configuration completed"
+}
+
+configure_backups() {
+    print_section "BACKUP CONFIGURATION"
+    log_step "Configuring backup settings..."
+    
+    echo -e "${CYAN}💾 Backup Configuration:${NC}"
+    
+    # Backup schedule
+    echo "1) Daily backups at 2 AM"
+    echo "2) Weekly backups on Sunday at 2 AM"
+    echo "3) Monthly backups on 1st at 2 AM"
+    echo "4) Custom schedule"
+    echo ""
+    
+    while true; do
+        read -p "Select backup schedule (1-4): " backup_choice
+        case $backup_choice in
+            1) BACKUP_SCHEDULE="0 2 * * *"; break ;;
+            2) BACKUP_SCHEDULE="0 2 * * 0"; break ;;
+            3) BACKUP_SCHEDULE="0 2 1 * *"; break ;;
+            4) 
+                read -p "Enter custom cron schedule: " BACKUP_SCHEDULE
+                break ;;
+            *) echo -e "${RED}Invalid choice. Please select 1-4.${NC}" ;;
+        esac
+    done
+    
+    # Retention policy
+    read -p "Enter backup retention days (default: 30): " BACKUP_RETENTION
+    BACKUP_RETENTION=${BACKUP_RETENTION:-30}
+    
+    # Remote backup location (optional)
+    read -p "Enter remote backup location (optional): " BACKUP_REMOTE_LOCATION
+    
+    log_success "Backup configuration completed"
+}
+
+# ==============================================================================
+# PHASE 6: REVIEW & SAVE FUNCTIONS
+# ==============================================================================
+
+review_configuration() {
+    print_section "CONFIGURATION REVIEW"
+    log_step "Reviewing collected configuration..."
+    
+    echo -e "${WHITE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${WHITE}  COLLECTED CONFIGURATION SUMMARY${NC}"
+    echo -e "${WHITE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    
+    echo -e "${CYAN}🌐 Network Configuration:${NC}"
+    echo "  - Domain/IP: ${DOMAIN_NAME:-Not set}"
+    echo "  - SSL Mode: ${SSL_MODE:-Not set}"
+    echo "  - SSL Email: ${SSL_EMAIL:-Not set}"
+    echo "  - Reverse Proxy: ${SELECTED_PROXY:-Not set}"
+    echo ""
+    
+    echo -e "${CYAN}🏗️ Core Services:${NC}"
+    for service in "${SELECTED_CORE_SERVICES[@]:-}"; do
+        echo "  - $service"
+    done
+    echo ""
+    
+    echo -e "${CYAN}🤖 AI Services:${NC}"
+    for service in "${SELECTED_AI_SERVICES[@]:-}"; do
+        echo "  - $service"
+    done
+    echo ""
+    
+    echo -e "${CYAN}🔧 Optional Services:${NC}"
+    for service in "${SELECTED_OPTIONAL_SERVICES[@]:-}"; do
+        echo "  - $service"
+    done
+    echo ""
+    
+    echo -e "${CYAN}🔐 Security:${NC}"
+    echo "  - PostgreSQL Password: [AUTO-GENERATED]"
+    echo "  - Qdrant API Key: [AUTO-GENERATED]"
+    echo "  - n8n Encryption: [AUTO-GENERATED]"
+    echo ""
+    
+    echo -e "${CYAN}🤖 LLM Providers:${NC}"
+    [ -n "$OPENAI_API_KEY" ] && echo "  - OpenAI: [CONFIGURED]"
+    [ -n "$ANTHROPIC_API_KEY" ] && echo "  - Anthropic: [CONFIGURED]"
+    [ -n "$GOOGLE_API_KEY" ] && echo "  - Google: [CONFIGURED]"
+    [ -n "$GROQ_API_KEY" ] && echo "  - Groq: [CONFIGURED]"
+    [ -n "$OPENROUTER_API_KEY" ] && echo "  - OpenRouter: [CONFIGURED]"
+    [ -n "$DEEPSEEK_API_KEY" ] && echo "  - DeepSeek: [CONFIGURED]"
+    echo ""
+    
+    read -p "Press Enter to continue, or Ctrl+C to cancel..."
+}
+
+save_configuration() {
+    print_section "SAVING CONFIGURATION"
+    log_step "Saving configuration files..."
+    
+    # Create config directory
+    mkdir -p "${CONFIG_DIR}"
+    
+    # Generate master.env file
+    cat > "$CONFIG_FILE" << EOF
+# ==============================================================================
+# AI Platform Master Configuration
+# Generated: $(date)
+# Version: ${SCRIPT_VERSION}
+# ==============================================================================
+
+# Domain and Network
+DOMAIN_NAME=${DOMAIN_NAME}
+SSL_MODE=${SSL_MODE}
+SSL_EMAIL=${SSL_EMAIL}
+SELECTED_PROXY=${SELECTED_PROXY}
+PUBLIC_IP=${PUBLIC_IP}
+
+# Paths
+BASE_DIR=${BASE_DIR}
+DATA_DIR=${DATA_DIR}
+AI_PLATFORM_DIR=${AI_PLATFORM_DIR}
+CONFIG_DIR=${CONFIG_DIR}
+DOCKER_DIR=${DOCKER_DIR}
+
+# PostgreSQL Configuration
+POSTGRES_USER=${POSTGRES_USER:-aiplatform}
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+POSTGRES_DB=aiplatform
+POSTGRES_PORT=5432
+POSTGRES_DATA=${POSTGRES_DATA}
+
+# Ollama Configuration
+OLLAMA_HOST=0.0.0.0
+OLLAMA_PORT=11434
+OLLAMA_DATA=${OLLAMA_DATA}
+OLLAMA_GPU_LAYERS=${OLLAMA_GPU_LAYERS:-0}
+
+# n8n Configuration
+N8N_PORT=5678
+N8N_DATA=${N8N_DATA}
+N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+N8N_USER_MANAGEMENT_JWT_SECRET=${N8N_USER_MANAGEMENT_JWT_SECRET}
+N8N_TIMEZONE=${N8N_TIMEZONE:-UTC}
+N8N_WEBHOOK_URL=${N8N_WEBHOOK_URL}
+
+# Qdrant Configuration
+QDRANT_PORT=6333
+QDRANT_GRPC_PORT=6334
+QDRANT_DATA=${QDRANT_DATA}
+QDRANT_API_KEY=${QDRANT_API_KEY}
+
+# External LLM Providers
+OPENAI_API_KEY=${OPENAI_API_KEY:-}
+ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+GROQ_API_KEY=${GROQ_API_KEY:-}
+OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+
+# Google Drive Integration
+GDRIVE_AUTH_METHOD=${GDRIVE_AUTH_METHOD:-none}
+GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+GDRIVE_SERVICE_ACCOUNT_JSON=${GDRIVE_SERVICE_ACCOUNT_JSON:-}
+
+# Backup Configuration
+BACKUP_SCHEDULE=${BACKUP_SCHEDULE:-0 2 * * *}
+BACKUP_RETENTION=${BACKUP_RETENTION:-30}
+BACKUP_REMOTE_LOCATION=${BACKUP_REMOTE_LOCATION:-}
+
+# Service Selections
+SELECTED_CORE_SERVICES=$(IFS=,; echo "${SELECTED_CORE_SERVICES[*]}")
+SELECTED_AI_SERVICES=$(IFS=,; echo "${SELECTED_AI_SERVICES[*]}")
+SELECTED_OPTIONAL_SERVICES=$(IFS=,; echo "${SELECTED_OPTIONAL_SERVICES[*]}")
+OLLAMA_MODELS=$(IFS=,; echo "${OLLAMA_MODELS[*]}")
+
+# System Configuration
+TZ=UTC
+COMPOSE_PROJECT_NAME=ai-platform
+EOF
+    
+    # Save service selections
+    cat > "${CONFIG_DIR}/service-selection.env" << EOF
+# Service Selection Configuration
+SELECTED_CORE_SERVICES=$(IFS=,; echo "${SELECTED_CORE_SERVICES[*]}")
+SELECTED_AI_SERVICES=$(IFS=,; echo "${SELECTED_AI_SERVICES[*]}")
+SELECTED_OPTIONAL_SERVICES=$(IFS=,; echo "${SELECTED_OPTIONAL_SERVICES[*]}")
+SELECTED_PROXY=${SELECTED_PROXY}
+OLLAMA_MODELS=$(IFS=,; echo "${OLLAMA_MODELS[*]}")
+EOF
+    
+    log_success "Configuration saved to ${CONFIG_FILE}"
+    log_success "Service selections saved to ${CONFIG_DIR}/service-selection.env"
+}
+
+# ==============================================================================
+# PHASE 7: SUMMARY FUNCTIONS
+# ==============================================================================
+
+print_summary() {
+    print_section "DEPLOYMENT SUMMARY"
+    log_step "Printing final summary..."
+    
+    echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║              CONFIGURATION COLLECTION COMPLETE             ║${NC}"
+    echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    echo -e "${WHITE}📋 Service URLs (after deployment):${NC}"
+    echo -e "${WHITE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    
+    local base_url="http://${DOMAIN_NAME}"
+    if [ "$SSL_MODE" = "letsencrypt" ] || [ "$SSL_MODE" = "self-signed" ]; then
+        base_url="https://${DOMAIN_NAME}"
+    fi
+    
+    # Core services URLs
+    [[ " ${SELECTED_CORE_SERVICES[*]} " =~ " n8n " ]] && echo "  - n8n: ${base_url}/n8n"
+    [[ " ${SELECTED_CORE_SERVICES[*]} " =~ " ollama " ]] && echo "  - Ollama API: ${base_url}/api/ollama"
+    
+    # AI services URLs
+    [[ " ${SELECTED_AI_SERVICES[*]} " =~ " dify " ]] && echo "  - Dify: ${base_url}/dify"
+    [[ " ${SELECTED_AI_SERVICES[*]} " =~ " open-webui " ]] && echo "  - Open WebUI: ${base_url}/chat"
+    [[ " ${SELECTED_AI_SERVICES[*]} " =~ " flowise " ]] && echo "  - Flowise: ${base_url}/flowise"
+    [[ " ${SELECTED_AI_SERVICES[*]} " =~ " anythingllm " ]] && echo "  - AnythingLLM: ${base_url}/anythingllm"
+    [[ " ${SELECTED_AI_SERVICES[*]} " =~ " openclaw " ]] && echo "  - OpenClaw: ${base_url}/openclaw"
+    [[ " ${SELECTED_AI_SERVICES[*]} " =~ " langfuse " ]] && echo "  - Langfuse: ${base_url}/langfuse"
+    
+    # Optional services URLs
+    [[ " ${SELECTED_OPTIONAL_SERVICES[*]} " =~ " monitoring " ]] && echo "  - Grafana: ${base_url}/grafana"
+    [[ " ${SELECTED_OPTIONAL_SERVICES[*]} " =~ " minio " ]] && echo "  - Minio: ${base_url}/minio"
+    
+    echo ""
+    echo -e "${WHITE}🔐 Important Credentials:${NC}"
+    echo -e "${WHITE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo "  - PostgreSQL User: ${POSTGRES_USER:-aiplatform}"
+    echo "  - PostgreSQL Password: ${POSTGRES_PASSWORD:-[AUTO-GENERATED]}"
+    echo "  - Qdrant API Key: ${QDRANT_API_KEY:-[AUTO-GENERATED]}"
+    echo ""
+    
+    echo -e "${WHITE}📁 Important File Locations:${NC}"
+    echo -e "${WHITE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo "  - Master Configuration: ${CONFIG_FILE}"
+    echo "  - Service Selections: ${CONFIG_DIR}/service-selection.env"
+    echo "  - GPU Info: ${CONFIG_DIR}/gpu-info.env"
+    echo "  - Setup Logs: ${SETUP_LOG}"
+    echo "  - Error Logs: ${ERROR_LOG}"
+    echo ""
+    
+    echo -e "${WHITE}🚀 Next Steps:${NC}"
+    echo -e "${WHITE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo "  1. Review the configuration files in ${CONFIG_DIR}"
+    echo "  2. Run Script 2 to deploy services: ./2-deploy-services.sh"
+    echo "  3. Run Script 3 to configure services: ./3-configure-services.sh"
+    echo "  4. Access your AI platform using the URLs above"
+    echo ""
+    
+    echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║              READY FOR DEPLOYMENT!                        ║${NC}"
+    echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
 }
 
 # ==============================================================================
