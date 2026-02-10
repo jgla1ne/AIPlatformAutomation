@@ -143,7 +143,7 @@ show_progress() {
 save_state() {
     local step=$1
     echo "CURRENT_STEP=$step" > "$STATE_FILE"
-    log_debug "State saved: $step"
+    log_debug "State saved: CURRENT_STEP=$step"
 }
 
 load_state() {
@@ -489,6 +489,580 @@ HARDWARE_PROFILE=${HARDWARE_PROFILE}
 EOF
     
     log_success "Hardware profile: ${HARDWARE_PROFILE}"
+}
+
+# ==============================================================================
+# STEP 6: INTERACTIVE QUESTIONNAIRE (MISSING - CRITICAL)
+# ==============================================================================
+
+step_6_interactive_questionnaire() {
+    show_progress 6 27 "📋 Interactive Configuration"
+    log_step "Starting interactive questionnaire..."
+    
+    # Domain/IP Configuration
+    print_section "DOMAIN & NETWORK CONFIGURATION"
+    while true; do
+        read -p "Enter your domain or IP (e.g., ai.example.com or 192.168.1.100): " DOMAIN_NAME
+        if validate_domain_or_ip "$DOMAIN_NAME"; then
+            break
+        else
+            echo -e "${RED}Invalid domain or IP. Please try again.${NC}"
+        fi
+    done
+    
+    # SSL Mode Selection
+    echo ""
+    echo -e "${CYAN}🔒 SSL Certificate Mode:${NC}"
+    echo "1) Caddy Auto-Let's Encrypt (recommended)"
+    echo "2) Self-signed certificates"
+    echo "3) No SSL (development only)"
+    echo ""
+    
+    while true; do
+        read -p "Select SSL mode (1-3): " ssl_choice
+        case $ssl_choice in
+            1) SSL_MODE="caddy-auto"; break ;;
+            2) SSL_MODE="self-signed"; break ;;
+            3) SSL_MODE="none"; break ;;
+            *) echo -e "${RED}Invalid choice. Please select 1-3.${NC}" ;;
+        esac
+    done
+    
+    # SSL Email
+    if [ "$SSL_MODE" != "none" ]; then
+        while true; do
+            read -p "Enter SSL certificate email: " SSL_EMAIL
+            if validate_email "$SSL_EMAIL"; then
+                break
+            else
+                echo -e "${RED}Invalid email address. Please try again.${NC}"
+            fi
+        done
+    fi
+    
+    # Provider API Keys
+    print_section "EXTERNAL LLM PROVIDERS"
+    echo -e "${CYAN}🤖 Configure API keys (optional, press Enter to skip):${NC}"
+    echo ""
+    
+    read -p "OpenAI API Key: " OPENAI_API_KEY
+    read -p "Anthropic Claude API Key: " ANTHROPIC_API_KEY
+    read -p "Google Gemini API Key: " GOOGLE_API_KEY
+    read -p "Groq API Key: " GROQ_API_KEY
+    read -p "OpenRouter API Key: " OPENROUTER_API_KEY
+    read -p "DeepSeek API Key: " DEEPSEEK_API_KEY
+    
+    # Google Drive Authentication
+    print_section "GOOGLE DRIVE INTEGRATION"
+    echo -e "${CYAN}📁 Google Drive Authentication Method:${NC}"
+    echo "1) OAuth2 (recommended)"
+    echo "2) Service Account JSON"
+    echo "3) Interactive Token Refresh"
+    echo "4) Skip Google Drive"
+    echo ""
+    
+    while true; do
+        read -p "Select Google Drive auth method (1-4): " gdrive_choice
+        case $gdrive_choice in
+            1) 
+                GDRIVE_AUTH_METHOD="oauth2"
+                read -p "Enter Google Client ID: " GOOGLE_CLIENT_ID
+                read -p "Enter Google Client Secret: " GOOGLE_CLIENT_SECRET
+                break ;;
+            2) 
+                GDRIVE_AUTH_METHOD="service_account"
+                read -p "Enter path to service account JSON: " GDRIVE_SERVICE_ACCOUNT_JSON
+                break ;;
+            3) 
+                GDRIVE_AUTH_METHOD="token_refresh"
+                read -p "Enter refresh token: " GDRIVE_REFRESH_TOKEN
+                break ;;
+            4) 
+                GDRIVE_AUTH_METHOD="skip"
+                break ;;
+            *) echo -e "${RED}Invalid choice. Please select 1-4.${NC}" ;;
+        esac
+    done
+    
+    # Signal Integration
+    print_section "SIGNAL INTEGRATION"
+    echo -e "${CYAN}📱 Signal Registration Method:${NC}"
+    echo "1) QR Code Generation"
+    echo "2) API Key Registration"
+    echo "3) Skip Signal"
+    echo ""
+    
+    while true; do
+        read -p "Select Signal registration method (1-3): " signal_choice
+        case $signal_choice in
+            1) 
+                SIGNAL_AUTH_METHOD="qr_code"
+                log_info "QR code will be generated during deployment"
+                break ;;
+            2) 
+                SIGNAL_AUTH_METHOD="api_key"
+                read -p "Enter Signal API key: " SIGNAL_API_KEY
+                break ;;
+            3) 
+                SIGNAL_AUTH_METHOD="skip"
+                break ;;
+            *) echo -e "${RED}Invalid choice. Please select 1-3.${NC}" ;;
+        esac
+    done
+    
+    # Service Selection by Tier
+    print_section "SERVICE SELECTION BY TIER"
+    echo -e "${CYAN}🏗 Tier 1: Infrastructure (Auto-selected)${NC}"
+    echo "   ✓ PostgreSQL (database)"
+    echo "   ✓ Redis (cache)"
+    echo "   ✓ Qdrant (vector DB)"
+    echo "   ✓ SuperTokens (auth)"
+    echo ""
+    
+    echo -e "${CYAN}🤖 Tier 2: AI Services${NC}"
+    echo "1) LiteLLM (gateway) - [REQUIRED]"
+    echo "2) Dify (platform) - [RECOMMENDED]"
+    echo "3) n8n (automation)"
+    echo "4) Open WebUI (chat)"
+    echo "5) Flowise (workflows)"
+    echo "all) All AI Services"
+    echo ""
+    
+    while true; do
+        read -p "Select AI services (1-5, or 'all'): " ai_choices
+        
+        if [ "$ai_choices" = "all" ]; then
+            SELECTED_AI_SERVICES=("litellm" "dify" "n8n" "open-webui" "flowise")
+            break
+        fi
+        
+        IFS=',' read -ra CHOSEN_AI <<< "$ai_choices"
+        valid=true
+        SELECTED_AI_SERVICES=("litellm")  # Always include LiteLLM
+        
+        for choice in "${CHOSEN_AI[@]}"; do
+            choice=$(echo "$choice" | xargs) # trim whitespace
+            case $choice in
+                2) SELECTED_AI_SERVICES+=("dify") ;;
+                3) SELECTED_AI_SERVICES+=("n8n") ;;
+                4) SELECTED_AI_SERVICES+=("open-webui") ;;
+                5) SELECTED_AI_SERVICES+=("flowise") ;;
+                *) valid=false; break ;;
+            esac
+        done
+        
+        if [ "$valid" = true ]; then
+            break
+        else
+            echo -e "${RED}Invalid choices. Please select numbers 1-5 separated by commas, or 'all'.${NC}"
+        fi
+    done
+    
+    echo ""
+    echo -e "${CYAN}🌐 Tier 3: Applications${NC}"
+    echo "1) Caddy (proxy) - [REQUIRED]"
+    echo "2) Monitoring (Prometheus + Grafana)"
+    echo "all) All Applications"
+    echo ""
+    
+    while true; do
+        read -p "Select applications (1-2, or 'all'): " app_choices
+        
+        if [ "$app_choices" = "all" ]; then
+            SELECTED_APPLICATIONS=("caddy" "monitoring")
+            break
+        fi
+        
+        IFS=',' read -ra CHOSEN_APP <<< "$app_choices"
+        valid=true
+        SELECTED_APPLICATIONS=("caddy")  # Always include Caddy
+        
+        for choice in "${CHOSEN_APP[@]}"; do
+            choice=$(echo "$choice" | xargs) # trim whitespace
+            case $choice in
+                2) SELECTED_APPLICATIONS+=("monitoring") ;;
+                *) valid=false; break ;;
+            esac
+        done
+        
+        if [ "$valid" = true ]; then
+            break
+        else
+            echo -e "${RED}Invalid choices. Please select numbers 1-2 separated by commas, or 'all'.${NC}"
+        fi
+    done
+    
+    # Auto-generate all passwords
+    log_info "Auto-generating secure passwords..."
+    POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+    POSTGRES_USER="aiplatform"
+    REDIS_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+    LITELLM_MASTER_KEY=$(openssl rand -hex 32)
+    LITELLM_SALT_KEY=$(openssl rand -hex 32)
+    N8N_ENCRYPTION_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+    JWT_SECRET=$(openssl rand -base64 64)
+    
+    # Save selections to file
+    cat > "${CONFIG_DIR}/service-selection.env" << EOF
+# Service Selection Configuration
+DOMAIN_NAME=${DOMAIN_NAME}
+SSL_MODE=${SSL_MODE}
+SSL_EMAIL=${SSL_EMAIL}
+SELECTED_AI_SERVICES=$(IFS=,; echo "${SELECTED_AI_SERVICES[*]}")
+SELECTED_APPLICATIONS=$(IFS=,; echo "${SELECTED_APPLICATIONS[*]}")
+AUTO_SELECTED_CORE_SERVICES=postgresql,redis,qdrant,supertokens
+GDRIVE_AUTH_METHOD=${GDRIVE_AUTH_METHOD}
+SIGNAL_AUTH_METHOD=${SIGNAL_AUTH_METHOD}
+EOF
+    
+    log_success "Interactive questionnaire completed"
+    log_info "Domain: ${DOMAIN_NAME}"
+    log_info "SSL Mode: ${SSL_MODE}"
+    log_info "AI Services: ${SELECTED_AI_SERVICES[*]}"
+    log_info "Applications: ${SELECTED_APPLICATIONS[*]}"
+    log_info "Google Drive: ${GDRIVE_AUTH_METHOD}"
+    log_info "Signal: ${SIGNAL_AUTH_METHOD}"
+}
+
+# ==============================================================================
+# STEP FUNCTIONS - 27 STEP FRAMEWORK
+# ==============================================================================
+
+step_1_hardware_detection() {
+    show_progress 1 27 "🔍 Hardware Detection & Profiling"
+    log_step "Detecting hardware profile..."
+    
+    # GPU Detection
+    GPU_AVAILABLE=false
+    GPU_TYPE=""
+    GPU_MEMORY=""
+    
+    if command -v nvidia-smi &> /dev/null; then
+        GPU_AVAILABLE=true
+        GPU_TYPE="nvidia"
+        GPU_MEMORY=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1)
+        log_success "NVIDIA GPU detected: ${GPU_MEMORY}MB"
+    elif command -v rocm-smi &> /dev/null; then
+        GPU_AVAILABLE=true
+        GPU_TYPE="amd"
+        log_success "AMD GPU detected"
+    else
+        log_info "No GPU detected - CPU-only mode"
+    fi
+    
+    # CPU Detection
+    CPU_CORES=$(nproc)
+    CPU_MEMORY=$(free -m | awk 'NR==2{printf "%.0f", $2}')
+    
+    # Determine hardware profile
+    if [ "$GPU_AVAILABLE" = true ]; then
+        if [ "$GPU_MEMORY" -gt 8000 ]; then
+            HARDWARE_PROFILE="high-gpu"
+        else
+            HARDWARE_PROFILE="standard-gpu"
+        fi
+    else
+        if [ "$CPU_MEMORY" -gt 16000 ]; then
+            HARDWARE_PROFILE="high-cpu"
+        else
+            HARDWARE_PROFILE="standard-cpu"
+        fi
+    fi
+    
+    # Save hardware profile
+    mkdir -p "${CONFIG_DIR}"
+    cat > "${CONFIG_DIR}/hardware-profile.env" << EOF
+# Hardware Profile Configuration
+GPU_AVAILABLE=${GPU_AVAILABLE}
+GPU_TYPE=${GPU_TYPE}
+GPU_MEMORY=${GPU_MEMORY}
+CPU_CORES=${CPU_CORES}
+CPU_MEMORY=${CPU_MEMORY}
+HARDWARE_PROFILE=${HARDWARE_PROFILE}
+EOF
+    
+    log_success "Hardware profile: ${HARDWARE_PROFILE}"
+}
+
+step_2_docker_installation() {
+    show_progress 2 27 "🐳 Docker Engine Installation"
+    log_step "Installing Docker and Docker Compose..."
+    
+    # Remove conflicting packages
+    apt remove -y docker docker-engine docker.io containerd runc || true
+    
+    # Add Docker GPG key and repository
+    apt update
+    apt install -y ca-certificates curl gnupg lsb-release
+    
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+    
+    # Install Docker
+    apt update
+    apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    
+    # Configure Docker daemon
+    mkdir -p /etc/docker
+    cat > /etc/docker/daemon.json << 'EOF'
+{
+    "log-driver": "json-file",
+    "log-opts": {
+        "max-size": "10m",
+        "max-file": "3"
+    },
+    "storage-driver": "overlay2",
+    "live-restore": true,
+    "default-address-pools": [
+        {
+            "base": "172.20.0.0/14",
+            "size": 24
+        }
+    ]
+}
+EOF
+    
+    # Add user to docker group
+    local target_user="${SUDO_USER:-$USER}"
+    if ! groups "$target_user" | grep -q docker; then
+        usermod -aG docker "$target_user"
+        log_info "Added ${target_user} to docker group"
+    fi
+    
+    # Start and enable Docker
+    systemctl enable docker
+    systemctl start docker
+    
+    log_success "Docker installed: $(docker --version)"
+}
+
+step_3_nvidia_toolkit() {
+    show_progress 3 27 "🎮 NVIDIA Container Toolkit"
+    log_step "Installing NVIDIA Container Toolkit..."
+    
+    if [ "$GPU_AVAILABLE" = true ] && [ "$GPU_TYPE" = "nvidia" ]; then
+        # Add NVIDIA repository
+        curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+        echo "deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://nvidia.github.io/libnvidia-container/stable/ubuntu20.04/$(dpkg --print-architecture) /" | tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
+        
+        # Install NVIDIA container toolkit
+        apt update
+        apt install -y nvidia-container-toolkit
+        
+        # Configure Docker runtime
+        nvidia-ctk runtime configure --runtime=docker
+        systemctl restart docker
+        
+        # Test GPU passthrough
+        if docker run --rm --gpus all nvidia/cuda:11.0-base nvidia-smi &> /dev/null; then
+            log_success "NVIDIA GPU passthrough working"
+        else
+            log_warning "NVIDIA GPU passthrough test failed"
+        fi
+    else
+        log_info "Skipping NVIDIA toolkit - no NVIDIA GPU detected"
+    fi
+}
+
+step_4_ollama_installation() {
+    show_progress 4 27 "🦙 Ollama Installation & Model Pull"
+    log_step "Installing Ollama..."
+    
+    # Install Ollama
+    curl -fsSL https://ollama.ai/install.sh | sh
+    
+    # Configure Ollama environment
+    mkdir -p /etc/systemd/system/ollama.service.d
+    cat > /etc/systemd/system/ollama.service.d/override.conf << EOF
+[Service]
+Environment="OLLAMA_HOST=0.0.0.0"
+Environment="OLLAMA_ORIGINS=*"
+Environment="OLLAMA_NUM_PARALLEL=4"
+Environment="OLLAMA_MAX_LOADED_MODELS=3"
+Environment="OLLAMA_KEEP_ALIVE=5m"
+EOF
+    
+    # Start and enable Ollama
+    systemctl daemon-reload
+    systemctl enable ollama
+    systemctl start ollama
+    
+    # Wait for Ollama to start
+    local retries=30
+    while [ $retries -gt 0 ]; do
+        if curl -s http://localhost:11434/api/tags &> /dev/null; then
+            break
+        fi
+        sleep 2
+        retries=$((retries - 1))
+    done
+    
+    if [ $retries -eq 0 ]; then
+        log_error "Ollama failed to start"
+        return 1
+    fi
+    
+    # Pull default models based on hardware profile
+    case $HARDWARE_PROFILE in
+        "high-gpu")
+            ollama pull llama2
+            ollama pull codellama
+            ollama pull mistral
+            ;;
+        "standard-gpu")
+            ollama pull llama2
+            ollama pull mistral
+            ;;
+        "high-cpu")
+            ollama pull llama2
+            ;;
+        "standard-cpu")
+            ollama pull tinyllama
+            ;;
+    esac
+    
+    log_success "Ollama installed and models pulled"
+}
+
+step_5_validation() {
+    show_progress 5 27 "✅ Validation & Handoff"
+    log_step "Validating installation..."
+    
+    # Verify Docker daemon
+    if ! systemctl is-active --quiet docker; then
+        log_error "Docker daemon is not running"
+        return 1
+    fi
+    
+    # Verify Docker Compose
+    if ! command -v docker compose &> /dev/null; then
+        log_error "Docker Compose is not available"
+        return 1
+    fi
+    
+    # Verify GPU passthrough (if applicable)
+    if [ "$GPU_AVAILABLE" = true ]; then
+        if ! docker run --rm --gpus all nvidia/cuda:11.0-base nvidia-smi &> /dev/null; then
+            log_warning "GPU passthrough validation failed"
+        else
+            log_success "GPU passthrough validated"
+        fi
+    fi
+    
+    # Verify Ollama
+    if ! curl -s http://localhost:11434/api/tags &> /dev/null; then
+        log_error "Ollama is not responding"
+        return 1
+    fi
+    
+    # Verify models
+    local model_count=$(curl -s http://localhost:11434/api/tags | jq -r '.models | length' 2>/dev/null || echo "0")
+    if [ "$model_count" -eq 0 ]; then
+        log_warning "No Ollama models found"
+    else
+        log_success "Found $model_count Ollama models"
+    fi
+    
+    log_success "Validation completed successfully"
+    log_info "Ready for Script 2: Deploy Platform"
+}
+
+step_7_generate_master_env() {
+    show_progress 7 27 "⚙️ master.env Generation"
+    log_step "Generating master configuration file..."
+    
+    # Source service selections
+    source "${CONFIG_DIR}/service-selection.env"
+    
+    cat > "$CONFIG_FILE" << EOF
+# ==============================================================================
+# AI Platform Configuration
+# Generated: $(date)
+# Version: ${SCRIPT_VERSION}
+# ==============================================================================
+
+# Domain and Network
+DOMAIN_NAME="${DOMAIN_NAME}"
+SSL_MODE="${SSL_MODE}"
+SSL_EMAIL="${SSL_EMAIL}"
+DOCKER_NETWORK="${DOCKER_NETWORK}"
+SUBNET="${SUBNET}"
+
+# Paths
+BASE_DIR="${BASE_DIR}"
+DATA_DIR="${DATA_DIR}"
+AI_PLATFORM_DIR="${AI_PLATFORM_DIR}"
+BACKUP_DIR="${BACKUP_DIR}"
+LOG_DIR="${LOG_DIR}"
+CONFIG_DIR="${CONFIG_DIR}"
+DOCKER_DIR="${DOCKER_DIR}"
+
+# PostgreSQL Configuration
+POSTGRES_VERSION=16
+POSTGRES_USER=${POSTGRES_USER}
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+POSTGRES_DB=aiplatform
+POSTGRES_PORT=5432
+POSTGRES_DATA=${POSTGRES_DATA}
+POSTGRES_MAX_CONNECTIONS=200
+
+# Redis Configuration
+REDIS_PASSWORD=${REDIS_PASSWORD}
+REDIS_PORT=6379
+REDIS_DATA=${DATA_DIR}/redis
+
+# Ollama Configuration
+OLLAMA_HOST=0.0.0.0
+OLLAMA_PORT=11434
+OLLAMA_DATA=${OLLAMA_DATA}
+OLLAMA_ORIGINS=*
+
+# LiteLLM Configuration
+LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+LITELLM_SALT_KEY=${LITELLM_SALT_KEY}
+LITELLM_PORT=4000
+
+# Qdrant Configuration
+QDRANT_PORT=6333
+QDRANT_GRPC_PORT=6334
+Qdrant_DATA=${QDRANT_DATA}
+
+# n8n Configuration
+N8N_PORT=5678
+N8N_DATA=${N8N_DATA}
+N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+N8N_USER_MANAGEMENT_JWT_SECRET=${JWT_SECRET}
+
+# External LLM Providers
+OPENAI_API_KEY=${OPENAI_API_KEY:-}
+ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+GROQ_API_KEY=${GROQ_API_KEY:-}
+OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+
+# Google Drive Integration
+GDRIVE_AUTH_METHOD=${GDRIVE_AUTH_METHOD}
+GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+GDRIVE_SERVICE_ACCOUNT_JSON=${GDRIVE_SERVICE_ACCOUNT_JSON:-}
+GDRIVE_REFRESH_TOKEN=${GDRIVE_REFRESH_TOKEN:-}
+
+# Signal Integration
+SIGNAL_AUTH_METHOD=${SIGNAL_AUTH_METHOD}
+SIGNAL_API_KEY=${SIGNAL_API_KEY:-}
+
+# Service Selections
+SELECTED_AI_SERVICES="${SELECTED_AI_SERVICES}"
+SELECTED_APPLICATIONS="${SELECTED_APPLICATIONS}"
+AUTO_SELECTED_CORE_SERVICES="${AUTO_SELECTED_CORE_SERVICES}"
+
+# System Configuration
+TZ=UTC
+COMPOSE_PROJECT_NAME=ai-platform
+EOF
+    
+    log_success "master.env generated successfully"
 }
 
 # ==============================================================================
@@ -3441,27 +4015,23 @@ main() {
     fi
 
     # Execute setup steps
-    [ "${CURRENT_STEP:-1}" -le 1 ] && { update_system; save_state 1; }
-    [ "${CURRENT_STEP:-1}" -le 2 ] && { install_docker; save_state 2; }
-    [ "${CURRENT_STEP:-1}" -le 3 ] && { create_directory_structure; save_state 3; }
-    [ "${CURRENT_STEP:-1}" -le 4 ] && { create_config_file; save_state 4; }
-    [ "${CURRENT_STEP:-1}" -le 5 ] && { create_postgresql_init; save_state 5; }
-    [ "${CURRENT_STEP:-1}" -le 6 ] && { create_ollama_init; save_state 6; }
-    [ "${CURRENT_STEP:-1}" -le 7 ] && { configure_firewall; save_state 7; }
-    [ "${CURRENT_STEP:-1}" -le 8 ] && { configure_fail2ban; save_state 8; }
-    [ "${CURRENT_STEP:-1}" -le 9 ] && { generate_ssl_certificates; save_state 9; }
-    [ "${CURRENT_STEP:-1}" -le 10 ] && { configure_postgresql_tuning; save_state 10; }
-    [ "${CURRENT_STEP:-1}" -le 11 ] && { install_ollama_cli; save_state 11; }
-    [ "${CURRENT_STEP:-1}" -le 12 ] && { create_qdrant_init; save_state 12; }
-    [ "${CURRENT_STEP:-1}" -le 13 ] && { create_n8n_workflows; save_state 13; }
-    [ "${CURRENT_STEP:-1}" -le 14 ] && { generate_docker_compose; save_state 14; }
-    [ "${CURRENT_STEP:-1}" -le 15 ] && { generate_nginx_config; save_state 15; }
-    [ "${CURRENT_STEP:-1}" -le 16 ] && { create_systemd_service; save_state 16; }
-    [ "${CURRENT_STEP:-1}" -le 17 ] && { create_backup_script; save_state 17; }
-    [ "${CURRENT_STEP:-1}" -le 18 ] && { create_health_check_script; save_state 18; }
-    [ "${CURRENT_STEP:-1}" -le 19 ] && { create_monitoring_script; save_state 19; }
-    [ "${CURRENT_STEP:-1}" -le 20 ] && { verify_and_start_services; save_state 20; }
-    [ "${CURRENT_STEP:-1}" -le 21 ] && { display_summary; save_state 21; }
+    [ "${CURRENT_STEP:-1}" -le 1 ] && { step_1_hardware_detection; save_state 1; }
+    [ "${CURRENT_STEP:-1}" -le 2 ] && { step_2_docker_installation; save_state 2; }
+    [ "${CURRENT_STEP:-1}" -le 3 ] && { step_3_nvidia_toolkit; save_state 3; }
+    [ "${CURRENT_STEP:-1}" -le 4 ] && { step_4_ollama_installation; save_state 4; }
+    [ "${CURRENT_STEP:-1}" -le 5 ] && { step_5_validation; save_state 5; }
+    [ "${CURRENT_STEP:-1}" -le 6 ] && { step_6_interactive_questionnaire; save_state 6; }
+    [ "${CURRENT_STEP:-1}" -le 7 ] && { step_7_generate_master_env; save_state 7; }
+    [ "${CURRENT_STEP:-1}" -le 8 ] && { step_8_service_env_files; save_state 8; }
+    [ "${CURRENT_STEP:-1}" -le 9 ] && { step_9_postgresql_init; save_state 9; }
+    [ "${CURRENT_STEP:-1}" -le 10 ] && { step_10_redis_config; save_state 10; }
+    [ "${CURRENT_STEP:-1}" -le 11 ] && { step_11_litellm_config; save_state 11; }
+    [ "${CURRENT_STEP:-1}" -le 12 ] && { step_12_dify_config; save_state 12; }
+    [ "${CURRENT_STEP:-1}" -le 13 ] && { step_13_caddyfile_gen; save_state 13; }
+    [ "${CURRENT_STEP:-1}" -le 14 ] && { step_14_monitoring_config; save_state 14; }
+    [ "${CURRENT_STEP:-1}" -le 15 ] && { step_15_convenience_scripts; save_state 15; }
+    [ "${CURRENT_STEP:-1}" -le 16 ] && { step_16_deploy_services; save_state 16; }
+    [ "${CURRENT_STEP:-1}" -le 17 ] && { step_17_verification_summary; save_state 17; }
 
     log_info "All setup steps completed successfully!"
 
