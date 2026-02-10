@@ -1,1094 +1,789 @@
 #!/bin/bash
-#===============================================================================
-# AI Platform Automation - Script 1: System Setup & Configuration Collection
-#===============================================================================
-# Version: 3.1.0 - Enhanced with Gemini, OpenRouter, LiteLLM routing, URL summary
-#===============================================================================
+################################################################################
+# AI Platform Automation Setup Script
+# Version: 1.0.2
+# Description: Interactive setup for AI development platform with Docker
+################################################################################
 
 set -euo pipefail
-IFS=$'\n\t'
 
-readonly SCRIPT_VERSION="3.1.0"
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly BASE_DIR="/root/scripts"
-readonly DATA_DIR="/mnt/data"
-readonly LOG_DIR="${BASE_DIR}/logs"
-readonly CONFIG_FILE="${BASE_DIR}/.env.master"
-readonly STATE_FILE="${BASE_DIR}/.setup_state"
-readonly LOG_FILE="${LOG_DIR}/setup-$(date +%Y%m%d-%H%M%S).log"
-
-# Color codes
+# Color definitions
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
 readonly BLUE='\033[0;34m'
-readonly CYAN='\033[0;36m'
 readonly MAGENTA='\033[0;35m'
-readonly NC='\033[0m'
+readonly CYAN='\033[0;36m'
+readonly WHITE='\033[1;37m'
+readonly NC='\033[0m' # No Color
 
-# Exit codes
-readonly EXIT_SUCCESS=0
-readonly EXIT_ERROR=1
-readonly EXIT_USER_CANCEL=2
-readonly EXIT_VALIDATION_FAILED=3
+# Script configuration
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+readonly CONFIG_DIR="$PROJECT_ROOT/config"
+readonly ENV_FILE="$CONFIG_DIR/.env"
+readonly DOCKER_COMPOSE_FILE="$PROJECT_ROOT/docker-compose.yml"
 
-# Global associative arrays
-declare -A CONFIG=(
-    ["INSTALL_POSTGRES"]="false"
-    ["INSTALL_N8N"]="false"
-    ["INSTALL_FLOWISE"]="false"
-    ["INSTALL_LITELLM"]="false"
-    ["INSTALL_OLLAMA"]="false"
-    ["INSTALL_LANGFUSE"]="false"
-    ["INSTALL_DIFY"]="false"
-    ["INSTALL_OPENWEBUI"]="false"
-    ["INSTALL_ANYTHINGLLM"]="false"
-    ["INSTALL_OPENCLAW"]="false"
-    ["INSTALL_MINIO"]="false"
-    ["INSTALL_SIGNAL_API"]="false"
-    ["INSTALL_TAILSCALE"]="false"
-    ["INSTALL_VECTORDB"]="false"
-    ["GDRIVE_ENABLED"]="false"
-    ["USE_DOMAIN"]="false"
-    ["LITELLM_ROUTING_STRATEGY"]="usage-based-routing"
-)
+# Logging
+readonly LOG_FILE="$PROJECT_ROOT/setup.log"
+exec 1> >(tee -a "$LOG_FILE")
+exec 2>&1
 
-declare -A CREDENTIALS=()
-declare -A LLM_PROVIDERS=()
-declare -A LLM_MODELS=()
-declare -a SELECTED_SERVICES=()
-declare -a CONFIGURED_LLMS=()
+################################################################################
+# Utility Functions
+################################################################################
 
-#===============================================================================
-# SIGNAL HANDLING
-#===============================================================================
-trap cleanup_on_exit EXIT
-trap handle_interrupt INT TERM
-
-cleanup_on_exit() {
-    local exit_code=$?
-    if [ $exit_code -ne 0 ] && [ $exit_code -ne $EXIT_USER_CANCEL ]; then
-        log "ERROR" "Script exited with error code: $exit_code"
-        echo -e "\n${RED}Setup interrupted or failed. Check log: ${LOG_FILE}${NC}"
-    fi
-}
-
-handle_interrupt() {
-    echo -e "\n${YELLOW}⚠️ Setup interrupted by user${NC}"
-    log "WARN" "User interrupted setup"
-    exit $EXIT_USER_CANCEL
-}
-
-#===============================================================================
-# LOGGING FUNCTIONS
-#===============================================================================
-setup_logging() {
-    mkdir -p "$LOG_DIR"
-    exec 1> >(tee -a "$LOG_FILE")
-    exec 2> >(tee -a "$LOG_FILE" >&2)
-}
-
-log() {
-    local level="$1"
-    shift
-    local message="$*"
-    local timestamp
-    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[${timestamp}] [${level}] ${message}" >> "$LOG_FILE"
-}
-
-print_header() {
-    echo -e "\n${CYAN}╔════════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${NC} $1"
-    echo -e "${CYAN}╚════════════════════════════════════════════════════════════════════╝${NC}\n"
-    log "INFO" "$1"
-}
-
-print_section() {
-    echo -e "\n${BLUE}━━━ $1 ━━━${NC}\n"
-    log "INFO" "Section: $1"
-}
-
-print_success() {
-    echo -e "${GREEN}✓${NC} $1"
-    log "INFO" "Success: $1"
-}
-
-print_error() {
-    echo -e "${RED}✗${NC} $1"
-    log "ERROR" "$1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}⚠${NC} $1"
-    log "WARN" "$1"
-}
-
-print_info() {
-    echo -e "${CYAN}ℹ${NC} $1"
-    log "INFO" "$1"
-}
-
-#===============================================================================
-# VALIDATION FUNCTIONS
-#===============================================================================
-check_root() {
-    if [ "$EUID" -ne 0 ]; then
-        print_error "This script must be run as root"
-        exit $EXIT_ERROR
-    fi
-}
-
-validate_ip() {
-    local ip=$1
-    if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-        local IFS='.'
-        read -ra ADDR <<< "$ip"
-        [[ ${ADDR[0]} -le 255 && ${ADDR[1]} -le 255 && ${ADDR[2]} -le 255 && ${ADDR[3]} -le 255 ]]
-        return $?
-    fi
-    return 1
-}
-
-validate_domain() {
-    local domain=$1
-    if [[ $domain =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
-        return 0
-    fi
-    return 1
-}
-
-validate_email() {
-    local email=$1
-    if [[ $email =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
-        return 0
-    fi
-    return 1
-}
-
-validate_port() {
-    local port=$1
-    if [[ $port =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
-        return 0
-    fi
-    return 1
-}
-
-check_port_available() {
-    local port=$1
-    if command -v netstat &> /dev/null; then
-        if netstat -tuln 2>/dev/null | grep -q ":${port} "; then
-            return 1
-        fi
-    elif command -v ss &> /dev/null; then
-        if ss -tuln 2>/dev/null | grep -q ":${port} "; then
-            return 1
-        fi
-    fi
-    return 0
-}
-
-check_dependencies() {
-    print_section "Checking System Dependencies"
-    
-    local missing_deps=()
-    local deps=("curl" "wget" "git" "jq" "openssl" "gpg" "systemctl")
-    
-    for dep in "${deps[@]}"; do
-        if ! command -v "$dep" &> /dev/null; then
-            missing_deps+=("$dep")
-            print_warning "Missing: $dep"
-        else
-            print_success "Found: $dep"
-        fi
-    done
-    
-    if [ ${#missing_deps[@]} -gt 0 ]; then
-        print_error "Missing dependencies: ${missing_deps[*]}"
-        read -p "Install missing dependencies now? (y/n): " install_deps
-        if [[ $install_deps =~ ^[Yy]$ ]]; then
-            apt-get update
-            apt-get install -y "${missing_deps[@]}"
-            print_success "Dependencies installed"
-        else
-            print_error "Cannot proceed without required dependencies"
-            exit $EXIT_ERROR
-        fi
-    else
-        print_success "All dependencies satisfied"
-    fi
-}
-
-check_disk_space() {
-    print_section "Checking Disk Space"
-    
-    local required_space_gb=50
-    local available_space_gb
-    available_space_gb=$(df -BG "$BASE_DIR" 2>/dev/null | awk 'NR==2 {print $4}' | sed 's/G//')
-    
-    if [ -z "$available_space_gb" ]; then
-        print_warning "Could not determine disk space"
-        return
-    fi
-    
-    print_info "Available space: ${available_space_gb}GB"
-    print_info "Required space: ${required_space_gb}GB"
-    
-    if [ "$available_space_gb" -lt "$required_space_gb" ]; then
-        print_warning "Low disk space. Recommended: ${required_space_gb}GB, Available: ${available_space_gb}GB"
-        read -p "Continue anyway? (y/n): " continue_low_space
-        if [[ ! $continue_low_space =~ ^[Yy]$ ]]; then
-            exit $EXIT_USER_CANCEL
-        fi
-    else
-        print_success "Sufficient disk space available"
-    fi
-}
-
-detect_public_ip() {
-    print_section "Detecting Public IP"
-    
-    local ip
-    ip=$(curl -s -4 --max-time 5 icanhazip.com || curl -s -4 --max-time 5 ifconfig.me || curl -s -4 --max-time 5 api.ipify.org || echo "")
-    
-    if [ -n "$ip" ] && validate_ip "$ip"; then
-        CONFIG["PUBLIC_IP"]=$ip
-        print_success "Detected public IP: $ip"
-    else
-        print_warning "Could not auto-detect public IP"
-        while true; do
-            read -p "Enter public IP manually: " manual_ip
-            if validate_ip "$manual_ip"; then
-                CONFIG["PUBLIC_IP"]=$manual_ip
-                print_success "Using IP: $manual_ip"
-                break
-            else
-                print_error "Invalid IP address format"
-            fi
-        done
-    fi
-}
-
-detect_gpu() {
-    print_section "Detecting GPU"
-    
-    if lspci 2>/dev/null | grep -i nvidia &> /dev/null; then
-        if command -v nvidia-smi &> /dev/null; then
-            print_success "NVIDIA GPU detected with drivers"
-            CONFIG["OLLAMA_GPU_ENABLED"]="true"
-        else
-            print_warning "NVIDIA GPU detected but drivers not installed"
-            CONFIG["OLLAMA_GPU_ENABLED"]="false"
-            print_info "NVIDIA Docker runtime can be installed in Script 2"
-        fi
-    else
-        print_info "No NVIDIA GPU detected, using CPU mode"
-        CONFIG["OLLAMA_GPU_ENABLED"]="false"
-    fi
-}
-
-#===============================================================================
-# UTILITY FUNCTIONS
-#===============================================================================
-generate_password() {
-    local length=${1:-32}
-    openssl rand -base64 48 | tr -d "=+/" | cut -c1-${length}
-}
-
-generate_secret() {
-    openssl rand -hex 32
-}
-
-save_state() {
-    declare -p CONFIG CREDENTIALS LLM_PROVIDERS LLM_MODELS SELECTED_SERVICES CONFIGURED_LLMS > "$STATE_FILE" 2>/dev/null || true
-    log "INFO" "State saved to $STATE_FILE"
-}
-
-load_state() {
-    if [ -f "$STATE_FILE" ]; then
-        source "$STATE_FILE"
-        log "INFO" "State loaded from $STATE_FILE"
-        return 0
-    fi
-    return 1
-}
-
-#===============================================================================
-# NETWORK CONFIGURATION
-#===============================================================================
-configure_network() {
-    print_header "Network Configuration"
-    
-    # Domain or IP
-    read -p "Do you have a domain name? (y/n): " has_domain
-    if [[ $has_domain =~ ^[Yy]$ ]]; then
-        while true; do
-            read -p "Enter domain name (e.g., ai.example.com): " domain
-            if validate_domain "$domain"; then
-                CONFIG["DOMAIN"]=$domain
-                CONFIG["USE_DOMAIN"]="true"
-                print_success "Domain: $domain"
-                break
-            else
-                print_error "Invalid domain format"
-            fi
-        done
-    else
-        CONFIG["USE_DOMAIN"]="false"
-        CONFIG["DOMAIN"]=""
-        print_info "Will use IP-based access: ${CONFIG["PUBLIC_IP"]}"
-    fi
-    
-    # SSL Configuration
-    if [[ "${CONFIG["USE_DOMAIN"]}" == "true" ]]; then
-        echo ""
-        echo "SSL Certificate Options:"
-        echo "  1) Let's Encrypt - Free, auto-renewal (RECOMMENDED)"
-        echo "  2) Self-signed - For testing/internal use"
-        echo ""
-        read -p "Select SSL mode (1-2): " ssl_choice
-        
-        case $ssl_choice in
-            1)
-                CONFIG["SSL_MODE"]="letsencrypt"
-                while true; do
-                    read -p "Enter email for Let's Encrypt notifications: " le_email
-                    if validate_email "$le_email"; then
-                        CONFIG["SSL_EMAIL"]=$le_email
-                        print_success "Let's Encrypt enabled"
-                        break
-                    else
-                        print_error "Invalid email format"
-                    fi
-                done
-                ;;
-            2)
-                CONFIG["SSL_MODE"]="selfsigned"
-                print_info "Will use self-signed certificates"
-                ;;
-            *)
-                print_warning "Invalid choice, using self-signed"
-                CONFIG["SSL_MODE"]="selfsigned"
-                ;;
-        esac
-    else
-        CONFIG["SSL_MODE"]="none"
-        print_info "SSL disabled for IP-based access"
-    fi
-}
-
-#===============================================================================
-# SERVICE SELECTION
-#===============================================================================
-select_services() {
-    print_header "Service Selection"
-    
-    echo "Select services to install (space-separated numbers, or 'all'):"
-    echo ""
-    echo "  Core Infrastructure:"
-    echo "    1)  PostgreSQL - Database (required for most services)"
-    echo "    2)  Redis - Caching & queue management"
-    echo "    3)  MinIO - S3-compatible object storage"
-    echo ""
-    echo "  AI Workflow & Automation:"
-    echo "    4)  n8n - Workflow automation"
-    echo "    5)  Flowise - Low-code AI workflows"
-    echo ""
-    echo "  LLM Infrastructure:"
-    echo "    6)  LiteLLM - Unified LLM proxy with load balancing"
-    echo "    7)  Ollama - Local LLM hosting"
-    echo ""
-    echo "  Chat & Interface Platforms:"
-    echo "    8)  Open WebUI - Modern LLM chat interface"
-    echo "    9)  LibreChat - Multi-model chat platform"
-    echo "    10) AnythingLLM - Full-stack LLM workspace"
-    echo "    11) Dify - LLM app development platform"
-    echo ""
-    echo "  Observability & Management:"
-    echo "    12) Langfuse - LLM observability & analytics"
-    echo ""
-    echo "  Optional Integrations:"
-    echo "    13) Signal API - Messaging integration"
-    echo "    14) Tailscale - Private networking (VPN)"
-    echo ""
-    
-    read -p "Enter selection (e.g., '1 4 6 8' or 'all'): " service_selection
-    
-    if [[ $service_selection == "all" ]]; then
-        SELECTED_SERVICES=(1 2 3 4 5 6 7 8 9 10 11 12 13 14)
-    else
-        read -ra SELECTED_SERVICES <<< "$service_selection"
-    fi
-    
-    # Map selections to install flags
-    for num in "${SELECTED_SERVICES[@]}"; do
-        case $num in
-            1) CONFIG["INSTALL_POSTGRES"]="true" ;;
-            2) CONFIG["INSTALL_REDIS"]="true" ;;
-            3) CONFIG["INSTALL_MINIO"]="true" ;;
-            4) CONFIG["INSTALL_N8N"]="true" ;;
-            5) CONFIG["INSTALL_FLOWISE"]="true" ;;
-            6) CONFIG["INSTALL_LITELLM"]="true" ;;
-            7) CONFIG["INSTALL_OLLAMA"]="true" ;;
-            8) CONFIG["INSTALL_OPENWEBUI"]="true" ;;
-            9) CONFIG["INSTALL_LIBRECHAT"]="true" ;;
-            10) CONFIG["INSTALL_ANYTHINGLLM"]="true" ;;
-            11) CONFIG["INSTALL_DIFY"]="true" ;;
-            12) CONFIG["INSTALL_LANGFUSE"]="true" ;;
-            13) CONFIG["INSTALL_SIGNAL_API"]="true" ;;
-            14) CONFIG["INSTALL_TAILSCALE"]="true" ;;
-        esac
-    done
-    
-    # Show selected services
-    echo ""
-    print_section "Selected Services"
-    for key in "${!CONFIG[@]}"; do
-        if [[ $key == INSTALL_* ]] && [[ ${CONFIG[$key]} == "true" ]]; then
-            local service_name=${key#INSTALL_}
-            print_success "$service_name"
-        fi
-    done
-}
-
-#===============================================================================
-# LLM PROVIDER CONFIGURATION - ENHANCED
-#===============================================================================
-configure_llm_providers() {
-    print_header "LLM Provider Configuration"
-    
-    echo "Configure LLM providers (you can skip any):"
-    echo ""
-    
-    # OpenAI
-    read -p "Configure OpenAI? (y/n): " config_openai
-    if [[ $config_openai =~ ^[Yy]$ ]]; then
-        read -p "Enter OpenAI API Key: " openai_key
-        if [ -n "$openai_key" ]; then
-            LLM_PROVIDERS["OPENAI_API_KEY"]=$openai_key
-            CONFIGURED_LLMS+=("openai")
-            
-            # Fetch available models
-            print_info "Fetching OpenAI models..."
-            local models=$(curl -s https://api.openai.com/v1/models                 -H "Authorization: Bearer $openai_key" | jq -r '.data[].id' | grep -E '^gpt-' | head -10)
-            LLM_MODELS["OPENAI"]=$models
-            print_success "OpenAI configured"
-        fi
-    fi
-    
-    # Anthropic
-    read -p "Configure Anthropic (Claude)? (y/n): " config_anthropic
-    if [[ $config_anthropic =~ ^[Yy]$ ]]; then
-        read -p "Enter Anthropic API Key: " anthropic_key
-        if [ -n "$anthropic_key" ]; then
-            LLM_PROVIDERS["ANTHROPIC_API_KEY"]=$anthropic_key
-            CONFIGURED_LLMS+=("anthropic")
-            LLM_MODELS["ANTHROPIC"]="claude-3-5-sonnet-20241022,claude-3-5-haiku-20241022,claude-3-opus-20240229"
-            print_success "Anthropic configured"
-        fi
-    fi
-    
-    # Google Gemini - NEW
-    read -p "Configure Google Gemini? (y/n): " config_gemini
-    if [[ $config_gemini =~ ^[Yy]$ ]]; then
-        read -p "Enter Google AI API Key: " gemini_key
-        if [ -n "$gemini_key" ]; then
-            LLM_PROVIDERS["GEMINI_API_KEY"]=$gemini_key
-            CONFIGURED_LLMS+=("gemini")
-            LLM_MODELS["GEMINI"]="gemini-2.0-flash-exp,gemini-1.5-pro-latest,gemini-1.5-flash-latest"
-            print_success "Google Gemini configured"
-        fi
-    fi
-    
-    # OpenRouter - NEW
-    read -p "Configure OpenRouter? (y/n): " config_openrouter
-    if [[ $config_openrouter =~ ^[Yy]$ ]]; then
-        read -p "Enter OpenRouter API Key: " openrouter_key
-        if [ -n "$openrouter_key" ]; then
-            LLM_PROVIDERS["OPENROUTER_API_KEY"]=$openrouter_key
-            CONFIGURED_LLMS+=("openrouter")
-            
-            print_info "Fetching OpenRouter models..."
-            local or_models=$(curl -s https://openrouter.ai/api/v1/models                 -H "Authorization: Bearer $openrouter_key" | jq -r '.data[].id' | head -20)
-            LLM_MODELS["OPENROUTER"]=$or_models
-            print_success "OpenRouter configured"
-        fi
-    fi
-    
-    # Groq
-    read -p "Configure Groq? (y/n): " config_groq
-    if [[ $config_groq =~ ^[Yy]$ ]]; then
-        read -p "Enter Groq API Key: " groq_key
-        if [ -n "$groq_key" ]; then
-            LLM_PROVIDERS["GROQ_API_KEY"]=$groq_key
-            CONFIGURED_LLMS+=("groq")
-            LLM_MODELS["GROQ"]="llama-3.3-70b-versatile,llama-3.2-90b-text-preview,mixtral-8x7b-32768"
-            print_success "Groq configured"
-        fi
-    fi
-    
-    # Mistral
-    read -p "Configure Mistral? (y/n): " config_mistral
-    if [[ $config_mistral =~ ^[Yy]$ ]]; then
-        read -p "Enter Mistral API Key: " mistral_key
-        if [ -n "$mistral_key" ]; then
-            LLM_PROVIDERS["MISTRAL_API_KEY"]=$mistral_key
-            CONFIGURED_LLMS+=("mistral")
-            LLM_MODELS["MISTRAL"]="mistral-large-latest,mistral-medium-latest,mistral-small-latest"
-            print_success "Mistral configured"
-        fi
-    fi
-    
-    # Cohere
-    read -p "Configure Cohere? (y/n): " config_cohere
-    if [[ $config_cohere =~ ^[Yy]$ ]]; then
-        read -p "Enter Cohere API Key: " cohere_key
-        if [ -n "$cohere_key" ]; then
-            LLM_PROVIDERS["COHERE_API_KEY"]=$cohere_key
-            CONFIGURED_LLMS+=("cohere")
-            LLM_MODELS["COHERE"]="command-r-plus,command-r,command"
-            print_success "Cohere configured"
-        fi
-    fi
-    
-    # Perplexity
-    read -p "Configure Perplexity? (y/n): " config_perplexity
-    if [[ $config_perplexity =~ ^[Yy]$ ]]; then
-        read -p "Enter Perplexity API Key: " perplexity_key
-        if [ -n "$perplexity_key" ]; then
-            LLM_PROVIDERS["PERPLEXITY_API_KEY"]=$perplexity_key
-            CONFIGURED_LLMS+=("perplexity")
-            LLM_MODELS["PERPLEXITY"]="llama-3.1-sonar-large-128k-online,llama-3.1-sonar-small-128k-online"
-            print_success "Perplexity configured"
-        fi
-    fi
-    
-    # Together AI
-    read -p "Configure Together AI? (y/n): " config_together
-    if [[ $config_together =~ ^[Yy]$ ]]; then
-        read -p "Enter Together AI API Key: " together_key
-        if [ -n "$together_key" ]; then
-            LLM_PROVIDERS["TOGETHER_API_KEY"]=$together_key
-            CONFIGURED_LLMS+=("together")
-            LLM_MODELS["TOGETHER"]="meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo,mistralai/Mixtral-8x7B-Instruct-v0.1"
-            print_success "Together AI configured"
-        fi
-    fi
-    
-    # Hugging Face
-    read -p "Configure Hugging Face? (y/n): " config_hf
-    if [[ $config_hf =~ ^[Yy]$ ]]; then
-        read -p "Enter Hugging Face API Token: " hf_token
-        if [ -n "$hf_token" ]; then
-            LLM_PROVIDERS["HUGGINGFACE_API_KEY"]=$hf_token
-            CONFIGURED_LLMS+=("huggingface")
-            print_success "Hugging Face configured"
-        fi
-    fi
-    
-    # Azure OpenAI
-    read -p "Configure Azure OpenAI? (y/n): " config_azure
-    if [[ $config_azure =~ ^[Yy]$ ]]; then
-        read -p "Enter Azure OpenAI API Key: " azure_key
-        read -p "Enter Azure OpenAI Endpoint: " azure_endpoint
-        read -p "Enter Azure API Version (default: 2024-02-15-preview): " azure_version
-        azure_version=${azure_version:-2024-02-15-preview}
-        
-        if [ -n "$azure_key" ] && [ -n "$azure_endpoint" ]; then
-            LLM_PROVIDERS["AZURE_API_KEY"]=$azure_key
-            LLM_PROVIDERS["AZURE_API_BASE"]=$azure_endpoint
-            LLM_PROVIDERS["AZURE_API_VERSION"]=$azure_version
-            CONFIGURED_LLMS+=("azure")
-            print_success "Azure OpenAI configured"
-        fi
-    fi
-    
-    # LiteLLM Routing Strategy Configuration
-    if [[ "${CONFIG["INSTALL_LITELLM"]}" == "true" ]] && [ ${#CONFIGURED_LLMS[@]} -gt 0 ]; then
-        echo ""
-        print_section "LiteLLM Routing Strategy"
-        echo "Select routing strategy for LiteLLM:"
-        echo "  1) usage-based-routing - Route based on API usage/cost (RECOMMENDED)"
-        echo "  2) simple-shuffle - Random selection from available models"
-        echo "  3) least-busy - Route to least busy endpoint"
-        echo "  4) latency-based-routing - Route to fastest responding endpoint"
-        echo ""
-        read -p "Select routing strategy (1-4, default: 1): " routing_choice
-        
-        case ${routing_choice:-1} in
-            1) CONFIG["LITELLM_ROUTING_STRATEGY"]="usage-based-routing" ;;
-            2) CONFIG["LITELLM_ROUTING_STRATEGY"]="simple-shuffle" ;;
-            3) CONFIG["LITELLM_ROUTING_STRATEGY"]="least-busy" ;;
-            4) CONFIG["LITELLM_ROUTING_STRATEGY"]="latency-based-routing" ;;
-            *) CONFIG["LITELLM_ROUTING_STRATEGY"]="usage-based-routing" ;;
-        esac
-        
-        print_success "LiteLLM routing: ${CONFIG["LITELLM_ROUTING_STRATEGY"]}"
-        
-        # Failover configuration
-        read -p "Enable automatic failover between providers? (y/n, default: y): " enable_failover
-        if [[ ${enable_failover:-y} =~ ^[Yy]$ ]]; then
-            CONFIG["LITELLM_ENABLE_FAILOVER"]="true"
-            print_success "Failover enabled"
-        else
-            CONFIG["LITELLM_ENABLE_FAILOVER"]="false"
-        fi
-    fi
-    
-    # Summary of configured providers
-    if [ ${#CONFIGURED_LLMS[@]} -gt 0 ]; then
-        echo ""
-        print_section "Configured LLM Providers"
-        for provider in "${CONFIGURED_LLMS[@]}"; do
-            print_success "$provider"
-            if [ -n "${LLM_MODELS[$provider]:-}" ]; then
-                echo -e "  ${CYAN}Available models: ${LLM_MODELS[$provider]}${NC}"
-            fi
-        done
-    else
-        print_warning "No LLM providers configured"
-    fi
-}
-
-#===============================================================================
-# DATABASE CONFIGURATION
-#===============================================================================
-configure_databases() {
-    print_header "Database Configuration"
-    
-    if [[ "${CONFIG["INSTALL_POSTGRES"]}" == "true" ]]; then
-        print_section "PostgreSQL Configuration"
-        
-        # Generate strong password
-        local pg_password=$(generate_password 32)
-        CREDENTIALS["POSTGRES_PASSWORD"]=$pg_password
-        
-        read -p "PostgreSQL username (default: aiplatform): " pg_user
-        CREDENTIALS["POSTGRES_USER"]=${pg_user:-aiplatform}
-        
-        read -p "PostgreSQL database name (default: aiplatform): " pg_db
-        CREDENTIALS["POSTGRES_DB"]=${pg_db:-aiplatform}
-        
-        print_success "PostgreSQL configured"
-        print_info "Username: ${CREDENTIALS["POSTGRES_USER"]}"
-        print_info "Password: [auto-generated - saved to config]"
-        print_info "Database: ${CREDENTIALS["POSTGRES_DB"]}"
-    fi
-    
-    if [[ "${CONFIG["INSTALL_REDIS"]}" == "true" ]]; then
-        print_section "Redis Configuration"
-        
-        local redis_password=$(generate_password 32)
-        CREDENTIALS["REDIS_PASSWORD"]=$redis_password
-        
-        print_success "Redis configured"
-        print_info "Password: [auto-generated - saved to config]"
-    fi
-}
-
-#===============================================================================
-# PORT CONFIGURATION
-#===============================================================================
-configure_ports() {
-    print_header "Port Configuration"
-    
-    # Default ports
-    declare -A DEFAULT_PORTS=(
-        ["N8N"]="5678"
-        ["FLOWISE"]="3000"
-        ["LITELLM"]="4000"
-        ["OLLAMA"]="11434"
-        ["OPENWEBUI"]="8080"
-        ["LIBRECHAT"]="3001"
-        ["ANYTHINGLLM"]="3002"
-        ["DIFY"]="3003"
-        ["LANGFUSE"]="3004"
-        ["POSTGRES"]="5432"
-        ["REDIS"]="6379"
-        ["MINIO"]="9000"
-        ["MINIO_CONSOLE"]="9001"
-    )
-    
-    if [[ "${CONFIG["USE_DOMAIN"]}" == "false" ]]; then
-        print_info "Using IP-based access - ports will be exposed"
-        echo ""
-        read -p "Use default ports? (y/n): " use_defaults
-        
-        if [[ ! $use_defaults =~ ^[Yy]$ ]]; then
-            for service in "${!DEFAULT_PORTS[@]}"; do
-                local config_key="INSTALL_${service}"
-                if [[ "${CONFIG[$config_key]:-false}" == "true" ]]; then
-                    while true; do
-                        read -p "Port for $service (default: ${DEFAULT_PORTS[$service]}): " custom_port
-                        custom_port=${custom_port:-${DEFAULT_PORTS[$service]}}
-                        
-                        if validate_port "$custom_port" && check_port_available "$custom_port"; then
-                            CONFIG["${service}_PORT"]=$custom_port
-                            print_success "$service will use port $custom_port"
-                            break
-                        else
-                            print_error "Port $custom_port is invalid or already in use"
-                        fi
-                    done
-                fi
-            done
-        else
-            for service in "${!DEFAULT_PORTS[@]}"; do
-                CONFIG["${service}_PORT"]=${DEFAULT_PORTS[$service]}
-            done
-            print_success "Using default ports"
-        fi
-    else
-        print_info "Using domain-based access - services behind reverse proxy"
-        for service in "${!DEFAULT_PORTS[@]}"; do
-            CONFIG["${service}_PORT"]=${DEFAULT_PORTS[$service]}
-        done
-    fi
-}
-
-#===============================================================================
-# GENERATE CONFIGURATION FILES
-#===============================================================================
-generate_env_file() {
-    print_header "Generating Configuration Files"
-    
-    cat > "$CONFIG_FILE" << EOF
-# AI Platform Master Configuration
-# Generated: $(date)
-# Version: $SCRIPT_VERSION
-
-#===============================================================================
-# SYSTEM CONFIGURATION
-#===============================================================================
-PUBLIC_IP=${CONFIG["PUBLIC_IP"]}
-DOMAIN=${CONFIG["DOMAIN"]}
-USE_DOMAIN=${CONFIG["USE_DOMAIN"]}
-SSL_MODE=${CONFIG["SSL_MODE"]}
-SSL_EMAIL=${CONFIG["SSL_EMAIL"]:-}
-
-#===============================================================================
-# SERVICE INSTALLATION FLAGS
-#===============================================================================
-INSTALL_POSTGRES=${CONFIG["INSTALL_POSTGRES"]}
-INSTALL_REDIS=${CONFIG["INSTALL_REDIS"]}
-INSTALL_MINIO=${CONFIG["INSTALL_MINIO"]}
-INSTALL_N8N=${CONFIG["INSTALL_N8N"]}
-INSTALL_FLOWISE=${CONFIG["INSTALL_FLOWISE"]}
-INSTALL_LITELLM=${CONFIG["INSTALL_LITELLM"]}
-INSTALL_OLLAMA=${CONFIG["INSTALL_OLLAMA"]}
-INSTALL_OPENWEBUI=${CONFIG["INSTALL_OPENWEBUI"]}
-INSTALL_LIBRECHAT=${CONFIG["INSTALL_LIBRECHAT"]}
-INSTALL_ANYTHINGLLM=${CONFIG["INSTALL_ANYTHINGLLM"]}
-INSTALL_DIFY=${CONFIG["INSTALL_DIFY"]}
-INSTALL_LANGFUSE=${CONFIG["INSTALL_LANGFUSE"]}
-INSTALL_SIGNAL_API=${CONFIG["INSTALL_SIGNAL_API"]}
-INSTALL_TAILSCALE=${CONFIG["INSTALL_TAILSCALE"]}
-
-#===============================================================================
-# PORT CONFIGURATION
-#===============================================================================
-N8N_PORT=${CONFIG["N8N_PORT"]:-5678}
-FLOWISE_PORT=${CONFIG["FLOWISE_PORT"]:-3000}
-LITELLM_PORT=${CONFIG["LITELLM_PORT"]:-4000}
-OLLAMA_PORT=${CONFIG["OLLAMA_PORT"]:-11434}
-OPENWEBUI_PORT=${CONFIG["OPENWEBUI_PORT"]:-8080}
-LIBRECHAT_PORT=${CONFIG["LIBRECHAT_PORT"]:-3001}
-ANYTHINGLLM_PORT=${CONFIG["ANYTHINGLLM_PORT"]:-3002}
-DIFY_PORT=${CONFIG["DIFY_PORT"]:-3003}
-LANGFUSE_PORT=${CONFIG["LANGFUSE_PORT"]:-3004}
-POSTGRES_PORT=${CONFIG["POSTGRES_PORT"]:-5432}
-REDIS_PORT=${CONFIG["REDIS_PORT"]:-6379}
-MINIO_PORT=${CONFIG["MINIO_PORT"]:-9000}
-MINIO_CONSOLE_PORT=${CONFIG["MINIO_CONSOLE_PORT"]:-9001}
-
-#===============================================================================
-# DATABASE CREDENTIALS
-#===============================================================================
-POSTGRES_USER=${CREDENTIALS["POSTGRES_USER"]:-aiplatform}
-POSTGRES_PASSWORD=${CREDENTIALS["POSTGRES_PASSWORD"]:-}
-POSTGRES_DB=${CREDENTIALS["POSTGRES_DB"]:-aiplatform}
-REDIS_PASSWORD=${CREDENTIALS["REDIS_PASSWORD"]:-}
-
-#===============================================================================
-# LLM PROVIDER API KEYS
-#===============================================================================
-EOF
-
-    # Add LLM provider keys
-    for key in "${!LLM_PROVIDERS[@]}"; do
-        echo "${key}=${LLM_PROVIDERS[$key]}" >> "$CONFIG_FILE"
-    done
-    
-    # LiteLLM configuration
-    if [[ "${CONFIG["INSTALL_LITELLM"]}" == "true" ]]; then
-        cat >> "$CONFIG_FILE" << EOF
-
-#===============================================================================
-# LITELLM CONFIGURATION
-#===============================================================================
-LITELLM_ROUTING_STRATEGY=${CONFIG["LITELLM_ROUTING_STRATEGY"]}
-LITELLM_ENABLE_FAILOVER=${CONFIG["LITELLM_ENABLE_FAILOVER"]:-true}
-LITELLM_MASTER_KEY=$(generate_secret)
-LITELLM_SALT_KEY=$(generate_secret)
-
-# Configured Providers
-LITELLM_PROVIDERS="${CONFIGURED_LLMS[*]}"
-
-# Model mappings per provider
-EOF
-        for provider in "${CONFIGURED_LLMS[@]}"; do
-            if [ -n "${LLM_MODELS[$provider]:-}" ]; then
-                echo "LITELLM_MODELS_${provider^^}="${LLM_MODELS[$provider]}"" >> "$CONFIG_FILE"
-            fi
-        done
-    fi
-    
-    # GPU configuration
-    cat >> "$CONFIG_FILE" << EOF
-
-#===============================================================================
-# GPU CONFIGURATION
-#===============================================================================
-OLLAMA_GPU_ENABLED=${CONFIG["OLLAMA_GPU_ENABLED"]}
-
-#===============================================================================
-# SECURITY TOKENS & SECRETS
-#===============================================================================
-JWT_SECRET=$(generate_secret)
-SESSION_SECRET=$(generate_secret)
-ENCRYPTION_KEY=$(generate_secret)
-
-#===============================================================================
-# DATA DIRECTORIES
-#===============================================================================
-DATA_DIR=$DATA_DIR
-EOF
-
-    chmod 600 "$CONFIG_FILE"
-    print_success "Configuration file created: $CONFIG_FILE"
-    log "INFO" "Configuration file generated"
-}
-
-#===============================================================================
-# CONFIGURATION SUMMARY & URL GENERATION
-#===============================================================================
-show_summary() {
-    print_header "Configuration Summary"
-    
-    local base_url
-    if [[ "${CONFIG["USE_DOMAIN"]}" == "true" ]]; then
-        if [[ "${CONFIG["SSL_MODE"]}" == "letsencrypt" ]] || [[ "${CONFIG["SSL_MODE"]}" == "selfsigned" ]]; then
-            base_url="https://${CONFIG["DOMAIN"]}"
-        else
-            base_url="http://${CONFIG["DOMAIN"]}"
-        fi
-    else
-        base_url="http://${CONFIG["PUBLIC_IP"]}"
-    fi
-    
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
-    echo -e "${GREEN}Network Configuration${NC}"
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
-    if [[ "${CONFIG["USE_DOMAIN"]}" == "true" ]]; then
-        echo -e "Domain: ${WHITE}${CONFIG["DOMAIN"]}${NC}"
-        echo -e "SSL: ${WHITE}${CONFIG["SSL_MODE"]}${NC}"
-    else
-        echo -e "Public IP: ${WHITE}${CONFIG["PUBLIC_IP"]}${NC}"
-        echo -e "SSL: ${WHITE}Disabled (IP-based access)${NC}"
-    fi
-    
-    echo -e "\n${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
-    echo -e "${GREEN}Service Access URLs${NC}"
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
-    
-    # Generate URLs for each installed service
-    if [[ "${CONFIG["INSTALL_N8N"]}" == "true" ]]; then
-        if [[ "${CONFIG["USE_DOMAIN"]}" == "true" ]]; then
-            echo -e "n8n: ${WHITE}${base_url}/n8n${NC}"
-        else
-            echo -e "n8n: ${WHITE}${base_url}:${CONFIG["N8N_PORT"]}${NC}"
-        fi
-    fi
-    
-    if [[ "${CONFIG["INSTALL_FLOWISE"]}" == "true" ]]; then
-        if [[ "${CONFIG["USE_DOMAIN"]}" == "true" ]]; then
-            echo -e "Flowise: ${WHITE}${base_url}/flowise${NC}"
-        else
-            echo -e "Flowise: ${WHITE}${base_url}:${CONFIG["FLOWISE_PORT"]}${NC}"
-        fi
-    fi
-    
-    if [[ "${CONFIG["INSTALL_LITELLM"]}" == "true" ]]; then
-        if [[ "${CONFIG["USE_DOMAIN"]}" == "true" ]]; then
-            echo -e "LiteLLM: ${WHITE}${base_url}/litellm${NC}"
-        else
-            echo -e "LiteLLM: ${WHITE}${base_url}:${CONFIG["LITELLM_PORT"]}${NC}"
-        fi
-    fi
-    
-    if [[ "${CONFIG["INSTALL_OPENWEBUI"]}" == "true" ]]; then
-        if [[ "${CONFIG["USE_DOMAIN"]}" == "true" ]]; then
-            echo -e "Open WebUI: ${WHITE}${base_url}/openwebui${NC}"
-        else
-            echo -e "Open WebUI: ${WHITE}${base_url}:${CONFIG["OPENWEBUI_PORT"]}${NC}"
-        fi
-    fi
-    
-    if [[ "${CONFIG["INSTALL_LIBRECHAT"]}" == "true" ]]; then
-        if [[ "${CONFIG["USE_DOMAIN"]}" == "true" ]]; then
-            echo -e "LibreChat: ${WHITE}${base_url}/librechat${NC}"
-        else
-            echo -e "LibreChat: ${WHITE}${base_url}:${CONFIG["LIBRECHAT_PORT"]}${NC}"
-        fi
-    fi
-    
-    if [[ "${CONFIG["INSTALL_ANYTHINGLLM"]}" == "true" ]]; then
-        if [[ "${CONFIG["USE_DOMAIN"]}" == "true" ]]; then
-            echo -e "AnythingLLM: ${WHITE}${base_url}/anythingllm${NC}"
-        else
-            echo -e "AnythingLLM: ${WHITE}${base_url}:${CONFIG["ANYTHINGLLM_PORT"]}${NC}"
-        fi
-    fi
-    
-    if [[ "${CONFIG["INSTALL_DIFY"]}" == "true" ]]; then
-        if [[ "${CONFIG["USE_DOMAIN"]}" == "true" ]]; then
-            echo -e "Dify: ${WHITE}${base_url}/dify${NC}"
-        else
-            echo -e "Dify: ${WHITE}${base_url}:${CONFIG["DIFY_PORT"]}${NC}"
-        fi
-    fi
-    
-    if [[ "${CONFIG["INSTALL_LANGFUSE"]}" == "true" ]]; then
-        if [[ "${CONFIG["USE_DOMAIN"]}" == "true" ]]; then
-            echo -e "Langfuse: ${WHITE}${base_url}/langfuse${NC}"
-        else
-            echo -e "Langfuse: ${WHITE}${base_url}:${CONFIG["LANGFUSE_PORT"]}${NC}"
-        fi
-    fi
-    
-    if [[ "${CONFIG["INSTALL_MINIO"]}" == "true" ]]; then
-        if [[ "${CONFIG["USE_DOMAIN"]}" == "true" ]]; then
-            echo -e "MinIO Console: ${WHITE}${base_url}/minio${NC}"
-        else
-            echo -e "MinIO Console: ${WHITE}${base_url}:${CONFIG["MINIO_CONSOLE_PORT"]}${NC}"
-        fi
-    fi
-    
-    echo -e "\n${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
-    echo -e "${GREEN}LLM Providers Configured${NC}"
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
-    
-    if [ ${#CONFIGURED_LLMS[@]} -gt 0 ]; then
-        for provider in "${CONFIGURED_LLMS[@]}"; do
-            echo -e "✓ ${WHITE}${provider}${NC}"
-            if [ -n "${LLM_MODELS[$provider]:-}" ]; then
-                local model_count=$(echo "${LLM_MODELS[$provider]}" | tr ',' '\n' | wc -l)
-                echo -e "  └─ ${CYAN}${model_count} models available${NC}"
-            fi
-        done
-        
-        if [[ "${CONFIG["INSTALL_LITELLM"]}" == "true" ]]; then
-            echo -e "\nLiteLLM Routing: ${WHITE}${CONFIG["LITELLM_ROUTING_STRATEGY"]}${NC}"
-            echo -e "Failover: ${WHITE}${CONFIG["LITELLM_ENABLE_FAILOVER"]:-true}${NC}"
-        fi
-    else
-        echo -e "${YELLOW}No LLM providers configured${NC}"
-    fi
-    
-    echo -e "\n${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
-    echo -e "${GREEN}Auto-Generated Credentials${NC}"
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
-    echo -e "${YELLOW}⚠ These are saved in: ${CONFIG_FILE}${NC}"
-    echo -e "${YELLOW}⚠ Keep this file secure!${NC}"
-    
-    if [[ "${CONFIG["INSTALL_POSTGRES"]}" == "true" ]]; then
-        echo -e "\nPostgreSQL:"
-        echo -e "  User: ${WHITE}${CREDENTIALS["POSTGRES_USER"]}${NC}"
-        echo -e "  Database: ${WHITE}${CREDENTIALS["POSTGRES_DB"]}${NC}"
-        echo -e "  Password: ${WHITE}[saved in config]${NC}"
-    fi
-    
-    if [[ "${CONFIG["INSTALL_REDIS"]}" == "true" ]]; then
-        echo -e "\nRedis:"
-        echo -e "  Password: ${WHITE}[saved in config]${NC}"
-    fi
-    
-    echo -e "\n${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
-    echo -e "${GREEN}Next Steps${NC}"
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
-    echo -e "1. Review configuration: ${WHITE}cat ${CONFIG_FILE}${NC}"
-    echo -e "2. Deploy services: ${WHITE}./2-deploy-services.sh${NC}"
-    echo -e "3. Configure services: ${WHITE}./3-configure-services.sh${NC}"
-    echo -e "\n${GREEN}Configuration complete! Ready to deploy.${NC}\n"
-    
-    # Save URLs to a file for easy reference
-    local url_file="${BASE_DIR}/service-urls.txt"
-    {
-        echo "AI Platform Service URLs"
-        echo "Generated: $(date)"
-        echo "======================================"
-        echo ""
-        
-        if [[ "${CONFIG["INSTALL_N8N"]}" == "true" ]]; then
-            if [[ "${CONFIG["USE_DOMAIN"]}" == "true" ]]; then
-                echo "n8n: ${base_url}/n8n"
-            else
-                echo "n8n: ${base_url}:${CONFIG["N8N_PORT"]}"
-            fi
-        fi
-        
-        # ... (similar for all other services)
-        
-    } > "$url_file"
-    
-    print_success "Service URLs saved to: $url_file"
-}
-
-#===============================================================================
-# MAIN EXECUTION
-#===============================================================================
-main() {
-    setup_logging
-    
-    clear
+print_banner() {
     echo -e "${CYAN}"
     cat << "EOF"
 ╔═══════════════════════════════════════════════════════════════════╗
 ║                                                                   ║
-║         AI PLATFORM AUTOMATION - SYSTEM SETUP v3.1.0            ║
-║                                                                   ║
-║  This script will collect all configuration for your AI platform ║
+║         AI PLATFORM AUTOMATION - SYSTEM SETUP                     ║
+║         Version 1.0.2                                             ║
 ║                                                                   ║
 ╚═══════════════════════════════════════════════════════════════════╝
 EOF
-    echo -e "${NC}\n"
+    echo -e "${NC}"
+}
+
+print_section() {
+    local title="$1"
+    echo ""
+    echo -e "${BLUE}═══════════════════════════════════════════════════════════════════${NC}"
+    echo -e "${WHITE}${title}${NC}"
+    echo -e "${BLUE}═══════════════════════════════════════════════════════════════════${NC}"
+    echo ""
+}
+
+print_success() {
+    echo -e "${GREEN}✓${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}✗${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}⚠${NC} $1"
+}
+
+print_info() {
+    echo -e "${CYAN}ℹ${NC} $1"
+}
+
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        print_error "This script must be run as root (use sudo)"
+        exit 1
+    fi
+}
+
+prompt_user() {
+    local prompt="$1"
+    local default="$2"
+    local response
     
-    log "INFO" "Starting AI Platform Setup v${SCRIPT_VERSION}"
+    if [[ -n "$default" ]]; then
+        read -p "$(echo -e ${CYAN}${prompt}${NC} [${default}]: )" response
+        echo "${response:-$default}"
+    else
+        read -p "$(echo -e ${CYAN}${prompt}${NC}: )" response
+        echo "$response"
+    fi
+}
+
+prompt_yes_no() {
+    local prompt="$1"
+    local default="${2:-n}"
+    local response
     
-    # Pre-flight checks
+    while true; do
+        read -p "$(echo -e ${CYAN}${prompt}${NC} [y/n] (default: ${default}): )" response
+        response="${response:-$default}"
+        case "$response" in
+            [Yy]|[Yy][Ee][Ss]) return 0 ;;
+            [Nn]|[Nn][Oo]) return 1 ;;
+            *) print_warning "Please answer yes or no." ;;
+        esac
+    done
+}
+
+generate_random_password() {
+    local length="${1:-32}"
+    openssl rand -base64 "$length" | tr -d "=+/" | cut -c1-"$length"
+}
+
+################################################################################
+# System Prerequisites
+################################################################################
+
+check_prerequisites() {
+    print_section "Checking System Prerequisites"
+    
+    local missing_deps=()
+    
+    # Check required commands
+    local required_commands=("docker" "docker-compose" "git" "curl" "openssl")
+    for cmd in "${required_commands[@]}"; do
+        if ! command -v "$cmd" &> /dev/null; then
+            missing_deps+=("$cmd")
+            print_error "$cmd is not installed"
+        else
+            print_success "$cmd is installed"
+        fi
+    done
+    
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+        print_error "Missing dependencies: ${missing_deps[*]}"
+        print_info "Please install missing dependencies and run this script again"
+        exit 1
+    fi
+    
+    # Check Docker daemon
+    if ! docker info &> /dev/null; then
+        print_error "Docker daemon is not running"
+        exit 1
+    fi
+    print_success "Docker daemon is running"
+    
+    # Check disk space (minimum 20GB free)
+    local available_space=$(df -BG "$PROJECT_ROOT" | awk 'NR==2 {print $4}' | sed 's/G//')
+    if [[ $available_space -lt 20 ]]; then
+        print_warning "Low disk space: ${available_space}GB available (20GB+ recommended)"
+    else
+        print_success "Sufficient disk space: ${available_space}GB available"
+    fi
+}
+
+install_docker() {
+    print_section "Docker Installation"
+    
+    if command -v docker &> /dev/null; then
+        print_success "Docker is already installed"
+        docker --version
+        return 0
+    fi
+    
+    print_info "Installing Docker..."
+    
+    # Detect OS
+    if [[ -f /etc/os-release ]]; then
+        . /etc/os-release
+        OS=$ID
+    else
+        print_error "Cannot detect operating system"
+        exit 1
+    fi
+    
+    case "$OS" in
+        ubuntu|debian)
+            apt-get update
+            apt-get install -y ca-certificates curl gnupg lsb-release
+            
+            mkdir -p /etc/apt/keyrings
+            curl -fsSL https://download.docker.com/linux/$OS/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+            
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$OS $(lsb_release -cs) stable" | \
+                tee /etc/apt/sources.list.d/docker.list > /dev/null
+            
+            apt-get update
+            apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+            ;;
+        centos|rhel|fedora)
+            yum install -y yum-utils
+            yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+            yum install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+            systemctl start docker
+            systemctl enable docker
+            ;;
+        *)
+            print_error "Unsupported operating system: $OS"
+            exit 1
+            ;;
+    esac
+    
+    # Add current user to docker group
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        usermod -aG docker "$SUDO_USER"
+        print_success "Added $SUDO_USER to docker group"
+    fi
+    
+    print_success "Docker installed successfully"
+}
+
+################################################################################
+# Network Configuration
+################################################################################
+
+configure_network() {
+    print_section "Network Configuration"
+    
+    # Network mode selection
+    echo "Select network configuration mode:"
+    echo "1) Domain-based (Recommended for production)"
+    echo "2) IP-based (Simple setup)"
+    echo ""
+    
+    local network_mode
+    while true; do
+        read -p "$(echo -e ${CYAN}Enter choice [1-2]:${NC} )" network_mode
+        case "$network_mode" in
+            1|2) break ;;
+            *) print_warning "Invalid choice. Please enter 1 or 2." ;;
+        esac
+    done
+    
+    if [[ "$network_mode" == "1" ]]; then
+        NETWORK_MODE="domain"
+        DOMAIN=$(prompt_user "Enter your domain name" "example.com")
+        USE_HTTPS=$(prompt_yes_no "Enable HTTPS with Let's Encrypt?" "y" && echo "true" || echo "false")
+        
+        if [[ "$USE_HTTPS" == "true" ]]; then
+            LETSENCRYPT_EMAIL=$(prompt_user "Enter email for Let's Encrypt" "")
+        fi
+        
+        # Service subdomains
+        N8N_SUBDOMAIN=$(prompt_user "N8N subdomain" "n8n")
+        FLOWISE_SUBDOMAIN=$(prompt_user "Flowise subdomain" "flowise")
+        DIFY_SUBDOMAIN=$(prompt_user "Dify subdomain" "dify")
+        LANGFUSE_SUBDOMAIN=$(prompt_user "LangFuse subdomain" "langfuse")
+        OPENWEBUI_SUBDOMAIN=$(prompt_user "Open WebUI subdomain" "chat")
+        ANYTHINGLLM_SUBDOMAIN=$(prompt_user "AnythingLLM subdomain" "anything")
+        LITELLM_SUBDOMAIN=$(prompt_user "LiteLLM subdomain" "litellm")
+        OPENCLAW_SUBDOMAIN=$(prompt_user "OpenClaw subdomain" "openclaw")
+        
+    else
+        NETWORK_MODE="ip"
+        SERVER_IP=$(prompt_user "Enter server IP address" "$(hostname -I | awk '{print $1}')")
+        USE_HTTPS="false"
+        
+        # Service ports
+        N8N_PORT=$(prompt_user "N8N port" "5678")
+        FLOWISE_PORT=$(prompt_user "Flowise port" "3000")
+        DIFY_PORT=$(prompt_user "Dify port" "3001")
+        LANGFUSE_PORT=$(prompt_user "LangFuse port" "3002")
+        OPENWEBUI_PORT=$(prompt_user "Open WebUI port" "8080")
+        ANYTHINGLLM_PORT=$(prompt_user "AnythingLLM port" "3003")
+        LITELLM_PORT=$(prompt_user "LiteLLM port" "4000")
+        OPENCLAW_PORT=$(prompt_user "OpenClaw port" "3004")
+    fi
+    
+    print_success "Network configuration completed"
+}
+
+################################################################################
+# Service Selection - 3 Platform Structure
+################################################################################
+
+select_services() {
+    print_section "Service Selection"
+    
+    echo -e "${WHITE}Select services to install (grouped by platform):${NC}"
+    echo ""
+    
+    # Platform 1: Automation & Workflows
+    echo -e "${MAGENTA}═══ Platform 1: Automation & Workflows ═══${NC}"
+    INSTALL_N8N=$(prompt_yes_no "Install N8N (Workflow Automation)?" "y" && echo "true" || echo "false")
+    INSTALL_FLOWISE=$(prompt_yes_no "Install Flowise (Visual AI Chains)?" "y" && echo "true" || echo "false")
+    echo ""
+    
+    # Platform 2: AI Development & Monitoring
+    echo -e "${MAGENTA}═══ Platform 2: AI Development & Monitoring ═══${NC}"
+    INSTALL_DIFY=$(prompt_yes_no "Install Dify (LLM App Development)?" "y" && echo "true" || echo "false")
+    INSTALL_LANGFUSE=$(prompt_yes_no "Install LangFuse (LLM Observability)?" "y" && echo "true" || echo "false")
+    echo ""
+    
+    # Platform 3: User Interfaces
+    echo -e "${MAGENTA}═══ Platform 3: Chat Interfaces ═══${NC}"
+    INSTALL_OPENWEBUI=$(prompt_yes_no "Install Open WebUI (ChatGPT-like Interface)?" "y" && echo "true" || echo "false")
+    INSTALL_ANYTHINGLLM=$(prompt_yes_no "Install AnythingLLM (Document Chat)?" "y" && echo "true" || echo "false")
+    INSTALL_OPENCLAW=$(prompt_yes_no "Install OpenClaw (AI Assistant)?" "y" && echo "true" || echo "false")
+    echo ""
+    
+    # Core Services
+    echo -e "${MAGENTA}═══ Core Services (Recommended) ═══${NC}"
+    INSTALL_LITELLM=$(prompt_yes_no "Install LiteLLM (Unified LLM Gateway)?" "y" && echo "true" || echo "false")
+    INSTALL_OLLAMA=$(prompt_yes_no "Install Ollama (Local LLM Runtime)?" "y" && echo "true" || echo "false")
+    echo ""
+    
+    print_success "Service selection completed"
+}
+
+################################################################################
+# LLM Configuration
+################################################################################
+
+configure_llm_providers() {
+    print_section "LLM Provider Configuration"
+    
+    # OpenAI
+    if prompt_yes_no "Configure OpenAI?" "y"; then
+        OPENAI_API_KEY=$(prompt_user "Enter OpenAI API key" "")
+        OPENAI_MODELS="gpt-4o,gpt-4o-mini,gpt-4-turbo,gpt-3.5-turbo"
+        print_success "OpenAI configured with models: $OPENAI_MODELS"
+    fi
+    
+    # Anthropic
+    if prompt_yes_no "Configure Anthropic (Claude)?" "y"; then
+        ANTHROPIC_API_KEY=$(prompt_user "Enter Anthropic API key" "")
+        ANTHROPIC_MODELS="claude-3-5-sonnet-20241022,claude-3-5-haiku-20241022,claude-3-opus-20240229"
+        print_success "Anthropic configured with models: $ANTHROPIC_MODELS"
+    fi
+    
+    # Google Gemini
+    if prompt_yes_no "Configure Google Gemini?" "y"; then
+        GEMINI_API_KEY=$(prompt_user "Enter Google Gemini API key" "")
+        GEMINI_MODELS="gemini-2.0-flash-exp,gemini-1.5-pro-latest,gemini-1.5-flash-latest"
+        print_success "Gemini configured with models: $GEMINI_MODELS"
+    fi
+    
+    # OpenRouter with dynamic model discovery
+    if prompt_yes_no "Configure OpenRouter?" "y"; then
+        OPENROUTER_API_KEY=$(prompt_user "Enter OpenRouter API key" "")
+        
+        print_info "Fetching available OpenRouter models..."
+        local openrouter_models=$(curl -s https://openrouter.ai/api/v1/models \
+            -H "Authorization: Bearer $OPENROUTER_API_KEY" | \
+            jq -r '.data[].id' | head -20 | tr '\n' ',')
+        
+        if [[ -n "$openrouter_models" ]]; then
+            OPENROUTER_MODELS="${openrouter_models%,}"
+            print_success "OpenRouter configured with $(echo $OPENROUTER_MODELS | tr ',' '\n' | wc -l) models"
+            print_info "Top models: $(echo $OPENROUTER_MODELS | cut -d',' -f1-3)"
+        else
+            print_warning "Could not fetch models, using defaults"
+            OPENROUTER_MODELS="openai/gpt-4,anthropic/claude-3-opus,google/gemini-pro"
+        fi
+    fi
+    
+    # Ollama local models
+    if [[ "$INSTALL_OLLAMA" == "true" ]]; then
+        print_info "Ollama will be configured for local models"
+        OLLAMA_MODELS=$(prompt_user "Enter Ollama models to pull (comma-separated)" "llama3.2,mistral,codellama")
+    fi
+    
+    # LiteLLM Routing Strategy
+    if [[ "$INSTALL_LITELLM" == "true" ]]; then
+        echo ""
+        echo -e "${WHITE}LiteLLM Routing Strategy:${NC}"
+        echo "1) usage-based-routing (Recommended: Cost-optimized, local for simple, cloud for complex)"
+        echo "2) simple-shuffle (Random selection)"
+        echo "3) least-busy (Load balancing)"
+        echo "4) latency-based-routing (Performance-optimized)"
+        echo ""
+        
+        local routing_choice
+        while true; do
+            read -p "$(echo -e ${CYAN}Select routing strategy [1-4]:${NC} )" routing_choice
+            case "$routing_choice" in
+                1) LITELLM_ROUTING_STRATEGY="usage-based-routing"; break ;;
+                2) LITELLM_ROUTING_STRATEGY="simple-shuffle"; break ;;
+                3) LITELLM_ROUTING_STRATEGY="least-busy"; break ;;
+                4) LITELLM_ROUTING_STRATEGY="latency-based-routing"; break ;;
+                *) print_warning "Invalid choice. Please enter 1-4." ;;
+            esac
+        done
+        
+        print_success "LiteLLM routing strategy: $LITELLM_ROUTING_STRATEGY"
+        print_info "This will route simple queries to local models and complex queries to cloud providers"
+    fi
+}
+
+################################################################################
+# Integration Configuration
+################################################################################
+
+configure_integrations() {
+    print_section "Integration Configuration"
+    
+    # Google Drive
+    if prompt_yes_no "Configure Google Drive integration?" "n"; then
+        print_info "Google Drive OAuth setup required"
+        GOOGLE_CLIENT_ID=$(prompt_user "Enter Google Client ID" "")
+        GOOGLE_CLIENT_SECRET=$(prompt_user "Enter Google Client Secret" "")
+        GOOGLE_REDIRECT_URI=$(prompt_user "Enter OAuth Redirect URI" "http://localhost:5678/oauth/callback")
+        print_success "Google Drive configured"
+    fi
+    
+    # Signal
+    if prompt_yes_no "Configure Signal integration?" "n"; then
+        SIGNAL_PHONE_NUMBER=$(prompt_user "Enter Signal phone number (with country code)" "")
+        print_success "Signal configured (you'll need to link device)"
+    fi
+    
+    # Email (SMTP)
+    if prompt_yes_no "Configure email (SMTP)?" "n"; then
+        SMTP_HOST=$(prompt_user "SMTP host" "smtp.gmail.com")
+        SMTP_PORT=$(prompt_user "SMTP port" "587")
+        SMTP_USER=$(prompt_user "SMTP username" "")
+        SMTP_PASSWORD=$(prompt_user "SMTP password" "")
+        SMTP_FROM=$(prompt_user "From email address" "$SMTP_USER")
+        print_success "SMTP configured"
+    fi
+}
+
+################################################################################
+# Database Configuration
+################################################################################
+
+configure_databases() {
+    print_section "Database Configuration"
+    
+    # PostgreSQL
+    POSTGRES_USER="aiplatform"
+    POSTGRES_PASSWORD=$(generate_random_password 32)
+    POSTGRES_DB="aiplatform"
+    
+    print_info "PostgreSQL credentials:"
+    echo "  User: $POSTGRES_USER"
+    echo "  Password: $POSTGRES_PASSWORD"
+    echo "  Database: $POSTGRES_DB"
+    
+    # Redis
+    REDIS_PASSWORD=$(generate_random_password 32)
+    print_info "Redis password: $REDIS_PASSWORD"
+    
+    # Qdrant (Vector DB)
+    QDRANT_API_KEY=$(generate_random_password 32)
+    print_info "Qdrant API key: $QDRANT_API_KEY"
+    
+    print_success "Database configuration completed"
+}
+
+################################################################################
+# Generate Configuration Files
+################################################################################
+
+generate_env_file() {
+    print_section "Generating Configuration Files"
+    
+    mkdir -p "$CONFIG_DIR"
+    
+    cat > "$ENV_FILE" << EOF
+################################################################################
+# AI Platform Configuration
+# Generated: $(date)
+# Version: 1.0.2
+################################################################################
+
+# Network Configuration
+NETWORK_MODE=$NETWORK_MODE
+${DOMAIN:+DOMAIN=$DOMAIN}
+${SERVER_IP:+SERVER_IP=$SERVER_IP}
+USE_HTTPS=$USE_HTTPS
+${LETSENCRYPT_EMAIL:+LETSENCRYPT_EMAIL=$LETSENCRYPT_EMAIL}
+
+# Service URLs/Ports
+${N8N_SUBDOMAIN:+N8N_SUBDOMAIN=$N8N_SUBDOMAIN}
+${N8N_PORT:+N8N_PORT=$N8N_PORT}
+${FLOWISE_SUBDOMAIN:+FLOWISE_SUBDOMAIN=$FLOWISE_SUBDOMAIN}
+${FLOWISE_PORT:+FLOWISE_PORT=$FLOWISE_PORT}
+${DIFY_SUBDOMAIN:+DIFY_SUBDOMAIN=$DIFY_SUBDOMAIN}
+${DIFY_PORT:+DIFY_PORT=$DIFY_PORT}
+${LANGFUSE_SUBDOMAIN:+LANGFUSE_SUBDOMAIN=$LANGFUSE_SUBDOMAIN}
+${LANGFUSE_PORT:+LANGFUSE_PORT=$LANGFUSE_PORT}
+${OPENWEBUI_SUBDOMAIN:+OPENWEBUI_SUBDOMAIN=$OPENWEBUI_SUBDOMAIN}
+${OPENWEBUI_PORT:+OPENWEBUI_PORT=$OPENWEBUI_PORT}
+${ANYTHINGLLM_SUBDOMAIN:+ANYTHINGLLM_SUBDOMAIN=$ANYTHINGLLM_SUBDOMAIN}
+${ANYTHINGLLM_PORT:+ANYTHINGLLM_PORT=$ANYTHINGLLM_PORT}
+${LITELLM_SUBDOMAIN:+LITELLM_SUBDOMAIN=$LITELLM_SUBDOMAIN}
+${LITELLM_PORT:+LITELLM_PORT=$LITELLM_PORT}
+${OPENCLAW_SUBDOMAIN:+OPENCLAW_SUBDOMAIN=$OPENCLAW_SUBDOMAIN}
+${OPENCLAW_PORT:+OPENCLAW_PORT=$OPENCLAW_PORT}
+
+# Service Installation Flags
+INSTALL_N8N=$INSTALL_N8N
+INSTALL_FLOWISE=$INSTALL_FLOWISE
+INSTALL_DIFY=$INSTALL_DIFY
+INSTALL_LANGFUSE=$INSTALL_LANGFUSE
+INSTALL_OPENWEBUI=$INSTALL_OPENWEBUI
+INSTALL_ANYTHINGLLM=$INSTALL_ANYTHINGLLM
+INSTALL_LITELLM=$INSTALL_LITELLM
+INSTALL_OLLAMA=$INSTALL_OLLAMA
+INSTALL_OPENCLAW=$INSTALL_OPENCLAW
+
+# Database Configuration
+POSTGRES_USER=$POSTGRES_USER
+POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+POSTGRES_DB=$POSTGRES_DB
+REDIS_PASSWORD=$REDIS_PASSWORD
+QDRANT_API_KEY=$QDRANT_API_KEY
+
+# LLM Providers
+${OPENAI_API_KEY:+OPENAI_API_KEY=$OPENAI_API_KEY}
+${OPENAI_MODELS:+OPENAI_MODELS=$OPENAI_MODELS}
+${ANTHROPIC_API_KEY:+ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY}
+${ANTHROPIC_MODELS:+ANTHROPIC_MODELS=$ANTHROPIC_MODELS}
+${GEMINI_API_KEY:+GEMINI_API_KEY=$GEMINI_API_KEY}
+${GEMINI_MODELS:+GEMINI_MODELS=$GEMINI_MODELS}
+${OPENROUTER_API_KEY:+OPENROUTER_API_KEY=$OPENROUTER_API_KEY}
+${OPENROUTER_MODELS:+OPENROUTER_MODELS=$OPENROUTER_MODELS}
+${OLLAMA_MODELS:+OLLAMA_MODELS=$OLLAMA_MODELS}
+
+# LiteLLM Configuration
+${LITELLM_ROUTING_STRATEGY:+LITELLM_ROUTING_STRATEGY=$LITELLM_ROUTING_STRATEGY}
+
+# Integrations
+${GOOGLE_CLIENT_ID:+GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID}
+${GOOGLE_CLIENT_SECRET:+GOOGLE_CLIENT_SECRET=$GOOGLE_CLIENT_SECRET}
+${GOOGLE_REDIRECT_URI:+GOOGLE_REDIRECT_URI=$GOOGLE_REDIRECT_URI}
+${SIGNAL_PHONE_NUMBER:+SIGNAL_PHONE_NUMBER=$SIGNAL_PHONE_NUMBER}
+${SMTP_HOST:+SMTP_HOST=$SMTP_HOST}
+${SMTP_PORT:+SMTP_PORT=$SMTP_PORT}
+${SMTP_USER:+SMTP_USER=$SMTP_USER}
+${SMTP_PASSWORD:+SMTP_PASSWORD=$SMTP_PASSWORD}
+${SMTP_FROM:+SMTP_FROM=$SMTP_FROM}
+
+# Generated Secrets
+N8N_ENCRYPTION_KEY=$(generate_random_password 32)
+FLOWISE_SECRET_KEY=$(generate_random_password 32)
+DIFY_SECRET_KEY=$(generate_random_password 64)
+LANGFUSE_SECRET=$(generate_random_password 32)
+ANYTHINGLLM_JWT_SECRET=$(generate_random_password 32)
+LITELLM_MASTER_KEY=$(generate_random_password 32)
+
+EOF
+
+    chmod 600 "$ENV_FILE"
+    print_success "Configuration file created: $ENV_FILE"
+}
+
+generate_litellm_config() {
+    if [[ "$INSTALL_LITELLM" != "true" ]]; then
+        return 0
+    fi
+    
+    print_info "Generating LiteLLM configuration..."
+    
+    local litellm_config="$CONFIG_DIR/litellm-config.yaml"
+    
+    cat > "$litellm_config" << 'EOF'
+model_list:
+EOF
+
+    # Add configured models
+    if [[ -n "${OPENAI_API_KEY:-}" ]]; then
+        IFS=',' read -ra MODELS <<< "$OPENAI_MODELS"
+        for model in "${MODELS[@]}"; do
+            cat >> "$litellm_config" << EOF
+  - model_name: openai/$model
+    litellm_params:
+      model: $model
+      api_key: \${OPENAI_API_KEY}
+EOF
+        done
+    fi
+    
+    if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+        IFS=',' read -ra MODELS <<< "$ANTHROPIC_MODELS"
+        for model in "${MODELS[@]}"; do
+            cat >> "$litellm_config" << EOF
+  - model_name: anthropic/$model
+    litellm_params:
+      model: $model
+      api_key: \${ANTHROPIC_API_KEY}
+EOF
+        done
+    fi
+    
+    if [[ -n "${GEMINI_API_KEY:-}" ]]; then
+        IFS=',' read -ra MODELS <<< "$GEMINI_MODELS"
+        for model in "${MODELS[@]}"; do
+            cat >> "$litellm_config" << EOF
+  - model_name: gemini/$model
+    litellm_params:
+      model: $model
+      api_key: \${GEMINI_API_KEY}
+EOF
+        done
+    fi
+    
+    if [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
+        IFS=',' read -ra MODELS <<< "$OPENROUTER_MODELS"
+        for model in "${MODELS[@]}"; do
+            cat >> "$litellm_config" << EOF
+  - model_name: openrouter/$model
+    litellm_params:
+      model: openrouter/$model
+      api_key: \${OPENROUTER_API_KEY}
+      api_base: https://openrouter.ai/api/v1
+EOF
+        done
+    fi
+    
+    if [[ "$INSTALL_OLLAMA" == "true" ]]; then
+        IFS=',' read -ra MODELS <<< "$OLLAMA_MODELS"
+        for model in "${MODELS[@]}"; do
+            cat >> "$litellm_config" << EOF
+  - model_name: ollama/$model
+    litellm_params:
+      model: ollama/$model
+      api_base: http://ollama:11434
+EOF
+        done
+    fi
+    
+    # Add routing strategy
+    cat >> "$litellm_config" << EOF
+
+router_settings:
+  routing_strategy: ${LITELLM_ROUTING_STRATEGY}
+  fallbacks:
+    - [ollama/*, openai/gpt-4o-mini]
+    - [openai/*, anthropic/claude-3-5-haiku-20241022]
+  
+litellm_settings:
+  success_callback: ["langfuse"]
+  failure_callback: ["langfuse"]
+EOF
+
+    print_success "LiteLLM configuration created: $litellm_config"
+}
+
+################################################################################
+# Service URLs Generation
+################################################################################
+
+generate_service_urls() {
+    print_section "Generating Service URLs"
+    
+    local urls_file="$PROJECT_ROOT/service-urls.txt"
+    
+    cat > "$urls_file" << EOF
+################################################################################
+# AI Platform Service URLs
+# Generated: $(date)
+################################################################################
+
+EOF
+
+    if [[ "$NETWORK_MODE" == "domain" ]]; then
+        local protocol="http"
+        [[ "$USE_HTTPS" == "true" ]] && protocol="https"
+        
+        [[ "$INSTALL_N8N" == "true" ]] && echo "N8N:         ${protocol}://${N8N_SUBDOMAIN}.${DOMAIN}" >> "$urls_file"
+        [[ "$INSTALL_FLOWISE" == "true" ]] && echo "Flowise:     ${protocol}://${FLOWISE_SUBDOMAIN}.${DOMAIN}" >> "$urls_file"
+        [[ "$INSTALL_DIFY" == "true" ]] && echo "Dify:        ${protocol}://${DIFY_SUBDOMAIN}.${DOMAIN}" >> "$urls_file"
+        [[ "$INSTALL_LANGFUSE" == "true" ]] && echo "LangFuse:    ${protocol}://${LANGFUSE_SUBDOMAIN}.${DOMAIN}" >> "$urls_file"
+        [[ "$INSTALL_OPENWEBUI" == "true" ]] && echo "Open WebUI:  ${protocol}://${OPENWEBUI_SUBDOMAIN}.${DOMAIN}" >> "$urls_file"
+        [[ "$INSTALL_ANYTHINGLLM" == "true" ]] && echo "AnythingLLM: ${protocol}://${ANYTHINGLLM_SUBDOMAIN}.${DOMAIN}" >> "$urls_file"
+        [[ "$INSTALL_LITELLM" == "true" ]] && echo "LiteLLM:     ${protocol}://${LITELLM_SUBDOMAIN}.${DOMAIN}" >> "$urls_file"
+        [[ "$INSTALL_OPENCLAW" == "true" ]] && echo "OpenClaw:    ${protocol}://${OPENCLAW_SUBDOMAIN}.${DOMAIN}" >> "$urls_file"
+    else
+        [[ "$INSTALL_N8N" == "true" ]] && echo "N8N:         http://${SERVER_IP}:${N8N_PORT}" >> "$urls_file"
+        [[ "$INSTALL_FLOWISE" == "true" ]] && echo "Flowise:     http://${SERVER_IP}:${FLOWISE_PORT}" >> "$urls_file"
+        [[ "$INSTALL_DIFY" == "true" ]] && echo "Dify:        http://${SERVER_IP}:${DIFY_PORT}" >> "$urls_file"
+        [[ "$INSTALL_LANGFUSE" == "true" ]] && echo "LangFuse:    http://${SERVER_IP}:${LANGFUSE_PORT}" >> "$urls_file"
+        [[ "$INSTALL_OPENWEBUI" == "true" ]] && echo "Open WebUI:  http://${SERVER_IP}:${OPENWEBUI_PORT}" >> "$urls_file"
+        [[ "$INSTALL_ANYTHINGLLM" == "true" ]] && echo "AnythingLLM: http://${SERVER_IP}:${ANYTHINGLLM_PORT}" >> "$urls_file"
+        [[ "$INSTALL_LITELLM" == "true" ]] && echo "LiteLLM:     http://${SERVER_IP}:${LITELLM_PORT}" >> "$urls_file"
+        [[ "$INSTALL_OPENCLAW" == "true" ]] && echo "OpenClaw:    http://${SERVER_IP}:${OPENCLAW_PORT}" >> "$urls_file"
+    fi
+    
+    cat >> "$urls_file" << EOF
+
+################################################################################
+# Database Connections
+################################################################################
+
+PostgreSQL:  postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}
+Redis:       redis://:${REDIS_PASSWORD}@localhost:6379
+Qdrant:      http://localhost:6333 (API Key: ${QDRANT_API_KEY})
+
+EOF
+
+    print_success "Service URLs saved to: $urls_file"
+}
+
+################################################################################
+# Summary Display
+################################################################################
+
+display_summary() {
+    print_section "Configuration Summary"
+    
+    echo -e "${WHITE}Network Configuration:${NC}"
+    echo "  Mode: $NETWORK_MODE"
+    if [[ "$NETWORK_MODE" == "domain" ]]; then
+        echo "  Domain: $DOMAIN"
+        echo "  HTTPS: $USE_HTTPS"
+    else
+        echo "  Server IP: $SERVER_IP"
+    fi
+    echo ""
+    
+    echo -e "${WHITE}Installed Services:${NC}"
+    [[ "$INSTALL_N8N" == "true" ]] && echo "  ✓ N8N (Workflow Automation)"
+    [[ "$INSTALL_FLOWISE" == "true" ]] && echo "  ✓ Flowise (Visual AI Chains)"
+    [[ "$INSTALL_DIFY" == "true" ]] && echo "  ✓ Dify (LLM App Development)"
+    [[ "$INSTALL_LANGFUSE" == "true" ]] && echo "  ✓ LangFuse (LLM Observability)"
+    [[ "$INSTALL_OPENWEBUI" == "true" ]] && echo "  ✓ Open WebUI (Chat Interface)"
+    [[ "$INSTALL_ANYTHINGLLM" == "true" ]] && echo "  ✓ AnythingLLM (Document Chat)"
+    [[ "$INSTALL_LITELLM" == "true" ]] && echo "  ✓ LiteLLM (Unified Gateway)"
+    [[ "$INSTALL_OLLAMA" == "true" ]] && echo "  ✓ Ollama (Local LLM)"
+    [[ "$INSTALL_OPENCLAW" == "true" ]] && echo "  ✓ OpenClaw (AI Assistant)"
+    echo ""
+    
+    echo -e "${WHITE}LLM Providers Configured:${NC}"
+    [[ -n "${OPENAI_API_KEY:-}" ]] && echo "  ✓ OpenAI ($OPENAI_MODELS)"
+    [[ -n "${ANTHROPIC_API_KEY:-}" ]] && echo "  ✓ Anthropic ($ANTHROPIC_MODELS)"
+    [[ -n "${GEMINI_API_KEY:-}" ]] && echo "  ✓ Google Gemini ($GEMINI_MODELS)"
+    [[ -n "${OPENROUTER_API_KEY:-}" ]] && echo "  ✓ OpenRouter ($(echo $OPENROUTER_MODELS | tr ',' '\n' | wc -l) models)"
+    [[ "$INSTALL_OLLAMA" == "true" ]] && echo "  ✓ Ollama Local ($OLLAMA_MODELS)"
+    echo ""
+    
+    echo -e "${WHITE}LiteLLM Routing:${NC}"
+    [[ -n "${LITELLM_ROUTING_STRATEGY:-}" ]] && echo "  Strategy: $LITELLM_ROUTING_STRATEGY"
+    echo "  Simple queries → Local models (Ollama)"
+    echo "  Complex queries → Cloud providers"
+    echo ""
+    
+    echo -e "${WHITE}Database Credentials:${NC}"
+    echo "  PostgreSQL User: $POSTGRES_USER"
+    echo "  PostgreSQL Password: $POSTGRES_PASSWORD"
+    echo "  Redis Password: $REDIS_PASSWORD"
+    echo "  Qdrant API Key: $QDRANT_API_KEY"
+    echo ""
+    
+    echo -e "${WHITE}Service URLs:${NC}"
+    cat "$PROJECT_ROOT/service-urls.txt" | grep -v "^#" | grep -v "^$"
+    echo ""
+    
+    echo -e "${YELLOW}⚠ Important:${NC}"
+    echo "  • Configuration saved to: $ENV_FILE"
+    echo "  • Service URLs saved to: $PROJECT_ROOT/service-urls.txt"
+    echo "  • Keep these credentials secure!"
+    echo "  • Run script 2 (2-generate-compose.sh) to create Docker Compose configuration"
+    echo ""
+}
+
+################################################################################
+# Main Execution
+################################################################################
+
+main() {
+    print_banner
+    
     check_root
-    check_dependencies
-    check_disk_space
-    detect_public_ip
-    detect_gpu
+    check_prerequisites
+    install_docker
     
-    # Configuration
     configure_network
     select_services
     configure_llm_providers
+    configure_integrations
     configure_databases
-    configure_ports
     
-    # Generate configuration
     generate_env_file
-    save_state
+    generate_litellm_config
+    generate_service_urls
     
-    # Show summary
-    show_summary
+    display_summary
     
-    log "INFO" "Setup completed successfully"
-    exit $EXIT_SUCCESS
+    print_success "System setup completed successfully!"
+    print_info "Next step: Run ./scripts/2-generate-compose.sh to create Docker Compose configuration"
 }
 
 # Run main function
 main "$@"
+
