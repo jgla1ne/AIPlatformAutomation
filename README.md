@@ -1991,3 +1991,20 @@ Copy table
 9. ✅ **Zero manual configuration** (all via scripts)  
 10. ✅ **Fully documented** (credentials.txt, .env, logs)
 
+Codebase : 
+
+* The repository [https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation](https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation)  
+* high level objectives here : [https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/README.md](https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/README.md)  
+* The previous (superseeded) high level objectives : [https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/3176f2f3da7ee9ccb2908380387df3e38923a8d4/README.md](https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/3176f2f3da7ee9ccb2908380387df3e38923a8d4/README.md)  
+* script 0 : https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/0-complete-cleanup.sh  
+* script 1: https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/1-setup-system.sh  
+* script 2 : https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/2-deploy-services.sh  
+* script 3 : https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/3-configure-services.sh  
+* script 4 : https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/3-configure-services.sh  
+    
+* This was a good start ui wise : [https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/7df4b977d0d66f7dcdd0b099a38fb4011402d280/scripts/1-setup-system.sh](https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/7df4b977d0d66f7dcdd0b099a38fb4011402d280/scripts/1-setup-system.sh)  
+* This was the iteration with more bugs : [https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/0af338937926c8d052d9a413b79409376e8c7dfa/scripts/1-setup-system.sh](https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/0af338937926c8d052d9a413b79409376e8c7dfa/scripts/1-setup-system.sh)  
+* This was a good attempt to incorporate all mandatory variables from services : https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/069b5f51f047319120a1a97080116bbe4a1d322b/scripts/1-setup-system.sh
+
+
+  
