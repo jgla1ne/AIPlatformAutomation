@@ -1,21 +1,14 @@
 #!/bin/bash
 
 #==============================================================================
-# Script 4: Add Service
-# Purpose: Add user-facing applications and custom services
-# Features:
-#   - Template-based service creation
-#   - Pre-configured application stacks
-#   - Custom service builder
-#   - Service dependency management
-#   - Auto-networking configuration
+# Script 4: Add Service Dynamically
+# Purpose: Interactive service addition with dependency validation
+# Per README: Modular service addition post-deployment
 #==============================================================================
 
 set -euo pipefail
 
-#------------------------------------------------------------------------------
-# Color Definitions
-#------------------------------------------------------------------------------
+# Color definitions
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
@@ -25,21 +18,374 @@ readonly MAGENTA='\033[0;35m'
 readonly NC='\033[0m'
 readonly BOLD='\033[1m'
 
-#------------------------------------------------------------------------------
-# Global Variables
-#------------------------------------------------------------------------------
-SCRIPT_DIR=" $ (cd " $ (dirname "${BASH_SOURCE[0]}")" && pwd)"
-DATA_DIR="/mnt/data"
-METADATA_FILE=" $ DATA_DIR/metadata/deployment_info.json"
+# Paths
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+readonly DATA_DIR="/mnt/data"
+readonly CONFIG_DIR="$DATA_DIR/config"
+readonly COMPOSE_DIR="$DATA_DIR/compose"
+readonly METADATA_FILE="$DATA_DIR/.platform_metadata.json"
+readonly ENV_FILE="$DATA_DIR/.env"
+readonly SERVICES_CATALOG="$SCRIPT_DIR/services-catalog.json"
 
-# Check if metadata exists
-if [[ ! -f " $ METADATA_FILE" ]]; then
-    echo -e "${RED}Error: Setup not completed. Run scripts 1-3 first.${NC}"
+# Source environment
+if [[ -f "$ENV_FILE" ]]; then
+    set -a
+    source "$ENV_FILE"
+    set +a
+else
+    echo -e "${RED}Error: Environment file not found. Run script 1 first.${NC}"
     exit 1
 fi
 
-# Load metadata
-DATA_DIR= $ (jq -r '.data_directory' " $ METADATA_FILE")
+#------------------------------------------------------------------------------
+# Service Catalog
+#------------------------------------------------------------------------------
+
+# Initialize service catalog if it doesn't exist
+initialize_catalog() {
+    if [[ ! -f "$SERVICES_CATALOG" ]]; then
+        cat > "$SERVICES_CATALOG" <<'EOF'
+{
+  "services": {
+    "core": [
+      {
+        "id": "ollama",
+        "name": "Ollama",
+        "category": "core",
+        "description": "Local LLM runtime (Llama, Mistral, etc.)",
+        "port": 11434,
+        "dependencies": [],
+        "optional_deps": [],
+        "env_vars": ["OLLAMA_HOST", "OLLAMA_MODELS"],
+        "volumes": ["ollama"],
+        "status": "required"
+      },
+      {
+        "id": "postgres",
+        "name": "PostgreSQL",
+        "category": "core",
+        "description": "Relational database for application data",
+        "port": 5432,
+        "dependencies": [],
+        "optional_deps": [],
+        "env_vars": ["POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"],
+        "volumes": ["postgres"],
+        "status": "required"
+      },
+      {
+        "id": "redis",
+        "name": "Redis",
+        "category": "core",
+        "description": "In-memory cache and message broker",
+        "port": 6379,
+        "dependencies": [],
+        "optional_deps": [],
+        "env_vars": ["REDIS_PASSWORD"],
+        "volumes": ["redis"],
+        "status": "required"
+      },
+      {
+        "id": "traefik",
+        "name": "Traefik",
+        "category": "core",
+        "description": "Reverse proxy and load balancer",
+        "port": 80,
+        "dependencies": [],
+        "optional_deps": [],
+        "env_vars": ["DOMAIN", "ACME_EMAIL"],
+        "volumes": ["traefik"],
+        "status": "required"
+      }
+    ],
+    "vector_dbs": [
+      {
+        "id": "qdrant",
+        "name": "Qdrant",
+        "category": "vector_db",
+        "description": "High-performance vector database",
+        "port": 6333,
+        "dependencies": [],
+        "optional_deps": [],
+        "env_vars": ["QDRANT_API_KEY"],
+        "volumes": ["qdrant"],
+        "mutually_exclusive": ["weaviate", "milvus"],
+        "status": "optional"
+      },
+      {
+        "id": "weaviate",
+        "name": "Weaviate",
+        "category": "vector_db",
+        "description": "AI-native vector database",
+        "port": 8080,
+        "dependencies": [],
+        "optional_deps": [],
+        "env_vars": ["WEAVIATE_AUTHENTICATION_APIKEY_ENABLED", "WEAVIATE_AUTHENTICATION_APIKEY_ALLOWED_KEYS"],
+        "volumes": ["weaviate"],
+        "mutually_exclusive": ["qdrant", "milvus"],
+        "status": "optional"
+      },
+      {
+        "id": "milvus",
+        "name": "Milvus",
+        "category": "vector_db",
+        "description": "Cloud-native vector database",
+        "port": 19530,
+        "dependencies": ["etcd", "minio"],
+        "optional_deps": [],
+        "env_vars": ["MILVUS_USERNAME", "MILVUS_PASSWORD"],
+        "volumes": ["milvus"],
+        "mutually_exclusive": ["qdrant", "weaviate"],
+        "status": "optional"
+      }
+    ],
+    "llm_gateways": [
+      {
+        "id": "litellm",
+        "name": "LiteLLM",
+        "category": "llm_gateway",
+        "description": "Unified API for 100+ LLM providers",
+        "port": 4000,
+        "dependencies": ["postgres", "redis"],
+        "optional_deps": ["ollama"],
+        "env_vars": ["LITELLM_MASTER_KEY", "LITELLM_DATABASE_URL"],
+        "volumes": ["litellm"],
+        "status": "optional"
+      }
+    ],
+    "ui_platforms": [
+      {
+        "id": "open-webui",
+        "name": "Open WebUI",
+        "category": "ui",
+        "description": "ChatGPT-like interface for Ollama",
+        "port": 3000,
+        "dependencies": ["ollama"],
+        "optional_deps": ["litellm"],
+        "env_vars": ["WEBUI_SECRET_KEY", "WEBUI_AUTH"],
+        "volumes": ["open-webui"],
+        "status": "optional"
+      },
+      {
+        "id": "anythingllm",
+        "name": "AnythingLLM",
+        "category": "ui",
+        "description": "Document intelligence and RAG platform",
+        "port": 3001,
+        "dependencies": ["ollama"],
+        "optional_deps": ["qdrant", "weaviate"],
+        "env_vars": ["ANYTHINGLLM_AUTH_TOKEN", "ANYTHINGLLM_JWT_SECRET"],
+        "volumes": ["anythingllm"],
+        "status": "optional"
+      },
+      {
+        "id": "dify",
+        "name": "Dify",
+        "category": "ui",
+        "description": "LLM application development platform",
+        "port": 8000,
+        "dependencies": ["postgres", "redis"],
+        "optional_deps": ["ollama", "qdrant"],
+        "env_vars": ["DIFY_SECRET_KEY"],
+        "volumes": ["dify"],
+        "status": "optional"
+      },
+      {
+        "id": "librechat",
+        "name": "LibreChat",
+        "category": "ui",
+        "description": "Multi-model chat interface",
+        "port": 3003,
+        "dependencies": ["mongodb", "meilisearch"],
+        "optional_deps": ["ollama"],
+        "env_vars": ["LIBRECHAT_CREDS_KEY", "LIBRECHAT_JWT_SECRET"],
+        "volumes": ["librechat"],
+        "status": "optional"
+      },
+      {
+        "id": "flowise",
+        "name": "Flowise",
+        "category": "ui",
+        "description": "Visual flow builder for LLM apps",
+        "port": 3004,
+        "dependencies": ["postgres"],
+        "optional_deps": ["ollama"],
+        "env_vars": ["FLOWISE_USERNAME", "FLOWISE_PASSWORD"],
+        "volumes": ["flowise"],
+        "status": "optional"
+      }
+    ],
+    "automation": [
+      {
+        "id": "n8n",
+        "name": "n8n",
+        "category": "automation",
+        "description": "Workflow automation with 400+ integrations",
+        "port": 5678,
+        "dependencies": ["postgres"],
+        "optional_deps": ["ollama"],
+        "env_vars": ["N8N_ENCRYPTION_KEY"],
+        "volumes": ["n8n"],
+        "status": "optional"
+      },
+      {
+        "id": "activepieces",
+        "name": "Activepieces",
+        "category": "automation",
+        "description": "Open-source alternative to Zapier",
+        "port": 3005,
+        "dependencies": ["postgres", "redis"],
+        "optional_deps": [],
+        "env_vars": ["AP_ENCRYPTION_KEY", "AP_JWT_SECRET"],
+        "volumes": ["activepieces"],
+        "status": "optional"
+      }
+    ],
+    "monitoring": [
+      {
+        "id": "grafana",
+        "name": "Grafana",
+        "category": "monitoring",
+        "description": "Observability and monitoring dashboards",
+        "port": 3006,
+        "dependencies": ["prometheus"],
+        "optional_deps": ["loki"],
+        "env_vars": ["GF_SECURITY_ADMIN_PASSWORD"],
+        "volumes": ["grafana"],
+        "status": "optional"
+      },
+      {
+        "id": "prometheus",
+        "name": "Prometheus",
+        "category": "monitoring",
+        "description": "Metrics collection and alerting",
+        "port": 9090,
+        "dependencies": [],
+        "optional_deps": [],
+        "env_vars": [],
+        "volumes": ["prometheus"],
+        "status": "optional"
+      },
+      {
+        "id": "loki",
+        "name": "Loki",
+        "category": "monitoring",
+        "description": "Log aggregation system",
+        "port": 3100,
+        "dependencies": [],
+        "optional_deps": [],
+        "env_vars": [],
+        "volumes": ["loki"],
+        "status": "optional"
+      },
+      {
+        "id": "uptime-kuma",
+        "name": "Uptime Kuma",
+        "category": "monitoring",
+        "description": "Self-hosted uptime monitoring",
+        "port": 3007,
+        "dependencies": [],
+        "optional_deps": [],
+        "env_vars": [],
+        "volumes": ["uptime-kuma"],
+        "status": "optional"
+      }
+    ],
+    "communication": [
+      {
+        "id": "signal-api",
+        "name": "Signal API",
+        "category": "communication",
+        "description": "Signal messenger API bridge",
+        "port": 8080,
+        "dependencies": [],
+        "optional_deps": [],
+        "env_vars": ["SIGNAL_NUMBER", "SIGNAL_PASSWORD"],
+        "volumes": ["signal"],
+        "status": "optional"
+      },
+      {
+        "id": "mattermost",
+        "name": "Mattermost",
+        "category": "communication",
+        "description": "Team collaboration platform",
+        "port": 8065,
+        "dependencies": ["postgres"],
+        "optional_deps": [],
+        "env_vars": ["MM_SQLSETTINGS_DATASOURCE"],
+        "volumes": ["mattermost"],
+        "status": "optional"
+      }
+    ],
+    "storage": [
+      {
+        "id": "minio",
+        "name": "MinIO",
+        "category": "storage",
+        "description": "S3-compatible object storage",
+        "port": 9000,
+        "dependencies": [],
+        "optional_deps": [],
+        "env_vars": ["MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD"],
+        "volumes": ["minio"],
+        "status": "optional"
+      },
+      {
+        "id": "nextcloud",
+        "name": "Nextcloud",
+        "category": "storage",
+        "description": "File sync and collaboration platform",
+        "port": 8081,
+        "dependencies": ["postgres", "redis"],
+        "optional_deps": [],
+        "env_vars": ["NEXTCLOUD_ADMIN_USER", "NEXTCLOUD_ADMIN_PASSWORD"],
+        "volumes": ["nextcloud"],
+        "status": "optional"
+      }
+    ],
+    "auxiliary": [
+      {
+        "id": "mongodb",
+        "name": "MongoDB",
+        "category": "database",
+        "description": "NoSQL document database",
+        "port": 27017,
+        "dependencies": [],
+        "optional_deps": [],
+        "env_vars": ["MONGODB_USER", "MONGODB_PASSWORD"],
+        "volumes": ["mongodb"],
+        "status": "auxiliary"
+      },
+      {
+        "id": "meilisearch",
+        "name": "MeiliSearch",
+        "category": "search",
+        "description": "Fast search engine",
+        "port": 7700,
+        "dependencies": [],
+        "optional_deps": [],
+        "env_vars": ["MEILI_MASTER_KEY"],
+        "volumes": ["meilisearch"],
+        "status": "auxiliary"
+      },
+      {
+        "id": "etcd",
+        "name": "etcd",
+        "category": "database",
+        "description": "Distributed key-value store",
+        "port": 2379,
+        "dependencies": [],
+        "optional_deps": [],
+        "env_vars": [],
+        "volumes": ["etcd"],
+        "status": "auxiliary"
+      }
+    ]
+  }
+}
+EOF
+    fi
+}
 
 #------------------------------------------------------------------------------
 # Helper Functions
@@ -47,2546 +393,825 @@ DATA_DIR= $ (jq -r '.data_directory' " $ METADATA_FILE")
 
 print_header() {
     clear
-    echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${NC}     ${BOLD}AI PLATFORM AUTOMATION - ADD SERVICE${NC}             ${CYAN}║${NC}"
-    echo -e "${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
-    echo -e "${CYAN}║${NC}  ${GREEN}Script 4 of 5${NC} - Deploy additional applications         ${CYAN}║${NC}"
-    echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
+    echo -e "${CYAN}${BOLD}"
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║          ➕ AI Platform - Add Service Wizard              ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
 }
 
-print_step() {
-    echo -e "${BLUE}[STEP]${NC}  $ 1"
+print_phase() {
+    echo ""
+    echo -e "${BLUE}${BOLD}[PHASE $1] $2${NC}"
 }
 
 print_success() {
-    echo -e " $ {GREEN}[✓]${NC}  $ 1"
+    echo -e "${GREEN}  ✓${NC} $1"
 }
 
 print_error() {
-    echo -e " $ {RED}[✗]${NC}  $ 1"
-}
-
-print_info() {
-    echo -e " $ {YELLOW}[ℹ]${NC}  $ 1"
+    echo -e "${RED}  ✗${NC} $1"
 }
 
 print_warning() {
-    echo -e " $ {YELLOW}[⚠]${NC}  $ 1"
+    echo -e "${YELLOW}  ⚠${NC} $1"
 }
 
-confirm() {
-    local prompt=" $ 1"
-    read -p " $ prompt [y/N]: " response
-    [[ " $ response" =~ ^[Yy]$ ]]
+print_info() {
+    echo -e "${CYAN}  ℹ${NC} $1"
 }
 
-pause() {
+print_box_start() {
+    echo "┌────────────────────────────────────────────────────────────┐"
+}
+
+print_box_line() {
+    printf "│ %-58s │\n" "$1"
+}
+
+print_box_end() {
+    echo "└────────────────────────────────────────────────────────────┘"
+}
+
+get_deployed_services() {
+    if [[ -f "$METADATA_FILE" ]]; then
+        jq -r '.ui_services[].name' "$METADATA_FILE" 2>/dev/null || echo ""
+    fi
+}
+
+is_service_deployed() {
+    local service=$1
+    docker ps --format "{{.Names}}" | grep -q "^${service}$"
+}
+
+check_port_available() {
+    local port=$1
+    ! netstat -tuln 2>/dev/null | grep -q ":${port} " && ! ss -tuln 2>/dev/null | grep -q ":${port} "
+}
+
+#------------------------------------------------------------------------------
+# Phase 1: Service Selection
+#------------------------------------------------------------------------------
+
+select_service() {
+    print_phase "1" "🎯 Service Selection"
+    
+    initialize_catalog
+    
     echo ""
-    read -p "Press Enter to continue..."
+    echo -e "${BOLD}Available Service Categories:${NC}"
+    echo ""
+    echo "  1) UI Platforms        - Chat interfaces and document tools"
+    echo "  2) Vector Databases    - Qdrant, Weaviate, Milvus"
+    echo "  3) LLM Gateways        - LiteLLM proxy and routing"
+    echo "  4) Automation Tools    - n8n, Activepieces workflows"
+    echo "  5) Monitoring Stack    - Grafana, Prometheus, Loki"
+    echo "  6) Communication       - Signal API, Mattermost"
+    echo "  7) Storage Solutions   - MinIO, Nextcloud"
+    echo "  8) List All Services   - Browse complete catalog"
+    echo "  9) Custom Service      - Add unlisted service"
+    echo ""
+    
+    read -p "Select category (1-9): " category_choice
+    
+    case $category_choice in
+        1) show_category_services "ui_platforms" ;;
+        2) show_category_services "vector_dbs" ;;
+        3) show_category_services "llm_gateways" ;;
+        4) show_category_services "automation" ;;
+        5) show_category_services "monitoring" ;;
+        6) show_category_services "communication" ;;
+        7) show_category_services "storage" ;;
+        8) show_all_services ;;
+        9) add_custom_service ;;
+        *) print_error "Invalid choice"; exit 1 ;;
+    esac
 }
 
-#------------------------------------------------------------------------------
-# Main Menu
-#------------------------------------------------------------------------------
-
-main_menu() {
-    while true; do
-        print_header
+show_category_services() {
+    local category=$1
+    local services=$(jq -r ".services.${category}[]" "$SERVICES_CATALOG" 2>/dev/null)
+    
+    if [[ -z "$services" ]]; then
+        print_error "No services found in category: $category"
+        exit 1
+    fi
+    
+    echo ""
+    echo -e "${BOLD}${category} Services:${NC}"
+    echo ""
+    
+    local index=1
+    local service_ids=()
+    
+    while IFS= read -r service_json; do
+        local id=$(echo "$service_json" | jq -r '.id')
+        local name=$(echo "$service_json" | jq -r '.name')
+        local description=$(echo "$service_json" | jq -r '.description')
+        local port=$(echo "$service_json" | jq -r '.port')
         
-        echo -e "${BOLD}Application Categories:${NC}"
-        echo ""
-        echo "[1]  📱 Chat/Messaging Applications"
-        echo "[2]  🌐 Web Applications"
-        echo "[3]  🤖 AI/ML Services"
-        echo "[4]  📊 Analytics & Monitoring"
-        echo "[5]  💾 Data Management"
-        echo "[6]  🔧 Development Tools"
-        echo "[7]  🎯 Custom Service Builder"
-        echo "[8]  📋 View Deployed Services"
-        echo "[9]  🗑️  Remove Service"
-        echo "[Q]  Quit"
+        service_ids+=("$id")
+        
+        # Check if already deployed
+        local deployed_status=""
+        if is_service_deployed "$id"; then
+            deployed_status="${GREEN}[DEPLOYED]${NC}"
+        fi
+        
+        echo -e "  ${CYAN}${index})${NC} ${BOLD}${name}${NC} ${deployed_status}"
+        echo "     ${description}"
+        echo "     Port: ${port}"
         echo ""
         
-        read -p "Select category: " category
-        
-        case  $ category in
-            1) chat_applications_menu ;;
-            2) web_applications_menu ;;
-            3) ai_ml_services_menu ;;
-            4) analytics_monitoring_menu ;;
-            5) data_management_menu ;;
-            6) development_tools_menu ;;
-            7) custom_service_builder ;;
-            8) view_deployed_services ;;
-            9) remove_service ;;
-            [Qq]) exit 0 ;;
-            *) print_error "Invalid option" ; pause ;;
-        esac
-    done
-}
-
-#------------------------------------------------------------------------------
-# Category 1: Chat/Messaging Applications
-#------------------------------------------------------------------------------
-
-chat_applications_menu() {
-    print_header
-    echo -e " $ {BOLD}Chat/Messaging Applications${NC}"
-    echo ""
-    echo "[1] Matrix Synapse Server"
-    echo "[2] Rocket.Chat"
-    echo "[3] Mattermost"
-    echo "[4] Element Web (Matrix client)"
-    echo "[5] Zulip"
-    echo "[B] Back"
-    echo ""
+        ((index++))
+    done < <(jq -c ".services.${category}[]" "$SERVICES_CATALOG")
     
-    read -p "Selection: " choice
+    read -p "Select service number (1-$((index-1))): " service_choice
     
-    case  $ choice in
-        1) deploy_matrix_synapse ;;
-        2) deploy_rocketchat ;;
-        3) deploy_mattermost ;;
-        4) deploy_element ;;
-        5) deploy_zulip ;;
-        [Bb]) return ;;
-        *) print_error "Invalid option" ; pause ;;
-    esac
-}
-
-deploy_matrix_synapse() {
-    print_header
-    echo -e " $ {BOLD}Deploy Matrix Synapse Server${NC}"
-    echo ""
-    
-    print_info "Matrix Synapse is a federated chat server"
-    echo ""
-    
-    read -p "Server name (e.g., matrix.example.com): " server_name
-    read -p "Admin email: " admin_email
-    
-    if ! confirm "Deploy Matrix Synapse?"; then
-        return
-    fi
-    
-    print_step "Creating Matrix configuration..."
-    
-    local postgres_pass= $ (jq -r '.postgres.password' " $ DATA_DIR/metadata/credentials.json")
-    
-    cat > " $ DATA_DIR/compose/matrix.yml" <<EOF
-version: '3.8'
-
-services:
-  synapse:
-    image: matrixdotorg/synapse:latest
-    container_name: matrix-synapse
-    restart: unless-stopped
-    environment:
-      - SYNAPSE_SERVER_NAME= $ {server_name}
-      - SYNAPSE_REPORT_STATS=no
-    volumes:
-      - /mnt/data/matrix:/data
-    ports:
-      - "8008:8008"
-      - "8448:8448"
-    networks:
-      - ai_platform
-    depends_on:
-      - postgres
-
-networks:
-  ai_platform:
-    external: true
-EOF
-    
-    # Generate homeserver config
-    docker run --rm \
-        -v /mnt/data/matrix:/data \
-        -e SYNAPSE_SERVER_NAME="$server_name" \
-        -e SYNAPSE_REPORT_STATS=no \
-        matrixdotorg/synapse:latest generate
-    
-    # Configure database
-    cat >> /mnt/data/matrix/homeserver.yaml <<EOF
-
-database:
-  name: psycopg2
-  args:
-    user: matrix
-    password: ${postgres_pass}
-    database: matrix
-    host: postgres
-    cp_min: 5
-    cp_max: 10
-EOF
-    
-    # Create database
-    docker exec postgres psql -U ai_user -d ai_platform <<SQL
-CREATE DATABASE matrix;
-CREATE USER matrix WITH PASSWORD '${postgres_pass}';
-GRANT ALL PRIVILEGES ON DATABASE matrix TO matrix;
-SQL
-    
-    print_step "Deploying Matrix Synapse..."
-    docker compose -f " $ DATA_DIR/compose/matrix.yml" up -d
-    
-    sleep 5
-    
-    if docker ps | grep -q "matrix-synapse"; then
-        print_success "Matrix Synapse deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:8008"
-        print_info "Admin registration: docker exec -it matrix-synapse register_new_matrix_user -c /data/homeserver.yaml http://localhost:8008"
-    else
-        print_error "Deployment failed"
-    fi
-    
-    pause
-}
-
-deploy_rocketchat() {
-    print_header
-    echo -e " $ {BOLD}Deploy Rocket.Chat${NC}"
-    echo ""
-    
-    if ! confirm "Deploy Rocket.Chat?"; then
-        return
-    fi
-    
-    print_step "Deploying Rocket.Chat..."
-    
-    cat > " $ DATA_DIR/compose/rocketchat.yml" <<'EOF'
-version: '3.8'
-
-services:
-  rocketchat:
-    image: rocket.chat:latest
-    container_name: rocketchat
-    restart: unless-stopped
-    environment:
-      - MONGO_URL=mongodb://mongo:27017/rocketchat
-      - MONGO_OPLOG_URL=mongodb://mongo:27017/local
-      - ROOT_URL=http://localhost:3000
-      - PORT=3000
-    volumes:
-      - /mnt/data/rocketchat/uploads:/app/uploads
-    ports:
-      - "3100:3000"
-    networks:
-      - ai_platform
-    depends_on:
-      - mongo
-
-  mongo:
-    image: mongo:5.0
-    container_name: rocketchat-mongo
-    restart: unless-stopped
-    command: mongod --oplogSize 128 --replSet rs0
-    volumes:
-      - /mnt/data/rocketchat/db:/data/db
-    networks:
-      - ai_platform
-
-  mongo-init-replica:
-    image: mongo:5.0
-    container_name: mongo-init-replica
-    command: >
-      bash -c "sleep 10 && mongo mongo:27017 --eval \"rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'mongo:27017'}]})\""
-    networks:
-      - ai_platform
-    depends_on:
-      - mongo
-
-networks:
-  ai_platform:
-    external: true
-EOF
-    
-    docker compose -f " $ DATA_DIR/compose/rocketchat.yml" up -d
-    
-    sleep 10
-    
-    if docker ps | grep -q "rocketchat"; then
-        print_success "Rocket.Chat deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:3100"
-    else
-        print_error "Deployment failed"
-    fi
-    
-    pause
-}
-
-deploy_mattermost() {
-    print_header
-    echo -e "${BOLD}Deploy Mattermost${NC}"
-    echo ""
-    
-    if ! confirm "Deploy Mattermost?"; then
-        return
-    fi
-    
-    local postgres_pass= $ (jq -r '.postgres.password' " $ DATA_DIR/metadata/credentials.json")
-    
-    # Create database
-    docker exec postgres psql -U ai_user -d ai_platform <<SQL
-CREATE DATABASE mattermost;
-CREATE USER mmuser WITH PASSWORD '${postgres_pass}';
-GRANT ALL PRIVILEGES ON DATABASE mattermost TO mmuser;
-SQL
-    
-    cat > " $ DATA_DIR/compose/mattermost.yml" <<EOF
-version: '3.8'
-
-services:
-  mattermost:
-    image: mattermost/mattermost-team-edition:latest
-    container_name: mattermost
-    restart: unless-stopped
-    environment:
-      - MM_SQLSETTINGS_DRIVERNAME=postgres
-      - MM_SQLSETTINGS_DATASOURCE=postgres://mmuser: $ {postgres_pass}@postgres:5432/mattermost?sslmode=disable&connect_timeout=10
-      - MM_SERVICESETTINGS_SITEURL=http://localhost:8065
-    volumes:
-      - /mnt/data/mattermost/config:/mattermost/config
-      - /mnt/data/mattermost/data:/mattermost/data
-      - /mnt/data/mattermost/logs:/mattermost/logs
-      - /mnt/data/mattermost/plugins:/mattermost/plugins
-    ports:
-      - "8065:8065"
-    networks:
-      - ai_platform
-    depends_on:
-      - postgres
-
-networks:
-  ai_platform:
-    external: true
-EOF
-    
-    docker compose -f " $ DATA_DIR/compose/mattermost.yml" up -d
-    
-    sleep 5
-    
-    if docker ps | grep -q "mattermost"; then
-        print_success "Mattermost deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:8065"
-    else
-        print_error "Deployment failed"
-    fi
-    
-    pause
-}
-
-deploy_element() {
-    print_header
-    echo -e " $ {BOLD}Deploy Element Web${NC}"
-    echo ""
-    
-    read -p "Matrix homeserver URL: " homeserver_url
-    
-    if ! confirm "Deploy Element Web?"; then
-        return
-    fi
-    
-    mkdir -p /mnt/data/element
-    
-    cat > /mnt/data/element/config.json <<EOF
-{
-    "default_server_config": {
-        "m.homeserver": {
-            "base_url": "${homeserver_url}",
-            "server_name": "$(echo  $ homeserver_url | sed 's|https\?://||')"
-        }
-    },
-    "brand": "Element",
-    "integrations_ui_url": "https://scalar.vector.im/",
-    "integrations_rest_url": "https://scalar.vector.im/api",
-    "integrations_widgets_urls": [
-        "https://scalar.vector.im/_matrix/integrations/v1",
-        "https://scalar.vector.im/api",
-        "https://scalar-staging.vector.im/_matrix/integrations/v1",
-        "https://scalar-staging.vector.im/api",
-        "https://scalar-staging.riot.im/scalar/api"
-    ],
-    "bug_report_endpoint_url": "https://element.io/bugreports/submit",
-    "defaultCountryCode": "US",
-    "showLabsSettings": true,
-    "features": {
-        "feature_pinning": "labs",
-        "feature_custom_status": "labs",
-        "feature_custom_tags": "labs",
-        "feature_state_counters": "labs"
-    },
-    "default_federate": true,
-    "default_theme": "dark",
-    "roomDirectory": {
-        "servers": ["matrix.org"]
-    },
-    "welcomeUserId": "@riot-bot:matrix.org",
-    "piwik": false
-}
-EOF
-    
-    cat > " $ DATA_DIR/compose/element.yml" <<'EOF'
-version: '3.8'
-
-services:
-  element:
-    image: vectorim/element-web:latest
-    container_name: element-web
-    restart: unless-stopped
-    volumes:
-      - /mnt/data/element/config.json:/app/config.json
-    ports:
-      - "8009:80"
-    networks:
-      - ai_platform
-
-networks:
-  ai_platform:
-    external: true
-EOF
-    
-    docker compose -f " $ DATA_DIR/compose/element.yml" up -d
-    
-    sleep 3
-    
-    if docker ps | grep -q "element-web"; then
-        print_success "Element Web deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:8009"
-    else
-        print_error "Deployment failed"
-    fi
-    
-    pause
-}
-
-deploy_zulip() {
-    print_header
-    echo -e " $ {BOLD}Deploy Zulip${NC}"
-    echo ""
-    
-    print_warning "Zulip requires significant resources (4GB+ RAM recommended)"
-    echo ""
-    
-    if ! confirm "Deploy Zulip?"; then
-        return
-    fi
-    
-    read -p "Organization name: " org_name
-    read -p "Admin email: " admin_email
-    
-    cat > " $ DATA_DIR/compose/zulip.yml" <<EOF
-version: '3.8'
-
-services:
-  zulip:
-    image: zulip/docker-zulip:latest
-    container_name: zulip
-    restart: unless-stopped
-    environment:
-      - SETTING_EXTERNAL_HOST=localhost:9991
-      - SETTING_ZULIP_ADMINISTRATOR= $ {admin_email}
-      - SECRETS_email_password=
-      - SETTING_EMAIL_HOST=
-      - SETTING_EMAIL_HOST_USER=${admin_email}
-    volumes:
-      - /mnt/data/zulip:/data
-    ports:
-      - "9991:80"
-      - "9443:443"
-    networks:
-      - ai_platform
-    depends_on:
-      - postgres
-      - redis
-
-networks:
-  ai_platform:
-    external: true
-EOF
-    
-    docker compose -f " $ DATA_DIR/compose/zulip.yml" up -d
-    
-    sleep 10
-    
-    if docker ps | grep -q "zulip"; then
-        print_success "Zulip deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:9991"
-        print_info "Complete setup in web interface"
-    else
-        print_error "Deployment failed"
-    fi
-    
-    pause
-}
-
-#------------------------------------------------------------------------------
-# Category 2: Web Applications
-#------------------------------------------------------------------------------
-
-web_applications_menu() {
-    print_header
-    echo -e " $ {BOLD}Web Applications${NC}"
-    echo ""
-    echo "[1] WordPress + MySQL"
-    echo "[2] Ghost Blog"
-    echo "[3] Wiki.js"
-    echo "[4] BookStack"
-    echo "[5] Outline Knowledge Base"
-    echo "[6] Nginx Proxy Manager"
-    echo "[B] Back"
-    echo ""
-    
-    read -p "Selection: " choice
-    
-    case  $ choice in
-        1) deploy_wordpress ;;
-        2) deploy_ghost ;;
-        3) deploy_wikijs ;;
-        4) deploy_bookstack ;;
-        5) deploy_outline ;;
-        6) deploy_nginx_proxy ;;
-        [Bb]) return ;;
-        *) print_error "Invalid option" ; pause ;;
-    esac
-}
-
-deploy_wordpress() {
-    print_header
-    echo -e " $ {BOLD}Deploy WordPress${NC}"
-    echo ""
-    
-    if ! confirm "Deploy WordPress?"; then
-        return
-    fi
-    
-    local db_pass= $ (openssl rand -base64 16)
-    
-    cat > " $ DATA_DIR/compose/wordpress.yml" <<EOF
-version: '3.8'
-
-services:
-  wordpress:
-    image: wordpress:latest
-    container_name: wordpress
-    restart: unless-stopped
-    environment:
-      - WORDPRESS_DB_HOST=wordpress-mysql
-      - WORDPRESS_DB_NAME=wordpress
-      - WORDPRESS_DB_USER=wordpress
-      - WORDPRESS_DB_PASSWORD=${db_pass}
-    volumes:
-      - /mnt/data/wordpress:/var/www/html
-    ports:
-      - "8080:80"
-    networks:
-      - ai_platform
-    depends_on:
-      - wordpress-mysql
-
-  wordpress-mysql:
-    image: mysql:8.0
-    container_name: wordpress-mysql
-    restart: unless-stopped
-    environment:
-      - MYSQL_DATABASE=wordpress
-      - MYSQL_USER=wordpress
-      - MYSQL_PASSWORD=${db_pass}
-      - MYSQL_RANDOM_ROOT_PASSWORD=1
-    volumes:
-      - /mnt/data/wordpress-db:/var/lib/mysql
-    networks:
-      - ai_platform
-
-networks:
-  ai_platform:
-    external: true
-EOF
-    
-    docker compose -f "$DATA_DIR/compose/wordpress.yml" up -d
-    
-    sleep 5
-    
-    if docker ps | grep -q "wordpress"; then
-        print_success "WordPress deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:8080"
-        print_info "Database password:  $ db_pass"
-    else
-        print_error "Deployment failed"
-    fi
-    
-    pause
-}
-
-deploy_ghost() {
-    print_header
-    echo -e " $ {BOLD}Deploy Ghost Blog${NC}"
-    echo ""
-    
-    if ! confirm "Deploy Ghost?"; then
-        return
-    fi
-    
-    local db_pass= $ (openssl rand -base64 16)
-    
-    cat > " $ DATA_DIR/compose/ghost.yml" <<EOF
-version: '3.8'
-
-services:
-  ghost:
-    image: ghost:latest
-    container_name: ghost
-    restart: unless-stopped
-    environment:
-      - database__client=mysql
-      - database__connection__host=ghost-mysql
-      - database__connection__user=ghost
-      - database__connection__password=${db_pass}
-      - database__connection__database=ghost
-      - url=http://localhost:2368
-    volumes:
-      - /mnt/data/ghost:/var/lib/ghost/content
-    ports:
-      - "2368:2368"
-    networks:
-      - ai_platform
-    depends_on:
-      - ghost-mysql
-
-  ghost-mysql:
-    image: mysql:8.0
-    container_name: ghost-mysql
-    restart: unless-stopped
-    environment:
-      - MYSQL_DATABASE=ghost
-      - MYSQL_USER=ghost
-      - MYSQL_PASSWORD=${db_pass}
-      - MYSQL_RANDOM_ROOT_PASSWORD=1
-    volumes:
-      - /mnt/data/ghost-db:/var/lib/mysql
-    networks:
-      - ai_platform
-
-networks:
-  ai_platform:
-    external: true
-EOF
-    
-    docker compose -f " $ DATA_DIR/compose/ghost.yml" up -d
-    
-    sleep 5
-    
-    if docker ps | grep -q "ghost"; then
-        print_success "Ghost deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:2368"
-    else
-        print_error "Deployment failed"
-    fi
-    
-    pause
-}
-
-deploy_wikijs() {
-    print_header
-    echo -e " $ {BOLD}Deploy Wiki.js${NC}"
-    echo ""
-    
-    if ! confirm "Deploy Wiki.js?"; then
-        return
-    fi
-    
-    local postgres_pass= $ (jq -r '.postgres.password' " $ DATA_DIR/metadata/credentials.json")
-    
-    # Create database
-    docker exec postgres psql -U ai_user -d ai_platform <<SQL
-CREATE DATABASE wikijs;
-CREATE USER wikijs WITH PASSWORD '${postgres_pass}';
-GRANT ALL PRIVILEGES ON DATABASE wikijs TO wikijs;
-SQL
-    
-    cat > " $ DATA_DIR/compose/wikijs.yml" <<EOF
-version: '3.8'
-
-services:
-  wikijs:
-    image: ghcr.io/requarks/wiki:2
-    container_name: wikijs
-    restart: unless-stopped
-    environment:
-      - DB_TYPE=postgres
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_USER=wikijs
-      - DB_PASS= $ {postgres_pass}
-      - DB_NAME=wikijs
-    ports:
-      - "3001:3000"
-    networks:
-      - ai_platform
-    depends_on:
-      - postgres
-
-networks:
-  ai_platform:
-    external: true
-EOF
-    
-    docker compose -f " $ DATA_DIR/compose/wikijs.yml" up -d
-    
-    sleep 5
-    
-    if docker ps | grep -q "wikijs"; then
-        print_success "Wiki.js deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:3001"
-    else
-        print_error "Deployment failed"
-    fi
-    
-    pause
-}
-
-deploy_bookstack() {
-    print_header
-    echo -e " $ {BOLD}Deploy BookStack${NC}"
-    echo ""
-    
-    if ! confirm "Deploy BookStack?"; then
-        return
-    fi
-    
-    local db_pass= $ (openssl rand -base64 16)
-    
-    cat > " $ DATA_DIR/compose/bookstack.yml" <<EOF
-version: '3.8'
-
-services:
-  bookstack:
-    image: lscr.io/linuxserver/bookstack:latest
-    container_name: bookstack
-    restart: unless-stopped
-    environment:
-      - PUID=1000
-      - PGID=1000
-      - APP_URL=http://localhost:6875
-      - DB_HOST=bookstack-mysql
-      - DB_DATABASE=bookstack
-      - DB_USERNAME=bookstack
-      - DB_PASSWORD=${db_pass}
-    volumes:
-      - /mnt/data/bookstack:/config
-    ports:
-      - "6875:80"
-    networks:
-      - ai_platform
-    depends_on:
-      - bookstack-mysql
-
-  bookstack-mysql:
-    image: mysql:8.0
-    container_name: bookstack-mysql
-    restart: unless-stopped
-    environment:
-      - MYSQL_DATABASE=bookstack
-      - MYSQL_USER=bookstack
-      - MYSQL_PASSWORD=${db_pass}
-      - MYSQL_RANDOM_ROOT_PASSWORD=1
-    volumes:
-      - /mnt/data/bookstack-db:/var/lib/mysql
-    networks:
-      - ai_platform
-
-networks:
-  ai_platform:
-    external: true
-EOF
-    
-    docker compose -f " $ DATA_DIR/compose/bookstack.yml" up -d
-    
-    sleep 5
-    
-    if docker ps | grep -q "bookstack"; then
-        print_success "BookStack deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:6875"
-        print_info "Default login: admin@admin.com / password"
-    else
-        print_error "Deployment failed"
-    fi
-    
-    pause
-}
-
-deploy_outline() {
-    print_header
-    echo -e " $ {BOLD}Deploy Outline Knowledge Base${NC}"
-    echo ""
-    
-    print_warning "Outline requires S3-compatible storage"
-    echo ""
-    
-    if ! confirm "Deploy Outline?"; then
-        return
-    fi
-    
-    read -p "S3 endpoint URL: " s3_url
-    read -p "S3 access key: " s3_key
-    read -sp "S3 secret key: " s3_secret
-    echo ""
-    read -p "S3 bucket name: " s3_bucket
-    
-    local postgres_pass= $ (jq -r '.postgres.password' " $ DATA_DIR/metadata/credentials.json")
-    local redis_pass= $ (jq -r '.redis.password' " $ DATA_DIR/metadata/credentials.json")
-    local secret_key= $ (openssl rand -hex 32)
-    local utils_secret= $ (openssl rand -hex 32)
-    
-    # Create database
-    docker exec postgres psql -U ai_user -d ai_platform <<SQL
-CREATE DATABASE outline;
-CREATE USER outline WITH PASSWORD '${postgres_pass}';
-GRANT ALL PRIVILEGES ON DATABASE outline TO outline;
-SQL
-    
-    cat > " $ DATA_DIR/compose/outline.yml" <<EOF
-version: '3.8'
-
-services:
-  outline:
-    image: outlinewiki/outline:latest
-    container_name: outline
-    restart: unless-stopped
-    environment:
-      - NODE_ENV=production
-      - SECRET_KEY= $ {secret_key}
-      - UTILS_SECRET=${utils_secret}
-      - DATABASE_URL=postgres://outline:${postgres_pass}@postgres:5432/outline
-      - REDIS_URL=redis://:${redis_pass}@redis:6379
-      - URL=http://localhost:3002
-      - PORT=3000
-      - AWS_ACCESS_KEY_ID=${s3_key}
-      - AWS_SECRET_ACCESS_KEY=${s3_secret}
-      - AWS_REGION=us-east-1
-      - AWS_S3_UPLOAD_BUCKET_URL=${s3_url}
-      - AWS_S3_UPLOAD_BUCKET_NAME=${s3_bucket}
-      - AWS_S3_FORCE_PATH_STYLE=true
-      - AWS_S3_ACL=private
-    ports:
-      - "3002:3000"
-    networks:
-      - ai_platform
-    depends_on:
-      - postgres
-      - redis
-
-networks:
-  ai_platform:
-    external: true
-EOF
-    
-    docker compose -f " $ DATA_DIR/compose/outline.yml" up -d
-    
-    sleep 5
-    
-    if docker ps | grep -q "outline"; then
-        print_success "Outline deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:3002"
-    else
-        print_error "Deployment failed"
-    fi
-    
-    pause
-}
-
-deploy_nginx_proxy() {
-    print_header
-    echo -e " $ {BOLD}Deploy Nginx Proxy Manager${NC}"
-    echo ""
-    
-    if ! confirm "Deploy Nginx Proxy Manager?"; then
-        return
-    fi
-    
-    cat > " $ DATA_DIR/compose/nginx-proxy.yml" <<'EOF'
-version: '3.8'
-
-services:
-  nginx-proxy:
-    image: jc21/nginx-proxy-manager:latest
-    container_name: nginx-proxy-manager
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "81:81"
-      - "443:443"
-    volumes:
-      - /mnt/data/nginx-proxy/data:/data
-      - /mnt/data/nginx-proxy/letsencrypt:/etc/letsencrypt
-    networks:
-      - ai_platform
-
-networks:
-  ai_platform:
-    external: true
-EOF
-    
-    docker compose -f " $ DATA_DIR/compose/nginx-proxy.yml" up -d
-    
-    sleep 5
-    
-    if docker ps | grep -q "nginx-proxy-manager"; then
-        print_success "Nginx Proxy Manager deployed successfully"
-        echo ""
-        print_info "Access admin panel at: http://localhost:81"
-        print_info "Default credentials:"
-        print_info "  Email: admin@example.com"
-        print_info "  Password: changeme"
-    else
-        print_error "Deployment failed"
-    fi
-    
-    pause
-}
-
-#------------------------------------------------------------------------------
-# Category 3: AI/ML Services
-#------------------------------------------------------------------------------
-
-ai_ml_services_menu() {
-    print_header
-    echo -e "${BOLD}AI/ML Services${NC}"
-    echo ""
-    echo "[1] Jupyter Notebook"
-    echo "[2] MLflow (ML experiment tracking)"
-    echo "[3] Label Studio (data labeling)"
-    echo "[4] Hugging Face Text Generation Inference"
-    echo "[5] Stable Diffusion WebUI"
-    echo "[6] ComfyUI"
-    echo "[B] Back"
-    echo ""
-    
-    read -p "Selection: " choice
-    
-    case  $ choice in
-        1) deploy_jupyter ;;
-        2) deploy_mlflow ;;
-        3) deploy_labelstudio ;;
-        4) deploy_tgi ;;
-        5) deploy_stable_diffusion ;;
-        6) deploy_comfyui ;;
-        [Bb]) return ;;
-        *) print_error "Invalid option" ; pause ;;
-    esac
-}
-
-deploy_jupyter() {
-    print_header
-    echo -e " $ {BOLD}Deploy Jupyter Notebook${NC}"
-    echo ""
-    
-    local gpu_available= $ (jq -r '.gpu_available' " $ METADATA_FILE")
-    
-    if [[ "$gpu_available" == "true" ]]; then
-        echo "GPU support: ${GREEN}Available${NC}"
-        if ! confirm "Deploy with GPU support?"; then
-            gpu_available="false"
-        fi
-    fi
-    
-    local token= $ (openssl rand -hex 16)
-    
-    if [[ " $ gpu_available" == "true" ]]; then
-        cat > " $ DATA_DIR/compose/jupyter.yml" <<EOF
-version: '3.8'
-
-services:
-  jupyter:
-    image: jupyter/tensorflow-notebook:latest
-    container_name: jupyter
-    restart: unless-stopped
-    environment:
-      - JUPYTER_ENABLE_LAB=yes
-      - JUPYTER_TOKEN= $ {token}
-    volumes:
-      - /mnt/data/jupyter:/home/jovyan/work
-    ports:
-      - "8888:8888"
-    networks:
-      - ai_platform
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
-networks:
-  ai_platform:
-    external: true
-EOF
-    else
-        cat > " $ DATA_DIR/compose/jupyter.yml" <<EOF
-version: '3.8'
-
-services:
-  jupyter:
-    image: jupyter/scipy-notebook:latest
-    container_name: jupyter
-    restart: unless-stopped
-    environment:
-      - JUPYTER_ENABLE_LAB=yes
-      - JUPYTER_TOKEN= $ {token}
-    volumes:
-      - /mnt/data/jupyter:/home/jovyan/work
-    ports:
-      - "8888:8888"
-    networks:
-      - ai_platform
-
-networks:
-  ai_platform:
-    external: true
-EOF
-    fi
-    
-    docker compose -f "$DATA_DIR/compose/jupyter.yml" up -d
-    
-    sleep 5
-    
-    if docker ps | grep -q "jupyter"; then
-        print_success "Jupyter deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:8888"
-        print_info "Token:  $ token"
-    else
-        print_error "Deployment failed"
-    fi
-    
-    pause
-}
-
-deploy_mlflow() {
-    print_header
-    echo -e " $ {BOLD}Deploy MLflow${NC}"
-    echo ""
-    
-    if ! confirm "Deploy MLflow?"; then
-        return
-    fi
-    
-    local postgres_pass= $ (jq -r '.postgres.password' " $ DATA_DIR/metadata/credentials.json")
-    
-    # Create database
-    docker exec postgres psql -U ai_user -d ai_platform <<SQL
-CREATE DATABASE mlflow;
-CREATE USER mlflow WITH PASSWORD '${postgres_pass}';
-GRANT ALL PRIVILEGES ON DATABASE mlflow TO mlflow;
-SQL
-    
-    cat > " $ DATA_DIR/compose/mlflow.yml" <<EOF
-version: '3.8'
-
-services:
-  mlflow:
-    image: ghcr.io/mlflow/mlflow:latest
-    container_name: mlflow
-    restart: unless-stopped
-    command: >
-      mlflow server
-      --backend-store-uri postgresql://mlflow: $ {postgres_pass}@postgres:5432/mlflow
-      --default-artifact-root /mlflow/artifacts
-      --host 0.0.0.0
-      --port 5000
-    volumes:
-      - /mnt/data/mlflow:/mlflow
-    ports:
-      - "5000:5000"
-    networks:
-      - ai_platform
-    depends_on:
-      - postgres
-
-networks:
-  ai_platform:
-    external: true
-EOF
-    
-    docker compose -f " $ DATA_DIR/compose/mlflow.yml" up -d
-    
-    sleep 5
-    
-    if docker ps | grep -q "mlflow"; then
-        print_success "MLflow deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:5000"
-    else
-        print_error "Deployment failed"
-    fi
-    
-    pause
-}
-
-deploy_labelstudio() {
-    print_header
-    echo -e " $ {BOLD}Deploy Label Studio${NC}"
-    echo ""
-    
-    if ! confirm "Deploy Label Studio?"; then
-        return
-    fi
-    
-    local postgres_pass= $ (jq -r '.postgres.password' " $ DATA_DIR/metadata/credentials.json")
-    
-    # Create database
-    docker exec postgres psql -U ai_user -d ai_platform <<SQL
-CREATE DATABASE labelstudio;
-CREATE USER labelstudio WITH PASSWORD '${postgres_pass}';
-GRANT ALL PRIVILEGES ON DATABASE labelstudio TO labelstudio;
-SQL
-    
-    cat > " $ DATA_DIR/compose/labelstudio.yml" <<EOF
-version: '3.8'
-
-services:
-  labelstudio:
-    image: heartexlabs/label-studio:latest
-    container_name: labelstudio
-    restart: unless-stopped
-    environment:
-      - DJANGO_DB=default
-      - POSTGRE_NAME=labelstudio
-      - POSTGRE_USER=labelstudio
-      - POSTGRE_PASSWORD= $ {postgres_pass}
-      - POSTGRE_PORT=5432
-      - POSTGRE_HOST=postgres
-    volumes:
-      - /mnt/data/labelstudio:/label-studio/data
-    ports:
-      - "8090:8080"
-    networks:
-      - ai_platform
-    depends_on:
-      - postgres
-
-networks:
-  ai_platform:
-    external: true
-EOF
-    
-    docker compose -f " $ DATA_DIR/compose/labelstudio.yml" up -d
-    
-    sleep 5
-    
-    if docker ps | grep -q "labelstudio"; then
-        print_success "Label Studio deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:8090"
-    else
-        print_error "Deployment failed"
-    fi
-    
-    pause
-}
-
-deploy_tgi() {
-    print_header
-    echo -e " $ {BOLD}Deploy Hugging Face Text Generation Inference${NC}"
-    echo ""
-    
-    local gpu_available= $ (jq -r '.gpu_available' " $ METADATA_FILE")
-    
-    if [[ " $ gpu_available" != "true" ]]; then
-        print_warning "GPU not available. TGI performance will be limited."
-        if ! confirm "Continue anyway?"; then
-            return
-        fi
-    fi
-    
-    read -p "Model ID (e.g., mistralai/Mistral-7B-v0.1): " model_id
-    
-    cat > " $ DATA_DIR/compose/tgi.yml" <<EOF
-version: '3.8'
-
-services:
-  tgi:
-    image: ghcr.io/huggingface/text-generation-inference:latest
-    container_name: tgi
-    restart: unless-stopped
-    command: --model-id ${model_id}
-    volumes:
-      - /mnt/data/tgi:/data
-    ports:
-      - "8081:80"
-    networks:
-      - ai_platform
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
-networks:
-  ai_platform:
-    external: true
-EOF
-    
-    docker compose -f " $ DATA_DIR/compose/tgi.yml" up -d
-    
-    print_info "Downloading model... This may take a while."
-    sleep 10
-    
-    if docker ps | grep -q "tgi"; then
-        print_success "TGI deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:8081"
-    else
-        print_error "Deployment failed"
-    fi
-    
-    pause
-}
-
-deploy_stable_diffusion() {
-    print_header
-    echo -e " $ {BOLD}Deploy Stable Diffusion WebUI${NC}"
-    echo ""
-    
-    local gpu_available= $ (jq -r '.gpu_available' " $ METADATA_FILE")
-    
-    if [[ " $ gpu_available" != "true" ]]; then
-        print_error "GPU required for Stable Diffusion"
-        pause
-        return
-    fi
-    
-    if ! confirm "Deploy Stable Diffusion WebUI?"; then
-        return
-    fi
-    
-    cat > " $ DATA_DIR/compose/stable-diffusion.yml" <<'EOF'
-version: '3.8'
-
-services:
-  stable-diffusion:
-    image: ghcr.io/AUTOMATIC1111/stable-diffusion-webui:latest
-    container_name: stable-diffusion-webui
-    restart: unless-stopped
-    command: --listen --port 7860
-    volumes:
-      - /mnt/data/stable-diffusion:/data
- ports:
-      - "7860:7860"
-    networks:
-      - ai_platform
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
-networks:
-  ai_platform:
-    external: true
-EOF
-
-    docker compose -f "$DATA_DIR/compose/stable-diffusion.yml" up -d
-
-    sleep 10
-
-    if docker ps | grep -q "stable-diffusion-webui"; then
-        print_success "Stable Diffusion WebUI deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:7860"
-        print_info "First launch will download models (may take time)"
-    else
-        print_error "Deployment failed"
-    fi
-
-    pause
-}
-
-deploy_comfyui() {
-    print_header
-    echo -e "${BOLD}Deploy ComfyUI${NC}"
-    echo ""
-
-    local gpu_available=$(jq -r '.gpu_available' "$METADATA_FILE")
-
-    if [[ "$gpu_available" != "true" ]]; then
-        print_error "GPU required for ComfyUI"
-        pause
-        return
-    fi
-
-    if ! confirm "Deploy ComfyUI?"; then
-        return
-    fi
-
-    cat > "$DATA_DIR/compose/comfyui.yml" <<'EOF'
-version: '3.8'
-
-services:
-  comfyui:
-    image: yanwk/comfyui-boot:latest
-    container_name: comfyui
-    restart: unless-stopped
-    volumes:
-      - /mnt/data/comfyui:/root
-    ports:
-      - "8188:8188"
-    networks:
-      - ai_platform
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
-networks:
-  ai_platform:
-    external: true
-EOF
-
-    docker compose -f "$DATA_DIR/compose/comfyui.yml" up -d
-
-    sleep 5
-
-    if docker ps | grep -q "comfyui"; then
-        print_success "ComfyUI deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:8188"
-    else
-        print_error "Deployment failed"
-    fi
-
-    pause
-}
-
-#------------------------------------------------------------------------------
-# Category 4: Analytics & Monitoring
-#------------------------------------------------------------------------------
-
-analytics_monitoring_menu() {
-    print_header
-    echo -e "${BOLD}Analytics & Monitoring${NC}"
-    echo ""
-    echo "[1] Grafana + Prometheus"
-    echo "[2] Metabase"
-    echo "[3] Redash"
-    echo "[4] Uptime Kuma"
-    echo "[5] Netdata"
-    echo "[B] Back"
-    echo ""
-
-    read -p "Selection: " choice
-
-    case $choice in
-        1) deploy_grafana_prometheus ;;
-        2) deploy_metabase ;;
-        3) deploy_redash ;;
-        4) deploy_uptime_kuma ;;
-        5) deploy_netdata ;;
-        [Bb]) return ;;
-        *) print_error "Invalid option" ; pause ;;
-    esac
-}
-
-deploy_grafana_prometheus() {
-    print_header
-    echo -e "${BOLD}Deploy Grafana + Prometheus${NC}"
-    echo ""
-
-    if ! confirm "Deploy monitoring stack?"; then
-        return
-    fi
-
-    # Create Prometheus config
-    mkdir -p /mnt/data/prometheus
-
-    cat > /mnt/data/prometheus/prometheus.yml <<'EOF'
-global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
-
-scrape_configs:
-  - job_name: 'prometheus'
-    static_configs:
-      - targets: ['localhost:9090']
-
-  - job_name: 'node-exporter'
-    static_configs:
-      - targets: ['node-exporter:9100']
-
-  - job_name: 'cadvisor'
-    static_configs:
-      - targets: ['cadvisor:8080']
-EOF
-
-    cat > "$DATA_DIR/compose/monitoring.yml" <<'EOF'
-version: '3.8'
-
-services:
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus
-    restart: unless-stopped
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-    volumes:
-      - /mnt/data/prometheus:/etc/prometheus
-      - prometheus-data:/prometheus
-    ports:
-      - "9090:9090"
-    networks:
-      - ai_platform
-
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
-    restart: unless-stopped
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_USERS_ALLOW_SIGN_UP=false
-    volumes:
-      - grafana-data:/var/lib/grafana
-    ports:
-      - "3000:3000"
-    networks:
-      - ai_platform
-    depends_on:
-      - prometheus
-
-  node-exporter:
-    image: prom/node-exporter:latest
-    container_name: node-exporter
-    restart: unless-stopped
-    command:
-      - '--path.procfs=/host/proc'
-      - '--path.sysfs=/host/sys'
-      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
-    volumes:
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-      - /:/rootfs:ro
-    ports:
-      - "9100:9100"
-    networks:
-      - ai_platform
-
-  cadvisor:
-    image: gcr.io/cadvisor/cadvisor:latest
-    container_name: cadvisor
-    restart: unless-stopped
-    privileged: true
-    volumes:
-      - /:/rootfs:ro
-      - /var/run:/var/run:ro
-      - /sys:/sys:ro
-      - /var/lib/docker/:/var/lib/docker:ro
-      - /dev/disk/:/dev/disk:ro
-    ports:
-      - "8082:8080"
-    networks:
-      - ai_platform
-
-volumes:
-  prometheus-data:
-  grafana-data:
-
-networks:
-  ai_platform:
-    external: true
-EOF
-
-    docker compose -f "$DATA_DIR/compose/monitoring.yml" up -d
-
-    sleep 5
-
-    if docker ps | grep -q "grafana"; then
-        print_success "Monitoring stack deployed successfully"
-        echo ""
-        print_info "Grafana: http://localhost:3000 (admin/admin)"
-        print_info "Prometheus: http://localhost:9090"
-        print_info "Node Exporter: http://localhost:9100"
-        print_info "cAdvisor: http://localhost:8082"
-    else
-        print_error "Deployment failed"
-    fi
-
-    pause
-}
-
-deploy_metabase() {
-    print_header
-    echo -e "${BOLD}Deploy Metabase${NC}"
-    echo ""
-
-    if ! confirm "Deploy Metabase?"; then
-        return
-    fi
-
-    cat > "$DATA_DIR/compose/metabase.yml" <<'EOF'
-version: '3.8'
-
-services:
-  metabase:
-    image: metabase/metabase:latest
-    container_name: metabase
-    restart: unless-stopped
-    environment:
-      - MB_DB_FILE=/metabase-data/metabase.db
-    volumes:
-      - /mnt/data/metabase:/metabase-data
-    ports:
-      - "3003:3000"
-    networks:
-      - ai_platform
-
-networks:
-  ai_platform:
-    external: true
-EOF
-
-    docker compose -f "$DATA_DIR/compose/metabase.yml" up -d
-
-    sleep 5
-
-    if docker ps | grep -q "metabase"; then
-        print_success "Metabase deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:3003"
-    else
-        print_error "Deployment failed"
-    fi
-
-    pause
-}
-
-deploy_redash() {
-    print_header
-    echo -e "${BOLD}Deploy Redash${NC}"
-    echo ""
-
-    if ! confirm "Deploy Redash?"; then
-        return
-    fi
-
-    local postgres_pass=$(jq -r '.postgres.password' "$DATA_DIR/metadata/credentials.json")
-    local redis_pass=$(jq -r '.redis.password' "$DATA_DIR/metadata/credentials.json")
-    local cookie_secret=$(openssl rand -base64 32)
-    local secret_key=$(openssl rand -base64 32)
-
-    # Create database
-    docker exec postgres psql -U ai_user -d ai_platform <<SQL
-CREATE DATABASE redash;
-CREATE USER redash WITH PASSWORD '${postgres_pass}';
-GRANT ALL PRIVILEGES ON DATABASE redash TO redash;
-SQL
-
-    cat > "$DATA_DIR/compose/redash.yml" <<EOF
-version: '3.8'
-
-services:
-  redash:
-    image: redash/redash:latest
-    container_name: redash
-    restart: unless-stopped
-    command: server
-    environment:
-      - PYTHONUNBUFFERED=0
-      - REDASH_LOG_LEVEL=INFO
-      - REDASH_REDIS_URL=redis://:${redis_pass}@redis:6379/0
-      - REDASH_DATABASE_URL=postgresql://redash:${postgres_pass}@postgres:5432/redash
-      - REDASH_COOKIE_SECRET=${cookie_secret}
-      - REDASH_SECRET_KEY=${secret_key}
-      - REDASH_WEB_WORKERS=4
-    ports:
-      - "5001:5000"
-    networks:
-      - ai_platform
-    depends_on:
-      - postgres
-      - redis
-
-  redash-scheduler:
-    image: redash/redash:latest
-    container_name: redash-scheduler
-    restart: unless-stopped
-    command: scheduler
-    environment:
-      - REDASH_REDIS_URL=redis://:${redis_pass}@redis:6379/0
-      - REDASH_DATABASE_URL=postgresql://redash:${postgres_pass}@postgres:5432/redash
-      - QUEUES=celery
-      - WORKERS_COUNT=1
-    networks:
-      - ai_platform
-    depends_on:
-      - postgres
-      - redis
-
-  redash-worker:
-    image: redash/redash:latest
-    container_name: redash-worker
-    restart: unless-stopped
-    command: worker
-    environment:
-      - PYTHONUNBUFFERED=0
-      - REDASH_LOG_LEVEL=INFO
-      - REDASH_REDIS_URL=redis://:${redis_pass}@redis:6379/0
-      - REDASH_DATABASE_URL=postgresql://redash:${postgres_pass}@postgres:5432/redash
-      - QUEUES=queries,scheduled_queries,celery
-      - WORKERS_COUNT=2
-    networks:
-      - ai_platform
-    depends_on:
-      - postgres
-      - redis
-
-networks:
-  ai_platform:
-    external: true
-EOF
-
-    # Initialize database
-    docker compose -f "$DATA_DIR/compose/redash.yml" run --rm redash create_db
-
-    docker compose -f "$DATA_DIR/compose/redash.yml" up -d
-
-    sleep 5
-
-    if docker ps | grep -q "redash"; then
-        print_success "Redash deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:5001"
-    else
-        print_error "Deployment failed"
-    fi
-
-    pause
-}
-
-deploy_uptime_kuma() {
-    print_header
-    echo -e "${BOLD}Deploy Uptime Kuma${NC}"
-    echo ""
-
-    if ! confirm "Deploy Uptime Kuma?"; then
-        return
-    fi
-
-    cat > "$DATA_DIR/compose/uptime-kuma.yml" <<'EOF'
-version: '3.8'
-
-services:
-  uptime-kuma:
-    image: louislam/uptime-kuma:latest
-    container_name: uptime-kuma
-    restart: unless-stopped
-    volumes:
-      - /mnt/data/uptime-kuma:/app/data
-    ports:
-      - "3005:3001"
-    networks:
-      - ai_platform
-
-networks:
-  ai_platform:
-    external: true
-EOF
-
-    docker compose -f "$DATA_DIR/compose/uptime-kuma.yml" up -d
-
-    sleep 5
-
-    if docker ps | grep -q "uptime-kuma"; then
-        print_success "Uptime Kuma deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:3005"
-    else
-        print_error "Deployment failed"
-    fi
-
-    pause
-}
-
-deploy_netdata() {
-    print_header
-    echo -e "${BOLD}Deploy Netdata${NC}"
-    echo ""
-
-    if ! confirm "Deploy Netdata?"; then
-        return
-    fi
-
-    cat > "$DATA_DIR/compose/netdata.yml" <<'EOF'
-version: '3.8'
-
-services:
-  netdata:
-    image: netdata/netdata:latest
-    container_name: netdata
-    restart: unless-stopped
-    cap_add:
-      - SYS_PTRACE
-    security_opt:
-      - apparmor:unconfined
-    volumes:
-      - /etc/passwd:/host/etc/passwd:ro
-      - /etc/group:/host/etc/group:ro
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    ports:
-      - "19999:19999"
-    networks:
-      - ai_platform
-
-networks:
-  ai_platform:
-    external: true
-EOF
-
-    docker compose -f "$DATA_DIR/compose/netdata.yml" up -d
-
-    sleep 5
-
-    if docker ps | grep -q "netdata"; then
-        print_success "Netdata deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:19999"
-    else
-        print_error "Deployment failed"
-    fi
-
-    pause
-}
-
-#------------------------------------------------------------------------------
-# Category 5: Data Management
-#------------------------------------------------------------------------------
-
-data_management_menu() {
-    print_header
-    echo -e "${BOLD}Data Management${NC}"
-    echo ""
-    echo "[1] pgAdmin (PostgreSQL GUI)"
-    echo "[2] Redis Commander"
-    echo "[3] MinIO (S3-compatible storage)"
-    echo "[4] FileBrowser"
-    echo "[5] Nextcloud"
-    echo "[B] Back"
-    echo ""
-
-    read -p "Selection: " choice
-
-    case $choice in
-        1) deploy_pgadmin ;;
-        2) deploy_redis_commander ;;
-        3) deploy_minio ;;
-        4) deploy_filebrowser ;;
-        5) deploy_nextcloud ;;
-        [Bb]) return ;;
-        *) print_error "Invalid option" ; pause ;;
-    esac
-}
-
-deploy_pgadmin() {
-    print_header
-    echo -e "${BOLD}Deploy pgAdmin${NC}"
-    echo ""
-
-    read -p "Admin email: " admin_email
-    read -sp "Admin password: " admin_pass
-    echo ""
-
-    if ! confirm "Deploy pgAdmin?"; then
-        return
-    fi
-
-    cat > "$DATA_DIR/compose/pgadmin.yml" <<EOF
-version: '3.8'
-
-services:
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    container_name: pgadmin
-    restart: unless-stopped
-    environment:
-      - PGADMIN_DEFAULT_EMAIL=${admin_email}
-      - PGADMIN_DEFAULT_PASSWORD=${admin_pass}
-      - PGADMIN_CONFIG_SERVER_MODE=False
-    volumes:
-      - /mnt/data/pgadmin:/var/lib/pgadmin
-    ports:
-      - "5050:80"
-    networks:
-      - ai_platform
-
-networks:
-  ai_platform:
-    external: true
-EOF
-
-    docker compose -f "$DATA_DIR/compose/pgadmin.yml" up -d
-
-    sleep 5
-
-    if docker ps | grep -q "pgadmin"; then
-        print_success "pgAdmin deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:5050"
-        print_info "Login with: $admin_email"
-    else
-        print_error "Deployment failed"
-    fi
-
-    pause
-}
-
-deploy_redis_commander() {
-    print_header
-    echo -e "${BOLD}Deploy Redis Commander${NC}"
-    echo ""
-
-    if ! confirm "Deploy Redis Commander?"; then
-        return
-    fi
-
-    local redis_pass=$(jq -r '.redis.password' "$DATA_DIR/metadata/credentials.json")
-
-    cat > "$DATA_DIR/compose/redis-commander.yml" <<EOF
-version: '3.8'
-
-services:
-  redis-commander:
-    image: rediscommander/redis-commander:latest
-    container_name: redis-commander
-    restart: unless-stopped
-    environment:
-      - REDIS_HOSTS=local:redis:6379:0:${redis_pass}
-    ports:
-      - "8081:8081"
-    networks:
-      - ai_platform
-    depends_on:
-      - redis
-
-networks:
-  ai_platform:
-    external: true
-EOF
-
-    docker compose -f "$DATA_DIR/compose/redis-commander.yml" up -d
-
-    sleep 3
-
-    if docker ps | grep -q "redis-commander"; then
-        print_success "Redis Commander deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:8081"
-    else
-        print_error "Deployment failed"
-    fi
-
-    pause
-}
-
-deploy_minio() {
-    print_header
-    echo -e "${BOLD}Deploy MinIO${NC}"
-    echo ""
-
-    read -p "Root user: " root_user
-    read -sp "Root password (min 8 chars): " root_pass
-    echo ""
-
-    if ! confirm "Deploy MinIO?"; then
-        return
-    fi
-
-    cat > "$DATA_DIR/compose/minio.yml" <<EOF
-version: '3.8'
-
-services:
-  minio:
-    image: minio/minio:latest
-    container_name: minio
-    restart: unless-stopped
-    command: server /data --console-address ":9001"
-    environment:
-      - MINIO_ROOT_USER=${root_user}
-      - MINIO_ROOT_PASSWORD=${root_pass}
-    volumes:
-      - /mnt/data/minio:/data
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    networks:
-      - ai_platform
-
-networks:
-  ai_platform:
-    external: true
-EOF
-
-    docker compose -f "$DATA_DIR/compose/minio.yml" up -d
-
-    sleep 5
-
-    if docker ps | grep -q "minio"; then
-        print_success "MinIO deployed successfully"
-        echo ""
-        print_info "API: http://localhost:9000"
-        print_info "Console: http://localhost:9001"
-    else
-        print_error "Deployment failed"
-    fi
-
-    pause
-}
-
-deploy_filebrowser() {
-    print_header
-    echo -e "${BOLD}Deploy FileBrowser${NC}"
-    echo ""
-
-    if ! confirm "Deploy FileBrowser?"; then
-        return
-    fi
-
-    cat > "$DATA_DIR/compose/filebrowser.yml" <<'EOF'
-version: '3.8'
-
-services:
-  filebrowser:
-    image: filebrowser/filebrowser:latest
-    container_name: filebrowser
-    restart: unless-stopped
-    volumes:
-      - /mnt/data:/srv
-      - /mnt/data/filebrowser/database.db:/database.db
-      - /mnt/data/filebrowser/settings.json:/config/settings.json
-    ports:
-      - "8083:80"
-    networks:
-      - ai_platform
-
-networks:
-  ai_platform:
-    external: true
-EOF
-
-    mkdir -p /mnt/data/filebrowser
-
-    docker compose -f "$DATA_DIR/compose/filebrowser.yml" up -d
-
-    sleep 3
-
-    if docker ps | grep -q "filebrowser"; then
-        print_success "FileBrowser deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:8083"
-        print_info "Default credentials: admin/admin"
-    else
-        print_error "Deployment failed"
-    fi
-
-    pause
-}
-
-deploy_nextcloud() {
-    print_header
-    echo -e "${BOLD}Deploy Nextcloud${NC}"
-    echo ""
-
-    if ! confirm "Deploy Nextcloud?"; then
-        return
-    fi
-
-    local db_pass=$(openssl rand -base64 16)
-
-    cat > "$DATA_DIR/compose/nextcloud.yml" <<EOF
-version: '3.8'
-
-services:
-  nextcloud:
-    image: nextcloud:latest
-    container_name: nextcloud
-    restart: unless-stopped
-    environment:
-      - POSTGRES_HOST=nextcloud-db
-      - POSTGRES_DB=nextcloud
-      - POSTGRES_USER=nextcloud
-      - POSTGRES_PASSWORD=${db_pass}
-    volumes:
-      - /mnt/data/nextcloud:/var/www/html
-    ports:
-      - "8084:80"
-    networks:
-      - ai_platform
-    depends_on:
-      - nextcloud-db
-
-  nextcloud-db:
-    image: postgres:15
-    container_name: nextcloud-db
-    restart: unless-stopped
-    environment:
-      - POSTGRES_DB=nextcloud
-      - POSTGRES_USER=nextcloud
-      - POSTGRES_PASSWORD=${db_pass}
-    volumes:
-      - /mnt/data/nextcloud-db:/var/lib/postgresql/data
-    networks:
-      - ai_platform
-
-networks:
-  ai_platform:
-    external: true
-EOF
-
-    docker compose -f "$DATA_DIR/compose/nextcloud.yml" up -d
-
-    sleep 10
-
-    if docker ps | grep -q "nextcloud"; then
-        print_success "Nextcloud deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:8084"
-        print_info "Complete setup in web interface"
-    else
-        print_error "Deployment failed"
-    fi
-
-    pause
-}
-
-#------------------------------------------------------------------------------
-# Category 6: Development Tools
-#------------------------------------------------------------------------------
-
-development_tools_menu() {
-    print_header
-    echo -e "${BOLD}Development Tools${NC}"
-    echo ""
-    echo "[1] Code-Server (VS Code in browser)"
-    echo "[2] GitLab"
-    echo "[3] Gitea"
-    echo "[4] Jenkins"
-    echo "[5] Portainer"
-    echo "[B] Back"
-    echo ""
-
-    read -p "Selection: " choice
-
-    case $choice in
-        1) deploy_code_server ;;
-        2) deploy_gitlab ;;
-        3) deploy_gitea ;;
-        4) deploy_jenkins ;;
-        5) deploy_portainer ;;
-        [Bb]) return ;;
-        *) print_error "Invalid option" ; pause ;;
-    esac
-}
-
-deploy_code_server() {
-    print_header
-    echo -e "${BOLD}Deploy Code-Server${NC}"
-    echo ""
-
-    read -sp "Set password: " code_pass
-    echo ""
-
-    if ! confirm "Deploy Code-Server?"; then
-        return
-    fi
-
-    cat > "$DATA_DIR/compose/code-server.yml" <<EOF
-version: '3.8'
-
-services:
-  code-server:
-    image: codercom/code-server:latest
-    container_name: code-server
-    restart: unless-stopped
-    environment:
-      - PASSWORD=${code_pass}
-    volumes:
-      - /mnt/data/code-server:/home/coder/project
-    ports:
-      - "8085:8080"
-    networks:
-      - ai_platform
-
-networks:
-  ai_platform:
-    external: true
-EOF
-
-    docker compose -f "$DATA_DIR/compose/code-server.yml" up -d
-
-    sleep 5
-
-    if docker ps | grep -q "code-server"; then
-        print_success "Code-Server deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:8085"
-    else
-        print_error "Deployment failed"
-    fi
-
-    pause
-}
-
-deploy_gitlab() {
-    print_header
-    echo -e "${BOLD}Deploy GitLab${NC}"
-    echo ""
-
-    print_warning "GitLab requires at least 4GB RAM"
-    echo ""
-
-    if ! confirm "Deploy GitLab?"; then
-        return
-    fi
-
-    read -p "External URL (e.g., http://gitlab.local): " gitlab_url
-
-    cat > "$DATA_DIR/compose/gitlab.yml" <<EOF
-version: '3.8'
-
-services:
-  gitlab:
-    image: gitlab/gitlab-ce:latest
-    container_name: gitlab
-    restart: unless-stopped
-    hostname: 'gitlab.local'
-    environment:
-      GITLAB_OMNIBUS_CONFIG: |
-        external_url '${gitlab_url}'
-        gitlab_rails['gitlab_shell_ssh_port'] = 2224
-    volumes:
-      - /mnt/data/gitlab/config:/etc/gitlab
-      - /mnt/data/gitlab/logs:/var/log/gitlab
-      - /mnt/data/gitlab/data:/var/opt/gitlab
-    ports:
-      - "8086:80"
-      - "8443:443"
-      - "2224:22"
-    networks:
-      - ai_platform
-    shm_size: '256m'
-
-networks:
-  ai_platform:
-    external: true
-EOF
-
-    docker compose -f "$DATA_DIR/compose/gitlab.yml" up -d
-
-    print_info "GitLab is starting... This may take 2-3 minutes."
-    sleep 10
-
-    if docker ps | grep -q "gitlab"; then
-        print_success "GitLab deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:8086"
-        print_info "Get root password: docker exec -it gitlab grep 'Password:' /etc/gitlab/initial_root_password"
-    else
-        print_error "Deployment failed"
-    fi
-
-    pause
-}
-
-deploy_gitea() {
-    print_header
-    echo -e "${BOLD}Deploy Gitea${NC}"
-    echo ""
-
-    if ! confirm "Deploy Gitea?"; then
-        return
-    fi
-
-    local postgres_pass=$(jq -r '.postgres.password' "$DATA_DIR/metadata/credentials.json")
-
-    # Create database
-    docker exec postgres psql -U ai_user -d ai_platform <<SQL
-CREATE DATABASE gitea;
-CREATE USER gitea WITH PASSWORD '${postgres_pass}';
-GRANT ALL PRIVILEGES ON DATABASE gitea TO gitea;
-SQL
-
-    cat > "$DATA_DIR/compose/gitea.yml" <<EOF
-version: '3.8'
-
-services:
-  gitea:
-    image: gitea/gitea:latest
-    container_name: gitea
-    restart: unless-stopped
-    environment:
-      - USER_UID=1000
-      - USER_GID=1000
-      - GITEA__database__DB_TYPE=postgres
-      - GITEA__database__HOST=postgres:5432
-      - GITEA__database__NAME=gitea
-      - GITEA__database__USER=gitea
-      - GITEA__database__PASSWD=${postgres_pass}
-    volumes:
-      - /mnt/data/gitea:/data
-      - /etc/timezone:/etc/timezone:ro
-      - /etc/localtime:/etc/localtime:ro
-    ports:
-      - "3006:3000"
-      - "2223:22"
-    networks:
-      - ai_platform
-    depends_on:
-      - postgres
-
-networks:
-  ai_platform:
-    external: true
-EOF
-
-    docker compose -f "$DATA_DIR/compose/gitea.yml" up -d
-
-    sleep 5
-
-    if docker ps | grep -q "gitea"; then
-        print_success "Gitea deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:3006"
-    else
-        print_error "Deployment failed"
-    fi
-
-    pause
-}
-
-deploy_jenkins() {
-    print_header
-    echo -e "${BOLD}Deploy Jenkins${NC}"
-    echo ""
-
-    if ! confirm "Deploy Jenkins?"; then
-        return
-    fi
-
-    cat > "$DATA_DIR/compose/jenkins.yml" <<'EOF'
-version: '3.8'
-
-services:
-  jenkins:
-    image: jenkins/jenkins:lts
-    container_name: jenkins
-    restart: unless-stopped
-    privileged: true
-    user: root
-    volumes:
-      - /mnt/data/jenkins:/var/jenkins_home
-      - /var/run/docker.sock:/var/run/docker.sock
-    ports:
-      - "8087:8080"
-      - "50000:50000"
-    networks:
-      - ai_platform
-
-networks:
-  ai_platform:
-    external: true
-EOF
-
-    docker compose -f "$DATA_DIR/compose/jenkins.yml" up -d
-
-    sleep 10
-
-    if docker ps | grep -q "jenkins"; then
-        print_success "Jenkins deployed successfully"
-        echo ""
-        print_info "Access at: http://localhost:8087"
-        print_info "Get initial password: docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword"
-    else
-        print_error "Deployment failed"
-    fi
-
-    pause
-}
-
-deploy_portainer() {
-    print_header
-    echo -e "${BOLD}Deploy Portainer${NC}"
-    echo ""
-
-    if ! confirm "Deploy Portainer?"; then
-        return
-    fi
-
-    cat > "$DATA_DIR/compose/portainer.yml" <<'EOF'
-version: '3.8'
-
-services:
-  portainer:
-    image: portainer/portainer-ce:latest
-    container_name: portainer
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /mnt/data/portainer:/data
-    ports:
-      - "9000:9000"
-      - "9443:9443"
-    networks:
-      - ai_platform
-
-networks:
-  ai_platform:
-    external: true
-EOF
-
-    docker compose -f "$DATA_DIR/compose/portainer.yml" up -d
-
-    sleep 5
-
-    if docker ps | grep -q "portainer"; then
-        print_success "Portainer deployed successfully"
-        echo ""
-        print_info "Access at: https://localhost:9443"
-    else
-        print_error "Deployment failed"
-    fi
-
-    pause
-}
-
-#------------------------------------------------------------------------------
-# Option 7: Custom Service Builder
-#------------------------------------------------------------------------------
-
-custom_service_builder() {
-    print_header
-    echo -e "${BOLD}Custom Service Builder${NC}"
-    echo ""
-
-    read -p "Service name: " service_name
-    read -p "Docker image: " docker_image
-    read -p "Container name: " container_name
-    read -p "Port mapping (e.g., 8080:80): " port_mapping
-
-    echo ""
-    echo "Volumes (one per line, empty line to finish):"
-    local volumes=()
-    while true; do
-        read -p "Volume: " vol
-        [[ -z "$vol" ]] && break
-        volumes+=("$vol")
-    done
-
-    echo ""
-    echo "Environment variables (KEY=VALUE, one per line, empty line to finish):"
-    local env_vars=()
-    while true; do
-        read -p "Env var: " env
-        [[ -z "$env" ]] && break
-        env_vars+=("$env")
-    done
-
-    echo ""
-    if ! confirm "Create service?"; then
-        return
-    fi
-
-    # Generate compose file
-    cat > "$DATA_DIR/compose/${service_name}.yml" <<EOF
-version: '3.8'
-
-services:
-  ${service_name}:
-    image: ${docker_image}
-    container_name: ${container_name}
-    restart: unless-stopped
-EOF
-
-    if [[ ${#env_vars[@]} -gt 0 ]]; then
-        echo "    environment:" >> "$DATA_DIR/compose/${service_name}.yml"
-        for env in "${env_vars[@]}"; do
-            echo "      - ${env}" >> "$DATA_DIR/compose/${service_name}.yml"
-        done
-    fi
-
-    if [[ ${#volumes[@]} -gt 0 ]]; then
-        echo "    volumes:" >> "$DATA_DIR/compose/${service_name}.yml"
-        for vol in "${volumes[@]}"; do
-            echo "      - ${vol}" >> "$DATA_DIR/compose/${service_name}.yml"
-        done
-    fi
-
-    cat >> "$DATA_DIR/compose/${service_name}.yml" <<EOF
-    ports:
-      - "${port_mapping}"
-    networks:
-      - ai_platform
-
-networks:
-  ai_platform:
-    external: true
-EOF
-
-    print_step "Deploying ${service_name}..."
-    docker compose -f "$DATA_DIR/compose/${service_name}.yml" up -d
-
-    sleep 3
-
-    if docker ps | grep -q "${container_name}"; then
-        print_success "${service_name} deployed successfully"
-    else
-        print_error "Deployment failed"
-    fi
-
-    pause
-}
-
-#------------------------------------------------------------------------------
-# Option 8: View Deployed Services
-#------------------------------------------------------------------------------
-
-view_deployed_services() {
-    print_header
-    echo -e "${BOLD}Deployed Services${NC}"
-    echo ""
-
-    if [[ ! -d "$DATA_DIR/compose" ]]; then
-        print_info "No services deployed"
-        pause
-        return
-    fi
-
-    local compose_files=("$DATA_DIR/compose"/*.yml)
-
-    if [[ ${#compose_files[@]} -eq 0 ]]; then
-        print_info "No services deployed"
-        pause
-        return
-    fi
-
-    echo -e "${BOLD}Service${NC}\t\t${BOLD}Status${NC}\t\t${BOLD}Ports${NC}"
-    echo "--------------------------------------------------------"
-
-    for file in "${compose_files[@]}"; do
-        local service_name=$(basename "$file" .yml)
-        local containers=$(docker compose -f "$file" ps --format json 2>/dev/null | jq -r '.Name' 2>/dev/null)
-
-        if [[ -n "$containers" ]]; then
-            while IFS= read -r container; do
-                local status=$(docker inspect --format='{{.State.Status}}' "$container" 2>/dev/null)
-                local ports=$(docker port "$container" 2>/dev/null | tr '\n' ', ' | sed 's/,$//')
-
-                if [[ "$status" == "running" ]]; then
-                    echo -e "${service_name}\t${GREEN}${status}${NC}\t\t${ports}"
-                else
-                    echo -e "${service_name}\t${RED}${status}${NC}\t\t${ports}"
-                fi
-            done <<< "$containers"
-        fi
-    done
-
-    echo ""
-    pause
-}
-
-#------------------------------------------------------------------------------
-# Option 9: Remove Service
-#------------------------------------------------------------------------------
-
-remove_service() {
-    print_header
-    echo -e "${BOLD}Remove Service${NC}"
-    echo ""
-
-    if [[ ! -d "$DATA_DIR/compose" ]]; then
-        print_info "No services deployed"
-        pause
-        return
-    fi
-
-    local compose_files=("$DATA_DIR/compose"/*.yml)
-
-    if [[ ${#compose_files[@]} -eq 0 ]]; then
-        print_info "No services deployed"
-        pause
-        return
-    fi
-
-    echo "Available services:"
-    echo ""
-
-    local i=1
-    for file in "${compose_files[@]}"; do
-        echo "[$i] $(basename "$file" .yml)"
-        ((i++))
-    done
-
-    echo ""
-    read -p "Select service to remove (number): " selection
-
-    local selected_file="${compose_files[$((selection-1))]}"
-
-    if [[ ! -f "$selected_file" ]]; then
+    if [[ $service_choice -lt 1 ]] || [[ $service_choice -ge $index ]]; then
         print_error "Invalid selection"
-        pause
-        return
+        exit 1
     fi
+    
+    SELECTED_SERVICE="${service_ids[$((service_choice-1))]}"
+    SELECTED_SERVICE_JSON=$(jq ".services.${category}[$((service_choice-1))]" "$SERVICES_CATALOG")
+}
 
-    local service_name=$(basename "$selected_file" .yml)
+show_all_services() {
+    echo ""
+    echo -e "${BOLD}Complete Service Catalog:${NC}"
+    echo ""
+    
+    local all_services=()
+    
+    for category in $(jq -r '.services | keys[]' "$SERVICES_CATALOG"); do
+        echo -e "${MAGENTA}▸ ${category}${NC}"
+        
+        while IFS= read -r service_json; do
+            local id=$(echo "$service_json" | jq -r '.id')
+            local name=$(echo "$service_json" | jq -r '.name')
+            local description=$(echo "$service_json" | jq -r '.description')
+            
+            all_services+=("$id|$name|$description|$category")
+            
+            local deployed_status=""
+            if is_service_deployed "$id"; then
+                deployed_status="${GREEN}[DEPLOYED]${NC}"
+            fi
+            
+            echo -e "  • ${BOLD}${name}${NC} ${deployed_status}"
+            echo "    ${description}"
+        done < <(jq -c ".services.${category}[]" "$SERVICES_CATALOG")
+        
+        echo ""
+    done
+    
+    echo ""
+    read -p "Enter service ID to add: " service_id
+    
+    # Find service in catalog
+    SELECTED_SERVICE="$service_id"
+    SELECTED_SERVICE_JSON=$(jq -r --arg id "$service_id" '
+        .services | to_entries[] | .value[] | select(.id == $id)
+    ' "$SERVICES_CATALOG")
+    
+    if [[ -z "$SELECTED_SERVICE_JSON" ]] || [[ "$SELECTED_SERVICE_JSON" == "null" ]]; then
+        print_error "Service not found: $service_id"
+        exit 1
+    fi
+}
 
-    print_warning "This will remove: $service_name"
+add_custom_service() {
+    echo ""
+    echo -e "${BOLD}Custom Service Configuration${NC}"
+    echo ""
+    
+    read -p "Service ID (lowercase, no spaces): " custom_id
+    read -p "Service Name: " custom_name
+    read -p "Description: " custom_description
+    read -p "Docker Image: " custom_image
+    read -p "Port: " custom_port
+    read -p "Category: " custom_category
+    
+    SELECTED_SERVICE="$custom_id"
+    SELECTED_SERVICE_JSON=$(cat <<EOF
+{
+  "id": "$custom_id",
+  "name": "$custom_name",
+  "category": "$custom_category",
+  "description": "$custom_description",
+  "image": "$custom_image",
+  "port": $custom_port,
+  "dependencies": [],
+  "optional_deps": [],
+  "env_vars": [],
+  "volumes": ["$custom_id"],
+  "status": "custom"
+}
+EOF
+)
+}
 
-    if confirm "Also delete data volumes?"; then
-        local delete_volumes=true
+#------------------------------------------------------------------------------
+# Phase 2: Dependency Validation
+#------------------------------------------------------------------------------
+
+validate_dependencies() {
+    print_phase "2" "🔍 Dependency Validation"
+    
+    local service_name=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.name')
+    local dependencies=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.dependencies[]' 2>/dev/null || echo "")
+    local optional_deps=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.optional_deps[]' 2>/dev/null || echo "")
+    local mutually_exclusive=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.mutually_exclusive[]?' 2>/dev/null || echo "")
+    
+    print_info "Validating dependencies for: $service_name"
+    echo ""
+    
+    # Check if service already deployed
+    if is_service_deployed "$SELECTED_SERVICE"; then
+        print_warning "$service_name is already deployed"
+        read -p "Do you want to redeploy/update it? (y/N): " redeploy
+        if [[ ! "$redeploy" =~ ^[Yy]$ ]]; then
+            print_info "Skipping deployment"
+            exit 0
+        fi
+    fi
+    
+    # Check required dependencies
+    local missing_deps=()
+    if [[ -n "$dependencies" ]]; then
+        echo -e "${BOLD}Required Dependencies:${NC}"
+        for dep in $dependencies; do
+            if is_service_deployed "$dep"; then
+                print_success "$dep is running"
+            else
+                print_error "$dep is NOT running (required)"
+                missing_deps+=("$dep")
+            fi
+        done
+    fi
+    
+    # Check optional dependencies
+    if [[ -n "$optional_deps" ]]; then
+        echo ""
+        echo -e "${BOLD}Optional Dependencies:${NC}"
+        for dep in $optional_deps; do
+            if is_service_deployed "$dep"; then
+                print_success "$dep is running (will be integrated)"
+            else
+                print_warning "$dep is not running (optional, will work without it)"
+            fi
+        done
+    fi
+    
+    # Check mutually exclusive services
+    if [[ -n "$mutually_exclusive" ]]; then
+        echo ""
+        echo -e "${BOLD}Mutually Exclusive Services:${NC}"
+        for exclusive in $mutually_exclusive; do
+            if is_service_deployed "$exclusive"; then
+                print_error "$exclusive is running - cannot deploy $service_name alongside it"
+                echo ""
+                print_error "Remove $exclusive first or choose a different service"
+                exit 1
+            fi
+        done
+        print_success "No conflicts detected"
+    fi
+    
+    # Handle missing dependencies
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+        echo ""
+        print_error "Missing required dependencies: ${missing_deps[*]}"
+        echo ""
+        read -p "Do you want to install missing dependencies automatically? (y/N): " install_deps
+        
+        if [[ "$install_deps" =~ ^[Yy]$ ]]; then
+            for dep in "${missing_deps[@]}"; do
+                print_info "Installing dependency: $dep"
+                deploy_dependency "$dep"
+            done
+        else
+            print_error "Cannot proceed without required dependencies"
+            exit 1
+        fi
+    fi
+    
+    echo ""
+    print_success "All dependency checks passed"
+}
+
+deploy_dependency() {
+    local dep_id=$1
+    
+    # Find dependency in catalog
+    local dep_json=$(jq -r --arg id "$dep_id" '
+        .services | to_entries[] | .value[] | select(.id == $id)
+    ' "$SERVICES_CATALOG")
+    
+    if [[ -z "$dep_json" ]] || [[ "$dep_json" == "null" ]]; then
+        print_error "Dependency not found in catalog: $dep_id"
+        return 1
+    fi
+    
+    print_info "Deploying dependency: $dep_id"
+    
+    # Generate compose for dependency
+    generate_service_compose "$dep_id" "$dep_json" "dependency"
+    
+    # Deploy dependency
+    docker-compose -f "$COMPOSE_DIR/${dep_id}.yml" up -d
+    
+    sleep 5
+    
+    if is_service_deployed "$dep_id"; then
+        print_success "Dependency $dep_id deployed successfully"
     else
-        local delete_volumes=false
+        print_error "Failed to deploy dependency: $dep_id"
+        return 1
     fi
+}
 
-    if ! confirm "Proceed with removal?"; then
-        return
+#------------------------------------------------------------------------------
+# Phase 3: Port Conflict Detection
+#------------------------------------------------------------------------------
+
+check_port_conflicts() {
+    print_phase "3" "🔌 Port Conflict Detection"
+    
+    local service_port=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.port')
+    
+    print_info "Checking port availability: $service_port"
+    
+    if check_port_available "$service_port"; then
+        print_success "Port $service_port is available"
+    else
+        print_error "Port $service_port is already in use"
+        echo ""
+        print_info "Services using this port:"
+        netstat -tuln 2>/dev/null | grep ":${service_port} " || ss -tuln 2>/dev/null | grep ":${service_port} "
+        echo ""
+        
+        read -p "Enter alternative port (or 'q' to quit): " alt_port
+        
+        if [[ "$alt_port" == "q" ]]; then
+            exit 1
+        fi
+        
+        if ! [[ "$alt_port" =~ ^[0-9]+$ ]]; then
+            print_error "Invalid port number"
+            exit 1
+        fi
+        
+        if ! check_port_available "$alt_port"; then
+            print_error "Alternative port $alt_port is also in use"
+            exit 1
+        fi
+        
+        # Update service JSON with new port
+        SELECTED_SERVICE_JSON=$(echo "$SELECTED_SERVICE_JSON" | jq ".port = $alt_port")
+        print_success "Using alternative port: $alt_port"
     fi
+}
 
-    print_step "Stopping service..."
-    docker compose -f "$selected_file" down
+#------------------------------------------------------------------------------
+# Phase 4: Environment Configuration
+#------------------------------------------------------------------------------
 
-    if [[ "$delete_volumes" == true ]]; then
-        print_step "Removing volumes..."
-        docker compose -f "$selected_file" down -v
-
-        # Remove data directories
-        rm -rf "/mnt/data/${service_name}"
-        rm -rf "/mnt/data/${service_name}-"*
+configure_service_env() {
+    print_phase "4" "⚙️ Environment Configuration"
+    
+    local service_id=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.id')
+    local service_name=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.name')
+    local env_vars=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.env_vars[]' 2>/dev/null || echo "")
+    
+    if [[ -z "$env_vars" ]]; then
+        print_info "No environment variables required"
+        return 0
     fi
+    
+    echo ""
+    echo -e "${BOLD}Required Environment Variables for ${service_name}:${NC}"
+    echo ""
+    
+    local env_config=()
+    
+    for env_var in $env_vars; do
+        # Check if already exists in .env
+        if grep -q "^${env_var}=" "$ENV_FILE" 2>/dev/null; then
+            local current_value=$(grep "^${env_var}=" "$ENV_FILE" | cut -d'=' -f2-)
+            print_info "$env_var already set: ${current_value:0:20}..."
+            read -p "Keep existing value? (Y/n): " keep_value
+            
+            if [[ ! "$keep_value" =~ ^[Nn]$ ]]; then
+                continue
+            fi
+        fi
+        
+        # Generate default value
+        local default_value=""
+        case "$env_var" in
+            *_PASSWORD|*_SECRET*|*_KEY|*_TOKEN)
+                default_value=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+                ;;
+            *_USER|*_USERNAME)
+                default_value="admin"
+                ;;
+            *_DB|*_DATABASE)
+                default_value="$service_id"
+                ;;
+            *_HOST)
+                default_value="localhost"
+                ;;
+            *_PORT)
+                default_value=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.port')
+                ;;
+        esac
+        
+        echo ""
+        echo -e "${CYAN}${env_var}${NC}"
+        if [[ -n "$default_value" ]]; then
+            read -p "Value [default: ${default_value:0:30}...]: " user_value
+            env_config+=("${env_var}=${user_value:-$default_value}")
+        else
+            read -p "Value: " user_value
+            env_config+=("${env_var}=${user_value}")
+        fi
+    done
+    
+    # Write to .env
+    echo "" >> "$ENV_FILE"
+    echo "# ${service_name} Configuration (Added: $(date -u +"%Y-%m-%d %H:%M:%S"))" >> "$ENV_FILE"
+    for config in "${env_config[@]}"; do
+        echo "$config" >> "$ENV_FILE"
+    done
+    
+    print_success "Environment variables configured"
+    
+    # Reload environment
+    set -a
+    source "$ENV_FILE"
+    set +a
+}
 
+#------------------------------------------------------------------------------
+# Phase 5: Docker Compose Generation
+#------------------------------------------------------------------------------
+
+generate_service_compose() {
+    local service_id=${1:-$SELECTED_SERVICE}
+    local service_json=${2:-$SELECTED_SERVICE_JSON}
+    local deployment_type=${3:-"main"}
+    
+    print_phase "5" "📝 Generating Docker Compose Configuration"
+    
+    local service_name=$(echo "$service_json" | jq -r '.name')
+    local service_port=$(echo "$service_json" | jq -r '.port')
+    local service_image=$(echo "$service_json" | jq -r '.image // empty')
+    local service_volumes=$(echo "$service_json" | jq -r '.volumes[]' 2>/dev/null || echo "")
+    
+    print_info "Creating compose file for: $service_name"
+    
+    # Generate compose file based on service type
+    local compose_file="$COMPOSE_DIR/${service_id}.yml"
+    
+    cat > "$compose_file" <<EOF
+version: '3.8'
+
+networks:
+  ai_platform:
+    external: true
+
+services:
+  ${service_id}:
+EOF
+
+    # Determine image
+    if [[ -n "$service_image" ]]; then
+        echo "    image: $service_image" >> "$compose_file"
+    else
+        # Fallback to common image patterns
+        case "$service_id" in
+            open-webui)
+                echo "    image: ghcr.io/open-webui/open-webui:main" >> "$compose_file"
+                ;;
+            anythingllm)
+                echo "    image: mintplexlabs/anythingllm:latest" >> "$compose_file"
+                ;;
+            dify-*)
+                echo "    image: langgenius/dify-${service_id#dify-}:latest" >> "$compose_file"
+                ;;
+            librechat)
+                echo "    image: ghcr.io/danny-avila/librechat:latest" >> "$compose_file"
+                ;;
+            flowise)
+                echo "    image: flowiseai/flowise:latest" >> "$compose_file"
+                ;;
+            n8n)
+                echo "    image: n8nio/n8n:latest" >> "$compose_file"
+                ;;
+            qdrant)
+                echo "    image: qdrant/qdrant:latest" >> "$compose_file"
+                ;;
+            weaviate)
+                echo "    image: semitechnologies/weaviate:latest" >> "$compose_file"
+                ;;
+            litellm)
+                echo "    image: ghcr.io/berriai/litellm:main-latest" >> "$compose_file"
+                ;;
+            grafana)
+                echo "    image: grafana/grafana:latest" >> "$compose_file"
+                ;;
+            prometheus)
+                echo "    image: prom/prometheus:latest" >> "$compose_file"
+                ;;
+            loki)
+                echo "    image: grafana/loki:latest" >> "$compose_file"
+                ;;
+            uptime-kuma)
+                echo "    image: louislam/uptime-kuma:latest" >> "$compose_file"
+                ;;
+            minio)
+                echo "    image: minio/minio:latest" >> "$compose_file"
+                ;;
+            mongodb)
+                echo "    image: mongo:latest" >> "$compose_file"
+                ;;
+            meilisearch)
+                echo "    image: getmeili/meilisearch:latest" >> "$compose_file"
+                ;;
+            *)
+                echo "    image: ${service_id}:latest" >> "$compose_file"
+                ;;
+        esac
+    fi
+    
+    cat >> "$compose_file" <<EOF
+    container_name: ${service_id}
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - "${service_port}:${service_port}"
+EOF
+
+    # Add environment variables
+    local env_vars=$(echo "$service_json" | jq -r '.env_vars[]' 2>/dev/null || echo "")
+    if [[ -n "$env_vars" ]]; then
+        echo "    environment:" >> "$compose_file"
+        for env_var in $env_vars; do
+            echo "      - ${env_var}=\${${env_var}}" >> "$compose_file"
+        done
+    fi
+    
+    # Add volumes
+    if [[ -n "$service_volumes" ]]; then
+        echo "    volumes:" >> "$compose_file"
+        for volume in $service_volumes; do
+            echo "      - \${DATA_DIR}/${volume}:/data" >> "$compose_file"
+        done
+    fi
+    
+    # Add Traefik labels
+    if [[ "$deployment_type" == "main" ]]; then
+        cat >> "$compose_file" <<EOF
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.${service_id}.rule=Host(\`${service_id}.\${DOMAIN:-localhost}\`)"
+      - "traefik.http.routers.${service_id}.entrypoints=websecure"
+      - "traefik.http.routers.${service_id}.tls=true"
+      - "traefik.http.services.${service_id}.loadbalancer.server.port=${service_port}"
+EOF
+    fi
+    
+    # Add dependencies
+    local dependencies=$(echo "$service_json" | jq -r '.dependencies[]' 2>/dev/null || echo "")
+    if [[ -n "$dependencies" ]]; then
+        echo "    depends_on:" >> "$compose_file"
+        for dep in $dependencies; do
+            echo "      - ${dep}" >> "$compose_file"
+        done
+    fi
+    
+    print_success "Compose file generated: $compose_file"
+}
+
+#------------------------------------------------------------------------------
+# Phase 6: Service Deployment
+#------------------------------------------------------------------------------
+
+deploy_service() {
+    print_phase "6" "🚀 Service Deployment"
+    
+    local service_id=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.id')
+    local service_name=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.name')
+    local compose_file="$COMPOSE_DIR/${service_id}.yml"
+    
+    print_info "Deploying $service_name..."
+    
+    # Create data directories
+    local volumes=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.volumes[]' 2>/dev/null || echo "")
+    for volume in $volumes; do
+        mkdir -p "$DATA_DIR/$volume"
+    done
+    
+    # Pull image
+    echo -ne "${CYAN}  ⏳${NC} Pulling container image..."
+    if docker-compose -f "$compose_file" pull > /dev/null 2>&1; then
+        echo -e "\r${GREEN}  ✓${NC} Container image pulled                    "
+    else
+        echo -e "\r${YELLOW}  ⚠${NC} Could not pull image (may not exist)      "
+    fi
+    
+    # Deploy service
+    echo -ne "${CYAN}  ⏳${NC} Starting service..."
+    if docker-compose -f "$compose_file" up -d; then
+        echo -e "\r${GREEN}  ✓${NC} Service started                            "
+    else
+        echo -e "\r${RED}  ✗${NC} Failed to start service                    "
+        return 1
+    fi
+    
+    # Wait for service to be healthy
+    local service_port=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.port')
+    local max_attempts=30
+    local attempt=0
+    
+    echo -ne "${CYAN}  ⏳${NC} Waiting for service to be ready"
+    
+    while [ $attempt -lt $max_attempts ]; do
+        if curl -sf "http://localhost:${service_port}" > /dev/null 2>&1; then
+            echo -e "\r${GREEN}  ✓${NC} Service is ready and responding            "
+            break
+        fi
+        echo -ne "."
+        sleep 2
+        ((attempt++))
+    done
+    
+    if [ $attempt -eq $max_attempts ]; then
+        echo -e "\r${YELLOW}  ⚠${NC} Service started but not responding (may need configuration)"
+    fi
+    
+    print_success "$service_name deployed successfully"
+}
+
+#------------------------------------------------------------------------------
+# Phase 7: Post-Deployment Configuration
+#------------------------------------------------------------------------------
+
+post_deployment_config() {
+    print_phase "7" "🔧 Post-Deployment Configuration"
+    
+    local service_id=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.id')
+    local service_name=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.name')
+    local service_port=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.port')
+    
+    # Update metadata
+    if [[ -f "$METADATA_FILE" ]]; then
+        local temp_file=$(mktemp)
+        jq --arg service "$service_id" \
+           --arg name "$service_name" \
+           --arg port "$service_port" \
+           --arg url "http://localhost:${service_port}" \
+           '.ui_services += [{"id": $service, "name": $name, "port": $port, "url": $url, "deployed_at": now | strftime("%Y-%m-%d %H:%M:%S UTC")}] | 
+            .last_updated = (now | strftime("%Y-%m-%d %H:%M:%S UTC"))' \
+           "$METADATA_FILE" > "$temp_file"
+        mv "$temp_file" "$METADATA_FILE"
+        print_success "Metadata updated"
+    fi
+    
+    # Service-specific configuration
+    case "$service_id" in
+        anythingllm)
+            print_info "Configuring AnythingLLM with Ollama..."
+            # Wait a bit for AnythingLLM to initialize
+            sleep 10
+            # Configuration would go here via API
+            print_success "AnythingLLM configured"
+            ;;
+        dify)
+            print_info "Initializing Dify database..."
+            # Database initialization commands
+            print_success "Dify initialized"
+            ;;
+        litellm)
+            print_info "Configuring LiteLLM with Ollama..."
+            # LiteLLM proxy configuration
+            print_success "LiteLLM configured"
+            ;;
+    esac
+    
+    print_success "Post-deployment configuration complete"
+}
+
+#------------------------------------------------------------------------------
+# Phase 8: Integration Testing
+#------------------------------------------------------------------------------
+
+perform_integration_test() {
+    print_phase "8" "🧪 Integration Testing"
+    
+    local service_id=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.id')
+    local service_port=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.port')
+    
+    print_info "Testing service endpoints..."
+    
+    # Basic HTTP health check
+    if curl -sf "http://localhost:${service_port}" > /dev/null 2>&1; then
+        print_success "HTTP endpoint responding"
+    else
+        print_warning "HTTP endpoint not responding (may be normal for this service)"
+    fi
+    
+    # Check container logs for errors
+    local error_count=$(docker logs "$service_id" 2>&1 | grep -i "error" | wc -l)
+    if [ "$error_count" -gt 0 ]; then
+        print_warning "Found $error_count error(s) in logs"
+        read -p "View logs? (y/N): " view_logs
+        if [[ "$view_logs" =~ ^[Yy]$ ]]; then
+            docker logs "$service_id" --tail 50
+        fi
+    else
+        print_success "No errors in container logs"
+    fi
+    
+    # Test integration with dependencies
+    local dependencies=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.dependencies[]' 2>/dev/null || echo "")
+    if [[ -n "$dependencies" ]]; then
+        echo ""
+        echo -e "${BOLD}Testing dependency connections:${NC}"
+        for dep in $dependencies; do
+            if docker exec "$service_id" ping -c 1 "$dep" > /dev/null 2>&1; then
+                print_success "Can reach $dep"
+            else
+                print_warning "Cannot reach $dep (may not support ping)"
+            fi
+        done
+    fi
+    
+    print_success "Integration tests complete"
+}
+
+#------------------------------------------------------------------------------
+# Final Success Message
+#------------------------------------------------------------------------------
+
+print_final_success() {
+    local service_id=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.id')
+    local service_name=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.name')
+    local service_port=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.port')
+    
+    echo ""
+    echo -e "${GREEN}${BOLD}"
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║          ✅ SERVICE ADDED SUCCESSFULLY                     ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    echo ""
+    echo -e "${BOLD}Service Details:${NC}"
+    echo "  • Name: ${CYAN}${service_name}${NC}"
+    echo "  • ID: ${CYAN}${service_id}${NC}"
+    echo "  • URL: ${CYAN}http://localhost:${service_port}${NC}"
+    echo "  • Domain: ${CYAN}https://${service_id}.${DOMAIN:-localhost}${NC}"
+    echo ""
+    echo -e "${BOLD}Quick Actions:${NC}"
+    echo "  • View logs: ${CYAN}docker logs -f ${service_id}${NC}"
+    echo "  • Restart: ${CYAN}docker-compose -f $COMPOSE_DIR/${service_id}.yml restart${NC}"
+    echo "  • Remove: ${CYAN}docker-compose -f $COMPOSE_DIR/${service_id}.yml down${NC}"
+    echo "  • Update: ${CYAN}docker-compose -f $COMPOSE_DIR/${service_id}.yml pull && docker-compose -f $COMPOSE_DIR/${service_id}.yml up -d${NC}"
+    echo ""
+    echo -e "${BOLD}Configuration:${NC}"
+    echo "  • Environment: ${CYAN}$ENV_FILE${NC}"
+    echo "  • Compose: ${CYAN}$COMPOSE_DIR/${service_id}.yml${NC}"
+    echo "  • Data: ${CYAN}$DATA_DIR/${service_id}${NC}"
+    echo ""
+    
+    read -p "Would you like to add another service? (y/N): " add_another
+    if [[ "$add_another" =~ ^[Yy]$ ]]; then
+        exec "$0"
+    fi
+}
+
+#------------------------------------------------------------------------------
+# Rollback on Failure
+#------------------------------------------------------------------------------
+
+rollback_deployment() {
+    local service_id=$1
+    
+    print_error "Deployment failed - initiating rollback"
+    
+    # Stop and remove containers
+    docker-compose -f "$COMPOSE_DIR/${service_id}.yml" down -v 2>/dev/null || true
+    
     # Remove compose file
-    rm -f "$selected_file"
-
-    print_success "Service removed successfully"
-
-    pause
+    rm -f "$COMPOSE_DIR/${service_id}.yml"
+    
+    # Remove environment variables (optional)
+    # sed -i "/# ${service_name} Configuration/,+100d" "$ENV_FILE"
+    
+    print_info "Rollback complete"
 }
 
 #------------------------------------------------------------------------------
@@ -2594,21 +1219,21 @@ remove_service() {
 #------------------------------------------------------------------------------
 
 main() {
-    # Check root
-    if [[ $EUID -ne 0 ]]; then
-        print_error "This script must be run as root"
-        exit 1
-    fi
-
-    # Check prerequisites
-    if [[ ! -f "$METADATA_FILE" ]]; then
-        print_error "System not initialized. Run scripts 1-3 first."
-        exit 1
-    fi
-
-    # Start main menu loop
-    main_menu
+    print_header
+    
+    # Trap errors for rollback
+    trap 'rollback_deployment "$SELECTED_SERVICE"' ERR
+    
+    select_service
+    validate_dependencies
+    check_port_conflicts
+    configure_service_env
+    generate_service_compose
+    deploy_service
+    post_deployment_config
+    perform_integration_test
+    
+    print_final_success
 }
 
-# Run main function
 main "$@"

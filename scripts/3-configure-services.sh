@@ -1,29 +1,14 @@
 #!/bin/bash
 
 #==============================================================================
-# Script 3: Service Configuration
-# Purpose: Configure and manage deployed services
-# Options:
-#   1.  Manage LLM providers (add/remove/test)
-#   2.  Pair Signal device
-#   3.  Setup Google Drive OAuth
-#   4.  Configure Qdrant collections
-#   5.  Test service connections
-#   6.  Configure webhooks
-#   7.  Setup monitoring
-#   8.  View service logs
-#   9.  Restart services
-#   10. Stop services
-#   11. Rotate credentials
-#   12. Backup configuration
-#   13. Restore configuration
+# Script 3: Deploy UI Services
+# Purpose: Deploy Open WebUI, AnythingLLM, Dify, and other frontends
+# Per README: User Interface Layer Deployment
 #==============================================================================
 
 set -euo pipefail
 
-#------------------------------------------------------------------------------
-# Color Definitions
-#------------------------------------------------------------------------------
+# Color definitions
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
@@ -33,22 +18,24 @@ readonly MAGENTA='\033[0;35m'
 readonly NC='\033[0m'
 readonly BOLD='\033[1m'
 
-#------------------------------------------------------------------------------
-# Global Variables
-#------------------------------------------------------------------------------
-SCRIPT_DIR=" $ (cd " $ (dirname "${BASH_SOURCE[0]}")" && pwd)"
-DATA_DIR="/mnt/data"
-METADATA_FILE=" $ DATA_DIR/metadata/deployment_info.json"
-CREDENTIALS_FILE=" $ DATA_DIR/metadata/credentials.json"
+# Paths
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+readonly DATA_DIR="/mnt/data"
+readonly CONFIG_DIR="$DATA_DIR/config"
+readonly COMPOSE_DIR="$DATA_DIR/compose"
+readonly METADATA_FILE="$DATA_DIR/.platform_metadata.json"
+readonly ENV_FILE="$DATA_DIR/.env"
 
-# Check if metadata exists
-if [[ ! -f " $ METADATA_FILE" ]]; then
-    echo -e " $ {RED}Error: Setup not completed. Run scripts 1-2 first.${NC}"
+# Source environment
+if [[ -f "$ENV_FILE" ]]; then
+    set -a
+    source "$ENV_FILE"
+    set +a
+else
+    echo -e "${RED}Error: Environment file not found. Run scripts 1-2 first.${NC}"
     exit 1
 fi
-
-# Load metadata
-DATA_DIR= $ (jq -r '.data_directory' " $ METADATA_FILE")
 
 #------------------------------------------------------------------------------
 # Helper Functions
@@ -56,2159 +43,969 @@ DATA_DIR= $ (jq -r '.data_directory' " $ METADATA_FILE")
 
 print_header() {
     clear
-    echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${NC}     ${BOLD}AI PLATFORM AUTOMATION - SERVICE CONFIG${NC}          ${CYAN}║${NC}"
-    echo -e "${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
-    echo -e "${CYAN}║${NC}  ${GREEN}Script 3 of 5${NC} - Configure and manage services          ${CYAN}║${NC}"
-    echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "${CYAN}${BOLD}"
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║         🎨 AI Platform - UI Services Deployment            ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+}
+
+print_phase() {
     echo ""
+    echo -e "${BLUE}${BOLD}[PHASE $1] $2${NC}"
 }
 
 print_step() {
-    echo -e "${BLUE}[STEP]${NC}  $ 1"
+    echo -e "${CYAN}[$1/$2]${NC} $3 $4"
 }
 
 print_success() {
-    echo -e " $ {GREEN}[✓]${NC}  $ 1"
+    echo -e "${GREEN}  ✓${NC} $1"
 }
 
 print_error() {
-    echo -e " $ {RED}[✗]${NC}  $ 1"
+    echo -e "${RED}  ✗${NC} $1"
 }
 
 print_warning() {
-    echo -e " $ {YELLOW}[!]${NC}  $ 1"
+    echo -e "${YELLOW}  ⚠${NC} $1"
 }
 
 print_info() {
-    echo -e " $ {CYAN}[i]${NC}  $ 1"
+    echo -e "${CYAN}  ℹ${NC} $1"
 }
 
-confirm() {
-    local prompt=" $ 1"
-    local default="${2:-n}"
-    local response
+print_box_start() {
+    echo "┌────────────────────────────────────────────────────────────┐"
+}
+
+print_box_line() {
+    printf "│ %-58s │\n" "$1"
+}
+
+print_box_end() {
+    echo "└────────────────────────────────────────────────────────────┘"
+}
+
+wait_for_service() {
+    local service_name=$1
+    local check_url=$2
+    local max_attempts=${3:-60}
+    local attempt=0
     
-    if [[ " $ default" == "y" ]]; then
-        prompt=" $ prompt [Y/n]: "
-    else
-        prompt=" $ prompt [y/N]: "
-    fi
+    echo -ne "${CYAN}  ⏳${NC} Waiting for $service_name"
     
-    read -r -p " $ (echo -e ${YELLOW} $ prompt $ {NC})" response
-    response=${response:- $ default}
-    
-    [[ " $ response" =~ ^[Yy]$ ]]
-}
-
-pause() {
-    read -p "Press Enter to continue..."
-}
-
-check_service_running() {
-    local service= $ 1
-    docker ps --format '{{.Names}}' | grep -q "^ $ {service} $ "
-}
-
-#------------------------------------------------------------------------------
-# Main Menu
-#------------------------------------------------------------------------------
-
-show_main_menu() {
-    print_header
-    
-    echo -e " $ {BOLD}Service Configuration Menu${NC}"
-    echo ""
-    echo -e "${CYAN}LLM & AI Services:${NC}"
-    echo "  [1]  Manage LLM Providers"
-    echo "  [2]  Configure Ollama Models"
-    echo "  [3]  Test LLM Connections"
-    echo ""
-    echo -e "${CYAN}Integration Services:${NC}"
-    echo "  [4]  Pair Signal Device"
-    echo "  [5]  Setup Google Drive OAuth"
-    echo "  [6]  Configure Webhooks"
-    echo ""
-    echo -e "${CYAN}Database Configuration:${NC}"
-    echo "  [7]  Configure Qdrant Collections"
-    echo "  [8]  Test Database Connections"
-    echo "  [9]  Database Backup/Restore"
-    echo ""
-    echo -e "${CYAN}Service Management:${NC}"
-    echo "  [10] View Service Logs"
-    echo "  [11] Restart Services"
-    echo "  [12] Stop Services"
-    echo "  [13] Service Health Check"
-    echo ""
-    echo -e "${CYAN}Security & Maintenance:${NC}"
-    echo "  [14] Rotate Credentials"
-    echo "  [15] Backup Configuration"
-    echo "  [16] Restore Configuration"
-    echo "  [17] Setup Monitoring"
-    echo ""
-    echo "  [Q]  Quit"
-    echo ""
-}
-
-main_menu() {
-    while true; do
-        show_main_menu
-        read -p "Select option: " choice
-        
-        case  $ choice in
-            1) manage_llm_providers ;;
-            2) configure_ollama_models ;;
-            3) test_llm_connections ;;
-            4) pair_signal_device ;;
-            5) setup_gdrive_oauth ;;
-            6) configure_webhooks ;;
-            7) configure_qdrant_collections ;;
-            8) test_database_connections ;;
-            9) database_backup_restore ;;
-            10) view_service_logs ;;
-            11) restart_services ;;
-            12) stop_services ;;
-            13) service_health_check ;;
-            14) rotate_credentials ;;
-            15) backup_configuration ;;
-            16) restore_configuration ;;
-            17) setup_monitoring ;;
-            [Qq]) exit 0 ;;
-            *) print_error "Invalid option" ; pause ;;
-        esac
+    while [ $attempt -lt $max_attempts ]; do
+        if curl -sf "$check_url" > /dev/null 2>&1; then
+            echo -e "\r${GREEN}  ✓${NC} $service_name is ready                    "
+            return 0
+        fi
+        echo -ne "."
+        sleep 2
+        ((attempt++))
     done
+    
+    echo -e "\r${RED}  ✗${NC} $service_name failed to start (timeout)      "
+    return 1
+}
+
+update_metadata() {
+    local service=$1
+    local status=$2
+    local url=${3:-}
+    
+    if [[ -f "$METADATA_FILE" ]]; then
+        local temp_file=$(mktemp)
+        jq --arg service "$service" --arg status "$status" --arg url "$url" \
+           '.ui_services += [{"name": $service, "status": $status, "url": $url, "deployed_at": now | strftime("%Y-%m-%d %H:%M:%S UTC")}] | 
+            .last_updated = (now | strftime("%Y-%m-%d %H:%M:%S UTC"))' \
+           "$METADATA_FILE" > "$temp_file"
+        mv "$temp_file" "$METADATA_FILE"
+    fi
 }
 
 #------------------------------------------------------------------------------
-# Option 1: Manage LLM Providers
+# Phase 1: Pre-Deployment Validation
 #------------------------------------------------------------------------------
 
-manage_llm_providers() {
-    print_header
-    echo -e " $ {BOLD}Manage LLM Providers${NC}"
-    echo ""
+validate_prerequisites() {
+    print_phase "1" "🔍 Pre-Deployment Validation"
     
-    if ! check_service_running "litellm"; then
-        print_error "LiteLLM is not running"
-        pause
-        return
-    fi
+    local validation_ok=true
     
-    echo "Current providers:"
-    echo ""
+    # Check core services are running
+    print_info "Checking core services..."
     
-    if [[ -f " $ DATA_DIR/config/litellm_config.yaml" ]]; then
-        grep "model_name:" " $ DATA_DIR/config/litellm_config.yaml" | sed 's/.*model_name: /  - /'
+    if ! docker ps | grep -q traefik; then
+        print_error "Traefik is not running"
+        validation_ok=false
     else
-        echo "  No configuration file found"
+        print_success "Traefik is running"
     fi
     
-    echo ""
-    echo "[1] Add OpenAI"
-    echo "[2] Add Anthropic"
-    echo "[3] Add Google (Gemini)"
-    echo "[4] Add Azure OpenAI"
-    echo "[5] Add Groq"
-    echo "[6] Remove Provider"
-    echo "[7] Test Provider"
-    echo "[B] Back"
-    echo ""
-    
-    read -p "Select option: " choice
-    
-    case  $ choice in
-        1) add_openai_provider ;;
-        2) add_anthropic_provider ;;
-        3) add_google_provider ;;
-        4) add_azure_provider ;;
-        5) add_groq_provider ;;
-        6) remove_provider ;;
-        7) test_provider ;;
-        [Bb]) return ;;
-        *) print_error "Invalid option" ; pause ;;
-    esac
-}
-
-add_openai_provider() {
-    echo ""
-    print_step "Adding OpenAI Provider"
-    echo ""
-    
-    read -p "Enter OpenAI API Key: " -s api_key
-    echo ""
-    
-    if [[ -z " $ api_key" ]]; then
-        print_error "API key cannot be empty"
-        pause
-        return
-    fi
-    
-    # Add to litellm config
-    local config_file=" $ DATA_DIR/config/litellm_config.yaml"
-    
-    # Backup current config
-    cp " $ config_file" "${config_file}.backup"
-    
-    # Add models
-    cat >> "$config_file" <<EOF
-
-  - model_name: gpt-4o
-    litellm_params:
-      model: gpt-4o
-      api_key: $api_key
-  - model_name: gpt-4o-mini
-    litellm_params:
-      model: gpt-4o-mini
-      api_key: $api_key
-  - model_name: gpt-4-turbo
-    litellm_params:
-      model: gpt-4-turbo
-      api_key:  $ api_key
-EOF
-    
-    # Restart LiteLLM
-    print_info "Restarting LiteLLM..."
-    docker restart litellm
-    sleep 5
-    
-    print_success "OpenAI provider added"
-    pause
-}
-
-add_anthropic_provider() {
-    echo ""
-    print_step "Adding Anthropic Provider"
-    echo ""
-    
-    read -p "Enter Anthropic API Key: " -s api_key
-    echo ""
-    
-    if [[ -z " $ api_key" ]]; then
-        print_error "API key cannot be empty"
-        pause
-        return
-    fi
-    
-    local config_file=" $ DATA_DIR/config/litellm_config.yaml"
-    cp " $ config_file" "${config_file}.backup"
-    
-    cat >> "$config_file" <<EOF
-
-  - model_name: claude-3-5-sonnet
-    litellm_params:
-      model: claude-3-5-sonnet-20241022
-      api_key: $api_key
-  - model_name: claude-3-5-haiku
-    litellm_params:
-      model: claude-3-5-haiku-20241022
-      api_key:  $ api_key
-EOF
-    
-    print_info "Restarting LiteLLM..."
-    docker restart litellm
-    sleep 5
-    
-    print_success "Anthropic provider added"
-    pause
-}
-
-add_google_provider() {
-    echo ""
-    print_step "Adding Google (Gemini) Provider"
-    echo ""
-    
-    read -p "Enter Google API Key: " -s api_key
-    echo ""
-    
-    if [[ -z " $ api_key" ]]; then
-        print_error "API key cannot be empty"
-        pause
-        return
-    fi
-    
-    local config_file=" $ DATA_DIR/config/litellm_config.yaml"
-    cp " $ config_file" "${config_file}.backup"
-    
-    cat >> "$config_file" <<EOF
-
-  - model_name: gemini-2.0-flash
-    litellm_params:
-      model: gemini/gemini-2.0-flash-exp
-      api_key: $api_key
-  - model_name: gemini-1.5-pro
-    litellm_params:
-      model: gemini/gemini-1.5-pro
-      api_key:  $ api_key
-EOF
-    
-    print_info "Restarting LiteLLM..."
-    docker restart litellm
-    sleep 5
-    
-    print_success "Google provider added"
-    pause
-}
-
-add_azure_provider() {
-    echo ""
-    print_step "Adding Azure OpenAI Provider"
-    echo ""
-    
-    read -p "Enter Azure API Key: " -s api_key
-    echo ""
-    read -p "Enter Azure API Base URL: " api_base
-    read -p "Enter Azure API Version (default: 2024-02-15-preview): " api_version
-    api_version= $ {api_version:-2024-02-15-preview}
-    read -p "Enter deployment name: " deployment_name
-    
-    if [[ -z " $ api_key" || -z " $ api_base" || -z " $ deployment_name" ]]; then
-        print_error "All fields are required"
-        pause
-        return
-    fi
-    
-    local config_file=" $ DATA_DIR/config/litellm_config.yaml"
-    cp " $ config_file" " $ {config_file}.backup"
-    
-    cat >> " $ config_file" <<EOF
-
-  - model_name: azure-gpt-4
-    litellm_params:
-      model: azure/ $ deployment_name
-      api_key: $api_key
-      api_base: $api_base
-      api_version:  $ api_version
-EOF
-    
-    print_info "Restarting LiteLLM..."
-    docker restart litellm
-    sleep 5
-    
-    print_success "Azure OpenAI provider added"
-    pause
-}
-
-add_groq_provider() {
-    echo ""
-    print_step "Adding Groq Provider"
-    echo ""
-    
-    read -p "Enter Groq API Key: " -s api_key
-    echo ""
-    
-    if [[ -z " $ api_key" ]]; then
-        print_error "API key cannot be empty"
-        pause
-        return
-    fi
-    
-    local config_file=" $ DATA_DIR/config/litellm_config.yaml"
-    cp " $ config_file" "${config_file}.backup"
-    
-    cat >> "$config_file" <<EOF
-
-  - model_name: llama-3.3-70b
-    litellm_params:
-      model: groq/llama-3.3-70b-versatile
-      api_key: $api_key
-  - model_name: mixtral-8x7b
-    litellm_params:
-      model: groq/mixtral-8x7b-32768
-      api_key:  $ api_key
-EOF
-    
-    print_info "Restarting LiteLLM..."
-    docker restart litellm
-    sleep 5
-    
-    print_success "Groq provider added"
-    pause
-}
-
-remove_provider() {
-    echo ""
-    print_step "Remove Provider"
-    echo ""
-    
-    read -p "Enter model name to remove: " model_name
-    
-    if [[ -z " $ model_name" ]]; then
-        print_error "Model name cannot be empty"
-        pause
-        return
-    fi
-    
-    local config_file=" $ DATA_DIR/config/litellm_config.yaml"
-    cp " $ config_file" "${config_file}.backup"
-    
-    # Remove model block (this is simplified - in production use proper YAML parser)
-    print_warning "Manual removal recommended for complex configs"
-    print_info "Backup saved to ${config_file}.backup"
-    
-    pause
-}
-
-test_provider() {
-    echo ""
-    print_step "Test Provider"
-    echo ""
-    
-    read -p "Enter model name to test: " model_name
-    
-    if [[ -z " $ model_name" ]]; then
-        print_error "Model name cannot be empty"
-        pause
-        return
-    fi
-    
-    local master_key= $ (jq -r '.litellm.password' " $ CREDENTIALS_FILE" 2>/dev/null || echo "")
-    
-    if [[ -z " $ master_key" ]]; then
-        print_error "LiteLLM master key not found"
-        pause
-        return
-    fi
-    
-    print_info "Testing  $ model_name..."
-    
-    local response= $ (curl -s -X POST http://localhost:4000/v1/chat/completions \
-        -H "Authorization: Bearer  $ master_key" \
-        -H "Content-Type: application/json" \
-        -d "{
-            \"model\": \" $ model_name\",
-            \"messages\": [{\"role\": \"user\", \"content\": \"Say 'test successful'\"}],
-            \"max_tokens\": 10
-        }")
-    
-    if echo " $ response" | jq -e '.choices[0].message.content' &>/dev/null; then
-        local content= $ (echo "$response" | jq -r '.choices[0].message.content')
-        print_success "Test successful!"
-        echo ""
-        echo "Response: $content"
-    else
-        print_error "Test failed"
-        echo ""
-        echo "Response:  $ response"
-    fi
-    
-    echo ""
-    pause
-}
-
-#------------------------------------------------------------------------------
-# Option 2: Configure Ollama Models
-#------------------------------------------------------------------------------
-
-configure_ollama_models() {
-    print_header
-    echo -e " $ {BOLD}Configure Ollama Models${NC}"
-    echo ""
-    
-    if ! check_service_running "ollama"; then
+    if ! docker ps | grep -q ollama; then
         print_error "Ollama is not running"
-        pause
-        return
-    fi
-    
-    echo "Current models:"
-    echo ""
-    docker exec ollama ollama list
-    echo ""
-    
-    echo "[1] Pull New Model"
-    echo "[2] Remove Model"
-    echo "[3] Update Model"
-    echo "[4] Show Model Info"
-    echo "[B] Back"
-    echo ""
-    
-    read -p "Select option: " choice
-    
-    case  $ choice in
-        1) pull_ollama_model ;;
-        2) remove_ollama_model ;;
-        3) update_ollama_model ;;
-        4) show_ollama_model_info ;;
-        [Bb]) return ;;
-        *) print_error "Invalid option" ; pause ;;
-    esac
-}
-
-pull_ollama_model() {
-    echo ""
-    print_step "Pull Ollama Model"
-    echo ""
-    
-    echo "Popular models:"
-    echo "  - llama3.2:3b (2GB)"
-    echo "  - llama3.2:1b (1.3GB)"
-    echo "  - llama3.1:8b (4.7GB)"
-    echo "  - llama3.1:70b (40GB)"
-    echo "  - mistral:7b (4.1GB)"
-    echo "  - mixtral:8x7b (26GB)"
-    echo "  - phi3:mini (2.3GB)"
-    echo "  - codellama:7b (3.8GB)"
-    echo ""
-    
-    read -p "Enter model name (e.g., llama3.2:3b): " model_name
-    
-    if [[ -z " $ model_name" ]]; then
-        print_error "Model name cannot be empty"
-        pause
-        return
-    fi
-    
-    print_info "Pulling  $ model_name..."
-    docker exec ollama ollama pull " $ model_name"
-    
-    print_success "Model pulled successfully"
-    pause
-}
-
-remove_ollama_model() {
-    echo ""
-    print_step "Remove Ollama Model"
-    echo ""
-    
-    read -p "Enter model name to remove: " model_name
-    
-    if [[ -z "$model_name" ]]; then
-        print_error "Model name cannot be empty"
-        pause
-        return
-    fi
-    
-    if confirm "Remove  $ model_name?"; then
-        docker exec ollama ollama rm " $ model_name"
-        print_success "Model removed"
-    fi
-    
-    pause
-}
-
-update_ollama_model() {
-    echo ""
-    print_step "Update Ollama Model"
-    echo ""
-    
-    read -p "Enter model name to update: " model_name
-    
-    if [[ -z "$model_name" ]]; then
-        print_error "Model name cannot be empty"
-        pause
-        return
-    fi
-    
-    print_info "Updating  $ model_name..."
-    docker exec ollama ollama pull " $ model_name"
-    
-    print_success "Model updated"
-    pause
-}
-
-show_ollama_model_info() {
-    echo ""
-    print_step "Show Model Info"
-    echo ""
-    
-    read -p "Enter model name: " model_name
-    
-    if [[ -z " $ model_name" ]]; then
-        print_error "Model name cannot be empty"
-        pause
-        return
-    fi
-    
-    docker exec ollama ollama show " $ model_name"
-    
-    echo ""
-    pause
-}
-
-#------------------------------------------------------------------------------
-# Option 3: Test LLM Connections
-#------------------------------------------------------------------------------
-
-test_llm_connections() {
-    print_header
-    echo -e "${BOLD}Test LLM Connections${NC}"
-    echo ""
-    
-    if ! check_service_running "litellm"; then
-        print_error "LiteLLM is not running"
-        pause
-        return
-    fi
-    
-    local master_key= $ (jq -r '.litellm.password' " $ CREDENTIALS_FILE" 2>/dev/null || echo "")
-    
-    if [[ -z " $ master_key" ]]; then
-        print_error "LiteLLM master key not found"
-        pause
-        return
-    fi
-    
-    print_info "Fetching available models..."
-    
-    local models= $ (curl -s -X GET http://localhost:4000/v1/models \
-        -H "Authorization: Bearer  $ master_key" | jq -r '.data[].id' 2>/dev/null)
-    
-    if [[ -z " $ models" ]]; then
-        print_error "No models available or connection failed"
-        pause
-        return
-    fi
-    
-    echo ""
-    echo "Available models:"
-    echo " $ models" | nl
-    echo ""
-    
-    read -p "Enter model number to test (or 'all' for all models): " selection
-    
-    if [[ " $ selection" == "all" ]]; then
-        while IFS= read -r model; do
-            test_single_model " $ model" " $ master_key"
-        done <<< " $ models"
+        validation_ok=false
     else
-        local model= $ (echo " $ models" | sed -n " $ {selection}p")
-        if [[ -n " $ model" ]]; then
-            test_single_model " $ model" " $ master_key"
-        else
-            print_error "Invalid selection"
-        fi
+        print_success "Ollama is running"
     fi
     
-    pause
-}
-
-test_single_model() {
-    local model= $ 1
-    local api_key=$2
-    
-    print_info "Testing  $ model..."
-    
-    local start_time= $ (date +%s%3N)
-    
-    local response=$(curl -s -X POST http://localhost:4000/v1/chat/completions \
-        -H "Authorization: Bearer  $ api_key" \
-        -H "Content-Type: application/json" \
-        -d "{
-            \"model\": \" $ model\",
-            \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}],
-            \"max_tokens\": 10
-        }")
-    
-    local end_time= $ (date +%s%3N)
-    local duration= $ ((end_time - start_time))
-    
-    if echo " $ response" | jq -e '.choices[0].message.content' &>/dev/null; then
-        print_success " $ model - ${duration}ms"
-    else
-        print_error "$model - Failed"
-        echo "  Error:  $ (echo " $ response" | jq -r '.error.message' 2>/dev/null || echo 'Unknown error')"
-    fi
-}
-
-#------------------------------------------------------------------------------
-# Option 4: Pair Signal Device
-#------------------------------------------------------------------------------
-
-pair_signal_device() {
-    print_header
-    echo -e "${BOLD}Pair Signal Device${NC}"
-    echo ""
-    
-    if ! check_service_running "signal-api"; then
-        print_error "Signal API is not running"
-        pause
-        return
-    fi
-    
-    echo "Signal pairing options:"
-    echo ""
-    echo "[1] Link as Primary Device (QR Code)"
-    echo "[2] Register New Number (SMS verification)"
-    echo "[3] Show Linked Devices"
-    echo "[B] Back"
-    echo ""
-    
-    read -p "Select option: " choice
-    
-    case  $ choice in
-        1) signal_link_primary ;;
-        2) signal_register_number ;;
-        3) signal_show_devices ;;
-        [Bb]) return ;;
-        *) print_error "Invalid option" ; pause ;;
-    esac
-}
-
-signal_link_primary() {
-    echo ""
-    print_step "Link as Primary Device"
-    echo ""
-    
-    print_info "This will generate a QR code to scan with Signal mobile app"
-    echo ""
-    
-    read -p "Enter device name (e.g., 'AI Platform'): " device_name
-    device_name= $ {device_name:-AI Platform}
-    
-    print_info "Generating QR code..."
-    print_info "Open Signal on your phone: Settings > Linked Devices > Link New Device"
-    echo ""
-    
-    # Generate linking URI
-    local response= $ (curl -s -X GET "http://localhost:8090/v1/qrcodelink?device_name= $ device_name")
-    
-    if echo "$response" | jq -e '.error' &>/dev/null; then
-        print_error "Failed to generate QR code"
-        echo "Error:  $ (echo " $ response" | jq -r '.error')"
-        pause
-        return
-    fi
-    
-    # Display QR code (if qrencode is available)
-    if command -v qrencode &>/dev/null; then
-        local tsdevice= $ (echo " $ response" | jq -r '.tsdevice')
-        echo "$tsdevice" | qrencode -t UTF8
-    else
-        print_warning "qrencode not installed, showing URL instead"
-        echo "Manual URL:  $ (echo " $ response" | jq -r '.url')"
-    fi
-    
-    echo ""
-    print_info "Scan the QR code with your Signal app"
-    print_info "Waiting for pairing... (this may take a minute)"
-    
-    # Wait for pairing
-    sleep 60
-    
-    # Check if paired
-    local accounts= $ (curl -s -X GET http://localhost:8090/v1/accounts)
-    
-    if echo " $ accounts" | jq -e '.[0]' &>/dev/null; then
-        local number= $ (echo " $ accounts" | jq -r '.[0]')
-        print_success "Paired successfully!"
-        echo "Number:  $ number"
-        
-        # Save to credentials
-        local temp_file= $ (mktemp)
-        jq --arg number "$number" '.signal.number =  $ number' " $ CREDENTIALS_FILE" > " $ temp_file"
-        mv " $ temp_file" " $ CREDENTIALS_FILE"
-    else
-        print_error "Pairing failed or timed out"
-    fi
-    
-    pause
-}
-
-signal_register_number() {
-    echo ""
-    print_step "Register New Number"
-    echo ""
-    
-    read -p "Enter phone number (with country code, e.g., +1234567890): " phone_number
-    
-    if [[ -z " $ phone_number" ]]; then
-        print_error "Phone number cannot be empty"
-        pause
-        return
-    fi
-    
-    print_info "Sending verification code..."
-    
-    local response= $ (curl -s -X POST http://localhost:8090/v1/register/ $ phone_number \
-        -H "Content-Type: application/json" \
-        -d '{"use_voice": false}')
-    
-    if echo "$response" | jq -e '.error' &>/dev/null; then
-        print_error "Failed to send verification code"
-        echo "Error:  $ (echo " $ response" | jq -r '.error')"
-        pause
-        return
-    fi
-    
-    print_success "Verification code sent"
-    echo ""
-    
-    read -p "Enter verification code: " verification_code
-    
-    print_info "Verifying..."
-    
-    response= $ (curl -s -X POST http://localhost:8090/v1/register/ $ phone_number/verify/ $ verification_code)
-    
-    if echo " $ response" | jq -e '.error' &>/dev/null; then
-        print_error "Verification failed"
-        echo "Error:  $ (echo " $ response" | jq -r '.error')"
-    else
-        print_success "Registered successfully!"
-        
-        # Save to credentials
-        local temp_file= $ (mktemp)
-        jq --arg number " $ phone_number" '.signal.number =  $ number' " $ CREDENTIALS_FILE" > " $ temp_file"
-        mv " $ temp_file" " $ CREDENTIALS_FILE"
-    fi
-    
-    pause
-}
-
-signal_show_devices() {
-    echo ""
-    print_step "Linked Devices"
-    echo ""
-    
-    local accounts= $ (curl -s -X GET http://localhost:8090/v1/accounts)
-    
-    if echo " $ accounts" | jq -e '.[0]' &>/dev/null; then
-        echo "Linked accounts:"
-        echo " $ accounts" | jq -r '.[]' | nl
-    else
-        print_info "No devices linked"
-    fi
-    
-    echo ""
-    pause
-}
-
-#------------------------------------------------------------------------------
-# Option 5: Setup Google Drive OAuth
-#------------------------------------------------------------------------------
-
-setup_gdrive_oauth() {
-    print_header
-    echo -e "${BOLD}Setup Google Drive OAuth${NC}"
-    echo ""
-    
-    if ! check_service_running "gdrive-sync"; then
-        print_error "Google Drive Sync is not running"
-        pause
-        return
-    fi
-    
-    print_info "Setting up Google Drive OAuth requires:"
-    echo "  1. Google Cloud Project"
-    echo "  2. OAuth 2.0 credentials"
-    echo "  3. Google Drive API enabled"
-    echo ""
-    
-    echo "Steps:"
-    echo "  1. Go to: https://console.cloud.google.com/"
-    echo "  2. Create a project (or select existing)"
-    echo "  3. Enable Google Drive API"
-    echo "  4. Create OAuth 2.0 Client ID (Desktop app)"
-    echo "  5. Download credentials JSON"
-    echo ""
-    
-    if ! confirm "Do you have OAuth credentials ready?"; then
-        pause
-        return
-    fi
-    
-    echo ""
-    read -p "Enter path to credentials JSON file: " creds_path
-    
-    if [[ ! -f "$creds_path" ]]; then
-        print_error "File not found:  $ creds_path"
-        pause
-        return
-    fi
-    
-    # Copy credentials
-    mkdir -p " $ DATA_DIR/gdrive/config"
-    cp " $ creds_path" " $ DATA_DIR/gdrive/config/credentials.json"
-    
-    print_info "Starting OAuth flow..."
-    print_info "A browser window will open. Follow the prompts to authorize."
-    echo ""
-    
-    # Run rclone config
-    docker exec -it gdrive-sync rclone config create gdrive drive \
-        config_is_local false \
-        scope drive \
-        root_folder_id "" \
-        service_account_file /config/credentials.json
-    
-    print_success "OAuth configuration complete"
-    
-    # Test connection
-    print_info "Testing connection..."
-    
-    if docker exec gdrive-sync rclone lsd gdrive: &>/dev/null; then
-        print_success "Connection successful!"
-        
-        # Setup sync
-        echo ""
-        if confirm "Setup automatic sync?"; then
-            setup_gdrive_sync
-        fi
-    else
-        print_error "Connection failed"
-    fi
-    
-    pause
-}
-
-setup_gdrive_sync() {
-    echo ""
-    read -p "Enter local path to sync (default:  $ DATA_DIR/gdrive/sync): " local_path
-    local_path= $ {local_path:- $ DATA_DIR/gdrive/sync}
-    
-    read -p "Enter Google Drive path (e.g., /AI_Platform): " remote_path
-    
-    read -p "Sync interval in minutes (default: 30): " interval
-    interval= $ {interval:-30}
-    
-    # Create sync script
-    cat > "$DATA_DIR/gdrive/sync.sh" <<EOF
-#!/bin/bash
-rclone sync  $ local_path gdrive: $ remote_path -v --log-file=/data/sync.log
-EOF
-    
-    chmod +x " $ DATA_DIR/gdrive/sync.sh"
-    
-    # Add to crontab
-    local cron_schedule="*/ $ interval * * * *"
-    
-    print_success "Sync configured"
-    print_info "Schedule: Every $interval minutes"
-    print_info "Local:  $ local_path"
-    print_info "Remote: gdrive: $ remote_path"
-}
-
-#------------------------------------------------------------------------------
-# Option 6: Configure Webhooks
-#------------------------------------------------------------------------------
-
-configure_webhooks() {
-    print_header
-    echo -e "${BOLD}Configure Webhooks${NC}"
-    echo ""
-    
-    echo "Available webhook configurations:"
-    echo ""
-    echo "[1] n8n Webhook URLs"
-    echo "[2] Signal Incoming Messages"
-    echo "[3] LiteLLM Callbacks"
-    echo "[4] Custom Webhook"
-    echo "[B] Back"
-    echo ""
-    
-    read -p "Select option: " choice
-    
-    case  $ choice in
-        1) configure_n8n_webhooks ;;
-        2) configure_signal_webhooks ;;
-        3) configure_litellm_callbacks ;;
-        4) configure_custom_webhook ;;
-        [Bb]) return ;;
-        *) print_error "Invalid option" ; pause ;;
-    esac
-}
-
-configure_n8n_webhooks() {
-    echo ""
-    print_step "n8n Webhook URLs"
-    echo ""
-    
-    if ! check_service_running "n8n"; then
-        print_error "n8n is not running. Deploy it first using script 4."
-        pause
-        return
-    fi
-    
-    local tailscale_ip= $ (jq -r '.tailscale_ip' " $ METADATA_FILE" 2>/dev/null || echo "localhost")
-    
-    print_info "n8n webhook base URL:"
-    echo "  http:// $ tailscale_ip:5678/webhook/"
-    echo ""
-    print_info "Create webhooks in n8n UI and use this base URL"
-    echo ""
-    print_info "Example webhook: http:// $ tailscale_ip:5678/webhook/my-webhook"
-    
-    pause
-}
-
-configure_signal_webhooks() {
-    echo ""
-    print_step "Signal Incoming Messages Webhook"
-    echo ""
-    
-    if ! check_service_running "signal-api"; then
-        print_error "Signal API is not running"
-        pause
-        return
-    fi
-    
-    read -p "Enter webhook URL (e.g., http://n8n:5678/webhook/signal): " webhook_url
-    
-    if [[ -z " $ webhook_url" ]]; then
-        print_error "Webhook URL cannot be empty"
-        pause
-        return
-    fi
-    
-    # Configure Signal API to forward messages
-    print_info "Configuring Signal API..."
-    
-    # This would require modifying the Signal API container config
-    print_warning "Manual configuration required:"
-    echo "  1. Edit $DATA_DIR/signal/config.yml"
-    echo "  2. Add webhook URL:  $ webhook_url"
-    echo "  3. Restart signal-api container"
-    
-    pause
-}
-
-configure_litellm_callbacks() {
-    echo ""
-    print_step "LiteLLM Callbacks"
-    echo ""
-    
-    if ! check_service_running "litellm"; then
-        print_error "LiteLLM is not running"
-        pause
-        return
-    fi
-    
-    echo "Available callback types:"
-    echo "  1. Success callback (all successful requests)"
-    echo "  2. Failure callback (all failed requests)"
-    echo "  3. Langfuse logging"
-    echo "  4. Custom webhook"
-    echo ""
-    
-    read -p "Select callback type: " cb_type
-    read -p "Enter webhook URL: " webhook_url
-    
-    if [[ -z " $ webhook_url" ]]; then
-        print_error "Webhook URL cannot be empty"
-        pause
-        return
-    fi
-    
-    local config_file="$DATA_DIR/config/litellm_config.yaml"
-    
-    case  $ cb_type in
-        1)
-            sed -i "s/success_callback: .*/success_callback: [\"webhook\"]/" " $ config_file"
-            echo "WEBHOOK_URL= $ webhook_url" >> " $ DATA_DIR/env/litellm.env"
-            ;;
-        2)
-            sed -i "s/failure_callback: .*/failure_callback: [\"webhook\"]/" " $ config_file"
-            echo "FAILURE_WEBHOOK_URL= $ webhook_url" >> " $ DATA_DIR/env/litellm.env"
-            ;;
-        *)
-            print_error "Invalid selection"
-            pause
-            return
-            ;;
-    esac
-    
-    docker restart litellm
-    print_success "Callback configured"
-    
-    pause
-}
-
-configure_custom_webhook() {
-    echo ""
-    print_step "Custom Webhook"
-    echo ""
-    
-    read -p "Enter webhook name: " webhook_name
-    read -p "Enter webhook URL: " webhook_url
-    read -p "Enter HTTP method (GET/POST): " http_method
-    http_method= $ (echo " $ http_method" | tr '[:lower:]' '[:upper:]')
-    
-    if [[ -z " $ webhook_name" || -z " $ webhook_url" ]]; then
-        print_error "Name and URL are required"
-        pause
-        return
-    fi
-    
-    # Save webhook config
-    local webhook_file=" $ DATA_DIR/metadata/webhooks.json"
-    
-    if [[ ! -f " $ webhook_file" ]]; then
-        echo "[]" > " $ webhook_file"
-    fi
-    
-    local temp_file= $ (mktemp)
-    jq --arg name " $ webhook_name" \
-       --arg url " $ webhook_url" \
-       --arg method " $ http_method" \
-       '. += [{name: $name, url: $url, method:  $ method, created_at: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))}]' \
-       " $ webhook_file" > " $ temp_file"
-    
-    mv " $ temp_file" " $ webhook_file"
-    
-    print_success "Webhook saved"
-    print_info "Use this in your workflows/integrations"
-    
-    pause
-}
-
-#------------------------------------------------------------------------------
-# Option 7: Configure Qdrant Collections
-#------------------------------------------------------------------------------
-
-configure_qdrant_collections() {
-    print_header
-    echo -e " $ {BOLD}Configure Qdrant Collections${NC}"
-    echo ""
-    
-    if ! check_service_running "qdrant"; then
-        print_error "Qdrant is not running"
-        pause
-        return
-    fi
-    
-    local api_key= $ (jq -r '.qdrant.password' " $ CREDENTIALS_FILE" 2>/dev/null || echo "")
-    
-    echo "[1] List Collections"
-    echo "[2] Create Collection"
-    echo "[3] Delete Collection"
-    echo "[4] Collection Info"
-    echo "[B] Back"
-    echo ""
-    
-    read -p "Select option: " choice
-    
-    case  $ choice in
-        1) list_qdrant_collections " $ api_key" ;;
-        2) create_qdrant_collection " $ api_key" ;;
-        3) delete_qdrant_collection " $ api_key" ;;
-        4) qdrant_collection_info " $ api_key" ;;
-        [Bb]) return ;;
-        *) print_error "Invalid option" ; pause ;;
-    esac
-}
-
-list_qdrant_collections() {
-    local api_key= $ 1
-    
-    echo ""
-    print_step "Qdrant Collections"
-    echo ""
-    
-    local collections=$(curl -s -X GET http://localhost:6333/collections \
-        -H "api-key:  $ api_key")
-    
-    if echo " $ collections" | jq -e '.result.collections' &>/dev/null; then
-        echo " $ collections" | jq -r '.result.collections[] | "  - \(.name) (\(.vectors_count) vectors)"'
-    else
-        print_info "No collections found"
-    fi
-    
-    echo ""
-    pause
-}
-
-create_qdrant_collection() {
-    local api_key= $ 1
-    
-    echo ""
-    print_step "Create Qdrant Collection"
-    echo ""
-    
-    read -p "Enter collection name: " collection_name
-    read -p "Enter vector size (e.g., 1536 for OpenAI, 384 for all-MiniLM): " vector_size
-    read -p "Enter distance metric (Cosine/Euclid/Dot, default: Cosine): " distance
-    distance=${distance:-Cosine}
-    
-    if [[ -z " $ collection_name" || -z " $ vector_size" ]]; then
-        print_error "Collection name and vector size are required"
-        pause
-        return
-    fi
-    
-    print_info "Creating collection..."
-    
-    local response= $ (curl -s -X PUT http://localhost:6333/collections/ $ collection_name \
-        -H "api-key: $api_key" \
-        -H "Content-Type: application/json" \
-        -d "{
-            \"vectors\": {
-                \"size\":  $ vector_size,
-                \"distance\": \" $ distance\"
-            }
-        }")
-    
-    if echo "$response" | jq -e '.result' &>/dev/null; then
-        print_success "Collection created:  $ collection_name"
-    else
-        print_error "Failed to create collection"
-        echo " $ response" | jq .
-    fi
-    
-    pause
-}
-
-delete_qdrant_collection() {
-    local api_key= $ 1
-    
-    echo ""
-    print_step "Delete Qdrant Collection"
-    echo ""
-    
-    read -p "Enter collection name to delete: " collection_name
-    
-    if [[ -z " $ collection_name" ]]; then
-        print_error "Collection name cannot be empty"
-        pause
-        return
-    fi
-    
-    if ! confirm "Delete collection ' $ collection_name'? This cannot be undone."; then
-        return
-    fi
-    
-    print_info "Deleting collection..."
-    
-    local response= $ (curl -s -X DELETE http://localhost:6333/collections/$collection_name \
-        -H "api-key:  $ api_key")
-    
-    if echo " $ response" | jq -e '.result' &>/dev/null; then
-        print_success "Collection deleted"
-    else
-        print_error "Failed to delete collection"
-        echo " $ response" | jq .
-    fi
-    
-    pause
-}
-
-qdrant_collection_info() {
-    local api_key= $ 1
-    
-    echo ""
-    read -p "Enter collection name: " collection_name
-    
-    if [[ -z "$collection_name" ]]; then
-        print_error "Collection name cannot be empty"
-        pause
-        return
-    fi
-    
-    echo ""
-    print_info "Collection:  $ collection_name"
-    echo ""
-    
-    curl -s -X GET http://localhost:6333/collections/ $ collection_name \
-        -H "api-key:  $ api_key" | jq .
-    
-    echo ""
-    pause
-}
-
-#------------------------------------------------------------------------------
-# Option 8: Test Database Connections
-#------------------------------------------------------------------------------
-
-test_database_connections() {
-    print_header
-    echo -e " $ {BOLD}Test Database Connections${NC}"
-    echo ""
-    
-    local all_pass=true
-    
-    # Test PostgreSQL
-    print_step "Testing PostgreSQL..."
-    if check_service_running "postgres"; then
-        if docker exec postgres pg_isready -U postgres &>/dev/null; then
-            print_success "PostgreSQL: Connected"
-        else
-            print_error "PostgreSQL: Connection failed"
-            all_pass=false
-        fi
-    else
-        print_warning "PostgreSQL: Not running"
-        all_pass=false
-    fi
-    
-    # Test Redis
-    print_step "Testing Redis..."
-    if check_service_running "redis"; then
-        local redis_pass= $ (grep REDIS_PASSWORD " $ DATA_DIR/env/redis.env" 2>/dev/null | cut -d'=' -f2)
-        if docker exec redis redis-cli -a " $ redis_pass" PING &>/dev/null; then
-            print_success "Redis: Connected"
-        else
-            print_error "Redis: Connection failed"
-            all_pass=false
-        fi
-    else
-        print_warning "Redis: Not running"
-        all_pass=false
-    fi
-    
-    # Test Qdrant
-    print_step "Testing Qdrant..."
-    if check_service_running "qdrant"; then
-        if curl -sf http://localhost:6333/healthz &>/dev/null; then
-            print_success "Qdrant: Connected"
-        else
-            print_error "Qdrant: Connection failed"
-            all_pass=false
-        fi
-    else
-        print_warning "Qdrant: Not running"
-        all_pass=false
-    fi
-    
-    echo ""
-    if [[ " $ all_pass" == true ]]; then
-        print_success "All database connections successful"
-    else
-        print_warning "Some databases failed connection tests"
-    fi
-    
-    pause
-}
-
-#------------------------------------------------------------------------------
-# Option 9: Database Backup/Restore
-#------------------------------------------------------------------------------
-
-database_backup_restore() {
-    print_header
-    echo -e "${BOLD}Database Backup/Restore${NC}"
-    echo ""
-    
-    echo "[1] Backup All Databases"
-    echo "[2] Backup PostgreSQL"
-    echo "[3] Backup Qdrant"
-    echo "[4] Restore from Backup"
-    echo "[5] List Backups"
-    echo "[B] Back"
-    echo ""
-    
-    read -p "Select option: " choice
-    
-    case  $ choice in
-        1) backup_all_databases ;;
-        2) backup_postgres ;;
-        3) backup_qdrant ;;
-        4) restore_database ;;
-        5) list_backups ;;
-        [Bb]) return ;;
-        *) print_error "Invalid option" ; pause ;;
-    esac
-}
-
-backup_all_databases() {
-    echo ""
-    print_step "Backing up all databases..."
-    echo ""
-    
-    local backup_dir=" $ DATA_DIR/backups/ $ (date +%Y%m%d_%H%M%S)"
-    mkdir -p " $ backup_dir"
-    
-    # Backup PostgreSQL
-    if check_service_running "postgres"; then
-        print_info "Backing up PostgreSQL..."
-        docker exec postgres pg_dumpall -U postgres | gzip > " $ backup_dir/postgres.sql.gz"
-        print_success "PostgreSQL backed up"
-    fi
-    
-    # Backup Qdrant
-    if check_service_running "qdrant"; then
-        print_info "Backing up Qdrant..."
-        tar -czf " $ backup_dir/qdrant.tar.gz" -C " $ DATA_DIR" qdrant/
-        print_success "Qdrant backed up"
-    fi
-    
-    # Backup Redis
-    if check_service_running "redis"; then
-        print_info "Backing up Redis..."
-        docker exec redis redis-cli SAVE
-        cp " $ DATA_DIR/redis/dump.rdb" "$backup_dir/redis.rdb"
-        print_success "Redis backed up"
-    fi
-    
-    echo ""
-    print_success "All databases backed up to:  $ backup_dir"
-    
-    pause
-}
-
-backup_postgres() {
-    echo ""
-    print_step "Backing up PostgreSQL..."
-    echo ""
-    
-    if ! check_service_running "postgres"; then
+    if ! docker ps | grep -q postgres; then
         print_error "PostgreSQL is not running"
-        pause
-        return
+        validation_ok=false
+    else
+        print_success "PostgreSQL is running"
     fi
     
-    local backup_dir=" $ DATA_DIR/backups/postgres/ $ (date +%Y%m%d_%H%M%S)"
-    mkdir -p " $ backup_dir"
-    
-    docker exec postgres pg_dumpall -U postgres | gzip > "$backup_dir/all_databases.sql.gz"
-    
-    print_success "PostgreSQL backed up to:  $ backup_dir"
-    
-    pause
-}
-
-backup_qdrant() {
-    echo ""
-    print_step "Backing up Qdrant..."
-    echo ""
-    
-    if ! check_service_running "qdrant"; then
-        print_error "Qdrant is not running"
-        pause
-        return
+    if ! docker ps | grep -q redis; then
+        print_error "Redis is not running"
+        validation_ok=false
+    else
+        print_success "Redis is running"
     fi
     
-    local backup_dir=" $ DATA_DIR/backups/qdrant/ $ (date +%Y%m%d_%H%M%S)"
-    mkdir -p " $ backup_dir"
-    
-    # Create snapshot via API
-    local api_key= $ (jq -r '.qdrant.password' " $ CREDENTIALS_FILE" 2>/dev/null || echo "")
-    
-    curl -s -X POST http://localhost:6333/collections/snapshot \
-        -H "api-key:  $ api_key"
-    
-    # Copy Qdrant data
-    tar -czf " $ backup_dir/qdrant_data.tar.gz" -C "$DATA_DIR" qdrant/
-    
-    print_success "Qdrant backed up to:  $ backup_dir"
-    
-    pause
-}
-
-restore_database() {
-    echo ""
-    print_step "Restore Database"
-    echo ""
-    
-    local backup_base=" $ DATA_DIR/backups"
-    
-    if [[ ! -d " $ backup_base" ]] || [[ -z " $ (ls -A  $ backup_base)" ]]; then
-        print_error "No backups found"
-        pause
-        return
+    # Check Ollama has models
+    local model_count=$(curl -s http://localhost:11434/api/tags 2>/dev/null | jq -r '.models | length' 2>/dev/null || echo "0")
+    if [[ "$model_count" -eq 0 ]]; then
+        print_warning "No Ollama models found - UI may not function properly"
+    else
+        print_success "Ollama has $model_count model(s) available"
     fi
     
-    echo "Available backups:"
-    find " $ backup_base" -mindepth 1 -maxdepth 1 -type d | nl
-    echo ""
-    
-    read -p "Enter backup number to restore: " backup_num
-    
-    local backup_dir= $ (find " $ backup_base" -mindepth 1 -maxdepth 1 -type d | sed -n "${backup_num}p")
-    
-    if [[ -z " $ backup_dir" ]]; then
-        print_error "Invalid selection"
-        pause
-        return
+    if [[ "$validation_ok" == "false" ]]; then
+        echo ""
+        print_error "Validation failed. Please run script 2 first."
+        exit 1
     fi
-    
-    print_warning "This will overwrite current data!"
-    if ! confirm "Continue with restore?"; then
-        return
-    fi
-    
-    # Restore PostgreSQL
-    if [[ -f " $ backup_dir/postgres.sql.gz" ]]; then
-        print_info "Restoring PostgreSQL..."
-        gunzip < " $ backup_dir/postgres.sql.gz" | docker exec -i postgres psql -U postgres
-        print_success "PostgreSQL restored"
-    fi
-    
-    # Restore Qdrant
-    if [[ -f " $ backup_dir/qdrant.tar.gz" ]]; then
-        print_info "Restoring Qdrant..."
-        docker stop qdrant
-        rm -rf " $ DATA_DIR/qdrant"
-        tar -xzf " $ backup_dir/qdrant.tar.gz" -C " $ DATA_DIR"
-        docker start qdrant
-        print_success "Qdrant restored"
-    fi
-    
-    # Restore Redis
-    if [[ -f " $ backup_dir/redis.rdb" ]]; then
-        print_info "Restoring Redis..."
-        docker stop redis
-        cp " $ backup_dir/redis.rdb" " $ DATA_DIR/redis/dump.rdb"
-        docker start redis
-        print_success "Redis restored"
-    fi
-    
-    pause
-}
-
-list_backups() {
-    echo ""
-    print_step "Available Backups"
-    echo ""
-    
-    local backup_base=" $ DATA_DIR/backups"
-    
-    if [[ ! -d " $ backup_base" ]] || [[ -z "$(ls -A  $ backup_base)" ]]; then
-        print_info "No backups found"
-        pause
-        return
-    fi
-    
-    find " $ backup_base" -mindepth 1 -maxdepth 1 -type d -exec du -sh {} \; | sort
-    
-    echo ""
-    pause
 }
 
 #------------------------------------------------------------------------------
-# Option 10: View Service Logs
+# Phase 2: Generate UI Docker Compose
 #------------------------------------------------------------------------------
 
-view_service_logs() {
-    print_header
-    echo -e "${BOLD}View Service Logs${NC}"
-    echo ""
+generate_ui_compose() {
+    print_phase "2" "📝 Generating UI Services Configuration"
     
-    echo "Select service:"
-    docker ps --format "{{.Names}}" | nl
-    echo ""
-    echo "[A] All services"
-    echo "[B] Back"
-    echo ""
+    mkdir -p "$COMPOSE_DIR"
     
-    read -p "Selection: " choice
+    print_info "Creating UI services compose file..."
     
-    case  $ choice in
-        [Aa])
-            docker compose -f " $ DATA_DIR/compose/*.yml" logs -f --tail=100
-            ;;
-        [Bb])
-            return
-            ;;
-        *)
-            local service= $ (docker ps --format "{{.Names}}" | sed -n " $ {choice}p")
-            if [[ -n "$service" ]]; then
-                echo ""
-                print_info "Showing logs for  $ service (Ctrl+C to exit)"
-                echo ""
-                docker logs -f --tail=100 " $ service"
-            else
-                print_error "Invalid selection"
-                pause
-            fi
-            ;;
-    esac
-}
-
-#------------------------------------------------------------------------------
-# Option 11: Restart Services
-#------------------------------------------------------------------------------
-
-restart_services() {
-    print_header
-    echo -e "${BOLD}Restart Services${NC}"
-    echo ""
-    
-    echo "Select service to restart:"
-    docker ps --format "{{.Names}}" | nl
-    echo ""
-    echo "[A] All services"
-    echo "[B] Back"
-    echo ""
-    
-    read -p "Selection: " choice
-    
-    case $choice in
-        [Aa])
-            if confirm "Restart all services?"; then
-                print_info "Restarting all services..."
-                docker restart  $ (docker ps -q)
-                print_success "All services restarted"
-            fi
-            pause
-            ;;
-        [Bb])
-            return
-            ;;
-        *)
-            local service= $ (docker ps --format "{{.Names}}" | sed -n "${choice}p")
-            if [[ -n "$service" ]]; then
-                print_info "Restarting  $ service..."
-                docker restart " $ service"
-                print_success " $ service restarted"
-            else
-                print_error "Invalid selection"
-            fi
-            pause
-            ;;
-    esac
-}
-
-#------------------------------------------------------------------------------
-# Option 12: Stop Services
-#------------------------------------------------------------------------------
-
-stop_services() {
-    print_header
-    echo -e " $ {BOLD}Stop Services${NC}"
-    echo ""
-    
-    echo "Select service to stop:"
-    docker ps --format "{{.Names}}" | nl
-    echo ""
-    echo "[A] All services"
-    echo "[B] Back"
-    echo ""
-    
-    read -p "Selection: " choice
-    
-    case $choice in
-        [Aa])
-            if confirm "Stop all services?"; then
-                print_info "Stopping all services..."
-                docker stop  $ (docker ps -q)
-                print_success "All services stopped"
-            fi
-            pause
-            ;;
-        [Bb])
-            return
-            ;;
-        *)
-            local service= $ (docker ps --format "{{.Names}}" | sed -n "${choice}p")
-            if [[ -n "$service" ]]; then
-                if confirm "Stop  $ service?"; then
-                    docker stop " $ service"
-                    print_success " $ service stopped"
-                fi
-            else
-                print_error "Invalid selection"
-            fi
-            pause
-            ;;
-    esac
-}
-
-#------------------------------------------------------------------------------
-# Option 13: Service Health Check
-#------------------------------------------------------------------------------
-
-service_health_check() {
-    print_header
-    echo -e " $ {BOLD}Service Health Check${NC}"
-    echo ""
-    
-    print_step "Checking service health..."
-    echo ""
-    
-    # Get all running containers
-    local containers= $ (docker ps --format "{{.Names}}")
-    
-    while IFS= read -r container; do
-        local health= $ (docker inspect --format='{{.State.Health.Status}}' " $ container" 2>/dev/null || echo "N/A")
-        local status= $ (docker inspect --format='{{.State.Status}}' " $ container")
-        
-        if [[ " $ health" == "healthy" ]] || [[ " $ health" == "N/A" && " $ status" == "running" ]]; then
-            print_success " $ container: OK"
-        elif [[ " $ health" == "unhealthy" ]]; then
-            print_error " $ container: UNHEALTHY"
-        elif [[ " $ status" != "running" ]]; then
-            print_error " $ container: NOT RUNNING"
-        else
-            print_warning " $ container:  $ health"
-        fi
-    done <<< " $ containers"
-    
-    echo ""
-    pause
-}
-
-#------------------------------------------------------------------------------
-# Option 14: Rotate Credentials
-#------------------------------------------------------------------------------
-
-rotate_credentials() {
-    print_header
-    echo -e "${BOLD}Rotate Credentials${NC}"
-    echo ""
-    
-    echo "Select service:"
-    echo "  [1] PostgreSQL password"
-    echo "  [2] Redis password"
-    echo "  [3] Qdrant API key"
-    echo "  [4] LiteLLM master key"
-    echo "  [5] All credentials"
-    echo "  [B] Back"
-    echo ""
-    
-    read -p "Selection: " choice
-    
-    case  $ choice in
-        1) rotate_postgres_password ;;
-        2) rotate_redis_password ;;
-        3) rotate_qdrant_key ;;
-        4) rotate_litellm_key ;;
-        5) rotate_all_credentials ;;
-        [Bb]) return ;;
-        *) print_error "Invalid option" ; pause ;;
-    esac
-}
-
-rotate_postgres_password() {
-    echo ""
-    print_warning "Rotating PostgreSQL password will require updating all dependent services"
-    
-    if ! confirm "Continue?"; then
-        return
-    fi
-    
-    local new_password= $ (openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
-    
-    print_info "Updating password..."
-    
-    # Update in container
-    docker exec postgres psql -U postgres -c "ALTER USER postgres PASSWORD ' $ new_password';"
-    
-    # Update env file
-    sed -i "s/POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD= $ new_password/" " $ DATA_DIR/env/postgres.env"
-    
-    # Update credentials file
-    local temp_file= $ (mktemp)
-    jq --arg pass "$new_password" '.postgres.password =  $ pass' " $ CREDENTIALS_FILE" > " $ temp_file"
-    mv " $ temp_file" " $ CREDENTIALS_FILE"
-    
-    print_success "Password rotated"
-    print_warning "Update dependent services (n8n, dify, litellm, flowise)"
-    
-    pause
-}
-
-rotate_redis_password() {
-    echo ""
-    if ! confirm "Rotate Redis password?"; then
-        return
-    fi
-    
-    local new_password= $ (openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
-    
-    # Update config
-    sed -i "s/requirepass .*/requirepass  $ new_password/" " $ DATA_DIR/config/redis.conf"
-    sed -i "s/REDIS_PASSWORD=.*/REDIS_PASSWORD= $ new_password/" " $ DATA_DIR/env/redis.env"
-    
-    # Update credentials
-    local temp_file= $ (mktemp)
-    jq --arg pass " $ new_password" '.redis.password =  $ pass' " $ CREDENTIALS_FILE" > " $ temp_file"
-    mv " $ temp_file" " $ CREDENTIALS_FILE"
-    
-    # Restart Redis
-    docker restart redis
-    
-    print_success "Password rotated"
-    
-    pause
-}
-
-rotate_qdrant_key() {
-    echo ""
-    if ! confirm "Rotate Qdrant API key?"; then
-        return
-    fi
-    
-    local new_key="sk- $ (openssl rand -hex 32)"
-    
-    sed -i "s/QDRANT__SERVICE__API_KEY=.*/QDRANT__SERVICE__API_KEY= $ new_key/" " $ DATA_DIR/env/qdrant.env"
-    
-    local temp_file= $ (mktemp)
-    jq --arg key " $ new_key" '.qdrant.password =  $ key' " $ CREDENTIALS_FILE" > " $ temp_file"
-    mv " $ temp_file" " $ CREDENTIALS_FILE"
-    
-    docker restart qdrant
-    
-    print_success "API key rotated"
-    
-    pause
-}
-
-rotate_litellm_key() {
-    echo ""
-    if ! confirm "Rotate LiteLLM master key?"; then
-        return
-    fi
-    
-    local new_key="sk- $ (openssl rand -hex 32)"
-    
-    sed -i "s/LITELLM_MASTER_KEY=.*/LITELLM_MASTER_KEY= $ new_key/" " $ DATA_DIR/env/litellm.env"
-    
-    local temp_file= $ (mktemp)
-    jq --arg key " $ new_key" '.litellm.password =  $ key' " $ CREDENTIALS_FILE" > " $ temp_file"
-    mv " $ temp_file" "$CREDENTIALS_FILE"
-    
-    docker restart litellm
-    
-    print_success "Master key rotated"
-    print_info "New key:  $ new_key"
-    
-    pause
-}
-
-rotate_all_credentials() {
-    echo ""
-    print_warning "This will rotate all service credentials"
-    
-    if ! confirm "Continue?"; then
-        return
-    fi
-    
-    rotate_postgres_password
-    rotate_redis_password
-    rotate_qdrant_key
-    rotate_litellm_key
-    
-    print_success "All credentials rotated"
-    
-    pause
-}
-
-#------------------------------------------------------------------------------
-# Option 15: Backup Configuration
-#------------------------------------------------------------------------------
-
-backup_configuration() {
-    print_header
-    echo -e " $ {BOLD}Backup Configuration${NC}"
-    echo ""
-    
-    local backup_dir=" $ DATA_DIR/backups/config/ $ (date +%Y%m%d_%H%M%S)"
-    mkdir -p " $ backup_dir"
-    
-    print_info "Backing up configuration..."
-    
-    # Backup compose files
-    cp -r " $ DATA_DIR/compose" " $ backup_dir/"
-    
-    # Backup env files
-    cp -r " $ DATA_DIR/env" " $ backup_dir/"
-    
-    # Backup config files
-    cp -r " $ DATA_DIR/config" " $ backup_dir/"
-    
-    # Backup metadata
-    cp -r " $ DATA_DIR/metadata" " $ backup_dir/"
-    
-    # Create archive
-    tar -czf " $ backup_dir.tar.gz" -C " $ backup_dir" .
-    rm -rf " $ backup_dir"
-    
-    print_success "Configuration backed up to:  $ backup_dir.tar.gz"
-    
-    pause
-}
-
-#------------------------------------------------------------------------------
-# Option 16: Restore Configuration
-#------------------------------------------------------------------------------
-
-restore_configuration() {
-    print_header
-    echo -e " $ {BOLD}Restore Configuration${NC}"
-    echo ""
-    
-    local backup_base=" $ DATA_DIR/backups/config"
-    
-    if [[ ! -d " $ backup_base" ]] || [[ -z "$(ls -A  $ backup_base 2>/dev/null)" ]]; then
-        print_error "No configuration backups found"
-        pause
-        return
-    fi
-    
-    echo "Available backups:"
-    find " $ backup_base" -name "*.tar.gz" | nl
-    echo ""
-    
-    read -p "Enter backup number to restore: " backup_num
-    
-    local backup_file= $ (find " $ backup_base" -name "*.tar.gz" | sed -n "${backup_num}p")
-   
- if [[ -z "$backup_file" ]]; then
-        print_error "Invalid selection"
-        pause
-        return
-    fi
-
-    print_warning "This will overwrite current configuration!"
-    if ! confirm "Continue with restore?"; then
-        return
-    fi
-
-    local temp_dir=$(mktemp -d)
-
-    print_info "Extracting backup..."
-    tar -xzf "$backup_file" -C "$temp_dir"
-
-    print_info "Restoring configuration..."
-
-    # Stop all services
-    docker stop $(docker ps -q) 2>/dev/null || true
-
-    # Restore files
-    cp -r "$temp_dir/compose/"* "$DATA_DIR/compose/"
-    cp -r "$temp_dir/env/"* "$DATA_DIR/env/"
-    cp -r "$temp_dir/config/"* "$DATA_DIR/config/"
-    cp -r "$temp_dir/metadata/"* "$DATA_DIR/metadata/"
-
-    # Cleanup
-    rm -rf "$temp_dir"
-
-    print_success "Configuration restored"
-    print_info "Restart services to apply changes"
-
-    pause
-}
-
-#------------------------------------------------------------------------------
-# Option 17: Setup Monitoring
-#------------------------------------------------------------------------------
-
-setup_monitoring() {
-    print_header
-    echo -e "${BOLD}Setup Monitoring${NC}"
-    echo ""
-
-    print_info "Monitoring options:"
-    echo ""
-    echo "[1] Install Prometheus + Grafana"
-    echo "[2] Setup Docker stats monitoring"
-    echo "[3] Configure health check alerts"
-    echo "[4] View current metrics"
-    echo "[B] Back"
-    echo ""
-
-    read -p "Selection: " choice
-
-    case $choice in
-        1) install_prometheus_grafana ;;
-        2) setup_docker_stats ;;
-        3) configure_health_alerts ;;
-        4) view_current_metrics ;;
-        [Bb]) return ;;
-        *) print_error "Invalid option" ; pause ;;
-    esac
-}
-
-install_prometheus_grafana() {
-    echo ""
-    print_step "Installing Prometheus + Grafana"
-    echo ""
-
-    if confirm "Install monitoring stack?"; then
-        print_info "Creating monitoring compose file..."
-
-        cat > "$DATA_DIR/compose/monitoring.yml" <<'EOF'
+    cat > "$COMPOSE_DIR/ui-services.yml" <<'EOF'
 version: '3.8'
-
-services:
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus
-    restart: unless-stopped
-    volumes:
-      - /mnt/data/prometheus:/prometheus
-      - /mnt/data/config/prometheus.yml:/etc/prometheus/prometheus.yml
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-    ports:
-      - "9090:9090"
-    networks:
-      - ai_platform
-
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
-    restart: unless-stopped
-    volumes:
-      - /mnt/data/grafana:/var/lib/grafana
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
-    ports:
-      - "3000:3000"
-    networks:
-      - ai_platform
-
-  node-exporter:
-    image: prom/node-exporter:latest
-    container_name: node-exporter
-    restart: unless-stopped
-    command:
-      - '--path.rootfs=/host'
-    volumes:
-      - '/:/host:ro,rslave'
-    ports:
-      - "9100:9100"
-    networks:
-      - ai_platform
-
-  cadvisor:
-    image: gcr.io/cadvisor/cadvisor:latest
-    container_name: cadvisor
-    restart: unless-stopped
-    volumes:
-      - /:/rootfs:ro
-      - /var/run:/var/run:ro
-      - /sys:/sys:ro
-      - /var/lib/docker/:/var/lib/docker:ro
-    ports:
-      - "8080:8080"
-    networks:
-      - ai_platform
 
 networks:
   ai_platform:
     external: true
+
+services:
 EOF
 
-        # Create Prometheus config
-        mkdir -p "$DATA_DIR/config"
-        cat > "$DATA_DIR/config/prometheus.yml" <<'EOF'
-global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
+    # Add Open WebUI if enabled
+    if [[ "${OPEN_WEBUI_ENABLED:-false}" == "true" ]]; then
+        cat >> "$COMPOSE_DIR/ui-services.yml" <<'EOF'
+  #----------------------------------------------------------------------------
+  # Open WebUI - Primary Chat Interface
+  #----------------------------------------------------------------------------
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - "3000:8080"
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:-secret-key-change-me}
+      - WEBUI_AUTH=true
+      - ENABLE_SIGNUP=${OPEN_WEBUI_ENABLE_SIGNUP:-true}
+      - DEFAULT_USER_ROLE=${OPEN_WEBUI_DEFAULT_ROLE:-user}
+      - ENABLE_ADMIN_EXPORT=true
+      - ENABLE_COMMUNITY_SHARING=${OPEN_WEBUI_ENABLE_SHARING:-false}
+      - WEBUI_NAME=${OPEN_WEBUI_NAME:-AI Platform}
+    volumes:
+      - ${DATA_DIR}/open-webui:/app/backend/data
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.open-webui.rule=Host(`chat.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.open-webui.entrypoints=websecure"
+      - "traefik.http.routers.open-webui.tls=true"
+      - "traefik.http.services.open-webui.loadbalancer.server.port=8080"
+    depends_on:
+      - ollama
 
-scrape_configs:
-  - job_name: 'prometheus'
-    static_configs:
-      - targets: ['localhost:9090']
-
-  - job_name: 'node-exporter'
-    static_configs:
-      - targets: ['node-exporter:9100']
-
-  - job_name: 'cadvisor'
-    static_configs:
-      - targets: ['cadvisor:8080']
-
-  - job_name: 'docker-containers'
-    static_configs:
-      - targets:
-        - 'postgres:5432'
-        - 'redis:6379'
-        - 'qdrant:6333'
-        - 'ollama:11434'
-        - 'litellm:4000'
 EOF
-
-        # Generate Grafana password
-        local grafana_pass=$(openssl rand -base64 16)
-        echo "GRAFANA_PASSWORD=$grafana_pass" > "$DATA_DIR/env/monitoring.env"
-
-        # Deploy
-        docker compose -f "$DATA_DIR/compose/monitoring.yml" --env-file "$DATA_DIR/env/monitoring.env" up -d
-
-        print_success "Monitoring stack deployed"
-        echo ""
-        print_info "Access Grafana at: http://localhost:3000"
-        print_info "Username: admin"
-        print_info "Password: $grafana_pass"
-        echo ""
-        print_info "Access Prometheus at: http://localhost:9090"
+        print_success "Open WebUI configuration added"
     fi
 
-    pause
+    # Add AnythingLLM if enabled
+    if [[ "${ANYTHINGLLM_ENABLED:-false}" == "true" ]]; then
+        cat >> "$COMPOSE_DIR/ui-services.yml" <<'EOF'
+  #----------------------------------------------------------------------------
+  # AnythingLLM - Document Intelligence Platform
+  #----------------------------------------------------------------------------
+  anythingllm:
+    image: mintplexlabs/anythingllm:latest
+    container_name: anythingllm
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - "3001:3001"
+    environment:
+      - STORAGE_DIR=/app/server/storage
+      - OLLAMA_BASE_PATH=http://ollama:11434
+      - VECTOR_DB=${ANYTHINGLLM_VECTOR_DB:-lancedb}
+      - LLM_PROVIDER=ollama
+      - EMBEDDING_ENGINE=ollama
+      - AUTH_TOKEN=${ANYTHINGLLM_AUTH_TOKEN:-auth-token-change-me}
+      - JWT_SECRET=${ANYTHINGLLM_JWT_SECRET:-jwt-secret-change-me}
+      - DISABLE_TELEMETRY=true
+    volumes:
+      - ${DATA_DIR}/anythingllm:/app/server/storage
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.anythingllm.rule=Host(`docs.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.anythingllm.entrypoints=websecure"
+      - "traefik.http.routers.anythingllm.tls=true"
+      - "traefik.http.services.anythingllm.loadbalancer.server.port=3001"
+    depends_on:
+      - ollama
+
+EOF
+        print_success "AnythingLLM configuration added"
+    fi
+
+    # Add Dify if enabled
+    if [[ "${DIFY_ENABLED:-false}" == "true" ]]; then
+        cat >> "$COMPOSE_DIR/ui-services.yml" <<'EOF'
+  #----------------------------------------------------------------------------
+  # Dify - LLM Application Development Platform
+  #----------------------------------------------------------------------------
+  dify-api:
+    image: langgenius/dify-api:latest
+    container_name: dify-api
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    environment:
+      - MODE=api
+      - LOG_LEVEL=INFO
+      - SECRET_KEY=${DIFY_SECRET_KEY}
+      - DB_USERNAME=${POSTGRES_USER:-aiplatform}
+      - DB_PASSWORD=${POSTGRES_PASSWORD}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_DATABASE=dify
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_USE_SSL=false
+      - REDIS_DB=1
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/2
+      - WEB_API_CORS_ALLOW_ORIGINS=*
+      - CONSOLE_CORS_ALLOW_ORIGINS=*
+      - STORAGE_TYPE=local
+      - STORAGE_LOCAL_PATH=/app/storage
+      - VECTOR_STORE=${VECTOR_DB:-qdrant}
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+    volumes:
+      - ${DATA_DIR}/dify/api/storage:/app/storage
+    depends_on:
+      - postgres
+      - redis
+
+  dify-worker:
+    image: langgenius/dify-api:latest
+    container_name: dify-worker
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    environment:
+      - MODE=worker
+      - LOG_LEVEL=INFO
+      - SECRET_KEY=${DIFY_SECRET_KEY}
+      - DB_USERNAME=${POSTGRES_USER:-aiplatform}
+      - DB_PASSWORD=${POSTGRES_PASSWORD}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_DATABASE=dify
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_DB=1
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/2
+      - STORAGE_TYPE=local
+      - STORAGE_LOCAL_PATH=/app/storage
+      - VECTOR_STORE=${VECTOR_DB:-qdrant}
+      - QDRANT_URL=http://qdrant:6333
+    volumes:
+      - ${DATA_DIR}/dify/worker/storage:/app/storage
+    depends_on:
+      - postgres
+      - redis
+
+  dify-web:
+    image: langgenius/dify-web:latest
+    container_name: dify-web
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - "3002:3000"
+    environment:
+      - CONSOLE_API_URL=http://dify-api:5001
+      - APP_API_URL=http://dify-api:5001
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dify.rule=Host(`dify.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.dify.entrypoints=websecure"
+      - "traefik.http.routers.dify.tls=true"
+      - "traefik.http.services.dify.loadbalancer.server.port=3000"
+    depends_on:
+      - dify-api
+
+  dify-nginx:
+    image: nginx:alpine
+    container_name: dify-nginx
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - "8000:80"
+    volumes:
+      - ${DATA_DIR}/dify/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - dify-api
+      - dify-web
+
+EOF
+        print_success "Dify configuration added"
+    fi
+
+    # Add LibreChat if enabled
+    if [[ "${LIBRECHAT_ENABLED:-false}" == "true" ]]; then
+        cat >> "$COMPOSE_DIR/ui-services.yml" <<'EOF'
+  #----------------------------------------------------------------------------
+  # LibreChat - Multi-Model Chat Interface
+  #----------------------------------------------------------------------------
+  librechat-mongodb:
+    image: mongo:latest
+    container_name: librechat-mongodb
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGODB_USER:-admin}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGODB_PASSWORD:-mongodb_secure_password}
+    volumes:
+      - ${DATA_DIR}/librechat/mongodb:/data/db
+    command: mongod --quiet --logpath /dev/null
+
+  librechat-meilisearch:
+    image: getmeili/meilisearch:latest
+    container_name: librechat-meilisearch
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    environment:
+      - MEILI_HOST=http://librechat-meilisearch:7700
+      - MEILI_NO_ANALYTICS=true
+    volumes:
+      - ${DATA_DIR}/librechat/meilisearch:/meili_data
+
+  librechat:
+    image: ghcr.io/danny-avila/librechat:latest
+    container_name: librechat
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - "3003:3080"
+    environment:
+      - HOST=0.0.0.0
+      - MONGO_URI=mongodb://${MONGODB_USER:-admin}:${MONGODB_PASSWORD:-mongodb_secure_password}@librechat-mongodb:27017/LibreChat?authSource=admin
+      - MEILI_HOST=http://librechat-meilisearch:7700
+      - CREDS_KEY=${LIBRECHAT_CREDS_KEY:-creds-key-change-me-32-chars}
+      - CREDS_IV=${LIBRECHAT_CREDS_IV:-creds-iv-change-me-16-chars}
+      - JWT_SECRET=${LIBRECHAT_JWT_SECRET:-jwt-secret-change-me}
+      - ALLOW_EMAIL_LOGIN=true
+      - ALLOW_REGISTRATION=${LIBRECHAT_ALLOW_REGISTRATION:-true}
+      - OLLAMA_BASE_URL=http://ollama:11434
+    volumes:
+      - ${DATA_DIR}/librechat/config:/app/librechat.yaml:ro
+      - ${DATA_DIR}/librechat/images:/app/client/public/images
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.librechat.rule=Host(`librechat.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.librechat.entrypoints=websecure"
+      - "traefik.http.routers.librechat.tls=true"
+      - "traefik.http.services.librechat.loadbalancer.server.port=3080"
+    depends_on:
+      - librechat-mongodb
+      - librechat-meilisearch
+      - ollama
+
+EOF
+        print_success "LibreChat configuration added"
+    fi
+
+    # Add Flowise if enabled
+    if [[ "${FLOWISE_ENABLED:-false}" == "true" ]]; then
+        cat >> "$COMPOSE_DIR/ui-services.yml" <<'EOF'
+  #----------------------------------------------------------------------------
+  # Flowise - Visual Flow Builder for LLM Apps
+  #----------------------------------------------------------------------------
+  flowise:
+    image: flowiseai/flowise:latest
+    container_name: flowise
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - "3004:3000"
+    environment:
+      - PORT=3000
+      - FLOWISE_USERNAME=${FLOWISE_USERNAME:-admin}
+      - FLOWISE_PASSWORD=${FLOWISE_PASSWORD:-flowise_secure_password}
+      - APIKEY_PATH=/root/.flowise
+      - DATABASE_TYPE=postgres
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=flowise
+      - DATABASE_USER=${POSTGRES_USER:-aiplatform}
+      - DATABASE_PASSWORD=${POSTGRES_PASSWORD}
+      - EXECUTION_MODE=main
+    volumes:
+      - ${DATA_DIR}/flowise:/root/.flowise
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.flowise.rule=Host(`flowise.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.flowise.entrypoints=websecure"
+      - "traefik.http.routers.flowise.tls=true"
+      - "traefik.http.services.flowise.loadbalancer.server.port=3000"
+    depends_on:
+      - postgres
+
+EOF
+        print_success "Flowise configuration added"
+    fi
+
+    # Add n8n if enabled
+    if [[ "${N8N_ENABLED:-false}" == "true" ]]; then
+        cat >> "$COMPOSE_DIR/ui-services.yml" <<'EOF'
+  #----------------------------------------------------------------------------
+  # n8n - Workflow Automation
+  #----------------------------------------------------------------------------
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=${DOMAIN:-localhost}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=https
+      - NODE_ENV=production
+      - WEBHOOK_URL=https://n8n.${DOMAIN:-localhost}/
+      - GENERIC_TIMEZONE=UTC
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=n8n
+      - DB_POSTGRESDB_USER=${POSTGRES_USER:-aiplatform}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:-n8n-encryption-key-change-me}
+    volumes:
+      - ${DATA_DIR}/n8n:/home/node/.n8n
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.n8n.rule=Host(`n8n.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.n8n.entrypoints=websecure"
+      - "traefik.http.routers.n8n.tls=true"
+      - "traefik.http.services.n8n.loadbalancer.server.port=5678"
+    depends_on:
+      - postgres
+
+EOF
+        print_success "n8n configuration added"
+    fi
 }
 
-setup_docker_stats() {
-    echo ""
-    print_step "Docker Stats Monitoring"
-    echo ""
+#------------------------------------------------------------------------------
+# Phase 3: Initialize Databases for UI Services
+#------------------------------------------------------------------------------
 
-    print_info "Real-time container statistics:"
-    echo ""
-
-    docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}"
-
-    echo ""
-    pause
+initialize_databases() {
+    print_phase "3" "💾 Initializing UI Service Databases"
+    
+    # Create databases for each UI service
+    if [[ "${DIFY_ENABLED:-false}" == "true" ]]; then
+        print_info "Creating Dify database..."
+        docker exec postgres psql -U "${POSTGRES_USER:-aiplatform}" -c "CREATE DATABASE dify;" 2>/dev/null || print_warning "Dify database may already exist"
+        print_success "Dify database ready"
+    fi
+    
+    if [[ "${FLOWISE_ENABLED:-false}" == "true" ]]; then
+        print_info "Creating Flowise database..."
+        docker exec postgres psql -U "${POSTGRES_USER:-aiplatform}" -c "CREATE DATABASE flowise;" 2>/dev/null || print_warning "Flowise database may already exist"
+        print_success "Flowise database ready"
+    fi
+    
+    if [[ "${N8N_ENABLED:-false}" == "true" ]]; then
+        print_info "Creating n8n database..."
+        docker exec postgres psql -U "${POSTGRES_USER:-aiplatform}" -c "CREATE DATABASE n8n;" 2>/dev/null || print_warning "n8n database may already exist"
+        print_success "n8n database ready"
+    fi
 }
 
-configure_health_alerts() {
-    echo ""
-    print_step "Configure Health Check Alerts"
-    echo ""
+#------------------------------------------------------------------------------
+# Phase 4: Generate Nginx Configuration for Dify
+#------------------------------------------------------------------------------
 
-    read -p "Enter email for alerts (optional): " alert_email
-    read -p "Enter Slack webhook URL (optional): " slack_webhook
+generate_dify_nginx() {
+    if [[ "${DIFY_ENABLED:-false}" != "true" ]]; then
+        return 0
+    fi
+    
+    print_phase "4" "⚙️ Configuring Dify Nginx"
+    
+    mkdir -p "$DATA_DIR/dify/nginx"
+    
+    cat > "$DATA_DIR/dify/nginx/nginx.conf" <<'EOF'
+user  nginx;
+worker_processes  auto;
 
-    # Create health check script
-    cat > "$DATA_DIR/scripts/health_check.sh" <<'EOF'
-#!/bin/bash
+error_log  /var/log/nginx/error.log notice;
+pid        /var/run/nginx.pid;
 
-# Health check script
-SERVICES=("postgres" "redis" "qdrant" "ollama" "litellm")
-ALERT_EMAIL="${ALERT_EMAIL:-}"
-SLACK_WEBHOOK="${SLACK_WEBHOOK:-}"
+events {
+    worker_connections  1024;
+}
 
-for service in "${SERVICES[@]}"; do
-    if ! docker ps | grep -q "$service"; then
-        message="ALERT: $service is not running!"
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
 
-        # Send email if configured
-        if [[ -n "$ALERT_EMAIL" ]]; then
-            echo "$message" | mail -s "Service Alert: $service" "$ALERT_EMAIL"
+    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" "$http_x_forwarded_for"';
+
+    access_log  /var/log/nginx/access.log  main;
+
+    sendfile        on;
+    keepalive_timeout  65;
+
+    upstream api {
+        server dify-api:5001;
+    }
+
+    upstream web {
+        server dify-web:3000;
+    }
+
+    server {
+        listen 80;
+        server_name _;
+
+        location /console/api {
+            proxy_pass http://api;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+
+        location /api {
+            proxy_pass http://api;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+
+        location /v1 {
+            proxy_pass http://api;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+
+        location / {
+            proxy_pass http://web;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+    }
+}
+EOF
+    
+    print_success "Dify Nginx configuration created"
+}
+
+#------------------------------------------------------------------------------
+# Phase 5: Deploy UI Services
+#------------------------------------------------------------------------------
+
+deploy_ui_services() {
+    print_phase "5" "🚀 Deploying UI Services"
+    
+    local step=1
+    local total_steps=0
+    
+    # Count enabled services
+    [[ "${OPEN_WEBUI_ENABLED:-false}" == "true" ]] && ((total_steps++))
+    [[ "${ANYTHINGLLM_ENABLED:-false}" == "true" ]] && ((total_steps++))
+    [[ "${DIFY_ENABLED:-false}" == "true" ]] && ((total_steps++))
+    [[ "${LIBRECHAT_ENABLED:-false}" == "true" ]] && ((total_steps++))
+    [[ "${FLOWISE_ENABLED:-false}" == "true" ]] && ((total_steps++))
+    [[ "${N8N_ENABLED:-false}" == "true" ]] && ((total_steps++))
+    
+    if [[ $total_steps -eq 0 ]]; then
+        print_warning "No UI services enabled in configuration"
+        return 0
+    fi
+    
+    # Deploy Open WebUI
+    if [[ "${OPEN_WEBUI_ENABLED:-false}" == "true" ]]; then
+        print_step "$step" "$total_steps" "💬" "Starting Open WebUI..."
+        docker-compose -f "$COMPOSE_DIR/ui-services.yml" up -d open-webui
+        sleep 10
+        if wait_for_service "Open WebUI" "http://localhost:3000" 60; then
+            update_metadata "open-webui" "running" "http://localhost:3000"
         fi
-
-        # Send Slack notification if configured
-        if [[ -n "$SLACK_WEBHOOK" ]]; then
-            curl -X POST "$SLACK_WEBHOOK" \
-                -H 'Content-Type: application/json' \
-                -d "{\"text\":\"$message\"}"
+        ((step++))
+    fi
+    
+    # Deploy AnythingLLM
+    if [[ "${ANYTHINGLLM_ENABLED:-false}" == "true" ]]; then
+        print_step "$step" "$total_steps" "📚" "Starting AnythingLLM..."
+        docker-compose -f "$COMPOSE_DIR/ui-services.yml" up -d anythingllm
+        sleep 15
+        if wait_for_service "AnythingLLM" "http://localhost:3001" 60; then
+            update_metadata "anythingllm" "running" "http://localhost:3001"
         fi
-
-        echo "$message"
+        ((step++))
     fi
-done
-EOF
-
-    chmod +x "$DATA_DIR/scripts/health_check.sh"
-
-    # Add to crontab
-    if confirm "Add to crontab (check every 5 minutes)?"; then
-        (crontab -l 2>/dev/null; echo "*/5 * * * * $DATA_DIR/scripts/health_check.sh") | crontab -
-        print_success "Health check scheduled"
+    
+    # Deploy Dify
+    if [[ "${DIFY_ENABLED:-false}" == "true" ]]; then
+        print_step "$step" "$total_steps" "🎯" "Starting Dify stack..."
+        docker-compose -f "$COMPOSE_DIR/ui-services.yml" up -d dify-api dify-worker
+        sleep 10
+        docker-compose -f "$COMPOSE_DIR/ui-services.yml" up -d dify-web dify-nginx
+        sleep 15
+        if wait_for_service "Dify" "http://localhost:8000" 90; then
+            update_metadata "dify" "running" "http://localhost:8000"
+        fi
+        ((step++))
     fi
-
-    pause
+    
+    # Deploy LibreChat
+    if [[ "${LIBRECHAT_ENABLED:-false}" == "true" ]]; then
+        print_step "$step" "$total_steps" "💬" "Starting LibreChat..."
+        docker-compose -f "$COMPOSE_DIR/ui-services.yml" up -d librechat-mongodb librechat-meilisearch
+        sleep 10
+        docker-compose -f "$COMPOSE_DIR/ui-services.yml" up -d librechat
+        sleep 20
+        if wait_for_service "LibreChat" "http://localhost:3003" 90; then
+            update_metadata "librechat" "running" "http://localhost:3003"
+        fi
+        ((step++))
+    fi
+    
+    # Deploy Flowise
+    if [[ "${FLOWISE_ENABLED:-false}" == "true" ]]; then
+        print_step "$step" "$total_steps" "🔀" "Starting Flowise..."
+        docker-compose -f "$COMPOSE_DIR/ui-services.yml" up -d flowise
+        sleep 15
+        if wait_for_service "Flowise" "http://localhost:3004" 60; then
+            update_metadata "flowise" "running" "http://localhost:3004"
+        fi
+        ((step++))
+    fi
+    
+    # Deploy n8n
+    if [[ "${N8N_ENABLED:-false}" == "true" ]]; then
+        print_step "$step" "$total_steps" "⚡" "Starting n8n..."
+        docker-compose -f "$COMPOSE_DIR/ui-services.yml" up -d n8n
+        sleep 15
+        if wait_for_service "n8n" "http://localhost:5678" 60; then
+            update_metadata "n8n" "running" "http://localhost:5678"
+        fi
+        ((step++))
+    fi
 }
 
-view_current_metrics() {
+#------------------------------------------------------------------------------
+# Phase 6: Service Health Check
+#------------------------------------------------------------------------------
+
+perform_health_check() {
+    print_phase "6" "🏥 UI Services Health Check"
+    
+    print_box_start
+    
+    local all_healthy=true
+    
+    # Check each enabled service
+    if [[ "${OPEN_WEBUI_ENABLED:-false}" == "true" ]]; then
+        if curl -sf http://localhost:3000 > /dev/null 2>&1; then
+            print_box_line "Open WebUI: ✓ Healthy (http://localhost:3000)"
+        else
+            print_box_line "Open WebUI: ✗ Unhealthy"
+            all_healthy=false
+        fi
+    fi
+    
+    if [[ "${ANYTHINGLLM_ENABLED:-false}" == "true" ]]; then
+        if curl -sf http://localhost:3001/api/ping > /dev/null 2>&1; then
+            print_box_line "AnythingLLM: ✓ Healthy (http://localhost:3001)"
+        else
+            print_box_line "AnythingLLM: ✗ Unhealthy"
+            all_healthy=false
+        fi
+    fi
+    
+    if [[ "${DIFY_ENABLED:-false}" == "true" ]]; then
+        if curl -sf http://localhost:8000 > /dev/null 2>&1; then
+            print_box_line "Dify: ✓ Healthy (http://localhost:8000)"
+        else
+            print_box_line "Dify: ✗ Unhealthy"
+            all_healthy=false
+        fi
+    fi
+    
+    if [[ "${LIBRECHAT_ENABLED:-false}" == "true" ]]; then
+        if curl -sf http://localhost:3003 > /dev/null 2>&1; then
+            print_box_line "LibreChat: ✓ Healthy (http://localhost:3003)"
+        else
+            print_box_line "LibreChat: ✗ Unhealthy"
+            all_healthy=false
+        fi
+    fi
+    
+    if [[ "${FLOWISE_ENABLED:-false}" == "true" ]]; then
+        if curl -sf http://localhost:3004 > /dev/null 2>&1; then
+            print_box_line "Flowise: ✓ Healthy (http://localhost:3004)"
+        else
+            print_box_line "Flowise: ✗ Unhealthy"
+            all_healthy=false
+        fi
+    fi
+    
+    if [[ "${N8N_ENABLED:-false}" == "true" ]]; then
+        if curl -sf http://localhost:5678 > /dev/null 2>&1; then
+            print_box_line "n8n: ✓ Healthy (http://localhost:5678)"
+        else
+            print_box_line "n8n: ✗ Unhealthy"
+            all_healthy=false
+        fi
+    fi
+    
+    print_box_end
+    
+    if [[ "$all_healthy" == "true" ]]; then
+        print_success "All UI services are healthy"
+    else
+        print_warning "Some UI services are unhealthy - check logs"
+    fi
+}
+
+#------------------------------------------------------------------------------
+# Phase 7: Generate Access Instructions
+#------------------------------------------------------------------------------
+
+generate_access_info() {
+    print_phase "7" "📋 Generating Access Information"
+    
+    local access_file="$DATA_DIR/UI_ACCESS.md"
+    
+    cat > "$access_file" <<EOF
+# AI Platform - UI Access Information
+
+Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+
+## Available Interfaces
+
+EOF
+
+    if [[ "${OPEN_WEBUI_ENABLED:-false}" == "true" ]]; then
+        cat >> "$access_file" <<EOF
+### Open WebUI (Primary Chat Interface)
+- **URL**: http://localhost:3000
+- **Domain**: https://chat.${DOMAIN:-localhost}
+- **Description**: ChatGPT-like interface for Ollama models
+- **First Login**: Create admin account on first visit
+
+EOF
+    fi
+
+    if [[ "${ANYTHINGLLM_ENABLED:-false}" == "true" ]]; then
+        cat >> "$access_file" <<EOF
+### AnythingLLM (Document Intelligence)
+- **URL**: http://localhost:3001
+- **Domain**: https://docs.${DOMAIN:-localhost}
+- **Auth Token**: ${ANYTHINGLLM_AUTH_TOKEN:-Check .env file}
+- **Description**: RAG-powered document chat and analysis
+
+EOF
+    fi
+
+    if [[ "${DIFY_ENABLED:-false}" == "true" ]]; then
+        cat >> "$access_file" <<EOF
+### Dify (LLM App Development)
+- **URL**: http://localhost:8000
+- **Domain**: https://dify.${DOMAIN:-localhost}
+- **API**: http://localhost:8000/v1
+- **Description**: Visual workflow builder for LLM applications
+- **First Login**: Create account on first visit
+
+EOF
+    fi
+
+    if [[ "${LIBRECHAT_ENABLED:-false}" == "true" ]]; then
+        cat >> "$access_file" <<EOF
+### LibreChat (Multi-Model Interface)
+- **URL**: http://localhost:3003
+- **Domain**: https://librechat.${DOMAIN:-localhost}
+- **Description**: ChatGPT-style UI supporting multiple providers
+- **Registration**: ${LIBRECHAT_ALLOW_REGISTRATION:-Enabled}
+
+EOF
+    fi
+
+    if [[ "${FLOWISE_ENABLED:-false}" == "true" ]]; then
+        cat >> "$access_file" <<EOF
+### Flowise (Visual Flow Builder)
+- **URL**: http://localhost:3004
+- **Domain**: https://flowise.${DOMAIN:-localhost}
+- **Username**: ${FLOWISE_USERNAME:-admin}
+- **Password**: ${FLOWISE_PASSWORD:-Check .env file}
+- **Description**: Drag-and-drop LLM app builder
+
+EOF
+    fi
+
+    if [[ "${N8N_ENABLED:-false}" == "true" ]]; then
+        cat >> "$access_file" <<EOF
+### n8n (Workflow Automation)
+- **URL**: http://localhost:5678
+- **Domain**: https://n8n.${DOMAIN:-localhost}
+- **Description**: Workflow automation with 400+ integrations
+- **First Login**: Create account on first visit
+
+EOF
+    fi
+
+    cat >> "$access_file" <<EOF
+## Core Services
+
+### Ollama (LLM Runtime)
+- **API**: http://localhost:11434
+- **Models**: http://localhost:11434/api/tags
+
+### Traefik (Reverse Proxy)
+- **Dashboard**: http://localhost:8080
+
+$(if [[ "${VECTOR_DB:-none}" != "none" ]]; then
+    case "${VECTOR_DB}" in
+        "qdrant") echo "### Qdrant (Vector Database)
+- **API**: http://localhost:6333
+- **Dashboard**: http://localhost:6333/dashboard" ;;
+        "weaviate") echo "### Weaviate (Vector Database)
+- **API**: http://localhost:8080/v1" ;;
+        "milvus") echo "### Milvus (Vector Database)
+- **gRPC**: localhost:19530
+- **HTTP**: http://localhost:9091" ;;
+    esac
+fi)
+
+$(if [[ "${LITELLM_ENABLED:-false}" == "true" ]]; then
+    echo "### LiteLLM (API Gateway)
+- **API**: http://localhost:4000
+- **Docs**: http://localhost:4000/docs
+- **Master Key**: ${LITELLM_MASTER_KEY:-Check .env file}"
+fi)
+
+## Quick Start Commands
+
+\`\`\`bash
+# View all logs
+docker-compose -f $COMPOSE_DIR/ui-services.yml logs -f
+
+# Restart a service
+docker-compose -f $COMPOSE_DIR/ui-services.yml restart <service>
+
+# Stop all UI services
+docker-compose -f $COMPOSE_DIR/ui-services.yml down
+
+# Update a service
+docker-compose -f $COMPOSE_DIR/ui-services.yml pull <service>
+docker-compose -f $COMPOSE_DIR/ui-services.yml up -d <service>
+\`\`\`
+
+## Security Notes
+
+1. Change all default passwords in $ENV_FILE
+2. Enable HTTPS via Traefik for production
+3. Configure authentication for all services
+4. Restrict network access as needed
+5. Enable backup automation (Script 4)
+
+## Support
+
+For issues or questions:
+- Check logs: \`docker logs <container-name>\`
+- Review documentation in project README
+- Check service-specific documentation
+
+EOF
+
+    print_success "Access information saved to: $access_file"
+    cat "$access_file"
+}
+
+#------------------------------------------------------------------------------
+# Final Success Message
+#------------------------------------------------------------------------------
+
+print_final_success() {
     echo ""
-    print_step "Current System Metrics"
+    echo -e "${GREEN}${BOLD}"
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║           ✅ UI SERVICES DEPLOYED SUCCESSFULLY             ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
     echo ""
-
-    echo -e "${BOLD}System Resources:${NC}"
+    echo -e "${BOLD}🌐 Available Interfaces:${NC}"
+    
+    [[ "${OPEN_WEBUI_ENABLED:-false}" == "true" ]] && echo "  • Open WebUI: ${CYAN}http://localhost:3000${NC}"
+    [[ "${ANYTHINGLLM_ENABLED:-false}" == "true" ]] && echo "  • AnythingLLM: ${CYAN}http://localhost:3001${NC}"
+    [[ "${DIFY_ENABLED:-false}" == "true" ]] && echo "  • Dify: ${CYAN}http://localhost:8000${NC}"
+    [[ "${LIBRECHAT_ENABLED:-false}" == "true" ]] && echo "  • LibreChat: ${CYAN}http://localhost:3003${NC}"
+    [[ "${FLOWISE_ENABLED:-false}" == "true" ]] && echo "  • Flowise: ${CYAN}http://localhost:3004${NC}"
+    [[ "${N8N_ENABLED:-false}" == "true" ]] && echo "  • n8n: ${CYAN}http://localhost:5678${NC}"
+    
     echo ""
-
-    # CPU usage
-    local cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)
-    echo "CPU Usage: ${cpu_usage}%"
-
-    # Memory usage
-    local mem_usage=$(free | grep Mem | awk '{printf "%.1f", $3/$2 * 100.0}')
-    echo "Memory Usage: ${mem_usage}%"
-
-    # Disk usage
-    local disk_usage=$(df -h "$DATA_DIR" | awk 'NR==2 {print $5}')
-    echo "Disk Usage: $disk_usage"
-
+    echo -e "${BOLD}📋 Access Info:${NC} ${CYAN}$DATA_DIR/UI_ACCESS.md${NC}"
     echo ""
-    echo -e "${BOLD}Container Statistics:${NC}"
+    echo -e "${BOLD}Next Steps:${NC}"
+    echo "  1. Access any UI above and create your account"
+    echo "  2. Configure integrations (optional)"
+    echo "  3. Setup monitoring: ${CYAN}./scripts/4-monitoring-backup.sh${NC}"
     echo ""
-
-    docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}"
-
+    echo -e "${BOLD}Useful Commands:${NC}"
+    echo "  • View logs: ${CYAN}docker-compose -f $COMPOSE_DIR/ui-services.yml logs -f${NC}"
+    echo "  • Restart service: ${CYAN}docker-compose -f $COMPOSE_DIR/ui-services.yml restart <name>${NC}"
     echo ""
-    pause
 }
 
 #------------------------------------------------------------------------------
@@ -2216,21 +1013,17 @@ view_current_metrics() {
 #------------------------------------------------------------------------------
 
 main() {
-    # Check root
-    if [[ $EUID -ne 0 ]]; then
-        print_error "This script must be run as root"
-        exit 1
-    fi
-
-    # Check prerequisites
-    if [[ ! -f "$METADATA_FILE" ]]; then
-        print_error "System not initialized. Run script 1 first."
-        exit 1
-    fi
-
-    # Start main menu loop
-    main_menu
+    print_header
+    
+    validate_prerequisites
+    generate_ui_compose
+    initialize_databases
+    generate_dify_nginx
+    deploy_ui_services
+    perform_health_check
+    generate_access_info
+    
+    print_final_success
 }
 
-# Run main function
 main "$@"
