@@ -1,363 +1,282 @@
 #!/bin/bash
-# ==============================================================================
-# Script 0: Nuclear Cleanup Script ☢️
-# Version: 4.0 - Modular Architecture Support
-# Purpose: Complete system reset for fresh deployment
-# WARNING: This script destroys ALL data and configurations
-# ==============================================================================
+# 0-complete-cleanup.sh - Complete platform reset
 
-set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DATA_ROOT="/mnt/data"
 
-# Colors for output
+# Color codes
 RED='\033[0;31m'
-YELLOW='\033[1;33m'
 GREEN='\033[0;32m'
-NC='\033[0m' # No Color
+YELLOW='\033[1;33m'
+NC='\033[0m'
 
-# Logging
-LOG_FILE="/var/log/nuclear_cleanup_$(date +%Y%m%d_%H%M%S).log"
-exec 1> >(tee -a "$LOG_FILE")
-exec 2>&1
+log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# ==============================================================================
-# SAFETY CHECKS
-# ==============================================================================
-
-echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${RED}║           ☢️  NUCLEAR CLEANUP SCRIPT v4.0 ☢️              ║${NC}"
-echo -e "${RED}║                                                            ║${NC}"
-echo -e "${RED}║  THIS SCRIPT WILL PERMANENTLY DESTROY:                    ║${NC}"
-echo -e "${RED}║  • All Docker containers, images, and volumes             ║${NC}"
-echo -e "${RED}║  • All data in /mnt/data/*                                ║${NC}"
-echo -e "${RED}║  • All configurations in /root/scripts/                   ║${NC}"
-echo -e "${RED}║  • PostgreSQL databases                                   ║${NC}"
-echo -e "${RED}║  • Ollama models                                          ║${NC}"
-echo -e "${RED}║  • n8n workflows                                          ║${NC}"
-echo -e "${RED}║  • Qdrant collections                                     ║${NC}"
-echo -e "${RED}║  • SSL certificates                                       ║${NC}"
-echo -e "${RED}║  • Systemd services                                       ║${NC}"
-echo -e "${RED}║  • Network configurations                                 ║${NC}"
-echo -e "${RED}║                                                            ║${NC}"
-echo -e "${RED}║  ⚠️  DATA LOSS IS IRREVERSIBLE ⚠️                         ║${NC}"
-echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
-echo ""
-
-# Require explicit confirmation
-read -p "Type 'DESTROY EVERYTHING' to proceed: " confirmation
-if [ "$confirmation" != "DESTROY EVERYTHING" ]; then
-    echo -e "${GREEN}Cleanup cancelled. System unchanged.${NC}"
-    exit 0
-fi
-
-echo ""
-read -p "Are you ABSOLUTELY SURE? Type 'YES' to continue: " final_confirm
-if [ "$final_confirm" != "YES" ]; then
-    echo -e "${GREEN}Cleanup cancelled. System unchanged.${NC}"
-    exit 0
-fi
-
-echo -e "${RED}Starting nuclear cleanup in 5 seconds... Press Ctrl+C to abort${NC}"
-sleep 5
-
-# ==============================================================================
-# CLEANUP FUNCTIONS
-# ==============================================================================
-
-log_step() {
-    echo -e "${YELLOW}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1"
+show_banner() {
+    cat << 'EOF'
+╔════════════════════════════════════════════════════╗
+║  🧹 AIPlatformAutomation - Complete Cleanup v76.5  ║
+╚════════════════════════════════════════════════════╝
+EOF
 }
 
-log_success() {
-    echo -e "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')] ✓${NC} $1"
+show_cleanup_summary() {
+    log_info "Analyzing current installation..."
+    
+    RUNNING_CONTAINERS=$(docker ps -q | wc -l)
+    COMPOSE_FILES=$(find "$DATA_ROOT/compose" -name "*.yml" 2>/dev/null | wc -l)
+    TOTAL_SIZE=$(du -sh "$DATA_ROOT" 2>/dev/null | awk '{print $1}')
+    
+    # Check for Signal registration
+    if [ -f "$DATA_ROOT/data/signal-api/.storage/data/accounts.json" ]; then
+        SIGNAL_REGISTERED=true
+        SIGNAL_NUMBER=$(jq -r '.[0].number' "$DATA_ROOT/data/signal-api/.storage/data/accounts.json" 2>/dev/null)
+    else
+        SIGNAL_REGISTERED=false
+    fi
+    
+    # Check for GDrive auth
+    if [ -f "$DATA_ROOT/config/rclone/rclone.conf" ]; then
+        GDRIVE_CONFIGURED=true
+    else
+        GDRIVE_CONFIGURED=false
+    fi
+    
+    cat << EOF
+
+📊 Current Installation Summary:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  🐳 Running containers: $RUNNING_CONTAINERS
+  📦 Service definitions: $COMPOSE_FILES
+  💾 Total disk usage: $TOTAL_SIZE
+  📱 Signal registered: $([ "$SIGNAL_REGISTERED" = true ] && echo "✅ Yes ($SIGNAL_NUMBER)" || echo "❌ No")
+  📁 GDrive configured: $([ "$GDRIVE_CONFIGURED" = true ] && echo "✅ Yes" || echo "❌ No")
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+EOF
 }
 
-log_error() {
-    echo -e "${RED}[$(date '+%Y-%m-%d %H:%M:%S')] ✗${NC} $1"
+prompt_cleanup_mode() {
+    cat << 'EOF'
+🚨 CLEANUP MODE SELECTION
+
+  1) 🗑️  Full cleanup (delete everything)
+  2) 💾 Preserve user data (/mnt/data/data)
+  3) 📱 Preserve Signal registration
+  4) 🔄 Preserve configs (Signal + GDrive + LiteLLM)
+  5) 🔙 Backup then cleanup
+  6) ❌ Cancel
+
+EOF
+    
+    while true; do
+        read -p "Enter selection [1-6]: " choice
+        case $choice in
+            1) CLEANUP_MODE="full"; break ;;
+            2) CLEANUP_MODE="preserve-data"; break ;;
+            3) CLEANUP_MODE="preserve-signal"; break ;;
+            4) CLEANUP_MODE="preserve-configs"; break ;;
+            5) 
+                backup_before_cleanup
+                CLEANUP_MODE="full"
+                break
+                ;;
+            6) log_info "Cleanup cancelled"; exit 0 ;;
+            *) log_error "Invalid choice" ;;
+        esac
+    done
 }
 
-# ==============================================================================
-# STEP 1: Stop All Services
-# ==============================================================================
+backup_before_cleanup() {
+    BACKUP_DIR="$DATA_ROOT/backups/$(date +%Y%m%d_%H%M%S)"
+    log_info "Creating backup in $BACKUP_DIR..."
+    
+    mkdir -p "$BACKUP_DIR"
+    
+    # Backup critical configs
+    [ -d "$DATA_ROOT/data/signal-api" ] && cp -r "$DATA_ROOT/data/signal-api" "$BACKUP_DIR/"
+    [ -f "$DATA_ROOT/config/litellm_config.yaml" ] && cp "$DATA_ROOT/config/litellm_config.yaml" "$BACKUP_DIR/"
+    [ -f "$DATA_ROOT/config/rclone/rclone.conf" ] && cp "$DATA_ROOT/config/rclone/rclone.conf" "$BACKUP_DIR/"
+    [ -d "$DATA_ROOT/metadata" ] && cp -r "$DATA_ROOT/metadata" "$BACKUP_DIR/"
+    
+    # Export environment variables
+    if [ -d "$DATA_ROOT/env" ]; then
+        cp -r "$DATA_ROOT/env" "$BACKUP_DIR/"
+    fi
+    
+    log_info "✅ Backup completed: $BACKUP_DIR"
+}
 
-log_step "Stopping all Docker services..."
-if command -v docker &> /dev/null; then
-    # Stop modular compose files first
-    if [ -d "/mnt/data/ai-platform/docker" ]; then
-        for compose_file in /mnt/data/ai-platform/docker/docker-compose.*.yml; do
+stop_all_containers() {
+    log_info "🛑 Stopping all containers..."
+    
+    if [ -d "$DATA_ROOT/compose" ]; then
+        # Stop in reverse dependency order
+        for compose_file in \
+            "$DATA_ROOT/compose/openclaw-ui.yml" \
+            "$DATA_ROOT/compose/dify-web.yml" \
+            "$DATA_ROOT/compose/dify-worker.yml" \
+            "$DATA_ROOT/compose/dify-api.yml" \
+            "$DATA_ROOT/compose/anythingllm.yml" \
+            "$DATA_ROOT/compose/openwebui.yml" \
+            "$DATA_ROOT/compose/flowise.yml" \
+            "$DATA_ROOT/compose/n8n.yml" \
+            "$DATA_ROOT/compose/litellm.yml" \
+            "$DATA_ROOT/compose/signal-api.yml" \
+            "$DATA_ROOT/compose/ollama.yml" \
+            "$DATA_ROOT/compose/qdrant.yml" \
+            "$DATA_ROOT/compose/milvus.yml" \
+            "$DATA_ROOT/compose/chromadb.yml" \
+            "$DATA_ROOT/compose/redis.yml" \
+            "$DATA_ROOT/compose/postgres.yml" \
+            "$DATA_ROOT/compose/swag.yml" \
+            "$DATA_ROOT/compose/monitoring-stack.yml"; do
+            
             if [ -f "$compose_file" ]; then
-                log_step "Stopping services from $(basename "$compose_file")..."
-                docker compose -f "$compose_file" down --remove-orphans 2>/dev/null || true
+                SERVICE_NAME=$(basename "$compose_file" .yml)
+                log_info "Stopping $SERVICE_NAME..."
+                docker compose -f "$compose_file" down -v 2>/dev/null || true
             fi
         done
     fi
     
-    # Legacy monolithic compose (backwards compatibility)
-    docker compose -f /root/scripts/docker-compose.yml down --remove-orphans 2>/dev/null || true
-    docker stop $(docker ps -aq) 2>/dev/null || true
-    log_success "Docker services stopped"
-else
-    log_error "Docker not found, skipping"
-fi
+    # Force cleanup any remaining
+    docker ps -aq | xargs -r docker rm -f 2>/dev/null || true
+}
 
-# ==============================================================================
-# STEP 2: Stop Systemd Services
-# ==============================================================================
-
-log_step "Stopping and disabling systemd services..."
-SERVICES=(
-    "ai-platform"
-    "ollama"
-    "qdrant"
-    "n8n"
-    "postgresql"
-    "redis"
-    "litellm"
-    "dify-api"
-    "dify-web"
-    "dify-worker"
-    "dify-sandbox"
-    "open-webui"
-    "flowise"
-    "anythingllm"
-    "openclaw"
-    "prometheus"
-    "grafana"
-    "loki"
-    "minio"
-    "tailscale"
-    "supertokens"
-    "signal"
-    "chromadb"
-    "weaviate"
-    "caddy"
-    "traefik"
-    "portainer"
-)
-
-for service in "${SERVICES[@]}"; do
-    if systemctl is-active --quiet "$service" 2>/dev/null; then
-        systemctl stop "$service" 2>/dev/null || true
-        systemctl disable "$service" 2>/dev/null || true
-        log_success "Stopped and disabled $service"
-    fi
-done
-
-# Remove service files
-for service in "${SERVICES[@]}"; do
-    rm -f "/etc/systemd/system/${service}.service"
-done
-systemctl daemon-reload
-log_success "Systemd services removed"
-
-# ==============================================================================
-# STEP 3: Remove Docker Resources
-# ==============================================================================
-
-log_step "Removing all Docker containers..."
-if command -v docker &> /dev/null; then
-    docker rm -f $(docker ps -aq) 2>/dev/null || true
-    log_success "Docker containers removed"
+cleanup_docker_resources() {
+    log_info "🐳 Cleaning Docker resources..."
     
-    log_step "Removing all Docker images..."
-    docker rmi -f $(docker images -aq) 2>/dev/null || true
-    log_success "Docker images removed"
+    # Remove networks (except default bridge)
+    docker network ls --format '{{.Name}}' | grep -v -E '^(bridge|host|none)$' | xargs -r docker network rm 2>/dev/null || true
     
-    log_step "Removing all Docker volumes..."
-    docker volume rm -f $(docker volume ls -q) 2>/dev/null || true
-    log_success "Docker volumes removed"
+    # Remove volumes
+    docker volume ls -q | xargs -r docker volume rm 2>/dev/null || true
     
-    log_step "Removing all Docker networks..."
-    docker network rm $(docker network ls -q) 2>/dev/null || true
-    log_success "Docker networks removed"
-    
-    log_step "Pruning Docker system..."
+    # Prune system
     docker system prune -af --volumes 2>/dev/null || true
-    log_success "Docker system pruned"
-fi
+}
 
-# ==============================================================================
-# STEP 4: Remove Data Directories
-# ==============================================================================
+cleanup_filesystem() {
+    local mode=$1
+    log_info "📂 Cleaning filesystem (mode: $mode)..."
+    
+    case $mode in
+        "full")
+            log_warn "Removing ALL platform files..."
+            rm -rf "$DATA_ROOT"/*
+            ;;
+            
+        "preserve-data")
+            log_warn "Preserving user data directory..."
+            find "$DATA_ROOT" -mindepth 1 -maxdepth 1 ! -name 'data' -exec rm -rf {} + 2>/dev/null || true
+            ;;
+            
+        "preserve-signal")
+            log_warn "Preserving Signal registration..."
+            TEMP_SIGNAL="/tmp/signal-backup-$$"
+            [ -d "$DATA_ROOT/data/signal-api" ] && mv "$DATA_ROOT/data/signal-api" "$TEMP_SIGNAL"
+            
+            rm -rf "$DATA_ROOT"/*
+            
+            mkdir -p "$DATA_ROOT/data"
+            [ -d "$TEMP_SIGNAL" ] && mv "$TEMP_SIGNAL" "$DATA_ROOT/data/signal-api"
+            ;;
+            
+        "preserve-configs")
+            log_warn "Preserving Signal, GDrive, and LiteLLM configs..."
+            TEMP_DIR="/tmp/config-backup-$$"
+            mkdir -p "$TEMP_DIR"
+            
+            [ -d "$DATA_ROOT/data/signal-api" ] && cp -r "$DATA_ROOT/data/signal-api" "$TEMP_DIR/"
+            [ -f "$DATA_ROOT/config/litellm_config.yaml" ] && cp "$DATA_ROOT/config/litellm_config.yaml" "$TEMP_DIR/"
+            [ -f "$DATA_ROOT/config/rclone/rclone.conf" ] && cp "$DATA_ROOT/config/rclone/rclone.conf" "$TEMP_DIR/"
+            
+            rm -rf "$DATA_ROOT"/*
+            
+            mkdir -p "$DATA_ROOT/data" "$DATA_ROOT/config/rclone"
+            [ -d "$TEMP_DIR/signal-api" ] && mv "$TEMP_DIR/signal-api" "$DATA_ROOT/data/"
+            [ -f "$TEMP_DIR/litellm_config.yaml" ] && mv "$TEMP_DIR/litellm_config.yaml" "$DATA_ROOT/config/"
+            [ -f "$TEMP_DIR/rclone.conf" ] && mv "$TEMP_DIR/rclone.conf" "$DATA_ROOT/config/rclone/"
+            
+            rm -rf "$TEMP_DIR"
+            ;;
+    esac
+}
 
-log_step "Removing data directories..."
-DATA_DIRS=(
-    "/mnt/data/ai-platform"           # New modular structure
-    "/mnt/data/postgresql"            # Legacy structure
-    "/mnt/data/ollama"
-    "/mnt/data/n8n"
-    "/mnt/data/qdrant"
-    "/mnt/data/backups"
-    "/mnt/data/logs"
-)
-
-for dir in "${DATA_DIRS[@]}"; do
-    if [ -d "$dir" ]; then
-        rm -rf "$dir"
-        log_success "Removed $dir"
+unregister_signal() {
+    if [ "$CLEANUP_MODE" = "full" ] && [ -f "$DATA_ROOT/data/signal-api/.storage/data/accounts.json" ]; then
+        log_info "📱 Unregistering Signal device..."
+        
+        # This would require signal-cli to be running
+        # For now, just inform the user
+        log_warn "⚠️  Signal device registration data will be deleted"
+        log_warn "   You'll need to re-pair with Signal on next setup"
     fi
-done
+}
 
-# Recreate empty structure for new architecture
-mkdir -p /mnt/data/ai-platform/{docker,config,data,logs,scripts,backups}
-log_success "Recreated empty modular data structure"
+show_cleanup_report() {
+    cat << 'EOF'
 
-# ==============================================================================
-# STEP 5: Remove Configuration Files
-# ==============================================================================
+╔════════════════════════════════════════════════════╗
+║     ✅ CLEANUP COMPLETED SUCCESSFULLY              ║
+╚════════════════════════════════════════════════════╝
 
-log_step "Removing configuration files..."
-CONFIG_FILES=(
-    "/root/scripts/config.env"
-    "/root/scripts/docker-compose.yml"
-    "/root/scripts/.env"
-    "/root/scripts/nginx.conf"
-    "/root/scripts/postgres-init.sql"
-    "/mnt/data/ai-platform/config/master.env"        # New structure
-    "/mnt/data/ai-platform/config/service-selection.env"
-    "/mnt/data/ai-platform/config/hardware-profile.env"
-)
+📊 Cleanup Summary:
+  ✓ Docker containers stopped and removed
+  ✓ Docker networks cleaned
+  ✓ Docker volumes removed
+  ✓ Platform files cleaned
 
-for file in "${CONFIG_FILES[@]}"; do
-    if [ -f "$file" ]; then
-        rm -f "$file"
-        log_success "Removed $file"
+EOF
+
+    if [ "$CLEANUP_MODE" != "full" ]; then
+        cat << EOF
+💾 Preserved Items:
+EOF
+        [ -d "$DATA_ROOT/data" ] && echo "  • User data directory"
+        [ -d "$DATA_ROOT/data/signal-api" ] && echo "  • Signal registration"
+        [ -f "$DATA_ROOT/config/litellm_config.yaml" ] && echo "  • LiteLLM routing config"
+        [ -f "$DATA_ROOT/config/rclone/rclone.conf" ] && echo "  • GDrive authentication"
     fi
-done
+    
+    cat << 'EOF'
 
-# ==============================================================================
-# STEP 6: Remove SSL Certificates
-# ==============================================================================
+🚀 Next Steps:
+  • Run ./1-setup-system.sh to reinstall the platform
+  • Your system is now in a clean state
 
-log_step "Removing SSL certificates..."
-if [ -d "/etc/letsencrypt" ]; then
-    rm -rf /etc/letsencrypt
-    log_success "Removed Let's Encrypt certificates"
-fi
+EOF
+}
 
-if [ -d "/root/scripts/ssl" ]; then
-    rm -rf /root/scripts/ssl
-    log_success "Removed local SSL certificates"
-fi
-
-# ==============================================================================
-# STEP 7: Clean Package Managers
-# ==============================================================================
-
-log_step "Cleaning package manager caches..."
-if command -v apt-get &> /dev/null; then
-    apt-get clean
-    apt-get autoclean
-    apt-get autoremove -y
-    log_success "APT cache cleaned"
-fi
-
-# ==============================================================================
-# STEP 8: Remove Temporary Files
-# ==============================================================================
-
-log_step "Removing temporary files..."
-rm -rf /tmp/ai-platform-* 2>/dev/null || true
-rm -rf /var/tmp/ai-platform-* 2>/dev/null || true
-log_success "Temporary files removed"
-
-# ==============================================================================
-# STEP 9: Clean Logs
-# ==============================================================================
-
-log_step "Cleaning system logs..."
-journalctl --vacuum-time=1s 2>/dev/null || true
-rm -rf /var/log/ai-platform-* 2>/dev/null || true
-log_success "System logs cleaned"
-
-# ==============================================================================
-# STEP 10: Remove Firewall Rules
-# ==============================================================================
-
-log_step "Resetting firewall rules..."
-if command -v ufw &> /dev/null; then
-    ufw --force reset 2>/dev/null || true
-    ufw --force disable 2>/dev/null || true
-    log_success "UFW reset"
-fi
-
-# ==============================================================================
-# STEP 11: Clean User Profiles
-# ==============================================================================
-
-log_step "Cleaning user profiles..."
-rm -f /root/.n8n_* 2>/dev/null || true
-rm -f /root/.ollama_* 2>/dev/null || true
-rm -rf /root/.config/qdrant 2>/dev/null || true
-log_success "User profiles cleaned"
-
-# ==============================================================================
-# STEP 12: Verify Cleanup
-# ==============================================================================
-
-log_step "Verifying cleanup..."
-
-VERIFICATION_PASSED=true
-
-# Check Docker
-if [ "$(docker ps -aq 2>/dev/null | wc -l)" -gt 0 ]; then
-    log_error "Docker containers still exist"
-    VERIFICATION_PASSED=false
-fi
-
-# Check data directories
-for dir in "${DATA_DIRS[@]}"; do
-    if [ -n "$(ls -A $dir 2>/dev/null)" ]; then
-        log_error "$dir is not empty"
-        VERIFICATION_PASSED=false
+main() {
+    show_banner
+    
+    # Must run as root
+    if [ "$EUID" -ne 0 ]; then
+        log_error "This script must be run as root (use sudo)"
+        exit 1
     fi
-done
-
-# Check systemd services
-for service in "${SERVICES[@]}"; do
-    if systemctl is-enabled --quiet "$service" 2>/dev/null; then
-        log_error "$service is still enabled"
-        VERIFICATION_PASSED=false
+    
+    show_cleanup_summary
+    prompt_cleanup_mode
+    
+    # Final confirmation
+    log_warn "⚠️  This will stop all services and remove files based on mode: $CLEANUP_MODE"
+    read -p "Are you ABSOLUTELY sure? (type 'yes' to confirm): " confirm
+    
+    if [ "$confirm" != "yes" ]; then
+        log_info "Cleanup cancelled"
+        exit 0
     fi
-done
+    
+    unregister_signal
+    stop_all_containers
+    cleanup_docker_resources
+    cleanup_filesystem "$CLEANUP_MODE"
+    show_cleanup_report
+}
 
-if [ "$VERIFICATION_PASSED" = true ]; then
-    log_success "All verification checks passed"
-else
-    log_error "Some verification checks failed"
-fi
-
-# ==============================================================================
-# FINAL REPORT
-# ==============================================================================
-
-echo ""
-echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║              Nuclear Cleanup Complete ✓                   ║${NC}"
-echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
-echo ""
-echo "Cleanup Summary:"
-echo "  • Docker containers: Removed"
-echo "  • Docker images: Removed"
-echo "  • Docker volumes: Removed"
-echo "  • Data directories: Cleaned"
-echo "  • Configuration files: Removed"
-echo "  • SSL certificates: Removed"
-echo "  • Systemd services: Disabled and removed"
-echo "  • System logs: Cleaned"
-echo ""
-echo "Log file saved to: $LOG_FILE"
-echo ""
-echo -e "${YELLOW}System is ready for fresh deployment.${NC}"
-echo -e "${YELLOW}Reboot recommended: sudo reboot${NC}"
-echo ""
-
-# Optional automatic reboot
-read -p "Reboot now? (y/N): " reboot_confirm
-if [[ "$reboot_confirm" =~ ^[Yy]$ ]]; then
-    echo "Rebooting in 5 seconds..."
-    sleep 5
-    reboot
-fi
-
-exit 0
-
+main "$@"

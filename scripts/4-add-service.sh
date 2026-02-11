@@ -1,795 +1,724 @@
-#!/usr/bin/env bash
-
-#==============================================================================
-# Script: 4-add-service.sh
-# Description: Add optional services to deployed AI Platform
-# Version: 4.0.0 - Complete Add-Service Implementation
-# Purpose: Interactive menu to add additional services post-deployment
-# Flow: 0-cleanup → 1-setup → 2-deploy → 3-configure → 4-add-service
-#
-# CHANGELOG v4.0.0:
-# - Complete rewrite with interactive menu
-# - Add Flowise (visual LLM flow builder)
-# - Add Weaviate (vector database)
-# - Add Milvus (vector database)
-# - Add MLflow (ML experiment tracking)
-# - Add JupyterHub (notebook environment)
-# - Add MongoDB (document database)
-# - Add Neo4j (graph database)
-# - Add Metabase (analytics)
-# - Pull additional Ollama models
-#==============================================================================
-
-set -euo pipefail
-
-#==============================================================================
-# SCRIPT LOCATION & USER DETECTION
-#==============================================================================
+#!/bin/bash
+# 4-add-service.sh - Add new services to existing deployment
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-
-# Detect real user (works with sudo)
-if [ -n "${SUDO_USER:-}" ]; then
-    REAL_USER="${SUDO_USER}"
-    REAL_UID=$(id -u "${SUDO_USER}")
-    REAL_GID=$(id -g "${SUDO_USER}")
-    REAL_HOME=$(getent passwd "${SUDO_USER}" | cut -d: -f6)
-else
-    REAL_USER="${USER}"
-    REAL_UID=$(id -u)
-    REAL_GID=$(id -g)
-    REAL_HOME="${HOME}"
-fi
-
-#==============================================================================
-# GLOBAL CONFIGURATION
-#==============================================================================
-
-# Must match Script 1
-BASE_DIR="/root/scripts"
-AI_PLATFORM_DIR="/mnt/data/ai-platform"
-CONFIG_DIR="${AI_PLATFORM_DIR}/config"
-DATA_DIR="${AI_PLATFORM_DIR}/data"
-LOGS_DIR="${AI_PLATFORM_DIR}/logs"
-ENV_FILE="${CONFIG_DIR}/master.env"
-COMPOSE_FILE="${AI_PLATFORM_DIR}/docker/docker-compose.yml"
-
-# Logging
-LOGFILE="${LOGS_DIR}/add-service-$(date +%Y%m%d-%H%M%S).log"
-ERROR_LOG="${LOGS_DIR}/add-service-errors-$(date +%Y%m%d-%H%M%S).log"
+DATA_ROOT="/mnt/data"
+METADATA_DIR="$DATA_ROOT/metadata"
+COMPOSE_DIR="$DATA_ROOT/compose"
+ENV_DIR="$DATA_ROOT/env"
+CONFIG_DIR="$DATA_ROOT/config"
 
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-MAGENTA='\033[0;35m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-#==============================================================================
-# LOGGING FUNCTIONS
-#==============================================================================
+log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log_step() { echo -e "${CYAN}[STEP]${NC} $1"; }
 
-log_info() {
-    local msg="$1"
-    echo -e "${BLUE}ℹ${NC} ${msg}"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] INFO: ${msg}" >> "$LOGFILE" 2>/dev/null || true
+show_banner() {
+    cat << 'EOF'
+╔════════════════════════════════════════════════════════════╗
+║   🚀 AIPlatformAutomation - Add Service v76.5             ║
+╚════════════════════════════════════════════════════════════╝
+
+    Add new services to your existing platform deployment
+    
+EOF
 }
 
-log_success() {
-    local msg="$1"
-    echo -e "${GREEN}✓${NC} ${msg}"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] SUCCESS: ${msg}" >> "$LOGFILE" 2>/dev/null || true
-}
-
-log_warning() {
-    local msg="$1"
-    echo -e "${YELLOW}⚠${NC} ${msg}"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: ${msg}" >> "$LOGFILE" 2>/dev/null || true
-}
-
-log_error() {
-    local msg="$1"
-    echo -e "${RED}✗${NC} ${msg}"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: ${msg}" >> "$LOGFILE" 2>/dev/null || true
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: ${msg}" >> "$ERROR_LOG" 2>/dev/null || true
-}
-
-#==============================================================================
-# BANNER
-#==============================================================================
-
-print_banner() {
-    clear
-    echo ""
-    echo -e "${CYAN}╔════════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${NC}                                                                    ${CYAN}║${NC}"
-    echo -e "${CYAN}║${NC}          ${MAGENTA}AI PLATFORM AUTOMATION - ADD SERVICE${NC}                  ${CYAN}║${NC}"
-    echo -e "${CYAN}║${NC}                      ${YELLOW}Version 4.0.0${NC}                              ${CYAN}║${NC}"
-    echo -e "${CYAN}║${NC}                                                                    ${CYAN}║${NC}"
-    echo -e "${CYAN}╚════════════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-}
-
-#==============================================================================
-# PREFLIGHT CHECKS
-#==============================================================================
-
-preflight_checks() {
-    # Check if running as root
+check_prerequisites() {
     if [ "$EUID" -ne 0 ]; then
         log_error "This script must be run as root (use sudo)"
         exit 1
     fi
     
-    # Check if master.env file exists
-    if [ ! -f "$ENV_FILE" ]; then
-        log_error "Master configuration file not found at ${ENV_FILE}"
-        log_error "Please run ./1-setup-system.sh first"
+    if [ ! -f "$METADATA_DIR/selected_services.json" ]; then
+        log_error "Platform not deployed. Run ./2-deploy-services.sh first"
         exit 1
     fi
     
-    # Source the .env file
-    set -a
-    source "$ENV_FILE"
-    set +a
-    
-    # Check if services are running
-    local running_containers
-    running_containers=$(docker ps --filter "label=ai-platform=true" --format "{{.Names}}" | wc -l)
-    
-    if [ "$running_containers" -eq 0 ]; then
-        log_error "No AI Platform services are running"
-        log_error "Please run ./2-deploy-platform.sh first"
-        exit 1
+    # Detect real user
+    if [ -n "${SUDO_USER:-}" ]; then
+        REAL_USER="$SUDO_USER"
+    else
+        REAL_USER="$USER"
     fi
-}
-
-#==============================================================================
-# MAIN MENU
-#==============================================================================
-
-show_menu() {
-    echo ""
-    echo "╔════════════════════════════════════════════════════════════════════╗"
-    echo "║                          ADD SERVICE MENU                          ║"
-    echo "╚════════════════════════════════════════════════════════════════════╝"
-    echo ""
-    echo "  Available Services:"
-    echo ""
-    echo "  ${CYAN}AI & Workflow:${NC}"
-    echo "    1) Flowise          - Visual LLM flow builder"
-    echo "    2) AnythingLLM      - Multi-user AI workspace"
-    echo ""
-    echo "  ${CYAN}Vector Databases:${NC}"
-    echo "    3) Weaviate         - ML-first vector database"
-    echo "    4) Milvus           - High-performance vector DB"
-    echo ""
-    echo "  ${CYAN}ML & Data Science:${NC}"
-    echo "    5) MLflow           - ML experiment tracking"
-    echo "    6) JupyterHub       - Multi-user Jupyter notebooks"
-    echo ""
-    echo "  ${CYAN}Integrations:${NC}"
-    echo "    11) Google Drive     - Document sync (3 auth methods)"
-    echo "    12) Signal          - Communication (QR/API)"
-    echo "    13) External LLM    - Provider configuration"
-    echo ""
-    echo "  ${CYAN}Databases:${NC}"
-    echo "    7) MongoDB          - Document database"
-    echo "    8) Neo4j            - Graph database"
-    echo ""
-    echo "  ${CYAN}Analytics:${NC}"
-    echo "    9) Metabase         - Business intelligence"
-    echo ""
-    echo "  ${CYAN}Ollama:${NC}"
-    echo "    10) Pull additional models"
-    echo ""
-    echo "    0) Exit"
-    echo ""
-    echo -n "  Select service to add (0-13): "
-}
-
-#==============================================================================
-# ADD FLOWISE
-#==============================================================================
-
-add_flowise() {
-    log_info "Adding Flowise..."
     
-    # Add to docker-compose.yml
-    cat >> "$COMPOSE_FILE" <<'EOF'
+    PUID=$(id -u "$REAL_USER")
+    PGID=$(id -g "$REAL_USER")
+}
 
-  flowise:
-    image: flowiseai/flowise:latest
-    container_name: aiplatform-flowise
-    environment:
-      - DATABASE_PATH=/root/.flowise
-      - APIKEY_PATH=/root/.flowise
-      - SECRETKEY_PATH=/root/.flowise
-      - FLOWISE_USERNAME=admin
-      - FLOWISE_PASSWORD=${ADMIN_PASSWORD}
-    volumes:
-      - ${DATA_DIR}/flowise:/root/.flowise
-    networks:
-      - ai-platform
-      - ai-platform-internal
-    ports:
-      - "3001:3000"
-    restart: unless-stopped
-    labels:
-      - "ai-platform=true"
-      - "ai-platform.service=flowise"
+load_config() {
+    DOMAIN=$(jq -r '.domain' "$METADATA_DIR/network_config.json")
+    VECTORDB_TYPE=$(jq -r '.type' "$METADATA_DIR/vectordb_config.json" 2>/dev/null || echo "none")
+    DEPLOYED_SERVICES=($(jq -r '.applications[]' "$METADATA_DIR/selected_services.json"))
+}
+
+# Service catalog with descriptions and dependencies
+declare -A SERVICE_DESCRIPTIONS
+SERVICE_DESCRIPTIONS=(
+    ["open-webui"]="Modern web UI for LLMs (Ollama/LiteLLM) - No dependencies"
+    ["anythingllm"]="Document-based chat with RAG - Requires: VectorDB"
+    ["dify"]="LLM app development platform - Requires: VectorDB, PostgreSQL, Redis"
+    ["n8n"]="Workflow automation - Requires: PostgreSQL"
+    ["flowise"]="Drag-and-drop LLM workflows - Requires: PostgreSQL"
+    ["comfyui"]="Advanced image generation - No dependencies"
+    ["openclaw-ui"]="Communication orchestration UI - No dependencies"
+    ["signal-api"]="Signal messaging integration - No dependencies"
+    ["gdrive-sync"]="Google Drive sync service - No dependencies"
+)
+
+declare -A SERVICE_DEPS
+SERVICE_DEPS=(
+    ["open-webui"]=""
+    ["anythingllm"]="vectordb"
+    ["dify"]="vectordb postgres redis"
+    ["n8n"]="postgres"
+    ["flowise"]="postgres"
+    ["comfyui"]=""
+    ["openclaw-ui"]=""
+    ["signal-api"]=""
+    ["gdrive-sync"]=""
+)
+
+show_service_catalog() {
+    clear
+    cat << EOF
+╔════════════════════════════════════════════════════════════╗
+║               📦 AVAILABLE SERVICES                        ║
+╚════════════════════════════════════════════════════════════╝
+
+${CYAN}Currently Deployed:${NC}
 EOF
-
-    # Deploy
-    cd "$BASE_DIR"
-    docker compose up -d flowise
     
-    log_success "Flowise deployed"
-    echo ""
-    echo "Access Flowise at: http://localhost:3001"
-    echo "Credentials: admin / ${ADMIN_PASSWORD}"
-    echo ""
-}
-
-#==============================================================================
-# ADD WEAVIATE
-#==============================================================================
-
-add_weaviate() {
-    log_info "Adding Weaviate..."
+    for service in "${DEPLOYED_SERVICES[@]}"; do
+        echo "  ✅ $service"
+    done
     
-    cat >> "$COMPOSE_FILE" <<'EOF'
+    cat << EOF
 
-  weaviate:
-    image: semitechnologies/weaviate:latest
-    container_name: aiplatform-weaviate
-    environment:
-      - AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true
-      - PERSISTENCE_DATA_PATH=/var/lib/weaviate
-      - QUERY_DEFAULTS_LIMIT=25
-      - DEFAULT_VECTORIZER_MODULE=none
-      - ENABLE_MODULES=
-      - CLUSTER_HOSTNAME=node1
-    volumes:
-      - ${DATA_DIR}/weaviate:/var/lib/weaviate
-    networks:
-      - ai-platform-internal
-    ports:
-      - "8081:8080"
-    restart: unless-stopped
-    labels:
-      - "ai-platform=true"
-      - "ai-platform.service=weaviate"
+${CYAN}Available to Add:${NC}
+
 EOF
-
-    cd "$BASE_DIR"
-    docker compose up -d weaviate
     
-    log_success "Weaviate deployed"
-    echo ""
-    echo "Access Weaviate at: http://localhost:8081"
-    echo ""
+    local index=1
+    for service in "${!SERVICE_DESCRIPTIONS[@]}"; do
+        # Check if not already deployed
+        if [[ ! " ${DEPLOYED_SERVICES[@]} " =~ " ${service} " ]]; then
+            printf "  ${YELLOW}%-2d)${NC} %-20s - %s\n" \
+                "$index" \
+                "$service" \
+                "${SERVICE_DESCRIPTIONS[$service]}"
+            SERVICE_OPTIONS[$index]=$service
+            ((index++))
+        fi
+    done
+    
+    cat << EOF
+
+  ${YELLOW}0)${NC}  Exit
+
+EOF
 }
 
-#==============================================================================
-# ADD OLLAMA MODELS
-#==============================================================================
-
-add_ollama_models() {
-    if [ "${ENABLE_OLLAMA}" != "true" ]; then
-        log_error "Ollama is not enabled"
+check_dependencies() {
+    local service=$1
+    local deps="${SERVICE_DEPS[$service]}"
+    local missing_deps=()
+    
+    if [ -z "$deps" ]; then
+        return 0
+    fi
+    
+    for dep in $deps; do
+        case $dep in
+            vectordb)
+                if [ "$VECTORDB_TYPE" = "none" ]; then
+                    missing_deps+=("Vector Database")
+                fi
+                ;;
+            postgres)
+                if ! docker ps | grep -q postgres; then
+                    missing_deps+=("PostgreSQL")
+                fi
+                ;;
+            redis)
+                if ! docker ps | grep -q redis; then
+                    missing_deps+=("Redis")
+                fi
+                ;;
+        esac
+    done
+    
+    if [ ${#missing_deps[@]} -gt 0 ]; then
+        log_error "Missing dependencies for $service:"
+        printf '  • %s\n' "${missing_deps[@]}"
         return 1
     fi
     
-    echo ""
-    echo "Available Models:"
-    echo "  1) llama3.2:1b       - Smallest Llama 3 (1B params)"
-    echo "  2) llama3.2:3b       - Small Llama 3 (3B params)"
-    echo "  3) llama3.1:8b       - Standard Llama 3 (8B params)"
-    echo "  4) codellama:7b      - Code-focused (7B params)"
-    echo "  5) codellama:13b     - Code-focused (13B params)"
-    echo "  6) mistral:7b        - Mistral (7B params)"
-    echo "  7) mixtral:8x7b      - Mixtral MoE (8x7B params)"
-    echo "  8) phi3:mini         - Microsoft Phi-3 Mini"
-    echo "  9) nomic-embed-text  - Embeddings model"
-    echo "  10) Custom model"
-    echo ""
-    echo -n "  Select model to pull (1-10): "
+    return 0
+}
+
+check_port_conflicts() {
+    local service=$1
+    local port
     
-    read -r model_choice
+    case $service in
+        open-webui) port=8080 ;;
+        anythingllm) port=3001 ;;
+        dify) port=3002 ;;
+        n8n) port=5678 ;;
+        flowise) port=3003 ;;
+        comfyui) port=8188 ;;
+        openclaw-ui) port=3000 ;;
+        signal-api) port=8090 ;;
+        *) return 0 ;;
+    esac
     
-    local model=""
-    case $model_choice in
-        1) model="llama3.2:1b" ;;
-        2) model="llama3.2:3b" ;;
-        3) model="llama3.1:8b" ;;
-        4) model="codellama:7b" ;;
-        5) model="codellama:13b" ;;
-        6) model="mistral:7b" ;;
-        7) model="mixtral:8x7b" ;;
-        8) model="phi3:mini" ;;
-        9) model="nomic-embed-text" ;;
-        10)
-            echo -n "  Enter model name: "
-            read -r model
+    if netstat -tuln 2>/dev/null | grep -q ":$port "; then
+        log_error "Port $port is already in use"
+        return 1
+    fi
+    
+    return 0
+}
+
+generate_service_compose() {
+    local service=$1
+    
+    case $service in
+        open-webui) generate_openwebui_compose ;;
+        anythingllm) generate_anythingllm_compose ;;
+        dify) generate_dify_compose ;;
+        n8n) generate_n8n_compose ;;
+        flowise) generate_flowise_compose ;;
+        comfyui) generate_comfyui_compose ;;
+        openclaw-ui) generate_openclaw_compose ;;
+        signal-api) generate_signal_compose ;;
+        gdrive-sync) generate_gdrive_compose ;;
+    esac
+}
+
+generate_openwebui_compose() {
+    cat > "$COMPOSE_DIR/open-webui.yml" << 'EOF'
+services:
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    env_file: /mnt/data/env/open-webui.env
+    volumes:
+      - /mnt/data/data/open-webui:/app/backend/data
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    networks:
+      - aiplatform
+    depends_on:
+      - ollama
+      - litellm
+
+networks:
+  aiplatform:
+    external: true
+EOF
+    
+    cat > "$ENV_DIR/open-webui.env" << ENV
+OLLAMA_BASE_URL=http://ollama:11434
+OPENAI_API_BASE_URL=http://litellm:4000/v1
+OPENAI_API_KEY=$(cat "$ENV_DIR/litellm.env" | grep LITELLM_MASTER_KEY | cut -d= -f2)
+WEBUI_NAME=AI Platform - Open WebUI
+ENABLE_RAG_WEB_SEARCH=true
+ENV
+}
+
+generate_anythingllm_compose() {
+    cat > "$COMPOSE_DIR/anythingllm.yml" << EOF
+services:
+  anythingllm:
+    image: mintplexlabs/anythingllm:latest
+    container_name: anythingllm
+    env_file: /mnt/data/env/anythingllm.env
+    volumes:
+      - /mnt/data/data/anythingllm:/app/server/storage
+    ports:
+      - "3001:3001"
+    restart: unless-stopped
+    networks:
+      - aiplatform
+
+networks:
+  aiplatform:
+    external: true
+EOF
+    
+    # Get vector DB connection details
+    case $VECTORDB_TYPE in
+        qdrant)
+            VECTORDB_URL="http://qdrant:6333"
+            VECTORDB_API_KEY=$(cat "$ENV_DIR/qdrant.env" | grep QDRANT_API_KEY | cut -d= -f2)
+            ;;
+        chromadb)
+            VECTORDB_URL="http://chromadb:8000"
+            VECTORDB_API_KEY=""
             ;;
         *)
-            log_error "Invalid selection"
-            return 1
+            VECTORDB_URL=""
+            VECTORDB_API_KEY=""
             ;;
     esac
     
-    log_info "Pulling model: ${model}..."
-    if ollama pull "$model"; then
-        log_success "Model ${model} pulled successfully"
-        echo ""
-        echo "Available models:"
-        ollama list
+    cat > "$ENV_DIR/anythingllm.env" << ENV
+LLM_PROVIDER=openai
+OPEN_AI_KEY=$(cat "$ENV_DIR/litellm.env" | grep LITELLM_MASTER_KEY | cut -d= -f2)
+OPENAI_API_BASE=http://litellm:4000/v1
+VECTOR_DB=$VECTORDB_TYPE
+${VECTORDB_TYPE^^}_API_ENDPOINT=$VECTORDB_URL
+${VECTORDB_TYPE^^}_API_KEY=$VECTORDB_API_KEY
+EMBEDDING_ENGINE=ollama
+EMBEDDING_BASE_PATH=http://ollama:11434
+EMBEDDING_MODEL_PREF=nomic-embed-text
+ENV
+}
+
+generate_dify_compose() {
+    POSTGRES_PASSWORD=$(cat "$ENV_DIR/postgres.env" | grep POSTGRES_PASSWORD | cut -d= -f2)
+    REDIS_PASSWORD=$(cat "$ENV_DIR/redis.env" | grep REDIS_PASSWORD | cut -d= -f2)
+    SECRET_KEY=$(openssl rand -hex 32)
+    
+    cat > "$COMPOSE_DIR/dify-api.yml" << EOF
+services:
+  dify-api:
+    image: langgenius/dify-api:latest
+    container_name: dify-api
+    env_file: /mnt/data/env/dify.env
+    volumes:
+      - /mnt/data/data/dify:/app/api/storage
+    ports:
+      - "5001:5001"
+    restart: unless-stopped
+    networks:
+      - aiplatform
+    depends_on:
+      - postgres
+      - redis
+
+networks:
+  aiplatform:
+    external: true
+EOF
+    
+    cat > "$COMPOSE_DIR/dify-worker.yml" << EOF
+services:
+  dify-worker:
+    image: langgenius/dify-api:latest
+    container_name: dify-worker
+    env_file: /mnt/data/env/dify.env
+    command: celery -A app.celery worker -P gevent -c 1 -Q dataset,generation,mail
+    restart: unless-stopped
+    networks:
+      - aiplatform
+    depends_on:
+      - postgres
+      - redis
+
+networks:
+  aiplatform:
+    external: true
+EOF
+    
+    cat > "$COMPOSE_DIR/dify-web.yml" << EOF
+services:
+  dify-web:
+    image: langgenius/dify-web:latest
+    container_name: dify-web
+    environment:
+      - CONSOLE_API_URL=http://dify-api:5001
+      - APP_API_URL=http://dify-api:5001
+    ports:
+      - "3002:3000"
+    restart: unless-stopped
+    networks:
+      - aiplatform
+    depends_on:
+      - dify-api
+
+networks:
+  aiplatform:
+    external: true
+EOF
+    
+    cat > "$ENV_DIR/dify.env" << ENV
+MODE=api
+SECRET_KEY=$SECRET_KEY
+DB_USERNAME=aiplatform
+DB_PASSWORD=$POSTGRES_PASSWORD
+DB_HOST=postgres
+DB_PORT=5432
+DB_DATABASE=dify
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_PASSWORD=$REDIS_PASSWORD
+CELERY_BROKER_URL=redis://:$REDIS_PASSWORD@redis:6379/1
+VECTOR_STORE=$VECTORDB_TYPE
+ENV
+
+    case $VECTORDB_TYPE in
+        qdrant)
+            QDRANT_API_KEY=$(cat "$ENV_DIR/qdrant.env" | grep QDRANT_API_KEY | cut -d= -f2)
+            cat >> "$ENV_DIR/dify.env" << VECTORENV
+QDRANT_URL=http://qdrant:6333
+QDRANT_API_KEY=$QDRANT_API_KEY
+VECTORENV
+            ;;
+    esac
+}
+
+generate_n8n_compose() {
+    POSTGRES_PASSWORD=$(cat "$ENV_DIR/postgres.env" | grep POSTGRES_PASSWORD | cut -d= -f2)
+    
+    cat > "$COMPOSE_DIR/n8n.yml" << EOF
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    env_file: /mnt/data/env/n8n.env
+    volumes:
+      - /mnt/data/data/n8n:/home/node/.n8n
+    ports:
+      - "5678:5678"
+    restart: unless-stopped
+    networks:
+      - aiplatform
+    depends_on:
+      - postgres
+
+networks:
+  aiplatform:
+    external: true
+EOF
+    
+    cat > "$ENV_DIR/n8n.env" << ENV
+DB_TYPE=postgresdb
+DB_POSTGRESDB_HOST=postgres
+DB_POSTGRESDB_PORT=5432
+DB_POSTGRESDB_DATABASE=n8n
+DB_POSTGRESDB_USER=aiplatform
+DB_POSTGRESDB_PASSWORD=$POSTGRES_PASSWORD
+N8N_HOST=$DOMAIN
+N8N_PORT=5678
+N8N_PROTOCOL=https
+WEBHOOK_URL=https://$DOMAIN/
+ENV
+}
+
+generate_flowise_compose() {
+    POSTGRES_PASSWORD=$(cat "$ENV_DIR/postgres.env" | grep POSTGRES_PASSWORD | cut -d= -f2)
+    
+    cat > "$COMPOSE_DIR/flowise.yml" << EOF
+services:
+  flowise:
+    image: flowiseai/flowise:latest
+    container_name: flowise
+    env_file: /mnt/data/env/flowise.env
+    volumes:
+      - /mnt/data/data/flowise:/root/.flowise
+    ports:
+      - "3003:3000"
+    restart: unless-stopped
+    networks:
+      - aiplatform
+    depends_on:
+      - postgres
+
+networks:
+  aiplatform:
+    external: true
+EOF
+    
+    cat > "$ENV_DIR/flowise.env" << ENV
+DATABASE_TYPE=postgres
+DATABASE_HOST=postgres
+DATABASE_PORT=5432
+DATABASE_USER=aiplatform
+DATABASE_PASSWORD=$POSTGRES_PASSWORD
+DATABASE_NAME=flowise
+FLOWISE_USERNAME=admin
+FLOWISE_PASSWORD=$(openssl rand -base64 16)
+ENV
+}
+
+generate_comfyui_compose() {
+    GPU_AVAILABLE=$(lspci | grep -i nvidia &>/dev/null && echo "true" || echo "false")
+    
+    cat > "$COMPOSE_DIR/comfyui.yml" << EOF
+services:
+  comfyui:
+    image: yanwk/comfyui-boot:latest
+    container_name: comfyui
+    env_file: /mnt/data/env/comfyui.env
+    volumes:
+      - /mnt/data/data/comfyui:/home/runner
+    ports:
+      - "8188:8188"
+    restart: unless-stopped
+    networks:
+      - aiplatform
+EOF
+    
+    if [ "$GPU_AVAILABLE" = "true" ]; then
+        cat >> "$COMPOSE_DIR/comfyui.yml" << EOF
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+EOF
+    fi
+    
+    cat >> "$COMPOSE_DIR/comfyui.yml" << EOF
+
+networks:
+  aiplatform:
+    external: true
+EOF
+    
+    cat > "$ENV_DIR/comfyui.env" << ENV
+COMFYUI_FLAGS=--listen 0.0.0.0 --port 8188
+ENV
+}
+
+generate_openclaw_compose() {
+    cat > "$COMPOSE_DIR/openclaw-ui.yml" << EOF
+services:
+  openclaw-ui:
+    image: openclaw/openclaw-ui:latest
+    container_name: openclaw-ui
+    env_file: /mnt/data/env/openclaw-ui.env
+    volumes:
+      - /mnt/data/data/openclaw:/app/data
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    networks:
+      - aiplatform
+
+networks:
+  aiplatform:
+    external: true
+EOF
+    
+    LITELLM_KEY=$(cat "$ENV_DIR/litellm.env" | grep LITELLM_MASTER_KEY | cut -d= -f2)
+    
+    cat > "$ENV_DIR/openclaw-ui.env" << ENV
+LLM_API_URL=http://litellm:4000/v1
+LLM_API_KEY=$LITELLM_KEY
+SIGNAL_API_URL=http://signal-api:8090
+ENV
+}
+
+generate_signal_compose() {
+    cat > "$COMPOSE_DIR/signal-api.yml" << EOF
+services:
+  signal-api:
+    image: bbernhard/signal-cli-rest-api:latest
+    container_name: signal-api
+    env_file: /mnt/data/env/signal-api.env
+    volumes:
+      - /mnt/data/data/signal-api:/home/.local/share/signal-cli
+    ports:
+      - "8090:8080"
+    restart: unless-stopped
+    networks:
+      - aiplatform
+
+networks:
+  aiplatform:
+    external: true
+EOF
+    
+    cat > "$ENV_DIR/signal-api.env" << ENV
+MODE=json-rpc
+EOF
+}
+
+generate_gdrive_compose() {
+    cat > "$COMPOSE_DIR/gdrive-sync.yml" << EOF
+services:
+  gdrive-sync:
+    image: rclone/rclone:latest
+    container_name: gdrive-sync
+    env_file: /mnt/data/env/gdrive-sync.env
+    volumes:
+      - /mnt/data/config/rclone:/config/rclone
+      - /mnt/data/data/gdrive-sync:/data
+    command: rcd --rc-web-gui --rc-addr :5572 --rc-user admin --rc-pass \$RCLONE_PASSWORD
+    ports:
+      - "5572:5572"
+    restart: unless-stopped
+    networks:
+      - aiplatform
+
+networks:
+  aiplatform:
+    external: true
+EOF
+    
+    cat > "$ENV_DIR/gdrive-sync.env" << ENV
+RCLONE_PASSWORD=$(openssl rand -base64 16)
+SYNC_INTERVAL=1800
+ENV
+}
+
+deploy_service() {
+    local service=$1
+    
+    log_step "Deploying $service..."
+    
+    # Deploy based on service
+    case $service in
+        dify)
+            docker compose -f "$COMPOSE_DIR/dify-api.yml" up -d
+            docker compose -f "$COMPOSE_DIR/dify-worker.yml" up -d
+            docker compose -f "$COMPOSE_DIR/dify-web.yml" up -d
+            ;;
+        *)
+            docker compose -f "$COMPOSE_DIR/${service}.yml" up -d
+            ;;
+    esac
+    
+    # Wait for service to be healthy
+    sleep 5
+    
+    if docker ps | grep -q "$service"; then
+        log_info "✅ $service is running"
+        
+        # Add to selected services
+        jq --arg svc "$service" \
+           '.applications += [$svc] | .applications |= unique' \
+           "$METADATA_DIR/selected_services.json" > /tmp/selected_services.json.tmp
+        
+        mv /tmp/selected_services.json.tmp "$METADATA_DIR/selected_services.json"
+        
+        return 0
     else
-        log_error "Failed to pull model ${model}"
+        log_error "❌ $service failed to start"
+        docker logs "$service"
         return 1
     fi
 }
 
-#==============================================================================
-# ADD MLFLOW
-#==============================================================================
-
-add_mlflow() {
-    log_info "Adding MLflow..."
+show_service_info() {
+    local service=$1
     
-    cat >> "$COMPOSE_FILE" <<'EOF'
+    cat << EOF
 
-  mlflow:
-    image: ghcr.io/mlflow/mlflow:latest
-    container_name: aiplatform-mlflow
-    command: mlflow server --host 0.0.0.0 --port 5000
-    volumes:
-      - ${DATA_DIR}/mlflow:/mlflow
-    networks:
-      - ai-platform
-    ports:
-      - "5000:5000"
-    restart: unless-stopped
-    labels:
-      - "ai-platform=true"
-      - "ai-platform.service=mlflow"
+╔════════════════════════════════════════════════════════════╗
+║          ✅ SERVICE DEPLOYED SUCCESSFULLY                  ║
+╚════════════════════════════════════════════════════════════╝
+
+Service: $service
+
 EOF
-
-    cd "$BASE_DIR"
-    docker compose up -d mlflow
     
-    log_success "MLflow deployed"
-    echo ""
-    echo "Access MLflow at: http://localhost:5000"
-    echo ""
+    case $service in
+        open-webui)
+            echo "Access at: http://$DOMAIN:8080"
+            echo "Default: No authentication required"
+            ;;
+        anythingllm)
+            echo "Access at: http://$DOMAIN:3001"
+            echo "First-run setup required"
+            ;;
+        dify)
+            echo "Access at: http://$DOMAIN:3002"
+            echo "First-run setup required"
+            ;;
+        n8n)
+            N8N_PASSWORD=$(cat "$ENV_DIR/n8n.env" | grep N8N_PASSWORD | cut -d= -f2)
+            echo "Access at: http://$DOMAIN:5678"
+            echo "Setup wizard on first access"
+            ;;
+        flowise)
+            FLOWISE_PASSWORD=$(cat "$ENV_DIR/flowise.env" | grep FLOWISE_PASSWORD | cut -d= -f2)
+            echo "Access at: http://$DOMAIN:3003"
+            echo "Username: admin"
+            echo "Password: $FLOWISE_PASSWORD"
+            ;;
+        comfyui)
+            echo "Access at: http://$DOMAIN:8188"
+            ;;
+        openclaw-ui)
+            echo "Access at: http://$DOMAIN:3000"
+            ;;
+        signal-api)
+            echo "API endpoint: http://$DOMAIN:8090"
+            echo "Run ./3-configure-services.sh to pair phone"
+            ;;
+        gdrive-sync)
+            echo "Web GUI: http://$DOMAIN:5572"
+            echo "Run ./3-configure-services.sh for OAuth setup"
+            ;;
+    esac
+    
+    echo
 }
-
-#==============================================================================
-# ADD JUPYTERHUB
-#==============================================================================
-
-add_jupyterhub() {
-    log_info "Adding JupyterHub..."
-    
-    cat >> "$COMPOSE_FILE" <<'EOF'
-
-  jupyterhub:
-    image: jupyterhub/jupyterhub:latest
-    container_name: aiplatform-jupyterhub
-    volumes:
-      - ${DATA_DIR}/jupyterhub:/srv/jupyterhub
-    networks:
-      - ai-platform
-    ports:
-      - "8000:8000"
-    restart: unless-stopped
-    labels:
-      - "ai-platform=true"
-      - "ai-platform.service=jupyterhub"
-EOF
-
-    cd "$BASE_DIR"
-    docker compose up -d jupyterhub
-    
-    log_success "JupyterHub deployed"
-    echo ""
-    echo "Access JupyterHub at: http://localhost:8000"
-    echo "Note: Default configuration requires further setup"
-    echo ""
-}
-
-#==============================================================================
-# ADD MONGODB
-#==============================================================================
-
-add_mongodb() {
-    log_info "Adding MongoDB..."
-    
-    cat >> "$COMPOSE_FILE" <<'EOF'
-
-  mongodb:
-    image: mongo:7
-    container_name: aiplatform-mongodb
-    environment:
-      - MONGO_INITDB_ROOT_USERNAME=admin
-      - MONGO_INITDB_ROOT_PASSWORD=${DB_PASSWORD}
-    volumes:
-      - ${DATA_DIR}/mongodb:/data/db
-    networks:
-      - ai-platform-internal
-    ports:
-      - "27017:27017"
-    restart: unless-stopped
-    labels:
-      - "ai-platform=true"
-      - "ai-platform.service=mongodb"
-EOF
-
-    cd "$BASE_DIR"
-    docker compose up -d mongodb
-    
-    log_success "MongoDB deployed"
-    echo ""
-    echo "MongoDB connection: mongodb://admin:${DB_PASSWORD}@localhost:27017"
-    echo ""
-}
-
-#==============================================================================
-# ADD NEO4J
-#==============================================================================
-
-add_neo4j() {
-    log_info "Adding Neo4j..."
-    
-    cat >> "$COMPOSE_FILE" <<'EOF'
-
-  neo4j:
-    image: neo4j:latest
-    container_name: aiplatform-neo4j
-    environment:
-      - NEO4J_AUTH=neo4j/${DB_PASSWORD}
-    volumes:
-      - ${DATA_DIR}/neo4j:/data
-    networks:
-      - ai-platform
-      - ai-platform-internal
-    ports:
-      - "7474:7474"
-      - "7687:7687"
-    restart: unless-stopped
-    labels:
-      - "ai-platform=true"
-      - "ai-platform.service=neo4j"
-EOF
-
-    cd "$BASE_DIR"
-    docker compose up -d neo4j
-    
-    log_success "Neo4j deployed"
-    echo ""
-    echo "Access Neo4j Browser: http://localhost:7474"
-    echo "Credentials: neo4j / ${DB_PASSWORD}"
-    echo ""
-}
-
-#==============================================================================
-# ADD METABASE
-#==============================================================================
-
-add_metabase() {
-    log_info "Adding Metabase..."
-    
-    cat >> "$COMPOSE_FILE" <<'EOF'
-
-  metabase:
-    image: metabase/metabase:latest
-    container_name: aiplatform-metabase
-    environment:
-      - MB_DB_FILE=/metabase-data/metabase.db
-    volumes:
-      - ${DATA_DIR}/metabase:/metabase-data
-    networks:
-      - ai-platform
-      - ai-platform-internal
-    ports:
-      - "3002:3000"
-    restart: unless-stopped
-    labels:
-      - "ai-platform=true"
-      - "ai-platform.service=metabase"
-EOF
-
-    cd "$BASE_DIR"
-    docker compose up -d metabase
-    
-    log_success "Metabase deployed"
-    echo ""
-    echo "Access Metabase at: http://localhost:3002"
-    echo "Complete setup in web interface"
-    echo ""
-}
-
-#==============================================================================
-# MAIN LOOP
-#==============================================================================
 
 main() {
-    print_banner
+    show_banner
+    check_prerequisites
+    load_config
     
-    # Create log directory if needed
-    mkdir -p "$LOGS_DIR"
+    declare -A SERVICE_OPTIONS
     
-    log_info "Starting Add Service Menu v4.0.0"
-    
-    # Preflight checks
-    preflight_checks
-    
-    log_success "Platform ready for service additions"
-    
-    # Main menu loop
     while true; do
-        show_menu
-        read -r choice
+        show_service_catalog
         
-        case $choice in
-            1) add_flowise ;;
-            2) log_warning "AnythingLLM - Implementation pending" ;;
-            3) add_weaviate ;;
-            4) log_warning "Milvus - Implementation pending" ;;
-            5) add_mlflow ;;
-            6) add_jupyterhub ;;
-            7) add_mongodb ;;
-            8) add_neo4j ;;
-            9) add_metabase ;;
-            10) add_ollama_models ;;
-            11) add_google_drive ;;
-            12) add_signal_integration ;;
-            13) configure_external_providers ;;
-            0)
-                echo ""
-                log_info "Exiting..."
-                exit 0
-                ;;
-            *)
-                log_error "Invalid selection"
-                ;;
-        esac
+        read -p "Select service to add (0 to exit): " choice
         
-        echo ""
+        if [ "$choice" = "0" ]; then
+            log_info "Exiting..."
+            exit 0
+        fi
+        
+        selected_service="${SERVICE_OPTIONS[$choice]}"
+        
+        if [ -z "$selected_service" ]; then
+            log_warn "Invalid selection"
+            sleep 2
+            continue
+        fi
+        
+        # Check dependencies
+        if ! check_dependencies "$selected_service"; then
+            read -p "Press Enter to continue..."
+            continue
+        fi
+        
+        # Check port conflicts
+        if ! check_port_conflicts "$selected_service"; then
+            read -p "Press Enter to continue..."
+            continue
+        fi
+        
+        # Generate compose and env files
+        log_step "Generating configuration for $selected_service..."
+        generate_service_compose "$selected_service"
+        
+        # Deploy
+        if deploy_service "$selected_service"; then
+            show_service_info "$selected_service"
+        fi
+        
         read -p "Press Enter to continue..."
     done
 }
 
-# ==============================================================================
-# MISSING FEATURES - GDRIVE, SIGNAL, EXTERNAL PROVIDERS
-# ==============================================================================
-
-add_google_drive() {
-    log_step "Adding Google Drive integration..."
-    
-    echo ""
-    echo -e "${CYAN}=== GOOGLE DRIVE AUTHENTICATION METHOD ===${NC}"
-    echo "1) OAuth2 Flow (Interactive browser)"
-    echo "2) Service Account JSON (Server-to-server)"
-    echo "3) Interactive Token Refresh (Manual)"
-    echo ""
-    
-    while true; do
-        read -p "Select auth method (1-3): " auth_choice
-        case $auth_choice in
-            1) configure_gdrive_oauth ;;
-            2) configure_gdrive_service_account ;;
-            3) configure_gdrive_token_refresh ;;
-            *) echo -e "${RED}Invalid choice. Please select 1-3.${NC}" ;;
-        esac
-    done
-    
-    log_success "Google Drive integration configured"
-}
-
-configure_gdrive_oauth() {
-    log_info "Setting up OAuth2 flow..."
-    
-    # Generate OAuth credentials
-    GDRIVE_CLIENT_ID=$(openssl rand -hex 16)
-    GDRIVE_CLIENT_SECRET=$(openssl rand -hex 32)
-    
-    # Save credentials
-    cat > "${CONFIG_DIR}/gdrive-oauth.env" << EOF
-# Google Drive OAuth Configuration
-GDRIVE_CLIENT_ID=${GDRIVE_CLIENT_ID}
-GDRIVE_CLIENT_SECRET=${GDRIVE_CLIENT_SECRET}
-GDRIVE_REDIRECT_URI=http://localhost:8080/callback
-GDRIVE_SCOPE=https://www.googleapis.com/auth/drive
-EOF
-    
-    log_success "OAuth2 configuration saved"
-    log_info "Client ID: ${GDRIVE_CLIENT_ID}"
-    log_info "Complete OAuth flow at: https://console.developers.google.com/"
-}
-
-configure_gdrive_service_account() {
-    log_info "Setting up Service Account..."
-    
-    echo ""
-    read -p "Enter path to service account JSON file: " gdrive_json_path
-    
-    if [[ ! -f "$gdrive_json_path" ]]; then
-        log_error "Service account file not found"
-        return 1
-    fi
-    
-    # Copy service account file
-    cp "$gdrive_json_path" "${CONFIG_DIR}/gdrive-service-account.json"
-    
-    log_success "Service account configured"
-}
-
-configure_gdrive_token_refresh() {
-    log_info "Setting up token refresh..."
-    
-    # Interactive token setup
-    echo ""
-    read -p "Enter Google Drive refresh token: " GDRIVE_REFRESH_TOKEN
-    read -p "Enter access token: " GDRIVE_ACCESS_TOKEN
-    
-    # Save tokens
-    cat > "${CONFIG_DIR}/gdrive-tokens.env" << EOF
-# Google Drive Token Configuration
-GDRIVE_REFRESH_TOKEN=${GDRIVE_REFRESH_TOKEN}
-GDRIVE_ACCESS_TOKEN=${GDRIVE_ACCESS_TOKEN}
-GDRIVE_TOKEN_EXPIRY=$(date -d '+30 days' +%s)
-EOF
-    
-    log_success "Token configuration saved"
-}
-
-add_signal_integration() {
-    log_step "Adding Signal integration..."
-    
-    echo ""
-    echo -e "${CYAN}=== SIGNAL REGISTRATION METHOD ===${NC}"
-    echo "1) QR Code Registration (Mobile app)"
-    echo "2) API Key Registration (Server integration)"
-    echo ""
-    
-    while true; do
-        read -p "Select registration method (1-2): " signal_choice
-        case $signal_choice in
-            1) generate_signal_qr ;;
-            2) configure_signal_api ;;
-            *) echo -e "${RED}Invalid choice. Please select 1-2.${NC}" ;;
-        esac
-    done
-    
-    log_success "Signal integration configured"
-}
-
-generate_signal_qr() {
-    log_info "Generating Signal QR code..."
-    
-    # Generate device name
-    SIGNAL_DEVICE_NAME="ai-platform-$(date +%s)"
-    
-    # Generate QR code using signal-cli
-    if command -v signal-cli &> /dev/null; then
-        signal-cli -a "${CONFIG_DIR}/signal" link \
-            --name "${SIGNAL_DEVICE_NAME}" \
-            --device-type "cli" || {
-            log_error "Failed to generate Signal QR code"
-            return 1
-        }
-        
-        log_success "Signal QR code generated"
-        log_info "Device name: ${SIGNAL_DEVICE_NAME}"
-        log_info "Scan with Signal mobile app"
-    else
-        log_error "signal-cli not found"
-        return 1
-    fi
-}
-
-configure_signal_api() {
-    log_info "Configuring Signal API..."
-    
-    # Generate API credentials
-    SIGNAL_API_KEY=$(openssl rand -hex 32)
-    
-    # Save API configuration
-    cat > "${CONFIG_DIR}/signal-api.env" << EOF
-# Signal API Configuration
-SIGNAL_API_KEY=${SIGNAL_API_KEY}
-SIGNAL_PHONE_NUMBER=+1234567890
-SIGNAL_DEVICE_NAME=ai-platform-api
-EOF
-    
-    log_success "Signal API configured"
-    log_info "API Key: ${SIGNAL_API_KEY}"
-}
-
-configure_external_providers() {
-    log_step "Configuring external LLM providers..."
-    
-    echo ""
-    echo -e "${CYAN}=== EXTERNAL PROVIDER CONFIGURATION ===${NC}"
-    echo "1) Gemini (Google)"
-    echo "2) Groq (Groq)"
-    echo "3) OpenRouter (Multi-provider)"
-    echo "4) DeepSeek (DeepSeek)"
-    echo "5) Custom Provider"
-    echo ""
-    
-    while true; do
-        read -p "Select provider (1-5): " provider_choice
-        case $provider_choice in
-            1) configure_gemini ;;
-            2) configure_groq ;;
-            3) configure_openrouter ;;
-            4) configure_deepseek ;;
-            5) configure_custom_provider ;;
-            *) echo -e "${RED}Invalid choice. Please select 1-5.${NC}" ;;
-        esac
-    done
-    
-    log_success "External provider configured"
-}
-
-configure_gemini() {
-    log_info "Configuring Gemini..."
-    
-    read -p "Enter Gemini API key: " GEMINI_API_KEY
-    
-    # Add to LiteLLM configuration
-    if [ -f "${CONFIG_DIR}/litellm.yaml" ]; then
-        # Update existing config
-        sed -i "s|GEMINI_API_KEY=.*|GEMINI_API_KEY=${GEMINI_API_KEY}|" "${CONFIG_DIR}/litellm.yaml"
-    fi
-    
-    log_success "Gemini configured"
-}
-
-configure_groq() {
-    log_info "Configuring Groq..."
-    
-    read -p "Enter Groq API key: " GROQ_API_KEY
-    
-    log_success "Groq configured"
-}
-
-configure_openrouter() {
-    log_info "Configuring OpenRouter..."
-    
-    read -p "Enter OpenRouter API key: " OPENROUTER_API_KEY
-    
-    log_success "OpenRouter configured"
-}
-
-configure_deepseek() {
-    log_info "Configuring DeepSeek..."
-    
-    read -p "Enter DeepSeek API key: " DEEPSEEK_API_KEY
-    
-    log_success "DeepSeek configured"
-}
-
-configure_custom_provider() {
-    log_info "Configuring custom provider..."
-    
-    read -p "Enter provider name: " CUSTOM_PROVIDER_NAME
-    read -p "Enter API endpoint: " CUSTOM_PROVIDER_ENDPOINT
-    read -p "Enter API key: " CUSTOM_PROVIDER_KEY
-    
-    log_success "Custom provider ${CUSTOM_PROVIDER_NAME} configured"
-}
-
-# ==============================================================================
-# MAIN EXECUTION
-# ==============================================================================
-trap 'log_error "Script failed at line $LINENO with exit code $?"' ERR
-
-# Run main function
 main "$@"
