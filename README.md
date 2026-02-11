@@ -370,6 +370,158 @@ Phase 1: Recreate Directory Structure
 \* System packages    
 \* User accounts
 
+Script 0 \- ui flow  
+**UI Flow**  
+┌─────────────────────────────────────────────────────────────┐  
+│                                                             │  
+│         ⚠  NUCLEAR CLEANUP WARNING  ⚠                       │  
+│                                                             │  
+│   This will COMPLETELY REMOVE all traces of:               │  
+│   • All Docker containers, networks, and volumes           │  
+│   • All AI Platform configuration files                    │  
+│   • All data directories and databases                     │  
+│   • All downloaded models and embeddings                   │  
+│   • All logs and temporary files                           │  
+│                                                             │  
+│   ✓ Essential packages (git, curl) will be preserved       │  
+│                                                             │  
+│            THIS ACTION IS IRREVERSIBLE\!                     │  
+│                                                             │  
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐  
+│ Type 'DELETE EVERYTHING' to confirm (case-sensitive):      │  
+│ \> \_                                                         │  
+└─────────────────────────────────────────────────────────────┘
+
+Cleanup starting in 5... 4... 3... 2... 1...
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  
+  STEP 1/9: STOPPING ALL AI PLATFORM CONTAINERS  
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ℹ Found 12 container(s) to stop  
+ℹ Stopping container: postgres-1 (abc123456789)  
+ℹ Stopping container: redis-1 (def456789012)  
+ℹ Stopping container: qdrant-1 (ghi789012345)  
+...  
+✓ All containers stopped
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  
+  STEP 2/9: REMOVING ALL AI PLATFORM CONTAINERS  
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ℹ Removing container: postgres-1 (abc123456789)  
+ℹ Removing container: redis-1 (def456789012)  
+...  
+✓ All containers removed
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  
+  STEP 3/9: REMOVING AI PLATFORM NETWORKS  
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ℹ Removing network: ai-platform-network  
+✓ Networks removed
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  
+  STEP 4/9: REMOVING AI PLATFORM VOLUMES  
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ℹ Found 8 volume(s) to remove  
+ℹ Removing volume: aiplatform-postgres-data  
+ℹ Removing volume: aiplatform-redis-data  
+...  
+✓ All volumes removed
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  
+  STEP 5/9: CLEANING UP DOCKER IMAGES (OPTIONAL)  
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Docker images can consume significant disk space.  
+Options:  
+  1\) Keep all images (default \- recommended)  
+  2\) Remove AI Platform images only  
+  3\) Remove all unused images (prune)
+
+Select option \[1-3\] (Enter for default): \_
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  
+  STEP 6/9: REMOVING DATA DIRECTORIES  
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ℹ Data directory found: /mnt/data/ai-platform  
+ℹ Directory size: 42GB  
+ℹ Contents:  
+  15GB  ollama  
+  12GB  postgres  
+  8GB   qdrant  
+  5GB   redis  
+  2GB   logs
+
+⚠ This will delete ALL data including models, databases, and configurations\!  
+Remove /mnt/data/ai-platform and ALL contents? \[y/N\]: \_
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  
+  STEP 7/9: REMOVING CONFIGURATION FILES  
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ℹ Removing: /mnt/data/ai-platform  
+✓ Configuration files removed
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  
+  STEP 8/9: REMOVING LOG FILES  
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ℹ Searching for log files...  
+ℹ Removing: /mnt/data/logs/ai-platform-deployment.log  
+✓ Log files removed (current cleanup log preserved)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  
+  STEP 9/9: VERIFYING CLEANUP  
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ℹ Checking cleanup status...  
+✓ No AI Platform containers found  
+✓ No AI Platform networks found  
+✓ No AI Platform volumes found  
+✓ Data directory removed  
+✓ Configuration directory removed
+
+ℹ Verifying essential tools...  
+✓ git is available  
+✓ curl is available  
+✓ wget is available  
+✓ docker is available
+
+═══════════════════════════════════════════════════════════════  
+              CLEANUP COMPLETED  
+═══════════════════════════════════════════════════════════════
+
+Summary of actions:  
+  ✓ Stopped all AI Platform containers  
+  ✓ Removed all AI Platform containers  
+  ✓ Removed Docker networks  
+  ✓ Removed Docker volumes  
+  ✓ Cleaned up Docker images (if selected)  
+  ✓ Removed data directories (if confirmed)  
+  ✓ Removed configuration files  
+  ✓ Removed log files  
+  ✓ Preserved essential packages (git, curl, wget, docker)  
+  ✓ Verification completed
+
+Log file saved to: /var/log/ai-platform-cleanup-20260211-143022.log
+
+Next Steps:  
+  1\. Review the log file for any warnings  
+  2\. Reboot the system (optional but recommended):  
+     sudo reboot
+
+  3\. After reboot, run Script 1 for fresh installation:  
+     cd \~/AIPlatformAutomation/scripts  
+     sudo ./1-setup-system.sh
+
+System is ready for fresh AI Platform installation\!
+
 \#\# \*\*SCRIPT 1: SETUP SYSTEM\*\*
 
 \#\#\# \*\*Intent\*\*
@@ -405,6 +557,60 @@ Prepare the complete foundation for deployment WITHOUT starting any AI services.
 \* ✅ Docker group permissions active    
 \* ✅ NO containers running yet
 
+ **Summary: Complete Variable Collection Matrix**
+
+### **Script 1: Setup & Configuration**
+
+| Category | Variable | Type | Required | Default | Validation |
+| ----- | ----- | ----- | ----- | ----- | ----- |
+| **System** | OS | Auto-detected | Yes | \- | ubuntu/debian/centos/rhel/fedora |
+|  | CPU Cores | Auto-detected | Yes | \- | ≥1 |
+|  | RAM (GB) | Auto-detected | Yes | \- | ≥4 (recommended 16\) |
+|  | Disk (GB) | Auto-detected | Yes | \- | ≥50 |
+|  | GPU Type | Auto-detected | No | none | nvidia/amd/intel/apple/none |
+|  | GPU Count | Auto-detected | No | 0 | ≥0 |
+| **Network** | Base Domain | User input | Yes | \- | Valid domain format |
+|  | SSL Type | User choice | Yes | letsencrypt | letsencrypt/self-signed |
+|  | LE Email | User input | Conditional | \- | Valid email if letsencrypt |
+| **Services** | LiteLLM | User choice | No | Yes | true/false |
+|  | Ollama | User choice | No | Yes | true/false |
+|  | Open WebUI | User choice | No | Yes | true/false |
+|  | AnythingLLM | User choice | No | No | true/false |
+|  | Dify | User choice | No | No | true/false |
+|  | n8n | User choice | No | No | true/false |
+|  | Flowise | User choice | No | No | true/false |
+|  | Airflow | User choice | No | No | true/false |
+|  | Weaviate | User choice | No | No | true/false |
+|  | Qdrant | User choice | No | No | true/false |
+|  | Milvus | User choice | No | No | true/false |
+|  | JupyterHub | User choice | No | No | true/false |
+|  | MLflow | User choice | No | No | true/false |
+|  | MongoDB | User choice | No | No | true/false |
+|  | Neo4j | User choice | No | No | true/false |
+|  | Metabase | User choice | No | No | true/false |
+|  | Monitoring | User choice | No | Yes | true/false |
+|  | Tailscale | User choice | No | No | true/false |
+| **API Keys** | OpenAI | User input | No | \- | sk-\* format |
+|  | Anthropic | User input | No | \- | sk-ant-\* format |
+|  | Gemini | User input | No | \- | Valid key |
+|  | Groq | User input | No | \- | Valid key |
+|  | Mistral | User input | No | \- | Valid key |
+|  | OpenRouter | User input | No | \- | Valid key |
+|  | HuggingFace | User input | No | \- | Valid key |
+| **Secrets** | DB Password | Auto-generated | Yes | \- | 32 chars |
+|  | Admin Password | Auto-generated | Yes | \- | 24 chars |
+|  | JWT Secret | Auto-generated | Yes | \- | 64 chars |
+|  | Encryption Key | Auto-generated | Yes | \- | 32 bytes hex |
+|  | Redis Password | Auto-generated | Yes | \- | 32 chars |
+
+### **Total Variables Collected: 37**
+
+* Auto-detected: 6  
+* User input (required): 1-2  
+* User choice (services): 18  
+* User input (optional): 7  
+* Auto-generated: 5
+
 \`UI EXPECTED OUTPUTS\` 
 
 \`Script 1 expected output :\`   
@@ -415,7 +621,7 @@ Prepare the complete foundation for deployment WITHOUT starting any AI services.
 
 **Version:** 4.0.0  
  **Purpose:** Collect ALL configuration, generate modular files, prepare metadata  
- **Path:** All files in `/mnt/data/` (NO `/opt`)  
+ **Path:** All files in `/mnt/data/` (NO `/mnt/data`)  
  **Important:** This script does NOT deploy \- only prepares configuration
 
 ---
@@ -1575,7 +1781,392 @@ Security:
 ✓ Setup completed successfully\!  
   You may now run: sudo ./2-deploy-services.sh
 
-\`Script 2 Expected output :\` 
+Script 2 UI FLOW  expected output :   
+**UI Flow**  
+╔════════════════════════════════════════════════════════════════════╗  
+║                                                                    ║  
+║            AI PLATFORM AUTOMATION \- DEPLOYMENT                     ║  
+║                      Version 4.0.0                                 ║  
+║                                                                    ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+ℹ Loading configuration from /mnt/data/ai-platform/.env  
+✓ Configuration loaded  
+ℹ Deployment directory: /mnt/data/ai-platform
+
+╔════════════════════════════════════════════════════════════════════╗  
+║ PHASE 1: Pre-Deployment Validation                                ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+▶ Validating configuration files...  
+✓ .env file found and valid  
+✓ docker-compose.yml found and valid  
+✓ Secrets file found and valid
+
+▶ Validating Docker environment...  
+✓ Docker daemon running  
+✓ Docker Compose available  
+✓ Required networks exist
+
+▶ Checking service dependencies...  
+✓ All service dependencies satisfied
+
+✓ Pre-deployment validation completed
+
+╔════════════════════════════════════════════════════════════════════╗  
+║ PHASE 2: Deployment Plan                                          ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+Services to be deployed (in order):  
+  1\. postgres      (Database)  
+  2\. redis         (Cache)  
+  3\. qdrant        (Vector Database)  
+  4\. ollama        (Local LLM)  
+  5\. litellm       (AI Gateway)  
+  6\. openwebui     (Chat Interface)  
+  7\. dify          (AI Platform)  
+  8\. n8n           (Workflow)  
+  9\. prometheus    (Monitoring)  
+  10\. grafana      (Dashboards)
+
+Total: 10 services
+
+Estimated deployment time: 8-12 minutes  
+Estimated disk space required: \~25GB
+
+Continue with deployment? (Y/n): y
+
+╔════════════════════════════════════════════════════════════════════╗  
+║ PHASE 3: Infrastructure Deployment (Core Services)                ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+━━━ \[1/10\] Deploying: PostgreSQL ━━━
+
+ℹ Pulling image: postgres:16-alpine  
+████████████████████████████████████ 100% (245MB)
+
+ℹ Creating container: ai-platform-postgres  
+✓ Container created  
+ℹ Waiting for PostgreSQL to be ready...  
+  Attempt 1/30: Checking health... \[connecting\]  
+  Attempt 2/30: Checking health... \[initializing\]  
+  Attempt 3/30: Checking health... \[ready\]  
+✓ PostgreSQL is healthy (5432/tcp)
+
+ℹ Initializing database...  
+✓ Created schema: aiplatform  
+✓ Created schema: monitoring  
+✓ Database initialization completed
+
+✓ PostgreSQL deployed successfully  
+  Status: Running  
+  Port: 5432  
+  Database: aiplatform  
+  Health: ✓ Healthy
+
+━━━ \[2/10\] Deploying: Redis ━━━
+
+ℹ Pulling image: redis:7-alpine  
+████████████████████████████████████ 100% (89MB)
+
+ℹ Creating container: ai-platform-redis  
+✓ Container created  
+ℹ Waiting for Redis to be ready...  
+  Testing connection... ✓ Connected  
+✓ Redis is healthy (6379/tcp)
+
+✓ Redis deployed successfully  
+  Status: Running  
+  Port: 6379  
+  Health: ✓ Healthy
+
+━━━ \[3/10\] Deploying: Qdrant ━━━
+
+ℹ Pulling image: qdrant/qdrant:latest  
+████████████████████████████████████ 100% (312MB)
+
+ℹ Creating container: ai-platform-qdrant  
+✓ Container created  
+ℹ Waiting for Qdrant to be ready...  
+  Testing API endpoint... ✓ Responding  
+✓ Qdrant is healthy (6333/tcp, 6334/tcp)
+
+✓ Qdrant deployed successfully  
+  Status: Running  
+  HTTP Port: 6333  
+  gRPC Port: 6334  
+  Collections: 0  
+  Health: ✓ Healthy
+
+╔════════════════════════════════════════════════════════════════════╗  
+║ PHASE 4: AI Services Deployment                                   ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+━━━ \[4/10\] Deploying: Ollama ━━━
+
+ℹ Pulling image: ollama/ollama:latest  
+████████████████████████████████████ 100% (1.2GB)
+
+ℹ Creating container: ai-platform-ollama  
+✓ Container created  
+ℹ GPU detected: Configuring NVIDIA runtime...  
+✓ GPU configured  
+ℹ Waiting for Ollama to be ready...  
+  Testing API endpoint... ✓ Responding  
+✓ Ollama is healthy (11434/tcp)
+
+ℹ Pulling initial models...  
+  Pulling llama2... ████████████████████ 100% (3.8GB)  
+  Pulling mistral... ████████████████████ 100% (4.1GB)  
+  Pulling codellama... ████████████████████ 100% (3.8GB)  
+✓ Models pulled: llama2, mistral, codellama
+
+✓ Ollama deployed successfully  
+  Status: Running  
+  Port: 11434  
+  GPU: ✓ Enabled (NVIDIA)  
+  Models: 3 loaded (11.7GB total)  
+  Health: ✓ Healthy
+
+━━━ \[5/10\] Deploying: LiteLLM ━━━
+
+ℹ Pulling image: ghcr.io/berriai/litellm:latest  
+████████████████████████████████████ 100% (456MB)
+
+ℹ Creating container: ai-platform-litellm  
+✓ Container created  
+ℹ Configuring LiteLLM...  
+✓ Config file mounted: /mnt/data/ai-platform/config/litellm/config.yaml  
+ℹ Waiting for LiteLLM to be ready...  
+  Testing API endpoint... ✓ Responding  
+✓ LiteLLM is healthy (8000/tcp)
+
+ℹ Verifying model routes...  
+  ✓ ollama/llama2 → http://ollama:11434  
+  ✓ ollama/mistral → http://ollama:11434  
+  ✓ ollama/codellama → http://ollama:11434  
+  ✓ gpt-4 → https://api.openai.com  
+  ✓ claude-3-opus → https://api.anthropic.com
+
+✓ LiteLLM deployed successfully  
+  Status: Running  
+  Port: 8000  
+  Routes: 5 configured  
+  Database: ✓ Connected  
+  Health: ✓ Healthy
+
+━━━ \[6/10\] Deploying: Open WebUI ━━━
+
+ℹ Pulling image: ghcr.io/open-webui/open-webui:latest  
+████████████████████████████████████ 100% (892MB)
+
+ℹ Creating container: ai-platform-openwebui  
+✓ Container created  
+ℹ Waiting for Open WebUI to be ready...  
+  Testing web interface... ✓ Responding  
+✓ Open WebUI is healthy (3000/tcp)
+
+✓ Open WebUI deployed successfully  
+  Status: Running  
+  Port: 3000  
+  LLM Backend: ✓ Connected to Ollama  
+  Health: ✓ Healthy
+
+━━━ \[7/10\] Deploying: Dify ━━━
+
+ℹ Pulling images for Dify stack...  
+  dify-api... ████████████████████ 100% (1.1GB)  
+  dify-worker... ████████████████████ 100% (1.1GB)  
+  dify-web... ████████████████████ 100% (234MB)
+
+ℹ Creating Dify containers...  
+✓ ai-platform-dify-api created  
+✓ ai-platform-dify-worker created  
+✓ ai-platform-dify-web created
+
+ℹ Waiting for Dify to be ready...  
+  API health... ✓ Healthy  
+  Worker health... ✓ Healthy  
+  Web health... ✓ Healthy
+
+ℹ Connecting to vector database...  
+✓ Qdrant connection established
+
+✓ Dify deployed successfully  
+  Status: Running  
+  API Port: 5001  
+  Web Port: 3001  
+  Vector DB: ✓ Connected to Qdrant  
+  Health: ✓ All components healthy
+
+━━━ \[8/10\] Deploying: n8n ━━━
+
+ℹ Pulling image: n8nio/n8n:latest  
+████████████████████████████████████ 100% (512MB)
+
+ℹ Creating container: ai-platform-n8n  
+✓ Container created  
+ℹ Waiting for n8n to be ready...  
+  Testing web interface... ✓ Responding  
+✓ n8n is healthy (5678/tcp)
+
+✓ n8n deployed successfully  
+  Status: Running  
+  Port: 5678  
+  Database: ✓ Connected to PostgreSQL  
+  Health: ✓ Healthy
+
+╔════════════════════════════════════════════════════════════════════╗  
+║ PHASE 5: Monitoring Stack Deployment                              ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+━━━ \[9/10\] Deploying: Prometheus ━━━
+
+ℹ Pulling image: prom/prometheus:latest  
+████████████████████████████████████ 100% (178MB)
+
+ℹ Creating container: ai-platform-prometheus  
+✓ Container created  
+✓ Config file mounted: /mnt/data/ai-platform/config/prometheus/prometheus.yml  
+ℹ Waiting for Prometheus to be ready...  
+  Testing API endpoint... ✓ Responding  
+✓ Prometheus is healthy (9090/tcp)
+
+ℹ Discovering targets...  
+  ✓ postgres:5432  
+  ✓ redis:6379  
+  ✓ ollama:11434  
+  ✓ litellm:8000
+
+✓ Prometheus deployed successfully  
+  Status: Running  
+  Port: 9090  
+  Targets: 4 discovered  
+  Health: ✓ Healthy
+
+━━━ \[10/10\] Deploying: Grafana ━━━
+
+ℹ Pulling image: grafana/grafana:latest  
+████████████████████████████████████ 100% (298MB)
+
+ℹ Creating container: ai-platform-grafana  
+✓ Container created  
+ℹ Waiting for Grafana to be ready...  
+  Testing web interface... ✓ Responding  
+✓ Grafana is healthy (3001/tcp)
+
+ℹ Configuring data sources...  
+  ✓ Prometheus → http://prometheus:9090  
+✓ Data sources configured
+
+ℹ Importing dashboards...  
+  ✓ AI Platform Overview  
+  ✓ LLM Performance Metrics  
+  ✓ Infrastructure Health  
+✓ Dashboards imported: 3
+
+✓ Grafana deployed successfully  
+  Status: Running  
+  Port: 3001  
+  Data Sources: 1 configured  
+  Dashboards: 3 imported  
+  Health: ✓ Healthy
+
+╔════════════════════════════════════════════════════════════════════╗  
+║ PHASE 6: Post-Deployment Verification                             ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+▶ Verifying all services...
+
+Service Health Check Summary:  
+  ✓ postgres      → Healthy (5432/tcp)  
+  ✓ redis         → Healthy (6379/tcp)  
+  ✓ qdrant        → Healthy (6333/tcp, 6334/tcp)  
+  ✓ ollama        → Healthy (11434/tcp) | 3 models loaded  
+  ✓ litellm       → Healthy (8000/tcp) | 5 routes configured  
+  ✓ openwebui     → Healthy (3000/tcp)  
+  ✓ dify-api      → Healthy (5001/tcp)  
+  ✓ dify-worker   → Healthy  
+  ✓ dify-web      → Healthy (3001/tcp)  
+  ✓ n8n           → Healthy (5678/tcp)  
+  ✓ prometheus    → Healthy (9090/tcp) | 4 targets  
+  ✓ grafana       → Healthy (3001/tcp) | 3 dashboards
+
+Total: 12/12 containers running and healthy
+
+▶ Network connectivity check...  
+  ✓ All services can communicate on ai-platform-internal network  
+  ✓ Internet connectivity available for external services
+
+▶ Storage check...  
+  Total space used: 24.3GB  
+  Postgres data: 512MB  
+  Ollama models: 11.7GB  
+  Qdrant vectors: 128MB  
+  Other: 12.0GB
+
+✓ All services deployed and verified successfully\!
+
+╔════════════════════════════════════════════════════════════════════╗  
+║                                                                    ║  
+║                ✓ DEPLOYMENT COMPLETED SUCCESSFULLY\!                ║  
+║                                                                    ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+📋 Deployment Summary  
+────────────────────────────────────────────────────────────────────
+
+  Deployment Time: 11 minutes 34 seconds  
+  Services Deployed: 10  
+  Containers Running: 12  
+  Networks Created: 3  
+  Volumes Created: 8  
+  Disk Space Used: 24.3GB
+
+  Service Endpoints:  
+    • Open WebUI:     http://localhost:3000  
+    • LiteLLM API:    http://localhost:8000  
+    • Dify Platform:  http://localhost:3001  
+    • n8n Workflows:  http://localhost:5678  
+    • Grafana:        http://localhost:3001  
+    • Prometheus:     http://localhost:9090
+
+  Public Access (via reverse proxy):  
+    • https://ai.mycompany.com          → Open WebUI  
+    • https://api.ai.mycompany.com      → LiteLLM  
+    • https://dify.ai.mycompany.com     → Dify  
+    • https://workflows.ai.mycompany.com → n8n  
+    • https://metrics.ai.mycompany.com  → Grafana
+
+────────────────────────────────────────────────────────────────────
+
+🚀 Next Steps:
+
+  1\. Configure services:  
+     sudo ./3-configure-services.sh
+
+  2\. Access your AI platform:  
+     Open WebUI: https://ai.mycompany.com  
+     Admin user: admin  
+     Password: (see /mnt/data/ai-platform/.secrets)
+
+  3\. Monitor your platform:  
+     Grafana: https://metrics.ai.mycompany.com  
+     User: admin  
+     Password: (see /mnt/data/ai-platform/.secrets)
+
+────────────────────────────────────────────────────────────────────
+
+📄 Deployment Logs:  
+  • Full log: /mnt/data/ai-platform/logs/deployment-20260211-150045.log  
+  • Docker logs: docker compose logs \-f  
+  • Service logs: /mnt/data/ai-platform/logs/\<service\>/
+
+⚠️  Important:  
+  • Save your admin password from /mnt/data/ai-platform/.secrets  
+  • Enable SSL certificates: sudo certbot \--nginx  
+  • Configure firewall rules for public access  
+\` 
 
 \#\# \*\*SCRIPT 2: DEPLOY SERVICES\*\*
 
@@ -1850,6 +2441,317 @@ echo ""
 \* ✅ All containers have \`restart: unless-stopped\`
 
 \#\# \*\*SCRIPT 3: CONFIGURE SERVICES\*\*
+
+Script 3 : Expected UI Flow
+
+### **UI Flow**
+
+╔════════════════════════════════════════════════════════════════════╗  
+║                                                                    ║  
+║            AI PLATFORM AUTOMATION \- CONFIGURATION                  ║  
+║                      Version 4.0.0                                 ║  
+║                                                                    ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+ℹ Loading deployment status...  
+✓ 12 services detected and running
+
+╔════════════════════════════════════════════════════════════════════╗  
+║ PHASE 1: Database Initialization                                  ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+━━━ PostgreSQL Database Setup ━━━
+
+ℹ Connecting to PostgreSQL...  
+✓ Connection established
+
+ℹ Creating service-specific databases...  
+  Creating database: litellm\_db  
+    ✓ Database created  
+    ✓ User created: litellm\_user  
+    ✓ Permissions granted  
+    
+  Creating database: n8n\_db  
+    ✓ Database created  
+    ✓ User created: n8n\_user  
+    ✓ Permissions granted  
+    
+  Creating database: dify\_db  
+    ✓ Database created  
+    ✓ User created: dify\_user  
+    ✓ Permissions granted
+
+✓ PostgreSQL initialization completed  
+  Total databases: 3  
+  Total users: 3
+
+━━━ Redis Configuration ━━━
+
+ℹ Connecting to Redis...  
+✓ Connection established  
+✓ Authentication verified  
+ℹ Configuring cache policies...  
+✓ Cache policies configured
+
+━━━ Qdrant Vector Database Setup ━━━
+
+ℹ Connecting to Qdrant...  
+✓ Connection established  
+✓ API key verified
+
+ℹ Creating collections...  
+  Creating: dify\_knowledge\_base  
+    Vector size: 1536  
+    Distance: Cosine  
+    ✓ Collection created  
+    
+  Creating: openwebui\_embeddings  
+    Vector size: 1536  
+    Distance: Cosine  
+    ✓ Collection created
+
+✓ Qdrant initialization completed  
+  Total collections: 2
+
+╔════════════════════════════════════════════════════════════════════╗  
+║ PHASE 2: Service Integration Configuration                        ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+━━━ LiteLLM → Ollama Integration ━━━
+
+ℹ Configuring LiteLLM to use Ollama...  
+✓ Ollama endpoint configured: http://ollama:11434  
+ℹ Testing model routes...  
+  ✓ llama2 → Responding  
+  ✓ mistral → Responding  
+  ✓ codellama → Responding  
+✓ LiteLLM ↔ Ollama integration verified
+
+━━━ Open WebUI → Ollama Integration ━━━
+
+ℹ Configuring Open WebUI...  
+✓ Ollama connection configured  
+ℹ Testing model access...  
+  ✓ Models discovered: llama2, mistral, codellama  
+✓ Open WebUI ↔ Ollama integration verified
+
+━━━ Dify → Vector Database Integration ━━━
+
+ℹ Configuring Dify vector store...  
+✓ Qdrant endpoint configured: http://qdrant:6333  
+✓ Collection mapped: dify\_knowledge\_base  
+ℹ Testing vector operations...  
+  ✓ Insert test vector → Success  
+  ✓ Search test vector → Success  
+  ✓ Delete test vector → Success  
+✓ Dify ↔ Qdrant integration verified
+
+━━━ Dify → LiteLLM Integration ━━━
+
+ℹ Configuring Dify LLM provider...  
+✓ LiteLLM endpoint configured: http://litellm:8000  
+✓ API key configured  
+ℹ Testing model access...  
+  ✓ Available models: 5  
+✓ Dify ↔ LiteLLM integration verified
+
+━━━ n8n → Database Integration ━━━
+
+ℹ Configuring n8n database...  
+✓ PostgreSQL connection configured  
+ℹ Running database migrations...  
+  ████████████████████████████████ 100% (12 migrations)  
+✓ n8n database initialized
+
+╔════════════════════════════════════════════════════════════════════╗  
+║ PHASE 3: API Connection Configuration                             ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+━━━ External LLM Provider Configuration ━━━
+
+ℹ Configuring external API connections...  
+    
+  OpenAI:  
+    ✓ API key validated  
+    ✓ Models available: gpt-4, gpt-3.5-turbo  
+    
+  Anthropic:  
+    ✓ API key validated  
+    ✓ Models available: claude-3-opus, claude-3-sonnet
+
+✓ External API providers configured: 2
+
+╔════════════════════════════════════════════════════════════════════╗  
+║ PHASE 4: Monitoring Configuration                                 ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+━━━ Prometheus Target Configuration ━━━
+
+ℹ Configuring Prometheus scrape targets...  
+  ✓ postgres:5432/metrics  
+  ✓ redis:6379/metrics  
+  ✓ ollama:11434/metrics  
+  ✓ litellm:8000/metrics  
+✓ Prometheus targets configured: 4
+
+ℹ Reloading Prometheus configuration...  
+✓ Configuration reloaded
+
+━━━ Grafana Dashboard Setup ━━━
+
+ℹ Importing dashboards...  
+  AI Platform Overview... ✓ Imported (ID: 1\)  
+  LLM Performance... ✓ Imported (ID: 2\)  
+  Infrastructure Health... ✓ Imported (ID: 3\)  
+✓ Dashboards imported: 3
+
+ℹ Configuring alerting...  
+  ✓ High memory usage → Slack webhook  
+  ✓ Service down → Email alert  
+  ✓ High response latency → PagerDuty  
+✓ Alert rules configured: 3
+
+╔════════════════════════════════════════════════════════════════════╗  
+║ PHASE 5: User Account Setup                                       ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+━━━ Creating Admin Accounts ━━━
+
+ℹ Setting up admin users...  
+    
+  Open WebUI:  
+    Username: admin  
+    Password: (auto-generated)  
+    ✓ Account created  
+    
+  Dify:  
+    Email: admin@ai.mycompany.com  
+    Password: (auto-generated)  
+    ✓ Account created  
+    
+  n8n:  
+    Email: admin@ai.mycompany.com  
+    Password: (auto-generated)  
+    ✓ Account created  
+    
+  Grafana:  
+    Username: admin  
+    Password: (auto-generated)  
+    ✓ Account created
+
+✓ Admin accounts created: 4
+
+⚠ IMPORTANT: Admin passwords saved to /mnt/data/ai-platform/.secrets  
+  Please change these passwords after first login\!
+
+╔════════════════════════════════════════════════════════════════════╗  
+║ PHASE 6: SSL Certificate Setup                                    ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+ℹ SSL Type: Let's Encrypt  
+ℹ Domain: ai.mycompany.com  
+ℹ Email: admin@mycompany.com
+
+ℹ Requesting SSL certificates...  
+  ✓ Domain verification passed  
+  ✓ Certificate issued  
+  ✓ Certificate installed
+
+ℹ Configuring auto-renewal...  
+  ✓ Cron job created: /etc/cron.daily/certbot-renewal
+
+✓ SSL certificates configured  
+  Valid until: 2026-05-11  
+  Auto-renewal: ✓ Enabled
+
+╔════════════════════════════════════════════════════════════════════╗  
+║ PHASE 7: Final Verification                                       ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+▶ Verifying all configurations...
+
+Service Configuration Status:  
+  ✓ PostgreSQL → 3 databases initialized  
+  ✓ Redis → Cache configured  
+  ✓ Qdrant → 2 collections created  
+  ✓ Ollama → 3 models loaded  
+  ✓ LiteLLM → 5 routes configured, database connected  
+  ✓ Open WebUI → Connected to Ollama  
+  ✓ Dify → Connected to Qdrant \+ LiteLLM  
+  ✓ n8n → Database initialized  
+  ✓ Prometheus → 4 targets configured  
+  ✓ Grafana → 3 dashboards, 3 alerts
+
+Integration Status:  
+  ✓ LiteLLM ↔ Ollama → Verified  
+  ✓ Open WebUI ↔ Ollama → Verified  
+  ✓ Dify ↔ Qdrant → Verified  
+  ✓ Dify ↔ LiteLLM → Verified  
+  ✓ n8n ↔ PostgreSQL → Verified  
+  ✓ Grafana ↔ Prometheus → Verified
+
+External APIs:  
+  ✓ OpenAI → Connected  
+  ✓ Anthropic → Connected
+
+SSL/TLS:  
+  ✓ Certificate installed  
+  ✓ HTTPS enabled for all services  
+  ✓ Auto-renewal configured
+
+✓ All configurations verified successfully\!
+
+╔════════════════════════════════════════════════════════════════════╗  
+║                                                                    ║  
+║             ✓ CONFIGURATION COMPLETED SUCCESSFULLY\!                ║  
+║                                                                    ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+📋 Configuration Summary  
+────────────────────────────────────────────────────────────────────
+
+  Databases Initialized: 3  
+  Vector Collections: 2  
+  Service Integrations: 6 configured  
+  Admin Accounts: 4 created  
+  SSL Certificates: ✓ Installed  
+  Monitoring Dashboards: 3 imported  
+  Alert Rules: 3 configured
+
+  Service URLs (HTTPS Enabled):  
+    • Open WebUI:     https://ai.mycompany.com  
+    • LiteLLM API:    https://api.ai.mycompany.com  
+    • Dify Platform:  https://dify.ai.mycompany.com  
+    • n8n Workflows:  https://workflows.ai.mycompany.com  
+    • Grafana:        https://metrics.ai.mycompany.com
+
+────────────────────────────────────────────────────────────────────
+
+🚀 Your AI Platform is Ready\!
+
+  1\. Access your services:  
+     Open WebUI: https://ai.mycompany.com  
+     Username: admin  
+     Password: (see /mnt/data/ai-platform/.secrets)
+
+  2\. Start using AI:  
+     • Chat with local models (Ollama)  
+     • Build AI workflows (Dify, n8n)  
+     • Monitor performance (Grafana)
+
+  3\. Add more services (optional):  
+     sudo ./4-add-service.sh
+
+────────────────────────────────────────────────────────────────────
+
+📄 Configuration Logs:  
+  • Full log: /mnt/data/ai-platform/logs/configuration-20260211-151530.log
+
+⚠️  First-Time Setup:  
+  1\. Change all admin passwords after first login  
+  2\. Configure backup schedule  
+  3\. Review security settings  
+  4\. Test all integrations
 
 \#\#\# \*\*Intent\*\*
 
@@ -2296,6 +3198,333 @@ show\\\_configuration\\\_menu() {
 \* ✅ User can modify configuration via menu (no manual file editing)
 
 \#\# \*\*SCRIPT 4: ADD SERVICE (FUTURE EXTENSIBILITY)\*\*
+
+Script 4 : Expected UI flow  
+**UI Flow**  
+╔════════════════════════════════════════════════════════════════════╗  
+║                                                                    ║  
+║            AI PLATFORM AUTOMATION \- ADD SERVICE                    ║  
+║                      Version 4.0.0                                 ║  
+║                                                                    ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+ℹ Loading current deployment...  
+✓ Platform is running with 12 active services
+
+╔════════════════════════════════════════════════════════════════════╗  
+║ PHASE 1: Current Deployment Status                                ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+Currently Deployed Services:  
+  ✓ postgres        (Database)  
+  ✓ redis           (Cache)  
+  ✓ qdrant          (Vector DB)  
+  ✓ ollama          (Local LLM)  
+  ✓ litellm         (AI Gateway)  
+  ✓ openwebui       (Chat UI)  
+  ✓ dify            (AI Platform)  
+  ✓ n8n             (Workflows)  
+  ✓ prometheus      (Monitoring)  
+  ✓ grafana         (Dashboards)
+
+Total: 10 services (12 containers)
+
+Available Services to Add:  
+  • anythingllm     (Document Chat)  
+  • flowise         (No-code AI)  
+  • weaviate        (Vector DB Alternative)  
+  • milvus          (Vector DB Alternative)  
+  • jupyterhub      (Data Science)  
+  • mlflow          (ML Tracking)  
+  • mongodb         (NoSQL Database)  
+  • neo4j           (Graph Database)  
+  • metabase        (Analytics)  
+  • airflow         (Data Orchestration)
+
+╔════════════════════════════════════════════════════════════════════╗  
+║ PHASE 2: Service Selection                                        ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+Enter service name to add: flowise
+
+ℹ Selected service: Flowise (No-code AI workflows)
+
+▶ Checking compatibility...  
+  ✓ No conflicts detected  
+  ✓ All dependencies available  
+  ✓ Sufficient resources (CPU: 8 cores, RAM: 32GB, Disk: 225GB free)
+
+▶ Service requirements:  
+  • RAM: \~2GB  
+  • Disk: \~500MB  
+  • Dependencies: PostgreSQL, Redis  
+  • Integrations: LiteLLM, Qdrant
+
+Continue with Flowise installation? (Y/n): y
+
+╔════════════════════════════════════════════════════════════════════╗  
+║ PHASE 3: Service Deployment                                       ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+━━━ Deploying: Flowise ━━━
+
+ℹ Pulling image: flowiseai/flowise:latest  
+████████████████████████████████████ 100% (678MB)
+
+ℹ Creating container: ai-platform-flowise  
+✓ Container created
+
+ℹ Configuring environment...  
+  ✓ Database connection: PostgreSQL  
+  ✓ Cache connection: Redis  
+  ✓ Vector store: Qdrant
+
+ℹ Waiting for Flowise to be ready...  
+  Testing web interface... ✓ Responding  
+✓ Flowise is healthy (3002/tcp)
+
+✓ Flowise deployed successfully  
+  Status: Running  
+  Port: 3002  
+  Health: ✓ Healthy
+
+╔════════════════════════════════════════════════════════════════════╗  
+║ PHASE 4: Service Configuration                                    ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+━━━ Database Initialization ━━━
+
+ℹ Creating Flowise database...  
+  ✓ Database created: flowise\_db  
+  ✓ User created: flowise\_user  
+  ✓ Permissions granted
+
+ℹ Running database migrations...  
+  ████████████████████████████████ 100% (8 migrations)  
+✓ Database initialized
+
+━━━ Integration Configuration ━━━
+
+ℹ Configuring Flowise integrations...  
+    
+  LiteLLM Integration:  
+    ✓ Endpoint configured: http://litellm:8000  
+    ✓ Models discovered: 5  
+    
+  Qdrant Integration:  
+    ✓ Endpoint configured: http://qdrant:6333  
+    ✓ Collections accessible: 2  
+    
+  Ollama Integration:  
+    ✓ Endpoint configured: http://ollama:11434  
+    ✓ Models available: llama2, mistral, codellama
+
+✓ Integrations configured: 3
+
+━━━ Admin Account Setup ━━━
+
+ℹ Creating admin account...  
+  Email: admin@ai.mycompany.com  
+  Password: (auto-generated)  
+  ✓ Account created
+
+⚠ Password saved to: /mnt/data/ai-platform/.secrets
+
+╔════════════════════════════════════════════════════════════════════╗  
+║ PHASE 5: Network Configuration                                    ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+ℹ Configuring reverse proxy...  
+  ✓ Nginx configuration updated  
+  ✓ SSL certificate applied  
+  ✓ Route added: https://flowise.ai.mycompany.com → flowise:3002
+
+ℹ Reloading Nginx...  
+✓ Nginx reloaded successfully
+
+ℹ Testing public access...  
+  ✓ https://flowise.ai.mycompany.com → Responding
+
+╔════════════════════════════════════════════════════════════════════╗  
+║ PHASE 6: Monitoring Setup                                         ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+ℹ Adding Flowise to monitoring...  
+  ✓ Prometheus target added: flowise:3002/metrics  
+  ✓ Grafana dashboard imported: Flowise Metrics  
+  ✓ Alert rules configured
+
+ℹ Reloading Prometheus...  
+✓ Monitoring configured
+
+╔════════════════════════════════════════════════════════════════════╗  
+║ PHASE 7: Verification & Testing                                   ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+▶ Verifying Flowise deployment...
+
+Health Checks:  
+  ✓ Container running  
+  ✓ Web interface responding  
+  ✓ Database connected  
+  ✓ Cache connected  
+  ✓ Vector store connected
+
+Integration Tests:  
+  ✓ LiteLLM connection → Success  
+  ✓ Qdrant connection → Success  
+  ✓ Ollama connection → Success
+
+Network Tests:  
+  ✓ Internal network → Accessible  
+  ✓ Public HTTPS → Accessible  
+  ✓ SSL certificate → Valid
+
+✓ All verification tests passed\!
+
+╔════════════════════════════════════════════════════════════════════╗  
+║                                                                    ║  
+║          ✓ SERVICE ADDED SUCCESSFULLY\!                             ║  
+║                                                                    ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+📋 Addition Summary  
+────────────────────────────────────────────────────────────────────
+
+  Service Added: Flowise  
+  Deployment Time: 3 minutes 12 seconds  
+  Containers: 1 new (13 total)  
+  Databases: 1 created (4 total)  
+  Public Endpoints: 1 added (6 total)  
+  Disk Space Used: \+678MB (25.0GB total)
+
+  New Service Access:  
+    • Web Interface: https://flowise.ai.mycompany.com  
+    • Username: admin@ai.mycompany.com  
+    • Password: (see /mnt/data/ai-platform/.secrets)
+
+  Integrations:  
+    ✓ LiteLLM (AI models)  
+    ✓ Qdrant (vector storage)  
+    ✓ Ollama (local models)  
+    ✓ PostgreSQL (database)  
+    ✓ Redis (cache)
+
+────────────────────────────────────────────────────────────────────
+
+🚀 Start Using Flowise:
+
+  1\. Access Flowise:  
+     https://flowise.ai.mycompany.com
+
+  2\. Build your first AI workflow:  
+     • Connect to local models via Ollama  
+     • Use vector storage with Qdrant  
+     • Route requests through LiteLLM
+
+  3\. Monitor performance:  
+     Grafana → Flowise Metrics dashboard
+
+────────────────────────────────────────────────────────────────────
+
+📄 Addition Logs:  
+  • Full log: /mnt/data/ai-platform/logs/add-service-flowise-20260211-153045.log
+
+✓ Platform now has 11 services running  
+---
+
+## **🔄 SCRIPT 5: UPDATE & MAINTENANCE**
+
+### **Purpose**
+
+Update services, manage backups, perform maintenance tasks
+
+### **UI Flow**
+
+╔════════════════════════════════════════════════════════════════════╗  
+║                                                                    ║  
+║            AI PLATFORM AUTOMATION \- MAINTENANCE                    ║  
+║                      Version 4.0.0                                 ║  
+║                                                                    ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+Select maintenance operation:  
+  1\) Update Services  
+  2\) Backup Platform  
+  3\) Restore from Backup  
+  4\) Health Check  
+  5\) Resource Usage Report  
+  6\) Clean Up Resources  
+  7\) Exit
+
+Enter selection \[1-7\]: 1
+
+╔════════════════════════════════════════════════════════════════════╗  
+║ UPDATE SERVICES                                                    ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+ℹ Checking for updates...
+
+Available Updates:  
+  • ollama:          latest → 0.1.23 (New version available)  
+  • litellm:         1.35.8 → 1.36.2 (Security update)  
+  • openwebui:       0.1.105 → 0.1.107 (Feature update)  
+  • grafana:         10.3.1 → 10.3.3 (Bug fix)
+
+No updates available for:  
+  • postgres, redis, qdrant, dify, n8n, prometheus, flowise
+
+Update options:  
+  1\) Update all services  
+  2\) Update selected services  
+  3\) Update critical (security) only  
+  4\) Cancel
+
+Enter selection \[1-4\]: 3
+
+ℹ Updating critical services (security updates)...
+
+━━━ Updating: LiteLLM (Security Update) ━━━
+
+⚠ This service will be briefly unavailable during update
+
+ℹ Creating backup...  
+  ✓ Configuration backed up  
+  ✓ Database backed up
+
+ℹ Pulling new image: ghcr.io/berriai/litellm:1.36.2  
+████████████████████████████████████ 100%
+
+ℹ Stopping current container...  
+✓ Container stopped
+
+ℹ Starting updated container...  
+✓ Container started
+
+ℹ Waiting for service to be ready...  
+  Testing API endpoint... ✓ Responding
+
+ℹ Verifying update...  
+  ✓ Version: 1.36.2  
+  ✓ Database migration: No changes needed  
+  ✓ Configuration: Compatible  
+  ✓ All routes responding
+
+✓ LiteLLM updated successfully  
+  Downtime: 12 seconds
+
+╔════════════════════════════════════════════════════════════════════╗  
+║                                                                    ║  
+║          ✓ UPDATES COMPLETED SUCCESSFULLY\!                         ║  
+║                                                                    ║  
+╚════════════════════════════════════════════════════════════════════╝
+
+Update Summary:  
+  Services Updated: 1  
+  Total Downtime: 12 seconds  
+  Backups Created: 1
+
+All services are running and healthy.
 
 \#\#\# \*\*Intent\*\*
 
