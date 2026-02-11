@@ -1,1086 +1,796 @@
 #!/bin/bash
-# 1-setup-system.sh - System preparation and configuration collection
 
-SCRIPT_DIR=" $ (cd " $ (dirname "${BASH_SOURCE[0]}")" && pwd)"
-DATA_ROOT="/mnt/data"
-METADATA_DIR=" $ DATA_ROOT/metadata"
+#==============================================================================
+# Script 1: System Setup
+# Purpose: Prepare Ubuntu 24.04 system for AI platform deployment
+# Features:
+#   - System requirements check
+#   - Docker installation
+#   - Tailscale setup
+#   - Storage configuration
+#   - GPU detection and NVIDIA setup
+#   - Directory structure creation
+#==============================================================================
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+set -euo pipefail
 
-log_info() { echo -e " $ {GREEN}[INFO]${NC}  $ 1"; }
-log_warn() { echo -e " $ {YELLOW}[WARN]${NC}  $ 1"; }
-log_error() { echo -e " $ {RED}[ERROR]${NC}  $ 1"; }
-log_step() { echo -e " $ {CYAN}[STEP]${NC}  $ 1"; }
+#------------------------------------------------------------------------------
+# Color Definitions
+#------------------------------------------------------------------------------
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly CYAN='\033[0;36m'
+readonly MAGENTA='\033[0;35m'
+readonly NC='\033[0m' # No Color
+readonly BOLD='\033[1m'
 
-show_banner() {
-    cat << 'EOF'
-╔════════════════════════════════════════════════════════╗
-║  🚀 AIPlatformAutomation - System Setup v76.5.0       ║
-╚════════════════════════════════════════════════════════╝
-EOF
+#------------------------------------------------------------------------------
+# Global Variables
+#------------------------------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DATA_DIR="/mnt/data"
+MIN_DISK_GB=50
+MIN_RAM_GB=8
+TAILSCALE_INSTALLED=false
+TAILSCALE_IP=""
+GPU_AVAILABLE=false
+
+#------------------------------------------------------------------------------
+# Helper Functions
+#------------------------------------------------------------------------------
+
+print_header() {
+    clear
+    echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC}     ${BOLD}AI PLATFORM AUTOMATION - SYSTEM SETUP${NC}           ${CYAN}║${NC}"
+    echo -e "${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "${CYAN}║${NC}  ${GREEN}Script 1 of 5${NC} - Preparing your system                  ${CYAN}║${NC}"
+    echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
 }
 
-check_prerequisites() {
-    log_step "Checking prerequisites..."
+print_step() {
+    echo -e "${BLUE}[STEP]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[✓]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[✗]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[!]${NC} $1"
+}
+
+print_info() {
+    echo -e "${CYAN}[i]${NC} $1"
+}
+
+spinner() {
+    local pid=$1
+    local msg=$2
+    local spin='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+    local i=0
     
-    if [ " $ EUID" -ne 0 ]; then
-        log_error "This script must be run as root (use sudo)"
+    echo -n "  "
+    while kill -0 $pid 2>/dev/null; do
+        i=$(((i + 1) % 10))
+        printf "\r${CYAN}${spin:$i:1}${NC} $msg"
+        sleep 0.1
+    done
+    printf "\r"
+}
+
+confirm() {
+    local prompt="$1"
+    local default="${2:-n}"
+    local response
+    
+    if [[ "$default" == "y" ]]; then
+        prompt="$prompt [Y/n]: "
+    else
+        prompt="$prompt [y/N]: "
+    fi
+    
+    read -r -p "$(echo -e ${YELLOW}$prompt${NC})" response
+    response=${response:-$default}
+    
+    [[ "$response" =~ ^[Yy]$ ]]
+}
+
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        print_error "This script must be run as root (use sudo)"
+        exit 1
+    fi
+}
+
+#------------------------------------------------------------------------------
+# System Checks
+#------------------------------------------------------------------------------
+
+check_os() {
+    print_step "Checking operating system..."
+    
+    if [[ ! -f /etc/os-release ]]; then
+        print_error "Cannot determine OS version"
         exit 1
     fi
     
-    # Detect real user
-    if [ -n "${SUDO_USER:-}" ]; then
-        REAL_USER=" $ SUDO_USER"
-    else
-        REAL_USER=" $ USER"
+    source /etc/os-release
+    
+    if [[ "$ID" != "ubuntu" ]]; then
+        print_error "This script is designed for Ubuntu only"
+        print_info "Detected: $PRETTY_NAME"
+        exit 1
     fi
     
-    PUID= $ (id -u " $ REAL_USER")
-    PGID= $ (id -g " $ REAL_USER")
+    if [[ "$VERSION_ID" != "24.04" && "$VERSION_ID" != "22.04" ]]; then
+        print_warning "Tested on Ubuntu 24.04 LTS"
+        print_info "Your version: $VERSION_ID"
+        
+        if ! confirm "Continue anyway?" n; then
+            exit 0
+        fi
+    fi
     
-    log_info "Running as: root (for  $ REAL_USER, UID= $ PUID, GID= $ PGID)"
+    print_success "OS Check: $PRETTY_NAME"
 }
 
-detect_hardware() {
-    log_step "🔍 Detecting hardware configuration..."
+check_internet() {
+    print_step "Checking internet connectivity..."
     
-    CPU_CORES= $ (nproc)
-    CPU_MODEL= $ (lscpu | grep "Model name" | cut -d: -f2 | xargs)
-    RAM_GB= $ (free -g | awk '/^Mem:/{print  $ 2}')
+    if ! ping -c 1 -W 2 8.8.8.8 &>/dev/null; then
+        print_error "No internet connection detected"
+        exit 1
+    fi
     
-    # GPU detection
+    if ! curl -s --head --max-time 3 https://www.google.com &>/dev/null; then
+        print_error "Cannot reach internet (DNS/firewall issue?)"
+        exit 1
+    fi
+    
+    print_success "Internet connectivity OK"
+}
+
+check_system_resources() {
+    print_step "Checking system resources..."
+    
+    # Check RAM
+    local total_ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+    local total_ram_gb=$((total_ram_kb / 1024 / 1024))
+    
+    if [[ $total_ram_gb -lt $MIN_RAM_GB ]]; then
+        print_error "Insufficient RAM: ${total_ram_gb}GB (minimum: ${MIN_RAM_GB}GB)"
+        exit 1
+    fi
+    
+    print_success "RAM: ${total_ram_gb}GB"
+    
+    # Check disk space
+    local available_space_gb=$(df / | awk 'NR==2 {print int($4/1024/1024)}')
+    
+    if [[ $available_space_gb -lt $MIN_DISK_GB ]]; then
+        print_error "Insufficient disk space: ${available_space_gb}GB (minimum: ${MIN_DISK_GB}GB)"
+        exit 1
+    fi
+    
+    print_success "Available disk space: ${available_space_gb}GB"
+    
+    # Check CPU cores
+    local cpu_cores=$(nproc)
+    print_success "CPU cores: $cpu_cores"
+    
+    if [[ $cpu_cores -lt 4 ]]; then
+        print_warning "Recommended minimum: 4 CPU cores (detected: $cpu_cores)"
+        if ! confirm "Continue anyway?" n; then
+            exit 0
+        fi
+    fi
+}
+
+check_gpu() {
+    print_step "Detecting GPU..."
+    
     if command -v nvidia-smi &>/dev/null; then
-        GPU_AVAILABLE="true"
-        GPU_MODEL= $ (nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
-        GPU_MEMORY= $ (nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1)
-        GPU_DRIVER= $ (nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1)
+        local gpu_info=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | head -1)
+        
+        if [[ -n "$gpu_info" ]]; then
+            GPU_AVAILABLE=true
+            print_success "NVIDIA GPU detected: $gpu_info"
+            return 0
+        fi
+    fi
+    
+    if lspci | grep -i nvidia &>/dev/null; then
+        print_warning "NVIDIA GPU detected but drivers not installed"
+        print_info "GPU support will be configured during setup"
+        GPU_AVAILABLE=true
     else
-        GPU_AVAILABLE="false"
-        GPU_MODEL="None"
-        GPU_MEMORY="0"
-        GPU_DRIVER="N/A"
+        print_info "No GPU detected - will use CPU only"
+        GPU_AVAILABLE=false
     fi
-    
-    cat << EOF
-
-┌────────────────────────────────────────────────────┐
-│   💻 HARDWARE DETECTION SUMMARY                    │
-└────────────────────────────────────────────────────┘
-
-  🖥️  CPU: $CPU_MODEL
-  ⚙️  Cores: $CPU_CORES
-  🧠 RAM: ${RAM_GB}GB
-  🎮 GPU:  $ ([ " $ GPU_AVAILABLE" = "true" ] && echo "✅  $ GPU_MODEL ( $ {GPU_MEMORY}MB, Driver:  $ GPU_DRIVER)" || echo "❌ None detected")
-
-EOF
-
-    # Save to metadata
-    mkdir -p " $ METADATA_DIR"
-    cat > " $ METADATA_DIR/system_info.json" << EOJSON
-{
-  "cpu": {
-    "model": " $ CPU_MODEL",
-    "cores": $CPU_CORES
-  },
-  "ram_gb": $RAM_GB,
-  "gpu": {
-    "available":  $ GPU_AVAILABLE,
-    "model": " $ GPU_MODEL",
-    "memory_mb":  $ GPU_MEMORY,
-    "driver": " $ GPU_DRIVER"
-  },
-  "timestamp": " $ (date -Iseconds)"
-}
-EOJSON
 }
 
-mount_ebs_volume() {
-    log_step "💾 EBS Volume Detection and Mounting"
-    
-    # Check if /mnt/data already mounted
-    if mountpoint -q " $ DATA_ROOT"; then
-        log_info "/mnt/data already mounted"
-        DEVICE= $ (df " $ DATA_ROOT" | tail -1 | awk '{print $1}')
-        log_info "Current device:  $ DEVICE"
-        return 0
-    fi
-    
-    # Detect unmounted block devices
-    ROOT_DEVICE= $ (lsblk -no PKNAME  $ (findmnt -n -o SOURCE /) | head -1)
-    AVAILABLE_DEVICES= $ (lsblk -ndo NAME,SIZE,TYPE | grep disk | grep -v " $ ROOT_DEVICE" | grep -v "loop")
-    
-    if [ -z " $ AVAILABLE_DEVICES" ]; then
-        log_warn "No additional block devices detected"
-        log_info "Creating /mnt/data on root filesystem..."
-        mkdir -p " $ DATA_ROOT"
-        chown " $ PUID: $ PGID" " $ DATA_ROOT"
-        return 0
-    fi
-    
-    cat << 'EOF'
+#------------------------------------------------------------------------------
+# Storage Configuration
+#------------------------------------------------------------------------------
 
-📦 Available Block Devices:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-EOF
+select_storage_location() {
+    print_header
+    echo -e "${BOLD}Storage Configuration${NC}"
+    echo ""
+    echo "The platform requires a persistent storage location for:"
+    echo "  • Docker volumes (containers, images)"
+    echo "  • Service data (databases, vector stores)"
+    echo "  • Configuration files"
+    echo "  • Backups"
+    echo ""
+    echo "Available options:"
+    echo ""
     
-    echo " $ AVAILABLE_DEVICES" | nl -w2 -s') ' -v1
-    echo
+    # List mounted filesystems
+    local i=1
+    local options=()
     
-    while true; do
-        read -p "Enter device number to mount at /mnt/data (or 0 to use root FS): " device_choice
+    while IFS= read -r line; do
+        local mount_point=$(echo "$line" | awk '{print $1}')
+        local size=$(echo "$line" | awk '{print $2}')
+        local avail=$(echo "$line" | awk '{print $4}')
+        local percent=$(echo "$line" | awk '{print $5}')
         
-        if [ " $ device_choice" = "0" ]; then
-            mkdir -p " $ DATA_ROOT"
-            chown " $ PUID: $ PGID" " $ DATA_ROOT"
-            break
+        options+=("$mount_point")
+        echo -e "  ${CYAN}$i)${NC} $mount_point"
+        echo -e "     Size: $size | Available: $avail | Used: $percent"
+        echo ""
+        ((i++))
+    done < <(df -h | grep -E '^/dev/' | grep -v '/boot' | grep -v '/snap')
+    
+    echo -e "  ${CYAN}$i)${NC} Custom path"
+    echo ""
+    
+    local selection
+    read -p "Select storage location [1-$i]: " selection
+    
+    if [[ "$selection" =~ ^[0-9]+$ ]] && [[ $selection -ge 1 ]] && [[ $selection -lt $i ]]; then
+        local selected_mount="${options[$((selection-1))]}"
+        DATA_DIR="${selected_mount}/ai-platform-data"
+        print_success "Selected: $DATA_DIR"
+    elif [[ $selection -eq $i ]]; then
+        read -p "Enter custom path: " DATA_DIR
+        DATA_DIR="${DATA_DIR%/}"  # Remove trailing slash
+        print_info "Custom path: $DATA_DIR"
+    else
+        print_error "Invalid selection"
+        exit 1
+    fi
+    
+    # Confirm
+    echo ""
+    echo -e "${YELLOW}Data will be stored at: ${BOLD}$DATA_DIR${NC}"
+    
+    if [[ -d "$DATA_DIR" ]]; then
+        print_warning "Directory already exists"
+        if ! confirm "Use existing directory?" n; then
+            exit 0
         fi
-        
-        DEVICE_NAME= $ (echo " $ AVAILABLE_DEVICES" | sed -n "${device_choice}p" | awk '{print  $ 1}')
-        
-        if [ -z " $ DEVICE_NAME" ]; then
-            log_error "Invalid selection"
-            continue
+    else
+        if ! confirm "Create this directory?" y; then
+            exit 0
         fi
-        
-        DEVICE_PATH="/dev/ $ DEVICE_NAME"
-        
-        # Check if filesystem exists
-        if ! blkid " $ DEVICE_PATH" &>/dev/null; then
-            log_warn "No filesystem detected on  $ DEVICE_PATH"
-            read -p "Format as ext4? [y/N]: " format_confirm
-            
-            if [[ " $ format_confirm" =~ ^[Yy]$ ]]; then
-                log_info "Creating ext4 filesystem..."
-                mkfs.ext4 -F " $ DEVICE_PATH"
-            else
-                continue
-            fi
-        fi
-        
-        # Mount
-        mkdir -p " $ DATA_ROOT"
-        mount " $ DEVICE_PATH" " $ DATA_ROOT"
-        
-        # Verify mount
-        if ! mountpoint -q "$DATA_ROOT"; then
-            log_error "Failed to mount $DEVICE_PATH"
-            continue
-        fi
-        
-        log_info "✅ Successfully mounted $DEVICE_PATH at  $ DATA_ROOT"
-        
-        # Add to fstab if not present
-        if ! grep -q " $ DEVICE_PATH" /etc/fstab; then
-            echo "$DEVICE_PATH   $ DATA_ROOT  ext4  defaults,nofail  0  2" >> /etc/fstab
-            log_info "Added to /etc/fstab for persistent mounting"
-        fi
-        
-        # Set ownership
-        chown -R " $ PUID: $ PGID" " $ DATA_ROOT"
-        break
+    fi
+}
+
+create_directory_structure() {
+    print_step "Creating directory structure..."
+    
+    local dirs=(
+        "$DATA_DIR"
+        "$DATA_DIR/compose"
+        "$DATA_DIR/env"
+        "$DATA_DIR/config"
+        "$DATA_DIR/metadata"
+        "$DATA_DIR/backups/postgres"
+        "$DATA_DIR/backups/redis"
+        "$DATA_DIR/backups/qdrant"
+        "$DATA_DIR/backups/configs"
+        "$DATA_DIR/backups/containers"
+        "$DATA_DIR/logs"
+        "$DATA_DIR/postgres"
+        "$DATA_DIR/redis"
+        "$DATA_DIR/qdrant"
+        "$DATA_DIR/ollama"
+        "$DATA_DIR/openwebui"
+        "$DATA_DIR/anythingllm"
+        "$DATA_DIR/dify"
+        "$DATA_DIR/n8n"
+        "$DATA_DIR/signal"
+        "$DATA_DIR/comfyui"
+        "$DATA_DIR/flowise"
+        "$DATA_DIR/nginx-pm"
+        "$DATA_DIR/gdrive"
+        "$DATA_DIR/gdrive/mount"
+    )
+    
+    for dir in "${dirs[@]}"; do
+        mkdir -p "$dir"
     done
+    
+    # Set permissions
+    chown -R 1000:1000 "$DATA_DIR"
+    chmod -R 755 "$DATA_DIR"
+    
+    print_success "Directory structure created at $DATA_DIR"
 }
 
-install_system_packages() {
-    log_step "📦 Installing system dependencies..."
+#------------------------------------------------------------------------------
+# Package Installation
+#------------------------------------------------------------------------------
+
+update_system() {
+    print_step "Updating system packages..."
     
-    apt-get update -qq
-    apt-get install -y -qq \
-        curl \
-        wget \
-        jq \
-        git \
-        gnupg \
-        ca-certificates \
-        lsb-release \
-        apt-transport-https \
-        software-properties-common \
-        qrencode \
-        rclone
+    (
+        apt-get update &>/dev/null
+        apt-get upgrade -y &>/dev/null
+    ) &
+    spinner $! "Updating packages (this may take a few minutes)..."
+    wait $!
     
-    log_info "✅ System packages installed"
+    print_success "System updated"
 }
+
+install_base_packages() {
+    print_step "Installing base packages..."
+    
+    local packages=(
+        curl
+        wget
+        git
+        vim
+        htop
+        net-tools
+        ca-certificates
+        gnupg
+        lsb-release
+        software-properties-common
+        apt-transport-https
+        jq
+        yamllint
+        unzip
+    )
+    
+    (
+        apt-get install -y "${packages[@]}" &>/dev/null
+    ) &
+    spinner $! "Installing base packages..."
+    wait $!
+    
+    print_success "Base packages installed"
+}
+
+#------------------------------------------------------------------------------
+# Docker Installation
+#------------------------------------------------------------------------------
 
 install_docker() {
+    print_step "Installing Docker..."
+    
     if command -v docker &>/dev/null; then
-        log_info "Docker already installed:  $ (docker --version)"
-        return 0
+        local docker_version=$(docker --version | cut -d' ' -f3 | tr -d ',')
+        print_info "Docker already installed: $docker_version"
+        
+        if ! confirm "Reinstall Docker?" n; then
+            return 0
+        fi
     fi
     
-    log_step "🐳 Installing Docker..."
+    # Remove old versions
+    apt-get remove -y docker docker-engine docker.io containerd runc &>/dev/null || true
     
-    curl -fsSL https://get.docker.com | sh
-    systemctl enable docker
-    systemctl start docker
-    usermod -aG docker " $ REAL_USER"
+    # Add Docker repository
+    print_info "Adding Docker repository..."
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+    chmod a+r /etc/apt/keyrings/docker.asc
     
-    log_info "✅ Docker installed:  $ (docker --version)"
+    echo \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+      $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+      tee /etc/apt/sources.list.d/docker.list > /dev/null
+    
+    # Install Docker
+    (
+        apt-get update &>/dev/null
+        apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin &>/dev/null
+    ) &
+    spinner $! "Installing Docker Engine..."
+    wait $!
+    
+    # Start Docker
+    systemctl enable docker &>/dev/null
+    systemctl start docker &>/dev/null
+    
+    # Verify installation
+    if docker run --rm hello-world &>/dev/null; then
+        print_success "Docker installed successfully"
+    else
+        print_error "Docker installation failed"
+        exit 1
+    fi
+    
+    # Add current user to docker group
+    local real_user=$(logname 2>/dev/null || echo $SUDO_USER)
+    if [[ -n "$real_user" ]]; then
+        usermod -aG docker "$real_user"
+        print_info "Added $real_user to docker group (logout/login required)"
+    fi
 }
 
-install_nvidia_toolkit() {
-    if [ " $ GPU_AVAILABLE" != "true" ]; then
-        return 0
+configure_docker_storage() {
+    print_step "Configuring Docker storage..."
+    
+    local daemon_config="/etc/docker/daemon.json"
+    local docker_data_root="$DATA_DIR/docker"
+    
+    mkdir -p "$docker_data_root"
+    
+    cat > "$daemon_config" <<EOF
+{
+  "data-root": "$docker_data_root",
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  },
+  "storage-driver": "overlay2"
+}
+EOF
+    
+    # Restart Docker to apply changes
+    systemctl restart docker &>/dev/null
+    
+    print_success "Docker storage configured at $docker_data_root"
+}
+
+#------------------------------------------------------------------------------
+# NVIDIA GPU Setup
+#------------------------------------------------------------------------------
+
+install_nvidia_drivers() {
+    print_step "Installing NVIDIA drivers..."
+    
+    # Detect recommended driver
+    ubuntu-drivers devices &>/dev/null
+    local recommended_driver=$(ubuntu-drivers devices 2>/dev/null | grep recommended | awk '{print $3}')
+    
+    if [[ -z "$recommended_driver" ]]; then
+        print_warning "Could not detect recommended driver"
+        recommended_driver="nvidia-driver-535"
     fi
     
-    log_step "🎮 Installing NVIDIA Container Toolkit..."
+    print_info "Installing: $recommended_driver"
     
-    distribution=$(. /etc/os-release;echo  $ ID $ VERSION_ID)
+    (
+        apt-get install -y "$recommended_driver" &>/dev/null
+    ) &
+    spinner $! "Installing NVIDIA driver (this may take several minutes)..."
+    wait $!
+    
+    print_success "NVIDIA drivers installed"
+    print_warning "System reboot required for drivers to take effect"
+}
+
+install_nvidia_docker() {
+    print_step "Installing NVIDIA Container Toolkit..."
+    
+    # Add NVIDIA repository
+    distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
     curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
     curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
         sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
         tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
     
-    apt-get update -qq
-    apt-get install -y nvidia-container-toolkit
-    nvidia-ctk runtime configure --runtime=docker
-    systemctl restart docker
+    (
+        apt-get update &>/dev/null
+        apt-get install -y nvidia-container-toolkit &>/dev/null
+    ) &
+    spinner $! "Installing NVIDIA Container Toolkit..."
+    wait $!
     
-    # Test
+    # Configure Docker to use NVIDIA runtime
+    nvidia-ctk runtime configure --runtime=docker &>/dev/null
+    systemctl restart docker &>/dev/null
+    
+    # Test GPU access
     if docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi &>/dev/null; then
-        log_info "✅ NVIDIA Container Toolkit installed and verified"
+        print_success "NVIDIA Container Toolkit configured successfully"
     else
-        log_warn "⚠️  NVIDIA Container Toolkit installed but GPU not accessible in containers"
+        print_warning "GPU test failed - may need system reboot"
     fi
 }
 
-install_ollama() {
-    if command -v ollama &>/dev/null; then
-        log_info "Ollama already installed:  $ (ollama --version)"
+setup_gpu() {
+    if [[ "$GPU_AVAILABLE" == false ]]; then
         return 0
     fi
     
-    log_step "🦙 Installing Ollama..."
+    print_header
+    echo -e "${BOLD}GPU Configuration${NC}"
+    echo ""
     
-    curl -fsSL https://ollama.com/install.sh | sh
-    
-    # Start ollama service
-    systemctl enable ollama
-    systemctl start ollama
-    
-    # Wait for service
-    sleep 5
-    
-    if curl -s http://localhost:11434/api/tags &>/dev/null; then
-        log_info "✅ Ollama installed and running"
+    if command -v nvidia-smi &>/dev/null; then
+        print_info "NVIDIA drivers already installed"
+        nvidia-smi
+        echo ""
     else
-        log_warn "⚠️  Ollama installed but service not responding"
+        echo "NVIDIA GPU detected but drivers not installed."
+        echo ""
+        
+        if confirm "Install NVIDIA drivers?" y; then
+            install_nvidia_drivers
+        else
+            print_warning "Skipping GPU setup - can be configured later"
+            return 0
+        fi
     fi
-}
-
-# ============================================================================
-# INTERACTIVE CONFIGURATION QUESTIONNAIRE
-# ============================================================================
-
-ask_network_configuration() {
-    log_step "🌐 Network Configuration"
     
-    cat << 'EOF'
-
-┌────────────────────────────────────────────────────┐
-│   🌐 DOMAIN & NETWORK SETUP                        │
-└────────────────────────────────────────────────────┘
-
-EOF
-    
-    read -p "Enter domain name (or 'localhost' for local-only): " DOMAIN
-    DOMAIN=" $ {DOMAIN:-localhost}"
-    
-    if [ "$DOMAIN" != "localhost" ]; then
-        cat << 'EOF'
-
-Public Access Method:
-
-  1) 🔐 SWAG (Secure Web Application Gateway) - Let's Encrypt + nginx
-  2) 🎛️  Nginx Proxy Manager - Web UI for proxy management
-  3) ☁️  Cloudflare Tunnel - Zero-trust access
-  4) ❌ None (local network only)
-
-EOF
-        
-        while true; do
-            read -p "Select proxy method [1-4]: " proxy_choice
-            case  $ proxy_choice in
-                1) PROXY_TYPE="swag"; break ;;
-                2) PROXY_TYPE="nginx-proxy-manager"; break ;;
-                3) PROXY_TYPE="cloudflare-tunnel"; break ;;
-                4) PROXY_TYPE="none"; break ;;
-                *) log_error "Invalid selection" ;;
-            esac
-        done
-        
-        if [ " $ PROXY_TYPE" != "none" ]; then
-            read -p "Enter email for Let's Encrypt / notifications: " PROXY_EMAIL
+    if ! command -v nvidia-ctk &>/dev/null; then
+        if confirm "Install NVIDIA Container Toolkit for Docker?" y; then
+            install_nvidia_docker
         fi
     else
-        PROXY_TYPE="none"
+        print_info "NVIDIA Container Toolkit already installed"
+    fi
+}
+
+#------------------------------------------------------------------------------
+# Tailscale Setup
+#------------------------------------------------------------------------------
+
+install_tailscale() {
+    print_header
+    echo -e "${BOLD}Tailscale Configuration${NC}"
+    echo ""
+    echo "Tailscale provides secure remote access to your AI platform."
+    echo ""
+    echo -e "${CYAN}Benefits:${NC}"
+    echo "  • Access services from anywhere"
+    echo "  • Zero-trust security (encrypted)"
+    echo "  • No port forwarding needed"
+    echo "  • Free for personal use (up to 100 devices)"
+    echo ""
+    
+    if ! confirm "Install and configure Tailscale?" y; then
+        print_warning "Skipping Tailscale - will use local access only"
+        return 0
     fi
     
-    # Save metadata
-    cat > " $ METADATA_DIR/network_config.json" << EOJSON
-{
-  "domain": " $ DOMAIN",
-  "proxy_type": " $ PROXY_TYPE",
-  "proxy_email": " $ {PROXY_EMAIL:-}",
-  "local_only":  $ ([ " $ DOMAIN" = "localhost" ] && echo "true" || echo "false")
-}
-EOJSON
+    print_step "Installing Tailscale..."
     
-    log_info "✅ Network configuration saved"
-}
-
-ask_service_selection() {
-    log_step "🎯 Service Selection"
+    if command -v tailscale &>/dev/null; then
+        print_info "Tailscale already installed"
+    else
+        curl -fsSL https://tailscale.com/install.sh | sh
+    fi
     
-    cat << 'EOF'
-
-┌────────────────────────────────────────────────────┐
-│   🎯 AI PLATFORM SERVICES                          │
-└────────────────────────────────────────────────────┘
-
-Select services to deploy (space-separated numbers):
-
-  1) 🌐 OpenWebUI           - Modern LLM interface with RAG
-  2) 🧠 AnythingLLM         - Document-focused AI assistant
-  3) 🔧 Dify                - LLM application development platform
-  4) 🔄 n8n                 - Workflow automation
-  5) 💬 Flowise             - Drag-and-drop LLM chains
-  6) 🦁 OpenClaw UI         - Channel-based AI (requires Signal)
-  7) 🎨 ComfyUI             - Image generation workflows (requires GPU)
-
-EOF
+    # Check if already authenticated
+    if tailscale status &>/dev/null; then
+        TAILSCALE_IP=$(tailscale ip -4)
+        TAILSCALE_INSTALLED=true
+        print_success "Tailscale already running: $TAILSCALE_IP"
+        return 0
+    fi
     
-    read -p "Enter selections (e.g., 1 2 3 6): " selections
+    print_step "Authenticating with Tailscale..."
+    echo ""
+    echo -e "${YELLOW}Opening browser for authentication...${NC}"
+    echo "If browser doesn't open, visit the URL shown below."
+    echo ""
     
-    SELECTED_SERVICES=()
-    REQUIRES_SIGNAL=false
+    # Start tailscale and get auth URL
+    tailscale up
     
-    for num in $selections; do
-        case  $ num in
-            1) SELECTED_SERVICES+=("openwebui") ;;
-            2) SELECTED_SERVICES+=("anythingllm") ;;
-            3) SELECTED_SERVICES+=("dify") ;;
-            4) SELECTED_SERVICES+=("n8n") ;;
-            5) SELECTED_SERVICES+=("flowise") ;;
-            6)
-                SELECTED_SERVICES+=("openclaw")
-                REQUIRES_SIGNAL=true
-                ;;
-            7)
-                if [ " $ GPU_AVAILABLE" = "true" ]; then
-                    SELECTED_SERVICES+=("comfyui")
-                else
-                    log_warn "ComfyUI requires GPU - skipping"
-                fi
-                ;;
-        esac
-    done
-    
-    # Always include infrastructure services
-    INFRASTRUCTURE_SERVICES=("postgres" "redis" "ollama" "litellm")
-    
-    log_info "Selected: ${SELECTED_SERVICES[*]}"
-    
-    # Save metadata
-    cat > "$METADATA_DIR/selected_services.json" << EOJSON
-{
-  "infrastructure":  $ (printf '%s\n' " $ {INFRASTRUCTURE_SERVICES[@]}" | jq -R . | jq -s .),
-  "applications":  $ (printf '%s\n' " $ {SELECTED_SERVICES[@]}" | jq -R . | jq -s .),
-  "requires_signal":  $ REQUIRES_SIGNAL
-}
-EOJSON
-}
-
-ask_vectordb_selection() {
-    log_step "🗄️  Vector Database Selection"
-    
-    # Check if any service needs vector DB
-    NEEDS_VECTORDB=false
-    for service in " $ {SELECTED_SERVICES[@]}"; do
-        if [[ " $ service" =~ ^(anythingllm|dify) $  ]]; then
-            NEEDS_VECTORDB=true
-            break
+    # Wait for connection
+    local timeout=60
+    local elapsed=0
+    while ! tailscale status &>/dev/null; do
+        sleep 1
+        ((elapsed++))
+        if [[ $elapsed -ge $timeout ]]; then
+            print_error "Tailscale authentication timeout"
+            return 1
         fi
     done
     
-    if [ " $ NEEDS_VECTORDB" = "false" ]; then
-        log_info "No services require vector database - skipping"
-        echo '{"type": "none"}' > " $ METADATA_DIR/vectordb_config.json"
-        return 0
-    fi
+    TAILSCALE_IP=$(tailscale ip -4)
+    TAILSCALE_INSTALLED=true
     
-    cat << 'EOF'
+    print_success "Tailscale connected: $TAILSCALE_IP"
+    
+    # Enable IP forwarding (for subnet routing if needed)
+    echo 'net.ipv4.ip_forward = 1' | tee -a /etc/sysctl.conf
+    echo 'net.ipv6.conf.all.forwarding = 1' | tee -a /etc/sysctl.conf
+    sysctl -p &>/dev/null
+}
 
-┌────────────────────────────────────────────────────┐
-│   🗄️  VECTOR DATABASE SELECTION                    │
-└────────────────────────────────────────────────────┘
+#------------------------------------------------------------------------------
+# Save Installation Metadata
+#------------------------------------------------------------------------------
 
-  1) 📦 Qdrant       - Rust-based, fast, recommended for production
-  2) 🐘 Milvus       - Scalable, feature-rich
-  3) 🎨 ChromaDB     - Python-based, simple
-  4) 🔍 Weaviate     - GraphQL API, semantic search
-
-EOF
+save_metadata() {
+    print_step "Saving installation metadata..."
     
-    while true; do
-        read -p "Select vector database [1-4]: " vectordb_choice
-        case  $ vectordb_choice in
-            1) VECTORDB_TYPE="qdrant"; VECTORDB_PORT=6333; break ;;
-            2) VECTORDB_TYPE="milvus"; VECTORDB_PORT=19530; break ;;
-            3) VECTORDB_TYPE="chromadb"; VECTORDB_PORT=8000; break ;;
-            4) VECTORDB_TYPE="weaviate"; VECTORDB_PORT=8080; break ;;
-            *) log_error "Invalid selection" ;;
-        esac
-    done
+    local metadata_file="$DATA_DIR/metadata/deployment_info.json"
+    local network_file="$DATA_DIR/metadata/network_config.json"
+    local tailscale_file="$DATA_DIR/metadata/tailscale_info.json"
     
-    # Qdrant-specific config
-    if [ " $ VECTORDB_TYPE" = "qdrant" ]; then
-        read -sp "Set Qdrant API key (or press Enter to skip): " QDRANT_API_KEY
-        echo
-    fi
-    
-    # Save metadata
-    cat > " $ METADATA_DIR/vectordb_config.json" << EOJSON
+    # Deployment info
+    cat > "$metadata_file" <<EOF
 {
-  "type": " $ VECTORDB_TYPE",
-  "port":  $ VECTORDB_PORT,
-  "host": "localhost",
-  "connection_string": "http://localhost: $ VECTORDB_PORT",
-  "api_key": "${QDRANT_API_KEY:-}"
+  "deployment_date": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "script_version": "1.0.0",
+  "os_version": "$(lsb_release -ds)",
+  "data_directory": "$DATA_DIR",
+  "docker_version": "$(docker --version | cut -d' ' -f3 | tr -d ',')",
+  "gpu_available": $GPU_AVAILABLE,
+  "tailscale_enabled": $TAILSCALE_INSTALLED
 }
-EOJSON
-    
-    log_info "✅ Vector database:  $ VECTORDB_TYPE"
-}
-
-ask_llm_providers() {
-    log_step "🤖 LLM Provider Configuration"
-    
-    cat << 'EOF'
-
-┌────────────────────────────────────────────────────┐
-│   🤖 EXTERNAL LLM PROVIDERS                        │
-└────────────────────────────────────────────────────┘
-
-Select providers (space-separated, or '0' for local-only):
-
-  1) 🧠 OpenAI (GPT-4, GPT-3.5)
-  2) 🔷 Google Gemini (Gemini Pro, Ultra)
-  3) 🟣 Anthropic Claude (Claude 3)
-  4) 🌐 OpenRouter (Multi-provider proxy)
-  5) ⚡ Groq (Fast inference)
-  6) 🦙 Together AI (Open models)
-  0) 🏠 Local only (Ollama)
-
 EOF
     
-    read -p "Enter selections: " provider_selections
-    
-    PROVIDERS=()
-    
-    if [ " $ provider_selections" = "0" ]; then
-        log_info "Using local Ollama models only"
-    else
-        for num in $provider_selections; do
-            case  $ num in
-                1)
-                    read -sp "Enter OpenAI API key: " OPENAI_KEY
-                    echo
-                    PROVIDERS+=('{"name":"openai","api_key":"'" $ OPENAI_KEY"'","models":["gpt-4","gpt-3.5-turbo"]}')
-                    ;;
-                2)
-                    read -sp "Enter Google Gemini API key: " GEMINI_KEY
-                    echo
-                    PROVIDERS+=('{"name":"gemini","api_key":"'" $ GEMINI_KEY"'","models":["gemini-pro"]}')
-                    ;;
-                3)
-                    read -sp "Enter Anthropic API key: " ANTHROPIC_KEY
-                    echo
-                    PROVIDERS+=('{"name":"anthropic","api_key":"'" $ ANTHROPIC_KEY"'","models":["claude-3-opus","claude-3-sonnet"]}')
-                    ;;
-                4)
-                    read -sp "Enter OpenRouter API key: " OPENROUTER_KEY
-                    echo
-                    PROVIDERS+=('{"name":"openrouter","api_key":"'" $ OPENROUTER_KEY"'","base_url":"https://openrouter.ai/api/v1"}')
-                    ;;
-                5)
-                    read -sp "Enter Groq API key: " GROQ_KEY
-                    echo
-                    PROVIDERS+=('{"name":"groq","api_key":"'" $ GROQ_KEY"'","models":["mixtral-8x7b","llama2-70b"]}')
-                    ;;
-                6)
-                    read -sp "Enter Together AI API key: " TOGETHER_KEY
-                    echo
-                    PROVIDERS+=('{"name":"together","api_key":"'"$TOGETHER_KEY"'"}')
-                    ;;
-            esac
-        done
-    fi
-    
-    # Save metadata
-    if [ ${#PROVIDERS[@]} -gt 0 ]; then
-        PROVIDERS_JSON= $ (printf '%s\n' " $ {PROVIDERS[@]}" | jq -s .)
-    else
-        PROVIDERS_JSON="[]"
-    fi
-    
-    cat > "$METADATA_DIR/llm_providers.json" << EOJSON
+    # Network config
+    local local_ip=$(hostname -I | awk '{print $1}')
+    cat > "$network_file" <<EOF
 {
-  "providers": $PROVIDERS_JSON,
-  "local_only": $([ ${#PROVIDERS[@]} -eq 0 ] && echo "true" || echo "false")
+  "local_ip": "$local_ip",
+  "hostname": "$(hostname)",
+  "interfaces": $(ip -j addr show | jq '[.[] | select(.ifname != "lo") | {name: .ifname, addresses: [.addr_info[] | .local]}]')
 }
-EOJSON
-    
-    log_info "✅ Configured ${#PROVIDERS[@]} external providers"
-}
-
-ask_litellm_routing_strategy() {
-    log_step "🔀 LiteLLM Routing Strategy"
-    
-    cat << 'EOF'
-
-┌────────────────────────────────────────────────────┐
-│   🔀 LITELLM ROUTING STRATEGY                      │
-└────────────────────────────────────────────────────┘
-
-  1) 🎯 Simple Routing      - Direct model calls
-  2) 🔄 Fallback Routing    - Primary → backup on failure
-  3) ⚖️  Load Balancing      - Distribute across providers
-  4) 💰 Cost-based          - Route to cheapest available
-
 EOF
     
-    while true; do
-        read -p "Select routing strategy [1-4]: " routing_choice
-        case  $ routing_choice in
-            1) ROUTING_STRATEGY="simple"; break ;;
-            2) ROUTING_STRATEGY="fallback"; break ;;
-            3) ROUTING_STRATEGY="load-balancing"; break ;;
-            4) ROUTING_STRATEGY="cost-based"; break ;;
-            *) log_error "Invalid selection" ;;
-        esac
-    done
-    
-    # Additional config for fallback/load-balancing
-    if [[ " $ ROUTING_STRATEGY" =~ ^(fallback|load-balancing)$ ]]; then
-        cat << 'EOF'
-
-Provider Priority Configuration:
-
-EOF
-        PROVIDER_WEIGHTS=()
-        PROVIDERS_LIST= $ (jq -r '.providers[].name' " $ METADATA_DIR/llm_providers.json" 2>/dev/null)
-        
-        for provider in $PROVIDERS_LIST; do
-            read -p "  Weight for  $ provider [1-10, default 5]: " weight
-            weight= $ {weight:-5}
-            PROVIDER_WEIGHTS+=('{"provider":"'" $ provider"'","weight":'" $ weight"'}')
-        done
-        
-        WEIGHTS_JSON= $ (printf '%s\n' " $ {PROVIDER_WEIGHTS[@]}" | jq -s .)
-    else
-        WEIGHTS_JSON="[]"
-    fi
-    
-    # Save metadata
-    cat > " $ METADATA_DIR/litellm_routing.json" << EOJSON
-{
-  "strategy": " $ ROUTING_STRATEGY",
-  "weights": $WEIGHTS_JSON,
-  "retry_policy": {
-    "max_retries": 3,
-    "timeout_seconds": 60
-  }
-}
-EOJSON
-    
-    log_info "✅ Routing strategy:  $ ROUTING_STRATEGY"
-}
-
-ask_ollama_models() {
-    log_step "🦙 Ollama Model Selection"
-    
-    cat << 'EOF'
-
-┌────────────────────────────────────────────────────┐
-│   🦙 OLLAMA MODELS TO DOWNLOAD                     │
-└────────────────────────────────────────────────────┘
-
-Popular models (space-separated numbers):
-
-  1) llama2:7b          (4.1GB)  - General purpose
-  2) llama2:13b         (7.4GB)  - Better quality
-  3) mistral:7b         (4.1GB)  - Fast & capable
-  4) mixtral:8x7b       (26GB)   - MoE, high quality
-  5) codellama:7b       (3.8GB)  - Code generation
-  6) phi:2              (1.7GB)  - Lightweight
-  7) neural-chat:7b     (4.1GB)  - Conversational
-  8) Custom model name
-
-  0) Skip (download later)
-
-EOF
-    
-    read -p "Enter selections: " model_selections
-    
-    OLLAMA_MODELS=()
-    
-    if [ " $ model_selections" = "0" ]; then
-        log_info "Skipping Ollama model downloads"
-    else
-        for num in $model_selections; do
-            case  $ num in
-                1) OLLAMA_MODELS+=("llama2:7b") ;;
-                2) OLLAMA_MODELS+=("llama2:13b") ;;
-                3) OLLAMA_MODELS+=("mistral:7b") ;;
-                4) OLLAMA_MODELS+=("mixtral:8x7b") ;;
-                5) OLLAMA_MODELS+=("codellama:7b") ;;
-                6) OLLAMA_MODELS+=("phi:2") ;;
-                7) OLLAMA_MODELS+=("neural-chat:7b") ;;
-                8)
-                    read -p "Enter custom model name: " custom_model
-                    OLLAMA_MODELS+=(" $ custom_model")
-                    ;;
-            esac
-        done
-        
-        # Download models
-        log_info "Downloading ${#OLLAMA_MODELS[@]} models (this may take a while)..."
-        for model in "${OLLAMA_MODELS[@]}"; do
-            log_info "Pulling  $ model..."
-            ollama pull " $ model"
-        done
-    fi
-    
-    # Save metadata
-    cat > "$METADATA_DIR/ollama_models.json" << EOJSON
-{
-  "models":  $ (printf '%s\n' " $ {OLLAMA_MODELS[@]}" | jq -R . | jq -s .),
-  "pulled_at": " $ (date -Iseconds)"
-}
-EOJSON
-}
-
-ask_signal_configuration() {
-    # Only ask if OpenClaw or Signal-dependent services selected
-    if [ " $ REQUIRES_SIGNAL" != "true" ]; then
-        log_info "No services require Signal - skipping"
-        echo '{"enabled": false}' > " $ METADATA_DIR/signal_config.json"
-        return 0
-    fi
-    
-    log_step "📱 Signal API Configuration"
-    
-    cat << 'EOF'
-
-┌────────────────────────────────────────────────────┐
-│   📱 SIGNAL MESSENGER INTEGRATION                  │
-└────────────────────────────────────────────────────┘
-
-Signal-API allows your AI services to send/receive messages via Signal.
-
-⚠️  Requirements:
-  • Signal account (phone number)
-  • Smartphone with Signal app installed
-  • Ability to scan QR code
-
-EOF
-    
-    read -p "Configure Signal integration now? [Y/n]: " signal_confirm
-    
-    if [[ " $ signal_confirm" =~ ^[Nn]$ ]]; then
-        log_warn "Signal configuration skipped - OpenClaw will not function"
-        echo '{"enabled": false, "skipped": true}' > " $ METADATA_DIR/signal_config.json"
-        return 0
-    fi
-    
-    # Start signal-api container for pairing
-    log_info "Starting Signal-API container for pairing..."
-    
-    mkdir -p " $ DATA_ROOT/data/signal-api"
-    chown -R " $ PUID: $ PGID" " $ DATA_ROOT/data/signal-api"
-    
-    # Temporary container for pairing
-    docker run -d \
-        --name signal-api-setup \
-        -p 8080:8080 \
-        -v " $ DATA_ROOT/data/signal-api:/home/.local/share/signal-cli" \
-        -e MODE=native \
-        bbernhard/signal-cli-rest-api:latest
-    
-    sleep 10
-    
-    cat << 'EOF'
-
-📱 Signal Pairing Methods:
-
-  1) 📱 QR Code (scan with Signal app)
-  2) 📞 Phone Number (SMS verification)
-
-EOF
-    
-    read -p "Select pairing method [1-2]: " pairing_method
-    
-    case  $ pairing_method in
-        1)
-            # QR code pairing
-            read -p "Enter device name for this AI platform: " DEVICE_NAME
-            DEVICE_NAME=" $ {DEVICE_NAME:-AIPlatform}"
-            
-            log_info "Generating QR code..."
-            QR_RESPONSE= $ (curl -s -X GET "http://localhost:8080/v1/qrcodelink?device_name= $ DEVICE_NAME")
-            QR_URL= $ (echo " $ QR_RESPONSE" | jq -r '.url')
-            
-            if [ -z " $ QR_URL" ] || [ " $ QR_URL" = "null" ]; then
-                log_error "Failed to generate QR code"
-                docker stop signal-api-setup && docker rm signal-api-setup
-                return 1
-            fi
-            
-            # Generate QR code in terminal
-            echo
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "📱 Scan this QR code with Signal app:"
-            echo "   Settings → Linked Devices → Link New Device"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo
-            qrencode -t ANSIUTF8 " $ QR_URL"
-            echo
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            
-            read -p "Press Enter after scanning QR code..."
-            
-            # Wait for pairing confirmation
-            log_info "Waiting for pairing confirmation..."
-            sleep 5
-            
-            # Check if account registered
-            ACCOUNTS= $ (curl -s http://localhost:8080/v1/accounts)
-            PHONE_NUMBER= $ (echo " $ ACCOUNTS" | jq -r '.[0]' 2>/dev/null)
-            
-            if [ -z " $ PHONE_NUMBER" ] || [ " $ PHONE_NUMBER" = "null" ]; then
-                log_error "Pairing failed or not completed"
-                docker stop signal-api-setup && docker rm signal-api-setup
-                return 1
-            fi
-            
-            log_info "✅ Successfully paired with Signal:  $ PHONE_NUMBER"
-            ;;
-            
-        2)
-            # Phone number pairing
-            read -p "Enter your phone number (with country code, e.g., +1234567890): " PHONE_NUMBER
-            
-            log_info "Registering phone number..."
-            curl -X POST "http://localhost:8080/v1/register/ $ PHONE_NUMBER"
-            
-            read -p "Enter verification code sent to your phone: " VERIFICATION_CODE
-            
-            curl -X POST "http://localhost:8080/v1/register/ $ PHONE_NUMBER/verify/ $ VERIFICATION_CODE"
-            
-            log_info "✅ Phone number registered"
-            ;;
-    esac
-    
-    # Stop setup container
-    docker stop signal-api-setup
-    docker rm signal-api-setup
-    
-    # Generate webhook URL (will be used by OpenClaw)
-    SIGNAL_WEBHOOK_URL="http://signal-api:8080"
-    
-    # Save metadata
-    cat > " $ METADATA_DIR/signal_config.json" << EOJSON
+    # Tailscale info
+    if [[ "$TAILSCALE_INSTALLED" == true ]]; then
+        cat > "$tailscale_file" <<EOF
 {
   "enabled": true,
-  "phone_number": " $ PHONE_NUMBER",
-  "webhook_url": " $ SIGNAL_WEBHOOK_URL",
-  "device_name": " $ {DEVICE_NAME:-}",
-  "paired_at": " $ (date -Iseconds)"
+  "ip_address": "$TAILSCALE_IP",
+  "status": $(tailscale status --json 2>/dev/null || echo '{}')
 }
-EOJSON
-    
-    log_info "✅ Signal configuration saved"
-}
-
-ask_gdrive_configuration() {
-    log_step "📁 Google Drive Integration"
-    
-    cat << 'EOF'
-
-┌────────────────────────────────────────────────────┐
-│   📁 GOOGLE DRIVE SYNC (Optional)                  │
-└────────────────────────────────────────────────────┘
-
-Sync documents from Google Drive for RAG processing.
-
 EOF
-    
-    read -p "Configure Google Drive sync? [y/N]: " gdrive_confirm
-    
-    if [[ ! " $ gdrive_confirm" =~ ^[Yy]$ ]]; then
-        echo '{"enabled": false}' > " $ METADATA_DIR/gdrive_config.json"
-        return 0
-    fi
-    
-    log_info "Setting up rclone for Google Drive..."
-    
-    mkdir -p " $ DATA_ROOT/config/rclone"
-    
-    cat << 'EOF'
-
-Follow these steps:
-1. Visit: https://rclone.org/drive/
-2. Create OAuth credentials for desktop app
-3. Copy Client ID and Client Secret
-
-EOF
-    
-    read -p "Enter Google Drive Client ID: " GDRIVE_CLIENT_ID
-    read -sp "Enter Google Drive Client Secret: " GDRIVE_CLIENT_SECRET
-    echo
-    
-    # Run rclone config in interactive mode
-    log_info "Opening rclone configuration..."
-    log_warn "When prompted:"
-    log_warn "  1. Choose 'n' for new remote"
-    log_warn "  2. Name it 'gdrive'"
-    log_warn "  3. Select 'Google Drive'"
-    log_warn "  4. Enter the Client ID and Secret when asked"
-    log_warn "  5. Follow OAuth flow in browser"
-    
-    read -p "Press Enter to continue..."
-    
-    RCLONE_CONFIG=" $ DATA_ROOT/config/rclone/rclone.conf" rclone config
-    
-    # Verify configuration
-    if RCLONE_CONFIG=" $ DATA_ROOT/config/rclone/rclone.conf" rclone listremotes | grep -q "gdrive:"; then
-        log_info "✅ Google Drive configured successfully"
-        
-        cat > " $ METADATA_DIR/gdrive_config.json" << EOJSON
+    else
+        cat > "$tailscale_file" <<EOF
 {
-  "enabled": true,
-  "remote_name": "gdrive",
-  "sync_interval_minutes": 30,
-  "local_path": " $ DATA_ROOT/data/gdrive-sync",
-  "configured_at": " $ (date -Iseconds)"
+  "enabled": false
 }
-EOJSON
+EOF
+    fi
+    
+    print_success "Metadata saved"
+}
+
+#------------------------------------------------------------------------------
+# Summary and Next Steps
+#------------------------------------------------------------------------------
+
+print_summary() {
+    clear
+    print_header
+    
+    echo -e "${GREEN}${BOLD}✓ System Setup Complete!${NC}"
+    echo ""
+    echo -e "${BOLD}Installation Summary:${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    
+    echo -e "${CYAN}Storage:${NC}"
+    echo "  Data Directory: $DATA_DIR"
+    echo "  Available Space: $(df -h "$DATA_DIR" | awk 'NR==2 {print $4}')"
+    echo ""
+    
+    echo -e "${CYAN}Docker:${NC}"
+    echo "  Version: $(docker --version | cut -d' ' -f3 | tr -d ',')"
+    echo "  Storage: $DATA_DIR/docker"
+    echo ""
+    
+    if [[ "$GPU_AVAILABLE" == true ]]; then
+        echo -e "${CYAN}GPU:${NC}"
+        if command -v nvidia-smi &>/dev/null; then
+            echo "  $(nvidia-smi --query-gpu=name --format=csv,noheader)"
+            echo "  NVIDIA Container Toolkit: Installed"
+        else
+            echo "  Detected but drivers not installed"
+            echo "  ${YELLOW}Note: Reboot required for GPU support${NC}"
+        fi
+        echo ""
+    fi
+    
+    if [[ "$TAILSCALE_INSTALLED" == true ]]; then
+        echo -e "${CYAN}Tailscale:${NC}"
+        echo "  Status: Connected"
+        echo "  IP Address: $TAILSCALE_IP"
+        echo "  Access URL: http://$TAILSCALE_IP"
+        echo ""
+    fi
+    
+    echo -e "${CYAN}System Resources:${NC}"
+    echo "  RAM: $(free -h | awk 'NR==2 {print $2}')"
+    echo "  CPU Cores: $(nproc)"
+    echo ""
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    
+    if [[ "$GPU_AVAILABLE" == true ]] && ! command -v nvidia-smi &>/dev/null; then
+        echo -e "${YELLOW}${BOLD}⚠ REBOOT REQUIRED${NC}"
+        echo ""
+        echo "NVIDIA drivers were installed. Please reboot before continuing:"
+        echo ""
+        echo -e "  ${CYAN}sudo reboot${NC}"
+        echo ""
+        echo "After reboot, run the next script:"
+        echo -e "  ${CYAN}sudo ./scripts/2-deploy-services.sh${NC}"
+        echo ""
     else
-        log_error "Google Drive configuration failed"
-        echo '{"enabled": false, "error": "configuration_failed"}' > " $ METADATA_DIR/gdrive_config.json"
+        echo -e "${GREEN}${BOLD}Next Steps:${NC}"
+        echo ""
+        echo "1. Review the configuration:"
+        echo -e "   ${CYAN}cat $DATA_DIR/metadata/deployment_info.json${NC}"
+        echo ""
+        echo "2. Deploy services:"
+        echo -e "   ${CYAN}sudo ./scripts/2-deploy-services.sh${NC}"
+        echo ""
     fi
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
 }
 
-generate_litellm_config() {
-    log_step "📝 Generating LiteLLM configuration file..."
-    
-    mkdir -p " $ DATA_ROOT/config"
-    
-    # Load metadata
-    ROUTING_STRATEGY= $ (jq -r '.strategy' " $ METADATA_DIR/litellm_routing.json")
-    PROVIDERS_JSON= $ (jq '.providers' " $ METADATA_DIR/llm_providers.json")
-    
-    # Start building config
-    cat > " $ DATA_ROOT/config/litellm_config.yaml" << 'EOCONFIG'
-# LiteLLM Configuration
-# Generated by AIPlatformAutomation v76.5.0
-
-model_list:
-EOCONFIG
-    
-    # Add Ollama models
-    OLLAMA_MODELS_LIST= $ (jq -r '.models[]' " $ METADATA_DIR/ollama_models.json" 2>/dev/null)
-    for model in  $ OLLAMA_MODELS_LIST; do
-        cat >> " $ DATA_ROOT/config/litellm_config.yaml" << EOMODEL
-  - model_name: ${model//:/_}
-    litellm_params:
-      model: ollama/${model}
-      api_base: http://ollama:11434
-EOMODEL
-    done
-    
-    # Add external providers
-    echo " $ PROVIDERS_JSON" | jq -c '.[]' | while read -r provider; do
-        PROVIDER_NAME= $ (echo " $ provider" | jq -r '.name')
-        API_KEY= $ (echo " $ provider" | jq -r '.api_key')
-        MODELS= $ (echo "$provider" | jq -r '.models[]?' 2>/dev/null)
-        
-        for model in  $ MODELS; do
-            cat >> " $ DATA_ROOT/config/litellm_config.yaml" << EOMODEL
-  - model_name: ${PROVIDER_NAME}_${model//-/_}
-    litellm_params:
-      model:  $ PROVIDER_NAME/ $ model
-      api_key:  $ API_KEY
-EOMODEL
-        done
-    done
-    
-    # Add routing config
-    cat >> " $ DATA_ROOT/config/litellm_config.yaml" << EOROUTING
-
-# Routing Configuration
-router_settings:
-  routing_strategy: $ROUTING_STRATEGY
-  num_retries: 3
-  timeout: 60
-  fallback_models: true
-EOROUTING
-    
-    log_info "✅ LiteLLM config generated: $DATA_ROOT/config/litellm_config.yaml"
-}
-
-show_configuration_summary() {
-    cat << 'EOF'
-
-╔════════════════════════════════════════════════════════════╗
-║          ✅ SYSTEM SETUP COMPLETED                         ║
-╚════════════════════════════════════════════════════════════╝
-
-📦 Installed Components:
-EOF
-    
-    echo "  ✓ Docker $(docker --version | cut -d' ' -f3)"
-    echo "  ✓ Docker Compose $(docker compose version --short)"
-    echo "  ✓ Ollama  $ (ollama --version | head -1)"
-    [ " $ GPU_AVAILABLE" = "true" ] && echo "  ✓ NVIDIA Container Toolkit"
-    
-    echo
-    echo "🎯 Selected Services ( $ (jq '.applications | length' " $ METADATA_DIR/selected_services.json")):"
-    jq -r '.applications[]' "$METADATA_DIR/selected_services.json" | sed 's/^/  • /'
-    
-    echo
-    echo "🌐 Network:"
-    echo "  Domain:  $ (jq -r '.domain' " $ METADATA_DIR/network_config.json")"
-    echo "  Proxy:  $ (jq -r '.proxy_type' " $ METADATA_DIR/network_config.json")"
-    
-    VECTORDB_TYPE= $ (jq -r '.type' " $ METADATA_DIR/vectordb_config.json" 2>/dev/null)
-    if [ " $ VECTORDB_TYPE" != "none" ] && [ -n " $ VECTORDB_TYPE" ]; then
-        echo
-        echo "🗄️  Vector Database:  $ VECTORDB_TYPE"
-    fi
-    
-    echo
-    echo "🤖 LLM Providers:"
-    PROVIDERS_COUNT= $ (jq '.providers | length' " $ METADATA_DIR/llm_providers.json")
-    if [ " $ PROVIDERS_COUNT" -gt 0 ]; then
-        jq -r '.providers[].name' "$METADATA_DIR/llm_providers.json" | sed 's/^/  • /'
-    else
-        echo "  • Local only (Ollama)"
-    fi
-    
-    echo
-    echo "🔀 LiteLLM Routing:  $ (jq -r '.strategy' " $ METADATA_DIR/litellm_routing.json")"
-    
-    SIGNAL_ENABLED= $ (jq -r '.enabled' " $ METADATA_DIR/signal_config.json" 2>/dev/null)
-    if [ " $ SIGNAL_ENABLED" = "true" ]; then
-        echo
-        echo "📱 Signal: ✅ Configured ( $ (jq -r '.phone_number' " $ METADATA_DIR/signal_config.json"))"
-    fi
-    
-    GDRIVE_ENABLED= $ (jq -r '.enabled' " $ METADATA_DIR/gdrive_config.json" 2>/dev/null)
-    if [ " $ GDRIVE_ENABLED" = "true" ]; then
-        echo "📁 Google Drive: ✅ Configured"
-    fi
-    
-    cat << 'EOF'
-
-💾 Data Structure:
-  /mnt/data/
-  ├── compose/         (Docker Compose files - will be generated)
-  ├── env/             (Environment variables - will be generated)
-  ├── data/            (Persistent service data)
-  ├── config/          (Service configurations)
-  └── metadata/        (Setup configuration)
-
-📝 Configuration Files:
-EOF
-    
-    ls -1 " $ METADATA_DIR"/*.json | sed 's|.*/|  • |'
-    
-    cat << 'EOF'
-
-🚀 Next Steps:
-  1. Review configuration in /mnt/data/metadata/
-  2. Run: ./2-deploy-services.sh
-
-EOF
-}
+#------------------------------------------------------------------------------
+# Main Function
+#------------------------------------------------------------------------------
 
 main() {
-    show_banner
+    print_header
     
-    check_prerequisites
-    detect_hardware
-    mount_ebs_volume
+    # Pre-flight checks
+    check_root
+    check_os
+    check_internet
+    check_system_resources
+    check_gpu
     
-    # Create directory structure
-    mkdir -p " $ DATA_ROOT"/{compose,env,data,config,metadata,backups}
-chown -R "$PUID:$PGID" "$DATA_ROOT"
+    echo ""
+    read -p "Press Enter to continue with installation..."
     
-    # Install system packages
-    log_step "📦 Installing system packages..."
-    apt-get update
-    apt-get install -y curl wget jq git qrencode rclone docker.io docker-compose-plugin
+    # Storage configuration
+    select_storage_location
+    create_directory_structure
     
-    # Install Docker if not present
-    if ! command -v docker &>/dev/null; then
-        log_info "Installing Docker..."
-        curl -fsSL https://get.docker.com | sh
-        usermod -aG docker "$REAL_USER"
-    fi
+    # System updates
+    update_system
+    install_base_packages
     
-    # Install NVIDIA Container Toolkit if GPU present
-    if [ "$GPU_AVAILABLE" = "true" ]; then
-        log_step "🎮 Installing NVIDIA Container Toolkit..."
-        distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
-        curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-        curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
-            sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-            tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
-        apt-get update
-        apt-get install -y nvidia-container-toolkit
-        nvidia-ctk runtime configure --runtime=docker
-        systemctl restart docker
-    fi
+    # Docker installation
+    install_docker
+    configure_docker_storage
     
-    # Install Ollama
-    if ! command -v ollama &>/dev/null; then
-        log_step "🦙 Installing Ollama..."
-        curl -fsSL https://ollama.ai/install.sh | sh
-        
-        # Start Ollama service
-        systemctl enable ollama
-        systemctl start ollama
-        
-        # Wait for Ollama to be ready
-        sleep 5
-    fi
+    # GPU setup (if available)
+    setup_gpu
     
-    # Interactive configuration
-    ask_network_configuration
-    ask_proxy_selection
-    ask_service_selection
-    ask_vectordb_selection
-    ask_llm_providers
-    ask_litellm_routing_strategy
-    ask_ollama_models
-    ask_signal_configuration
-    ask_gdrive_configuration
+    # Tailscale setup
+    install_tailscale
     
-    # Generate configurations
-    generate_litellm_config
+    # Save metadata
+    save_metadata
     
-    # Final summary
-    show_configuration_summary
-    
-    log_info "✅ System setup complete!"
-    log_info "Next: Run ./2-deploy-services.sh"
+    # Show summary
+    print_summary
 }
 
+# Run main function
 main "$@"
