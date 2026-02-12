@@ -361,7 +361,7 @@ detect_hardware() {
         fi
     done < <(lsblk -d -n -p -o NAME,TYPE | grep "disk" | awk '{print $1}')
 
-    if [[ ${#additional_devices[@] -eq 0 ]]; then
+    if [[ ${#additional_devices[@]} -eq 0 ]]; then
         print_info "No additional storage devices detected"
     fi
 
@@ -385,7 +385,7 @@ detect_hardware() {
     "cuda_version": "$cuda_version"
   },
   "storage": {
-    "additional_devices": [$(printf '"%s",' "${additional_devices[@]" | sed 's/,$//')]
+    "additional_devices": [$(printf '"%s",' "${additional_devices[@]}" | sed 's/,$//')]
   }
 }
 EOF
@@ -393,7 +393,7 @@ EOF
     # Export for later use
     export HAS_GPU="$has_gpu"
     export GPU_INFO="$gpu_info"
-    export ADDITIONAL_DEVICES="${additional_devices[@]}"
+    export ADDITIONAL_DEVICES="${additional_devices[@]}}"
 }
 
 #───────────────────────────────────────────────────────────────────────────────
@@ -723,7 +723,7 @@ install_ollama() {
     )
 
     local count=1
-    for model_info in "${models[@]"; do
+    for model_info in "${models[@]}"; do
         local model_name=$(echo "$model_info" | cut -d':' -f1,2)
         local model_desc=$(echo "$model_info" | cut -d':' -f3)
         printf "  [%2d] %-20s - %s\n" "$count" "$model_name" "$model_desc"
@@ -744,23 +744,23 @@ install_ollama() {
     # Download selected models
     local selected_models=()
     for selection in $selections; do
-        if [[ "$selection" =~ ^[0-9]+$ ]] && [[ $selection -gt 0 ]] && [[ $selection -le ${#models[@] ]]; then
+        if [[ "$selection" =~ ^[0-9]+$ ]] && [[ $selection -gt 0 ]] && [[ $selection -le ${#models[@]} ]]; then
             local model_info="${models[$((selection-1))]}"
             local model_name=$(echo "$model_info" | cut -d':' -f1,2)
             selected_models+=("$model_name")
         fi
     done
 
-    if [[ ${#selected_models[@] -eq 0 ]]; then
+    if [[ ${#selected_models[@]} -eq 0 ]]; then
         print_info "No valid models selected"
         return 0
     fi
 
     echo ""
-    print_info "Downloading ${#selected_models[@] model(s)..."
+    print_info "Downloading ${#selected_models[@]} model(s)..."
     echo ""
 
-    for model in "${selected_models[@]"; do
+    for model in "${selected_models[@]}"; do
         print_info "Downloading $model..."
         if ollama pull "$model" 2>&1 | tee -a "$LOG_FILE" | grep -E "(pulling|success)"; then
             print_success "$model downloaded"
@@ -897,7 +897,7 @@ check_dependencies() {
     local missing_deps=()
     IFS=',' read -ra DEP_ARRAY <<< "$deps"
 
-    for dep in "${DEP_ARRAY[@]"; do
+    for dep in "${DEP_ARRAY[@]}"; do
         if [[ ! ",$selected_services," =~ ",$dep," ]]; then
             missing_deps+=("$dep")
         fi
@@ -1007,13 +1007,13 @@ select_services() {
     while [[ $iteration -lt $max_iterations ]]; do
         local added_this_round=0
 
-        for service_key in "${selected_services[@]"; do
+        for service_key in "${selected_services[@]}"; do
             local deps=$(get_service_info "$service_key" "dependencies")
 
             if [[ -n "$deps" ]]; then
                 IFS=',' read -ra DEP_ARRAY <<< "$deps"
 
-                for dep in "${DEP_ARRAY[@]"; do
+                for dep in "${DEP_ARRAY[@]}"; do
                     if [[ -z "${selected_map[$dep]}" ]]; then
                         selected_services+=("$dep")
                         selected_map[$dep]=1
@@ -1042,14 +1042,14 @@ select_services() {
 
     # Display final selection
     echo ""
-    print_header "✅ Selected Services (${#selected_services[@])"
+    print_header "✅ Selected Services (${#selected_services[@]})"
     echo ""
 
     for category in "${!SERVICE_CATEGORIES[@]"; do
         local category_has_services=false
         local category_list=""
 
-        for service_key in "${selected_services[@]"; do
+        for service_key in "${selected_services[@]}"; do
             if [[ "$(get_service_info "$service_key" "category")" == "$category" ]]; then
                 category_has_services=true
                 local display_name=$(get_service_info "$service_key" "display_name")
@@ -1076,12 +1076,12 @@ select_services() {
     cat > "$SERVICES_FILE" <<EOF
 {
   "selection_time": "$(date -Iseconds)",
-  "total_services": ${#selected_services[@],
+  "total_services": ${#selected_services[@]},
   "services": [
 EOF
 
     local first=true
-    for service_key in "${selected_services[@]"; do
+    for service_key in "${selected_services[@]}"; do
         if [[ "$first" == false ]]; then
             echo "," >> "$SERVICES_FILE"
         fi
@@ -1114,7 +1114,7 @@ EOF
     print_success "Service selection saved to $SERVICES_FILE"
 
     # Export selected services for next phase
-    export SELECTED_SERVICES="${selected_services[@]}"
+    export SELECTED_SERVICES="${selected_services[@]}}"
 
     return 0
 }
@@ -1134,7 +1134,7 @@ collect_configurations() {
     # Read selected services from JSON
     local selected_services=($(jq -r '.services[].key' "$SERVICES_FILE"))
 
-    if [[ ${#selected_services[@] -eq 0 ]]; then
+    if [[ ${#selected_services[@]} -eq 0 ]]; then
         print_info "No services selected, skipping configuration"
         return 0
     fi
@@ -1142,7 +1142,7 @@ collect_configurations() {
     echo ""
     print_header "🔧 Service Configuration"
     echo ""
-    print_info "Collecting configuration for ${#selected_services[@] services"
+    print_info "Collecting configuration for ${#selected_services[@]} services"
     echo ""
 
     # Initialize .env file
@@ -1179,7 +1179,7 @@ EOF
     local all_required_configs=()
 
     # Gather all unique required configs
-    for service_key in "${selected_services[@]"; do
+    for service_key in "${selected_services[@]}"; do
         local configs=$(get_service_info "$service_key" "requires_config")
 
         if [[ -n "$configs" ]]; then
@@ -1433,7 +1433,7 @@ create_directory_structure() {
 
     local created_count=0
 
-    for service_key in "${selected_services[@]"; do
+    for service_key in "${selected_services[@]}"; do
         local service_dirs=()
 
         case "$service_key" in
@@ -1797,7 +1797,7 @@ EOF
 EOF
 
     first=true
-    for service_key in "${selected_services[@]"; do
+    for service_key in "${selected_services[@]}"; do
         if [[ "$first" == false ]]; then
             echo "," >> "$dir_map_file"
         fi
@@ -2116,15 +2116,15 @@ OLLAMA INSTALLATION
 
 Ollama Version:       $(ollama --version 2>/dev/null | awk '{print $NF}')
 Service Status:       $(systemctl is-active ollama)
-Models Installed:     ${#ollama_models[@]
+Models Installed:     ${#ollama_models[@]}
 
 EOF
 
-    if [[ ${#ollama_models[@] -gt 0 ]]; then
+    if [[ ${#ollama_models[@]} -gt 0 ]]; then
         cat >> "$summary_file" <<EOF
 Installed Models:
 EOF
-        for model in "${ollama_models[@]"; do
+        for model in "${ollama_models[@]}"; do
             echo "  • $model" >> "$summary_file"
         done
         echo "" >> "$summary_file"
@@ -2276,12 +2276,12 @@ EOF
   "ollama": {
     "version": "$(ollama --version 2>/dev/null | awk '{print $NF}')",
     "service_active": $(systemctl is-active --quiet ollama && echo "true" || echo "false"),
-    "models_count": ${#ollama_models[@],
+    "models_count": ${#ollama_models[@]},
     "models": [
 EOF
 
     local first=true
-    for model in "${ollama_models[@]"; do
+    for model in "${ollama_models[@]}"; do
         if [[ "$first" == false ]]; then
             echo "," >> "$summary_json"
         fi
