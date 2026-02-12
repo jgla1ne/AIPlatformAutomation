@@ -871,8 +871,8 @@ EOF
         ["prometheus"]="9090"
         ["grafana"]="3001"
         ["signal-api"]="8090"
-        ["openclaw"]="8082"
-        ["tailscale"]="41641"
+        ["openclaw"]="18789"
+        ["tailscale"]="8443"
         ["postgres"]="5432"
         ["redis"]="6379"
         ["qdrant"]="6333"
@@ -995,10 +995,15 @@ EOF
         print_info "PostgreSQL Configuration"
         echo ""
         
+        # Allow override of database name and username
+        prompt_input "POSTGRES_DB" "PostgreSQL database name" "aiplatform" false
+        echo "POSTGRES_DB=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        prompt_input "POSTGRES_USER" "PostgreSQL username" "postgres" false
+        echo "POSTGRES_USER=$INPUT_RESULT" >> "$ENV_FILE"
+        
         local postgres_password=$(generate_random_password 24)
         echo "POSTGRES_PASSWORD=$postgres_password" >> "$ENV_FILE"
-        echo "POSTGRES_DB=aiplatform" >> "$ENV_FILE"
-        echo "POSTGRES_USER=postgres" >> "$ENV_FILE"
         
         # Check if default port is available
         if [[ " ${port_conflicts[*]} " =~ "5432:" ]]; then
