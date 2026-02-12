@@ -177,12 +177,16 @@ clean_networks() {
         fi
     done
     
-    # Remove all custom networks
+    # Remove all custom networks except default ones
     local all_networks=$(docker network ls -q --filter driver=bridge 2>/dev/null || echo "")
     if [[ -n "$all_networks" ]]; then
         for network in $all_networks; do
-            docker network rm "$network" 2>/dev/null || true
-            ((removed_count++))
+            # Skip default networks (bridge, host, none)
+            local network_name=$(docker network inspect --format '{{.Name}}' "$network" 2>/dev/null || echo "")
+            if [[ "$network_name" != "bridge" && "$network_name" != "host" && "$network_name" != "none" ]]; then
+                docker network rm "$network" 2>/dev/null || true
+                ((removed_count++))
+            fi
         done
     fi
     
