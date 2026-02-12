@@ -410,7 +410,7 @@ EOF
     # Export for later use
     export HAS_GPU="$has_gpu"
     export GPU_INFO="$gpu_info"
-    export ADDITIONAL_DEVICES="${additional_devices[*]}"
+    export ADDITIONAL_DEVICES="${additional_devices[@]}"
 }
 
 #───────────────────────────────────────────────────────────────────────────────
@@ -1131,7 +1131,7 @@ EOF
     print_success "Service selection saved to $SERVICES_FILE"
 
     # Export selected services for next phase
-    export SELECTED_SERVICES="${selected_services[*]}"
+    export SELECTED_SERVICES="${selected_services[@]}"
 
     return 0
 }
