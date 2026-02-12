@@ -935,13 +935,14 @@ EOF
         ["minio"]="9000"
     )
     
-    # Proxy port configuration
-    if [[ " ${selected_services[*]} " =~ " nginx-proxy-manager " ]] || [[ " ${selected_services[*]} " =~ " traefik " ]] || [[ " ${selected_services[*]} " =~ " caddy " ]]; then
+    # Proxy port configuration (only if proxy was selected in domain phase)
+    if [[ "${PROXY_TYPE:-}" == "nginx-proxy-manager" ]] || [[ "${PROXY_TYPE:-}" == "traefik" ]] || [[ "${PROXY_TYPE:-}" == "caddy" ]]; then
         echo ""
         print_info "Proxy Port Configuration"
         echo ""
         
-        if [[ " ${selected_services[*]} " =~ " nginx-proxy-manager " ]]; then
+        if [[ "${PROXY_TYPE:-}" == "nginx-proxy-manager" ]]; then
+            print_info "Configuring Nginx Proxy Manager ports (default: 80, 443)"
             prompt_input "NGINX_PROXY_HTTP_PORT" "Nginx Proxy Manager HTTP port" "80" false
             echo "NGINX_PROXY_HTTP_PORT=$INPUT_RESULT" >> "$ENV_FILE"
             
@@ -949,7 +950,8 @@ EOF
             echo "NGINX_PROXY_HTTPS_PORT=$INPUT_RESULT" >> "$ENV_FILE"
         fi
         
-        if [[ " ${selected_services[*]} " =~ " traefik " ]]; then
+        if [[ "${PROXY_TYPE:-}" == "traefik" ]]; then
+            print_info "Configuring Traefik ports (default: 80, 443)"
             prompt_input "TRAEFIK_HTTP_PORT" "Traefik HTTP port" "80" false
             echo "TRAEFIK_HTTP_PORT=$INPUT_RESULT" >> "$ENV_FILE"
             
@@ -957,7 +959,8 @@ EOF
             echo "TRAEFIK_HTTPS_PORT=$INPUT_RESULT" >> "$ENV_FILE"
         fi
         
-        if [[ " ${selected_services[*]} " =~ " caddy " ]]; then
+        if [[ "${PROXY_TYPE:-}" == "caddy" ]]; then
+            print_info "Configuring Caddy ports (default: 80, 443)"
             prompt_input "CADDY_HTTP_PORT" "Caddy HTTP port" "80" false
             echo "CADDY_HTTP_PORT=$INPUT_RESULT" >> "$ENV_FILE"
             
@@ -1164,141 +1167,63 @@ EOF
         
         echo "Add API providers? (recommended for fallback)"
         echo ""
-        echo "Select providers to configure (space-separated):"
-        echo "  1) OpenAI (GPT-4, GPT-3.5)"
-        echo "  2) Anthropic (Claude 3)"
-        echo "  3) Google (Gemini)"
-        echo "  4) Groq (Fast Llama inference)"
-        echo "  5) Mistral (Mistral AI)"
-        echo "  6) All of the above"
-        echo "  7) Skip API providers"
+        # Dynamic LLM provider selection
+        local selected_providers=("local")
+        local provider_keys=()
+        
+        echo ""
+        print_info "Configure LLM providers (Y/N for each):"
         echo ""
         
-        while true; do
-            echo -n -e "${YELLOW}Select providers [1-7]:${NC} "
-            read -r llm_provider_selection
-            
-            # Handle space-separated input like "3 4" or "3,4" or "3-4"
-            if [[ "$llm_provider_selection" =~ [,\ -] ]]; then
-                # Multiple providers selected
-                local selected_providers=("local")
-                local provider_keys=()
-                
-                # Clean up the input and split by spaces, commas, or dashes
-                local cleaned_input=$(echo "$llm_provider_selection" | tr ',- ' ' ' ' ')
-                
-                for num in $cleaned_input; do
-                    case $num in
-                        1) 
-                            selected_providers+=("openai")
-                            provider_keys+=("OPENAI_API_KEY")
-                            ;;
-                        2) 
-                            selected_providers+=("anthropic")
-                            provider_keys+=("ANTHROPIC_API_KEY")
-                            ;;
-                        3) 
-                            selected_providers+=("google")
-                            provider_keys+=("GOOGLE_API_KEY")
-                            ;;
-                        4) 
-                            selected_providers+=("groq")
-                            provider_keys+=("GROQ_API_KEY")
-                            ;;
-                        5) 
-                            selected_providers+=("mistral")
-                            provider_keys+=("MISTRAL_API_KEY")
-                            ;;
-                        6) 
-                            selected_providers+=("openai" "anthropic" "google" "groq" "mistral")
-                            provider_keys+=("OPENAI_API_KEY" "ANTHROPIC_API_KEY" "GOOGLE_API_KEY" "GROQ_API_KEY" "MISTRAL_API_KEY")
-                            ;;
-                        *) print_warn "Invalid provider selection: $num" ;;
-                    esac
-                done
-                
-                if [[ ${#selected_providers[@]} -gt 1 ]]; then
-                    local providers_str=$(IFS=','; echo "${selected_providers[*]}")
-                    echo "LLM_PROVIDERS=$providers_str" >> "$ENV_FILE"
-                    
-                    # Prompt for API keys for selected providers
-                    for key in "${provider_keys[@]}"; do
-                        case $key in
-                            "OPENAI_API_KEY") prompt_input "OPENAI_API_KEY" "OpenAI API key" "" false && echo "OPENAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE" ;;
-                            "ANTHROPIC_API_KEY") prompt_input "ANTHROPIC_API_KEY" "Anthropic API key" "" false && echo "ANTHROPIC_API_KEY=$INPUT_RESULT" >> "$ENV_FILE" ;;
-                            "GOOGLE_API_KEY") prompt_input "GOOGLE_API_KEY" "Google AI API key" "" false && echo "GOOGLE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE" ;;
-                            "GROQ_API_KEY") prompt_input "GROQ_API_KEY" "Groq API key" "" false && echo "GROQ_API_KEY=$INPUT_RESULT" >> "$ENV_FILE" ;;
-                            "MISTRAL_API_KEY") prompt_input "MISTRAL_API_KEY" "Mistral API key" "" false && echo "MISTRAL_API_KEY=$INPUT_RESULT" >> "$ENV_FILE" ;;
-                        esac
-                    done
-                    
-                    print_success "Providers configured: $providers_str"
-                    break
-                fi
-            else
-                # Single provider selection (original logic)
-                case "$llm_provider_selection" in
-                1)
-                    echo "LLM_PROVIDERS=local,openai" >> "$ENV_FILE"
-                    prompt_input "OPENAI_API_KEY" "OpenAI API key" "" false
-                    echo "OPENAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-                    print_success "Local + OpenAI providers configured"
-                    break
-                    ;;
-                2)
-                    echo "LLM_PROVIDERS=local,anthropic" >> "$ENV_FILE"
-                    prompt_input "ANTHROPIC_API_KEY" "Anthropic API key" "" false
-                    echo "ANTHROPIC_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-                    print_success "Local + Anthropic providers configured"
-                    break
-                    ;;
-                3)
-                    echo "LLM_PROVIDERS=local,google" >> "$ENV_FILE"
-                    prompt_input "GOOGLE_API_KEY" "Google AI API key" "" false
-                    echo "GOOGLE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-                    print_success "Local + Google providers configured"
-                    break
-                    ;;
-                4)
-                    echo "LLM_PROVIDERS=local,groq" >> "$ENV_FILE"
-                    prompt_input "GROQ_API_KEY" "Groq API key" "" false
-                    echo "GROQ_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-                    print_success "Local + Groq providers configured"
-                    break
-                    ;;
-                5)
-                    echo "LLM_PROVIDERS=local,mistral" >> "$ENV_FILE"
-                    prompt_input "MISTRAL_API_KEY" "Mistral API key" "" false
-                    echo "MISTRAL_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-                    print_success "Local + Mistral providers configured"
-                    break
-                    ;;
-                6)
-                    echo "LLM_PROVIDERS=local,openai,anthropic,google,groq,mistral" >> "$ENV_FILE"
-                    prompt_input "OPENAI_API_KEY" "OpenAI API key" "" false
-                    echo "OPENAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-                    prompt_input "ANTHROPIC_API_KEY" "Anthropic API key" "" false
-                    echo "ANTHROPIC_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-                    prompt_input "GOOGLE_API_KEY" "Google AI API key" "" false
-                    echo "GOOGLE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-                    prompt_input "GROQ_API_KEY" "Groq API key" "" false
-                    echo "GROQ_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-                    prompt_input "MISTRAL_API_KEY" "Mistral API key" "" false
-                    echo "MISTRAL_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-                    print_success "All providers configured"
-                    break
-                    ;;
-                7)
-                    echo "LLM_PROVIDERS=local" >> "$ENV_FILE"
-                    print_success "Local provider only"
-                    break
-                    ;;
-                *)
-                    print_error "Invalid selection"
-                    ;;
-            esac
+        # OpenAI
+        if confirm "Configure OpenAI (GPT-4, GPT-3.5)?"; then
+            selected_providers+=("openai")
+            provider_keys+=("OPENAI_API_KEY")
+            prompt_input "OPENAI_API_KEY" "OpenAI API key" "" false
+            echo "OPENAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
         fi
-        done
+        
+        # Anthropic
+        if confirm "Configure Anthropic (Claude 3)?"; then
+            selected_providers+=("anthropic")
+            provider_keys+=("ANTHROPIC_API_KEY")
+            prompt_input "ANTHROPIC_API_KEY" "Anthropic API key" "" false
+            echo "ANTHROPIC_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+        fi
+        
+        # Google
+        if confirm "Configure Google (Gemini)?"; then
+            selected_providers+=("google")
+            provider_keys+=("GOOGLE_API_KEY")
+            prompt_input "GOOGLE_API_KEY" "Google AI API key" "" false
+            echo "GOOGLE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+        fi
+        
+        # Groq
+        if confirm "Configure Groq (Fast Llama inference)?"; then
+            selected_providers+=("groq")
+            provider_keys+=("GROQ_API_KEY")
+            prompt_input "GROQ_API_KEY" "Groq API key" "" false
+            echo "GROQ_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+        fi
+        
+        # Mistral
+        if confirm "Configure Mistral (Mistral AI)?"; then
+            selected_providers+=("mistral")
+            provider_keys+=("MISTRAL_API_KEY")
+            prompt_input "MISTRAL_API_KEY" "Mistral API key" "" false
+            echo "MISTRAL_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+        fi
+        
+        # Configure providers
+        if [[ ${#selected_providers[@]} -gt 1 ]]; then
+            local providers_str=$(IFS=','; echo "${selected_providers[*]}")
+            echo "LLM_PROVIDERS=$providers_str" >> "$ENV_FILE"
+            print_success "Providers configured: $providers_str"
+        else
+            echo "LLM_PROVIDERS=local" >> "$ENV_FILE"
+            print_success "Local provider only"
+        fi
         
         # LiteLLM routing strategy (now after providers are configured)
         echo ""
@@ -1809,11 +1734,108 @@ EOF
     echo ""
     
     print_info "Service Access:"
-    echo "  • Open WebUI: http://localhost:3000"
-    echo "  • LiteLLM: http://localhost:4000"
-    echo "  • n8n: http://localhost:5678"
-    echo "  • Dify: http://localhost:8080"
-    echo "  • Grafana: http://localhost:3001"
+    
+    # Get selected services from file
+    local selected_services=($(jq -r '.services[].key' "$SERVICES_FILE" 2>/dev/null || echo ""))
+    
+    if [[ ${#selected_services[@]} -eq 0 ]]; then
+        echo "  • No services selected"
+    else
+        for service in "${selected_services[@]}"; do
+            case $service in
+                "openwebui")
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                        echo "  • Open WebUI: https://$DOMAIN/openwebui"
+                    else
+                        echo "  • Open WebUI: http://localhost:3000"
+                    fi
+                    ;;
+                "anythingllm")
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                        echo "  • AnythingLLM: https://$DOMAIN/anythingllm"
+                    else
+                        echo "  • AnythingLLM: http://localhost:3001"
+                    fi
+                    ;;
+                "dify")
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                        echo "  • Dify: https://$DOMAIN/dify"
+                    else
+                        echo "  • Dify: http://localhost:8080"
+                    fi
+                    ;;
+                "n8n")
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                        echo "  • n8n: https://$DOMAIN/n8n"
+                    else
+                        echo "  • n8n: http://localhost:5678"
+                    fi
+                    ;;
+                "flowise")
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                        echo "  • Flowise: https://$DOMAIN/flowise"
+                    else
+                        echo "  • Flowise: http://localhost:3002"
+                    fi
+                    ;;
+                "ollama")
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                        echo "  • Ollama: https://$DOMAIN/ollama"
+                    else
+                        echo "  • Ollama: http://localhost:11434"
+                    fi
+                    ;;
+                "litellm")
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                        echo "  • LiteLLM: https://$DOMAIN/litellm"
+                    else
+                        echo "  • LiteLLM: http://localhost:4000"
+                    fi
+                    ;;
+                "signal-api")
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                        echo "  • Signal API: https://$DOMAIN/signal-api"
+                    else
+                        echo "  • Signal API: http://localhost:8090"
+                    fi
+                    ;;
+                "openclaw")
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                        echo "  • OpenClaw: https://$DOMAIN/openclaw"
+                    else
+                        echo "  • OpenClaw: http://localhost:18789"
+                    fi
+                    ;;
+                "prometheus")
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                        echo "  • Prometheus: https://$DOMAIN/prometheus"
+                    else
+                        echo "  • Prometheus: http://localhost:9090"
+                    fi
+                    ;;
+                "grafana")
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                        echo "  • Grafana: https://$DOMAIN/grafana"
+                    else
+                        echo "  • Grafana: http://localhost:3005"
+                    fi
+                    ;;
+                "minio")
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                        echo "  • MinIO: https://$DOMAIN/minio"
+                    else
+                        echo "  • MinIO: http://localhost:9001"
+                    fi
+                    ;;
+                "postgres"|"redis"|"tailscale")
+                    # Infrastructure services - no direct UI
+                    ;;
+                *)
+                    echo "  • $service: (port configuration available)"
+                    ;;
+            esac
+        done
+    fi
     echo ""
     
     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
