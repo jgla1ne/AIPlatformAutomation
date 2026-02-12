@@ -305,9 +305,18 @@ collect_domain_info() {
             echo "DOMAIN_RESOLVES=true" >> "$ENV_FILE"
             echo "PUBLIC_IP=$server_ip" >> "$ENV_FILE"
         else
-            print_warn "Domain resolves to different IP: $public_ip (server: $server_ip)"
-            echo "DOMAIN_RESOLVES=false" >> "$ENV_FILE"
-            echo "PUBLIC_IP=$server_ip" >> "$ENV_FILE"
+            # Check if the resolved IP is actually reachable (it might be behind a load balancer or CDN)
+            if ping -c 1 "$public_ip" >/dev/null 2>&1; then
+                print_success "Domain resolves to reachable IP: $public_ip"
+                print_info "Domain will be used for proxy configuration"
+                echo "DOMAIN_RESOLVES=true" >> "$ENV_FILE"
+                echo "PUBLIC_IP=$public_ip" >> "$ENV_FILE"
+            else
+                print_warn "Domain resolves to unreachable IP: $public_ip"
+                print_warn "This may indicate DNS misconfiguration"
+                echo "DOMAIN_RESOLVES=false" >> "$ENV_FILE"
+                echo "PUBLIC_IP=$server_ip" >> "$ENV_FILE"
+            fi
         fi
     else
         print_warn "Domain does not resolve or DNS not configured"
