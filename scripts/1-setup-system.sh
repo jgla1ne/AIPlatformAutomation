@@ -564,8 +564,8 @@ install_docker() {
 
     # Add Docker repository
     echo \
-      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-      $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \\
+      $(. /etc/os-release       $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \      $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \ echo "$VERSION_CODENAME") stable" | \\
       tee /etc/apt/sources.list.d/docker.list > /dev/null
 
     print_success "Docker repository added"
@@ -1099,8 +1099,8 @@ EOF
       "display_name": "$display_name",
       "description": "$description",
       "category": "$category",
-      "dependencies": [$(echo "$deps" | sed 's/,/", "/g' | sed 's/^/"/' | sed 's/$/"/')]",
-      "required_configs": [$(echo "$configs" | sed 's/,/", "/g' | sed 's/^/"/' | sed 's/$/"/')]"
+      "dependencies": [$(echo "$deps" | sed 's/,/", "/g' | sed 's/^/"/' | sed 's/$/"/')],
+      "required_configs": [$(echo "$configs" | sed 's/,/", "/g' | sed 's/^/"/' | sed 's/$/"/')]
     }
 EOF
     done
@@ -2039,9 +2039,9 @@ EOF
 
     print_success "Validation results saved to $validation_file"
 }
-#───────────────────────────────────────────────────────────────────────────────
+#───────────────────────────────────────────────────────────────────────
 # SUMMARY REPORT
-#───────────────────────────────────────────────────────────────────────────────
+#───────────────────────────────────────────────────────────────────────
 
 generate_summary() {
     log_phase "11" "📊 Summary Report Generation"
@@ -2078,7 +2078,7 @@ Metadata Directory:   $METADATA_DIR
 SYSTEM INFORMATION
 ───────────────────────────────────────────────────────────────────────────────
 
-OS:                   $(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2)
+OS:                   $(grep PRETTY_NAME /etc/os-release | cut -d' -f2)
 Kernel:               $(uname -r)
 CPU:                  $(grep "model name" /proc/cpuinfo | head -1 | cut -d':' -f2 | xargs)
 CPU Cores:            $(nproc)
@@ -2263,7 +2263,7 @@ EOF
     "metadata": "$METADATA_DIR"
   },
   "system": {
-    "os": "$(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2)",
+    "os": "$(grep PRETTY_NAME /etc/os-release | cut -d' -f2)",
     "kernel": "$(uname -r)",
     "cpu_cores": $(nproc),
     "memory_gb": $(free -g | awk '/^Mem:/{print $2}'),
@@ -2281,7 +2281,7 @@ EOF
 EOF
 
     local first=true
-    for model in "${ollama_models[@]}}"; do
+    for model in "${ollama_models[@]}"; do
         if [[ "$first" == false ]]; then
             echo "," >> "$summary_json"
         fi
@@ -2337,9 +2337,9 @@ EOF
     print_success "  • JSON: $summary_json"
 }
 
-#───────────────────────────────────────────────────────────────────────────────
+#───────────────────────────────────────────────────────────────────────
 # MAIN EXECUTION FLOW
-#───────────────────────────────────────────────────────────────────────────────
+#───────────────────────────────────────────────────────────────────────
 
 main() {
     # Ensure running as root
