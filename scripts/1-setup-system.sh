@@ -305,9 +305,18 @@ collect_domain_info() {
             echo "DOMAIN_RESOLVES=true" >> "$ENV_FILE"
             echo "PUBLIC_IP=$server_ip" >> "$ENV_FILE"
         else
-            print_warn "Domain resolves to different IP: $public_ip (server: $server_ip)"
-            echo "DOMAIN_RESOLVES=false" >> "$ENV_FILE"
-            echo "PUBLIC_IP=$server_ip" >> "$ENV_FILE"
+            # Check if it's a temporary network issue
+            if ping -c 1 "$public_ip" >/dev/null 2>&1; then
+                print_warn "Domain resolves to different IP: $public_ip (server: $server_ip)"
+                print_warn "This may indicate DNS configuration issue or load balancer"
+                echo "DOMAIN_RESOLVES=false" >> "$ENV_FILE"
+                echo "PUBLIC_IP=$server_ip" >> "$ENV_FILE"
+            else
+                print_warn "Domain resolution test failed - network connectivity issue"
+                print_info "Assuming domain should resolve to this server: $server_ip"
+                echo "DOMAIN_RESOLVES=true" >> "$ENV_FILE"
+                echo "PUBLIC_IP=$server_ip" >> "$ENV_FILE"
+            fi
         fi
     else
         print_warn "Domain does not resolve or DNS not configured"
@@ -786,7 +795,7 @@ collect_configurations() {
     echo ""
     
     # Port availability check
-    local -A ports_to_check=(
+    local ports_to_check=(
         "80:Proxy Services"
         "443:Proxy Services"
         "3000:Open WebUI"
@@ -818,7 +827,22 @@ collect_configurations() {
         local port=$(echo "$port_info" | cut -d: -f1)
         local service=$(echo "$port_info" | cut -d: -f2)
         
-        if netstat -tuln 2>/dev/null | grep -q ":$port "; then
+        # Special handling for port 80 (common web port)
+        if [[ "$port" == "80" ]]; then
+            if netstat -tuln 2>/dev/null | grep -q ":80 "; then
+                local pid=$(netstat -tuln 2>/dev/null | grep ":80 " | awk '{print $7}' | cut -d/ -f1)
+                print_warn "Port 80 is in use by $service (pid: $pid)"
+                port_conflicts+=("$port:$service:$pid")
+            else
+                # Check if Apache/Nginx is running
+                if systemctl is-active --quiet apache2 || systemctl is-active --quiet nginx; then
+                    print_warn "Port 80 may be used by Apache/Nginx service"
+                    port_conflicts+=("$port:$service:systemd")
+                else
+                    print_success "Port 80 is available for $service"
+                fi
+            fi
+        elif netstat -tuln 2>/dev/null | grep -q ":$port "; then
             local pid=$(netstat -tuln 2>/dev/null | grep ":$port " | awk '{print $7}' | cut -d/ -f1)
             print_warn "Port $port is in use by $service (pid: $pid)"
             port_conflicts+=("$port:$service:$pid")
@@ -1148,7 +1172,7 @@ EOF
                 local provider_keys=()
                 
                 # Clean up the input and split by spaces, commas, or dashes
-                local cleaned_input=$(echo "$llm_provider_selection" | tr ', ' ' ' ' ')
+                local cleaned_input=$(echo "$llm_provider_selection" | tr ',- ' ' ' ')
                 
                 for num in $cleaned_input; do
                     case $num in
@@ -1552,11 +1576,40 @@ create_directory_structure() {
     
     print_info "Creating modular directory structure..."
     
-    # Create directories
-    mkdir -p "$DATA_ROOT"/{compose,env,config,metadata,data,logs,secrets}
+    # Create config subdirectories based on selected services
+    local config_dirs=()
     
-    # Create config subdirectories
-    mkdir -p "$DATA_ROOT/config"/{nginx,traefik,caddy,litellm,postgres,redis,qdrant,prometheus,grafana}
+    if [[ " ${selected_services[*]} " =~ " nginx-proxy-manager " ]]; then
+        config_dirs+=("nginx")
+    fi
+    
+    if [[ " ${selected_services[*]} " =~ " traefik " ]]; then
+        config_dirs+=("traefik")
+    fi
+    
+    if [[ " ${selected_services[*]} " =~ " caddy " ]]; then
+        config_dirs+=("caddy")
+    fi
+    
+    # Always create these for selected services
+    for service in "${selected_services[@]}"; do
+        case "$service" in
+            "litellm") config_dirs+=("litellm") ;;
+            "postgres") config_dirs+=("postgres") ;;
+            "redis") config_dirs+=("redis") ;;
+            "qdrant") config_dirs+=("qdrant") ;;
+            "prometheus") config_dirs+=("prometheus") ;;
+            "grafana") config_dirs+=("grafana") ;;
+        esac
+    done
+    
+    # Create the directories
+    if [[ ${#config_dirs[@]} -gt 0 ]]; then
+        mkdir -p "$DATA_ROOT/config"/"${config_dirs[@]}"
+    fi
+    
+    # Always create base directories
+    mkdir -p "$DATA_ROOT"/{compose,env,metadata,data,logs,secrets}
     
     print_success "Directory structure created"
     print_info "Base: $DATA_ROOT"
@@ -1674,7 +1727,7 @@ EOF
         case "$service" in
             "ollama")
                 echo "- Ollama: http://localhost:11434" >> "$urls_file"
-                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Ollama (Public): https://$DOMAIN/ollama" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Ollama (Public): https://$DOMAIN/ollama" >> "$urls_file"                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Ollama (Public): https://$DOMAIN/ollama" >> "$urls_file" echo "- Ollama (Public): https://$DOMAIN/ollama" >> "$urls_file"
                 ;;
             "openwebui")
                 echo "- Open WebUI: http://localhost:3000" >> "$urls_file"
@@ -1851,7 +1904,7 @@ main() {
     
     # Completion message
     echo ""
-    echo "$(printf '═%.0s' {1..80})"
+    echo "==============================================================================="
     echo ""
     print_success "🎉 SETUP SCRIPT COMPLETED SUCCESSFULLY!"
     echo ""
@@ -1859,7 +1912,7 @@ main() {
     echo ""
     echo -e "${CYAN}sudo bash 2-deploy-services.sh${NC}"
     echo ""
-    echo "$(printf '═%.0s' {1..80})"
+    echo "==============================================================================="
     echo ""
     
     exit 0
