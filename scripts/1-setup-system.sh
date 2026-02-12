@@ -444,6 +444,12 @@ collect_domain_info() {
         prompt_input "TAILSCALE_TAILNET" "Tailscale tailnet name" "default" false
         echo "TAILSCALE_TAILNET=$INPUT_RESULT" >> "$ENV_FILE"
         
+        # Optional Tailscale API key
+        if confirm "Configure Tailscale API key (optional)?"; then
+            prompt_input "TAILSCALE_API_KEY" "Tailscale API key" "" false
+            echo "TAILSCALE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+        fi
+        
         echo "TAILSCALE_EXIT_NODE=false" >> "$ENV_FILE"
         echo "TAILSCALE_ACCEPT_ROUTES=false" >> "$ENV_FILE"
         
@@ -780,20 +786,30 @@ collect_configurations() {
     echo ""
     
     # Port availability check
-    local ports_to_check=(
-        "80:HTTP"
-        "443:HTTPS"
-        "3000:OpenWebUI/Grafana/Langfuse"
+    local -A ports_to_check=(
+        "80:Proxy Services"
+        "443:Proxy Services"
+        "3000:Open WebUI"
         "3001:AnythingLLM"
+        "3002:Flowise"
         "5678:n8n"
-        "6333:Qdrant"
-        "6334:Qdrant GRPC"
         "8080:Dify"
+        "8082:OpenClaw"
+        "8090:Signal API"
+        "8443:Tailscale"
+        "9000:MinIO"
+        "9001:MinIO Console"
+        "9090:Prometheus"
+        "3005:Grafana"
         "11434:Ollama"
+        "18789:OpenClaw Admin"
+        "4000:LiteLLM"
         "5432:PostgreSQL"
         "6379:Redis"
-        "4000:LiteLLM"
-        "9090:Prometheus"
+        "6333:Qdrant"
+        "19530:Milvus"
+        "8000:ChromaDB"
+        "8080:Weaviate"
     )
     
     local port_conflicts=()
@@ -912,6 +928,8 @@ EOF
             echo "CADDY_HTTPS_PORT=$INPUT_RESULT" >> "$ENV_FILE"
         fi
     fi
+    
+    print_success "Proxy configuration completed"
     
     # Service port configuration
     for service_key in "${selected_services[@]}"; do
@@ -1123,7 +1141,66 @@ EOF
             echo -n -e "${YELLOW}Select providers [1-7]:${NC} "
             read -r llm_provider_selection
             
-            case "$llm_provider_selection" in
+            # Handle space-separated input like "3 4" or "3,4" or "3-4"
+            if [[ "$llm_provider_selection" =~ [,\ -] ]]; then
+                # Multiple providers selected
+                local selected_providers=("local")
+                local provider_keys=()
+                
+                # Clean up the input and split by spaces, commas, or dashes
+                local cleaned_input=$(echo "$llm_provider_selection" | tr ', ' ' ' ' ')
+                
+                for num in $cleaned_input; do
+                    case $num in
+                        1) 
+                            selected_providers+=("openai")
+                            provider_keys+=("OPENAI_API_KEY")
+                            ;;
+                        2) 
+                            selected_providers+=("anthropic")
+                            provider_keys+=("ANTHROPIC_API_KEY")
+                            ;;
+                        3) 
+                            selected_providers+=("google")
+                            provider_keys+=("GOOGLE_API_KEY")
+                            ;;
+                        4) 
+                            selected_providers+=("groq")
+                            provider_keys+=("GROQ_API_KEY")
+                            ;;
+                        5) 
+                            selected_providers+=("mistral")
+                            provider_keys+=("MISTRAL_API_KEY")
+                            ;;
+                        6) 
+                            selected_providers+=("openai" "anthropic" "google" "groq" "mistral")
+                            provider_keys+=("OPENAI_API_KEY" "ANTHROPIC_API_KEY" "GOOGLE_API_KEY" "GROQ_API_KEY" "MISTRAL_API_KEY")
+                            ;;
+                        *) print_warn "Invalid provider selection: $num" ;;
+                    esac
+                done
+                
+                if [[ ${#selected_providers[@]} -gt 1 ]]; then
+                    local providers_str=$(IFS=','; echo "${selected_providers[*]}")
+                    echo "LLM_PROVIDERS=$providers_str" >> "$ENV_FILE"
+                    
+                    # Prompt for API keys for selected providers
+                    for key in "${provider_keys[@]}"; do
+                        case $key in
+                            "OPENAI_API_KEY") prompt_input "OPENAI_API_KEY" "OpenAI API key" "" false && echo "OPENAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE" ;;
+                            "ANTHROPIC_API_KEY") prompt_input "ANTHROPIC_API_KEY" "Anthropic API key" "" false && echo "ANTHROPIC_API_KEY=$INPUT_RESULT" >> "$ENV_FILE" ;;
+                            "GOOGLE_API_KEY") prompt_input "GOOGLE_API_KEY" "Google AI API key" "" false && echo "GOOGLE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE" ;;
+                            "GROQ_API_KEY") prompt_input "GROQ_API_KEY" "Groq API key" "" false && echo "GROQ_API_KEY=$INPUT_RESULT" >> "$ENV_FILE" ;;
+                            "MISTRAL_API_KEY") prompt_input "MISTRAL_API_KEY" "Mistral API key" "" false && echo "MISTRAL_API_KEY=$INPUT_RESULT" >> "$ENV_FILE" ;;
+                        esac
+                    done
+                    
+                    print_success "Providers configured: $providers_str"
+                    break
+                fi
+            else
+                # Single provider selection (original logic)
+                case "$llm_provider_selection" in
                 1)
                     echo "LLM_PROVIDERS=local,openai" >> "$ENV_FILE"
                     prompt_input "OPENAI_API_KEY" "OpenAI API key" "" false
@@ -1576,11 +1653,13 @@ Public Access:
 EOF
     
     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
-        echo "- Main Site: https://$DOMAIN" >> "$urls_file"
-        echo "- Admin Panel: https://$DOMAIN/admin" >> "$urls_file"
+        echo "- Main Site: https://${DOMAIN:-localhost}" >> "$urls_file"
+        echo "- Admin Panel: https://${DOMAIN:-localhost}/admin" >> "$urls_file"
+        echo "- Domain Status: ✅ Resolves correctly" >> "$urls_file"
     else
         echo "- Main Site: http://${PUBLIC_IP:-localhost}" >> "$urls_file"
         echo "- Admin Panel: http://${PUBLIC_IP:-localhost}:8080" >> "$urls_file"
+        echo "- Domain Status: ⚠️ Does not resolve (using local access)" >> "$urls_file"
     fi
     
     echo "" >> "$urls_file"
@@ -1592,6 +1671,10 @@ EOF
     
     for service in "${selected_services[@]}"; do
         case "$service" in
+            "ollama")
+                echo "- Ollama: http://localhost:11434" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Ollama (Public): https://$DOMAIN/ollama" >> "$urls_file"
+                ;;
             "openwebui")
                 echo "- Open WebUI: http://localhost:3000" >> "$urls_file"
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Open WebUI (Public): https://$DOMAIN/openwebui" >> "$urls_file"
@@ -1619,16 +1702,17 @@ EOF
             "signal-api")
                 echo "- Signal API: http://localhost:8090" >> "$urls_file"
                 echo "- Signal QR: http://localhost:8090/v1/qrcode" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Signal API (Public): https://$DOMAIN/signal-api" >> "$urls_file"
                 ;;
             "openclaw")
-                echo "- OpenClaw: http://localhost:8082" >> "$urls_file"
+                echo "- OpenClaw: http://localhost:18789" >> "$urls_file"
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- OpenClaw (Public): https://$DOMAIN/openclaw" >> "$urls_file"
                 ;;
             "prometheus")
                 echo "- Prometheus: http://localhost:9090" >> "$urls_file"
                 ;;
             "grafana")
-                echo "- Grafana: http://localhost:3001" >> "$urls_file"
+                echo "- Grafana: http://localhost:3005" >> "$urls_file"
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Grafana (Public): https://$DOMAIN/grafana" >> "$urls_file"
                 ;;
             "qdrant")
