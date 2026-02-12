@@ -60,6 +60,66 @@ readonly WHITE='\033[1;37m'
 readonly NC='\033[0m' # No Color
 readonly BOLD='\033[1m'
 
+print_banner() {
+    clear
+    echo -e "${CYAN}${BOLD}"
+    echo "╔══════════════════════════════════════════════════════════════════╗"
+    echo "║          AI Platform Automation Setup v76.5.0                       ║"
+    echo "║          Complete Installation Wizard                            ║"
+    echo "╚══════════════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    echo ""
+}
+
+log_phase() {
+    local step="$1"
+    local description="$2"
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BLUE}🔍 STEP $step/13: $description${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+}
+
+print_header() {
+    local title="$1"
+    echo ""
+    echo -e "${WHITE}${BOLD}$title${NC}"
+    echo "$(printf '═%.0s' {1..60})"
+}
+
+confirm() {
+    local prompt="$1"
+    local default="${2:-Y}"
+    
+    while true; do
+        if [[ "$default" == "Y" ]]; then
+            print_info "$prompt [Y/n]: "
+        else
+            print_info "$prompt [y/N]: "
+        fi
+        
+        read -r response
+        
+        # Use default if empty
+        if [[ -z "$response" ]]; then
+            response="$default"
+        fi
+        
+        case "${response^^}" in
+            Y|YES)
+                return 0
+                ;;
+            N|NO)
+                return 1
+                ;;
+            *)
+                print_error "Please answer Y or N"
+                ;;
+        esac
+    done
+}
+
 #───────────────────────────────────────────────────────────────────────────────
 # LOGGING FUNCTIONS
 #───────────────────────────────────────────────────────────────────────────────
@@ -397,6 +457,149 @@ EOF
 }
 
 #───────────────────────────────────────────────────────────────────────────────
+# MAIN SYSTEM DETECTION
+#───────────────────────────────────────────────────────────────────────────────
+
+detect_system() {
+    log_phase "1" "🔍 System Detection"
+    
+    print_info "Performing comprehensive system detection..."
+    
+    # Run all detection functions
+    check_system_requirements
+    detect_hardware
+    
+    # Save system info
+    mv "$SYSTEM_INFO_FILE.tmp" "$SYSTEM_INFO_FILE"
+    print_success "System information saved to: $SYSTEM_INFO_FILE"
+    
+    # Display summary
+    echo ""
+    print_info "System Detection Summary:"
+    echo "  • OS: Ubuntu $(grep VERSION_ID /etc/os-release | cut -d'"' -f2)"
+    echo "  • CPU: $(grep "model name" /proc/cpuinfo | head -n1 | cut -d':' -f2 | xargs)"
+    echo "  • RAM: $(free -h | awk '/^Mem:/{print $2}')"
+    echo "  • GPU: ${GPU_INFO:-"Not detected"}"
+    echo "  • Storage: $(df -h / | tail -1 | awk '{print $2}') available"
+}
+
+#───────────────────────────────────────────────────────────────────────────────
+# DOMAIN AND NETWORK CONFIGURATION
+#───────────────────────────────────────────────────────────────────────────────
+
+collect_domain_info() {
+    log_phase "2" "🌐 Domain & Network Configuration"
+    
+    echo ""
+    print_info "Configure your platform domain and networking..."
+    
+    # Domain configuration
+    while true; do
+        echo ""
+        print_info "Enter your domain (e.g., ai.example.com) or press Enter for IP-only access:"
+        read -r domain_input
+        
+        if [[ -z "$domain_input" ]]; then
+            # IP-only mode
+            DETECTED_IP=$(curl -s https://api.ipify.org 2>/dev/null || echo "127.0.0.1")
+            PLATFORM_DOMAIN="$DETECTED_IP"
+            ACCESS_MODE="ip"
+            print_success "IP-only mode configured: $PLATFORM_DOMAIN"
+            break
+        else
+            # Domain mode - validate
+            if [[ "$domain_input" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.[a-zA-Z]{2,}$ ]]; then
+                PLATFORM_DOMAIN="$domain_input"
+                ACCESS_MODE="domain"
+                
+                # Test DNS resolution
+                print_info "Testing DNS resolution for $PLATFORM_DOMAIN..."
+                if nslookup "$PLATFORM_DOMAIN" >/dev/null 2>&1; then
+                    print_success "DNS resolution successful"
+                else
+                    print_warn "DNS resolution failed - you may need to configure DNS later"
+                fi
+                break
+            else
+                print_error "Invalid domain format. Please use format: domain.example.com"
+            fi
+        fi
+    done
+    
+    # SSL Configuration
+    echo ""
+    print_info "SSL/TLS Configuration:"
+    echo "  1) Automatic HTTPS (Let's Encrypt - requires domain)"
+    echo "  2) Self-signed certificates"
+    echo "  3) No SSL (HTTP only - not recommended)"
+    
+    while true; do
+        print_info "Select SSL option [1-3]: "
+        read -r ssl_option
+        
+        case $ssl_option in
+            1)
+                if [[ "$ACCESS_MODE" == "domain" ]]; then
+                    SSL_MODE="letsencrypt"
+                    print_success "Let's Encrypt SSL selected"
+                    break
+                else
+                    print_error "Let's Encrypt requires a domain name"
+                fi
+                ;;
+            2)
+                SSL_MODE="selfsigned"
+                print_success "Self-signed SSL selected"
+                break
+                ;;
+            3)
+                SSL_MODE="none"
+                print_warn "HTTP-only mode selected"
+                break
+                ;;
+            *)
+                print_error "Invalid option. Please select 1-3"
+                ;;
+        esac
+    done
+    
+    # Email for Let's Encrypt
+    if [[ "$SSL_MODE" == "letsencrypt" ]]; then
+        while true; do
+            print_info "Enter email for Let's Encrypt notifications: "
+            read -r le_email
+            
+            if [[ "$le_email" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+                LETSENCRYPT_EMAIL="$le_email"
+                print_success "Email configured: $LETSENCRYPT_EMAIL"
+                break
+            else
+                print_error "Invalid email format"
+            fi
+        done
+    fi
+    
+    # Detect local IP
+    LOCAL_IP=$(hostname -I | awk '{print $1}')
+    print_success "Local IP detected: $LOCAL_IP"
+    
+    # Save network configuration
+    cat > "$METADATA_DIR/network_config.json" <<EOF
+{
+  "platform_domain": "$PLATFORM_DOMAIN",
+  "access_mode": "$ACCESS_MODE",
+  "ssl_mode": "$SSL_MODE",
+  "letsencrypt_email": "${LETSENCRYPT_EMAIL:-}",
+  "public_ip": "${DETECTED_IP:-}",
+  "local_ip": "$LOCAL_IP",
+  "configured_at": "$(date -Iseconds)"
+}
+EOF
+    
+    print_success "Network configuration saved"
+}
+
+#───────────────────────────────────────────────────────────────────────────────
 # STORAGE CONFIGURATION
 #───────────────────────────────────────────────────────────────────────────────
 
@@ -508,6 +711,120 @@ configure_storage() {
     chmod -R 755 /mnt/data
 
     print_success "Storage configuration complete"
+}
+
+#───────────────────────────────────────────────────────────────────────────────
+# SYSTEM UPDATE
+#───────────────────────────────────────────────────────────────────────────────
+
+update_system() {
+    log_phase "3" "🔄 System Update"
+    
+    print_info "Updating system packages..."
+    
+    # Update package lists
+    if apt update &>> "$LOG_FILE"; then
+        print_success "Package lists updated"
+    else
+        print_error "Failed to update package lists"
+        exit 1
+    fi
+    
+    # Upgrade packages
+    print_info "Upgrading installed packages..."
+    if apt upgrade -y &>> "$LOG_FILE"; then
+        print_success "System packages upgraded"
+    else
+        print_error "Failed to upgrade packages"
+        exit 1
+    fi
+    
+    # Install essential packages
+    print_info "Installing essential packages..."
+    local essential_packages=(
+        "curl"
+        "wget"
+        "git"
+        "unzip"
+        "jq"
+        "lsb-release"
+        "gnupg"
+        "ca-certificates"
+    )
+    
+    for package in "${essential_packages[@]}"; do
+        print_info "Installing $package..."
+        if apt install -y "$package" &>> "$LOG_FILE"; then
+            print_success "$package installed"
+        else
+            print_error "Failed to install $package"
+            exit 1
+        fi
+    done
+    
+    print_success "System update complete"
+}
+
+#───────────────────────────────────────────────────────────────────────────────
+# DOCKER CONFIGURATION
+#───────────────────────────────────────────────────────────────────────────────
+
+configure_docker() {
+    log_phase "5" "⚙️  Docker Configuration"
+    
+    # Add user to docker group
+    local current_user="${SUDO_USER:-$USER}"
+    print_info "Adding user $current_user to docker group..."
+    
+    if usermod -aG docker "$current_user"; then
+        print_success "User added to docker group"
+    else
+        print_error "Failed to add user to docker group"
+        exit 1
+    fi
+    
+    # Enable docker service
+    print_info "Enabling Docker service..."
+    if systemctl enable docker &>> "$LOG_FILE"; then
+        print_success "Docker service enabled"
+    else
+        print_error "Failed to enable Docker service"
+        exit 1
+    fi
+    
+    # Start docker service
+    print_info "Starting Docker service..."
+    if systemctl start docker &>> "$LOG_FILE"; then
+        print_success "Docker service started"
+    else
+        print_error "Failed to start Docker service"
+        exit 1
+    fi
+    
+    # Verify docker is working
+    print_info "Verifying Docker installation..."
+    if docker run --rm hello-world &>> "$LOG_FILE"; then
+        print_success "Docker is working correctly"
+    else
+        print_error "Docker verification failed"
+        exit 1
+    fi
+    
+    # Create docker network for the platform
+    print_info "Creating Docker network for AI platform..."
+    if docker network create ai-platform &>> "$LOG_FILE"; then
+        print_success "Docker network 'ai-platform' created"
+    else
+        print_warn "Docker network might already exist"
+    fi
+    
+    print_success "Docker configuration complete"
+    
+    # Display group membership notice
+    echo ""
+    print_info "⚠️  IMPORTANT: You need to log out and log back in"
+    print_info "   or run 'newgrp docker' to use Docker without sudo."
+    echo ""
 }
 
 #───────────────────────────────────────────────────────────────────────────────
@@ -744,23 +1061,23 @@ install_ollama() {
     # Download selected models
     local selected_models=()
     for selection in $selections; do
-        if [[ "$selection" =~ ^[0-9]+$ ]] && [[ $selection -gt 0 ]] && [[ $selection -le ${#models[@]}} ]]; then
+        if [[ "$selection" =~ ^[0-9]+$ ]] && [[ $selection -gt 0 ]] && [[ $selection -le ${#models[@]} ]]; then
             local model_info="${models[$((selection-1))]}"
             local model_name=$(echo "$model_info" | cut -d':' -f1,2)
             selected_models+=("$model_name")
         fi
     done
 
-    if [[ ${#selected_models[@]}} -eq 0 ]]; then
+    if [[ ${#selected_models[@]} -eq 0 ]]; then
         print_info "No valid models selected"
         return 0
     fi
 
     echo ""
-    print_info "Downloading ${#selected_models[@]}} model(s)..."
+    print_info "Downloading ${#selected_models[@]} model(s)..."
     echo ""
 
-    for model in "${selected_models[@]}}"; do
+    for model in "${selected_models[@]}"; do
         print_info "Downloading $model..."
         if ollama pull "$model" 2>&1 | tee -a "$LOG_FILE" | grep -E "(pulling|success)"; then
             print_success "$model downloaded"
@@ -903,7 +1220,7 @@ check_dependencies() {
         fi
     done
 
-    if [[ ${#missing_deps[@] -gt 0 ]]; then
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
         return 1  # Has missing dependencies
     fi
 
@@ -921,7 +1238,7 @@ select_services() {
 
     # Group services by category
     local -A category_services
-    for service_key in "${!SERVICE_CATALOG[@]"; do
+    for service_key in "${!SERVICE_CATALOG[@]}"; do
         local category=$(get_service_info "$service_key" "category")
         if [[ -z "${category_services[$category]}" ]]; then
             category_services[$category]="$service_key"
@@ -978,7 +1295,7 @@ select_services() {
         print_info "No services selected"
         return 0
     elif [[ "$selection" == "all" ]]; then
-        for service_key in "${!SERVICE_CATALOG[@]"; do
+        for service_key in "${!SERVICE_CATALOG[@]}"; do
             selected_services+=("$service_key")
             selected_map[$service_key]=1
         done
@@ -1042,10 +1359,10 @@ select_services() {
 
     # Display final selection
     echo ""
-    print_header "✅ Selected Services (${#selected_services[@]}})"
+    print_header "✅ Selected Services (${#selected_services[@]})"
     echo ""
 
-    for category in "${!SERVICE_CATEGORIES[@]"; do
+    for category in "${!SERVICE_CATEGORIES[@]}"; do
         local category_has_services=false
         local category_list=""
 
@@ -1076,7 +1393,7 @@ select_services() {
     cat > "$SERVICES_FILE" <<EOF
 {
   "selection_time": "$(date -Iseconds)",
-  "total_services": ${#selected_services[@]}},
+  "total_services": ${#selected_services[@]},
   "services": [
 EOF
 
@@ -1114,7 +1431,7 @@ EOF
     print_success "Service selection saved to $SERVICES_FILE"
 
     # Export selected services for next phase
-    export SELECTED_SERVICES="${selected_services[@]}}"
+    export SELECTED_SERVICES="${selected_services[@]}"
 
     return 0
 }
@@ -1134,7 +1451,7 @@ collect_configurations() {
     # Read selected services from JSON
     local selected_services=($(jq -r '.services[].key' "$SERVICES_FILE"))
 
-    if [[ ${#selected_services[@]}} -eq 0 ]]; then
+    if [[ ${#selected_services[@]} -eq 0 ]]; then
         print_info "No services selected, skipping configuration"
         return 0
     fi
@@ -1142,7 +1459,7 @@ collect_configurations() {
     echo ""
     print_header "🔧 Service Configuration"
     echo ""
-    print_info "Collecting configuration for ${#selected_services[@]}} services"
+    print_info "Collecting configuration for ${#selected_services[@]} services"
     echo ""
 
     # Initialize .env file
@@ -1184,7 +1501,7 @@ EOF
 
         if [[ -n "$configs" ]]; then
             IFS=',' read -ra CONFIG_ARRAY <<< "$configs"
-            for config in "${CONFIG_ARRAY[@]"; do
+            for config in "${CONFIG_ARRAY[@]}"; do
                 if [[ -z "${collected_configs[$config]}" ]]; then
                     all_required_configs+=("$config")
                     collected_configs[$config]=1
@@ -1203,7 +1520,7 @@ EOF
     echo ""
 
     # Collect each configuration
-    for config_key in "${all_required_configs[@]"; do
+    for config_key in "${all_required_configs[@]}"; do
         collect_config_value "$config_key"
     done
 
@@ -1211,17 +1528,17 @@ EOF
     echo "" >> "$ENV_FILE"
     echo "# Common Settings" >> "$ENV_FILE"
 
-    collect_input "TIMEZONE" "Timezone (e.g., America/New_York)" "UTC" false
+    prompt_input "TIMEZONE" "Timezone (e.g., America/New_York)" "UTC" false
     echo "TIMEZONE=$INPUT_RESULT" >> "$ENV_FILE"
 
-    collect_input "LOG_LEVEL" "Log level (debug/info/warn/error)" "info" false
+    prompt_input "LOG_LEVEL" "Log level (debug/info/warn/error)" "info" false
     echo "LOG_LEVEL=$INPUT_RESULT" >> "$ENV_FILE"
 
     # Generate common secrets
     echo "" >> "$ENV_FILE"
     echo "# Generated Secrets" >> "$ENV_FILE"
-    echo "MASTER_SECRET=$(generate_password 64)" >> "$ENV_FILE"
-    echo "ENCRYPTION_KEY=$(generate_password 32)" >> "$ENV_FILE"
+    echo "MASTER_SECRET=$(generate_random_password 64)" >> "$ENV_FILE"
+    echo "ENCRYPTION_KEY=$(generate_random_password 32)" >> "$ENV_FILE"
 
     print_success "Configuration saved to $ENV_FILE"
 
@@ -1239,87 +1556,87 @@ collect_config_value() {
     case "$config_key" in
         # Domain & DNS
         "domain")
-            collect_input "DOMAIN" "Primary domain name" "" true "validate_domain"
+            prompt_input "DOMAIN" "Primary domain name" "" true "validate_domain"
             echo "DOMAIN=$INPUT_RESULT" >> "$ENV_FILE"
             ;;
 
         # Email
         "email")
-            collect_input "ADMIN_EMAIL" "Administrator email" "" true "validate_email"
+            prompt_input "ADMIN_EMAIL" "Administrator email" "" true "validate_email"
             echo "ADMIN_EMAIL=$INPUT_RESULT" >> "$ENV_FILE"
             ;;
 
         # Cloudflare
         "cloudflare_token")
-            collect_input "CLOUDFLARE_API_TOKEN" "Cloudflare API Token" "" false
+            prompt_input "CLOUDFLARE_API_TOKEN" "Cloudflare API Token" "" false
             echo "CLOUDFLARE_API_TOKEN=$INPUT_RESULT" >> "$ENV_FILE"
 
-            collect_input "CLOUDFLARE_ZONE_ID" "Cloudflare Zone ID" "" false
+            prompt_input "CLOUDFLARE_ZONE_ID" "Cloudflare Zone ID" "" false
             echo "CLOUDFLARE_ZONE_ID=$INPUT_RESULT" >> "$ENV_FILE"
             ;;
 
         # Tailscale
         "auth_key")
-            collect_input "TAILSCALE_AUTH_KEY" "Tailscale Auth Key" "" false
+            prompt_input "TAILSCALE_AUTH_KEY" "Tailscale Auth Key" "" false
             echo "TAILSCALE_AUTH_KEY=$INPUT_RESULT" >> "$ENV_FILE"
             ;;
 
         "tailnet")
-            collect_input "TAILSCALE_TAILNET" "Tailscale Tailnet name" "" false
+            prompt_input "TAILSCALE_TAILNET" "Tailscale Tailnet name" "" false
             echo "TAILSCALE_TAILNET=$INPUT_RESULT" >> "$ENV_FILE"
             ;;
 
         # Database passwords
         "postgres_password")
-            local pg_pass=$(generate_password 32)
+            local pg_pass=$(generate_random_password 32)
             echo "POSTGRES_PASSWORD=$pg_pass" >> "$ENV_FILE"
             print_success "Generated PostgreSQL password"
             ;;
 
         "redis_password")
-            local redis_pass=$(generate_password 32)
+            local redis_pass=$(generate_random_password 32)
             echo "REDIS_PASSWORD=$redis_pass" >> "$ENV_FILE"
             print_success "Generated Redis password"
             ;;
 
         "mongo_password")
-            local mongo_pass=$(generate_password 32)
+            local mongo_pass=$(generate_random_password 32)
             echo "MONGO_PASSWORD=$mongo_pass" >> "$ENV_FILE"
             print_success "Generated MongoDB password"
             ;;
 
         # API Keys
         "qdrant_api_key")
-            local qdrant_key=$(generate_password 32)
+            local qdrant_key=$(generate_random_password 32)
             echo "QDRANT_API_KEY=$qdrant_key" >> "$ENV_FILE"
             print_success "Generated Qdrant API key"
             ;;
 
         "litellm_master_key")
-            local litellm_key=$(generate_password 32)
+            local litellm_key=$(generate_random_password 32)
             echo "LITELLM_MASTER_KEY=$litellm_key" >> "$ENV_FILE"
             print_success "Generated LiteLLM master key"
             ;;
 
         "openai_api_key")
-            collect_input "OPENAI_API_KEY" "OpenAI API Key (or skip)" "" false
+            prompt_input "OPENAI_API_KEY" "OpenAI API Key (or skip)" "" false
             echo "OPENAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
             ;;
 
         # OAuth
         "google_client_id")
-            collect_input "GOOGLE_CLIENT_ID" "Google OAuth Client ID" "" false
+            prompt_input "GOOGLE_CLIENT_ID" "Google OAuth Client ID" "" false
             echo "GOOGLE_CLIENT_ID=$INPUT_RESULT" >> "$ENV_FILE"
             ;;
 
         "google_client_secret")
-            collect_input "GOOGLE_CLIENT_SECRET" "Google OAuth Client Secret" "" false
+            prompt_input "GOOGLE_CLIENT_SECRET" "Google OAuth Client Secret" "" false
             echo "GOOGLE_CLIENT_SECRET=$INPUT_RESULT" >> "$ENV_FILE"
             ;;
 
         # JWT Secrets
         "jwt_secret"|"n8n_encryption_key"|"ap_encryption_key"|"windmill_token"|"quivr_jwt_secret"|"danswer_secret"|"searxng_secret"|"meili_master_key")
-            local secret=$(generate_password 64)
+            local secret=$(generate_random_password 64)
             local var_name=$(echo "$config_key" | tr '[:lower:]' '[:upper:]')
             echo "${var_name}=$secret" >> "$ENV_FILE"
             print_success "Generated $config_key"
@@ -1327,12 +1644,12 @@ collect_config_value() {
 
         # Admin credentials
         "admin_password")
-            collect_input "ADMIN_PASSWORD" "Admin password (min 12 chars)" "" true "validate_password"
+            prompt_input "ADMIN_PASSWORD" "Admin password (min 12 chars)" "" true "validate_password"
             echo "ADMIN_PASSWORD=$INPUT_RESULT" >> "$ENV_FILE"
             ;;
 
         "grafana_password"|"code_password"|"seafile_admin_password"|"anything_llm_password")
-            local pass=$(generate_password 24)
+            local pass=$(generate_random_password 24)
             local var_name=$(echo "$config_key" | tr '[:lower:]' '[:upper:]')
             echo "${var_name}=$pass" >> "$ENV_FILE"
             print_success "Generated $config_key"
@@ -1340,44 +1657,44 @@ collect_config_value() {
 
         # MinIO
         "minio_root_user")
-            collect_input "MINIO_ROOT_USER" "MinIO root username" "minioadmin" false
+            prompt_input "MINIO_ROOT_USER" "MinIO root username" "minioadmin" false
             echo "MINIO_ROOT_USER=$INPUT_RESULT" >> "$ENV_FILE"
             ;;
 
         "minio_root_password")
-            local minio_pass=$(generate_password 32)
+            local minio_pass=$(generate_random_password 32)
             echo "MINIO_ROOT_PASSWORD=$minio_pass" >> "$ENV_FILE"
             print_success "Generated MinIO password"
             ;;
 
         # Signal
         "signal_phone")
-            collect_input "SIGNAL_PHONE" "Signal phone number (+1234567890)" "" false "validate_phone"
+            prompt_input "SIGNAL_PHONE" "Signal phone number (+1234567890)" "" false "validate_phone"
             echo "SIGNAL_PHONE=$INPUT_RESULT" >> "$ENV_FILE"
             ;;
 
         "signal_password")
-            local signal_pass=$(generate_password 32)
+            local signal_pass=$(generate_random_password 32)
             echo "SIGNAL_PASSWORD=$signal_pass" >> "$ENV_FILE"
             print_success "Generated Signal password"
             ;;
 
         # Jupyter
         "jupyter_token")
-            local jupyter_token=$(generate_password 48)
+            local jupyter_token=$(generate_random_password 48)
             echo "JUPYTER_TOKEN=$jupyter_token" >> "$ENV_FILE"
             print_success "Generated Jupyter token"
             ;;
 
         # Prometheus
         "prometheus_retention")
-            collect_input "PROMETHEUS_RETENTION" "Prometheus data retention (e.g., 15d)" "15d" false
+            prompt_input "PROMETHEUS_RETENTION" "Prometheus data retention (e.g., 15d)" "15d" false
             echo "PROMETHEUS_RETENTION=$INPUT_RESULT" >> "$ENV_FILE"
             ;;
 
         # Seafile
         "seafile_admin_email")
-            collect_input "SEAFILE_ADMIN_EMAIL" "Seafile admin email" "$ADMIN_EMAIL" true "validate_email"
+            prompt_input "SEAFILE_ADMIN_EMAIL" "Seafile admin email" "$ADMIN_EMAIL" true "validate_email"
             echo "SEAFILE_ADMIN_EMAIL=$INPUT_RESULT" >> "$ENV_FILE"
             ;;
 
@@ -2276,12 +2593,12 @@ EOF
   "ollama": {
     "version": "$(ollama --version 2>/dev/null | awk '{print $NF}')",
     "service_active": $(systemctl is-active --quiet ollama && echo "true" || echo "false"),
-    "models_count": ${#ollama_models[@]}},
+    "models_count": ${#ollama_models[@]},
     "models": [
 EOF
 
     local first=true
-    for model in "${ollama_models[@]}}"; do
+    for model in "${ollama_models[@]}"; do
         if [[ "$first" == false ]]; then
             echo "," >> "$summary_json"
         fi
@@ -2377,7 +2694,7 @@ main() {
     select_services
 
     # Phase 8: Collect configs
-    collect_service_configs
+    collect_configurations
 
     # Phase 9: Create directories
     create_directory_structure
