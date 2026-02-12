@@ -1098,31 +1098,34 @@ declare -A SERVICE_CATALOG
 
 # Format: "service_key:display_name:description:category:dependencies:requires_config"
 
-SERVICE_CATALOG=(
-    # Core Infrastructure
-    ["traefik"]="traefik:Traefik:Reverse proxy & SSL termination:infrastructure::domain,email,cloudflare_token"
-    ["tailscale"]="tailscale:Tailscale:VPN mesh network:infrastructure::auth_key,tailnet"
-    ["portainer"]="portainer:Portainer:Container management UI:infrastructure::"
+# Core Infrastructure
+["traefik"]="traefik:Traefik:Modern reverse proxy & SSL termination:infrastructure::domain,email,cloudflare_token"
+["nginx"]="nginx:Nginx:Traditional reverse proxy:infrastructure::domain,email"
+["caddy"]="caddy:Caddy:Automatic HTTPS with zero config:infrastructure::domain,email"
+["portainer"]="portainer:Portainer:Container management UI:infrastructure::"
+["tailscale"]="tailscale:Tailscale:VPN mesh network:infrastructure::auth_key,tailnet"
 
-    # Databases
-    ["postgres"]="postgres:PostgreSQL:Relational database:database::postgres_password"
-    ["redis"]="redis:Redis:In-memory cache:database::redis_password"
-    ["mongodb"]="mongodb:MongoDB:Document database:database::mongo_password"
+# Databases
+["postgres"]="postgres:PostgreSQL:Relational database:database::postgres_password"
+["redis"]="redis:Redis:In-memory cache:database::redis_password"
+["mongodb"]="mongodb:MongoDB:Document database:database::mongo_password"
 
-    # Vector Databases
-    ["qdrant"]="qdrant:Qdrant:Vector database:vector_db::qdrant_api_key"
-    ["weaviate"]="weaviate:Weaviate:Vector database with ML:vector_db::"
-    ["milvus"]="milvus:Milvus:Scalable vector database:vector_db::milvus_password"
-    ["chroma"]="chroma:ChromaDB:Embeddings database:vector_db::"
+# Vector Databases
+["qdrant"]="qdrant:Qdrant:Vector database:vector_db::qdrant_api_key"
+["weaviate"]="weaviate:Weaviate:Vector database with ML:vector_db::weaviate_password"
+["milvus"]="milvus:Milvus:Scalable vector database:vector_db::milvus_password"
+["chroma"]="chroma:ChromaDB:Embeddings database:vector_db::"
 
-    # AI Chat Interfaces
-    ["librechat"]="librechat:LibreChat:Multi-provider chat UI:ai_chat:postgres:google_client_id,google_client_secret,jwt_secret"
-    ["openwebui"]="openwebui:Open WebUI:Ollama web interface:ai_chat::admin_email,admin_password"
-    ["chatgpt_ui"]="chatgpt_ui:ChatGPT UI:ChatGPT-like interface:ai_chat::openai_api_key"
+# AI Chat Interfaces
+["openwebui"]="openwebui:Open WebUI:Ollama web interface:ai_chat::admin_email,admin_password"
+["anythingllm"]="anythingllm:AnythingLLM:Document-based AI chat:ai_chat::postgres,qdrant:admin_password"
+["librechat"]="librechat:LibreChat:Multi-provider chat UI:ai_chat::postgres:google_client_id,google_client_secret,jwt_secret"
+["chatgpt_ui"]="chatgpt_ui:ChatGPT UI:ChatGPT-like interface:ai_chat::openai_api_key"
 
-    # LLM Infrastructure
-    ["litellm"]="litellm:LiteLLM:LLM proxy & load balancer:llm::litellm_master_key,openai_api_key"
-    ["ollama_webui"]="ollama_webui:Ollama WebUI:Ollama management:llm::"
+# LLM Infrastructure
+["litellm"]="litellm:LiteLLM:LLM proxy & load balancer:llm::litellm_master_key,openai_api_key,anthropic_api_key,google_api_key,groq_api_key"
+["ollama_webui"]="ollama_webui:Ollama WebUI:Ollama management:llm::"
+["localai"]="localai:LocalAI:OpenAI-compatible API:llm::"
     ["localai"]="localai:LocalAI:OpenAI-compatible API:llm::"
 
     # Communication
@@ -1230,208 +1233,268 @@ check_dependencies() {
 
 select_services() {
     log_phase "7" "🎯 Service Selection"
-
-    local selected_services=()
-    local -A selected_map
-
-    # Group services by category
-    local -A category_services
-    for service_key in "${!SERVICE_CATALOG[@]}"; do
-        local category=$(get_service_info "$service_key" "category")
-        if [[ -z "${category_services[$category]}" ]]; then
-            category_services[$category]="$service_key"
-        else
-            category_services[$category]="${category_services[$category]} $service_key"
-        fi
-    done
-
+    
     echo ""
     print_header "📋 Available Services"
     echo ""
     print_info "Select services to deploy. Dependencies will be auto-selected."
     echo ""
-
-    # Display services by category
-    local service_number=1
-    local -A number_to_service
-
-    for category in "${!SERVICE_CATEGORIES[@]"; do
-        if [[ -n "${category_services[$category]}" ]]; then
-            echo ""
-            echo "${SERVICE_CATEGORIES[$category]}"
-            echo "$(printf '─%.0s' {1..60})"
-
-            for service_key in ${category_services[$category]}; do
-                local display_name=$(get_service_info "$service_key" "display_name")
-                local description=$(get_service_info "$service_key" "description")
-                local deps=$(get_service_info "$service_key" "dependencies")
-
-                printf "  [%2d] %-18s - %s" "$service_number" "$display_name" "$description"
-
-                if [[ -n "$deps" ]]; then
-                    echo -e "${YELLOW} (needs: $deps)${NC}"
-                else
-                    echo ""
-                fi
-
-                number_to_service[$service_number]="$service_key"
-                ((service_number++))
+    
+    # AI Applications Selection
+    echo "🤖 AI Applications:"
+    echo "  [1] Open WebUI - Modern ChatGPT-like interface"
+    echo "  [2] AnythingLLM - Document-based AI chat (SELECTED)"
+    echo "  [3] Dify - LLM application development platform"
+    echo "  [4] n8n - Workflow automation platform"
+    echo "  [5] Flowise - Visual LangChain builder"
+    echo ""
+    
+    # LLM Infrastructure Selection
+    echo "🤖 LLM Infrastructure:"
+    echo "  [6] Ollama - Local LLM runtime (SELECTED)"
+    echo "  [7] LiteLLM - Multi-provider proxy + routing (SELECTED)"
+    echo ""
+    
+    # Communication & Integration Selection
+    echo "📱 Communication & Integration:"
+    echo "  [8] Signal API - Private messaging (SELECTED)"
+    echo "  [9] OpenClaw UI - Multi-channel orchestration"
+    echo ""
+    
+    # Vector Database Selection (Qdrant already selected)
+    echo "🧠 Vector Database:"
+    echo "  [10] Qdrant - High-performance vector DB (SELECTED)"
+    echo ""
+    
+    # Monitoring Selection
+    echo "📊 Monitoring:"
+    echo "  [11] Prometheus + Grafana - Metrics and visualization (SELECTED)"
+    echo ""
+    
+    echo "Select services to toggle (space-separated, e.g., '1 3 6'):"
+    echo "Or enter 'all' to select all recommended services"
+    echo ""
+    
+    local -A selected_map=(
+        ["openwebui"]=1
+        ["anythingllm"]=1
+        ["dify"]=1
+        ["n8n"]=1
+        ["flowise"]=1
+        ["ollama"]=1
+        ["litellm"]=1
+        ["signal-api"]=1
+        ["openclaw"]=1
+        ["qdrant"]=1
+        ["prometheus"]=1
+        ["grafana"]=1
+    )
+    
+    while true; do
+        print_info "Enter selection: "
+        read -r selection
+        
+        if [[ "$selection" == "all" ]]; then
+            for service in "${!selected_map[@]}"; do
+                selected_map[$service]=1
             done
-        fi
-    done
-
-    echo ""
-    echo "$(printf '═%.0s' {1..60})"
-    echo ""
-    print_info "Enter service numbers (space-separated, e.g., '1 5 12 18'):"
-    print_info "Or enter 'all' for all services, 'none' to skip:"
-    echo ""
-    read -r -p "Selection: " selection
-
-    # Process selection
-    if [[ "$selection" == "none" ]]; then
-        print_info "No services selected"
-        return 0
-    elif [[ "$selection" == "all" ]]; then
-        for service_key in "${!SERVICE_CATALOG[@]}"; do
-            selected_services+=("$service_key")
-            selected_map[$service_key]=1
-        done
-        print_success "All services selected"
-    else
-        # Parse individual selections
-        for num in $selection; do
-            if [[ "$num" =~ ^[0-9]+$ ]] && [[ -n "${number_to_service[$num]}" ]]; then
-                local service_key="${number_to_service[$num]}"
-                selected_services+=("$service_key")
-                selected_map[$service_key]=1
-            else
-                print_warn "Invalid selection: $num (skipped)"
-            fi
-        done
-    fi
-
-    # Auto-select dependencies
-    echo ""
-    print_info "Checking dependencies..."
-
-    local deps_added=0
-    local max_iterations=10
-    local iteration=0
-
-    while [[ $iteration -lt $max_iterations ]]; do
-        local added_this_round=0
-
-        for service_key in "${selected_services[@]}"; do
-            local deps=$(get_service_info "$service_key" "dependencies")
-
-            if [[ -n "$deps" ]]; then
-                IFS=',' read -ra DEP_ARRAY <<< "$deps"
-
-                for dep in "${DEP_ARRAY[@]}"; do
-                    if [[ -z "${selected_map[$dep]}" ]]; then
-                        selected_services+=("$dep")
-                        selected_map[$dep]=1
-
-                        local dep_name=$(get_service_info "$dep" "display_name")
-                        print_success "Auto-selected dependency: $dep_name"
-
-                        ((deps_added++))
-                        ((added_this_round++))
-                    fi
-                done
-            fi
-        done
-
-        if [[ $added_this_round -eq 0 ]]; then
+            print_success "All recommended services selected"
             break
+        elif [[ "$selection" =~ ^[0-9]+$ ]]; then
+            for num in $selection; do
+                if [[ $num -ge 1 ]] && [[ $num -le 11 ]]; then
+                    local service_name
+                    case $num in
+                        1) service_name="openwebui" ;;
+                        2) service_name="anythingllm" ;;
+                        3) service_name="dify" ;;
+                        4) service_name="n8n" ;;
+                        5) service_name="flowise" ;;
+                        6) service_name="ollama" ;;
+                        7) service_name="litellm" ;;
+                        8) service_name="signal-api" ;;
+                        9) service_name="openclaw" ;;
+                        10) service_name="qdrant" ;;
+                        11) service_name="prometheus" ;;
+                        *) print_warn "Invalid selection: $num"; continue ;;
+                    esac
+                    
+                    if [[ -n "${selected_map[$service_name]:-}" ]]; then
+                        selected_map[$service_name]=1
+                        print_success "Added: $(get_service_display_name "$service_name")"
+                    else
+                        selected_map[$service_name]=0
+                        print_info "Removed: $(get_service_display_name "$service_name")"
+                    fi
+                else
+                    print_warn "Invalid selection: $num (must be 1-11)"
+                fi
+            done
+            break
+        else
+            print_error "Invalid selection. Please enter numbers 1-11 or 'all'"
         fi
-
-        ((iteration++))
     done
-
-    if [[ $deps_added -gt 0 ]]; then
-        echo ""
-        print_success "$deps_added dependencies auto-selected"
+    
+    # Convert selected services to array
+    local selected_services=()
+    for service in "${!selected_map[@]}"; do
+        if [[ "${selected_map[$service]}" == "1" ]]; then
+            selected_services+=("$service")
+        fi
+    done
+    
+    if [[ ${#selected_services[@]} -eq 0 ]]; then
+        print_error "No services selected"
+        return 1
     fi
-
+    
     # Display final selection
     echo ""
     print_header "✅ Selected Services (${#selected_services[@]})"
     echo ""
-
-    for category in "${!SERVICE_CATEGORIES[@]}"; do
-        local category_has_services=false
-        local category_list=""
-
-        for service_key in "${selected_services[@]}"; do
-            if [[ "$(get_service_info "$service_key" "category")" == "$category" ]]; then
-                category_has_services=true
-                local display_name=$(get_service_info "$service_key" "display_name")
-                category_list="${category_list}  • $display_name\n"
-            fi
-        done
-
-        if [[ "$category_has_services" == true ]]; then
-            echo "${SERVICE_CATEGORIES[$category]}"
-            echo -e "$category_list"
-        fi
+    
+    for service in "${selected_services[@]}"; do
+        echo "  • $(get_service_display_name "$service")"
     done
-
+    
     # Confirm selection
     echo ""
     if ! confirm "Proceed with these services?"; then
         print_info "Service selection cancelled"
         return 1
     fi
-
+    
     # Save selected services to JSON
     mkdir -p "$METADATA_DIR"
-
+    
     cat > "$SERVICES_FILE" <<EOF
 {
   "selection_time": "$(date -Iseconds)",
   "total_services": ${#selected_services[@]},
   "services": [
 EOF
-
+    
     local first=true
     for service_key in "${selected_services[@]}"; do
         if [[ "$first" == false ]]; then
             echo "," >> "$SERVICES_FILE"
         fi
         first=false
-
-        local display_name=$(get_service_info "$service_key" "display_name")
-        local description=$(get_service_info "$service_key" "description")
-        local category=$(get_service_info "$service_key" "category")
-        local deps=$(get_service_info "$service_key" "dependencies")
-        local configs=$(get_service_info "$service_key" "requires_config")
-
+        
         cat >> "$SERVICES_FILE" <<EOF
     {
       "key": "$service_key",
-      "display_name": "$display_name",
-      "description": "$description",
-      "category": "$category",
-      "dependencies": [$(echo "$deps" | sed 's/,/", "/g' | sed 's/^/"/' | sed 's/$/"/')]",
-      "required_configs": [$(echo "$configs" | sed 's/,/", "/g' | sed 's/^/"/' | sed 's/$/"/')]"
+      "display_name": "$(get_service_display_name "$service_key")",
+      "description": "$(get_service_description "$service_key")",
+      "category": "$(get_service_category "$service_key")",
+      "dependencies": [$(get_service_dependencies "$service_key")],
+      "required_configs": [$(get_service_configs "$service_key")]
     }
 EOF
     done
-
+    
     cat >> "$SERVICES_FILE" <<EOF
 
   ]
 }
 EOF
-
+    
     print_success "Service selection saved to $SERVICES_FILE"
-
+    
     # Export selected services for next phase
     export SELECTED_SERVICES="${selected_services[@]}"
-
+    
     return 0
+}
+
+# Helper functions for service selection
+get_service_display_name() {
+    local service_key="$1"
+    case "$service_key" in
+        "openwebui") echo "Open WebUI" ;;
+        "anythingllm") echo "AnythingLLM" ;;
+        "dify") echo "Dify" ;;
+        "n8n") echo "n8n" ;;
+        "flowise") echo "Flowise" ;;
+        "ollama") echo "Ollama" ;;
+        "litellm") echo "LiteLLM" ;;
+        "signal-api") echo "Signal API" ;;
+        "openclaw") echo "OpenClaw UI" ;;
+        "qdrant") echo "Qdrant" ;;
+        "prometheus") echo "Prometheus" ;;
+        "grafana") echo "Grafana" ;;
+        *) echo "$service_key" ;;
+    esac
+}
+
+get_service_description() {
+    local service_key="$1"
+    case "$service_key" in
+        "openwebui") echo "Modern ChatGPT-like interface" ;;
+        "anythingllm") echo "Document-based AI chat" ;;
+        "dify") echo "LLM application development platform" ;;
+        "n8n") echo "Workflow automation platform" ;;
+        "flowise") echo "Visual LangChain builder" ;;
+        "ollama") echo "Local LLM runtime" ;;
+        "litellm") echo "Multi-provider proxy + routing" ;;
+        "signal-api") echo "Private messaging" ;;
+        "openclaw") echo "Multi-channel orchestration" ;;
+        "qdrant") echo "High-performance vector DB" ;;
+        "prometheus") echo "Metrics collection" ;;
+        "grafana") echo "Metrics visualization" ;;
+        *) echo "Service" ;;
+    esac
+}
+
+get_service_category() {
+    local service_key="$1"
+    case "$service_key" in
+        "openwebui"|"anythingllm"|"dify"|"n8n"|"flowise") echo "ai_applications" ;;
+        "ollama"|"litellm") echo "llm_infrastructure" ;;
+        "signal-api"|"openclaw") echo "communication" ;;
+        "qdrant") echo "vector_database" ;;
+        "prometheus"|"grafana") echo "monitoring" ;;
+        *) echo "other" ;;
+    esac
+}
+
+get_service_dependencies() {
+    local service_key="$1"
+    case "$service_key" in
+        "openwebui") echo "ollama,litellm" ;;
+        "anythingllm") echo "ollama,qdrant" ;;
+        "dify") echo "postgres,redis,qdrant" ;;
+        "n8n") echo "postgres,redis" ;;
+        "flowise") echo "postgres,redis" ;;
+        "ollama") echo "" ;;
+        "litellm") echo "postgres,redis" ;;
+        "signal-api") echo "" ;;
+        "openclaw") echo "signal-api" ;;
+        "qdrant") echo "" ;;
+        "prometheus") echo "" ;;
+        "grafana") echo "prometheus" ;;
+        *) echo "" ;;
+    esac
+}
+
+get_service_configs() {
+    local service_key="$1"
+    case "$service_key" in
+        "openwebui") echo "admin_password" ;;
+        "anythingllm") echo "admin_password" ;;
+        "dify") echo "dify_secret_key,jwt_secret" ;;
+        "n8n") echo "n8n_encryption_key" ;;
+        "flowise") echo "flowise_encryption_key" ;;
+        "ollama") echo "" ;;
+        "litellm") echo "litellm_master_key,openai_api_key,anthropic_api_key,google_api_key,groq_api_key" ;;
+        "signal-api") echo "signal_phone,signal_password" ;;
+        "openclaw") echo "openclaw_api_key" ;;
+        "qdrant") echo "qdrant_api_key" ;;
+        "prometheus") echo "" ;;
+        "grafana") echo "grafana_password" ;;
+        *) echo "" ;;
+    esac
 }
 
 #───────────────────────────────────────────────────────────────────────────────
