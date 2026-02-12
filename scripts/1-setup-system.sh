@@ -1,2413 +1,1887 @@
 #!/bin/bash
 
-#═══════════════════════════════════════════════════════════════════════════════
-# AI Platform Automation - Script 1: System Setup & Configuration Collection
-#═══════════════════════════════════════════════════════════════════════════════
-# 
-# Purpose: Initialize system, detect hardware, collect ALL service configurations
-# 
-# Phases:
-#   1. System Requirements Check
-#   2. Hardware Detection
-#   3. Storage Configuration
-#   4. Docker Installation
-#   5. NVIDIA Container Toolkit (if GPU detected)
-#   6. Ollama Installation
-#   7. Service Selection & Configuration Collection
-#   8. Directory Structure & Validation
-#
-# Output: 
-#   - /mnt/data/env/.env (all configuration variables)
-#   - /mnt/data/metadata/selected-services.json
-#   - /mnt/data/metadata/system-info.json
-#
-#═══════════════════════════════════════════════════════════════════════════════
+#==============================================================================
+# Script 1: System Setup & Configuration Collection
+# Purpose: Complete system preparation with interactive UI
+# Version: 4.0.0
+#==============================================================================
 
 set -euo pipefail
 
-#───────────────────────────────────────────────────────────────────────────────
-# GLOBAL VARIABLES
-#───────────────────────────────────────────────────────────────────────────────
-
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly ROOT_PATH="$(dirname "$SCRIPT_DIR")"
-readonly LOG_DIR="${ROOT_PATH}/logs"
-readonly LOG_FILE="${LOG_DIR}/1-setup-system-$(date +%Y%m%d-%H%M%S).log"
-
-# Data paths
-readonly DATA_ROOT="/mnt/data"
-readonly ENV_FILE="${DATA_ROOT}/env/.env"
-readonly METADATA_DIR="${DATA_ROOT}/metadata"
-readonly SERVICES_FILE="${METADATA_DIR}/selected-services.json"
-readonly SYSTEM_INFO_FILE="${METADATA_DIR}/system-info.json"
-
-# Minimum requirements
-readonly MIN_RAM_GB=16
-readonly MIN_STORAGE_GB=100
-readonly REQUIRED_UBUNTU_VERSION="24.04"
-
-#───────────────────────────────────────────────────────────────────────────────
-# COLOR CODES & FORMATTING
-#───────────────────────────────────────────────────────────────────────────────
-
+# Color definitions
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
 readonly BLUE='\033[0;34m'
-readonly MAGENTA='\033[0;35m'
 readonly CYAN='\033[0;36m'
-readonly WHITE='\033[1;37m'
-readonly NC='\033[0m' # No Color
+readonly NC='\033[0m'
 readonly BOLD='\033[1m'
 
-#───────────────────────────────────────────────────────────────────────────────
-# LOGGING FUNCTIONS
-#───────────────────────────────────────────────────────────────────────────────
+# Paths
+readonly DATA_ROOT="/mnt/data"
+readonly METADATA_DIR="$DATA_ROOT/metadata"
+readonly STATE_FILE="$METADATA_DIR/setup_state.json"
+readonly LOG_FILE="$DATA_ROOT/logs/setup.log"
+readonly ENV_FILE="$DATA_ROOT/.env"
+readonly SERVICES_FILE="$METADATA_DIR/selected_services.json"
 
-setup_logging() {
-    mkdir -p "$LOG_DIR"
-    exec 1> >(tee -a "$LOG_FILE")
-    exec 2>&1
-    log_info "Logging initialized: $LOG_FILE"
+# UI Functions
+print_banner() {
+    clear
+    echo -e "${CYAN}${BOLD}"
+    echo "╔════════════════════════════════════════════════════════════════════╗"
+    echo "║            AI PLATFORM AUTOMATION - SETUP                      ║"
+    echo "║                      Version 4.0.0                               ║"
+    echo "║                Configuration Collection Only                ║"
+    echo "╚════════════════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    echo ""
 }
 
-log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
-}
-
-log_info() {
-    echo -e "${BLUE}ℹ${NC} $*" | tee -a "$LOG_FILE"
-}
-
-log_success() {
-    echo -e "${GREEN}✓${NC} $*" | tee -a "$LOG_FILE"
-}
-
-log_warn() {
-    echo -e "${YELLOW}⚠${NC} $*" | tee -a "$LOG_FILE"
-}
-
-log_error() {
-    echo -e "${RED}✗${NC} $*" | tee -a "$LOG_FILE"
-}
-
-log_section() {
-    echo "" | tee -a "$LOG_FILE"
-    echo -e "${CYAN}══════════════════════════════════════════════════════════${NC}" | tee -a "$LOG_FILE"
-    echo -e "${WHITE}${BOLD}  $*${NC}" | tee -a "$LOG_FILE"
-    echo -e "${CYAN}══════════════════════════════════════════════════════════${NC}" | tee -a "$LOG_FILE"
-    echo "" | tee -a "$LOG_FILE"
-}
-
-log_phase() {
-    echo "" | tee -a "$LOG_FILE"
-    echo -e "${MAGENTA}[PHASE $1]${NC} ${BOLD}$2${NC}" | tee -a "$LOG_FILE"
+print_header() {
+    local title="$1"
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  $title"
+    echo -e "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
 }
 
 print_success() {
-    echo -e "  ${GREEN}✓${NC} $*"
-}
-
-print_error() {
-    echo -e "  ${RED}✗${NC} $*"
-}
-
-print_warn() {
-    echo -e "  ${YELLOW}⚠${NC} $*"
+    echo -e "${GREEN}✅ $1${NC}"
 }
 
 print_info() {
-    echo -e "  ${BLUE}→${NC} $*"
+    echo -e "${BLUE}ℹ️  $1${NC}"
 }
 
-#───────────────────────────────────────────────────────────────────────────────
-# VALIDATION FUNCTIONS
-#───────────────────────────────────────────────────────────────────────────────
-
-check_root() {
-    if [[ $EUID -ne 0 ]]; then
-        log_error "This script must be run as root"
-        exit 1
-    fi
+print_warn() {
+    echo -e "${YELLOW}⚠️  $1${NC}"
 }
 
-validate_email() {
-    local email="$1"
-    if [[ "$email" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
-        return 0
-    else
-        return 1
-    fi
+print_error() {
+    echo -e "${RED}❌ $1${NC}"
 }
 
-validate_domain() {
-    local domain="$1"
-    if [[ "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-validate_phone() {
-    local phone="$1"
-    # Validate format: +[country code][number]
-    if [[ "$phone" =~ ^\+[1-9][0-9]{7,14}$ ]]; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-validate_password() {
-    local password="$1"
-    local min_length=8
+log_phase() {
+    local phase="$1"
+    local icon="$2"
+    local title="$3"
     
-    if [[ ${#password} -lt $min_length ]]; then
-        echo "Password must be at least $min_length characters"
-        return 1
-    fi
-    
-    return 0
+    echo ""
+    print_header "$icon STEP $phase/13: $title"
 }
 
-#───────────────────────────────────────────────────────────────────────────────
-# INPUT COLLECTION FUNCTIONS
-#───────────────────────────────────────────────────────────────────────────────
-
-prompt_input() {
-    local prompt="$1"
-    local var_name="$2"
-    local default="${3:-}"
-    local secret="${4:-false}"
-    local validation_func="${5:-}"
+confirm() {
+    local message="$1"
+    local default="${2:-n}"
+    local response
     
     while true; do
-        if [[ -n "$default" ]]; then
-            print_info "$prompt [$default]: "
+        if [[ "$default" == "y" ]]; then
+            echo -n -e "${YELLOW}$message [Y/n]:${NC} "
         else
-            print_info "$prompt: "
-        fi
-        
-        if [[ "$secret" == "true" ]]; then
-            read -s input
-            echo ""
-        else
-            read -r input
-        fi
-        
-        # Use default if empty
-        if [[ -z "$input" ]] && [[ -n "$default" ]]; then
-            input="$default"
-        fi
-        
-        # Validate if function provided
-        if [[ -n "$validation_func" ]]; then
-            if $validation_func "$input"; then
-                eval "$var_name='$input'"
-                return 0
-            else
-                print_error "Invalid input. Please try again."
-                continue
-            fi
-        fi
-        
-        # No validation needed
-        if [[ -n "$input" ]]; then
-            eval "$var_name='$input'"
-            return 0
-        fi
-        
-        print_error "Input cannot be empty. Please try again."
-    done
-}
-
-prompt_yes_no() {
-    local prompt="$1"
-    local default="${2:-Y}"
-    
-    while true; do
-        if [[ "$default" == "Y" ]]; then
-            print_info "$prompt [Y/n]: "
-        else
-            print_info "$prompt [y/N]: "
+            echo -n -e "${YELLOW}$message [y/N]:${NC} "
         fi
         
         read -r response
+        response=${response:-$default}
         
-        # Use default if empty
-        if [[ -z "$response" ]]; then
-            response="$default"
-        fi
-        
-        case "${response^^}" in
-            Y|YES)
-                return 0
-                ;;
-            N|NO)
-                return 1
-                ;;
-            *)
-                print_error "Please answer Y or N"
-                ;;
+        case "$response" in
+            [Yy]|[Yy][Ee][Ss]) return 0 ;;
+            [Nn]|[Nn][Oo]) return 1 ;;
+            *) echo "Please enter y or n" ;;
         esac
     done
 }
 
+prompt_input() {
+    local var_name="$1"
+    local prompt="$2"
+    local default="$3"
+    local is_password="${4:-false}"
+    local validation="${5:-}"
+    
+    while true; do
+        if [[ "$is_password" == "true" ]]; then
+            echo -n -e "${YELLOW}$prompt [${NC}*****${YELLOW}]:${NC} "
+            read -r -s INPUT_RESULT
+            echo ""
+        else
+            if [[ -n "$default" ]]; then
+                echo -n -e "${YELLOW}$prompt [${NC}$default${YELLOW}]:${NC} "
+            else
+                echo -n -e "${YELLOW}$prompt:${NC} "
+            fi
+            read -r INPUT_RESULT
+        fi
+        
+        INPUT_RESULT=${INPUT_RESULT:-$default}
+        
+        # Validation
+        if [[ -n "$validation" ]]; then
+            case "$validation" in
+                "email")
+                    if [[ "$INPUT_RESULT" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+                        break
+                    else
+                        print_error "Invalid email format"
+                    fi
+                    ;;
+                "domain")
+                    if [[ "$INPUT_RESULT" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+                        break
+                    else
+                        print_error "Invalid domain format"
+                    fi
+                    ;;
+                *)
+                    break
+                    ;;
+            esac
+        else
+            break
+        fi
+    done
+}
+
 generate_random_password() {
-    local length="${1:-32}"
+    local length="${1:-24}"
     openssl rand -base64 "$length" | tr -d "=+/" | cut -c1-"$length"
 }
 
-#───────────────────────────────────────────────────────────────────────────────
-# SYSTEM CHECK FUNCTIONS
-#───────────────────────────────────────────────────────────────────────────────
-
-check_system_requirements() {
-    log_info "System Requirements Check"
-    
-    # Check Ubuntu version
-    if [[ -f /etc/os-release ]]; then
-        source /etc/os-release
-        if [[ "$VERSION_ID" == "$REQUIRED_UBUNTU_VERSION" ]]; then
-            print_success "Ubuntu $VERSION_ID detected"
-        else
-            print_warn "Ubuntu $VERSION_ID detected (recommended: $REQUIRED_UBUNTU_VERSION)"
-        fi
-    else
-        print_error "Cannot detect OS version"
-        exit 1
-    fi
-    
-    # Check if running as root
-    if [[ $EUID -eq 0 ]]; then
-        print_success "Running as root"
-    else
-        print_error "Not running as root"
-        exit 1
-    fi
-    
-    # Check RAM
-    local total_ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-    local total_ram_gb=$((total_ram_kb / 1024 / 1024))
-    
-    if [[ $total_ram_gb -ge $MIN_RAM_GB ]]; then
-        print_success "${total_ram_gb}GB RAM available (minimum: ${MIN_RAM_GB}GB)"
-    else
-        print_error "${total_ram_gb}GB RAM available (minimum: ${MIN_RAM_GB}GB required)"
-        exit 1
-    fi
-    
-    # Check storage
-    local available_storage_gb=$(df / | tail -1 | awk '{print int($4/1024/1024)}')
-    
-    if [[ $available_storage_gb -ge $MIN_STORAGE_GB ]]; then
-        print_success "${available_storage_gb}GB storage available"
-    else
-        print_warn "${available_storage_gb}GB storage available (recommended: ${MIN_STORAGE_GB}GB)"
-    fi
-    
-    # Check internet connectivity
-    if curl -s --max-time 5 https://google.com > /dev/null 2>&1; then
-        print_success "Internet connectivity confirmed"
-    else
-        print_error "No internet connectivity"
-        exit 1
-    fi
+setup_logging() {
+    mkdir -p "$DATA_ROOT/logs"
+    exec 1> >(tee -a "$LOG_FILE")
+    exec 2> >(tee -a "$LOG_FILE" >&2)
 }
-#───────────────────────────────────────────────────────────────────────────────
-# HARDWARE DETECTION
-#───────────────────────────────────────────────────────────────────────────────
 
-detect_hardware() {
-    log_info "Hardware Detection"
-
-    local has_gpu=false
-    local gpu_info=""
-    local gpu_vram=""
-    local cuda_version=""
-
-    # Detect NVIDIA GPU
-    if command -v nvidia-smi &> /dev/null; then
-        gpu_info=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n1)
-        gpu_vram=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n1)
-
-        if [[ -n "$gpu_info" ]]; then
-            has_gpu=true
-            print_success "NVIDIA GPU detected: $gpu_info (${gpu_vram}MB VRAM)"
-
-            # Check CUDA version
-            if command -v nvcc &> /dev/null; then
-                cuda_version=$(nvcc --version | grep "release" | awk '{print $5}' | cut -d',' -f1)
-                print_success "CUDA $cuda_version installed"
-            else
-                print_info "CUDA not installed (will be installed later)"
-            fi
-        fi
-    else
-        print_info "No NVIDIA GPU detected (CPU-only mode)"
-    fi
-
-    # Detect additional storage devices
-    local additional_devices=()
-    while IFS= read -r device; do
-        local device_name=$(basename "$device")
-        local device_size=$(lsblk -b -d -n -o SIZE "$device" 2>/dev/null | awk '{print int($1/1024/1024/1024)}')
-
-        # Skip if already mounted or is root device
-        if ! grep -q "$device" /proc/mounts && [[ "$device" != *"$(df / | tail -1 | awk '{print $1}')"* ]]; then
-            additional_devices+=("$device:${device_size}GB")
-            print_success "Additional storage detected: $device (${device_size}GB)"
-        fi
-    done < <(lsblk -d -n -p -o NAME,TYPE | grep "disk" | awk '{print $1}')
-
-    if [[ ${#additional_devices[@]} -eq 0 ]]; then
-        print_info "No additional storage devices detected"
-    fi
-
-    # Save hardware info to metadata
-    cat > "$SYSTEM_INFO_FILE.tmp" <<EOF
+# State Management
+save_state() {
+    local phase="$1"
+    local status="$2"
+    local message="$3"
+    
+    mkdir -p "$METADATA_DIR"
+    
+    cat > "$STATE_FILE" <<EOF
 {
-  "detection_time": "$(date -Iseconds)",
-  "cpu": {
-    "model": "$(grep "model name" /proc/cpuinfo | head -n1 | cut -d':' -f2 | xargs)",
-    "cores": $(nproc),
-    "threads": $(nproc)
-  },
-  "memory": {
-    "total_gb": $total_ram_gb,
-    "available_gb": $(free -g | awk '/^Mem:/{print $7}')
-  },
-  "gpu": {
-    "present": $has_gpu,
-    "model": "$gpu_info",
-    "vram_mb": "${gpu_vram:-0}",
-    "cuda_version": "$cuda_version"
-  },
-  "storage": {
-    "additional_devices": [$(printf ""%s"," "${additional_devices[@]}" | sed "s/,$//")]
-  }
+  "script_version": "4.0.0",
+  "current_phase": "$phase",
+  "status": "$status",
+  "message": "$message",
+  "timestamp": "$(date -Iseconds)",
+  "completed_phases": [
+EOF
+    
+    local first=true
+    for completed_phase in "${COMPLETED_PHASES[@]:-}"; do
+        if [[ "$first" == false ]]; then
+            echo "," >> "$STATE_FILE"
+        fi
+        first=false
+        echo "    \"$completed_phase\"" >> "$STATE_FILE"
+    done
+    
+    cat >> "$STATE_FILE" <<EOF
+  ]
 }
 EOF
-
-    # Export for later use
-    export HAS_GPU="$has_gpu"
-    export GPU_INFO="$gpu_info"
-    export ADDITIONAL_DEVICES="${additional_devices[@]}}"
+    
+    print_success "State saved: Phase $phase - $status"
 }
 
-#───────────────────────────────────────────────────────────────────────────────
-# STORAGE CONFIGURATION
-#───────────────────────────────────────────────────────────────────────────────
-
-configure_storage() {
-    log_info "Storage Configuration"
-
-    # Check if /mnt/data already exists and is mounted
-    if mountpoint -q /mnt/data; then
-        print_success "/mnt/data already mounted"
-        local mount_device=$(df /mnt/data | tail -1 | awk '{print $1}')
-        local mount_size=$(df -h /mnt/data | tail -1 | awk '{print $2}')
-        print_info "Current mount: $mount_device ($mount_size)"
-        return 0
+restore_state() {
+    if [[ ! -f "$STATE_FILE" ]]; then
+        print_info "No previous state found - starting fresh"
+        return 1
     fi
-
-    # Parse additional devices
-    if [[ -z "$ADDITIONAL_DEVICES" ]]; then
-        print_info "No additional storage devices to configure"
-        print_info "Using root filesystem for /mnt/data"
-        mkdir -p /mnt/data
-        print_success "/mnt/data created on root filesystem"
-        return 0
+    
+    print_info "Found previous setup state"
+    
+    local current_phase=$(jq -r '.current_phase' "$STATE_FILE" 2>/dev/null || echo "")
+    local status=$(jq -r '.status' "$STATE_FILE" 2>/dev/null || echo "")
+    local message=$(jq -r '.message' "$STATE_FILE" 2>/dev/null || echo "")
+    local timestamp=$(jq -r '.timestamp' "$STATE_FILE" 2>/dev/null || echo "")
+    
+    if [[ -z "$current_phase" ]]; then
+        print_warn "State file corrupted - starting fresh"
+        return 1
     fi
-
-    # Present device selection
+    
     echo ""
-    echo "Available storage devices:"
+    print_header "🔄 Resume Previous Setup"
     echo ""
-
-    local device_array=()
-    local count=1
-
-    for device_info in $ADDITIONAL_DEVICES; do
-        local device=$(echo "$device_info" | cut -d':' -f1)
-        local size=$(echo "$device_info" | cut -d':' -f2)
-        echo "  [$count] $device ($size)"
-        device_array+=("$device")
-        ((count++))
-    done
-
-    echo "  [0] Skip - use root filesystem"
+    print_info "Previous setup detected:"
+    echo "  • Phase: $current_phase"
+    echo "  • Status: $status"
+    echo "  • Message: $message"
+    echo "  • Time: $timestamp"
     echo ""
+    
+    if ! confirm "Resume from this state?"; then
+        print_info "Starting fresh setup"
+        rm -f "$STATE_FILE"
+        return 1
+    fi
+    
+    # Load completed phases
+    local completed_phases_json=$(jq -r '.completed_phases[]' "$STATE_FILE" 2>/dev/null || echo "")
+    if [[ -n "$completed_phases_json" ]]; then
+        COMPLETED_PHASES=()
+        while IFS= read -r phase; do
+            COMPLETED_PHASES+=("$phase")
+        done <<< "$completed_phases_json"
+    fi
+    
+    print_success "State restored - resuming from phase $current_phase"
+    return 0
+}
 
-    # Get user selection
-    local selection=-1
-    while true; do
-        print_info "Select device to mount at /mnt/data [0-$((count-1))]: "
-        read -r selection
+mark_phase_complete() {
+    local phase="$1"
+    COMPLETED_PHASES+=("$phase")
+    save_state "$phase" "completed" "Phase completed successfully"
+}
 
-        if [[ "$selection" =~ ^[0-9]+$ ]] && [[ $selection -ge 0 ]] && [[ $selection -lt $count ]]; then
-            break
+# Core Functions
+detect_system() {
+    log_phase "1" "🔍" "System Detection"
+    
+    print_info "Detecting system hardware..."
+    
+    # Basic system info
+    local os_info=$(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2)
+    local kernel=$(uname -r)
+    local cpu_cores=$(nproc)
+    local ram_gb=$(free -g | awk '/^Mem:/ {print $2}')
+    local disk_gb=$(df -BG /mnt/data | awk 'NR==2 {print $2}' | tr -d 'G')
+    
+    echo ""
+    print_info "System Information:"
+    echo "  • OS: $os_info"
+    echo "  • Kernel: $kernel"
+    echo "  • CPU Cores: $cpu_cores"
+    echo "  • RAM: ${ram_gb}GB"
+    echo "  • Available Disk: ${disk_gb}GB"
+    echo ""
+    
+    # GPU Detection
+    print_info "GPU Detection..."
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        local gpu_info=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits | head -1)
+        print_success "NVIDIA GPU detected: $gpu_info"
+        echo "GPU_TYPE=nvidia" >> "$ENV_FILE"
+        echo "GPU_ACCELERATED=true" >> "$ENV_FILE"
+    else
+        print_info "No NVIDIA GPU detected - CPU mode only"
+        echo "GPU_TYPE=none" >> "$ENV_FILE"
+        echo "GPU_ACCELERATED=false" >> "$ENV_FILE"
+    fi
+    
+    echo ""
+    print_success "System detection completed"
+}
+
+collect_domain_info() {
+    log_phase "2" "🌐" "Domain & Network Configuration"
+    
+    echo ""
+    print_header "🌐 Domain Configuration"
+    echo ""
+    
+    prompt_input "DOMAIN" "Enter your domain (e.g., example.com)" "" false "domain"
+    echo "DOMAIN=$INPUT_RESULT" >> "$ENV_FILE"
+    
+    # Validate domain resolution
+    echo ""
+    print_info "Validating domain resolution..."
+    if nslookup "$INPUT_RESULT" >/dev/null 2>&1; then
+        local public_ip=$(nslookup "$INPUT_RESULT" | grep -A1 "Name:" | tail -1 | awk '{print $2}')
+        local server_ip=$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null)
+        
+        if [[ "$public_ip" == "$server_ip" ]]; then
+            print_success "Domain resolves to this server: $public_ip"
+            echo "DOMAIN_RESOLVES=true" >> "$ENV_FILE"
+            echo "PUBLIC_IP=$server_ip" >> "$ENV_FILE"
         else
-            print_error "Invalid selection. Please enter a number between 0 and $((count-1))"
+            print_warn "Domain resolves to different IP: $public_ip (server: $server_ip)"
+            echo "DOMAIN_RESOLVES=false" >> "$ENV_FILE"
+            echo "PUBLIC_IP=$server_ip" >> "$ENV_FILE"
         fi
-    done
-
-    # Handle selection
-    if [[ $selection -eq 0 ]]; then
-        print_info "Using root filesystem for /mnt/data"
-        mkdir -p /mnt/data
-        print_success "/mnt/data created on root filesystem"
-        return 0
+    else
+        print_warn "Domain does not resolve or DNS not configured"
+        echo "DOMAIN_RESOLVES=false" >> "$ENV_FILE"
+        echo "PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || echo 'unknown')" >> "$ENV_FILE"
     fi
-
-    local selected_device="${device_array[$((selection-1))]}"
-
-    # Confirm formatting
+    
     echo ""
-    print_warn "WARNING: This will FORMAT $selected_device and erase all data!"
-    if ! prompt_yes_no "Continue with formatting $selected_device?" "N"; then
-        print_info "Storage configuration cancelled"
-        mkdir -p /mnt/data
-        print_success "/mnt/data created on root filesystem"
-        return 0
+    print_header "🌐 Proxy Selection"
+    echo ""
+    echo "Select reverse proxy:"
+    echo "  1) Nginx Proxy Manager (Visual UI - Recommended)"
+    echo "  2) Traefik (Modern - Auto SSL with Docker labels)"
+    echo "  3) Caddy (Automatic - Zero-config HTTPS)"
+    echo "  4) None (Direct port access - Not recommended)"
+    echo ""
+    
+    while true; do
+        echo -n -e "${YELLOW}Select option [1-4]:${NC} "
+        read -r proxy_choice
+        
+        case "$proxy_choice" in
+            1)
+                echo "PROXY_TYPE=nginx-proxy-manager" >> "$ENV_FILE"
+                print_success "Nginx Proxy Manager selected"
+                break
+                ;;
+            2)
+                echo "PROXY_TYPE=traefik" >> "$ENV_FILE"
+                print_success "Traefik selected"
+                break
+                ;;
+            3)
+                echo "PROXY_TYPE=caddy" >> "$ENV_FILE"
+                print_success "Caddy selected"
+                break
+                ;;
+            4)
+                echo "PROXY_TYPE=none" >> "$ENV_FILE"
+                print_success "No proxy selected"
+                break
+                ;;
+            *)
+                print_error "Invalid selection"
+                ;;
+        esac
+    done
+    
+    # SSL Configuration
+    if [[ "$proxy_choice" != "4" ]]; then
+        echo ""
+        print_header "🔒 SSL Configuration"
+        echo ""
+        echo "Select SSL type:"
+        echo "  1) Let's Encrypt (Free, automatic renewal)"
+        echo "  2) Self-signed (Testing/internal use only)"
+        echo "  3) None (HTTP only - not recommended)"
+        echo ""
+        
+        while true; do
+            echo -n -e "${YELLOW}Select SSL type [1-3]:${NC} "
+            read -r ssl_choice
+            
+            case "$ssl_choice" in
+                1)
+                    echo "SSL_TYPE=letsencrypt" >> "$ENV_FILE"
+                    prompt_input "SSL_EMAIL" "Let's Encrypt email" "" false "email"
+                    echo "SSL_EMAIL=$INPUT_RESULT" >> "$ENV_FILE"
+                    print_success "Let's Encrypt SSL selected"
+                    break
+                    ;;
+                2)
+                    echo "SSL_TYPE=selfsigned" >> "$ENV_FILE"
+                    print_success "Self-signed SSL selected"
+                    break
+                    ;;
+                3)
+                    echo "SSL_TYPE=none" >> "$ENV_FILE"
+                    print_success "No SSL selected"
+                    break
+                    ;;
+                *)
+                    print_error "Invalid selection"
+                    ;;
+            esac
+        done
     fi
-
-    # Format device
-    print_info "Formatting $selected_device as ext4..."
-    if mkfs.ext4 -F "$selected_device" &>> "$LOG_FILE"; then
-        print_success "Device formatted successfully"
-    else
-        print_error "Failed to format device"
-        exit 1
+    
+    # Tailscale Configuration
+    echo ""
+    print_header "🔗 Tailscale Configuration (Optional)"
+    echo ""
+    
+    if confirm "Configure Tailscale VPN for private access?"; then
+        print_info "Tailscale Configuration"
+        echo ""
+        
+        echo "Select Tailscale setup method:"
+        echo "  1) Auth Key (Quick setup)"
+        echo "  2) Auth Token (Existing network)"
+        echo "  3) Skip"
+        echo ""
+        
+        while true; do
+            echo -n -e "${YELLOW}Select method [1-3]:${NC} "
+            read -r tailscale_method
+            
+            case "$tailscale_method" in
+                1)
+                    prompt_input "TAILSCALE_AUTH_KEY" "Tailscale auth key" "" false
+                    echo "TAILSCALE_AUTH_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    echo "TAILSCALE_SETUP_METHOD=auth_key" >> "$ENV_FILE"
+                    print_success "Tailscale auth key configured"
+                    break
+                    ;;
+                2)
+                    prompt_input "TAILSCALE_AUTH_TOKEN" "Tailscale auth token" "" false
+                    echo "TAILSCALE_AUTH_TOKEN=$INPUT_RESULT" >> "$ENV_FILE"
+                    echo "TAILSCALE_SETUP_METHOD=auth_token" >> "$ENV_FILE"
+                    print_success "Tailscale auth token configured"
+                    break
+                    ;;
+                3)
+                    break
+                    ;;
+                *)
+                    print_error "Invalid selection"
+                    ;;
+            esac
+        done
+        
+        # Tailscale network configuration
+        echo ""
+        prompt_input "TAILSCALE_TAILNET" "Tailscale tailnet name" "default" false
+        echo "TAILSCALE_TAILNET=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        echo "TAILSCALE_EXIT_NODE=false" >> "$ENV_FILE"
+        echo "TAILSCALE_ACCEPT_ROUTES=false" >> "$ENV_FILE"
+        
+        print_success "Tailscale configuration completed"
     fi
-
-    # Create mount point
-    mkdir -p /mnt/data
-
-    # Mount device
-    print_info "Mounting $selected_device to /mnt/data..."
-    if mount "$selected_device" /mnt/data; then
-        print_success "Device mounted successfully"
-    else
-        print_error "Failed to mount device"
-        exit 1
-    fi
-
-    # Get UUID
-    local device_uuid=$(blkid -s UUID -o value "$selected_device")
-
-    # Add to /etc/fstab
-    if ! grep -q "$device_uuid" /etc/fstab; then
-        echo "UUID=$device_uuid /mnt/data ext4 defaults,nofail 0 2" >> /etc/fstab
-        print_success "Added to /etc/fstab for persistence"
-    fi
-
-    # Set permissions
-    chown -R 1000:1000 /mnt/data
-    chmod -R 755 /mnt/data
-
-    print_success "Storage configuration complete"
+    
+    echo ""
+    print_success "Domain configuration completed"
 }
 
-#───────────────────────────────────────────────────────────────────────────────
-# DOCKER INSTALLATION
-#───────────────────────────────────────────────────────────────────────────────
+update_system() {
+    log_phase "3" "🔄" "System Update"
+    
+    print_info "Updating system packages..."
+    
+    if command -v apt >/dev/null 2>&1; then
+        apt update && apt upgrade -y
+        print_success "System packages updated"
+    else
+        print_warn "Package manager not detected - skipping system update"
+    fi
+    
+    # Install basic tools
+    print_info "Installing basic tools..."
+    apt install -y curl wget git jq openssl ca-certificates gnupg
+    
+    print_success "System update completed"
+}
 
 install_docker() {
-    log_phase "4" "📦 Docker Installation"
-
-    # Check if Docker already installed
-    if command -v docker &> /dev/null; then
-        local docker_version=$(docker --version | awk '{print $3}' | tr -d ',')
-        print_success "Docker already installed (version $docker_version)"
-
-        # Check Docker Compose
-        if docker compose version &> /dev/null; then
-            local compose_version=$(docker compose version --short)
-            print_success "Docker Compose already installed (version $compose_version)"
-        fi
-
-        # Ensure docker service is running
-        if systemctl is-active --quiet docker; then
-            print_success "Docker service is running"
-        else
-            print_info "Starting Docker service..."
-            systemctl start docker
-            systemctl enable docker
-            print_success "Docker service started"
-        fi
-
+    log_phase "4" "🐳" "Docker Installation"
+    
+    if command -v docker >/dev/null 2>&1; then
+        print_info "Docker already installed"
+        docker --version
         return 0
     fi
-
+    
     print_info "Installing Docker..."
-
-    # Update package index
-    apt-get update -qq &>> "$LOG_FILE"
-
-    # Install prerequisites
-    apt-get install -y -qq \
-        apt-transport-https \
-        ca-certificates \
-        curl \
-        gnupg \
-        lsb-release \
-        &>> "$LOG_FILE"
-
-    print_success "Prerequisites installed"
-
+    
     # Add Docker's official GPG key
-    install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-    chmod a+r /etc/apt/keyrings/docker.gpg
-
-    # Add Docker repository
-    echo \
-      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \\
-      $(. /etc/os-release       $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \      $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \ echo "$VERSION_CODENAME") stable" | \\
-      tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-    print_success "Docker repository added"
-
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+    
+    # Set up the repository
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+    
     # Install Docker Engine
-    apt-get update -qq &>> "$LOG_FILE"
-    apt-get install -y -qq \
-        docker-ce \
-        docker-ce-cli \
-        containerd.io \
-        docker-buildx-plugin \
-        docker-compose-plugin \
-        &>> "$LOG_FILE"
-
-    local docker_version=$(docker --version | awk '{print $3}' | tr -d ',')
-    print_success "Docker $docker_version installed"
-
-    local compose_version=$(docker compose version --short)
-    print_success "Docker Compose $compose_version installed"
-
-    # Start and enable Docker service
+    apt update
+    apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    
+    # Start Docker
     systemctl start docker
     systemctl enable docker
-    print_success "Docker service started and enabled"
-
-    # Add ubuntu user to docker group (if exists)
-    if id "ubuntu" &>/dev/null; then
-        usermod -aG docker ubuntu
-        print_success "User 'ubuntu' added to docker group"
-    fi
-
-    # Verify installation
-    if docker run --rm hello-world &>> "$LOG_FILE"; then
-        print_success "Docker installation verified"
-    else
-        print_error "Docker installation verification failed"
-        exit 1
-    fi
+    
+    # Add user to docker group
+    usermod -aG docker "${SUDO_USER:-$USER}"
+    
+    print_success "Docker installed successfully"
+    docker --version
 }
 
-#───────────────────────────────────────────────────────────────────────────────
-# NVIDIA CONTAINER TOOLKIT
-#───────────────────────────────────────────────────────────────────────────────
-
-install_nvidia_toolkit() {
-    if [[ "$HAS_GPU" != "true" ]]; then
-        log_phase "5" "🎮 NVIDIA Container Toolkit (Skipped - No GPU)"
-        print_info "No NVIDIA GPU detected, skipping GPU setup"
-        return 0
-    fi
-
-    log_phase "5" "🎮 NVIDIA Container Toolkit"
-
-    # Check if NVIDIA drivers installed
-    if ! command -v nvidia-smi &> /dev/null; then
-        print_info "Installing NVIDIA drivers..."
-
-        apt-get update -qq &>> "$LOG_FILE"
-        apt-get install -y -qq nvidia-driver-535 &>> "$LOG_FILE"
-
-        print_success "NVIDIA drivers installed (reboot required)"
-        print_warn "Please reboot and run this script again"
-        exit 0
-    fi
-
-    local driver_version=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -n1)
-    print_success "NVIDIA drivers installed (version $driver_version)"
-
-    # Install NVIDIA Container Toolkit
-    if command -v nvidia-ctk &> /dev/null; then
-        print_success "NVIDIA Container Toolkit already installed"
-    else
-        print_info "Installing NVIDIA Container Toolkit..."
-
-        # Add NVIDIA package repository
-        distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
-        curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-        curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
-            sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-            tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
-
-        apt-get update -qq &>> "$LOG_FILE"
-        apt-get install -y -qq nvidia-container-toolkit &>> "$LOG_FILE"
-
-        print_success "NVIDIA Container Toolkit installed"
-    fi
-
-    # Configure Docker to use NVIDIA runtime
-    nvidia-ctk runtime configure --runtime=docker &>> "$LOG_FILE"
+configure_docker() {
+    log_phase "5" "⚙️" "Docker Configuration"
+    
+    print_info "Configuring Docker..."
+    
+    # Create Docker daemon config
+    mkdir -p /etc/docker
+    cat > /etc/docker/daemon.json <<EOF
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  },
+  "live-restore": true,
+  "storage-driver": "overlay2"
+}
+EOF
+    
+    # Restart Docker
     systemctl restart docker
-
-    print_success "Docker configured for GPU access"
-
-    # Verify GPU access in Docker
-    if docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi &>> "$LOG_FILE"; then
-        print_success "GPU accessible in Docker containers"
-    else
-        print_warn "GPU verification failed, but continuing..."
-    fi
+    
+    # Create networks
+    docker network create ai-platform 2>/dev/null || true
+    docker network create ai-platform-internal 2>/dev/null || true
+    docker network create ai-platform-monitoring 2>/dev/null || true
+    
+    print_success "Docker configured successfully"
 }
-#───────────────────────────────────────────────────────────────────────────────
-# OLLAMA INSTALLATION
-#───────────────────────────────────────────────────────────────────────────────
 
 install_ollama() {
-    log_phase "6" "🦙 Ollama Installation"
-
-    # Check if Ollama already installed
-    if command -v ollama &> /dev/null; then
-        local ollama_version=$(ollama --version 2>/dev/null | awk '{print $NF}')
-        print_success "Ollama already installed (version $ollama_version)"
-    else
-        print_info "Installing Ollama..."
-
-        # Install Ollama
-        curl -fsSL https://ollama.ai/install.sh | sh &>> "$LOG_FILE"
-
-        if command -v ollama &> /dev/null; then
-            print_success "Ollama installed successfully"
-        else
-            print_error "Ollama installation failed"
-            exit 1
-        fi
+    log_phase "6" "🤖" "Ollama Installation"
+    
+    if command -v ollama >/dev/null 2>&1; then
+        print_info "Ollama already installed"
+        return 0
     fi
-
+    
+    print_info "Installing Ollama..."
+    
+    # Install Ollama
+    curl -fsSL https://ollama.ai/install.sh | sh
+    
     # Start Ollama service
-    if systemctl is-active --quiet ollama; then
-        print_success "Ollama service is running"
-    else
-        print_info "Starting Ollama service..."
-        systemctl start ollama
-        systemctl enable ollama
-        sleep 3
-        print_success "Ollama service started"
-    fi
-
-    # Interactive model selection
-    echo ""
-    print_header "🤖 Ollama Model Selection"
-    echo ""
-    echo "Select models to download (space-separated numbers, or 0 to skip):"
-    echo ""
-
-    local models=(
-        "llama3.2:latest:Meta Llama 3.2 (3B) - Fast, general purpose"
-        "llama3.2:1b:Meta Llama 3.2 (1B) - Lightweight, fast"
-        "llama3.1:8b:Meta Llama 3.1 (8B) - Balanced performance"
-        "llama3.1:70b:Meta Llama 3.1 (70B) - High quality (requires 48GB+ VRAM)"
-        "mistral:latest:Mistral 7B - Excellent reasoning"
-        "mixtral:latest:Mixtral 8x7B - Expert mixture model"
-        "codellama:latest:Code Llama - Code generation"
-        "phi3:latest:Microsoft Phi-3 - Efficient small model"
-        "gemma2:9b:Google Gemma 2 (9B) - Latest Google model"
-        "qwen2.5:latest:Alibaba Qwen 2.5 - Multilingual"
-    )
-
-    local count=1
-    for model_info in "${models[@]}}"; do
-        local model_name=$(echo "$model_info" | cut -d':' -f1,2)
-        local model_desc=$(echo "$model_info" | cut -d':' -f3)
-        printf "  [%2d] %-20s - %s\n" "$count" "$model_name" "$model_desc"
-        ((count++))
-    done
-
-    echo "  [ 0] Skip model download"
-    echo ""
-
-    print_info "Enter selections (e.g., '1 5 7' or '0' to skip): "
-    read -r selections
-
-    if [[ "$selections" == "0" ]]; then
-        print_info "Model download skipped"
-        return 0
-    fi
-
-    # Download selected models
-    local selected_models=()
-    for selection in $selections; do
-        if [[ "$selection" =~ ^[0-9]+$ ]] && [[ $selection -gt 0 ]] && [[ $selection -le ${#models[@]}} ]]; then
-            local model_info="${models[$((selection-1))]}"
-            local model_name=$(echo "$model_info" | cut -d':' -f1,2)
-            selected_models+=("$model_name")
-        fi
-    done
-
-    if [[ ${#selected_models[@]}} -eq 0 ]]; then
-        print_info "No valid models selected"
-        return 0
-    fi
-
-    echo ""
-    print_info "Downloading ${#selected_models[@]}} model(s)..."
-    echo ""
-
-    for model in "${selected_models[@]}}"; do
-        print_info "Downloading $model..."
-        if ollama pull "$model" 2>&1 | tee -a "$LOG_FILE" | grep -E "(pulling|success)"; then
-            print_success "$model downloaded"
-        else
-            print_warn "$model download failed (continuing...)"
-        fi
-        echo ""
-    done
-
-    # List downloaded models
-    print_info "Available models:"
-    ollama list 2>&1 | tee -a "$LOG_FILE"
+    systemctl start ollama 2>/dev/null || true
+    systemctl enable ollama 2>/dev/null || true
+    
+    print_success "Ollama installed successfully"
 }
-
-#───────────────────────────────────────────────────────────────────────────────
-# SERVICE CATALOG DEFINITION
-#───────────────────────────────────────────────────────────────────────────────
-
-declare -A SERVICE_CATALOG
-
-# Format: "service_key:display_name:description:category:dependencies:requires_config"
-
-SERVICE_CATALOG=(
-    # Core Infrastructure
-    ["traefik"]="traefik:Traefik:Reverse proxy & SSL termination:infrastructure::domain,email,cloudflare_token"
-    ["tailscale"]="tailscale:Tailscale:VPN mesh network:infrastructure::auth_key,tailnet"
-    ["portainer"]="portainer:Portainer:Container management UI:infrastructure::"
-
-    # Databases
-    ["postgres"]="postgres:PostgreSQL:Relational database:database::postgres_password"
-    ["redis"]="redis:Redis:In-memory cache:database::redis_password"
-    ["mongodb"]="mongodb:MongoDB:Document database:database::mongo_password"
-
-    # Vector Databases
-    ["qdrant"]="qdrant:Qdrant:Vector database:vector_db::qdrant_api_key"
-    ["weaviate"]="weaviate:Weaviate:Vector database with ML:vector_db::"
-    ["milvus"]="milvus: Milvus:Scalable vector database:vector_db::milvus_password"
-    ["chroma"]="chroma: ChromaDB:Embeddings database:vector_db::"
-
-    # AI Chat Interfaces
-    ["librechat"]="librechat: LibreChat:Multi-provider chat UI:ai_chat:postgres:google_client_id,google_client_secret,jwt_secret"
-    ["openwebui"]="openwebui: Open WebUI:Ollama web interface:ai_chat::admin_email,admin_password"
-    ["chatgpt_ui"]="chatgpt_ui: ChatGPT UI:ChatGPT-like interface:ai_chat::openai_api_key"
-
-    # LLM Infrastructure
-    ["litellm"]="litellm: LiteLLM:LLM proxy & load balancer:llm::litellm_master_key,openai_api_key"
-    ["ollama_webui"]="ollama_webui: Ollama WebUI:Ollama management:llm::"
-    ["localai"]="localai: LocalAI:OpenAI-compatible API:llm::"
-
-    # Communication
-    ["signal"]="signal: Signal Bot:Signal messaging bot:communication::signal_phone,signal_password"
-    ["ntfy"]="ntfy: Ntfy:Push notifications:communication::"
-
-    # Automation & Orchestration
-    ["n8n"]="n8n: n8n:Workflow automation:automation:postgres:n8n_encryption_key"
-    ["activepieces"]="activepieces: Activepieces:Workflow automation:automation:postgres:ap_encryption_key"
-    ["windmill"]="windmill: Windmill:Developer platform:automation:postgres:windmill_token"
-
-    # Monitoring
-    ["prometheus"]="prometheus: Prometheus:Metrics collection:monitoring::prometheus_retention"
-    ["grafana"]="grafana: Grafana:Metrics visualization:monitoring:prometheus:grafana_password"
-    ["uptime_kuma"]="uptime_kuma: Uptime Kuma:Uptime monitoring:monitoring::"
-    ["netdata"]="netdata: Netdata:Real-time monitoring:monitoring::"
-
-    # Development Tools
-    ["code_server"]="code_server: Code Server:VS Code in browser:development::code_password"
-    ["jupyter"]="jupyter: JupyterLab:Data science notebooks:development::jupyter_token"
-
-    # Storage & Files
-    ["minio"]="minio: MinIO:S3-compatible storage:storage::minio_root_user,minio_root_password"
-    ["seafile"]="seafile: Seafile:File sync & share:storage::seafile_admin_email,seafile_admin_password"
-
-    # Search & Knowledge
-    ["searxng"]="searxng: SearXNG:Meta search engine:search::searxng_secret"
-    ["meilisearch"]="meilisearch: Meilisearch:Search engine:search::meili_master_key"
-
-    # RAG & Document Processing
-    ["anything_llm"]="anything_llm: AnythingLLM:RAG document chat:rag::anything_llm_password"
-    ["danswer"]="danswer: Danswer:Enterprise RAG:rag:postgres,qdrant:danswer_secret"
-    ["quivr"]="quivr: Quivr:Personal AI assistant:rag:postgres:quivr_jwt_secret"
-)
-
-#───────────────────────────────────────────────────────────────────────────────
-# SERVICE CATEGORY DEFINITIONS
-#───────────────────────────────────────────────────────────────────────────────
-
-declare -A SERVICE_CATEGORIES=(
-    ["infrastructure"]="🏗️  Core Infrastructure"
-    ["database"]="💾 Databases"
-    ["vector_db"]="🧠 Vector Databases"
-    ["ai_chat"]="💬 AI Chat Interfaces"
-    ["llm"]="🤖 LLM Infrastructure"
-    ["communication"]="📡 Communication"
-    ["automation"]="⚙️  Automation"
-    ["monitoring"]="📊 Monitoring"
-    ["development"]="👨‍💻 Development"
-    ["storage"]="📦 Storage"
-    ["search"]="🔍 Search"
-    ["rag"]="📚 RAG & Documents"
-)
-
-#───────────────────────────────────────────────────────────────────────────────
-# SERVICE SELECTION HELPERS
-#───────────────────────────────────────────────────────────────────────────────
-
-get_service_info() {
-    local service_key="$1"
-    local field="$2"  # display_name, description, category, dependencies, requires_config
-
-    local service_data="${SERVICE_CATALOG[$service_key]}"
-    local field_index
-
-    case "$field" in
-        "key") echo "$service_key" ;;
-        "display_name") echo "$service_data" | cut -d':' -f2 ;;
-        "description") echo "$service_data" | cut -d':' -f3 ;;
-        "category") echo "$service_data" | cut -d':' -f4 ;;
-        "dependencies") echo "$service_data" | cut -d":" -f5 ;;
-        "requires_config") echo "$service_data" | cut -d":" -f6 ;;
-        *) echo "" ;;
-    esac
-}
-
-check_dependencies() {
-    local service_key="$1"
-    local selected_services="$2"  # comma-separated string
-
-    local deps=$(get_service_info "$service_key" "dependencies")
-
-    if [[ -z "$deps" ]]; then
-        return 0  # No dependencies
-    fi
-
-    local missing_deps=()
-    IFS="," read -ra DEP_ARRAY <<< "$deps"
-
-    for dep in "${DEP_ARRAY[@]}"; do
-        if [[ ! ",$selected_services," =~ ",$dep," ]]; then
-            missing_deps+=("$dep")
-        fi
-    done
-
-    if [[ ${#missing_deps[@]} -gt 0 ]]; then
-        return 1  # Has missing dependencies
-    fi
-
-    return 0  # All dependencies met
-}
-#───────────────────────────────────────────────────────────────────────
-# INTERACTIVE SERVICE SELECTION
-#───────────────────────────────────────────────────────────────────────
 
 select_services() {
-    log_phase "7" "🎯 Service Selection"
-
-    local selected_services=()
-    local -A selected_map
-
-    # Group services by category
-    local -A category_services
-    for service_key in "${!SERVICE_CATALOG[@]"; do
-        local category=$(get_service_info "$service_key" "category")
-        if [[ -z "${category_services[$category]}" ]]; then
-            category_services[$category]="$service_key"
-        else
-            category_services[$category]="${category_services[$category]} $service_key"
-        fi
-    done
-
+    log_phase "7" "🎯" "Service Selection"
+    
     echo ""
     print_header "📋 Available Services"
     echo ""
     print_info "Select services to deploy. Dependencies will be auto-selected."
     echo ""
-
-    # Display services by category
-    local service_number=1
-    local -A number_to_service
-
-    for category in "${!SERVICE_CATEGORIES[@]"; do
-        if [[ -n "${category_services[$category]}" ]]; then
-            echo ""
-            echo "${SERVICE_CATEGORIES[$category]}"
-            echo "$(printf "─%.0s" {1..60})"
-
-            for service_key in ${category_services[$category]}; do
-                local display_name=$(get_service_info "$service_key" "display_name")
-                local description=$(get_service_info "$service_key" "description")
-                local deps=$(get_service_info "$service_key" "dependencies")
-
-                printf "  [%2d] %-18s - %s" "$service_number" "$display_name" "$description"
-
-                if [[ -n "$deps" ]]; then
-                    echo -e "${YELLOW} (needs: $deps)${NC}"
-                else
-                    echo ""
-                fi
-
-                number_to_service[$service_number]="$service_key"
-                ((service_number++))
+    
+    # Service Groups
+    echo "🎯 Service Selection Options:"
+    echo "  [core] Core Infrastructure (Proxy, Database, VPN)"
+    echo "  [stack] AI Stack (LLM, Vector DB, Chat UI)"
+    echo "  [all] All Services"
+    echo "  [1-20] Individual services"
+    echo ""
+    
+    # Individual Services List
+    echo "📋 Individual Services:"
+    echo ""
+    echo "🏗️  Core Infrastructure:"
+    echo "  [1] Nginx Proxy Manager - Visual reverse proxy (RECOMMENDED)"
+    echo "  [2] Traefik - Modern reverse proxy with auto SSL"
+    echo "  [3] Caddy - Simple reverse proxy with automatic SSL"
+    echo "  [4] PostgreSQL - Relational database"
+    echo "  [5] Redis - Cache and message queue"
+    echo "  [6] Tailscale - VPN mesh network"
+    echo ""
+    
+    echo "💾 Databases:"
+    echo "  [7] MongoDB - Document database"
+    echo ""
+    
+    echo "🧠 Vector Databases:"
+    echo "  [8] Qdrant - High-performance vector DB (Recommended)"
+    echo "  [9] Milvus - Distributed vector database"
+    echo "  [10] ChromaDB - Simple Python-native DB"
+    echo "  [11] Weaviate - GraphQL API with semantic search"
+    echo ""
+    
+    echo "💬 AI Chat Interfaces:"
+    echo "  [12] Open WebUI - Modern ChatGPT-like interface"
+    echo "  [13] AnythingLLM - Document-based AI chat"
+    echo "  [14] LibreChat - Multi-provider chat UI"
+    echo "  [15] ChatGPT UI - ChatGPT-like interface"
+    echo ""
+    
+    echo "🤖 LLM Infrastructure:"
+    echo "  [16] Ollama - Local LLM runtime"
+    echo "  [17] LiteLLM - Multi-provider proxy + routing"
+    echo "  [18] Ollama WebUI - Ollama management interface"
+    echo "  [19] LocalAI - OpenAI-compatible API"
+    echo ""
+    
+    echo "📡 Communication:"
+    echo "  [20] Signal Bot - Signal messaging bot"
+    echo "  [21] Ntfy - Push notifications"
+    echo ""
+    
+    echo "⚙️  Automation:"
+    echo "  [22] n8n - Workflow automation platform"
+    echo "  [23] Activepieces - Workflow automation"
+    echo "  [24] Windmill - Developer platform"
+    echo ""
+    
+    echo "📊 Monitoring:"
+    echo "  [25] Prometheus - Metrics collection"
+    echo "  [26] Grafana - Metrics visualization"
+    echo "  [27] Uptime Kuma - Uptime monitoring"
+    echo "  [28] Netdata - Real-time monitoring"
+    echo ""
+    
+    echo "👨‍💻 Development:"
+    echo "  [29] Code Server - VS Code in browser"
+    echo "  [30] JupyterLab - Data science notebooks"
+    echo ""
+    
+    echo "📦 Storage:"
+    echo "  [31] MinIO - S3-compatible storage"
+    echo "  [32] Seafile - File sync & share"
+    echo ""
+    
+    echo "🔍 Search:"
+    echo "  [33] SearXNG - Meta search engine"
+    echo "  [34] Meilisearch - Search engine"
+    echo ""
+    
+    echo "📚 RAG & Documents:"
+    echo "  [35] AnythingLLM - RAG document chat"
+    echo "  [36] Danswer - Enterprise RAG"
+    echo "  [37] Quivr - Personal AI assistant"
+    echo ""
+    echo "📱 Communication & Integration:"
+    echo "  [17] Signal API - Private messaging"
+    echo "  [18] OpenClaw UI - Multi-channel orchestration"
+    echo ""
+    
+    # Monitoring
+    echo "📊 Monitoring:"
+    echo "  [19] Prometheus + Grafana - Metrics and visualization"
+    echo ""
+    
+    # Storage
+    echo "� Storage:"
+    echo "  [20] MinIO - S3-compatible storage"
+    echo ""
+    
+    echo "Select services (space-separated, e.g., '1 3 6'):"
+    echo "Or enter 'all' to select all recommended services"
+    echo ""
+    
+    local -A selected_map=(
+        ["nginx-proxy-manager"]=1
+        ["traefik"]=1
+        ["postgres"]=1
+        ["redis"]=1
+        ["tailscale"]=1
+        ["openwebui"]=1
+        ["anythingllm"]=1
+        ["dify"]=1
+        ["n8n"]=1
+        ["flowise"]=1
+        ["ollama"]=1
+        ["litellm"]=1
+        ["qdrant"]=1
+        ["milvus"]=1
+        ["chroma"]=1
+        ["weaviate"]=1
+        ["signal-api"]=1
+        ["openclaw"]=1
+        ["prometheus"]=1
+        ["grafana"]=1
+        ["minio"]=1
+    )
+    
+    while true; do
+        echo -n -e "${YELLOW}Enter selection:${NC} "
+        read -r selection
+        
+        if [[ "$selection" == "all" ]]; then
+            for service in "${!selected_map[@]}"; do
+                selected_map[$service]=1
             done
-        fi
-    done
-
-    echo ""
-    echo "$(printf "═%.0s" {1..60})"
-    echo ""
-    print_info "Enter service numbers (space-separated, e.g., '1 5 12 18'):"
-    print_info "Or enter 'all' for all services, 'none' to skip:"
-    echo ""
-    read -r -p "Selection: " selection
-
-    # Process selection
-    if [[ "$selection" == "none" ]]; then
-        print_info "No services selected"
-        return 0
-    elif [[ "$selection" == "all" ]]; then
-        for service_key in "${!SERVICE_CATALOG[@]"; do
-            selected_services+=("$service_key")
-            selected_map[$service_key]=1
-        done
-        print_success "All services selected"
-    else
-        # Parse individual selections
-        for num in $selection; do
-            if [[ "$num" =~ ^[0-9]+$ ]] && [[ -n "${number_to_service[$num]}" ]]; then
-                local service_key="${number_to_service[$num]}"
-                selected_services+=("$service_key")
-                selected_map[$service_key]=1
-            else
-                print_warn "Invalid selection: $num (skipped)"
-            fi
-        done
-    fi
-
-    # Auto-select dependencies
-    echo ""
-    print_info "Checking dependencies..."
-
-    local deps_added=0
-    local max_iterations=10
-    local iteration=0
-
-    while [[ $iteration -lt $max_iterations ]]; do
-        local added_this_round=0
-
-        for service_key in "${selected_services[@]}"; do
-            local deps=$(get_service_info "$service_key" "dependencies")
-
-            if [[ -n "$deps" ]]; then
-                IFS=',' read -ra DEP_ARRAY <<< "$deps"
-
-                for dep in "${DEP_ARRAY[@]}"; do
-                    if [[ -z "${selected_map[$dep]}" ]]; then
-                        selected_services+=("$dep")
-                        selected_map[$dep]=1
-
-                        local dep_name=$(get_service_info "$dep" "display_name")
-                        print_success "Auto-selected dependency: $dep_name"
-
-                        ((deps_added++))
-                        ((added_this_round++))
-                    fi
-                done
-            fi
-        done
-
-        if [[ $added_this_round -eq 0 ]]; then
+            print_success "All recommended services selected"
             break
+        elif [[ "$selection" =~ ^[0-9\ ]+$ ]]; then
+            for num in $selection; do
+                if [[ $num -ge 1 ]] && [[ $num -le 20 ]]; then
+                    local service_name
+                    case $num in
+                        1) service_name="nginx-proxy-manager" ;;
+                        2) service_name="traefik" ;;
+                        3) service_name="postgres" ;;
+                        4) service_name="redis" ;;
+                        5) service_name="tailscale" ;;
+                        6) service_name="openwebui" ;;
+                        7) service_name="anythingllm" ;;
+                        8) service_name="dify" ;;
+                        9) service_name="n8n" ;;
+                        10) service_name="flowise" ;;
+                        11) service_name="ollama" ;;
+                        12) service_name="litellm" ;;
+                        13) service_name="qdrant" ;;
+                        14) service_name="milvus" ;;
+                        15) service_name="chroma" ;;
+                        16) service_name="weaviate" ;;
+                        17) service_name="signal-api" ;;
+                        18) service_name="openclaw" ;;
+                        19) service_name="prometheus" ;;
+                        20) service_name="minio" ;;
+                        *) print_warn "Invalid selection: $num"; continue ;;
+                    esac
+                    
+                    if [[ -n "${selected_map[$service_name]:-}" ]]; then
+                        selected_map[$service_name]=1
+                        print_success "Added: $service_name"
+                    else
+                        selected_map[$service_name]=0
+                        print_info "Removed: $service_name"
+                    fi
+                else
+                    print_warn "Invalid selection: $num (must be 1-11)"
+                fi
+            done
+            break
+        else
+            print_error "Invalid selection. Please enter numbers 1-11 or 'all'"
         fi
-
-        ((iteration++))
     done
-
-    if [[ $deps_added -gt 0 ]]; then
-        echo ""
-        print_success "$deps_added dependencies auto-selected"
+    
+    # Convert selected services to array
+    local selected_services=()
+    for service in "${!selected_map[@]}"; do
+        if [[ "${selected_map[$service]}" == "1" ]]; then
+            selected_services+=("$service")
+        fi
+    done
+    
+    if [[ ${#selected_services[@]} -eq 0 ]]; then
+        print_error "No services selected"
+        return 1
     fi
-
+    
     # Display final selection
     echo ""
-    print_header "✅ Selected Services (${#selected_services[@]}})"
+    print_header "✅ Selected Services (${#selected_services[@]})"
     echo ""
-
-    for category in "${!SERVICE_CATEGORIES[@]"; do
-        local category_has_services=false
-        local category_list=""
-
-        for service_key in "${selected_services[@]}"; do
-            if [[ "$(get_service_info "$service_key" "category")" == "$category" ]]; then
-                category_has_services=true
-                local display_name=$(get_service_info "$service_key" "display_name")
-                category_list="${category_list}  • ${display_name}"
-            fi
-        done
-
-        if [[ "$category_has_services" == true ]]; then
-            echo "${SERVICE_CATEGORIES[$category]}"
-            echo -e "$category_list"
-        fi
+    
+    for service in "${selected_services[@]}"; do
+        echo "  • $service"
     done
-
+    
     # Confirm selection
     echo ""
     if ! confirm "Proceed with these services?"; then
         print_info "Service selection cancelled"
         return 1
     fi
-
+    
     # Save selected services to JSON
     mkdir -p "$METADATA_DIR"
-
+    
     cat > "$SERVICES_FILE" <<EOF
 {
   "selection_time": "$(date -Iseconds)",
-  "total_services": ${#selected_services[@]}},
+  "total_services": ${#selected_services[@]},
   "services": [
 EOF
-
+    
     local first=true
     for service_key in "${selected_services[@]}"; do
         if [[ "$first" == false ]]; then
             echo "," >> "$SERVICES_FILE"
         fi
         first=false
-
-        local display_name=$(get_service_info "$service_key" "display_name")
-        local description=$(get_service_info "$service_key" "description")
-        local category=$(get_service_info "$service_key" "category")
-        local deps=$(get_service_info "$service_key" "dependencies")
-        local configs=$(get_service_info "$service_key" "requires_config")
-
+        
         cat >> "$SERVICES_FILE" <<EOF
     {
       "key": "$service_key",
-      "display_name": "$display_name",
-      "description": "$description",
-      "category": "$category",
-      "dependencies": [$(echo "$deps" | sed 's/,/", "/g' | sed 's/^/"/' | sed 's/$/"/')],
-      "required_configs": [$(echo "$configs" | sed 's/,/", "/g' | sed 's/^/"/' | sed 's/$/"/')]
+      "display_name": "$service_key",
+      "description": "Service description",
+      "category": "category"
     }
 EOF
     done
-
+    
     cat >> "$SERVICES_FILE" <<EOF
 
   ]
 }
 EOF
-
+    
     print_success "Service selection saved to $SERVICES_FILE"
-
+    
     # Export selected services for next phase
-    export SELECTED_SERVICES="${selected_services[@]}}"
-
+    export SELECTED_SERVICES="${selected_services[@]}"
+    
     return 0
 }
 
-#───────────────────────────────────────────────────────────────────────────────
-# CONFIGURATION COLLECTION
-#───────────────────────────────────────────────────────────────────────────────
-
 collect_configurations() {
-    log_phase "8" "⚙️  Configuration Collection"
-
+    log_phase "8" "⚙️" "Configuration Collection"
+    
     if [[ ! -f "$SERVICES_FILE" ]]; then
         print_error "Services file not found: $SERVICES_FILE"
         exit 1
     fi
-
-    # Read selected services from JSON
+    
     local selected_services=($(jq -r '.services[].key' "$SERVICES_FILE"))
-
-    if [[ ${#selected_services[@]}} -eq 0 ]]; then
-        print_info "No services selected, skipping configuration"
-        return 0
+    
+    echo ""
+    print_header "🔍 Port Availability Check"
+    echo ""
+    
+    # Port availability check
+    local ports_to_check=(
+        "80:HTTP"
+        "443:HTTPS"
+        "3000:OpenWebUI/Grafana/Langfuse"
+        "3001:AnythingLLM"
+        "5678:n8n"
+        "6333:Qdrant"
+        "6334:Qdrant GRPC"
+        "8080:Dify"
+        "11434:Ollama"
+        "5432:PostgreSQL"
+        "6379:Redis"
+        "4000:LiteLLM"
+        "9090:Prometheus"
+    )
+    
+    local port_conflicts=()
+    
+    for port_info in "${ports_to_check[@]}"; do
+        local port=$(echo "$port_info" | cut -d: -f1)
+        local service=$(echo "$port_info" | cut -d: -f2)
+        
+        if netstat -tuln 2>/dev/null | grep -q ":$port "; then
+            local pid=$(netstat -tuln 2>/dev/null | grep ":$port " | awk '{print $7}' | cut -d/ -f1)
+            print_warn "Port $port is in use by $service (pid: $pid)"
+            port_conflicts+=("$port:$service:$pid")
+        else
+            print_success "Port $port is available for $service"
+        fi
+    done
+    
+    if [[ ${#port_conflicts[@]} -gt 0 ]]; then
+        echo ""
+        print_header "⚠️ Port Conflicts Detected"
+        echo ""
+        print_info "The following ports are in use:"
+        for conflict in "${port_conflicts[@]}"; do
+            local port=$(echo "$conflict" | cut -d: -f1)
+            local service=$(echo "$conflict" | cut -d: -f2)
+            local pid=$(echo "$conflict" | cut -d: -f3)
+            echo "  • Port $port ($service) - PID: $pid"
+        done
+        echo ""
+        
+        if ! confirm "Continue with port conflicts?"; then
+            print_info "Configuration cancelled"
+            return 1
+        fi
     fi
-
+    
     echo ""
-    print_header "🔧 Service Configuration"
+    print_header "⚙️ Configuration Collection"
     echo ""
-    print_info "Collecting configuration for ${#selected_services[@]}} services"
-    echo ""
-
-    # Initialize .env file
-    mkdir -p "$(dirname "$ENV_FILE")"
-
+    
+    # Initialize environment file
     cat > "$ENV_FILE" <<EOF
-#═══════════════════════════════════════════════════════════════════════════════
-# AI Platform Configuration
+# AI Platform Environment
 # Generated: $(date -Iseconds)
-#═══════════════════════════════════════════════════════════════════════════════
 
-# System Paths
+# System Configuration
 DATA_ROOT=$DATA_ROOT
 METADATA_DIR=$METADATA_DIR
+TIMEZONE=UTC
+LOG_LEVEL=info
 
-# Hardware Configuration
+# Network Configuration
+DOMAIN=${DOMAIN:-localhost}
+PROXY_TYPE=${PROXY_TYPE:-none}
+SSL_TYPE=${SSL_TYPE:-none}
+SSL_EMAIL=${SSL_EMAIL:-}
 EOF
-
-    # Add hardware info
-    local has_gpu=$(jq -r '.gpu.detected' "$SYSTEM_INFO_FILE")
-    echo "HAS_GPU=$has_gpu" >> "$ENV_FILE"
-
-    if [[ "$has_gpu" == "true" ]]; then
-        local gpu_name=$(jq -r '.gpu.name' "$SYSTEM_INFO_FILE")
-        local gpu_vram=$(jq -r '.gpu.vram_mb' "$SYSTEM_INFO_FILE")
-        echo "GPU_NAME=\"$gpu_name\"" >> "$ENV_FILE"
-        echo "GPU_VRAM_MB=$gpu_vram" >> "$ENV_FILE"
-    fi
-
-    echo "" >> "$ENV_FILE"
-
-    # Collect required configurations
-    local -A collected_configs
-    local all_required_configs=()
-
-    # Gather all unique required configs
-    for service_key in "${selected_services[@]}"; do
-        local configs=$(get_service_info "$service_key" "requires_config")
-
-        if [[ -n "$configs" ]]; then
-            IFS=',' read -ra CONFIG_ARRAY <<< "$configs"
-            for config in "${CONFIG_ARRAY[@]"; do
-                if [[ -z "${collected_configs[$config]}" ]]; then
-                    all_required_configs+=("$config")
-                    collected_configs[$config]=1
-                fi
-            done
-        fi
-    done
-
-    if [[ ${#all_required_configs[@] -eq 0 ]]; then
-        print_success "No additional configuration required"
-        return 0
-    fi
-
+    
+    # Port configuration
     echo ""
-    print_info "Required configuration items: ${#all_required_configs[@]"
+    print_info "Port Configuration"
     echo ""
-
-    # Collect each configuration
-    for config_key in "${all_required_configs[@]"; do
-        collect_config_value "$config_key"
-    done
-
-    # Add common configurations
-    echo "" >> "$ENV_FILE"
-    echo "# Common Settings" >> "$ENV_FILE"
-
-    collect_input "TIMEZONE" "Timezone (e.g., America/New_York)" "UTC" false
-    echo "TIMEZONE=$INPUT_RESULT" >> "$ENV_FILE"
-
-    collect_input "LOG_LEVEL" "Log level (debug/info/warn/error)" "info" false
-    echo "LOG_LEVEL=$INPUT_RESULT" >> "$ENV_FILE"
-
-    # Generate common secrets
-    echo "" >> "$ENV_FILE"
-    echo "# Generated Secrets" >> "$ENV_FILE"
-    echo "MASTER_SECRET=$(generate_password 64)" >> "$ENV_FILE"
-    echo "ENCRYPTION_KEY=$(generate_password 32)" >> "$ENV_FILE"
-
-    print_success "Configuration saved to $ENV_FILE"
-
-    # Set restrictive permissions
-    chmod 600 "$ENV_FILE"
-    print_success "Secure permissions set on $ENV_FILE"
-}
-
-collect_config_value() {
-    local config_key="$1"
-
-    echo "" >> "$ENV_FILE"
-    echo "# Configuration: $config_key" >> "$ENV_FILE"
-
-    case "$config_key" in
-        # Domain & DNS
-        "domain")
-            collect_input "DOMAIN" "Primary domain name" "" true "validate_domain"
-            echo "DOMAIN=$INPUT_RESULT" >> "$ENV_FILE"
-            ;;
-
-        # Email
-        "email")
-            collect_input "ADMIN_EMAIL" "Administrator email" "" true "validate_email"
-            echo "ADMIN_EMAIL=$INPUT_RESULT" >> "$ENV_FILE"
-            ;;
-
-        # Cloudflare
-        "cloudflare_token")
-            collect_input "CLOUDFLARE_API_TOKEN" "Cloudflare API Token" "" false
-            echo "CLOUDFLARE_API_TOKEN=$INPUT_RESULT" >> "$ENV_FILE"
-
-            collect_input "CLOUDFLARE_ZONE_ID" "Cloudflare Zone ID" "" false
-            echo "CLOUDFLARE_ZONE_ID=$INPUT_RESULT" >> "$ENV_FILE"
-            ;;
-
-        # Tailscale
-        "auth_key")
-            collect_input "TAILSCALE_AUTH_KEY" "Tailscale Auth Key" "" false
-            echo "TAILSCALE_AUTH_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-            ;;
-
-        "tailnet")
-            collect_input "TAILSCALE_TAILNET" "Tailscale Tailnet name" "" false
-            echo "TAILSCALE_TAILNET=$INPUT_RESULT" >> "$ENV_FILE"
-            ;;
-
-        # Database passwords
-        "postgres_password")
-            local pg_pass=$(generate_password 32)
-            echo "POSTGRES_PASSWORD=$pg_pass" >> "$ENV_FILE"
-            print_success "Generated PostgreSQL password"
-            ;;
-
-        "redis_password")
-            local redis_pass=$(generate_password 32)
-            echo "REDIS_PASSWORD=$redis_pass" >> "$ENV_FILE"
-            print_success "Generated Redis password"
-            ;;
-
-        "mongo_password")
-            local mongo_pass=$(generate_password 32)
-            echo "MONGO_PASSWORD=$mongo_pass" >> "$ENV_FILE"
-            print_success "Generated MongoDB password"
-            ;;
-
-        # API Keys
-        "qdrant_api_key")
-            local qdrant_key=$(generate_password 32)
-            echo "QDRANT_API_KEY=$qdrant_key" >> "$ENV_FILE"
-            print_success "Generated Qdrant API key"
-            ;;
-
-        "litellm_master_key")
-            local litellm_key=$(generate_password 32)
-            echo "LITELLM_MASTER_KEY=$litellm_key" >> "$ENV_FILE"
-            print_success "Generated LiteLLM master key"
-            ;;
-
-        "openai_api_key")
-            collect_input "OPENAI_API_KEY" "OpenAI API Key (or skip)" "" false
-            echo "OPENAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-            ;;
-
-        # OAuth
-        "google_client_id")
-            collect_input "GOOGLE_CLIENT_ID" "Google OAuth Client ID" "" false
-            echo "GOOGLE_CLIENT_ID=$INPUT_RESULT" >> "$ENV_FILE"
-            ;;
-
-        "google_client_secret")
-            collect_input "GOOGLE_CLIENT_SECRET" "Google OAuth Client Secret" "" false
-            echo "GOOGLE_CLIENT_SECRET=$INPUT_RESULT" >> "$ENV_FILE"
-            ;;
-
-        # JWT Secrets
-        "jwt_secret"|"n8n_encryption_key"|"ap_encryption_key"|"windmill_token"|"quivr_jwt_secret"|"danswer_secret"|"searxng_secret"|"meili_master_key")
-            local secret=$(generate_password 64)
-            local var_name=$(echo "$config_key" | tr '[:lower:]' '[:upper:]')
-            echo "${var_name}=$secret" >> "$ENV_FILE"
-            print_success "Generated $config_key"
-            ;;
-
-        # Admin credentials
-        "admin_password")
-            collect_input "ADMIN_PASSWORD" "Admin password (min 12 chars)" "" true "validate_password"
-            echo "ADMIN_PASSWORD=$INPUT_RESULT" >> "$ENV_FILE"
-            ;;
-
-        "grafana_password"|"code_password"|"seafile_admin_password"|"anything_llm_password")
-            local pass=$(generate_password 24)
-            local var_name=$(echo "$config_key" | tr '[:lower:]' '[:upper:]')
-            echo "${var_name}=$pass" >> "$ENV_FILE"
-            print_success "Generated $config_key"
-            ;;
-
-        # MinIO
-        "minio_root_user")
-            collect_input "MINIO_ROOT_USER" "MinIO root username" "minioadmin" false
-            echo "MINIO_ROOT_USER=$INPUT_RESULT" >> "$ENV_FILE"
-            ;;
-
-        "minio_root_password")
-            local minio_pass=$(generate_password 32)
-            echo "MINIO_ROOT_PASSWORD=$minio_pass" >> "$ENV_FILE"
-            print_success "Generated MinIO password"
-            ;;
-
-        # Signal
-        "signal_phone")
-            collect_input "SIGNAL_PHONE" "Signal phone number (+1234567890)" "" false "validate_phone"
-            echo "SIGNAL_PHONE=$INPUT_RESULT" >> "$ENV_FILE"
-            ;;
-
-        "signal_password")
-            local signal_pass=$(generate_password 32)
-            echo "SIGNAL_PASSWORD=$signal_pass" >> "$ENV_FILE"
-            print_success "Generated Signal password"
-            ;;
-
-        # Jupyter
-        "jupyter_token")
-            local jupyter_token=$(generate_password 48)
-            echo "JUPYTER_TOKEN=$jupyter_token" >> "$ENV_FILE"
-            print_success "Generated Jupyter token"
-            ;;
-
-        # Prometheus
-        "prometheus_retention")
-            collect_input "PROMETHEUS_RETENTION" "Prometheus data retention (e.g., 15d)" "15d" false
-            echo "PROMETHEUS_RETENTION=$INPUT_RESULT" >> "$ENV_FILE"
-            ;;
-
-        # Seafile
-        "seafile_admin_email")
-            collect_input "SEAFILE_ADMIN_EMAIL" "Seafile admin email" "$ADMIN_EMAIL" true "validate_email"
-            echo "SEAFILE_ADMIN_EMAIL=$INPUT_RESULT" >> "$ENV_FILE"
-            ;;
-
-        *)
-            print_warn "Unknown configuration: $config_key (skipped)"
-            ;;
-    esac
-}
-#───────────────────────────────────────────────────────────────────────────────
-# DIRECTORY STRUCTURE CREATION
-#───────────────────────────────────────────────────────────────────────────────
-
-create_directory_structure() {
-    log_phase "9" "📁 Directory Structure Creation"
-
-    if [[ ! -f "$SERVICES_FILE" ]]; then
-        print_error "Services file not found: $SERVICES_FILE"
-        exit 1
-    fi
-
-    local selected_services=($(jq -r '.services[].key' "$SERVICES_FILE"))
-
-    echo ""
-    print_header "🏗️  Creating Directory Structure"
-    echo ""
-
-    # Create base directories
-    print_info "Creating base directories..."
-
-    local base_dirs=(
-        "$DATA_ROOT"
-        "$METADATA_DIR"
-        "$DATA_ROOT/compose"
-        "$DATA_ROOT/configs"
-        "$DATA_ROOT/scripts"
-        "$DATA_ROOT/backups"
-        "$DATA_ROOT/logs"
-        "$DATA_ROOT/temp"
+    
+    # Custom port selection for major services
+    local -A default_ports=(
+        ["nginx-proxy-manager"]="80"
+        ["traefik"]="80"
+        ["caddy"]="80"
+        ["openwebui"]="3000"
+        ["anythingllm"]="3001"
+        ["n8n"]="5678"
+        ["dify"]="8080"
+        ["flowise"]="3002"
+        ["comfyui"]="8188"
+        ["ollama"]="11434"
+        ["litellm"]="4000"
+        ["signal-api"]="8090"
+        ["openclaw"]="18789"
+        ["tailscale"]="8443"
+        ["prometheus"]="9090"
+        ["grafana"]="3005"
+        ["milvus"]="19530"
+        ["chroma"]="8000"
+        ["weaviate"]="8080"
+        ["minio"]="9000"
     )
-
-    for dir in "${base_dirs[@]"; do
-        if mkdir -p "$dir" 2>/dev/null; then
-            print_success "Created: $dir"
-        else
-            print_error "Failed to create: $dir"
-            exit 1
+    
+    # Proxy port configuration
+    if [[ " ${selected_services[*]} " =~ " nginx-proxy-manager " ]] || [[ " ${selected_services[*]} " =~ " traefik " ]] || [[ " ${selected_services[*]} " =~ " caddy " ]]; then
+        echo ""
+        print_info "Proxy Port Configuration"
+        echo ""
+        
+        if [[ " ${selected_services[*]} " =~ " nginx-proxy-manager " ]]; then
+            prompt_input "NGINX_PROXY_HTTP_PORT" "Nginx Proxy Manager HTTP port" "80" false
+            echo "NGINX_PROXY_HTTP_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+            
+            prompt_input "NGINX_PROXY_HTTPS_PORT" "Nginx Proxy Manager HTTPS port" "443" false
+            echo "NGINX_PROXY_HTTPS_PORT=$INPUT_RESULT" >> "$ENV_FILE"
         fi
-    done
-
-    # Create service-specific directories
-    echo ""
-    print_info "Creating service directories..."
-
-    local created_count=0
-
+        
+        if [[ " ${selected_services[*]} " =~ " traefik " ]]; then
+            prompt_input "TRAEFIK_HTTP_PORT" "Traefik HTTP port" "80" false
+            echo "TRAEFIK_HTTP_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+            
+            prompt_input "TRAEFIK_HTTPS_PORT" "Traefik HTTPS port" "443" false
+            echo "TRAEFIK_HTTPS_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+        fi
+        
+        if [[ " ${selected_services[*]} " =~ " caddy " ]]; then
+            prompt_input "CADDY_HTTP_PORT" "Caddy HTTP port" "80" false
+            echo "CADDY_HTTP_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+            
+            prompt_input "CADDY_HTTPS_PORT" "Caddy HTTPS port" "443" false
+            echo "CADDY_HTTPS_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+        fi
+    fi
+    
+    # Service port configuration
     for service_key in "${selected_services[@]}"; do
-        local service_dirs=()
-
         case "$service_key" in
-            # Reverse Proxy
-            "traefik")
-                service_dirs=(
-                    "$DATA_ROOT/traefik/config"
-                    "$DATA_ROOT/traefik/acme"
-                    "$DATA_ROOT/traefik/logs"
-                )
-                ;;
-
-            # VPN
-            "tailscale")
-                service_dirs=(
-                    "$DATA_ROOT/tailscale/state"
-                    "$DATA_ROOT/tailscale/config"
-                )
-                ;;
-
-            # Container Management
-            "portainer")
-                service_dirs=(
-                    "$DATA_ROOT/portainer/data"
-                )
-                ;;
-
-            "yacht")
-                service_dirs=(
-                    "$DATA_ROOT/yacht/config"
-                )
-                ;;
-
-            # Databases
-            "postgres")
-                service_dirs=(
-                    "$DATA_ROOT/postgres/data"
-                    "$DATA_ROOT/postgres/backups"
-                    "$DATA_ROOT/postgres/init"
-                )
-                ;;
-
-            "redis")
-                service_dirs=(
-                    "$DATA_ROOT/redis/data"
-                    "$DATA_ROOT/redis/config"
-                )
-                ;;
-
-            "mongodb")
-                service_dirs=(
-                    "$DATA_ROOT/mongodb/data"
-                    "$DATA_ROOT/mongodb/backups"
-                    "$DATA_ROOT/mongodb/logs"
-                )
-                ;;
-
-            # Vector Databases
-            "qdrant")
-                service_dirs=(
-                    "$DATA_ROOT/qdrant/storage"
-                    "$DATA_ROOT/qdrant/snapshots"
-                    "$DATA_ROOT/qdrant/config"
-                )
-                ;;
-
-            "weaviate")
-                service_dirs=(
-                    "$DATA_ROOT/weaviate/data"
-                    "$DATA_ROOT/weaviate/backups"
-                )
-                ;;
-
-            "milvus")
-                service_dirs=(
-                    "$DATA_ROOT/milvus/data"
-                    "$DATA_ROOT/milvus/etcd"
-                    "$DATA_ROOT/milvus/minio"
-                    "$DATA_ROOT/milvus/logs"
-                )
-                ;;
-
-            "chromadb")
-                service_dirs=(
-                    "$DATA_ROOT/chromadb/data"
-                    "$DATA_ROOT/chromadb/backups"
-                )
-                ;;
-
-            # AI Chat Interfaces
-            "librechat")
-                service_dirs=(
-                    "$DATA_ROOT/librechat/uploads"
-                    "$DATA_ROOT/librechat/config"
-                    "$DATA_ROOT/librechat/logs"
-                )
-                ;;
-
-            "openwebui")
-                service_dirs=(
-                    "$DATA_ROOT/openwebui/data"
-                    "$DATA_ROOT/openwebui/uploads"
-                )
-                ;;
-
-            "chatgptui")
-                service_dirs=(
-                    "$DATA_ROOT/chatgptui/data"
-                )
-                ;;
-
-            "lobe")
-                service_dirs=(
-                    "$DATA_ROOT/lobe/data"
-                    "$DATA_ROOT/lobe/uploads"
-                )
-                ;;
-
-            "hollama")
-                service_dirs=(
-                    "$DATA_ROOT/hollama/data"
-                )
-                ;;
-
-            # LLM Infrastructure
-            "litellm")
-                service_dirs=(
-                    "$DATA_ROOT/litellm/config"
-                    "$DATA_ROOT/litellm/logs"
-                    "$DATA_ROOT/litellm/cache"
-                )
-                ;;
-
-            "localai")
-                service_dirs=(
-                    "$DATA_ROOT/localai/models"
-                    "$DATA_ROOT/localai/uploads"
-                    "$DATA_ROOT/localai/config"
-                )
-                ;;
-
-            # Communication
-            "signal")
-                service_dirs=(
-                    "$DATA_ROOT/signal/data"
-                    "$DATA_ROOT/signal/attachments"
-                )
-                ;;
-
-            "ntfy")
-                service_dirs=(
-                    "$DATA_ROOT/ntfy/data"
-                    "$DATA_ROOT/ntfy/cache"
-                    "$DATA_ROOT/ntfy/config"
-                )
-                ;;
-
-            # Automation
-            "n8n")
-                service_dirs=(
-                    "$DATA_ROOT/n8n/data"
-                    "$DATA_ROOT/n8n/workflows"
-                    "$DATA_ROOT/n8n/backups"
-                )
-                ;;
-
-            "activepieces")
-                service_dirs=(
-                    "$DATA_ROOT/activepieces/data"
-                    "$DATA_ROOT/activepieces/flows"
-                )
-                ;;
-
-            "windmill")
-                service_dirs=(
-                    "$DATA_ROOT/windmill/data"
-                    "$DATA_ROOT/windmill/scripts"
-                    "$DATA_ROOT/windmill/resources"
-                )
-                ;;
-
-            "huginn")
-                service_dirs=(
-                    "$DATA_ROOT/huginn/data"
-                )
-                ;;
-
-            # Monitoring
-            "prometheus")
-                service_dirs=(
-                    "$DATA_ROOT/prometheus/data"
-                    "$DATA_ROOT/prometheus/config"
-                    "$DATA_ROOT/prometheus/rules"
-                )
-                ;;
-
-            "grafana")
-                service_dirs=(
-                    "$DATA_ROOT/grafana/data"
-                    "$DATA_ROOT/grafana/dashboards"
-                    "$DATA_ROOT/grafana/provisioning/datasources"
-                    "$DATA_ROOT/grafana/provisioning/dashboards"
-                    "$DATA_ROOT/grafana/plugins"
-                )
-                ;;
-
-            "uptimekuma")
-                service_dirs=(
-                    "$DATA_ROOT/uptimekuma/data"
-                )
-                ;;
-
-            "netdata")
-                service_dirs=(
-                    "$DATA_ROOT/netdata/config"
-                    "$DATA_ROOT/netdata/cache"
-                    "$DATA_ROOT/netdata/lib"
-                )
-                ;;
-
-            # Development
-            "codeserver")
-                service_dirs=(
-                    "$DATA_ROOT/codeserver/config"
-                    "$DATA_ROOT/codeserver/projects"
-                    "$DATA_ROOT/codeserver/extensions"
-                )
-                ;;
-
-            "jupyter")
-                service_dirs=(
-                    "$DATA_ROOT/jupyter/notebooks"
-                    "$DATA_ROOT/jupyter/data"
-                    "$DATA_ROOT/jupyter/config"
-                )
-                ;;
-
-            # Storage
-            "minio")
-                service_dirs=(
-                    "$DATA_ROOT/minio/data"
-                    "$DATA_ROOT/minio/config"
-                )
-                ;;
-
-            "seafile")
-                service_dirs=(
-                    "$DATA_ROOT/seafile/data"
-                    "$DATA_ROOT/seafile/mysql"
-                    "$DATA_ROOT/seafile/logs"
-                )
-                ;;
-
-            # Search
-            "searxng")
-                service_dirs=(
-                    "$DATA_ROOT/searxng/config"
-                )
-                ;;
-
-            "meilisearch")
-                service_dirs=(
-                    "$DATA_ROOT/meilisearch/data"
-                    "$DATA_ROOT/meilisearch/dumps"
-                )
-                ;;
-
-            # RAG & Documents
-            "anythingllm")
-                service_dirs=(
-                    "$DATA_ROOT/anythingllm/storage"
-                    "$DATA_ROOT/anythingllm/documents"
-                    "$DATA_ROOT/anythingllm/vector-cache"
-                    "$DATA_ROOT/anythingllm/uploads"
-                )
-                ;;
-
-            "danswer")
-                service_dirs=(
-                    "$DATA_ROOT/danswer/data"
-                    "$DATA_ROOT/danswer/indexes"
-                    "$DATA_ROOT/danswer/uploads"
-                )
-                ;;
-
-            "quivr")
-                service_dirs=(
-                    "$DATA_ROOT/quivr/data"
-                    "$DATA_ROOT/quivr/uploads"
-                    "$DATA_ROOT/quivr/embeddings"
-                )
-                ;;
-
-            *)
-                print_warn "No directory structure defined for: $service_key"
-                continue
+            "nginx-proxy-manager"|"traefik"|"caddy"|"openwebui"|"anythingllm"|"n8n"|"dify"|"ollama"|"litellm"|"prometheus"|"grafana"|"signal-api"|"openclaw"|"tailscale"|"postgres"|"redis"|"qdrant"|"milvus"|"chroma"|"weaviate"|"minio")
+                local default_port="${default_ports[$service_key]:-3000}"
+                prompt_input "${service_key^^}_PORT" "$service_key port" "$default_port" false
+                echo "${service_key^^}_PORT=$INPUT_RESULT" >> "$ENV_FILE"
                 ;;
         esac
-
-        # Create the directories
-        for dir in "${service_dirs[@]"; do
-            if mkdir -p "$dir" 2>/dev/null; then
-                ((created_count++))
+    done
+    
+    # Ollama model selection
+    if [[ " ${selected_services[*]} " =~ " ollama " ]]; then
+        echo ""
+        print_header "🤖 Ollama Model Selection"
+        echo ""
+        
+        print_info "Select models to download and use:"
+        echo ""
+        echo "Recommended Models:"
+        echo "  [1] llama3.2:8b (7.8GB) - Latest Llama 3.2"
+        echo "  [2] llama3.2:70b (43GB) - Full Llama 3.2 (requires 64GB RAM)"
+        echo "  [3] mistral:7b (4.7GB) - Mistral 7B"
+        echo "  [4] codellama:13b (7.6GB) - Code Llama"
+        echo "  [5] qwen2.5:14b (8.2GB) - Qwen 2.5"
+        echo ""
+        echo "Specialized Models:"
+        echo "  [6] llama3.1:8b (4.9GB) - Llama 3.1"
+        echo "  [7] mixtral:8x7b (4.7GB) - Mixtral MoE"
+        echo "  [8] deepseek-coder:6.7b (3.8GB) - DeepSeek Coder"
+        echo ""
+        echo "Select models (space-separated, e.g., '1 3 5'):"
+        echo "Or enter 'recommended' for models 1,3,4"
+        echo ""
+        
+        while true; do
+            echo -n -e "${YELLOW}Enter model selection:${NC} "
+            read -r model_selection
+            
+            if [[ "$model_selection" == "recommended" ]]; then
+                echo "OLLAMA_MODELS=llama3.2:8b,mistral:7b,codellama:13b" >> "$ENV_FILE"
+                print_success "Recommended models selected: llama3.2:8b, mistral:7b, codellama:13b"
+                break
+            elif [[ "$model_selection" =~ ^[0-9\ ]+$ ]]; then
+                local selected_models=()
+                for num in $model_selection; do
+                    case $num in
+                        1) selected_models+=("llama3.2:8b") ;;
+                        2) selected_models+=("llama3.2:70b") ;;
+                        3) selected_models+=("mistral:7b") ;;
+                        4) selected_models+=("codellama:13b") ;;
+                        5) selected_models+=("qwen2.5:14b") ;;
+                        6) selected_models+=("llama3.1:8b") ;;
+                        7) selected_models+=("mixtral:8x7b") ;;
+                        8) selected_models+=("deepseek-coder:6.7b") ;;
+                        *) print_warn "Invalid model selection: $num" ;;
+                    esac
+                done
+                
+                if [[ ${#selected_models[@]} -gt 0 ]]; then
+                    local models_str=$(IFS=','; echo "${selected_models[*]}")
+                    echo "OLLAMA_MODELS=$models_str" >> "$ENV_FILE"
+                    print_success "Models selected: $models_str"
+                    break
+                fi
             else
-                print_error "Failed to create: $dir"
+                print_error "Invalid selection. Please enter numbers 1-8 or 'recommended'"
             fi
         done
-    done
-
-    print_success "Created $created_count service directories"
-
-    # Set appropriate permissions
-    echo ""
-    print_info "Setting directory permissions..."
-
-    # Most directories: 755
-    find "$DATA_ROOT" -type d -exec chmod 755 {} \; 2>/dev/null
-
-    # Sensitive directories: 700
-    local secure_dirs=(
-        "$DATA_ROOT/traefik/acme"
-        "$DATA_ROOT/tailscale/state"
-        "$DATA_ROOT/postgres/data"
-        "$DATA_ROOT/mongodb/data"
-        "$DATA_ROOT/redis/data"
-        "$METADATA_DIR"
-    )
-
-    for dir in "${secure_dirs[@]"; do
-        if [[ -d "$dir" ]]; then
-            chmod 700 "$dir"
+        
+        # Default model
+        echo ""
+        prompt_input "OLLAMA_DEFAULT_MODEL" "Default Ollama model" "llama3.2:8b" false
+        echo "OLLAMA_DEFAULT_MODEL=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        print_success "Ollama configuration completed"
+    fi
+    if [[ " ${selected_services[*]} " =~ " postgres " ]]; then
+        echo ""
+        print_info "PostgreSQL Configuration"
+        echo ""
+        
+        local postgres_password=$(generate_random_password 24)
+        echo "POSTGRES_PASSWORD=$postgres_password" >> "$ENV_FILE"
+        echo "POSTGRES_DB=aiplatform" >> "$ENV_FILE"
+        echo "POSTGRES_USER=postgres" >> "$ENV_FILE"
+        
+        # Check if default port is available
+        if [[ " ${port_conflicts[*]} " =~ "5432:" ]]; then
+            prompt_input "POSTGRES_PORT" "PostgreSQL port (5432 in use)" "5433" false
+            echo "POSTGRES_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+        else
+            echo "POSTGRES_PORT=5432" >> "$ENV_FILE"
         fi
-    done
-
-    print_success "Directory permissions configured"
-
-    # Create directory map
-    local dir_map_file="$METADATA_DIR/directory_map.json"
-
-    cat > "$dir_map_file" <<EOF
+        
+        print_success "PostgreSQL configuration generated"
+    fi
+    
+    # Redis configuration
+    if [[ " ${selected_services[*]} " =~ " redis " ]]; then
+        echo ""
+        print_info "Redis Configuration"
+        echo ""
+        
+        local redis_password=$(generate_random_password 24)
+        echo "REDIS_PASSWORD=$redis_password" >> "$ENV_FILE"
+        echo "REDIS_PORT=6379" >> "$ENV_FILE"
+        
+        print_success "Redis configuration generated"
+    fi
+    
+    # Vector Database Selection
+    if [[ " ${selected_services[*]} " =~ " anythingllm " ]] || [[ " ${selected_services[*]} " =~ " dify " ]]; then
+        echo ""
+        print_header "🗄️ Vector Database Selection"
+        echo ""
+        
+        echo "Select vector database for RAG applications:"
+        echo ""
+        echo "  1) Qdrant (Recommended)"
+        echo "     - REST + gRPC API"
+        echo "     - Web dashboard"
+        echo "     - Production-ready"
+        echo ""
+        echo "  2) Milvus"
+        echo "     - High performance"
+        echo "     - Distributed support"
+        echo "     - Complex setup"
+        echo ""
+        echo "  3) ChromaDB"
+        echo "     - Simple setup"
+        echo "     - Python-native"
+        echo "     - Good for development"
+        echo ""
+        echo "  4) Weaviate"
+        echo "     - GraphQL API"
+        echo "     - Semantic search"
+        echo "     - Modular architecture"
+        echo ""
+        
+        while true; do
+            echo -n -e "${YELLOW}Select vector database [1-4]:${NC} "
+            read -r vector_db_choice
+            
+            case "$vector_db_choice" in
+                1)
+                    echo "VECTOR_DB=qdrant" >> "$ENV_FILE"
+                    echo "VECTOR_DB_TYPE=qdrant" >> "$ENV_FILE"
+                    print_success "Qdrant selected as vector database"
+                    break
+                    ;;
+                2)
+                    echo "VECTOR_DB=milvus" >> "$ENV_FILE"
+                    echo "VECTOR_DB_TYPE=milvus" >> "$ENV_FILE"
+                    print_success "Milvus selected as vector database"
+                    break
+                    ;;
+                3)
+                    echo "VECTOR_DB=chroma" >> "$ENV_FILE"
+                    echo "VECTOR_DB_TYPE=chroma" >> "$ENV_FILE"
+                    print_success "ChromaDB selected as vector database"
+                    break
+                    ;;
+                4)
+                    echo "VECTOR_DB=weaviate" >> "$ENV_FILE"
+                    echo "VECTOR_DB_TYPE=weaviate" >> "$ENV_FILE"
+                    print_success "Weaviate selected as vector database"
+                    break
+                    ;;
+                *)
+                    print_error "Invalid selection"
+                    ;;
+            esac
+        done
+    fi
+    
+    # LLM Provider Selection (moved before routing strategy)
+    if [[ " ${selected_services[*]} " =~ " litellm " ]]; then
+        echo ""
+        print_header "🤖 LLM Provider Configuration"
+        echo ""
+        
+        print_info "Configure LLM providers for LiteLLM routing:"
+        echo ""
+        echo "✅ Local Provider:"
+        echo "  • Ollama (will be deployed)"
+        echo "  • Models: ${OLLAMA_MODELS:-llama3.2:8b,mistral:7b,codellama:13b}"
+        echo ""
+        
+        echo "Add API providers? (recommended for fallback)"
+        echo ""
+        echo "Select providers to configure (space-separated):"
+        echo "  1) OpenAI (GPT-4, GPT-3.5)"
+        echo "  2) Anthropic (Claude 3)"
+        echo "  3) Google (Gemini)"
+        echo "  4) Groq (Fast Llama inference)"
+        echo "  5) Mistral (Mistral AI)"
+        echo "  6) All of the above"
+        echo "  7) Skip API providers"
+        echo ""
+        
+        while true; do
+            echo -n -e "${YELLOW}Select providers [1-7]:${NC} "
+            read -r llm_provider_selection
+            
+            # Handle space-separated input like "3 4" or "3,4" or "3-4"
+            if [[ "$llm_provider_selection" =~ [,\ -] ]]; then
+                # Multiple providers selected
+                local selected_providers=("local")
+                local provider_keys=()
+                
+                # Clean up the input and split by spaces, commas, or dashes
+                local cleaned_input=$(echo "$llm_provider_selection" | tr ', ' ' ' ')
+                
+                for num in $cleaned_input; do
+                    case $num in
+                        1) 
+                            selected_providers+=("openai")
+                            provider_keys+=("OPENAI_API_KEY")
+                            ;;
+                        2) 
+                            selected_providers+=("anthropic")
+                            provider_keys+=("ANTHROPIC_API_KEY")
+                            ;;
+                        3) 
+                            selected_providers+=("google")
+                            provider_keys+=("GOOGLE_API_KEY")
+                            ;;
+                        4) 
+                            selected_providers+=("groq")
+                            provider_keys+=("GROQ_API_KEY")
+                            ;;
+                        5) 
+                            selected_providers+=("mistral")
+                            provider_keys+=("MISTRAL_API_KEY")
+                            ;;
+                        6) 
+                            selected_providers+=("openai" "anthropic" "google" "groq" "mistral")
+                            provider_keys+=("OPENAI_API_KEY" "ANTHROPIC_API_KEY" "GOOGLE_API_KEY" "GROQ_API_KEY" "MISTRAL_API_KEY")
+                            ;;
+                        *) print_warn "Invalid provider selection: $num" ;;
+                    esac
+                done
+                
+                if [[ ${#selected_providers[@]} -gt 1 ]]; then
+                    local providers_str=$(IFS=','; echo "${selected_providers[*]}")
+                    echo "LLM_PROVIDERS=$providers_str" >> "$ENV_FILE"
+                    
+                    # Prompt for API keys for selected providers
+                    for key in "${provider_keys[@]}"; do
+                        case $key in
+                            "OPENAI_API_KEY") prompt_input "OPENAI_API_KEY" "OpenAI API key" "" false && echo "OPENAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE" ;;
+                            "ANTHROPIC_API_KEY") prompt_input "ANTHROPIC_API_KEY" "Anthropic API key" "" false && echo "ANTHROPIC_API_KEY=$INPUT_RESULT" >> "$ENV_FILE" ;;
+                            "GOOGLE_API_KEY") prompt_input "GOOGLE_API_KEY" "Google AI API key" "" false && echo "GOOGLE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE" ;;
+                            "GROQ_API_KEY") prompt_input "GROQ_API_KEY" "Groq API key" "" false && echo "GROQ_API_KEY=$INPUT_RESULT" >> "$ENV_FILE" ;;
+                            "MISTRAL_API_KEY") prompt_input "MISTRAL_API_KEY" "Mistral API key" "" false && echo "MISTRAL_API_KEY=$INPUT_RESULT" >> "$ENV_FILE" ;;
+                        esac
+                    done
+                    
+                    print_success "Providers configured: $providers_str"
+                    break
+                fi
+            else
+                # Single provider selection (original logic)
+                case "$llm_provider_selection" in
+                1)
+                    echo "LLM_PROVIDERS=local,openai" >> "$ENV_FILE"
+                    prompt_input "OPENAI_API_KEY" "OpenAI API key" "" false
+                    echo "OPENAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    print_success "Local + OpenAI providers configured"
+                    break
+                    ;;
+                2)
+                    echo "LLM_PROVIDERS=local,anthropic" >> "$ENV_FILE"
+                    prompt_input "ANTHROPIC_API_KEY" "Anthropic API key" "" false
+                    echo "ANTHROPIC_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    print_success "Local + Anthropic providers configured"
+                    break
+                    ;;
+                3)
+                    echo "LLM_PROVIDERS=local,google" >> "$ENV_FILE"
+                    prompt_input "GOOGLE_API_KEY" "Google AI API key" "" false
+                    echo "GOOGLE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    print_success "Local + Google providers configured"
+                    break
+                    ;;
+                4)
+                    echo "LLM_PROVIDERS=local,groq" >> "$ENV_FILE"
+                    prompt_input "GROQ_API_KEY" "Groq API key" "" false
+                    echo "GROQ_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    print_success "Local + Groq providers configured"
+                    break
+                    ;;
+                5)
+                    echo "LLM_PROVIDERS=local,mistral" >> "$ENV_FILE"
+                    prompt_input "MISTRAL_API_KEY" "Mistral API key" "" false
+                    echo "MISTRAL_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    print_success "Local + Mistral providers configured"
+                    break
+                    ;;
+                6)
+                    echo "LLM_PROVIDERS=local,openai,anthropic,google,groq,mistral" >> "$ENV_FILE"
+                    prompt_input "OPENAI_API_KEY" "OpenAI API key" "" false
+                    echo "OPENAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    prompt_input "ANTHROPIC_API_KEY" "Anthropic API key" "" false
+                    echo "ANTHROPIC_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    prompt_input "GOOGLE_API_KEY" "Google AI API key" "" false
+                    echo "GOOGLE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    prompt_input "GROQ_API_KEY" "Groq API key" "" false
+                    echo "GROQ_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    prompt_input "MISTRAL_API_KEY" "Mistral API key" "" false
+                    echo "MISTRAL_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    print_success "All providers configured"
+                    break
+                    ;;
+                7)
+                    echo "LLM_PROVIDERS=local" >> "$ENV_FILE"
+                    print_success "Local provider only"
+                    break
+                    ;;
+                *)
+                    print_error "Invalid selection"
+                    ;;
+            esac
+        done
+        
+        # LiteLLM routing strategy (now after providers are configured)
+        echo ""
+        print_header "🔄 LiteLLM Routing Strategy"
+        echo ""
+        
+        echo "Select routing strategy for configured providers:"
+        echo ""
+        echo "  1) simple-shuffle"
+        echo "     Random selection from available models"
+        echo ""
+        echo "  2) cost-based-routing (Recommended)"
+        echo "     Choose cheapest model first, fallback on expensive"
+        echo ""
+        echo "  3) latency-based-routing"
+        echo "     Choose fastest model based on historical latency"
+        echo ""
+        echo "  4) usage-based-routing"
+        echo "     Load balance across all models"
+        echo ""
+        
+        while true; do
+            echo -n -e "${YELLOW}Select routing strategy [1-4]:${NC} "
+            read -r routing_choice
+            
+            case "$routing_choice" in
+                1)
+                    echo "LITELLM_ROUTING_STRATEGY=simple-shuffle" >> "$ENV_FILE"
+                    print_success "Simple Shuffle routing selected"
+                    break
+                    ;;
+                2)
+                    echo "LITELLM_ROUTING_STRATEGY=cost-based" >> "$ENV_FILE"
+                    print_success "Cost-based routing selected"
+                    break
+                    ;;
+                3)
+                    echo "LITELLM_ROUTING_STRATEGY=latency-based" >> "$ENV_FILE"
+                    print_success "Latency-based routing selected"
+                    break
+                    ;;
+                4)
+                    echo "LITELLM_ROUTING_STRATEGY=usage-based" >> "$ENV_FILE"
+                    print_success "Usage-based routing selected"
+                    break
+                    ;;
+                *)
+                    print_error "Invalid selection"
+                    ;;
+            esac
+        done
+        
+        # LiteLLM core variables
+        local litellm_master_key=$(generate_random_password 32)
+        echo "LITELLM_MASTER_KEY=$litellm_master_key" >> "$ENV_FILE"
+        echo "LITELLM_CACHE_ENABLED=true" >> "$ENV_FILE"
+        echo "LITELLM_CACHE_TTL=3600" >> "$ENV_FILE"
+        echo "LITELLM_RATE_LIMIT_ENABLED=true" >> "$ENV_FILE"
+        echo "LITELLM_RATE_LIMIT_REQUESTS_PER_MINUTE=60" >> "$ENV_FILE"
+        
+        print_success "LiteLLM configuration completed"
+    fi
+    
+    # Signal API configuration
+    if [[ " ${selected_services[*]} " =~ " signal-api " ]]; then
+        echo ""
+        print_header "📱 Signal API Configuration"
+        echo ""
+        
+        print_info "Signal Bot Configuration"
+        echo ""
+        
+        prompt_input "SIGNAL_PHONE" "Signal phone number (E.164 format, e.g., +15551234567)" "" false
+        echo "SIGNAL_PHONE=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        # Signal pairing options
+        echo ""
+        print_info "Signal Pairing Options:"
+        echo ""
+        echo "  1) Generate QR Code (Recommended - scan with Signal app)"
+        echo "  2) Internal API pairing (http://localhost:8081/v1/generate_token)"
+        echo "  3) Manual pairing (advanced)"
+        echo ""
+        
+        while true; do
+            echo -n -e "${YELLOW}Select pairing method [1-3]:${NC} "
+            read -r signal_pairing
+            
+            case "$signal_pairing" in
+                1)
+                    echo "SIGNAL_PAIRING_METHOD=qr_code" >> "$ENV_FILE"
+                    echo "SIGNAL_QR_URL=http://localhost:8090/v1/qrcode" >> "$ENV_FILE"
+                    print_success "QR code pairing selected"
+                    print_info "QR code will be available at: http://localhost:8090/v1/qrcode"
+                    break
+                    ;;
+                2)
+                    echo "SIGNAL_PAIRING_METHOD=internal_api" >> "$ENV_FILE"
+                    echo "SIGNAL_API_PAIRING_URL=http://localhost:8081/v1/generate_token" >> "$ENV_FILE"
+                    print_success "Internal API pairing selected"
+                    print_info "Pairing token will be available at: http://localhost:8081/v1/generate_token"
+                    break
+                    ;;
+                3)
+                    echo "SIGNAL_PAIRING_METHOD=manual" >> "$ENV_FILE"
+                    local signal_password=$(generate_random_password 16)
+                    echo "SIGNAL_PASSWORD=$signal_password" >> "$ENV_FILE"
+                    print_success "Manual pairing selected"
+                    break
+                    ;;
+                *)
+                    print_error "Invalid selection"
+                    ;;
+            esac
+        done
+        
+        # Signal webhook configuration
+        echo ""
+        print_info "Signal Webhook Configuration"
+        echo ""
+        echo "SIGNAL_WEBHOOK_URL=http://signal-api:8090/v2/receive" >> "$ENV_FILE"
+        echo "SIGNAL_API_PORT=8090" >> "$ENV_FILE"
+        
+        print_success "Signal API configuration completed"
+    fi
+    
+    # OpenClaw configuration
+    if [[ " ${selected_services[*]} " =~ " openclaw " ]]; then
+        echo ""
+        print_header "🔗 OpenClaw UI Configuration"
+        echo ""
+        
+        print_info "OpenClaw Multi-Channel Orchestration"
+        echo ""
+        
+        prompt_input "OPENCLAW_ADMIN_USER" "OpenClaw admin user" "admin" false
+        echo "OPENCLAW_ADMIN_USER=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        local openclaw_password=$(generate_random_password 24)
+        echo "OPENCLAW_ADMIN_PASSWORD=$openclaw_password" >> "$ENV_FILE"
+        
+        echo "OPENCLAW_PORT=8082" >> "$ENV_FILE"
+        echo "OPENCLAW_API_PORT=8083" >> "$ENV_FILE"
+        
+        # OpenClaw integration settings
+        echo "OPENCLAW_ENABLE_SIGNAL=true" >> "$ENV_FILE"
+        echo "OPENCLAW_ENABLE_LITELM=true" >> "$ENV_FILE"
+        echo "OPENCLAW_ENABLE_N8N=true" >> "$ENV_FILE"
+        
+        print_success "OpenClaw configuration completed"
+    fi
+    echo ""
+    print_info "Google Drive Integration (Optional)"
+    echo ""
+    
+    if confirm "Configure Google Drive sync?"; then
+        print_info "Google Drive Configuration"
+        echo ""
+        
+        echo "Select authentication method:"
+        echo "  1) OAuth 2.0 (Recommended for personal use)"
+        echo "  2) Service Account (Recommended for server use)"
+        echo "  3) rclone (Advanced)"
+        echo ""
+        
+        while true; do
+            echo -n -e "${YELLOW}Select method [1-3]:${NC} "
+            read -r auth_method
+            
+            case "$auth_method" in
+                1)
+                    echo "GDRIVE_AUTH_METHOD=oauth" >> "$ENV_FILE"
+                    prompt_input "GDRIVE_CLIENT_ID" "Google Client ID" "" false
+                    echo "GDRIVE_CLIENT_ID=$INPUT_RESULT" >> "$ENV_FILE"
+                    prompt_input "GDRIVE_CLIENT_SECRET" "Google Client Secret" "" true
+                    echo "GDRIVE_CLIENT_SECRET=$INPUT_RESULT" >> "$ENV_FILE"
+                    break
+                    ;;
+                2)
+                    echo "GDRIVE_AUTH_METHOD=service_account" >> "$ENV_FILE"
+                    print_info "Service account JSON file path:"
+                    echo -n -e "${YELLOW}Path to service account JSON:${NC} "
+                    read -r json_path
+                    echo "GDRIVE_SERVICE_ACCOUNT_JSON=$json_path" >> "$ENV_FILE"
+                    break
+                    ;;
+                3)
+                    echo "GDRIVE_AUTH_METHOD=rclone" >> "$ENV_FILE"
+                    print_info "rclone configuration will be set up later"
+                    break
+                    ;;
+                *)
+                    print_error "Invalid selection"
+                    ;;
+            esac
+        done
+        
+        prompt_input "GDRIVE_SYNC_INTERVAL" "Sync interval in minutes" "15" false
+        echo "GDRIVE_SYNC_INTERVAL=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        print_success "Google Drive configuration completed"
+    fi
+    
+    # Application-specific configurations
+    echo ""
+    print_info "Application Configuration"
+    echo ""
+    
+    # Admin passwords
+    local admin_password=$(generate_random_password 24)
+    echo "ADMIN_PASSWORD=$admin_password" >> "$ENV_FILE"
+    echo "GRAFANA_PASSWORD=$admin_password" >> "$ENV_FILE"
+    
+    # JWT secrets
+    local jwt_secret=$(generate_random_password 64)
+    echo "JWT_SECRET=$jwt_secret" >> "$ENV_FILE"
+    
+    # n8n encryption key
+    if [[ " ${selected_services[*]} " =~ " n8n " ]]; then
+        local n8n_key=$(generate_random_password 64)
+        echo "N8N_ENCRYPTION_KEY=$n8n_key" >> "$ENV_FILE"
+    fi
+    
+    # Dify configuration
+    if [[ " ${selected_services[*]} " =~ " dify " ]]; then
+        local dify_secret=$(generate_random_password 32)
+        echo "DIFY_SECRET_KEY=$dify_secret" >> "$ENV_FILE"
+        echo "DIFY_WEB_API_PORT=5001" >> "$ENV_FILE"
+        echo "DIFY_WEB_PORT=3002" >> "$ENV_FILE"
+    fi
+    
+    # MinIO configuration (if selected)
+    if [[ " ${selected_services[*]} " =~ " minio " ]]; then
+        echo ""
+        print_info "MinIO Configuration"
+        echo ""
+        
+        prompt_input "MINIO_ROOT_USER" "MinIO root user" "minioadmin" false
+        echo "MINIO_ROOT_USER=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        local minio_pass=$(generate_random_password 32)
+        echo "MINIO_ROOT_PASSWORD=$minio_pass" >> "$ENV_FILE"
+        
+        print_success "MinIO configuration completed"
+    fi
+    
+    # Save configuration summary
+    echo ""
+    print_header "📊 Configuration Summary"
+    echo ""
+    
+    local config_summary="$METADATA_DIR/configuration_summary.json"
+    
+    cat > "$config_summary" <<EOF
 {
-  "created": "$(date -Iseconds)",
-  "data_root": "$DATA_ROOT",
-  "total_directories": $created_count,
-  "base_directories": [
+  "configuration_time": "$(date -Iseconds)",
+  "selected_services": ${#selected_services[@]},
+  "services": [
 EOF
-
+    
     local first=true
-    for dir in "${base_dirs[@]"; do
+    for service in "${selected_services[@]}"; do
         if [[ "$first" == false ]]; then
-            echo "," >> "$dir_map_file"
+            echo "," >> "$config_summary"
         fi
         first=false
-        echo "    \"$dir\"" >> "$dir_map_file"
+        echo "    \"$service\"" >> "$config_summary"
     done
-
-    cat >> "$dir_map_file" <<EOF
+    
+    cat >> "$config_summary" <<EOF
 
   ],
-  "service_directories": {
-EOF
-
-    first=true
-    for service_key in "${selected_services[@]}"; do
-        if [[ "$first" == false ]]; then
-            echo "," >> "$dir_map_file"
-        fi
-        first=false
-
-        echo "    \"$service_key\": [" >> "$dir_map_file"
-
-        # List directories for this service
-        local service_dirs=($(find "$DATA_ROOT" -type d -path "*/$service_key/*" 2>/dev/null | sort))
-        local dir_first=true
-
-        for dir in "${service_dirs[@]"; do
-            if [[ "$dir_first" == false ]]; then
-                echo "," >> "$dir_map_file"
-            fi
-            dir_first=false
-            echo "      \"$dir\"" >> "$dir_map_file"
-        done
-
-        echo "    ]" >> "$dir_map_file"
-    done
-
-    cat >> "$dir_map_file" <<EOF
-
-  }
+  "environment_variables": $(grep -c "^" "$ENV_FILE"),
+  "generated_secrets": $(grep -c "_PASSWORD\|_SECRET\|_KEY" "$ENV_FILE")
 }
 EOF
-
-    print_success "Directory map saved to $dir_map_file"
+    
+    print_success "Configuration summary saved: $config_summary"
+    print_info "Total environment variables: $(grep -c "^" "$ENV_FILE")"
+    print_info "Generated secrets: $(grep -c "_PASSWORD\|_SECRET\|_KEY" "$ENV_FILE")"
+    
+    echo ""
+    print_success "Configuration collection completed"
 }
 
-#───────────────────────────────────────────────────────────────────────────────
-# SYSTEM VALIDATION
-#───────────────────────────────────────────────────────────────────────────────
+create_directory_structure() {
+    log_phase "9" "📁" "Directory Structure Creation"
+    
+    print_info "Creating modular directory structure..."
+    
+    # Create directories
+    mkdir -p "$DATA_ROOT"/{compose,env,config,metadata,data,logs,secrets}
+    
+    # Create config subdirectories
+    mkdir -p "$DATA_ROOT/config"/{nginx,traefik,caddy,litellm,postgres,redis,qdrant,prometheus,grafana}
+    
+    print_success "Directory structure created"
+    print_info "Base: $DATA_ROOT"
+}
 
 validate_system() {
-    log_phase "10" "✅ System Validation"
-
-    echo ""
-    print_header "🔍 System Validation"
-    echo ""
-
-    local validation_errors=0
-    local validation_warnings=0
-
+    log_phase "10" "🔍" "System Validation"
+    
+    print_info "Validating system configuration..."
+    
     # Check Docker
-    print_info "Validating Docker..."
-    if ! docker ps &>/dev/null; then
-        print_error "Docker is not running"
-        ((validation_errors++))
+    if command -v docker >/dev/null 2>&1; then
+        print_success "Docker is installed and running"
+        docker --version
     else
-        print_success "Docker is running"
-
-        # Check Docker Compose
-        if ! docker compose version &>/dev/null; then
-            print_error "Docker Compose not available"
-            ((validation_errors++))
-        else
-            local compose_version=$(docker compose version --short)
-            print_success "Docker Compose $compose_version available"
-        fi
+        print_error "Docker is not installed"
+        return 1
     fi
-
-    # Check Ollama
-    print_info "Validating Ollama..."
-    if ! systemctl is-active --quiet ollama; then
-        print_warn "Ollama service not running"
-        ((validation_warnings++))
+    
+    # Check directories
+    if [[ -d "$DATA_ROOT" ]]; then
+        print_success "Data directory exists: $DATA_ROOT"
     else
-        print_success "Ollama service is active"
-
-        # Check if any models installed
-        local model_count=$(ollama list 2>/dev/null | tail -n +2 | wc -l)
-        if [[ $model_count -eq 0 ]]; then
-            print_warn "No Ollama models installed"
-            ((validation_warnings++))
-        else
-            print_success "$model_count Ollama model(s) installed"
-        fi
+        print_error "Data directory not found"
+        return 1
     fi
-
-    # Check GPU (if applicable)
-    if [[ -f "$SYSTEM_INFO_FILE" ]]; then
-        local has_gpu=$(jq -r '.gpu.detected' "$SYSTEM_INFO_FILE")
-
-        if [[ "$has_gpu" == "true" ]]; then
-            print_info "Validating GPU access..."
-
-            if ! nvidia-smi &>/dev/null; then
-                print_error "nvidia-smi not accessible"
-                ((validation_errors++))
-            else
-                print_success "NVIDIA GPU accessible"
-
-                # Test GPU in Docker
-                if docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi &>/dev/null; then
-                    print_success "GPU accessible in Docker containers"
-                else
-                    print_warn "GPU not accessible in Docker"
-                    ((validation_warnings++))
-                fi
-            fi
-        fi
-    fi
-
-    # Check required files
-    print_info "Validating configuration files..."
-
-    local required_files=(
-        "$SYSTEM_INFO_FILE:System info"
-        "$SERVICES_FILE:Service selection"
-        "$ENV_FILE:Environment config"
-    )
-
-    for file_info in "${required_files[@]"; do
-        local file_path=$(echo "$file_info" | cut -d':' -f1)
-        local file_desc=$(echo "$file_info" | cut -d':' -f2)
-
-        if [[ ! -f "$file_path" ]]; then
-            print_error "$file_desc not found: $file_path"
-            ((validation_errors++))
-        else
-            print_success "$file_desc exists"
-        fi
-    done
-
-    # Check directory structure
-    print_info "Validating directory structure..."
-
-    local required_dirs=(
-        "$DATA_ROOT"
-        "$METADATA_DIR"
-        "$DATA_ROOT/compose"
-        "$DATA_ROOT/configs"
-        "$DATA_ROOT/scripts"
-    )
-
-    for dir in "${required_dirs[@]"; do
-        if [[ ! -d "$dir" ]]; then
-            print_error "Required directory missing: $dir"
-            ((validation_errors++))
-        fi
-    done
-
-    if [[ $validation_errors -eq 0 ]]; then
-        print_success "All required directories exist"
-    fi
-
-    # Check disk space
-    print_info "Validating disk space..."
-
-    local available_gb=$(df -BG "$DATA_ROOT" | tail -1 | awk '{print $4}' | sed 's/G//')
-
-    if [[ $available_gb -lt 10 ]]; then
-        print_error "Insufficient disk space: ${available_gb}GB available (minimum 10GB required)"
-        ((validation_errors++))
-    elif [[ $available_gb -lt 50 ]]; then
-        print_warn "Low disk space: ${available_gb}GB available (50GB+ recommended)"
-        ((validation_warnings++))
+    
+    # Check environment file
+    if [[ -f "$ENV_FILE" ]]; then
+        print_success "Environment file exists: $ENV_FILE"
     else
-        print_success "Sufficient disk space: ${available_gb}GB available"
+        print_error "Environment file not found"
+        return 1
     fi
-
-    # Check memory
-    print_info "Validating memory..."
-
-    local total_mem_gb=$(free -g | awk '/^Mem:/{print $2}')
-
-    if [[ $total_mem_gb -lt 4 ]]; then
-        print_error "Insufficient memory: ${total_mem_gb}GB (minimum 4GB required)"
-        ((validation_errors++))
-    elif [[ $total_mem_gb -lt 8 ]]; then
-        print_warn "Limited memory: ${total_mem_gb}GB (8GB+ recommended)"
-        ((validation_warnings++))
-    else
-        print_success "Sufficient memory: ${total_mem_gb}GB available"
-    fi
-
-    # Check network connectivity
-    print_info "Validating network connectivity..."
-
-    if ! ping -c 1 -W 2 8.8.8.8 &>/dev/null; then
-        print_error "No internet connectivity"
-        ((validation_errors++))
-    else
-        print_success "Internet connectivity OK"
-
-        # Check DNS resolution
-        if ! ping -c 1 -W 2 google.com &>/dev/null; then
-            print_warn "DNS resolution issues detected"
-            ((validation_warnings++))
-        else
-            print_success "DNS resolution OK"
-        fi
-    fi
-
-    # Summary
-    echo ""
-    echo "$(printf "═%.0s" {1..60})"
-    echo ""
-
-    if [[ $validation_errors -eq 0 && $validation_warnings -eq 0 ]]; then
-        print_success "✅ All validations passed!"
-    elif [[ $validation_errors -eq 0 ]]; then
-        print_warn "⚠️  Validation completed with $validation_warnings warning(s)"
-    else
-        print_error "❌ Validation failed with $validation_errors error(s) and $validation_warnings warning(s)"
-
-        echo ""
-        if ! confirm "Continue despite validation errors?"; then
-            print_error "Setup aborted"
-            exit 1
-        fi
-    fi
-
-    # Save validation results
-    local validation_file="$METADATA_DIR/validation_results.json"
-
-    cat > "$validation_file" <<EOF
-{
-  "timestamp": "$(date -Iseconds)",
-  "errors": $validation_errors,
-  "warnings": $validation_warnings,
-  "docker": {
-    "running": $(docker ps &>/dev/null && echo "true" || echo "false"),
-    "compose_available": $(docker compose version &>/dev/null && echo "true" || echo "false")
-  },
-  "ollama": {
-    "service_active": $(systemctl is-active --quiet ollama && echo "true" || echo "false"),
-    "models_installed": $(ollama list 2>/dev/null | tail -n +2 | wc -l)
-  },
-  "resources": {
-    "disk_space_gb": $available_gb,
-    "memory_gb": $total_mem_gb,
-    "internet": $(ping -c 1 -W 2 8.8.8.8 &>/dev/null && echo "true" || echo "false")
-  }
+    
+    print_success "System validation completed"
 }
-EOF
-
-    print_success "Validation results saved to $validation_file"
-}
-#───────────────────────────────────────────────────────────────────────
-# SUMMARY REPORT
-#───────────────────────────────────────────────────────────────────────
 
 generate_summary() {
-    log_phase "11" "📊 Summary Report Generation"
-
+    log_phase "11" "📊" "Summary Generation"
+    
+    echo ""
+    print_header "📊 Setup Summary"
+    echo ""
+    
+    # Generate comprehensive summary
     local summary_file="$METADATA_DIR/setup_summary.txt"
-    local summary_json="$METADATA_DIR/setup_summary.json"
-
-    # Gather data
-    local total_services=0
-    local service_names=()
-
-    if [[ -f "$SERVICES_FILE" ]]; then
-        total_services=$(jq -r '.services | length' "$SERVICES_FILE")
-        mapfile -t service_names < <(jq -r '.services[].display_name' "$SERVICES_FILE")
-    fi
-
-    local ollama_models=()
-    if command -v ollama &>/dev/null; then
-        mapfile -t ollama_models < <(ollama list 2>/dev/null | tail -n +2 | awk '{print $1}')
-    fi
-
-    # Generate text summary
+    local urls_file="$METADATA_DIR/service_urls.txt"
+    
     cat > "$summary_file" <<EOF
-═══════════════════════════════════════════════════════════════════════════════
-                          🎉 SETUP COMPLETE! 🎉
-═══════════════════════════════════════════════════════════════════════════════
+AI Platform Setup Summary
+======================
 
-Setup Date:           $(date '+%Y-%m-%d %H:%M:%S %Z')
-Hostname:             $(hostname)
-Data Directory:       $DATA_ROOT
-Metadata Directory:   $METADATA_DIR
+Setup completed: $(date -Iseconds)
+Script version: 4.0.0
 
-───────────────────────────────────────────────────────────────────────────────
-SYSTEM INFORMATION
-───────────────────────────────────────────────────────────────────────────────
+Directories:
+- Data: $DATA_ROOT
+- Metadata: $METADATA_DIR
+- Logs: $DATA_ROOT/logs
+- Config: $DATA_ROOT/config
+- Compose: $DATA_ROOT/compose
 
-OS:                   $(grep PRETTY_NAME /etc/os-release | cut -d' -f2)
-Kernel:               $(uname -r)
-CPU:                  $(grep "model name" /proc/cpuinfo | head -1 | cut -d':' -f2 | xargs)
-CPU Cores:            $(nproc)
-Memory:               $(free -h | awk '/^Mem:/{print $2}')
-Disk Space:           $(df -h "$DATA_ROOT" | tail -1 | awk '{print $4}') available
+Network Configuration:
+- Domain: ${DOMAIN:-localhost}
+- Public IP: ${PUBLIC_IP:-unknown}
+- Domain Resolves: ${DOMAIN_RESOLVES:-false}
+- Proxy: ${PROXY_TYPE:-none}
+- SSL: ${SSL_TYPE:-none}
 
+Selected Services: $(jq -r '.total_services' "$SERVICES_FILE" 2>/dev/null || echo "unknown")
+Environment Variables: $(grep -c "^" "$ENV_FILE" 2>/dev/null || echo "0")
+Generated Secrets: $(grep -c "_PASSWORD\|_SECRET\|_KEY" "$ENV_FILE" 2>/dev/null || echo "0")
+
+Next Steps:
+1. Review configuration in $ENV_FILE
+2. Review service URLs in $urls_file
+3. Run: sudo bash 2-deploy-services.sh
+4. Monitor deployment logs
+
+Generated Files:
+- Environment variables: $ENV_FILE
+- Service selections: $SERVICES_FILE
+- Configuration summary: $METADATA_DIR/configuration_summary.json
+- Service URLs: $urls_file
+- State file: $STATE_FILE
 EOF
+    
+    # Generate service URLs and ports summary
+    cat > "$urls_file" <<EOF
+AI Platform Service URLs and Ports
+================================
 
-    # GPU info if available
-    if [[ -f "$SYSTEM_INFO_FILE" ]]; then
-        local has_gpu=$(jq -r '.gpu.detected' "$SYSTEM_INFO_FILE" 2>/dev/null)
-
-        if [[ "$has_gpu" == "true" ]]; then
-            cat >> "$summary_file" <<EOF
-GPU:                  NVIDIA GPU Detected
-GPU Driver:           $(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1)
-CUDA Version:         $(nvidia-smi | grep "CUDA Version" | awk '{print $9}' 2>/dev/null)
-
+Public Access:
 EOF
-        fi
+    
+    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+        echo "- Main Site: https://$DOMAIN" >> "$urls_file"
+        echo "- Admin Panel: https://$DOMAIN/admin" >> "$urls_file"
+    else
+        echo "- Main Site: http://${PUBLIC_IP:-localhost}" >> "$urls_file"
+        echo "- Admin Panel: http://${PUBLIC_IP:-localhost}:8080" >> "$urls_file"
     fi
-
-    cat >> "$summary_file" <<EOF
-───────────────────────────────────────────────────────────────────────────────
-DOCKER ENVIRONMENT
-───────────────────────────────────────────────────────────────────────────────
-
-Docker Version:       $(docker --version | awk '{print $3}' | tr -d ',')
-Docker Compose:       $(docker compose version --short)
-Docker Root:          $(docker info --format '{{.DockerRootDir}}' 2>/dev/null)
-
-───────────────────────────────────────────────────────────────────────────────
-OLLAMA INSTALLATION
-───────────────────────────────────────────────────────────────────────────────
-
-Ollama Version:       $(ollama --version 2>/dev/null | awk '{print $NF}')
-Service Status:       $(systemctl is-active ollama)
-Models Installed:     ${#ollama_models[@]}}
-
-EOF
-
-    if [[ ${#ollama_models[@]}} -gt 0 ]]; then
-        cat >> "$summary_file" <<EOF
-Installed Models:
-EOF
-        for model in "${ollama_models[@]}}"; do
-            echo "  • $model" >> "$summary_file"
-        done
-        echo "" >> "$summary_file"
-    fi
-
-    cat >> "$summary_file" <<EOF
-───────────────────────────────────────────────────────────────────────────────
-SELECTED SERVICES
-───────────────────────────────────────────────────────────────────────────────
-
-Total Services:       $total_services
-
-EOF
-
-    if [[ ${#service_names[@] -gt 0 ]]; then
-        cat >> "$summary_file" <<EOF
-Service List:
-EOF
-        for service in "${service_names[@]"; do
-            echo "  ✓ $service" >> "$summary_file"
-        done
-        echo "" >> "$summary_file"
-    fi
-
-    cat >> "$summary_file" <<EOF
-───────────────────────────────────────────────────────────────────────────────
-CONFIGURATION FILES
-───────────────────────────────────────────────────────────────────────────────
-
-System Info:          $SYSTEM_INFO_FILE
-Service Selection:    $SERVICES_FILE
-Environment Config:   $ENV_FILE
-Directory Map:        $METADATA_DIR/directory_map.json
-Validation Results:   $METADATA_DIR/validation_results.json
-Setup Log:            $LOG_FILE
-
-───────────────────────────────────────────────────────────────────────────────
-NEXT STEPS
-───────────────────────────────────────────────────────────────────────────────
-
-1. Review Configuration:
-
-   View your environment configuration:
-   $ cat $ENV_FILE
-
-   Review selected services:
-   $ cat $SERVICES_FILE | jq .
-
-2. Generate Docker Compose Files:
-
-   Run the compose generator script (Script 2):
-   $ sudo bash 2_generate_compose_files.sh
-
-3. Deploy Services:
-
-   Run the deployment script (Script 3):
-   $ sudo bash 3_deploy_services.sh
-
-4. Access Services:
-
-   Services will be available at:
-   • Traefik Dashboard:  https://traefik.$DOMAIN
-   • Portainer:          https://portainer.$DOMAIN
-   • Open WebUI:         https://openwebui.$DOMAIN
-   • Other services:     https://<service>.$DOMAIN
-
-5. Monitor Deployment:
-
-   Check running containers:
-   $ docker ps
-
-   View service logs:
-   $ docker compose -f $DATA_ROOT/compose/<service>.yml logs -f
-
-   Check Ollama:
-   $ ollama list
-   $ systemctl status ollama
-
-───────────────────────────────────────────────────────────────────────────────
-IMPORTANT NOTES
-───────────────────────────────────────────────────────────────────────────────
-
-• Your environment file contains sensitive credentials
-  Location: $ENV_FILE (permissions: 600)
-
-• Backup your metadata directory regularly:
-  $ tar -czf homelab-backup-\$(date +%Y%m%d).tar.gz $METADATA_DIR
-
-• Default admin credentials are in $ENV_FILE
-  Change them after first login!
-
-• Traefik will automatically obtain Let's Encrypt SSL certificates
-  Ensure your domain DNS is properly configured
-
-• GPU acceleration is available for Ollama
-  Test with: ollama run llama3.2
-
-───────────────────────────────────────────────────────────────────────────────
-TROUBLESHOOTING
-───────────────────────────────────────────────────────────────────────────────
-
-• Check setup log for errors:
-  $ tail -100 $LOG_FILE
-
-• Verify Docker network:
-  $ docker network ls | grep homelab
-
-• Test Ollama API:
-  $ curl http://localhost:11434/api/tags
-
-• Review system validation:
-  $ cat $METADATA_DIR/validation_results.json | jq .
-
-───────────────────────────────────────────────────────────────────────────────
-SUPPORT & DOCUMENTATION
-───────────────────────────────────────────────────────────────────────────────
-
-For issues or questions:
-• Review the setup log: $LOG_FILE
-• Check service documentation in Docker Compose files
-• Consult individual service documentation
-
-═══════════════════════════════════════════════════════════════════════════════
-                    🚀 Ready to generate compose files! 🚀
-═══════════════════════════════════════════════════════════════════════════════
-
-EOF
-
-    # Generate JSON summary
-    cat > "$summary_json" <<EOF
-{
-  "setup_completed": "$(date -Iseconds)",
-  "hostname": "$(hostname)",
-  "directories": {
-    "data_root": "$DATA_ROOT",
-    "metadata": "$METADATA_DIR"
-  },
-  "system": {
-    "os": "$(grep PRETTY_NAME /etc/os-release | cut -d' -f2)",
-    "kernel": "$(uname -r)",
-    "cpu_cores": $(nproc),
-    "memory_gb": $(free -g | awk '/^Mem:/{print $2}'),
-    "gpu_available": $(nvidia-smi &>/dev/null && echo "true" || echo "false")
-  },
-  "docker": {
-    "version": "$(docker --version | awk '{print $3}' | tr -d ',')",
-    "compose_version": "$(docker compose version --short)"
-  },
-  "ollama": {
-    "version": "$(ollama --version 2>/dev/null | awk '{print $NF}')",
-    "service_active": $(systemctl is-active --quiet ollama && echo "true" || echo "false"),
-    "models_count": ${#ollama_models[@]}},
-    "models": [
-EOF
-
-    local first=true
-    for model in "${ollama_models[@]}"; do
-        if [[ "$first" == false ]]; then
-            echo "," >> "$summary_json"
-        fi
-        first=false
-        echo "      \"$model\"" >> "$summary_json"
+    
+    echo "" >> "$urls_file"
+    echo "Service Ports:" >> "$urls_file"
+    echo "" >> "$urls_file"
+    
+    # Add service URLs based on selected services
+    local selected_services=($(jq -r '.services[].key' "$SERVICES_FILE" 2>/dev/null || echo ""))
+    
+    for service in "${selected_services[@]}"; do
+        case "$service" in
+            "openwebui")
+                echo "- Open WebUI: http://localhost:3000" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Open WebUI (Public): https://$DOMAIN/openwebui" >> "$urls_file"
+                ;;
+            "anythingllm")
+                echo "- AnythingLLM: http://localhost:3001" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- AnythingLLM (Public): https://$DOMAIN/anythingllm" >> "$urls_file"
+                ;;
+            "dify")
+                echo "- Dify: http://localhost:8080" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Dify (Public): https://$DOMAIN/dify" >> "$urls_file"
+                ;;
+            "n8n")
+                echo "- n8n: http://localhost:5678" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- n8n (Public): https://$DOMAIN/n8n" >> "$urls_file"
+                ;;
+            "flowise")
+                echo "- Flowise: http://localhost:3002" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Flowise (Public): https://$DOMAIN/flowise" >> "$urls_file"
+                ;;
+            "litellm")
+                echo "- LiteLLM: http://localhost:4000" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- LiteLLM (Public): https://$DOMAIN/litellm" >> "$urls_file"
+                ;;
+            "signal-api")
+                echo "- Signal API: http://localhost:8090" >> "$urls_file"
+                echo "- Signal QR: http://localhost:8090/v1/qrcode" >> "$urls_file"
+                ;;
+            "openclaw")
+                echo "- OpenClaw: http://localhost:8082" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- OpenClaw (Public): https://$DOMAIN/openclaw" >> "$urls_file"
+                ;;
+            "prometheus")
+                echo "- Prometheus: http://localhost:9090" >> "$urls_file"
+                ;;
+            "grafana")
+                echo "- Grafana: http://localhost:3001" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Grafana (Public): https://$DOMAIN/grafana" >> "$urls_file"
+                ;;
+            "qdrant")
+                echo "- Qdrant: http://localhost:6333" >> "$urls_file"
+                echo "- Qdrant Dashboard: http://localhost:6333/dashboard" >> "$urls_file"
+                ;;
+            "postgres")
+                echo "- PostgreSQL: localhost:5432" >> "$urls_file"
+                ;;
+            "redis")
+                echo "- Redis: localhost:6379" >> "$urls_file"
+                ;;
+            "minio")
+                echo "- MinIO: http://localhost:9000" >> "$urls_file"
+                echo "- MinIO Console: http://localhost:9001" >> "$urls_file"
+                ;;
+        esac
     done
-
-    cat >> "$summary_json" <<EOF
-
-    ]
-  },
-  "services": {
-    "total": $total_services,
-    "names": [
-EOF
-
-    first=true
-    for service in "${service_names[@]}"; do
-        if [[ "$first" == false ]]; then
-            echo "," >> "$summary_json"
-        fi
-        first=false
-        echo "      \"$service\"" >> "$summary_json"
-    done
-
-    cat >> "$summary_json" <<EOF
-
-    ]
-  },
-  "files": {
-    "system_info": "$SYSTEM_INFO_FILE",
-    "services": "$SERVICES_FILE",
-    "environment": "$ENV_FILE",
-    "directory_map": "$METADATA_DIR/directory_map.json",
-    "validation": "$METADATA_DIR/validation_results.json",
-    "log": "$LOG_FILE"
-  },
-  "next_steps": [
-    "Review configuration files",
-    "Run compose generator script",
-    "Deploy services",
-    "Access services via domain"
-  ]
-}
-EOF
-
-    # Display summary
-    clear
-    cat "$summary_file"
-
-    print_success "Summary saved to:"
-    print_success "  • Text: $summary_file"
-    print_success "  • JSON: $summary_json"
+    
+    echo "" >> "$urls_file"
+    echo "Database Credentials:" >> "$urls_file"
+    echo "" >> "$urls_file"
+    echo "- PostgreSQL User: postgres" >> "$urls_file"
+    echo "- PostgreSQL Password: $(grep "^POSTGRES_PASSWORD=" "$ENV_FILE" | cut -d= -f2)" >> "$urls_file"
+    echo "- Redis Password: $(grep "^REDIS_PASSWORD=" "$ENV_FILE" | cut -d= -f2)" >> "$urls_file"
+    echo "- Vector DB: ${VECTOR_DB:-qdrant}" >> "$urls_file"
+    [[ -n "${QDRANT_API_KEY:-}" ]] && echo "- Qdrant API Key: $(grep "^QDRANT_API_KEY=" "$ENV_FILE" | cut -d= -f2)" >> "$urls_file"
+    
+    echo "" >> "$urls_file"
+    echo "Admin Credentials:" >> "$urls_file"
+    echo "" >> "$urls_file"
+    echo "- Admin Password: $(grep "^ADMIN_PASSWORD=" "$ENV_FILE" | cut -d= -f2)" >> "$urls_file"
+    echo "- Grafana Password: $(grep "^GRAFANA_PASSWORD=" "$ENV_FILE" | cut -d= -f2)" >> "$urls_file"
+    [[ -n "${OPENCLAW_ADMIN_PASSWORD:-}" ]] && echo "- OpenClaw Password: $(grep "^OPENCLAW_ADMIN_PASSWORD=" "$ENV_FILE" | cut -d= -f2)" >> "$urls_file"
+    
+    # Display summary to user
+    print_success "Setup summary generated: $summary_file"
+    print_success "Service URLs saved: $urls_file"
+    print_info "Review service URLs file for complete access information"
+    
+    # Display key information
+    echo ""
+    print_header "🔑 Key Information"
+    echo ""
+    print_info "Database Credentials:"
+    echo "  • PostgreSQL User: postgres"
+    echo "  • PostgreSQL Password: $(grep "^POSTGRES_PASSWORD=" "$ENV_FILE" | cut -d= -f2)"
+    echo "  • Redis Password: $(grep "^REDIS_PASSWORD=" "$ENV_FILE" | cut -d= -f2)"
+    echo "  • Vector Database: ${VECTOR_DB:-qdrant}"
+    echo ""
+    
+    print_info "Admin Credentials:"
+    echo "  • Admin Password: $(grep "^ADMIN_PASSWORD=" "$ENV_FILE" | cut -d= -f2)"
+    echo "  • Grafana Password: $(grep "^GRAFANA_PASSWORD=" "$ENV_FILE" | cut -d= -f2)"
+    [[ -n "${OPENCLAW_ADMIN_PASSWORD:-}" ]] && echo "  • OpenClaw Password: $(grep "^OPENCLAW_ADMIN_PASSWORD=" "$ENV_FILE" | cut -d= -f2)"
+    echo ""
+    
+    print_info "Service Access:"
+    echo "  • Open WebUI: http://localhost:3000"
+    echo "  • LiteLLM: http://localhost:4000"
+    echo "  • n8n: http://localhost:5678"
+    echo "  • Dify: http://localhost:8080"
+    echo "  • Grafana: http://localhost:3001"
+    echo ""
+    
+    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+        print_success "Domain resolves correctly - public access available"
+    else
+        print_warn "Domain does not resolve - using local access"
+    fi
+    
+    print_success "Summary generation completed"
 }
 
-#───────────────────────────────────────────────────────────────────────
-# MAIN EXECUTION FLOW
-#───────────────────────────────────────────────────────────────────────
-
+# Main Execution
 main() {
     # Ensure running as root
     if [[ $EUID -ne 0 ]]; then
         echo "This script must be run as root"
         exit 1
     fi
-
+    
     # Initialize
     setup_logging
-
+    
     # Display banner
-    clear
     print_banner
-
-    # Phase 1: Detect system
+    
+    # Check for previous state and offer to resume
+    if restore_state; then
+        print_info "Resuming from saved state..."
+    else
+        # Fresh start - clear any old state
+        rm -f "$STATE_FILE"
+        COMPLETED_PHASES=()
+        save_state "init" "started" "Setup initialized"
+    fi
+    
+    # Execute phases
     detect_system
-
-    # Phase 2: Collect domain info
+    mark_phase_complete "detect_system"
+    
     collect_domain_info
-
-    # Phase 3: Update system
+    mark_phase_complete "collect_domain_info"
+    
     update_system
-
-    # Phase 4: Install Docker
+    mark_phase_complete "update_system"
+    
     install_docker
-
-    # Phase 5: Configure Docker
+    mark_phase_complete "install_docker"
+    
     configure_docker
-
-    # Phase 6: Install Ollama
+    mark_phase_complete "configure_docker"
+    
     install_ollama
-
-    # Phase 7: Select services
+    mark_phase_complete "install_ollama"
+    
     select_services
-
-    # Phase 8: Collect configs
-    collect_service_configs
-
-    # Phase 9: Create directories
+    mark_phase_complete "select_services"
+    
+    collect_configurations
+    mark_phase_complete "collect_configurations"
+    
     create_directory_structure
-
-    # Phase 10: Validate system
+    mark_phase_complete "create_directory_structure"
+    
     validate_system
-
-    # Phase 11: Generate summary
+    mark_phase_complete "validate_system"
+    
     generate_summary
-
+    mark_phase_complete "generate_summary"
+    
+    # Mark setup as completed
+    save_state "completed" "success" "Setup completed successfully"
+    
     # Completion message
-    echo ""
-    echo "$(printf '═%.0s' {1..80})"
-    echo ""
-    print_success "🎉 SETUP SCRIPT COMPLETED SUCCESSFULLY!"
-    echo ""
-    print_info "Next: Run the compose generator script:"
-    echo ""
-    echo "  ${CYAN}sudo bash 2_generate_compose_files.sh${NC}"
     echo ""
     echo "==============================================================================="
     echo ""
+    print_success "🎉 SETUP SCRIPT COMPLETED SUCCESSFULLY!"
+    echo ""
+    print_info "Next: Run the deployment script:"
+    echo ""
+    echo -e "${CYAN}sudo bash 2-deploy-services.sh${NC}"
+    echo ""
+    echo "==============================================================================="
+    echo ""
+    
+    exit 0
 }
 
 # Run main function
 main "$@"
-
-# Exit successfully
-exit 0
-
-#───────────────────────────────────────────────────────────────────────────────
-# END OF SCRIPT 1: SYSTEM SETUP
-#───────────────────────────────────────────────────────────────────────────────
