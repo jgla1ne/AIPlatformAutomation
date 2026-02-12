@@ -1260,6 +1260,7 @@ EOF
                     print_error "Invalid selection"
                     ;;
             esac
+        fi
         done
         
         # LiteLLM routing strategy (now after providers are configured)
