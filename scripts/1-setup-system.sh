@@ -1683,16 +1683,69 @@ collect_config_value() {
             prompt_input "OPENAI_API_KEY" "OpenAI API Key (or skip)" "" false
             echo "OPENAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
             ;;
-
-        # OAuth
-        "google_client_id")
-            prompt_input "GOOGLE_CLIENT_ID" "Google OAuth Client ID" "" false
-            echo "GOOGLE_CLIENT_ID=$INPUT_RESULT" >> "$ENV_FILE"
+        "anthropic_api_key")
+            prompt_input "ANTHROPIC_API_KEY" "Anthropic API Key (or skip)" "" false
+            echo "ANTHROPIC_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
             ;;
-
-        "google_client_secret")
-            prompt_input "GOOGLE_CLIENT_SECRET" "Google OAuth Client Secret" "" false
-            echo "GOOGLE_CLIENT_SECRET=$INPUT_RESULT" >> "$ENV_FILE"
+        "google_api_key")
+            prompt_input "GOOGLE_API_KEY" "Google API Key (or skip)" "" false
+            echo "GOOGLE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+            ;;
+        "groq_api_key")
+            prompt_input "GROQ_API_KEY" "Groq API Key (or skip)" "" false
+            echo "GROQ_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+            ;;
+        "mistral_api_key")
+            prompt_input "MISTRAL_API_KEY" "Mistral API Key (or skip)" "" false
+            echo "MISTRAL_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+            ;;
+        "openrouter_api_key")
+            prompt_input "OPENROUTER_API_KEY" "OpenRouter API Key (or skip)" "" false
+            echo "OPENROUTER_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+            ;;
+        "deepseek_api_key")
+            prompt_input "DEEPSEEK_API_KEY" "DeepSeek API Key (or skip)" "" false
+            echo "DEEPSEEK_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+            ;;
+        "together_api_key")
+            prompt_input "TOGETHER_API_KEY" "Together API Key (or skip)" "" false
+            echo "TOGETHER_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+            ;;
+        "fireworks_api_key")
+            prompt_input "FIREWORKS_API_KEY" "Fireworks API Key (or skip)" "" false
+            echo "FIREWORKS_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+            ;;
+        "perplexity_api_key")
+            prompt_input "PERPLEXITY_API_KEY" "Perplexity API Key (or skip)" "" false
+            echo "PERPLEXITY_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+            ;;
+        "cohere_api_key")
+            prompt_input "COHERE_API_KEY" "Cohere API Key (or skip)" "" false
+            echo "COHERE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+            ;;
+        "huggingface_token")
+            prompt_input "HUGGINGFACE_TOKEN" "Hugging Face Token (or skip)" "" false
+            echo "HUGGINGFACE_TOKEN=$INPUT_RESULT" >> "$ENV_FILE"
+            ;;
+        "replicate_api_key")
+            prompt_input "REPLICATE_API_KEY" "Replicate API Key (or skip)" "" false
+            echo "REPLICATE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+            ;;
+        "xai_api_key")
+            prompt_input "XAI_API_KEY" "XAI API Key (or skip)" "" false
+            echo "XAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+            ;;
+        "novita_api_key")
+            prompt_input "NOVITA_API_KEY" "Novita API Key (or skip)" "" false
+            echo "NOVITA_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+            ;;
+        "groq_base_url")
+            prompt_input "GROQ_BASE_URL" "Groq Base URL (or skip)" "" false
+            echo "GROQ_BASE_URL=$INPUT_RESULT" >> "$ENV_FILE"
+            ;;
+        "openai_base_url")
+            prompt_input "OPENAI_BASE_URL" "OpenAI Base URL (or skip)" "" false
+            echo "OPENAI_BASE_URL=$INPUT_RESULT" >> "$ENV_FILE"
             ;;
 
         # JWT Secrets
