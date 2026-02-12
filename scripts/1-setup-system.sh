@@ -807,7 +807,7 @@ collect_configurations() {
         ["ollama"]="11434"
         ["litellm"]="4000"
         ["signal-api"]="8090"
-        ["openclaw"]="3000"
+        ["openclaw"]="18789"
         ["tailscale"]="8443"
         ["prometheus"]="9090"
         ["grafana"]="3001"
@@ -885,7 +885,7 @@ EOF
         ["prometheus"]="9090"
         ["grafana"]="3001"
         ["signal-api"]="8090"
-        ["openclaw"]="3000"
+        ["openclaw"]="18789"
         ["tailscale"]="8443"
         ["postgres"]="5432"
         ["redis"]="6379"
@@ -947,18 +947,71 @@ EOF
         esac
     done
     
-    # Ollama model selection (simplified)
+    # Ollama model selection (full list)
     if [[ " ${selected_services[*]} " =~ " ollama " ]]; then
         echo ""
-        print_header "🤖 Ollama Configuration"
+        print_header "🤖 Ollama Model Selection"
         echo ""
         
-        # Just set default model - LiteLLM will handle model selection
+        print_info "Select models to download and use:"
+        echo ""
+        echo "Recommended Models:"
+        echo "  [1] llama3.2:8b (7.8GB) - Latest Llama 3.2"
+        echo "  [2] llama3.2:70b (43GB) - Full Llama 3.2 (requires 64GB RAM)"
+        echo "  [3] mistral:7b (4.7GB) - Mistral 7B"
+        echo "  [4] codellama:13b (7.6GB) - Code Llama"
+        echo "  [5] qwen2.5:14b (8.2GB) - Qwen 2.5"
+        echo ""
+        echo "Specialized Models:"
+        echo "  [6] llama3.1:8b (4.9GB) - Llama 3.1"
+        echo "  [7] mixtral:8x7b (4.7GB) - Mixtral MoE"
+        echo "  [8] deepseek-coder:6.7b (3.8GB) - DeepSeek Coder"
+        echo ""
+        echo "Select models (space-separated, e.g., '1 3 5'):"
+        echo "Or enter 'recommended' for models 1,3,4"
+        echo ""
+        
+        while true; do
+            echo -n -e "${YELLOW}Enter model selection:${NC} "
+            read -r model_selection
+            
+            if [[ "$model_selection" == "recommended" ]]; then
+                echo "OLLAMA_MODELS=llama3.2:8b,mistral:7b,codellama:13b" >> "$ENV_FILE"
+                print_success "Recommended models selected: llama3.2:8b, mistral:7b, codellama:13b"
+                break
+            elif [[ "$model_selection" =~ ^[0-9\ ]+$ ]]; then
+                local selected_models=()
+                for num in $model_selection; do
+                    case $num in
+                        1) selected_models+=("llama3.2:8b") ;;
+                        2) selected_models+=("llama3.2:70b") ;;
+                        3) selected_models+=("mistral:7b") ;;
+                        4) selected_models+=("codellama:13b") ;;
+                        5) selected_models+=("qwen2.5:14b") ;;
+                        6) selected_models+=("llama3.1:8b") ;;
+                        7) selected_models+=("mixtral:8x7b") ;;
+                        8) selected_models+=("deepseek-coder:6.7b") ;;
+                        *) print_warn "Invalid model selection: $num" ;;
+                    esac
+                done
+                
+                if [[ ${#selected_models[@]} -gt 0 ]]; then
+                    local models_str=$(IFS=','; echo "${selected_models[*]}")
+                    echo "OLLAMA_MODELS=$models_str" >> "$ENV_FILE"
+                    print_success "Models selected: $models_str"
+                    break
+                fi
+            else
+                print_error "Invalid selection. Please enter numbers 1-8 or 'recommended'"
+            fi
+        done
+        
+        # Default model
+        echo ""
         prompt_input "OLLAMA_DEFAULT_MODEL" "Default Ollama model" "llama3.2:8b" false
         echo "OLLAMA_DEFAULT_MODEL=$INPUT_RESULT" >> "$ENV_FILE"
         
         print_success "Ollama configuration completed"
-        print_info "LiteLLM will handle model routing and selection"
     fi
     
     # Database configuration with service interconnection
@@ -1123,7 +1176,66 @@ EOF
             echo -n -e "${YELLOW}Select providers [1-7]:${NC} "
             read -r llm_provider_selection
             
-            case "$llm_provider_selection" in
+            # Handle space-separated input like "3 4" or "3,4" or "3-4"
+            if [[ "$llm_provider_selection" =~ [,\ -] ]]; then
+                # Multiple providers selected
+                local selected_providers=("local")
+                local provider_keys=()
+                
+                # Clean up the input and split by spaces, commas, or dashes
+                local cleaned_input=$(echo "$llm_provider_selection" | tr ', ' ' ' ')
+                
+                for num in $cleaned_input; do
+                    case $num in
+                        1) 
+                            selected_providers+=("openai")
+                            provider_keys+=("OPENAI_API_KEY")
+                            ;;
+                        2) 
+                            selected_providers+=("anthropic")
+                            provider_keys+=("ANTHROPIC_API_KEY")
+                            ;;
+                        3) 
+                            selected_providers+=("google")
+                            provider_keys+=("GOOGLE_API_KEY")
+                            ;;
+                        4) 
+                            selected_providers+=("groq")
+                            provider_keys+=("GROQ_API_KEY")
+                            ;;
+                        5) 
+                            selected_providers+=("mistral")
+                            provider_keys+=("MISTRAL_API_KEY")
+                            ;;
+                        6) 
+                            selected_providers+=("openai" "anthropic" "google" "groq" "mistral")
+                            provider_keys+=("OPENAI_API_KEY" "ANTHROPIC_API_KEY" "GOOGLE_API_KEY" "GROQ_API_KEY" "MISTRAL_API_KEY")
+                            ;;
+                        *) print_warn "Invalid provider selection: $num" ;;
+                    esac
+                done
+                
+                if [[ ${#selected_providers[@]} -gt 1 ]]; then
+                    local providers_str=$(IFS=','; echo "${selected_providers[*]}")
+                    echo "LLM_PROVIDERS=$providers_str" >> "$ENV_FILE"
+                    
+                    # Prompt for API keys for selected providers
+                    for key in "${provider_keys[@]}"; do
+                        case $key in
+                            "OPENAI_API_KEY") prompt_input "OPENAI_API_KEY" "OpenAI API key" "" false && echo "OPENAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE" ;;
+                            "ANTHROPIC_API_KEY") prompt_input "ANTHROPIC_API_KEY" "Anthropic API key" "" false && echo "ANTHROPIC_API_KEY=$INPUT_RESULT" >> "$ENV_FILE" ;;
+                            "GOOGLE_API_KEY") prompt_input "GOOGLE_API_KEY" "Google AI API key" "" false && echo "GOOGLE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE" ;;
+                            "GROQ_API_KEY") prompt_input "GROQ_API_KEY" "Groq API key" "" false && echo "GROQ_API_KEY=$INPUT_RESULT" >> "$ENV_FILE" ;;
+                            "MISTRAL_API_KEY") prompt_input "MISTRAL_API_KEY" "Mistral API key" "" false && echo "MISTRAL_API_KEY=$INPUT_RESULT" >> "$ENV_FILE" ;;
+                        esac
+                    done
+                    
+                    print_success "Providers configured: $providers_str"
+                    break
+                fi
+            else
+                # Single provider selection (original logic)
+                case "$llm_provider_selection" in
                 1)
                     echo "LLM_PROVIDERS=local,openai" >> "$ENV_FILE"
                     prompt_input "OPENAI_API_KEY" "OpenAI API key" "" false
@@ -1325,7 +1437,7 @@ EOF
         local openclaw_password=$(generate_random_password 24)
         echo "OPENCLAW_ADMIN_PASSWORD=$openclaw_password" >> "$ENV_FILE"
         
-        echo "OPENCLAW_PORT=3000" >> "$ENV_FILE"
+        echo "OPENCLAW_PORT=18789" >> "$ENV_FILE"
         echo "OPENCLAW_API_PORT=8083" >> "$ENV_FILE"
         
         # OpenClaw integration settings
