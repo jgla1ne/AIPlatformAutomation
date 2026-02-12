@@ -559,84 +559,68 @@ select_services() {
     log_phase "7" "🎯" "Service Selection"
     
     echo ""
-    print_header "📋 Available Services"
+    print_header "� Service Selection"
     echo ""
     print_info "Select services to deploy. Dependencies will be auto-selected."
     echo ""
     
-    # Infrastructure Services
-    echo "🏗️  Infrastructure:"
-    echo "  [1] Nginx Proxy Manager - Visual reverse proxy (RECOMMENDED)"
-    echo "  [2] Traefik - Modern reverse proxy with auto SSL"
-    echo "  [3] PostgreSQL - Relational database"
-    echo "  [4] Redis - Cache and message queue"
-    echo "  [5] Tailscale - VPN mesh network"
+    # Core Services (Required)
+    echo "🏗️  Core Services (Required):"
+    echo "  [1] PostgreSQL - Relational database"
+    echo "  [2] Redis - Cache and message queue"
+    echo "  [3] Qdrant - Vector database"
+    echo "  [4] Ollama - Local LLM runtime"
+    echo "  [5] LiteLLM - Universal LLM routing layer"
     echo ""
     
-    # AI Applications
-    echo "🤖 AI Applications:"
-    echo "  [6] Open WebUI - Modern ChatGPT-like interface"
-    echo "  [7] AnythingLLM - Document-based AI chat"
-    echo "  [8] Dify - LLM application development platform"
-    echo "  [9] n8n - Workflow automation platform"
-    echo "  [10] Flowise - Visual LangChain builder"
+    # AI Stack (Recommended)
+    echo "🤖 AI Stack (Recommended):"
+    echo "  [6] Open WebUI - ChatGPT-like interface for Ollama/LiteLLM"
+    echo "  [7] AnythingLLM - Document-based AI chat with RAG"
+    echo "  [8] n8n - Workflow automation"
+    echo "  [9] Signal API - Signal messaging integration"
+    echo "  [10] OpenClaw UI - Message orchestration hub"
     echo ""
     
-    # LLM Infrastructure
-    echo "🤖 LLM Infrastructure:"
-    echo "  [11] Ollama - Local LLM runtime"
-    echo "  [12] LiteLLM - Multi-provider proxy + routing"
-    echo ""
-    
-    # Vector Databases
-    echo "🧠 Vector Databases:"
-    echo "  [13] Qdrant - High-performance vector DB (Recommended)"
-    echo "  [14] Milvus - Distributed vector database"
-    echo "  [15] ChromaDB - Simple Python-native DB"
-    echo "  [16] Weaviate - GraphQL API with semantic search"
-    echo ""
-    
-    # Communication & Integration
-    echo "📱 Communication & Integration:"
-    echo "  [17] Signal API - Private messaging"
-    echo "  [18] OpenClaw UI - Multi-channel orchestration"
-    echo ""
-    
-    # Monitoring
-    echo "📊 Monitoring:"
-    echo "  [19] Prometheus + Grafana - Metrics and visualization"
-    echo ""
-    
-    # Storage
-    echo "� Storage:"
+    # Optional Services
+    echo "🔧 Optional Services:"
+    echo "  [11] Dify - LLM application development platform"
+    echo "  [12] Flowise - Visual LangChain builder"
+    echo "  [13] ComfyUI - Advanced image generation (GPU required)"
+    echo "  [14] Nginx Proxy Manager - Visual reverse proxy (RECOMMENDED)"
+    echo "  [15] Traefik - Modern reverse proxy with auto SSL"
+    echo "  [16] Caddy - Automatic zero-config HTTPS"
+    echo "  [17] SWAG - Secure Web Application Gateway"
+    echo "  [18] Prometheus + Grafana - Metrics and dashboards"
+    echo "  [19] Tailscale - VPN mesh network"
     echo "  [20] MinIO - S3-compatible storage"
     echo ""
     
     echo "Select services (space-separated, e.g., '1 3 6'):"
-    echo "Or enter 'all' to select all recommended services"
+    echo "Or enter 'core' for core services, 'stack' for AI stack, or 'all' for everything"
     echo ""
     
     local -A selected_map=(
-        ["nginx-proxy-manager"]=1
-        ["traefik"]=1
         ["postgres"]=1
         ["redis"]=1
-        ["tailscale"]=1
-        ["openwebui"]=1
-        ["anythingllm"]=1
-        ["dify"]=1
-        ["n8n"]=1
-        ["flowise"]=1
+        ["qdrant"]=1
         ["ollama"]=1
         ["litellm"]=1
-        ["qdrant"]=1
-        ["milvus"]=1
-        ["chroma"]=1
-        ["weaviate"]=1
+        ["openwebui"]=1
+        ["anythingllm"]=1
+        ["n8n"]=1
         ["signal-api"]=1
         ["openclaw"]=1
+        ["dify"]=1
+        ["flowise"]=1
+        ["comfyui"]=1
+        ["nginx-proxy-manager"]=1
+        ["traefik"]=1
+        ["caddy"]=1
+        ["swag"]=1
         ["prometheus"]=1
         ["grafana"]=1
+        ["tailscale"]=1
         ["minio"]=1
     )
     
@@ -648,32 +632,54 @@ select_services() {
             for service in "${!selected_map[@]}"; do
                 selected_map[$service]=1
             done
-            print_success "All recommended services selected"
+            print_success "All services selected"
+            break
+        elif [[ "$selection" == "core" ]]; then
+            # Select only core services
+            for service in postgres redis qdrant ollama litellm; do
+                selected_map[$service]=1
+            done
+            # Deselect optional services
+            for service in openwebui anythingllm n8n signal-api openclaw dify flowise comfyui nginx-proxy-manager traefik caddy swag prometheus grafana tailscale minio; do
+                selected_map[$service]=0
+            done
+            print_success "Core services selected"
+            break
+        elif [[ "$selection" == "stack" ]]; then
+            # Select AI stack (core + AI interfaces)
+            for service in postgres redis qdrant ollama litellm openwebui anythingllm n8n signal-api openclaw; do
+                selected_map[$service]=1
+            done
+            # Deselect optional services
+            for service in dify flowise comfyui nginx-proxy-manager traefik caddy swag prometheus grafana tailscale minio; do
+                selected_map[$service]=0
+            done
+            print_success "AI stack selected"
             break
         elif [[ "$selection" =~ ^[0-9\ ]+$ ]]; then
             for num in $selection; do
                 if [[ $num -ge 1 ]] && [[ $num -le 20 ]]; then
                     local service_name
                     case $num in
-                        1) service_name="nginx-proxy-manager" ;;
-                        2) service_name="traefik" ;;
-                        3) service_name="postgres" ;;
-                        4) service_name="redis" ;;
-                        5) service_name="tailscale" ;;
+                        1) service_name="postgres" ;;
+                        2) service_name="redis" ;;
+                        3) service_name="qdrant" ;;
+                        4) service_name="ollama" ;;
+                        5) service_name="litellm" ;;
                         6) service_name="openwebui" ;;
                         7) service_name="anythingllm" ;;
-                        8) service_name="dify" ;;
-                        9) service_name="n8n" ;;
-                        10) service_name="flowise" ;;
-                        11) service_name="ollama" ;;
-                        12) service_name="litellm" ;;
-                        13) service_name="qdrant" ;;
-                        14) service_name="milvus" ;;
-                        15) service_name="chroma" ;;
-                        16) service_name="weaviate" ;;
-                        17) service_name="signal-api" ;;
-                        18) service_name="openclaw" ;;
-                        19) service_name="prometheus" ;;
+                        8) service_name="n8n" ;;
+                        9) service_name="signal-api" ;;
+                        10) service_name="openclaw" ;;
+                        11) service_name="dify" ;;
+                        12) service_name="flowise" ;;
+                        13) service_name="comfyui" ;;
+                        14) service_name="nginx-proxy-manager" ;;
+                        15) service_name="traefik" ;;
+                        16) service_name="caddy" ;;
+                        17) service_name="swag" ;;
+                        18) service_name="prometheus" ;;
+                        19) service_name="tailscale" ;;
                         20) service_name="minio" ;;
                         *) print_warn "Invalid selection: $num"; continue ;;
                     esac
@@ -686,12 +692,12 @@ select_services() {
                         print_info "Removed: $service_name"
                     fi
                 else
-                    print_warn "Invalid selection: $num (must be 1-11)"
+                    print_warn "Invalid selection: $num (must be 1-20)"
                 fi
             done
             break
         else
-            print_error "Invalid selection. Please enter numbers 1-11 or 'all'"
+            print_error "Invalid selection. Please enter numbers 1-20, 'core', 'stack', or 'all'"
         fi
     done
     
@@ -779,49 +785,57 @@ collect_configurations() {
     print_header "🔍 Port Availability Check"
     echo ""
     
-    # Port availability check
-    local ports_to_check=(
-        "80:HTTP"
-        "443:HTTPS"
-        "3000:OpenWebUI/Grafana/Langfuse"
-        "3001:AnythingLLM"
-        "5678:n8n"
-        "6333:Qdrant"
-        "6334:Qdrant GRPC"
-        "8080:Dify"
-        "11434:Ollama"
-        "5432:PostgreSQL"
-        "6379:Redis"
-        "4000:LiteLLM"
-        "9090:Prometheus"
+    print_info "Port Availability Check"
+    echo ""
+    
+    local -A default_ports=(
+        ["nginx-proxy-manager"]="80"
+        ["traefik"]="80"
+        ["caddy"]="80"
+        ["postgres"]="5432"
+        ["redis"]="6379"
+        ["qdrant"]="6333"
+        ["milvus"]="19530"
+        ["chroma"]="8000"
+        ["weaviate"]="8080"
+        ["openwebui"]="3000"
+        ["anythingllm"]="3001"
+        ["n8n"]="5678"
+        ["dify"]="8080"
+        ["flowise"]="3002"
+        ["comfyui"]="8188"
+        ["ollama"]="11434"
+        ["litellm"]="4000"
+        ["signal-api"]="8090"
+        ["openclaw"]="8082"
+        ["tailscale"]="41641"
+        ["prometheus"]="9090"
+        ["grafana"]="3001"
+        ["minio"]="9000"
     )
     
     local port_conflicts=()
     
-    for port_info in "${ports_to_check[@]}"; do
-        local port=$(echo "$port_info" | cut -d: -f1)
-        local service=$(echo "$port_info" | cut -d: -f2)
-        
-        if netstat -tuln 2>/dev/null | grep -q ":$port "; then
-            local pid=$(netstat -tuln 2>/dev/null | grep ":$port " | awk '{print $7}' | cut -d/ -f1)
-            print_warn "Port $port is in use by $service (pid: $pid)"
-            port_conflicts+=("$port:$service:$pid")
-        else
-            print_success "Port $port is available for $service"
+    for service_key in "${selected_services[@]}"; do
+        if [[ -n "${default_ports[$service_key]:-}" ]]; then
+            local port="${default_ports[$service_key]}"
+            if netstat -tuln 2>/dev/null | grep -q ":$port "; then
+                local pid=$(netstat -tuln 2>/dev/null | grep ":$port " | awk '{print $7}' | cut -d'/' -f1)
+                port_conflicts+=("$service_key:$port (PID: $pid)")
+                print_warn "Port $port is in use by process $pid (service: $service_key)"
+            else
+                print_success "Port $port is available for $service_key"
+            fi
         fi
     done
     
     if [[ ${#port_conflicts[@]} -gt 0 ]]; then
         echo ""
-        print_header "⚠️ Port Conflicts Detected"
+        print_warn "Port conflicts detected. You can:"
+        echo "  1) Stop conflicting processes"
+        echo "  2) Use different ports (will be prompted)"
         echo ""
-        print_info "The following ports are in use:"
-        for conflict in "${port_conflicts[@]}"; do
-            local port=$(echo "$conflict" | cut -d: -f1)
-            local service=$(echo "$conflict" | cut -d: -f2)
-            local pid=$(echo "$conflict" | cut -d: -f3)
-            echo "  • Port $port ($service) - PID: $pid"
-        done
+        confirm "Continue with port conflicts?"
         echo ""
         
         if ! confirm "Continue with port conflicts?"; then
@@ -883,34 +897,43 @@ EOF
     )
     
     # Proxy port configuration
-    if [[ " ${selected_services[*]} " =~ " nginx-proxy-manager " ]] || [[ " ${selected_services[*]} " =~ " traefik " ]] || [[ " ${selected_services[*]} " =~ " caddy " ]]; then
+    local selected_proxy=""
+    if [[ " ${selected_services[*]} " =~ " nginx-proxy-manager " ]]; then
+        selected_proxy="nginx-proxy-manager"
+    elif [[ " ${selected_services[*]} " =~ " traefik " ]]; then
+        selected_proxy="traefik"
+    elif [[ " ${selected_services[*]} " =~ " caddy " ]]; then
+        selected_proxy="caddy"
+    fi
+    
+    if [[ -n "$selected_proxy" ]]; then
         echo ""
         print_info "Proxy Port Configuration"
         echo ""
         
-        if [[ " ${selected_services[*]} " =~ " nginx-proxy-manager " ]]; then
-            prompt_input "NGINX_PROXY_HTTP_PORT" "Nginx Proxy Manager HTTP port" "80" false
-            echo "NGINX_PROXY_HTTP_PORT=$INPUT_RESULT" >> "$ENV_FILE"
-            
-            prompt_input "NGINX_PROXY_HTTPS_PORT" "Nginx Proxy Manager HTTPS port" "443" false
-            echo "NGINX_PROXY_HTTPS_PORT=$INPUT_RESULT" >> "$ENV_FILE"
-        fi
-        
-        if [[ " ${selected_services[*]} " =~ " traefik " ]]; then
-            prompt_input "TRAEFIK_HTTP_PORT" "Traefik HTTP port" "80" false
-            echo "TRAEFIK_HTTP_PORT=$INPUT_RESULT" >> "$ENV_FILE"
-            
-            prompt_input "TRAEFIK_HTTPS_PORT" "Traefik HTTPS port" "443" false
-            echo "TRAEFIK_HTTPS_PORT=$INPUT_RESULT" >> "$ENV_FILE"
-        fi
-        
-        if [[ " ${selected_services[*]} " =~ " caddy " ]]; then
-            prompt_input "CADDY_HTTP_PORT" "Caddy HTTP port" "80" false
-            echo "CADDY_HTTP_PORT=$INPUT_RESULT" >> "$ENV_FILE"
-            
-            prompt_input "CADDY_HTTPS_PORT" "Caddy HTTPS port" "443" false
-            echo "CADDY_HTTPS_PORT=$INPUT_RESULT" >> "$ENV_FILE"
-        fi
+        case "$selected_proxy" in
+            "nginx-proxy-manager")
+                prompt_input "NGINX_PROXY_HTTP_PORT" "Nginx Proxy Manager HTTP port" "80" false
+                echo "NGINX_PROXY_HTTP_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+                
+                prompt_input "NGINX_PROXY_HTTPS_PORT" "Nginx Proxy Manager HTTPS port" "443" false
+                echo "NGINX_PROXY_HTTPS_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+                ;;
+            "traefik")
+                prompt_input "TRAEFIK_HTTP_PORT" "Traefik HTTP port" "80" false
+                echo "TRAEFIK_HTTP_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+                
+                prompt_input "TRAEFIK_HTTPS_PORT" "Traefik HTTPS port" "443" false
+                echo "TRAEFIK_HTTPS_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+                ;;
+            "caddy")
+                prompt_input "CADDY_HTTP_PORT" "Caddy HTTP port" "80" false
+                echo "CADDY_HTTP_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+                
+                prompt_input "CADDY_HTTPS_PORT" "Caddy HTTPS port" "443" false
+                echo "CADDY_HTTPS_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+                ;;
+        esac
     fi
     
     # Service port configuration
@@ -924,72 +947,21 @@ EOF
         esac
     done
     
-    # Ollama model selection
+    # Ollama model selection (simplified)
     if [[ " ${selected_services[*]} " =~ " ollama " ]]; then
         echo ""
-        print_header "🤖 Ollama Model Selection"
+        print_header "🤖 Ollama Configuration"
         echo ""
         
-        print_info "Select models to download and use:"
-        echo ""
-        echo "Recommended Models:"
-        echo "  [1] llama3.2:8b (7.8GB) - Latest Llama 3.2"
-        echo "  [2] llama3.2:70b (43GB) - Full Llama 3.2 (requires 64GB RAM)"
-        echo "  [3] mistral:7b (4.7GB) - Mistral 7B"
-        echo "  [4] codellama:13b (7.6GB) - Code Llama"
-        echo "  [5] qwen2.5:14b (8.2GB) - Qwen 2.5"
-        echo ""
-        echo "Specialized Models:"
-        echo "  [6] llama3.1:8b (4.9GB) - Llama 3.1"
-        echo "  [7] mixtral:8x7b (4.7GB) - Mixtral MoE"
-        echo "  [8] deepseek-coder:6.7b (3.8GB) - DeepSeek Coder"
-        echo ""
-        echo "Select models (space-separated, e.g., '1 3 5'):"
-        echo "Or enter 'recommended' for models 1,3,4"
-        echo ""
-        
-        while true; do
-            echo -n -e "${YELLOW}Enter model selection:${NC} "
-            read -r model_selection
-            
-            if [[ "$model_selection" == "recommended" ]]; then
-                echo "OLLAMA_MODELS=llama3.2:8b,mistral:7b,codellama:13b" >> "$ENV_FILE"
-                print_success "Recommended models selected: llama3.2:8b, mistral:7b, codellama:13b"
-                break
-            elif [[ "$model_selection" =~ ^[0-9\ ]+$ ]]; then
-                local selected_models=()
-                for num in $model_selection; do
-                    case $num in
-                        1) selected_models+=("llama3.2:8b") ;;
-                        2) selected_models+=("llama3.2:70b") ;;
-                        3) selected_models+=("mistral:7b") ;;
-                        4) selected_models+=("codellama:13b") ;;
-                        5) selected_models+=("qwen2.5:14b") ;;
-                        6) selected_models+=("llama3.1:8b") ;;
-                        7) selected_models+=("mixtral:8x7b") ;;
-                        8) selected_models+=("deepseek-coder:6.7b") ;;
-                        *) print_warn "Invalid model selection: $num" ;;
-                    esac
-                done
-                
-                if [[ ${#selected_models[@]} -gt 0 ]]; then
-                    local models_str=$(IFS=','; echo "${selected_models[*]}")
-                    echo "OLLAMA_MODELS=$models_str" >> "$ENV_FILE"
-                    print_success "Models selected: $models_str"
-                    break
-                fi
-            else
-                print_error "Invalid selection. Please enter numbers 1-8 or 'recommended'"
-            fi
-        done
-        
-        # Default model
-        echo ""
+        # Just set default model - LiteLLM will handle model selection
         prompt_input "OLLAMA_DEFAULT_MODEL" "Default Ollama model" "llama3.2:8b" false
         echo "OLLAMA_DEFAULT_MODEL=$INPUT_RESULT" >> "$ENV_FILE"
         
         print_success "Ollama configuration completed"
+        print_info "LiteLLM will handle model routing and selection"
     fi
+    
+    # Database configuration with service interconnection
     if [[ " ${selected_services[*]} " =~ " postgres " ]]; then
         echo ""
         print_info "PostgreSQL Configuration"
@@ -997,8 +969,13 @@ EOF
         
         local postgres_password=$(generate_random_password 24)
         echo "POSTGRES_PASSWORD=$postgres_password" >> "$ENV_FILE"
-        echo "POSTGRES_DB=aiplatform" >> "$ENV_FILE"
-        echo "POSTGRES_USER=postgres" >> "$ENV_FILE"
+        
+        # Make DB name and username overrideable
+        prompt_input "POSTGRES_DB" "PostgreSQL database name" "aiplatform" false
+        echo "POSTGRES_DB=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        prompt_input "POSTGRES_USER" "PostgreSQL username" "postgres" false
+        echo "POSTGRES_USER=$INPUT_RESULT" >> "$ENV_FILE"
         
         # Check if default port is available
         if [[ " ${port_conflicts[*]} " =~ "5432:" ]]; then
@@ -1006,6 +983,34 @@ EOF
             echo "POSTGRES_PORT=$INPUT_RESULT" >> "$ENV_FILE"
         else
             echo "POSTGRES_PORT=5432" >> "$ENV_FILE"
+        fi
+        
+        # Configure dependent services to use this PostgreSQL
+        if [[ " ${selected_services[*]} " =~ " anythingllm " ]]; then
+            echo "ANYTHINGLLM_DB_TYPE=postgres" >> "$ENV_FILE"
+            echo "ANYTHINGLLM_DB_HOST=postgres" >> "$ENV_FILE"
+            echo "ANYTHINGLLM_DB_PORT=\${POSTGRES_PORT:-5432}" >> "$ENV_FILE"
+            echo "ANYTHINGLLM_DB_NAME=\${POSTGRES_DB}" >> "$ENV_FILE"
+            echo "ANYTHINGLLM_DB_USER=\${POSTGRES_USER}" >> "$ENV_FILE"
+            echo "ANYTHINGLLM_DB_PASSWORD=\${POSTGRES_PASSWORD}" >> "$ENV_FILE"
+        fi
+        
+        if [[ " ${selected_services[*]} " =~ " dify " ]]; then
+            echo "DIFY_DB_TYPE=postgres" >> "$ENV_FILE"
+            echo "DIFY_DB_HOST=postgres" >> "$ENV_FILE"
+            echo "DIFY_DB_PORT=\${POSTGRES_PORT:-5432}" >> "$ENV_FILE"
+            echo "DIFY_DB_NAME=\${POSTGRES_DB}" >> "$ENV_FILE"
+            echo "DIFY_DB_USER=\${POSTGRES_USER}" >> "$ENV_FILE"
+            echo "DIFY_DB_PASSWORD=\${POSTGRES_PASSWORD}" >> "$ENV_FILE"
+        fi
+        
+        if [[ " ${selected_services[*]} " =~ " n8n " ]]; then
+            echo "N8N_DB_TYPE=postgres" >> "$ENV_FILE"
+            echo "N8N_DB_HOST=postgres" >> "$ENV_FILE"
+            echo "N8N_DB_PORT=\${POSTGRES_PORT:-5432}" >> "$ENV_FILE"
+            echo "N8N_DB_NAME=\${POSTGRES_DB}" >> "$ENV_FILE"
+            echo "N8N_DB_USER=\${POSTGRES_USER}" >> "$ENV_FILE"
+            echo "N8N_DB_PASSWORD=\${POSTGRES_PASSWORD}" >> "$ENV_FILE"
         fi
         
         print_success "PostgreSQL configuration generated"
@@ -1327,6 +1332,14 @@ EOF
         echo "OPENCLAW_ENABLE_SIGNAL=true" >> "$ENV_FILE"
         echo "OPENCLAW_ENABLE_LITELM=true" >> "$ENV_FILE"
         echo "OPENCLAW_ENABLE_N8N=true" >> "$ENV_FILE"
+        
+        # Signal configuration for OpenClaw
+        if [[ " ${selected_services[*]} " =~ " signal-api " ]]; then
+            echo "OPENCLAW_SIGNAL_PHONE=\${SIGNAL_PHONE}" >> "$ENV_FILE"
+            echo "OPENCLAW_SIGNAL_WEBHOOK=\${SIGNAL_WEBHOOK_URL}" >> "$ENV_FILE"
+            echo "OPENCLAW_SIGNAL_API_URL=http://signal-api:8090" >> "$ENV_FILE"
+            print_success "OpenClaw Signal integration configured"
+        fi
         
         print_success "OpenClaw configuration completed"
     fi
