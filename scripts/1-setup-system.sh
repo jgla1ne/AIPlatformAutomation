@@ -293,14 +293,14 @@ collect_domain_info() {
     prompt_input "DOMAIN" "Enter your domain (e.g., example.com)" "" false "domain"
     echo "DOMAIN=$INPUT_RESULT" >> "$ENV_FILE"
     
-    # Validate domain resolution
+    # Validate domain resolution with subdomain support
     echo ""
     print_info "Validating domain resolution..."
     if nslookup "$INPUT_RESULT" >/dev/null 2>&1; then
-        local public_ip=$(nslookup "$INPUT_RESULT" | grep -A1 "Name:" | tail -1 | awk '{print $2}')
+        local public_ip=$(nslookup "$INPUT_RESULT" | grep -A1 "Name:" | tail -1 | awk '{print $2}' | head -1)
         local server_ip=$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null)
         
-        if [[ "$public_ip" == "$server_ip" ]]; then
+        if [[ "$public_ip" == "$server_ip" ]] && [[ -n "$public_ip" ]]; then
             print_success "Domain resolves to this server: $public_ip"
             echo "DOMAIN_RESOLVES=true" >> "$ENV_FILE"
             echo "PUBLIC_IP=$server_ip" >> "$ENV_FILE"
@@ -807,8 +807,8 @@ collect_configurations() {
         ["ollama"]="11434"
         ["litellm"]="4000"
         ["signal-api"]="8090"
-        ["openclaw"]="8082"
-        ["tailscale"]="41641"
+        ["openclaw"]="3000"
+        ["tailscale"]="8443"
         ["prometheus"]="9090"
         ["grafana"]="3001"
         ["minio"]="9000"
@@ -885,8 +885,8 @@ EOF
         ["prometheus"]="9090"
         ["grafana"]="3001"
         ["signal-api"]="8090"
-        ["openclaw"]="8082"
-        ["tailscale"]="41641"
+        ["openclaw"]="3000"
+        ["tailscale"]="8443"
         ["postgres"]="5432"
         ["redis"]="6379"
         ["qdrant"]="6333"
@@ -1325,7 +1325,7 @@ EOF
         local openclaw_password=$(generate_random_password 24)
         echo "OPENCLAW_ADMIN_PASSWORD=$openclaw_password" >> "$ENV_FILE"
         
-        echo "OPENCLAW_PORT=8082" >> "$ENV_FILE"
+        echo "OPENCLAW_PORT=3000" >> "$ENV_FILE"
         echo "OPENCLAW_API_PORT=8083" >> "$ENV_FILE"
         
         # OpenClaw integration settings
