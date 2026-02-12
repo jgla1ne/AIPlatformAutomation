@@ -914,7 +914,7 @@ check_dependencies() {
     local missing_deps=()
     IFS=',' read -ra DEP_ARRAY <<< "$deps"
 
-    for dep in "${DEP_ARRAY[@]}"; do
+    for dep in "${DEP_ARRAY[@]"; do
         if [[ ! ",$selected_services," =~ ",$dep," ]]; then
             missing_deps+=("$dep")
         fi
@@ -1024,13 +1024,13 @@ select_services() {
     while [[ $iteration -lt $max_iterations ]]; do
         local added_this_round=0
 
-        for service_key in "${selected_services[@]}"; do
+        for service_key in "${selected_services[@]"; do
             local deps=$(get_service_info "$service_key" "dependencies")
 
             if [[ -n "$deps" ]]; then
                 IFS=',' read -ra DEP_ARRAY <<< "$deps"
 
-                for dep in "${DEP_ARRAY[@]}"; do
+                for dep in "${DEP_ARRAY[@]"; do
                     if [[ -z "${selected_map[$dep]}" ]]; then
                         selected_services+=("$dep")
                         selected_map[$dep]=1
@@ -1059,14 +1059,14 @@ select_services() {
 
     # Display final selection
     echo ""
-    print_header "✅ Selected Services (${#selected_services[@]})"
+    print_header "✅ Selected Services (${#selected_services[@])"
     echo ""
 
     for category in "${!SERVICE_CATEGORIES[@]}"; do
         local category_has_services=false
         local category_list=""
 
-        for service_key in "${selected_services[@]}"; do
+        for service_key in "${selected_services[@]"; do
             if [[ "$(get_service_info "$service_key" "category")" == "$category" ]]; then
                 category_has_services=true
                 local display_name=$(get_service_info "$service_key" "display_name")
@@ -1093,12 +1093,12 @@ select_services() {
     cat > "$SERVICES_FILE" <<EOF
 {
   "selection_time": "$(date -Iseconds)",
-  "total_services": ${#selected_services[@]},
+  "total_services": ${#selected_services[@],
   "services": [
 EOF
 
     local first=true
-    for service_key in "${selected_services[@]}"; do
+    for service_key in "${selected_services[@]"; do
         if [[ "$first" == false ]]; then
             echo "," >> "$SERVICES_FILE"
         fi
@@ -1151,7 +1151,7 @@ collect_configurations() {
     # Read selected services from JSON
     local selected_services=($(jq -r '.services[].key' "$SERVICES_FILE"))
 
-    if [[ ${#selected_services[@]} -eq 0 ]]; then
+    if [[ ${#selected_services[@] -eq 0 ]]; then
         print_info "No services selected, skipping configuration"
         return 0
     fi
@@ -1159,7 +1159,7 @@ collect_configurations() {
     echo ""
     print_header "🔧 Service Configuration"
     echo ""
-    print_info "Collecting configuration for ${#selected_services[@]} services"
+    print_info "Collecting configuration for ${#selected_services[@] services"
     echo ""
 
     # Initialize .env file
@@ -1196,12 +1196,12 @@ EOF
     local all_required_configs=()
 
     # Gather all unique required configs
-    for service_key in "${selected_services[@]}"; do
+    for service_key in "${selected_services[@]"; do
         local configs=$(get_service_info "$service_key" "requires_config")
 
         if [[ -n "$configs" ]]; then
             IFS=',' read -ra CONFIG_ARRAY <<< "$configs"
-            for config in "${CONFIG_ARRAY[@]}"; do
+            for config in "${CONFIG_ARRAY[@]"; do
                 if [[ -z "${collected_configs[$config]}" ]]; then
                     all_required_configs+=("$config")
                     collected_configs[$config]=1
@@ -1450,7 +1450,7 @@ create_directory_structure() {
 
     local created_count=0
 
-    for service_key in "${selected_services[@]}"; do
+    for service_key in "${selected_services[@]"; do
         local service_dirs=()
 
         case "$service_key" in
@@ -1814,7 +1814,7 @@ EOF
 EOF
 
     first=true
-    for service_key in "${selected_services[@]}"; do
+    for service_key in "${selected_services[@]"; do
         if [[ "$first" == false ]]; then
             echo "," >> "$dir_map_file"
         fi
