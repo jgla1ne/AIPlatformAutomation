@@ -662,6 +662,63 @@ collect_configurations() {
         exit 1
     fi
     
+    local selected_services=($(jq -r '.services[].key' "$SERVICES_FILE"))
+    
+    echo ""
+    print_header "🔍 Port Availability Check"
+    echo ""
+    
+    # Port availability check
+    local ports_to_check=(
+        "80:HTTP"
+        "443:HTTPS"
+        "3000:OpenWebUI/Grafana/Langfuse"
+        "3001:AnythingLLM"
+        "5678:n8n"
+        "6333:Qdrant"
+        "6334:Qdrant GRPC"
+        "8080:Dify"
+        "11434:Ollama"
+        "5432:PostgreSQL"
+        "6379:Redis"
+        "4000:LiteLLM"
+        "9090:Prometheus"
+    )
+    
+    local port_conflicts=()
+    
+    for port_info in "${ports_to_check[@]}"; do
+        local port=$(echo "$port_info" | cut -d: -f1)
+        local service=$(echo "$port_info" | cut -d: -f2)
+        
+        if netstat -tuln 2>/dev/null | grep -q ":$port "; then
+            local pid=$(netstat -tuln 2>/dev/null | grep ":$port " | awk '{print $7}' | cut -d/ -f1)
+            print_warn "Port $port is in use by $service (pid: $pid)"
+            port_conflicts+=("$port:$service:$pid")
+        else
+            print_success "Port $port is available for $service"
+        fi
+    done
+    
+    if [[ ${#port_conflicts[@]} -gt 0 ]]; then
+        echo ""
+        print_header "⚠️ Port Conflicts Detected"
+        echo ""
+        print_info "The following ports are in use:"
+        for conflict in "${port_conflicts[@]}"; do
+            local port=$(echo "$conflict" | cut -d: -f1)
+            local service=$(echo "$conflict" | cut -d: -f2)
+            local pid=$(echo "$conflict" | cut -d: -f3)
+            echo "  • Port $port ($service) - PID: $pid"
+        done
+        echo ""
+        
+        if ! confirm "Continue with port conflicts?"; then
+            print_info "Configuration cancelled"
+            return 1
+        fi
+    fi
+    
     echo ""
     print_header "⚙️ Configuration Collection"
     echo ""
@@ -677,18 +734,317 @@ METADATA_DIR=$METADATA_DIR
 TIMEZONE=UTC
 LOG_LEVEL=info
 
-# Generated Secrets
-ADMIN_PASSWORD=$(generate_random_password 24)
-JWT_SECRET=$(generate_random_password 64)
-LITELLM_MASTER_KEY=$(generate_random_password 32)
-POSTGRES_PASSWORD=$(generate_random_password 24)
-REDIS_PASSWORD=$(generate_random_password 24)
-QDRANT_API_KEY=$(generate_random_password 32)
-GRAFANA_PASSWORD=$(generate_random_password 24)
+# Network Configuration
+DOMAIN=${DOMAIN:-localhost}
+PROXY_TYPE=${PROXY_TYPE:-none}
+SSL_TYPE=${SSL_TYPE:-none}
+SSL_EMAIL=${SSL_EMAIL:-}
 EOF
     
-    print_success "Environment file generated: $ENV_FILE"
-    print_info "Generated secrets and basic configuration"
+    # Port configuration
+    echo ""
+    print_info "Port Configuration"
+    echo ""
+    
+    # Custom port selection for major services
+    local -A default_ports=(
+        ["openwebui"]="3000"
+        ["anythingllm"]="3001"
+        ["n8n"]="5678"
+        ["dify"]="8080"
+        ["ollama"]="11434"
+        ["litellm"]="4000"
+        ["prometheus"]="9090"
+        ["grafana"]="3001"
+        ["signal-api"]="8090"
+    )
+    
+    for service_key in "${selected_services[@]}"; do
+        case "$service_key" in
+            "openwebui"|"anythingllm"|"n8n"|"dify"|"ollama"|"litellm"|"prometheus"|"grafana"|"signal-api")
+                local default_port="${default_ports[$service_key]:-3000}"
+                prompt_input "${service_key^^}_PORT" "$service_key port" "$default_port" false
+                echo "${service_key^^}_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+                ;;
+        esac
+    done
+    
+    # Database configuration
+    if [[ " ${selected_services[*]} " =~ " postgres " ]]; then
+        echo ""
+        print_info "PostgreSQL Configuration"
+        echo ""
+        
+        local postgres_password=$(generate_random_password 24)
+        echo "POSTGRES_PASSWORD=$postgres_password" >> "$ENV_FILE"
+        echo "POSTGRES_DB=aiplatform" >> "$ENV_FILE"
+        echo "POSTGRES_USER=postgres" >> "$ENV_FILE"
+        
+        # Check if default port is available
+        if [[ " ${port_conflicts[*]} " =~ "5432:" ]]; then
+            prompt_input "POSTGRES_PORT" "PostgreSQL port (5432 in use)" "5433" false
+            echo "POSTGRES_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+        else
+            echo "POSTGRES_PORT=5432" >> "$ENV_FILE"
+        fi
+        
+        print_success "PostgreSQL configuration generated"
+    fi
+    
+    # Redis configuration
+    if [[ " ${selected_services[*]} " =~ " redis " ]]; then
+        echo ""
+        print_info "Redis Configuration"
+        echo ""
+        
+        local redis_password=$(generate_random_password 24)
+        echo "REDIS_PASSWORD=$redis_password" >> "$ENV_FILE"
+        echo "REDIS_PORT=6379" >> "$ENV_FILE"
+        
+        print_success "Redis configuration generated"
+    fi
+    
+    # Qdrant configuration
+    if [[ " ${selected_services[*]} " =~ " qdrant " ]]; then
+        echo ""
+        print_info "Qdrant Configuration"
+        echo ""
+        
+        local qdrant_api_key=$(generate_random_password 32)
+        echo "QDRANT_API_KEY=$qdrant_api_key" >> "$ENV_FILE"
+        echo "QDRANT_HTTP_PORT=6333" >> "$ENV_FILE"
+        echo "QDRANT_GRPC_PORT=6334" >> "$ENV_FILE"
+        
+        print_success "Qdrant configuration generated"
+    fi
+    
+    # LiteLLM configuration
+    if [[ " ${selected_services[*]} " =~ " litellm " ]]; then
+        echo ""
+        print_header "🤖 LiteLLM Configuration"
+        echo ""
+        
+        local litellm_master_key=$(generate_random_password 32)
+        echo "LITELLM_MASTER_KEY=$litellm_master_key" >> "$ENV_FILE"
+        
+        print_info "Routing Strategy Selection"
+        echo ""
+        echo "Select LiteLLM routing strategy:"
+        echo "  1) Simple Shuffle - Random selection"
+        echo "  2) Cost-Based - Choose cheapest model first"
+        echo "  3) Latency-Based - Choose fastest model"
+        echo "  4) Usage-Based - Load balance across models"
+        echo ""
+        
+        while true; do
+            echo -n -e "${YELLOW}Select routing strategy [1-4]:${NC} "
+            read -r routing_choice
+            
+            case "$routing_choice" in
+                1)
+                    echo "LITELLM_ROUTING_STRATEGY=simple-shuffle" >> "$ENV_FILE"
+                    print_success "Simple Shuffle routing selected"
+                    break
+                    ;;
+                2)
+                    echo "LITELLM_ROUTING_STRATEGY=cost-based" >> "$ENV_FILE"
+                    print_success "Cost-based routing selected"
+                    break
+                    ;;
+                3)
+                    echo "LITELLM_ROUTING_STRATEGY=latency-based" >> "$ENV_FILE"
+                    print_success "Latency-based routing selected"
+                    break
+                    ;;
+                4)
+                    echo "LITELLM_ROUTING_STRATEGY=usage-based" >> "$ENV_FILE"
+                    print_success "Usage-based routing selected"
+                    break
+                    ;;
+                *)
+                    print_error "Invalid selection"
+                    ;;
+            esac
+        done
+        
+        # External LLM providers
+        echo ""
+        print_info "External LLM Provider Configuration"
+        echo ""
+        print_info "Configure external providers (skip if not needed):"
+        echo ""
+        
+        prompt_input "OPENAI_API_KEY" "OpenAI API Key (or skip)" "" false
+        [[ -n "$INPUT_RESULT" ]] && echo "OPENAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        prompt_input "ANTHROPIC_API_KEY" "Anthropic API Key (or skip)" "" false
+        [[ -n "$INPUT_RESULT" ]] && echo "ANTHROPIC_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        prompt_input "GOOGLE_API_KEY" "Google AI API Key (or skip)" "" false
+        [[ -n "$INPUT_RESULT" ]] && echo "GOOGLE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        prompt_input "GROQ_API_KEY" "Groq API Key (or skip)" "" false
+        [[ -n "$INPUT_RESULT" ]] && echo "GROQ_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        prompt_input "MISTRAL_API_KEY" "Mistral API Key (or skip)" "" false
+        [[ -n "$INPUT_RESULT" ]] && echo "MISTRAL_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        print_success "LiteLLM configuration completed"
+    fi
+    
+    # Signal API configuration
+    if [[ " ${selected_services[*]} " =~ " signal-api " ]]; then
+        echo ""
+        print_header "📱 Signal API Configuration"
+        echo ""
+        
+        print_info "Signal Bot Configuration"
+        echo ""
+        
+        prompt_input "SIGNAL_PHONE" "Signal phone number (E.164 format, e.g., +15551234567)" "" false
+        echo "SIGNAL_PHONE=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        prompt_input "SIGNAL_PASSWORD" "Signal bot password" "$(generate_random_password 16)" true
+        echo "SIGNAL_PASSWORD=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        echo "SIGNAL_WEBHOOK_URL=http://signal-api:8090/v2/receive" >> "$ENV_FILE"
+        
+        print_success "Signal API configuration completed"
+    fi
+    
+    # Google Drive integration
+    echo ""
+    print_info "Google Drive Integration (Optional)"
+    echo ""
+    
+    if confirm "Configure Google Drive sync?"; then
+        print_info "Google Drive Configuration"
+        echo ""
+        
+        echo "Select authentication method:"
+        echo "  1) OAuth 2.0 (Recommended for personal use)"
+        echo "  2) Service Account (Recommended for server use)"
+        echo "  3) rclone (Advanced)"
+        echo ""
+        
+        while true; do
+            echo -n -e "${YELLOW}Select method [1-3]:${NC} "
+            read -r auth_method
+            
+            case "$auth_method" in
+                1)
+                    echo "GDRIVE_AUTH_METHOD=oauth" >> "$ENV_FILE"
+                    prompt_input "GDRIVE_CLIENT_ID" "Google Client ID" "" false
+                    echo "GDRIVE_CLIENT_ID=$INPUT_RESULT" >> "$ENV_FILE"
+                    prompt_input "GDRIVE_CLIENT_SECRET" "Google Client Secret" "" true
+                    echo "GDRIVE_CLIENT_SECRET=$INPUT_RESULT" >> "$ENV_FILE"
+                    break
+                    ;;
+                2)
+                    echo "GDRIVE_AUTH_METHOD=service_account" >> "$ENV_FILE"
+                    print_info "Service account JSON file path:"
+                    echo -n -e "${YELLOW}Path to service account JSON:${NC} "
+                    read -r json_path
+                    echo "GDRIVE_SERVICE_ACCOUNT_JSON=$json_path" >> "$ENV_FILE"
+                    break
+                    ;;
+                3)
+                    echo "GDRIVE_AUTH_METHOD=rclone" >> "$ENV_FILE"
+                    print_info "rclone configuration will be set up later"
+                    break
+                    ;;
+                *)
+                    print_error "Invalid selection"
+                    ;;
+            esac
+        done
+        
+        prompt_input "GDRIVE_SYNC_INTERVAL" "Sync interval in minutes" "15" false
+        echo "GDRIVE_SYNC_INTERVAL=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        print_success "Google Drive configuration completed"
+    fi
+    
+    # Application-specific configurations
+    echo ""
+    print_info "Application Configuration"
+    echo ""
+    
+    # Admin passwords
+    local admin_password=$(generate_random_password 24)
+    echo "ADMIN_PASSWORD=$admin_password" >> "$ENV_FILE"
+    echo "GRAFANA_PASSWORD=$admin_password" >> "$ENV_FILE"
+    
+    # JWT secrets
+    local jwt_secret=$(generate_random_password 64)
+    echo "JWT_SECRET=$jwt_secret" >> "$ENV_FILE"
+    
+    # n8n encryption key
+    if [[ " ${selected_services[*]} " =~ " n8n " ]]; then
+        local n8n_key=$(generate_random_password 64)
+        echo "N8N_ENCRYPTION_KEY=$n8n_key" >> "$ENV_FILE"
+    fi
+    
+    # Dify configuration
+    if [[ " ${selected_services[*]} " =~ " dify " ]]; then
+        local dify_secret=$(generate_random_password 32)
+        echo "DIFY_SECRET_KEY=$dify_secret" >> "$ENV_FILE"
+        echo "DIFY_WEB_API_PORT=5001" >> "$ENV_FILE"
+        echo "DIFY_WEB_PORT=3002" >> "$ENV_FILE"
+    fi
+    
+    # MinIO configuration (if selected)
+    if [[ " ${selected_services[*]} " =~ " minio " ]]; then
+        echo ""
+        print_info "MinIO Configuration"
+        echo ""
+        
+        prompt_input "MINIO_ROOT_USER" "MinIO root user" "minioadmin" false
+        echo "MINIO_ROOT_USER=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        local minio_pass=$(generate_random_password 32)
+        echo "MINIO_ROOT_PASSWORD=$minio_pass" >> "$ENV_FILE"
+        
+        print_success "MinIO configuration completed"
+    fi
+    
+    # Save configuration summary
+    echo ""
+    print_header "📊 Configuration Summary"
+    echo ""
+    
+    local config_summary="$METADATA_DIR/configuration_summary.json"
+    
+    cat > "$config_summary" <<EOF
+{
+  "configuration_time": "$(date -Iseconds)",
+  "selected_services": ${#selected_services[@]},
+  "services": [
+EOF
+    
+    local first=true
+    for service in "${selected_services[@]}"; do
+        if [[ "$first" == false ]]; then
+            echo "," >> "$config_summary"
+        fi
+        first=false
+        echo "    \"$service\"" >> "$config_summary"
+    done
+    
+    cat >> "$config_summary" <<EOF
+
+  ],
+  "environment_variables": $(grep -c "^" "$ENV_FILE"),
+  "generated_secrets": $(grep -c "_PASSWORD\|_SECRET\|_KEY" "$ENV_FILE")
+}
+EOF
+    
+    print_success "Configuration summary saved: $config_summary"
+    print_info "Total environment variables: $(grep -c "^" "$ENV_FILE")"
+    print_info "Generated secrets: $(grep -c "_PASSWORD\|_SECRET\|_KEY" "$ENV_FILE")"
+    
+    echo ""
+    print_success "Configuration collection completed"
 }
 
 create_directory_structure() {
