@@ -880,9 +880,7 @@ install_docker() {
     chmod a+r /etc/apt/keyrings/docker.gpg
 
     # Add Docker repository
-    echo \
-      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-      $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
       tee /etc/apt/sources.list.d/docker.list > /dev/null
 
     print_success "Docker repository added"
@@ -958,7 +956,7 @@ install_nvidia_toolkit() {
         print_info "Installing NVIDIA Container Toolkit..."
 
         # Add NVIDIA package repository
-        distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
+        distribution=$(. /etc/os-release; echo $ID$VERSION_ID)
         curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
         curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
             sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
@@ -2433,15 +2431,15 @@ OLLAMA INSTALLATION
 
 Ollama Version:       $(ollama --version 2>/dev/null | awk '{print $NF}')
 Service Status:       $(systemctl is-active ollama)
-Models Installed:     ${#ollama_models[@]}}
+Models Installed:     ${#ollama_models[@]}
 
 EOF
 
-    if [[ ${#ollama_models[@]}} -gt 0 ]]; then
+    if [[ ${#ollama_models[@]} -gt 0 ]]; then
         cat >> "$summary_file" <<EOF
 Installed Models:
 EOF
-        for model in "${ollama_models[@]}}"; do
+        for model in "${ollama_models[@]}"; do
             echo "  • $model" >> "$summary_file"
         done
         echo "" >> "$summary_file"
@@ -2528,7 +2526,7 @@ IMPORTANT NOTES
   Location: $ENV_FILE (permissions: 600)
 
 • Backup your metadata directory regularly:
-  $ tar -czf homelab-backup-\$(date +%Y%m%d).tar.gz $METADATA_DIR
+  $ tar -czf homelab-backup-$(date +%Y%m%d).tar.gz $METADATA_DIR
 
 • Default admin credentials are in $ENV_FILE
   Change them after first login!
