@@ -296,7 +296,12 @@ collect_domain_info() {
     # Validate domain resolution
     echo ""
     print_info "Validating domain resolution..."
-    if nslookup "$INPUT_RESULT" >/dev/null 2>&1; then
+    # Special case for localhost
+    if [[ "$INPUT_RESULT" == "localhost" ]]; then
+        print_success "Using localhost for development"
+        echo "DOMAIN_RESOLVES=true" >> "$ENV_FILE"
+        echo "PUBLIC_IP=127.0.0.1" >> "$ENV_FILE"
+    elif nslookup "$INPUT_RESULT" >/dev/null 2>&1; then
         local public_ip=$(nslookup "$INPUT_RESULT" | grep -A1 "Name:" | tail -1 | awk '{print $2}')
         local server_ip=$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null)
         
@@ -1658,7 +1663,8 @@ EOF
     echo "" >> "$urls_file"
     echo "Database Credentials:" >> "$urls_file"
     echo "" >> "$urls_file"
-    echo "- PostgreSQL User: postgres" >> "$urls_file"
+    echo "- PostgreSQL User: $(grep "^POSTGRES_USER=" "$ENV_FILE" | cut -d= -f2)" >> "$urls_file"
+    echo "- PostgreSQL Database: $(grep "^POSTGRES_DB=" "$ENV_FILE" | cut -d= -f2)" >> "$urls_file"
     echo "- PostgreSQL Password: $(grep "^POSTGRES_PASSWORD=" "$ENV_FILE" | cut -d= -f2)" >> "$urls_file"
     echo "- Redis Password: $(grep "^REDIS_PASSWORD=" "$ENV_FILE" | cut -d= -f2)" >> "$urls_file"
     echo "- Vector DB: ${VECTOR_DB:-qdrant}" >> "$urls_file"
@@ -1681,7 +1687,8 @@ EOF
     print_header "🔑 Key Information"
     echo ""
     print_info "Database Credentials:"
-    echo "  • PostgreSQL User: postgres"
+    echo "  • PostgreSQL User: $(grep "^POSTGRES_USER=" "$ENV_FILE" | cut -d= -f2)"
+    echo "  • PostgreSQL Database: $(grep "^POSTGRES_DB=" "$ENV_FILE" | cut -d= -f2)"
     echo "  • PostgreSQL Password: $(grep "^POSTGRES_PASSWORD=" "$ENV_FILE" | cut -d= -f2)"
     echo "  • Redis Password: $(grep "^REDIS_PASSWORD=" "$ENV_FILE" | cut -d= -f2)"
     echo "  • Vector Database: ${VECTOR_DB:-qdrant}"
