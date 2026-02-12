@@ -305,9 +305,18 @@ collect_domain_info() {
             echo "DOMAIN_RESOLVES=true" >> "$ENV_FILE"
             echo "PUBLIC_IP=$server_ip" >> "$ENV_FILE"
         else
-            print_warn "Domain resolves to different IP: $public_ip (server: $server_ip)"
-            echo "DOMAIN_RESOLVES=false" >> "$ENV_FILE"
-            echo "PUBLIC_IP=$server_ip" >> "$ENV_FILE"
+            # Check if it's a temporary network issue
+            if ping -c 1 "$public_ip" >/dev/null 2>&1; then
+                print_warn "Domain resolves to different IP: $public_ip (server: $server_ip)"
+                print_warn "This may indicate DNS configuration issue or load balancer"
+                echo "DOMAIN_RESOLVES=false" >> "$ENV_FILE"
+                echo "PUBLIC_IP=$server_ip" >> "$ENV_FILE"
+            else
+                print_warn "Domain resolution test failed - network connectivity issue"
+                print_info "Assuming domain should resolve to this server: $server_ip"
+                echo "DOMAIN_RESOLVES=true" >> "$ENV_FILE"
+                echo "PUBLIC_IP=$server_ip" >> "$ENV_FILE"
+            fi
         fi
     else
         print_warn "Domain does not resolve or DNS not configured"
@@ -1163,7 +1172,7 @@ EOF
                 local provider_keys=()
                 
                 # Clean up the input and split by spaces, commas, or dashes
-                local cleaned_input=$(echo "$llm_provider_selection" | tr ', ' ' ' ' ')
+                local cleaned_input=$(echo "$llm_provider_selection" | tr ',- ' ' ' ')
                 
                 for num in $cleaned_input; do
                     case $num in
@@ -1718,7 +1727,7 @@ EOF
         case "$service" in
             "ollama")
                 echo "- Ollama: http://localhost:11434" >> "$urls_file"
-                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Ollama (Public): https://$DOMAIN/ollama" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Ollama (Public): https://$DOMAIN/ollama" >> "$urls_file"                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Ollama (Public): https://$DOMAIN/ollama" >> "$urls_file" echo "- Ollama (Public): https://$DOMAIN/ollama" >> "$urls_file"
                 ;;
             "openwebui")
                 echo "- Open WebUI: http://localhost:3000" >> "$urls_file"
@@ -1895,7 +1904,7 @@ main() {
     
     # Completion message
     echo ""
-    echo "$(printf '═%.0s' {1..80})"
+    echo "==============================================================================="
     echo ""
     print_success "🎉 SETUP SCRIPT COMPLETED SUCCESSFULLY!"
     echo ""
@@ -1903,7 +1912,7 @@ main() {
     echo ""
     echo -e "${CYAN}sudo bash 2-deploy-services.sh${NC}"
     echo ""
-    echo "$(printf '═%.0s' {1..80})"
+    echo "==============================================================================="
     echo ""
     
     exit 0
