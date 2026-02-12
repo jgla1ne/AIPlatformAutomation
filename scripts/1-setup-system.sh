@@ -1498,6 +1498,110 @@ get_service_configs() {
 }
 
 #───────────────────────────────────────────────────────────────────────────────
+# STATE MANAGEMENT
+#───────────────────────────────────────────────────────────────────────────────
+
+STATE_FILE="$METADATA_DIR/setup_state.json"
+
+save_state() {
+    local phase="$1"
+    local status="$2"
+    local message="$3"
+    
+    mkdir -p "$METADATA_DIR"
+    
+    cat > "$STATE_FILE" <<EOF
+{
+  "script_version": "76.5.0",
+  "current_phase": "$phase",
+  "status": "$status",
+  "message": "$message",
+  "timestamp": "$(date -Iseconds)",
+  "completed_phases": [
+EOF
+    
+    local first=true
+    for completed_phase in "${COMPLETED_PHASES[@]:-}"; do
+        if [[ "$first" == false ]]; then
+            echo "," >> "$STATE_FILE"
+        fi
+        first=false
+        echo "    \"$completed_phase\"" >> "$STATE_FILE"
+    done
+    
+    cat >> "$STATE_FILE" <<EOF
+  ],
+  "environment": {
+    "user": "${SUDO_USER:-$USER}",
+    "shell": "$SHELL",
+    "pwd": "$(pwd)",
+    "script_path": "$0"
+  },
+  "system_info": {
+    "hostname": "$(hostname)",
+    "os": "$(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2)",
+    "kernel": "$(uname -r)"
+  }
+}
+EOF
+    
+    print_success "State saved: Phase $phase - $status"
+}
+
+restore_state() {
+    if [[ ! -f "$STATE_FILE" ]]; then
+        print_info "No previous state found - starting fresh"
+        return 1
+    fi
+    
+    print_info "Found previous setup state"
+    
+    local current_phase=$(jq -r '.current_phase' "$STATE_FILE" 2>/dev/null || echo "")
+    local status=$(jq -r '.status' "$STATE_FILE" 2>/dev/null || echo "")
+    local message=$(jq -r '.message' "$STATE_FILE" 2>/dev/null || echo "")
+    local timestamp=$(jq -r '.timestamp' "$STATE_FILE" 2>/dev/null || echo "")
+    
+    if [[ -z "$current_phase" ]]; then
+        print_warn "State file corrupted - starting fresh"
+        return 1
+    fi
+    
+    echo ""
+    print_header "🔄 Resume Previous Setup"
+    echo ""
+    print_info "Previous setup detected:"
+    echo "  • Phase: $current_phase"
+    echo "  • Status: $status"
+    echo "  • Message: $message"
+    echo "  • Time: $timestamp"
+    echo ""
+    
+    if ! confirm "Resume from this state?"; then
+        print_info "Starting fresh setup"
+        rm -f "$STATE_FILE"
+        return 1
+    fi
+    
+    # Load completed phases
+    local completed_phases_json=$(jq -r '.completed_phases[]' "$STATE_FILE" 2>/dev/null || echo "")
+    if [[ -n "$completed_phases_json" ]]; then
+        COMPLETED_PHASES=()
+        while IFS= read -r phase; do
+            COMPLETED_PHASES+=("$phase")
+        done <<< "$completed_phases_json"
+    fi
+    
+    print_success "State restored - resuming from phase $current_phase"
+    return 0
+}
+
+mark_phase_complete() {
+    local phase="$1"
+    COMPLETED_PHASES+=("$phase")
+    save_state "$phase" "completed" "Phase completed successfully"
+}
+
+#───────────────────────────────────────────────────────────────────────────────
 # CONFIGURATION COLLECTION
 #───────────────────────────────────────────────────────────────────────────────
 
@@ -2786,38 +2890,106 @@ main() {
     clear
     print_banner
 
+    # Check for previous state and offer to resume
+    if restore_state; then
+        print_info "Resuming from saved state..."
+    else
+        # Fresh start - clear any old state
+        rm -f "$STATE_FILE"
+        COMPLETED_PHASES=()
+        save_state "init" "started" "Setup initialized"
+    fi
+
     # Phase 1: Detect system
-    detect_system
+    if [[ ! " ${COMPLETED_PHASES[*]} " =~ " detect_system " ]]; then
+        detect_system
+        mark_phase_complete "detect_system"
+    else
+        print_info "Skipping detect_system (already completed)"
+    fi
 
     # Phase 2: Collect domain info
-    collect_domain_info
+    if [[ ! " ${COMPLETED_PHASES[*]} " =~ " collect_domain_info " ]]; then
+        collect_domain_info
+        mark_phase_complete "collect_domain_info"
+    else
+        print_info "Skipping collect_domain_info (already completed)"
+    fi
 
     # Phase 3: Update system
-    update_system
+    if [[ ! " ${COMPLETED_PHASES[*]} " =~ " update_system " ]]; then
+        update_system
+        mark_phase_complete "update_system"
+    else
+        print_info "Skipping update_system (already completed)"
+    fi
 
     # Phase 4: Install Docker
-    install_docker
+    if [[ ! " ${COMPLETED_PHASES[*]} " =~ " install_docker " ]]; then
+        install_docker
+        mark_phase_complete "install_docker"
+    else
+        print_info "Skipping install_docker (already completed)"
+    fi
 
     # Phase 5: Configure Docker
-    configure_docker
+    if [[ ! " ${COMPLETED_PHASES[*]} " =~ " configure_docker " ]]; then
+        configure_docker
+        mark_phase_complete "configure_docker"
+    else
+        print_info "Skipping configure_docker (already completed)"
+    fi
 
     # Phase 6: Install Ollama
-    install_ollama
+    if [[ ! " ${COMPLETED_PHASES[*]} " =~ " install_ollama " ]]; then
+        install_ollama
+        mark_phase_complete "install_ollama"
+    else
+        print_info "Skipping install_ollama (already completed)"
+    fi
 
     # Phase 7: Select services
-    select_services
+    if [[ ! " ${COMPLETED_PHASES[*]} " =~ " select_services " ]]; then
+        select_services
+        mark_phase_complete "select_services"
+    else
+        print_info "Skipping select_services (already completed)"
+    fi
 
     # Phase 8: Collect configs
-    collect_configurations
+    if [[ ! " ${COMPLETED_PHASES[*]} " =~ " collect_configurations " ]]; then
+        collect_configurations
+        mark_phase_complete "collect_configurations"
+    else
+        print_info "Skipping collect_configurations (already completed)"
+    fi
 
     # Phase 9: Create directories
-    create_directory_structure
+    if [[ ! " ${COMPLETED_PHASES[*]} " =~ " create_directory_structure " ]]; then
+        create_directory_structure
+        mark_phase_complete "create_directory_structure"
+    else
+        print_info "Skipping create_directory_structure (already completed)"
+    fi
 
     # Phase 10: Validate system
-    validate_system
+    if [[ ! " ${COMPLETED_PHASES[*]} " =~ " validate_system " ]]; then
+        validate_system
+        mark_phase_complete "validate_system"
+    else
+        print_info "Skipping validate_system (already completed)"
+    fi
 
     # Phase 11: Generate summary
-    generate_summary
+    if [[ ! " ${COMPLETED_PHASES[*]} " =~ " generate_summary " ]]; then
+        generate_summary
+        mark_phase_complete "generate_summary"
+    else
+        print_info "Skipping generate_summary (already completed)"
+    fi
+
+    # Mark setup as completed
+    save_state "completed" "success" "Setup completed successfully"
 
     # Completion message
     echo ""
