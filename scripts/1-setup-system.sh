@@ -1922,6 +1922,245 @@ collect_config_value() {
     esac
 }
 #───────────────────────────────────────────────────────────────────────────────
+# MODULAR COMPOSE GENERATION
+#───────────────────────────────────────────────────────────────────────────────
+
+generate_modular_composes() {
+    log_phase "9" "📝 Modular Compose Generation"
+    
+    if [[ ! -f "$SERVICES_FILE" ]]; then
+        print_error "Services file not found: $SERVICES_FILE"
+        exit 1
+    fi
+    
+    local selected_services=($(jq -r '.services[].key' "$SERVICES_FILE"))
+    local compose_dir="$DATA_ROOT/compose"
+    local env_dir="$DATA_ROOT/env"
+    
+    echo ""
+    print_header "📝 Generating Modular Compose Files"
+    echo ""
+    
+    # Create directories
+    mkdir -p "$compose_dir" "$env_dir"
+    
+    # Generate individual compose files
+    for service_key in "${selected_services[@]}"; do
+        generate_service_compose "$service_key"
+        generate_service_env "$service_key"
+    done
+    
+    # Generate master compose file
+    generate_master_compose "${selected_services[@]}"
+    
+    # Generate deployment plan
+    generate_deployment_plan "${selected_services[@]}"
+    
+    print_success "Modular compose files generated"
+    print_info "Compose files: $compose_dir/"
+    print_info "Environment files: $env_dir/"
+}
+
+generate_service_compose() {
+    local service_key="$1"
+    local compose_file="$DATA_ROOT/compose/${service_key}.yml"
+    
+    cat > "$compose_file" <<EOF
+# ${service_key} service compose file
+# Generated: $(date -Iseconds)
+EOF
+    
+    case "$service_key" in
+        "postgres")
+            cat >> "$compose_file" <<'EOF'
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-aiplatform}
+    volumes:
+      - ${DATA_ROOT}/data/postgres:/var/lib/postgresql/data
+    networks:
+      - ai-platform-internal
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  ai-platform-internal:
+    external: true
+EOF
+            ;;
+        "redis")
+            cat >> "$compose_file" <<'EOF'
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - ${DATA_ROOT}/data/redis:/data
+    networks:
+      - ai-platform-internal
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  ai-platform-internal:
+    external: true
+EOF
+            ;;
+        "qdrant")
+            cat >> "$compose_file" <<'EOF'
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    restart: unless-stopped
+    environment:
+      QDRANT__SERVICE__HTTP_PORT: 6333
+      QDRANT__SERVICE__GRPC_PORT: 6334
+    volumes:
+      - ${DATA_ROOT}/data/qdrant:/qdrant/storage
+    networks:
+      - ai-platform-internal
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:6333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  ai-platform-internal:
+    external: true
+EOF
+            ;;
+        # Add more service templates as needed
+        *)
+            print_warn "No compose template for $service_key (will be generated in script 2)"
+            ;;
+    esac
+}
+
+generate_service_env() {
+    local service_key="$1"
+    local env_file="$DATA_ROOT/env/${service_key}.env"
+    
+    # Extract relevant variables from main ENV_FILE
+    if [[ -f "$ENV_FILE" ]]; then
+        case "$service_key" in
+            "postgres")
+                grep -E "^(POSTGRES_|DATA_ROOT)" "$ENV_FILE" > "$env_file" || true
+                ;;
+            "redis")
+                grep -E "^(REDIS_|DATA_ROOT)" "$ENV_FILE" > "$env_file" || true
+                ;;
+            "qdrant")
+                grep -E "^(QDRANT_|DATA_ROOT)" "$ENV_FILE" > "$env_file" || true
+                ;;
+            *)
+                touch "$env_file"
+                ;;
+        esac
+    fi
+}
+
+generate_master_compose() {
+    local selected_services=("$@")
+    local master_compose="$DATA_ROOT/docker-compose.yml"
+    
+    cat > "$master_compose" <<EOF
+# Master Docker Compose file
+# Generated: $(date -Iseconds)
+# Services: ${#selected_services[@]}
+
+version: '3.8'
+
+services:
+EOF
+    
+    # Include each service
+    for service_key in "${selected_services[@]}"; do
+        cat >> "$master_compose" <<EOF
+  ${service_key}:
+    extends:
+      file: compose/${service_key}.yml
+      service: ${service_key}
+
+EOF
+    done
+    
+    # Add networks
+    cat >> "$master_compose" <<'EOF'
+networks:
+  ai-platform:
+    driver: bridge
+  ai-platform-internal:
+    driver: bridge
+  ai-platform-monitoring:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  qdrant_data:
+    driver: local
+EOF
+}
+
+generate_deployment_plan() {
+    local selected_services=("$@")
+    local plan_file="$METADATA_DIR/deployment_plan.json"
+    
+    cat > "$plan_file" <<EOF
+{
+  "deployment_plan": {
+    "version": "1.0",
+    "generated": "$(date -Iseconds)",
+    "total_services": ${#selected_services[@]},
+    "deployment_order": [
+EOF
+    
+    # Define deployment order (infrastructure first)
+    local deployment_order=("postgres" "redis" "qdrant" "ollama" "litellm" "openwebui" "anythingllm" "dify" "n8n" "prometheus" "grafana")
+    
+    local first=true
+    for service in "${deployment_order[@]}"; do
+        if [[ " ${selected_services[*]} " =~ " $service " ]]; then
+            if [[ "$first" == false ]]; then
+                echo "," >> "$plan_file"
+            fi
+            first=false
+            echo "    \"$service\"" >> "$plan_file"
+        fi
+    done
+    
+    cat >> "$plan_file" <<EOF
+    ]
+  }
+}
+EOF
+}
+
+#───────────────────────────────────────────────────────────────────────────────
 # DIRECTORY STRUCTURE CREATION
 #───────────────────────────────────────────────────────────────────────────────
 
@@ -2964,7 +3203,15 @@ main() {
         print_info "Skipping collect_configurations (already completed)"
     fi
 
-    # Phase 9: Create directories
+    # Phase 9: Generate modular composes
+    if [[ ! " ${COMPLETED_PHASES[*]} " =~ " generate_modular_composes " ]]; then
+        generate_modular_composes
+        mark_phase_complete "generate_modular_composes"
+    else
+        print_info "Skipping generate_modular_composes (already completed)"
+    fi
+
+    # Phase 10: Create directories
     if [[ ! " ${COMPLETED_PHASES[*]} " =~ " create_directory_structure " ]]; then
         create_directory_structure
         mark_phase_complete "create_directory_structure"
