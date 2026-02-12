@@ -572,46 +572,36 @@ select_services() {
     
     # Infrastructure Services
     echo "🏗️  Infrastructure:"
-    echo "  [1] Nginx Proxy Manager - Visual reverse proxy (RECOMMENDED)"
-    echo "  [2] Traefik - Modern reverse proxy with auto SSL"
-    echo "  [3] PostgreSQL - Relational database"
-    echo "  [4] Redis - Cache and message queue"
-    echo "  [5] Tailscale - VPN mesh network"
+    echo "  [1] PostgreSQL - Relational database"
+    echo "  [2] Redis - Cache and message queue"
+    echo "  [3] Tailscale - VPN mesh network"
     echo ""
     
     # AI Applications
     echo "🤖 AI Applications:"
-    echo "  [6] Open WebUI - Modern ChatGPT-like interface"
-    echo "  [7] AnythingLLM - Document-based AI chat"
-    echo "  [8] Dify - LLM application development platform"
-    echo "  [9] n8n - Workflow automation platform"
-    echo "  [10] Flowise - Visual LangChain builder"
-    echo "  [11] Ollama - Local LLM runtime"
-    echo "  [12] LiteLLM - Multi-provider proxy + routing"
-    echo ""
-    
-    # Vector Databases
-    echo "🧠 Vector Databases:"
-    echo "  [13] Qdrant - High-performance vector DB (Recommended)"
-    echo "  [14] Milvus - Distributed vector database"
-    echo "  [15] ChromaDB - Simple Python-native DB"
-    echo "  [16] Weaviate - GraphQL API with semantic search"
+    echo "  [4] Open WebUI - Modern ChatGPT-like interface"
+    echo "  [5] AnythingLLM - Document-based AI chat"
+    echo "  [6] Dify - LLM application development platform"
+    echo "  [7] n8n - Workflow automation platform"
+    echo "  [8] Flowise - Visual LangChain builder"
+    echo "  [9] Ollama - Local LLM runtime"
+    echo "  [10] LiteLLM - Multi-provider proxy + routing"
     echo ""
     
     # Communication & Integration
     echo "📱 Communication & Integration:"
-    echo "  [17] Signal API - Private messaging"
-    echo "  [18] OpenClaw UI - Multi-channel orchestration"
+    echo "  [11] Signal API - Private messaging"
+    echo "  [12] OpenClaw UI - Multi-channel orchestration"
     echo ""
     
     # Monitoring
     echo "📊 Monitoring:"
-    echo "  [19] Prometheus + Grafana - Metrics and visualization"
+    echo "  [13] Prometheus + Grafana - Metrics and visualization"
     echo ""
     
     # Storage
     echo "📦 Storage:"
-    echo "  [20] MinIO - S3-compatible storage"
+    echo "  [14] MinIO - S3-compatible storage"
     echo ""
     
     echo "Select services (space-separated, e.g., '1 3 6'):"
@@ -619,8 +609,6 @@ select_services() {
     echo ""
     
     local -A selected_map=(
-        ["nginx-proxy-manager"]=1
-        ["traefik"]=1
         ["postgres"]=1
         ["redis"]=1
         ["tailscale"]=1
@@ -631,27 +619,6 @@ select_services() {
         ["flowise"]=1
         ["ollama"]=1
         ["litellm"]=1
-        ["qdrant"]=1
-        ["milvus"]=1
-        ["chroma"]=1
-        ["weaviate"]=1
-        ["signal-api"]=1
-        ["openclaw"]=1
-        ["prometheus"]=1
-        ["grafana"]=1
-        ["minio"]=1
-        ["tailscale"]=1
-        ["openwebui"]=1
-        ["anythingllm"]=1
-        ["dify"]=1
-        ["n8n"]=1
-        ["flowise"]=1
-        ["ollama"]=1
-        ["litellm"]=1
-        ["qdrant"]=1
-        ["milvus"]=1
-        ["chroma"]=1
-        ["weaviate"]=1
         ["signal-api"]=1
         ["openclaw"]=1
         ["prometheus"]=1
@@ -671,22 +638,24 @@ select_services() {
             break
         elif [[ "$selection" =~ ^[0-9\ ]+$ ]]; then
             for num in $selection; do
-                if [[ $num -ge 1 ]] && [[ $num -le 12 ]]; then
+                if [[ $num -ge 1 ]] && [[ $num -le 14 ]]; then
                     local service_name
                     case $num in
-                        1) service_name="nginx-proxy-manager" ;;
-                        2) service_name="traefik" ;;
-                        3) service_name="postgres" ;;
-                        4) service_name="redis" ;;
-                        5) service_name="tailscale" ;;
-                        6) service_name="openwebui" ;;
-                        7) service_name="anythingllm" ;;
-                        8) service_name="dify" ;;
-                        9) service_name="n8n" ;;
-                        10) service_name="flowise" ;;
-                        11) service_name="ollama" ;;
-                        12) service_name="litellm" ;;
-                        *) print_warn "Invalid selection: $num (must be 1-12)"; continue ;;
+                        1) service_name="postgres" ;;
+                        2) service_name="redis" ;;
+                        3) service_name="tailscale" ;;
+                        4) service_name="openwebui" ;;
+                        5) service_name="anythingllm" ;;
+                        6) service_name="dify" ;;
+                        7) service_name="n8n" ;;
+                        8) service_name="flowise" ;;
+                        9) service_name="ollama" ;;
+                        10) service_name="litellm" ;;
+                        11) service_name="signal-api" ;;
+                        12) service_name="openclaw" ;;
+                        13) service_name="prometheus" ;;
+                        14) service_name="minio" ;;
+                        *) print_warn "Invalid selection: $num (must be 1-14)"; continue ;;
                     esac
                     
                     if [[ -n "${selected_map[$service_name]:-}" ]]; then
@@ -697,12 +666,12 @@ select_services() {
                         print_info "Removed: $service_name"
                     fi
                 else
-                    print_warn "Invalid selection: $num (must be 1-12)"
+                    print_warn "Invalid selection: $num (must be 1-14)"
                 fi
             done
             break
         else
-            print_error "Invalid selection. Please enter numbers 1-12 or 'all'"
+            print_error "Invalid selection. Please enter numbers 1-14 or 'all'"
         fi
     done
     
