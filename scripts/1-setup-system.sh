@@ -1886,7 +1886,7 @@ main() {
     
     # Completion message
     echo ""
-    echo "$(printf '═%.0s' {1..80})"
+    echo "==============================================================================="
     echo ""
     print_success "🎉 SETUP SCRIPT COMPLETED SUCCESSFULLY!"
     echo ""
@@ -1899,7 +1899,6 @@ main() {
     echo ""
     echo -e "${CYAN}sudo bash 2-deploy-services.sh${NC}"
     echo ""
-    echo "$(printf '"═%.0s"' {1..80})
     echo ""
 
 }
