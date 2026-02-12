@@ -287,17 +287,39 @@ collect_domain_info() {
     log_phase "2" "🌐" "Domain & Network Configuration"
     
     echo ""
-    print_info "Domain Configuration"
+    print_header "🌐 Domain Configuration"
     echo ""
     
     prompt_input "DOMAIN" "Enter your domain (e.g., example.com)" "" false "domain"
     echo "DOMAIN=$INPUT_RESULT" >> "$ENV_FILE"
     
+    # Validate domain resolution
     echo ""
-    print_info "Proxy Selection"
+    print_info "Validating domain resolution..."
+    if nslookup "$INPUT_RESULT" >/dev/null 2>&1; then
+        local public_ip=$(nslookup "$INPUT_RESULT" | grep -A1 "Name:" | tail -1 | awk '{print $2}')
+        local server_ip=$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null)
+        
+        if [[ "$public_ip" == "$server_ip" ]]; then
+            print_success "Domain resolves to this server: $public_ip"
+            echo "DOMAIN_RESOLVES=true" >> "$ENV_FILE"
+            echo "PUBLIC_IP=$server_ip" >> "$ENV_FILE"
+        else
+            print_warn "Domain resolves to different IP: $public_ip (server: $server_ip)"
+            echo "DOMAIN_RESOLVES=false" >> "$ENV_FILE"
+            echo "PUBLIC_IP=$server_ip" >> "$ENV_FILE"
+        fi
+    else
+        print_warn "Domain does not resolve or DNS not configured"
+        echo "DOMAIN_RESOLVES=false" >> "$ENV_FILE"
+        echo "PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || echo 'unknown')" >> "$ENV_FILE"
+    fi
+    
+    echo ""
+    print_header "🌐 Proxy Selection"
     echo ""
     echo "Select reverse proxy:"
-    echo "  1) Nginx (Traditional - Reliable, manual SSL config)"
+    echo "  1) Nginx Proxy Manager (Visual UI - Recommended)"
     echo "  2) Traefik (Modern - Auto SSL with Docker labels)"
     echo "  3) Caddy (Automatic - Zero-config HTTPS)"
     echo "  4) None (Direct port access - Not recommended)"
@@ -309,8 +331,8 @@ collect_domain_info() {
         
         case "$proxy_choice" in
             1)
-                echo "PROXY_TYPE=nginx" >> "$ENV_FILE"
-                print_success "Nginx selected"
+                echo "PROXY_TYPE=nginx-proxy-manager" >> "$ENV_FILE"
+                print_success "Nginx Proxy Manager selected"
                 break
                 ;;
             2)
@@ -337,7 +359,7 @@ collect_domain_info() {
     # SSL Configuration
     if [[ "$proxy_choice" != "4" ]]; then
         echo ""
-        print_info "SSL Configuration"
+        print_header "🔒 SSL Configuration"
         echo ""
         echo "Select SSL type:"
         echo "  1) Let's Encrypt (Free, automatic renewal)"
@@ -372,6 +394,60 @@ collect_domain_info() {
                     ;;
             esac
         done
+    fi
+    
+    # Tailscale Configuration
+    echo ""
+    print_header "🔗 Tailscale Configuration (Optional)"
+    echo ""
+    
+    if confirm "Configure Tailscale VPN for private access?"; then
+        print_info "Tailscale Configuration"
+        echo ""
+        
+        echo "Select Tailscale setup method:"
+        echo "  1) Auth Key (Quick setup)"
+        echo "  2) Auth Token (Existing network)"
+        echo "  3) Skip"
+        echo ""
+        
+        while true; do
+            echo -n -e "${YELLOW}Select method [1-3]:${NC} "
+            read -r tailscale_method
+            
+            case "$tailscale_method" in
+                1)
+                    prompt_input "TAILSCALE_AUTH_KEY" "Tailscale auth key" "" false
+                    echo "TAILSCALE_AUTH_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    echo "TAILSCALE_SETUP_METHOD=auth_key" >> "$ENV_FILE"
+                    print_success "Tailscale auth key configured"
+                    break
+                    ;;
+                2)
+                    prompt_input "TAILSCALE_AUTH_TOKEN" "Tailscale auth token" "" false
+                    echo "TAILSCALE_AUTH_TOKEN=$INPUT_RESULT" >> "$ENV_FILE"
+                    echo "TAILSCALE_SETUP_METHOD=auth_token" >> "$ENV_FILE"
+                    print_success "Tailscale auth token configured"
+                    break
+                    ;;
+                3)
+                    break
+                    ;;
+                *)
+                    print_error "Invalid selection"
+                    ;;
+            esac
+        done
+        
+        # Tailscale network configuration
+        echo ""
+        prompt_input "TAILSCALE_TAILNET" "Tailscale tailnet name" "default" false
+        echo "TAILSCALE_TAILNET=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        echo "TAILSCALE_EXIT_NODE=false" >> "$ENV_FILE"
+        echo "TAILSCALE_ACCEPT_ROUTES=false" >> "$ENV_FILE"
+        
+        print_success "Tailscale configuration completed"
     fi
     
     echo ""
@@ -488,35 +564,52 @@ select_services() {
     print_info "Select services to deploy. Dependencies will be auto-selected."
     echo ""
     
-    # AI Applications Selection
+    # Infrastructure Services
+    echo "🏗️  Infrastructure:"
+    echo "  [1] Nginx Proxy Manager - Visual reverse proxy (RECOMMENDED)"
+    echo "  [2] Traefik - Modern reverse proxy with auto SSL"
+    echo "  [3] PostgreSQL - Relational database"
+    echo "  [4] Redis - Cache and message queue"
+    echo "  [5] Tailscale - VPN mesh network"
+    echo ""
+    
+    # AI Applications
     echo "🤖 AI Applications:"
-    echo "  [1] Open WebUI - Modern ChatGPT-like interface"
-    echo "  [2] AnythingLLM - Document-based AI chat"
-    echo "  [3] Dify - LLM application development platform"
-    echo "  [4] n8n - Workflow automation platform"
-    echo "  [5] Flowise - Visual LangChain builder"
+    echo "  [6] Open WebUI - Modern ChatGPT-like interface"
+    echo "  [7] AnythingLLM - Document-based AI chat"
+    echo "  [8] Dify - LLM application development platform"
+    echo "  [9] n8n - Workflow automation platform"
+    echo "  [10] Flowise - Visual LangChain builder"
     echo ""
     
-    # LLM Infrastructure Selection
+    # LLM Infrastructure
     echo "🤖 LLM Infrastructure:"
-    echo "  [6] Ollama - Local LLM runtime"
-    echo "  [7] LiteLLM - Multi-provider proxy + routing"
+    echo "  [11] Ollama - Local LLM runtime"
+    echo "  [12] LiteLLM - Multi-provider proxy + routing"
     echo ""
     
-    # Communication & Integration Selection
+    # Vector Databases
+    echo "🧠 Vector Databases:"
+    echo "  [13] Qdrant - High-performance vector DB (Recommended)"
+    echo "  [14] Milvus - Distributed vector database"
+    echo "  [15] ChromaDB - Simple Python-native DB"
+    echo "  [16] Weaviate - GraphQL API with semantic search"
+    echo ""
+    
+    # Communication & Integration
     echo "📱 Communication & Integration:"
-    echo "  [8] Signal API - Private messaging"
-    echo "  [9] OpenClaw UI - Multi-channel orchestration"
+    echo "  [17] Signal API - Private messaging"
+    echo "  [18] OpenClaw UI - Multi-channel orchestration"
     echo ""
     
-    # Vector Database Selection
-    echo "🧠 Vector Database:"
-    echo "  [10] Qdrant - High-performance vector DB"
-    echo ""
-    
-    # Monitoring Selection
+    # Monitoring
     echo "📊 Monitoring:"
-    echo "  [11] Prometheus + Grafana - Metrics and visualization"
+    echo "  [19] Prometheus + Grafana - Metrics and visualization"
+    echo ""
+    
+    # Storage
+    echo "� Storage:"
+    echo "  [20] MinIO - S3-compatible storage"
     echo ""
     
     echo "Select services (space-separated, e.g., '1 3 6'):"
@@ -524,6 +617,11 @@ select_services() {
     echo ""
     
     local -A selected_map=(
+        ["nginx-proxy-manager"]=1
+        ["traefik"]=1
+        ["postgres"]=1
+        ["redis"]=1
+        ["tailscale"]=1
         ["openwebui"]=1
         ["anythingllm"]=1
         ["dify"]=1
@@ -531,11 +629,15 @@ select_services() {
         ["flowise"]=1
         ["ollama"]=1
         ["litellm"]=1
+        ["qdrant"]=1
+        ["milvus"]=1
+        ["chroma"]=1
+        ["weaviate"]=1
         ["signal-api"]=1
         ["openclaw"]=1
-        ["qdrant"]=1
         ["prometheus"]=1
         ["grafana"]=1
+        ["minio"]=1
     )
     
     while true; do
@@ -550,20 +652,29 @@ select_services() {
             break
         elif [[ "$selection" =~ ^[0-9\ ]+$ ]]; then
             for num in $selection; do
-                if [[ $num -ge 1 ]] && [[ $num -le 11 ]]; then
+                if [[ $num -ge 1 ]] && [[ $num -le 20 ]]; then
                     local service_name
                     case $num in
-                        1) service_name="openwebui" ;;
-                        2) service_name="anythingllm" ;;
-                        3) service_name="dify" ;;
-                        4) service_name="n8n" ;;
-                        5) service_name="flowise" ;;
-                        6) service_name="ollama" ;;
-                        7) service_name="litellm" ;;
-                        8) service_name="signal-api" ;;
-                        9) service_name="openclaw" ;;
-                        10) service_name="qdrant" ;;
-                        11) service_name="prometheus" ;;
+                        1) service_name="nginx-proxy-manager" ;;
+                        2) service_name="traefik" ;;
+                        3) service_name="postgres" ;;
+                        4) service_name="redis" ;;
+                        5) service_name="tailscale" ;;
+                        6) service_name="openwebui" ;;
+                        7) service_name="anythingllm" ;;
+                        8) service_name="dify" ;;
+                        9) service_name="n8n" ;;
+                        10) service_name="flowise" ;;
+                        11) service_name="ollama" ;;
+                        12) service_name="litellm" ;;
+                        13) service_name="qdrant" ;;
+                        14) service_name="milvus" ;;
+                        15) service_name="chroma" ;;
+                        16) service_name="weaviate" ;;
+                        17) service_name="signal-api" ;;
+                        18) service_name="openclaw" ;;
+                        19) service_name="prometheus" ;;
+                        20) service_name="minio" ;;
                         *) print_warn "Invalid selection: $num"; continue ;;
                     esac
                     
@@ -804,18 +915,69 @@ EOF
         print_success "Redis configuration generated"
     fi
     
-    # Qdrant configuration
-    if [[ " ${selected_services[*]} " =~ " qdrant " ]]; then
+    # Vector Database Selection
+    if [[ " ${selected_services[*]} " =~ " anythingllm " ]] || [[ " ${selected_services[*]} " =~ " dify " ]]; then
         echo ""
-        print_info "Qdrant Configuration"
+        print_header "🗄️ Vector Database Selection"
         echo ""
         
-        local qdrant_api_key=$(generate_random_password 32)
-        echo "QDRANT_API_KEY=$qdrant_api_key" >> "$ENV_FILE"
-        echo "QDRANT_HTTP_PORT=6333" >> "$ENV_FILE"
-        echo "QDRANT_GRPC_PORT=6334" >> "$ENV_FILE"
+        echo "Select vector database for RAG applications:"
+        echo ""
+        echo "  1) Qdrant (Recommended)"
+        echo "     - REST + gRPC API"
+        echo "     - Web dashboard"
+        echo "     - Production-ready"
+        echo ""
+        echo "  2) Milvus"
+        echo "     - High performance"
+        echo "     - Distributed support"
+        echo "     - Complex setup"
+        echo ""
+        echo "  3) ChromaDB"
+        echo "     - Simple setup"
+        echo "     - Python-native"
+        echo "     - Good for development"
+        echo ""
+        echo "  4) Weaviate"
+        echo "     - GraphQL API"
+        echo "     - Semantic search"
+        echo "     - Modular architecture"
+        echo ""
         
-        print_success "Qdrant configuration generated"
+        while true; do
+            echo -n -e "${YELLOW}Select vector database [1-4]:${NC} "
+            read -r vector_db_choice
+            
+            case "$vector_db_choice" in
+                1)
+                    echo "VECTOR_DB=qdrant" >> "$ENV_FILE"
+                    echo "VECTOR_DB_TYPE=qdrant" >> "$ENV_FILE"
+                    print_success "Qdrant selected as vector database"
+                    break
+                    ;;
+                2)
+                    echo "VECTOR_DB=milvus" >> "$ENV_FILE"
+                    echo "VECTOR_DB_TYPE=milvus" >> "$ENV_FILE"
+                    print_success "Milvus selected as vector database"
+                    break
+                    ;;
+                3)
+                    echo "VECTOR_DB=chroma" >> "$ENV_FILE"
+                    echo "VECTOR_DB_TYPE=chroma" >> "$ENV_FILE"
+                    print_success "ChromaDB selected as vector database"
+                    break
+                    ;;
+                4)
+                    echo "VECTOR_DB=weaviate" >> "$ENV_FILE"
+                    echo "VECTOR_DB_TYPE=weaviate" >> "$ENV_FILE"
+                    print_success "Weaviate selected as vector database"
+                    break
+                    ;;
+                *)
+                    print_error "Invalid selection"
+                    ;;
+            esac
+        done
     fi
     
     # LiteLLM configuration
@@ -867,29 +1029,86 @@ EOF
             esac
         done
         
-        # External LLM providers
+        # LLM Provider Selection
+    if [[ " ${selected_services[*]} " =~ " litellm " ]]; then
         echo ""
-        print_info "External LLM Provider Configuration"
-        echo ""
-        print_info "Configure external providers (skip if not needed):"
+        print_header "🤖 LLM Provider Selection"
         echo ""
         
-        prompt_input "OPENAI_API_KEY" "OpenAI API Key (or skip)" "" false
-        [[ -n "$INPUT_RESULT" ]] && echo "OPENAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+        echo "Configure LLM providers for LiteLLM routing:"
+        echo ""
+        echo "✅ Local Provider:"
+        echo "  • Ollama (will be deployed)"
+        echo "  • Models: llama3.2, mistral, codellama"
+        echo ""
         
-        prompt_input "ANTHROPIC_API_KEY" "Anthropic API Key (or skip)" "" false
-        [[ -n "$INPUT_RESULT" ]] && echo "ANTHROPIC_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+        echo "Add API providers? (recommended for fallback)"
+        echo ""
+        echo "  1) OpenAI (GPT-4, GPT-3.5)"
+        echo "  2) Anthropic (Claude 3)"
+        echo "  3) Google (Gemini)"
+        echo "  4) Groq (Fast Llama inference)"
+        echo "  5) All of the above"
+        echo "  6) Skip API providers"
+        echo ""
         
-        prompt_input "GOOGLE_API_KEY" "Google AI API Key (or skip)" "" false
-        [[ -n "$INPUT_RESULT" ]] && echo "GOOGLE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-        
-        prompt_input "GROQ_API_KEY" "Groq API Key (or skip)" "" false
-        [[ -n "$INPUT_RESULT" ]] && echo "GROQ_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-        
-        prompt_input "MISTRAL_API_KEY" "Mistral API Key (or skip)" "" false
-        [[ -n "$INPUT_RESULT" ]] && echo "MISTRAL_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-        
-        print_success "LiteLLM configuration completed"
+        while true; do
+            echo -n -e "${YELLOW}Select option [1-6]:${NC} "
+            read -r llm_provider_choice
+            
+            case "$llm_provider_choice" in
+                1)
+                    echo "LLM_PROVIDERS=local,openai" >> "$ENV_FILE"
+                    prompt_input "OPENAI_API_KEY" "OpenAI API key" "" false
+                    echo "OPENAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    print_success "Local + OpenAI providers configured"
+                    break
+                    ;;
+                2)
+                    echo "LLM_PROVIDERS=local,anthropic" >> "$ENV_FILE"
+                    prompt_input "ANTHROPIC_API_KEY" "Anthropic API key" "" false
+                    echo "ANTHROPIC_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    print_success "Local + Anthropic providers configured"
+                    break
+                    ;;
+                3)
+                    echo "LLM_PROVIDERS=local,google" >> "$ENV_FILE"
+                    prompt_input "GOOGLE_API_KEY" "Google AI API key" "" false
+                    echo "GOOGLE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    print_success "Local + Google providers configured"
+                    break
+                    ;;
+                4)
+                    echo "LLM_PROVIDERS=local,groq" >> "$ENV_FILE"
+                    prompt_input "GROQ_API_KEY" "Groq API key" "" false
+                    echo "GROQ_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    print_success "Local + Groq providers configured"
+                    break
+                    ;;
+                5)
+                    echo "LLM_PROVIDERS=local,openai,anthropic,google,groq" >> "$ENV_FILE"
+                    prompt_input "OPENAI_API_KEY" "OpenAI API key" "" false
+                    echo "OPENAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    prompt_input "ANTHROPIC_API_KEY" "Anthropic API key" "" false
+                    echo "ANTHROPIC_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    prompt_input "GOOGLE_API_KEY" "Google AI API key" "" false
+                    echo "GOOGLE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    prompt_input "GROQ_API_KEY" "Groq API key" "" false
+                    echo "GROQ_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    print_success "All providers configured"
+                    break
+                    ;;
+                6)
+                    echo "LLM_PROVIDERS=local" >> "$ENV_FILE"
+                    print_success "Local provider only"
+                    break
+                    ;;
+                *)
+                    print_error "Invalid selection"
+                    ;;
+            esac
+        done
+    fi
     fi
     
     # Signal API configuration
@@ -904,15 +1123,82 @@ EOF
         prompt_input "SIGNAL_PHONE" "Signal phone number (E.164 format, e.g., +15551234567)" "" false
         echo "SIGNAL_PHONE=$INPUT_RESULT" >> "$ENV_FILE"
         
-        prompt_input "SIGNAL_PASSWORD" "Signal bot password" "$(generate_random_password 16)" true
-        echo "SIGNAL_PASSWORD=$INPUT_RESULT" >> "$ENV_FILE"
+        # Signal pairing options
+        echo ""
+        print_info "Signal Pairing Options:"
+        echo ""
+        echo "  1) Generate QR Code (Recommended - scan with Signal app)"
+        echo "  2) Internal API pairing (http://localhost:8081/v1/generate_token)"
+        echo "  3) Manual pairing (advanced)"
+        echo ""
         
+        while true; do
+            echo -n -e "${YELLOW}Select pairing method [1-3]:${NC} "
+            read -r signal_pairing
+            
+            case "$signal_pairing" in
+                1)
+                    echo "SIGNAL_PAIRING_METHOD=qr_code" >> "$ENV_FILE"
+                    echo "SIGNAL_QR_URL=http://localhost:8090/v1/qrcode" >> "$ENV_FILE"
+                    print_success "QR code pairing selected"
+                    print_info "QR code will be available at: http://localhost:8090/v1/qrcode"
+                    break
+                    ;;
+                2)
+                    echo "SIGNAL_PAIRING_METHOD=internal_api" >> "$ENV_FILE"
+                    echo "SIGNAL_API_PAIRING_URL=http://localhost:8081/v1/generate_token" >> "$ENV_FILE"
+                    print_success "Internal API pairing selected"
+                    print_info "Pairing token will be available at: http://localhost:8081/v1/generate_token"
+                    break
+                    ;;
+                3)
+                    echo "SIGNAL_PAIRING_METHOD=manual" >> "$ENV_FILE"
+                    local signal_password=$(generate_random_password 16)
+                    echo "SIGNAL_PASSWORD=$signal_password" >> "$ENV_FILE"
+                    print_success "Manual pairing selected"
+                    break
+                    ;;
+                *)
+                    print_error "Invalid selection"
+                    ;;
+            esac
+        done
+        
+        # Signal webhook configuration
+        echo ""
+        print_info "Signal Webhook Configuration"
+        echo ""
         echo "SIGNAL_WEBHOOK_URL=http://signal-api:8090/v2/receive" >> "$ENV_FILE"
+        echo "SIGNAL_API_PORT=8090" >> "$ENV_FILE"
         
         print_success "Signal API configuration completed"
     fi
     
-    # Google Drive integration
+    # OpenClaw configuration
+    if [[ " ${selected_services[*]} " =~ " openclaw " ]]; then
+        echo ""
+        print_header "🔗 OpenClaw UI Configuration"
+        echo ""
+        
+        print_info "OpenClaw Multi-Channel Orchestration"
+        echo ""
+        
+        prompt_input "OPENCLAW_ADMIN_USER" "OpenClaw admin user" "admin" false
+        echo "OPENCLAW_ADMIN_USER=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        local openclaw_password=$(generate_random_password 24)
+        echo "OPENCLAW_ADMIN_PASSWORD=$openclaw_password" >> "$ENV_FILE"
+        
+        echo "OPENCLAW_PORT=8082" >> "$ENV_FILE"
+        echo "OPENCLAW_API_PORT=8083" >> "$ENV_FILE"
+        
+        # OpenClaw integration settings
+        echo "OPENCLAW_ENABLE_SIGNAL=true" >> "$ENV_FILE"
+        echo "OPENCLAW_ENABLE_LITELM=true" >> "$ENV_FILE"
+        echo "OPENCLAW_ENABLE_N8N=true" >> "$ENV_FILE"
+        
+        print_success "OpenClaw configuration completed"
+    fi
     echo ""
     print_info "Google Drive Integration (Optional)"
     echo ""
@@ -1102,7 +1388,9 @@ generate_summary() {
     print_header "📊 Setup Summary"
     echo ""
     
+    # Generate comprehensive summary
     local summary_file="$METADATA_DIR/setup_summary.txt"
+    local urls_file="$METADATA_DIR/service_urls.txt"
     
     cat > "$summary_file" <<EOF
 AI Platform Setup Summary
@@ -1115,25 +1403,168 @@ Directories:
 - Data: $DATA_ROOT
 - Metadata: $METADATA_DIR
 - Logs: $DATA_ROOT/logs
+- Config: $DATA_ROOT/config
+- Compose: $DATA_ROOT/compose
 
-Configuration:
-- Environment: $ENV_FILE
-- Services: $SERVICES_FILE
+Network Configuration:
+- Domain: ${DOMAIN:-localhost}
+- Public IP: ${PUBLIC_IP:-unknown}
+- Domain Resolves: ${DOMAIN_RESOLVES:-false}
+- Proxy: ${PROXY_TYPE:-none}
+- SSL: ${SSL_TYPE:-none}
+
+Selected Services: $(jq -r '.total_services' "$SERVICES_FILE" 2>/dev/null || echo "unknown")
+Environment Variables: $(grep -c "^" "$ENV_FILE" 2>/dev/null || echo "0")
+Generated Secrets: $(grep -c "_PASSWORD\|_SECRET\|_KEY" "$ENV_FILE" 2>/dev/null || echo "0")
 
 Next Steps:
 1. Review configuration in $ENV_FILE
-2. Run: sudo bash 2-deploy-services.sh
-3. Monitor deployment logs
+2. Review service URLs in $urls_file
+3. Run: sudo bash 2-deploy-services.sh
+4. Monitor deployment logs
 
 Generated Files:
-- Environment variables
-- Service selections
-- Directory structure
-- System configuration
+- Environment variables: $ENV_FILE
+- Service selections: $SERVICES_FILE
+- Configuration summary: $METADATA_DIR/configuration_summary.json
+- Service URLs: $urls_file
+- State file: $STATE_FILE
 EOF
     
+    # Generate service URLs and ports summary
+    cat > "$urls_file" <<EOF
+AI Platform Service URLs and Ports
+================================
+
+Public Access:
+EOF
+    
+    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+        echo "- Main Site: https://$DOMAIN" >> "$urls_file"
+        echo "- Admin Panel: https://$DOMAIN/admin" >> "$urls_file"
+    else
+        echo "- Main Site: http://${PUBLIC_IP:-localhost}" >> "$urls_file"
+        echo "- Admin Panel: http://${PUBLIC_IP:-localhost}:8080" >> "$urls_file"
+    fi
+    
+    echo "" >> "$urls_file"
+    echo "Service Ports:" >> "$urls_file"
+    echo "" >> "$urls_file"
+    
+    # Add service URLs based on selected services
+    local selected_services=($(jq -r '.services[].key' "$SERVICES_FILE" 2>/dev/null || echo ""))
+    
+    for service in "${selected_services[@]}"; do
+        case "$service" in
+            "openwebui")
+                echo "- Open WebUI: http://localhost:3000" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Open WebUI (Public): https://$DOMAIN/openwebui" >> "$urls_file"
+                ;;
+            "anythingllm")
+                echo "- AnythingLLM: http://localhost:3001" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- AnythingLLM (Public): https://$DOMAIN/anythingllm" >> "$urls_file"
+                ;;
+            "dify")
+                echo "- Dify: http://localhost:8080" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Dify (Public): https://$DOMAIN/dify" >> "$urls_file"
+                ;;
+            "n8n")
+                echo "- n8n: http://localhost:5678" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- n8n (Public): https://$DOMAIN/n8n" >> "$urls_file"
+                ;;
+            "flowise")
+                echo "- Flowise: http://localhost:3002" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Flowise (Public): https://$DOMAIN/flowise" >> "$urls_file"
+                ;;
+            "litellm")
+                echo "- LiteLLM: http://localhost:4000" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- LiteLLM (Public): https://$DOMAIN/litellm" >> "$urls_file"
+                ;;
+            "signal-api")
+                echo "- Signal API: http://localhost:8090" >> "$urls_file"
+                echo "- Signal QR: http://localhost:8090/v1/qrcode" >> "$urls_file"
+                ;;
+            "openclaw")
+                echo "- OpenClaw: http://localhost:8082" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- OpenClaw (Public): https://$DOMAIN/openclaw" >> "$urls_file"
+                ;;
+            "prometheus")
+                echo "- Prometheus: http://localhost:9090" >> "$urls_file"
+                ;;
+            "grafana")
+                echo "- Grafana: http://localhost:3001" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Grafana (Public): https://$DOMAIN/grafana" >> "$urls_file"
+                ;;
+            "qdrant")
+                echo "- Qdrant: http://localhost:6333" >> "$urls_file"
+                echo "- Qdrant Dashboard: http://localhost:6333/dashboard" >> "$urls_file"
+                ;;
+            "postgres")
+                echo "- PostgreSQL: localhost:5432" >> "$urls_file"
+                ;;
+            "redis")
+                echo "- Redis: localhost:6379" >> "$urls_file"
+                ;;
+            "minio")
+                echo "- MinIO: http://localhost:9000" >> "$urls_file"
+                echo "- MinIO Console: http://localhost:9001" >> "$urls_file"
+                ;;
+        esac
+    done
+    
+    echo "" >> "$urls_file"
+    echo "Database Credentials:" >> "$urls_file"
+    echo "" >> "$urls_file"
+    echo "- PostgreSQL User: postgres" >> "$urls_file"
+    echo "- PostgreSQL Password: $(grep "^POSTGRES_PASSWORD=" "$ENV_FILE" | cut -d= -f2)" >> "$urls_file"
+    echo "- Redis Password: $(grep "^REDIS_PASSWORD=" "$ENV_FILE" | cut -d= -f2)" >> "$urls_file"
+    echo "- Vector DB: ${VECTOR_DB:-qdrant}" >> "$urls_file"
+    [[ -n "${QDRANT_API_KEY:-}" ]] && echo "- Qdrant API Key: $(grep "^QDRANT_API_KEY=" "$ENV_FILE" | cut -d= -f2)" >> "$urls_file"
+    
+    echo "" >> "$urls_file"
+    echo "Admin Credentials:" >> "$urls_file"
+    echo "" >> "$urls_file"
+    echo "- Admin Password: $(grep "^ADMIN_PASSWORD=" "$ENV_FILE" | cut -d= -f2)" >> "$urls_file"
+    echo "- Grafana Password: $(grep "^GRAFANA_PASSWORD=" "$ENV_FILE" | cut -d= -f2)" >> "$urls_file"
+    [[ -n "${OPENCLAW_ADMIN_PASSWORD:-}" ]] && echo "- OpenClaw Password: $(grep "^OPENCLAW_ADMIN_PASSWORD=" "$ENV_FILE" | cut -d= -f2)" >> "$urls_file"
+    
+    # Display summary to user
     print_success "Setup summary generated: $summary_file"
-    print_info "Review the summary file for complete configuration details"
+    print_success "Service URLs saved: $urls_file"
+    print_info "Review service URLs file for complete access information"
+    
+    # Display key information
+    echo ""
+    print_header "🔑 Key Information"
+    echo ""
+    print_info "Database Credentials:"
+    echo "  • PostgreSQL User: postgres"
+    echo "  • PostgreSQL Password: $(grep "^POSTGRES_PASSWORD=" "$ENV_FILE" | cut -d= -f2)"
+    echo "  • Redis Password: $(grep "^REDIS_PASSWORD=" "$ENV_FILE" | cut -d= -f2)"
+    echo "  • Vector Database: ${VECTOR_DB:-qdrant}"
+    echo ""
+    
+    print_info "Admin Credentials:"
+    echo "  • Admin Password: $(grep "^ADMIN_PASSWORD=" "$ENV_FILE" | cut -d= -f2)"
+    echo "  • Grafana Password: $(grep "^GRAFANA_PASSWORD=" "$ENV_FILE" | cut -d= -f2)"
+    [[ -n "${OPENCLAW_ADMIN_PASSWORD:-}" ]] && echo "  • OpenClaw Password: $(grep "^OPENCLAW_ADMIN_PASSWORD=" "$ENV_FILE" | cut -d= -f2)"
+    echo ""
+    
+    print_info "Service Access:"
+    echo "  • Open WebUI: http://localhost:3000"
+    echo "  • LiteLLM: http://localhost:4000"
+    echo "  • n8n: http://localhost:5678"
+    echo "  • Dify: http://localhost:8080"
+    echo "  • Grafana: http://localhost:3001"
+    echo ""
+    
+    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+        print_success "Domain resolves correctly - public access available"
+    else
+        print_warn "Domain does not resolve - using local access"
+    fi
+    
+    print_success "Summary generation completed"
 }
 
 # Main Execution
