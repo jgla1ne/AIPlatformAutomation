@@ -1892,12 +1892,16 @@ main() {
     echo ""
     print_info "Next: Run the deployment script:"
     echo ""
+    echo ""
+    print_success "🎉 SETUP SCRIPT COMPLETED SUCCESSFULLY!"
+    echo ""
+    print_info "Next: Run the deployment script:"
+    echo ""
     echo -e "${CYAN}sudo bash 2-deploy-services.sh${NC}"
     echo ""
-    echo "$(printf '═%.0s' {1..80})"
+    echo "$(printf '"═%.0s"' {1..80})
     echo ""
-    
-    exit 0
+
 }
 
 # Run main function
