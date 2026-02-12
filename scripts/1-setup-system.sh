@@ -723,7 +723,7 @@ install_ollama() {
     )
 
     local count=1
-    for model_info in "${models[@]}"; do
+    for model_info in "${models[@]}}"; do
         local model_name=$(echo "$model_info" | cut -d':' -f1,2)
         local model_desc=$(echo "$model_info" | cut -d':' -f3)
         printf "  [%2d] %-20s - %s\n" "$count" "$model_name" "$model_desc"
@@ -744,23 +744,23 @@ install_ollama() {
     # Download selected models
     local selected_models=()
     for selection in $selections; do
-        if [[ "$selection" =~ ^[0-9]+$ ]] && [[ $selection -gt 0 ]] && [[ $selection -le ${#models[@]} ]]; then
+        if [[ "$selection" =~ ^[0-9]+$ ]] && [[ $selection -gt 0 ]] && [[ $selection -le ${#models[@]}} ]]; then
             local model_info="${models[$((selection-1))]}"
             local model_name=$(echo "$model_info" | cut -d':' -f1,2)
             selected_models+=("$model_name")
         fi
     done
 
-    if [[ ${#selected_models[@]} -eq 0 ]]; then
+    if [[ ${#selected_models[@]}} -eq 0 ]]; then
         print_info "No valid models selected"
         return 0
     fi
 
     echo ""
-    print_info "Downloading ${#selected_models[@]} model(s)..."
+    print_info "Downloading ${#selected_models[@]}} model(s)..."
     echo ""
 
-    for model in "${selected_models[@]}"; do
+    for model in "${selected_models[@]}}"; do
         print_info "Downloading $model..."
         if ollama pull "$model" 2>&1 | tee -a "$LOG_FILE" | grep -E "(pulling|success)"; then
             print_success "$model downloaded"
@@ -1042,7 +1042,7 @@ select_services() {
 
     # Display final selection
     echo ""
-    print_header "✅ Selected Services (${#selected_services[@]})"
+    print_header "✅ Selected Services (${#selected_services[@]}})"
     echo ""
 
     for category in "${!SERVICE_CATEGORIES[@]"; do
@@ -1076,7 +1076,7 @@ select_services() {
     cat > "$SERVICES_FILE" <<EOF
 {
   "selection_time": "$(date -Iseconds)",
-  "total_services": ${#selected_services[@]},
+  "total_services": ${#selected_services[@]}},
   "services": [
 EOF
 
@@ -1134,7 +1134,7 @@ collect_configurations() {
     # Read selected services from JSON
     local selected_services=($(jq -r '.services[].key' "$SERVICES_FILE"))
 
-    if [[ ${#selected_services[@]} -eq 0 ]]; then
+    if [[ ${#selected_services[@]}} -eq 0 ]]; then
         print_info "No services selected, skipping configuration"
         return 0
     fi
@@ -1142,7 +1142,7 @@ collect_configurations() {
     echo ""
     print_header "🔧 Service Configuration"
     echo ""
-    print_info "Collecting configuration for ${#selected_services[@]} services"
+    print_info "Collecting configuration for ${#selected_services[@]}} services"
     echo ""
 
     # Initialize .env file
@@ -2116,15 +2116,15 @@ OLLAMA INSTALLATION
 
 Ollama Version:       $(ollama --version 2>/dev/null | awk '{print $NF}')
 Service Status:       $(systemctl is-active ollama)
-Models Installed:     ${#ollama_models[@]}
+Models Installed:     ${#ollama_models[@]}}
 
 EOF
 
-    if [[ ${#ollama_models[@]} -gt 0 ]]; then
+    if [[ ${#ollama_models[@]}} -gt 0 ]]; then
         cat >> "$summary_file" <<EOF
 Installed Models:
 EOF
-        for model in "${ollama_models[@]}"; do
+        for model in "${ollama_models[@]}}"; do
             echo "  • $model" >> "$summary_file"
         done
         echo "" >> "$summary_file"
@@ -2276,12 +2276,12 @@ EOF
   "ollama": {
     "version": "$(ollama --version 2>/dev/null | awk '{print $NF}')",
     "service_active": $(systemctl is-active --quiet ollama && echo "true" || echo "false"),
-    "models_count": ${#ollama_models[@]},
+    "models_count": ${#ollama_models[@]}},
     "models": [
 EOF
 
     local first=true
-    for model in "${ollama_models[@]}"; do
+    for model in "${ollama_models[@]}}"; do
         if [[ "$first" == false ]]; then
             echo "," >> "$summary_json"
         fi
