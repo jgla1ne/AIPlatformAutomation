@@ -786,7 +786,7 @@ collect_configurations() {
     echo ""
     
     # Port availability check
-    local -A ports_to_check=(
+    local ports_to_check=(
         "80:Proxy Services"
         "443:Proxy Services"
         "3000:Open WebUI"
@@ -1148,7 +1148,7 @@ EOF
                 local provider_keys=()
                 
                 # Clean up the input and split by spaces, commas, or dashes
-                local cleaned_input=$(echo "$llm_provider_selection" | tr ', ' ' ' ' ')
+                local cleaned_input=$(echo "$llm_provider_selection" | tr ',- ' ' ' ' ')
                 
                 for num in $cleaned_input; do
                     case $num in
