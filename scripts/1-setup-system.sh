@@ -1126,40 +1126,22 @@ declare -A SERVICE_CATALOG
 ["litellm"]="litellm:LiteLLM:LLM proxy & load balancer:llm::litellm_master_key,openai_api_key,anthropic_api_key,google_api_key,groq_api_key"
 ["ollama_webui"]="ollama_webui:Ollama WebUI:Ollama management:llm::"
 ["localai"]="localai:LocalAI:OpenAI-compatible API:llm::"
-    ["localai"]="localai:LocalAI:OpenAI-compatible API:llm::"
 
-    # Communication
-    ["signal"]="signal:Signal Bot:Signal messaging bot:communication::signal_phone,signal_password"
-    ["ntfy"]="ntfy:Ntfy:Push notifications:communication::"
+# Communication
+["signal"]="signal:Signal Bot:Signal messaging bot:communication::signal_phone,signal_password"
+["ntfy"]="ntfy:Ntfy:Push notifications:communication::"
 
-    # Automation & Orchestration
-    ["n8n"]="n8n:n8n:Workflow automation:automation:postgres:n8n_encryption_key"
-    ["activepieces"]="activepieces:Activepieces:Workflow automation:automation:postgres:ap_encryption_key"
-    ["windmill"]="windmill:Windmill:Developer platform:automation:postgres:windmill_token"
+# Automation & Orchestration
+["n8n"]="n8n:n8n:Workflow automation:automation:postgres:n8n_encryption_key"
+["activepieces"]="activepieces:Activepieces:Workflow automation:automation:postgres:ap_encryption_key"
+["windmill"]="windmill:Windmill:Developer platform:automation:postgres:windmill_token"
 
-    # Monitoring
-    ["prometheus"]="prometheus:Prometheus:Metrics collection:monitoring::prometheus_retention"
-    ["grafana"]="grafana:Grafana:Metrics visualization:monitoring:prometheus:grafana_password"
-    ["uptime_kuma"]="uptime_kuma:Uptime Kuma:Uptime monitoring:monitoring::"
-    ["netdata"]="netdata:Netdata:Real-time monitoring:monitoring::"
+# Monitoring
+["prometheus"]="prometheus:Prometheus:Metrics collection:monitoring::prometheus_retention"
+["grafana"]="grafana:Grafana:Metrics visualization:monitoring:prometheus:grafana_password"
 
-    # Development Tools
-    ["code_server"]="code_server:Code Server:VS Code in browser:development::code_password"
-    ["jupyter"]="jupyter:JupyterLab:Data science notebooks:development::jupyter_token"
-
-    # Storage & Files
-    ["minio"]="minio:MinIO:S3-compatible storage:storage::minio_root_user,minio_root_password"
-    ["seafile"]="seafile:Seafile:File sync & share:storage::seafile_admin_email,seafile_admin_password"
-
-    # Search & Knowledge
-    ["searxng"]="searxng:SearXNG:Meta search engine:search::searxng_secret"
-    ["meilisearch"]="meilisearch:Meilisearch:Search engine:search::meili_master_key"
-
-    # RAG & Document Processing
-    ["anything_llm"]="anything_llm:AnythingLLM:RAG document chat:rag::anything_llm_password"
-    ["danswer"]="danswer:Danswer:Enterprise RAG:rag:postgres,qdrant:danswer_secret"
-    ["quivr"]="quivr:Quivr:Personal AI assistant:rag:postgres:quivr_jwt_secret"
-)
+# Storage & Files
+["minio"]="minio:MinIO:S3-compatible storage:storage::minio_root_user,minio_root_password"
 
 #───────────────────────────────────────────────────────────────────────────────
 # SERVICE CATEGORY DEFINITIONS
@@ -3115,6 +3097,7 @@ EOF
 # MAIN EXECUTION FLOW
 #───────────────────────────────────────────────────────────────────────────────
 
+
 main() {
     # Ensure running as root
     if [[ $EUID -ne 0 ]]; then
@@ -3219,7 +3202,7 @@ main() {
         print_info "Skipping create_directory_structure (already completed)"
     fi
 
-    # Phase 10: Validate system
+    # Phase 11: Validate system
     if [[ ! " ${COMPLETED_PHASES[*]} " =~ " validate_system " ]]; then
         validate_system
         mark_phase_complete "validate_system"
@@ -3227,7 +3210,7 @@ main() {
         print_info "Skipping validate_system (already completed)"
     fi
 
-    # Phase 11: Generate summary
+    # Phase 12: Generate summary
     if [[ ! " ${COMPLETED_PHASES[*]} " =~ " generate_summary " ]]; then
         generate_summary
         mark_phase_complete "generate_summary"
@@ -3246,7 +3229,7 @@ main() {
     echo ""
     print_info "Next: Run the compose generator script:"
     echo ""
-    echo "  ${CYAN}sudo bash 2_generate_compose_files.sh${NC}"
+    echo -e "${CYAN}sudo bash 2-deploy-services.sh${NC}"
     echo ""
     echo "$(printf '═%.0s' {1..80})"
     echo ""
@@ -3257,7 +3240,3 @@ main "$@"
 
 # Exit successfully
 exit 0
-
-#───────────────────────────────────────────────────────────────────────────────
-# END OF SCRIPT 1: SYSTEM SETUP
-#───────────────────────────────────────────────────────────────────────────────
