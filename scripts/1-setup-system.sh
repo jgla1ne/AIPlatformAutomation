@@ -859,6 +859,9 @@ EOF
     
     # Custom port selection for major services
     local -A default_ports=(
+        ["nginx-proxy-manager"]="80"
+        ["traefik"]="80"
+        ["caddy"]="80"
         ["openwebui"]="3000"
         ["anythingllm"]="3001"
         ["n8n"]="5678"
@@ -868,11 +871,52 @@ EOF
         ["prometheus"]="9090"
         ["grafana"]="3001"
         ["signal-api"]="8090"
+        ["openclaw"]="8082"
+        ["tailscale"]="41641"
+        ["postgres"]="5432"
+        ["redis"]="6379"
+        ["qdrant"]="6333"
+        ["milvus"]="19530"
+        ["chroma"]="8000"
+        ["weaviate"]="8080"
+        ["minio"]="9000"
     )
     
+    # Proxy port configuration
+    if [[ " ${selected_services[*]} " =~ " nginx-proxy-manager " ]] || [[ " ${selected_services[*]} " =~ " traefik " ]] || [[ " ${selected_services[*]} " =~ " caddy " ]]; then
+        echo ""
+        print_info "Proxy Port Configuration"
+        echo ""
+        
+        if [[ " ${selected_services[*]} " =~ " nginx-proxy-manager " ]]; then
+            prompt_input "NGINX_PROXY_HTTP_PORT" "Nginx Proxy Manager HTTP port" "80" false
+            echo "NGINX_PROXY_HTTP_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+            
+            prompt_input "NGINX_PROXY_HTTPS_PORT" "Nginx Proxy Manager HTTPS port" "443" false
+            echo "NGINX_PROXY_HTTPS_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+        fi
+        
+        if [[ " ${selected_services[*]} " =~ " traefik " ]]; then
+            prompt_input "TRAEFIK_HTTP_PORT" "Traefik HTTP port" "80" false
+            echo "TRAEFIK_HTTP_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+            
+            prompt_input "TRAEFIK_HTTPS_PORT" "Traefik HTTPS port" "443" false
+            echo "TRAEFIK_HTTPS_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+        fi
+        
+        if [[ " ${selected_services[*]} " =~ " caddy " ]]; then
+            prompt_input "CADDY_HTTP_PORT" "Caddy HTTP port" "80" false
+            echo "CADDY_HTTP_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+            
+            prompt_input "CADDY_HTTPS_PORT" "Caddy HTTPS port" "443" false
+            echo "CADDY_HTTPS_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+        fi
+    fi
+    
+    # Service port configuration
     for service_key in "${selected_services[@]}"; do
         case "$service_key" in
-            "openwebui"|"anythingllm"|"n8n"|"dify"|"ollama"|"litellm"|"prometheus"|"grafana"|"signal-api")
+            "nginx-proxy-manager"|"traefik"|"caddy"|"openwebui"|"anythingllm"|"n8n"|"dify"|"ollama"|"litellm"|"prometheus"|"grafana"|"signal-api"|"openclaw"|"tailscale"|"postgres"|"redis"|"qdrant"|"milvus"|"chroma"|"weaviate"|"minio")
                 local default_port="${default_ports[$service_key]:-3000}"
                 prompt_input "${service_key^^}_PORT" "$service_key port" "$default_port" false
                 echo "${service_key^^}_PORT=$INPUT_RESULT" >> "$ENV_FILE"
@@ -880,7 +924,72 @@ EOF
         esac
     done
     
-    # Database configuration
+    # Ollama model selection
+    if [[ " ${selected_services[*]} " =~ " ollama " ]]; then
+        echo ""
+        print_header "🤖 Ollama Model Selection"
+        echo ""
+        
+        print_info "Select models to download and use:"
+        echo ""
+        echo "Recommended Models:"
+        echo "  [1] llama3.2:8b (7.8GB) - Latest Llama 3.2"
+        echo "  [2] llama3.2:70b (43GB) - Full Llama 3.2 (requires 64GB RAM)"
+        echo "  [3] mistral:7b (4.7GB) - Mistral 7B"
+        echo "  [4] codellama:13b (7.6GB) - Code Llama"
+        echo "  [5] qwen2.5:14b (8.2GB) - Qwen 2.5"
+        echo ""
+        echo "Specialized Models:"
+        echo "  [6] llama3.1:8b (4.9GB) - Llama 3.1"
+        echo "  [7] mixtral:8x7b (4.7GB) - Mixtral MoE"
+        echo "  [8] deepseek-coder:6.7b (3.8GB) - DeepSeek Coder"
+        echo ""
+        echo "Select models (space-separated, e.g., '1 3 5'):"
+        echo "Or enter 'recommended' for models 1,3,4"
+        echo ""
+        
+        while true; do
+            echo -n -e "${YELLOW}Enter model selection:${NC} "
+            read -r model_selection
+            
+            if [[ "$model_selection" == "recommended" ]]; then
+                echo "OLLAMA_MODELS=llama3.2:8b,mistral:7b,codellama:13b" >> "$ENV_FILE"
+                print_success "Recommended models selected: llama3.2:8b, mistral:7b, codellama:13b"
+                break
+            elif [[ "$model_selection" =~ ^[0-9\ ]+$ ]]; then
+                local selected_models=()
+                for num in $model_selection; do
+                    case $num in
+                        1) selected_models+=("llama3.2:8b") ;;
+                        2) selected_models+=("llama3.2:70b") ;;
+                        3) selected_models+=("mistral:7b") ;;
+                        4) selected_models+=("codellama:13b") ;;
+                        5) selected_models+=("qwen2.5:14b") ;;
+                        6) selected_models+=("llama3.1:8b") ;;
+                        7) selected_models+=("mixtral:8x7b") ;;
+                        8) selected_models+=("deepseek-coder:6.7b") ;;
+                        *) print_warn "Invalid model selection: $num" ;;
+                    esac
+                done
+                
+                if [[ ${#selected_models[@]} -gt 0 ]]; then
+                    local models_str=$(IFS=','; echo "${selected_models[*]}")
+                    echo "OLLAMA_MODELS=$models_str" >> "$ENV_FILE"
+                    print_success "Models selected: $models_str"
+                    break
+                fi
+            else
+                print_error "Invalid selection. Please enter numbers 1-8 or 'recommended'"
+            fi
+        done
+        
+        # Default model
+        echo ""
+        prompt_input "OLLAMA_DEFAULT_MODEL" "Default Ollama model" "llama3.2:8b" false
+        echo "OLLAMA_DEFAULT_MODEL=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        print_success "Ollama configuration completed"
+    fi
     if [[ " ${selected_services[*]} " =~ " postgres " ]]; then
         echo ""
         print_info "PostgreSQL Configuration"
@@ -980,22 +1089,115 @@ EOF
         done
     fi
     
-    # LiteLLM configuration
+    # LLM Provider Selection (moved before routing strategy)
     if [[ " ${selected_services[*]} " =~ " litellm " ]]; then
         echo ""
-        print_header "🤖 LiteLLM Configuration"
+        print_header "🤖 LLM Provider Configuration"
         echo ""
         
-        local litellm_master_key=$(generate_random_password 32)
-        echo "LITELLM_MASTER_KEY=$litellm_master_key" >> "$ENV_FILE"
-        
-        print_info "Routing Strategy Selection"
+        print_info "Configure LLM providers for LiteLLM routing:"
         echo ""
-        echo "Select LiteLLM routing strategy:"
-        echo "  1) Simple Shuffle - Random selection"
-        echo "  2) Cost-Based - Choose cheapest model first"
-        echo "  3) Latency-Based - Choose fastest model"
-        echo "  4) Usage-Based - Load balance across models"
+        echo "✅ Local Provider:"
+        echo "  • Ollama (will be deployed)"
+        echo "  • Models: ${OLLAMA_MODELS:-llama3.2:8b,mistral:7b,codellama:13b}"
+        echo ""
+        
+        echo "Add API providers? (recommended for fallback)"
+        echo ""
+        echo "Select providers to configure (space-separated):"
+        echo "  1) OpenAI (GPT-4, GPT-3.5)"
+        echo "  2) Anthropic (Claude 3)"
+        echo "  3) Google (Gemini)"
+        echo "  4) Groq (Fast Llama inference)"
+        echo "  5) Mistral (Mistral AI)"
+        echo "  6) All of the above"
+        echo "  7) Skip API providers"
+        echo ""
+        
+        while true; do
+            echo -n -e "${YELLOW}Select providers [1-7]:${NC} "
+            read -r llm_provider_selection
+            
+            case "$llm_provider_selection" in
+                1)
+                    echo "LLM_PROVIDERS=local,openai" >> "$ENV_FILE"
+                    prompt_input "OPENAI_API_KEY" "OpenAI API key" "" false
+                    echo "OPENAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    print_success "Local + OpenAI providers configured"
+                    break
+                    ;;
+                2)
+                    echo "LLM_PROVIDERS=local,anthropic" >> "$ENV_FILE"
+                    prompt_input "ANTHROPIC_API_KEY" "Anthropic API key" "" false
+                    echo "ANTHROPIC_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    print_success "Local + Anthropic providers configured"
+                    break
+                    ;;
+                3)
+                    echo "LLM_PROVIDERS=local,google" >> "$ENV_FILE"
+                    prompt_input "GOOGLE_API_KEY" "Google AI API key" "" false
+                    echo "GOOGLE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    print_success "Local + Google providers configured"
+                    break
+                    ;;
+                4)
+                    echo "LLM_PROVIDERS=local,groq" >> "$ENV_FILE"
+                    prompt_input "GROQ_API_KEY" "Groq API key" "" false
+                    echo "GROQ_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    print_success "Local + Groq providers configured"
+                    break
+                    ;;
+                5)
+                    echo "LLM_PROVIDERS=local,mistral" >> "$ENV_FILE"
+                    prompt_input "MISTRAL_API_KEY" "Mistral API key" "" false
+                    echo "MISTRAL_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    print_success "Local + Mistral providers configured"
+                    break
+                    ;;
+                6)
+                    echo "LLM_PROVIDERS=local,openai,anthropic,google,groq,mistral" >> "$ENV_FILE"
+                    prompt_input "OPENAI_API_KEY" "OpenAI API key" "" false
+                    echo "OPENAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    prompt_input "ANTHROPIC_API_KEY" "Anthropic API key" "" false
+                    echo "ANTHROPIC_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    prompt_input "GOOGLE_API_KEY" "Google AI API key" "" false
+                    echo "GOOGLE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    prompt_input "GROQ_API_KEY" "Groq API key" "" false
+                    echo "GROQ_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    prompt_input "MISTRAL_API_KEY" "Mistral API key" "" false
+                    echo "MISTRAL_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    print_success "All providers configured"
+                    break
+                    ;;
+                7)
+                    echo "LLM_PROVIDERS=local" >> "$ENV_FILE"
+                    print_success "Local provider only"
+                    break
+                    ;;
+                *)
+                    print_error "Invalid selection"
+                    ;;
+            esac
+        done
+        
+        # LiteLLM routing strategy (now after providers are configured)
+        echo ""
+        print_header "🔄 LiteLLM Routing Strategy"
+        echo ""
+        
+        echo "Select routing strategy for configured providers:"
+        echo ""
+        echo "  1) simple-shuffle"
+        echo "     Random selection from available models"
+        echo ""
+        echo "  2) cost-based-routing (Recommended)"
+        echo "     Choose cheapest model first, fallback on expensive"
+        echo ""
+        echo "  3) latency-based-routing"
+        echo "     Choose fastest model based on historical latency"
+        echo ""
+        echo "  4) usage-based-routing"
+        echo "     Load balance across all models"
         echo ""
         
         while true; do
@@ -1029,86 +1231,15 @@ EOF
             esac
         done
         
-        # LLM Provider Selection
-    if [[ " ${selected_services[*]} " =~ " litellm " ]]; then
-        echo ""
-        print_header "🤖 LLM Provider Selection"
-        echo ""
+        # LiteLLM core variables
+        local litellm_master_key=$(generate_random_password 32)
+        echo "LITELLM_MASTER_KEY=$litellm_master_key" >> "$ENV_FILE"
+        echo "LITELLM_CACHE_ENABLED=true" >> "$ENV_FILE"
+        echo "LITELLM_CACHE_TTL=3600" >> "$ENV_FILE"
+        echo "LITELLM_RATE_LIMIT_ENABLED=true" >> "$ENV_FILE"
+        echo "LITELLM_RATE_LIMIT_REQUESTS_PER_MINUTE=60" >> "$ENV_FILE"
         
-        echo "Configure LLM providers for LiteLLM routing:"
-        echo ""
-        echo "✅ Local Provider:"
-        echo "  • Ollama (will be deployed)"
-        echo "  • Models: llama3.2, mistral, codellama"
-        echo ""
-        
-        echo "Add API providers? (recommended for fallback)"
-        echo ""
-        echo "  1) OpenAI (GPT-4, GPT-3.5)"
-        echo "  2) Anthropic (Claude 3)"
-        echo "  3) Google (Gemini)"
-        echo "  4) Groq (Fast Llama inference)"
-        echo "  5) All of the above"
-        echo "  6) Skip API providers"
-        echo ""
-        
-        while true; do
-            echo -n -e "${YELLOW}Select option [1-6]:${NC} "
-            read -r llm_provider_choice
-            
-            case "$llm_provider_choice" in
-                1)
-                    echo "LLM_PROVIDERS=local,openai" >> "$ENV_FILE"
-                    prompt_input "OPENAI_API_KEY" "OpenAI API key" "" false
-                    echo "OPENAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-                    print_success "Local + OpenAI providers configured"
-                    break
-                    ;;
-                2)
-                    echo "LLM_PROVIDERS=local,anthropic" >> "$ENV_FILE"
-                    prompt_input "ANTHROPIC_API_KEY" "Anthropic API key" "" false
-                    echo "ANTHROPIC_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-                    print_success "Local + Anthropic providers configured"
-                    break
-                    ;;
-                3)
-                    echo "LLM_PROVIDERS=local,google" >> "$ENV_FILE"
-                    prompt_input "GOOGLE_API_KEY" "Google AI API key" "" false
-                    echo "GOOGLE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-                    print_success "Local + Google providers configured"
-                    break
-                    ;;
-                4)
-                    echo "LLM_PROVIDERS=local,groq" >> "$ENV_FILE"
-                    prompt_input "GROQ_API_KEY" "Groq API key" "" false
-                    echo "GROQ_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-                    print_success "Local + Groq providers configured"
-                    break
-                    ;;
-                5)
-                    echo "LLM_PROVIDERS=local,openai,anthropic,google,groq" >> "$ENV_FILE"
-                    prompt_input "OPENAI_API_KEY" "OpenAI API key" "" false
-                    echo "OPENAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-                    prompt_input "ANTHROPIC_API_KEY" "Anthropic API key" "" false
-                    echo "ANTHROPIC_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-                    prompt_input "GOOGLE_API_KEY" "Google AI API key" "" false
-                    echo "GOOGLE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-                    prompt_input "GROQ_API_KEY" "Groq API key" "" false
-                    echo "GROQ_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-                    print_success "All providers configured"
-                    break
-                    ;;
-                6)
-                    echo "LLM_PROVIDERS=local" >> "$ENV_FILE"
-                    print_success "Local provider only"
-                    break
-                    ;;
-                *)
-                    print_error "Invalid selection"
-                    ;;
-            esac
-        done
-    fi
+        print_success "LiteLLM configuration completed"
     fi
     
     # Signal API configuration
