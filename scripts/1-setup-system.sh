@@ -586,10 +586,6 @@ select_services() {
     echo "  [8] Dify - LLM application development platform"
     echo "  [9] n8n - Workflow automation platform"
     echo "  [10] Flowise - Visual LangChain builder"
-    echo ""
-    
-    # LLM Infrastructure
-    echo "🤖 LLM Infrastructure:"
     echo "  [11] Ollama - Local LLM runtime"
     echo "  [12] LiteLLM - Multi-provider proxy + routing"
     echo ""
@@ -614,7 +610,7 @@ select_services() {
     echo ""
     
     # Storage
-    echo "� Storage:"
+    echo "📦 Storage:"
     echo "  [20] MinIO - S3-compatible storage"
     echo ""
     
@@ -627,6 +623,23 @@ select_services() {
         ["traefik"]=1
         ["postgres"]=1
         ["redis"]=1
+        ["tailscale"]=1
+        ["openwebui"]=1
+        ["anythingllm"]=1
+        ["dify"]=1
+        ["n8n"]=1
+        ["flowise"]=1
+        ["ollama"]=1
+        ["litellm"]=1
+        ["qdrant"]=1
+        ["milvus"]=1
+        ["chroma"]=1
+        ["weaviate"]=1
+        ["signal-api"]=1
+        ["openclaw"]=1
+        ["prometheus"]=1
+        ["grafana"]=1
+        ["minio"]=1
         ["tailscale"]=1
         ["openwebui"]=1
         ["anythingllm"]=1
@@ -658,7 +671,7 @@ select_services() {
             break
         elif [[ "$selection" =~ ^[0-9\ ]+$ ]]; then
             for num in $selection; do
-                if [[ $num -ge 1 ]] && [[ $num -le 20 ]]; then
+                if [[ $num -ge 1 ]] && [[ $num -le 12 ]]; then
                     local service_name
                     case $num in
                         1) service_name="nginx-proxy-manager" ;;
@@ -673,15 +686,7 @@ select_services() {
                         10) service_name="flowise" ;;
                         11) service_name="ollama" ;;
                         12) service_name="litellm" ;;
-                        13) service_name="qdrant" ;;
-                        14) service_name="milvus" ;;
-                        15) service_name="chroma" ;;
-                        16) service_name="weaviate" ;;
-                        17) service_name="signal-api" ;;
-                        18) service_name="openclaw" ;;
-                        19) service_name="prometheus" ;;
-                        20) service_name="minio" ;;
-                        *) print_warn "Invalid selection: $num"; continue ;;
+                        *) print_warn "Invalid selection: $num (must be 1-12)"; continue ;;
                     esac
                     
                     if [[ -n "${selected_map[$service_name]:-}" ]]; then
@@ -692,12 +697,12 @@ select_services() {
                         print_info "Removed: $service_name"
                     fi
                 else
-                    print_warn "Invalid selection: $num (must be 1-11)"
+                    print_warn "Invalid selection: $num (must be 1-12)"
                 fi
             done
             break
         else
-            print_error "Invalid selection. Please enter numbers 1-11 or 'all'"
+            print_error "Invalid selection. Please enter numbers 1-12 or 'all'"
         fi
     done
     
@@ -708,6 +713,69 @@ select_services() {
             selected_services+=("$service")
         fi
     done
+    
+    # Vector Database Selection (separate from services)
+    if [[ " ${selected_services[*]} " =~ " litellm " ]] || [[ " ${selected_services[*]} " =~ " openwebui " ]] || [[ " ${selected_services[*]} " =~ " anythingllm " ]] || [[ " ${selected_services[*]} " =~ " dify " ]] || [[ " ${selected_services[*]} " =~ " n8n " ]]; then
+        echo ""
+        print_header "🧠 Vector Database Selection"
+        echo ""
+        echo "Select vector database for RAG applications:"
+        echo ""
+        echo "  1) Qdrant (Recommended)"
+        echo "     - REST + gRPC API"
+        echo "     - Web dashboard"
+        echo "     - Production-ready"
+        echo ""
+        echo "  2) Milvus"
+        echo "     - High performance"
+        echo "     - Distributed support"
+        echo "     - Cloud-native"
+        echo ""
+        echo "  3) ChromaDB"
+        echo "     - Python-native"
+        echo "     - Good for development"
+        echo ""
+        echo "  4) Weaviate"
+        echo "     - GraphQL API"
+        echo "     - Semantic search"
+        echo "     - Modular architecture"
+        echo ""
+        
+        while true; do
+            echo -n -e "${YELLOW}Select vector database [1-4]:${NC} "
+            read -r vector_db_choice
+            
+            case "$vector_db_choice" in
+                1)
+                    echo "VECTOR_DB=qdrant" >> "$ENV_FILE"
+                    echo "VECTOR_DB_TYPE=qdrant" >> "$ENV_FILE"
+                    print_success "Qdrant selected as vector database"
+                    break
+                    ;;
+                2)
+                    echo "VECTOR_DB=milvus" >> "$ENV_FILE"
+                    echo "VECTOR_DB_TYPE=milvus" >> "$ENV_FILE"
+                    print_success "Milvus selected as vector database"
+                    break
+                    ;;
+                3)
+                    echo "VECTOR_DB=chroma" >> "$ENV_FILE"
+                    echo "VECTOR_DB_TYPE=chroma" >> "$ENV_FILE"
+                    print_success "ChromaDB selected as vector database"
+                    break
+                    ;;
+                4)
+                    echo "VECTOR_DB=weaviate" >> "$ENV_FILE"
+                    echo "VECTOR_DB_TYPE=weaviate" >> "$ENV_FILE"
+                    print_success "Weaviate selected as vector database"
+                    break
+                    ;;
+                *)
+                    print_error "Invalid selection"
+                    ;;
+            esac
+        done
+    fi
     
     if [[ ${#selected_services[@]} -eq 0 ]]; then
         print_error "No services selected"
