@@ -103,7 +103,7 @@ main() {
     echo ""
     print_info "Next: Run the compose generator script:"
     echo ""
-    echo "  ${CYAN}sudo bash 2-deploy-services.sh${NC}"
+    echo -e "${CYAN}sudo bash 2-deploy-services.sh${NC}"
     echo ""
     
     exit 0
