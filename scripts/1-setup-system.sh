@@ -378,7 +378,7 @@ detect_hardware() {
         fi
     done < <(lsblk -d -n -p -o NAME,TYPE | grep "disk" | awk '{print $1}')
 
-    if [[ ${#additional_devices[@]} -eq 0 ]]; then
+    if [[ ${#additional_devices[@] -eq 0 ]]; then
         print_info "No additional storage devices detected"
     fi
 
@@ -402,7 +402,7 @@ detect_hardware() {
     "cuda_version": "$cuda_version"
   },
   "storage": {
-    "additional_devices": [$(printf '"%s",' "${additional_devices[@]}" | sed 's/,$//')]
+    "additional_devices": [$(printf '"%s",' "${additional_devices[@]" | sed 's/,$//')]
   }
 }
 EOF
@@ -740,7 +740,7 @@ install_ollama() {
     )
 
     local count=1
-    for model_info in "${models[@]}"; do
+    for model_info in "${models[@]"; do
         local model_name=$(echo "$model_info" | cut -d':' -f1,2)
         local model_desc=$(echo "$model_info" | cut -d':' -f3)
         printf "  [%2d] %-20s - %s\n" "$count" "$model_name" "$model_desc"
@@ -761,23 +761,23 @@ install_ollama() {
     # Download selected models
     local selected_models=()
     for selection in $selections; do
-        if [[ "$selection" =~ ^[0-9]+$ ]] && [[ $selection -gt 0 ]] && [[ $selection -le ${#models[@]} ]]; then
+        if [[ "$selection" =~ ^[0-9]+$ ]] && [[ $selection -gt 0 ]] && [[ $selection -le ${#models[@] ]]; then
             local model_info="${models[$((selection-1))]}"
             local model_name=$(echo "$model_info" | cut -d':' -f1,2)
             selected_models+=("$model_name")
         fi
     done
 
-    if [[ ${#selected_models[@]} -eq 0 ]]; then
+    if [[ ${#selected_models[@] -eq 0 ]]; then
         print_info "No valid models selected"
         return 0
     fi
 
     echo ""
-    print_info "Downloading ${#selected_models[@]} model(s)..."
+    print_info "Downloading ${#selected_models[@] model(s)..."
     echo ""
 
-    for model in "${selected_models[@]}"; do
+    for model in "${selected_models[@]"; do
         print_info "Downloading $model..."
         if ollama pull "$model" 2>&1 | tee -a "$LOG_FILE" | grep -E "(pulling|success)"; then
             print_success "$model downloaded"
@@ -920,7 +920,7 @@ check_dependencies() {
         fi
     done
 
-    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+    if [[ ${#missing_deps[@] -gt 0 ]]; then
         return 1  # Has missing dependencies
     fi
 
@@ -938,7 +938,7 @@ select_services() {
 
     # Group services by category
     local -A category_services
-    for service_key in "${!SERVICE_CATALOG[@]}"; do
+    for service_key in "${!SERVICE_CATALOG[@]"; do
         local category=$(get_service_info "$service_key" "category")
         if [[ -z "${category_services[$category]}" ]]; then
             category_services[$category]="$service_key"
@@ -957,7 +957,7 @@ select_services() {
     local service_number=1
     local -A number_to_service
 
-    for category in "${!SERVICE_CATEGORIES[@]}"; do
+    for category in "${!SERVICE_CATEGORIES[@]"; do
         if [[ -n "${category_services[$category]}" ]]; then
             echo ""
             echo "${SERVICE_CATEGORIES[$category]}"
@@ -995,7 +995,7 @@ select_services() {
         print_info "No services selected"
         return 0
     elif [[ "$selection" == "all" ]]; then
-        for service_key in "${!SERVICE_CATALOG[@]}"; do
+        for service_key in "${!SERVICE_CATALOG[@]"; do
             selected_services+=("$service_key")
             selected_map[$service_key]=1
         done
@@ -1062,7 +1062,7 @@ select_services() {
     print_header "✅ Selected Services (${#selected_services[@])"
     echo ""
 
-    for category in "${!SERVICE_CATEGORIES[@]}"; do
+    for category in "${!SERVICE_CATEGORIES[@]"; do
         local category_has_services=false
         local category_list=""
 
@@ -1210,17 +1210,17 @@ EOF
         fi
     done
 
-    if [[ ${#all_required_configs[@]} -eq 0 ]]; then
+    if [[ ${#all_required_configs[@] -eq 0 ]]; then
         print_success "No additional configuration required"
         return 0
     fi
 
     echo ""
-    print_info "Required configuration items: ${#all_required_configs[@]}"
+    print_info "Required configuration items: ${#all_required_configs[@]"
     echo ""
 
     # Collect each configuration
-    for config_key in "${all_required_configs[@]}"; do
+    for config_key in "${all_required_configs[@]"; do
         collect_config_value "$config_key"
     done
 
@@ -1435,7 +1435,7 @@ create_directory_structure() {
         "$DATA_ROOT/temp"
     )
 
-    for dir in "${base_dirs[@]}"; do
+    for dir in "${base_dirs[@]"; do
         if mkdir -p "$dir" 2>/dev/null; then
             print_success "Created: $dir"
         else
@@ -1751,7 +1751,7 @@ create_directory_structure() {
         esac
 
         # Create the directories
-        for dir in "${service_dirs[@]}"; do
+        for dir in "${service_dirs[@]"; do
             if mkdir -p "$dir" 2>/dev/null; then
                 ((created_count++))
             else
@@ -1779,7 +1779,7 @@ create_directory_structure() {
         "$METADATA_DIR"
     )
 
-    for dir in "${secure_dirs[@]}"; do
+    for dir in "${secure_dirs[@]"; do
         if [[ -d "$dir" ]]; then
             chmod 700 "$dir"
         fi
@@ -1799,7 +1799,7 @@ create_directory_structure() {
 EOF
 
     local first=true
-    for dir in "${base_dirs[@]}"; do
+    for dir in "${base_dirs[@]"; do
         if [[ "$first" == false ]]; then
             echo "," >> "$dir_map_file"
         fi
@@ -1826,7 +1826,7 @@ EOF
         local service_dirs=($(find "$DATA_ROOT" -type d -path "*/$service_key/*" 2>/dev/null | sort))
         local dir_first=true
 
-        for dir in "${service_dirs[@]}"; do
+        for dir in "${service_dirs[@]"; do
             if [[ "$dir_first" == false ]]; then
                 echo "," >> "$dir_map_file"
             fi
@@ -1929,7 +1929,7 @@ validate_system() {
         "$ENV_FILE:Environment config"
     )
 
-    for file_info in "${required_files[@]}"; do
+    for file_info in "${required_files[@]"; do
         local file_path=$(echo "$file_info" | cut -d':' -f1)
         local file_desc=$(echo "$file_info" | cut -d':' -f2)
 
@@ -1952,7 +1952,7 @@ validate_system() {
         "$DATA_ROOT/scripts"
     )
 
-    for dir in "${required_dirs[@]}"; do
+    for dir in "${required_dirs[@]"; do
         if [[ ! -d "$dir" ]]; then
             print_error "Required directory missing: $dir"
             ((validation_errors++))
@@ -2133,15 +2133,15 @@ OLLAMA INSTALLATION
 
 Ollama Version:       $(ollama --version 2>/dev/null | awk '{print $NF}')
 Service Status:       $(systemctl is-active ollama)
-Models Installed:     ${#ollama_models[@]}
+Models Installed:     ${#ollama_models[@]
 
 EOF
 
-    if [[ ${#ollama_models[@]} -gt 0 ]]; then
+    if [[ ${#ollama_models[@] -gt 0 ]]; then
         cat >> "$summary_file" <<EOF
 Installed Models:
 EOF
-        for model in "${ollama_models[@]}"; do
+        for model in "${ollama_models[@]"; do
             echo "  • $model" >> "$summary_file"
         done
         echo "" >> "$summary_file"
@@ -2156,11 +2156,11 @@ Total Services:       $total_services
 
 EOF
 
-    if [[ ${#service_names[@]} -gt 0 ]]; then
+    if [[ ${#service_names[@] -gt 0 ]]; then
         cat >> "$summary_file" <<EOF
 Service List:
 EOF
-        for service in "${service_names[@]}"; do
+        for service in "${service_names[@]"; do
             echo "  ✓ $service" >> "$summary_file"
         done
         echo "" >> "$summary_file"
@@ -2293,12 +2293,12 @@ EOF
   "ollama": {
     "version": "$(ollama --version 2>/dev/null | awk '{print $NF}')",
     "service_active": $(systemctl is-active --quiet ollama && echo "true" || echo "false"),
-    "models_count": ${#ollama_models[@]},
+    "models_count": ${#ollama_models[@],
     "models": [
 EOF
 
     local first=true
-    for model in "${ollama_models[@]}"; do
+    for model in "${ollama_models[@]"; do
         if [[ "$first" == false ]]; then
             echo "," >> "$summary_json"
         fi
@@ -2316,7 +2316,7 @@ EOF
 EOF
 
     first=true
-    for service in "${service_names[@]}"; do
+    for service in "${service_names[@]"; do
         if [[ "$first" == false ]]; then
             echo "," >> "$summary_json"
         fi
