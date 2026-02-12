@@ -1082,75 +1082,18 @@ EOF
         
         local redis_password=$(generate_random_password 24)
         echo "REDIS_PASSWORD=$redis_password" >> "$ENV_FILE"
-        echo "REDIS_PORT=6379" >> "$ENV_FILE"
+        
+        # Check if default port is available
+        if [[ " ${port_conflicts[*]} " =~ "6379:" ]]; then
+            prompt_input "REDIS_PORT" "Redis port (6379 in use)" "6380" false
+            echo "REDIS_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+        else
+            echo "REDIS_PORT=6379" >> "$ENV_FILE"
+        fi
         
         print_success "Redis configuration generated"
     fi
     
-    # Vector Database Selection
-    if [[ " ${selected_services[*]} " =~ " anythingllm " ]] || [[ " ${selected_services[*]} " =~ " dify " ]]; then
-        echo ""
-        print_header "🗄️ Vector Database Selection"
-        echo ""
-        
-        echo "Select vector database for RAG applications:"
-        echo ""
-        echo "  1) Qdrant (Recommended)"
-        echo "     - REST + gRPC API"
-        echo "     - Web dashboard"
-        echo "     - Production-ready"
-        echo ""
-        echo "  2) Milvus"
-        echo "     - High performance"
-        echo "     - Distributed support"
-        echo "     - Complex setup"
-        echo ""
-        echo "  3) ChromaDB"
-        echo "     - Simple setup"
-        echo "     - Python-native"
-        echo "     - Good for development"
-        echo ""
-        echo "  4) Weaviate"
-        echo "     - GraphQL API"
-        echo "     - Semantic search"
-        echo "     - Modular architecture"
-        echo ""
-        
-        while true; do
-            echo -n -e "${YELLOW}Select vector database [1-4]:${NC} "
-            read -r vector_db_choice
-            
-            case "$vector_db_choice" in
-                1)
-                    echo "VECTOR_DB=qdrant" >> "$ENV_FILE"
-                    echo "VECTOR_DB_TYPE=qdrant" >> "$ENV_FILE"
-                    print_success "Qdrant selected as vector database"
-                    break
-                    ;;
-                2)
-                    echo "VECTOR_DB=milvus" >> "$ENV_FILE"
-                    echo "VECTOR_DB_TYPE=milvus" >> "$ENV_FILE"
-                    print_success "Milvus selected as vector database"
-                    break
-                    ;;
-                3)
-                    echo "VECTOR_DB=chroma" >> "$ENV_FILE"
-                    echo "VECTOR_DB_TYPE=chroma" >> "$ENV_FILE"
-                    print_success "ChromaDB selected as vector database"
-                    break
-                    ;;
-                4)
-                    echo "VECTOR_DB=weaviate" >> "$ENV_FILE"
-                    echo "VECTOR_DB_TYPE=weaviate" >> "$ENV_FILE"
-                    print_success "Weaviate selected as vector database"
-                    break
-                    ;;
-                *)
-                    print_error "Invalid selection"
-                    ;;
-            esac
-        done
-    fi
     
     # LLM Provider Selection (moved before routing strategy)
     if [[ " ${selected_services[*]} " =~ " litellm " ]]; then
@@ -1244,9 +1187,12 @@ EOF
         echo "  4) usage-based-routing"
         echo "     Load balance across all models"
         echo ""
+        echo "  5) local-first-routing"
+        echo "     Simple queries → local models, Complex queries → external models"
+        echo ""
         
         while true; do
-            echo -n -e "${YELLOW}Select routing strategy [1-4]:${NC} "
+            echo -n -e "${YELLOW}Select routing strategy [1-5]:${NC} "
             read -r routing_choice
             
             case "$routing_choice" in
@@ -1268,6 +1214,11 @@ EOF
                 4)
                     echo "LITELLM_ROUTING_STRATEGY=usage-based" >> "$ENV_FILE"
                     print_success "Usage-based routing selected"
+                    break
+                    ;;
+                5)
+                    echo "LITELLM_ROUTING_STRATEGY=local-first" >> "$ENV_FILE"
+                    print_success "Local-first routing selected (simple → local, complex → external)"
                     break
                     ;;
                 *)
