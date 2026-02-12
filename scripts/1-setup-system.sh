@@ -389,7 +389,7 @@ detect_hardware() {
   "cpu": {
     "model": "$(grep "model name" /proc/cpuinfo | head -n1 | cut -d':' -f2 | xargs)",
     "cores": $(nproc),
-    "threads": $(grep -c processor /proc/cpuinfo)
+    "threads": $(nproc)
   },
   "memory": {
     "total_gb": $total_ram_gb,
