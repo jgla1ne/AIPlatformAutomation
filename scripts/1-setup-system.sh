@@ -385,7 +385,7 @@ detect_hardware() {
     "cuda_version": "$cuda_version"
   },
   "storage": {
-    "additional_devices": [$(printf '"%s",' "${additional_devices[@]}" | sed 's/,$//')]
+    "additional_devices": [$(printf ""%s"," "${additional_devices[@]}" | sed "s/,$//")]
   }
 }
 EOF
@@ -797,50 +797,50 @@ SERVICE_CATALOG=(
     # Vector Databases
     ["qdrant"]="qdrant:Qdrant:Vector database:vector_db::qdrant_api_key"
     ["weaviate"]="weaviate:Weaviate:Vector database with ML:vector_db::"
-    ["milvus"]="milvus:Milvus:Scalable vector database:vector_db::milvus_password"
-    ["chroma"]="chroma:ChromaDB:Embeddings database:vector_db::"
+    ["milvus"]="milvus: Milvus:Scalable vector database:vector_db::milvus_password"
+    ["chroma"]="chroma: ChromaDB:Embeddings database:vector_db::"
 
     # AI Chat Interfaces
-    ["librechat"]="librechat:LibreChat:Multi-provider chat UI:ai_chat:postgres:google_client_id,google_client_secret,jwt_secret"
-    ["openwebui"]="openwebui:Open WebUI:Ollama web interface:ai_chat::admin_email,admin_password"
-    ["chatgpt_ui"]="chatgpt_ui:ChatGPT UI:ChatGPT-like interface:ai_chat::openai_api_key"
+    ["librechat"]="librechat: LibreChat:Multi-provider chat UI:ai_chat:postgres:google_client_id,google_client_secret,jwt_secret"
+    ["openwebui"]="openwebui: Open WebUI:Ollama web interface:ai_chat::admin_email,admin_password"
+    ["chatgpt_ui"]="chatgpt_ui: ChatGPT UI:ChatGPT-like interface:ai_chat::openai_api_key"
 
     # LLM Infrastructure
-    ["litellm"]="litellm:LiteLLM:LLM proxy & load balancer:llm::litellm_master_key,openai_api_key"
-    ["ollama_webui"]="ollama_webui:Ollama WebUI:Ollama management:llm::"
-    ["localai"]="localai:LocalAI:OpenAI-compatible API:llm::"
+    ["litellm"]="litellm: LiteLLM:LLM proxy & load balancer:llm::litellm_master_key,openai_api_key"
+    ["ollama_webui"]="ollama_webui: Ollama WebUI:Ollama management:llm::"
+    ["localai"]="localai: LocalAI:OpenAI-compatible API:llm::"
 
     # Communication
-    ["signal"]="signal:Signal Bot:Signal messaging bot:communication::signal_phone,signal_password"
-    ["ntfy"]="ntfy:Ntfy:Push notifications:communication::"
+    ["signal"]="signal: Signal Bot:Signal messaging bot:communication::signal_phone,signal_password"
+    ["ntfy"]="ntfy: Ntfy:Push notifications:communication::"
 
     # Automation & Orchestration
-    ["n8n"]="n8n:n8n:Workflow automation:automation:postgres:n8n_encryption_key"
-    ["activepieces"]="activepieces:Activepieces:Workflow automation:automation:postgres:ap_encryption_key"
-    ["windmill"]="windmill:Windmill:Developer platform:automation:postgres:windmill_token"
+    ["n8n"]="n8n: n8n:Workflow automation:automation:postgres:n8n_encryption_key"
+    ["activepieces"]="activepieces: Activepieces:Workflow automation:automation:postgres:ap_encryption_key"
+    ["windmill"]="windmill: Windmill:Developer platform:automation:postgres:windmill_token"
 
     # Monitoring
-    ["prometheus"]="prometheus:Prometheus:Metrics collection:monitoring::prometheus_retention"
-    ["grafana"]="grafana:Grafana:Metrics visualization:monitoring:prometheus:grafana_password"
-    ["uptime_kuma"]="uptime_kuma:Uptime Kuma:Uptime monitoring:monitoring::"
-    ["netdata"]="netdata:Netdata:Real-time monitoring:monitoring::"
+    ["prometheus"]="prometheus: Prometheus:Metrics collection:monitoring::prometheus_retention"
+    ["grafana"]="grafana: Grafana:Metrics visualization:monitoring:prometheus:grafana_password"
+    ["uptime_kuma"]="uptime_kuma: Uptime Kuma:Uptime monitoring:monitoring::"
+    ["netdata"]="netdata: Netdata:Real-time monitoring:monitoring::"
 
     # Development Tools
-    ["code_server"]="code_server:Code Server:VS Code in browser:development::code_password"
-    ["jupyter"]="jupyter:JupyterLab:Data science notebooks:development::jupyter_token"
+    ["code_server"]="code_server: Code Server:VS Code in browser:development::code_password"
+    ["jupyter"]="jupyter: JupyterLab:Data science notebooks:development::jupyter_token"
 
     # Storage & Files
-    ["minio"]="minio:MinIO:S3-compatible storage:storage::minio_root_user,minio_root_password"
-    ["seafile"]="seafile:Seafile:File sync & share:storage::seafile_admin_email,seafile_admin_password"
+    ["minio"]="minio: MinIO:S3-compatible storage:storage::minio_root_user,minio_root_password"
+    ["seafile"]="seafile: Seafile:File sync & share:storage::seafile_admin_email,seafile_admin_password"
 
     # Search & Knowledge
-    ["searxng"]="searxng:SearXNG:Meta search engine:search::searxng_secret"
-    ["meilisearch"]="meilisearch:Meilisearch:Search engine:search::meili_master_key"
+    ["searxng"]="searxng: SearXNG:Meta search engine:search::searxng_secret"
+    ["meilisearch"]="meilisearch: Meilisearch:Search engine:search::meili_master_key"
 
     # RAG & Document Processing
-    ["anything_llm"]="anything_llm:AnythingLLM:RAG document chat:rag::anything_llm_password"
-    ["danswer"]="danswer:Danswer:Enterprise RAG:rag:postgres,qdrant:danswer_secret"
-    ["quivr"]="quivr:Quivr:Personal AI assistant:rag:postgres:quivr_jwt_secret"
+    ["anything_llm"]="anything_llm: AnythingLLM:RAG document chat:rag::anything_llm_password"
+    ["danswer"]="danswer: Danswer:Enterprise RAG:rag:postgres,qdrant:danswer_secret"
+    ["quivr"]="quivr: Quivr:Personal AI assistant:rag:postgres:quivr_jwt_secret"
 )
 
 #───────────────────────────────────────────────────────────────────────────────
@@ -878,8 +878,8 @@ get_service_info() {
         "display_name") echo "$service_data" | cut -d':' -f2 ;;
         "description") echo "$service_data" | cut -d':' -f3 ;;
         "category") echo "$service_data" | cut -d':' -f4 ;;
-        "dependencies") echo "$service_data" | cut -d':' -f5 ;;
-        "requires_config") echo "$service_data" | cut -d':' -f6 ;;
+        "dependencies") echo "$service_data" | cut -d":" -f5 ;;
+        "requires_config") echo "$service_data" | cut -d":" -f6 ;;
         *) echo "" ;;
     esac
 }
@@ -895,7 +895,7 @@ check_dependencies() {
     fi
 
     local missing_deps=()
-    IFS=',' read -ra DEP_ARRAY <<< "$deps"
+    IFS="," read -ra DEP_ARRAY <<< "$deps"
 
     for dep in "${DEP_ARRAY[@]}"; do
         if [[ ! ",$selected_services," =~ ",$dep," ]]; then
@@ -903,15 +903,15 @@ check_dependencies() {
         fi
     done
 
-    if [[ ${#missing_deps[@] -gt 0 ]]; then
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
         return 1  # Has missing dependencies
     fi
 
     return 0  # All dependencies met
 }
-#───────────────────────────────────────────────────────────────────────────────
+#───────────────────────────────────────────────────────────────────────
 # INTERACTIVE SERVICE SELECTION
-#───────────────────────────────────────────────────────────────────────────────
+#───────────────────────────────────────────────────────────────────────
 
 select_services() {
     log_phase "7" "🎯 Service Selection"
@@ -944,7 +944,7 @@ select_services() {
         if [[ -n "${category_services[$category]}" ]]; then
             echo ""
             echo "${SERVICE_CATEGORIES[$category]}"
-            echo "$(printf '─%.0s' {1..60})"
+            echo "$(printf "─%.0s" {1..60})"
 
             for service_key in ${category_services[$category]}; do
                 local display_name=$(get_service_info "$service_key" "display_name")
@@ -966,7 +966,7 @@ select_services() {
     done
 
     echo ""
-    echo "$(printf '═%.0s' {1..60})"
+    echo "$(printf "═%.0s" {1..60})"
     echo ""
     print_info "Enter service numbers (space-separated, e.g., '1 5 12 18'):"
     print_info "Or enter 'all' for all services, 'none' to skip:"
@@ -1996,7 +1996,7 @@ validate_system() {
 
     # Summary
     echo ""
-    echo "$(printf '═%.0s' {1..60})"
+    echo "$(printf "═%.0s" {1..60})"
     echo ""
 
     if [[ $validation_errors -eq 0 && $validation_warnings -eq 0 ]]; then
@@ -2299,7 +2299,7 @@ EOF
 EOF
 
     first=true
-    for service in "${service_names[@]"; do
+    for service in "${service_names[@]}"; do
         if [[ "$first" == false ]]; then
             echo "," >> "$summary_json"
         fi
@@ -2398,7 +2398,7 @@ main() {
     echo ""
     echo "  ${CYAN}sudo bash 2_generate_compose_files.sh${NC}"
     echo ""
-    echo "$(printf '═%.0s' {1..80})"
+    echo "==============================================================================="
     echo ""
 }
 
