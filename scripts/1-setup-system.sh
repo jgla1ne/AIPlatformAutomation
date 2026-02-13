@@ -1918,8 +1918,27 @@ EOF
     echo "  • PostgreSQL User: $(grep "^POSTGRES_USER=" "$ENV_FILE" | cut -d= -f2)"
     echo "  • PostgreSQL Database: $(grep "^POSTGRES_DB=" "$ENV_FILE" | cut -d= -f2)"
     echo "  • PostgreSQL Password: $(grep "^POSTGRES_PASSWORD=" "$ENV_FILE" | cut -d= -f2)"
+    # Show Redis user if overridden
+    local redis_user=$(grep "^REDIS_USER=" "$ENV_FILE" 2>/dev/null | cut -d= -f2)
+    [[ -n "$redis_user" ]] && echo "  • Redis User: $redis_user"
     echo "  • Redis Password: $(grep "^REDIS_PASSWORD=" "$ENV_FILE" | cut -d= -f2)"
     echo "  • Vector Database: ${VECTOR_DB:-qdrant}"
+    
+    # Show vector database overrides if present
+    echo ""
+    print_info "Vector Database Configuration:"
+    local qdrant_collection=$(grep "^QDRANT_COLLECTION_NAME=" "$ENV_FILE" 2>/dev/null | cut -d= -f2)
+    local milvus_db=$(grep "^MILVUS_DATABASE_NAME=" "$ENV_FILE" 2>/dev/null | cut -d= -f2)
+    local chroma_collection=$(grep "^CHROMA_COLLECTION_NAME=" "$ENV_FILE" 2>/dev/null | cut -d= -f2)
+    local weaviate_class=$(grep "^WEAVIATE_CLASS_NAME=" "$ENV_FILE" 2>/dev/null | cut -d= -f2)
+    
+    [[ -n "$qdrant_collection" ]] && echo "  • Qdrant Collection: $qdrant_collection"
+    [[ -n "$milvus_db" ]] && echo "  • Milvus Database: $milvus_db"
+    [[ -n "$chroma_collection" ]] && echo "  • ChromaDB Collection: $chroma_collection"
+    [[ -n "$weaviate_class" ]] && echo "  • Weaviate Class: $weaviate_class"
+    
+    # If no vector DB overrides, show default message
+    [[ -z "$qdrant_collection" && -z "$milvus_db" && -z "$chroma_collection" && -z "$weaviate_class" ]] && echo "  • Using default vector database configuration"
     echo ""
     
     print_info "Admin Credentials:"
