@@ -308,8 +308,6 @@ collect_domain_info() {
     # Validate domain resolution
     echo ""
     print_info "Validating domain resolution..."
-    # Debug: Show what we're working with
-    print_info "Debug: INPUT_RESULT='$INPUT_RESULT'"
     
     # Special case for localhost
     if [[ "$INPUT_RESULT" == "localhost" ]]; then
@@ -337,8 +335,6 @@ collect_domain_info() {
         fi
     else
         print_warn "Domain does not resolve or DNS not configured"
-        # Debug: Show what failed
-        print_info "Debug: nslookup failed for '$INPUT_RESULT'"
         echo "DOMAIN_RESOLVES=false" >> "$ENV_FILE"
         echo "PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || echo 'unknown')" >> "$ENV_FILE"
     fi
@@ -1957,9 +1953,6 @@ EOF
     DOMAIN_NAME=$(grep "^DOMAIN_NAME=" "$ENV_FILE" | cut -d= -f2)
     DOMAIN_RESOLVES=$(grep "^DOMAIN_RESOLVES=" "$ENV_FILE" | cut -d= -f2 || echo "false")
     PROXY_CONFIG_METHOD=$(grep "^PROXY_CONFIG_METHOD=" "$ENV_FILE" | cut -d= -f2 || echo "direct")
-    
-    # Debug: Show loaded variables
-    print_info "Debug: DOMAIN=$DOMAIN, DOMAIN_NAME=$DOMAIN_NAME, DOMAIN_RESOLVES=$DOMAIN_RESOLVES, PROXY_CONFIG_METHOD=$PROXY_CONFIG_METHOD"
     
     [[ "$postgres_user" != "postgres" ]] && echo "  • PostgreSQL User: $postgres_user"
     [[ "$openclaw_user" != "admin" ]] && echo "  • OpenClaw User: $openclaw_user"
