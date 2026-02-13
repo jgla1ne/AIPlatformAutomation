@@ -29,11 +29,23 @@ readonly COMPOSE_DIR="$DATA_ROOT/compose"
 readonly CONFIG_DIR="$DATA_ROOT/config"
 readonly CREDENTIALS_FILE="$METADATA_DIR/credentials.json"
 
-# Source environment
+# Source environment (handle readonly variables)
 if [[ -f "$ENV_FILE" ]]; then
-    set -a
-    source "$ENV_FILE"
-    set +a
+    # Export all variables except readonly ones defined in this script
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+            var_name="${line%%=*}"
+            # Skip readonly variables defined in this script
+            case "$var_name" in
+                DATA_ROOT|METADATA_DIR|STATE_FILE|LOG_FILE|ENV_FILE|SERVICES_FILE|COMPOSE_DIR|CONFIG_DIR|CREDENTIALS_FILE)
+                    continue
+                    ;;
+                *)
+                    export "$line"
+                    ;;
+            esac
+        fi
+    done < "$ENV_FILE"
 else
     echo -e "${RED}Error: Environment file not found. Run script 1 first.${NC}"
     exit 1
@@ -122,16 +134,11 @@ load_configuration() {
         exit 1
     fi
     
-    # Load environment variables
+    # Load environment variables (already loaded above)
     if [[ ! -f "$ENV_FILE" ]]; then
         print_error "Environment file not found. Run Script 1 first."
         exit 1
     fi
-    
-    # Source all environment variables
-    set -a
-    source "$ENV_FILE"
-    set +a
     
     # Get selected services
     local selected_services=($(jq -r '.services[].key' "$SERVICES_FILE" 2>/dev/null || echo ""))
@@ -148,7 +155,10 @@ deploy_service() {
     case "$service" in
         postgres) deploy_postgres ;;
         redis) deploy_redis ;;
-        qdrant|milvus|chroma|weaviate) deploy_vector_db "$service" ;;
+        qdrant) deploy_qdrant ;;
+        milvus) deploy_milvus ;;
+        chroma) deploy_chroma ;;
+        weaviate) deploy_weaviate ;;
         ollama) deploy_ollama ;;
         litellm) deploy_litellm ;;
         openwebui) deploy_openwebui ;;
@@ -163,8 +173,14 @@ deploy_service() {
         minio) deploy_minio ;;
         nginx-proxy-manager|traefik|caddy|swag) deploy_proxy "$service" ;;
         tailscale) deploy_tailscale ;;
-        *) print_warn "Unknown service: $service" ;;
+        *) 
+            print_warn "Unknown service: $service"
+            return 1
+            ;;
     esac
+    
+    # Return the exit code of the deployment function
+    return $?
 }
 
 #------------------------------------------------------------------------------
@@ -173,6 +189,7 @@ deploy_service() {
 
 deploy_postgres() {
     print_info "Generating PostgreSQL configuration..."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting PostgreSQL deployment" >> "$LOG_FILE"
     
     mkdir -p "$COMPOSE_DIR/postgres"
     
@@ -207,13 +224,25 @@ networks:
 EOF
     
     print_success "PostgreSQL configuration generated"
-    docker-compose -f "$COMPOSE_DIR/postgres/docker-compose.yml" up -d
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - PostgreSQL configuration generated" >> "$LOG_FILE"
+    
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting PostgreSQL container" >> "$LOG_FILE"
+    docker-compose -f "$COMPOSE_DIR/postgres/docker-compose.yml" up -d 2>&1 | tee -a "$LOG_FILE"
+    
     wait_for_service "PostgreSQL" "http://localhost:5432" 30
-    print_success "PostgreSQL deployed successfully"
+    if [[ $? -eq 0 ]]; then
+        print_success "PostgreSQL deployed successfully"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - PostgreSQL deployed successfully" >> "$LOG_FILE"
+    else
+        print_error "PostgreSQL deployment failed"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - PostgreSQL deployment failed" >> "$LOG_FILE"
+        return 1
+    fi
 }
 
 deploy_redis() {
     print_info "Generating Redis configuration..."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Redis deployment" >> "$LOG_FILE"
     
     mkdir -p "$COMPOSE_DIR/redis"
     
@@ -244,9 +273,20 @@ networks:
 EOF
     
     print_success "Redis configuration generated"
-    docker-compose -f "$COMPOSE_DIR/redis/docker-compose.yml" up -d
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Redis configuration generated" >> "$LOG_FILE"
+    
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Redis container" >> "$LOG_FILE"
+    docker-compose -f "$COMPOSE_DIR/redis/docker-compose.yml" up -d 2>&1 | tee -a "$LOG_FILE"
+    
     wait_for_service "Redis" "http://localhost:6379" 30
-    print_success "Redis deployed successfully"
+    if [[ $? -eq 0 ]]; then
+        print_success "Redis deployed successfully"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Redis deployed successfully" >> "$LOG_FILE"
+    else
+        print_error "Redis deployment failed"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Redis deployment failed" >> "$LOG_FILE"
+        return 1
+    fi
 }
 
 #------------------------------------------------------------------------------
@@ -254,7 +294,7 @@ EOF
 #------------------------------------------------------------------------------
 
 validate_prerequisites() {
-    log_phase "1" "🔍 Pre-Deployment Validation"
+    log_phase "1" "🔍" "Pre-Deployment Validation"
     
     local validation_ok=true
     
@@ -328,24 +368,24 @@ validate_prerequisites() {
 }
 
 load_configuration_phase() {
-    log_phase "2" "📋 Configuration Loading"
+    log_phase "2" "📋" "Configuration Loading"
     
     load_configuration
     
     # Display configuration summary
     echo ""
     print_info "Configuration Summary:"
-    echo "  • Domain: $DOMAIN_NAME (external), $DOMAIN (internal)"
+    echo "  • Domain: ${DOMAIN_NAME:-$DOMAIN} (external), ${DOMAIN:-localhost} (internal)"
     echo "  • Data Directory: $DATA_ROOT"
-    echo "  • Proxy Type: $PROXY_TYPE"
-    echo "  • Vector Database: $VECTOR_DB_TYPE"
-    echo "  • LLM Providers: $(echo $LLM_PROVIDERS | tr ',' ' ')"
+    echo "  • Proxy Type: ${PROXY_TYPE:-none}"
+    echo "  • Vector Database: ${VECTOR_DB_TYPE:-none selected}"
+    echo "  • LLM Providers: ${LLM_PROVIDERS:-none configured}"
     
     print_success "Configuration loaded successfully"
 }
 
 deploy_infrastructure() {
-    log_phase "3" "🏗️ Infrastructure Deployment"
+    log_phase "3" "🏗️" "Infrastructure Deployment"
     
     local selected_services=($(jq -r '.services[].key' "$SERVICES_FILE" 2>/dev/null || echo ""))
     local infrastructure_services=()
@@ -383,7 +423,7 @@ deploy_infrastructure() {
 }
 
 deploy_llm_layer() {
-    log_phase "4" "🤖 LLM Layer Deployment"
+    log_phase "4" "🤖" "LLM Layer Deployment"
     
     local selected_services=($(jq -r '.services[].key' "$SERVICES_FILE" 2>/dev/null || echo ""))
     local llm_services=()
@@ -421,7 +461,7 @@ deploy_llm_layer() {
 }
 
 deploy_ai_applications() {
-    log_phase "5" "🎨 AI Applications Deployment"
+    log_phase "5" "🎨" "AI Applications Deployment"
     
     local selected_services=($(jq -r '.services[].key' "$SERVICES_FILE" 2>/dev/null || echo ""))
     local app_services=()
@@ -459,7 +499,7 @@ deploy_ai_applications() {
 }
 
 deploy_workflow_tools() {
-    log_phase "6" "⚙️ Workflow Tools Deployment"
+    log_phase "6" "⚙️" "Workflow Tools Deployment"
     
     local selected_services=($(jq -r '.services[].key' "$SERVICES_FILE" 2>/dev/null || echo ""))
     local workflow_services=()
@@ -497,7 +537,7 @@ deploy_workflow_tools() {
 }
 
 deploy_proxy_layer() {
-    log_phase "7" "🌐 Proxy Layer Deployment"
+    log_phase "7" "🌐" "Proxy Layer Deployment"
     
     local selected_services=($(jq -r '.services[].key' "$SERVICES_FILE" 2>/dev/null || echo ""))
     local proxy_services=()
@@ -535,7 +575,7 @@ deploy_proxy_layer() {
 }
 
 generate_deployment_summary() {
-    log_phase "8" "📊 Deployment Summary"
+    log_phase "8" "📊" "Deployment Summary"
     
     echo ""
     print_header "📊 Deployment Summary"
@@ -693,19 +733,63 @@ wait_for_service() {
     local max_attempts="${3:-30}"
     local attempt=0
     
+    # Create log directory if it doesn't exist
+    mkdir -p "$(dirname "$LOG_FILE")"
+    
     echo -ne "${CYAN}  ⏳${NC} Waiting for $service_name"
     
+    # Log the wait process
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting health check for $service_name at $check_url" >> "$LOG_FILE"
+    
     while [ $attempt -lt $max_attempts ]; do
-        if curl -sf "$check_url" > /dev/null 2>&1; then
+        # Try different health check methods based on service
+        local health_result=""
+        local service_name_lower=$(echo "$service_name" | tr '[:upper:]' '[:lower:]')
+        case "$service_name_lower" in
+            "PostgreSQL")
+                health_result=$(docker exec postgres 2>/dev/null pg_isready -U "${POSTGRES_USER:-postgres}" 2>&1 || echo "failed")
+                ;;
+            "redis")
+                if [[ -n "${REDIS_PASSWORD:-}" ]]; then
+                    health_result=$(docker exec redis 2>/dev/null redis-cli -a "$REDIS_PASSWORD" ping 2>/dev/null || echo "failed")
+                else
+                    health_result=$(docker exec redis 2>/dev/null redis-cli ping 2>/dev/null || echo "failed")
+                fi
+                ;;
+            *)
+                # Default HTTP check
+                if curl -sf "$check_url" > /dev/null 2>&1; then
+                    health_result="success"
+                else
+                    health_result="failed"
+                fi
+                ;;
+        esac
+        
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Health check attempt $((attempt + 1))/$max_attempts for $service_name: $health_result" >> "$LOG_FILE"
+        
+        if [[ "$health_result" == "success" ]] || [[ "$health_result" == *"accepting connections"* ]] || [[ "$health_result" == "PONG" ]]; then
             echo -e "\r${GREEN}  ✓${NC} $service_name is ready                    "
+            echo "$(date '+%Y-%m-%d %H:%M:%S') - $service_name health check passed" >> "$LOG_FILE"
             return 0
         fi
+        
         echo -ne "."
         sleep 2
         ((attempt++))
     done
     
     echo -e "\r${RED}  ✗${NC} $service_name failed to start (timeout)      "
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $service_name health check failed after $max_attempts attempts" >> "$LOG_FILE"
+    
+    # Show container logs for debugging
+    echo ""
+    print_warn "Showing last 20 lines of $service_name container logs:"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Fetching container logs for $service_name" >> "$LOG_FILE"
+    # Convert service name to lowercase for container name
+    local container_name=$(echo "$service_name" | tr '[:upper:]' '[:lower:]')
+    docker logs --tail 20 "$container_name" 2>&1 | tee -a "$LOG_FILE"
+    
     return 1
 }
 
@@ -716,11 +800,23 @@ wait_for_service() {
 main() {
     print_banner
     
+    # Check for verbose mode
+    local verbose_mode=false
+    if [[ "${1:-}" == "--verbose" ]] || [[ "${1:-}" == "-v" ]]; then
+        verbose_mode=true
+        print_info "Verbose mode enabled"
+        set -x  # Enable command tracing
+    fi
+    
     # Check if running as root
     if [[ $EUID -ne 0 ]]; then
         print_error "This script must be run as root (use sudo)"
         exit 1
     fi
+    
+    # Initialize log file
+    mkdir -p "$(dirname "$LOG_FILE")"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - ===== Script 2 Deployment Started =====" >> "$LOG_FILE"
     
     # Check if Script 1 was completed
     if [[ ! -f "$STATE_FILE" ]]; then
@@ -735,6 +831,7 @@ main() {
     fi
     
     print_success "Script 1 setup verified - proceeding with deployment"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Script 1 setup verified" >> "$LOG_FILE"
     
     # Confirm deployment
     if ! confirm "Proceed with service deployment?" "n"; then
@@ -758,6 +855,15 @@ main() {
     print_info "Configuration files saved to: $COMPOSE_DIR"
     print_info "Logs available at: $LOG_FILE"
     print_info "Next: Run 'sudo ./scripts/3-configure-services.sh'"
+    
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - ===== Script 2 Deployment Completed =====" >> "$LOG_FILE"
+    
+    # Show log tail if verbose
+    if [[ "$verbose_mode" == "true" ]]; then
+        echo ""
+        print_info "Tailing deployment log (Ctrl+C to exit):"
+        tail -f "$LOG_FILE"
+    fi
 }
 
 # Execute main function
