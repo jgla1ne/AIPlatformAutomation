@@ -322,6 +322,9 @@ collect_domain_info() {
         local public_ip=$(nslookup "$INPUT_RESULT" | grep -A1 "Name:" | tail -1 | awk '{print $2}')
         local server_ip=$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null)
         
+        # Debug: Show nslookup results
+        print_info "Debug: nslookup successful, public_ip=$public_ip"
+        
         # Always store the resolved IP, regardless of reachability
         print_success "Domain resolves to IP: $public_ip"
         echo "DOMAIN_RESOLVES=true" >> "$ENV_FILE"
@@ -334,6 +337,8 @@ collect_domain_info() {
         fi
     else
         print_warn "Domain does not resolve or DNS not configured"
+        # Debug: Show what failed
+        print_info "Debug: nslookup failed for '$INPUT_RESULT'"
         echo "DOMAIN_RESOLVES=false" >> "$ENV_FILE"
         echo "PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || echo 'unknown')" >> "$ENV_FILE"
     fi
