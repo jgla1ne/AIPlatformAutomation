@@ -1906,6 +1906,11 @@ EOF
     local openclaw_user=$(grep "^OPENCLAW_ADMIN_USER=" "$ENV_FILE" | cut -d= -f2)
     local minio_user=$(grep "^MINIO_ROOT_USER=" "$ENV_FILE" | cut -d= -f2)
     
+    # Load environment variables for URL generation
+    DOMAIN=$(grep "^DOMAIN=" "$ENV_FILE" | cut -d= -f2)
+    DOMAIN_RESOLVES=$(grep "^DOMAIN_RESOLVES=" "$ENV_FILE" | cut -d= -f2)
+    PROXY_CONFIG_METHOD=$(grep "^PROXY_CONFIG_METHOD=" "$ENV_FILE" | cut -d= -f2)
+    
     [[ "$postgres_user" != "postgres" ]] && echo "  • PostgreSQL User: $postgres_user"
     [[ "$openclaw_user" != "admin" ]] && echo "  • OpenClaw User: $openclaw_user"
     [[ "$minio_user" != "minioadmin" ]] && echo "  • MinIO User: $minio_user"
