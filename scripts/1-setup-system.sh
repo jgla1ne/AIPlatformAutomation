@@ -305,23 +305,15 @@ collect_domain_info() {
         local public_ip=$(nslookup "$INPUT_RESULT" | grep -A1 "Name:" | tail -1 | awk '{print $2}')
         local server_ip=$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null)
         
-        if [[ "$public_ip" == "$server_ip" ]]; then
-            print_success "Domain resolves to this server: $public_ip"
-            echo "DOMAIN_RESOLVES=true" >> "$ENV_FILE"
-            echo "PUBLIC_IP=$server_ip" >> "$ENV_FILE"
-        else
-            # Check if the resolved IP is actually reachable (it might be behind a load balancer or CDN)
-            if ping -c 1 "$public_ip" >/dev/null 2>&1; then
-                print_success "Domain resolves to reachable IP: $public_ip"
-                print_info "Domain will be used for proxy configuration"
-                echo "DOMAIN_RESOLVES=true" >> "$ENV_FILE"
-                echo "PUBLIC_IP=$public_ip" >> "$ENV_FILE"
-            else
-                print_warn "Domain resolves to unreachable IP: $public_ip"
-                print_warn "This may indicate DNS misconfiguration"
-                echo "DOMAIN_RESOLVES=false" >> "$ENV_FILE"
-                echo "PUBLIC_IP=$server_ip" >> "$ENV_FILE"
-            fi
+        # Always store the resolved IP, regardless of reachability
+        print_success "Domain resolves to IP: $public_ip"
+        echo "DOMAIN_RESOLVES=true" >> "$ENV_FILE"
+        echo "PUBLIC_IP=$public_ip" >> "$ENV_FILE"
+        
+        # Only warn if IP is different from server IP (for awareness)
+        if [[ "$public_ip" != "$server_ip" ]]; then
+            print_info "Note: Domain IP differs from server IP ($server_ip)"
+            print_info "This is normal for load balancers, CDNs, or cloud services"
         fi
     else
         print_warn "Domain does not resolve or DNS not configured"
@@ -369,6 +361,43 @@ collect_domain_info() {
                 ;;
         esac
     done
+    
+    # Proxy Configuration Method (only if proxy was selected)
+    if [[ "$proxy_choice" != "4" ]]; then
+        echo ""
+        print_header "🔧 Proxy Configuration Method"
+        echo ""
+        echo "Select how services should be accessed through the proxy:"
+        echo "  1) Direct Port (e.g., :8080, :3000)"
+        echo "     - Simple and direct access"
+        echo "     - Good for development and internal use"
+        echo ""
+        echo "  2) Path Aliases (e.g., /signal, /n8n)"
+        echo "     - Clean URLs with single domain"
+        echo "     - Good for production and public access"
+        echo ""
+        
+        while true; do
+            echo -n -e "${YELLOW}Select configuration method [1-2]:${NC} "
+            read -r proxy_config_choice
+            
+            case "$proxy_config_choice" in
+                1)
+                    echo "PROXY_CONFIG_METHOD=direct" >> "$ENV_FILE"
+                    print_success "Direct port access selected"
+                    break
+                    ;;
+                2)
+                    echo "PROXY_CONFIG_METHOD=alias" >> "$ENV_FILE"
+                    print_success "Path aliases selected"
+                    break
+                    ;;
+                *)
+                    print_error "Invalid selection"
+                    ;;
+            esac
+        done
+    fi
     
     # SSL Configuration
     if [[ "$proxy_choice" != "4" ]]; then
@@ -1698,6 +1727,7 @@ EOF
     echo "  • Admin Password: $(grep "^ADMIN_PASSWORD=" "$ENV_FILE" | cut -d= -f2)"
     echo "  • Grafana Password: $(grep "^GRAFANA_PASSWORD=" "$ENV_FILE" | cut -d= -f2)"
     [[ -n "${OPENCLAW_ADMIN_PASSWORD:-}" ]] && echo "  • OpenClaw Password: $(grep "^OPENCLAW_ADMIN_PASSWORD=" "$ENV_FILE" | cut -d= -f2)"
+    [[ -n "${MINIO_ROOT_PASSWORD:-}" ]] && echo "  • MinIO Password: $(grep "^MINIO_ROOT_PASSWORD=" "$ENV_FILE" | cut -d= -f2)"
     echo ""
     
     print_info "Service Access:"
