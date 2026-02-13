@@ -1293,9 +1293,94 @@ EOF
 }
 
 deploy_dify() {
-    print_info "Deploying Dify..."
-    # TODO: Implement Dify deployment
-    print_success "Dify deployment stub completed"
+    print_info "Generating Dify configuration..."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Dify deployment" >> "$LOG_FILE"
+    
+    mkdir -p "$COMPOSE_DIR/dify"
+    mkdir -p "${DATA_ROOT}/dify"
+    mkdir -p "${DATA_ROOT}/dify/storage"
+    
+    cat > "$COMPOSE_DIR/dify/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  dify-web:
+    image: langgenius/dify-web:latest
+    container_name: dify-web
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    environment:
+      - CONSOLE_API_URL=http://dify-api:5001
+      - APP_API_URL=http://dify-api:5001
+    ports:
+      - "${DIFY_PORT:-8080}:3000"
+    depends_on:
+      - dify-api
+
+  dify-api:
+    image: langgenius/dify-api:latest
+    container_name: dify-api
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    environment:
+      - MODE=api
+      - LOG_LEVEL=INFO
+      - SECRET_KEY=${DIFY_SECRET_KEY:-your-secret-key-here}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aiplatform}
+      - REDIS_URL=redis://redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - WEB_API_CORS_ALLOW_ORIGINS=*
+    volumes:
+      - ${DATA_ROOT}/dify/storage:/app/storage
+    ports:
+      - "5001:5001"
+    depends_on:
+      - postgres
+      - redis
+
+  dify-worker:
+    image: langgenius/dify-api:latest
+    container_name: dify-worker
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    environment:
+      - MODE=worker
+      - LOG_LEVEL=INFO
+      - SECRET_KEY=${DIFY_SECRET_KEY:-your-secret-key-here}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aiplatform}
+      - REDIS_URL=redis://redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    volumes:
+      - ${DATA_ROOT}/dify/storage:/app/storage
+    depends_on:
+      - postgres
+      - redis
+
+networks:
+  ai_platform:
+    external: true
+EOF
+    
+    print_success "Dify configuration generated"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Dify configuration generated" >> "$LOG_FILE"
+    
+    docker-compose -f "$COMPOSE_DIR/dify/docker-compose.yml" up -d 2>&1 | tee -a "$LOG_FILE"
+    
+    wait_for_service "Dify" "http://localhost:8080" 120
+    if [[ $? -eq 0 ]]; then
+        print_success "Dify deployed successfully"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Dify deployed successfully" >> "$LOG_FILE"
+        return 0
+    else
+        print_error "Dify deployment failed"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Dify deployment failed" >> "$LOG_FILE"
+        return 1
+    fi
 }
 
 deploy_n8n() {
@@ -1505,9 +1590,63 @@ EOF
 }
 
 deploy_openclaw() {
-    print_info "Deploying OpenClaw..."
-    # TODO: Implement OpenClaw deployment
-    print_success "OpenClaw deployment stub completed"
+    print_info "Generating OpenClaw configuration..."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting OpenClaw deployment" >> "$LOG_FILE"
+    
+    mkdir -p "$COMPOSE_DIR/openclaw"
+    mkdir -p "${DATA_ROOT}/openclaw"
+    
+    cat > "$COMPOSE_DIR/openclaw/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  openclaw:
+    image: openclaw/openclaw:latest
+    container_name: openclaw
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    environment:
+      - OPENCLAW_API_KEY=${OPENCLAW_API_KEY:-your-api-key-here}
+      - OPENCLAW_BASE_URL=${OPENCLAW_BASE_URL:-http://localhost:18789}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aiplatform}
+      - REDIS_URL=redis://redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - LOG_LEVEL=${OPENCLAW_LOG_LEVEL:-INFO}
+    volumes:
+      - ${DATA_ROOT}/openclaw:/app/data
+    ports:
+      - "${OPENCLAW_PORT:-18789}:18789"
+    depends_on:
+      - postgres
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:18789/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+    
+    print_success "OpenClaw configuration generated"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - OpenClaw configuration generated" >> "$LOG_FILE"
+    
+    docker-compose -f "$COMPOSE_DIR/openclaw/docker-compose.yml" up -d 2>&1 | tee -a "$LOG_FILE"
+    
+    wait_for_service "OpenClaw" "http://localhost:18789" 60
+    if [[ $? -eq 0 ]]; then
+        print_success "OpenClaw deployed successfully"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - OpenClaw deployed successfully" >> "$LOG_FILE"
+        return 0
+    else
+        print_error "OpenClaw deployment failed"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - OpenClaw deployment failed" >> "$LOG_FILE"
+        return 1
+    fi
 }
 
 deploy_grafana() {
@@ -1723,9 +1862,160 @@ EOF
 
 deploy_proxy() {
     local proxy_type="$1"
-    print_info "Deploying proxy: $proxy_type"
-    # TODO: Implement proxy deployment
-    print_success "$proxy_type deployment stub completed"
+    print_info "Generating $proxy_type configuration..."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting $proxy_type deployment" >> "$LOG_FILE"
+    
+    mkdir -p "$COMPOSE_DIR/$proxy_type"
+    
+    case "$proxy_type" in
+        "caddy")
+            cat > "$COMPOSE_DIR/$proxy_type/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ${DATA_ROOT}/caddy/Caddyfile:/etc/caddy/Caddyfile
+      - ${DATA_ROOT}/caddy/data:/data
+    environment:
+      - DOMAIN=${DOMAIN}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+            ;;
+        "traefik")
+            cat > "$COMPOSE_DIR/$proxy_type/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  traefik:
+    image: traefik:v2.10
+    container_name: traefik
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${DATA_ROOT}/traefik/traefik.yml:/etc/traefik/traefik.yml
+    command:
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+            ;;
+        "nginx-proxy-manager")
+            cat > "$COMPOSE_DIR/$proxy_type/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  npm:
+    image: 'jc21/nginx-proxy-manager:latest'
+    container_name: npm
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - '80:80'
+      - '443:443'
+      - '81:81'
+    volumes:
+      - '${DATA_ROOT}/npm/data:/data'
+      - '${DATA_ROOT}/npm/letsencrypt:/etc/letsencrypt'
+    environment:
+      - DISABLE_IPV6=true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:81"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+            ;;
+        "swag")
+            cat > "$COMPOSE_DIR/$proxy_type/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  swag:
+    image: lscr.io/linuxserver/swag:latest
+    container_name: swag
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ${DATA_ROOT}/swag/config:/config
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=UTC
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+            ;;
+    esac
+    
+    print_success "$proxy_type configuration generated"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $proxy_type configuration generated" >> "$LOG_FILE"
+    
+    docker-compose -f "$COMPOSE_DIR/$proxy_type/docker-compose.yml" up -d 2>&1 | tee -a "$LOG_FILE"
+    
+    wait_for_service "$proxy_type" "http://localhost:80" 60
+    if [[ $? -eq 0 ]]; then
+        print_success "$proxy_type deployed successfully"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - $proxy_type deployed successfully" >> "$LOG_FILE"
+        return 0
+    else
+        print_error "$proxy_type deployment failed"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - $proxy_type deployment failed" >> "$LOG_FILE"
+        return 1
+    fi
 }
 
 deploy_tailscale() {
