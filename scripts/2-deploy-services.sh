@@ -227,8 +227,12 @@ EOF
     docker-compose -f "$COMPOSE_DIR/postgres/docker-compose.yml" up -d
     
     wait_for_service "PostgreSQL" "http://localhost:5432" 30
-    if [[ $? -eq 0 ]]; then
+    
+    # Return the exit code from wait_for_service
+    local postgres_result=$?
+    if [[ $postgres_result -eq 0 ]]; then
         print_success "PostgreSQL deployed successfully"
+        return 0
     else
         print_error "PostgreSQL deployment failed"
         return 1
@@ -271,8 +275,12 @@ EOF
     docker-compose -f "$COMPOSE_DIR/redis/docker-compose.yml" up -d
     
     wait_for_service "Redis" "http://localhost:6379" 30
-    if [[ $? -eq 0 ]]; then
+    
+    # Return the exit code from wait_for_service
+    local redis_result=$?
+    if [[ $redis_result -eq 0 ]]; then
         print_success "Redis deployed successfully"
+        return 0
     else
         print_error "Redis deployment failed"
         return 1
@@ -368,7 +376,23 @@ load_configuration_phase() {
     echo "  • Domain: ${DOMAIN_NAME:-$DOMAIN} (external), ${DOMAIN:-localhost} (internal)"
     echo "  • Data Directory: $DATA_ROOT"
     echo "  • Proxy Type: ${PROXY_TYPE:-none}"
-    echo "  • Vector Database: ${VECTOR_DB_TYPE:-none selected}"
+    
+    # Check if proxy services were selected
+    local proxy_services=($(jq -r '.services[] | select(.category == "proxy") | .key' "$SERVICES_FILE" 2>/dev/null || echo ""))
+    if [[ ${#proxy_services[@]} -gt 0 ]]; then
+        echo "  • Proxy Services: ${proxy_services[*]}"
+    else
+        echo "  • Proxy Services: none selected"
+    fi
+    
+    # Check if vector database services were selected
+    local vector_db_services=($(jq -r '.services[] | select(.category == "vector-database") | .key' "$SERVICES_FILE" 2>/dev/null || echo ""))
+    if [[ ${#vector_db_services[@]} -gt 0 ]]; then
+        echo "  • Vector Database: ${vector_db_services[*]}"
+    else
+        echo "  • Vector Database: none selected"
+    fi
+    
     echo "  • LLM Providers: ${LLM_PROVIDERS:-none configured}"
     echo "  • Total Services: $(jq -r '.total_services' "$SERVICES_FILE" 2>/dev/null || echo "0")"
     
@@ -943,6 +967,12 @@ services:
       - REDIS_URL=redis://redis:6379
       - REDIS_PASSWORD=${REDIS_PASSWORD}
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aiplatform}
+      - DATABASE_TYPE=postgres
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=${POSTGRES_DB:-aiplatform}
+      - DATABASE_USER=${POSTGRES_USER:-postgres}
+      - DATABASE_PASSWORD=${POSTGRES_PASSWORD}
     depends_on:
       - redis
       - postgres
