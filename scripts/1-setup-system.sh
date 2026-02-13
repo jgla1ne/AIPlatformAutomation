@@ -1109,6 +1109,10 @@ EOF
         echo ""
         
         # Allow override of database name and username
+        print_info "Database Configuration (Optional Overrides)"
+        echo "Note: All services will be pre-configured to use this vector database"
+        echo ""
+        
         prompt_input "POSTGRES_DB" "PostgreSQL database name" "aiplatform" false
         echo "POSTGRES_DB=$INPUT_RESULT" >> "$ENV_FILE"
         
@@ -1211,6 +1215,14 @@ EOF
             provider_keys+=("MISTRAL_API_KEY")
             prompt_input "MISTRAL_API_KEY" "Mistral API key" "" false
             echo "MISTRAL_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+        fi
+        
+        # OpenRouter
+        if confirm "Configure OpenRouter (Multi-provider access)?"; then
+            selected_providers+=("openrouter")
+            provider_keys+=("OPENROUTER_API_KEY")
+            prompt_input "OPENROUTER_API_KEY" "OpenRouter API key" "" false
+            echo "OPENROUTER_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
         fi
         
         # Configure providers
@@ -1370,6 +1382,41 @@ EOF
         
         local openclaw_password=$(generate_random_password 24)
         echo "OPENCLAW_ADMIN_PASSWORD=$openclaw_password" >> "$ENV_FILE"
+        
+        # Web Search Configuration
+        echo ""
+        print_info "Web Search Configuration"
+        echo "Select web search provider for OpenClaw:"
+        echo "  1) Brave Search API (Recommended)"
+        echo "  2) SerpApi (Google Search)"
+        echo "  3) None (Disable web search)"
+        echo ""
+        
+        while true; do
+            echo -n -e "${YELLOW}Select web search provider [1-3]:${NC} "
+            read -r websearch_choice
+            
+            case "$websearch_choice" in
+                1)
+                    echo "OPENCLAW_WEBSEARCH=brave" >> "$ENV_FILE"
+                    print_success "Brave Search API selected"
+                    break
+                    ;;
+                2)
+                    echo "OPENCLAW_WEBSEARCH=serpapi" >> "$ENV_FILE"
+                    print_success "SerpApi selected"
+                    break
+                    ;;
+                3)
+                    echo "OPENCLAW_WEBSEARCH=none" >> "$ENV_FILE"
+                    print_success "Web search disabled"
+                    break
+                    ;;
+                *)
+                    print_error "Invalid selection"
+                    ;;
+            esac
+        done
         
         echo "OPENCLAW_PORT=8082" >> "$ENV_FILE"
         echo "OPENCLAW_API_PORT=8083" >> "$ENV_FILE"
@@ -1726,6 +1773,16 @@ EOF
     echo "- Admin Password: $(grep "^ADMIN_PASSWORD=" "$ENV_FILE" | cut -d= -f2)" >> "$urls_file"
     echo "- Grafana Password: $(grep "^GRAFANA_PASSWORD=" "$ENV_FILE" | cut -d= -f2)" >> "$urls_file"
     [[ -n "${OPENCLAW_ADMIN_PASSWORD:-}" ]] && echo "- OpenClaw Password: $(grep "^OPENCLAW_ADMIN_PASSWORD=" "$ENV_FILE" | cut -d= -f2)" >> "$urls_file"
+    [[ -n "${MINIO_ROOT_PASSWORD:-}" ]] && echo "- MinIO Password: $(grep "^MINIO_ROOT_PASSWORD=" "$ENV_FILE" | cut -d= -f2)" >> "$urls_file"
+    
+    # Show usernames if overridden
+    local postgres_user=$(grep "^POSTGRES_USER=" "$ENV_FILE" | cut -d= -f2)
+    local openclaw_user=$(grep "^OPENCLAW_ADMIN_USER=" "$ENV_FILE" | cut -d= -f2)
+    local minio_user=$(grep "^MINIO_ROOT_USER=" "$ENV_FILE" | cut -d= -f2)
+    
+    [[ "$postgres_user" != "postgres" ]] && echo "- PostgreSQL User: $postgres_user" >> "$urls_file"
+    [[ "$openclaw_user" != "admin" ]] && echo "- OpenClaw User: $openclaw_user" >> "$urls_file"
+    [[ "$minio_user" != "minioadmin" ]] && echo "- MinIO User: $minio_user" >> "$urls_file"
     
     # Display summary to user
     print_success "Setup summary generated: $summary_file"
@@ -1749,6 +1806,15 @@ EOF
     echo "  • Grafana Password: $(grep "^GRAFANA_PASSWORD=" "$ENV_FILE" | cut -d= -f2)"
     [[ -n "${OPENCLAW_ADMIN_PASSWORD:-}" ]] && echo "  • OpenClaw Password: $(grep "^OPENCLAW_ADMIN_PASSWORD=" "$ENV_FILE" | cut -d= -f2)"
     [[ -n "${MINIO_ROOT_PASSWORD:-}" ]] && echo "  • MinIO Password: $(grep "^MINIO_ROOT_PASSWORD=" "$ENV_FILE" | cut -d= -f2)"
+    
+    # Show usernames if overridden
+    local postgres_user=$(grep "^POSTGRES_USER=" "$ENV_FILE" | cut -d= -f2)
+    local openclaw_user=$(grep "^OPENCLAW_ADMIN_USER=" "$ENV_FILE" | cut -d= -f2)
+    local minio_user=$(grep "^MINIO_ROOT_USER=" "$ENV_FILE" | cut -d= -f2)
+    
+    [[ "$postgres_user" != "postgres" ]] && echo "  • PostgreSQL User: $postgres_user"
+    [[ "$openclaw_user" != "admin" ]] && echo "  • OpenClaw User: $openclaw_user"
+    [[ "$minio_user" != "minioadmin" ]] && echo "  • MinIO User: $minio_user"
     echo ""
     
     print_info "Service Access:"
@@ -1762,29 +1828,37 @@ EOF
         for service in "${selected_services[@]}"; do
             case $service in
                 "openwebui")
-                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                         echo "  • Open WebUI: https://$DOMAIN/openwebui"
+                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
+                        echo "  • Open WebUI: https://$DOMAIN:3000"
                     else
                         echo "  • Open WebUI: http://localhost:3000"
                     fi
                     ;;
                 "anythingllm")
-                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                         echo "  • AnythingLLM: https://$DOMAIN/anythingllm"
+                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
+                        echo "  • AnythingLLM: https://$DOMAIN:3001"
                     else
                         echo "  • AnythingLLM: http://localhost:3001"
                     fi
                     ;;
                 "dify")
-                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                         echo "  • Dify: https://$DOMAIN/dify"
+                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
+                        echo "  • Dify: https://$DOMAIN:8080"
                     else
                         echo "  • Dify: http://localhost:8080"
                     fi
                     ;;
                 "n8n")
-                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                         echo "  • n8n: https://$DOMAIN/n8n"
+                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
+                        echo "  • n8n: https://$DOMAIN:5678"
                     else
                         echo "  • n8n: http://localhost:5678"
                     fi
@@ -1804,15 +1878,19 @@ EOF
                     fi
                     ;;
                 "litellm")
-                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                         echo "  • LiteLLM: https://$DOMAIN/litellm"
+                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
+                        echo "  • LiteLLM: https://$DOMAIN:4000"
                     else
                         echo "  • LiteLLM: http://localhost:4000"
                     fi
                     ;;
                 "signal-api")
-                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
-                        echo "  • Signal API: https://$DOMAIN/signal-api"
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
+                        echo "  • Signal API: https://$DOMAIN/signal"
+                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
+                        echo "  • Signal API: https://$DOMAIN:8090"
                     else
                         echo "  • Signal API: http://localhost:8090"
                     fi
