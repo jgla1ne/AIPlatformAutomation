@@ -313,6 +313,8 @@ collect_domain_info() {
         print_success "Using localhost for development"
         echo "DOMAIN_RESOLVES=true" >> "$ENV_FILE"
         echo "PUBLIC_IP=127.0.0.1" >> "$ENV_FILE"
+        # Set default proxy config method for localhost
+        echo "PROXY_CONFIG_METHOD=direct" >> "$ENV_FILE"
     elif nslookup "$INPUT_RESULT" >/dev/null 2>&1; then
         local public_ip=$(nslookup "$INPUT_RESULT" | grep -A1 "Name:" | tail -1 | awk '{print $2}')
         local server_ip=$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null)
@@ -409,6 +411,9 @@ collect_domain_info() {
                     ;;
             esac
         done
+    else
+        # Set default for no proxy
+        echo "PROXY_CONFIG_METHOD=direct" >> "$ENV_FILE"
     fi
     
     # SSL Configuration
@@ -1389,25 +1394,39 @@ EOF
         echo "Select web search provider for OpenClaw:"
         echo "  1) Brave Search API (Recommended)"
         echo "  2) SerpApi (Google Search)"
-        echo "  3) None (Disable web search)"
+        echo "  3) Both Brave and SerpApi"
+        echo "  4) None (Disable web search)"
         echo ""
         
         while true; do
-            echo -n -e "${YELLOW}Select web search provider [1-3]:${NC} "
+            echo -n -e "${YELLOW}Select web search provider [1-4]:${NC} "
             read -r websearch_choice
             
             case "$websearch_choice" in
                 1)
                     echo "OPENCLAW_WEBSEARCH=brave" >> "$ENV_FILE"
+                    prompt_input "BRAVE_API_KEY" "Brave Search API key" "" false
+                    echo "BRAVE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
                     print_success "Brave Search API selected"
                     break
                     ;;
                 2)
                     echo "OPENCLAW_WEBSEARCH=serpapi" >> "$ENV_FILE"
+                    prompt_input "SERPAPI_KEY" "SerpApi key" "" false
+                    echo "SERPAPI_KEY=$INPUT_RESULT" >> "$ENV_FILE"
                     print_success "SerpApi selected"
                     break
                     ;;
                 3)
+                    echo "OPENCLAW_WEBSEARCH=both" >> "$ENV_FILE"
+                    prompt_input "BRAVE_API_KEY" "Brave Search API key" "" false
+                    echo "BRAVE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    prompt_input "SERPAPI_KEY" "SerpApi key" "" false
+                    echo "SERPAPI_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+                    print_success "Both Brave Search API and SerpApi selected"
+                    break
+                    ;;
+                4)
                     echo "OPENCLAW_WEBSEARCH=none" >> "$ENV_FILE"
                     print_success "Web search disabled"
                     break
@@ -1788,6 +1807,81 @@ EOF
     print_success "Setup summary generated: $summary_file"
     print_success "Service URLs saved: $urls_file"
     print_info "Review service URLs file for complete access information"
+    
+    # Display selected services summary
+    echo ""
+    print_header "📋 Selected Services Summary"
+    echo ""
+    
+    local selected_services=($(jq -r '.services[].key' "$SERVICES_FILE" 2>/dev/null || echo ""))
+    local total_services=$(jq -r '.total_services' "$SERVICES_FILE" 2>/dev/null || echo "0")
+    
+    print_info "Total Services Selected: $total_services"
+    echo ""
+    
+    # Group services by category
+    echo "🏗️  Core Infrastructure:"
+    local core_services=("nginx-proxy-manager" "traefik" "caddy" "postgres" "redis" "tailscale")
+    for service in "${core_services[@]}"; do
+        if [[ " ${selected_services[*]} " =~ " $service " ]]; then
+            case $service in
+                "nginx-proxy-manager") echo "  ✅ Nginx Proxy Manager" ;;
+                "traefik") echo "  ✅ Traefik" ;;
+                "caddy") echo "  ✅ Caddy" ;;
+                "postgres") echo "  ✅ PostgreSQL" ;;
+                "redis") echo "  ✅ Redis" ;;
+                "tailscale") echo "  ✅ Tailscale" ;;
+            esac
+        fi
+    done
+    
+    echo ""
+    echo "🤖 AI Applications:"
+    local ai_services=("openwebui" "anythingllm" "dify" "n8n" "flowise" "ollama" "litellm")
+    for service in "${ai_services[@]}"; do
+        if [[ " ${selected_services[*]} " =~ " $service " ]]; then
+            case $service in
+                "openwebui") echo "  ✅ Open WebUI" ;;
+                "anythingllm") echo "  ✅ AnythingLLM" ;;
+                "dify") echo "  ✅ Dify" ;;
+                "n8n") echo "  ✅ n8n" ;;
+                "flowise") echo "  ✅ Flowise" ;;
+                "ollama") echo "  ✅ Ollama" ;;
+                "litellm") echo "  ✅ LiteLLM" ;;
+            esac
+        fi
+    done
+    
+    echo ""
+    echo "🧠 Vector Databases:"
+    local vector_services=("qdrant" "milvus" "chromadb" "weaviate")
+    for service in "${vector_services[@]}"; do
+        if [[ " ${selected_services[*]} " =~ " $service " ]]; then
+            case $service in
+                "qdrant") echo "  ✅ Qdrant" ;;
+                "milvus") echo "  ✅ Milvus" ;;
+                "chromadb") echo "  ✅ ChromaDB" ;;
+                "weaviate") echo "  ✅ Weaviate" ;;
+            esac
+        fi
+    done
+    
+    echo ""
+    echo "📊 Monitoring & Storage:"
+    local monitoring_services=("prometheus" "grafana" "minio" "signal-api" "openclaw")
+    for service in "${monitoring_services[@]}"; do
+        if [[ " ${selected_services[*]} " =~ " $service " ]]; then
+            case $service in
+                "prometheus") echo "  ✅ Prometheus" ;;
+                "grafana") echo "  ✅ Grafana" ;;
+                "minio") echo "  ✅ MinIO" ;;
+                "signal-api") echo "  ✅ Signal API" ;;
+                "openclaw") echo "  ✅ OpenClaw" ;;
+            esac
+        fi
+    done
+    
+    echo ""
     
     # Display key information
     echo ""
