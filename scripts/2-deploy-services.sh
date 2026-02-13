@@ -150,37 +150,101 @@ load_configuration() {
 deploy_service() {
     local service="$1"
     
+    echo "DEBUG: deploy_service called with: $service" >> "$LOG_FILE"
     print_info "Deploying $service..."
     
     case "$service" in
-        postgres) deploy_postgres ;;
-        redis) deploy_redis ;;
-        qdrant) deploy_qdrant ;;
-        milvus) deploy_milvus ;;
-        chroma) deploy_chroma ;;
-        weaviate) deploy_weaviate ;;
-        ollama) deploy_ollama ;;
-        litellm) deploy_litellm ;;
-        openwebui) deploy_openwebui ;;
-        anythingllm) deploy_anythingllm ;;
-        dify) deploy_dify ;;
-        n8n) deploy_n8n ;;
-        flowise) deploy_flowise ;;
-        signal-api) deploy_signal_api ;;
-        openclaw) deploy_openclaw ;;
-        grafana) deploy_grafana ;;
-        prometheus) deploy_prometheus ;;
-        minio) deploy_minio ;;
-        nginx-proxy-manager|traefik|caddy|swag) deploy_proxy "$service" ;;
-        tailscale) deploy_tailscale ;;
+        postgres) 
+            echo "DEBUG: Calling deploy_postgres for $service" >> "$LOG_FILE"
+            deploy_postgres 
+            ;;
+        redis) 
+            echo "DEBUG: Calling deploy_redis for $service" >> "$LOG_FILE"
+            deploy_redis 
+            ;;
+        qdrant) 
+            echo "DEBUG: Calling deploy_qdrant for $service" >> "$LOG_FILE"
+            deploy_qdrant 
+            ;;
+        milvus) 
+            echo "DEBUG: Calling deploy_milvus for $service" >> "$LOG_FILE"
+            deploy_milvus 
+            ;;
+        chroma) 
+            echo "DEBUG: Calling deploy_chroma for $service" >> "$LOG_FILE"
+            deploy_chroma 
+            ;;
+        weaviate) 
+            echo "DEBUG: Calling deploy_weaviate for $service" >> "$LOG_FILE"
+            deploy_weaviate 
+            ;;
+        ollama) 
+            echo "DEBUG: Calling deploy_ollama for $service" >> "$LOG_FILE"
+            deploy_ollama 
+            ;;
+        litellm) 
+            echo "DEBUG: Calling deploy_litellm for $service" >> "$LOG_FILE"
+            deploy_litellm 
+            ;;
+        openwebui) 
+            echo "DEBUG: Calling deploy_openwebui for $service" >> "$LOG_FILE"
+            deploy_openwebui 
+            ;;
+        anythingllm) 
+            echo "DEBUG: Calling deploy_anythingllm for $service" >> "$LOG_FILE"
+            deploy_anythingllm 
+            ;;
+        dify) 
+            echo "DEBUG: Calling deploy_dify for $service" >> "$LOG_FILE"
+            deploy_dify 
+            ;;
+        n8n) 
+            echo "DEBUG: Calling deploy_n8n for $service" >> "$LOG_FILE"
+            deploy_n8n 
+            ;;
+        flowise) 
+            echo "DEBUG: Calling deploy_flowise for $service" >> "$LOG_FILE"
+            deploy_flowise 
+            ;;
+        signal-api) 
+            echo "DEBUG: Calling deploy_signal_api for $service" >> "$LOG_FILE"
+            deploy_signal_api 
+            ;;
+        openclaw) 
+            echo "DEBUG: Calling deploy_openclaw for $service" >> "$LOG_FILE"
+            deploy_openclaw 
+            ;;
+        grafana) 
+            echo "DEBUG: Calling deploy_grafana for $service" >> "$LOG_FILE"
+            deploy_grafana 
+            ;;
+        prometheus) 
+            echo "DEBUG: Calling deploy_prometheus for $service" >> "$LOG_FILE"
+            deploy_prometheus 
+            ;;
+        minio) 
+            echo "DEBUG: Calling deploy_minio for $service" >> "$LOG_FILE"
+            deploy_minio 
+            ;;
+        nginx-proxy-manager|traefik|caddy|swag) 
+            echo "DEBUG: Calling deploy_proxy for $service" >> "$LOG_FILE"
+            deploy_proxy "$service" 
+            ;;
+        tailscale) 
+            echo "DEBUG: Calling deploy_tailscale for $service" >> "$LOG_FILE"
+            deploy_tailscale 
+            ;;
         *) 
+            echo "DEBUG: Unknown service: $service" >> "$LOG_FILE"
             print_warn "Unknown service: $service"
             return 1
             ;;
     esac
     
     # Return the exit code of the deployment function
-    return $?
+    local deploy_result=$?
+    echo "DEBUG: deploy_service $service result: $deploy_result" >> "$LOG_FILE"
+    return $deploy_result
 }
 
 #------------------------------------------------------------------------------
@@ -189,6 +253,12 @@ deploy_service() {
 
 deploy_postgres() {
     print_info "Generating PostgreSQL configuration..."
+    echo "DEBUG: Starting PostgreSQL deployment..." >> "$LOG_FILE"
+    echo "DEBUG: POSTGRES_USER=${POSTGRES_USER:-not_set}" >> "$LOG_FILE"
+    echo "DEBUG: POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-not_set}" >> "$LOG_FILE"
+    echo "DEBUG: POSTGRES_DB=${POSTGRES_DB:-not_set}" >> "$LOG_FILE"
+    echo "DEBUG: DATA_ROOT=$DATA_ROOT" >> "$LOG_FILE"
+    echo "DEBUG: Using localhost for internal service binding" >> "$LOG_FILE"
     
     mkdir -p "$COMPOSE_DIR/postgres"
     
@@ -210,12 +280,13 @@ services:
     volumes:
       - ${DATA_ROOT}/postgres:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-aiplatform}"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
 
 networks:
   ai_platform:
@@ -223,18 +294,46 @@ networks:
 EOF
     
     print_success "PostgreSQL configuration generated"
+    echo "DEBUG: PostgreSQL configuration generated" >> "$LOG_FILE"
     
     docker-compose -f "$COMPOSE_DIR/postgres/docker-compose.yml" up -d
+    echo "DEBUG: PostgreSQL container started" >> "$LOG_FILE"
     
-    wait_for_service "PostgreSQL" "http://localhost:5432" 30
+    # Wait for container to be ready using Docker's own health check
+    print_info "Waiting for PostgreSQL to be ready..."
+    local max_attempts=30
+    local attempt=0
     
-    # Return the exit code from wait_for_service
-    local postgres_result=$?
-    if [[ $postgres_result -eq 0 ]]; then
+    while [ $attempt -lt $max_attempts ]; do
+        if docker exec postgres pg_isready -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-aiplatform}" >/dev/null 2>&1; then
+            print_success "PostgreSQL is ready"
+            echo "DEBUG: PostgreSQL is ready" >> "$LOG_FILE"
+            break
+        fi
+        
+        echo -ne "."
+        sleep 2
+        ((attempt++))
+        
+        if [ $attempt -eq $max_attempts ]; then
+            echo ""
+            print_error "PostgreSQL failed to become ready"
+            echo "DEBUG: PostgreSQL failed to become ready after $max_attempts attempts" >> "$LOG_FILE"
+            docker logs postgres 2>&1 | tail -10 >> "$LOG_FILE"
+            return 1
+        fi
+    done
+    
+    # Test database connection
+    echo "DEBUG: Testing database connection to ${POSTGRES_DB:-aiplatform}" >> "$LOG_FILE"
+    if docker exec postgres psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-aiplatform}" -c "SELECT 1;" >/dev/null 2>&1; then
+        echo "DEBUG: Database connection test passed" >> "$LOG_FILE"
         print_success "PostgreSQL deployed successfully"
         return 0
     else
-        print_error "PostgreSQL deployment failed"
+        echo "DEBUG: Database connection test failed" >> "$LOG_FILE"
+        docker exec postgres psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-aiplatform}" -c "SELECT 1;" 2>&1 | tail -5 >> "$LOG_FILE"
+        print_error "PostgreSQL database connection failed"
         return 1
     fi
 }
@@ -381,6 +480,8 @@ load_configuration_phase() {
     local proxy_services=($(jq -r '.services[] | select(.key | test("nginx-proxy-manager|traefik|caddy|swag")) | .key' "$SERVICES_FILE" 2>/dev/null || echo ""))
     if [[ ${#proxy_services[@]} -gt 0 ]]; then
         echo "  • Proxy Services: ${proxy_services[*]}"
+    elif [[ -n "${PROXY_TYPE:-}" && "${PROXY_TYPE:-}" != "none" ]]; then
+        echo "  • Proxy Services: ${PROXY_TYPE}"
     else
         echo "  • Proxy Services: none selected"
     fi
@@ -389,6 +490,8 @@ load_configuration_phase() {
     local vector_db_services=($(jq -r '.services[] | select(.key | test("qdrant|milvus|chroma|weaviate")) | .key' "$SERVICES_FILE" 2>/dev/null || echo ""))
     if [[ ${#vector_db_services[@]} -gt 0 ]]; then
         echo "  • Vector Database: ${vector_db_services[*]}"
+    elif [[ -n "${VECTOR_DB_TYPE:-}" && "${VECTOR_DB_TYPE:-}" != "none" ]]; then
+        echo "  • Vector Database: ${VECTOR_DB_TYPE}"
     else
         echo "  • Vector Database: none selected"
     fi
@@ -402,17 +505,24 @@ load_configuration_phase() {
 deploy_infrastructure() {
     log_phase "3" "🏗️" "Infrastructure Deployment"
     
+    echo "DEBUG: Starting infrastructure deployment..." >> "$LOG_FILE"
+    
     local selected_services=($(jq -r '.services[].key' "$SERVICES_FILE" 2>/dev/null || echo ""))
     local infrastructure_services=()
     
     # Identify infrastructure services
+    echo "DEBUG: Identifying infrastructure services..." >> "$LOG_FILE"
     for service in "${selected_services[@]}"; do
         case "$service" in
             postgres|redis|qdrant|milvus|chroma|weaviate)
                 infrastructure_services+=("$service")
+                echo "DEBUG: Added infrastructure service: $service" >> "$LOG_FILE"
                 ;;
         esac
     done
+    
+    echo "DEBUG: Found infrastructure services: ${infrastructure_services[*]}" >> "$LOG_FILE"
+    echo "DEBUG: Total infrastructure services: ${#infrastructure_services[@]}" >> "$LOG_FILE"
     
     if [[ ${#infrastructure_services[@]} -eq 0 ]]; then
         print_warn "No infrastructure services selected"
@@ -420,20 +530,52 @@ deploy_infrastructure() {
     fi
     
     print_info "Deploying ${#infrastructure_services[@]} infrastructure services..."
+    echo "DEBUG: Starting deployment loop..." >> "$LOG_FILE"
     
     local deployed=0
     for service in "${infrastructure_services[@]}"; do
         echo ""
+        echo "DEBUG: Deploying service: $service (deployed: $deployed, total: ${#infrastructure_services[@]})" >> "$LOG_FILE"
+        echo "DEBUG: About to call deploy_service $service" >> "$LOG_FILE"
         print_info "[$((deployed + 1))/${#infrastructure_services[@]}] Deploying $service"
         
+        # Add prompt to force continuation
+        if [[ $deployed -gt 0 ]]; then
+            print_info "Continuing to next service: $service"
+        fi
+        
+        echo "DEBUG: About to enter if condition for $service" >> "$LOG_FILE"
         if deploy_service "$service"; then
-            ((deployed++))
+            echo "DEBUG: Inside if condition - deploy_service succeeded for $service" >> "$LOG_FILE"
+            echo "DEBUG: deploy_service returned success for $service" >> "$LOG_FILE"
+            echo "DEBUG: About to increment deployed counter" >> "$LOG_FILE"
+            deployed=$((deployed + 1))
+            echo "DEBUG: Successfully incremented deployed to $deployed for $service" >> "$LOG_FILE"
+            echo "DEBUG: Service $service deployed successfully (deployed: $deployed)" >> "$LOG_FILE"
             print_success "$service deployed successfully"
+            
+            # Force continuation with explicit check
+            if [[ $deployed -lt ${#infrastructure_services[@]} ]]; then
+                echo "DEBUG: More services to deploy, continuing loop..." >> "$LOG_FILE"
+                print_info "Continuing to next service ($((deployed + 1))/${#infrastructure_services[@]})"
+            else
+                echo "DEBUG: All services deployed, loop should end" >> "$LOG_FILE"
+            fi
         else
+            echo "DEBUG: Service $service deployment failed with exit code $?" >> "$LOG_FILE"
             print_error "Failed to deploy $service"
         fi
+        
+        echo "DEBUG: About to execute 'Finished iteration' message for $service" >> "$LOG_FILE"
+        echo "DEBUG: Finished iteration for $service, deployed count: $deployed" >> "$LOG_FILE"
+        echo "DEBUG: Loop iteration complete, checking if should continue..." >> "$LOG_FILE"
+        
+        # Force loop to continue explicitly
+        echo "DEBUG: Loop state check - deployed: $deployed, total: ${#infrastructure_services[@]}" >> "$LOG_FILE"
+        echo "DEBUG: About to reach 'done' statement for $service iteration" >> "$LOG_FILE"
     done
     
+    echo "DEBUG: Infrastructure deployment completed (deployed: $deployed/${#infrastructure_services[@]})" >> "$LOG_FILE"
     print_success "Infrastructure deployment completed: $deployed/${#infrastructure_services[@]} services"
 }
 
@@ -941,8 +1083,12 @@ EOF
         
         # Pull default model if specified
         if [[ -n "${OLLAMA_DEFAULT_MODEL:-}" ]]; then
-            print_info "Pulling default model: $OLLAMA_DEFAULT_MODEL"
-            docker exec ollama ollama pull "$OLLAMA_DEFAULT_MODEL" 2>&1 | tee -a "$LOG_FILE"
+            # Fix model name format - remove version suffix if causing issues
+            local model_name="${OLLAMA_DEFAULT_MODEL%%:*}"
+            print_info "Pulling default model: $model_name"
+            docker exec ollama ollama pull "$model_name" || {
+                print_warn "Failed to pull model $model_name, continuing..."
+            }
         fi
     else
         print_error "Ollama deployment failed"
@@ -1552,7 +1698,7 @@ wait_for_service() {
         local service_name_lower=$(echo "$service_name" | tr '[:upper:]' '[:lower:]')
         case "$service_name_lower" in
             "PostgreSQL")
-                health_result=$(docker exec postgres 2>/dev/null pg_isready -U "${POSTGRES_USER:-postgres}" 2>&1 || echo "failed")
+                health_result=$(docker exec postgres 2>/dev/null pg_isready -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-aiplatform}" 2>&1 || echo "failed")
                 ;;
             "redis")
                 if [[ -n "${REDIS_PASSWORD:-}" ]]; then
@@ -1591,8 +1737,17 @@ wait_for_service() {
     echo ""
     print_warn "Showing last 20 lines of $service_name container logs:"
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Fetching container logs for $service_name" >> "$LOG_FILE"
-    # Convert service name to lowercase for container name
-    local container_name=$(echo "$service_name" | tr '[:upper:]' '[:lower:]')
+    # Handle special case for PostgreSQL container name
+    local container_name=""
+    case "$service_name" in
+        "PostgreSQL")
+            container_name="postgres"
+            ;;
+        *)
+            # Convert service name to lowercase for container name
+            container_name=$(echo "$service_name" | tr '[:upper:]' '[:lower:]')
+            ;;
+    esac
     docker logs --tail 20 "$container_name" 2>&1 | tee -a "$LOG_FILE"
     
     return 1
