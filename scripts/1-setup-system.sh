@@ -1162,6 +1162,15 @@ EOF
         print_info "Redis Configuration"
         echo ""
         
+        # Allow override of Redis configuration
+        print_info "Redis Configuration (Optional Overrides)"
+        echo ""
+        
+        prompt_input "REDIS_USER" "Redis username (leave empty for default)" "" false
+        if [[ -n "$INPUT_RESULT" ]]; then
+            echo "REDIS_USER=$INPUT_RESULT" >> "$ENV_FILE"
+        fi
+        
         local redis_password=$(generate_random_password 24)
         echo "REDIS_PASSWORD=$redis_password" >> "$ENV_FILE"
         
