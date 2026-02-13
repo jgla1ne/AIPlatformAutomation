@@ -1908,8 +1908,11 @@ EOF
     
     # Load environment variables for URL generation
     DOMAIN=$(grep "^DOMAIN=" "$ENV_FILE" | cut -d= -f2)
-    DOMAIN_RESOLVES=$(grep "^DOMAIN_RESOLVES=" "$ENV_FILE" | cut -d= -f2)
-    PROXY_CONFIG_METHOD=$(grep "^PROXY_CONFIG_METHOD=" "$ENV_FILE" | cut -d= -f2)
+    DOMAIN_RESOLVES=$(grep "^DOMAIN_RESOLVES=" "$ENV_FILE" | cut -d= -f2 || echo "false")
+    PROXY_CONFIG_METHOD=$(grep "^PROXY_CONFIG_METHOD=" "$ENV_FILE" | cut -d= -f2 || echo "direct")
+    
+    # Debug: Show loaded variables
+    print_info "Debug: DOMAIN=$DOMAIN, DOMAIN_RESOLVES=$DOMAIN_RESOLVES, PROXY_CONFIG_METHOD=$PROXY_CONFIG_METHOD"
     
     [[ "$postgres_user" != "postgres" ]] && echo "  • PostgreSQL User: $postgres_user"
     [[ "$openclaw_user" != "admin" ]] && echo "  • OpenClaw User: $openclaw_user"
