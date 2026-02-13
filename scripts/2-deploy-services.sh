@@ -604,16 +604,24 @@ deploy_llm_layer() {
     local deployed=0
     for service in "${llm_services[@]}"; do
         echo ""
+        echo "DEBUG: Deploying LLM service: $service (deployed: $deployed, total: ${#llm_services[@]})" >> "$LOG_FILE"
+        echo "DEBUG: About to call deploy_service $service" >> "$LOG_FILE"
         print_info "[$((deployed + 1))/${#llm_services[@]}] Deploying $service"
         
         if deploy_service "$service"; then
             ((deployed++))
+            echo "DEBUG: LLM service $service deployed successfully (deployed: $deployed)" >> "$LOG_FILE"
             print_success "$service deployed successfully"
         else
+            echo "DEBUG: LLM service $service deployment failed with exit code $?" >> "$LOG_FILE"
             print_error "Failed to deploy $service"
         fi
+        
+        echo "DEBUG: Finished LLM iteration for $service, deployed count: $deployed" >> "$LOG_FILE"
+        echo "DEBUG: LLM loop iteration complete, checking if should continue..." >> "$LOG_FILE"
     done
     
+    echo "DEBUG: LLM layer deployment completed (deployed: $deployed/${#llm_services[@]})" >> "$LOG_FILE"
     print_success "LLM layer deployment completed: $deployed/${#llm_services[@]} services"
 }
 
@@ -1098,15 +1106,122 @@ EOF
 }
 
 deploy_litellm() {
-    print_info "Deploying LiteLLM..."
-    # TODO: Implement LiteLLM deployment
-    print_success "LiteLLM deployment stub completed"
+    print_info "Generating LiteLLM configuration..."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting LiteLLM deployment" >> "$LOG_FILE"
+    
+    mkdir -p "$COMPOSE_DIR/litellm"
+    
+    cat > "$COMPOSE_DIR/litellm/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main
+    container_name: litellm
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    environment:
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+      - LITELLM_ROUTING_STRATEGY=${LITELLM_ROUTING_STRATEGY:-local-first}
+      - LITELLM_CACHE_ENABLED=${LITELLM_CACHE_ENABLED:-true}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aiplatform}
+      - REDIS_URL=redis://redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    volumes:
+      - ${DATA_ROOT}/litellm:/app/data
+    ports:
+      - "4000:4000"
+    depends_on:
+      - postgres
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+    
+    print_success "LiteLLM configuration generated"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - LiteLLM configuration generated" >> "$LOG_FILE"
+    
+    docker-compose -f "$COMPOSE_DIR/litellm/docker-compose.yml" up -d 2>&1 | tee -a "$LOG_FILE"
+    
+    wait_for_service "LiteLLM" "http://localhost:4000" 60
+    if [[ $? -eq 0 ]]; then
+        print_success "LiteLLM deployed successfully"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - LiteLLM deployed successfully" >> "$LOG_FILE"
+        return 0
+    else
+        print_error "LiteLLM deployment failed"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - LiteLLM deployment failed" >> "$LOG_FILE"
+        return 1
+    fi
 }
 
 deploy_openwebui() {
-    print_info "Deploying Open WebUI..."
-    # TODO: Implement Open WebUI deployment
-    print_success "Open WebUI deployment stub completed"
+    print_info "Generating Open WebUI configuration..."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Open WebUI deployment" >> "$LOG_FILE"
+    
+    mkdir -p "$COMPOSE_DIR/openwebui"
+    mkdir -p "${DATA_ROOT}/openwebui"
+    
+    cat > "$COMPOSE_DIR/openwebui/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: openwebui
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_SECRET_KEY=${OPENWEBUI_SECRET_KEY:-your-secret-key-here}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aiplatform}
+      - REDIS_URL=redis://redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    volumes:
+      - ${DATA_ROOT}/openwebui:/app/backend/data
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+      - redis
+      - ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+    
+    print_success "Open WebUI configuration generated"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Open WebUI configuration generated" >> "$LOG_FILE"
+    
+    docker-compose -f "$COMPOSE_DIR/openwebui/docker-compose.yml" up -d 2>&1 | tee -a "$LOG_FILE"
+    
+    wait_for_service "Open WebUI" "http://localhost:3000" 60
+    if [[ $? -eq 0 ]]; then
+        print_success "Open WebUI deployed successfully"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Open WebUI deployed successfully" >> "$LOG_FILE"
+        return 0
+    else
+        print_error "Open WebUI deployment failed"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Open WebUI deployment failed" >> "$LOG_FILE"
+        return 1
+    fi
 }
 
 deploy_anythingllm() {
