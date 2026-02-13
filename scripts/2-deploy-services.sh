@@ -380,6 +380,7 @@ load_configuration_phase() {
     echo "  • Proxy Type: ${PROXY_TYPE:-none}"
     echo "  • Vector Database: ${VECTOR_DB_TYPE:-none selected}"
     echo "  • LLM Providers: ${LLM_PROVIDERS:-none configured}"
+    echo "  • Total Services: $(jq -r '.total_services' "$SERVICES_FILE" 2>/dev/null || echo "0")"
     
     print_success "Configuration loaded successfully"
 }
@@ -643,9 +644,61 @@ deploy_vector_db() {
 }
 
 deploy_ollama() {
-    print_info "Deploying Ollama..."
-    # TODO: Implement Ollama deployment
-    print_success "Ollama deployment stub completed"
+    print_info "Generating Ollama configuration..."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Ollama deployment" >> "$LOG_FILE"
+    
+    mkdir -p "$COMPOSE_DIR/ollama"
+    mkdir -p "${DATA_ROOT}/ollama"
+    
+    cat > "$COMPOSE_DIR/ollama/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+    volumes:
+      - ${DATA_ROOT}/ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+    
+    print_success "Ollama configuration generated"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Ollama configuration generated" >> "$LOG_FILE"
+    
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Ollama container" >> "$LOG_FILE"
+    docker-compose -f "$COMPOSE_DIR/ollama/docker-compose.yml" up -d 2>&1 | tee -a "$LOG_FILE"
+    
+    wait_for_service "Ollama" "http://localhost:11434" 60
+    if [[ $? -eq 0 ]]; then
+        print_success "Ollama deployed successfully"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Ollama deployed successfully" >> "$LOG_FILE"
+        
+        # Pull default model if specified
+        if [[ -n "${OLLAMA_DEFAULT_MODEL:-}" ]]; then
+            print_info "Pulling default model: $OLLAMA_DEFAULT_MODEL"
+            docker exec ollama ollama pull "$OLLAMA_DEFAULT_MODEL" 2>&1 | tee -a "$LOG_FILE"
+        fi
+    else
+        print_error "Ollama deployment failed"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Ollama deployment failed" >> "$LOG_FILE"
+        return 1
+    fi
 }
 
 deploy_litellm() {
@@ -661,9 +714,71 @@ deploy_openwebui() {
 }
 
 deploy_anythingllm() {
-    print_info "Deploying AnythingLLM..."
-    # TODO: Implement AnythingLLM deployment
-    print_success "AnythingLLM deployment stub completed"
+    print_info "Generating AnythingLLM configuration..."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting AnythingLLM deployment" >> "$LOG_FILE"
+    
+    mkdir -p "$COMPOSE_DIR/anythingllm"
+    mkdir -p "${DATA_ROOT}/anythingllm"
+    mkdir -p "${DATA_ROOT}/anythingllm/storage"
+    
+    cat > "$COMPOSE_DIR/anythingllm/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  anythingllm:
+    image: mintplexlabs/anythingllm:latest
+    container_name: anythingllm
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - "${ANYTHINGLLM_PORT:-3001}:3001"
+    environment:
+      - NODE_ENV=production
+      - JWT_SECRET=${ANYTHINGLLM_JWT_SECRET:-$(openssl rand -hex 32)}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=${POSTGRES_USER:-postgres}
+      - DB_PASS=${POSTGRES_PASSWORD}
+      - DB_NAME=${POSTGRES_DB:-aiplatform}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - STORAGE_DIR=/app/server/storage
+      - DISABLE_TELEMETRY=${ANYTHINGLLM_DISABLE_TELEMETRY:-true}
+    depends_on:
+      - redis
+      - postgres
+    volumes:
+      - ${DATA_ROOT}/anythingllm/storage:/app/server/storage
+      - ${DATA_ROOT}/anythingllm:/app/server/documents
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+    
+    print_success "AnythingLLM configuration generated"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - AnythingLLM configuration generated" >> "$LOG_FILE"
+    
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting AnythingLLM container" >> "$LOG_FILE"
+    docker-compose -f "$COMPOSE_DIR/anythingllm/docker-compose.yml" up -d 2>&1 | tee -a "$LOG_FILE"
+    
+    wait_for_service "AnythingLLM" "http://localhost:${ANYTHINGLLM_PORT:-3001}" 60
+    if [[ $? -eq 0 ]]; then
+        print_success "AnythingLLM deployed successfully"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - AnythingLLM deployed successfully" >> "$LOG_FILE"
+    else
+        print_error "AnythingLLM deployment failed"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - AnythingLLM deployment failed" >> "$LOG_FILE"
+        return 1
+    fi
 }
 
 deploy_dify() {
@@ -685,9 +800,62 @@ deploy_flowise() {
 }
 
 deploy_signal_api() {
-    print_info "Deploying Signal API..."
-    # TODO: Implement Signal API deployment
-    print_success "Signal API deployment stub completed"
+    print_info "Generating Signal-API configuration..."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Signal-API deployment" >> "$LOG_FILE"
+    
+    mkdir -p "$COMPOSE_DIR/signal-api"
+    mkdir -p "${DATA_ROOT}/signal-api"
+    
+    cat > "$COMPOSE_DIR/signal-api/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  signal-api:
+    image: signal-api/signal-api:latest
+    container_name: signal-api
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - "${SIGNAL_API_PORT:-8080}:8080"
+    environment:
+      - SIGNAL_API_HOST=0.0.0.0
+      - SIGNAL_API_PORT=8080
+      - REDIS_URL=redis://redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aiplatform}
+    depends_on:
+      - redis
+      - postgres
+    volumes:
+      - ${DATA_ROOT}/signal-api:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+    
+    print_success "Signal-API configuration generated"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Signal-API configuration generated" >> "$LOG_FILE"
+    
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Signal-API container" >> "$LOG_FILE"
+    docker-compose -f "$COMPOSE_DIR/signal-api/docker-compose.yml" up -d 2>&1 | tee -a "$LOG_FILE"
+    
+    wait_for_service "Signal-API" "http://localhost:${SIGNAL_API_PORT:-8080}" 45
+    if [[ $? -eq 0 ]]; then
+        print_success "Signal-API deployed successfully"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Signal-API deployed successfully" >> "$LOG_FILE"
+    else
+        print_error "Signal-API deployment failed"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Signal-API deployment failed" >> "$LOG_FILE"
+        return 1
+    fi
 }
 
 deploy_openclaw() {
@@ -697,15 +865,146 @@ deploy_openclaw() {
 }
 
 deploy_grafana() {
-    print_info "Deploying Grafana..."
-    # TODO: Implement Grafana deployment
-    print_success "Grafana deployment stub completed"
+    print_info "Generating Grafana configuration..."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Grafana deployment" >> "$LOG_FILE"
+    
+    mkdir -p "$COMPOSE_DIR/grafana"
+    mkdir -p "${DATA_ROOT}/grafana"
+    mkdir -p "${DATA_ROOT}/grafana/provisioning"
+    
+    cat > "$COMPOSE_DIR/grafana/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+      - GF_SERVER_DOMAIN=${DOMAIN_NAME:-localhost}
+      - GF_SERVER_ROOT_URL=http://${DOMAIN_NAME:-localhost}:${GRAFANA_PORT:-3001}
+      - GF_SMTP_ENABLED=${GRAFANA_SMTP_ENABLED:-false}
+    volumes:
+      - ${DATA_ROOT}/grafana:/var/lib/grafana
+      - ${DATA_ROOT}/grafana/provisioning:/etc/grafana/provisioning
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+    
+    print_success "Grafana configuration generated"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Grafana configuration generated" >> "$LOG_FILE"
+    
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Grafana container" >> "$LOG_FILE"
+    docker-compose -f "$COMPOSE_DIR/grafana/docker-compose.yml" up -d 2>&1 | tee -a "$LOG_FILE"
+    
+    wait_for_service "Grafana" "http://localhost:${GRAFANA_PORT:-3001}" 45
+    if [[ $? -eq 0 ]]; then
+        print_success "Grafana deployed successfully"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Grafana deployed successfully" >> "$LOG_FILE"
+    else
+        print_error "Grafana deployment failed"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Grafana deployment failed" >> "$LOG_FILE"
+        return 1
+    fi
 }
 
 deploy_prometheus() {
-    print_info "Deploying Prometheus..."
-    # TODO: Implement Prometheus deployment
-    print_success "Prometheus deployment stub completed"
+    print_info "Generating Prometheus configuration..."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Prometheus deployment" >> "$LOG_FILE"
+    
+    mkdir -p "$COMPOSE_DIR/prometheus"
+    mkdir -p "${DATA_ROOT}/prometheus"
+    mkdir -p "${DATA_ROOT}/prometheus/config"
+    
+    cat > "$COMPOSE_DIR/prometheus/prometheus.yml" <<EOF
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+  - job_name: 'docker'
+    static_configs:
+      - targets: ['docker-exporter:9323']
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+rule_files:
+  - "/etc/prometheus/rules/*.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+EOF
+    
+    cat > "$COMPOSE_DIR/prometheus/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ${DATA_ROOT}/prometheus/config:/etc/prometheus
+      - ${DATA_ROOT}/prometheus:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+    
+    print_success "Prometheus configuration generated"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Prometheus configuration generated" >> "$LOG_FILE"
+    
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Prometheus container" >> "$LOG_FILE"
+    docker-compose -f "$COMPOSE_DIR/prometheus/docker-compose.yml" up -d 2>&1 | tee -a "$LOG_FILE"
+    
+    wait_for_service "Prometheus" "http://localhost:${PROMETHEUS_PORT:-9090}" 45
+    if [[ $? -eq 0 ]]; then
+        print_success "Prometheus deployed successfully"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Prometheus deployed successfully" >> "$LOG_FILE"
+    else
+        print_error "Prometheus deployment failed"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Prometheus deployment failed" >> "$LOG_FILE"
+        return 1
+    fi
 }
 
 deploy_minio() {
