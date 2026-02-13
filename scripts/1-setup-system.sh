@@ -308,6 +308,9 @@ collect_domain_info() {
     # Validate domain resolution
     echo ""
     print_info "Validating domain resolution..."
+    # Debug: Show what we're working with
+    print_info "Debug: INPUT_RESULT='$INPUT_RESULT'"
+    
     # Special case for localhost
     if [[ "$INPUT_RESULT" == "localhost" ]]; then
         print_success "Using localhost for development"
