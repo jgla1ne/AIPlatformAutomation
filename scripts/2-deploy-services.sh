@@ -378,7 +378,7 @@ load_configuration_phase() {
     echo "  • Proxy Type: ${PROXY_TYPE:-none}"
     
     # Check if proxy services were selected
-    local proxy_services=($(jq -r '.services[] | select(.category == "proxy") | .key' "$SERVICES_FILE" 2>/dev/null || echo ""))
+    local proxy_services=($(jq -r '.services[] | select(.key | test("nginx-proxy-manager|traefik|caddy|swag")) | .key' "$SERVICES_FILE" 2>/dev/null || echo ""))
     if [[ ${#proxy_services[@]} -gt 0 ]]; then
         echo "  • Proxy Services: ${proxy_services[*]}"
     else
@@ -386,7 +386,7 @@ load_configuration_phase() {
     fi
     
     # Check if vector database services were selected
-    local vector_db_services=($(jq -r '.services[] | select(.category == "vector-database") | .key' "$SERVICES_FILE" 2>/dev/null || echo ""))
+    local vector_db_services=($(jq -r '.services[] | select(.key | test("qdrant|milvus|chroma|weaviate")) | .key' "$SERVICES_FILE" 2>/dev/null || echo ""))
     if [[ ${#vector_db_services[@]} -gt 0 ]]; then
         echo "  • Vector Database: ${vector_db_services[*]}"
     else
