@@ -955,7 +955,13 @@ collect_configurations() {
     print_header "⚙️ Configuration Collection"
     echo ""
     
-    # Initialize environment file
+    # Initialize environment file (preserve existing domain variables)
+    # Read existing domain variables if they exist
+    local existing_domain=$(grep "^DOMAIN=" "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "localhost")
+    local existing_domain_resolves=$(grep "^DOMAIN_RESOLVES=" "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "false")
+    local existing_public_ip=$(grep "^PUBLIC_IP=" "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "unknown")
+    local existing_proxy_config_method=$(grep "^PROXY_CONFIG_METHOD=" "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "direct")
+    
     cat > "$ENV_FILE" <<EOF
 # AI Platform Environment
 # Generated: $(date -Iseconds)
@@ -967,7 +973,10 @@ TIMEZONE=UTC
 LOG_LEVEL=info
 
 # Network Configuration
-DOMAIN=${DOMAIN:-localhost}
+DOMAIN=$existing_domain
+DOMAIN_RESOLVES=$existing_domain_resolves
+PUBLIC_IP=$existing_public_ip
+PROXY_CONFIG_METHOD=$existing_proxy_config_method
 PROXY_TYPE=${PROXY_TYPE:-none}
 SSL_TYPE=${SSL_TYPE:-none}
 SSL_EMAIL=${SSL_EMAIL:-}
