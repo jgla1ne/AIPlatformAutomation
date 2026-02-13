@@ -290,6 +290,18 @@ collect_domain_info() {
     print_header "🌐 Domain Configuration"
     echo ""
     
+    # Collect running user information for proper ownership
+    RUNNING_USER="${SUDO_USER:-$USER}"
+    RUNNING_UID=$(id -u "$RUNNING_USER")
+    RUNNING_GID=$(id -g "$RUNNING_USER")
+    
+    # Save user variables to environment file
+    echo "RUNNING_USER=$RUNNING_USER" >> "$ENV_FILE"
+    echo "RUNNING_UID=$RUNNING_UID" >> "$ENV_FILE"
+    echo "RUNNING_GID=$RUNNING_GID" >> "$ENV_FILE"
+    
+    print_success "User configuration: $RUNNING_USER (UID:$RUNNING_UID, GID:$RUNNING_GID)"
+    
     prompt_input "DOMAIN" "Enter your domain (e.g., example.com)" "" false "domain"
     echo "DOMAIN=$INPUT_RESULT" >> "$ENV_FILE"
     
@@ -1514,8 +1526,17 @@ create_directory_structure() {
     # Create config subdirectories
     mkdir -p "$DATA_ROOT/config"/{nginx,traefik,caddy,litellm,postgres,redis,qdrant,prometheus,grafana}
     
+    # Set proper ownership to running user (not root)
+    RUNNING_USER="${RUNNING_USER:-${SUDO_USER:-$USER}}"
+    RUNNING_UID="${RUNNING_UID:-$(id -u "$RUNNING_USER")}"
+    RUNNING_GID="${RUNNING_GID:-$(id -g "$RUNNING_USER")}"
+    
+    print_info "Setting directory ownership to $RUNNING_USER ($RUNNING_UID:$RUNNING_GID)"
+    chown -R "$RUNNING_UID:$RUNNING_GID" "$DATA_ROOT"
+    
     print_success "Directory structure created"
     print_info "Base: $DATA_ROOT"
+    print_info "Ownership: $RUNNING_USER ($RUNNING_UID:$RUNNING_GID)"
 }
 
 validate_system() {
