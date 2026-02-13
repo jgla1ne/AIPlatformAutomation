@@ -657,6 +657,242 @@ deploy_vector_db() {
     print_success "$db_type deployment stub completed"
 }
 
+deploy_qdrant() {
+    print_info "Generating Qdrant configuration..."
+    
+    mkdir -p "$COMPOSE_DIR/qdrant"
+    mkdir -p "${DATA_ROOT}/qdrant"
+    
+    cat > "$COMPOSE_DIR/qdrant/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - "6333:6333"
+    environment:
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    volumes:
+      - ${DATA_ROOT}/qdrant:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:6333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+    
+    print_success "Qdrant configuration generated"
+    
+    docker-compose -f "$COMPOSE_DIR/qdrant/docker-compose.yml" up -d
+    
+    wait_for_service "Qdrant" "http://localhost:6333" 60
+    
+    local qdrant_result=$?
+    if [[ $qdrant_result -eq 0 ]]; then
+        print_success "Qdrant deployed successfully"
+        return 0
+    else
+        print_error "Qdrant deployment failed"
+        return 1
+    fi
+}
+
+deploy_milvus() {
+    print_info "Generating Milvus configuration..."
+    
+    mkdir -p "$COMPOSE_DIR/milvus"
+    mkdir -p "${DATA_ROOT}/milvus"
+    
+    cat > "$COMPOSE_DIR/milvus/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    container_name: milvus-etcd
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - ${DATA_ROOT}/milvus/etcd:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+
+  minio:
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    container_name: milvus-minio
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    environment:
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+    volumes:
+      - ${DATA_ROOT}/milvus/minio:/minio_data
+    command: minio server /minio_data
+
+  standalone:
+    image: milvusdb/milvus:v2.3.3
+    container_name: milvus-standalone
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    environment:
+      - ETCD_ENDPOINTS=etcd:2379
+      - MINIO_ADDRESS=minio:9000
+    volumes:
+      - ${DATA_ROOT}/milvus/volumes:/var/lib/milvus
+    ports:
+      - "19530:19530"
+    depends_on:
+      - etcd
+      - minio
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:19530/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+    
+    print_success "Milvus configuration generated"
+    
+    docker-compose -f "$COMPOSE_DIR/milvus/docker-compose.yml" up -d
+    
+    wait_for_service "Milvus" "http://localhost:19530" 90
+    
+    local milvus_result=$?
+    if [[ $milvus_result -eq 0 ]]; then
+        print_success "Milvus deployed successfully"
+        return 0
+    else
+        print_error "Milvus deployment failed"
+        return 1
+    fi
+}
+
+deploy_chroma() {
+    print_info "Generating ChromaDB configuration..."
+    
+    mkdir -p "$COMPOSE_DIR/chroma"
+    mkdir -p "${DATA_ROOT}/chroma"
+    
+    cat > "$COMPOSE_DIR/chroma/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  chroma:
+    image: chromadb/chroma:latest
+    container_name: chroma
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - "8000:8000"
+    environment:
+      - CHROMA_SERVER_HOST=0.0.0.0
+      - CHROMA_SERVER_HTTP_PORT=8000
+    volumes:
+      - ${DATA_ROOT}/chroma:/chroma/chroma
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+    
+    print_success "ChromaDB configuration generated"
+    
+    docker-compose -f "$COMPOSE_DIR/chroma/docker-compose.yml" up -d
+    
+    wait_for_service "ChromaDB" "http://localhost:8000" 60
+    
+    local chroma_result=$?
+    if [[ $chroma_result -eq 0 ]]; then
+        print_success "ChromaDB deployed successfully"
+        return 0
+    else
+        print_error "ChromaDB deployment failed"
+        return 1
+    fi
+}
+
+deploy_weaviate() {
+    print_info "Generating Weaviate configuration..."
+    
+    mkdir -p "$COMPOSE_DIR/weaviate"
+    mkdir -p "${DATA_ROOT}/weaviate"
+    
+    cat > "$COMPOSE_DIR/weaviate/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  weaviate:
+    image: semitechnologies/weaviate:latest
+    container_name: weaviate
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - "8080:8080"
+    environment:
+      - QUERY_DEFAULTS_LIMIT=25
+      - AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true
+      - PERSISTENCE_DATA_PATH=/var/lib/weaviate
+      - DEFAULT_VECTORIZER_MODULE=none
+    volumes:
+      - ${DATA_ROOT}/weaviate:/var/lib/weaviate
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+    
+    print_success "Weaviate configuration generated"
+    
+    docker-compose -f "$COMPOSE_DIR/weaviate/docker-compose.yml" up -d
+    
+    wait_for_service "Weaviate" "http://localhost:8080" 60
+    
+    local weaviate_result=$?
+    if [[ $weaviate_result -eq 0 ]]; then
+        print_success "Weaviate deployed successfully"
+        return 0
+    else
+        print_error "Weaviate deployment failed"
+        return 1
+    fi
+}
+
 deploy_ollama() {
     print_info "Generating Ollama configuration..."
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Ollama deployment" >> "$LOG_FILE"
