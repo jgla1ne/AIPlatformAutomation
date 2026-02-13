@@ -974,6 +974,7 @@ LOG_LEVEL=info
 
 # Network Configuration
 DOMAIN=$existing_domain
+DOMAIN_NAME=$existing_domain
 DOMAIN_RESOLVES=$existing_domain_resolves
 PUBLIC_IP=$existing_public_ip
 PROXY_CONFIG_METHOD=$existing_proxy_config_method
@@ -1734,47 +1735,47 @@ EOF
         case "$service" in
             "ollama")
                 echo "- Ollama: http://localhost:11434" >> "$urls_file"
-                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Ollama (Public): https://$DOMAIN/ollama" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Ollama (Public): https://$DOMAIN_NAME/ollama" >> "$urls_file"
                 ;;
             "openwebui")
                 echo "- Open WebUI: http://localhost:3000" >> "$urls_file"
-                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Open WebUI (Public): https://$DOMAIN/openwebui" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Open WebUI (Public): https://$DOMAIN_NAME/openwebui" >> "$urls_file"
                 ;;
             "anythingllm")
                 echo "- AnythingLLM: http://localhost:3001" >> "$urls_file"
-                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- AnythingLLM (Public): https://$DOMAIN/anythingllm" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- AnythingLLM (Public): https://$DOMAIN_NAME/anythingllm" >> "$urls_file"
                 ;;
             "dify")
                 echo "- Dify: http://localhost:8080" >> "$urls_file"
-                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Dify (Public): https://$DOMAIN/dify" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Dify (Public): https://$DOMAIN_NAME/dify" >> "$urls_file"
                 ;;
             "n8n")
                 echo "- n8n: http://localhost:5678" >> "$urls_file"
-                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- n8n (Public): https://$DOMAIN/n8n" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- n8n (Public): https://$DOMAIN_NAME/n8n" >> "$urls_file"
                 ;;
             "flowise")
                 echo "- Flowise: http://localhost:3002" >> "$urls_file"
-                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Flowise (Public): https://$DOMAIN/flowise" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Flowise (Public): https://$DOMAIN_NAME/flowise" >> "$urls_file"
                 ;;
             "litellm")
                 echo "- LiteLLM: http://localhost:4000" >> "$urls_file"
-                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- LiteLLM (Public): https://$DOMAIN/litellm" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- LiteLLM (Public): https://$DOMAIN_NAME/litellm" >> "$urls_file"
                 ;;
             "signal-api")
                 echo "- Signal API: http://localhost:8090" >> "$urls_file"
                 echo "- Signal QR: http://localhost:8090/v1/qrcode" >> "$urls_file"
-                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Signal API (Public): https://$DOMAIN/signal-api" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Signal API (Public): https://$DOMAIN_NAME/signal-api" >> "$urls_file"
                 ;;
             "openclaw")
                 echo "- OpenClaw: http://localhost:18789" >> "$urls_file"
-                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- OpenClaw (Public): https://$DOMAIN/openclaw" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- OpenClaw (Public): https://$DOMAIN_NAME/openclaw" >> "$urls_file"
                 ;;
             "prometheus")
                 echo "- Prometheus: http://localhost:9090" >> "$urls_file"
                 ;;
             "grafana")
                 echo "- Grafana: http://localhost:3005" >> "$urls_file"
-                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Grafana (Public): https://$DOMAIN/grafana" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Grafana (Public): https://$DOMAIN_NAME/grafana" >> "$urls_file"
                 ;;
             "qdrant")
                 echo "- Qdrant: http://localhost:6333" >> "$urls_file"
@@ -1925,11 +1926,12 @@ EOF
     
     # Load environment variables for URL generation
     DOMAIN=$(grep "^DOMAIN=" "$ENV_FILE" | cut -d= -f2)
+    DOMAIN_NAME=$(grep "^DOMAIN_NAME=" "$ENV_FILE" | cut -d= -f2)
     DOMAIN_RESOLVES=$(grep "^DOMAIN_RESOLVES=" "$ENV_FILE" | cut -d= -f2 || echo "false")
     PROXY_CONFIG_METHOD=$(grep "^PROXY_CONFIG_METHOD=" "$ENV_FILE" | cut -d= -f2 || echo "direct")
     
     # Debug: Show loaded variables
-    print_info "Debug: DOMAIN=$DOMAIN, DOMAIN_RESOLVES=$DOMAIN_RESOLVES, PROXY_CONFIG_METHOD=$PROXY_CONFIG_METHOD"
+    print_info "Debug: DOMAIN=$DOMAIN, DOMAIN_NAME=$DOMAIN_NAME, DOMAIN_RESOLVES=$DOMAIN_RESOLVES, PROXY_CONFIG_METHOD=$PROXY_CONFIG_METHOD"
     
     [[ "$postgres_user" != "postgres" ]] && echo "  • PostgreSQL User: $postgres_user"
     [[ "$openclaw_user" != "admin" ]] && echo "  • OpenClaw User: $openclaw_user"
@@ -1948,96 +1950,96 @@ EOF
             case $service in
                 "openwebui")
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
-                        echo "  • Open WebUI: https://$DOMAIN/openwebui"
+                        echo "  • Open WebUI: https://$DOMAIN_NAME/openwebui"
                     elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • Open WebUI: https://$DOMAIN:3000"
+                        echo "  • Open WebUI: https://$DOMAIN_NAME:3000"
                     else
                         echo "  • Open WebUI: http://localhost:3000"
                     fi
                     ;;
                 "anythingllm")
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
-                        echo "  • AnythingLLM: https://$DOMAIN/anythingllm"
+                        echo "  • AnythingLLM: https://$DOMAIN_NAME/anythingllm"
                     elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • AnythingLLM: https://$DOMAIN:3001"
+                        echo "  • AnythingLLM: https://$DOMAIN_NAME:3001"
                     else
                         echo "  • AnythingLLM: http://localhost:3001"
                     fi
                     ;;
                 "dify")
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
-                        echo "  • Dify: https://$DOMAIN/dify"
+                        echo "  • Dify: https://$DOMAIN_NAME/dify"
                     elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • Dify: https://$DOMAIN:8080"
+                        echo "  • Dify: https://$DOMAIN_NAME:8080"
                     else
                         echo "  • Dify: http://localhost:8080"
                     fi
                     ;;
                 "n8n")
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
-                        echo "  • n8n: https://$DOMAIN/n8n"
+                        echo "  • n8n: https://$DOMAIN_NAME/n8n"
                     elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • n8n: https://$DOMAIN:5678"
+                        echo "  • n8n: https://$DOMAIN_NAME:5678"
                     else
                         echo "  • n8n: http://localhost:5678"
                     fi
                     ;;
                 "flowise")
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
-                        echo "  • Flowise: https://$DOMAIN/flowise"
+                        echo "  • Flowise: https://$DOMAIN_NAME/flowise"
                     else
                         echo "  • Flowise: http://localhost:3002"
                     fi
                     ;;
                 "ollama")
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
-                        echo "  • Ollama: https://$DOMAIN/ollama"
+                        echo "  • Ollama: https://$DOMAIN_NAME/ollama"
                     else
                         echo "  • Ollama: http://localhost:11434"
                     fi
                     ;;
                 "litellm")
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
-                        echo "  • LiteLLM: https://$DOMAIN/litellm"
+                        echo "  • LiteLLM: https://$DOMAIN_NAME/litellm"
                     elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • LiteLLM: https://$DOMAIN:4000"
+                        echo "  • LiteLLM: https://$DOMAIN_NAME:4000"
                     else
                         echo "  • LiteLLM: http://localhost:4000"
                     fi
                     ;;
                 "signal-api")
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
-                        echo "  • Signal API: https://$DOMAIN/signal"
+                        echo "  • Signal API: https://$DOMAIN_NAME/signal"
                     elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • Signal API: https://$DOMAIN:8090"
+                        echo "  • Signal API: https://$DOMAIN_NAME:8090"
                     else
                         echo "  • Signal API: http://localhost:8090"
                     fi
                     ;;
                 "openclaw")
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
-                        echo "  • OpenClaw: https://$DOMAIN/openclaw"
+                        echo "  • OpenClaw: https://$DOMAIN_NAME/openclaw"
                     else
                         echo "  • OpenClaw: http://localhost:18789"
                     fi
                     ;;
                 "prometheus")
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
-                        echo "  • Prometheus: https://$DOMAIN/prometheus"
+                        echo "  • Prometheus: https://$DOMAIN_NAME/prometheus"
                     else
                         echo "  • Prometheus: http://localhost:9090"
                     fi
                     ;;
                 "grafana")
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
-                        echo "  • Grafana: https://$DOMAIN/grafana"
+                        echo "  • Grafana: https://$DOMAIN_NAME/grafana"
                     else
                         echo "  • Grafana: http://localhost:3005"
                     fi
                     ;;
                 "minio")
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
-                        echo "  • MinIO: https://$DOMAIN/minio"
+                        echo "  • MinIO: https://$DOMAIN_NAME/minio"
                     else
                         echo "  • MinIO: http://localhost:9001"
                     fi
