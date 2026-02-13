@@ -189,7 +189,6 @@ deploy_service() {
 
 deploy_postgres() {
     print_info "Generating PostgreSQL configuration..."
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting PostgreSQL deployment" >> "$LOG_FILE"
     
     mkdir -p "$COMPOSE_DIR/postgres"
     
@@ -224,25 +223,20 @@ networks:
 EOF
     
     print_success "PostgreSQL configuration generated"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - PostgreSQL configuration generated" >> "$LOG_FILE"
     
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting PostgreSQL container" >> "$LOG_FILE"
-    docker-compose -f "$COMPOSE_DIR/postgres/docker-compose.yml" up -d 2>&1 | tee -a "$LOG_FILE"
+    docker-compose -f "$COMPOSE_DIR/postgres/docker-compose.yml" up -d
     
     wait_for_service "PostgreSQL" "http://localhost:5432" 30
     if [[ $? -eq 0 ]]; then
         print_success "PostgreSQL deployed successfully"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') - PostgreSQL deployed successfully" >> "$LOG_FILE"
     else
         print_error "PostgreSQL deployment failed"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') - PostgreSQL deployment failed" >> "$LOG_FILE"
         return 1
     fi
 }
 
 deploy_redis() {
     print_info "Generating Redis configuration..."
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Redis deployment" >> "$LOG_FILE"
     
     mkdir -p "$COMPOSE_DIR/redis"
     
@@ -273,18 +267,14 @@ networks:
 EOF
     
     print_success "Redis configuration generated"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Redis configuration generated" >> "$LOG_FILE"
     
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Redis container" >> "$LOG_FILE"
-    docker-compose -f "$COMPOSE_DIR/redis/docker-compose.yml" up -d 2>&1 | tee -a "$LOG_FILE"
+    docker-compose -f "$COMPOSE_DIR/redis/docker-compose.yml" up -d
     
     wait_for_service "Redis" "http://localhost:6379" 30
     if [[ $? -eq 0 ]]; then
         print_success "Redis deployed successfully"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') - Redis deployed successfully" >> "$LOG_FILE"
     else
         print_error "Redis deployment failed"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') - Redis deployment failed" >> "$LOG_FILE"
         return 1
     fi
 }
