@@ -788,15 +788,144 @@ deploy_dify() {
 }
 
 deploy_n8n() {
-    print_info "Deploying n8n..."
-    # TODO: Implement n8n deployment
-    print_success "n8n deployment stub completed"
+    print_info "Generating n8n configuration..."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting n8n deployment" >> "$LOG_FILE"
+    
+    mkdir -p "$COMPOSE_DIR/n8n"
+    mkdir -p "${DATA_ROOT}/n8n"
+    
+    cat > "$COMPOSE_DIR/n8n/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=${N8N_BASIC_AUTH_ACTIVE:-true}
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
+      - N8N_HOST=${N8N_HOST:-0.0.0.0}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://${DOMAIN_NAME:-localhost}:${N8N_PORT:-5678}/
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-aiplatform}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER:-postgres}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+      - NODE_ENV=production
+      - N8N_EMAIL=${N8N_EMAIL:-}
+      - N8N_SMTP_HOST=${N8N_SMTP_HOST:-}
+      - N8N_SMTP_PORT=${N8N_SMTP_PORT:-587}
+      - N8N_SMTP_USER=${N8N_SMTP_USER:-}
+      - N8N_SMTP_PASS=${N8N_SMTP_PASS:-}
+      - N8N_SMTP_SENDER=${N8N_SMTP_SENDER:-}
+    depends_on:
+      - postgres
+    volumes:
+      - ${DATA_ROOT}/n8n:/home/node/.n8n
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+    
+    print_success "n8n configuration generated"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - n8n configuration generated" >> "$LOG_FILE"
+    
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting n8n container" >> "$LOG_FILE"
+    docker-compose -f "$COMPOSE_DIR/n8n/docker-compose.yml" up -d 2>&1 | tee -a "$LOG_FILE"
+    
+    wait_for_service "n8n" "http://localhost:${N8N_PORT:-5678}" 60
+    if [[ $? -eq 0 ]]; then
+        print_success "n8n deployed successfully"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - n8n deployed successfully" >> "$LOG_FILE"
+    else
+        print_error "n8n deployment failed"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - n8n deployment failed" >> "$LOG_FILE"
+        return 1
+    fi
 }
 
 deploy_flowise() {
-    print_info "Deploying Flowise..."
-    # TODO: Implement Flowise deployment
-    print_success "Flowise deployment stub completed"
+    print_info "Generating Flowise configuration..."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Flowise deployment" >> "$LOG_FILE"
+    
+    mkdir -p "$COMPOSE_DIR/flowise"
+    mkdir -p "${DATA_ROOT}/flowise"
+    
+    cat > "$COMPOSE_DIR/flowise/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  flowise:
+    image: flowiseai/flowise:latest
+    container_name: flowise
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - "${FLOWISE_PORT:-3000}:3000"
+    environment:
+      - PORT=3000
+      - FLOWISE_SECRETKEY=${FLOWISE_SECRETKEY:-$(openssl rand -hex 32)}
+      - FLOWISE_USERNAME=${FLOWISE_USERNAME:-admin}
+      - FLOWISE_PASSWORD=${FLOWISE_PASSWORD:-}
+      - DATABASE_TYPE=postgres
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=${POSTGRES_DB:-aiplatform}
+      - DATABASE_USER=${POSTGRES_USER:-postgres}
+      - DATABASE_PASSWORD=${POSTGRES_PASSWORD}
+      - APIKEY_PATH=${DATA_ROOT}/flowise/apikeys
+      - FLOWISE_FILE_SIZE_LIMIT=${FLOWISE_FILE_SIZE_LIMIT:-50}
+      - FLOWISE_FILE_MANAGER_ENABLED=${FLOWISE_FILE_MANAGER_ENABLED:-true}
+      - FLOWISE_BLOB_STORAGE_PROVIDER=local
+      - FLOWISE_BLOB_STORAGE_LOCAL_PATH=${DATA_ROOT}/flowise/uploads
+    depends_on:
+      - postgres
+    volumes:
+      - ${DATA_ROOT}/flowise:/root/.flowise
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/v1/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+    
+    print_success "Flowise configuration generated"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Flowise configuration generated" >> "$LOG_FILE"
+    
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Flowise container" >> "$LOG_FILE"
+    docker-compose -f "$COMPOSE_DIR/flowise/docker-compose.yml" up -d 2>&1 | tee -a "$LOG_FILE"
+    
+    wait_for_service "Flowise" "http://localhost:${FLOWISE_PORT:-3000}" 60
+    if [[ $? -eq 0 ]]; then
+        print_success "Flowise deployed successfully"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Flowise deployed successfully" >> "$LOG_FILE"
+    else
+        print_error "Flowise deployment failed"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Flowise deployment failed" >> "$LOG_FILE"
+        return 1
+    fi
 }
 
 deploy_signal_api() {
@@ -1008,9 +1137,71 @@ EOF
 }
 
 deploy_minio() {
-    print_info "Deploying MinIO..."
-    # TODO: Implement MinIO deployment
-    print_success "MinIO deployment stub completed"
+    print_info "Generating MinIO configuration..."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting MinIO deployment" >> "$LOG_FILE"
+    
+    mkdir -p "$COMPOSE_DIR/minio"
+    mkdir -p "${DATA_ROOT}/minio"
+    mkdir -p "${DATA_ROOT}/minio/data"
+    
+    cat > "$COMPOSE_DIR/minio/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    ports:
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      - "${MINIO_API_PORT:-9000}:9000"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - MINIO_BROWSER_REDIRECT_URL=http://${DOMAIN_NAME:-localhost}:${MINIO_CONSOLE_PORT:-9001}
+      - MINIO_SERVER_URL=http://${DOMAIN_NAME:-localhost}:${MINIO_API_PORT:-9000}
+      - MINIO_DOMAIN=${DOMAIN_NAME:-localhost}
+    command: server /data --console-address ":9001"
+    volumes:
+      - ${DATA_ROOT}/minio/data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+    
+    print_success "MinIO configuration generated"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - MinIO configuration generated" >> "$LOG_FILE"
+    
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting MinIO container" >> "$LOG_FILE"
+    docker-compose -f "$COMPOSE_DIR/minio/docker-compose.yml" up -d 2>&1 | tee -a "$LOG_FILE"
+    
+    wait_for_service "MinIO" "http://localhost:${MINIO_API_PORT:-9000}" 45
+    if [[ $? -eq 0 ]]; then
+        print_success "MinIO deployed successfully"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - MinIO deployed successfully" >> "$LOG_FILE"
+        
+        # Create default buckets if specified
+        if [[ -n "${MINIO_DEFAULT_BUCKETS:-}" ]]; then
+            print_info "Creating default buckets: $MINIO_DEFAULT_BUCKETS"
+            IFS=',' read -ra BUCKETS <<< "$MINIO_DEFAULT_BUCKETS"
+            for bucket in "${BUCKETS[@]}"; do
+                docker exec minio mc mb "minio/$bucket" 2>&1 | tee -a "$LOG_FILE"
+            done
+        fi
+    else
+        print_error "MinIO deployment failed"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - MinIO deployment failed" >> "$LOG_FILE"
+        return 1
+    fi
 }
 
 deploy_proxy() {
@@ -1021,9 +1212,68 @@ deploy_proxy() {
 }
 
 deploy_tailscale() {
-    print_info "Deploying Tailscale..."
-    # TODO: Implement Tailscale deployment
-    print_success "Tailscale deployment stub completed"
+    print_info "Generating Tailscale configuration..."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Tailscale deployment" >> "$LOG_FILE"
+    
+    mkdir -p "$COMPOSE_DIR/tailscale"
+    mkdir -p "${DATA_ROOT}/tailscale"
+    
+    cat > "$COMPOSE_DIR/tailscale/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tailscale
+    restart: unless-stopped
+    networks:
+      - ai_platform
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun
+    environment:
+      - TS_AUTHKEY=${TAILSCALE_AUTH_KEY}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=${TAILSCALE_USERSPACE:-default}
+      - TS_ACCEPT_DNS=${TAILSCALE_ACCEPT_DNS:-false}
+      - TS_EXTRA_ARGS=${TAILSCALE_EXTRA_ARGS:-}
+    volumes:
+      - ${DATA_ROOT}/tailscale:/var/lib/tailscale
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:41641"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+    
+    print_success "Tailscale configuration generated"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Tailscale configuration generated" >> "$LOG_FILE"
+    
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Tailscale container" >> "$LOG_FILE"
+    docker-compose -f "$COMPOSE_DIR/tailscale/docker-compose.yml" up -d 2>&1 | tee -a "$LOG_FILE"
+    
+    wait_for_service "Tailscale" "http://localhost:41641" 60
+    if [[ $? -eq 0 ]]; then
+        print_success "Tailscale deployed successfully"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Tailscale deployed successfully" >> "$LOG_FILE"
+        
+        # Show status
+        if [[ -n "${TAILSCALE_AUTH_KEY:-}" ]]; then
+            print_info "Tailscale status:"
+            docker exec tailscale tailscale status 2>&1 | tee -a "$LOG_FILE"
+        fi
+    else
+        print_error "Tailscale deployment failed"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Tailscale deployment failed" >> "$LOG_FILE"
+        return 1
+    fi
 }
 
 wait_for_service() {
