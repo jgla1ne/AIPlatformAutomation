@@ -2327,6 +2327,20 @@ main() {
         set -x  # Enable command tracing
     fi
     
+    # SSL Configuration (only if proxy was selected)
+    if [[ "${PROXY_TYPE:-none}" != "none" ]]; then
+        local ssl_type="${SSL_TYPE:-none}"
+        local ssl_email="${SSL_EMAIL:-}"
+        
+        if [[ "$ssl_type" == "letsencrypt" ]]; then
+            print_info "SSL: Let's Encrypt configured with email: $ssl_email"
+        elif [[ "$ssl_type" == "selfsigned" ]]; then
+            print_info "SSL: Self-signed certificates configured"
+        else
+            print_info "SSL: HTTP only (not recommended for production)"
+        fi
+    fi
+    
     # Check if running as root
     if [[ $EUID -ne 0 ]]; then
         print_error "This script must be run as root (use sudo)"
