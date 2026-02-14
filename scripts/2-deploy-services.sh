@@ -1131,6 +1131,7 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD}
     volumes:
       - ${DATA_ROOT}/litellm:/app/data
+      - ${DATA_ROOT}/litellm/config.yaml:/app/config.yaml
     ports:
       - "4000:4000"
     healthcheck:
@@ -1147,6 +1148,130 @@ EOF
     
     print_success "LiteLLM configuration generated"
     echo "$(date '+%Y-%m-%d %H:%M:%S') - LiteLLM configuration generated" >> "$LOG_FILE"
+    
+    # Generate LiteLLM config.yaml with external providers
+    mkdir -p "${DATA_ROOT}/litellm"
+    cat > "${DATA_ROOT}/litellm/config.yaml" <<EOF
+model_list:
+  # Local provider (Ollama)
+  - model_name: ollama/llama3.2:8b
+    litellm_params:
+      model: ollama/llama3.2:8b
+      api_base: http://ollama:11434
+  
+  - model_name: ollama/mistral:7b
+    litellm_params:
+      model: ollama/mistral:7b
+      api_base: http://ollama:11434
+  
+  - model_name: ollama/codellama:13b
+    litellm_params:
+      model: ollama/codellama:13b
+      api_base: http://ollama:11434
+
+EOF
+
+    # Add external providers if enabled
+    if [[ "${LITELLM_OPENAI_ENABLED:-false}" == "true" ]]; then
+        cat >> "${DATA_ROOT}/litellm/config.yaml" <<EOF
+  # OpenAI provider
+  - model_name: gpt-4o
+    litellm_params:
+      model: gpt-4o
+      api_key: \${OPENAI_API_KEY}
+  
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: gpt-4o-mini
+      api_key: \${OPENAI_API_KEY}
+
+EOF
+    fi
+    
+    if [[ "${LITELLM_ANTHROPIC_ENABLED:-false}" == "true" ]]; then
+        cat >> "${DATA_ROOT}/litellm/config.yaml" <<EOF
+  # Anthropic provider
+  - model_name: claude-3-5-sonnet-20241022
+    litellm_params:
+      model: claude-3-5-sonnet-20241022
+      api_key: \${ANTHROPIC_API_KEY}
+
+EOF
+    fi
+    
+    if [[ "${LITELLM_GOOGLE_ENABLED:-false}" == "true" ]]; then
+        cat >> "${DATA_ROOT}/litellm/config.yaml" <<EOF
+  # Google provider
+  - model_name: gemini-1.5-pro
+    litellm_params:
+      model: gemini-1.5-pro
+      api_key: \${GOOGLE_API_KEY}
+
+EOF
+    fi
+    
+    if [[ "${LITELLM_GROQ_ENABLED:-false}" == "true" ]]; then
+        cat >> "${DATA_ROOT}/litellm/config.yaml" <<EOF
+  # Groq provider
+  - model_name: llama-3.1-70b-versatile
+    litellm_params:
+      model: llama-3.1-70b-versatile
+      api_key: \${GROQ_API_KEY}
+
+EOF
+    fi
+    
+    if [[ "${LITELLM_MISTRAL_ENABLED:-false}" == "true" ]]; then
+        cat >> "${DATA_ROOT}/litellm/config.yaml" <<EOF
+  # Mistral provider
+  - model_name: mistral-large-2407
+    litellm_params:
+      model: mistral-large-2407
+      api_key: \${MISTRAL_API_KEY}
+
+EOF
+    fi
+    
+    if [[ "${LITELLM_OPENROUTER_ENABLED:-false}" == "true" ]]; then
+        cat >> "${DATA_ROOT}/litellm/config.yaml" <<EOF
+  # OpenRouter provider
+  - model_name: openrouter/meta-llama/llama-3.1-70b-instruct
+    litellm_params:
+      model: openrouter/meta-llama/llama-3.1-70b-instruct
+      api_key: \${OPENROUTER_API_KEY}
+
+EOF
+    fi
+    
+    # Add routing settings
+    cat >> "${DATA_ROOT}/litellm/config.yaml" <<EOF
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  success_callback: ["langfuse_callback"]
+
+general_settings:
+  master_key: \${LITELLM_MASTER_KEY}
+  database_url: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aiplatform}
+  cache:
+    type: redis
+    redis:
+      host: redis
+      port: 6379
+      password: \${REDIS_PASSWORD}
+  rate_limit:
+    strategy: \${LITELLM_RATE_LIMIT_ENABLED:-true}
+    redis_cache:
+      redis_url: redis://redis:6379
+      password: \${REDIS_PASSWORD}
+      host: redis
+      port: 6379
+      default_ttl: \${LITELLM_CACHE_TTL:-3600}
+EOF
+    
+    print_success "LiteLLM config.yaml generated with external providers"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - LiteLLM config.yaml generated" >> "$LOG_FILE"
     
     docker-compose -f "$COMPOSE_DIR/litellm/docker-compose.yml" up -d 2>&1 | tee -a "$LOG_FILE"
     
