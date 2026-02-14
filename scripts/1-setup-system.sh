@@ -507,12 +507,12 @@ collect_configurations() {
         print_info "Redis Configuration"
         echo ""
         
-        local redis_password=$(generate_random_password 24)
-        echo "REDIS_PASSWORD=$redis_password" >> "$ENV_FILE"
+        prompt_input "REDIS_PASSWORD" "Redis password" "$(generate_random_password 24)" true
+        echo "REDIS_PASSWORD=$INPUT_RESULT" >> "$ENV_FILE"
         
         echo "REDIS_PORT=6379" >> "$ENV_FILE"
         
-        print_success "Redis configuration generated"
+        print_success "Redis configuration completed"
     fi
     
     # Ollama model selection
@@ -582,70 +582,12 @@ collect_configurations() {
         print_success "Ollama configuration completed"
     fi
     
-    # LLM Provider Configuration
+    # External LLM Provider Configuration
     if [[ " ${final_services[*]} " =~ " litellm " ]]; then
         echo ""
         print_header "🤖 LLM Provider Configuration"
         echo ""
         
-        print_info "Configure LLM providers for LiteLLM routing:"
-        echo ""
-        echo "✅ Local Provider:"
-        echo "  • Ollama: http://localhost:11434"
-        echo ""
-        
-        print_info "External providers (configure API keys as needed):"
-        echo "  • OpenAI: https://api.openai.com/v1"
-        echo "  • Anthropic: https://api.anthropic.com"
-        echo "  • Google: https://generativelanguage.googleapis.com"
-        echo ""
-        
-        echo "Select routing strategy:"
-        echo "  1) Simple Shuffle (round-robin)"
-        echo "  2) Cost-based (cheapest first)"
-        echo "  3) Latency-based (fastest first)"
-        echo "  4) Usage-based (load balanced)"
-        echo "  5) Local-first (prefer local models)"
-        echo ""
-        
-        while true; do
-            echo -n -e "${YELLOW}Select routing strategy [1-5]:${NC} "
-            read -r routing_choice
-            
-            case "$routing_choice" in
-                1)
-                    echo "LITELLM_ROUTING_STRATEGY=simple-shuffle" >> "$ENV_FILE"
-                    print_success "Simple Shuffle routing selected"
-                    break
-                    ;;
-                2)
-                    echo "LITELLM_ROUTING_STRATEGY=cost-based" >> "$ENV_FILE"
-                    print_success "Cost-based routing selected"
-                    break
-                    ;;
-                3)
-                    echo "LITELLM_ROUTING_STRATEGY=latency-based" >> "$ENV_FILE"
-                    print_success "Latency-based routing selected"
-                    break
-                    ;;
-                4)
-                    echo "LITELLM_ROUTING_STRATEGY=usage-based" >> "$ENV_FILE"
-                    print_success "Usage-based routing selected"
-                    break
-                    ;;
-                5)
-                    echo "LITELLM_ROUTING_STRATEGY=local-first" >> "$ENV_FILE"
-                    print_success "Local-first routing selected (simple → local, complex → external)"
-                    break
-                    ;;
-                *)
-                    print_error "Invalid selection"
-                    ;;
-            esac
-        done
-        
-        # External LLM Provider Configuration
-        echo ""
         print_info "Configure LLM providers for LiteLLM routing:"
         echo ""
         echo "✅ Local Provider:"
