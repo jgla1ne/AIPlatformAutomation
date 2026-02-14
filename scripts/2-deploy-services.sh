@@ -612,6 +612,7 @@ deploy_llm_layer() {
             ((deployed++))
             echo "DEBUG: LLM service $service deployed successfully (deployed: $deployed)" >> "$LOG_FILE"
             print_success "$service deployed successfully"
+            echo "DEBUG: About to continue to next iteration in LLM loop..." >> "$LOG_FILE"
         else
             echo "DEBUG: LLM service $service deployment failed with exit code $?" >> "$LOG_FILE"
             print_error "Failed to deploy $service"
@@ -619,6 +620,7 @@ deploy_llm_layer() {
         
         echo "DEBUG: Finished LLM iteration for $service, deployed count: $deployed" >> "$LOG_FILE"
         echo "DEBUG: LLM loop iteration complete, checking if should continue..." >> "$LOG_FILE"
+        echo "DEBUG: About to continue to next service in LLM loop..." >> "$LOG_FILE"
     done
     
     echo "DEBUG: LLM layer deployment completed (deployed: $deployed/${#llm_services[@]})" >> "$LOG_FILE"
@@ -1129,10 +1131,17 @@ EOF
             # Fix model name format - remove version suffix if causing issues
             local model_name="${OLLAMA_DEFAULT_MODEL%%:*}"
             print_info "Pulling default model: $model_name"
-            docker exec ollama ollama pull "$model_name" || {
+            set +e  # Temporarily disable strict error handling
+            if docker exec ollama ollama pull "$model_name"; then
+                print_success "Model $model_name pulled successfully"
+            else
                 print_warn "Failed to pull model $model_name, continuing..."
-            }
+            fi
+            set -e  # Re-enable strict error handling
         fi
+        
+        echo "DEBUG: deploy_ollama function completed successfully, returning 0" >> "$LOG_FILE"
+        return 0
     else
         print_error "Ollama deployment failed"
         echo "$(date '+%Y-%m-%d %H:%M:%S') - Ollama deployment failed" >> "$LOG_FILE"
