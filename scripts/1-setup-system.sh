@@ -276,6 +276,183 @@ get_service_category() {
     esac
 }
 
+# Domain Configuration
+configure_domain() {
+    log_phase "3" "🌍" "Domain Configuration"
+    
+    echo ""
+    print_header "🌐 Domain Configuration"
+    echo ""
+    
+    prompt_input "DOMAIN" "Primary domain for services" "localhost" false
+    echo "DOMAIN=$INPUT_RESULT" >> "$ENV_FILE"
+    echo "DOMAIN_NAME=$INPUT_RESULT" >> "$ENV_FILE"
+    
+    # Validate domain resolution
+    if [[ "$INPUT_RESULT" != "localhost" ]]; then
+        print_info "Validating domain resolution..."
+        
+        if dig +short "$INPUT_RESULT" >/dev/null 2>&1; then
+            echo "DOMAIN_RESOLVES=true" >> "$ENV_FILE"
+            print_success "Domain $INPUT_RESULT resolves successfully"
+        else
+            echo "DOMAIN_RESOLVES=false" >> "$ENV_FILE"
+            print_warn "Domain $INPUT_RESULT does not resolve - using localhost"
+        fi
+    else
+        echo "DOMAIN_RESOLVES=false" >> "$ENV_FILE"
+    fi
+    
+    echo "PUBLIC_IP=" >> "$ENV_FILE"
+}
+
+# Proxy Selection
+configure_proxy() {
+    log_phase "4" "🌐" "Proxy Selection"
+    
+    echo ""
+    print_header "🌐 Proxy Selection"
+    echo ""
+    
+    print_info "Select reverse proxy for external access:"
+    echo ""
+    echo "  1) None - Direct access only"
+    echo "  2) Nginx Proxy Manager - Web UI management"
+    echo "  3) Traefik - Automatic HTTPS and routing"
+    echo "  4) Caddy - Automatic HTTPS with simple config"
+    echo ""
+    
+    while true; do
+        echo -n -e "${YELLOW}Select proxy type [1-4]:${NC} "
+        read -r proxy_choice
+        
+        case "$proxy_choice" in
+            1)
+                echo "PROXY_TYPE=none" >> "$ENV_FILE"
+                echo "PROXY_CONFIG_METHOD=direct" >> "$ENV_FILE"
+                print_success "No proxy selected - direct access only"
+                break
+                ;;
+            2)
+                echo "PROXY_TYPE=nginx-proxy-manager" >> "$ENV_FILE"
+                echo "PROXY_CONFIG_METHOD=alias" >> "$ENV_FILE"
+                print_success "Nginx Proxy Manager selected"
+                ;;
+            3)
+                echo "PROXY_TYPE=traefik" >> "$ENV_FILE"
+                echo "PROXY_CONFIG_METHOD=alias" >> "$ENV_FILE"
+                print_success "Traefik selected"
+                ;;
+            4)
+                echo "PROXY_TYPE=caddy" >> "$ENV_FILE"
+                echo "PROXY_CONFIG_METHOD=alias" >> "$ENV_FILE"
+                print_success "Caddy selected"
+                ;;
+            *)
+                print_error "Invalid selection"
+                ;;
+        esac
+    done
+}
+
+# SSL Configuration
+configure_ssl() {
+    local proxy_type=$(grep "^PROXY_TYPE=" "$ENV_FILE" | cut -d'=' -f2)
+    
+    if [[ "$proxy_type" != "none" ]]; then
+        echo ""
+        print_header "🔒 SSL Configuration"
+        echo ""
+        
+        print_info "Configure SSL/TLS certificates:"
+        echo ""
+        echo "  1) None - HTTP only"
+        echo "  2) Self-signed - For testing"
+        echo "  3) Let's Encrypt - Automatic SSL (requires domain)"
+        echo ""
+        
+        while true; do
+            echo -n -e "${YELLOW}Select SSL type [1-3]:${NC} "
+            read -r ssl_choice
+            
+            case "$ssl_choice" in
+                1)
+                    echo "SSL_TYPE=none" >> "$ENV_FILE"
+                    print_success "SSL disabled - HTTP only"
+                    break
+                    ;;
+                2)
+                    echo "SSL_TYPE=self-signed" >> "$ENV_FILE"
+                    print_success "Self-signed SSL selected"
+                    break
+                    ;;
+                3)
+                    echo "SSL_TYPE=letsencrypt" >> "$ENV_FILE"
+                    prompt_input "SSL_EMAIL" "Email for Let's Encrypt certificates" "" false
+                    echo "SSL_EMAIL=$INPUT_RESULT" >> "$ENV_FILE"
+                    print_success "Let's Encrypt SSL selected"
+                    break
+                    ;;
+                *)
+                    print_error "Invalid selection"
+                    ;;
+            esac
+        done
+    else
+        echo "SSL_TYPE=none" >> "$ENV_FILE"
+    fi
+}
+
+# Vector Database Selection
+select_vector_database() {
+    log_phase "5" "🧠" "Vector Database Selection"
+    
+    echo ""
+    print_header "🧠 Vector Database Selection"
+    echo ""
+    
+    print_info "Select vector database for AI applications:"
+    echo ""
+    echo "  1) None - Use built-in storage"
+    echo "  2) Qdrant - High-performance vector database"
+    echo "  3) Weaviate - Knowledge graph enabled"
+    echo "  4) Milvus - Scalable vector search"
+    echo "  5) ChromaDB - Simple and lightweight"
+    echo ""
+    
+    while true; do
+        echo -n -e "${YELLOW}Select vector database [1-5]:${NC} "
+        read -r vector_choice
+        
+        case "$vector_choice" in
+            1)
+                echo "VECTOR_DB_TYPE=none" >> "$ENV_FILE"
+                print_success "No vector database selected"
+                break
+                ;;
+            2)
+                echo "VECTOR_DB_TYPE=qdrant" >> "$ENV_FILE"
+                print_success "Qdrant selected"
+                ;;
+            3)
+                echo "VECTOR_DB_TYPE=weaviate" >> "$ENV_FILE"
+                print_success "Weaviate selected"
+                ;;
+            4)
+                echo "VECTOR_DB_TYPE=milvus" >> "$ENV_FILE"
+                print_success "Milvus selected"
+                ;;
+            5)
+                echo "VECTOR_DB_TYPE=chromadb" >> "$ENV_FILE"
+                print_success "ChromaDB selected"
+                ;;
+            *)
+                print_error "Invalid selection"
+                ;;
+        esac
+    done
+}
+
 # Configuration Collection
 collect_configurations() {
     log_phase "5" "⚙️" "Configuration Collection"
@@ -843,16 +1020,28 @@ main() {
     # Phase 2: Docker Configuration
     configure_docker
     
-    # Phase 3: Environment Setup
+    # Phase 3: Environment Configuration
     setup_environment
     
-    # Phase 4: Service Selection
+    # Phase 4: Domain Configuration
+    configure_domain
+    
+    # Phase 5: Proxy Selection
+    configure_proxy
+    
+    # Phase 6: SSL Configuration
+    configure_ssl
+    
+    # Phase 7: Vector Database Selection
+    select_vector_database
+    
+    # Phase 8: Service Selection
     select_services
     
-    # Phase 5: Configuration Collection
+    # Phase 9: Configuration Collection
     collect_configurations
     
-    # Phase 6: Generate Base Compose Files
+    # Phase 10: Generate Base Compose Files
     generate_base_compose_files
     
     # Save state
