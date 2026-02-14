@@ -280,6 +280,12 @@ get_service_category() {
 collect_configurations() {
     log_phase "5" "⚙️" "Configuration Collection"
     
+    # Read selected services from JSON file
+    local final_services=()
+    while IFS= read -r service; do
+        final_services+=("$service")
+    done < <(jq -r '.services[].key' "$SERVICES_FILE" 2>/dev/null)
+    
     # Database Configuration
     echo ""
     print_info "Database Configuration"
