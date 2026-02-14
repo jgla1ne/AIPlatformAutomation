@@ -1015,7 +1015,7 @@ select_services() {
     
     if [[ "$service_selection" == "all" ]]; then
         # Select all recommended services
-        selected_services=("postgres" "redis" "ollama" "openwebui" "n8n" "prometheus")
+        selected_services=("postgres" "redis" "ollama" "litellm" "openwebui" "n8n" "prometheus")
         print_info "Selected all recommended services"
     else
         # Parse individual selections
