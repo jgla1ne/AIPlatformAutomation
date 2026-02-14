@@ -187,7 +187,7 @@ cleanup_compose_files() {
     
     if [[ -d "$COMPOSE_DIR" ]]; then
         # Count and remove compose files
-        compose_count=$(find "$COMPOSE_DIR" -name "*.yml" -o -name "*.yaml" | wc -l)
+        compose_count=$(find "$COMPOSE_DIR" -name "*.yml" -o -name "*.yaml" 2>/dev/null | wc -l || echo "0")
         if [[ $compose_count -gt 0 ]]; then
             print_info "Found $compose_count compose files to remove"
             rm -rf "$COMPOSE_DIR"/* 2>/dev/null || true
@@ -219,13 +219,13 @@ cleanup_data_directory() {
         fi
         
         # Remove contents carefully
-        cd "$DATA_ROOT"
+        cd "$DATA_ROOT" || exit 1
         # Remove regular files and directories
         find . -maxdepth 1 -type f -delete 2>/dev/null || true
         find . -maxdepth 1 -type d ! -name "." -exec rm -rf {} + 2>/dev/null || true
         # Remove hidden files and directories except . and ..
         find . -maxdepth 1 -name ".*" ! -name "." ! -name ".." -exec rm -rf {} + 2>/dev/null || true
-        cd - > /dev/null
+        cd - > /dev/null || true
     else
         print_info "Data directory is not a mount point - removing completely"
         rm -rf "$DATA_ROOT" 2>/dev/null || true
