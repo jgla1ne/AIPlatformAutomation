@@ -478,51 +478,10 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
-    networks:
-      - ai_platform
-    ports:
-      - "6333:6333"
-    volumes:
-      - \${DATA_ROOT}/qdrant:/qdrant/storage
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
       interval: 30s
       timeout: 10s
       retries: 3
 EOF
-            ;;
-        weaviate)
-            cat > "$COMPOSE_DIR/weaviate.yml" <<EOF
-version: '3.8'
-
-networks:
-  ai_platform:
-    external: true
-
-services:
-  weaviate:
-    image: semitechnologies/weaviate:latest
-    container_name: weaviate
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    networks:
-      - ai_platform
-    ports:
-      - "8080:8080"
-    environment:
-      - AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
-      - PERSISTENCE_DATA_PATH: /var/lib/weaviate
-    volumes:
-      - \${DATA_ROOT}/weaviate:/var/lib/weaviate
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/.well-known/ready"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-EOF
-            ;;
-    esac
     
     print_success "Base Docker Compose files generated"
 }
