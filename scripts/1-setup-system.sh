@@ -259,6 +259,12 @@ EOF
 select_services() {
     log_phase "4" "🎯" "Service Selection"
     
+    echo ""
+    print_header "📋 Available Services"
+    echo ""
+    print_info "Select services to deploy. Dependencies will be auto-selected."
+    echo ""
+    
     # Infrastructure Services
     echo "🏗️  Infrastructure:"
     echo "  [1] PostgreSQL - Relational database"
@@ -274,157 +280,122 @@ select_services() {
     echo "  [7] n8n - Workflow automation platform"
     echo "  [8] Flowise - Visual LangChain builder"
     echo "  [9] Ollama - Local LLM runtime"
+    echo "  [10] LiteLLM - Multi-provider proxy + routing"
+    echo ""
+    
+    # Communication & Integration
+    echo "� Communication & Integration:"
+    echo "  [11] Signal API - Private messaging"
+    echo "  [12] OpenClaw UI - Multi-channel orchestration"
     echo ""
     
     # Monitoring
-    echo "📊 Monitoring:"
-    echo "  [10] Grafana - Metrics visualization"
-    echo "  [11] Prometheus - Metrics collection"
-    echo ""
-    
-    # Communication
-    echo "📡 Communication:"
-    echo "  [12] Signal-API - SMS/Messaging gateway"
+    echo "� Monitoring:"
+    echo "  [13] Prometheus + Grafana - Metrics and visualization"
     echo ""
     
     # Storage
-    echo "💾 Storage:"
-    echo "  [13] MinIO - Object storage"
+    echo "� Storage:"
+    echo "  [14] MinIO - S3-compatible storage"
     echo ""
     
-    # Vector Databases
-    echo "🔍 Vector Databases:"
-    echo "  [14] Qdrant - Vector similarity search"
-    echo "  [15] Weaviate - Vector database"
-    echo "  [16] Milvus - Vector database"
-    echo "  [17] Chroma - In-memory vector database"
+    echo "Select services (space-separated, e.g., '1 3 6'):"
+    echo "Or enter 'all' to select all recommended services"
     echo ""
     
-    # Proxy Layer
-    echo "🌐 Proxy Layer:"
-    echo "  [18] Caddy - Modern reverse proxy"
-    echo "  [19] Traefik - Cloud-native edge router"
-    echo "  [20] Nginx Proxy Manager - Web UI proxy management"
-    echo "  [21] SWAG - Secure Web Application Gateway"
-    echo ""
+    local -A selected_map=(
+        ["postgres"]=1
+        ["redis"]=1
+        ["tailscale"]=1
+        ["openwebui"]=1
+        ["anythingllm"]=1
+        ["dify"]=1
+        ["n8n"]=1
+        ["flowise"]=1
+        ["ollama"]=1
+        ["litellm"]=1
+        ["signal-api"]=1
+        ["openclaw"]=1
+        ["prometheus"]=1
+        ["grafana"]=1
+        ["minio"]=1
+    )
+    
+    local -A service_descriptions=(
+        ["postgres"]="PostgreSQL - Relational database"
+        ["redis"]="Redis - Cache and message queue"
+        ["tailscale"]="Tailscale - VPN mesh network"
+        ["openwebui"]="Open WebUI - Modern ChatGPT-like interface"
+        ["anythingllm"]="AnythingLLM - Document-based AI chat"
+        ["dify"]="Dify - LLM application development platform"
+        ["n8n"]="n8n - Workflow automation platform"
+        ["flowise"]="Flowise - Visual LangChain builder"
+        ["ollama"]="Ollama - Local LLM runtime"
+        ["litellm"]="LiteLLM - Multi-provider proxy + routing"
+        ["signal-api"]="Signal API - Private messaging"
+        ["openclaw"]="OpenClaw UI - Multi-channel orchestration"
+        ["prometheus"]="Prometheus + Grafana - Metrics and visualization"
+        ["minio"]="MinIO - S3-compatible storage"
+    )
     
     local selected_services=()
     
-    # Infrastructure selection
-    echo "Select infrastructure services (space-separated, e.g., '1 2 3'):"
-    read -p "Infrastructure: " infra_selection
+    # Get user selection
+    read -p "Services: " service_selection
     
-    for num in $infra_selection; do
-        case "$num" in
-            1) selected_services+=("postgres") ;;
-            2) selected_services+=("redis") ;;
-            3) selected_services+=("tailscale") ;;
+    if [[ "$service_selection" == "all" ]]; then
+        # Select all recommended services
+        selected_services=("postgres" "redis" "ollama" "openwebui" "n8n" "prometheus")
+        print_info "Selected all recommended services"
+    else
+        # Parse individual selections
+        for num in $service_selection; do
+            case "$num" in
+                1) selected_services+=("postgres") ;;
+                2) selected_services+=("redis") ;;
+                3) selected_services+=("tailscale") ;;
+                4) selected_services+=("openwebui") ;;
+                5) selected_services+=("anythingllm") ;;
+                6) selected_services+=("dify") ;;
+                7) selected_services+=("n8n") ;;
+                8) selected_services+=("flowise") ;;
+                9) selected_services+=("ollama") ;;
+                10) selected_services+=("litellm") ;;
+                11) selected_services+=("signal-api") ;;
+                12) selected_services+=("openclaw") ;;
+                13) selected_services+=("prometheus") ;;
+                14) selected_services+=("minio") ;;
+                *) 
+                    if [[ -n "${selected_map[$num]:-}" ]]; then
+                        selected_services+=("${!selected_map[$num]}")
+                    else
+                        print_error "Invalid selection: $num"
+                    fi
+                    ;;
+            esac
+        done
+    fi
+    
+    # Add dependencies automatically
+    local final_services=("${selected_services[@]}")
+    
+    # Always include postgres and redis if any AI app is selected
+    for service in "${selected_services[@]}"; do
+        case "$service" in
+            openwebui|anythingllm|dify|n8n|flowise|ollama|litellm|openclaw)
+                if [[ ! " ${final_services[*]} " =~ " postgres " ]]; then
+                    final_services+=("postgres")
+                    print_info "Auto-selected PostgreSQL (dependency)"
+                fi
+                if [[ ! " ${final_services[*]} " =~ " redis " ]]; then
+                    final_services+=("redis")
+                    print_info "Auto-selected Redis (dependency)"
+                fi
+                ;;
         esac
     done
     
-    # AI Applications selection
-    echo "Select AI applications (space-separated):"
-    read -p "AI Applications: " apps_selection
-    
-    for num in $apps_selection; do
-        case "$num" in
-            4) selected_services+=("openwebui") ;;
-            5) selected_services+=("anythingllm") ;;
-            6) selected_services+=("dify") ;;
-            7) selected_services+=("n8n") ;;
-            8) selected_services+=("flowise") ;;
-            9) selected_services+=("ollama") ;;
-        esac
-    done
-    
-    # Monitoring selection
-    echo "Select monitoring services (space-separated):"
-    read -p "Monitoring: " monitoring_selection
-    
-    for num in $monitoring_selection; do
-        case "$num" in
-            10) selected_services+=("grafana") ;;
-            11) selected_services+=("prometheus") ;;
-        esac
-    done
-    
-    # Communication selection
-    echo "Select communication services (space-separated):"
-    read -p "Communication: " comm_selection
-    
-    for num in $comm_selection; do
-        case "$num" in
-            12) selected_services+=("signal-api") ;;
-        esac
-    done
-    
-    # Storage selection
-    echo "Select storage services (space-separated):"
-    read -p "Storage: " storage_selection
-    
-    for num in $storage_selection; do
-        case "$num" in
-            13) selected_services+=("minio") ;;
-        esac
-    done
-    
-    # Vector Database selection
-    echo "Select vector database (enter number or 'none'):"
-    read -p "Vector DB: " vector_selection
-    
-    case "$vector_selection" in
-        14) 
-            selected_services+=("qdrant")
-            echo "VECTOR_DB_TYPE=qdrant" >> "$ENV_FILE"
-            ;;
-        15) 
-            selected_services+=("weaviate")
-            echo "VECTOR_DB_TYPE=weaviate" >> "$ENV_FILE"
-            ;;
-        16) 
-            selected_services+=("milvus")
-            echo "VECTOR_DB_TYPE=milvus" >> "$ENV_FILE"
-            ;;
-        17) 
-            selected_services+=("chroma")
-            echo "VECTOR_DB_TYPE=chroma" >> "$ENV_FILE"
-            ;;
-        *) 
-            echo "VECTOR_DB_TYPE=none" >> "$ENV_FILE"
-            ;;
-    esac
-    
-    # Proxy selection
-    echo "Select proxy type (enter number or 'none'):"
-    echo "  [18] Caddy"
-    echo "  [19] Traefik"
-    echo "  [20] Nginx Proxy Manager"
-    echo "  [21] SWAG"
-    read -p "Proxy: " proxy_selection
-    
-    case "$proxy_selection" in
-        18) 
-            selected_services+=("caddy")
-            echo "PROXY_TYPE=caddy" >> "$ENV_FILE"
-            ;;
-        19) 
-            selected_services+=("traefik")
-            echo "PROXY_TYPE=traefik" >> "$ENV_FILE"
-            ;;
-        20) 
-            selected_services+=("nginx-proxy-manager")
-            echo "PROXY_TYPE=nginx-proxy-manager" >> "$ENV_FILE"
-            ;;
-        21) 
-            selected_services+=("swag")
-            echo "PROXY_TYPE=swag" >> "$ENV_FILE"
-            ;;
-        *) 
-            echo "PROXY_TYPE=none" >> "$ENV_FILE"
-            ;;
-    esac
-    
-    # Save selected services
+    # Save selected services to JSON
     mkdir -p "$METADATA_DIR"
     cat > "$SERVICES_FILE" <<EOF
 {
@@ -432,17 +403,16 @@ select_services() {
 EOF
     
     local first=true
-    for service in "${selected_services[@]}"; do
-        if [[ "$first" == "true" ]]; then
-            first=false
-        else
+    for service in "${final_services[@]}"; do
+        if [[ "$first" == "false" ]]; then
             echo "," >> "$SERVICES_FILE"
         fi
+        first=false
         
         cat >> "$SERVICES_FILE" <<EOF
         {
             "key": "$service",
-            "name": "$(echo "$service" | sed 's/-/ /g; s/\b\w/\u&/g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2)}')",
+            "name": "$(echo "$service" | sed 's/-/ /g; s/\b\w/\u&/g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2)}1')",
             "category": "$(get_service_category "$service")",
             "selected": true
         }
@@ -454,7 +424,7 @@ EOF
 }
 EOF
     
-    print_success "Services selection saved"
+    print_success "Services selection saved to $SERVICES_FILE"
 }
 
 get_service_category() {
