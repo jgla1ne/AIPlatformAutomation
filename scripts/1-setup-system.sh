@@ -278,7 +278,7 @@ get_service_category() {
 
 # Domain Configuration
 configure_domain() {
-    log_phase "3" "🌍" "Domain Configuration"
+    log_phase "4" "🌍" "Domain Configuration"
     
     echo ""
     print_header "🌐 Domain Configuration"
@@ -308,7 +308,7 @@ configure_domain() {
 
 # Proxy Selection
 configure_proxy() {
-    log_phase "4" "🌐" "Proxy Selection"
+    log_phase "5" "🌐" "Proxy Selection"
     
     echo ""
     print_header "🌐 Proxy Selection"
@@ -360,6 +360,8 @@ configure_proxy() {
 
 # SSL Configuration
 configure_ssl() {
+    log_phase "6" "🔒" "SSL Configuration"
+    
     local proxy_type=$(grep "^PROXY_TYPE=" "$ENV_FILE" | cut -d'=' -f2)
     
     if [[ "$proxy_type" != "none" ]]; then
@@ -408,7 +410,7 @@ configure_ssl() {
 
 # Vector Database Selection
 select_vector_database() {
-    log_phase "5" "🧠" "Vector Database Selection"
+    log_phase "7" "🧠" "Vector Database Selection"
     
     echo ""
     print_header "🧠 Vector Database Selection"
@@ -462,7 +464,7 @@ select_vector_database() {
 
 # Configuration Collection
 collect_configurations() {
-    log_phase "5" "⚙️" "Configuration Collection"
+    log_phase "8" "⚙️" "Configuration Collection"
     
     # Read selected services from JSON file
     local final_services=()
@@ -829,7 +831,7 @@ collect_configurations() {
 
 # Generate Base Docker Compose Files
 generate_base_compose_files() {
-    log_phase "6" "📝" "Base Docker Compose Generation"
+    log_phase "9" "📝" "Base Docker Compose Generation"
     
     mkdir -p "$COMPOSE_DIR"
     
@@ -886,7 +888,7 @@ EOF
 
 # Service Selection
 select_services() {
-    log_phase "4" "🎯" "Service Selection"
+    log_phase "10" "🎯" "Service Selection"
     
     echo ""
     print_header "📋 Available Services"
@@ -1042,14 +1044,14 @@ main() {
     # Phase 7: Vector Database Selection
     select_vector_database
     
-    # Phase 8: Service Selection
-    select_services
-    
-    # Phase 9: Configuration Collection
+    # Phase 8: Configuration Collection
     collect_configurations
     
-    # Phase 10: Generate Base Compose Files
+    # Phase 9: Generate Base Compose Files
     generate_base_compose_files
+    
+    # Phase 10: Service Selection
+    select_services
     
     # Save state
     save_setup_state
