@@ -974,7 +974,7 @@ DOMAIN_NAME=$existing_domain
 DOMAIN_RESOLVES=$existing_domain_resolves
 PUBLIC_IP=$existing_public_ip
 PROXY_CONFIG_METHOD=$existing_proxy_config_method
-PROXY_TYPE=${PROXY_TYPE:-none}
+# PROXY_TYPE=${PROXY_TYPE:-none}  # REMOVED: This was overwriting the selection!
 SSL_TYPE=${SSL_TYPE:-none}
 SSL_EMAIL=${SSL_EMAIL:-}
 EOF
