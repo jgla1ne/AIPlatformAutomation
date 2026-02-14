@@ -274,9 +274,158 @@ select_services() {
     
     # AI Applications
     echo "🤖 AI Applications:"
+    echo "  [4] Open WebUI - Modern ChatGPT-like interface"
+    echo "  [5] AnythingLLM - Document-based AI chat"
+    echo "  [6] Dify - LLM application development platform"
+    echo "  [7] n8n - Workflow automation platform"
+    echo "  [8] Flowise - Visual LangChain builder"
+    echo "  [9] Ollama - Local LLM runtime"
+    echo "  [10] LiteLLM - Multi-provider proxy + routing"
+    echo ""
+    
+    # Communication & Integration
+    echo "📱 Communication & Integration:"
+    echo "  [11] Signal API - Private messaging"
+    echo "  [12] OpenClaw UI - Multi-channel orchestration"
+    echo ""
+    
+    # Monitoring
+    echo "📊 Monitoring:"
+    echo "  [13] Prometheus + Grafana - Metrics and visualization"
+    echo ""
+    
+    # Storage
+    echo "📦 Storage:"
+    echo "  [14] MinIO - S3-compatible storage"
+    echo ""
+    
+    echo "Select services (space-separated, e.g., '1 3 6'):"
+    echo "Or enter 'all' to select all recommended services"
+    echo ""
+    
+    local -A selected_map=(
+        ["postgres"]=1
+        ["redis"]=1
+        ["tailscale"]=1
+        ["openwebui"]=1
+        ["anythingllm"]=1
+        ["dify"]=1
+        ["n8n"]=1
+        ["flowise"]=1
+        ["ollama"]=1
+        ["litellm"]=1
+        ["signal-api"]=1
+        ["openclaw"]=1
+        ["prometheus"]=1
+        ["grafana"]=1
+        ["minio"]=1
+    )
+    
+    local -A service_descriptions=(
+        ["postgres"]="PostgreSQL - Relational database"
+        ["redis"]="Redis - Cache and message queue"
+        ["tailscale"]="Tailscale - VPN mesh network"
+        ["openwebui"]="Open WebUI - Modern ChatGPT-like interface"
+        ["anythingllm"]="AnythingLLM - Document-based AI chat"
+        ["dify"]="Dify - LLM application development platform"
+        ["n8n"]="n8n - Workflow automation platform"
+        ["flowise"]="Flowise - Visual LangChain builder"
+        ["ollama"]="Ollama - Local LLM runtime"
+        ["litellm"]="LiteLLM - Multi-provider proxy + routing"
+        ["signal-api"]="Signal API - Private messaging"
+        ["openclaw"]="OpenClaw UI - Multi-channel orchestration"
+        ["prometheus"]="Prometheus + Grafana - Metrics and visualization"
+        ["minio"]="MinIO - S3-compatible storage"
+    )
+    
+    local selected_services=()
+    
+    # Get user selection
+    read -p "Services: " service_selection
+    
+    if [[ "$service_selection" == "all" ]]; then
+        # Select all recommended services
+        selected_services=("postgres" "redis" "ollama" "openwebui" "n8n" "prometheus")
+        print_info "Selected all recommended services"
+    else
+        # Parse individual selections
+        for num in $service_selection; do
+            case "$num" in
+                1) selected_services+=("postgres") ;;
+                2) selected_services+=("redis") ;;
+                3) selected_services+=("tailscale") ;;
+                4) selected_services+=("openwebui") ;;
+                5) selected_services+=("anythingllm") ;;
+                6) selected_services+=("dify") ;;
+                7) selected_services+=("n8n") ;;
+                8) selected_services+=("flowise") ;;
+                9) selected_services+=("ollama") ;;
+                10) selected_services+=("litellm") ;;
+                11) selected_services+=("signal-api") ;;
+                12) selected_services+=("openclaw") ;;
+                13) selected_services+=("prometheus") ;;
+                14) selected_services+=("minio") ;;
+                *) 
+                    if [[ -n "${selected_map[$num]:-}" ]]; then
+                        selected_services+=("${!selected_map[$num]}")
+                    else
+                        print_error "Invalid selection: $num"
                     fi
-                    
-                    if [[ -n "$model_selection" ]]; then
+                    ;;
+            esac
+        done
+    fi
+    
+    # Add dependencies automatically
+    local final_services=("${selected_services[@]}")
+    
+    # Always include postgres and redis if any AI app is selected
+    for service in "${selected_services[@]}"; do
+        case "$service" in
+            openwebui|anythingllm|dify|n8n|flowise|ollama|litellm|openclaw)
+                if [[ ! " ${final_services[*]} " =~ " postgres " ]]; then
+                    final_services+=("postgres")
+                    print_info "Auto-selected PostgreSQL (dependency)"
+                fi
+                if [[ ! " ${final_services[*]} " =~ " redis " ]]; then
+                    final_services+=("redis")
+                    print_info "Auto-selected Redis (dependency)"
+                fi
+                ;;
+        esac
+    done
+    
+    # Save selected services to JSON
+    mkdir -p "$METADATA_DIR"
+    cat > "$SERVICES_FILE" <<EOF
+{
+    "services": [
+EOF
+    
+    local first=true
+    for service in "${final_services[@]}"; do
+        if [[ "$first" == "false" ]]; then
+            echo "," >> "$SERVICES_FILE"
+        fi
+        first=false
+        
+        cat >> "$SERVICES_FILE" <<EOF
+        {
+            "key": "$service",
+            "name": "$(echo "$service" | sed 's/-/ /g; s/\b\w/\u&/g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2)}1')",
+            "category": "$(get_service_category "$service")",
+            "selected": true
+        }
+EOF
+    done
+    
+    cat >> "$SERVICES_FILE" <<EOF
+    ]
+}
+EOF
+    
+    print_success "Services selection saved to $SERVICES_FILE"
+}
                         local models_array=($model_selection)
                         local valid_models=true
                         
