@@ -263,13 +263,13 @@ deploy_postgres() {
     mkdir -p "$COMPOSE_DIR/postgres"
     
     cat > "$COMPOSE_DIR/postgres/docker-compose.yml" <<EOF
-version: '3.8'
-
 services:
   postgres:
     image: postgres:15-alpine
     container_name: postgres
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     networks:
       - ai_platform
     environment:
@@ -301,7 +301,7 @@ EOF
     
     # Wait for container to be ready using Docker's own health check
     print_info "Waiting for PostgreSQL to be ready..."
-    local max_attempts=30
+    local max_attempts=20
     local attempt=0
     
     while [ $attempt -lt $max_attempts ]; do
@@ -344,13 +344,13 @@ deploy_redis() {
     mkdir -p "$COMPOSE_DIR/redis"
     
     cat > "$COMPOSE_DIR/redis/docker-compose.yml" <<EOF
-version: '3.8'
-
 services:
   redis:
     image: redis:7-alpine
     container_name: redis
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     networks:
       - ai_platform
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
@@ -373,7 +373,7 @@ EOF
     
     docker-compose -f "$COMPOSE_DIR/redis/docker-compose.yml" up -d
     
-    wait_for_service "Redis" "http://localhost:6379" 30
+    wait_for_service "Redis" "tcp://127.0.0.1:6379" 20
     
     # Return the exit code from wait_for_service
     local redis_result=$?
@@ -1051,19 +1051,20 @@ deploy_ollama() {
     mkdir -p "${DATA_ROOT}/ollama"
     
     cat > "$COMPOSE_DIR/ollama/docker-compose.yml" <<EOF
-version: '3.8'
-
 services:
   ollama:
     image: ollama/ollama:latest
     container_name: ollama
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     networks:
       - ai_platform
     ports:
       - "11434:11434"
     environment:
       - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_KEEP_ALIVE=24h
     volumes:
       - ${DATA_ROOT}/ollama:/root/.ollama
     healthcheck:
@@ -1084,7 +1085,7 @@ EOF
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Ollama container" >> "$LOG_FILE"
     docker-compose -f "$COMPOSE_DIR/ollama/docker-compose.yml" up -d 2>&1 | tee -a "$LOG_FILE"
     
-    wait_for_service "Ollama" "http://localhost:11434" 60
+    wait_for_service "Ollama" "http://localhost:11434" 30
     if [[ $? -eq 0 ]]; then
         print_success "Ollama deployed successfully"
         echo "$(date '+%Y-%m-%d %H:%M:%S') - Ollama deployed successfully" >> "$LOG_FILE"
@@ -1112,13 +1113,13 @@ deploy_litellm() {
     mkdir -p "$COMPOSE_DIR/litellm"
     
     cat > "$COMPOSE_DIR/litellm/docker-compose.yml" <<EOF
-version: '3.8'
-
 services:
   litellm:
     image: ghcr.io/berriai/litellm:main
     container_name: litellm
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     networks:
       - ai_platform
     environment:
@@ -1132,9 +1133,6 @@ services:
       - ${DATA_ROOT}/litellm:/app/data
     ports:
       - "4000:4000"
-    depends_on:
-      - postgres
-      - redis
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
       interval: 30s
@@ -1152,7 +1150,7 @@ EOF
     
     docker-compose -f "$COMPOSE_DIR/litellm/docker-compose.yml" up -d 2>&1 | tee -a "$LOG_FILE"
     
-    wait_for_service "LiteLLM" "http://localhost:4000" 60
+    wait_for_service "LiteLLM" "http://localhost:4000" 30
     if [[ $? -eq 0 ]]; then
         print_success "LiteLLM deployed successfully"
         echo "$(date '+%Y-%m-%d %H:%M:%S') - LiteLLM deployed successfully" >> "$LOG_FILE"
@@ -1172,13 +1170,13 @@ deploy_openwebui() {
     mkdir -p "${DATA_ROOT}/openwebui"
     
     cat > "$COMPOSE_DIR/openwebui/docker-compose.yml" <<EOF
-version: '3.8'
-
 services:
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: openwebui
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     networks:
       - ai_platform
     environment:
@@ -1191,10 +1189,6 @@ services:
       - ${DATA_ROOT}/openwebui:/app/backend/data
     ports:
       - "3000:3000"
-    depends_on:
-      - postgres
-      - redis
-      - ollama
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 30s
@@ -1301,13 +1295,13 @@ deploy_dify() {
     mkdir -p "${DATA_ROOT}/dify/storage"
     
     cat > "$COMPOSE_DIR/dify/docker-compose.yml" <<EOF
-version: '3.8'
-
 services:
   dify-web:
     image: langgenius/dify-web:latest
     container_name: dify-web
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     networks:
       - ai_platform
     environment:
@@ -1315,13 +1309,19 @@ services:
       - APP_API_URL=http://dify-api:5001
     ports:
       - "${DIFY_PORT:-8080}:3000"
-    depends_on:
-      - dify-api
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   dify-api:
     image: langgenius/dify-api:latest
     container_name: dify-api
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     networks:
       - ai_platform
     environment:
@@ -1337,14 +1337,19 @@ services:
       - ${DATA_ROOT}/dify/storage:/app/storage
     ports:
       - "5001:5001"
-    depends_on:
-      - postgres
-      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   dify-worker:
     image: langgenius/dify-api:latest
     container_name: dify-worker
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     networks:
       - ai_platform
     environment:
@@ -1357,9 +1362,12 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
     volumes:
       - ${DATA_ROOT}/dify/storage:/app/storage
-    depends_on:
-      - postgres
-      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5002"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
 networks:
   ai_platform:
@@ -1391,42 +1399,29 @@ deploy_n8n() {
     mkdir -p "${DATA_ROOT}/n8n"
     
     cat > "$COMPOSE_DIR/n8n/docker-compose.yml" <<EOF
-version: '3.8'
-
 services:
   n8n:
     image: n8nio/n8n:latest
     container_name: n8n
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     networks:
       - ai_platform
-    ports:
-      - "${N8N_PORT:-5678}:5678"
     environment:
-      - N8N_BASIC_AUTH_ACTIVE=${N8N_BASIC_AUTH_ACTIVE:-true}
-      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-admin}
-      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
-      - N8N_HOST=${N8N_HOST:-0.0.0.0}
-      - N8N_PORT=5678
-      - N8N_PROTOCOL=http
-      - WEBHOOK_URL=http://${DOMAIN_NAME:-localhost}:${N8N_PORT:-5678}/
-      - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=postgres
-      - DB_POSTGRESDB_PORT=5432
-      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-aiplatform}
-      - DB_POSTGRESDB_USER=${POSTGRES_USER:-postgres}
-      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
-      - NODE_ENV=production
-      - N8N_EMAIL=${N8N_EMAIL:-}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aiplatform}
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD:-password}
       - N8N_SMTP_HOST=${N8N_SMTP_HOST:-}
       - N8N_SMTP_PORT=${N8N_SMTP_PORT:-587}
       - N8N_SMTP_USER=${N8N_SMTP_USER:-}
       - N8N_SMTP_PASS=${N8N_SMTP_PASS:-}
       - N8N_SMTP_SENDER=${N8N_SMTP_SENDER:-}
-    depends_on:
-      - postgres
     volumes:
       - ${DATA_ROOT}/n8n:/home/node/.n8n
+    ports:
+      - "${N8N_PORT:-5678}:5678"
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:5678/healthz"]
       interval: 30s
