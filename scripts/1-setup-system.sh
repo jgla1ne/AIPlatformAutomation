@@ -421,101 +421,98 @@ EOF
     
     cat >> "$SERVICES_FILE" <<EOF
     ]
-}
-EOF
-    
     print_success "Services selection saved to $SERVICES_FILE"
 }
-                        local models_array=($model_selection)
-                        local valid_models=true
-                        
-                        for model_num in "${models_array[@]}"; do
-                            case "$model_num" in
-                                1|2|3|4|5|6|7) 
-                                    # Valid model selection
-                                    ;;
-                                *) 
-                                    print_error "Invalid model selection: $model_num"
-                                    valid_models=false
-                                    break
-                                    ;;
-                            esac
-                        done
-                        
-                        if [[ "$valid_models" == "true" ]]; then
-                            local model_list=""
-                            for model_num in "${models_array[@]}"; do
-                                case "$model_num" in
-                                    1) model_list="${model_list}llama3.2:8b " ;;
-                                    2) model_list="${model_list}llama3.2:70b " ;;
-                                    3) model_list="${model_list}mistral:7b " ;;
-                                    4) model_list="${model_list}codellama:13b " ;;
-                                    5) model_list="${model_list}llama3.1:8b " ;;
-                                    6) model_list="${model_list}mixtral:8x7b " ;;
-                                    7) model_list="${model_list}deepseek-coder:6.7b " ;;
-                                esac
-                            done
-                            
-                            # Remove trailing space and save
-                            model_list=${model_list% }
-                            echo "OLLAMA_MODELS=$model_list" >> "$ENV_FILE"
-                            
-                            # Set default model to first selected model
-                            local first_model=${models_array[0]}
-                            case "$first_model" in
-                                1) echo "OLLAMA_DEFAULT_MODEL=llama3.2:8b" >> "$ENV_FILE" ;;
-                                2) echo "OLLAMA_DEFAULT_MODEL=llama3.2:70b" >> "$ENV_FILE" ;;
-                                3) echo "OLLAMA_DEFAULT_MODEL=mistral:7b" >> "$ENV_FILE" ;;
-                                4) echo "OLLAMA_DEFAULT_MODEL=codellama:13b" >> "$ENV_FILE" ;;
-                                5) echo "OLLAMA_DEFAULT_MODEL=llama3.1:8b" >> "$ENV_FILE" ;;
-                                6) echo "OLLAMA_DEFAULT_MODEL=mixtral:8x7b" >> "$ENV_FILE" ;;
-                                7) echo "OLLAMA_DEFAULT_MODEL=deepseek-coder:6.7b" >> "$ENV_FILE" ;;
-                            esac
-                            
-                            print_success "Ollama models configured: $model_list"
-                            break
-                        fi
-                    fi
-                    
-                    if [[ "$valid_models" == "true" ]]; then
-                        break
-                    fi
-                done
-            fi
-            ;;
-        esac
-    done
-    
-    # Save selected services to JSON
-    mkdir -p "$METADATA_DIR"
-    cat > "$SERVICES_FILE" <<EOF
-{
-    "services": [
-EOF
-    
-    local first=true
-    for service in "${final_services[@]}"; do
-        if [[ "$first" == "false" ]]; then
-            echo "," >> "$SERVICES_FILE"
-        fi
-        first=false
+
+# Ollama model selection
+ollama_model_selection() {
+    if [[ " ${final_services[*]} " =~ " ollama " ]]; then
+        echo ""
+        print_header "🤖 Ollama Model Selection"
+        echo ""
         
-        cat >> "$SERVICES_FILE" <<EOF
-        {
-            "key": "$service",
-            "name": "$(echo "$service" | sed 's/-/ /g; s/\b\w/\u&/g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2)}1')",
-            "category": "$(get_service_category "$service")",
-            "selected": true
-        }
-EOF
-    done
-    
-    cat >> "$SERVICES_FILE" <<EOF
-    ]
-}
-EOF
-    
-    print_success "Services selection saved to $SERVICES_FILE"
+        print_info "Select models to download and use:"
+        echo ""
+        echo "Recommended Models:"
+        echo "  [1] llama3.2:8b (7.8GB) - Latest Llama 3.2"
+        echo "  [2] llama3.2:70b (43GB) - Full Llama 3.2 (requires 64GB RAM)"
+        echo "  [3] mistral:7b (4.7GB) - Mistral 7B"
+        echo "  [4] codellama:13b (7.6GB) - Code Llama"
+        echo ""
+        echo "Specialized Models:"
+        echo "  [5] llama3.1:8b (4.9GB) - Llama 3.1"
+        echo "  [6] mixtral:8x7b (4.7GB) - Mixtral MoE"
+        echo "  [7] deepseek-coder:6.7b (3.8GB) - DeepSeek Coder"
+        echo ""
+        echo "Select models (space-separated, e.g., '1 3 5'):"
+        echo "Or enter 'recommended' for models 1,3,4"
+        echo ""
+        
+        while true; do
+            echo -n -e "${YELLOW}Select models:${NC} "
+            read -r model_selection
+            
+            if [[ "$model_selection" == "recommended" ]]; then
+                model_selection="1 3 4"
+                print_info "Selected recommended models: llama3.2:8b, mistral:7b, codellama:13b"
+            fi
+            
+            if [[ -n "$model_selection" ]]; then
+                local models_array=($model_selection)
+                local valid_models=true
+                
+                for model_num in "${models_array[@]}"; do
+                    case "$model_num" in
+                        1|2|3|4|5|6|7) 
+                            # Valid model selection
+                            ;;
+                        *) 
+                            print_error "Invalid model selection: $model_num"
+                            valid_models=false
+                            break
+                            ;;
+                    esac
+                done
+                
+                if [[ "$valid_models" == "true" ]]; then
+                    local model_list=""
+                    for model_num in "${models_array[@]}"; do
+                        case "$model_num" in
+                            1) model_list="${model_list}llama3.2:8b " ;;
+                            2) model_list="${model_list}llama3.2:70b " ;;
+                            3) model_list="${model_list}mistral:7b " ;;
+                            4) model_list="${model_list}codellama:13b " ;;
+                            5) model_list="${model_list}llama3.1:8b " ;;
+                            6) model_list="${model_list}mixtral:8x7b " ;;
+                            7) model_list="${model_list}deepseek-coder:6.7b " ;;
+                        esac
+                    done
+                    
+                    # Remove trailing space and save
+                    model_list=${model_list% }
+                    echo "OLLAMA_MODELS=$model_list" >> "$ENV_FILE"
+                    
+                    # Set default model to first selected model
+                    local first_model=${models_array[0]}
+                    case "$first_model" in
+                        1) echo "OLLAMA_DEFAULT_MODEL=llama3.2:8b" >> "$ENV_FILE" ;;
+                        2) echo "OLLAMA_DEFAULT_MODEL=llama3.2:70b" >> "$ENV_FILE" ;;
+                        3) echo "OLLAMA_DEFAULT_MODEL=mistral:7b" >> "$ENV_FILE" ;;
+                        4) echo "OLLAMA_DEFAULT_MODEL=codellama:13b" >> "$ENV_FILE" ;;
+                        5) echo "OLLAMA_DEFAULT_MODEL=llama3.1:8b" >> "$ENV_FILE" ;;
+                        6) echo "OLLAMA_DEFAULT_MODEL=mixtral:8x7b" >> "$ENV_FILE" ;;
+                        7) echo "OLLAMA_DEFAULT_MODEL=deepseek-coder:6.7b" >> "$ENV_FILE" ;;
+                    esac
+                    
+                    print_success "Ollama models configured: $model_list"
+                    break
+                fi
+            
+            if [[ "$valid_models" == "true" ]]; then
+                break
+            fi
+        done
+    fi
 }
 
 get_service_category() {
