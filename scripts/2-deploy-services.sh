@@ -1172,7 +1172,7 @@ model_list:
 EOF
 
     # Add external providers if enabled
-    if [[ "${LITELLM_OPENAI_ENABLED:-false}" == "true" ]]; then
+    if [[ "${LLM_PROVIDERS:-local}" == *"openai"* ]]; then
         cat >> "${DATA_ROOT}/litellm/config.yaml" <<EOF
   # OpenAI provider
   - model_name: gpt-4o
@@ -1188,7 +1188,7 @@ EOF
 EOF
     fi
     
-    if [[ "${LITELLM_ANTHROPIC_ENABLED:-false}" == "true" ]]; then
+    if [[ "${LLM_PROVIDERS:-local}" == *"anthropic"* ]]; then
         cat >> "${DATA_ROOT}/litellm/config.yaml" <<EOF
   # Anthropic provider
   - model_name: claude-3-5-sonnet-20241022
@@ -1199,7 +1199,7 @@ EOF
 EOF
     fi
     
-    if [[ "${LITELLM_GOOGLE_ENABLED:-false}" == "true" ]]; then
+    if [[ "${LLM_PROVIDERS:-local}" == *"google"* ]]; then
         cat >> "${DATA_ROOT}/litellm/config.yaml" <<EOF
   # Google provider
   - model_name: gemini-1.5-pro
@@ -1210,7 +1210,7 @@ EOF
 EOF
     fi
     
-    if [[ "${LITELLM_GROQ_ENABLED:-false}" == "true" ]]; then
+    if [[ "${LLM_PROVIDERS:-local}" == *"groq"* ]]; then
         cat >> "${DATA_ROOT}/litellm/config.yaml" <<EOF
   # Groq provider
   - model_name: llama-3.1-70b-versatile
@@ -1221,7 +1221,7 @@ EOF
 EOF
     fi
     
-    if [[ "${LITELLM_MISTRAL_ENABLED:-false}" == "true" ]]; then
+    if [[ "${LLM_PROVIDERS:-local}" == *"mistral"* ]]; then
         cat >> "${DATA_ROOT}/litellm/config.yaml" <<EOF
   # Mistral provider
   - model_name: mistral-large-2407
@@ -1232,7 +1232,7 @@ EOF
 EOF
     fi
     
-    if [[ "${LITELLM_OPENROUTER_ENABLED:-false}" == "true" ]]; then
+    if [[ "${LLM_PROVIDERS:-local}" == *"openrouter"* ]]; then
         cat >> "${DATA_ROOT}/litellm/config.yaml" <<EOF
   # OpenRouter provider
   - model_name: openrouter/meta-llama/llama-3.1-70b-instruct

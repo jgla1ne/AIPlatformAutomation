@@ -646,76 +646,77 @@ collect_configurations() {
         
         # External LLM Provider Configuration
         echo ""
-        print_info "Configure external LLM providers (optional):"
+        print_info "Configure LLM providers for LiteLLM routing:"
         echo ""
-        echo "Enable providers and enter API keys (press Enter to skip):"
+        echo "✅ Local Provider:"
+        echo "  • Ollama (will be deployed)"
+        echo "  • Models: ${OLLAMA_MODELS:-llama3.2:8b,mistral:7b,codellama:13b}"
+        echo ""
+        
+        echo "Add API providers? (recommended for fallback)"
+        echo ""
+        
+        # Dynamic LLM provider selection
+        local selected_providers=("local")
+        local provider_keys=()
+        
+        echo ""
+        print_info "Configure LLM providers (Y/N for each):"
         echo ""
         
         # OpenAI
-        echo -n -e "${YELLOW}Enable OpenAI provider? [y/N]:${NC} "
-        read -r enable_openai
-        if [[ "$enable_openai" =~ ^[Yy]$ ]]; then
-            echo "LITELLM_OPENAI_ENABLED=true" >> "$ENV_FILE"
-            prompt_input "OPENAI_API_KEY" "OpenAI API key" "" true
+        if confirm "Configure OpenAI (GPT-4, GPT-3.5)?"; then
+            selected_providers+=("openai")
+            provider_keys+=("OPENAI_API_KEY")
+            prompt_input "OPENAI_API_KEY" "OpenAI API key" "" false
             echo "OPENAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-        else
-            echo "LITELLM_OPENAI_ENABLED=false" >> "$ENV_FILE"
         fi
         
         # Anthropic
-        echo -n -e "${YELLOW}Enable Anthropic provider? [y/N]:${NC} "
-        read -r enable_anthropic
-        if [[ "$enable_anthropic" =~ ^[Yy]$ ]]; then
-            echo "LITELLM_ANTHROPIC_ENABLED=true" >> "$ENV_FILE"
-            prompt_input "ANTHROPIC_API_KEY" "Anthropic API key" "" true
+        if confirm "Configure Anthropic (Claude 3)?"; then
+            selected_providers+=("anthropic")
+            provider_keys+=("ANTHROPIC_API_KEY")
+            prompt_input "ANTHROPIC_API_KEY" "Anthropic API key" "" false
             echo "ANTHROPIC_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-        else
-            echo "LITELLM_ANTHROPIC_ENABLED=false" >> "$ENV_FILE"
         fi
         
         # Google
-        echo -n -e "${YELLOW}Enable Google provider? [y/N]:${NC} "
-        read -r enable_google
-        if [[ "$enable_google" =~ ^[Yy]$ ]]; then
-            echo "LITELLM_GOOGLE_ENABLED=true" >> "$ENV_FILE"
-            prompt_input "GOOGLE_API_KEY" "Google API key" "" true
+        if confirm "Configure Google (Gemini)?"; then
+            selected_providers+=("google")
+            provider_keys+=("GOOGLE_API_KEY")
+            prompt_input "GOOGLE_API_KEY" "Google AI API key" "" false
             echo "GOOGLE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-        else
-            echo "LITELLM_GOOGLE_ENABLED=false" >> "$ENV_FILE"
         fi
         
         # Groq
-        echo -n -e "${YELLOW}Enable Groq provider? [y/N]:${NC} "
-        read -r enable_groq
-        if [[ "$enable_groq" =~ ^[Yy]$ ]]; then
-            echo "LITELLM_GROQ_ENABLED=true" >> "$ENV_FILE"
-            prompt_input "GROQ_API_KEY" "Groq API key" "" true
+        if confirm "Configure Groq (Fast Llama inference)?"; then
+            selected_providers+=("groq")
+            provider_keys+=("GROQ_API_KEY")
+            prompt_input "GROQ_API_KEY" "Groq API key" "" false
             echo "GROQ_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-        else
-            echo "LITELLM_GROQ_ENABLED=false" >> "$ENV_FILE"
         fi
         
         # Mistral
-        echo -n -e "${YELLOW}Enable Mistral provider? [y/N]:${NC} "
-        read -r enable_mistral
-        if [[ "$enable_mistral" =~ ^[Yy]$ ]]; then
-            echo "LITELLM_MISTRAL_ENABLED=true" >> "$ENV_FILE"
-            prompt_input "MISTRAL_API_KEY" "Mistral API key" "" true
+        if confirm "Configure Mistral (Mistral AI)?"; then
+            selected_providers+=("mistral")
+            provider_keys+=("MISTRAL_API_KEY")
+            prompt_input "MISTRAL_API_KEY" "Mistral API key" "" false
             echo "MISTRAL_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-        else
-            echo "LITELLM_MISTRAL_ENABLED=false" >> "$ENV_FILE"
         fi
         
         # OpenRouter
-        echo -n -e "${YELLOW}Enable OpenRouter provider? [y/N]:${NC} "
-        read -r enable_openrouter
-        if [[ "$enable_openrouter" =~ ^[Yy]$ ]]; then
-            echo "LITELLM_OPENROUTER_ENABLED=true" >> "$ENV_FILE"
-            prompt_input "OPENROUTER_API_KEY" "OpenRouter API key" "" true
+        if confirm "Configure OpenRouter (Multi-provider access)?"; then
+            selected_providers+=("openrouter")
+            provider_keys+=("OPENROUTER_API_KEY")
+            prompt_input "OPENROUTER_API_KEY" "OpenRouter API key" "" false
             echo "OPENROUTER_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-        else
-            echo "LITELLM_OPENROUTER_ENABLED=false" >> "$ENV_FILE"
         fi
+        
+        # Generate provider list
+        local providers_str=$(IFS=','; echo "${selected_providers[*]}")
+        echo "LLM_PROVIDERS=$providers_str" >> "$ENV_FILE"
+        
+        print_success "LLM providers configured: $providers_str"
         
         # LiteLLM core variables
         local litellm_master_key=$(generate_random_password 32)
