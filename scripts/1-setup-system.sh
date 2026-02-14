@@ -439,25 +439,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
-
-  redis:
-    image: redis:7-alpine
-    container_name: redis
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    networks:
-      - ai_platform
-    command: redis-server --appendonly yes --requirepass \${REDIS_PASSWORD}
-    volumes:
-      - \${DATA_ROOT}/redis:/data
-    ports:
-      - "\${REDIS_PORT:-6379}:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 EOF
     
     # Generate vector database compose files based on selection
@@ -478,10 +459,23 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    networks:
+      - ai_platform
+    ports:
+      - "6333:6333"
+    volumes:
+      - ${DATA_ROOT}/qdrant:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
       interval: 30s
       timeout: 10s
       retries: 3
 EOF
+            ;;
+        *)
+            print_info "No vector database selected or unsupported type: $vector_db_type"
+            ;;
+    esac
     
     print_success "Base Docker Compose files generated"
 }
