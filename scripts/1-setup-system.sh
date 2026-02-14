@@ -292,15 +292,40 @@ collect_configurations() {
     
     # PostgreSQL configuration
     if [[ " ${final_services[*]} " =~ " postgres " ]]; then
+        echo ""
+        print_info "PostgreSQL Configuration"
+        echo ""
+        
+        # Allow override of database name and username
+        print_info "Database Configuration (Optional Overrides)"
+        echo "Note: All services will be pre-configured to use this database"
+        echo ""
+        
+        prompt_input "POSTGRES_DB" "PostgreSQL database name" "aiplatform" false
+        echo "POSTGRES_DB=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        prompt_input "POSTGRES_USER" "PostgreSQL username" "postgres" false
+        echo "POSTGRES_USER=$INPUT_RESULT" >> "$ENV_FILE"
+        
         local postgres_password=$(generate_random_password 24)
         echo "POSTGRES_PASSWORD=$postgres_password" >> "$ENV_FILE"
+        
+        echo "POSTGRES_PORT=5432" >> "$ENV_FILE"
+        
         print_success "PostgreSQL configuration generated"
     fi
     
     # Redis configuration
     if [[ " ${final_services[*]} " =~ " redis " ]]; then
+        echo ""
+        print_info "Redis Configuration"
+        echo ""
+        
         local redis_password=$(generate_random_password 24)
         echo "REDIS_PASSWORD=$redis_password" >> "$ENV_FILE"
+        
+        echo "REDIS_PORT=6379" >> "$ENV_FILE"
+        
         print_success "Redis configuration generated"
     fi
     
@@ -362,27 +387,95 @@ collect_configurations() {
                 print_error "Invalid selection. Please enter numbers or 'recommended'"
             fi
         done
+        
+        # Default model
+        echo ""
+        prompt_input "OLLAMA_DEFAULT_MODEL" "Default Ollama model" "llama3.2:8b" false
+        echo "OLLAMA_DEFAULT_MODEL=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        print_success "Ollama configuration completed"
     fi
     
-    # LLM Configuration
-    echo ""
-    print_info "LLM Configuration"
-    echo "OLLAMA_DEFAULT_MODEL=llama3.2:8b" >> "$ENV_FILE"
-    
-    # LiteLLM configuration
+    # LLM Provider Configuration
     if [[ " ${final_services[*]} " =~ " litellm " ]]; then
+        echo ""
+        print_header "🤖 LLM Provider Configuration"
+        echo ""
+        
+        print_info "Configure LLM providers for LiteLLM routing:"
+        echo ""
+        echo "✅ Local Provider:"
+        echo "  • Ollama: http://localhost:11434"
+        echo ""
+        
+        print_info "External providers (configure API keys as needed):"
+        echo "  • OpenAI: https://api.openai.com/v1"
+        echo "  • Anthropic: https://api.anthropic.com"
+        echo "  • Google: https://generativelanguage.googleapis.com"
+        echo ""
+        
+        echo "Select routing strategy:"
+        echo "  1) Simple Shuffle (round-robin)"
+        echo "  2) Cost-based (cheapest first)"
+        echo "  3) Latency-based (fastest first)"
+        echo "  4) Usage-based (load balanced)"
+        echo "  5) Local-first (prefer local models)"
+        echo ""
+        
+        while true; do
+            echo -n -e "${YELLOW}Select routing strategy [1-5]:${NC} "
+            read -r routing_choice
+            
+            case "$routing_choice" in
+                1)
+                    echo "LITELLM_ROUTING_STRATEGY=simple-shuffle" >> "$ENV_FILE"
+                    print_success "Simple Shuffle routing selected"
+                    break
+                    ;;
+                2)
+                    echo "LITELLM_ROUTING_STRATEGY=cost-based" >> "$ENV_FILE"
+                    print_success "Cost-based routing selected"
+                    break
+                    ;;
+                3)
+                    echo "LITELLM_ROUTING_STRATEGY=latency-based" >> "$ENV_FILE"
+                    print_success "Latency-based routing selected"
+                    break
+                    ;;
+                4)
+                    echo "LITELLM_ROUTING_STRATEGY=usage-based" >> "$ENV_FILE"
+                    print_success "Usage-based routing selected"
+                    break
+                    ;;
+                5)
+                    echo "LITELLM_ROUTING_STRATEGY=local-first" >> "$ENV_FILE"
+                    print_success "Local-first routing selected (simple → local, complex → external)"
+                    break
+                    ;;
+                *)
+                    print_error "Invalid selection"
+                    ;;
+            esac
+        done
+        
+        # LiteLLM core variables
         local litellm_master_key=$(generate_random_password 32)
         echo "LITELLM_MASTER_KEY=$litellm_master_key" >> "$ENV_FILE"
         echo "LITELLM_CACHE_ENABLED=true" >> "$ENV_FILE"
         echo "LITELLM_CACHE_TTL=3600" >> "$ENV_FILE"
         echo "LITELLM_RATE_LIMIT_ENABLED=true" >> "$ENV_FILE"
         echo "LITELLM_RATE_LIMIT_REQUESTS_PER_MINUTE=60" >> "$ENV_FILE"
+        
         print_success "LiteLLM configuration completed"
     fi
     
     # Security Configuration
     echo ""
-    print_info "Security Configuration"
+    print_header "🔒 Security Configuration"
+    echo ""
+    
+    print_info "Generating secure passwords and keys..."
+    echo ""
     
     # Admin passwords
     local admin_password=$(generate_random_password 24)
@@ -399,9 +492,20 @@ collect_configurations() {
         echo "N8N_ENCRYPTION_KEY=$n8n_key" >> "$ENV_FILE"
     fi
     
+    # Dify configuration
+    if [[ " ${final_services[*]} " =~ " dify " ]]; then
+        local dify_secret=$(generate_random_password 32)
+        echo "DIFY_SECRET_KEY=$dify_secret" >> "$ENV_FILE"
+        echo "DIFY_WEB_API_PORT=5001" >> "$ENV_FILE"
+        echo "DIFY_WEB_PORT=3002" >> "$ENV_FILE"
+    fi
+    
+    print_success "Security configuration completed"
+    
     # Service-specific configurations
     echo ""
-    print_info "Service-specific Configuration"
+    print_header "🔧 Service-specific Configuration"
+    echo ""
     
     # Signal API
     if [[ -n "$(jq -r '.services[] | select(.key=="signal-api") | .key' "$SERVICES_FILE" 2>/dev/null)" ]]; then
@@ -415,6 +519,51 @@ collect_configurations() {
         prompt_input "SIGNAL_PHONE" "Signal phone number (E.164 format, e.g., +15551234567)" "" false
         echo "SIGNAL_PHONE=$INPUT_RESULT" >> "$ENV_FILE"
         
+        # Signal pairing options
+        echo ""
+        print_info "Signal Pairing Options:"
+        echo ""
+        echo "  1) Generate QR Code (Recommended - scan with Signal app)"
+        echo "  2) Internal API pairing (http://localhost:8081/v1/generate_token)"
+        echo "  3) Manual pairing (advanced)"
+        echo ""
+        
+        while true; do
+            echo -n -e "${YELLOW}Select pairing method [1-3]:${NC} "
+            read -r signal_pairing
+            
+            case "$signal_pairing" in
+                1)
+                    echo "SIGNAL_PAIRING_METHOD=qr_code" >> "$ENV_FILE"
+                    echo "SIGNAL_QR_URL=http://localhost:8090/v1/qrcode" >> "$ENV_FILE"
+                    print_success "QR code pairing selected"
+                    print_info "QR code will be available at: http://localhost:8090/v1/qrcode"
+                    break
+                    ;;
+                2)
+                    echo "SIGNAL_PAIRING_METHOD=internal_api" >> "$ENV_FILE"
+                    echo "SIGNAL_API_PAIRING_URL=http://localhost:8081/v1/generate_token" >> "$ENV_FILE"
+                    print_success "Internal API pairing selected"
+                    print_info "Pairing token will be available at: http://localhost:8081/v1/generate_token"
+                    break
+                    ;;
+                3)
+                    echo "SIGNAL_PAIRING_METHOD=manual" >> "$ENV_FILE"
+                    local signal_password=$(generate_random_password 16)
+                    echo "SIGNAL_PASSWORD=$signal_password" >> "$ENV_FILE"
+                    print_success "Manual pairing selected"
+                    break
+                    ;;
+                *)
+                    print_error "Invalid selection"
+                    ;;
+            esac
+        done
+        
+        # Signal webhook configuration
+        echo ""
+        print_info "Signal Webhook Configuration"
+        echo ""
         echo "SIGNAL_WEBHOOK_URL=http://signal-api:8090/v2/receive" >> "$ENV_FILE"
         echo "SIGNAL_API_PORT=8090" >> "$ENV_FILE"
         
@@ -482,7 +631,9 @@ collect_configurations() {
         print_info "MinIO Configuration"
         echo ""
         
-        echo "MINIO_ROOT_USER=minioadmin" >> "$ENV_FILE"
+        prompt_input "MINIO_ROOT_USER" "MinIO root user" "minioadmin" false
+        echo "MINIO_ROOT_USER=$INPUT_RESULT" >> "$ENV_FILE"
+        
         local minio_pass=$(generate_random_password 32)
         echo "MINIO_ROOT_PASSWORD=$minio_pass" >> "$ENV_FILE"
         
