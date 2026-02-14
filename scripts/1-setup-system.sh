@@ -1527,6 +1527,165 @@ EOF
     print_info "Application Configuration"
     echo ""
     
+    # Flowise configuration (if selected)
+    if [[ " ${selected_services[*]} " =~ " flowise " ]]; then
+        echo ""
+        print_info "Flowise Configuration"
+        echo ""
+        
+        prompt_input "FLOWISE_USERNAME" "Flowise username" "admin" false
+        echo "FLOWISE_USERNAME=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        local flowise_password=$(generate_random_password 24)
+        echo "FLOWISE_PASSWORD=$flowise_password" >> "$ENV_FILE"
+        
+        prompt_input "FLOWISE_SECRETKEY" "Flowise secret key" "$(generate_random_password 32)" false
+        echo "FLOWISE_SECRETKEY=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        echo "FLOWISE_FILE_MANAGER_ENABLED=true" >> "$ENV_FILE"
+        echo "FLOWISE_FILE_SIZE_LIMIT=10485760" >> "$ENV_FILE"
+        
+        print_success "Flowise configuration completed"
+    fi
+    
+    # OpenWebUI configuration (if selected)
+    if [[ " ${selected_services[*]} " =~ " openwebui " ]]; then
+        echo ""
+        print_info "OpenWebUI Configuration"
+        echo ""
+        
+        local openwebui_secret=$(generate_random_password 64)
+        echo "OPENWEBUI_SECRET_KEY=$openwebui_secret" >> "$ENV_FILE"
+        
+        print_success "OpenWebUI configuration completed"
+    fi
+    
+    # Grafana admin user (if selected)
+    if [[ " ${selected_services[*]} " =~ " grafana " ]]; then
+        echo ""
+        print_info "Grafana Configuration"
+        echo ""
+        
+        prompt_input "GRAFANA_ADMIN_USER" "Grafana admin user" "admin" false
+        echo "GRAFANA_ADMIN_USER=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        echo "GRAFANA_SMTP_ENABLED=false" >> "$ENV_FILE"
+        
+        print_success "Grafana configuration completed"
+    fi
+    
+    # Vector database port configurations (if selected)
+    if [[ " ${selected_services[*]} " =~ " qdrant " ]]; then
+        echo ""
+        print_info "Qdrant Port Configuration"
+        echo ""
+        
+        prompt_input "QDRANT_PORT" "Qdrant port" "6333" false
+        echo "QDRANT_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        prompt_input "QDRANT_GRPC_PORT" "Qdrant gRPC port" "6334" false
+        echo "QDRANT_GRPC_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        prompt_input "QDRANT_API_KEY" "Qdrant API key" "" false
+        echo "QDRANT_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        print_success "Qdrant port configuration completed"
+    fi
+    
+    if [[ " ${selected_services[*]} " =~ " milvus " ]]; then
+        echo ""
+        print_info "Milvus Port Configuration"
+        echo ""
+        
+        prompt_input "MILVUS_PORT" "Milvus port" "19530" false
+        echo "MILVUS_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        print_success "Milvus port configuration completed"
+    fi
+    
+    if [[ " ${selected_services[*]} " =~ " chroma " ]]; then
+        echo ""
+        print_info "ChromaDB Port Configuration"
+        echo ""
+        
+        prompt_input "CHROMA_PORT" "ChromaDB port" "8000" false
+        echo "CHROMA_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        print_success "ChromaDB port configuration completed"
+    fi
+    
+    if [[ " ${selected_services[*]} " =~ " weaviate " ]]; then
+        echo ""
+        print_info "Weaviate Port Configuration"
+        echo ""
+        
+        prompt_input "WEAVIATE_PORT" "Weaviate port" "8080" false
+        echo "WEAVIATE_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        print_success "Weaviate port configuration completed"
+    fi
+    
+    # MinIO port configurations (if selected)
+    if [[ " ${selected_services[*]} " =~ " minio " ]]; then
+        echo ""
+        print_info "MinIO Port Configuration"
+        echo ""
+        
+        echo "MINIO_API_PORT=9000" >> "$ENV_FILE"
+        echo "MINIO_CONSOLE_PORT=9001" >> "$ENV_FILE"
+        
+        local minio_buckets="aiplatform-docs,aiplatform-media,aiplatform-backups"
+        prompt_input "MINIO_DEFAULT_BUCKETS" "MinIO default buckets" "$minio_buckets" false
+        echo "MINIO_DEFAULT_BUCKETS=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        print_success "MinIO port configuration completed"
+    fi
+    
+    # Tailscale configuration (if selected)
+    if [[ " ${selected_services[*]} " =~ " tailscale " ]]; then
+        echo ""
+        print_info "Tailscale Configuration"
+        echo ""
+        
+        prompt_input "TAILSCALE_AUTH_KEY" "Tailscale auth key" "" false
+        echo "TAILSCALE_AUTH_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        echo "TAILSCALE_ACCEPT_DNS=false" >> "$ENV_FILE"
+        echo "TAILSCALE_USERSPACE=ai-platform" >> "$ENV_FILE"
+        
+        prompt_input "TAILSCALE_EXTRA_ARGS" "Tailscale extra arguments" "" false
+        echo "TAILSCALE_EXTRA_ARGS=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        print_success "Tailscale configuration completed"
+    fi
+    
+    # OpenClaw base URL (if selected)
+    if [[ " ${selected_services[*]} " =~ " openclaw " ]]; then
+        echo ""
+        print_info "OpenClaw Base URL Configuration"
+        echo ""
+        
+        echo "OPENCLAW_BASE_URL=http://localhost:8082" >> "$ENV_FILE"
+        
+        echo "OPENCLAW_LOG_LEVEL=info" >> "$ENV_FILE"
+        
+        print_success "OpenClaw base URL configuration completed"
+    fi
+    
+    # AnythingLLM telemetry (if selected)
+    if [[ " ${selected_services[*]} " =~ " anythingllm " ]]; then
+        echo ""
+        print_info "AnythingLLM Telemetry Configuration"
+        echo ""
+        
+        echo "ANYTHINGLLM_DISABLE_TELEMETRY=true" >> "$ENV_FILE"
+        
+        local anythingllm_jwt=$(generate_random_password 64)
+        echo "ANYTHINGLLM_JWT_SECRET=$anythingllm_jwt" >> "$ENV_FILE"
+        
+        print_success "AnythingLLM telemetry configuration completed"
+    fi
+    
     # Admin passwords
     local admin_password=$(generate_random_password 24)
     echo "ADMIN_PASSWORD=$admin_password" >> "$ENV_FILE"
