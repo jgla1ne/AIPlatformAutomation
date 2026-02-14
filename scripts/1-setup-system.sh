@@ -1647,10 +1647,16 @@ EOF
         print_info "Tailscale Configuration"
         echo ""
         
-        prompt_input "TAILSCALE_AUTH_KEY" "Tailscale auth key" "" false
-        echo "TAILSCALE_AUTH_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+        # Only collect auth key once here - remove duplicate from service-specific section
+        if [[ -z "${TAILSCALE_AUTH_KEY:-}" ]]; then
+            prompt_input "TAILSCALE_AUTH_KEY" "Tailscale auth key" "" false
+            echo "TAILSCALE_AUTH_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+            echo "TAILSCALE_SETUP_METHOD=auth_key" >> "$ENV_FILE"
+            print_success "Tailscale auth key configured"
+        fi
         
-        echo "TAILSCALE_ACCEPT_DNS=false" >> "$ENV_FILE"
+        echo "TAILSCALE_EXIT_NODE=false" >> "$ENV_FILE"
+        echo "TAILSCALE_ACCEPT_ROUTES=false" >> "$ENV_FILE"
         echo "TAILSCALE_USERSPACE=ai-platform" >> "$ENV_FILE"
         
         prompt_input "TAILSCALE_EXTRA_ARGS" "Tailscale extra arguments" "" false
