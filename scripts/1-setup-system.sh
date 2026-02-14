@@ -406,76 +406,38 @@ generate_base_compose_files() {
     mkdir -p "$COMPOSE_DIR"
     
     # Generate infrastructure compose file
-    cat > "$COMPOSE_DIR/infrastructure.yml" <<EOF
-version: '3.8'
-
-networks:
-  ai_platform:
-    external: true
-  ai_platform_internal:
-    external: true
-
-services:
-  postgres:
-    image: postgres:15-alpine
-    container_name: postgres
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    networks:
-      - ai_platform
-    environment:
-      - POSTGRES_USER=\${POSTGRES_USER:-ds-admin}
-      - POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}
-      - POSTGRES_DB=\${POSTGRES_DB:-aiplatform}
-      - PGDATA=/var/lib/postgresql/data/pgdata
-    volumes:
-      - \${DATA_ROOT}/postgres:/var/lib/postgresql/data
-    ports:
-      - "127.0.0.1:\${POSTGRES_PORT:-5432}:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER:-ds-admin} -d \${POSTGRES_DB:-aiplatform}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-EOF
-    
-    # Generate vector database compose files based on selection
-    local vector_db_type=$(grep "^VECTOR_DB_TYPE=" "$ENV_FILE" | cut -d'=' -f2)
-    case "$vector_db_type" in
-        qdrant)
-            cat > "$COMPOSE_DIR/qdrant.yml" <<EOF
-version: '3.8'
-
-networks:
-  ai_platform:
-    external: true
-
-services:
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: qdrant
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    networks:
-      - ai_platform
-    ports:
-      - "6333:6333"
-    volumes:
-      - ${DATA_ROOT}/qdrant:/qdrant/storage
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-EOF
-            ;;
-        *)
-            print_info "No vector database selected or unsupported type: $vector_db_type"
-            ;;
-    esac
+    echo "version: '3.8'" > "$COMPOSE_DIR/infrastructure.yml"
+    echo "" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "networks:" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "  ai_platform:" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "    external: true" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "  ai_platform_internal:" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "    external: true" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "services:" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "  postgres:" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "    image: postgres:15-alpine" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "    container_name: postgres" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "    restart: unless-stopped" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "    security_opt:" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "      - no-new-privileges:true" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "    networks:" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "      - ai_platform" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "    environment:" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "      - POSTGRES_USER=\${POSTGRES_USER:-ds-admin}" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "      - POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "      - POSTGRES_DB=\${POSTGRES_DB:-aiplatform}" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "      - PGDATA=/var/lib/postgresql/data/pgdata" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "    volumes:" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "      - \${DATA_ROOT}/postgres:/var/lib/postgresql/data" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "    ports:" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "      - \"127.0.0.1:\${POSTGRES_PORT:-5432}:5432\"" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "    healthcheck:" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "      test: [\"CMD-SHELL\", \"pg_isready -U \${POSTGRES_USER:-ds-admin} -d \${POSTGRES_DB:-aiplatform}\"]" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "      interval: 10s" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "      timeout: 5s" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "      retries: 5" >> "$COMPOSE_DIR/infrastructure.yml"
+    echo "      start_period: 30s" >> "$COMPOSE_DIR/infrastructure.yml"
     
     print_success "Base Docker Compose files generated"
 }
@@ -492,7 +454,6 @@ save_setup_state() {
     "environment_configured": true
 }
 EOF
-}
 
 # Main execution
 main() {
