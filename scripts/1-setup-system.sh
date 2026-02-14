@@ -460,6 +460,45 @@ select_vector_database() {
                 ;;
         esac
     done
+    
+    # Vector Database Configuration (if selected)
+    if [[ " ${final_services[*]} " =~ " qdrant " ]] || [[ " ${final_services[*]} " =~ " milvus " ]] || [[ " ${final_services[*]} " =~ " weaviate " ]] || [[ " ${final_services[*]} " =~ " chroma " ]]; then
+        echo ""
+        print_info "Vector Database Configuration (Optional Overrides)"
+        echo "Note: Default configurations will work for most use cases"
+        echo ""
+        
+        # Qdrant configuration
+        if [[ " ${final_services[*]} " =~ " qdrant " ]]; then
+            prompt_input "QDRANT_PORT" "Qdrant port" "6333" false
+            echo "QDRANT_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+            
+            prompt_input "QDRANT_API_KEY" "Qdrant API key (optional)" "" false
+            if [[ -n "$INPUT_RESULT" ]]; then
+                echo "QDRANT_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+            fi
+        fi
+        
+        # Milvus configuration
+        if [[ " ${final_services[*]} " =~ " milvus " ]]; then
+            prompt_input "MILVUS_PORT" "Milvus port" "19530" false
+            echo "MILVUS_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+        fi
+        
+        # Weaviate configuration
+        if [[ " ${final_services[*]} " =~ " weaviate " ]]; then
+            prompt_input "WEAVIATE_PORT" "Weaviate port" "8080" false
+            echo "WEAVIATE_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+        fi
+        
+        # ChromaDB configuration
+        if [[ " ${final_services[*]} " =~ " chroma " ]]; then
+            prompt_input "CHROMA_PORT" "ChromaDB port" "8000" false
+            echo "CHROMA_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+        fi
+        
+        print_success "Vector database configuration completed"
+    fi
 }
 
 # Configuration Collection
@@ -507,12 +546,12 @@ collect_configurations() {
         print_info "Redis Configuration"
         echo ""
         
-        prompt_input "REDIS_PASSWORD" "Redis password" "$(generate_random_password 24)" true
-        echo "REDIS_PASSWORD=$INPUT_RESULT" >> "$ENV_FILE"
+        local redis_password=$(generate_random_password 24)
+        echo "REDIS_PASSWORD=$redis_password" >> "$ENV_FILE"
         
         echo "REDIS_PORT=6379" >> "$ENV_FILE"
         
-        print_success "Redis configuration completed"
+        print_success "Redis configuration generated"
     fi
     
     # Ollama model selection
