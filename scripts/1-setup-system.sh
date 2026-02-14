@@ -309,6 +309,14 @@ collect_domain_info() {
     echo ""
     print_info "Validating domain resolution..."
     
+    # Skip validation if no domain provided (resuming from saved state)
+    if [[ -z "${INPUT_RESULT:-}" ]]; then
+        print_info "No domain provided - skipping validation"
+        echo "DOMAIN_RESOLVES=false" >> "$ENV_FILE"
+        echo "PUBLIC_IP=" >> "$ENV_FILE"
+        return 0
+    fi
+    
     # Special case for localhost
     if [[ "$INPUT_RESULT" == "localhost" ]]; then
         print_success "Using localhost for development"
