@@ -337,16 +337,19 @@ configure_proxy() {
                 echo "PROXY_TYPE=nginx-proxy-manager" >> "$ENV_FILE"
                 echo "PROXY_CONFIG_METHOD=alias" >> "$ENV_FILE"
                 print_success "Nginx Proxy Manager selected"
+                break
                 ;;
             3)
                 echo "PROXY_TYPE=traefik" >> "$ENV_FILE"
                 echo "PROXY_CONFIG_METHOD=alias" >> "$ENV_FILE"
                 print_success "Traefik selected"
+                break
                 ;;
             4)
                 echo "PROXY_TYPE=caddy" >> "$ENV_FILE"
                 echo "PROXY_CONFIG_METHOD=alias" >> "$ENV_FILE"
                 print_success "Caddy selected"
+                break
                 ;;
             *)
                 print_error "Invalid selection"
@@ -433,18 +436,22 @@ select_vector_database() {
             2)
                 echo "VECTOR_DB_TYPE=qdrant" >> "$ENV_FILE"
                 print_success "Qdrant selected"
+                break
                 ;;
             3)
                 echo "VECTOR_DB_TYPE=weaviate" >> "$ENV_FILE"
                 print_success "Weaviate selected"
+                break
                 ;;
             4)
                 echo "VECTOR_DB_TYPE=milvus" >> "$ENV_FILE"
                 print_success "Milvus selected"
+                break
                 ;;
             5)
                 echo "VECTOR_DB_TYPE=chromadb" >> "$ENV_FILE"
                 print_success "ChromaDB selected"
+                break
                 ;;
             *)
                 print_error "Invalid selection"
