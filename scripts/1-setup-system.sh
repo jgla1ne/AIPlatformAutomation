@@ -500,19 +500,19 @@ collect_configurations() {
     print_info "Service-specific Configuration"
     
     # Signal API
-    if [[ " $(jq -r '.services[] | select(.key=="signal-api") | .key' "$SERVICES_FILE") " == *" ]]; then
+    if [[ -n "$(jq -r '.services[] | select(.key=="signal-api") | .key' "$SERVICES_FILE" 2>/dev/null)" ]]; then
         prompt_input "SIGNAL_PHONE" "Signal phone number" "" false
         echo "SIGNAL_PHONE=$INPUT_RESULT" >> "$ENV_FILE"
     fi
     
     # OpenClaw
-    if [[ " $(jq -r '.services[] | select(.key=="openclaw") | .key' "$SERVICES_FILE") " == *" ]]; then
+    if [[ -n "$(jq -r '.services[] | select(.key=="openclaw") | .key' "$SERVICES_FILE" 2>/dev/null)" ]]; then
         prompt_input "OPENCLAW_ADMIN_USER" "OpenClaw admin user" "ds-admin"
         prompt_input "OPENCLAW_ADMIN_PASSWORD" "OpenClaw admin password" "" true
     fi
     
     # MinIO
-    if [[ " $(jq -r '.services[] | select(.key=="minio") | .key' "$SERVICES_FILE") " == *" ]]; then
+    if [[ -n "$(jq -r '.services[] | select(.key=="minio") | .key' "$SERVICES_FILE" 2>/dev/null)" ]]; then
         prompt_input "MINIO_ROOT_USER" "MinIO root user" "ds-admin"
         prompt_input "MINIO_ROOT_PASSWORD" "MinIO root password" "" true
     fi
