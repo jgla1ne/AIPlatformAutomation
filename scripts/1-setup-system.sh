@@ -306,6 +306,49 @@ configure_domain() {
     echo "PUBLIC_IP=" >> "$ENV_FILE"
 }
 
+# System Detection
+detect_system() {
+    log_phase "5" "🖥️" "System Detection"
+    
+    echo ""
+    print_header "🖥️ System Information"
+    echo ""
+    
+    print_info "Detecting system hardware..."
+    
+    # Basic system info
+    local os_info=$(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2)
+    local kernel=$(uname -r)
+    local cpu_cores=$(nproc)
+    local ram_gb=$(free -g | awk '/^Mem:/ {print $2}')
+    local disk_gb=$(df -BG /mnt/data | awk 'NR==2 {print $2}' | tr -d 'G')
+    
+    echo ""
+    print_info "System Information:"
+    echo "  • OS: $os_info"
+    echo "  • Kernel: $kernel"
+    echo "  • CPU Cores: $cpu_cores"
+    echo "  • RAM: ${ram_gb}GB"
+    echo "  • Available Disk: ${disk_gb}GB"
+    echo ""
+    
+    # GPU Detection
+    print_info "GPU Detection..."
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        local gpu_info=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits | head -1)
+        print_success "NVIDIA GPU detected: $gpu_info"
+        echo "GPU_TYPE=nvidia" >> "$ENV_FILE"
+        echo "GPU_ACCELERATED=true" >> "$ENV_FILE"
+    else
+        print_info "No NVIDIA GPU detected - CPU mode only"
+        echo "GPU_TYPE=none" >> "$ENV_FILE"
+        echo "GPU_ACCELERATED=false" >> "$ENV_FILE"
+    fi
+    
+    echo ""
+    print_success "System detection completed"
+}
+
 # Proxy Selection
 configure_proxy() {
     log_phase "5" "🌐" "Proxy Selection"
@@ -1090,22 +1133,25 @@ main() {
     # Phase 4: Domain Configuration
     configure_domain
     
-    # Phase 5: Proxy Selection
+    # Phase 5: System Detection
+    detect_system
+    
+    # Phase 6: Proxy Selection
     configure_proxy
     
-    # Phase 6: SSL Configuration
+    # Phase 7: SSL Configuration
     configure_ssl
     
-    # Phase 7: Vector Database Selection
+    # Phase 8: Vector Database Selection
     select_vector_database
     
-    # Phase 8: Configuration Collection
+    # Phase 9: Configuration Collection
     collect_configurations
     
-    # Phase 9: Generate Base Compose Files
+    # Phase 10: Generate Base Compose Files
     generate_base_compose_files
     
-    # Phase 10: Service Selection
+    # Phase 11: Service Selection
     select_services
     
     # Save state

@@ -759,19 +759,35 @@ generate_deployment_summary() {
     
     # Display service URLs based on domain configuration
     if [[ "$DOMAIN_RESOLVES" == "true" ]]; then
-        print_info "Public Access (https://$DOMAIN_NAME):"
-        echo "  • Open WebUI: https://$DOMAIN_NAME/openwebui"
-        echo "  • AnythingLLM: https://$DOMAIN_NAME/anythingllm"
-        echo "  • Dify: https://$DOMAIN_NAME/dify"
-        echo "  • n8n: https://$DOMAIN_NAME/n8n"
-        echo "  • Flowise: https://$DOMAIN_NAME/flowise"
-        echo "  • Grafana: https://$DOMAIN_NAME/grafana"
-        echo "  • MinIO: https://$DOMAIN_NAME/minio"
-        echo "  • OpenClaw: https://$DOMAIN_NAME/openclaw"
-        echo "  • Signal API: https://$DOMAIN_NAME/signal"
-        echo "  • LiteLLM: https://$DOMAIN_NAME/litellm"
-        echo "  • Ollama: https://$DOMAIN_NAME/ollama"
-        echo "  • Prometheus: https://$DOMAIN_NAME/prometheus"
+        if [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
+            print_info "Public Access (https://$DOMAIN_NAME) - Path Aliases:"
+            echo "  • Open WebUI: https://$DOMAIN_NAME/openwebui"
+            echo "  • AnythingLLM: https://$DOMAIN_NAME/anythingllm"
+            echo "  • Dify: https://$DOMAIN_NAME/dify"
+            echo "  • n8n: https://$DOMAIN_NAME/n8n"
+            echo "  • Flowise: https://$DOMAIN_NAME/flowise"
+            echo "  • Grafana: https://$DOMAIN_NAME/grafana"
+            echo "  • MinIO: https://$DOMAIN_NAME/minio"
+            echo "  • OpenClaw: https://$DOMAIN_NAME/openclaw"
+            echo "  • Signal API: https://$DOMAIN_NAME/signal"
+            echo "  • LiteLLM: https://$DOMAIN_NAME/litellm"
+            echo "  • Ollama: https://$DOMAIN_NAME/ollama"
+            echo "  • Prometheus: https://$DOMAIN_NAME/prometheus"
+        else
+            print_info "Public Access (https://$DOMAIN_NAME) - Direct Ports:"
+            echo "  • Open WebUI: https://$DOMAIN_NAME:3000"
+            echo "  • AnythingLLM: https://$DOMAIN_NAME:3001"
+            echo "  • Dify: https://$DOMAIN_NAME:8080"
+            echo "  • n8n: https://$DOMAIN_NAME:5678"
+            echo "  • Flowise: https://$DOMAIN_NAME:3000"
+            echo "  • Grafana: https://$DOMAIN_NAME:3005"
+            echo "  • MinIO: https://$DOMAIN_NAME:9001"
+            echo "  • OpenClaw: https://$DOMAIN_NAME:18789"
+            echo "  • Signal API: https://$DOMAIN_NAME:8090"
+            echo "  • LiteLLM: https://$DOMAIN_NAME:4000"
+            echo "  • Ollama: https://$DOMAIN_NAME:11434"
+            echo "  • Prometheus: https://$DOMAIN_NAME:9090"
+        fi
     else
         print_info "Local Access (http://localhost):"
         echo "  • Open WebUI: http://localhost:8080"
@@ -1069,6 +1085,22 @@ services:
       - OLLAMA_KEEP_ALIVE=24h
     volumes:
       - ${DATA_ROOT}/ollama:/root/.ollama
+EOF
+
+# Add GPU support if NVIDIA GPU is detected
+if [[ "${GPU_TYPE:-none}" == "nvidia" ]] && [[ "${GPU_ACCELERATED:-false}" == "true" ]]; then
+    cat >> "$COMPOSE_DIR/ollama/docker-compose.yml" <<EOF
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+EOF
+fi
+    
+    cat >> "$COMPOSE_DIR/ollama/docker-compose.yml" <<EOF
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
       interval: 30s
