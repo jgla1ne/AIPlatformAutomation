@@ -824,14 +824,16 @@ services:
     networks:
       - ai_platform
     ports:
-      - "6333:6333"
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
     environment:
-      - QDRANT__SERVICE__HTTP_PORT=6333
-      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__SERVICE__HTTP_PORT=${QDRANT_PORT:-6333}
+      - QDRANT__SERVICE__GRPC_PORT=${QDRANT_GRPC_PORT:-6334}
+      - QDRANT__API__KEY=${QDRANT_API_KEY:-}
     volumes:
       - ${DATA_ROOT}/qdrant:/qdrant/storage
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:6333/health"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:${QDRANT_PORT:-6333}/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -907,12 +909,12 @@ services:
     volumes:
       - ${DATA_ROOT}/milvus/volumes:/var/lib/milvus
     ports:
-      - "19530:19530"
+      - "${MILVUS_PORT:-19530}:19530"
     depends_on:
       - etcd
       - minio
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:19530/health"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:${MILVUS_PORT:-19530}/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -956,14 +958,14 @@ services:
     networks:
       - ai_platform
     ports:
-      - "8000:8000"
+      - "${CHROMA_PORT:-8000}:8000"
     environment:
       - CHROMA_SERVER_HOST=0.0.0.0
-      - CHROMA_SERVER_HTTP_PORT=8000
+      - CHROMA_SERVER_HTTP_PORT=${CHROMA_PORT:-8000}
     volumes:
       - ${DATA_ROOT}/chroma:/chroma/chroma
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8000/api/v1/heartbeat"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:${CHROMA_PORT:-8000}/api/v1/heartbeat"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -1007,7 +1009,7 @@ services:
     networks:
       - ai_platform
     ports:
-      - "8080:8080"
+      - "${WEAVIATE_PORT:-8080}:8080"
     environment:
       - QUERY_DEFAULTS_LIMIT=25
       - AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true
@@ -1016,7 +1018,7 @@ services:
     volumes:
       - ${DATA_ROOT}/weaviate:/var/lib/weaviate
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/v1/.well-known/ready"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:${WEAVIATE_PORT:-8080}/v1/.well-known/ready"]
       interval: 30s
       timeout: 10s
       retries: 3
