@@ -2258,8 +2258,7 @@ generate_compose_templates() {
     
     print_info "Generating Docker Compose templates with non-root user mapping..."
     
-    # Ensure paths are available
-    local DATA_ROOT="${DATA_ROOT:-/mnt/data}"
+    # Ensure paths are available (DATA_ROOT is already readonly)
     local COMPOSE_DIR="${COMPOSE_DIR:-$DATA_ROOT/compose}"
     
     # Ensure user variables are available
