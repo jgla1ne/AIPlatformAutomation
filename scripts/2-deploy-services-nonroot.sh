@@ -181,26 +181,22 @@ generate_service_env() {
       - POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}
       - POSTGRES_DB=\${POSTGRES_DB:-aiplatform}
       - PGDATA=/var/lib/postgresql/data/pgdata
-      - PUID=$DETECTED_UID
-      - PGID=$DETECTED_GID"
+      - TZ=\${TIMEZONE:-UTC}"
             ;;
         "redis")
             env_vars="      - REDIS_PASSWORD=\${REDIS_PASSWORD}
-      - PUID=$DETECTED_UID
-      - PGID=$DETECTED_GID"
+      - TZ=\${TIMEZONE:-UTC}"
             ;;
         "ollama")
             env_vars="      - OLLAMA_HOST=0.0.0.0
-      - PUID=$DETECTED_UID
-      - PGID=$DETECTED_GID"
+      - TZ=\${TIMEZONE:-UTC}"
             ;;
         "litellm")
             env_vars="      - LITELLM_MASTER_KEY=\${LITELLM_MASTER_KEY}
       - DATABASE_URL=postgresql://\${POSTGRES_USER:-postgres}:\${POSTGRES_PASSWORD}@postgres:5432/\${POSTGRES_DB:-aiplatform}
       - REDIS_URL=redis://redis:6379
       - REDIS_PASSWORD=\${REDIS_PASSWORD}
-      - PUID=$DETECTED_UID
-      - PGID=$DETECTED_GID"
+      - TZ=\${TIMEZONE:-UTC}"
             ;;
         "dify")
             env_vars="      - CONSOLE_WEB_URL=http://localhost:8080
@@ -213,12 +209,10 @@ generate_service_env() {
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=\${REDIS_PASSWORD}
-      - PUID=$DETECTED_UID
-      - PGID=$DETECTED_GID"
+      - TZ=\${TIMEZONE:-UTC}"
             ;;
         *)
-            env_vars="      - PUID=$DETECTED_UID
-      - PGID=$DETECTED_GID"
+            env_vars="      - TZ=\${TIMEZONE:-UTC}"
             ;;
     esac
     
