@@ -24,6 +24,9 @@ readonly STATE_FILE="$METADATA_DIR/setup_state.json"
 readonly LOG_FILE="$DATA_ROOT/logs/setup.log"
 readonly ENV_FILE="$DATA_ROOT/.env"
 readonly SERVICES_FILE="$METADATA_DIR/selected_services.json"
+readonly COMPOSE_DIR="$DATA_ROOT/compose"
+readonly CONFIG_DIR="$DATA_ROOT/config"
+readonly CREDENTIALS_FILE="$METADATA_DIR/credentials.json"
 
 # UI Functions
 print_banner() {
@@ -2258,8 +2261,8 @@ generate_compose_templates() {
     
     print_info "Generating Docker Compose templates with non-root user mapping..."
     
-    # Ensure paths are available (DATA_ROOT is already readonly)
-    local COMPOSE_DIR="${COMPOSE_DIR:-$DATA_ROOT/compose}"
+    # Ensure paths are available (COMPOSE_DIR is now readonly)
+    # COMPOSE_DIR is already defined as readonly at script top
     
     # Ensure user variables are available
     RUNNING_USER="${RUNNING_USER:-${SUDO_USER:-$USER}}"
