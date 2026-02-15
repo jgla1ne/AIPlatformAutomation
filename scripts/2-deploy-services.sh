@@ -1121,7 +1121,7 @@ EOF
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Ollama configuration generated" >> "$LOG_FILE"
     
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting Ollama container" >> "$LOG_FILE"
-    docker-compose -f "$COMPOSE_DIR/ollama/docker-compose.yml" up -d 2>&1 | tee -a "$LOG_FILE"
+    docker run -d --name ollama         --network ai_platform         -p ${OLLAMA_PORT:-11434}:11434         -v ${DATA_ROOT}/ollama:/root/.ollama         -e OLLAMA_HOST=0.0.0.0         ollama/ollama:latest 2>&1 | tee -a "$LOG_FILE"
     
     wait_for_service "Ollama" "http://localhost:11434" 30
     if [[ $? -eq 0 ]]; then
