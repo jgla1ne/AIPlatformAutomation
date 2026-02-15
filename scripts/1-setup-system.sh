@@ -1655,14 +1655,8 @@ EOF
         print_info "Tailscale Configuration"
         echo ""
         
-        # Only collect auth key once here - remove duplicate from service-specific section
-        if [[ -z "${TAILSCALE_AUTH_KEY:-}" ]]; then
-            prompt_input "TAILSCALE_AUTH_KEY" "Tailscale auth key" "" false
-            echo "TAILSCALE_AUTH_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-            echo "TAILSCALE_SETUP_METHOD=auth_key" >> "$ENV_FILE"
-            print_success "Tailscale auth key configured"
-        fi
-        
+        # Tailscale auth key already collected in system configuration section
+        # Only set exit node configuration here
         echo "TAILSCALE_EXIT_NODE=false" >> "$ENV_FILE"
         echo "TAILSCALE_ACCEPT_ROUTES=false" >> "$ENV_FILE"
         echo "TAILSCALE_USERSPACE=ai-platform" >> "$ENV_FILE"
@@ -2258,6 +2252,138 @@ EOF
     print_success "Summary generation completed"
 }
 
+# 🔥 NEW: Generate Docker Compose Templates with User Mapping
+generate_compose_templates() {
+    log_phase "10" "🐳" "Docker Compose Template Generation"
+    
+    print_info "Generating Docker Compose templates with non-root user mapping..."
+    
+    # Ensure paths are available
+    local DATA_ROOT="${DATA_ROOT:-/mnt/data}"
+    local COMPOSE_DIR="${COMPOSE_DIR:-$DATA_ROOT/compose}"
+    
+    # Ensure user variables are available
+    RUNNING_USER="${RUNNING_USER:-${SUDO_USER:-$USER}}"
+    RUNNING_UID="${RUNNING_UID:-$(id -u "$RUNNING_USER")}"
+    RUNNING_GID="${RUNNING_GID:-$(id -g "$RUNNING_USER")}"
+    
+    print_info "User mapping: $RUNNING_USER ($RUNNING_UID:$RUNNING_GID)"
+    print_info "Compose directory: $COMPOSE_DIR"
+    
+    # Generate PostgreSQL compose with user mapping
+    mkdir -p "$COMPOSE_DIR/postgres"
+    cat > "$COMPOSE_DIR/postgres/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    restart: unless-stopped
+    # 🔥 NON-ROOT USER MAPPING
+    user: "$RUNNING_UID:$RUNNING_GID"
+    networks:
+      - ai_platform
+    environment:
+      - POSTGRES_USER=\${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}
+      - POSTGRES_DB=\${POSTGRES_DB:-aiplatform}
+      - PGDATA=/var/lib/postgresql/data/pgdata
+      - PUID=$RUNNING_UID
+      - PGID=$RUNNING_GID
+      - TZ=\${TIMEZONE:-UTC}
+    volumes:
+      - ${DATA_ROOT}/postgres:/var/lib/postgresql/data
+      - ${DATA_ROOT}/logs/postgres:/var/log/postgresql
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER:-postgres} -d \${POSTGRES_DB:-aiplatform}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+
+    # Generate Redis compose with user mapping
+    mkdir -p "$COMPOSE_DIR/redis"
+    cat > "$COMPOSE_DIR/redis/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    # 🔥 NON-ROOT USER MAPPING
+    user: "$RUNNING_UID:$RUNNING_GID"
+    networks:
+      - ai_platform
+    environment:
+      - REDIS_PASSWORD=\${REDIS_PASSWORD}
+      - PUID=$RUNNING_UID
+      - PGID=$RUNNING_GID
+      - TZ=\${TIMEZONE:-UTC}
+    volumes:
+      - ${DATA_ROOT}/redis:/data
+      - ${DATA_ROOT}/logs/redis:/var/log/redis
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+
+    # Generate Ollama compose with user mapping
+    mkdir -p "$COMPOSE_DIR/ollama"
+    cat > "$COMPOSE_DIR/ollama/docker-compose.yml" <<EOF
+version: '3.8'
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    # 🔥 NON-ROOT USER MAPPING
+    user: "$RUNNING_UID:$RUNNING_GID"
+    networks:
+      - ai_platform
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - PUID=$RUNNING_UID
+      - PGID=$RUNNING_GID
+      - TZ=\${TIMEZONE:-UTC}
+    volumes:
+      - ${DATA_ROOT}/ollama:/root/.ollama
+    ports:
+      - "\${OLLAMA_PORT:-11434}:11434"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+
+networks:
+  ai_platform:
+    external: true
+EOF
+
+    print_success "Docker Compose templates generated with non-root user mapping"
+    print_info "All containers will run as: $RUNNING_USER ($RUNNING_UID:$RUNNING_GID)"
+}
+
 # Main Execution
 main() {
     # Ensure running as root
@@ -2309,6 +2435,18 @@ main() {
     
     create_directory_structure
     mark_phase_complete "create_directory_structure"
+    
+    # 🔥 NEW: Generate Docker Compose Templates with User Mapping
+    generate_compose_templates
+    mark_phase_complete "generate_compose_templates"
+    
+    # DEBUG: Verify compose files were created
+    print_info "DEBUG: Checking generated compose files..."
+    if [[ -d "$COMPOSE_DIR/postgres" ]]; then
+        print_success "PostgreSQL compose file generated"
+    else
+        print_error "PostgreSQL compose file NOT generated"
+    fi
     
     validate_system
     mark_phase_complete "validate_system"
