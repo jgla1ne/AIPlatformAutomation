@@ -155,29 +155,17 @@ cleanup_volumes() {
 cleanup_networks() {
     print_step "4" "6" "🌐" "Removing networks..."
     
-    # Define all AI platform networks
-    local networks=("ai_platform" "ai_platform_internal" "ai_platform_monitoring")
-    local removed_count=0
-    
-    for network in "${networks[@]}"; do
-        if docker network ls -q --filter name="$network" | grep -q .; then
-            print_info "Removing network: $network"
-            docker network rm "$network" 2>/dev/null || true
-            ((removed_count++))
-        else
-            print_info "Network not found: $network"
-        fi
-    done
-    
-    # Also remove any orphaned networks
-    local orphaned_networks=$(docker network ls -q --filter "name=ai-platform" 2>/dev/null || true)
-    if [[ -n "$orphaned_networks" ]]; then
-        print_info "Removing orphaned ai-platform networks"
-        echo "$orphaned_networks" | xargs -r docker network rm 2>/dev/null || true
-        ((removed_count++))
+    # Remove ALL Docker networks (nuclear cleanup)
+    local network_count=0
+    if docker network ls -q | grep -q .; then
+        network_count=$(docker network ls -q | wc -l)
+        print_info "Found $network_count networks to remove"
+        docker network rm $(docker network ls -q) 2>/dev/null || true
+        print_success "$network_count networks removed"
+    else
+        print_info "No networks found"
+        print_success "0 networks removed"
     fi
-    
-    print_success "$removed_count AI platform networks removed"
 }
 
 cleanup_compose_files() {
@@ -207,30 +195,33 @@ cleanup_data_directory() {
     # Get initial size
     local initial_size=$(du -sb "$DATA_ROOT" 2>/dev/null | awk '{print $1}' || echo "0")
     
-    if mountpoint -q "$DATA_ROOT"; then
-        print_info "Data directory is a mount point - cleaning contents only"
-        
-        # Kill processes using /mnt/data
-        local processes=$(lsof +D "$DATA_ROOT" 2>/dev/null | awk 'NR>1 {print $2}' | sort -u || true)
-        if [[ -n "$processes" ]]; then
-            print_info "Terminating processes using data directory"
-            echo "$processes" | xargs -r kill -9 2>/dev/null || true
-            sleep 2
-        fi
-        
-        # Remove contents carefully
-        cd "$DATA_ROOT" || exit 1
-        # Remove regular files and directories
-        find . -maxdepth 1 -type f -delete 2>/dev/null || true
-        find . -maxdepth 1 -type d ! -name "." -exec rm -rf {} + 2>/dev/null || true
-        # Remove hidden files and directories except . and ..
-        find . -maxdepth 1 -name ".*" ! -name "." ! -name ".." -exec rm -rf {} + 2>/dev/null || true
-        cd - > /dev/null || true
-    else
-        print_info "Data directory is not a mount point - removing completely"
-        rm -rf "$DATA_ROOT" 2>/dev/null || true
-        mkdir -p "$DATA_ROOT" 2>/dev/null || true
+    # NUCLEAR CLEANUP: Remove everything first
+    print_info "Performing nuclear cleanup of data directory"
+    
+    # Kill processes using /mnt/data
+    local processes=$(lsof +D "$DATA_ROOT" 2>/dev/null | awk 'NR>1 {print $2}' | sort -u || true)
+    if [[ -n "$processes" ]]; then
+        print_info "Terminating processes using data directory"
+        echo "$processes" | xargs -r kill -9 2>/dev/null || true
+        sleep 2
     fi
+    
+    # NUCLEAR: Remove everything regardless of mount status
+    rm -rf "$DATA_ROOT"/* 2>/dev/null || true
+    rm -rf "$DATA_ROOT"/.[!.]* 2>/dev/null || true
+    sleep 1
+    
+    # Check if mount point still exists after nuclear cleanup
+    if mountpoint -q "$DATA_ROOT"; then
+        print_info "Unmounting data directory after nuclear cleanup"
+        umount "$DATA_ROOT" 2>/dev/null || true
+        sleep 1
+    else
+        print_info "Data directory is not mounted after nuclear cleanup"
+    fi
+    
+    # Ensure directory exists for next run
+    mkdir -p "$DATA_ROOT" 2>/dev/null || true
     
     # Calculate freed space
     local freed_gb=$((initial_size / 1024 / 1024 / 1024))
