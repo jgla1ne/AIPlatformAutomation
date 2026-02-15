@@ -615,13 +615,96 @@ wait_for_service() {
     return 1
 }
 
+# 🔥 NEW: Comprehensive Cleanup Function
+cleanup_previous_deployments() {
+    print_info "Cleaning up previous deployments..."
+    
+    # Stop and remove all AI platform containers
+    print_info "Stopping AI platform containers..."
+    local containers=$(docker ps -q --filter "name=postgres|redis|ollama|litellm|dify|n8n|flowise|anythingllm|openwebui|signal-api|openclaw|grafana|prometheus|minio|tailscale" 2>/dev/null || true)
+    
+    if [[ -n "$containers" ]]; then
+        echo "$containers" | xargs -r docker stop
+        echo "$containers" | xargs -r docker rm
+        print_success "Stopped and removed previous containers"
+    else
+        print_info "No previous containers found"
+    fi
+    
+    # Remove orphaned containers
+    print_info "Removing orphaned containers..."
+    docker container prune -f >/dev/null 2>&1 || true
+    
+    # Clean up AI platform networks
+    print_info "Cleaning up AI platform networks..."
+    local networks=$(docker network ls -q --filter "name=ai_platform" 2>/dev/null || true)
+    if [[ -n "$networks" ]]; then
+        echo "$networks" | xargs -r docker network rm
+        print_success "Removed AI platform networks"
+    fi
+    
+    # Clean up AppArmor profiles
+    print_info "Cleaning up AppArmor profiles..."
+    for service in postgres redis ollama litellm dify n8n flowise anythingllm openwebui signal-api openclaw grafana prometheus minio tailscale; do
+        if aa-status | grep -q "$service" 2>/dev/null; then
+            aa-complain "$service" 2>/dev/null || true
+            apparmor_parser -R "/etc/apparmor.d/$service" 2>/dev/null || true
+        fi
+    done
+    
+    # Clean up compose files (but keep templates from Script 1)
+    print_info "Cleaning up deployment artifacts..."
+    for service in postgres redis ollama litellm dify n8n flowise anythingllm openwebui signal-api openclaw grafana prometheus minio tailscale; do
+        if [[ -f "$COMPOSE_DIR/$service/docker-compose.yml" ]]; then
+            cd "$COMPOSE_DIR/$service"
+            docker-compose down -v 2>/dev/null || true
+            cd - >/dev/null
+        fi
+    done
+    
+    # Clean up temporary files and logs
+    print_info "Cleaning up temporary files..."
+    rm -f "$DATA_ROOT/logs/deployment.log" 2>/dev/null || true
+    rm -f "$DATA_ROOT/.deployment_lock" 2>/dev/null || true
+    
+    # Ensure no background processes are running
+    print_info "Terminating any background deployment processes..."
+    pkill -f "2-deploy-services.sh" 2>/dev/null || true
+    pkill -f "docker-compose" 2>/dev/null || true
+    
+    print_success "Pre-deployment cleanup completed"
+}
+
 # Main deployment function
 main() {
+    # 🔥 NEW: Deployment Lock Mechanism
+    local lock_file="$DATA_ROOT/.deployment_lock"
+    
+    if [[ -f "$lock_file" ]]; then
+        local lock_pid=$(cat "$lock_file" 2>/dev/null || echo "unknown")
+        if ps -p "$lock_pid" >/dev/null 2>&1; then
+            print_error "Deployment is already running (PID: $lock_pid)"
+            print_error "Wait for it to complete or run: kill $lock_pid"
+            exit 1
+        else
+            print_warning "Removing stale deployment lock"
+            rm -f "$lock_file"
+        fi
+    fi
+    
+    # Create deployment lock
+    echo $$ > "$lock_file"
+    trap 'rm -f "$lock_file"' EXIT
+    
     echo -e "\n${CYAN}╔════════════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║            AI PLATFORM AUTOMATION - DEPLOYMENT                 ║${NC}"
     echo -e "${CYAN}║              Non-Root Version 7.0.0                      ║${NC}"
     echo -e "${CYAN}║           AppArmor Security & Complete Coverage              ║${NC}"
     echo -e "${CYAN}╚════════════════════════════════════════════════════════════════════╝${NC}\n"
+    
+    # 🔥 NEW: Comprehensive Cleanup Before Deployment
+    print_info "Performing pre-deployment cleanup..."
+    cleanup_previous_deployments
     
     # Load selected services from Script 1
     load_selected_services
