@@ -309,6 +309,14 @@ collect_domain_info() {
     echo ""
     print_info "Validating domain resolution..."
     
+    # Skip validation if no domain provided (resuming from saved state)
+    if [[ -z "${INPUT_RESULT:-}" ]]; then
+        print_info "No domain provided - skipping validation"
+        echo "DOMAIN_RESOLVES=false" >> "$ENV_FILE"
+        echo "PUBLIC_IP=" >> "$ENV_FILE"
+        return 0
+    fi
+    
     # Special case for localhost
     if [[ "$INPUT_RESULT" == "localhost" ]]; then
         print_success "Using localhost for development"
@@ -484,11 +492,6 @@ collect_domain_info() {
                     prompt_input "TAILSCALE_AUTH_KEY" "Tailscale auth key" "" false
                     echo "TAILSCALE_AUTH_KEY=$INPUT_RESULT" >> "$ENV_FILE"
                     echo "TAILSCALE_SETUP_METHOD=auth_key" >> "$ENV_FILE"
-                    
-                    # Additional Tailscale configuration
-                    prompt_input "TAILSCALE_EXTRA_ARGS" "Tailscale extra arguments" "" false
-                    echo "TAILSCALE_EXTRA_ARGS=$INPUT_RESULT" >> "$ENV_FILE"
-                    
                     print_success "Tailscale auth key configured"
                     break
                     ;;
@@ -496,11 +499,6 @@ collect_domain_info() {
                     prompt_input "TAILSCALE_AUTH_TOKEN" "Tailscale auth token" "" false
                     echo "TAILSCALE_AUTH_TOKEN=$INPUT_RESULT" >> "$ENV_FILE"
                     echo "TAILSCALE_SETUP_METHOD=auth_token" >> "$ENV_FILE"
-                    
-                    # Additional Tailscale configuration
-                    prompt_input "TAILSCALE_EXTRA_ARGS" "Tailscale extra arguments" "" false
-                    echo "TAILSCALE_EXTRA_ARGS=$INPUT_RESULT" >> "$ENV_FILE"
-                    
                     print_success "Tailscale auth token configured"
                     break
                     ;;
@@ -512,10 +510,6 @@ collect_domain_info() {
                     ;;
             esac
         done
-        
-        # Standard Tailscale configuration
-        echo "TAILSCALE_ACCEPT_DNS=false" >> "$ENV_FILE"
-        echo "TAILSCALE_USERSPACE=ai-platform" >> "$ENV_FILE"
         
         # Tailscale network configuration
         echo ""
@@ -1658,7 +1652,25 @@ EOF
     # Tailscale configuration (if selected)
     if [[ " ${selected_services[*]} " =~ " tailscale " ]]; then
         echo ""
-
+        print_info "Tailscale Configuration"
+        echo ""
+        
+        # Only collect auth key once here - remove duplicate from service-specific section
+        if [[ -z "${TAILSCALE_AUTH_KEY:-}" ]]; then
+            prompt_input "TAILSCALE_AUTH_KEY" "Tailscale auth key" "" false
+            echo "TAILSCALE_AUTH_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+            echo "TAILSCALE_SETUP_METHOD=auth_key" >> "$ENV_FILE"
+            print_success "Tailscale auth key configured"
+        fi
+        
+        echo "TAILSCALE_EXIT_NODE=false" >> "$ENV_FILE"
+        echo "TAILSCALE_ACCEPT_ROUTES=false" >> "$ENV_FILE"
+        echo "TAILSCALE_USERSPACE=ai-platform" >> "$ENV_FILE"
+        
+        prompt_input "TAILSCALE_EXTRA_ARGS" "Tailscale extra arguments" "" false
+        echo "TAILSCALE_EXTRA_ARGS=$INPUT_RESULT" >> "$ENV_FILE"
+        
+        print_success "Tailscale configuration completed"
     fi
     
     # OpenClaw base URL (if selected)
