@@ -625,6 +625,8 @@ deploy_llm_layer() {
     
     echo "DEBUG: LLM layer deployment completed (deployed: $deployed/${#llm_services[@]})" >> "$LOG_FILE"
     print_success "LLM layer deployment completed: $deployed/${#llm_services[@]} services"
+    echo "DEBUG: About to call deploy_ai_applications..." >> "$LOG_FILE"
+    echo "DEBUG: LLM layer function completed successfully" >> "$LOG_FILE"
 }
 
 deploy_ai_applications() {
