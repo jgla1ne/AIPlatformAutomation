@@ -413,6 +413,18 @@ validate_prerequisites() {
         print_success "Docker Compose is available"
     fi
     
+    
+    # Clean up existing containers to avoid conflicts
+    print_info "Cleaning up existing containers to avoid conflicts..."
+    docker ps -aq --filter "name=ollama" | xargs -r docker rm -f 2>/dev/null || true
+    docker ps -aq --filter "name=postgres" | xargs -r docker rm -f 2>/dev/null || true
+    docker ps -aq --filter "name=redis" | xargs -r docker rm -f 2>/dev/null || true
+    
+    # Clean up existing networks to avoid conflicts
+    print_info "Cleaning up existing networks to avoid conflicts..."
+    docker network ls -q --filter "name=ai_platform" | xargs -r docker network rm 2>/dev/null || true
+    
+    sleep 2
     # Check data directory
     if [[ ! -d "$DATA_ROOT" ]]; then
         print_error "Data directory not found: $DATA_ROOT"
