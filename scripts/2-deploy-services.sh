@@ -621,8 +621,13 @@ deploy_llm_layer() {
         print_info "[$((deployed + 1))/${#llm_services[@]}] Deploying $service"
         
         if deploy_service "$service"; then
-            ((deployed++))
+            echo "DEBUG: Still alive after ollama deploy - $?" >> "$LOG_FILE"
+            echo "DEBUG: About to deploy litellm..." >> "$LOG_FILE"
+            echo "DEBUG: About to increment deployed counter..." >> "$LOG_FILE"
+            deployed=$((deployed + 1))
+            echo "DEBUG: Incremented deployed to: $deployed" >> "$LOG_FILE"
             echo "DEBUG: LLM service $service deployed successfully (deployed: $deployed)" >> "$LOG_FILE"
+            echo "DEBUG: About to continue to next iteration..." >> "$LOG_FILE"
             print_success "$service deployed successfully"
             echo "DEBUG: About to continue to next iteration in LLM loop..." >> "$LOG_FILE"
         else
@@ -1145,11 +1150,18 @@ EOF
             # Fix model name format - remove version suffix if causing issues
             local model_name="${OLLAMA_DEFAULT_MODEL%%:*}"
             print_info "Pulling default model: $model_name"
+            # Pull model with timeout to prevent hanging
+            print_info "Pulling default model: $model_name"
             set +e  # Temporarily disable strict error handling
-            if docker exec ollama ollama pull "$model_name"; then
+            
+            # Use timeout to prevent hanging
+            if timeout 300 docker exec ollama ollama pull "$model_name" 2>&1 | tee -a "$LOG_FILE"; then
                 print_success "Model $model_name pulled successfully"
+                echo "DEBUG: Model pull completed successfully" >> "$LOG_FILE"
             else
-                print_warn "Failed to pull model $model_name, continuing..."
+                local pull_code=$?
+                print_warn "Failed to pull model $model_name (exit code: $pull_code), continuing..."
+                echo "DEBUG: Model pull failed with exit code: $pull_code" >> "$LOG_FILE"
             fi
             set -e  # Re-enable strict error handling
         fi
