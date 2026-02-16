@@ -659,13 +659,42 @@ cleanup_previous_deployments() {
     docker container prune -f >> "$LOG_FILE" 2>&1 || true
     
     # Clean up unused networks
-    print_info "DEBUG: Simple network cleanup starting..."
+    print_info "DEBUG: Aggressive network cleanup starting..."
     
-    # Simple approach: just remove ai_platform networks directly
-    print_info "DEBUG: Removing ai_platform networks..."
-    docker network rm ai_platform 2>/dev/null || true
-    docker network rm ai_platform_internal 2>/dev/null || true
-    print_info "DEBUG: Network cleanup completed"
+    # Stop Docker daemon to clear network cache
+    print_info "DEBUG: Stopping Docker daemon to clear network cache..."
+    systemctl stop docker 2>/dev/null || true
+    print_info "DEBUG: Docker daemon stopped"
+    
+    # Force remove all ai_platform networks
+    print_info "DEBUG: Force removing all ai_platform networks..."
+    docker network ls --filter "name=ai_platform*" --format "{{.Name}}" 2>/dev/null | while read network; do
+        docker network rm "$network" --force 2>/dev/null || true
+        print_info "DEBUG: Removed network: $network"
+    done
+    
+    # Wait for networks to be fully removed
+    print_info "DEBUG: Waiting for networks to be fully removed..."
+    sleep 10
+    
+    # Verify networks are actually removed
+    print_info "DEBUG: Verifying networks are actually removed..."
+    local remaining_networks=$(docker network ls --filter "name=ai_platform*" --format "{{.Name}}" 2>/dev/null)
+    if [[ -n "$remaining_networks" ]]; then
+        print_error "ERROR: ai_platform networks still exist: $remaining_networks"
+        print_error "This indicates a fundamental network cleanup issue"
+        return 1
+    fi
+    
+    # Start Docker daemon to refresh network cache
+    print_info "DEBUG: Starting Docker daemon to refresh network cache..."
+    systemctl start docker 2>/dev/null || true
+    
+    # Wait for Docker daemon to be ready
+    print_info "DEBUG: Waiting for Docker daemon to be ready..."
+    sleep 5
+    
+    print_info "DEBUG: Network cleanup completed successfully"
     
     # Clean up unused volumes (be careful not to remove data volumes)
     print_info "Cleaning up unused volumes..."
