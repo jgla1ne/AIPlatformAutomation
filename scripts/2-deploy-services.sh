@@ -665,11 +665,20 @@ cleanup_previous_deployments() {
     docker volume prune -f --filter "label!=ai-platform.data" >> "$LOG_FILE" 2>&1 || true
     
     # Terminate any background deployment processes
-    print_info "Terminating any background deployment processes..."
-    pkill -f "2-deploy-services.sh" 2>/dev/null || true
+    print_info "DEBUG: About to terminate background processes..."
+    print_info "DEBUG: Current PID: $$"
+    # Kill other 2-deploy-services processes but not current one
+    for pid in $(pgrep -f "2-deploy-services.sh"); do
+        if [[ "$pid" != "$$" ]]; then
+            kill "$pid" 2>/dev/null || true
+        fi
+    done
+    print_info "DEBUG: Terminated other 2-deploy-services processes"
     pkill -f "docker-compose" 2>/dev/null || true
+    print_info "DEBUG: Terminated docker-compose processes"
     
     print_success "Pre-deployment cleanup completed"
+    print_info "DEBUG: cleanup_previous_deployments function completed"
 }
 
 # Main deployment function
