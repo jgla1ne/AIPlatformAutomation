@@ -1778,7 +1778,7 @@ setup_volumes() {
     print_info "Setting up volumes..."
     
     # Detect available volumes
-    local available_volumes=$(lsblk -d -o NAME,SIZE | grep -E "nvme|xvd" | grep -v "loop" | awk '$2 ~ /[0-9]+G/ && $2 > 50 {print $1}')
+    local fdisk_volumes=$(fdisk -l 2>/dev/null | grep "Amazon Elastic Block Store" | awk '{print $2}' | sort)
     
     if [[ -z "$available_volumes" ]]; then
         print_error "No suitable data volumes found"
