@@ -25,6 +25,7 @@ readonly LOG_FILE="$DATA_ROOT/logs/setup.log"
 readonly ENV_FILE="$DATA_ROOT/.env"
 readonly SERVICES_FILE="$METADATA_DIR/selected_services.json"
 readonly COMPOSE_DIR="$DATA_ROOT/compose"
+readonly COMPOSE_FILE="$DATA_ROOT/ai-platform/deployment/stack/docker-compose.yml"
 readonly CONFIG_DIR="$DATA_ROOT/config"
 readonly CREDENTIALS_FILE="$METADATA_DIR/credentials.json"
 
@@ -1780,32 +1781,28 @@ setup_volumes() {
     # Detect available volumes
     local volume_list=()
     local i=1
-    local fdisk_volumes=$(fdisk -l 2>/dev/null | grep "Amazon Elastic Block Store" | awk '{print $2}' | sort)
+    local fdisk_volumes=$(fdisk -l 2>/dev/null | grep -B1 "Amazon Elastic Block Store" | grep "^Disk /dev" | awk '{print $2}' | sed 's/://' | sort)
     
     if [[ -n "$fdisk_volumes" ]]; then
-        echo "$fdisk_volumes" | while read -r device; do
-            local size=$(fdisk -l 2>/dev/null | grep "/dev/$device" | awk -F': ' '/Disk/ {print $3}')
-            volume_list+=("$i) /dev/$device ($size)")
+        # Build volume list with sizes
+        while read -r device; do
+            local size=$(fdisk -l 2>/dev/null | grep "^Disk $device" | awk -F': ' '{print $2}' | awk '{print $1}')
+            volume_list+=("$i) $device ($size)")
             ((i++))
-        done
-    else
-            # Fallback to lsblk if fdisk fails
-            lsblk -d -o NAME,SIZE | grep -E "nvme|xvd" | grep -v "loop" | awk '$2 ~ /[0-9]+G/ && $2 > 50 {print $1 " " $2}' | while read -r device size; do
-                volume_list+=("$i) /dev/$device ($size)")
-                ((i++))
-            done
-        fi
-        
-        if [[ ${#volume_list[@]} -eq 0 ]]; then
-            print_error "No suitable data volumes found"
-            print_info "Please attach an EBS volume (100G+) to this instance"
-            exit 1
-        fi
+        done <<< "$fdisk_volumes"
+    fi
+    
+    # Check if we found any volumes
+    if [[ ${#volume_list[@]} -eq 0 ]]; then
+        print_error "No suitable data volumes found"
+        print_info "Please attach an EBS volume (100G+) to this instance"
+        exit 1
+    fi
         
         # Auto-select largest volume (based on size)
         if [[ ${#volume_list[@]} -eq 1 ]]; then
             local selected_device=$(echo "${volume_list[0]}" | awk '{print $2}')
-            print_info "Auto-selected: /dev/$selected_device (largest available)"
+            print_info "Auto-selected: $selected_device (only available)"
         else
             # Let user choose
             echo "Select volume to mount:"
@@ -1821,19 +1818,38 @@ setup_volumes() {
             fi
             
             local selected_device=$(echo "${volume_list[$((selection-1))]}" | awk '{print $2}')
-            print_info "Selected: /dev/$selected_device"
+            print_info "Selected: $selected_device"
         fi
         
-        local device_path="/dev/$selected_device"
+        local device_path="$selected_device"
         print_info "Mounting to /mnt..."
         
         # Create mount point if needed
         mkdir -p /mnt
         
         # Mount the volume
-        if ! mount "$device_path" /mnt; then
-            print_error "Failed to mount $device_path to /mnt"
-            exit 1
+        if mountpoint -q /mnt; then
+            print_info "/mnt is already mounted"
+            local current_mount=$(findmnt -n -o SOURCE /mnt)
+            if [[ "$current_mount" == "$device_path" ]]; then
+                print_success "Correct volume already mounted: $device_path"
+            else
+                print_warning "Different volume mounted: $current_mount"
+                print_info "Attempting to remount correct volume..."
+                umount /mnt || print_warning "Could not unmount current volume"
+                if mount "$device_path" /mnt; then
+                    print_success "Successfully remounted $device_path"
+                else
+                    print_error "Failed to mount $device_path to /mnt"
+                    exit 1
+                fi
+            fi
+        else
+            if ! mount "$device_path" /mnt; then
+                print_error "Failed to mount $device_path to /mnt"
+                exit 1
+            fi
+            print_success "Volume mounted successfully"
         fi
         
         # Add to fstab for persistence
@@ -2338,12 +2354,54 @@ generate_compose_templates() {
     
     print_info "Generating complete Docker Compose templates with non-root user mapping..."
     
+    # Load selected services
+    if [ ! -f "$SERVICES_FILE" ]; then
+        print_error "Selected services file not found"
+        return 1
+    fi
+    
+    local selected_services=($(jq -r '.services[].key' "$SERVICES_FILE"))
+    
+    # Set ENABLE variables based on selection
+    local ENABLE_OLLAMA=false
+    local ENABLE_LITELLM=false
+    local ENABLE_DIFY=false
+    local ENABLE_N8N=false
+    local ENABLE_FLOWISE=false
+    local ENABLE_ANYTHINGLLM=false
+    local ENABLE_OPENWEBUI=false
+    local ENABLE_MONITORING=false
+    
+    for service in "${selected_services[@]}"; do
+        case "$service" in
+            "ollama") ENABLE_OLLAMA=true ;;
+            "litellm") ENABLE_LITELLM=true ;;
+            "dify-api"|"dify-web") ENABLE_DIFY=true ;;
+            "n8n") ENABLE_N8N=true ;;
+            "flowise") ENABLE_FLOWISE=true ;;
+            "anythingllm") ENABLE_ANYTHINGLLM=true ;;
+            "open-webui") ENABLE_OPENWEBUI=true ;;
+            "prometheus"|"grafana") ENABLE_MONITORING=true ;;
+        esac
+    done
+    
+    # Ensure compose directory exists
+    mkdir -p "$(dirname "$COMPOSE_FILE")"
+    
     # Ensure user variables are available
     RUNNING_USER="${RUNNING_USER:-${SUDO_USER:-$USER}}"
     RUNNING_UID="${RUNNING_UID:-$(id -u "$RUNNING_USER")}"
     RUNNING_GID="${RUNNING_GID:-$(id -g "$RUNNING_USER")}"
     
+    # Set real user ID for file ownership
+    REAL_UID="${RUNNING_UID}"
+    REAL_GID="${RUNNING_GID}"
+    
+    # Set GPU type (default to none for CPU-only)
+    GPU_TYPE="${GPU_TYPE:-none}"
+    
     print_info "User mapping: $RUNNING_USER ($RUNNING_UID:$RUNNING_GID)"
+    print_info "GPU type: $GPU_TYPE"
     print_info "Compose file: $COMPOSE_FILE"
     
     # Generate complete unified compose file
