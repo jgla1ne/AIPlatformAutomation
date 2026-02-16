@@ -1824,6 +1824,7 @@ setup_volumes() {
             print_info "Selected: /dev/$selected_device"
         fi
     fi
+    fi
         
         local device_path="/dev/$selected_device"
         print_info "Mounting to /mnt..."
