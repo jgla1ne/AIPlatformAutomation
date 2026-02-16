@@ -659,7 +659,12 @@ cleanup_previous_deployments() {
     docker container prune -f >> "$LOG_FILE" 2>&1 || true
     
     # Clean up unused networks
-    print_info "DEBUG: Aggressive network cleanup starting..."
+    print_info "DEBUG: Ultimate network cleanup starting..."
+    
+    # Stop Docker daemon to clear network cache
+    print_info "DEBUG: Stopping Docker daemon to clear network cache..."
+    systemctl stop docker 2>/dev/null || true
+    print_info "DEBUG: Docker daemon stopped"
     
     # Force remove all ai_platform networks
     print_info "DEBUG: Force removing all ai_platform networks..."
@@ -681,6 +686,14 @@ cleanup_previous_deployments() {
     
     # Wait for networks to be fully removed
     print_info "DEBUG: Waiting for networks to be fully removed..."
+    sleep 5
+    
+    # Start Docker daemon to refresh network cache
+    print_info "DEBUG: Starting Docker daemon to refresh network cache..."
+    systemctl start docker 2>/dev/null || true
+    
+    # Wait for Docker daemon to be ready
+    print_info "DEBUG: Waiting for Docker daemon to be ready..."
     sleep 5
     
     # Verify complete removal
