@@ -2237,43 +2237,109 @@ EOF
         for service in "${selected_services[@]}"; do
             case $service in
                 "openwebui")
-                    echo "  • Open WebUI: http://localhost:3000"
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
+                        echo "  • Open WebUI: https://$DOMAIN_NAME/openwebui"
+                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
+                        echo "  • Open WebUI: https://$DOMAIN_NAME:3000"
+                    else
+                        echo "  • Open WebUI: http://localhost:3000"
+                    fi
                     ;;
                 "anythingllm")
-                    echo "  • AnythingLLM: http://localhost:3001"
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
+                        echo "  • AnythingLLM: https://$DOMAIN_NAME/anythingllm"
+                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
+                        echo "  • AnythingLLM: https://$DOMAIN_NAME:3001"
+                    else
+                        echo "  • AnythingLLM: http://localhost:3001"
+                    fi
                     ;;
                 "dify")
-                    echo "  • Dify: http://localhost:8080"
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
+                        echo "  • Dify: https://$DOMAIN_NAME/dify"
+                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
+                        echo "  • Dify: https://$DOMAIN_NAME:8080"
+                    else
+                        echo "  • Dify: http://localhost:8080"
+                    fi
                     ;;
                 "n8n")
-                    echo "  • n8n: http://localhost:5678"
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
+                        echo "  • n8n: https://$DOMAIN_NAME/n8n"
+                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
+                        echo "  • n8n: https://$DOMAIN_NAME:5678"
+                    else
+                        echo "  • n8n: http://localhost:5678"
+                    fi
                     ;;
                 "flowise")
-                    echo "  • Flowise: http://localhost:3002"
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
+                        echo "  • Flowise: https://$DOMAIN_NAME/flowise"
+                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
+                        echo "  • Flowise: https://$DOMAIN_NAME:3002"
+                    else
+                        echo "  • Flowise: http://localhost:3002"
+                    fi
                     ;;
                 "ollama")
-                    echo "  • Ollama: http://localhost:11434"
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
+                        echo "  • Ollama: https://$DOMAIN_NAME/ollama"
+                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
+                        echo "  • Ollama: https://$DOMAIN_NAME:11434"
+                    else
+                        echo "  • Ollama: http://localhost:11434"
+                    fi
                     ;;
                 "litellm")
-                    echo "  • LiteLLM: http://localhost:4000"
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
+                        echo "  • LiteLLM: https://$DOMAIN_NAME/litellm"
+                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
+                        echo "  • LiteLLM: https://$DOMAIN_NAME:4000"
+                    else
+                        echo "  • LiteLLM: http://localhost:4000"
+                    fi
                     ;;
                 "signal-api")
-                    echo "  • Signal API: http://localhost:8090"
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
+                        echo "  • Signal API: https://$DOMAIN_NAME/signal"
+                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
+                        echo "  • Signal API: https://$DOMAIN_NAME:8090"
+                    else
+                        echo "  • Signal API: http://localhost:8090"
+                    fi
                     ;;
                 "openclaw")
-                    echo "  • OpenClaw: http://localhost:18789"
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
+                        echo "  • OpenClaw: https://$DOMAIN_NAME/openclaw"
+                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
+                        echo "  • OpenClaw: https://$DOMAIN_NAME:18789"
+                    else
+                        echo "  • OpenClaw: http://localhost:18789"
+                    fi
                     ;;
                 "prometheus")
                     echo "  • Prometheus: http://localhost:9090"
                     ;;
                 "grafana")
-                    echo "  • Grafana: http://localhost:3005"
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
+                        echo "  • Grafana: https://$DOMAIN_NAME/grafana"
+                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
+                        echo "  • Grafana: https://$DOMAIN_NAME:3005"
+                    else
+                        echo "  • Grafana: http://localhost:3005"
+                    fi
                     ;;
                 "qdrant")
                     echo "  • Qdrant: http://localhost:6333"
                     ;;
                 "minio")
-                    echo "  • MinIO: http://localhost:9000"
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
+                        echo "  • MinIO: https://$DOMAIN_NAME/minio"
+                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
+                        echo "  • MinIO: https://$DOMAIN_NAME:9000"
+                    else
+                        echo "  • MinIO: http://localhost:9000"
+                    fi
                     ;;
                 "postgres"|"redis"|"tailscale")
                     # Infrastructure services - no direct UI
