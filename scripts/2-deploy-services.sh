@@ -710,7 +710,9 @@ main() {
     cleanup_previous_deployments
     
     # Load selected services from Script 1
+    print_info "DEBUG: About to call load_selected_services..."
     load_selected_services
+    print_info "DEBUG: load_selected_services completed successfully"
     
     # 🔍 DEBUG: Environment verification
     print_info "DEBUG: Environment variables loaded:"
@@ -721,13 +723,16 @@ main() {
     print_info "  LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-NOT_SET}"
     
     # Verify unified compose file exists
+    print_info "DEBUG: About to verify compose file exists..."
     if [[ ! -f "$COMPOSE_FILE" ]]; then
         print_error "Unified compose file not found: $COMPOSE_FILE"
         print_error "Run Script 1 first to generate the compose file"
         exit 1
     fi
+    print_info "DEBUG: Compose file verification completed"
     
     print_success "Using unified compose file: $COMPOSE_FILE"
+    print_info "DEBUG: About to create Docker networks..."
     
     # Create Docker networks if not exists
     if ! docker network inspect ai_platform >/dev/null 2>&1; then
@@ -739,24 +744,36 @@ main() {
         docker network create ai_platform_internal --internal
         print_success "Created ai_platform_internal network"
     fi
+    print_info "DEBUG: Docker networks created successfully"
     
-    # Deploy all selected services with proper ordering
-    local deployed=0
-    local failed=0
+    # 🔥 NEW: Deploy All Selected Services
+    print_info "DEBUG: About to start service deployment loop..."
+    for service in "${SELECTED_SERVICES[@]}"; do
+        print_info "DEBUG: Deploying service: $service"
+        deploy_service "$service"
+        print_info "DEBUG: Service $service deployment completed"
+    done
+    print_info "DEBUG: All services deployment loop completed"
     
     echo -e "\n${CYAN}🚀 Starting deployment of ${TOTAL_SERVICES} services...${NC}\n"
+    print_info "DEBUG: About to start core services deployment..."
     
     # Deploy core infrastructure first
     local core_services=("postgres" "redis")
     for service in "${core_services[@]}"; do
+        print_info "DEBUG: Checking core service: $service"
         if [[ " ${SELECTED_SERVICES[@]} " =~ " $service " ]]; then
+            print_info "DEBUG: Deploying core service: $service"
             if deploy_service "$service"; then
                 deployed=$((deployed + 1))
+                print_info "DEBUG: Core service $service deployed successfully"
             else
                 failed=$((failed + 1))
+                print_info "DEBUG: Core service $service deployment failed"
             fi
         fi
     done
+    print_info "DEBUG: Core services deployment completed"
     
     # Deploy remaining services
     for service in "${SELECTED_SERVICES[@]}"; do
