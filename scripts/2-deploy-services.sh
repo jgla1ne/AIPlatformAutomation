@@ -659,8 +659,14 @@ cleanup_previous_deployments() {
     docker container prune -f >> "$LOG_FILE" 2>&1 || true
     
     # Clean up unused networks
-    print_info "Cleaning up unused networks..."
+    print_info "DEBUG: Cleaning up existing networks..."
     docker network prune -f >> "$LOG_FILE" 2>&1 || true
+    
+    # Also remove any ai_platform networks specifically to ensure clean state
+    print_info "DEBUG: Removing any existing ai_platform networks..."
+    docker network ls --filter "name=ai_platform*" --format "{{.Name}}" 2>/dev/null | while read network; do
+        docker network rm "$network" 2>/dev/null || true
+    done
     
     # Clean up unused volumes (be careful not to remove data volumes)
     print_info "Cleaning up unused volumes..."
