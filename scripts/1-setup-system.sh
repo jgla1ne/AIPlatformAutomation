@@ -2361,20 +2361,20 @@ generate_compose_templates() {
     
     local selected_services=($(jq -r '.services[].key' "$SERVICES_FILE"))
     
-    # Set ENABLE variables based on selection
-    local ENABLE_OLLAMA=false
-    local ENABLE_LITELLM=false
-    local ENABLE_DIFY=false
-    local ENABLE_N8N=false
-    local ENABLE_FLOWISE=false
-    local ENABLE_ANYTHINGLLM=false
-    local ENABLE_OPENWEBUI=false
-    local ENABLE_MONITORING=false
-    local ENABLE_SIGNAL_API=false
-    local ENABLE_OPENCLAW=false
-    local ENABLE_TAILSCALE=false
-    local ENABLE_MINIO=false
-    local ENABLE_QDRANT=false
+    # Set ENABLE variables based on selection - declare globally
+    ENABLE_OLLAMA=false
+    ENABLE_LITELLM=false
+    ENABLE_DIFY=false
+    ENABLE_N8N=false
+    ENABLE_FLOWISE=false
+    ENABLE_ANYTHINGLLM=false
+    ENABLE_OPENWEBUI=false
+    ENABLE_MONITORING=false
+    ENABLE_SIGNAL_API=false
+    ENABLE_OPENCLAW=false
+    ENABLE_TAILSCALE=false
+    ENABLE_MINIO=false
+    ENABLE_QDRANT=false
     
     for service in "${selected_services[@]}"; do
         case "$service" in
@@ -2630,9 +2630,9 @@ EOF
 
 add_openwebui_service() {
     cat >> "$COMPOSE_FILE" <<'EOF'
-  open-webui:
+  openwebui:
     image: ghcr.io/open-webui/open-webui:main
-    container_name: open-webui
+    container_name: openwebui
     restart: unless-stopped
     user: "${RUNNING_UID}:${RUNNING_GID}"
     depends_on:
@@ -2680,7 +2680,7 @@ add_dify_services() {
     environment:
       MODE: api
       LOG_LEVEL: INFO
-      SECRET_KEY: ${ENCRYPTION_KEY}
+      SECRET_KEY: ${DIFY_SECRET_KEY}
       DB_USERNAME: ${POSTGRES_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD}
       DB_HOST: postgres
@@ -2758,7 +2758,7 @@ add_n8n_service() {
       DB_POSTGRESDB_DATABASE: n8n
       DB_POSTGRESDB_USER: ${POSTGRES_USER:-postgres}
       DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
-      N8N_ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
       N8N_HOST: ${DOMAIN_NAME:-localhost}
       N8N_PORT: 5678
       N8N_PROTOCOL: http
