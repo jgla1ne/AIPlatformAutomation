@@ -1798,7 +1798,7 @@ setup_volumes() {
         local i=1
         
         # Use fdisk to find EBS volumes (Amazon Elastic Block Store)
-        local fdisk_volumes=$(fdisk -l 2>/dev/null | grep "Amazon Elastic Block Store" | awk -F': ' '/Disk /dev/{print $2}' | sort)
+        local fdisk_volumes=$(fdisk -l 2>/dev/null | grep "Amazon Elastic Block Store" | awk '{print $2}' | sort)
         
         if [[ -n "$fdisk_volumes" ]]; then
             echo "$fdisk_volumes" | while read -r device; do
