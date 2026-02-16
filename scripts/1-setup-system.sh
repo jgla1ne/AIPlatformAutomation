@@ -963,9 +963,12 @@ collect_configurations() {
     # Initialize environment file (preserve existing domain variables)
     # Read existing domain variables if they exist
     local existing_domain=$(grep "^DOMAIN=" "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "localhost")
+    local existing_domain_name=$(grep "^DOMAIN_NAME=" "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "$existing_domain")
     local existing_domain_resolves=$(grep "^DOMAIN_RESOLVES=" "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "false")
     local existing_public_ip=$(grep "^PUBLIC_IP=" "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "unknown")
     local existing_proxy_config_method=$(grep "^PROXY_CONFIG_METHOD=" "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "direct")
+    local existing_ssl_type=$(grep "^SSL_TYPE=" "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "none")
+    local existing_ssl_email=$(grep "^SSL_EMAIL=" "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "")
     
     cat > "$ENV_FILE" <<EOF
 # AI Platform Environment
@@ -977,14 +980,14 @@ METADATA_DIR=$METADATA_DIR
 TIMEZONE=UTC
 LOG_LEVEL=info
 
-# Network Configuration
-DOMAIN_NAME=localhost  # Keep for backward compatibility
-DOMAIN=localhost  # Keep for backward compatibility
-DOMAIN_RESOLVES=true
-PUBLIC_IP=127.0.0.1
-PROXY_CONFIG_METHOD=alias
-SSL_TYPE=none
-SSL_EMAIL=${SSL_EMAIL:-}
+# Network Configuration (Preserved from user input)
+DOMAIN_NAME=$existing_domain_name
+DOMAIN=$existing_domain
+DOMAIN_RESOLVES=$existing_domain_resolves
+PUBLIC_IP=$existing_public_ip
+PROXY_CONFIG_METHOD=$existing_proxy_config_method
+SSL_TYPE=$existing_ssl_type
+SSL_EMAIL=$existing_ssl_email
 EOF
     
     # Port configuration
