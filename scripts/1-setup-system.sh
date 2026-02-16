@@ -980,9 +980,9 @@ METADATA_DIR=$METADATA_DIR
 TIMEZONE=UTC
 LOG_LEVEL=info
 
-# Network Configuration (Preserved from user input)
+# Network Configuration (DOMAIN=localhost by default)
 DOMAIN_NAME=$existing_domain_name
-DOMAIN=$existing_domain
+DOMAIN=localhost
 DOMAIN_RESOLVES=$existing_domain_resolves
 PUBLIC_IP=$existing_public_ip
 PROXY_CONFIG_METHOD=$existing_proxy_config_method
