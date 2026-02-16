@@ -884,6 +884,11 @@ EOF
 collect_configurations() {
     log_phase "8" "⚙️" "Configuration Collection"
     
+    # Set user variables for this function
+    RUNNING_USER="${SUDO_USER:-$USER}"
+    RUNNING_UID=$(id -u "$RUNNING_USER")
+    RUNNING_GID=$(id -g "$RUNNING_USER")
+    
     if [[ ! -f "$SERVICES_FILE" ]]; then
         print_error "Services file not found: $SERVICES_FILE"
         exit 1
@@ -988,6 +993,11 @@ PUBLIC_IP=$existing_public_ip
 PROXY_CONFIG_METHOD=$existing_proxy_config_method
 SSL_TYPE=$existing_ssl_type
 SSL_EMAIL=$existing_ssl_email
+
+# User Configuration
+RUNNING_USER=$RUNNING_USER
+RUNNING_UID=$RUNNING_UID
+RUNNING_GID=$RUNNING_GID
 EOF
     
     # Port configuration
