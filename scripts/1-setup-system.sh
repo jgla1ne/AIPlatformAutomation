@@ -2380,11 +2380,11 @@ generate_compose_templates() {
         case "$service" in
             "ollama") ENABLE_OLLAMA=true ;;
             "litellm") ENABLE_LITELLM=true ;;
-            "dify-api"|"dify-web") ENABLE_DIFY=true ;;
+            "dify") ENABLE_DIFY=true ;;
             "n8n") ENABLE_N8N=true ;;
             "flowise") ENABLE_FLOWISE=true ;;
             "anythingllm") ENABLE_ANYTHINGLLM=true ;;
-            "open-webui") ENABLE_OPENWEBUI=true ;;
+            "openwebui") ENABLE_OPENWEBUI=true ;;
             "prometheus"|"grafana") ENABLE_MONITORING=true ;;
             "signal-api") ENABLE_SIGNAL_API=true ;;
             "openclaw") ENABLE_OPENCLAW=true ;;
