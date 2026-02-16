@@ -1797,10 +1797,22 @@ setup_volumes() {
         local volume_list=()
         local i=1
         
-        lsblk -d -o NAME,SIZE | grep -E "nvme|xvd" | grep -v "loop" | awk '$2 ~ /[0-9]+G/ && $2 > 50 {print $1 " " $2}' | while read device size; do
-            volume_list+=("$i) /dev/$device ($size)")
-            ((i++))
-        done
+        # Use fdisk to find EBS volumes (more reliable than lsblk)
+        local fdisk_volumes=$(fdisk -l 2>/dev/null | grep -E "Disk /dev/(nvme|xvd)" | grep -E "100G|80G|120G|200G" | awk -F': ' '/Disk /dev/{print $2}' | sort -hr)
+        
+        if [[ -n "$fdisk_volumes" ]]; then
+            echo "$fdisk_volumes" | while read -r device; do
+                local size=$(fdisk -l 2>/dev/null | grep "/dev/$device" | awk -F': ' '/Disk/ {print $3}')
+                volume_list+=("$i) /dev/$device ($size)")
+                ((i++))
+            done
+        else
+            # Fallback to lsblk if fdisk fails
+            lsblk -d -o NAME,SIZE | grep -E "nvme|xvd" | grep -v "loop" | awk '$2 ~ /[0-9]+G/ && $2 > 50 {print $1 " " $2}' | while read -r device size; do
+                volume_list+=("$i) /dev/$device ($size)")
+                ((i++))
+            done
+        fi
         
         if [[ ${#volume_list[@]} -eq 0 ]]; then
             print_error "No suitable data volumes found"
@@ -1808,10 +1820,10 @@ setup_volumes() {
             exit 1
         fi
         
-        # If only one volume, auto-select it
+        # Auto-select largest volume (based on size)
         if [[ ${#volume_list[@]} -eq 1 ]]; then
             local selected_device=$(echo "${volume_list[0]}" | awk '{print $2}')
-            print_info "Auto-selected: /dev/$selected_device"
+            print_info "Auto-selected: /dev/$selected_device (largest available)"
         else
             # Let user choose
             echo "Select volume to mount:"
