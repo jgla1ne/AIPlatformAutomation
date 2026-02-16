@@ -19,8 +19,8 @@ readonly NC='\033[0m'
 readonly BOLD='\033[1m'
 
 # Paths (matching Script 1)
-readonly DATA_ROOT="/mnt/data"
-readonly METADATA_DIR="$DATA_ROOT/metadata"
+DATA_ROOT="/mnt/data"
+METADATA_DIR="$DATA_ROOT/metadata"
 readonly STATE_FILE="$METADATA_DIR/setup_state.json"
 readonly LOG_FILE="$DATA_ROOT/logs/deployment.log"
 readonly ENV_FILE="$DATA_ROOT/.env"
