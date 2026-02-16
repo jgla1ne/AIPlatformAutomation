@@ -2332,14 +2332,11 @@ EOF
     print_success "Summary generation completed"
 }
 
-# 🔥 NEW: Generate Docker Compose Templates with User Mapping
+# 🔥 NEW: Generate Complete Docker Compose Templates with User Mapping
 generate_compose_templates() {
-    log_phase "10" "🐳" "Docker Compose Template Generation"
+    log_phase "11" "🐳" "Docker Compose Template Generation"
     
-    print_info "Generating Docker Compose templates with non-root user mapping..."
-    
-    # Ensure paths are available (COMPOSE_DIR is now readonly)
-    # COMPOSE_DIR is already defined as readonly at script top
+    print_info "Generating complete Docker Compose templates with non-root user mapping..."
     
     # Ensure user variables are available
     RUNNING_USER="${RUNNING_USER:-${SUDO_USER:-$USER}}"
@@ -2347,69 +2344,103 @@ generate_compose_templates() {
     RUNNING_GID="${RUNNING_GID:-$(id -g "$RUNNING_USER")}"
     
     print_info "User mapping: $RUNNING_USER ($RUNNING_UID:$RUNNING_GID)"
-    print_info "Compose directory: $COMPOSE_DIR"
+    print_info "Compose file: $COMPOSE_FILE"
     
-    # Generate PostgreSQL compose with user mapping
-    mkdir -p "$COMPOSE_DIR/postgres"
-    cat > "$COMPOSE_DIR/postgres/docker-compose.yml" <<EOF
+    # Generate complete unified compose file
+    cat > "$COMPOSE_FILE" <<'COMPOSE_HEADER'
 version: '3.8'
 
+networks:
+  ai_platform:
+    name: ai_platform
+    driver: bridge
+  ai_platform_internal:
+    name: ai_platform_internal
+    driver: bridge
+    internal: true
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  ollama_data:
+    driver: local
+
 services:
+COMPOSE_HEADER
+
+    # Always add core infrastructure
+    add_postgres_service
+    add_redis_service
+    
+    # Add selected services based on user selection
+    [ "$ENABLE_OLLAMA" = true ] && add_ollama_service
+    [ "$ENABLE_LITELLM" = true ] && add_litellm_service
+    [ "$ENABLE_DIFY" = true ] && add_dify_services
+    [ "$ENABLE_N8N" = true ] && add_n8n_service
+    [ "$ENABLE_FLOWISE" = true ] && add_flowise_service
+    [ "$ENABLE_ANYTHINGLLM" = true ] && add_anythingllm_service
+    [ "$ENABLE_OPENWEBUI" = true ] && add_openwebui_service
+    [ "$ENABLE_MONITORING" = true ] && add_monitoring_services
+    
+    chmod 644 "$COMPOSE_FILE"
+    chown "${REAL_UID}:${REAL_GID}" "$COMPOSE_FILE"
+    
+    print_success "Docker Compose templates generated with non-root user mapping"
+    print_info "All containers will run as: $RUNNING_USER ($RUNNING_UID:$RUNNING_GID)"
+    mark_phase_complete "generate_compose_templates"
+}
+
+# Service definition functions
+add_postgres_service() {
+    cat >> "$COMPOSE_FILE" <<'EOF'
   postgres:
     image: postgres:15-alpine
     container_name: postgres
     restart: unless-stopped
-    # 🔥 NON-ROOT USER MAPPING
-    user: "$RUNNING_UID:$RUNNING_GID"
-    networks:
-      - ai_platform
+    user: "${RUNNING_UID}:${RUNNING_GID}"
     environment:
-      - POSTGRES_USER=\${POSTGRES_USER:-postgres}
-      - POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}
-      - POSTGRES_DB=\${POSTGRES_DB:-aiplatform}
-      - PGDATA=/var/lib/postgresql/data/pgdata
-      - PUID=$RUNNING_UID
-      - PGID=$RUNNING_GID
-      - TZ=\${TIMEZONE:-UTC}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-aiplatform}
+      PGDATA: /var/lib/postgresql/data/pgdata
+      PUID: ${RUNNING_UID}
+      PGID: ${RUNNING_GID}
+      TZ: ${TIMEZONE:-UTC}
     volumes:
-      - ${DATA_ROOT}/postgres:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
       - ${DATA_ROOT}/logs/postgres:/var/log/postgresql
+    networks:
+      - ai_platform_internal
     ports:
       - "127.0.0.1:5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER:-postgres} -d \${POSTGRES_DB:-aiplatform}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-aiplatform}"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
+    labels:
+      - "ai-platform.service=postgres"
+      - "ai-platform.type=infrastructure"
 
-networks:
-  ai_platform:
-    external: true
 EOF
+}
 
-    # Generate Redis compose with user mapping
-    mkdir -p "$COMPOSE_DIR/redis"
-    cat > "$COMPOSE_DIR/redis/docker-compose.yml" <<EOF
-version: '3.8'
-
-services:
+add_redis_service() {
+    cat >> "$COMPOSE_FILE" <<'EOF'
   redis:
     image: redis:7-alpine
     container_name: redis
     restart: unless-stopped
-    # 🔥 NON-ROOT USER MAPPING
-    user: "$RUNNING_UID:$RUNNING_GID"
-    networks:
-      - ai_platform
-    environment:
-      - REDIS_PASSWORD=\${REDIS_PASSWORD}
-      - PUID=$RUNNING_UID
-      - PGID=$RUNNING_GID
-      - TZ=\${TIMEZONE:-UTC}
+    user: "${RUNNING_UID}:${RUNNING_GID}"
+    command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes
     volumes:
-      - ${DATA_ROOT}/redis:/data
+      - redis_data:/data
       - ${DATA_ROOT}/logs/redis:/var/log/redis
+    networks:
+      - ai_platform_internal
     ports:
       - "127.0.0.1:6379:6379"
     healthcheck:
@@ -2418,49 +2449,422 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    labels:
+      - "ai-platform.service=redis"
+      - "ai-platform.type=infrastructure"
 
-networks:
-  ai_platform:
-    external: true
 EOF
+}
 
-    # Generate Ollama compose with user mapping
-    mkdir -p "$COMPOSE_DIR/ollama"
-    cat > "$COMPOSE_DIR/ollama/docker-compose.yml" <<EOF
-version: '3.8'
-
-services:
+add_ollama_service() {
+    local runtime_config=""
+    if [ "$GPU_TYPE" = "nvidia" ]; then
+        runtime_config="runtime: nvidia"
+    fi
+    
+    cat >> "$COMPOSE_FILE" <<EOF
   ollama:
     image: ollama/ollama:latest
     container_name: ollama
     restart: unless-stopped
-    # 🔥 NON-ROOT USER MAPPING
-    user: "$RUNNING_UID:$RUNNING_GID"
+    user: "\${RUNNING_UID}:\${RUNNING_GID}"
+    ${runtime_config}
     networks:
+      - ai_platform_internal
       - ai_platform
     environment:
       - OLLAMA_HOST=0.0.0.0
-      - PUID=$RUNNING_UID
-      - PGID=$RUNNING_GID
+      - OLLAMA_ORIGINS=*
+      - PUID=\${RUNNING_UID}
+      - PGID=\${RUNNING_GID}
       - TZ=\${TIMEZONE:-UTC}
     volumes:
-      - ${DATA_ROOT}/ollama:/root/.ollama
+      - ollama_data:/root/.ollama
+      - \${DATA_ROOT}/logs/ollama:/var/log/ollama
     ports:
       - "\${OLLAMA_PORT:-11434}:11434"
+EOF
+
+    if [ "$GPU_TYPE" = "nvidia" ]; then
+        cat >> "$COMPOSE_FILE" <<'EOF'
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+EOF
+    fi
+
+    cat >> "$COMPOSE_FILE" <<'EOF'
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434"]
+      test: ["CMD", "curl", "-f", "http://localhost:11434/"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 45s
+      start_period: 60s
+    labels:
+      - "ai-platform.service=ollama"
+      - "ai-platform.type=llm"
 
-networks:
-  ai_platform:
-    external: true
 EOF
+}
 
-    print_success "Docker Compose templates generated with non-root user mapping"
-    print_info "All containers will run as: $RUNNING_USER ($RUNNING_UID:$RUNNING_GID)"
+add_litellm_service() {
+    cat >> "$COMPOSE_FILE" <<'EOF'
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: litellm
+    restart: unless-stopped
+    user: "${RUNNING_UID}:${RUNNING_GID}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aiplatform}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      STORE_MODEL_IN_DB: "True"
+      PUID: ${RUNNING_UID}
+      PGID: ${RUNNING_GID}
+      TZ: ${TIMEZONE:-UTC}
+    volumes:
+      - ${DATA_ROOT}/config/litellm:/app/config
+      - ${DATA_ROOT}/logs/litellm:/app/logs
+    networks:
+      - ai_platform_internal
+      - ai_platform
+    ports:
+      - "8010:4000"
+    command: ["--config", "/app/config/config.yaml", "--port", "4000", "--num_workers", "4"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "ai-platform.service=litellm"
+      - "ai-platform.type=llm-gateway"
+
+EOF
+}
+
+add_openwebui_service() {
+    cat >> "$COMPOSE_FILE" <<'EOF'
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    user: "${RUNNING_UID}:${RUNNING_GID}"
+    depends_on:
+      - ollama
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      WEBUI_AUTH: "True"
+      WEBUI_SECRET_KEY: ${JWT_SECRET}
+      PUID: ${RUNNING_UID}
+      PGID: ${RUNNING_GID}
+      TZ: ${TIMEZONE:-UTC}
+    volumes:
+      - ${DATA_ROOT}/open-webui:/app/backend/data
+      - ${DATA_ROOT}/logs/open-webui:/app/logs
+    networks:
+      - ai_platform_internal
+      - ai_platform
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    labels:
+      - "ai-platform.service=open-webui"
+      - "ai-platform.type=ui"
+
+EOF
+}
+
+add_dify_services() {
+    cat >> "$COMPOSE_FILE" <<'EOF'
+  dify-api:
+    image: langgenius/dify-api:latest
+    container_name: dify-api
+    restart: unless-stopped
+    user: "${RUNNING_UID}:${RUNNING_GID}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      MODE: api
+      LOG_LEVEL: INFO
+      SECRET_KEY: ${ENCRYPTION_KEY}
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: dify
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      STORAGE_TYPE: local
+      STORAGE_LOCAL_PATH: /app/storage
+      VECTOR_STORE: qdrant
+      QDRANT_URL: http://qdrant:6333
+      PUID: ${RUNNING_UID}
+      PGID: ${RUNNING_GID}
+      TZ: ${TIMEZONE:-UTC}
+    volumes:
+      - ${DATA_ROOT}/dify/storage:/app/storage
+      - ${DATA_ROOT}/logs/dify:/app/logs
+    networks:
+      - ai_platform_internal
+      - ai_platform
+    ports:
+      - "5001:5001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    labels:
+      - "ai-platform.service=dify-api"
+      - "ai-platform.type=ai-platform"
+
+  dify-web:
+    image: langgenius/dify-web:latest
+    container_name: dify-web
+    restart: unless-stopped
+    depends_on:
+      dify-api:
+        condition: service_healthy
+    environment:
+      CONSOLE_API_URL: http://dify-api:5001
+      APP_API_URL: http://dify-api:5001
+    networks:
+      - ai_platform
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    labels:
+      - "ai-platform.service=dify-web"
+      - "ai-platform.type=ai-platform"
+
+EOF
+}
+
+add_n8n_service() {
+    cat >> "$COMPOSE_FILE" <<'EOF'
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    user: "${RUNNING_UID}:${RUNNING_GID}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: ${POSTGRES_USER:-postgres}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      N8N_ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      N8N_HOST: ${DOMAIN_NAME:-localhost}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: http://${DOMAIN_NAME:-localhost}:5678
+      PUID: ${RUNNING_UID}
+      PGID: ${RUNNING_GID}
+      TZ: ${TIMEZONE:-UTC}
+    volumes:
+      - ${DATA_ROOT}/n8n:/home/node/.n8n
+      - ${DATA_ROOT}/logs/n8n:/var/log/n8n
+    networks:
+      - ai_platform_internal
+      - ai_platform
+    ports:
+      - "5678:5678"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "ai-platform.service=n8n"
+      - "ai-platform.type=workflow"
+
+EOF
+}
+
+add_flowise_service() {
+    cat >> "$COMPOSE_FILE" <<'EOF'
+  flowise:
+    image: flowiseai/flowise:latest
+    container_name: flowise
+    restart: unless-stopped
+    user: "${RUNNING_UID}:${RUNNING_GID}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_TYPE: postgres
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: ${POSTGRES_USER:-postgres}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      DATABASE_NAME: flowise
+      FLOWISE_USERNAME: admin
+      FLOWISE_PASSWORD: ${ADMIN_PASSWORD}
+      SECRETKEY_OVERWRITE: ${ENCRYPTION_KEY}
+      PUID: ${RUNNING_UID}
+      PGID: ${RUNNING_GID}
+      TZ: ${TIMEZONE:-UTC}
+    volumes:
+      - ${DATA_ROOT}/flowise:/root/.flowise
+      - ${DATA_ROOT}/logs/flowise:/var/log/flowise
+    networks:
+      - ai_platform_internal
+      - ai_platform
+    ports:
+      - "3001:3000"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/v1/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "ai-platform.service=flowise"
+      - "ai-platform.type=workflow"
+
+EOF
+}
+
+add_anythingllm_service() {
+    cat >> "$COMPOSE_FILE" <<'EOF'
+  anythingllm:
+    image: mintplexlabs/anythingllm:latest
+    container_name: anythingllm
+    restart: unless-stopped
+    user: "${RUNNING_UID}:${RUNNING_GID}"
+    environment:
+      STORAGE_DIR: /app/server/storage
+      JWT_SECRET: ${JWT_SECRET}
+      LLM_PROVIDER: ollama
+      OLLAMA_BASE_PATH: http://ollama:11434
+      EMBEDDING_ENGINE: ollama
+      EMBEDDING_BASE_PATH: http://ollama:11434
+      VECTOR_DB: qdrant
+      QDRANT_ENDPOINT: http://qdrant:6333
+      PUID: ${RUNNING_UID}
+      PGID: ${RUNNING_GID}
+      TZ: ${TIMEZONE:-UTC}
+    volumes:
+      - ${DATA_ROOT}/anythingllm:/app/server/storage
+      - ${DATA_ROOT}/documents:/app/server/storage/documents
+      - ${DATA_ROOT}/logs/anythingllm:/var/log/anythingllm
+    networks:
+      - ai_platform_internal
+      - ai_platform
+    ports:
+      - "3002:3001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "ai-platform.service=anythingllm"
+      - "ai-platform.type=ai-platform"
+
+EOF
+}
+
+add_monitoring_services() {
+    cat >> "$COMPOSE_FILE" <<'EOF'
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    user: "${RUNNING_UID}:${RUNNING_GID}"
+    volumes:
+      - ${DATA_ROOT}/prometheus:/prometheus
+      - ${DATA_ROOT}/config/prometheus:/etc/prometheus
+      - ${DATA_ROOT}/logs/prometheus:/var/log/prometheus
+    networks:
+      - ai_platform_internal
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "ai-platform.service=prometheus"
+      - "ai-platform.type=monitoring"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    user: "${RUNNING_UID}:${RUNNING_GID}"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: false
+      PUID: ${RUNNING_UID}
+      PGID: ${RUNNING_GID}
+      TZ: ${TIMEZONE:-UTC}
+    volumes:
+      - ${DATA_ROOT}/grafana:/var/lib/grafana
+      - ${DATA_ROOT}/logs/grafana:/var/log/grafana
+    networks:
+      - ai_platform_internal
+      - ai_platform
+    ports:
+      - "3003:3000"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "ai-platform.service=grafana"
+      - "ai-platform.type=monitoring"
+
+EOF
 }
 
 # Main Execution
@@ -2509,16 +2913,15 @@ main() {
     create_directory_structure
     mark_phase_complete "create_directory_structure"
     generate_compose_templates
-    generate_summary Compose Templates with User Mapping
-    generate_compose_templates
     mark_phase_complete "generate_compose_templates"
     
-    # DEBUG: Verify compose files were created
-    print_info "DEBUG: Checking generated compose files..."
-    if [[ -d "$COMPOSE_DIR/postgres" ]]; then
-        print_success "PostgreSQL compose file generated"
+    # DEBUG: Verify compose file was created
+    print_info "DEBUG: Checking generated compose file..."
+    if [[ -f "$COMPOSE_FILE" ]]; then
+        print_success "Docker Compose file generated: $COMPOSE_FILE"
+        print_info "Services in compose file: $(grep -c "^  [a-z]" "$COMPOSE_FILE")"
     else
-        print_error "PostgreSQL compose file NOT generated"
+        print_error "Docker Compose file NOT generated"
     fi
     
     validate_system
