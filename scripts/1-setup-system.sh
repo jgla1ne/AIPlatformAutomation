@@ -1778,35 +1778,17 @@ setup_volumes() {
     print_info "Setting up volumes..."
     
     # Detect available volumes
+    local volume_list=()
+    local i=1
     local fdisk_volumes=$(fdisk -l 2>/dev/null | grep "Amazon Elastic Block Store" | awk '{print $2}' | sort)
     
-    if [[ -z "$available_volumes" ]]; then
-        print_error "No suitable data volumes found"
-        print_info "Please attach an EBS volume (100G+) to this instance"
-        exit 1
-    fi
-    
-    # Check if /mnt is already mounted
-    if mountpoint -q /mnt 2>/dev/null; then
-        print_warning "/mnt is already mounted"
-        local current_device=$(findmnt -n -o SOURCE /mnt | cut -d'/' -f3)
-        print_info "Currently mounted: $current_device"
+    if [[ -n "$fdisk_volumes" ]]; then
+        echo "$fdisk_volumes" | while read -r device; do
+            local size=$(fdisk -l 2>/dev/null | grep "/dev/$device" | awk -F': ' '/Disk/ {print $3}')
+            volume_list+=("$i) /dev/$device ($size)")
+            ((i++))
+        done
     else
-        # Show available volumes and let user choose
-        print_info "Available data volumes:"
-        local volume_list=()
-        local i=1
-        
-        # Use fdisk to find EBS volumes (Amazon Elastic Block Store)
-        local fdisk_volumes=$(fdisk -l 2>/dev/null | grep "Amazon Elastic Block Store" | awk '{print $2}' | sort)
-        
-        if [[ -n "$fdisk_volumes" ]]; then
-            echo "$fdisk_volumes" | while read -r device; do
-                local size=$(fdisk -l 2>/dev/null | grep "/dev/$device" | awk -F': ' '/Disk/ {print $3}')
-                volume_list+=("$i) /dev/$device ($size)")
-                ((i++))
-            done
-        else
             # Fallback to lsblk if fdisk fails
             lsblk -d -o NAME,SIZE | grep -E "nvme|xvd" | grep -v "loop" | awk '$2 ~ /[0-9]+G/ && $2 > 50 {print $1 " " $2}' | while read -r device size; do
                 volume_list+=("$i) /dev/$device ($size)")
