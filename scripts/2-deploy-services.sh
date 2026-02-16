@@ -744,6 +744,11 @@ main() {
     print_info "DEBUG: About to create Docker networks..."
     
     # Create Docker networks if not exists
+    print_info "DEBUG: About to create Docker networks..."
+    # Clean up existing networks with wrong labels first
+    print_info "DEBUG: Cleaning up existing networks..."
+    docker network prune -f >> "$LOG_FILE" 2>&1 || true
+    
     if ! docker network inspect ai_platform >/dev/null 2>&1; then
         docker network create ai_platform
         print_success "Created ai_platform network"
@@ -778,22 +783,37 @@ main() {
                 print_info "DEBUG: Core service $service deployed successfully"
             else
                 failed=$((failed + 1))
-                print_info "DEBUG: Core service $service deployment failed"
+                print_error "❌ ZERO TOLERANCE: Core service $service deployment failed!"
+                print_error "🚨 STOPPING DEPLOYMENT - Zero tolerance policy"
+                echo -e "\n${RED}❌ DEPLOYMENT FAILED WITH ERRORS${NC}"
+                echo -e "${RED}Failed services: $failed${NC}"
+                echo -e "${RED}Deployed services: $deployed${NC}"
+                exit 1
             fi
         fi
     done
     print_info "DEBUG: Core services deployment completed"
     
     # Deploy remaining services
+    print_info "DEBUG: About to deploy remaining services..."
     for service in "${SELECTED_SERVICES[@]}"; do
         if [[ ! " ${core_services[@]} " =~ " $service " ]]; then
+            print_info "DEBUG: Deploying remaining service: $service"
             if deploy_service "$service"; then
                 deployed=$((deployed + 1))
+                print_info "DEBUG: Service $service deployed successfully"
             else
                 failed=$((failed + 1))
+                print_error "❌ ZERO TOLERANCE: Service $service deployment failed!"
+                print_error "🚨 STOPPING DEPLOYMENT - Zero tolerance policy"
+                echo -e "\n${RED}❌ DEPLOYMENT FAILED WITH ERRORS${NC}"
+                echo -e "${RED}Failed services: $failed${NC}"
+                echo -e "${RED}Deployed services: $deployed${NC}"
+                exit 1
             fi
         fi
     done
+    print_info "DEBUG: All remaining services deployment completed"
     
     echo -e "\n${GREEN}🎉 Deployment completed!${NC}"
     echo -e "${CYAN}✅ Deployed: $deployed services${NC}"
