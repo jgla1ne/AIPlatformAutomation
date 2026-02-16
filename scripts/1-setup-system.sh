@@ -31,14 +31,11 @@ readonly CREDENTIALS_FILE="$METADATA_DIR/credentials.json"
 # UI Functions
 print_banner() {
     clear
-    echo -e "${CYAN}${BOLD}"
-    echo "╔════════════════════════════════════════════════════════════════════╗"
-    echo "║            AI PLATFORM AUTOMATION - SETUP                      ║"
-    echo "║                      Version 4.0.0                               ║"
-    echo "║                Configuration Collection Only                ║"
-    echo "╚════════════════════════════════════════════════════════════════════╝"
-    echo -e "${NC}"
-    echo ""
+    echo -e "\n${CYAN}╔════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║            AI PLATFORM AUTOMATION - SETUP                    ║${NC}"
+    echo -e "${CYAN}║              Version 4.0.0 - Framework Refactor          ║${NC}"
+    echo -e "${CYAN}║           Volume Detection + Domain Configuration          ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════════════════════════════╝${NC}\n"
 }
 
 print_header() {
@@ -1795,11 +1792,45 @@ setup_volumes() {
         local current_device=$(findmnt -n -o SOURCE /mnt | cut -d'/' -f3)
         print_info "Currently mounted: $current_device"
     else
-        # Select best volume (largest)
-        local selected_volume=$(echo "$available_volumes" | head -1)
-        local device_path="/dev/$selected_volume"
+        # Show available volumes and let user choose
+        print_info "Available data volumes:"
+        local volume_list=()
+        local i=1
         
-        print_info "Selected volume: $device_path"
+        lsblk -d -o NAME,SIZE | grep -E "nvme|xvd" | grep -v "loop" | awk '$2 ~ /[0-9]+G/ && $2 > 50 {print $1 " " $2}' | while read device size; do
+            volume_list+=("$i) /dev/$device ($size)")
+            ((i++))
+        done
+        
+        if [[ ${#volume_list[@]} -eq 0 ]]; then
+            print_error "No suitable data volumes found"
+            print_info "Please attach an EBS volume (100G+) to this instance"
+            exit 1
+        fi
+        
+        # If only one volume, auto-select it
+        if [[ ${#volume_list[@]} -eq 1 ]]; then
+            local selected_device=$(echo "${volume_list[0]}" | awk '{print $2}')
+            print_info "Auto-selected: /dev/$selected_device"
+        else
+            # Let user choose
+            echo "Select volume to mount:"
+            for volume in "${volume_list[@]}"; do
+                echo "$volume"
+            done
+            echo -n "Enter selection [1-${#volume_list[@]}]: "
+            read -r selection
+            
+            if [[ ! "$selection" =~ ^[0-9]+$ ]] || [[ "$selection" -lt 1 ]] || [[ "$selection" -gt ${#volume_list[@]} ]]; then
+                print_error "Invalid selection"
+                exit 1
+            fi
+            
+            local selected_device=$(echo "${volume_list[$((selection-1))]}" | awk '{print $2}')
+            print_info "Selected: /dev/$selected_device"
+        fi
+        
+        local device_path="/dev/$selected_device"
         print_info "Mounting to /mnt..."
         
         # Create mount point if needed
