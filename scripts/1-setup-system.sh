@@ -1223,7 +1223,12 @@ EOF
             selected_providers+=("openai")
             provider_keys+=("OPENAI_API_KEY")
             prompt_input "OPENAI_API_KEY" "OpenAI API key" "" false
-            echo "OPENAI_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+            # API Keys - properly quoted to handle special characters
+            if [[ -n "$INPUT_RESULT" ]]; then
+                echo "OPENAI_API_KEY='$INPUT_RESULT'" >> "$ENV_FILE"
+            else
+                echo "OPENAI_API_KEY=" >> "$ENV_FILE"
+            fi
         fi
         
         # Anthropic
@@ -1231,7 +1236,12 @@ EOF
             selected_providers+=("anthropic")
             provider_keys+=("ANTHROPIC_API_KEY")
             prompt_input "ANTHROPIC_API_KEY" "Anthropic API key" "" false
-            echo "ANTHROPIC_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+            # API Keys - properly quoted to handle special characters
+            if [[ -n "$INPUT_RESULT" ]]; then
+                echo "ANTHROPIC_API_KEY='$INPUT_RESULT'" >> "$ENV_FILE"
+            else
+                echo "ANTHROPIC_API_KEY=" >> "$ENV_FILE"
+            fi
         fi
         
         # Google
@@ -1239,7 +1249,12 @@ EOF
             selected_providers+=("google")
             provider_keys+=("GOOGLE_API_KEY")
             prompt_input "GOOGLE_API_KEY" "Google AI API key" "" false
-            echo "GOOGLE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+            # API Keys - properly quoted to handle special characters
+            if [[ -n "$INPUT_RESULT" ]]; then
+                echo "GOOGLE_API_KEY='$INPUT_RESULT'" >> "$ENV_FILE"
+            else
+                echo "GOOGLE_API_KEY=" >> "$ENV_FILE"
+            fi
         fi
         
         # Groq
@@ -1247,7 +1262,12 @@ EOF
             selected_providers+=("groq")
             provider_keys+=("GROQ_API_KEY")
             prompt_input "GROQ_API_KEY" "Groq API key" "" false
-            echo "GROQ_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+            # API Keys - properly quoted to handle special characters
+            if [[ -n "$INPUT_RESULT" ]]; then
+                echo "GROQ_API_KEY='$INPUT_RESULT'" >> "$ENV_FILE"
+            else
+                echo "GROQ_API_KEY=" >> "$ENV_FILE"
+            fi
         fi
         
         # Mistral
@@ -1255,7 +1275,12 @@ EOF
             selected_providers+=("mistral")
             provider_keys+=("MISTRAL_API_KEY")
             prompt_input "MISTRAL_API_KEY" "Mistral API key" "" false
-            echo "MISTRAL_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+            # API Keys - properly quoted to handle special characters
+            if [[ -n "$INPUT_RESULT" ]]; then
+                echo "MISTRAL_API_KEY='$INPUT_RESULT'" >> "$ENV_FILE"
+            else
+                echo "MISTRAL_API_KEY=" >> "$ENV_FILE"
+            fi
         fi
         
         # OpenRouter
@@ -1263,7 +1288,12 @@ EOF
             selected_providers+=("openrouter")
             provider_keys+=("OPENROUTER_API_KEY")
             prompt_input "OPENROUTER_API_KEY" "OpenRouter API key" "" false
-            echo "OPENROUTER_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
+            # API Keys - properly quoted to handle special characters
+            if [[ -n "$INPUT_RESULT" ]]; then
+                echo "OPENROUTER_API_KEY='$INPUT_RESULT'" >> "$ENV_FILE"
+            else
+                echo "OPENROUTER_API_KEY=" >> "$ENV_FILE"
+            fi
         fi
         
         # Configure providers
