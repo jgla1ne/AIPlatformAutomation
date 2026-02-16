@@ -1795,9 +1795,22 @@ setup_volumes() {
         local current_device=$(findmnt -n -o SOURCE /mnt | cut -d'/' -f3)
         print_info "Currently mounted: $current_device"
     else
-        # Select best volume (largest)
-        local selected_volume=$(echo "$available_volumes" | head -1)
-        local device_path="/dev/$selected_volume"
+        # Use fdisk to find EBS volumes (Amazon Elastic Block Store)
+        local fdisk_volumes=$(fdisk -l 2>/dev/null | grep "Amazon Elastic Block Store" | awk -F': ' '/Disk /dev/{print $2}' | sort)
+        
+        if [[ -n "$fdisk_volumes" ]]; then
+            echo "$fdisk_volumes" | while read -r device; do
+                local size=$(fdisk -l 2>/dev/null | grep "/dev/$device" | awk -F': ' '/Disk/ {print $3}')
+                volume_list+=("$i) /dev/$device ($size)")
+                ((i++))
+            done
+            
+            # Auto-select first volume (simplify)
+            local selected_device=$(echo "$fdisk_volumes" | head -1 | awk '{print $2}')
+            local device_path="/dev/$selected_device"
+            
+            print_info "Auto-selected: $device_path (first EBS volume)"
+        else
         
         print_info "Selected volume: $device_path"
         print_info "Mounting to /mnt..."
