@@ -546,15 +546,17 @@ deploy_service() {
     fi
     
     # Pull image
-    if ! docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" pull "$service" >> "$LOG_FILE" 2>&1; then
+    print_info "DEBUG: Pulling $service image..."
+    if ! docker compose -f "$COMPOSE_FILE" pull "$service" >> "$LOG_FILE" 2>&1; then
         echo -e "${RED}FAILED TO PULL${NC}"
         print_error "Failed to pull $service image"
-        docker compose -f "$COMPOSE_FILE" logs "$service" --tail 20 >> "$LOG_FILE" 2>&1
+        docker compose -f "$COMPOSE_FILE" logs "$service" --tail 20
         return 1
     fi
     
-    # Start service
-    if ! docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d "$service" >> "$LOG_FILE" 2>&1; then
+    # Start service with explicit environment export
+    print_info "DEBUG: Starting $service with explicit environment..."
+    if ! docker compose -f "$COMPOSE_FILE" up -d "$service" >> "$LOG_FILE" 2>&1; then
         echo -e "${RED}FAILED TO START${NC}"
         print_error "Failed to start $service"
         docker compose -f "$COMPOSE_FILE" logs "$service" --tail 20
