@@ -696,11 +696,12 @@ cleanup_previous_deployments() {
     print_info "DEBUG: Waiting for Docker daemon to be ready..."
     sleep 5
     
-    # Verify complete removal
-    print_info "DEBUG: Verifying complete network removal..."
+    # Final verification - ensure no ai_platform networks exist
+    print_info "DEBUG: Final verification - ensure no ai_platform networks exist..."
     local remaining_networks=$(docker network ls --filter "name=ai_platform*" --format "{{.Name}}" 2>/dev/null)
     if [[ -n "$remaining_networks" ]]; then
         print_error "ERROR: ai_platform networks still exist: $remaining_networks"
+        print_error "This indicates a fundamental network cleanup issue"
         return 1
     fi
     
