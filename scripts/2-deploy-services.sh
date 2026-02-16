@@ -130,7 +130,7 @@ if [[ -f "$ENV_FILE" ]]; then
             var_name="${line%%=*}"
             # Skip readonly variables defined in this script
             case "$var_name" in
-                DATA_ROOT|METADATA_DIR|STATE_FILE|LOG_FILE|ENV_FILE|SERVICES_FILE|COMPOSE_DIR|CONFIG_DIR|CREDENTIALS_FILE|APPARMOR_PROFILES_DIR|SECURITY_COMPLIANCE)
+                DATA_ROOT|METADATA_DIR|STATE_FILE|LOG_FILE|ENV_FILE|SERVICES_FILE|COMPOSE_FILE|CONFIG_DIR|CREDENTIALS_FILE|APPARMOR_PROFILES_DIR|SECURITY_COMPLIANCE)
                     continue
                     ;;
                 *)
@@ -143,6 +143,9 @@ else
     print_error "Environment file not found. Run script 1 first."
     exit 1
 fi
+
+# 🔥 CRITICAL FIX: Export DATA_ROOT globally for docker compose
+export DATA_ROOT=/mnt/data
 
 # 🔥 NEW: Load Selected Services from JSON
 load_selected_services() {
@@ -545,8 +548,44 @@ deploy_service() {
         return 1
     fi
     
+    # Check for alternative service names (handle Script 1 naming differences)
+    local service_found=false
+    
+    # Try exact match first
+    if grep -q "^  $service:" "$COMPOSE_FILE"; then
+        service_found=true
+    fi
+    
+    # Try common alternatives if not found
+    if [[ "$service_found" == false ]]; then
+        case "$service" in
+            "dify")
+                if grep -q "^dify-api:" "$COMPOSE_FILE" || grep -q "^dify-web:" "$COMPOSE_FILE"; then
+                    service_found=true
+                fi
+                ;;
+            "openclaw")
+                if grep -q "^openclaw:" "$COMPOSE_FILE"; then
+                    service_found=true
+                fi
+                ;;
+            "signal-api")
+                if grep -q "^signal-cli:" "$COMPOSE_FILE" || grep -q "^signal-api:" "$COMPOSE_FILE"; then
+                    service_found=true
+                fi
+                ;;
+        esac
+    fi
+    
+    if [[ "$service_found" == false ]]; then
+        echo -e "${RED}SERVICE NOT FOUND IN COMPOSE FILE${NC}"
+        print_error "Service $service not defined in $COMPOSE_FILE"
+        return 1
+    fi
+    
     # Pull image
     print_info "DEBUG: Pulling $service image..."
+    export DATA_ROOT=/mnt/data
     if ! DATA_ROOT=/mnt/data docker compose -f "$COMPOSE_FILE" pull "$service" >> "$LOG_FILE" 2>&1; then
         echo -e "${RED}FAILED TO PULL${NC}"
         print_error "Failed to pull $service image"
@@ -556,6 +595,7 @@ deploy_service() {
     
     # Start service with explicit environment
     print_info "DEBUG: Starting $service with explicit environment..."
+    export DATA_ROOT=/mnt/data
     if ! DATA_ROOT=/mnt/data docker compose -f "$COMPOSE_FILE" up -d "$service" >> "$LOG_FILE" 2>&1; then
         echo -e "${RED}FAILED TO START${NC}"
         print_error "Failed to start $service"
@@ -564,14 +604,15 @@ deploy_service() {
     fi
     
     # Wait for health
-    if wait_for_healthy "$service" 60; then
+    print_info "DEBUG: Waiting for $service to become healthy..."
+    if wait_for_healthy "$service" 180; then
         echo -e "${GREEN}✓ HEALTHY${NC}"
         display_service_info "$service"
         return 0
     else
         echo -e "${YELLOW}⚠ RUNNING (health check timeout)${NC}"
         print_warning "$service is running but health check timed out"
-        return 0  # Don't fail deployment for health check timeout
+        return 0 # Don't fail deployment for health check timeout
     fi
 }
 
@@ -750,6 +791,7 @@ main() {
     echo -e "${CYAN}║           AppArmor Security & Complete Coverage              ║${NC}"
     echo -e "${CYAN}╚════════════════════════════════════════════════════════════════════╝${NC}\n"
     
+
     # 🔥 NEW: Comprehensive Cleanup Before Deployment
     print_info "Performing pre-deployment cleanup..."
     cleanup_previous_deployments
@@ -796,12 +838,83 @@ main() {
     fi
     print_info "DEBUG: Docker networks created successfully"
     
-    # 🔥 NEW: Deploy All Selected Services
+    # 🔥 UPDATED: Deploy Services in Dependency Order
     print_info "DEBUG: About to start service deployment loop..."
-    for service in "${SELECTED_SERVICES[@]}"; do
-        print_info "DEBUG: Deploying service: $service"
-        deploy_service "$service"
-        print_info "DEBUG: Service $service deployment completed"
+    
+    # Define deployment order based on dependencies
+    local core_services=("postgres" "redis")
+    local monitoring_services=("prometheus" "grafana")
+    local ai_services=("ollama" "litellm" "openwebui" "anythingllm" "dify" "openclaw")
+    local communication_services=("n8n" "signal-api")
+    local storage_services=("minio")
+    local network_services=("tailscale")
+    
+    # Deploy in phases
+    local failed=0
+    
+    # Phase 1: Core Infrastructure
+    print_info "DEBUG: Deploying core infrastructure..."
+    
+    # Fix PostgreSQL volume permissions first
+    print_info "DEBUG: Fixing PostgreSQL volume permissions..."
+    if [[ -d "${DATA_ROOT}/postgres" ]]; then
+        chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/postgres"
+        chmod -R 755 "${DATA_ROOT}/postgres"
+        print_success "Fixed PostgreSQL volume permissions"
+    fi
+    
+    # Fix Redis volume permissions
+    print_info "DEBUG: Fixing Redis volume permissions..."
+    if [[ -d "${DATA_ROOT}/redis" ]]; then
+        chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/redis"
+        chmod -R 755 "${DATA_ROOT}/redis"
+        print_success "Fixed Redis volume permissions"
+    fi
+    
+    for service in "${core_services[@]}"; do
+        if [[ " ${SELECTED_SERVICES[*]} " =~ " ${service} " ]]; then
+            deploy_service "$service" || failed=$((failed + 1))
+        fi
+    done
+    
+    # Phase 2: Monitoring Services
+    print_info "DEBUG: Deploying monitoring services..."
+    for service in "${monitoring_services[@]}"; do
+        if [[ " ${SELECTED_SERVICES[*]} " =~ " ${service} " ]]; then
+            deploy_service "$service" || failed=$((failed + 1))
+        fi
+    done
+    
+    # Phase 3: AI Services
+    print_info "DEBUG: Deploying AI services..."
+    for service in "${ai_services[@]}"; do
+        if [[ " ${SELECTED_SERVICES[*]} " =~ " ${service} " ]]; then
+            deploy_service "$service" || failed=$((failed + 1))
+        fi
+    done
+    
+    # Phase 4: Communication Services
+    print_info "DEBUG: Deploying communication services..."
+    for service in "${communication_services[@]}"; do
+        if [[ " ${SELECTED_SERVICES[*]} " =~ " ${service} " ]]; then
+            deploy_service "$service" || failed=$((failed + 1))
+        fi
+    done
+    
+    # Phase 5: Storage Services
+    print_info "DEBUG: Deploying storage services..."
+    for service in "${storage_services[@]}"; do
+        if [[ " ${SELECTED_SERVICES[*]} " =~ " ${service} " ]]; then
+            deploy_service "$service" || failed=$((failed + 1))
+        fi
+    done
+    
+    # Phase 6: Network Services
+    print_info "DEBUG: Deploying network services..."
+    for service in "${network_services[@]}"; do
+        if [[ " ${SELECTED_SERVICES[*]} " =~ " ${service} " ]]; then
+            deploy_service "$service" || failed=$((failed + 1))
+        fi
     done
     print_info "DEBUG: All services deployment loop completed"
     
@@ -810,6 +923,7 @@ main() {
     
     # Deploy core infrastructure first
     local core_services=("postgres" "redis")
+    local deployed=0
     for service in "${core_services[@]}"; do
         print_info "DEBUG: Checking core service: $service"
         if [[ " ${SELECTED_SERVICES[@]} " =~ " $service " ]]; then
