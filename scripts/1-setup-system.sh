@@ -1771,9 +1771,9 @@ EOF
     print_success "Configuration collection completed"
 }
 
-# 🔥 NEW: Volume Detection and Mounting
+# 🔥 UPDATED: Volume Detection and Mounting
 setup_volumes() {
-    log_phase "8" "🗂️" "Volume Setup"
+    log_phase "1" "🗂️" "Volume Setup"
     
     print_info "Setting up volumes..."
     
@@ -2507,37 +2507,28 @@ main() {
     fi
     
     # Execute phases
-    detect_system
-    mark_phase_complete "detect_system"
-    
-    collect_domain_info
-    mark_phase_complete "collect_domain_info"
-    
-    update_system
-    mark_phase_complete "update_system"
-    
-    install_docker
-    mark_phase_complete "install_docker"
-    
-    configure_docker
-    mark_phase_complete "configure_docker"
-    
-    install_ollama
-    mark_phase_complete "install_ollama"
-    
-    select_services
-    mark_phase_complete "select_services"
-    
     setup_volumes
     mark_phase_complete "setup_volumes"
-    
+    detect_system
+    mark_phase_complete "detect_system"
+    collect_domain_info
+    mark_phase_complete "collect_domain_info"
+    update_system
+    mark_phase_complete "update_system"
+    install_docker
+    mark_phase_complete "install_docker"
+    configure_docker
+    mark_phase_complete "configure_docker"
+    install_ollama
+    mark_phase_complete "install_ollama"
+    select_services
+    mark_phase_complete "select_services"
     collect_configurations
     mark_phase_complete "collect_configurations"
-    
     create_directory_structure
     mark_phase_complete "create_directory_structure"
-    
-    # 🔥 NEW: Generate Docker Compose Templates with User Mapping
+    generate_compose_templates
+    generate_summary Compose Templates with User Mapping
     generate_compose_templates
     mark_phase_complete "generate_compose_templates"
     
