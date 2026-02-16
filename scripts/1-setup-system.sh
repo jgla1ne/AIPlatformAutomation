@@ -961,14 +961,14 @@ collect_configurations() {
     echo ""
     
     # Initialize environment file (preserve existing domain variables)
-    # Read existing domain variables if they exist
-    local existing_domain=$(grep "^DOMAIN=" "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "localhost")
-    local existing_domain_name=$(grep "^DOMAIN_NAME=" "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "$existing_domain")
-    local existing_domain_resolves=$(grep "^DOMAIN_RESOLVES=" "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "false")
-    local existing_public_ip=$(grep "^PUBLIC_IP=" "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "unknown")
-    local existing_proxy_config_method=$(grep "^PROXY_CONFIG_METHOD=" "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "direct")
-    local existing_ssl_type=$(grep "^SSL_TYPE=" "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "none")
-    local existing_ssl_email=$(grep "^SSL_EMAIL=" "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "")
+    # Read existing domain variables if they exist (get last occurrence to avoid duplicates)
+    local existing_domain=$(grep "^DOMAIN=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "localhost")
+    local existing_domain_name=$(grep "^DOMAIN_NAME=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "$existing_domain")
+    local existing_domain_resolves=$(grep "^DOMAIN_RESOLVES=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "false")
+    local existing_public_ip=$(grep "^PUBLIC_IP=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "unknown")
+    local existing_proxy_config_method=$(grep "^PROXY_CONFIG_METHOD=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "direct")
+    local existing_ssl_type=$(grep "^SSL_TYPE=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "none")
+    local existing_ssl_email=$(grep "^SSL_EMAIL=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "")
     
     cat > "$ENV_FILE" <<EOF
 # AI Platform Environment
@@ -1061,8 +1061,10 @@ EOF
         case "$service_key" in
             "nginx-proxy-manager"|"traefik"|"caddy"|"openwebui"|"anythingllm"|"n8n"|"dify"|"ollama"|"litellm"|"prometheus"|"grafana"|"signal-api"|"openclaw"|"tailscale"|"postgres"|"redis"|"qdrant"|"milvus"|"chroma"|"weaviate"|"minio")
                 local default_port="${default_ports[$service_key]:-3000}"
-                prompt_input "${service_key^^}_PORT" "$service_key port" "$default_port" false
-                echo "${service_key^^}_PORT=$INPUT_RESULT" >> "$ENV_FILE"
+                # Convert service key to uppercase with underscores only
+                local port_var_name=$(echo "$service_key" | tr '-' '_' | tr '[:lower:]' '[:upper:]')_PORT
+                prompt_input "$port_var_name" "$service_key port" "$default_port" false
+                echo "$port_var_name=$INPUT_RESULT" >> "$ENV_FILE"
                 ;;
         esac
     done
