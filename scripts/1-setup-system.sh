@@ -978,13 +978,12 @@ TIMEZONE=UTC
 LOG_LEVEL=info
 
 # Network Configuration
-DOMAIN_NAME=$existing_domain
-DOMAIN=$existing_domain  # Keep for backward compatibility
-DOMAIN_RESOLVES=$existing_domain_resolves
-PUBLIC_IP=$existing_public_ip
-PROXY_CONFIG_METHOD=$existing_proxy_config_method
-# PROXY_TYPE=${PROXY_TYPE:-none}  # REMOVED: This was overwriting the selection!
-SSL_TYPE=${SSL_TYPE:-none}
+DOMAIN_NAME=localhost  # Keep for backward compatibility
+DOMAIN=localhost  # Keep for backward compatibility
+DOMAIN_RESOLVES=true
+PUBLIC_IP=127.0.0.1
+PROXY_CONFIG_METHOD=alias
+SSL_TYPE=none
 SSL_EMAIL=${SSL_EMAIL:-}
 EOF
     
@@ -1377,9 +1376,9 @@ EOF
                     ;;
                 2)
                     echo "SIGNAL_PAIRING_METHOD=internal_api" >> "$ENV_FILE"
-                    echo "SIGNAL_API_PAIRING_URL=http://localhost:8081/v1/generate_token" >> "$ENV_FILE"
+                    echo "SIGNAL_API_PAIRING_URL=http://localhost:8081/v1/qrcodelink?device_name=signal-api" >> "$ENV_FILE"
                     print_success "Internal API pairing selected"
-                    print_info "Pairing token will be available at: http://localhost:8081/v1/generate_token"
+                    print_info "Pairing token will be available at: http://localhost:8081/v1/qrcodelink?device_name=signal-api"
                     break
                     ;;
                 3)
@@ -1469,7 +1468,7 @@ EOF
             esac
         done
         
-        echo "OPENCLAW_PORT=8082" >> "$ENV_FILE"
+        echo "OPENCLAW_PORT=18789" >> "$ENV_FILE"
         echo "OPENCLAW_API_PORT=8083" >> "$ENV_FILE"
         
         # OpenClaw integration settings
@@ -2371,6 +2370,11 @@ generate_compose_templates() {
     local ENABLE_ANYTHINGLLM=false
     local ENABLE_OPENWEBUI=false
     local ENABLE_MONITORING=false
+    local ENABLE_SIGNAL_API=false
+    local ENABLE_OPENCLAW=false
+    local ENABLE_TAILSCALE=false
+    local ENABLE_MINIO=false
+    local ENABLE_QDRANT=false
     
     for service in "${selected_services[@]}"; do
         case "$service" in
@@ -2382,6 +2386,11 @@ generate_compose_templates() {
             "anythingllm") ENABLE_ANYTHINGLLM=true ;;
             "open-webui") ENABLE_OPENWEBUI=true ;;
             "prometheus"|"grafana") ENABLE_MONITORING=true ;;
+            "signal-api") ENABLE_SIGNAL_API=true ;;
+            "openclaw") ENABLE_OPENCLAW=true ;;
+            "tailscale") ENABLE_TAILSCALE=true ;;
+            "minio") ENABLE_MINIO=true ;;
+            "qdrant") ENABLE_QDRANT=true ;;
         esac
     done
     
@@ -2441,6 +2450,11 @@ COMPOSE_HEADER
     [ "$ENABLE_ANYTHINGLLM" = true ] && add_anythingllm_service
     [ "$ENABLE_OPENWEBUI" = true ] && add_openwebui_service
     [ "$ENABLE_MONITORING" = true ] && add_monitoring_services
+    [ "$ENABLE_SIGNAL_API" = true ] && add_signal_api_service
+    [ "$ENABLE_OPENCLAW" = true ] && add_openclaw_service
+    [ "$ENABLE_TAILSCALE" = true ] && add_tailscale_service
+    [ "$ENABLE_MINIO" = true ] && add_minio_service
+    [ "$ENABLE_QDRANT" = true ] && add_qdrant_service
     
     chmod 644 "$COMPOSE_FILE"
     chown "${REAL_UID}:${REAL_GID}" "$COMPOSE_FILE"
@@ -2921,6 +2935,184 @@ add_monitoring_services() {
     labels:
       - "ai-platform.service=grafana"
       - "ai-platform.type=monitoring"
+
+EOF
+}
+
+add_signal_api_service() {
+    cat >> "$COMPOSE_FILE" <<'EOF'
+  signal-api:
+    image: bbernhard/signal-cli-rest-api:latest
+    container_name: signal-api
+    restart: unless-stopped
+    user: "${RUNNING_UID}:${RUNNING_GID}"
+    environment:
+      MODE: json-rpc
+      PORT: ${SIGNAL_API_PORT:-8090}
+      PUID: ${RUNNING_UID}
+      PGID: ${RUNNING_GID}
+      TZ: ${TIMEZONE:-UTC}
+    volumes:
+      - ${DATA_ROOT}/signal-api:/home/.local/share/signal-cli
+      - ${DATA_ROOT}/logs/signal-api:/var/log/signal-api
+    networks:
+      - ai_platform_internal
+      - ai_platform
+    ports:
+      - "${SIGNAL_API_PORT:-8090}:8090"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8090/about"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "ai-platform.service=signal-api"
+      - "ai-platform.type=communication"
+
+EOF
+}
+
+add_openclaw_service() {
+    cat >> "$COMPOSE_FILE" <<'EOF'
+  openclaw:
+    image: openclaw/openclaw:latest
+    container_name: openclaw
+    restart: unless-stopped
+    user: "${RUNNING_UID}:${RUNNING_GID}"
+    environment:
+      OPENCLAW_ADMIN_USER: ${OPENCLAW_ADMIN_USER:-admin}
+      OPENCLAW_ADMIN_PASSWORD: ${OPENCLAW_ADMIN_PASSWORD}
+      OPENCLAW_PORT: ${OPENCLAW_PORT:-18789}
+      OPENCLAW_API_PORT: ${OPENCLAW_API_PORT:-8083}
+      OPENCLAW_ENABLE_SIGNAL: ${OPENCLAW_ENABLE_SIGNAL:-true}
+      OPENCLAW_ENABLE_LITELM: ${OPENCLAW_ENABLE_LITELM:-true}
+      OPENCLAW_ENABLE_N8N: ${OPENCLAW_ENABLE_N8N:-true}
+      PUID: ${RUNNING_UID}
+      PGID: ${RUNNING_GID}
+      TZ: ${TIMEZONE:-UTC}
+    volumes:
+      - ${DATA_ROOT}/openclaw:/app/data
+      - ${DATA_ROOT}/logs/openclaw:/var/log/openclaw
+    networks:
+      - ai_platform_internal
+      - ai_platform
+    ports:
+      - "${OPENCLAW_PORT:-18789}:8082"
+      - "${OPENCLAW_API_PORT:-8083}:8083"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8082/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "ai-platform.service=openclaw"
+      - "ai-platform.type=orchestration"
+
+EOF
+}
+
+add_tailscale_service() {
+    cat >> "$COMPOSE_FILE" <<'EOF'
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tailscale
+    restart: unless-stopped
+    user: "${RUNNING_UID}:${RUNNING_GID}"
+    environment:
+      TS_USERSPACE: ${TAILSCALE_USERSPACE:-ai-platform}
+      TS_EXTRA_ARGS: ${TAILSCALE_EXTRA_ARGS}
+      PUID: ${RUNNING_UID}
+      PGID: ${RUNNING_GID}
+      TZ: ${TIMEZONE:-UTC}
+    volumes:
+      - ${DATA_ROOT}/tailscale:/var/lib/tailscale
+      - ${DATA_ROOT}/logs/tailscale:/var/log/tailscale
+    networks:
+      - ai_platform_internal
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun
+    healthcheck:
+      test: ["CMD", "tailscale", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "ai-platform.service=tailscale"
+      - "ai-platform.type=networking"
+
+EOF
+}
+
+add_minio_service() {
+    cat >> "$COMPOSE_FILE" <<'EOF'
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    restart: unless-stopped
+    user: "${RUNNING_UID}:${RUNNING_GID}"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      PUID: ${RUNNING_UID}
+      PGID: ${RUNNING_GID}
+      TZ: ${TIMEZONE:-UTC}
+    volumes:
+      - ${DATA_ROOT}/minio:/data
+      - ${DATA_ROOT}/logs/minio:/var/log/minio
+    networks:
+      - ai_platform_internal
+      - ai_platform
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "ai-platform.service=minio"
+      - "ai-platform.type=storage"
+
+EOF
+}
+
+add_qdrant_service() {
+    cat >> "$COMPOSE_FILE" <<'EOF'
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    restart: unless-stopped
+    user: "${RUNNING_UID}:${RUNNING_GID}"
+    environment:
+      PUID: ${RUNNING_UID}
+      PGID: ${RUNNING_GID}
+      TZ: ${TIMEZONE:-UTC}
+    volumes:
+      - ${DATA_ROOT}/qdrant:/qdrant/storage
+      - ${DATA_ROOT}/logs/qdrant:/var/log/qdrant
+    networks:
+      - ai_platform_internal
+      - ai_platform
+    ports:
+      - "6333:6333"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:6333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "ai-platform.service=qdrant"
+      - "ai-platform.type=vector-database"
 
 EOF
 }
