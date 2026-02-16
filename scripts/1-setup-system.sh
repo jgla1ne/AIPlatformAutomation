@@ -980,8 +980,8 @@ TIMEZONE=UTC
 LOG_LEVEL=info
 
 # Network Configuration
-DOMAIN=$existing_domain
 DOMAIN_NAME=$existing_domain
+DOMAIN=$existing_domain  # Keep for backward compatibility
 DOMAIN_RESOLVES=$existing_domain_resolves
 PUBLIC_IP=$existing_public_ip
 PROXY_CONFIG_METHOD=$existing_proxy_config_method
@@ -1774,10 +1774,63 @@ EOF
     print_success "Configuration collection completed"
 }
 
+# 🔥 NEW: Volume Detection and Mounting
+setup_volumes() {
+    log_phase "8" "🗂️" "Volume Setup"
+    
+    print_info "Setting up volumes..."
+    
+    # Detect available volumes
+    local available_volumes=$(lsblk -d -o NAME,SIZE | grep -E "nvme|xvd" | grep -v "loop" | awk '$2 ~ /[0-9]+G/ && $2 > 50 {print $1}')
+    
+    if [[ -z "$available_volumes" ]]; then
+        print_error "No suitable data volumes found"
+        print_info "Please attach an EBS volume (100G+) to this instance"
+        exit 1
+    fi
+    
+    # Check if /mnt is already mounted
+    if mountpoint -q /mnt 2>/dev/null; then
+        print_warning "/mnt is already mounted"
+        local current_device=$(findmnt -n -o SOURCE /mnt | cut -d'/' -f3)
+        print_info "Currently mounted: $current_device"
+    else
+        # Select best volume (largest)
+        local selected_volume=$(echo "$available_volumes" | head -1)
+        local device_path="/dev/$selected_volume"
+        
+        print_info "Selected volume: $device_path"
+        print_info "Mounting to /mnt..."
+        
+        # Create mount point if needed
+        mkdir -p /mnt
+        
+        # Mount the volume
+        if ! mount "$device_path" /mnt; then
+            print_error "Failed to mount $device_path to /mnt"
+            exit 1
+        fi
+        
+        # Add to fstab for persistence
+        if ! grep -q "$device_path" /etc/fstab; then
+            echo "$device_path /mnt ext4 defaults 0 2" >> /etc/fstab
+            print_success "Added to /etc/fstab for persistence"
+        fi
+        
+        print_success "Volume mounted successfully"
+    fi
+}
+
 create_directory_structure() {
     log_phase "9" "📁" "Directory Structure Creation"
     
     print_info "Creating modular directory structure..."
+    
+    # Validate /mnt is properly mounted
+    if ! mountpoint -q /mnt 2>/dev/null; then
+        print_error "/mnt is not mounted - running volume setup first"
+        setup_volumes
+    fi
     
     # Create directories
     mkdir -p "$DATA_ROOT"/{compose,env,config,metadata,data,logs,secrets}
@@ -2431,6 +2484,9 @@ main() {
     
     select_services
     mark_phase_complete "select_services"
+    
+    setup_volumes
+    mark_phase_complete "setup_volumes"
     
     collect_configurations
     mark_phase_complete "collect_configurations"

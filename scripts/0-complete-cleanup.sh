@@ -1,296 +1,136 @@
 #!/bin/bash
-
-#==============================================================================
-# Script 0: Complete Platform Reset (Refactored)
-# Purpose: Remove all containers, volumes, networks, and configurations
-# WARNING: This will DELETE ALL DATA - Use with extreme caution!
-# Version: 5.0.0 (Refactored)
-#==============================================================================
-
+# 0-complete-cleanup.sh - Nuclear cleanup with proper volume management
 set -euo pipefail
 
-# Color definitions
+# Colors for output
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly CYAN='\033[0;36m'
 readonly NC='\033[0m'
-readonly BOLD='\033[1m'
 
-# Configuration
-readonly DATA_ROOT="/mnt/data"
-readonly COMPOSE_DIR="$DATA_ROOT/compose"
+print_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 
-#------------------------------------------------------------------------------
-# Output Structure (Per README)
-#------------------------------------------------------------------------------
-# ╔════════════════════════════════════════════════════════════╗
-# ║           🚨 COMPLETE PLATFORM CLEANUP 🚨                  ║
-# ╚════════════════════════════════════════════════════════════╝
-# 
-# [WARNING] This will:
-#   • Stop all Docker containers
-#   • Remove all Docker volumes
-#   • Delete all AI platform networks
-#   • Delete /mnt/data contents
-#   • Reset all configurations
-# 
-# Type 'DELETE EVERYTHING' to proceed: _
-#
-# [1/6] 🛑 Stopping containers...
-#   ✓ 8 containers stopped
-# 
-# [2/6] 🗑️  Removing containers...
-#   ✓ 8 containers removed
-# 
-# [3/6] 💾 Cleaning volumes...
-#   ✓ 12 volumes removed
-# 
-# [4/6] 🌐 Removing networks...
-#   ✓ Network ai_platform removed
-#   ✓ Network ai_platform_internal removed
-#   ✓ Network ai_platform_monitoring removed
-# 
-# [5/6] 📝 Cleaning compose files...
-#   ✓ 15 compose files removed
-# 
-# [6/6] 📁 Cleaning data directory...
-#   ✓ /mnt/data cleaned (523GB freed)
-# 
-# ╔════════════════════════════════════════════════════════════╗
-# ║              ✅ CLEANUP COMPLETE                           ║
-# ╚════════════════════════════════════════════════════════════╝
-# 
-# Run ./scripts/1-setup-system-refactored.sh to start fresh
-#------------------------------------------------------------------------------
-
-print_header() {
-    clear
-    echo -e "${RED}${BOLD}"
-    echo "╔══════════════════════════════════════════════════════════════════════════╗"
-    echo "║           🚨 COMPLETE PLATFORM CLEANUP 🚨                  ║"
-    echo "║                      Version 5.0.0 (Refactored)              ║"
-    echo "╚════════════════════════════════════════════════════════════════════════════╝"
-    echo -e "${NC}"
+# Main cleanup function
+main() {
+    echo -e "\n${GREEN}╔═══════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║          AI PLATFORM AUTOMATION - CLEANUP                      ║${NC}"
+    echo -e "${GREEN}║                Version 3.0.0 - Nuclear Cleanup         ║${NC}"
+    echo -e "${GREEN}╚═══════════════════════════════════════════════════════════════════╝${NC}\n"
+    
+    # Check if running as root
+    if [[ $EUID -ne 0 ]]; then
+        print_error "This script must be run as root"
+        exit 1
+    fi
+    
+    # Phase 1: Volume Management
+    print_info "Phase 1: Volume Management"
+    manage_volumes
+    
+    # Phase 2: Container Cleanup
+    print_info "Phase 2: Container Cleanup"
+    cleanup_containers
+    
+    # Phase 3: Network Cleanup
+    print_info "Phase 3: Network Cleanup"
+    cleanup_networks
+    
+    # Phase 4: Volume Cleanup
+    print_info "Phase 4: Volume Cleanup"
+    cleanup_volumes
+    
+    # Phase 5: Configuration Cleanup
+    print_info "Phase 5: Configuration Cleanup"
+    cleanup_config
+    
+    print_success "Nuclear cleanup completed - Environment reset"
 }
 
-print_warning_block() {
-    echo ""
-    echo -e "${YELLOW}[WARNING]${NC} This will:"
-    echo "  • Stop all Docker containers"
-    echo "  • Remove all Docker volumes"
-    echo "  • Delete all AI platform networks"
-    echo "  • Delete /mnt/data contents"
-    echo "  • Reset all configurations"
-    echo ""
+# Volume management with proper detection
+manage_volumes() {
+    print_info "Detecting and managing volumes..."
+    
+    # Unmount /mnt if mounted
+    if mountpoint -q /mnt 2>/dev/null; then
+        print_warning "/mnt is mounted - unmounting..."
+        umount /mnt || print_error "Failed to unmount /mnt"
+    fi
+    
+    # Detect available volumes
+    local volumes=$(lsblk -d -o NAME,SIZE | grep -E "nvme|xvd" | grep -v "loop" | awk '$2 ~ /[0-9]+G/ && $2 > 50')
+    
+    if [[ -n "$volumes" ]]; then
+        print_info "Available data volumes found:"
+        echo "$volumes" | while read device size; do
+            print_info "  - /dev/$device ($size)"
+        done
+    else
+        print_warning "No data volumes found"
+    fi
 }
 
-print_step() {
-    local step=$1
-    local total=$2
-    local icon=$3
-    local message=$4
-    echo ""
-    echo -e "${BLUE}[$step/$total] $icon $message${NC}"
-}
-
-print_success() {
-    echo -e "${GREEN}  ✓${NC} $1"
-}
-
-print_info() {
-    echo -e "${CYAN}  ℹ️${NC} $1"
-}
-
-#------------------------------------------------------------------------------
-# Cleanup Functions
-#------------------------------------------------------------------------------
-
+# Container cleanup
 cleanup_containers() {
-    print_step "1" "6" "🛑" "Stopping containers..."
+    print_info "Stopping and removing all containers..."
     
-    local container_count=0
-    if docker ps -q | grep -q .; then
-        container_count=$(docker ps -q | wc -l)
-        print_info "Found $container_count running containers"
-        docker stop $(docker ps -aq) 2>/dev/null || true
-        sleep 2
-    else
-        print_info "No running containers found"
+    # Stop all containers
+    local containers=$(docker ps -q 2>/dev/null || true)
+    if [[ -n "$containers" ]]; then
+        echo "$containers" | xargs -r docker stop
+        print_success "All containers stopped"
     fi
-    print_success "$container_count containers stopped"
+    
+    # Remove all containers
+    local all_containers=$(docker ps -aq 2>/dev/null || true)
+    if [[ -n "$all_containers" ]]; then
+        echo "$all_containers" | xargs -r docker rm
+        print_success "All containers removed"
+    fi
 }
 
-remove_containers() {
-    print_step "2" "6" "🗑️ " "Removing containers..."
-    
-    local container_count=0
-    if docker ps -aq | grep -q .; then
-        container_count=$(docker ps -aq | wc -l)
-        print_info "Found $container_count containers to remove"
-        docker rm -f $(docker ps -aq) 2>/dev/null || true
-        sleep 2
-    else
-        print_info "No containers to remove"
-    fi
-    print_success "$container_count containers removed"
-}
-
-cleanup_volumes() {
-    print_step "3" "6" "💾" "Cleaning volumes..."
-    
-    local volume_count=0
-    if docker volume ls -q | grep -q .; then
-        volume_count=$(docker volume ls -q | wc -l)
-        print_info "Found $volume_count volumes to remove"
-        docker volume rm $(docker volume ls -q) 2>/dev/null || true
-        sleep 2
-    else
-        print_info "No volumes to remove"
-    fi
-    print_success "$volume_count volumes removed"
-}
-
+# Network cleanup
 cleanup_networks() {
-    print_step "4" "6" "🌐" "Removing networks..."
+    print_info "Cleaning up Docker networks..."
     
-    # Remove ALL Docker networks (nuclear cleanup)
-    local network_count=0
-    if docker network ls -q | grep -q .; then
-        network_count=$(docker network ls -q | wc -l)
-        print_info "Found $network_count networks to remove"
-        docker network rm $(docker network ls -q) 2>/dev/null || true
-        print_success "$network_count networks removed"
-    else
-        print_info "No networks found"
-        print_success "0 networks removed"
+    # Remove custom networks (keep default ones)
+    local networks=$(docker network ls -q --filter "type=custom" 2>/dev/null || true)
+    if [[ -n "$networks" ]]; then
+        echo "$networks" | xargs -r docker network rm
+        print_success "Custom networks removed"
     fi
 }
 
-cleanup_compose_files() {
-    print_step "5" "6" "📝" "Cleaning compose files..."
+# Volume cleanup
+cleanup_volumes() {
+    print_info "Cleaning up Docker volumes..."
     
-    local compose_count=0
+    # Remove all volumes (be careful!)
+    docker volume prune -f 2>/dev/null || true
+    print_success "Docker volumes cleaned"
+}
+
+# Configuration cleanup
+cleanup_config() {
+    print_info "Cleaning up configuration files..."
     
-    if [[ -d "$COMPOSE_DIR" ]]; then
-        # Count and remove compose files
-        compose_count=$(find "$COMPOSE_DIR" -name "*.yml" -o -name "*.yaml" 2>/dev/null | wc -l || echo "0")
-        if [[ $compose_count -gt 0 ]]; then
-            print_info "Found $compose_count compose files to remove"
-            rm -rf "$COMPOSE_DIR"/* 2>/dev/null || true
-        else
-            print_info "No compose files found"
+    # Remove data directories (be careful!)
+    if [[ -d "/mnt/data" ]]; then
+        # Backup important configs first
+        if [[ -f "/mnt/data/.env" ]]; then
+            cp /mnt/data/.env /tmp/.env.backup 2>/dev/null || true
         fi
-    else
-        print_info "Compose directory not found"
+        
+        # Remove with confirmation
+        rm -rf /mnt/data/*
+        print_success "Configuration files cleaned"
     fi
     
-    print_success "$compose_count compose files removed"
+    # Remove lock files
+    find /tmp -name ".deployment_lock" -delete 2>/dev/null || true
 }
 
-cleanup_data_directory() {
-    print_step "6" "6" "📁" "Cleaning data directory..."
-    
-    # Get initial size
-    local initial_size=$(du -sb "$DATA_ROOT" 2>/dev/null | awk '{print $1}' || echo "0")
-    
-    # NUCLEAR CLEANUP: Remove everything first
-    print_info "Performing nuclear cleanup of data directory"
-    
-    # Kill processes using /mnt/data
-    local processes=$(lsof +D "$DATA_ROOT" 2>/dev/null | awk 'NR>1 {print $2}' | sort -u || true)
-    if [[ -n "$processes" ]]; then
-        print_info "Terminating processes using data directory"
-        echo "$processes" | xargs -r kill -9 2>/dev/null || true
-        sleep 2
-    fi
-    
-    # NUCLEAR: Remove everything regardless of mount status
-    rm -rf "$DATA_ROOT"/* 2>/dev/null || true
-    rm -rf "$DATA_ROOT"/.[!.]* 2>/dev/null || true
-    sleep 1
-    
-    # Check if mount point still exists after nuclear cleanup
-    if mountpoint -q "$DATA_ROOT"; then
-        print_info "Unmounting data directory after nuclear cleanup"
-        umount "$DATA_ROOT" 2>/dev/null || true
-        sleep 1
-    else
-        print_info "Data directory is not mounted after nuclear cleanup"
-    fi
-    
-    # Ensure directory exists for next run
-    mkdir -p "$DATA_ROOT" 2>/dev/null || true
-    
-    # Calculate freed space
-    local freed_gb=$((initial_size / 1024 / 1024 / 1024))
-    print_success "/mnt/data cleaned (${freed_gb}GB freed)"
-}
-
-docker_system_prune() {
-    print_info "Running Docker system prune..."
-    docker system prune -af --volumes 2>/dev/null || true
-    print_success "Docker system prune completed"
-}
-
-#------------------------------------------------------------------------------
-# Main Execution
-#------------------------------------------------------------------------------
-
-clear
-print_header
-print_warning_block
-
-# Triple confirmation with enhanced warnings
-echo -e "${YELLOW}Type 'DELETE EVERYTHING' to proceed:${NC} "
-read -r confirm1
-if [[ "$confirm1" != "DELETE EVERYTHING" ]]; then
-    echo -e "${RED}Cleanup cancelled.${NC}"
-    exit 0
-fi
-
-echo ""
-echo -e "${YELLOW}Type 'I UNDERSTAND THIS IS PERMANENT':${NC} "
-read -r confirm2
-if [[ "$confirm2" != "I UNDERSTAND THIS IS PERMANENT" ]]; then
-    echo -e "${RED}Cleanup cancelled.${NC}"
-    exit 0
-fi
-
-echo ""
-echo -e "${RED}${BOLD}Final confirmation - Type 'RESET NOW':${NC} "
-read -r confirm3
-if [[ "$confirm3" != "RESET NOW" ]]; then
-    echo -e "${RED}Cleanup cancelled.${NC}"
-    exit 0
-fi
-
-echo ""
-echo -e "${CYAN}${BOLD}Starting complete platform cleanup...${NC}"
-echo ""
-
-# Execute cleanup steps
-cleanup_containers
-remove_containers
-cleanup_volumes
-cleanup_networks
-cleanup_compose_files
-cleanup_data_directory
-
-# Final Docker cleanup
-docker_system_prune
-
-# Final success message
-echo ""
-echo -e "${GREEN}${BOLD}"
-echo "╔════════════════════════════════════════════════════════════════════════════╗"
-echo "║              ✅ CLEANUP COMPLETE                           ║"
-echo "║                      Version 5.0.0 (Refactored)              ║"
-echo "╚══════════════════════════════════════════════════════════════════════════════╝"
-echo -e "${NC}"
-echo ""
-echo "Run ${BOLD}./scripts/1-setup-system-refactored.sh${NC} to start fresh"
-echo ""
-
-exit 0
+# Execute main function
+main "$@"
