@@ -707,15 +707,7 @@ cleanup_previous_deployments() {
     print_info "DEBUG: cleanup_previous_deployments function completed"
 }
 
-# Main deployment function
-main() {
-    # � DEBUG: Script start
-    print_info "DEBUG: Script 2 starting..."
-    print_info "DEBUG: ENV_FILE=$ENV_FILE"
-    print_info "DEBUG: SERVICES_FILE=$SERVICES_FILE"
-    print_info "DEBUG: COMPOSE_FILE=$COMPOSE_FILE"
-    
-    # �🔥 NEW: Deployment Lock Mechanism
+# 🔥 NEW: Deployment Lock Mechanism
     local lock_file="$DATA_ROOT/.deployment_lock"
     
     if [[ -f "$lock_file" ]]; then
@@ -733,6 +725,14 @@ main() {
     # Create deployment lock
     echo $$ > "$lock_file"
     trap 'rm -f "$lock_file"' EXIT
+
+# Main deployment function
+main() {
+    # 🔍 DEBUG: Script start
+    print_info "DEBUG: Script 2 starting..."
+    print_info "DEBUG: ENV_FILE=$ENV_FILE"
+    print_info "DEBUG: SERVICES_FILE=$SERVICES_FILE"
+    print_info "DEBUG: COMPOSE_FILE=$COMPOSE_FILE"
     
     echo -e "\n${CYAN}╔════════════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║            AI PLATFORM AUTOMATION - DEPLOYMENT                 ║${NC}"
