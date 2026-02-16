@@ -707,7 +707,9 @@ cleanup_previous_deployments() {
     print_info "DEBUG: cleanup_previous_deployments function completed"
 }
 
-# 🔥 NEW: Deployment Lock Mechanism
+# Main deployment function
+main() {
+    # 🔥 NEW: Deployment Lock Mechanism
     local lock_file="$DATA_ROOT/.deployment_lock"
     
     if [[ -f "$lock_file" ]]; then
@@ -725,9 +727,7 @@ cleanup_previous_deployments() {
     # Create deployment lock
     echo $$ > "$lock_file"
     trap 'rm -f "$lock_file"' EXIT
-
-# Main deployment function
-main() {
+    
     # 🔍 DEBUG: Script start
     print_info "DEBUG: Script 2 starting..."
     print_info "DEBUG: ENV_FILE=$ENV_FILE"
