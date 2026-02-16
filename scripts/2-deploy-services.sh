@@ -706,6 +706,14 @@ main() {
     # Load selected services from Script 1
     load_selected_services
     
+    # 🔍 DEBUG: Environment verification
+    print_info "DEBUG: Environment variables loaded:"
+    print_info "  RUNNING_UID: ${RUNNING_UID:-NOT_SET}"
+    print_info "  RUNNING_GID: ${RUNNING_GID:-NOT_SET}"
+    print_info "  ENCRYPTION_KEY: ${ENCRYPTION_KEY:-NOT_SET}"
+    print_info "  LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:-NOT_SET}"
+    print_info "  LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-NOT_SET}"
+    
     # Verify unified compose file exists
     if [[ ! -f "$COMPOSE_FILE" ]]; then
         print_error "Unified compose file not found: $COMPOSE_FILE"
