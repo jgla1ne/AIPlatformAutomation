@@ -133,10 +133,6 @@ if [[ -f "$ENV_FILE" ]]; then
                 DATA_ROOT|METADATA_DIR|STATE_FILE|LOG_FILE|ENV_FILE|SERVICES_FILE|COMPOSE_DIR|CONFIG_DIR|CREDENTIALS_FILE|APPARMOR_PROFILES_DIR|SECURITY_COMPLIANCE)
                     continue
                     ;;
-                # Also skip variables that are already defined as readonly in this script
-                RUNNING_UID|RUNNING_GID|ENCRYPTION_KEY|LITELLM_SALT_KEY|LITELLM_MASTER_KEY|DOCKER_HOST|DOCKER_SOCKET)
-                    continue
-                    ;;
                 *)
                     export "$line"
                     ;;
