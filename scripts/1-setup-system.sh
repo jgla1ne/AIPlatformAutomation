@@ -2237,100 +2237,43 @@ EOF
         for service in "${selected_services[@]}"; do
             case $service in
                 "openwebui")
-                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
-                        echo "  • Open WebUI: https://$DOMAIN_NAME/openwebui"
-                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • Open WebUI: https://$DOMAIN_NAME:3000"
-                    else
-                        echo "  • Open WebUI: http://localhost:3000"
-                    fi
+                    echo "  • Open WebUI: http://localhost:3000"
                     ;;
                 "anythingllm")
-                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
-                        echo "  • AnythingLLM: https://$DOMAIN_NAME/anythingllm"
-                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • AnythingLLM: https://$DOMAIN_NAME:3001"
-                    else
-                        echo "  • AnythingLLM: http://localhost:3001"
-                    fi
+                    echo "  • AnythingLLM: http://localhost:3001"
                     ;;
                 "dify")
-                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
-                        echo "  • Dify: https://$DOMAIN_NAME/dify"
-                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • Dify: https://$DOMAIN_NAME:8080"
-                    else
-                        echo "  • Dify: http://localhost:8080"
-                    fi
+                    echo "  • Dify: http://localhost:8080"
                     ;;
                 "n8n")
-                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
-                        echo "  • n8n: https://$DOMAIN_NAME/n8n"
-                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • n8n: https://$DOMAIN_NAME:5678"
-                    else
-                        echo "  • n8n: http://localhost:5678"
-                    fi
+                    echo "  • n8n: http://localhost:5678"
                     ;;
                 "flowise")
-                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
-                        echo "  • Flowise: https://$DOMAIN_NAME/flowise"
-                    else
-                        echo "  • Flowise: http://localhost:3002"
-                    fi
+                    echo "  • Flowise: http://localhost:3002"
                     ;;
                 "ollama")
-                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
-                        echo "  • Ollama: https://$DOMAIN_NAME/ollama"
-                    else
-                        echo "  • Ollama: http://localhost:11434"
-                    fi
+                    echo "  • Ollama: http://localhost:11434"
                     ;;
                 "litellm")
-                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
-                        echo "  • LiteLLM: https://$DOMAIN_NAME/litellm"
-                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • LiteLLM: https://$DOMAIN_NAME:4000"
-                    else
-                        echo "  • LiteLLM: http://localhost:4000"
-                    fi
+                    echo "  • LiteLLM: http://localhost:4000"
                     ;;
                 "signal-api")
-                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
-                        echo "  • Signal API: https://$DOMAIN_NAME/signal"
-                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • Signal API: https://$DOMAIN_NAME:8090"
-                    else
-                        echo "  • Signal API: http://localhost:8090"
-                    fi
+                    echo "  • Signal API: http://localhost:8090"
                     ;;
                 "openclaw")
-                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
-                        echo "  • OpenClaw: https://$DOMAIN_NAME/openclaw"
-                    else
-                        echo "  • OpenClaw: http://localhost:18789"
-                    fi
+                    echo "  • OpenClaw: http://localhost:18789"
                     ;;
                 "prometheus")
-                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
-                        echo "  • Prometheus: https://$DOMAIN_NAME/prometheus"
-                    else
-                        echo "  • Prometheus: http://localhost:9090"
-                    fi
+                    echo "  • Prometheus: http://localhost:9090"
                     ;;
                 "grafana")
-                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
-                        echo "  • Grafana: https://$DOMAIN_NAME/grafana"
-                    else
-                        echo "  • Grafana: http://localhost:3005"
-                    fi
+                    echo "  • Grafana: http://localhost:3005"
+                    ;;
+                "qdrant")
+                    echo "  • Qdrant: http://localhost:6333"
                     ;;
                 "minio")
-                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
-                        echo "  • MinIO: https://$DOMAIN_NAME/minio"
-                    else
-                        echo "  • MinIO: http://localhost:9001"
-                    fi
+                    echo "  • MinIO: http://localhost:9000"
                     ;;
                 "postgres"|"redis"|"tailscale")
                     # Infrastructure services - no direct UI
