@@ -661,23 +661,30 @@ cleanup_previous_deployments() {
     # Clean up unused networks
     print_info "DEBUG: Aggressive network cleanup starting..."
     
-    # First, force remove all ai_platform networks
+    # Force remove all ai_platform networks
     print_info "DEBUG: Force removing all ai_platform networks..."
     docker network ls --filter "name=ai_platform*" --format "{{.Name}}" 2>/dev/null | while read network; do
         docker network rm "$network" --force 2>/dev/null || true
         print_info "DEBUG: Removed network: $network"
     done
     
-    # Then run general network prune
-    print_info "DEBUG: Running general network prune..."
-    docker network prune -f >> "$LOG_FILE" 2>&1 || true
-    
-    # Wait a moment for networks to be fully removed
+    # Wait for networks to be fully removed
     print_info "DEBUG: Waiting for networks to be fully removed..."
-    sleep 3
+    sleep 5
     
-    # Verify no ai_platform networks remain
-    print_info "DEBUG: Verifying no ai_platform networks remain..."
+    # Force remove any remaining networks (including internal)
+    print_info "DEBUG: Force removing any remaining networks..."
+    docker network ls --filter "name=ai_platform*" --format "{{.Name}}" 2>/dev/null | while read network; do
+        docker network rm "$network" --force 2>/dev/null || true
+        print_info "DEBUG: Force removed network: $network"
+    done
+    
+    # Wait for networks to be fully removed
+    print_info "DEBUG: Waiting for networks to be fully removed..."
+    sleep 5
+    
+    # Verify complete removal
+    print_info "DEBUG: Verifying complete network removal..."
     local remaining_networks=$(docker network ls --filter "name=ai_platform*" --format "{{.Name}}" 2>/dev/null)
     if [[ -n "$remaining_networks" ]]; then
         print_error "ERROR: ai_platform networks still exist: $remaining_networks"
