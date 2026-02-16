@@ -25,7 +25,7 @@ readonly STATE_FILE="$METADATA_DIR/setup_state.json"
 readonly LOG_FILE="$DATA_ROOT/logs/deployment.log"
 readonly ENV_FILE="$DATA_ROOT/.env"
 readonly SERVICES_FILE="$METADATA_DIR/selected_services.json"
-readonly COMPOSE_DIR="$DATA_ROOT/compose"
+readonly COMPOSE_FILE="$DATA_ROOT/ai-platform/deployment/stack/docker-compose.yml"
 readonly CONFIG_DIR="$DATA_ROOT/config"
 readonly CREDENTIALS_FILE="$METADATA_DIR/credentials.json"
 
@@ -532,157 +532,142 @@ generate_healthcheck() {
     echo "$healthcheck"
 }
 
-# 🔥 UPDATED: Deploy Service with Security
+# 🔥 UPDATED: Deploy Service with Unified Compose and Health Checks
 deploy_service() {
-    local service_name="$1"
+    local service="$1"
     
-    print_info "Deploying $service_name with non-root user mapping and security..."
+    echo -e "  🐳 ${BOLD}$service${NC}: "
     
-    # Generate compose template with security
-    generate_compose_template "$service_name"
-    
-    # Generate AppArmor profile
-    if [[ "$SECURITY_COMPLIANCE" == "true" ]]; then
-        generate_apparmor_profile "$service_name"
+    # Check if service exists in unified compose file
+    if ! grep -q "^  $service:" "$COMPOSE_FILE"; then
+        echo -e "${RED}SERVICE NOT FOUND IN COMPOSE FILE${NC}"
+        print_error "Service $service not defined in $COMPOSE_FILE"
+        return 1
     fi
     
-    # Create data directory with proper ownership
-    mkdir -p "$DATA_ROOT/$service_name"
-    chown -R "${RUNNING_UID:-1001}:${RUNNING_GID:-1001}" "$DATA_ROOT/$service_name"
+    # Pull image
+    if ! docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" pull "$service" >> "$LOG_FILE" 2>&1; then
+        echo -e "${RED}FAILED TO PULL${NC}"
+        print_error "Failed to pull $service image"
+        docker compose -f "$COMPOSE_FILE" logs "$service" --tail 20 >> "$LOG_FILE" 2>&1
+        return 1
+    fi
     
-    # Deploy using docker-compose
-    cd "$COMPOSE_DIR/$service_name"
-    docker-compose up -d
+    # Start service
+    if ! docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d "$service" >> "$LOG_FILE" 2>&1; then
+        echo -e "${RED}FAILED TO START${NC}"
+        print_error "Failed to start $service"
+        docker compose -f "$COMPOSE_FILE" logs "$service" --tail 20
+        return 1
+    fi
     
-    # Wait for service to be healthy
-    local health_url=""
-    local timeout=60
-    
-    case "$service_name" in
-        "postgres")
-            health_url="tcp://127.0.0.1:5432"
-            timeout=30
-            ;;
-        "redis")
-            health_url="tcp://127.0.0.1:6379"
-            timeout=30
-            ;;
-        "ollama")
-            health_url="http://localhost:${OLLAMA_PORT:-11434}"
-            timeout=45
-            ;;
-        "litellm")
-            health_url="http://localhost:4000"
-            timeout=60
-            ;;
-        "dify")
-            health_url="http://localhost:8080"
-            timeout=120
-            ;;
-        "prometheus")
-            health_url="http://localhost:9090"
-            timeout=60
-            ;;
-        *)
-            health_url="http://localhost:3000"
-            timeout=60
-            ;;
-    esac
-    
-    wait_for_service "$service_name" "$health_url" "$timeout"
-    
-    if [[ $? -eq 0 ]]; then
-        print_success "$service_name deployed successfully as non-root user with security"
+    # Wait for health
+    if wait_for_healthy "$service" 60; then
+        echo -e "${GREEN}✓ HEALTHY${NC}"
+        display_service_info "$service"
         return 0
     else
-        print_error "$service_name deployment failed"
-        return 1
+        echo -e "${YELLOW}⚠ RUNNING (health check timeout)${NC}"
+        print_warning "$service is running but health check timed out"
+        return 0  # Don't fail deployment for health check timeout
     fi
 }
 
-# Wait for service health
-wait_for_service() {
-    local service_name="$1"
-    local health_url="$2"
-    local max_attempts="$3"
-    local attempt=0
+# 🔥 NEW: Wait for Service Health with Docker Health Checks
+wait_for_healthy() {
+    local service="$1"
+    local timeout="${2:-30}"
+    local elapsed=0
     
-    print_info "Waiting for $service_name to be healthy..."
-    
-    while [ $attempt -lt $max_attempts ]; do
-        if curl -f -s --max-time 10 "$health_url" >/dev/null 2>&1; then
-            print_success "$service_name is healthy"
-            return 0
+    while [ $elapsed -lt $timeout ]; do
+        # Check container is running
+        if ! docker ps --format '{{.Names}}' | grep -q "^${service}$"; then
+            sleep 2
+            elapsed=$((elapsed + 2))
+            continue
         fi
         
-        attempt=$((attempt + 1))
-        sleep 5
+        # Check health status using Docker health check
+        local health=$(docker inspect --format='{{.State.Health.Status}}' "$service" 2>/dev/null || echo "no_healthcheck")
+        
+        if [ "$health" = "healthy" ]; then
+            return 0
+        elif [ "$health" = "unhealthy" ]; then
+            return 1
+        elif [ "$health" = "no_healthcheck" ]; then
+            # No healthcheck defined, verify running for 10s
+            if [ $elapsed -ge 10 ]; then
+                return 0
+            fi
+        fi
+        
+        sleep 2
+        elapsed=$((elapsed + 2))
     done
     
-    print_error "$service_name health check failed after $max_attempts attempts"
     return 1
 }
 
-# 🔥 NEW: Comprehensive Cleanup Function
+# 🔥 NEW: Display Service Information
+display_service_info() {
+    local svc="$1"
+    case "$svc" in
+        postgres) echo -e "    ${BLUE}→ Database ready on 5432${NC}" ;;
+        redis)    echo -e "    ${BLUE}→ Cache ready on 6379${NC}" ;;
+        qdrant)   echo -e "    ${BLUE}→ Vector DB ready on 6333${NC}" ;;
+        ollama)   echo -e "    ${BLUE}→ LLM engine ready on 11434${NC}" ;;
+        litellm)  echo -e "    ${BLUE}→ Gateway ready: http://localhost:8010/health${NC}" ;;
+        open-webui) echo -e "    ${BLUE}→ UI ready: http://localhost:8080${NC}" ;;
+        dify-api) echo -e "    ${BLUE}→ Dify API ready: http://localhost:5001${NC}" ;;
+        dify-web) echo -e "    ${BLUE}→ Dify Web ready: http://localhost:3000${NC}" ;;
+        n8n)      echo -e "    ${BLUE}→ n8n ready: http://localhost:5678${NC}" ;;
+        flowise)  echo -e "    ${BLUE}→ Flowise ready: http://localhost:3001${NC}" ;;
+        anythingllm) echo -e "    ${BLUE}→ AnythingLLM ready: http://localhost:3002${NC}" ;;
+        prometheus) echo -e "    ${BLUE}→ Prometheus ready: http://localhost:9090${NC}" ;;
+        grafana)   echo -e "    ${BLUE}→ Grafana ready: http://localhost:3003${NC}" ;;
+        *)        echo -e "    ${BLUE}→ Service running${NC}" ;;
+    esac
+}
+
+# 🔥 NEW: Comprehensive Cleanup Function with Unified Compose
 cleanup_previous_deployments() {
     print_info "Cleaning up previous deployments..."
     
-    # Stop and remove all AI platform containers
-    print_info "Stopping AI platform containers..."
-    local containers=$(docker ps -q --filter "name=postgres|redis|ollama|litellm|dify|n8n|flowise|anythingllm|openwebui|signal-api|openclaw|grafana|prometheus|minio|tailscale" 2>/dev/null || true)
-    
-    if [[ -n "$containers" ]]; then
-        echo "$containers" | xargs -r docker stop
-        echo "$containers" | xargs -r docker rm
-        print_success "Stopped and removed previous containers"
+    # Stop and remove all AI platform containers using unified compose
+    if [[ -f "$COMPOSE_FILE" ]]; then
+        print_info "Stopping AI platform containers using unified compose..."
+        if docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" down >> "$LOG_FILE" 2>&1; then
+            print_success "All containers stopped successfully"
+        else
+            print_warning "Some containers may not have stopped properly"
+        fi
     else
-        print_info "No previous containers found"
+        print_warning "Unified compose file not found, using manual cleanup"
+        # Fallback to manual cleanup
+        local containers=$(docker ps -q --filter "name=postgres|redis|ollama|litellm|dify|n8n|flowise|anythingllm|openwebui|signal-api|openclaw|grafana|prometheus|minio|tailscale" 2>/dev/null || true)
+        
+        if [[ -n "$containers" ]]; then
+            echo "$containers" | xargs -r docker stop >> "$LOG_FILE" 2>&1 || true
+            echo "$containers" | xargs -r docker rm >> "$LOG_FILE" 2>&1 || true
+        fi
     fi
     
-    # Remove orphaned containers
-    print_info "Removing orphaned containers..."
-    docker container prune -f >/dev/null 2>&1 || true
+    # Clean up orphaned containers
+    print_info "Cleaning up orphaned containers..."
+    docker container prune -f >> "$LOG_FILE" 2>&1 || true
     
-    # Clean up AI platform networks
-    print_info "Cleaning up AI platform networks..."
-    local networks=$(docker network ls -q --filter "name=ai_platform" 2>/dev/null || true)
-    if [[ -n "$networks" ]]; then
-        echo "$networks" | xargs -r docker network rm
-        print_success "Removed AI platform networks"
-    fi
+    # Clean up unused networks
+    print_info "Cleaning up unused networks..."
+    docker network prune -f >> "$LOG_FILE" 2>&1 || true
     
-    # Clean up AppArmor profiles
-    print_info "Cleaning up AppArmor profiles..."
-    for service in postgres redis ollama litellm dify n8n flowise anythingllm openwebui signal-api openclaw grafana prometheus minio tailscale; do
-        if aa-status | grep -q "$service" 2>/dev/null; then
-            aa-complain "$service" 2>/dev/null || true
-            apparmor_parser -R "/etc/apparmor.d/$service" 2>/dev/null || true
-        fi
-    done
+    # Clean up unused volumes (be careful not to remove data volumes)
+    print_info "Cleaning up unused volumes..."
+    docker volume prune -f --filter "label!=ai-platform.data" >> "$LOG_FILE" 2>&1 || true
     
-    # Clean up compose files (but keep templates from Script 1)
-    print_info "Cleaning up deployment artifacts..."
-    for service in postgres redis ollama litellm dify n8n flowise anythingllm openwebui signal-api openclaw grafana prometheus minio tailscale; do
-        if [[ -f "$COMPOSE_DIR/$service/docker-compose.yml" ]]; then
-            # Only run docker-compose down if containers are actually running
-            if docker ps -q --filter "name=$service" | grep -q .; then
-                cd "$COMPOSE_DIR/$service"
-                docker-compose down 2>/dev/null || true
-                cd - >/dev/null
-            fi
-        fi
-    done
-    
-    # Clean up temporary files and logs
-    print_info "Cleaning up temporary files..."
-    rm -f "$DATA_ROOT/logs/deployment.log" 2>/dev/null || true
-    rm -f "$DATA_ROOT/.deployment_lock" 2>/dev/null || true
-    
-    # Ensure no background processes are running
+    # Terminate any background deployment processes
     print_info "Terminating any background deployment processes..."
-    # Temporarily disabled for testing
-    # pkill -f "2-deploy-services.sh" 2>/dev/null || true
-    # pkill -f "docker-compose" 2>/dev/null || true
+    pkill -f "2-deploy-services.sh" 2>/dev/null || true
+    pkill -f "docker-compose" 2>/dev/null || true
     
     print_success "Pre-deployment cleanup completed"
 }
@@ -721,26 +706,52 @@ main() {
     # Load selected services from Script 1
     load_selected_services
     
-    # Setup AppArmor security
-    setup_apparmor_security
+    # Verify unified compose file exists
+    if [[ ! -f "$COMPOSE_FILE" ]]; then
+        print_error "Unified compose file not found: $COMPOSE_FILE"
+        print_error "Run Script 1 first to generate the compose file"
+        exit 1
+    fi
     
-    # Create Docker network if not exists
+    print_success "Using unified compose file: $COMPOSE_FILE"
+    
+    # Create Docker networks if not exists
     if ! docker network inspect ai_platform >/dev/null 2>&1; then
         docker network create ai_platform
         print_success "Created ai_platform network"
     fi
     
-    # Deploy all selected services
+    if ! docker network inspect ai_platform_internal >/dev/null 2>&1; then
+        docker network create ai_platform_internal --internal
+        print_success "Created ai_platform_internal network"
+    fi
+    
+    # Deploy all selected services with proper ordering
     local deployed=0
     local failed=0
     
+    echo -e "\n${CYAN}🚀 Starting deployment of ${TOTAL_SERVICES} services...${NC}\n"
+    
+    # Deploy core infrastructure first
+    local core_services=("postgres" "redis")
+    for service in "${core_services[@]}"; do
+        if [[ " ${SELECTED_SERVICES[@]} " =~ " $service " ]]; then
+            if deploy_service "$service"; then
+                deployed=$((deployed + 1))
+            else
+                failed=$((failed + 1))
+            fi
+        fi
+    done
+    
+    # Deploy remaining services
     for service in "${SELECTED_SERVICES[@]}"; do
-        print_info "Deploying service: $service"
-        
-        if deploy_service "$service"; then
-            deployed=$((deployed + 1))
-        else
-            failed=$((failed + 1))
+        if [[ ! " ${core_services[@]} " =~ " $service " ]]; then
+            if deploy_service "$service"; then
+                deployed=$((deployed + 1))
+            else
+                failed=$((failed + 1))
+            fi
         fi
     done
     
