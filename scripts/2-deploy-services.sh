@@ -659,14 +659,32 @@ cleanup_previous_deployments() {
     docker container prune -f >> "$LOG_FILE" 2>&1 || true
     
     # Clean up unused networks
-    print_info "DEBUG: Cleaning up existing networks..."
+    print_info "DEBUG: Aggressive network cleanup starting..."
+    
+    # First, force remove all ai_platform networks
+    print_info "DEBUG: Force removing all ai_platform networks..."
+    docker network ls --filter "name=ai_platform*" --format "{{.Name}}" 2>/dev/null | while read network; do
+        docker network rm "$network" --force 2>/dev/null || true
+        print_info "DEBUG: Removed network: $network"
+    done
+    
+    # Then run general network prune
+    print_info "DEBUG: Running general network prune..."
     docker network prune -f >> "$LOG_FILE" 2>&1 || true
     
-    # Also remove any ai_platform networks specifically to ensure clean state
-    print_info "DEBUG: Removing any existing ai_platform networks..."
-    docker network ls --filter "name=ai_platform*" --format "{{.Name}}" 2>/dev/null | while read network; do
-        docker network rm "$network" 2>/dev/null || true
-    done
+    # Wait a moment for networks to be fully removed
+    print_info "DEBUG: Waiting for networks to be fully removed..."
+    sleep 3
+    
+    # Verify no ai_platform networks remain
+    print_info "DEBUG: Verifying no ai_platform networks remain..."
+    local remaining_networks=$(docker network ls --filter "name=ai_platform*" --format "{{.Name}}" 2>/dev/null)
+    if [[ -n "$remaining_networks" ]]; then
+        print_error "ERROR: ai_platform networks still exist: $remaining_networks"
+        return 1
+    fi
+    
+    print_info "DEBUG: Network cleanup completed successfully"
     
     # Clean up unused volumes (be careful not to remove data volumes)
     print_info "Cleaning up unused volumes..."
