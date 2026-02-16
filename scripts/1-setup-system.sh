@@ -1823,6 +1823,7 @@ setup_volumes() {
             local selected_device=$(echo "${volume_list[$((selection-1))]}" | awk '{print $2}')
             print_info "Selected: /dev/$selected_device"
         fi
+    fi
         
         local device_path="/dev/$selected_device"
         print_info "Mounting to /mnt..."
