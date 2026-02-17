@@ -31,7 +31,7 @@ readonly CREDENTIALS_FILE="$METADATA_DIR/credentials.json"
 
 # 🔥 NEW: AppArmor Security Configuration
 readonly APPARMOR_PROFILES_DIR="$DATA_ROOT/security/apparmor"
-readonly SECURITY_COMPLIANCE=false  # Temporarily disabled for testing
+readonly SECURITY_COMPLIANCE=true  # Enable AppArmor security for production
 
 # Print functions
 print_info() {
@@ -1267,7 +1267,7 @@ main() {
     
     # Define deployment order based on dependencies
     local core_services=("postgres" "redis")
-    local monitoring_services=("prometheus" "grafana")
+    local monitoring_services=("prometheus" "grafana")  # Grafana no longer depends on Prometheus
     local ai_services=("ollama" "litellm" "openwebui" "anythingllm" "dify" "openclaw")
     local communication_services=("n8n" "signal-api")
     local storage_services=("minio")
