@@ -19,8 +19,8 @@ readonly NC='\033[0m'
 readonly BOLD='\033[1m'
 
 # Paths (matching Script 1)
-DATA_ROOT="/mnt/data"
-METADATA_DIR="$DATA_ROOT/metadata"
+readonly DATA_ROOT="/mnt/data"
+readonly METADATA_DIR="$DATA_ROOT/metadata"
 readonly STATE_FILE="$METADATA_DIR/setup_state.json"
 readonly LOG_FILE="$DATA_ROOT/logs/deployment.log"
 readonly ENV_FILE="$DATA_ROOT/.env"
@@ -28,6 +28,7 @@ readonly SERVICES_FILE="$METADATA_DIR/selected_services.json"
 readonly COMPOSE_FILE="$DATA_ROOT/ai-platform/deployment/stack/docker-compose.yml"
 readonly CONFIG_DIR="$DATA_ROOT/config"
 readonly CREDENTIALS_FILE="$METADATA_DIR/credentials.json"
+readonly DEPLOYMENT_LOCK="$DATA_ROOT/.deployment_lock"
 
 # 🔥 NEW: AppArmor Security Configuration
 readonly APPARMOR_PROFILES_DIR="$DATA_ROOT/security/apparmor"
@@ -1386,23 +1387,21 @@ cleanup_previous_deployments() {
 # Main deployment function
 main() {
     # 🔥 NEW: Deployment Lock Mechanism
-    local lock_file="$DATA_ROOT/.deployment_lock"
-    
-    if [[ -f "$lock_file" ]]; then
-        local lock_pid=$(cat "$lock_file" 2>/dev/null || echo "unknown")
+    if [[ -f "$DEPLOYMENT_LOCK" ]]; then
+        local lock_pid=$(cat "$DEPLOYMENT_LOCK" 2>/dev/null || echo "unknown")
         if ps -p "$lock_pid" >/dev/null 2>&1; then
             print_error "Deployment is already running (PID: $lock_pid)"
             print_error "Wait for it to complete or run: kill $lock_pid"
             exit 1
         else
             print_warning "Removing stale deployment lock"
-            rm -f "$lock_file"
+            rm -f "$DEPLOYMENT_LOCK"
         fi
     fi
     
     # Create deployment lock
-    echo $$ > "$lock_file"
-    trap 'rm -f "$lock_file"' EXIT
+    echo $$ > "$DEPLOYMENT_LOCK"
+    trap 'rm -f "$DEPLOYMENT_LOCK"' EXIT
     
     # 🔍 DEBUG: Script start
     print_info "DEBUG: Script 2 starting..."
