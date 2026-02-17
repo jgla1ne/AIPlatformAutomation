@@ -1321,57 +1321,8 @@ cleanup_previous_deployments() {
     docker container prune -f >> "$LOG_FILE" 2>&1 || true
     
     # Clean up unused networks
-    print_info "DEBUG: Aggressive network cleanup starting..."
-    
-    # Stop Docker daemon to clear network cache
-    print_info "DEBUG: Stopping Docker daemon to clear network cache..."
-    systemctl stop docker 2>/dev/null || true
-    print_info "DEBUG: Docker daemon stopped"
-    
-    # Force remove all ai_platform networks
-    print_info "DEBUG: Force removing all ai_platform networks..."
-    docker network ls --filter "name=ai_platform*" --format "{{.Name}}" 2>/dev/null | while read network; do
-        docker network rm "$network" --force 2>/dev/null || true
-        print_info "DEBUG: Removed network: $network"
-    done
-    
-    # Wait for networks to be fully removed
-    print_info "DEBUG: Waiting for networks to be fully removed..."
-    sleep 10
-    
-    # Verify networks are actually removed
-    print_info "DEBUG: Verifying networks are actually removed..."
-    
-    # Start Docker daemon first before checking
-    print_info "DEBUG: Starting Docker daemon to refresh network cache..."
-    systemctl start docker 2>/dev/null || true
-    sleep 5
-    
-    local remaining_networks=$(docker network ls --filter "name=ai_platform*" --format "{{.Name}}" 2>/dev/null)
-    if [[ -n "$remaining_networks" ]]; then
-        print_warning "WARNING: ai_platform networks still exist: $remaining_networks"
-        print_warning "Force removing remaining networks..."
-        docker network rm $(docker network ls --filter "name=ai_platform*" -q) 2>/dev/null || true
-        sleep 3
-        
-        # Final verification
-        remaining_networks=$(docker network ls --filter "name=ai_platform*" --format "{{.Name}}" 2>/dev/null)
-        if [[ -n "$remaining_networks" ]]; then
-            print_error "ERROR: Failed to remove ai_platform networks: $remaining_networks"
-            print_error "This indicates a fundamental network cleanup issue"
-            return 1
-        else
-            print_success "Successfully removed all ai_platform networks"
-        fi
-    else
-        print_success "All ai_platform networks successfully removed"
-    fi
-    
-    # Wait for Docker daemon to be ready
-    print_info "DEBUG: Waiting for Docker daemon to be ready..."
-    sleep 5
-    
-    print_info "DEBUG: Network cleanup completed successfully"
+    print_info "DEBUG: Cleaning up networks..."
+    docker network prune -f >> "$LOG_FILE" 2>&1 || true
     
     # Clean up unused volumes (be careful not to remove data volumes)
     print_info "Cleaning up unused volumes..."
