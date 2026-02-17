@@ -1341,16 +1341,31 @@ cleanup_previous_deployments() {
     
     # Verify networks are actually removed
     print_info "DEBUG: Verifying networks are actually removed..."
-    local remaining_networks=$(docker network ls --filter "name=ai_platform*" --format "{{.Name}}" 2>/dev/null)
-    if [[ -n "$remaining_networks" ]]; then
-        print_error "ERROR: ai_platform networks still exist: $remaining_networks"
-        print_error "This indicates a fundamental network cleanup issue"
-        return 1
-    fi
     
-    # Start Docker daemon to refresh network cache
+    # Start Docker daemon first before checking
     print_info "DEBUG: Starting Docker daemon to refresh network cache..."
     systemctl start docker 2>/dev/null || true
+    sleep 5
+    
+    local remaining_networks=$(docker network ls --filter "name=ai_platform*" --format "{{.Name}}" 2>/dev/null)
+    if [[ -n "$remaining_networks" ]]; then
+        print_warning "WARNING: ai_platform networks still exist: $remaining_networks"
+        print_warning "Force removing remaining networks..."
+        docker network rm $(docker network ls --filter "name=ai_platform*" -q) 2>/dev/null || true
+        sleep 3
+        
+        # Final verification
+        remaining_networks=$(docker network ls --filter "name=ai_platform*" --format "{{.Name}}" 2>/dev/null)
+        if [[ -n "$remaining_networks" ]]; then
+            print_error "ERROR: Failed to remove ai_platform networks: $remaining_networks"
+            print_error "This indicates a fundamental network cleanup issue"
+            return 1
+        else
+            print_success "Successfully removed all ai_platform networks"
+        fi
+    else
+        print_success "All ai_platform networks successfully removed"
+    fi
     
     # Wait for Docker daemon to be ready
     print_info "DEBUG: Waiting for Docker daemon to be ready..."
