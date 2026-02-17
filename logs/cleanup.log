@@ -1,0 +1,392 @@
+[0;32m[INFO][0m Phase 1: Volume Cleanup
+[0;32m[INFO][0m Cleaning up Docker volumes...
+[0;32m[SUCCESS][0m Docker volumes cleaned
+[0;32m[INFO][0m Phase 2: Volume Management
+[0;32m[INFO][0m Detecting and managing volumes...
+[0;32m[INFO][0m Available data volumes found:
+[0;32m[INFO][0m   - /dev/nvme0n1 (80G)
+[0;32m[INFO][0m Phase 3: Container Cleanup
+[0;32m[INFO][0m Stopping and removing all containers...
+[0;32m[INFO][0m Phase 4: Network Cleanup
+[0;32m[INFO][0m Cleaning up Docker networks...
+[0;32m[INFO][0m Phase 5: Configuration Cleanup
+[0;32m[INFO][0m Cleaning up configuration files...
+[0;32m[SUCCESS][0m Configuration files cleaned
+[0;32m[SUCCESS][0m Nuclear cleanup completed - Environment reset
+[0;32m[INFO][0m Phase 1: Volume Cleanup
+[0;32m[INFO][0m Cleaning up Docker volumes...
+[0;32m[SUCCESS][0m Docker volumes cleaned
+[0;32m[INFO][0m Phase 2: Volume Management
+[0;32m[INFO][0m Detecting and managing volumes...
+[1;33m[WARNING][0m /mnt is mounted - unmounting...
+[0;32m[INFO][0m Available data volumes found:
+[0;32m[INFO][0m   - /dev/nvme0n1 (80G)
+[0;32m[INFO][0m Phase 3: Container Cleanup
+[0;32m[INFO][0m Stopping and removing all containers...
+[0;32m[INFO][0m Phase 4: Network Cleanup
+[0;32m[INFO][0m Cleaning up Docker networks...
+[0;32m[INFO][0m Phase 5: Configuration Cleanup
+[0;32m[INFO][0m Cleaning up configuration files...
+[1;33m[WARNING][0m Removing all data in /mnt/data...
+[0;32m[SUCCESS][0m Configuration files cleaned
+[0;32m[SUCCESS][0m Nuclear cleanup completed - Environment reset
+[0;32m[INFO][0m Phase 1: Container Cleanup
+[0;32m[INFO][0m Stopping and removing all containers...
+[0;32m[INFO][0m Phase 2: Network Cleanup
+[0;32m[INFO][0m Cleaning up Docker networks...
+[0;32m[INFO][0m Phase 3: Volume Cleanup
+[0;32m[INFO][0m Cleaning up Docker volumes...
+[0;32m[SUCCESS][0m Docker volumes cleaned
+[0;32m[INFO][0m Phase 4: Configuration Cleanup - NUCLEAR PURGE
+[0;32m[INFO][0m Configuration Cleanup - NUCLEAR PURGE
+[1;33m[WARNING][0m NUCLEAR PURGE: Removing all data in /mnt/data...
+[0;32m[INFO][0m Removing all files and directories...
+[0;32m[SUCCESS][0m NUCLEAR PURGE: /mnt/data completely cleaned
+[0;32m[INFO][0m Phase 5: Volume Management
+[0;32m[INFO][0m Volume Management - Unmounting device
+[0;32m[INFO][0m /mnt is not mounted
+[0;32m[INFO][0m Available data volumes found:
+[0;32m[INFO][0m   - /dev/nvme0n1 (80G)
+[0;32m[INFO][0m Device ready for clean system setup
+[0;32m[SUCCESS][0m Nuclear purge completed - Clean system ready
+[0;32m[INFO][0m Phase 1: Container Cleanup
+[0;32m[INFO][0m Stopping and removing all containers...
+[0;32m[INFO][0m Phase 2: Network Cleanup
+[0;32m[INFO][0m Cleaning up Docker networks...
+[0;32m[INFO][0m Phase 3: Volume Cleanup
+[0;32m[INFO][0m Cleaning up Docker volumes...
+[0;32m[SUCCESS][0m Docker volumes cleaned
+[0;32m[INFO][0m Phase 4: Configuration Cleanup - NUCLEAR PURGE
+[0;32m[INFO][0m Configuration Cleanup - NUCLEAR PURGE
+[1;33m[WARNING][0m NUCLEAR PURGE: Removing all data in /mnt/data...
+[0;32m[INFO][0m Removing all files and directories with verbose output...
+removed '/mnt/data/ai-platform/deployment/stack/docker-compose.yml'
+removed directory '/mnt/data/ai-platform/deployment/stack'
+removed directory '/mnt/data/ai-platform/deployment'
+removed directory '/mnt/data/ai-platform'
+removed directory '/mnt/data/anythingllm/documents'
+removed directory '/mnt/data/anythingllm'
+removed directory '/mnt/data/caddy/data/caddy/locks'
+removed '/mnt/data/caddy/data/caddy/last_clean.json'
+removed '/mnt/data/caddy/data/caddy/instance.uuid'
+removed '/mnt/data/caddy/data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/ai.datasquiz.net/ai.datasquiz.net.json'
+removed '/mnt/data/caddy/data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/ai.datasquiz.net/ai.datasquiz.net.crt'
+removed '/mnt/data/caddy/data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/ai.datasquiz.net/ai.datasquiz.net.key'
+removed directory '/mnt/data/caddy/data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/ai.datasquiz.net'
+removed directory '/mnt/data/caddy/data/caddy/certificates/acme-v02.api.letsencrypt.org-directory'
+removed directory '/mnt/data/caddy/data/caddy/certificates'
+removed '/mnt/data/caddy/data/caddy/acme/acme-v02.api.letsencrypt.org-directory/users/hosting@datasquiz.net/hosting.key'
+removed '/mnt/data/caddy/data/caddy/acme/acme-v02.api.letsencrypt.org-directory/users/hosting@datasquiz.net/hosting.json'
+removed directory '/mnt/data/caddy/data/caddy/acme/acme-v02.api.letsencrypt.org-directory/users/hosting@datasquiz.net'
+removed directory '/mnt/data/caddy/data/caddy/acme/acme-v02.api.letsencrypt.org-directory/users'
+removed directory '/mnt/data/caddy/data/caddy/acme/acme-v02.api.letsencrypt.org-directory/challenge_tokens'
+removed directory '/mnt/data/caddy/data/caddy/acme/acme-v02.api.letsencrypt.org-directory'
+removed directory '/mnt/data/caddy/data/caddy/acme'
+removed directory '/mnt/data/caddy/data/caddy'
+removed directory '/mnt/data/caddy/data'
+removed '/mnt/data/caddy/config/caddy/autosave.json'
+removed directory '/mnt/data/caddy/config/caddy'
+removed directory '/mnt/data/caddy/config'
+removed directory '/mnt/data/caddy'
+removed directory '/mnt/data/compose'
+removed directory '/mnt/data/config/traefik'
+removed directory '/mnt/data/config/qdrant'
+removed directory '/mnt/data/config/postgres'
+removed directory '/mnt/data/config/grafana'
+removed '/mnt/data/config/prometheus/prometheus.yml'
+removed directory '/mnt/data/config/prometheus'
+removed directory '/mnt/data/config/litellm'
+removed directory '/mnt/data/config/redis'
+removed '/mnt/data/config/caddy/Caddyfile'
+removed directory '/mnt/data/config/caddy'
+removed '/mnt/data/config/nginx/nginx.conf'
+removed '/mnt/data/config/nginx/mime.types'
+removed '/mnt/data/config/nginx/sites-available/ai-platform.conf'
+removed directory '/mnt/data/config/nginx/sites-available'
+removed '/mnt/data/config/nginx/sites-enabled-backup/ai-platform.conf'
+removed directory '/mnt/data/config/nginx/sites-enabled-backup'
+removed directory '/mnt/data/config/nginx/sites-enabled'
+removed directory '/mnt/data/config/nginx'
+removed directory '/mnt/data/config'
+removed directory '/mnt/data/data'
+removed directory '/mnt/data/documents'
+removed directory '/mnt/data/env'
+removed directory '/mnt/data/flowise'
+removed directory '/mnt/data/logs/n8n'
+removed directory '/mnt/data/logs/postgres'
+removed '/mnt/data/logs/setup.log'
+removed directory '/mnt/data/logs/prometheus'
+removed directory '/mnt/data/logs/ollama'
+removed directory '/mnt/data/logs/flowise'
+removed directory '/mnt/data/logs/minio'
+removed '/mnt/data/logs/deployment.log'
+removed directory '/mnt/data/logs/redis'
+removed '/mnt/data/logs/cleanup.log'
+removed directory '/mnt/data/logs/anythingllm'
+removed directory '/mnt/data/logs/signal-api'
+removed directory '/mnt/data/logs/open-webui'
+removed directory '/mnt/data/logs/tailscale'
+removed directory '/mnt/data/logs'
+removed '/mnt/data/metadata/service_urls.txt'
+removed '/mnt/data/metadata/setup_summary.txt'
+removed '/mnt/data/metadata/selected_services.json'
+removed '/mnt/data/metadata/configuration_summary.json'
+removed '/mnt/data/metadata/setup_state.json'
+removed directory '/mnt/data/metadata'
+removed directory '/mnt/data/minio'
+removed directory '/mnt/data/n8n'
+removed directory '/mnt/data/nginx/html'
+removed directory '/mnt/data/nginx'
+removed directory '/mnt/data/open-webui'
+removed directory '/mnt/data/prometheus'
+removed directory '/mnt/data/secrets'
+removed directory '/mnt/data/signal-api'
+removed '/mnt/data/ssl/privkey.pem'
+removed '/mnt/data/ssl/fullchain.pem'
+removed directory '/mnt/data/ssl'
+removed directory '/mnt/data/tailscale'
+[0;31m[ERROR][0m Some files still exist, forcing complete removal...
+[0;32m[INFO][0m Using find command to remove stubborn files...
+[0;32m[SUCCESS][0m NUCLEAR PURGE: /mnt/data completely cleaned
+[1;33m[WARNING][0m /mnt is still mounted, attempting forced unmount...
+[0;32m[INFO][0m Phase 5: Volume Management
+[0;32m[INFO][0m Volume Management - Unmounting device
+[0;32m[INFO][0m /mnt is not mounted
+[0;32m[INFO][0m Available data volumes found:
+[0;32m[INFO][0m   - /dev/nvme0n1 (80G)
+[0;32m[INFO][0m Device ready for clean system setup
+[0;32m[SUCCESS][0m Nuclear purge completed - Clean system ready
+[0;32m[INFO][0m Phase 1: Container Cleanup
+[0;32m[INFO][0m Stopping and removing all containers...
+[0;32m[INFO][0m Phase 2: Network Cleanup
+[0;32m[INFO][0m Cleaning up Docker networks...
+[0;32m[INFO][0m Phase 3: Volume Cleanup
+[0;32m[INFO][0m Cleaning up Docker volumes...
+[0;32m[SUCCESS][0m Docker volumes cleaned
+[0;32m[INFO][0m Phase 4: Configuration Cleanup - NUCLEAR PURGE
+[0;32m[INFO][0m Configuration Cleanup - NUCLEAR PURGE
+[1;33m[WARNING][0m NUCLEAR PURGE: Removing all data in /mnt/data...
+[0;32m[INFO][0m Removing all files and directories with verbose output...
+removed '/mnt/data/logs/setup.log'
+removed directory '/mnt/data/logs'
+removed '/mnt/data/metadata/setup_state.json'
+removed directory '/mnt/data/metadata'
+[0;32m[SUCCESS][0m NUCLEAR PURGE: /mnt/data completely cleaned
+[0;32m[INFO][0m Phase 5: Volume Management
+[0;32m[INFO][0m Volume Management - Unmounting device
+[0;32m[INFO][0m /mnt is not mounted
+[0;32m[INFO][0m Available data volumes found:
+[0;32m[INFO][0m   - /dev/nvme0n1 (80G)
+[0;32m[INFO][0m Device ready for clean system setup
+[0;32m[SUCCESS][0m Nuclear purge completed - Clean system ready
+[0;32m[INFO][0m Phase 1: Container Cleanup
+[0;32m[INFO][0m Stopping and removing all containers...
+[0;32m[INFO][0m Phase 2: Network Cleanup
+[0;32m[INFO][0m Cleaning up Docker networks...
+[0;32m[INFO][0m Phase 3: Volume Cleanup
+[0;32m[INFO][0m Cleaning up Docker volumes...
+[0;32m[SUCCESS][0m Docker volumes cleaned
+[0;32m[INFO][0m Phase 4: Configuration Cleanup - NUCLEAR PURGE
+[0;32m[INFO][0m Configuration Cleanup - NUCLEAR PURGE
+[1;33m[WARNING][0m NUCLEAR PURGE: Removing all data in /mnt/data...
+[0;32m[INFO][0m Removing all files and directories with verbose output...
+removed '/mnt/data/logs/setup.log'
+removed directory '/mnt/data/logs'
+removed '/mnt/data/metadata/setup_state.json'
+removed directory '/mnt/data/metadata'
+[0;32m[SUCCESS][0m NUCLEAR PURGE: /mnt/data completely cleaned
+[0;32m[INFO][0m Phase 5: Volume Management
+[0;32m[INFO][0m Volume Management - Unmounting device
+[0;32m[INFO][0m /mnt is not mounted
+[0;32m[INFO][0m Available data volumes found:
+[0;32m[INFO][0m   - /dev/nvme0n1 (80G)
+[0;32m[INFO][0m Device ready for clean system setup
+[0;32m[SUCCESS][0m Nuclear purge completed - Clean system ready
+[0;32m[INFO][0m Phase 1: Container Cleanup
+[0;32m[INFO][0m Stopping and removing all containers...
+[0;32m[INFO][0m Phase 2: Network Cleanup
+[0;32m[INFO][0m Cleaning up Docker networks...
+[0;32m[INFO][0m Phase 3: Volume Cleanup
+[0;32m[INFO][0m Cleaning up Docker volumes...
+[0;32m[SUCCESS][0m Docker volumes cleaned
+[0;32m[INFO][0m Phase 4: Configuration Cleanup - NUCLEAR PURGE
+[0;32m[INFO][0m Configuration Cleanup - NUCLEAR PURGE
+[1;33m[WARNING][0m NUCLEAR PURGE: Removing all data in /mnt/data...
+[0;32m[INFO][0m Removing all files and directories with verbose output...
+removed directory '/mnt/data/data'
+[0;32m[SUCCESS][0m NUCLEAR PURGE: /mnt/data completely cleaned
+[0;32m[INFO][0m Phase 5: Volume Management
+[0;32m[INFO][0m Volume Management - Unmounting device
+[0;32m[INFO][0m /mnt is not mounted
+[0;32m[INFO][0m Available data volumes found:
+[0;32m[INFO][0m   - /dev/nvme0n1 (80G)
+[0;32m[INFO][0m Device ready for clean system setup
+[0;32m[SUCCESS][0m Nuclear purge completed - Clean system ready
+[0;32m[INFO][0m Phase 1: Container Cleanup
+[0;32m[INFO][0m Stopping and removing all containers...
+[0;32m[INFO][0m Phase 2: Network Cleanup
+[0;32m[INFO][0m Cleaning up Docker networks...
+[0;32m[INFO][0m Phase 3: Volume Cleanup
+[0;32m[INFO][0m Cleaning up Docker volumes...
+[0;32m[SUCCESS][0m Docker volumes cleaned
+[0;32m[INFO][0m Phase 4: Configuration Cleanup - NUCLEAR PURGE
+[0;32m[INFO][0m Configuration Cleanup - NUCLEAR PURGE
+[1;33m[WARNING][0m NUCLEAR PURGE: Removing all data in /mnt/data...
+[0;32m[INFO][0m Removing all files and directories with verbose output...
+[0;32m[SUCCESS][0m NUCLEAR PURGE: /mnt/data completely cleaned
+[0;32m[INFO][0m Phase 5: Volume Management
+[0;32m[INFO][0m Volume Management - Unmounting device
+[0;32m[INFO][0m /mnt is not mounted
+[0;32m[INFO][0m Available data volumes found:
+[0;32m[INFO][0m   - /dev/nvme0n1 (80G)
+[0;32m[INFO][0m Device ready for clean system setup
+[0;32m[SUCCESS][0m Nuclear purge completed - Clean system ready
+[0;32m[INFO][0m Phase 1: Container Cleanup
+[0;32m[INFO][0m Stopping and removing all containers...
+[0;32m[INFO][0m Phase 2: Network Cleanup
+[0;32m[INFO][0m Cleaning up Docker networks...
+[0;32m[INFO][0m Phase 3: Volume Cleanup
+[0;32m[INFO][0m Cleaning up Docker volumes...
+[0;32m[SUCCESS][0m Docker volumes cleaned
+[0;32m[INFO][0m Phase 4: Configuration Cleanup - NUCLEAR PURGE
+[0;32m[INFO][0m Configuration Cleanup - NUCLEAR PURGE
+[1;33m[WARNING][0m NUCLEAR PURGE: Removing all data in /mnt/data...
+[0;32m[INFO][0m Removing all files and directories with verbose output...
+[0;32m[SUCCESS][0m NUCLEAR PURGE: /mnt/data completely cleaned
+[0;32m[INFO][0m Phase 5: Volume Management
+[0;32m[INFO][0m Volume Management - Unmounting device
+[0;32m[INFO][0m /mnt is not mounted
+[0;32m[INFO][0m Available data volumes found:
+[0;32m[INFO][0m   - /dev/nvme0n1 (80G)
+[0;32m[INFO][0m Device ready for clean system setup
+[0;32m[SUCCESS][0m Nuclear purge completed - Clean system ready
+[0;32m[INFO][0m Phase 1: Container Cleanup
+[0;32m[INFO][0m Stopping and removing all containers...
+[0;32m[INFO][0m Phase 2: Network Cleanup
+[0;32m[INFO][0m Cleaning up Docker networks...
+[0;32m[INFO][0m Phase 3: Volume Cleanup
+[0;32m[INFO][0m Cleaning up Docker volumes...
+[0;32m[SUCCESS][0m Docker volumes cleaned
+[0;32m[INFO][0m Phase 4: Configuration Cleanup - NUCLEAR PURGE
+[0;32m[INFO][0m Configuration Cleanup - NUCLEAR PURGE
+[1;33m[WARNING][0m NUCLEAR PURGE: Removing all data in /mnt/data...
+[0;32m[INFO][0m Changing ownership to root...
+[0;32m[INFO][0m Setting permissions for removal...
+[0;32m[INFO][0m Removing all files and directories with verbose output...
+[0;32m[SUCCESS][0m NUCLEAR PURGE: /mnt/data completely cleaned
+[0;32m[INFO][0m Phase 5: Volume Management
+[0;32m[INFO][0m Volume Management - Unmounting device
+[0;32m[INFO][0m /mnt is not mounted
+[1;33m[WARNING][0m No data volumes found (excluding system disk)
+[0;32m[SUCCESS][0m Nuclear purge completed - Clean system ready
+[0;32m[INFO][0m Phase 1: Container Cleanup
+[0;32m[INFO][0m Stopping and removing all containers...
+[0;32m[INFO][0m Phase 2: Network Cleanup
+[0;32m[INFO][0m Cleaning up Docker networks...
+[0;32m[INFO][0m Phase 3: Volume Cleanup
+[0;32m[INFO][0m Cleaning up Docker volumes...
+[0;32m[SUCCESS][0m Docker volumes cleaned
+[0;32m[INFO][0m Phase 4: Configuration Cleanup - NUCLEAR PURGE
+[0;32m[INFO][0m Configuration Cleanup - NUCLEAR PURGE
+[0;32m[INFO][0m Found EBS volumes:
+[0;32m[INFO][0m   - /dev/nvme0n1 (80)
+[0;32m[INFO][0m   - /dev/nvme1n1 (100)
+[1;33m[WARNING][0m Volume /dev/nvme1n1 is mounted at /mnt/data - unmounting...
+[0;32m[SUCCESS][0m Unmounted /mnt/data
+[1;33m[WARNING][0m NUCLEAR PURGE: Removing all data in /mnt/data...
+[0;32m[INFO][0m Changing ownership to root...
+[0;32m[INFO][0m Setting permissions for removal...
+[0;32m[INFO][0m Removing all files and directories with verbose output...
+[0;32m[SUCCESS][0m NUCLEAR PURGE: /mnt/data completely cleaned
+[0;32m[INFO][0m Phase 5: Volume Management
+[0;32m[INFO][0m Volume Management - Verifying unmount and cleanup
+[0;32m[INFO][0m Verifying EBS volumes (excluding system disk):
+[0;32m[INFO][0m   - /dev/nvme0n1 (80) - SYSTEM DISK (skipped)
+[0;32m[INFO][0m   - /dev/nvme1n1 (100) - Data volume
+[0;32m[SUCCESS][0m Volume /dev/nvme1n1 is properly unmounted
+[0;32m[INFO][0m Data volumes ready for clean system setup
+[0;32m[SUCCESS][0m Nuclear purge completed - Clean system ready
+[0;32m[INFO][0m Phase 1: Container Cleanup
+[0;32m[INFO][0m Stopping and removing all containers...
+[0;32m[INFO][0m Phase 2: Network Cleanup
+[0;32m[INFO][0m Cleaning up Docker networks...
+[0;32m[INFO][0m Phase 3: Volume Cleanup
+[0;32m[INFO][0m Cleaning up Docker volumes...
+[0;32m[SUCCESS][0m Docker volumes cleaned
+[0;32m[INFO][0m Phase 4: Configuration Cleanup - NUCLEAR PURGE
+[0;32m[INFO][0m Configuration Cleanup - NUCLEAR PURGE
+[0;32m[INFO][0m Found EBS volumes:
+[0;32m[INFO][0m   - /dev/nvme0n1 (80)
+[0;32m[INFO][0m   - /dev/nvme1n1 (100)
+[1;33m[WARNING][0m Volume /dev/nvme1n1 is mounted at /mnt - unmounting...
+[0;32m[SUCCESS][0m Unmounted /mnt
+[0;32m[INFO][0m Phase 5: Volume Management
+[0;32m[INFO][0m Volume Management - Verifying unmount and cleanup
+[0;32m[INFO][0m Verifying EBS volumes (excluding system disk):
+[0;32m[INFO][0m   - /dev/nvme0n1 (80) - SYSTEM DISK (skipped)
+[0;32m[INFO][0m   - /dev/nvme1n1 (100) - Data volume
+[0;32m[SUCCESS][0m Volume /dev/nvme1n1 is properly unmounted
+[0;32m[INFO][0m Data volumes ready for clean system setup
+[0;32m[SUCCESS][0m Nuclear purge completed - Clean system ready
+[0;32m[INFO][0m Phase 1: Container Cleanup
+[0;32m[INFO][0m Stopping and removing all containers...
+[0;32m[INFO][0m Phase 2: Network Cleanup
+[0;32m[INFO][0m Cleaning up Docker networks...
+[0;32m[INFO][0m Phase 3: Volume Cleanup
+[0;32m[INFO][0m Cleaning up Docker volumes...
+[0;32m[SUCCESS][0m Docker volumes cleaned
+[0;32m[INFO][0m Phase 4: Configuration Cleanup - NUCLEAR PURGE
+[0;32m[INFO][0m Configuration Cleanup - NUCLEAR PURGE
+[0;32m[INFO][0m Found EBS volumes:
+[0;32m[INFO][0m   - /dev/nvme0n1 (80)
+[0;32m[INFO][0m   - /dev/nvme1n1 (100)
+[1;33m[WARNING][0m Volume /dev/nvme1n1 is mounted at /mnt - unmounting...
+[0;32m[SUCCESS][0m Unmounted /mnt
+[0;32m[INFO][0m Phase 5: Volume Management
+[0;32m[INFO][0m Volume Management - Verifying unmount and cleanup
+[0;32m[INFO][0m Verifying EBS volumes (excluding system disk):
+[0;32m[INFO][0m   - /dev/nvme0n1 (80) - SYSTEM DISK (skipped)
+[0;32m[INFO][0m   - /dev/nvme1n1 (100) - Data volume
+[0;32m[SUCCESS][0m Volume /dev/nvme1n1 is properly unmounted
+[0;32m[INFO][0m Data volumes ready for clean system setup
+[0;32m[SUCCESS][0m Nuclear purge completed - Clean system ready
+[0;32m[INFO][0m Phase 1: Container Cleanup
+[0;32m[INFO][0m Stopping and removing all containers...
+[0;32m[INFO][0m Phase 2: Network Cleanup
+[0;32m[INFO][0m Cleaning up Docker networks...
+[0;32m[INFO][0m Phase 3: Volume Cleanup
+[0;32m[INFO][0m Cleaning up Docker volumes...
+[0;32m[SUCCESS][0m Docker volumes cleaned
+[0;32m[INFO][0m Phase 4: Configuration Cleanup - NUCLEAR PURGE
+[0;32m[INFO][0m Configuration Cleanup - NUCLEAR PURGE
+[0;32m[INFO][0m Found EBS volumes:
+[0;32m[INFO][0m   - /dev/nvme0n1 (80)
+[0;32m[INFO][0m   - /dev/nvme1n1 (100)
+[0;32m[INFO][0m Phase 5: Volume Management
+[0;32m[INFO][0m Volume Management - Verifying unmount and cleanup
+[0;32m[INFO][0m Verifying EBS volumes (excluding system disk):
+[0;32m[INFO][0m   - /dev/nvme0n1 (80) - SYSTEM DISK (skipped)
+[0;32m[INFO][0m   - /dev/nvme1n1 (100) - Data volume
+[0;32m[SUCCESS][0m Volume /dev/nvme1n1 is properly unmounted
+[0;32m[INFO][0m Data volumes ready for clean system setup
+[0;32m[SUCCESS][0m Nuclear purge completed - Clean system ready
+[0;32m[INFO][0m Phase 1: Container Cleanup
+[0;32m[INFO][0m Stopping and removing all containers...
+[0;32m[INFO][0m Phase 2: Network Cleanup
+[0;32m[INFO][0m Cleaning up Docker networks...
+[0;32m[INFO][0m Phase 3: Volume Cleanup
+[0;32m[INFO][0m Cleaning up Docker volumes...
+[0;32m[SUCCESS][0m Docker volumes cleaned
+[0;32m[INFO][0m Phase 4: Configuration Cleanup - NUCLEAR PURGE
+[0;32m[INFO][0m Configuration Cleanup - NUCLEAR PURGE
+[0;32m[INFO][0m Found EBS volumes:
+[0;32m[INFO][0m   - /dev/nvme0n1 (80)
+[0;32m[INFO][0m   - /dev/nvme1n1 (100)
+[0;32m[INFO][0m Phase 5: Volume Management
+[0;32m[INFO][0m Volume Management - Verifying unmount and cleanup
+[0;32m[INFO][0m Verifying EBS volumes (excluding system disk):
+[0;32m[INFO][0m   - /dev/nvme0n1 (80) - SYSTEM DISK (skipped)
+[0;32m[INFO][0m   - /dev/nvme1n1 (100) - Data volume
+[0;32m[SUCCESS][0m Volume /dev/nvme1n1 is properly unmounted
+[0;32m[INFO][0m Data volumes ready for clean system setup
+[0;32m[SUCCESS][0m Nuclear purge completed - Clean system ready
