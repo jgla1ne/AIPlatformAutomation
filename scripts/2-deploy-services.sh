@@ -138,7 +138,7 @@ wait_for_redis() {
     print_info "Waiting for Redis to be ready (max ${max_attempts}s)..."
     
     while [ $attempt -lt $max_attempts ]; do
-        if docker exec redis redis-cli ping 2>/dev/null | grep -q PONG; then
+        if docker exec redis redis-cli -a "${REDIS_PASSWORD}" ping 2>/dev/null | grep -q PONG; then
             print_success "Redis is ready"
             return 0
         fi
@@ -1257,6 +1257,32 @@ display_service_info() {
 #==============================================================================
 
 wait_for_service_healthy() {
+    local service_name=$1
+    local max_attempts=${2:-30}  # Reduced from 60 to 30
+    local attempt=0
+
+    print_info "Waiting for $service_name to be healthy (max ${max_attempts}s)..."
+
+    while [ $attempt -lt $max_attempts ]; do
+        local health_status=$(docker inspect --format='{{.State.Health.Status}}' "$service_name" 2>/dev/null || echo "not_found")
+
+        if [ "$health_status" = "healthy" ]; then
+            print_success "$service_name is healthy"
+            return 0
+        fi
+
+        if [ "$health_status" = "not_found" ]; then
+            print_error "$service_name container not found"
+            return 1
+        fi
+
+        attempt=$((attempt + 1))
+        sleep 1  # Reduced from 2 to 1 second
+    done
+
+    print_error "$service_name failed to become healthy after $max_attempts seconds"
+    docker logs "$service_name" --tail 20 2>&1 | tee -a "$LOG_FILE" || true
+    return 1
 }
 
 # 🔥 NEW: Wait for Service Health with Docker Health Checks
