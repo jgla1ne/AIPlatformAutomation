@@ -303,10 +303,14 @@ collect_domain_info() {
     
     print_success "User configuration: $RUNNING_USER (UID:$RUNNING_UID, GID:$RUNNING_GID)"
     
-    prompt_input "DOMAIN" "Enter your domain (e.g., example.com)" "" false "domain"
-    echo "DOMAIN=$INPUT_RESULT" >> "$ENV_FILE"
+    # DOMAIN is always localhost for backward compatibility
+    echo "DOMAIN=localhost" >> "$ENV_FILE"
     
-    # Validate domain resolution
+    # DOMAIN_NAME is what the user enters
+    prompt_input "DOMAIN_NAME" "Enter your domain name (e.g., ai.datasquiz.net)" "" false "domain"
+    echo "DOMAIN_NAME=$INPUT_RESULT" >> "$ENV_FILE"
+    
+    # Validate domain resolution for DOMAIN_NAME
     echo ""
     print_info "Validating domain resolution..."
     
@@ -984,7 +988,7 @@ collect_configurations() {
     local existing_ssl_type=$(grep "^SSL_TYPE=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "none")
     local existing_ssl_email=$(grep "^SSL_EMAIL=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "")
     local existing_proxy_type=$(grep "^PROXY_TYPE=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "none")
-    local existing_bind_ip=$(grep "^BIND_IP=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "127.0.0.1")
+    local existing_bind_ip=$(grep "^BIND_IP=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "0.0.0.0")
     
     cat > "$ENV_FILE" <<EOF
 # AI Platform Environment
