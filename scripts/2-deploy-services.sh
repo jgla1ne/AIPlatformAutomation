@@ -1180,7 +1180,7 @@ deploy_service() {
     
     # Pull image
     print_info "DEBUG: Pulling $service image..."
-    DATA_ROOT=/mnt/data docker compose -f "$COMPOSE_FILE" pull "$service" >> "$LOG_FILE" 2>&1 || {
+    docker compose -f "$COMPOSE_FILE" pull "$service" >> "$LOG_FILE" 2>&1 || {
         echo -e "${RED}FAILED TO PULL${NC}"
         print_error "Failed to pull $service image"
         docker compose -f "$COMPOSE_FILE" logs "$service" --tail 20
@@ -1189,7 +1189,7 @@ deploy_service() {
     
     # Start service with explicit environment
     print_info "DEBUG: Starting $service with explicit environment..."
-    DATA_ROOT=/mnt/data docker compose -f "$COMPOSE_FILE" up -d "$service" >> "$LOG_FILE" 2>&1 || {
+    docker compose -f "$COMPOSE_FILE" up -d "$service" >> "$LOG_FILE" 2>&1 || {
         echo -e "${RED}FAILED TO START${NC}"
         print_error "Failed to start $service"
         docker compose -f "$COMPOSE_FILE" logs "$service" --tail 20
@@ -1445,15 +1445,15 @@ main() {
     print_info "DEBUG: About to create Docker networks..."
     # Clean up existing networks with wrong labels first
     print_info "DEBUG: Cleaning up existing networks..."
-    DATA_ROOT=/mnt/data docker network prune -f >> "$LOG_FILE" 2>&1 || true
+    docker network prune -f >> "$LOG_FILE" 2>&1 || true
     
     if ! docker network inspect ai_platform >/dev/null 2>&1; then
-        DATA_ROOT=/mnt/data docker compose -f "$COMPOSE_FILE" up --no-deps --detach prometheus || true
+        docker compose -f "$COMPOSE_FILE" up --no-deps --detach prometheus || true
         print_success "Created ai_platform network"
     fi
     
     if ! docker network inspect ai_platform_internal >/dev/null 2>&1; then
-        DATA_ROOT=/mnt/data docker compose -f "$COMPOSE_FILE" up --no-deps --detach prometheus || true
+        docker compose -f "$COMPOSE_FILE" up --no-deps --detach prometheus || true
         print_success "Created ai_platform_internal network"
     fi
     print_info "DEBUG: Docker networks created successfully"
