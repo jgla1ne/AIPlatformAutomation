@@ -127,6 +127,25 @@ wait_for_port() {
     return 1
 }
 
+wait_for_redis() {
+    local max_attempts=60
+    local attempt=0
+    
+    print_info "Waiting for Redis to respond..."
+    
+    while [ $attempt -lt $max_attempts ]; do
+        if docker exec redis redis-cli ping 2>/dev/null | grep -q PONG; then
+            print_success "Redis is ready"
+            return 0
+        fi
+        sleep 1
+        ((attempt++))
+    done
+    
+    print_error "Redis failed to respond to ping"
+    return 1
+}
+
 wait_for_postgres() {
     local container_name="$1"
     local max_attempts="${2:-30}"
@@ -146,8 +165,76 @@ wait_for_postgres() {
 }
 
 #==============================================================================
-# PROXY CONFIGURATION GENERATION
+# CONFIGURATION GENERATION
 #==============================================================================
+
+generate_prometheus_config() {
+    local config_dir="${DATA_ROOT}/config/prometheus"
+    mkdir -p "${config_dir}"
+    
+    cat > "${config_dir}/prometheus.yml" <<'EOF'
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres:5432']
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+EOF
+    
+    print_success "Prometheus config generated at ${config_dir}/prometheus.yml"
+}
+
+fix_grafana_permissions() {
+    local grafana_vol="${DATA_ROOT}/grafana"
+    mkdir -p "${grafana_vol}"
+    
+    # Grafana's internal UID is 472
+    chown -R 472:472 "${grafana_vol}"
+    chmod 755 "${grafana_vol}"
+    
+    print_success "Grafana volume permissions set (UID 472)"
+}
+
+fix_ollama_permissions() {
+    local ollama_vol="${DATA_ROOT}/volumes/ollama"
+    mkdir -p "${ollama_vol}"
+    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${ollama_vol}"
+    chmod 755 "${ollama_vol}"
+    
+    print_success "Ollama volume permissions set"
+}
+
+fix_postgres_permissions() {
+    local postgres_vol="${DATA_ROOT}/volumes/postgres"
+    mkdir -p "${postgres_vol}"
+    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${postgres_vol}"
+    chmod 755 "${postgres_vol}"
+    
+    print_success "PostgreSQL volume permissions set"
+}
+
+fix_redis_permissions() {
+    local redis_vol="${DATA_ROOT}/volumes/redis"
+    mkdir -p "${redis_vol}"
+    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${redis_vol}"
+    chmod 755 "${redis_vol}"
+    
+    print_success "Redis volume permissions set"
+}
 
 generate_proxy_config() {
     print_info "Generating proxy configuration for ${PROXY_TYPE}..."
@@ -1130,7 +1217,7 @@ deploy_service() {
             fi
             ;;
         "redis")
-            if wait_for_port "localhost" "6379" 60; then
+            if wait_for_redis; then
                 echo -e "${GREEN}✓ HEALTHY${NC}"
                 display_service_info "$service"
                 return 0
@@ -1369,6 +1456,29 @@ main() {
     echo -e "${GREEN}✓ Proxy configuration ready${NC}"
     echo ""
     
+    # 🔥 NEW: Generate Critical Configurations BEFORE Deployment
+    print_info "DEBUG: About to generate critical configurations..."
+    echo ""
+    echo -e "${BLUE}→ Generating Prometheus configuration...${NC}"
+    
+    generate_prometheus_config
+    
+    echo -e "${GREEN}✓ Prometheus configuration ready${NC}"
+    echo ""
+    
+    # 🔥 NEW: Fix Volume Permissions BEFORE Deployment
+    print_info "DEBUG: About to fix volume permissions..."
+    echo ""
+    echo -e "${BLUE}→ Setting up volume permissions...${NC}"
+    
+    fix_postgres_permissions
+    fix_redis_permissions
+    fix_grafana_permissions
+    fix_ollama_permissions
+    
+    echo -e "${GREEN}✓ Volume permissions fixed${NC}"
+    echo ""
+    
     print_info "DEBUG: About to create Docker networks..."
     
     # ,
@@ -1388,38 +1498,23 @@ main() {
     fi
     print_info "DEBUG: Docker networks created successfully"
     
-    # 🔥 UPDATED: Deploy Services in Dependency Order
+    # 🔥 REFACTORED: Deploy Services in Corrected Dependency Order
     print_info "DEBUG: About to start service deployment loop..."
     
-    # Define deployment order based on dependencies
+    # Define deployment order based on gap analysis fixes
     local core_services=("postgres" "redis")
-    local monitoring_services=("prometheus" "grafana")  # Grafana no longer depends on Prometheus
-    local ai_services=("ollama" "litellm" "openwebui" "anythingllm" "dify" "openclaw")
-    local communication_services=("n8n" "signal-api")
+    local monitoring_services=("prometheus" "grafana")
+    local ai_services=("ollama" "litellm" "openwebui" "anythingllm" "dify")
+    local application_services=("n8n" "flowise")
     local storage_services=("minio")
-    local network_services=("tailscale")
+    local network_services=("tailscale" "openclaw" "signal-api")
+    local proxy_services=("caddy")
     
-    # Deploy in phases
+    # Deploy in phases with proper dependencies
     local failed=0
     
-    # Phase 1: Core Infrastructure
+    # Phase 1: Core Infrastructure (PostgreSQL, Redis)
     print_info "DEBUG: Deploying core infrastructure..."
-    
-    # Fix PostgreSQL volume permissions first
-    print_info "DEBUG: Fixing PostgreSQL volume permissions..."
-    if [[ -d "${DATA_ROOT}/postgres" ]]; then
-        chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/postgres"
-        chmod -R 755 "${DATA_ROOT}/postgres"
-        print_success "Fixed PostgreSQL volume permissions"
-    fi
-    
-    # Fix Redis volume permissions
-    print_info "DEBUG: Fixing Redis volume permissions..."
-    if [[ -d "${DATA_ROOT}/redis" ]]; then
-        chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/redis"
-        chmod -R 755 "${DATA_ROOT}/redis"
-        print_success "Fixed Redis volume permissions"
-    fi
     
     for service in "${core_services[@]}"; do
         if [[ " ${SELECTED_SERVICES[*]} " =~ " ${service} " ]]; then
@@ -1427,7 +1522,7 @@ main() {
         fi
     done
     
-    # Phase 2: Monitoring Services
+    # Phase 2: Monitoring Stack (Prometheus, Grafana)
     print_info "DEBUG: Deploying monitoring services..."
     for service in "${monitoring_services[@]}"; do
         if [[ " ${SELECTED_SERVICES[*]} " =~ " ${service} " ]]; then
@@ -1435,7 +1530,7 @@ main() {
         fi
     done
     
-    # Phase 3: AI Services
+    # Phase 3: AI Services (Ollama → LiteLLM → OpenWebUI → AnythingLLM → Dify)
     print_info "DEBUG: Deploying AI services..."
     for service in "${ai_services[@]}"; do
         if [[ " ${SELECTED_SERVICES[*]} " =~ " ${service} " ]]; then
@@ -1443,30 +1538,37 @@ main() {
         fi
     done
     
-    # Phase 4: Communication Services
-    print_info "DEBUG: Deploying communication services..."
-    for service in "${communication_services[@]}"; do
+    # Phase 4: Application Services (n8n, Flowise)
+    print_info "DEBUG: Deploying application services..."
+    for service in "${application_services[@]}"; do
         if [[ " ${SELECTED_SERVICES[*]} " =~ " ${service} " ]]; then
             deploy_service "$service" || failed=$((failed + 1))
         fi
     done
     
-    # Phase 5: Storage Services
-    print_info "DEBUG: Deploying storage services..."
+    # Phase 5: Storage & Network Services (MinIO, Tailscale, OpenClaw, Signal-API)
+    print_info "DEBUG: Deploying storage and network services..."
     for service in "${storage_services[@]}"; do
         if [[ " ${SELECTED_SERVICES[*]} " =~ " ${service} " ]]; then
             deploy_service "$service" || failed=$((failed + 1))
         fi
     done
     
-    # Phase 6: Network Services
-    print_info "DEBUG: Deploying network services..."
     for service in "${network_services[@]}"; do
         if [[ " ${SELECTED_SERVICES[*]} " =~ " ${service} " ]]; then
             deploy_service "$service" || failed=$((failed + 1))
         fi
     done
-    print_info "DEBUG: All services deployment loop completed"
+    
+    # Phase 6: Proxy Layer (Caddy - Start Last)
+    print_info "DEBUG: Deploying proxy services..."
+    for service in "${proxy_services[@]}"; do
+        if [[ " ${SELECTED_SERVICES[*]} " =~ " ${service} " ]]; then
+            deploy_service "$service" || failed=$((failed + 1))
+        fi
+    done
+    
+    print_info "DEBUG: All services deployment completed"
     
     echo -e "\n${CYAN}🚀 Starting deployment of ${TOTAL_SERVICES} services...${NC}\n"
     print_info "DEBUG: About to start core services deployment..."
