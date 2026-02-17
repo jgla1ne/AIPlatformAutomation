@@ -1217,8 +1217,8 @@ main() {
     print_info "DEBUG: Environment variables loaded:"
     print_info "  RUNNING_UID: ${RUNNING_UID:-NOT_SET}"
     print_info "  RUNNING_GID: ${RUNNING_GID:-NOT_SET}"
-    print_info "  ENCRYPTION_KEY: ${ENCRYPTION_KEY:-NOT_SET}"
-    print_info "  LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:-NOT_SET}"
+    print_info "  ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-NOT_SET}"
+    print_info "  LITELLM_SALT_KEY: ${N8N_ENCRYPTION_KEY:-NOT_SET}"
     print_info "  LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-NOT_SET}"
     
     # Verify unified compose file exists
