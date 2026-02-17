@@ -988,7 +988,6 @@ collect_configurations() {
     local existing_ssl_type=$(grep "^SSL_TYPE=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "none")
     local existing_ssl_email=$(grep "^SSL_EMAIL=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "")
     local existing_proxy_type=$(grep "^PROXY_TYPE=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "none")
-    local existing_bind_ip=$(grep "^BIND_IP=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "0.0.0.0")
     
     cat > "$ENV_FILE" <<EOF
 # AI Platform Environment
@@ -1007,7 +1006,6 @@ DOMAIN_RESOLVES=$existing_domain_resolves
 PUBLIC_IP=$existing_public_ip
 PROXY_CONFIG_METHOD=$existing_proxy_config_method
 PROXY_TYPE=$existing_proxy_type
-BIND_IP=$existing_bind_ip
 SSL_TYPE=$existing_ssl_type
 SSL_EMAIL=$existing_ssl_email
 
