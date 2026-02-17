@@ -1120,76 +1120,33 @@ generate_healthcheck() {
 # 🔥 UPDATED: Deploy Service with Unified Compose and Health Checks
 deploy_service() {
     local service="$1"
-    local service_found=false
+    
+    # Map logical names to actual compose service names
+    case "$service" in
+        dify)
+            # Deploy dify-api, dify-web (dify was split into multiple services)
+            for svc in dify-api dify-web; do
+                if grep -q "^  $svc:" "$COMPOSE_FILE"; then
+                    _deploy_single_service "$svc"
+                else
+                    print_warning "Service $svc not found in compose file"
+                fi
+            done
+            return
+            ;;
+        openwebui|open-webui)
+            _deploy_single_service "openwebui"
+            return
+            ;;
+    esac
+    
+    _deploy_single_service "$service"
+}
+
+_deploy_single_service() {
+    local service="$1"
     
     echo -e "  🐳 ${BOLD}$service${NC}: "
-    
-    # Check if service exists in unified compose file
-    if ! grep -q "^  $service:" "$COMPOSE_FILE"; then
-        # Check for special cases (dify, signal-api, etc.)
-        case "$service" in
-            "dify")
-                if grep -q "^dify-api:" "$COMPOSE_FILE" || grep -q "^dify-web:" "$COMPOSE_FILE"; then
-                    service_found=true
-                else
-                    echo -e "${RED}SERVICE NOT FOUND IN COMPOSE FILE${NC}"
-                    print_error "Service $service not defined in $COMPOSE_FILE"
-                    return 1
-                fi
-                ;;
-            "signal-api")
-                if grep -q "^signal-cli:" "$COMPOSE_FILE" || grep -q "^signal-api:" "$COMPOSE_FILE"; then
-                    service_found=true
-                else
-                    echo -e "${RED}SERVICE NOT FOUND IN COMPOSE FILE${NC}"
-                    print_error "Service $service not defined in $COMPOSE_FILE"
-                    return 1
-                fi
-                ;;
-            *)
-                echo -e "${RED}SERVICE NOT FOUND IN COMPOSE FILE${NC}"
-                print_error "Service $service not defined in $COMPOSE_FILE"
-                return 1
-                ;;
-        esac
-    else
-        service_found=true
-    fi
-    
-    # Check for alternative service names (handle Script 1 naming differences)
-    local service_found=false
-    
-    # Try exact match first
-    if grep -q "^  $service:" "$COMPOSE_FILE"; then
-        service_found=true
-    fi
-    
-    # Try common alternatives if not found
-    if [[ "$service_found" == false ]]; then
-        case "$service" in
-            "dify")
-                if grep -q "^dify-api:" "$COMPOSE_FILE" || grep -q "^dify-web:" "$COMPOSE_FILE"; then
-                    service_found=true
-                fi
-                ;;
-            "openclaw")
-                if grep -q "^openclaw:" "$COMPOSE_FILE"; then
-                    service_found=true
-                fi
-                ;;
-            "signal-api")
-                if grep -q "^signal-cli:" "$COMPOSE_FILE" || grep -q "^signal-api:" "$COMPOSE_FILE"; then
-                    service_found=true
-                fi
-                ;;
-        esac
-    fi
-    
-    if [[ "$service_found" == false ]]; then
-        echo -e "${RED}SERVICE NOT FOUND IN COMPOSE FILE${NC}"
-        print_error "Service $service not defined in $COMPOSE_FILE"
-        return 1
-    fi
     
     # Pull image
     print_info "DEBUG: Pulling $service image..."
@@ -1214,40 +1171,92 @@ deploy_service() {
     
     # Use enhanced wait for specific services
     case "$service" in
-        "postgres")
-            if wait_for_postgres "postgres" 60; then
-                echo -e "${GREEN}✓ HEALTHY${NC}"
-                display_service_info "$service"
-                return 0
-            else
-                echo -e "${YELLOW}⚠ RUNNING (health check timeout)${NC}"
-                print_warning "$service is running but health check timed out"
-                return 0 # Don't fail deployment for health check timeout
-            fi
-            ;;
         "redis")
-            if wait_for_redis; then
-                echo -e "${GREEN}✓ HEALTHY${NC}"
-                display_service_info "$service"
-                return 0
-            else
-                echo -e "${YELLOW}⚠ RUNNING (health check timeout)${NC}"
-                print_warning "$service is running but health check timed out"
-                return 0
-            fi
+            wait_for_redis
+            ;;
+        "postgres")
+            wait_for_postgres "postgres" 30
             ;;
         *)
-            if wait_for_service_healthy "$service" 180; then
-                echo -e "${GREEN}✓ HEALTHY${NC}"
-                display_service_info "$service"
-                return 0
-            else
-                echo -e "${YELLOW}⚠ RUNNING (health check timeout)${NC}"
-                print_warning "$service is running but health check timed out"
-                return 0 # Don't fail deployment for health check timeout
-            fi
+            wait_for_healthy "$service" 180
             ;;
     esac
+    
+    local health_status=$?
+    if [ $health_status -eq 0 ]; then
+        echo -e "${GREEN}✓ HEALTHY${NC}"
+        display_service_info "$service"
+    else
+        echo -e "${YELLOW}⚠ RUNNING (health check timeout)${NC}"
+        print_warning "$service is running but health check timed out"
+    fi
+    
+    print_success "Service $service deployed successfully"
+}
+
+# 🔥 NEW: Display Service Information
+display_service_info() {
+    local svc="$1"
+    case "$svc" in
+        "postgres")
+            echo -e "    → PostgreSQL ready: localhost:5432"
+            ;;
+        "redis")
+            echo -e "    → Redis ready: localhost:6379"
+            ;;
+        "prometheus")
+            echo -e "    → Prometheus ready: http://localhost:9090"
+            ;;
+        "grafana")
+            echo -e "    → Grafana ready: http://localhost:3003"
+            ;;
+        "ollama")
+            echo -e "    → Ollama ready: http://localhost:11434"
+            ;;
+        "n8n")
+            echo -e "    → N8N ready: http://localhost:5678"
+            ;;
+        "flowise")
+            echo -e "    → Flowise ready: http://localhost:3001"
+            ;;
+        "openwebui")
+            echo -e "    → OpenWebUI ready: http://localhost:8080"
+            ;;
+        "anythingllm")
+            echo -e "    → AnythingLLM ready: http://localhost:3002"
+            ;;
+        "minio")
+            echo -e "    → MinIO ready: http://localhost:9000 (console: http://localhost:9001)"
+            ;;
+        "signal-api")
+            echo -e "    → Signal API ready: http://localhost:8090"
+            ;;
+        "tailscale")
+            echo -e "    → Tailscale running (check status with: docker logs tailscale)"
+            ;;
+        "openclaw")
+            echo -e "    → OpenClaw ready: http://localhost:18789"
+            ;;
+        "dify-api")
+            echo -e "    → Dify API ready: http://localhost:5001"
+            ;;
+        "dify-web")
+            echo -e "    → Dify Web ready: http://localhost:3000"
+            ;;
+        "caddy")
+            echo -e "    → Caddy proxy ready: http://localhost (HTTP), https://localhost (HTTPS)"
+            ;;
+        *)
+            echo -e "    → $svc deployed"
+            ;;
+    esac
+}
+
+#==============================================================================
+# ENHANCED WAIT MECHANISMS (Frontier Recommendations Adopted)
+#==============================================================================
+
+wait_for_service_healthy() {
 }
 
 # 🔥 NEW: Wait for Service Health with Docker Health Checks
