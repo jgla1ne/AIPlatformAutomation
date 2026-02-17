@@ -1347,6 +1347,9 @@ cleanup_previous_deployments() {
 
 # Main deployment function
 main() {
+    # Export DATA_ROOT for docker compose commands
+    export DATA_ROOT=/mnt/data
+    
     # 🔥 NEW: Deployment Lock Mechanism
     if [[ -f "$DEPLOYMENT_LOCK" ]]; then
         local lock_pid=$(cat "$DEPLOYMENT_LOCK" 2>/dev/null || echo "unknown")
