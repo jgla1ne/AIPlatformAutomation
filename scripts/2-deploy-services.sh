@@ -78,7 +78,7 @@ setup_apparmor_security() {
 #==============================================================================
 
 generate_proxy_config() {
-    print_info "Generating proxy configuration..."
+    print_info "Generating proxy configuration for ${PROXY_TYPE}..."
     
     # Create SSL directory
     mkdir -p "${DATA_ROOT}/ssl"
@@ -96,7 +96,7 @@ generate_proxy_config() {
     
     # Determine which proxy to configure
     case "${PROXY_TYPE:-nginx}" in
-        nginx)
+        nginx-proxy-manager|nginx)
             generate_nginx_config
             ;;
         caddy)
@@ -111,7 +111,7 @@ generate_proxy_config() {
             ;;
     esac
     
-    print_success "Proxy configuration generated"
+    print_success "Proxy configuration generated for ${PROXY_TYPE}"
 }
 
 generate_nginx_config() {
@@ -392,16 +392,25 @@ EOF
 }
 
 add_proxy_to_compose() {
-    print_info "Adding proxy service to docker-compose.yml..."
+    print_info "Adding ${PROXY_TYPE} service to docker-compose.yml..."
     
     case "${PROXY_TYPE:-nginx}" in
-        nginx)
+        nginx-proxy-manager|nginx)
             add_nginx_to_compose
             ;;
         caddy)
             add_caddy_to_compose
             ;;
+        traefik)
+            add_traefik_to_compose
+            ;;
+        *)
+            print_error "Unknown proxy type: ${PROXY_TYPE}"
+            return 1
+            ;;
     esac
+    
+    print_success "${PROXY_TYPE} added to compose"
 }
 
 add_nginx_to_compose() {
@@ -827,60 +836,58 @@ generate_service_volumes() {
 }
 
 # 🔥 UPDATED: Generate Service Ports
-generate_service_ports() {
+generate_ports() {
     local service_name="$1"
     local ports=""
+    local bind_ip="${BIND_IP:-127.0.0.1}"
     
     case "$service_name" in
         "postgres")
-            ports="      - \"127.0.0.1:5432:5432\""
+            ports="      - \"${bind_ip}:5432:5432\""
             ;;
         "redis")
-            ports="      - \"127.0.0.1:6379:6379\""
+            ports="      - \"${bind_ip}:6379:6379\""
             ;;
         "ollama")
-            ports="      - \"\${OLLAMA_PORT:-11434}:11434\""
+            ports="      - \"${bind_ip}:\${OLLAMA_PORT:-11434}:11434\""
             ;;
         "litellm")
-            ports="      - \"4000:4000\""
+            ports="      - \"${bind_ip}:4000:4000\""
             ;;
         "dify")
-            ports="      - \"8080:3000\"
-      - \"5001:5001\""
+            ports="      - \"${bind_ip}:8080:3000\"
+      - \"${bind_ip}:5001:5001\""
             ;;
         "n8n")
-            ports="      - \"\${N8N_PORT:-5678}:5678\""
+            ports="      - \"${bind_ip}:\${N8N_PORT:-5678}:5678\""
             ;;
         "flowise")
-            ports="      - \"\${FLOWISE_PORT:-3000}:3000\""
+            ports="      - \"${bind_ip}:\${FLOWISE_PORT:-3000}:3000\""
             ;;
         "anythingllm")
-            ports="      - \"\${ANYTHINGLLM_PORT:-3001}:3001\""
+            ports="      - \"${bind_ip}:\${ANYTHINGLLM_PORT:-3001}:3001\""
             ;;
         "openwebui")
-            ports="      - \"3000:3000\""
-            ;;
-        "signal-api")
-            ports="      - \"\${SIGNAL_API_PORT:-8080}:8080\""
+            ports="      - \"${bind_ip}:\${OPENWEBUI_PORT:-3000}:3000\""
             ;;
         "openclaw")
-            ports="      - \"\${OPENCLAW_PORT:-8081}:8081\""
+            ports="      - \"${bind_ip}:\${OPENCLAW_PORT:-8081}:8081\""
             ;;
         "grafana")
-            ports="      - \"3000:3000\""
+            ports="      - \"${bind_ip}:3000:3000\""
             ;;
         "prometheus")
-            ports="      - \"9090:9090\""
+            ports="      - \"${bind_ip}:9090:9090\""
             ;;
         "minio")
-            ports="      - \"9000:9000\"
-      - \"9001:9001\""
+            ports="      - \"${bind_ip}:9000:9000\"
+      - \"${bind_ip}:9001:9001\""
             ;;
         "tailscale")
-            ports="      - \"41641:41641/udp\""
+            ports="      - \"${bind_ip}:41641:41641/udp\""
             ;;
         *)
-            ports="      - \"3000:3000\""
+            ports="      - \"${bind_ip}:3000:3000\""
             ;;
     esac
     
