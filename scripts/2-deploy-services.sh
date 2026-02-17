@@ -718,9 +718,6 @@ else
     exit 1
 fi
 
-# 🔥 CRITICAL FIX: Export DATA_ROOT globally for docker compose
-export DATA_ROOT=/mnt/data
-
 # 🔥 NEW: Load Selected Services from JSON
 load_selected_services() {
     if [[ ! -f "$SERVICES_FILE" ]]; then
@@ -1183,8 +1180,7 @@ deploy_service() {
     
     # Pull image
     print_info "DEBUG: Pulling $service image..."
-    export DATA_ROOT=/mnt/data
-    if ! DATA_ROOT=/mnt/data docker compose -f "$COMPOSE_FILE" pull "$service" >> "$LOG_FILE" 2>&1; then
+    if ! docker compose -f "$COMPOSE_FILE" pull "$service" >> "$LOG_FILE" 2>&1; then
         echo -e "${RED}FAILED TO PULL${NC}"
         print_error "Failed to pull $service image"
         docker compose -f "$COMPOSE_FILE" logs "$service" --tail 20
@@ -1193,8 +1189,7 @@ deploy_service() {
     
     # Start service with explicit environment
     print_info "DEBUG: Starting $service with explicit environment..."
-    export DATA_ROOT=/mnt/data
-    if ! DATA_ROOT=/mnt/data docker compose -f "$COMPOSE_FILE" up -d "$service" >> "$LOG_FILE" 2>&1; then
+    if ! docker compose -f "$COMPOSE_FILE" up -d "$service" >> "$LOG_FILE" 2>&1; then
         echo -e "${RED}FAILED TO START${NC}"
         print_error "Failed to start $service"
         docker compose -f "$COMPOSE_FILE" logs "$service" --tail 20
