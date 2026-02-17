@@ -1494,6 +1494,7 @@ main() {
     print_info "DEBUG: About to create Docker networks..."
     # Clean up existing networks with wrong labels first
     print_info "DEBUG: Cleaning up existing networks..."
+    export DATA_ROOT=/mnt/data
     docker network prune -f >> "$LOG_FILE" 2>&1 || true
     
     if ! docker network inspect ai_platform >/dev/null 2>&1; then
@@ -1502,7 +1503,7 @@ main() {
     fi
     
     if ! docker network inspect ai_platform_internal >/dev/null 2>&1; then
-        docker compose -f "$COMPOSE_FILE" up --no-deps --detach prometheus || true_internal --internal
+        docker compose -f "$COMPOSE_FILE" up --no-deps --detach prometheus || true
         print_success "Created ai_platform_internal network"
     fi
     print_info "DEBUG: Docker networks created successfully"
