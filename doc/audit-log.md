@@ -1,5 +1,4 @@
-
-╔════════════════════════════════════════════════════════════════════╗
+════════════════════════════════════════════════════════════════════╗
 ║            AI PLATFORM AUTOMATION - DEPLOYMENT                 ║
 ║              Non-Root Version 7.0.0                      ║
 ║           AppArmor Security & Complete Coverage              ║
@@ -179,3 +178,31 @@ FAILED TO START
 [INFO] DEBUG: Starting openwebui with explicit environment...
 [INFO] DEBUG: Waiting for openwebui to become healthy...
 [INFO] Waiting for openwebui to become healthy...
+[ERROR] openwebui failed to become healthy after 180 attempts
+  File "/usr/local/lib/python3.11/site-packages/peewee.py", line 196, in reraise
+    raise value.with_traceback(tb)
+  File "/usr/local/lib/python3.11/site-packages/peewee.py", line 3321, in execute_sql
+    cursor = self.cursor()
+             ^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/peewee.py", line 3311, in cursor
+    self.connect()
+  File "/usr/local/lib/python3.11/site-packages/peewee.py", line 3262, in connect
+    with __exception_wrapper__:
+  File "/usr/local/lib/python3.11/site-packages/peewee.py", line 3088, in __exit__
+    reraise(new_type, new_type(exc_value, *exc_args), traceback)
+  File "/usr/local/lib/python3.11/site-packages/peewee.py", line 196, in reraise
+    raise value.with_traceback(tb)
+  File "/usr/local/lib/python3.11/site-packages/peewee.py", line 3263, in connect
+    self._state.set_connection(self._connect())
+                               ^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/peewee.py", line 3604, in _connect
+    conn = sqlite3.connect(self.database, timeout=self._timeout,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+peewee.OperationalError: unable to open database file
+⚠ RUNNING (health check timeout)
+[WARNING] openwebui is running but health check timed out
+  🐳 anythingllm: 
+[INFO] DEBUG: Pulling anythingllm image...
+[INFO] DEBUG: Starting anythingllm with explicit environment...
+[INFO] DEBUG: Waiting for anythingllm to become healthy...
+[INFO] Waiting for anythingllm to become healthy..
