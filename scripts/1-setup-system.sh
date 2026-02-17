@@ -344,8 +344,17 @@ collect_domain_info() {
         fi
     else
         print_warn "Domain does not resolve or DNS not configured"
-        echo "DOMAIN_RESOLVES=false" >> "$ENV_FILE"
-        echo "PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || echo 'unknown')" >> "$ENV_FILE"
+        # Still set to true if we can get public IP, as external access is possible
+        local public_ip=$(curl -s ifconfig.me 2>/dev/null || echo 'unknown')
+        if [[ "$public_ip" != "unknown" ]]; then
+            echo "DOMAIN_RESOLVES=true" >> "$ENV_FILE"
+            echo "PUBLIC_IP=$public_ip" >> "$ENV_FILE"
+            print_info "Public IP available: $public_ip - external access possible"
+        else
+            echo "DOMAIN_RESOLVES=false" >> "$ENV_FILE"
+            echo "PUBLIC_IP=unknown" >> "$ENV_FILE"
+            print_warn "No public IP available - local access only"
+        fi
     fi
     
     echo ""
@@ -974,6 +983,8 @@ collect_configurations() {
     local existing_proxy_config_method=$(grep "^PROXY_CONFIG_METHOD=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "direct")
     local existing_ssl_type=$(grep "^SSL_TYPE=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "none")
     local existing_ssl_email=$(grep "^SSL_EMAIL=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "")
+    local existing_proxy_type=$(grep "^PROXY_TYPE=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "none")
+    local existing_bind_ip=$(grep "^BIND_IP=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "127.0.0.1")
     
     cat > "$ENV_FILE" <<EOF
 # AI Platform Environment
@@ -987,10 +998,12 @@ LOG_LEVEL=info
 
 # Network Configuration (DOMAIN=localhost by default)
 DOMAIN_NAME=$existing_domain_name
-DOMAIN=localhost
+DOMAIN=$existing_domain
 DOMAIN_RESOLVES=$existing_domain_resolves
 PUBLIC_IP=$existing_public_ip
 PROXY_CONFIG_METHOD=$existing_proxy_config_method
+PROXY_TYPE=$existing_proxy_type
+BIND_IP=$existing_bind_ip
 SSL_TYPE=$existing_ssl_type
 SSL_EMAIL=$existing_ssl_email
 
@@ -999,6 +1012,36 @@ RUNNING_USER=$RUNNING_USER
 RUNNING_UID=$RUNNING_UID
 RUNNING_GID=$RUNNING_GID
 EOF
+    
+    # Service Binding Configuration
+    echo ""
+    print_header "🔗 Service Binding Configuration"
+    echo ""
+    echo "Select how services should bind to network interfaces:"
+    echo "  1) Localhost only (127.0.0.1) - More secure, internal access only"
+    echo "  2) All interfaces (0.0.0.0) - Accessible from external networks"
+    echo ""
+    
+    while true; do
+        echo -n -e "${YELLOW}Select binding option [1-2]:${NC} "
+        read -r bind_choice
+        
+        case "$bind_choice" in
+            1)
+                echo "BIND_IP=127.0.0.1" >> "$ENV_FILE"
+                print_success "Services will bind to localhost only"
+                break
+                ;;
+            2)
+                echo "BIND_IP=0.0.0.0" >> "$ENV_FILE"
+                print_success "Services will bind to all interfaces (external access)"
+                break
+                ;;
+            *)
+                print_error "Invalid selection"
+                ;;
+        esac
+    done
     
     # Port configuration
     echo ""
