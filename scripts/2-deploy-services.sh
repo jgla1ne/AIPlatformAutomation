@@ -79,30 +79,30 @@ setup_apparmor_security() {
 #==============================================================================
 
 wait_for_service_healthy() {
-    local service_name="$1"
-    local max_attempts="${2:-60}"
+    local service_name=$1
+    local max_attempts=${2:-30}  # Reduced from 60 to 30
     local attempt=0
-    
-    print_info "Waiting for $service_name to become healthy..."
-    
+
+    print_info "Waiting for $service_name to be healthy (max ${max_attempts}s)..."
+
     while [ $attempt -lt $max_attempts ]; do
         local health_status=$(docker inspect --format='{{.State.Health.Status}}' "$service_name" 2>/dev/null || echo "not_found")
-        
+
         if [ "$health_status" = "healthy" ]; then
             print_success "$service_name is healthy"
             return 0
         fi
-        
+
         if [ "$health_status" = "not_found" ]; then
             print_error "$service_name container not found"
             return 1
         fi
-        
+
         attempt=$((attempt + 1))
-        sleep 2
+        sleep 1  # Reduced from 2 to 1 second
     done
-    
-    print_error "$service_name failed to become healthy after $max_attempts attempts"
+
+    print_error "$service_name failed to become healthy after $max_attempts seconds"
     docker logs "$service_name" --tail 20 2>&1 | tee -a "$LOG_FILE" || true
     return 1
 }
@@ -110,10 +110,10 @@ wait_for_service_healthy() {
 wait_for_port() {
     local host="$1"
     local port="$2"
-    local max_attempts="${3:-30}"
+    local max_attempts="${3:-15}"  # Reduced from 30 to 15
     local attempt=0
     
-    print_info "Waiting for $host:$port to be available..."
+    print_info "Waiting for $host:$port to be available (max ${max_attempts}s)..."
     
     while [ $attempt -lt $max_attempts ]; do
         if nc -z "$host" "$port" 2>/dev/null; then
@@ -121,7 +121,7 @@ wait_for_port() {
             return 0
         fi
         attempt=$((attempt + 1))
-        sleep 2
+        sleep 1  # Reduced from 2 to 1 second
     done
     
     print_error "$host:$port failed to become available"
@@ -129,39 +129,39 @@ wait_for_port() {
 }
 
 wait_for_redis() {
-    local max_attempts=60
+    local max_attempts=30  # Reduced from 60 to 30
     local attempt=0
     
-    print_info "Waiting for Redis to respond..."
+    print_info "Waiting for Redis to be ready (max ${max_attempts}s)..."
     
     while [ $attempt -lt $max_attempts ]; do
         if docker exec redis redis-cli ping 2>/dev/null | grep -q PONG; then
             print_success "Redis is ready"
             return 0
         fi
-        sleep 1
-        ((attempt++))
+        attempt=$((attempt + 1))
+        sleep 1  # Reduced from 2 to 1 second
     done
     
-    print_error "Redis failed to respond to ping"
+    print_error "Redis failed to become ready after $max_attempts seconds"
     return 1
 }
 
 wait_for_postgres() {
     local container_name="$1"
-    local max_attempts="${2:-30}"
+    local max_attempts="${2:-20}"  # Reduced from 30 to 20
     
-    print_info "Waiting for PostgreSQL to be ready..."
+    print_info "Waiting for PostgreSQL to be ready (max ${max_attempts}s)..."
     
     for i in $(seq 1 $max_attempts); do
         if docker exec "$container_name" pg_isready -U "${POSTGRES_USER:-postgres}" >/dev/null 2>&1; then
             print_success "PostgreSQL is ready"
             return 0
         fi
-        sleep 2
+        sleep 1  # Reduced from 2 to 1 second
     done
     
-    print_error "PostgreSQL failed to become ready"
+    print_error "PostgreSQL failed to become ready after $max_attempts seconds"
     return 1
 }
 
@@ -1246,8 +1246,8 @@ wait_for_healthy() {
     while [ $elapsed -lt $timeout ]; do
         # Check container is running
         if ! docker ps --format '{{.Names}}' | grep -q "^${service}$"; then
-            sleep 2
-            elapsed=$((elapsed + 2))
+            sleep 1
+            elapsed=$((elapsed + 1))
             continue
         fi
         
@@ -1265,7 +1265,7 @@ wait_for_healthy() {
             fi
         fi
         
-        sleep 2
+        sleep 1
         elapsed=$((elapsed + 2))
     done
     
@@ -1347,9 +1347,11 @@ cleanup_previous_deployments() {
 
 # Main deployment function
 main() {
-    # Export DATA_ROOT for docker compose commands
-    export DATA_ROOT=/mnt/data
+    # Export DATA_ROOT for docker compose commands (use local variable to avoid readonly conflict)
+    local DATA_ROOT_EXPORT=/mnt/data
+    export DATA_ROOT_EXPORT
     
+    # Update docker compose commands to use DATA_ROOT_EXPORT
     # 🔥 NEW: Deployment Lock Mechanism
     if [[ -f "$DEPLOYMENT_LOCK" ]]; then
         local lock_pid=$(cat "$DEPLOYMENT_LOCK" 2>/dev/null || echo "unknown")
