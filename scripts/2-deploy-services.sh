@@ -74,6 +74,78 @@ setup_apparmor_security() {
 }
 
 #==============================================================================
+# ENHANCED WAIT MECHANISMS (Frontier Recommendations Adopted)
+#==============================================================================
+
+wait_for_service_healthy() {
+    local service_name="$1"
+    local max_attempts="${2:-60}"
+    local attempt=0
+    
+    print_info "Waiting for $service_name to become healthy..."
+    
+    while [ $attempt -lt $max_attempts ]; do
+        local health_status=$(docker inspect --format='{{.State.Health.Status}}' "$service_name" 2>/dev/null || echo "not_found")
+        
+        if [ "$health_status" = "healthy" ]; then
+            print_success "$service_name is healthy"
+            return 0
+        fi
+        
+        if [ "$health_status" = "not_found" ]; then
+            print_error "$service_name container not found"
+            return 1
+        fi
+        
+        attempt=$((attempt + 1))
+        sleep 2
+    done
+    
+    print_error "$service_name failed to become healthy after $max_attempts attempts"
+    docker logs "$service_name" --tail 20 2>&1 | tee -a "$LOG_FILE" || true
+    return 1
+}
+
+wait_for_port() {
+    local host="$1"
+    local port="$2"
+    local max_attempts="${3:-30}"
+    local attempt=0
+    
+    print_info "Waiting for $host:$port to be available..."
+    
+    while [ $attempt -lt $max_attempts ]; do
+        if nc -z "$host" "$port" 2>/dev/null; then
+            print_success "$host:$port is available"
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        sleep 2
+    done
+    
+    print_error "$host:$port failed to become available"
+    return 1
+}
+
+wait_for_postgres() {
+    local container_name="$1"
+    local max_attempts="${2:-30}"
+    
+    print_info "Waiting for PostgreSQL to be ready..."
+    
+    for i in $(seq 1 $max_attempts); do
+        if docker exec "$container_name" pg_isready -U "${POSTGRES_USER:-postgres}" >/dev/null 2>&1; then
+            print_success "PostgreSQL is ready"
+            return 0
+        fi
+        sleep 2
+    done
+    
+    print_error "PostgreSQL failed to become ready"
+    return 1
+}
+
+#==============================================================================
 # PROXY CONFIGURATION GENERATION
 #==============================================================================
 
@@ -950,14 +1022,40 @@ generate_healthcheck() {
 # 🔥 UPDATED: Deploy Service with Unified Compose and Health Checks
 deploy_service() {
     local service="$1"
+    local service_found=false
     
     echo -e "  🐳 ${BOLD}$service${NC}: "
     
     # Check if service exists in unified compose file
     if ! grep -q "^  $service:" "$COMPOSE_FILE"; then
-        echo -e "${RED}SERVICE NOT FOUND IN COMPOSE FILE${NC}"
-        print_error "Service $service not defined in $COMPOSE_FILE"
-        return 1
+        # Check for special cases (dify, signal-api, etc.)
+        case "$service" in
+            "dify")
+                if grep -q "^dify-api:" "$COMPOSE_FILE" || grep -q "^dify-web:" "$COMPOSE_FILE"; then
+                    service_found=true
+                else
+                    echo -e "${RED}SERVICE NOT FOUND IN COMPOSE FILE${NC}"
+                    print_error "Service $service not defined in $COMPOSE_FILE"
+                    return 1
+                fi
+                ;;
+            "signal-api")
+                if grep -q "^signal-cli:" "$COMPOSE_FILE" || grep -q "^signal-api:" "$COMPOSE_FILE"; then
+                    service_found=true
+                else
+                    echo -e "${RED}SERVICE NOT FOUND IN COMPOSE FILE${NC}"
+                    print_error "Service $service not defined in $COMPOSE_FILE"
+                    return 1
+                fi
+                ;;
+            *)
+                echo -e "${RED}SERVICE NOT FOUND IN COMPOSE FILE${NC}"
+                print_error "Service $service not defined in $COMPOSE_FILE"
+                return 1
+                ;;
+        esac
+    else
+        service_found=true
     fi
     
     # Check for alternative service names (handle Script 1 naming differences)
@@ -1015,17 +1113,45 @@ deploy_service() {
         return 1
     fi
     
-    # Wait for health
+    # Wait for health using enhanced wait mechanisms
     print_info "DEBUG: Waiting for $service to become healthy..."
-    if wait_for_healthy "$service" 180; then
-        echo -e "${GREEN}✓ HEALTHY${NC}"
-        display_service_info "$service"
-        return 0
-    else
-        echo -e "${YELLOW}⚠ RUNNING (health check timeout)${NC}"
-        print_warning "$service is running but health check timed out"
-        return 0 # Don't fail deployment for health check timeout
-    fi
+    
+    # Use enhanced wait for specific services
+    case "$service" in
+        "postgres")
+            if wait_for_postgres "postgres" 60; then
+                echo -e "${GREEN}✓ HEALTHY${NC}"
+                display_service_info "$service"
+                return 0
+            else
+                echo -e "${YELLOW}⚠ RUNNING (health check timeout)${NC}"
+                print_warning "$service is running but health check timed out"
+                return 0 # Don't fail deployment for health check timeout
+            fi
+            ;;
+        "redis")
+            if wait_for_port "localhost" "6379" 60; then
+                echo -e "${GREEN}✓ HEALTHY${NC}"
+                display_service_info "$service"
+                return 0
+            else
+                echo -e "${YELLOW}⚠ RUNNING (health check timeout)${NC}"
+                print_warning "$service is running but health check timed out"
+                return 0
+            fi
+            ;;
+        *)
+            if wait_for_service_healthy "$service" 180; then
+                echo -e "${GREEN}✓ HEALTHY${NC}"
+                display_service_info "$service"
+                return 0
+            else
+                echo -e "${YELLOW}⚠ RUNNING (health check timeout)${NC}"
+                print_warning "$service is running but health check timed out"
+                return 0 # Don't fail deployment for health check timeout
+            fi
+            ;;
+    esac
 }
 
 # 🔥 NEW: Wait for Service Health with Docker Health Checks
