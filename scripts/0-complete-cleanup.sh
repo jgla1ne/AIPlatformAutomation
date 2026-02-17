@@ -2,16 +2,23 @@
 # 0-complete-cleanup.sh - Nuclear cleanup with proper volume management
 set -euo pipefail
 
+# Paths
+DATA_ROOT="/mnt/data"
+LOG_FILE="$DATA_ROOT/logs/cleanup.log"
+
+# Ensure log directory exists
+mkdir -p "$DATA_ROOT/logs"
+
 # Colors for output
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
 readonly NC='\033[0m'
 
-print_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
-print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
-print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+print_info() { echo -e "${GREEN}[INFO]${NC} $1" | tee -a "$LOG_FILE"; }
+print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1" | tee -a "$LOG_FILE"; }
+print_error() { echo -e "${RED}[ERROR]${NC} $1" | tee -a "$LOG_FILE"; }
+print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1" | tee -a "$LOG_FILE"; }
 
 # Main cleanup function
 main() {
