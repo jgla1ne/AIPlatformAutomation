@@ -203,12 +203,22 @@ EOF
 }
 
 fix_grafana_permissions() {
-    local grafana_vol="${DATA_ROOT}/grafana"
-    mkdir -p "${grafana_vol}"
+    print_info "Setting up Grafana permissions (UID 472)..."
     
-    # Grafana's internal UID is 472
-    chown -R 472:472 "${grafana_vol}"
-    chmod 755 "${grafana_vol}"
+    # Create directories with proper permissions
+    mkdir -p "${DATA_ROOT}/grafana"
+    mkdir -p "${DATA_ROOT}/grafana/plugins"
+    mkdir -p "${DATA_ROOT}/logs/grafana"
+    
+    # Set ownership to grafana user (UID 472) but allow group access
+    chown -R 472:"${RUNNING_GID}" "${DATA_ROOT}/grafana" "${DATA_ROOT}/logs/grafana"
+    
+    # Set permissions for security and functionality
+    chmod -R 775 "${DATA_ROOT}/grafana"
+    chmod -R 775 "${DATA_ROOT}/logs/grafana"
+    
+    # Ensure plugins directory is writable
+    chmod -R 777 "${DATA_ROOT}/grafana/plugins"
     
     print_success "Grafana volume permissions set (UID 472)"
 }
