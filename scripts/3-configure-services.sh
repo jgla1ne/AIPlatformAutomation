@@ -37,6 +37,10 @@ else
     exit 1
 fi
 
+# Log file path
+LOG_FILE="$DATA_DIR/logs/configuration.log"
+mkdir -p "$DATA_DIR/logs"
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -51,10 +55,10 @@ BOLD='\033[1m'
 # LOGGING
 #==============================================================================
 
-log_info() { echo -e "${BLUE}→${NC} $1"; }
-log_success() { echo -e "${GREEN}✓${NC} $1"; }
-log_warning() { echo -e "${YELLOW}⚠${NC} $1"; }
-log_error() { echo -e "${RED}✗${NC} $1"; }
+log_info() { echo -e "${BLUE}→${NC} $1" | tee -a "$LOG_FILE"; }
+log_success() { echo -e "${GREEN}✓${NC} $1" | tee -a "$LOG_FILE"; }
+log_warning() { echo -e "${YELLOW}⚠${NC} $1" | tee -a "$LOG_FILE"; }
+log_error() { echo -e "${RED}✗${NC} $1" | tee -a "$LOG_FILE"; }
 
 #==============================================================================
 # MAIN MENU
