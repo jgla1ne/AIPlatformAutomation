@@ -73,6 +73,411 @@ setup_apparmor_security() {
     print_success "AppArmor security configured"
 }
 
+#==============================================================================
+# PROXY CONFIGURATION GENERATION
+#==============================================================================
+
+generate_proxy_config() {
+    print_info "Generating proxy configuration..."
+    
+    # Create SSL directory
+    mkdir -p "${DATA_ROOT}/ssl"
+    
+    # Generate self-signed certificate for testing
+    if [ ! -f "${DATA_ROOT}/ssl/fullchain.pem" ]; then
+        print_info "Generating self-signed SSL certificate..."
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+            -keyout "${DATA_ROOT}/ssl/privkey.pem" \
+            -out "${DATA_ROOT}/ssl/fullchain.pem" \
+            -subj "/CN=${DOMAIN_NAME:-localhost}/O=AI Platform/C=US" \
+            2>/dev/null || true
+        print_success "SSL certificate generated"
+    fi
+    
+    # Determine which proxy to configure
+    case "${PROXY_TYPE:-nginx}" in
+        nginx)
+            generate_nginx_config
+            ;;
+        caddy)
+            generate_caddy_config
+            ;;
+        traefik)
+            generate_traefik_config
+            ;;
+        *)
+            print_error "Unknown proxy type: ${PROXY_TYPE}"
+            return 1
+            ;;
+    esac
+    
+    print_success "Proxy configuration generated"
+}
+
+generate_nginx_config() {
+    local nginx_conf_dir="${DATA_ROOT}/config/nginx"
+    mkdir -p "$nginx_conf_dir/sites-available" "$nginx_conf_dir/sites-enabled"
+    
+    print_info "Generating nginx configuration..."
+    
+    # Main nginx.conf
+    cat > "$nginx_conf_dir/nginx.conf" <<'EOF'
+user nginx;
+worker_processes auto;
+error_log /var/log/nginx/error.log warn;
+pid /var/run/nginx.pid;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" "$http_x_forwarded_for"';
+    
+    access_log /var/log/nginx/access.log main;
+    
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+    client_max_body_size 100M;
+    
+    # Gzip compression
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_types text/plain text/css text/xml text/javascript 
+               application/json application/javascript application/xml+rss 
+               application/rss+xml font/truetype font/opentype 
+               application/vnd.ms-fontobject image/svg+xml;
+    
+    # Include site configs
+    include /etc/nginx/sites-enabled/*.conf;
+}
+EOF
+
+    # Generate site config based on access mode
+    if [ "${PROXY_CONFIG_METHOD}" = "alias" ]; then
+        generate_nginx_alias_config
+    else
+        generate_nginx_direct_port_config
+    fi
+    
+    # Create symlink
+    ln -sf "${nginx_conf_dir}/sites-available/ai-platform.conf" \
+           "${nginx_conf_dir}/sites-enabled/ai-platform.conf"
+}
+
+generate_nginx_alias_config() {
+    local site_conf="${DATA_ROOT}/config/nginx/sites-available/ai-platform.conf"
+    
+    cat > "$site_conf" <<EOF
+# AI Platform - Alias Mode Configuration
+# Generated: $(date)
+
+# HTTP redirect to HTTPS
+server {
+    listen 80;
+    server_name ${DOMAIN_NAME} *.${DOMAIN_NAME};
+    return 301 https://\$host\$request_uri;
+}
+
+# Main HTTPS server
+server {
+    listen 443 ssl http2;
+    server_name ${DOMAIN_NAME};
+    
+    # SSL Configuration
+    ssl_certificate ${DATA_ROOT}/ssl/fullchain.pem;
+    ssl_certificate_key ${DATA_ROOT}/ssl/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+    
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "no-referrer-when-downgrade" always;
+    
+    # Root location - dashboard or landing page
+    location / {
+        return 200 "AI Platform - Services available at /servicename";
+        add_header Content-Type text/plain;
+    }
+
+EOF
+
+    # Add service locations based on what's enabled
+    add_nginx_service_locations "$site_conf"
+    
+    # Close server block
+    echo "}" >> "$site_conf"
+}
+
+add_nginx_service_locations() {
+    local site_conf="$1"
+    
+    # Check which services are enabled and add locations
+    if [[ " ${SELECTED_SERVICES[*]} " =~ " litellm " ]]; then
+        cat >> "$site_conf" <<'EOF'
+    
+    # LiteLLM Gateway
+    location /litellm/ {
+        proxy_pass http://litellm:4000/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+    }
+EOF
+    fi
+    
+    if [[ " ${SELECTED_SERVICES[*]} " =~ " openwebui " ]]; then
+        cat >> "$site_conf" <<'EOF'
+    
+    # Open WebUI
+    location /webui/ {
+        proxy_pass http://openwebui:8080/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+        proxy_read_timeout 300s;
+    }
+EOF
+    fi
+    
+    if [[ " ${SELECTED_SERVICES[*]} " =~ " n8n " ]]; then
+        cat >> "$site_conf" <<'EOF'
+    
+    # n8n Workflow Automation
+    location /n8n/ {
+        proxy_pass http://n8n:5678/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+        chunked_transfer_encoding off;
+        proxy_buffering off;
+    }
+EOF
+    fi
+    
+    if [[ " ${SELECTED_SERVICES[*]} " =~ " grafana " ]]; then
+        cat >> "$site_conf" <<'EOF'
+    
+    # Grafana Monitoring
+    location /grafana/ {
+        proxy_pass http://grafana:3000/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+EOF
+    fi
+}
+
+generate_caddy_config() {
+    local caddy_conf="${DATA_ROOT}/config/caddy/Caddyfile"
+    mkdir -p "${DATA_ROOT}/config/caddy"
+    
+    print_info "Generating Caddy configuration..."
+    
+    if [ "${PROXY_CONFIG_METHOD}" = "alias" ]; then
+        generate_caddy_alias_config "$caddy_conf"
+    else
+        generate_caddy_subdomain_config "$caddy_conf"
+    fi
+}
+
+generate_caddy_alias_config() {
+    local caddy_conf="$1"
+    
+    cat > "$caddy_conf" <<EOF
+# AI Platform - Caddy Configuration (Alias Mode)
+# Generated: $(date)
+
+{
+    email ${SSL_EMAIL}
+    acme_ca https://acme-v02.api.letsencrypt.org/directory
+}
+
+${DOMAIN_NAME} {
+    # Automatic HTTPS
+    
+    # Root - landing page or dashboard
+    route / {
+        respond "AI Platform - Services available at /servicename"
+    }
+
+EOF
+
+    # Add service routes
+    if [[ " ${SELECTED_SERVICES[*]} " =~ " litellm " ]]; then
+        cat >> "$caddy_conf" <<'EOF'
+    
+    # LiteLLM Gateway
+    route /litellm/* {
+        uri strip_prefix /litellm
+        reverse_proxy litellm:4000 {
+            header_up X-Real-IP {remote_host}
+        }
+    }
+EOF
+    fi
+
+    if [[ " ${SELECTED_SERVICES[*]} " =~ " openwebui " ]]; then
+        cat >> "$caddy_conf" <<'EOF'
+    
+    # Open WebUI
+    route /webui/* {
+        uri strip_prefix /webui
+        reverse_proxy openwebui:8080 {
+            header_up X-Real-IP {remote_host}
+        }
+    }
+EOF
+    fi
+
+    if [[ " ${SELECTED_SERVICES[*]} " =~ " n8n " ]]; then
+        cat >> "$caddy_conf" <<'EOF'
+    
+    # n8n
+    route /n8n/* {
+        uri strip_prefix /n8n
+        reverse_proxy n8n:5678 {
+            header_up X-Real-IP {remote_host}
+        }
+    }
+EOF
+    fi
+
+    if [[ " ${SELECTED_SERVICES[*]} " =~ " grafana " ]]; then
+        cat >> "$caddy_conf" <<'EOF'
+    
+    # Grafana
+    route /grafana/* {
+        uri strip_prefix /grafana
+        reverse_proxy grafana:3000 {
+            header_up X-Real-IP {remote_host}
+        }
+    }
+EOF
+    fi
+
+    # Close Caddy block
+    echo "}" >> "$caddy_conf"
+}
+
+add_proxy_to_compose() {
+    print_info "Adding proxy service to docker-compose.yml..."
+    
+    case "${PROXY_TYPE:-nginx}" in
+        nginx)
+            add_nginx_to_compose
+            ;;
+        caddy)
+            add_caddy_to_compose
+            ;;
+    esac
+}
+
+add_nginx_to_compose() {
+    # Check if nginx already in compose
+    if grep -q "^  nginx:" "$COMPOSE_FILE"; then
+        print_info "Nginx already in compose file"
+        return 0
+    fi
+    
+    # Add nginx service
+    cat >> "$COMPOSE_FILE" <<'EOF'
+
+  nginx:
+    image: nginx:alpine
+    container_name: nginx
+    restart: unless-stopped
+    volumes:
+      - ${DATA_ROOT}/config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${DATA_ROOT}/config/nginx/sites-enabled:/etc/nginx/sites-enabled:ro
+      - ${DATA_ROOT}/config/nginx/mime.types:/etc/nginx/mime.types:ro
+      - ${DATA_ROOT}/ssl:/etc/nginx/ssl:ro
+      - ${DATA_ROOT}/nginx/html:/usr/share/nginx/html
+    networks:
+      - ai_platform
+      - ai_platform_internal
+    ports:
+      - "80:80"
+      - "443:443"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "ai-platform.service=nginx"
+      - "ai-platform.type=proxy"
+EOF
+    
+    print_success "Nginx added to compose"
+}
+
+add_caddy_to_compose() {
+    if grep -q "^  caddy:" "$COMPOSE_FILE"; then
+        print_info "Caddy already in compose file"
+        return 0
+    fi
+    
+    cat >> "$COMPOSE_FILE" <<'EOF'
+
+  caddy:
+    image: caddy:alpine
+    container_name: caddy
+    restart: unless-stopped
+    volumes:
+      - ${DATA_ROOT}/config/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${DATA_ROOT}/caddy/data:/data
+      - ${DATA_ROOT}/caddy/config:/config
+    networks:
+      - ai_platform
+      - ai_platform_internal
+    ports:
+      - "80:80"
+      - "443:443"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:2019/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "ai-platform.service=caddy"
+      - "ai-platform.type=proxy"
+EOF
+    
+    print_success "Caddy added to compose"
+}
+
 # 🔥 NEW: Generate AppArmor Profile for Service
 generate_apparmor_profile() {
     local service_name="$1"
@@ -819,6 +1224,18 @@ main() {
     print_info "DEBUG: Compose file verification completed"
     
     print_success "Using unified compose file: $COMPOSE_FILE"
+    
+    # 🔥 NEW: Generate Proxy Configuration BEFORE Deployment
+    print_info "DEBUG: About to generate proxy configuration..."
+    echo ""
+    echo -e "${BLUE}→ Generating proxy configuration...${NC}"
+    
+    generate_proxy_config
+    add_proxy_to_compose
+    
+    echo -e "${GREEN}✓ Proxy configuration ready${NC}"
+    echo ""
+    
     print_info "DEBUG: About to create Docker networks..."
     
     # ,
