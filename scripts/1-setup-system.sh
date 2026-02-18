@@ -2721,7 +2721,6 @@ add_litellm_service() {
     image: ghcr.io/berriai/litellm:main-latest
     container_name: litellm
     restart: unless-stopped
-    user: "${RUNNING_UID}:${RUNNING_GID}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -2766,7 +2765,6 @@ add_openwebui_service() {
     image: ghcr.io/open-webui/open-webui:main
     container_name: openwebui
     restart: unless-stopped
-    user: "${RUNNING_UID}:${RUNNING_GID}"
     depends_on:
       - ollama
     environment:
@@ -2803,7 +2801,6 @@ add_dify_services() {
     image: langgenius/dify-api:latest
     container_name: dify-api
     restart: unless-stopped
-    user: "${RUNNING_UID}:${RUNNING_GID}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -2997,7 +2994,6 @@ add_monitoring_services() {
     image: prom/prometheus:latest
     container_name: prometheus
     restart: unless-stopped
-    user: "${RUNNING_UID}:${RUNNING_GID}"
     volumes:
       - ${DATA_ROOT}/prometheus:/prometheus
       - ${DATA_ROOT}/config/prometheus:/etc/prometheus
@@ -3027,7 +3023,6 @@ add_monitoring_services() {
     image: grafana/grafana:latest
     container_name: grafana
     restart: unless-stopped
-    user: "${RUNNING_UID}:${RUNNING_GID}"
     depends_on:
       prometheus:
         condition: service_healthy
