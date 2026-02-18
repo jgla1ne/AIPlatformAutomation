@@ -2682,9 +2682,7 @@ add_ollama_service() {
     environment:
       - OLLAMA_HOST=0.0.0.0
       - OLLAMA_ORIGINS=*
-      - PUID=\${RUNNING_UID}
-      - PGID=\${RUNNING_GID}
-      - TZ=\${TIMEZONE:-UTC}
+      - TZ=${TIMEZONE:-UTC}
     volumes:
       - ollama_data:/root/.ollama
       - \${DATA_ROOT}/logs/ollama:/var/log/ollama
@@ -2882,10 +2880,6 @@ add_n8n_service() {
     image: n8nio/n8n:latest
     container_name: n8n
     restart: unless-stopped
-    user: "${RUNNING_UID}:${RUNNING_GID}"
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: postgres
@@ -2898,8 +2892,6 @@ add_n8n_service() {
       N8N_PORT: 5678
       N8N_PROTOCOL: http
       WEBHOOK_URL: http://${DOMAIN_NAME:-localhost}:5678
-      PUID: ${RUNNING_UID}
-      PGID: ${RUNNING_GID}
       TZ: ${TIMEZONE:-UTC}
     volumes:
       - ${DATA_ROOT}/n8n:/home/node/.n8n
@@ -2928,10 +2920,6 @@ add_flowise_service() {
     image: flowiseai/flowise:latest
     container_name: flowise
     restart: unless-stopped
-    user: "${RUNNING_UID}:${RUNNING_GID}"
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
       DATABASE_TYPE: postgres
       DATABASE_HOST: postgres
@@ -2972,7 +2960,6 @@ add_anythingllm_service() {
     image: mintplexlabs/anythingllm:latest
     container_name: anythingllm
     restart: unless-stopped
-    user: "${RUNNING_UID}:${RUNNING_GID}"
     environment:
       STORAGE_DIR: /app/server/storage
       JWT_SECRET: ${JWT_SECRET}
@@ -2982,8 +2969,6 @@ add_anythingllm_service() {
       EMBEDDING_BASE_PATH: http://ollama:11434
       VECTOR_DB: qdrant
       QDRANT_ENDPOINT: http://qdrant:6333
-      PUID: ${RUNNING_UID}
-      PGID: ${RUNNING_GID}
       TZ: ${TIMEZONE:-UTC}
     volumes:
       - ${DATA_ROOT}/anythingllm:/app/server/storage
@@ -3080,12 +3065,9 @@ add_signal_api_service() {
     image: bbernhard/signal-cli-rest-api:latest
     container_name: signal-api
     restart: unless-stopped
-    user: "${RUNNING_UID}:${RUNNING_GID}"
     environment:
       MODE: json-rpc
       PORT: ${SIGNAL_API_PORT:-8090}
-      PUID: ${RUNNING_UID}
-      PGID: ${RUNNING_GID}
       TZ: ${TIMEZONE:-UTC}
     volumes:
       - ${DATA_ROOT}/signal-api:/home/.local/share/signal-cli
@@ -3114,7 +3096,6 @@ add_openclaw_service() {
     image: alpine/openclaw:latest
     container_name: openclaw
     restart: unless-stopped
-    user: "${RUNNING_UID}:${RUNNING_GID}"
     environment:
       OPENCLAW_ADMIN_USER: ${OPENCLAW_ADMIN_USER:-admin}
       OPENCLAW_ADMIN_PASSWORD: ${OPENCLAW_ADMIN_PASSWORD}
@@ -3154,12 +3135,9 @@ add_tailscale_service() {
     image: tailscale/tailscale:latest
     container_name: tailscale
     restart: unless-stopped
-    user: "${RUNNING_UID}:${RUNNING_GID}"
     environment:
       TS_USERSPACE: ${TAILSCALE_USERSPACE:-ai-platform}
       TS_EXTRA_ARGS: ${TAILSCALE_EXTRA_ARGS}
-      PUID: ${RUNNING_UID}
-      PGID: ${RUNNING_GID}
       TZ: ${TIMEZONE:-UTC}
     volumes:
       - ${DATA_ROOT}/tailscale:/var/lib/tailscale
@@ -3190,12 +3168,9 @@ add_minio_service() {
     image: minio/minio:latest
     container_name: minio
     restart: unless-stopped
-    user: "${RUNNING_UID}:${RUNNING_GID}"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      PUID: ${RUNNING_UID}
-      PGID: ${RUNNING_GID}
       TZ: ${TIMEZONE:-UTC}
     volumes:
       - ${DATA_ROOT}/minio:/data
