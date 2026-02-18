@@ -4,10 +4,11 @@ set -euo pipefail
 
 # Paths
 DATA_ROOT="/mnt/data"
-LOG_FILE="$DATA_ROOT/logs/cleanup.log"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG_FILE="$SCRIPT_DIR/../logs/cleanup.log"
 
-# Ensure log directory exists
-mkdir -p "$DATA_ROOT/logs"
+# Ensure log directory exists (outside of DATA_ROOT)
+mkdir -p "$(dirname "$LOG_FILE")"
 
 # Colors for output
 readonly RED='\033[0;31m'
@@ -128,6 +129,12 @@ cleanup_config() {
         # Backup important configs first
         if [[ -f "/mnt/data/.env" ]]; then
             cp /mnt/data/.env /tmp/.env.backup 2>/dev/null || true
+        fi
+        
+        # Check if /mnt is still mounted before removing data
+        if mountpoint -q /mnt 2>/dev/null; then
+            print_warning "/mnt is still mounted - unmounting before data removal..."
+            umount /mnt || print_error "Failed to unmount /mnt"
         fi
         
         # Remove with confirmation
