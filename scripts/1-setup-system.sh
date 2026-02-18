@@ -2674,7 +2674,6 @@ add_ollama_service() {
     image: ollama/ollama:latest
     container_name: ollama
     restart: unless-stopped
-    user: "\${RUNNING_UID}:\${RUNNING_GID}"
     ${runtime_config}
     networks:
       - ai_platform_internal
