@@ -1748,8 +1748,12 @@ EOF
         print_info "MinIO Port Configuration"
         echo ""
         
-        echo "MINIO_API_PORT=5007" >> "$ENV_FILE"
-        echo "MINIO_CONSOLE_PORT=5008" >> "$ENV_FILE"
+        # Use user's port input for MinIO API, calculate console port as API port + 1
+        local minio_api_port=$(grep "^MINIO_PORT=" "$ENV_FILE" | cut -d= -f2)
+        local minio_console_port=$((minio_api_port + 1))
+        
+        echo "MINIO_API_PORT=$minio_api_port" >> "$ENV_FILE"
+        echo "MINIO_CONSOLE_PORT=$minio_console_port" >> "$ENV_FILE"
         
         local minio_buckets="aiplatform-docs,aiplatform-media,aiplatform-backups"
         prompt_input "MINIO_DEFAULT_BUCKETS" "MinIO default buckets" "$minio_buckets" false
@@ -2110,48 +2114,59 @@ EOF
     for service in "${selected_services[@]}"; do
         case "$service" in
             "ollama")
-                echo "- Ollama: http://localhost:11434" >> "$urls_file"
+                local ollama_port=$(grep "^OLLAMA_PORT=" "$ENV_FILE" | cut -d= -f2)
+                echo "- Ollama: http://localhost:$ollama_port" >> "$urls_file"
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Ollama (Public): https://$DOMAIN_NAME/ollama" >> "$urls_file"
                 ;;
             "openwebui")
-                echo "- Open WebUI: http://localhost:5006" >> "$urls_file"
+                local openwebui_port=$(grep "^OPENWEBUI_PORT=" "$ENV_FILE" | cut -d= -f2)
+                echo "- Open WebUI: http://localhost:$openwebui_port" >> "$urls_file"
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Open WebUI (Public): https://$DOMAIN_NAME/openwebui" >> "$urls_file"
                 ;;
             "anythingllm")
-                echo "- AnythingLLM: http://localhost:3001" >> "$urls_file"
+                local anythingllm_port=$(grep "^ANYTHINGLLM_PORT=" "$ENV_FILE" | cut -d= -f2)
+                echo "- AnythingLLM: http://localhost:$anythingllm_port" >> "$urls_file"
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- AnythingLLM (Public): https://$DOMAIN_NAME/anythingllm" >> "$urls_file"
                 ;;
             "dify")
-                echo "- Dify: http://localhost:5003" >> "$urls_file"
+                local dify_port=$(grep "^DIFY_PORT=" "$ENV_FILE" | cut -d= -f2)
+                echo "- Dify: http://localhost:$dify_port" >> "$urls_file"
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Dify (Public): https://$DOMAIN_NAME/dify" >> "$urls_file"
                 ;;
             "n8n")
-                echo "- n8n: http://localhost:5002" >> "$urls_file"
+                local n8n_port=$(grep "^N8N_PORT=" "$ENV_FILE" | cut -d= -f2)
+                echo "- n8n: http://localhost:$n8n_port" >> "$urls_file"
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- n8n (Public): https://$DOMAIN_NAME/n8n" >> "$urls_file"
                 ;;
             "flowise")
-                echo "- Flowise: http://localhost:3002" >> "$urls_file"
+                local flowise_port=$(grep "^FLOWISE_PORT=" "$ENV_FILE" | cut -d= -f2)
+                echo "- Flowise: http://localhost:$flowise_port" >> "$urls_file"
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Flowise (Public): https://$DOMAIN_NAME/flowise" >> "$urls_file"
                 ;;
             "litellm")
-                echo "- LiteLLM: http://localhost:5005" >> "$urls_file"
+                local litellm_port=$(grep "^LITELLM_PORT=" "$ENV_FILE" | cut -d= -f2)
+                echo "- LiteLLM: http://localhost:$litellm_port" >> "$urls_file"
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- LiteLLM (Public): https://$DOMAIN_NAME/litellm" >> "$urls_file"
                 ;;
             "signal-api")
-                echo "- Signal API: http://localhost:8080" >> "$urls_file"
-                echo "- Signal QR: http://localhost:8080/v1/qrcode" >> "$urls_file"
+                local signal_api_port=$(grep "^SIGNAL_API_PORT=" "$ENV_FILE" | cut -d= -f2)
+                echo "- Signal API: http://localhost:$signal_api_port" >> "$urls_file"
+                echo "- Signal QR: http://localhost:$signal_api_port/v1/qrcode" >> "$urls_file"
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Signal API (Public): https://$DOMAIN_NAME/signal-api" >> "$urls_file"
                 ;;
             "openclaw")
-                echo "- OpenClaw: http://localhost:18789" >> "$urls_file"
+                local openclaw_port=$(grep "^OPENCLAW_PORT=" "$ENV_FILE" | cut -d= -f2)
+                echo "- OpenClaw: http://localhost:$openclaw_port" >> "$urls_file"
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- OpenClaw (Public): https://$DOMAIN_NAME/openclaw" >> "$urls_file"
                 ;;
             "prometheus")
-                echo "- Prometheus: http://localhost:5000" >> "$urls_file"
+                local prometheus_port=$(grep "^PROMETHEUS_PORT=" "$ENV_FILE" | cut -d= -f2)
+                echo "- Prometheus: http://localhost:$prometheus_port" >> "$urls_file"
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Prometheus (Public): https://$DOMAIN_NAME/prometheus" >> "$urls_file"
                 ;;
             "grafana")
-                echo "- Grafana: http://localhost:5001" >> "$urls_file"
+                local grafana_port=$(grep "^GRAFANA_PORT=" "$ENV_FILE" | cut -d= -f2)
+                echo "- Grafana: http://localhost:$grafana_port" >> "$urls_file"
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Grafana (Public): https://$DOMAIN_NAME/grafana" >> "$urls_file"
                 ;;
             "qdrant")
@@ -2165,8 +2180,10 @@ EOF
                 echo "- Redis: localhost:6379" >> "$urls_file"
                 ;;
             "minio")
-                echo "- MinIO: http://localhost:5007" >> "$urls_file"
-                echo "- MinIO Console: http://localhost:5008" >> "$urls_file"
+                local minio_api_port=$(grep "^MINIO_API_PORT=" "$ENV_FILE" | cut -d= -f2)
+                local minio_console_port=$(grep "^MINIO_CONSOLE_PORT=" "$ENV_FILE" | cut -d= -f2)
+                echo "- MinIO: http://localhost:$minio_api_port" >> "$urls_file"
+                echo "- MinIO Console: http://localhost:$minio_console_port" >> "$urls_file"
                 ;;
         esac
     done
@@ -2342,108 +2359,110 @@ EOF
         for service in "${selected_services[@]}"; do
             case $service in
                 "openwebui")
+                    local openwebui_port=$(grep "^OPENWEBUI_PORT=" "$ENV_FILE" | cut -d= -f2)
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                         echo "  • Open WebUI: https://$DOMAIN_NAME/openwebui"
                     elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • Open WebUI: https://$DOMAIN_NAME:3000"
+                        echo "  • Open WebUI: https://$DOMAIN_NAME:$openwebui_port"
                     else
-                        echo "  • Open WebUI: http://localhost:3000"
+                        echo "  • Open WebUI: http://localhost:$openwebui_port"
                     fi
                     ;;
                 "anythingllm")
+                    local anythingllm_port=$(grep "^ANYTHINGLLM_PORT=" "$ENV_FILE" | cut -d= -f2)
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                         echo "  • AnythingLLM: https://$DOMAIN_NAME/anythingllm"
                     elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • AnythingLLM: https://$DOMAIN_NAME:3001"
+                        echo "  • AnythingLLM: https://$DOMAIN_NAME:$anythingllm_port"
                     else
-                        echo "  • AnythingLLM: http://localhost:3001"
+                        echo "  • AnythingLLM: http://localhost:$anythingllm_port"
                     fi
                     ;;
                 "dify")
+                    local dify_port=$(grep "^DIFY_PORT=" "$ENV_FILE" | cut -d= -f2)
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                         echo "  • Dify: https://$DOMAIN_NAME/dify"
                     elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • Dify: https://$DOMAIN_NAME:8080"
+                        echo "  • Dify: https://$DOMAIN_NAME:$dify_port"
                     else
-                        echo "  • Dify: http://localhost:8080"
+                        echo "  • Dify: http://localhost:$dify_port"
                     fi
                     ;;
                 "n8n")
+                    local n8n_port=$(grep "^N8N_PORT=" "$ENV_FILE" | cut -d= -f2)
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                         echo "  • n8n: https://$DOMAIN_NAME/n8n"
                     elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • n8n: https://$DOMAIN_NAME:5678"
+                        echo "  • n8n: https://$DOMAIN_NAME:$n8n_port"
                     else
-                        echo "  • n8n: http://localhost:5678"
+                        echo "  • n8n: http://localhost:$n8n_port"
                     fi
                     ;;
                 "flowise")
+                    local flowise_port=$(grep "^FLOWISE_PORT=" "$ENV_FILE" | cut -d= -f2)
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                         echo "  • Flowise: https://$DOMAIN_NAME/flowise"
                     elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • Flowise: https://$DOMAIN_NAME:3002"
+                        echo "  • Flowise: https://$DOMAIN_NAME:$flowise_port"
                     else
-                        echo "  • Flowise: http://localhost:3002"
-                    fi
-                    ;;
-                "ollama")
-                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
-                        echo "  • Ollama: https://$DOMAIN_NAME/ollama"
-                    elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • Ollama: https://$DOMAIN_NAME:11434"
-                    else
-                        echo "  • Ollama: http://localhost:11434"
+                        echo "  • Flowise: http://localhost:$flowise_port"
                     fi
                     ;;
                 "litellm")
+                    local litellm_port=$(grep "^LITELLM_PORT=" "$ENV_FILE" | cut -d= -f2)
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                         echo "  • LiteLLM: https://$DOMAIN_NAME/litellm"
                     elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • LiteLLM: https://$DOMAIN_NAME:4000"
+                        echo "  • LiteLLM: https://$DOMAIN_NAME:$litellm_port"
                     else
-                        echo "  • LiteLLM: http://localhost:4000"
+                        echo "  • LiteLLM: http://localhost:$litellm_port"
                     fi
                     ;;
                 "signal-api")
+                    local signal_api_port=$(grep "^SIGNAL_API_PORT=" "$ENV_FILE" | cut -d= -f2)
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                         echo "  • Signal API: https://$DOMAIN_NAME/signal"
                     elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • Signal API: https://$DOMAIN_NAME:8090"
+                        echo "  • Signal API: https://$DOMAIN_NAME:$signal_api_port"
                     else
-                        echo "  • Signal API: http://localhost:8090"
+                        echo "  • Signal API: http://localhost:$signal_api_port"
                     fi
                     ;;
                 "openclaw")
+                    local openclaw_port=$(grep "^OPENCLAW_PORT=" "$ENV_FILE" | cut -d= -f2)
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                         echo "  • OpenClaw: https://$DOMAIN_NAME/openclaw"
                     elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • OpenClaw: https://$DOMAIN_NAME:18789"
+                        echo "  • OpenClaw: https://$DOMAIN_NAME:$openclaw_port"
                     else
-                        echo "  • OpenClaw: http://localhost:18789"
+                        echo "  • OpenClaw: http://localhost:$openclaw_port"
                     fi
                     ;;
                 "prometheus")
-                    echo "  • Prometheus: http://localhost:9090"
+                    local prometheus_port=$(grep "^PROMETHEUS_PORT=" "$ENV_FILE" | cut -d= -f2)
+                    echo "  • Prometheus: http://localhost:$prometheus_port"
                     ;;
                 "grafana")
+                    local grafana_port=$(grep "^GRAFANA_PORT=" "$ENV_FILE" | cut -d= -f2)
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                         echo "  • Grafana: https://$DOMAIN_NAME/grafana"
                     elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • Grafana: https://$DOMAIN_NAME:3005"
+                        echo "  • Grafana: https://$DOMAIN_NAME:$grafana_port"
                     else
-                        echo "  • Grafana: http://localhost:3005"
+                        echo "  • Grafana: http://localhost:$grafana_port"
                     fi
                     ;;
                 "qdrant")
                     echo "  • Qdrant: http://localhost:6333"
                     ;;
                 "minio")
+                    local minio_api_port=$(grep "^MINIO_API_PORT=" "$ENV_FILE" | cut -d= -f2)
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                         echo "  • MinIO: https://$DOMAIN_NAME/minio"
                     elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • MinIO: https://$DOMAIN_NAME:5007"
+                        echo "  • MinIO: https://$DOMAIN_NAME:$minio_api_port"
                     else
-                        echo "  • MinIO: http://localhost:5007"
+                        echo "  • MinIO: http://localhost:$minio_api_port"
                     fi
                     ;;
                 "postgres"|"redis"|"tailscale")
