@@ -2640,16 +2640,16 @@ EOF
 }
 
 add_redis_service() {
-    cat >> "$COMPOSE_FILE" <<'EOF'
+    cat >> "$COMPOSE_FILE" <<EOF
   redis:
     image: redis:7-alpine
     container_name: redis
     restart: unless-stopped
-    user: "${RUNNING_UID}:${RUNNING_GID}"
-    command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes
+    user: "\${RUNNING_UID}:\${RUNNING_GID}"
+    command: redis-server --requirepass \${REDIS_PASSWORD} --appendonly yes
     volumes:
       - redis_data:/data
-      - ${DATA_ROOT}/logs/redis:/var/log/redis
+      - \${DATA_ROOT}/logs/redis:/var/log/redis
     networks:
       - ai_platform_internal
     ports:
