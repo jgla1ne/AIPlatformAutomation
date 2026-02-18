@@ -2610,14 +2610,11 @@ add_postgres_service() {
     image: postgres:15-alpine
     container_name: postgres
     restart: unless-stopped
-    user: "${RUNNING_UID}:${RUNNING_GID}"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-aiplatform}
       PGDATA: /var/lib/postgresql/data/pgdata
-      PUID: ${RUNNING_UID}
-      PGID: ${RUNNING_GID}
       TZ: ${TIMEZONE:-UTC}
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -2645,7 +2642,6 @@ add_redis_service() {
     image: redis:7-alpine
     container_name: redis
     restart: unless-stopped
-    user: "\${RUNNING_UID}:\${RUNNING_GID}"
     command: redis-server --requirepass \${REDIS_PASSWORD} --appendonly yes
     volumes:
       - redis_data:/data
