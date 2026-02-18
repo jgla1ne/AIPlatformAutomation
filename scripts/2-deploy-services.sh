@@ -1719,6 +1719,160 @@ main() {
     echo -e "${RED}❌ Failed: $failed services${NC}"
     echo -e "${CYAN}All containers are running as non-root user with AppArmor security${NC}"
     echo -e "${CYAN}Check container status: docker ps --format 'table {{.Names}}\t{{.User}}\t{{.Status}}'${NC}"
+    
+    # 🔥 NEW: Generate Deployment Summary with Health Checks
+    generate_deployment_summary "$deployed" "$failed"
+}
+
+generate_deployment_summary() {
+    local deployed="$1"
+    local failed="$2"
+    local urls_file="${METADATA_DIR}/deployment_urls.json"
+    
+    print_info "Generating deployment summary with health checks..."
+    
+    # Create comprehensive deployment summary
+    cat > "$urls_file" <<EOF
+{
+  "deployment_time": "$(date -Iseconds)",
+  "total_services": ${TOTAL_SERVICES},
+  "deployed_services": $deployed,
+  "failed_services": $failed,
+  "success_rate": "$(echo "scale=2; $deployed * 100 / $TOTAL_SERVICES" | bc)",
+  "domain": "${DOMAIN_NAME:-localhost}",
+  "proxy_type": "${PROXY_TYPE:-none}",
+  "ssl_type": "${SSL_TYPE:-none}",
+  "services": [
+EOF
+    
+    # Add service status for all deployed services
+    local first=true
+    for service in "${SELECTED_SERVICES[@]}"; do
+        if [[ " ${core_services[@]} ${monitoring_services[@]} ${ai_services[@]} ${application_services[@]} ${storage_services[@]} ${network_services[@]} ${proxy_services[@]} " =~ " ${service} " ]]; then
+            
+            # Get container status
+            local container_status="unknown"
+            local health_status="unknown"
+            local container_ip="localhost"
+            local container_port=""
+            local proxy_url=""
+            
+            if docker ps --format "table {{.Names}}" | grep -q "^${service}$"; then
+                container_status="running"
+                
+                # Get health status
+                if docker inspect --format='{{.State.Health.Status}}' "$service" 2>/dev/null; then
+                    health_status=$(docker inspect --format='{{.State.Health.Status}}' "$service" 2>/dev/null)
+                else
+                    health_status="no_healthcheck"
+                fi
+                
+                # Get port mapping
+                container_port=$(docker port "$service" 2>/dev/null | grep -o "0.0.0.0:\\([0-9]*\\)" | head -1 | cut -d: -f2 || echo "")
+            fi
+            
+            # Generate URLs based on proxy configuration
+            if [[ "${PROXY_TYPE:-}" == "caddy" ]] && [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                proxy_url="https://${DOMAIN_NAME}/${service}"
+                container_ip="${DOMAIN_NAME}"
+            elif [[ "${PROXY_TYPE:-}" == "nginx-proxy-manager" ]] && [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                proxy_url="https://${DOMAIN_NAME}/${service}"
+                container_ip="${DOMAIN_NAME}"
+            elif [[ -n "$container_port" ]]; then
+                proxy_url="http://localhost:${container_port}"
+            fi
+            
+            # Add comma for non-first items
+            local comma=""
+            if [[ "$first" == false ]]; then
+                comma=","
+            fi
+            first=false
+            
+            # Add service to JSON
+            cat >> "$urls_file" <<EOF
+    ${comma}
+    {
+      "name": "$service",
+      "container_status": "$container_status",
+      "health_status": "$health_status",
+      "container_port": "$container_port",
+      "container_ip": "$container_ip",
+      "proxy_url": "$proxy_url",
+      "direct_url": "http://localhost:${container_port}",
+      "accessible": $([ "$container_status" == "running" ] && echo true || echo false)
+    }
+EOF
+        fi
+    done
+    
+    # Close JSON array and object
+    cat >> "$urls_file" <<EOF
+  ],
+  "proxy_urls": {
+EOF
+    
+    # Add proxy base URLs
+    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+        cat >> "$urls_file" <<EOF
+    "main": "https://${DOMAIN_NAME:-localhost}",
+    "admin": "https://${DOMAIN_NAME:-localhost}/admin"
+EOF
+    else
+        cat >> "$urls_file" <<EOF
+    "main": "http://${PUBLIC_IP:-localhost}",
+    "admin": "http://${PUBLIC_IP:-localhost}:8080"
+EOF
+    fi
+    
+    cat >> "$urls_file" <<EOF
+  },
+  "access_methods": {
+    "proxy": "Use proxy URLs above",
+    "direct": "Use http://localhost:{port}",
+    "tailscale": "Use Tailscale IP:{service_port}"
+  },
+  "next_steps": [
+    "1. Review service URLs in deployment_urls.json",
+    "2. Configure services with: sudo bash 3-configure-services.sh",
+    "3. Monitor logs with: tail -f /mnt/data/logs/deployment.log",
+    "4. Renew SSL with: sudo bash 3-configure-services.sh (option 1)",
+    "5. Update Tailscale with: sudo bash 3-configure-services.sh (option 8)"
+  ]
+}
+EOF
+    
+    print_success "Deployment summary generated: $urls_file"
+    
+    # Display summary to console
+    echo ""
+    echo -e "${GREEN}🎉 DEPLOYMENT SUMMARY${NC}"
+    echo -e "${CYAN}=====================${NC}"
+    echo -e "✅ Deployed: $deployed/${TOTAL_SERVICES} services"
+    echo -e "❌ Failed: $failed/${TOTAL_SERVICES} services" 
+    echo -e "📊 Success Rate: $(echo "scale=2; $deployed * 100 / $TOTAL_SERVICES" | bc)%"
+    echo ""
+    
+    if [[ $failed -gt 0 ]]; then
+        echo -e "${RED}⚠️  DEPLOYMENT HAD FAILURES${NC}"
+        echo -e "${YELLOW}Check logs: tail -f /mnt/data/logs/deployment.log${NC}"
+    else
+        echo -e "${GREEN}🚀 ALL SERVICES DEPLOYED SUCCESSFULLY!${NC}"
+    fi
+    
+    echo ""
+    echo -e "${CYAN}📍 ACCESS URLS:${NC}"
+    echo -e "${CYAN}=====================${NC}"
+    
+    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+        echo -e "${GREEN}🌐 Proxy URLs: https://${DOMAIN_NAME:-localhost}/{service}${NC}"
+    else
+        echo -e "${YELLOW}🏠 Local URLs: http://localhost:{port}${NC}"
+    fi
+    
+    echo -e "${CYAN}📱 Tailscale: Use Tailscale IP for remote access${NC}"
+    echo ""
+    echo -e "${BLUE}📋 Full details: $urls_file${NC}"
 }
 
 # Run main function

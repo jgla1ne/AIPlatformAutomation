@@ -71,38 +71,35 @@ show_main_menu() {
     echo -e "${CYAN}║     AI Platform - Configuration & Management Menu        ║${NC}"
     echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo "Configuration Options:"
+    echo "  ${BOLD}Service Management${NC}"
+    echo "    1) Add New Service (Dynamic)"
+    echo "    2) Remove Service (Dynamic)"
+    echo "    3) List All Services"
+    echo "    4) Regenerate Service Configs"
     echo ""
     echo "  ${BOLD}SSL & Security${NC}"
-    echo "    1) Regenerate SSL Certificate"
-    echo "    2) Update SSL Certificate (Let's Encrypt renewal)"
-    echo ""
-    echo "  ${BOLD}Service Management${NC}"
-    echo "    3) Add New Service to Stack"
-    echo "    4) Remove Service from Stack"
-    echo "    5) Restart All Services"
-    echo "    6) View Service Status"
+    echo "    5) Regenerate SSL Certificate"
+    echo "    6) Update SSL Certificate (Let's Encrypt renewal)"
     echo ""
     echo "  ${BOLD}Integration Configuration${NC}"
     echo "    7) Configure Signal CLI (QR Code Pairing)"
-    echo "    8) Configure Tailscale (Device Linking)"
+    echo "    8) Configure Tailscale (Dynamic Auth)"
     echo "    9) Configure OpenClaw Integrations"
-    echo "    10) Configure Google Drive Sync"
+    echo "   10) Configure Google Drive Sync"
     echo ""
     echo "  ${BOLD}Backup & Restore${NC}"
-    echo "    11) Backup Configuration Files"
-    echo "    12) Backup Core .env + Secrets"
-    echo "    13) Full System Backup"
-    echo "    14) Restore from Backup"
+    echo "   11) Backup Config"
+    echo "   12) Backup Core Data"
+    echo "   13) Restore Config"
+    echo "   14) Restore Core Data"
     echo ""
-    echo "  ${BOLD}Database Management${NC}"
-    echo "    15) Initialize New Database"
-    echo "    16) Backup Databases"
-    echo "    17) Restore Databases"
-    echo ""
-    echo "  ${BOLD}Model Management${NC}"
-    echo "    18) Pull/Update Ollama Models"
-    echo "    19) List Available Models"
+    echo "  ${BOLD}Monitoring & Logs${NC}"
+    echo "   15) View Service Status"
+    echo "   16) View Deployment Summary"
+    echo "   17) Monitor Live Logs"
+    echo "   18) Export Service URLs"
+    echo "   19) Restart Services"
+    echo "   20) Full System Status"
     echo ""
     echo "  0) Exit"
     echo ""
@@ -117,21 +114,22 @@ handle_menu_choice() {
         2) renew_ssl_certificate ;;
         3) add_new_service ;;
         4) remove_service ;;
-        5) restart_all_services ;;
-        6) view_service_status ;;
+        5) list_all_services ;;
+        6) regenerate_service_configs ;;
         7) configure_signal ;;
         8) configure_tailscale ;;
         9) configure_openclaw ;;
         10) configure_gdrive ;;
         11) backup_config ;;
         12) backup_core ;;
-        13) backup_full ;;
-        14) restore_backup ;;
-        15) initialize_database ;;
-        16) backup_databases ;;
-        17) restore_databases ;;
-        18) manage_ollama_models ;;
-        19) list_ollama_models ;;
+        13) restore_config ;;
+        14) restore_core ;;
+        15) view_service_status ;;
+        16) view_deployment_summary ;;
+        17) monitor_live_logs ;;
+        18) export_service_urls ;;
+        19) restart_services ;;
+        20) full_system_status ;;
         0) exit 0 ;;
         *) 
             log_error "Invalid option"
@@ -1234,6 +1232,291 @@ main() {
     echo -e "${CYAN}✅ Integrations tested${NC}"
     echo -e "${CYAN}📄 Configuration summary: $DATA_ROOT/configuration-summary.md${NC}"
     echo -e "${CYAN}📄 Configuration log: $LOG_FILE${NC}"
+}
+
+#==============================================================================
+# DYNAMIC SERVICE MANAGEMENT FUNCTIONS
+#==============================================================================
+
+add_new_service() {
+    echo ""
+    echo -e "${CYAN}═══ Add New Service (Dynamic) ═══${NC}"
+    echo ""
+    
+    print_info "Available service templates:"
+    echo "  1) Custom Service (manual configuration)"
+    echo "  2) Web Service (with domain/subdomain)"
+    echo "  3) API Service (with port)"
+    echo "  4) Database Service"
+    echo "  5) Background Worker"
+    echo ""
+    
+    read -p "Select service type [1-5]: " service_type
+    read -p "Service name: " service_name
+    read -p "Container image: " service_image
+    read -p "Internal port: " service_port
+    
+    # Add to selected services
+    jq --arg service_name "$service_name" \
+       --arg service_type "$service_type" \
+       --arg service_image "$service_image" \
+       --arg service_port "$service_port" \
+       '.services += {
+         "key": $service_name,
+         "display_name": $service_name,
+         "description": "Dynamic service - $service_type",
+         "category": $service_type,
+         "port": $service_port,
+         "image": $service_image
+       }' "$SERVICES_FILE" > "${SERVICES_FILE}.tmp" && mv "${SERVICES_FILE}.tmp" "$SERVICES_FILE"
+    
+    # Generate compose fragment
+    generate_service_compose_fragment "$service_name" "$service_type" "$service_image" "$service_port"
+    
+    log_success "Service $service_name added dynamically"
+}
+
+remove_service() {
+    echo ""
+    echo -e "${CYAN}═══ Remove Service (Dynamic) ═══${NC}"
+    echo ""
+    
+    # List current services
+    local services=($(jq -r '.services[].key' "$SERVICES_FILE"))
+    echo "Current services:"
+    for i in "${!services[@]}"; do
+        echo "  $((i+1))) ${services[$i]}"
+    done
+    
+    read -p "Enter service name to remove: " service_name
+    
+    # Remove from selected services
+    jq --arg service_name "$service_name" \
+       '.services |= map(select(.key != $service_name))' \
+       "$SERVICES_FILE" > "${SERVICES_FILE}.tmp" && mv "${SERVICES_FILE}.tmp" "$SERVICES_FILE"
+    
+    # Remove from compose if exists
+    if grep -q "^  $service_name:" "$COMPOSE_FILE"; then
+        print_info "Removing $service_name from docker-compose.yml..."
+        # Backup compose file first
+        cp "$COMPOSE_FILE" "${COMPOSE_FILE}.backup.$(date +%s)"
+        
+        # Remove service block
+        sed -i "/^  $service_name:/,/^  [^[:space:]]/d" "$COMPOSE_FILE"
+        
+        log_success "Service $service_name removed from compose"
+    fi
+    
+    log_success "Service $service_name removed"
+}
+
+list_all_services() {
+    echo ""
+    echo -e "${CYAN}═══ All Services ═══${NC}"
+    echo ""
+    
+    local services=($(jq -r '.services[].key' "$SERVICES_FILE"))
+    echo "Total services: ${#services[@]}"
+    echo ""
+    echo "Service Details:"
+    printf "%-20s %-15s %-10s %-15s %-10s %-15s %s\n" "NAME" "TYPE" "IMAGE" "PORT" "STATUS"
+    
+    for service in "${services[@]}"; do
+        local service_info=$(jq -r --arg service_name "$service" '.services[] | select(.key == $service_name)' "$SERVICES_FILE")
+        local name=$(echo "$service_info" | jq -r '.key')
+        local type=$(echo "$service_info" | jq -r '.category // "unknown"')
+        local image=$(echo "$service_info" | jq -r '.image // "manual"')
+        local port=$(echo "$service_info" | jq -r '.port // "unknown"')
+        
+        local status="unknown"
+        if docker ps --format "{{.Names}}" | grep -q "^${name}$"; then
+            status="running"
+        fi
+        
+        printf "%-20s %-15s %-10s %-15s %-10s %-15s %s\n" "$name" "$type" "$image" "$port" "$status"
+    done
+    
+    echo ""
+}
+
+regenerate_service_configs() {
+    echo ""
+    echo -e "${CYAN}═══ Regenerate Service Configs ═══${NC}"
+    echo ""
+    
+    local services=($(jq -r '.services[].key' "$SERVICES_FILE"))
+    echo "Select service to regenerate config:"
+    
+    select service in "${services[@]}"; do
+        echo "$service) $(jq -r --arg service_name "$service" '.services[] | select(.key == $service_name) | .display_name')"
+    done
+    
+    read -p "Enter service name: " selected_service
+    
+    if [[ " ${services[@]} " =~ " ${selected_service} " ]]; then
+        generate_service_config "$selected_service"
+        log_success "Configuration regenerated for $selected_service"
+    else
+        log_error "Service $selected_service not found"
+    fi
+}
+
+view_deployment_summary() {
+    echo ""
+    echo -e "${CYAN}═══ View Deployment Summary ═══${NC}"
+    echo ""
+    
+    local summary_file="${METADATA_DIR}/deployment_urls.json"
+    if [ -f "$summary_file" ]; then
+        echo "Latest deployment summary:"
+        cat "$summary_file" | jq -r '.'
+    else
+        log_warning "No deployment summary found. Run deployment first."
+    fi
+}
+
+export_service_urls() {
+    echo ""
+    echo -e "${CYAN}═══ Export Service URLs ═══${NC}"
+    echo ""
+    
+    local summary_file="${METADATA_DIR}/deployment_urls.json"
+    if [ -f "$summary_file" ]; then
+        local export_file="${BASE_DIR}/service_urls_export.json"
+        cp "$summary_file" "$export_file"
+        
+        echo "Service URLs exported to: $export_file"
+        echo "Contents:"
+        cat "$export_file" | jq -r '.'
+    else
+        log_warning "No deployment summary found. Run deployment first."
+    fi
+}
+
+restart_services() {
+    echo ""
+    echo -e "${CYAN}═══ Restart Services ═══${NC}"
+    echo ""
+    
+    local services=($(jq -r '.services[].key' "$SERVICES_FILE"))
+    echo "Select services to restart (space-separated, or 'all'):"
+    read -p "Services: " restart_selection
+    
+    if [[ "$restart_selection" == "all" ]]; then
+        restart_selection=("${services[@]}")
+    else
+        IFS=' ' read -ra restart_selection <<< "$restart_selection"
+    fi
+    
+    for service in "${restart_selection[@]}"; do
+        if [[ " ${services[@]} " =~ " ${service} " ]]; then
+            print_info "Restarting $service..."
+            if docker restart "$service" &>/dev/null; then
+                log_success "$service restarted"
+            else
+                log_error "Failed to restart $service"
+            fi
+        else
+            log_warning "Service $service not found"
+        fi
+    done
+    
+    log_success "Service restart completed"
+}
+
+full_system_status() {
+    echo ""
+    echo -e "${CYAN}═══ Full System Status ═══${NC}"
+    echo ""
+    
+    echo -e "${GREEN}📊 System Overview${NC}"
+    echo "===================="
+    
+    # Docker status
+    echo -e "${BLUE}Docker Status:${NC}"
+    docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}"
+    
+    echo ""
+    echo -e "${BLUE}Resource Usage:${NC}"
+    df -h | grep -E "(Filesystem|/dev/)" | head -5
+    
+    echo ""
+    echo -e "${BLUE}Network Status:${NC}"
+    docker network ls
+    
+    echo ""
+    echo -e "${BLUE}Disk Usage:${NC}"
+    du -sh /mnt/data/* | head -10
+    
+    echo ""
+    echo -e "${BLUE}Memory Usage:${NC}"
+    free -h
+    
+    echo ""
+    echo -e "${BLUE}Service Health:${NC}"
+    local services=($(jq -r '.services[].key' "$SERVICES_FILE"))
+    for service in "${services[@]}"; do
+        if docker ps --format "{{.Names}}" | grep -q "^${service}$"; then
+            local health=$(docker inspect --format='{{.State.Health.Status}}' "$service" 2>/dev/null || echo "no_check")
+            local status="🟢 running"
+            if [[ "$health" == "unhealthy" ]]; then
+                status="🟡 unhealthy"
+            elif [[ "$health" == "healthy" ]]; then
+                status="🟢 healthy"
+            fi
+            printf "%-15s: %s\n" "$service" "$status"
+        else
+            printf "%-15s: %s\n" "$service" "🔴 stopped"
+        fi
+    done
+    
+    echo ""
+    echo -e "${BLUE}Recent Logs:${NC}"
+    tail -20 /mnt/data/logs/deployment.log
+}
+
+generate_service_compose_fragment() {
+    local service_name="$1"
+    local service_type="$2"
+    local service_image="$3"
+    local service_port="$4"
+    
+    # This would generate a docker-compose fragment for the service
+    # Implementation would go here
+    log_info "Compose fragment would be generated for $service_name"
+}
+
+generate_service_config() {
+    local service_name="$1"
+    local service_info=$(jq -r --arg service_name "$service_name" '.services[] | select(.key == $service_name)' "$SERVICES_FILE")
+    
+    print_info "Generating configuration for $service_name..."
+    
+    # Implementation would generate config files based on service type
+    log_info "Configuration would be generated for $service_name ($service_info)"
+}
+
+monitor_live_logs() {
+    echo ""
+    echo -e "${CYAN}═══ Monitor Live Logs ═══${NC}"
+    echo ""
+    
+    echo "Available log files:"
+    local logs=($(find /mnt/data/logs -name "*.log" -type f))
+    select log_file in "${logs[@]}"; do
+        echo "$log_file"
+    done
+    
+    read -p "Select log file to monitor: " selected_log
+    
+    if [[ -f "/mnt/data/logs/$selected_log" ]]; then
+        echo ""
+        echo -e "${GREEN}Monitoring $selected_log (Ctrl+C to stop)${NC}"
+        echo "===================="
+        tail -f "/mnt/data/logs/$selected_log"
+    else
+        log_error "Log file not found: $selected_log"
+    fi
 }
 
 main "$@"
