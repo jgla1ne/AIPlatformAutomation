@@ -1072,7 +1072,7 @@ EOF
         ["milvus"]="19530"
         ["chroma"]="8000"
         ["weaviate"]="8080"
-        ["minio"]="9000"
+        ["minio"]="5007"
     )
     
     # Proxy port configuration (only if proxy was selected in domain phase)
@@ -1748,8 +1748,8 @@ EOF
         print_info "MinIO Port Configuration"
         echo ""
         
-        echo "MINIO_API_PORT=9000" >> "$ENV_FILE"
-        echo "MINIO_CONSOLE_PORT=9001" >> "$ENV_FILE"
+        echo "MINIO_API_PORT=5007" >> "$ENV_FILE"
+        echo "MINIO_CONSOLE_PORT=5008" >> "$ENV_FILE"
         
         local minio_buckets="aiplatform-docs,aiplatform-media,aiplatform-backups"
         prompt_input "MINIO_DEFAULT_BUCKETS" "MinIO default buckets" "$minio_buckets" false
@@ -2165,8 +2165,8 @@ EOF
                 echo "- Redis: localhost:6379" >> "$urls_file"
                 ;;
             "minio")
-                echo "- MinIO: http://localhost:9000" >> "$urls_file"
-                echo "- MinIO Console: http://localhost:9001" >> "$urls_file"
+                echo "- MinIO: http://localhost:5007" >> "$urls_file"
+                echo "- MinIO Console: http://localhost:5008" >> "$urls_file"
                 ;;
         esac
     done
@@ -2441,9 +2441,9 @@ EOF
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                         echo "  • MinIO: https://$DOMAIN_NAME/minio"
                     elif [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && [[ "${PROXY_CONFIG_METHOD:-direct}" == "direct" ]]; then
-                        echo "  • MinIO: https://$DOMAIN_NAME:9000"
+                        echo "  • MinIO: https://$DOMAIN_NAME:5007"
                     else
-                        echo "  • MinIO: http://localhost:9000"
+                        echo "  • MinIO: http://localhost:5007"
                     fi
                     ;;
                 "postgres"|"redis"|"tailscale")
