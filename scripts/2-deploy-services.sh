@@ -1728,8 +1728,26 @@ generate_deployment_summary() {
     local deployed="$1"
     local failed="$2"
     local urls_file="${METADATA_DIR}/deployment_urls.json"
+    local log_file="${LOG_DIR}/deployment.log"
     
     print_info "Generating deployment summary with health checks..."
+    
+    # 🔥 NEW: Enhanced logging for debugging
+    echo "$(date): === DEPLOYMENT SUMMARY GENERATION ===" >> "$log_file"
+    echo "$(date): Total services: ${TOTAL_SERVICES}" >> "$log_file"
+    echo "$(date): Deployed services: $deployed" >> "$log_file"
+    echo "$(date): Failed services: $failed" >> "$log_file"
+    
+    # Get current service status
+    echo "$(date): === CURRENT SERVICE STATUS ===" >> "$log_file"
+    sudo docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" >> "$log_file"
+    
+    # Test proxy accessibility
+    echo "$(date): === PROXY ACCESSIBILITY TEST ===" >> "$log_file"
+    for service in webui n8n flowise litellm ollama grafana dify; do
+        local test_result=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "https://ai.datasquiz.net/$service" 2>/dev/null || echo "000")
+        echo "$(date): $service -> HTTP $test_result" >> "$log_file"
+    done
     
     # Create comprehensive deployment summary
     cat > "$urls_file" <<EOF
