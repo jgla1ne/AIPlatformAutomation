@@ -472,6 +472,43 @@ EOF
     fi
 }
 
+generate_traefik_config() {
+    local traefik_conf_dir="${DATA_ROOT}/config/traefik"
+    mkdir -p "$traefik_conf_dir"
+    
+    print_info "Generating Traefik configuration..."
+    
+    # Main traefik.yml
+    cat > "${traefik_conf_dir}/traefik.yml" <<'EOF'
+entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+
+providers:
+  docker:
+    exposedByDefault: false
+    network: ai_platform
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: ${SSL_EMAIL:-hosting@datasquiz.net}
+      storage: /letsencrypt/acme.json
+      httpChallenge:
+        entryPoint: web
+EOF
+    
+    print_success "Traefik config generated"
+}
+
 generate_caddy_config() {
     local caddy_conf="${DATA_ROOT}/config/caddy/Caddyfile"
     mkdir -p "${DATA_ROOT}/config/caddy"
@@ -658,6 +695,52 @@ add_caddy_to_compose() {
 EOF
     
     print_success "Caddy added to compose"
+}
+
+add_traefik_to_compose() {
+    # Check if traefik already in compose
+    if grep -q "^  traefik:" "$COMPOSE_FILE"; then
+        print_info "Traefik already in compose file"
+        return 0
+    fi
+    
+    # Add traefik service
+    cat >> "$COMPOSE_FILE" <<'EOF'
+
+  traefik:
+    image: traefik:v2.10
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=ai_platform"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.email=${SSL_EMAIL:-hosting@datasquiz.net}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${DATA_ROOT}/letsencrypt:/letsencrypt
+    networks:
+      - ai_platform
+      - ai_platform_internal
+    ports:
+      - "80:80"
+      - "443:443"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "ai-platform.service=traefik"
+      - "ai-platform.type=proxy"
+EOF
+    
+    print_success "Traefik added to compose"
 }
 
 # 🔥 NEW: Generate AppArmor Profile for Service
@@ -1558,13 +1641,19 @@ main() {
     print_info "DEBUG: Deploying storage and network services..."
     for service in "${storage_services[@]}"; do
         if [[ " ${SELECTED_SERVICES[*]} " =~ " ${service} " ]]; then
-            deploy_service "$service" || failed=$((failed + 1))
-        fi
-    done
-    
-    for service in "${network_services[@]}"; do
-        if [[ " ${SELECTED_SERVICES[*]} " =~ " ${service} " ]]; then
-            deploy_service "$service" || failed=$((failed + 1))
+            # Special handling for Tailscale to ensure it's up before OpenClaw
+            if [[ "$service" == "tailscale" ]]; then
+                deploy_service "$service" || failed=$((failed + 1))
+                # Wait a bit for Tailscale to initialize and get IP
+                sleep 10
+                if docker ps --format "table {{.Names}}" | grep -q tailscale; then
+                    print_success "Tailscale is running - OpenClaw will be accessible via Tailscale IP"
+                else
+                    print_warning "Tailscale failed to start - OpenClaw may not be accessible via Tailscale"
+                fi
+            else
+                deploy_service "$service" || failed=$((failed + 1))
+            fi
         fi
     done
     
