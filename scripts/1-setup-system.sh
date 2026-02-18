@@ -1422,7 +1422,9 @@ EOF
         
         # LiteLLM core variables
         local litellm_master_key=$(generate_random_password 32)
+        local litellm_salt_key=$(generate_random_password 16)
         echo "LITELLM_MASTER_KEY=$litellm_master_key" >> "$ENV_FILE"
+        echo "LITELLM_SALT_KEY=$litellm_salt_key" >> "$ENV_FILE"
         echo "LITELLM_CACHE_ENABLED=true" >> "$ENV_FILE"
         echo "LITELLM_CACHE_TTL=3600" >> "$ENV_FILE"
         echo "LITELLM_RATE_LIMIT_ENABLED=true" >> "$ENV_FILE"
