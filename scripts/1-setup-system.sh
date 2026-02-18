@@ -1055,15 +1055,15 @@ EOF
         ["nginx-proxy-manager"]="80"
         ["traefik"]="80"
         ["caddy"]="80"
-        ["openwebui"]="3000"
-        ["anythingllm"]="3001"
-        ["n8n"]="5678"
-        ["dify"]="8080"
+        ["openwebui"]="5006"
+        ["anythingllm"]="5004"
+        ["n8n"]="5002"
+        ["dify"]="5003"
         ["ollama"]="11434"
-        ["litellm"]="4000"
-        ["prometheus"]="9090"
-        ["grafana"]="3001"
-        ["signal-api"]="8090"
+        ["litellm"]="5005"
+        ["prometheus"]="5000"
+        ["grafana"]="5001"
+        ["signal-api"]="8080"
         ["openclaw"]="18789"
         ["tailscale"]="8443"
         ["postgres"]="5432"
@@ -1655,6 +1655,10 @@ EOF
         prompt_input "FLOWISE_SECRETKEY" "Flowise secret key" "$(generate_random_password 32)" false
         echo "FLOWISE_SECRETKEY=$INPUT_RESULT" >> "$ENV_FILE"
         
+        # Generate ENCRYPTION_KEY for Flowise (compose file expects this)
+        local encryption_key=$(generate_random_password 32)
+        echo "ENCRYPTION_KEY=$encryption_key" >> "$ENV_FILE"
+        
         echo "FLOWISE_FILE_MANAGER_ENABLED=true" >> "$ENV_FILE"
         echo "FLOWISE_FILE_SIZE_LIMIT=10485760" >> "$ENV_FILE"
         
@@ -2110,7 +2114,7 @@ EOF
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Ollama (Public): https://$DOMAIN_NAME/ollama" >> "$urls_file"
                 ;;
             "openwebui")
-                echo "- Open WebUI: http://localhost:3000" >> "$urls_file"
+                echo "- Open WebUI: http://localhost:5006" >> "$urls_file"
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Open WebUI (Public): https://$DOMAIN_NAME/openwebui" >> "$urls_file"
                 ;;
             "anythingllm")
@@ -2118,11 +2122,11 @@ EOF
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- AnythingLLM (Public): https://$DOMAIN_NAME/anythingllm" >> "$urls_file"
                 ;;
             "dify")
-                echo "- Dify: http://localhost:8080" >> "$urls_file"
+                echo "- Dify: http://localhost:5003" >> "$urls_file"
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Dify (Public): https://$DOMAIN_NAME/dify" >> "$urls_file"
                 ;;
             "n8n")
-                echo "- n8n: http://localhost:5678" >> "$urls_file"
+                echo "- n8n: http://localhost:5002" >> "$urls_file"
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- n8n (Public): https://$DOMAIN_NAME/n8n" >> "$urls_file"
                 ;;
             "flowise")
@@ -2130,12 +2134,12 @@ EOF
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Flowise (Public): https://$DOMAIN_NAME/flowise" >> "$urls_file"
                 ;;
             "litellm")
-                echo "- LiteLLM: http://localhost:4000" >> "$urls_file"
+                echo "- LiteLLM: http://localhost:5005" >> "$urls_file"
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- LiteLLM (Public): https://$DOMAIN_NAME/litellm" >> "$urls_file"
                 ;;
             "signal-api")
-                echo "- Signal API: http://localhost:8090" >> "$urls_file"
-                echo "- Signal QR: http://localhost:8090/v1/qrcode" >> "$urls_file"
+                echo "- Signal API: http://localhost:8080" >> "$urls_file"
+                echo "- Signal QR: http://localhost:8080/v1/qrcode" >> "$urls_file"
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Signal API (Public): https://$DOMAIN_NAME/signal-api" >> "$urls_file"
                 ;;
             "openclaw")
@@ -2143,10 +2147,11 @@ EOF
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- OpenClaw (Public): https://$DOMAIN_NAME/openclaw" >> "$urls_file"
                 ;;
             "prometheus")
-                echo "- Prometheus: http://localhost:9090" >> "$urls_file"
+                echo "- Prometheus: http://localhost:5000" >> "$urls_file"
+                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Prometheus (Public): https://$DOMAIN_NAME/prometheus" >> "$urls_file"
                 ;;
             "grafana")
-                echo "- Grafana: http://localhost:3005" >> "$urls_file"
+                echo "- Grafana: http://localhost:5001" >> "$urls_file"
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Grafana (Public): https://$DOMAIN_NAME/grafana" >> "$urls_file"
                 ;;
             "qdrant")
@@ -2529,7 +2534,8 @@ generate_compose_templates() {
     
     # Generate complete unified compose file
     cat > "$COMPOSE_FILE" <<'COMPOSE_HEADER'
-version: '3.8'
+# Docker Compose Configuration
+# AI Platform - Complete Service Stack
 
 networks:
   ai_platform:
@@ -3090,7 +3096,7 @@ EOF
 add_openclaw_service() {
     cat >> "$COMPOSE_FILE" <<'EOF'
   openclaw:
-    image: openclaw/openclaw:latest
+    image: alpine/openclaw:latest
     container_name: openclaw
     restart: unless-stopped
     user: "${RUNNING_UID}:${RUNNING_GID}"

@@ -933,7 +933,7 @@ generate_service_config() {
     user: \"$user_mapping\""
             ;;
         "openclaw")
-            echo "    image: openclaw/openclaw:latest
+            echo "    image: alpine/openclaw:latest
     container_name: openclaw
     # 🔥 NON-ROOT USER MAPPING
     user: \"$user_mapping\""
