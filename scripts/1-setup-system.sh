@@ -2752,7 +2752,7 @@ add_litellm_service() {
       - ai_platform_internal
       - ai_platform
     ports:
-      - "8010:4000"
+      - "${LITELLM_PORT:-4000}:4000"
     command: ["--config", "/app/config/config.yaml", "--port", "4000", "--num_workers", "4"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
@@ -2790,7 +2790,7 @@ add_openwebui_service() {
       - ai_platform_internal
       - ai_platform
     ports:
-      - "8080:8080"
+      - "${OPENWEBUI_PORT:-3000}:8080"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/"]
       interval: 30s
@@ -2842,7 +2842,7 @@ add_dify_services() {
       - ai_platform_internal
       - ai_platform
     ports:
-      - "5001:5001"
+      - "${DIFY_PORT:-8080}:5001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
       interval: 30s
@@ -2866,7 +2866,7 @@ add_dify_services() {
     networks:
       - ai_platform
     ports:
-      - "3000:3000"
+      - "${DIFY_PORT:-8080}:3000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/"]
       interval: 30s
@@ -2912,7 +2912,7 @@ add_n8n_service() {
       - ai_platform_internal
       - ai_platform
     ports:
-      - "5678:5678"
+      - "${N8N_PORT:-5678}:5678"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:5678/healthz"]
       interval: 30s
@@ -2956,7 +2956,7 @@ add_flowise_service() {
       - ai_platform_internal
       - ai_platform
     ports:
-      - "3001:3000"
+      - "${FLOWISE_PORT:-3002}:3000"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/v1/ping"]
       interval: 30s
@@ -2997,7 +2997,7 @@ add_anythingllm_service() {
       - ai_platform_internal
       - ai_platform
     ports:
-      - "3002:3001"
+      - "${ANYTHINGLLM_PORT:-3001}:3000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3001/api/ping"]
       interval: 30s
@@ -3025,7 +3025,7 @@ add_monitoring_services() {
     networks:
       - ai_platform_internal
     ports:
-      - "9090:9090"
+      - "${PROMETHEUS_PORT:-9090}:9090"
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -3064,7 +3064,7 @@ add_monitoring_services() {
       - ai_platform_internal
       - ai_platform
     ports:
-      - "3003:3000"
+      - "${GRAFANA_PORT:-3001}:3000"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
       interval: 30s
