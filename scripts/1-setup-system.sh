@@ -1421,8 +1421,21 @@ EOF
         done
         
         # LiteLLM core variables
-        local litellm_master_key=$(generate_random_password 32)
-        local litellm_salt_key=$(generate_random_password 16)
+        print_info "LiteLLM Configuration (Optional Overrides)"
+        echo ""
+        
+        prompt_input "LITELLM_MASTER_KEY" "LiteLLM master key (leave empty to auto-generate)" "" false
+        local litellm_master_key="$INPUT_RESULT"
+        if [[ -z "$litellm_master_key" ]]; then
+            litellm_master_key=$(generate_random_password 32)
+        fi
+        
+        prompt_input "LITELLM_SALT_KEY" "LiteLLM salt key (leave empty to auto-generate)" "" false
+        local litellm_salt_key="$INPUT_RESULT"
+        if [[ -z "$litellm_salt_key" ]]; then
+            litellm_salt_key=$(generate_random_password 16)
+        fi
+        
         echo "LITELLM_MASTER_KEY=$litellm_master_key" >> "$ENV_FILE"
         echo "LITELLM_SALT_KEY=$litellm_salt_key" >> "$ENV_FILE"
         echo "LITELLM_CACHE_ENABLED=true" >> "$ENV_FILE"
