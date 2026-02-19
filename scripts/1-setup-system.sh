@@ -1827,7 +1827,12 @@ EOF
         local dify_secret=$(generate_random_password 32)
         echo "DIFY_SECRET_KEY=$dify_secret" >> "$ENV_FILE"
         echo "DIFY_WEB_API_PORT=5001" >> "$ENV_FILE"
-        echo "DIFY_WEB_PORT=3002" >> "$ENV_FILE"
+        # Find an available port for dify-web to avoid conflicts
+        local dify_web_port=8085
+        while netstat -tuln 2>/dev/null | grep -q ":$dify_web_port "; do
+            dify_web_port=$((dify_web_port + 1))
+        done
+        echo "DIFY_WEB_PORT=$dify_web_port" >> "$ENV_FILE"
     fi
     
     # MinIO configuration (if selected)
@@ -2130,7 +2135,9 @@ EOF
                 ;;
             "dify")
                 local dify_port=$(grep "^DIFY_PORT=" "$ENV_FILE" | cut -d= -f2)
-                echo "- Dify: http://localhost:$dify_port" >> "$urls_file"
+                echo "- Dify API: http://localhost:$dify_port" >> "$urls_file"
+                local dify_web_port=$(grep "^DIFY_WEB_PORT=" "$ENV_FILE" | cut -d= -f2)
+                echo "- Dify Web: http://localhost:$dify_web_port" >> "$urls_file"
                 [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Dify (Public): https://$DOMAIN_NAME/dify" >> "$urls_file"
                 ;;
             "n8n")
@@ -2856,7 +2863,7 @@ add_dify_services() {
     networks:
       - ai_platform
     ports:
-      - "${DIFY_PORT:-8080}:3000"
+      - "${DIFY_WEB_PORT:-8080}:3000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/"]
       interval: 30s
