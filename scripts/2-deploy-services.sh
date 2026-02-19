@@ -1720,7 +1720,11 @@ main() {
     echo -e "${CYAN}All containers are running as non-root user with AppArmor security${NC}"
     echo -e "${CYAN}Check container status: docker ps --format 'table {{.Names}}\t{{.User}}\t{{.Status}}'${NC}"
     
-    # 🔥 NEW: Generate Deployment Summary with Health Checks
+    # 🔥 NEW: Enhanced deployment with frontier patterns
+    fix_permissions_enhanced
+    deploy_services_enhanced
+    
+    # 🔥 NEW: Generate deployment summary with health checks
     generate_deployment_summary "$deployed" "$failed"
 }
 
@@ -1891,6 +1895,209 @@ EOF
     echo -e "${CYAN}📱 Tailscale: Use Tailscale IP for remote access${NC}"
     echo ""
     echo -e "${BLUE}📋 Full details: $urls_file${NC}"
+}
+
+# ── Enhanced Deployment Functions (Frontier Patterns) ────────────────────────
+
+# Enhanced health check with longer timeout (frontier pattern)
+MAX_WAIT=120  # Increased from 30s to 120s
+POLL=5
+
+wait_for_container_healthy_enhanced() {
+    local name="$1"
+    local start elapsed status health
+    
+    print_info "Waiting for ${name} (enhanced)..."
+    start=$(date +%s)
+    
+    while true; do
+        elapsed=$(( $(date +%s) - start ))
+        [[ $elapsed -ge $MAX_WAIT ]] && {
+            print_warning "TIMEOUT: ${name} not healthy after ${MAX_WAIT}s"
+            docker logs "$name" --tail 20 2>/dev/null | sed 's/^/    /' | tee -a "$LOG_FILE"
+            return 1
+        }
+        
+        # Check container exists
+        if ! docker inspect "$name" &>/dev/null; then
+            print_info "${name}: container not yet created (${elapsed}s)..."
+            sleep "$POLL"; continue
+        fi
+        
+        status=$(docker inspect --format='{{.State.Status}}' "$name" 2>/dev/null || echo "unknown")
+        health=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$name" 2>/dev/null || echo "none")
+        
+        case "$status" in
+            running)
+                case "$health" in
+                    healthy)
+                        print_success "${name}: healthy (${elapsed}s)"
+                        return 0
+                        ;;
+                    none)
+                        # No healthcheck defined - running is good enough
+                        print_success "${name}: running, no healthcheck (${elapsed}s)"
+                        return 0
+                        ;;
+                    starting)
+                        print_info "${name}: starting... (${elapsed}s)"
+                        sleep "$POLL"
+                        ;;
+                    unhealthy)
+                        print_warning "${name}: UNHEALTHY"
+                        docker logs "$name" --tail 20 2>/dev/null | sed 's/^/    /' | tee -a "$LOG_FILE"
+                        return 1
+                        ;;
+                    *)
+                        print_info "${name}: health=${health} (${elapsed}s)"
+                        sleep "$POLL"
+                        ;;
+                esac
+                ;;
+            exited|dead)
+                print_error "${name}: ${status}"
+                docker logs "$name" --tail 20 2>/dev/null | sed 's/^/    /' | tee -a "$LOG_FILE"
+                return 1
+                ;;
+            *)
+                print_info "${name}: status=${status} (${elapsed}s)"
+                sleep "$POLL"
+                ;;
+        esac
+    done
+}
+
+# Tier-based deployment with graceful degradation (frontier pattern)
+wait_for_tier_enhanced() {
+    local tier="$1"
+    shift
+    local containers=("$@")
+    local failed=0
+    
+    print_header "🔄 Health Checks: ${tier}"
+    for c in "${containers[@]}"; do
+        wait_for_container_healthy_enhanced "$c" || failed=$((failed + 1))
+    done
+    
+    if [[ $failed -gt 0 ]]; then
+        print_warning "${failed} container(s) in '${tier}' not healthy - deployment may be partial"
+        echo "$(date): Tier '${tier}': ${failed} failed containers" >> "$LOG_FILE"
+    else
+        print_success "Tier '${tier}': all containers healthy"
+        echo "$(date): Tier '${tier}': all healthy" >> "$LOG_FILE"
+    fi
+    return $failed
+}
+
+# Permission fixing based on failure analysis (frontier pattern)
+fix_permissions_enhanced() {
+    print_header "🔧 Fixing Service Permissions (Enhanced)"
+    
+    # Fix anythingllm storage
+    if [[ "${SERVICE_ANYTHINGLLM_ENABLED:-false}" == "true" ]]; then
+        print_info "Fixing AnythingLLM storage permissions..."
+        mkdir -p "${DATA_ROOT}/anythingllm/storage"
+        chown -R 1001:1001 "${DATA_ROOT}/anythingllm"
+        print_success "AnythingLLM permissions fixed"
+    fi
+    
+    # Fix n8n config
+    if [[ "${SERVICE_N8N_ENABLED:-false}" == "true" ]]; then
+        print_info "Fixing n8n config permissions..."
+        mkdir -p "${DATA_ROOT}/n8n"
+        chown -R 1001:1001 "${DATA_ROOT}/n8n"
+        print_success "n8n permissions fixed"
+    fi
+    
+    # Fix prometheus volumes
+    if [[ "${SERVICE_PROMETHEUS_ENABLED:-false}" == "true" ]]; then
+        print_info "Fixing Prometheus permissions..."
+        chown -R 65534:65534 "${DATA_ROOT}/prometheus"
+        print_success "Prometheus permissions fixed"
+    fi
+    
+    # Fix litellm config
+    if [[ "${SERVICE_LITELLM_ENABLED:-false}" == "true" ]]; then
+        print_info "Ensuring LiteLLM config exists..."
+        mkdir -p "${DATA_ROOT}/config/litellm"
+        if [[ ! -f "${DATA_ROOT}/config/litellm/config.yaml" ]]; then
+            cat > "${DATA_ROOT}/config/litellm/config.yaml" << EOF
+model_list:
+  - model_name: ollama/llama3.2
+    litellm_params:
+      model: ollama/llama3.2
+      api_base: http://ollama:11434
+
+general_settings:
+  master_key: "${LITELLM_MASTER_KEY}"
+  database_url: "postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/litellm"
+  
+litellm_settings:
+  drop_params: ["api_key", "api_base"]
+EOF
+            print_success "LiteLLM config created"
+        fi
+    fi
+}
+
+# Enhanced deployment in tiers (frontier pattern)
+deploy_services_enhanced() {
+    print_header "🚀 Deploying Services (Enhanced)"
+    
+    local tier1_services=()
+    local tier2_services=()
+    local tier3_services=()
+    
+    # Tier 1: Infrastructure
+    [[ "${SERVICE_POSTGRES_ENABLED:-false}" == "true" ]] && tier1_services+=("postgres")
+    [[ "${SERVICE_REDIS_ENABLED:-false}" == "true" ]] && tier1_services+=("redis")
+    
+    # Tier 2: Core services
+    [[ "${SERVICE_OLLAMA_ENABLED:-false}" == "true" ]] && tier2_services+=("ollama")
+    [[ "${SERVICE_OPENWEBUI_ENABLED:-false}" == "true" ]] && tier2_services+=("openwebui")
+    [[ "${SERVICE_LITELLM_ENABLED:-false}" == "true" ]] && tier2_services+=("litellm")
+    
+    # Tier 3: Application services
+    [[ "${SERVICE_FLOWISE_ENABLED:-false}" == "true" ]] && tier3_services+=("flowise")
+    [[ "${SERVICE_N8N_ENABLED:-false}" == "true" ]] && tier3_services+=("n8n")
+    [[ "${SERVICE_DIFY_API_ENABLED:-false}" == "true" ]] && tier3_services+=("dify-api")
+    [[ "${SERVICE_DIFY_WEB_ENABLED:-false}" == "true" ]] && tier3_services+=("dify-web")
+    [[ "${SERVICE_ANYTHINGLLM_ENABLED:-false}" == "true" ]] && tier3_services+=("anythingllm")
+    [[ "${SERVICE_PROMETHEUS_ENABLED:-false}" == "true" ]] && tier3_services+=("prometheus")
+    [[ "${SERVICE_GRAFANA_ENABLED:-false}" == "true" ]] && tier3_services+=("grafana")
+    [[ "${SERVICE_MINIO_ENABLED:-false}" == "true" ]] && tier3_services+=("minio")
+    [[ "${SERVICE_SIGNAL_API_ENABLED:-false}" == "true" ]] && tier3_services+=("signal-api")
+    [[ "${SERVICE_OPENCLAW_ENABLED:-false}" == "true" ]] && tier3_services+=("openclaw")
+    
+    # Deploy Tier 1
+    if [[ ${#tier1_services[@]} -gt 0 ]]; then
+        print_info "Deploying Tier 1: Infrastructure"
+        for service in "${tier1_services[@]}"; do
+            print_info "Starting $service..."
+            DATA_ROOT=/mnt/data docker compose -f "$COMPOSE_FILE" up -d "$service" 2>&1 | tee -a "$LOG_FILE"
+        done
+        wait_for_tier_enhanced "Infrastructure" "${tier1_services[@]}" || true
+    fi
+    
+    # Deploy Tier 2
+    if [[ ${#tier2_services[@]} -gt 0 ]]; then
+        print_info "Deploying Tier 2: Core Services"
+        for service in "${tier2_services[@]}"; do
+            print_info "Starting $service..."
+            DATA_ROOT=/mnt/data docker compose -f "$COMPOSE_FILE" up -d "$service" 2>&1 | tee -a "$LOG_FILE"
+        done
+        wait_for_tier_enhanced "Core Services" "${tier2_services[@]}" || true
+    fi
+    
+    # Deploy Tier 3
+    if [[ ${#tier3_services[@]} -gt 0 ]]; then
+        print_info "Deploying Tier 3: Application Services"
+        for service in "${tier3_services[@]}"; do
+            print_info "Starting $service..."
+            DATA_ROOT=/mnt/data docker compose -f "$COMPOSE_FILE" up -d "$service" 2>&1 | tee -a "$LOG_FILE"
+        done
+        wait_for_tier_enhanced "Application Services" "${tier3_services[@]}" || true
+    fi
 }
 
 # Run main function
