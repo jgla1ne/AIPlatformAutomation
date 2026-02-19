@@ -1058,7 +1058,7 @@ EOF
         ["openwebui"]="5006"
         ["anythingllm"]="5004"
         ["n8n"]="5002"
-        ["dify"]="5003"
+        ["dify"]="8082"
         ["ollama"]="11434"
         ["litellm"]="5005"
         ["prometheus"]="5000"
@@ -1116,9 +1116,18 @@ EOF
         case "$service_key" in
             "nginx-proxy-manager"|"traefik"|"caddy"|"openwebui"|"anythingllm"|"n8n"|"dify"|"ollama"|"litellm"|"prometheus"|"grafana"|"signal-api"|"openclaw"|"tailscale"|"postgres"|"redis"|"qdrant"|"milvus"|"chroma"|"weaviate"|"minio")
                 local default_port="${default_ports[$service_key]:-3000}"
+                # Check for port conflicts and find available port
+                local available_port="$default_port"
+                while netstat -tuln 2>/dev/null | grep -q ":$available_port "; do
+                    available_port=$((available_port + 1))
+                done
                 # Convert service key to uppercase with underscores only
                 local port_var_name=$(echo "$service_key" | tr '-' '_' | tr '[:lower:]' '[:upper:]')_PORT
-                prompt_input "$port_var_name" "$service_key port" "$default_port" false
+                if [[ "$available_port" != "$default_port" ]]; then
+                    prompt_input "$port_var_name" "$service_key port (default $default_port in use)" "$available_port" false
+                else
+                    prompt_input "$port_var_name" "$service_key port" "$default_port" false
+                fi
                 echo "$port_var_name=$INPUT_RESULT" >> "$ENV_FILE"
                 ;;
         esac
@@ -1827,12 +1836,7 @@ EOF
         local dify_secret=$(generate_random_password 32)
         echo "DIFY_SECRET_KEY=$dify_secret" >> "$ENV_FILE"
         echo "DIFY_WEB_API_PORT=5001" >> "$ENV_FILE"
-        # Find an available port for dify-web to avoid conflicts
-        local dify_web_port=8085
-        while netstat -tuln 2>/dev/null | grep -q ":$dify_web_port "; do
-            dify_web_port=$((dify_web_port + 1))
-        done
-        echo "DIFY_WEB_PORT=$dify_web_port" >> "$ENV_FILE"
+        # DIFY_WEB_PORT will be set by the main port configuration above
     fi
     
     # MinIO configuration (if selected)
