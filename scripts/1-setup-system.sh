@@ -1850,6 +1850,58 @@ EOF
         print_success "MinIO configuration completed"
     fi
     
+    # 🔥 NEW: Sub-path environment variables for proxy configuration
+    if [[ "${PROXY_TYPE:-}" == "caddy" ]] || [[ "${PROXY_TYPE:-}" == "nginx-proxy-manager" ]] || [[ "${PROXY_TYPE:-}" == "traefik" ]]; then
+        echo ""
+        print_info "Generating sub-path environment variables for proxy configuration..."
+        echo ""
+        
+        # Get the domain for sub-path URLs
+        local proxy_domain="${existing_domain_name:-localhost}"
+        
+        # n8n sub-path configuration
+        if [[ " ${selected_services[*]} " =~ " n8n " ]]; then
+            echo "N8N_PATH=/n8n/" >> "$ENV_FILE"
+            echo "N8N_EDITOR_BASE_URL=https://$proxy_domain/n8n/" >> "$ENV_FILE"
+            echo "N8N_WEBHOOK_URL=https://$proxy_domain/n8n/" >> "$ENV_FILE"
+            print_success "n8n sub-path variables configured"
+        fi
+        
+        # grafana sub-path configuration
+        if [[ " ${selected_services[*]} " =~ " grafana " ]]; then
+            echo "GF_SERVER_ROOT_URL=https://$proxy_domain/grafana/" >> "$ENV_FILE"
+            echo "GF_SERVER_SERVE_FROM_SUB_PATH=true" >> "$ENV_FILE"
+            print_success "grafana sub-path variables configured"
+        fi
+        
+        # flowise sub-path configuration
+        if [[ " ${selected_services[*]} " =~ " flowise " ]]; then
+            echo "FLOWISE_BASE_PATH=/flowise" >> "$ENV_FILE"
+            print_success "flowise sub-path variables configured"
+        fi
+        
+        # anythingllm sub-path configuration
+        if [[ " ${selected_services[*]} " =~ " anythingllm " ]]; then
+            echo "ANYTHINGLLM_APP_BASE_PATH=/anythingllm" >> "$ENV_FILE"
+            print_success "anythingllm sub-path variables configured"
+        fi
+        
+        # minio sub-path configuration
+        if [[ " ${selected_services[*]} " =~ " minio " ]]; then
+            echo "MINIO_BROWSER_REDIRECT_URL=https://$proxy_domain/minio" >> "$ENV_FILE"
+            echo "MINIO_SERVER_URL=https://$proxy_domain/minio" >> "$ENV_FILE"
+            print_success "minio sub-path variables configured"
+        fi
+        
+        # openwebui sub-path configuration
+        if [[ " ${selected_services[*]} " =~ " openwebui " ]]; then
+            echo "WEBUI_URL=https://$proxy_domain/openwebui" >> "$ENV_FILE"
+            print_success "openwebui sub-path variables configured"
+        fi
+        
+        print_success "Sub-path environment variables generated for proxy configuration"
+    fi
+    
     # Save configuration summary
     echo ""
     print_header "📊 Configuration Summary"
