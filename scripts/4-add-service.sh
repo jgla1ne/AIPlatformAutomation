@@ -3,7 +3,7 @@
 #==============================================================================
 # Script 4/5: Add Service Dynamically
 # Purpose: Interactive service addition with dependency validation
-# Architecture: 5-Script Framework (Setup → Deploy → Configure → Add → Backup)
+# Architecture: 5-Script Framework (Cleanup → Setup → Deploy → Configure → Add)
 # Per README: Modular service addition post-deployment
 # Version: 4.1.0 - Frontier Model Integration
 #==============================================================================

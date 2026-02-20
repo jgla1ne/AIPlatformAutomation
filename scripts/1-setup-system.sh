@@ -3,7 +3,7 @@
 #==============================================================================
 # Script 1/5: System Setup & Configuration Collection
 # Purpose: Complete system preparation with interactive UI
-# Architecture: 5-Script Framework (Setup → Deploy → Configure → Add → Backup)
+# Architecture: 5-Script Framework (Cleanup → Setup → Deploy → Configure → Add)
 # Version: 4.0.0
 #==============================================================================
 

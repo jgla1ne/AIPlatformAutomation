@@ -3,7 +3,7 @@
 #==============================================================================
 # Script 2/5: Service Deployment & Container Management
 # Purpose: Deploy all selected services using Script 1 configuration
-# Architecture: 5-Script Framework (Setup → Deploy → Configure → Add → Backup)
+# Architecture: 5-Script Framework (Cleanup → Setup → Deploy → Configure → Add)
 # Version: 7.1.0 - Frontier Model Integration
 #==============================================================================
 

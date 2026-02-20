@@ -2,7 +2,7 @@
 #==============================================================================
 # Script 3/5: Post-Deployment Configuration & Management
 # Purpose: Configure services, manage SSL, add services, backups
-# Architecture: 5-Script Framework (Setup → Deploy → Configure → Add → Backup)
+# Architecture: 5-Script Framework (Cleanup → Setup → Deploy → Configure → Add)
 # Version: 9.1.0 - Frontier Model Integration
 #==============================================================================
 
