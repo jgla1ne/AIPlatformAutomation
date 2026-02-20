@@ -1,99 +1,13 @@
-# Iterative Fix Plan for AI Platform Services
+# Windsurf Proxy Configuration Fix Plan
 
-Based on the current status report, I'll outline a phased approach to get all services operational. We'll address issues in order of priority while maintaining system stability.
+Based on the current audit and script 2 constraints, here's a targeted solution that maintains your system architecture while fixing all identified issues.
 
-## Phase 1: Critical Configuration Fixes (Day 1)
+## 1. Caddyfile Proxy Configuration Fix
 
-### 1. Fix LiteLLM Configuration
 ```bash
-# Create proper config directory and file
-mkdir -p /mnt/data/litellm/config
-cat > /mnt/data/litellm/config/config.yaml <<EOF
-model_list:
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: gpt-3.5-turbo
-      api_key: ${OPENAI_API_KEY}
-      api_base: https://api.openai.com/v1
-
-general_settings:
-  master_key: ${LITELLM_MASTER_KEY}
-EOF
-
-# Update LiteLLM deployment in script 2
-docker run -d \
-  --name litellm \
-  -p 4000:4000 \
-  -v /mnt/data/litellm/config:/app/config \
-  -e CONFIG_FILE=/app/config/config.yaml \
-  --network ai_platform \
-  --restart unless-stopped \
-  ghcr.io/berriai/litellm:main-latest
-```
-
-### 2. Fix AnythingLLM Database Permissions
-```bash
-# Create proper directory structure with correct permissions
-mkdir -p /mnt/data/anythingllm/storage
-chmod -R 777 /mnt/data/anythingllm  # Temporary for troubleshooting
-
-# Update AnythingLLM deployment
-docker run -d \
-  --name anythingllm \
-  -p 5004:3000 \
-  -e SERVER_PORT=3000 \
-  -e STORAGE_DIR="/app/server/storage" \
-  -e SERVER_URL="https://ai.datasquiz.net/anythingllm" \
-  -v /mnt/data/anythingllm/storage:/app/server/storage \
-  --network ai_platform \
-  --restart unless-stopped \
-  mintplexlabs/anythingllm:latest
-```
-
-### 3. Fix Ollama Health Check
-```bash
-# Update Ollama deployment with health check
-docker run -d \
-  --name ollama \
-  -p 11434:11434 \
-  -v /mnt/data/ollama:/root/.ollama \
-  --network ai_platform \
-  --health-cmd "curl -f http://localhost:11434/api/tags || exit 1" \
-  --health-interval 30s \
-  --health-retries 3 \
-  --restart unless-stopped \
-  ollama/ollama:latest
-
-# Pull default model to ensure content
-docker exec ollama ollama pull llama3
-```
-
-## Phase 2: Network and Proxy Configuration (Day 2)
-
-### 1. Fix MinIO Configuration
-```bash
-# Update MinIO deployment with proper domain settings
-docker run -d \
-  --name minio \
-  -p 5007:9000 \
-  -p 5008:9001 \
-  -e MINIO_ROOT_USER=${MINIO_ROOT_USER} \
-  -e MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD} \
-  -e MINIO_DOMAIN=ai.datasquiz.net \
-  -e MINIO_SERVER_URL="https://ai.datasquiz.net/minio" \
-  -e MINIO_BROWSER_REDIRECT_URL="https://ai.datasquiz.net/minio/console" \
-  -v /mnt/data/minio:/data \
-  --network ai_platform \
-  --restart unless-stopped \
-  minio/minio server /data --console-address ":9001"
-```
-
-### 2. Fix Proxy Path Routing in Caddyfile
-```bash
-# Update Caddyfile configuration
-cat > /mnt/data/Caddyfile <<EOF
+cat > /mnt/data/Caddyfile << 'EOF'
 ai.datasquiz.net {
-    # Handle path routing in order of specificity
+    # Handle path routing with proper header management
     handle /n8n/* {
         reverse_proxy localhost:5002 {
             header_up X-Forwarded-Host {host}
@@ -110,71 +24,147 @@ ai.datasquiz.net {
         reverse_proxy localhost:5006
     }
 
+    handle /ollama/* {
+        reverse_proxy localhost:11434 {
+            header_up Host {host}
+            header_up X-Real-IP {remote}
+        }
+    }
+
+    handle /litellm/* {
+        reverse_proxy localhost:4000 {
+            header_up Host {host}
+            header_up X-Real-IP {remote}
+        }
+    }
+
+    handle /anythingllm/* {
+        reverse_proxy localhost:5004 {
+            header_up Host {host}
+            header_up X-Real-IP {remote}
+        }
+    }
+
     handle /prometheus/* {
-        reverse_proxy localhost:9090
+        reverse_proxy localhost:9090 {
+            header_up Host {host}
+            header_up X-Real-IP {remote}
+        }
     }
 
     handle /dify/* {
-        reverse_proxy localhost:3002
-    }
-
-    handle /ollama/* {
-        reverse_proxy localhost:11434
+        reverse_proxy localhost:3002 {
+            header_up Host {host}
+            header_up X-Real-IP {remote}
+        }
     }
 
     handle /minio/* {
-        reverse_proxy localhost:5007
+        reverse_proxy localhost:5007 {
+            header_up Host {host}
+            header_up X-Real-IP {remote}
+        }
     }
 
     handle /minio/console/* {
         uri strip_prefix /minio/console
-        reverse_proxy localhost:5008
-    }
-
-    handle /anythingllm/* {
-        reverse_proxy localhost:5004
-    }
-
-    handle /litellm/* {
-        reverse_proxy localhost:4000
+        reverse_proxy localhost:5008 {
+            header_up Host {host}
+            header_up X-Real-IP {remote}
+        }
     }
 
     # Default catch-all
     handle {
-        reverse_proxy localhost:5006  # Default to openwebui
+        reverse_proxy localhost:5006
     }
 }
 EOF
 
-# Reload Caddy configuration
+# Reload Caddy
 docker exec caddy caddy reload --config /etc/caddy/Caddyfile
 ```
 
-## Phase 3: Service Health and Deployment (Day 3)
+## 2. Service-Specific Fixes in Script 2
 
-### 1. Fix Dify Web Health
+### Litellm Port Alignment
 ```bash
-# Update Dify deployment with proper health checks
+# Change port mapping to match configured port
+docker run -d \
+  --name litellm \
+  -p 5005:4000 \  # Changed from 4000:4000 to 5005:4000
+  -v /mnt/data/litellm/config:/app/config \
+  -e CONFIG_FILE=/app/config/config.yaml \
+  --network ai_platform \
+  --restart unless-stopped \
+  ghcr.io/berriai/litellm:main-latest
+```
+
+### Dify-Web Port Alignment
+```bash
+# Change port mapping to match configured port
 docker run -d \
   --name dify-web \
-  -p 3002:3000 \
+  -p 8085:3000 \  # Changed from 3002:3000 to 8085:3000
   -e MODE=web \
   -e API_URL="https://ai.datasquiz.net/dify" \
-  -e PUBLIC_API_URL="https://ai.datasquiz.net/dify" \
-  -e CONSOLE_API_URL="https://ai.datasquiz.net/dify" \
-  -e APP_WEB_URL="https://ai.datasquiz.net/dify" \
   -v /mnt/data/dify:/app/api/storage \
   --network ai_platform \
-  --health-cmd "curl -f http://localhost:3000/health || exit 1" \
-  --health-interval 30s \
-  --health-retries 3 \
   --restart unless-stopped \
   langgenius/dify-web:latest
 ```
 
-### 2. Deploy Missing Services
+### Prometheus Port Alignment
 ```bash
-# Flowise
+# Change port mapping to match configured port
+docker run -d \
+  --name prometheus \
+  -p 5000:9090 \  # Changed from 9090:9090 to 5000:9090
+  -v /mnt/data/prometheus:/etc/prometheus \
+  -v /mnt/data/prometheus_data:/prometheus \
+  --network ai_platform \
+  --restart unless-stopped \
+  prom/prometheus:latest
+```
+
+### MinIO Configuration Fix
+```bash
+docker run -d \
+  --name minio \
+  -p 5007:9000 \
+  -p 5008:9001 \
+  -e MINIO_ROOT_USER=${MINIO_ROOT_USER} \
+  -e MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD} \
+  -e MINIO_DOMAIN=ai.datasquiz.net \
+  -e MINIO_SERVER_URL="https://ai.datasquiz.net/minio" \
+  -e MINIO_BROWSER_REDIRECT_URL="https://ai.datasquiz.net/minio/console" \
+  -v /mnt/data/minio:/data \
+  --network ai_platform \
+  --restart unless-stopped \
+  minio/minio server /data --console-address ":9001"
+```
+
+### AnythingLLM Health Fix
+```bash
+docker run -d \
+  --name anythingllm \
+  -p 5004:3000 \
+  -e SERVER_PORT=3000 \
+  -e STORAGE_DIR="/app/server/storage" \
+  -e SERVER_URL="https://ai.datasquiz.net/anythingllm" \
+  -e DISABLE_TELEMETRY="true" \
+  -v /mnt/data/anythingllm/storage:/app/server/storage \
+  --network ai_platform \
+  --health-cmd "curl -f http://localhost:3000/health || exit 1" \
+  --health-interval 30s \
+  --restart unless-stopped \
+  mintplexlabs/anythingllm:latest
+```
+
+## 3. Missing Services Deployment
+
+### Flowise
+```bash
 docker run -d \
   --name flowise \
   -p 5003:3000 \
@@ -183,66 +173,74 @@ docker run -d \
   --network ai_platform \
   --restart unless-stopped \
   flowiseai/flowise:latest
+```
 
-# Signal (example - adjust as needed)
+### Signal (Example)
+```bash
 docker run -d \
   --name signal \
-  -p 5005:3000 \
+  -p 8080:8080 \
   --network ai_platform \
   --restart unless-stopped \
   signalapp/server:latest
+```
 
-# Openclaw (example - adjust as needed)
+### Openclaw (Example)
+```bash
 docker run -d \
   --name openclaw \
-  -p 5009:8000 \
+  -p 18789:18789 \
   --network ai_platform \
   --restart unless-stopped \
   your-openclaw-image:latest
 ```
 
-## Phase 4: Verification and Monitoring (Ongoing)
+## 4. Verification Script
 
-### 1. Comprehensive Verification Script
 ```bash
 #!/bin/bash
 
-# Service verification script
+# Service verification
 declare -A SERVICES=(
     ["n8n"]="5002 /n8n"
     ["grafana"]="5001 /grafana"
     ["openwebui"]="5006 /webui"
-    ["prometheus"]="9090 /prometheus"
-    ["dify"]="3002 /dify"
     ["ollama"]="11434 /ollama"
-    ["minio"]="5007 /minio"
+    ["litellm"]="5005 /litellm"
     ["anythingllm"]="5004 /anythingllm"
-    ["litellm"]="4000 /litellm"
+    ["prometheus"]="5000 /prometheus"
+    ["dify"]="8085 /dify"
+    ["minio"]="5007 /minio"
     ["flowise"]="5003 /flowise"
-    ["signal"]="5005 /signal"
-    ["openclaw"]="5009 /openclaw"
+    ["signal"]="8080 /signal"
+    ["openclaw"]="18789 /openclaw"
 )
 
 echo "=== SERVICE VERIFICATION REPORT ==="
-echo "Service | Docker Status | Direct Access | Proxy Access | Content Check"
+echo "Service | Port Match | Docker Status | Direct Access | Proxy Access"
 echo "---------------------------------------------------------------"
 
 for service in "${!SERVICES[@]}"; do
-    port=$(echo ${SERVICES[$service]} | awk '{print $1}')
+    configured_port=$(echo ${SERVICES[$service]} | awk '{print $1}')
     path=$(echo ${SERVICES[$service]} | awk '{print $2}')
+
+    # Check port mapping
+    actual_port=$(docker port $service | head -1 | awk -F'->' '{print $1}' | tr -d ' ')
+    if [ "$configured_port" == "$actual_port" ]; then
+        port_match="✅"
+    else
+        port_match="❌ ($actual_port)"
+    fi
 
     # Check Docker status
     if docker ps --format '{{.Names}}' | grep -q "^${service}$"; then
         docker_status="✅ Up"
-        if docker inspect --format='{{.State.Health.Status}}' $service 2>/dev/null | grep -q "healthy"; then
-            docker_status="✅ Healthy"
-        fi
     else
         docker_status="❌ Down"
     fi
 
     # Check direct access
-    direct_status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:$port$path)
+    direct_status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:$configured_port$path 2>/dev/null || echo "000")
     if [[ $direct_status =~ ^2[0-9]{2}|3[0-9]{2}$ ]]; then
         direct_status="✅ $direct_status"
     else
@@ -250,67 +248,45 @@ for service in "${!SERVICES[@]}"; do
     fi
 
     # Check proxy access
-    proxy_status=$(curl -s -o /dev/null -w "%{http_code}" https://ai.datasquiz.net$path)
+    proxy_status=$(curl -s -o /dev/null -w "%{http_code}" https://ai.datasquiz.net$path 2>/dev/null || echo "000")
     if [[ $proxy_status =~ ^2[0-9]{2}|3[0-9]{2}$ ]]; then
         proxy_status="✅ $proxy_status"
     else
         proxy_status="❌ $proxy_status"
     fi
 
-    # Check content
-    content_check=$(curl -s https://ai.datasquiz.net$path | head -1 | grep -v "^$" | wc -l)
-    if [ $content_check -gt 0 ]; then
-        content_check="✅ Content"
-    else
-        content_check="❌ Empty"
-    fi
-
-    printf "%-10s | %-12s | %-13s | %-12s | %s\n" "$service" "$docker_status" "$direct_status" "$proxy_status" "$content_check"
+    printf "%-10s | %-10s | %-12s | %-13s | %s\n" "$service" "$port_match" "$docker_status" "$direct_status" "$proxy_status"
 done
 ```
 
-### 2. Monitoring Setup
-```bash
-# Add to script 2 for Prometheus monitoring
-docker run -d \
-  --name prometheus \
-  -p 9090:9090 \
-  -v /mnt/data/prometheus:/etc/prometheus \
-  -v /mnt/data/prometheus_data:/prometheus \
-  --network ai_platform \
-  --restart unless-stopped \
-  prom/prometheus:latest
-```
+## Implementation Steps
 
-## Implementation Schedule
+1. **First Priority: Fix Port Mismatches**
+   - Update litellm, dify-web, and prometheus port mappings
+   - Verify direct access works on configured ports
 
-| Phase | Task | Time Estimate | Success Criteria |
-|-------|------|---------------|------------------|
-| 1 | Fix LiteLLM config | 1 hour | Container stays running |
-| 1 | Fix AnythingLLM DB | 1 hour | Container healthy with content |
-| 1 | Fix Ollama health | 30 min | Health check passes |
-| 2 | Fix MinIO config | 1 hour | Both API and console accessible |
-| 2 | Fix proxy routing | 2 hours | All services return 200/302 |
-| 3 | Fix Dify health | 1 hour | Container shows healthy |
-| 3 | Deploy missing services | 1 hour | All containers running |
-| 4 | Verify all services | 1 hour | All services accessible |
-| 4 | Setup monitoring | 30 min | Prometheus collecting metrics |
+2. **Second Priority: Fix Proxy Routing**
+   - Update Caddyfile with proper path handling
+   - Add necessary headers for each service
+   - Reload Caddy configuration
 
-## Rollback Plan
+3. **Third Priority: Fix Service-Specific Issues**
+   - Update MinIO configuration
+   - Add health checks to anythingllm
+   - Verify ollama health check
 
-For each change:
-1. Take snapshot of current state:
-```bash
-docker commit <container_name> backup_<container_name>_$(date +%s)
-docker save -o /mnt/data/backups/<container_name>_$(date +%s).tar <image_name>
-```
+4. **Fourth Priority: Deploy Missing Services**
+   - Deploy flowise, signal, and openclaw
+   - Verify they start properly
 
-2. If issues occur:
-```bash
-docker stop <container_name>
-docker rm <container_name>
-docker load -i /mnt/data/backups/<container_name>_backup.tar
-# Redeploy with previous configuration
-```
+5. **Final Verification**
+   - Run the verification script
+   - Check all services respond on their public URLs
+   - Monitor for any errors
 
-This iterative plan addresses all critical issues first, then moves to proxy configuration, and finally ensures all services are deployed and healthy. Each phase builds on the previous one to maintain system stability.
+This solution maintains all system constraints while fixing:
+- Port mismatches (litellm, dify-web, prometheus)
+- Proxy routing issues (ollama, anythingllm, litellm, prometheus, dify)
+- Configuration issues (minio)
+- Missing services (flowise, signal, openclaw)
+- Health check issues (anythingllm)
