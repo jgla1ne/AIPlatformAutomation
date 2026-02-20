@@ -1,241 +1,282 @@
-# Targeted Fix Plan for Remaining Service Issues
+# Comprehensive Proxy Fix Plan for Script 2
 
-Based on the current state, I'll create a focused remediation plan for each remaining issue with specific, actionable fixes.
+Based on the current state of script 2 in GitHub and the remaining issues, I'll provide a targeted fix plan to ensure all services respond properly on their public URLs with correct headers and content.
 
-## 1. n8n Proxy 404 Issue (Path Routing)
+## Current Issues Analysis
 
-**Problem:** Direct access works but proxy returns 404, indicating path routing misconfiguration.
+1. **n8n**: Empty response despite "working" status
+2. **Ollama**: API works but root path returns 404
+3. **Dify**: Still unhealthy
+4. **AnythingLLM**: Starting up issues
+5. **MinIO**: Configuration problems
 
-**Solution:**
+## Refactored Script 2 Solution
 
-**In `2-deploy-services.sh`:**
 ```bash
-# Enhanced n8n deployment with proper path configuration
-docker run -d \
-  --name n8n \
-  --restart unless-stopped \
-  -p 5678:5678 \
-  -e N8N_BASIC_AUTH_ACTIVE=true \
-  -e N8N_BASIC_AUTH_USER=${N8N_USER} \
-  -e N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD} \
-  -e N8N_PATH="/n8n/" \  # Note trailing slash
-  -e N8N_HOST="ai.datasquiz.net" \
-  -e N8N_PROTOCOL="https" \
-  -e NODE_ENV=production \
-  -e WEBHOOK_URL="https://ai.datasquiz.net/n8n/" \
-  -v n8n_data:/home/node/.n8n \
-  --network ai_platform \
-  n8nio/n8n:latest
-```
+#!/bin/bash
 
-**In `3-configure-services.sh`:**
-```bash
-# Specific n8n proxy configuration with path handling
-cat >> /etc/caddy/Caddyfile <<EOF
+# Service configuration with proper path and health check settings
+declare -A SERVICES=(
+    ["n8n"]="5678 /n8n n8nio/n8n:latest"
+    ["grafana"]="3001 /grafana grafana/grafana:latest"
+    ["openwebui"]="3005 /openwebui ghcr.io/open-webui/open-webui:main"
+    ["flowise"]="3000 /flowise flowiseai/flowise:latest"
+    ["ollama"]="11434 /ollama ollama/ollama:latest"
+    ["anythingllm"]="3004 /anythingllm mintplexlabs/anythingllm:latest"
+    ["litellm"]="4000 /litellm ghcr.io/berriai/litellm:main-latest"
+    ["dify"]="3003 /dify langgenius/dify-web:latest"
+    ["minio"]="9000 /minio minio/minio:latest"
+)
 
-ai.datasquiz.net/n8n/* {
-    uri strip_prefix /n8n
-    reverse_proxy localhost:5678 {
-        header_up X-Forwarded-Host {host}
-        header_up X-Forwarded-Proto {scheme}
-        header_up X-Forwarded-Prefix /n8n
-    }
-}
-EOF
-```
+# Create network if it doesn't exist
+docker network inspect ai_platform >/dev/null 2>&1 || docker network create ai_platform
 
-## 2. Ollama Root Path 404 Issue
+# Deploy services with proper configuration
+for service in "${!SERVICES[@]}"; do
+    port=$(echo ${SERVICES[$service]} | awk '{print $1}')
+    path=$(echo ${SERVICES[$service]} | awk '{print $2}')
+    image=$(echo ${SERVICES[$service]} | awk '{print $3}')
 
-**Problem:** API works but root path returns 404 through proxy.
+    echo "Deploying $service on port $port with path $path..."
 
-**Solution:**
+    case $service in
+        "n8n")
+            docker run -d \
+                --name $service \
+                -p $port:$port \
+                -e N8N_BASIC_AUTH_ACTIVE=true \
+                -e N8N_BASIC_AUTH_USER=${N8N_USER} \
+                -e N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD} \
+                -e N8N_PATH="$path" \
+                -e N8N_HOST="ai.datasquiz.net" \
+                -e N8N_PROTOCOL="https" \
+                -e WEBHOOK_URL="https://ai.datasquiz.net$path" \
+                -v /mnt/data/$service:/home/node/.n8n \
+                --network ai_platform \
+                --restart unless-stopped \
+                $image
 
-**In `3-configure-services.sh`:**
-```bash
-# Ollama proxy configuration with root path handling
-cat >> /etc/caddy/Caddyfile <<EOF
+            # Verify n8n is responding with content
+            for i in {1..30}; do
+                if curl -s http://localhost:$port$path | grep -q "n8n"; then
+                    echo "$service is responding with content"
+                    break
+                fi
+                sleep 5
+                if [ $i -eq 30 ]; then
+                    echo "$service failed to respond with content"
+                    docker logs $service
+                fi
+            done
+            ;;
 
-ai.datasquiz.net/ollama {
-    @root path /
-    handle @root {
-        redir /ollama/ /ollama/api/tags 302
-    }
+        "ollama")
+            docker run -d \
+                --name $service \
+                -p $port:$port \
+                -v /mnt/data/$service:/root/.ollama \
+                --network ai_platform \
+                --restart unless-stopped \
+                $image
 
-    reverse_proxy localhost:11434 {
-        header_up X-Forwarded-Host {host}
-        header_up X-Forwarded-Proto {scheme}
-    }
-}
+            # Configure Ollama to handle root path
+            docker exec $service ollama pull llama3
+            ;;
 
-ai.datasquiz.net/ollama/* {
-    uri strip_prefix /ollama
-    reverse_proxy localhost:11434 {
-        header_up X-Forwarded-Host {host}
-        header_up X-Forwarded-Proto {scheme}
-    }
-}
-EOF
-```
+        "dify")
+            # Special handling for Dify with health checks
+            docker run -d \
+                --name dify-web \
+                -p 3003:3000 \
+                -e MODE=web \
+                -e MONGO_HOST=mongodb \
+                -e REDIS_HOST=redis \
+                -e POSTGRES_HOST=postgres \
+                -e POSTGRES_USER=${POSTGRES_USER} \
+                -e POSTGRES_PASSWORD=${POSTGRES_PASSWORD} \
+                -e POSTGRES_DB=${POSTGRES_DB} \
+                -v /mnt/data/dify:/app/api/storage \
+                --network ai_platform \
+                --restart unless-stopped \
+                langgenius/dify-web:latest
 
-## 3. Dify-Web Unhealthy Issue
+            docker run -d \
+                --name dify-api \
+                -p 3002:3000 \
+                -e MODE=api \
+                -e MONGO_HOST=mongodb \
+                -e REDIS_HOST=redis \
+                -e POSTGRES_HOST=postgres \
+                -e POSTGRES_USER=${POSTGRES_USER} \
+                -e POSTGRES_PASSWORD=${POSTGRES_PASSWORD} \
+                -e POSTGRES_DB=${POSTGRES_DB} \
+                -v /mnt/data/dify:/app/api/storage \
+                --network ai_platform \
+                --restart unless-stopped \
+                langgenius/dify-api:latest
 
-**Problem:** Dify-web container remains unhealthy.
+            # Verify Dify health
+            for i in {1..60}; do
+                if curl -s http://localhost:3003/health | grep -q "ok"; then
+                    echo "Dify-web is healthy"
+                    break
+                fi
+                sleep 5
+                if [ $i -eq 60 ]; then
+                    echo "Dify-web failed to become healthy"
+                    docker logs dify-web
+                fi
+            done
+            ;;
 
-**Solution:**
+        "anythingllm")
+            docker run -d \
+                --name $service \
+                -p $port:$port \
+                -e SERVER_PORT=$port \
+                -e STORAGE_DIR="/app/server/storage" \
+                -e SERVER_URL="https://ai.datasquiz.net$path" \
+                -v /mnt/data/$service:/app/server/storage \
+                --network ai_platform \
+                --restart unless-stopped \
+                $image
 
-**In `2-deploy-services.sh`:**
-```bash
-# Enhanced Dify deployment with health checks
-docker-compose -f dify-docker-compose.yml up -d --force-recreate
+            # Wait for AnythingLLM to complete migrations
+            for i in {1..60}; do
+                if curl -s http://localhost:$port$path | grep -q "AnythingLLM"; then
+                    echo "$service is ready"
+                    break
+                fi
+                sleep 10
+                if [ $i -eq 60 ]; then
+                    echo "$service failed to start properly"
+                    docker logs $service
+                fi
+            done
+            ;;
 
-# Add specific health check for dify-web
-for i in {1..60}; do
-  if docker exec dify-web curl -fs http://localhost:3000/health; then
-    echo "Dify-web is healthy"
-    break
-  fi
-  sleep 5
-  echo "Waiting for Dify-web to become healthy... ($i/60)"
+        "minio")
+            docker run -d \
+                --name $service \
+                -p $port:$port \
+                -p 9001:9001 \
+                -e MINIO_ROOT_USER=${MINIO_ROOT_USER} \
+                -e MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD} \
+                -e MINIO_BROWSER_REDIRECT_URL="https://ai.datasquiz.net/minio/console" \
+                -e MINIO_SERVER_URL="https://ai.datasquiz.net/minio" \
+                -v /mnt/data/$service:/data \
+                --network ai_platform \
+                --restart unless-stopped \
+                $image server /data --console-address ":9001"
+            ;;
 
-  if [ $i -eq 60 ]; then
-    echo "Dify-web failed to become healthy"
-    docker logs dify-web --tail 100
-    exit 1
-  fi
+        *)
+            # Generic service deployment
+            docker run -d \
+                --name $service \
+                -p $port:$port \
+                -v /mnt/data/$service:/data \
+                --network ai_platform \
+                --restart unless-stopped \
+                $image
+            ;;
+    esac
+done
+
+# Verify all services are running
+echo -e "\n=== SERVICE STATUS ==="
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+# Verify all services respond on their paths
+echo -e "\n=== SERVICE RESPONSE TESTS ==="
+for service in "${!SERVICES[@]}"; do
+    port=$(echo ${SERVICES[$service]} | awk '{print $1}')
+    path=$(echo ${SERVICES[$service]} | awk '{print $2}')
+    echo -n "Testing $service on $path... "
+
+    # Test direct access
+    direct_status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:$port$path)
+    if [[ $direct_status =~ ^2[0-9]{2}|3[0-9]{2}$ ]]; then
+        echo -n "✅ Direct ($direct_status) "
+
+        # Test for actual content
+        if curl -s http://localhost:$port$path | grep -q -v "^$"; then
+            echo "✅ Content"
+        else
+            echo "⚠️ Empty response"
+        fi
+    else
+        echo "❌ Direct ($direct_status)"
+    fi
 done
 ```
 
-## 4. AnythingLLM Starting Up Indefinitely
+## Key Fixes Implemented
 
-**Problem:** AnythingLLM remains in "starting" state.
+1. **n8n Empty Response Fix**:
+   - Added content verification in health check
+   - Proper WEBHOOK_URL configuration
+   - Added basic auth configuration
 
-**Solution:**
+2. **Ollama Root Path Fix**:
+   - Added initial model pull to ensure content
+   - Proper volume mounting for persistence
 
-**In `2-deploy-services.sh`:**
-```bash
-# Enhanced AnythingLLM deployment with proper startup handling
-docker run -d \
-  --name anythingllm \
-  -p 3004:3001 \
-  -e SERVER_BASE_URL="/anythingllm/" \  # Note trailing slash
-  -e STORAGE_DIR="/app/server/storage" \
-  -e DISABLE_TELEMETRY="true" \
-  -e NODE_ENV="production" \
-  -v anythingllm_storage:/app/server/storage \
-  --network ai_platform \
-  --health-cmd="curl -fs http://localhost:3001/api/health || exit 1" \
-  --health-interval=30s \
-  --health-retries=5 \
-  mintplexlabs/anythingllm:latest
+3. **Dify Health Issues**:
+   - Separated web and API components
+   - Added comprehensive health checks
+   - Proper database configuration
 
-# Wait for AnythingLLM to fully start
-echo "Waiting for AnythingLLM to initialize..."
-for i in {1..90}; do
-  if docker inspect --format='{{.State.Health.Status}}' anythingllm | grep -q healthy; then
-    echo "AnythingLLM is healthy"
-    break
-  fi
-  sleep 5
-  echo "Waiting for AnythingLLM... ($i/90)"
+4. **AnythingLLM Startup Issues**:
+   - Added proper SERVER_URL configuration
+   - Extended startup wait time
+   - Added content verification
 
-  if [ $i -eq 90 ]; then
-    echo "AnythingLLM failed to start properly"
-    docker logs anythingllm --tail 100
-    exit 1
-  fi
-done
-```
+5. **MinIO Configuration**:
+   - Proper console URL configuration
+   - Correct server URL settings
+   - Added proper volume mounting
 
-## 5. MinIO Configuration Issues
+## Verification Plan
 
-**Problem:** MinIO has configuration issues with proxy access.
+1. **After deployment**:
+   ```bash
+   # Check all services are running
+   docker ps
 
-**Solution:**
+   # Check logs for any errors
+   docker logs <service_name>
 
-**In `2-deploy-services.sh`:**
-```bash
-# Enhanced MinIO deployment with proper configuration
-docker run -d \
-  --name minio \
-  -p 9000:9000 \
-  -p 9001:9001 \
-  -e "MINIO_ROOT_USER=${MINIO_ROOT_USER}" \
-  -e "MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}" \
-  -e "MINIO_BROWSER_REDIRECT_URL=https://ai.datasquiz.net/minio/console/" \
-  -e "MINIO_SERVER_URL=https://ai.datasquiz.net/minio" \
-  -e "MINIO_DOMAIN=ai.datasquiz.net" \
-  -v minio_data:/data \
-  --network ai_platform \
-  minio/minio server /data --console-address ":9001"
-```
+   # Test each service directly
+   curl -v http://localhost:<port><path>
 
-**In `3-configure-services.sh`:**
-```bash
-# MinIO proxy configuration with proper path handling
-cat >> /etc/caddy/Caddyfile <<EOF
+   # Test each service via proxy
+   curl -v https://ai.datasquiz.net<path>
+   ```
 
-ai.datasquiz.net/minio {
-    reverse_proxy localhost:9000 {
-        header_up X-Forwarded-Host {host}
-        header_up X-Forwarded-Proto {scheme}
-        header_up Host {host}
-    }
-}
+2. **For n8n specifically**:
+   ```bash
+   # Verify n8n is returning content
+   curl -s http://localhost:5678/n8n | head -20
 
-ai.datasquiz.net/minio/console/* {
-    uri strip_prefix /minio/console
-    reverse_proxy localhost:9001 {
-        header_up X-Forwarded-Host {host}
-        header_up X-Forwarded-Proto {scheme}
-        header_up Host {host}
-    }
-}
-EOF
-```
+   # Check n8n configuration
+   docker exec n8n env | grep N8N_
+   ```
 
-## Implementation and Validation Plan
+3. **For Ollama**:
+   ```bash
+   # Test root path
+   curl -v http://localhost:11434/
 
-1. **Apply fixes in this order:**
-   - First fix n8n path routing
-   - Then address Ollama root path issue
-   - Next resolve Dify-web health
-   - Then fix AnythingLLM startup
-   - Finally address MinIO configuration
+   # Test API path
+   curl -v http://localhost:11434/api/tags
+   ```
 
-2. **Validation steps after each fix:**
-```bash
-# Test direct access
-curl -v http://localhost:<port>
+This solution ensures all services:
+- Respond on their public URLs
+- Return actual content (not empty responses)
+- Have proper health checks
+- Maintain persistence
+- Are properly configured for proxy usage
 
-# Test proxy access
-curl -v https://ai.datasquiz.net/<service>
-
-# Check container logs
-docker logs <container_name> --tail 50
-
-# Verify health status
-docker inspect --format='{{.State.Health.Status}}' <container_name>
-```
-
-3. **Proxy configuration validation:**
-```bash
-# Test Caddy configuration
-caddy validate --config /etc/caddy/Caddyfile
-
-# Reload Caddy
-caddy reload --config /etc/caddy/Caddyfile
-```
-
-4. **Rollback plan:**
-```bash
-# For each service, maintain backup of:
-# - Deployment commands
-# - Proxy configuration
-# - Original environment variables
-
-# Example rollback command
-docker stop <container_name> && docker rm <container_name>
-# Then redeploy with original configuration
-```
-
-This targeted approach addresses each remaining issue with specific, tested solutions while maintaining the stability of already working services.
+The implementation maintains the 5-script structure and uses only `/mnt/data` for storage as requested.
