@@ -1489,6 +1489,86 @@ cleanup_previous_deployments() {
     print_info "DEBUG: cleanup_previous_deployments function completed"
 }
 
+# 🔧 FIX 1: Permission setup (add to script 2 BEFORE docker-compose up)
+setup_permissions() {
+    local base="/mnt/data"
+    
+    print_info "Setting up service permissions..."
+    
+    # Prometheus runs as nobody (65534)
+    mkdir -p "$base/prometheus"
+    chown -R 65534:65534 "$base/prometheus"
+    chmod 755 "$base/prometheus"
+    
+    # n8n runs as node (1000)
+    mkdir -p "$base/n8n"
+    chown -R 1000:1000 "$base/n8n"
+    chmod 755 "$base/n8n"
+    
+    # Flowise runs as node (1000)
+    mkdir -p "$base/flowise"
+    chown -R 1000:1000 "$base/flowise"
+    chmod 755 "$base/flowise"
+    
+    # AnythingLLM
+    mkdir -p "$base/anythingllm"
+    chown -R 1000:1000 "$base/anythingllm"
+    chmod 755 "$base/anythingllm"
+    
+    # Caddy (runs as root, but data dir needs to exist)
+    mkdir -p "$base/caddy/data"
+    mkdir -p "$base/caddy/config"
+    chmod 755 "$base/caddy/data"
+    chmod 755 "$base/caddy/config"
+    
+    # LiteLLM
+    mkdir -p "$base/litellm"
+    chmod 777 "$base/litellm"
+    
+    print_success "Permissions configured"
+}
+
+# 🔧 FIX 3: Deploy Caddy CORRECTLY
+deploy_caddy() {
+    # Remove any existing broken caddy container
+    docker rm -f caddy 2>/dev/null || true
+    
+    # Validate Caddyfile BEFORE starting
+    docker run --rm \
+        -v /mnt/data/caddy/Caddyfile:/etc/caddy/Caddyfile \
+        caddy:2-alpine \
+        caddy validate --config /etc/caddy/Caddyfile
+    
+    if [ $? -ne 0 ]; then
+        print_error "FATAL: Caddyfile validation failed. Aborting."
+        print_error "Check: cat /mnt/data/caddy/Caddyfile"
+        exit 1
+    fi
+    
+    # Start Caddy on ai-platform network (NOT --network host)
+    docker run -d \
+        --name caddy \
+        --network ai-platform \
+        -p 80:80 \
+        -p 443:443 \
+        -v /mnt/data/caddy/Caddyfile:/etc/caddy/Caddyfile \
+        -v /mnt/data/caddy/data:/data \
+        -v /mnt/data/caddy/config:/config \
+        --restart unless-stopped \
+        caddy:2-alpine
+    
+    # Wait for Caddy to initialize
+    sleep 5
+    
+    # Verify Caddy is actually listening
+    if ! curl -sf http://localhost/ > /dev/null 2>&1; then
+        print_warning "Caddy started but not responding - check logs:"
+        docker logs caddy --tail 20
+    else
+        print_success "Caddy proxy is running"
+    fi
+}
+
 # Main deployment function
 main() {
     # 🔥 NEW: Deployment Lock Mechanism
@@ -2287,6 +2367,9 @@ deploy_services_enhanced() {
     [[ "${SERVICE_SIGNAL_API_ENABLED:-false}" == "true" ]] && tier3_services+=("signal-api")
     [[ "${SERVICE_OPENCLAW_ENABLED:-false}" == "true" ]] && tier3_services+=("openclaw")
     
+    # 🔧 FIX 1: Setup permissions BEFORE any service deployment
+    setup_permissions
+    
     # Deploy Tier 1
     if [[ ${#tier1_services[@]} -gt 0 ]]; then
         print_info "Deploying Tier 1: Infrastructure"
@@ -2315,6 +2398,12 @@ deploy_services_enhanced() {
             DATA_ROOT=/mnt/data docker compose -f "$COMPOSE_FILE" up -d "$service" 2>&1 | tee -a "$LOG_FILE"
         done
         wait_for_tier_enhanced "Application Services" "${tier3_services[@]}" || true
+    fi
+    
+    # 🔧 FIX 3: Deploy Caddy proxy after all services
+    if [[ "${PROXY_TYPE:-none}" != "none" ]]; then
+        print_info "Deploying Caddy reverse proxy..."
+        deploy_caddy
     fi
 }
 
