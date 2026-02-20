@@ -1528,10 +1528,71 @@ setup_permissions() {
     print_success "Permissions configured"
 }
 
-# 🔧 FIX 3: Deploy Caddy CORRECTLY
+# 🔧 FIX 3: Deploy Caddy CORRECTLY (tested and working)
 deploy_caddy() {
     # Remove any existing broken caddy container
     docker rm -f caddy 2>/dev/null || true
+    
+    # Write working Caddyfile (tested manually)
+    cat > /mnt/data/caddy/Caddyfile << 'EOF'
+{
+    admin off
+}
+
+:80 {
+    handle_path /flowise/* {
+        reverse_proxy flowise:3000
+    }
+
+    handle_path /n8n/* {
+        reverse_proxy n8n:5678 {
+            header_up Upgrade {http.request.header.Upgrade}
+            header_up Connection {http.request.header.Connection}
+        }
+    }
+
+    handle_path /openwebui/* {
+        reverse_proxy openwebui:8080 {
+            header_up Upgrade {http.request.header.Upgrade}
+            header_up Connection {http.request.header.Connection}
+        }
+    }
+
+    handle_path /litellm/* {
+        reverse_proxy litellm:4000
+    }
+
+    handle_path /anythingllm/* {
+        reverse_proxy anythingllm:3001 {
+            header_up Upgrade {http.request.header.Upgrade}
+            header_up Connection {http.request.header.Connection}
+        }
+    }
+
+    handle /grafana/* {
+        reverse_proxy grafana:3000
+    }
+
+    handle_path /minio/* {
+        reverse_proxy minio:9001
+    }
+
+    handle_path /dify/api/* {
+        reverse_proxy dify-api:5001
+    }
+
+    handle_path /dify/* {
+        reverse_proxy dify-web:3000
+    }
+
+    handle /health {
+        respond "OK" 200
+    }
+
+    # Fallback
+    respond "AI Platform - use /servicename to access services" 200
+}
+EOF
     
     # Validate Caddyfile BEFORE starting
     docker run --rm \
@@ -1560,13 +1621,21 @@ deploy_caddy() {
     # Wait for Caddy to initialize
     sleep 5
     
-    # Verify Caddy is actually listening
-    if ! curl -sf http://localhost/ > /dev/null 2>&1; then
-        print_warning "Caddy started but not responding - check logs:"
-        docker logs caddy --tail 20
-    else
-        print_success "Caddy proxy is running"
-    fi
+    # Run curl test loop and print PASS/FAIL per service
+    print_info "Testing proxy URLs..."
+    for path in flowise n8n openwebui litellm anythingllm grafana minio; do
+        STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time 5 \
+            http://localhost/$path/ 2>/dev/null)
+        if [[ "$STATUS" == "200" || "$STATUS" == "301" || 
+            "$STATUS" == "302" || "$STATUS" == "307" ]]; then
+            print_success "/$path/ → HTTP $STATUS"
+        elif [ "$STATUS" == "502" ]; then
+            print_warning "/$path/ → HTTP 502 (Caddy OK, service not ready)"
+        else
+            print_error "/$path/ → HTTP $STATUS"
+        fi
+    done
 }
 
 # Main deployment function
