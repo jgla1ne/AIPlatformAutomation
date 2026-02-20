@@ -168,43 +168,21 @@ setup_logging() {
     mkdir -p "$(dirname "$LOG_FILE")"
     log "INFO" "Logging initialized"
 }
-EOF
-    fi
+
+log_phase() {
+    local phase="$1"
+    local icon="$2"
+    local title="$3"
     
-    if [[ ! -f "${SCRIPT_DIR}/lib/manifest.sh" ]]; then
-        log "WARN" "Manifest library not found, creating minimal version..."
-        cat > "${SCRIPT_DIR}/lib/manifest.sh" << 'EOF'
-# Minimal manifest.sh for Script 1
-init_service_manifest() {
-    log "INFO" "Initializing service manifest..."
-    mkdir -p "$(dirname "/mnt/data/config/installed_services.json")"
-    echo '{"services": {}}' > "/mnt/data/config/installed_services.json"
+    echo ""
+    print_header "$icon STEP $phase/13: $title"
 }
 
-write_service_manifest() {
-    local service=$1
-    local port=$2
-    local path=$3
-    local container=$4
-    local image=$5
-    local external_port=$6
-    
-    log "INFO" "Writing service manifest entry for $service..."
-    # Minimal implementation - will be enhanced by full library later
-}
-EOF
-    fi
-    
-    # Now load the libraries
-    source "${SCRIPT_DIR}/lib/common.sh"
-    source "${SCRIPT_DIR}/lib/manifest.sh"
+mark_phase_complete() {
+    local phase="$1"
+    log "INFO" "Phase completed: $phase"
 }
 
-# Paths (already defined above, removing duplicates)
-
-# Phase Functions
-
-# State Management
 save_state() {
     local phase="$1"
     local status="$2"
@@ -214,7 +192,7 @@ save_state() {
     
     cat > "$STATE_FILE" <<EOF
 {
-  "script_version": "4.0.0",
+  "script_version": "4.2.0",
   "current_phase": "$phase",
   "status": "$status",
   "message": "$message",
@@ -245,52 +223,13 @@ restore_state() {
         return 1
     fi
     
-    print_info "Found previous setup state"
-    
-    local current_phase=$(jq -r '.current_phase' "$STATE_FILE" 2>/dev/null || echo "")
-    local status=$(jq -r '.status' "$STATE_FILE" 2>/dev/null || echo "")
-    local message=$(jq -r '.message' "$STATE_FILE" 2>/dev/null || echo "")
-    local timestamp=$(jq -r '.timestamp' "$STATE_FILE" 2>/dev/null || echo "")
-    
-    if [[ -z "$current_phase" ]]; then
-        print_warning "State file corrupted - starting fresh"
-        return 1
-    fi
-    
-    echo ""
-    print_header "🔄 Resume Previous Setup"
-    echo ""
-    print_info "Previous setup detected:"
-    echo "  • Phase: $current_phase"
-    echo "  • Status: $status"
-    echo "  • Message: $message"
-    echo "  • Time: $timestamp"
-    echo ""
-    
-    if ! confirm "Resume from this state?"; then
-        print_info "Starting fresh setup"
-        rm -f "$STATE_FILE"
-        return 1
-    fi
-    
-    # Load completed phases
-    local completed_phases_json=$(jq -r '.completed_phases[]' "$STATE_FILE" 2>/dev/null || echo "")
-    if [[ -n "$completed_phases_json" ]]; then
-        COMPLETED_PHASES=()
-        while IFS= read -r phase; do
-            COMPLETED_PHASES+=("$phase")
-        done <<< "$completed_phases_json"
-    fi
-    
-    print_success "State restored - resuming from phase $current_phase"
+    print_info "Previous state found"
     return 0
 }
 
-mark_phase_complete() {
-    local phase="$1"
-    COMPLETED_PHASES+=("$phase")
-    save_state "$phase" "completed" "Phase completed successfully"
-}
+# Paths (already defined above, removing duplicates)
+
+# Phase Functions
 
 # Core Functions
 detect_system() {
