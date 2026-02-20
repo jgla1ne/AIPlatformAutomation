@@ -1,7 +1,0 @@
-Adding all scripts for context 
-consider :  ______https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/1-setup-system.sh______ ______https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/0-complete-cleanup.sh______ ______https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/2-deploy-services.sh______ ______https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/3-configure-services.sh______ ______https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/4-add-service.sh______
-
-I want you tobre read all GitHub scripts provided, and do another assessment of the end to end flow, and the current gaps in the implementation.
-At present, script 2 fails to deploy, and you can see a mid flight deploy log here https://github.com/jgla1ne/AIPlatformAutomation/blob/main/doc%2Faudit-log.md
-
-Present a complete set of recommendations for windsurf to implement this solution end to end, especially around script 2 so we can move to iterate with script 3

@@ -1,234 +1,194 @@
-## Assessment: Three Separate Problems, Not One
+## Crystal Clear Now — Let Me Map This Properly
 
-The report shows **three distinct failure categories** that need to be addressed in priority order. The good news is the infrastructure (PostgreSQL, Redis) is solid.
+The `.env` ports are **host ports only**. Caddy uses **internal container ports**. Here's the complete correct mapping:
 
 ---
 
-## Problem 1: Permission Errors (Blocking Services)
+## The Definitive Port Truth Table
 
-These are **pre-conditions** — fix these first or nothing else matters:
+| Service | URL Path | Host Port (.env) | Container Internal Port | Caddy Routes To |
+|---------|----------|-----------------|------------------------|-----------------|
+| Prometheus | `/prometheus` | 5000 | **9090** | `prometheus:9090` |
+| Grafana | `/grafana` | 5001 | **3000** | `grafana:3000` |
+| n8n | `/n8n` | 5002 | **5678** | `n8n:5678` |
+| Ollama | `/ollama` | 11434 | **11434** | `ollama:11434` |
+| OpenClaw | `/openclaw` | 18789 | **3000** | `openclaw:3000` |
+| Dify | `/dify` | 5003 | web:**3000** api:**5001** | `dify-web:3000` + `dify-api:5001` |
+| AnythingLLM | `/anythingllm` | 5004 | **3001** | `anythingllm:3001` |
+| LiteLLM | `/litellm` | 5005 | **4000** | `litellm:4000` |
+| OpenWebUI | `/openwebui` | 5006 | **8080** | `open-webui:8080` |
+| Signal API | `/signal` | 8080 | **8080** | `signal-cli-rest-api:8080` |
+| MinIO | `/minio` | 5007 | console:**9001** s3:**9000** | `minio:9001` |
+| Flowise | `/flowise` | 3002* | **3000** | `flowise:3000` |
+
+---
+
+## The Correct Caddyfile (Final Version)
 
 ```bash
-# These need to run on the HOST before any service can start properly
-
-# Prometheus (runs as nobody:65534)
-sudo chown -R 65534:65534 /mnt/data/prometheus/
-sudo chmod 755 /mnt/data/prometheus/
-
-# n8n (runs as node:1000, NOT 1001 as the report suggests)
-sudo chown -R 1000:1000 /mnt/data/n8n/
-sudo chmod 755 /mnt/data/n8n/
-# Note: n8n uses /home/node/.n8n inside container
-# This means the volume mount in docker-compose is wrong
-# It should mount to the container path /home/node/.n8n
-# Check: docker inspect n8n | grep -A5 Mounts
-
-# Flowise
-sudo chown -R 1000:1000 /mnt/data/flowise/
-sudo chmod 755 /mnt/data/flowise/
-```
-
----
-
-## Problem 2: Caddy Never Deployed (The Actual Regression)
-
-The report confirms: **Caddy was selected but never started.** The `docker run` command in the suggested fix is also wrong:
-
-```bash
-# WRONG (from the report suggestion):
-docker run -d --name caddy --network host \
-  -v /mnt/data/caddy/Caddyfile:/etc/caddy/Caddyfile \
-  caddy:2-alpine
-# Problems:
-# 1. --network host bypasses Docker DNS (caddy can't resolve 
-#    container names like "flowise", "n8n", etc.)
-# 2. Missing data volume (SSL certs won't persist)
-# 3. Missing port mappings
-
-# CORRECT:
-docker run -d --name caddy \
-  --network ai-platform \
-  -p 80:80 \
-  -p 443:443 \
-  -v /mnt/data/caddy/Caddyfile:/etc/caddy/Caddyfile \
-  -v /mnt/data/caddy/data:/data \
-  -v /mnt/data/caddy/config:/config \
-  --restart unless-stopped \
-  caddy:2-alpine
-```
-
-**`--network host` is the critical mistake** — it would break all container-to-container DNS resolution.
-
----
-
-## Windsurf Prompt: Fix All Three Problems
-
-```
-SITUATION: Script 2 has three critical failures to fix.
-DO NOT refactor. DO NOT change architecture.
-Fix these specific issues in order:
-
-═══════════════════════════════════════════════
-FIX 1: Permission setup (add to script 2 BEFORE docker-compose up)
-═══════════════════════════════════════════════
-
-Add a setup_permissions() function called before any service starts:
-
-setup_permissions() {
-  local base="/mnt/data"
-  
-  # Prometheus runs as nobody (65534)
-  mkdir -p "$base/prometheus"
-  chown -R 65534:65534 "$base/prometheus"
-  chmod 755 "$base/prometheus"
-  
-  # n8n runs as node (1000)
-  mkdir -p "$base/n8n"
-  chown -R 1000:1000 "$base/n8n"
-  chmod 755 "$base/n8n"
-  
-  # Flowise runs as node (1000)
-  mkdir -p "$base/flowise"
-  chown -R 1000:1000 "$base/flowise"
-  chmod 755 "$base/flowise"
-  
-  # AnythingLLM
-  mkdir -p "$base/anythingllm"
-  chown -R 1000:1000 "$base/anythingllm"
-  chmod 755 "$base/anythingllm"
-  
-  # Caddy (runs as root, but data dir needs to exist)
-  mkdir -p "$base/caddy/data"
-  mkdir -p "$base/caddy/config"
-  chmod 755 "$base/caddy/data"
-  chmod 755 "$base/caddy/config"
-  
-  # LiteLLM
-  mkdir -p "$base/litellm"
-  chmod 777 "$base/litellm"
-  
-  echo "✅ Permissions configured"
+cat > /mnt/data/caddy/Caddyfile << 'EOF'
+{
+    admin off
 }
 
-═══════════════════════════════════════════════
-FIX 2: n8n volume mount is wrong
-═══════════════════════════════════════════════
+ai.datasquiz.net {
+    # Prometheus
+    handle_path /prometheus/* {
+        reverse_proxy prometheus:9090
+    }
 
-In the n8n docker-compose definition, fix the volume:
+    # Grafana - needs path prefix support
+    handle /grafana* {
+        reverse_proxy grafana:3000
+    }
 
-WRONG:
-  volumes:
-    - /mnt/data/n8n:/home/node/.n8n
-    
-CORRECT:
-  volumes:
-    - /mnt/data/n8n:/home/node/.n8n
-  user: "1000:1000"
+    # n8n - needs websocket
+    handle_path /n8n/* {
+        reverse_proxy n8n:5678 {
+            header_up Upgrade {http.request.header.Upgrade}
+            header_up Connection {http.request.header.Connection}
+        }
+    }
 
-AND add these environment variables to n8n:
-  N8N_USER_FOLDER: /home/node/.n8n
-  N8N_EDITOR_BASE_URL: https://ai.datasquiz.net/n8n
-  WEBHOOK_URL: https://ai.datasquiz.net/n8n
-  N8N_PATH: /n8n/
+    # Ollama
+    handle_path /ollama/* {
+        reverse_proxy ollama:11434
+    }
 
-═══════════════════════════════════════════════
-FIX 3: Deploy Caddy CORRECTLY
-═══════════════════════════════════════════════
+    # OpenClaw
+    handle_path /openclaw/* {
+        reverse_proxy openclaw:3000
+    }
 
-The Caddy deployment function must use this EXACT configuration:
+    # Dify - web frontend + API split
+    handle_path /dify/api/* {
+        reverse_proxy dify-api:5001
+    }
+    handle_path /dify/* {
+        reverse_proxy dify-web:3000
+    }
 
-deploy_caddy() {
-  # Remove any existing broken caddy container
-  docker rm -f caddy 2>/dev/null || true
+    # AnythingLLM - needs websocket
+    handle_path /anythingllm/* {
+        reverse_proxy anythingllm:3001 {
+            header_up Upgrade {http.request.header.Upgrade}
+            header_up Connection {http.request.header.Connection}
+        }
+    }
+
+    # LiteLLM
+    handle_path /litellm/* {
+        reverse_proxy litellm:4000
+    }
+
+    # Open WebUI - needs websocket
+    handle_path /openwebui/* {
+        reverse_proxy open-webui:8080 {
+            header_up Upgrade {http.request.header.Upgrade}
+            header_up Connection {http.request.header.Connection}
+        }
+    }
+
+    # Signal API
+    handle_path /signal/* {
+        reverse_proxy signal-cli-rest-api:8080
+    }
+
+    # MinIO Console
+    handle_path /minio/* {
+        reverse_proxy minio:9001
+    }
+
+    # Flowise
+    handle_path /flowise/* {
+        reverse_proxy flowise:3000
+    }
+
+    # Health check
+    handle /health {
+        respond "OK" 200
+    }
+
+    # Root
+    respond "AI Platform - use /servicename to access services" 200
+}
+EOF
+```
+
+---
+
+## Environment Variables Required Per Service
+
+These go in **docker-compose**, not Caddy:
+
+```yaml
+# Grafana — must know its public subpath
+grafana:
+  environment:
+    GF_SERVER_ROOT_URL: https://ai.datasquiz.net/grafana
+    GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+
+# n8n — must know its public URL
+n8n:
+  environment:
+    N8N_EDITOR_BASE_URL: https://ai.datasquiz.net/n8n
+    WEBHOOK_URL: https://ai.datasquiz.net/n8n
+    N8N_PATH: /n8n/
+
+# Open WebUI
+open-webui:
+  environment:
+    WEBUI_URL: https://ai.datasquiz.net/openwebui
+
+# MinIO
+minio:
+  environment:
+    MINIO_BROWSER_REDIRECT_URL: https://ai.datasquiz.net/minio
+```
+
+---
+
+## The Actual Problem To Solve Now
+
+Before fixing routing, confirm which services are **actually running internally**:
+
+```bash
+#!/bin/bash
+echo "=== INTERNAL SERVICE HEALTH CHECK ==="
+
+services=(
+  "prometheus:9090:/metrics"
+  "grafana:3000:/api/health"
+  "n8n:5678:/"
+  "ollama:11434:/api/tags"
+  "anythingllm:3001:/"
+  "litellm:4000:/health"
+  "flowise:3000:/"
+  "open-webui:8080:/"
+  "minio:9001:/"
+  "dify-web:3000:/"
+  "dify-api:5001:/health"
+  "signal-cli-rest-api:8080:/"
+)
+
+for entry in "${services[@]}"; do
+  container=$(echo $entry | cut -d: -f1)
+  port=$(echo $entry | cut -d: -f2)
+  path=$(echo $entry | cut -d: -f3)
   
-  # Validate Caddyfile BEFORE starting
-  docker run --rm \
-    -v /mnt/data/caddy/Caddyfile:/etc/caddy/Caddyfile \
-    caddy:2-alpine \
-    caddy validate --config /etc/caddy/Caddyfile
+  result=$(docker exec "$container" \
+    wget -qO- --timeout=3 "http://localhost:${port}${path}" 2>/dev/null | \
+    head -c 50)
   
-  if [ $? -ne 0 ]; then
-    echo "❌ FATAL: Caddyfile validation failed. Aborting."
-    echo "Check: cat /mnt/data/caddy/Caddyfile"
-    exit 1
-  fi
-  
-  # Start Caddy on the ai-platform network (NOT --network host)
-  docker run -d \
-    --name caddy \
-    --network ai-platform \
-    -p 80:80 \
-    -p 443:443 \
-    -v /mnt/data/caddy/Caddyfile:/etc/caddy/Caddyfile \
-    -v /mnt/data/caddy/data:/data \
-    -v /mnt/data/caddy/config:/config \
-    --restart unless-stopped \
-    caddy:2-alpine
-    
-  # Wait for Caddy to initialize
-  sleep 5
-  
-  # Verify Caddy is actually listening
-  if ! curl -sf http://localhost/health > /dev/null 2>&1; then
-    echo "⚠️ Caddy started but not responding - check logs:"
-    docker logs caddy --tail 20
+  if [ -n "$result" ]; then
+    echo "✅ $container:$port — RESPONDING"
   else
-    echo "✅ Caddy proxy is running"
+    status=$(docker inspect "$container" \
+      --format='{{.State.Status}} (restarts:{{.RestartCount}})' 2>/dev/null)
+    echo "❌ $container:$port — DEAD — $status"
+    docker logs "$container" --tail 3 2>&1 | sed 's/^/   /'
   fi
-}
-
-═══════════════════════════════════════════════
-FIX 4: Caddyfile template - VERIFY handle_path is used
-═══════════════════════════════════════════════
-
-Print the current Caddyfile content to verify:
-cat /mnt/data/caddy/Caddyfile
-
-It MUST use handle_path (not handle) for these services:
-/flowise, /n8n, /anythingllm, /litellm, /openwebui, /signal, /minio
-
-It MUST use handle (not handle_path) for:
-/grafana (grafana handles its own sub-path)
-
-Dify routing order (CRITICAL - specific before general):
-1. handle /dify/api/*       → dify-api:5001
-2. handle /dify/console/*   → dify-api:5001  
-3. handle /dify/v1/*        → dify-api:5001
-4. handle_path /dify/*      → dify-web:3000
-
-═══════════════════════════════════════════════
-FIX 5: Health check sequence
-═══════════════════════════════════════════════
-
-After all services start, run checks in this order:
-1. Check permissions (ls -la /mnt/data/{prometheus,n8n,flowise})
-2. Check containers running (docker ps)
-3. Check Caddy is on correct network:
-   docker inspect caddy | grep -A20 Networks
-4. Test each proxy URL:
-   curl -I http://localhost/flowise/
-   curl -I http://localhost/n8n/
-   curl -I http://localhost/openwebui/
-   (expect 200 or 3xx, NOT connection refused)
-
-CONSTRAINTS:
-- DO NOT use --network host for Caddy
-- DO NOT expose service ports to host except Caddy 80/443
-- DO NOT change script 1, 3, or 4
-- ALL data under /mnt/data/
-- Fail loudly with specific error messages
+done
 ```
 
----
-
-## Current State Summary
-
-| Issue | Root Cause | Fix |
-|-------|-----------|-----|
-| Caddy not running | Never deployed in script 2 | Add `deploy_caddy()` function |
-| `--network host` suggestion | Wrong network mode breaks DNS | Use `--network ai-platform` |
-| n8n/Flowise/AnythingLLM failing | Permission denied on data dirs | `setup_permissions()` before deploy |
-| Prometheus restart loop | Wrong ownership on `/mnt/data/prometheus` | `chown 65534:65534` |
-| LiteLLM not responding | Likely still starting up (slow) | Add startup wait + retry |
-
-The underlying services are **mostly fine** — this is purely a proxy deployment and permissions problem.:
+**Paste the output of this** and I'll give you the exact fix for each dead service. Once all services respond internally, the Caddy routes above will work immediately.
