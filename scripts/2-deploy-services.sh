@@ -1,8 +1,9 @@
 #!/bin/bash
 
 #==============================================================================
-# Script 2: Non-Root Docker Deployment with AppArmor Security
+# Script 2/5: Service Deployment & Container Management
 # Purpose: Deploy all selected services using Script 1 configuration
+# Architecture: 5-Script Framework (Setup → Deploy → Configure → Add → Backup)
 # Version: 7.1.0 - Frontier Model Integration
 #==============================================================================
 
@@ -17,6 +18,16 @@ source "${SCRIPT_DIR}/lib/common.sh"
 source "${SCRIPT_DIR}/lib/manifest.sh"
 source "${SCRIPT_DIR}/lib/caddy-generator.sh"
 source "${SCRIPT_DIR}/lib/health-check.sh"
+source "${SCRIPT_DIR}/lib/env-verification.sh"
+
+# Color definitions (safe approach)
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+BOLD='\033[1m'
 
 # Paths (matching Script 1)
 readonly DATA_ROOT="/mnt/data"
@@ -789,7 +800,7 @@ EOF
     fi
 }
 
-# Source environment (handle readonly variables)
+# Source environment (handle readonly variables safely)
 if [[ -f "$ENV_FILE" ]]; then
     # Export all variables except readonly ones defined in this script
     while IFS= read -r line; do
@@ -797,7 +808,7 @@ if [[ -f "$ENV_FILE" ]]; then
             var_name="${line%%=*}"
             # Skip readonly variables defined in this script
             case "$var_name" in
-                DATA_ROOT|METADATA_DIR|STATE_FILE|LOG_FILE|ENV_FILE|SERVICES_FILE|COMPOSE_FILE|CONFIG_DIR|CREDENTIALS_FILE|APPARMOR_PROFILES_DIR|SECURITY_COMPLIANCE)
+                DATA_ROOT|METADATA_DIR|STATE_FILE|LOG_FILE|ENV_FILE|SERVICES_FILE|COMPOSE_FILE|CONFIG_DIR|CREDENTIALS_FILE|APPARMOR_PROFILES_DIR|SECURITY_COMPLIANCE|RED|GREEN|YELLOW|BLUE|CYAN|NC)
                     continue
                     ;;
                 *)
@@ -811,6 +822,11 @@ else
     exit 1
 fi
 
+# Set safe defaults for critical variables
+REDIS_PASSWORD="${REDIS_PASSWORD:-$(openssl rand -base64 32)}"
+POSTGRES_USER="${POSTGRES_USER:-postgres}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(openssl rand -base64 32)}"
+
 # 🔥 NEW: Load Selected Services from JSON
 load_selected_services() {
     if [[ ! -f "$SERVICES_FILE" ]]; then
@@ -819,7 +835,7 @@ load_selected_services() {
     fi
     
     # Parse JSON and extract service keys
-    SELECTED_SERVICES=($(jq -r '.services[].key' "$SERVICES_FILE"))
+    SELECTED_SERVICES=($(jq -r '.services[].key' "$SERVICES_FILE" 2>/dev/null || echo ""))
     TOTAL_SERVICES=${#SELECTED_SERVICES[@]}
     
     print_info "Loaded ${TOTAL_SERVICES} selected services from Script 1"

@@ -1,456 +1,209 @@
-# Diagnosis: The Problem with the "100% Complete" Report
+## Assessment: This is a Step Backward
 
-The document is **a success theater report** — it describes what *should* work conceptually but the actual proxy configurations have real bugs. Let me diagnose the specific issues.
-
----
-
-## Root Cause Analysis
-
-The report says "Caddy configuration generation ready" but the **actual Caddyfile blocks being generated are broken**. Here's why each service fails:
+The current state tells me the refactor **abandoned the reverse proxy entirely** and fell back to direct port mapping. This is the wrong direction.
 
 ---
 
-## Specific Proxy Configuration Bugs
-
-### Bug 1: Sub-path Stripping — The Core Issue
+## What Actually Happened
 
 ```
-# WHAT'S LIKELY BEING GENERATED (BROKEN):
-https://ai.datasquiz.net {
-    handle /flowise/* {
-        reverse_proxy flowise:3000
-    }
-}
+EXPECTED OUTCOME:
+Browser → https://ai.datasquiz.net/flowise → Caddy → flowise:3000
 
-# PROBLEM: 
-# Request comes in as: /flowise/api/something
-# Gets forwarded as:   /flowise/api/something  ← prefix NOT stripped
-# Service expects:     /api/something
+WHAT WAS BUILT INSTEAD:
+Browser → http://localhost:5006 → OpenWebUI (direct)
+Browser → http://localhost:8082 → Dify API (direct)
+Browser → http://localhost:3002 → Flowise (direct)
+
+The proxy layer was REMOVED, not FIXED.
 ```
 
-```
-# CORRECT Caddy syntax:
-https://ai.datasquiz.net {
-    handle_path /flowise/* {      # ← handle_path strips the prefix
-        reverse_proxy flowise:3000
-    }
-}
-```
-
-**`handle` vs `handle_path` is the critical difference in Caddy.**
+The "landing page" suggestion is also wrong — it's a workaround that avoids solving the actual problem.
 
 ---
 
-### Bug 2: Service-Specific Path Awareness
+## The Real Issue: Why This Happened
 
-Some services are **not sub-path aware** and need the prefix kept OR need internal config:
-
-```
-# Services that CAN strip prefix (handle_path works):
-flowise     ✓ (with FLOWISE_BASE_PATH env)
-n8n         ✓ (with N8N_PATH env)  
-litellm     ✓ (stateless API)
-signal      ✓ (stateless API)
-
-# Services that CANNOT have prefix stripped without app config:
-grafana     ← needs GF_SERVER_ROOT_URL + serve_from_sub_path=true
-minio       ← needs MINIO_BROWSER_REDIRECT_URL
-dify        ← complex: frontend + API + worker are separate containers
-anythingllm ← needs APP_BASE_PATH env
-openwebui   ← needs WEBUI_BASE_URL env (likely missing from implementation)
-```
+Windsurf likely hit the `handle` vs `handle_path` complexity and the Dify multi-container routing, got errors during validation, and **took the path of least resistance** — removing the proxy rather than fixing the config.
 
 ---
 
-### Bug 3: Dify Multi-Container Routing (Almost Certainly Broken)
+## Correct Direction: Fix Script 2 Properly
+
+Here is the exact Windsurf prompt to get this back on track:
 
 ```
-# Dify is NOT a single container — it needs:
-handle_path /dify/* {
-    reverse_proxy dify-web:3000        # Frontend
-}
+STOP. The current script 2 refactor is wrong.
 
-handle_path /dify/api/* {
-    reverse_proxy dify-api:5001         # API backend
-}
+CURRENT BROKEN STATE:
+- Services are running on direct ports (5006, 8082, 3002, etc.)
+- No reverse proxy is routing /path/* requests
+- This is NOT acceptable - we need sub-path routing
 
-handle_path /dify/console/api/* {
-    reverse_proxy dify-api:5001
-}
+REQUIRED END STATE:
+- Caddy reverse proxy running as a Docker container
+- All services ONLY accessible via https://ai.datasquiz.net/{service}
+- Direct ports should NOT be exposed to host (remove port mappings 
+  from docker-compose files for all services except Caddy)
+- Caddy exposes ONLY 80 and 443 to host
 
-handle /dify/v1/* {
-    reverse_proxy dify-api:5001
-}
+DO NOT suggest direct port mapping as a solution.
+DO NOT suggest a landing page as a solution.
+DO NOT remove the proxy layer.
 
-# The ORDER matters — more specific paths must come FIRST
-# If /dify/* catches everything, /dify/api/* never matches
-```
+TASK: Fix script 2 (2-deploy-services.sh) to:
 
----
+1. Deploy Caddy as the entry point container:
+   - Image: caddy:2-alpine
+   - Ports: "80:80" and "443:443" mapped to host
+   - Volume: /mnt/data/caddy/Caddyfile:/etc/caddy/Caddyfile
+   - Volume: /mnt/data/caddy/data:/data
+   - Network: ai-platform (shared with all services)
+   - Restart: unless-stopped
 
-### Bug 4: WebSocket Handling in Caddy
+2. Generate /mnt/data/caddy/Caddyfile with these EXACT rules:
 
-```
-# Caddy handles WebSockets automatically BUT only if:
-# 1. The Connection/Upgrade headers are passed through
-# 2. The timeout is sufficient
+   For each service use handle_path (strips prefix):
+   EXCEPT grafana which uses handle (keeps prefix)
+   
+   FLOWISE (internal port 3000):
+   handle_path /flowise/* {
+       reverse_proxy flowise:3000
+   }
+   
+   GRAFANA (internal port 3000):
+   handle /grafana/* {
+       reverse_proxy grafana:3000
+   }
+   
+   N8N (internal port 5678) WITH websockets:
+   handle_path /n8n/* {
+       reverse_proxy n8n:5678 {
+           header_up Connection {http.request.header.Connection}
+           header_up Upgrade {http.request.header.Upgrade}
+       }
+   }
+   
+   DIFY (two containers, ORDER MATTERS - specific before general):
+   handle /dify/api/* {
+       uri strip_prefix /dify
+       reverse_proxy dify-api:5001
+   }
+   handle /dify/console/api/* {
+       uri strip_prefix /dify
+       reverse_proxy dify-api:5001
+   }
+   handle /dify/v1/* {
+       uri strip_prefix /dify
+       reverse_proxy dify-api:5001
+   }
+   handle_path /dify/* {
+       reverse_proxy dify-web:3000
+   }
+   
+   ANYTHINGLLM (internal port 3001) WITH websockets:
+   handle_path /anythingllm/* {
+       reverse_proxy anythingllm:3001 {
+           header_up Connection {http.request.header.Connection}
+           header_up Upgrade {http.request.header.Upgrade}
+       }
+   }
+   
+   LITELLM (internal port 4000):
+   handle_path /litellm/* {
+       reverse_proxy litellm:4000
+   }
+   
+   OPENWEBUI (internal port 8080) WITH websockets:
+   handle_path /openwebui/* {
+       reverse_proxy open-webui:8080 {
+           header_up Connection {http.request.header.Connection}
+           header_up Upgrade {http.request.header.Upgrade}
+       }
+   }
+   
+   SIGNAL (internal port 8080):
+   handle_path /signal/* {
+       reverse_proxy signal-cli-rest-api:8080
+   }
+   
+   MINIO Console (internal port 9001):
+   handle_path /minio/* {
+       reverse_proxy minio:9001
+   }
 
-# BROKEN (likely generated):
-handle_path /n8n/* {
-    reverse_proxy n8n:5678
-}
+3. Remove host port mappings from ALL service docker-compose 
+   definitions EXCEPT Caddy. Services communicate only on 
+   the internal Docker network ai-platform.
 
-# CORRECT:
-handle_path /n8n/* {
-    reverse_proxy n8n:5678 {
-        transport http {
-            keepalive 86400s
-            keepalive_idle_conns 10
-        }
-        header_up Connection {http.request.header.Connection}
-        header_up Upgrade {http.request.header.Upgrade}
-    }
-}
-```
+4. Add these environment variables to docker-compose definitions:
+   
+   grafana:
+     GF_SERVER_ROOT_URL: https://ai.datasquiz.net/grafana
+     GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+   
+   n8n:
+     N8N_EDITOR_BASE_URL: https://ai.datasquiz.net/n8n
+     WEBHOOK_URL: https://ai.datasquiz.net/n8n
+     N8N_PATH: /n8n/
+   
+   flowise:
+     FLOWISE_BASE_PATH: /flowise
+   
+   openwebui:
+     WEBUI_URL: https://ai.datasquiz.net/openwebui
+   
+   minio:
+     MINIO_BROWSER_REDIRECT_URL: https://ai.datasquiz.net/minio
 
----
+5. After generating Caddyfile, validate it:
+   docker run --rm \
+     -v /mnt/data/caddy/Caddyfile:/etc/caddy/Caddyfile \
+     caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
+   
+   If validation fails: print the error and EXIT with code 1.
+   Do NOT continue deployment with an invalid Caddyfile.
 
-### Bug 5: MinIO Dual-Port Problem
+6. After Caddy starts, run health checks:
+   For each service path, curl https://ai.datasquiz.net/{service}
+   and verify HTTP response is not 502/504.
+   Print PASS or FAIL per service.
 
-```
-# MinIO has TWO ports:
-# 9000 = API/data port
-# 9001 = Console (web UI) port
+INTERNAL PORT REFERENCE (use these, not the random host ports):
+- flowise:3000
+- grafana:3000  
+- n8n:5678
+- openclaw:3002
+- dify-api:5001
+- dify-web:3000
+- anythingllm:3001
+- litellm:4000
+- open-webui:8080
+- signal-cli-rest-api:8080
+- minio:9001 (console), minio:9000 (S3 API)
 
-# If only 9001 is proxied but API calls go to /minio/api → broken uploads
-# Correct setup:
-
-handle_path /minio/* {
-    reverse_proxy minio:9001    # Console UI
-}
-
-# MinIO API should be direct or separately handled:
-handle_path /minio-api/* {
-    reverse_proxy minio:9000    # S3 API
-}
-```
-
----
-
-## The Fix: Windsurf Implementation Instructions
-
-### Step 1: Fix `nginx-generator.sh` (or `caddy-generator.sh`)
-
-Tell Windsurf to **replace** the entire config generation with this verified template:
-
-```bash
-# /mnt/data/scripts/lib/caddy-generator.sh
-
-generate_caddy_config() {
-  local manifest="/mnt/data/config/installed_services.json"
-  local caddyfile="/mnt/data/caddy/Caddyfile"
-  
-  mkdir -p "$(dirname "$caddyfile")"
-  
-  cat > "$caddyfile" << 'CADDY_HEADER'
-{
-    email admin@datasquiz.net
-    admin off
-}
-
-https://ai.datasquiz.net {
-    tls {
-        protocols tls1.2 tls1.3
-    }
-
-CADDY_HEADER
-
-  # ── Read manifest and generate only installed services ──
-
-  # FLOWISE
-  if is_installed "flowise" "$manifest"; then
-    cat >> "$caddyfile" << 'EOF'
-    # Flowise - handle_path strips /flowise prefix
-    handle_path /flowise/* {
-        reverse_proxy flowise:3000 {
-            header_up Host {upstream_hostport}
-            header_up X-Forwarded-Proto https
-            header_up X-Real-IP {remote_host}
-        }
-    }
-EOF
-  fi
-
-  # GRAFANA - keep prefix, grafana handles it internally
-  if is_installed "grafana" "$manifest"; then
-    cat >> "$caddyfile" << 'EOF'
-    # Grafana - must keep /grafana prefix (GF_SERVER_SERVE_FROM_SUB_PATH=true)
-    handle /grafana/* {
-        reverse_proxy grafana:3000 {
-            header_up Host {upstream_hostport}
-            header_up X-Forwarded-Proto https
-            header_up X-Real-IP {remote_host}
-        }
-    }
-EOF
-  fi
-
-  # N8N - WebSocket required
-  if is_installed "n8n" "$manifest"; then
-    cat >> "$caddyfile" << 'EOF'
-    # n8n - handle_path strips prefix, WebSocket support
-    handle_path /n8n/* {
-        reverse_proxy n8n:5678 {
-            header_up Host {upstream_hostport}
-            header_up X-Forwarded-Proto https
-            header_up X-Real-IP {remote_host}
-            header_up Connection {http.request.header.Connection}
-            header_up Upgrade {http.request.header.Upgrade}
-            transport http {
-                keepalive 86400s
-                keepalive_idle_conns 10
-            }
-        }
-    }
-EOF
-  fi
-
-  # OPENCLAW
-  if is_installed "openclaw" "$manifest"; then
-    cat >> "$caddyfile" << 'EOF'
-    # OpenClaw
-    handle_path /openclaw/* {
-        reverse_proxy openclaw:3002 {
-            header_up Host {upstream_hostport}
-            header_up X-Forwarded-Proto https
-        }
-    }
-EOF
-  fi
-
-  # DIFY - multi-container, ORDER CRITICAL (specific before general)
-  if is_installed "dify" "$manifest"; then
-    cat >> "$caddyfile" << 'EOF'
-    # Dify API routes - MUST come before frontend catch-all
-    handle /dify/api/* {
-        uri strip_prefix /dify
-        reverse_proxy dify-api:5001 {
-            header_up Host {upstream_hostport}
-            header_up X-Forwarded-Proto https
-        }
-    }
-    handle /dify/console/api/* {
-        uri strip_prefix /dify
-        reverse_proxy dify-api:5001 {
-            header_up Host {upstream_hostport}
-            header_up X-Forwarded-Proto https
-        }
-    }
-    handle /dify/v1/* {
-        uri strip_prefix /dify
-        reverse_proxy dify-api:5001 {
-            header_up Host {upstream_hostport}
-            header_up X-Forwarded-Proto https
-        }
-    }
-    # Dify frontend - catches remaining /dify/* traffic
-    handle_path /dify/* {
-        reverse_proxy dify-web:3000 {
-            header_up Host {upstream_hostport}
-            header_up X-Forwarded-Proto https
-        }
-    }
-EOF
-  fi
-
-  # ANYTHINGLLM - WebSocket required
-  if is_installed "anythingllm" "$manifest"; then
-    cat >> "$caddyfile" << 'EOF'
-    # AnythingLLM - WebSocket support
-    handle_path /anythingllm/* {
-        reverse_proxy anythingllm:3001 {
-            header_up Host {upstream_hostport}
-            header_up X-Forwarded-Proto https
-            header_up Connection {http.request.header.Connection}
-            header_up Upgrade {http.request.header.Upgrade}
-            transport http {
-                keepalive 86400s
-            }
-        }
-    }
-EOF
-  fi
-
-  # LITELLM
-  if is_installed "litellm" "$manifest"; then
-    cat >> "$caddyfile" << 'EOF'
-    # LiteLLM
-    handle_path /litellm/* {
-        reverse_proxy litellm:4000 {
-            header_up Host {upstream_hostport}
-            header_up X-Forwarded-Proto https
-        }
-    }
-EOF
-  fi
-
-  # OPEN WEBUI - WebSocket required
-  if is_installed "openwebui" "$manifest"; then
-    cat >> "$caddyfile" << 'EOF'
-    # Open WebUI - WebSocket support
-    handle_path /openwebui/* {
-        reverse_proxy open-webui:8080 {
-            header_up Host {upstream_hostport}
-            header_up X-Forwarded-Proto https
-            header_up Connection {http.request.header.Connection}
-            header_up Upgrade {http.request.header.Upgrade}
-            transport http {
-                keepalive 86400s
-            }
-        }
-    }
-EOF
-  fi
-
-  # SIGNAL API
-  if is_installed "signal" "$manifest"; then
-    cat >> "$caddyfile" << 'EOF'
-    # Signal CLI REST API
-    handle_path /signal/* {
-        reverse_proxy signal-cli-rest-api:8080 {
-            header_up Host {upstream_hostport}
-            header_up X-Forwarded-Proto https
-        }
-    }
-EOF
-  fi
-
-  # MINIO - Console (9001) + API note
-  if is_installed "minio" "$manifest"; then
-    cat >> "$caddyfile" << 'EOF'
-    # MinIO Console UI (port 9001)
-    handle_path /minio/* {
-        reverse_proxy minio:9001 {
-            header_up Host {upstream_hostport}
-            header_up X-Forwarded-Proto https
-        }
-    }
-    # MinIO S3 API (port 9000) - for internal service use
-    handle_path /minio-api/* {
-        reverse_proxy minio:9000 {
-            header_up Host {upstream_hostport}
-            header_up X-Forwarded-Proto https
-        }
-    }
-EOF
-  fi
-
-  # Close server block
-  echo "}" >> "$caddyfile"
-  
-  log "SUCCESS" "Caddyfile generated: $caddyfile"
-}
-
-# Helper: check if service is in manifest
-is_installed() {
-  local service=$1
-  local manifest=$2
-  jq -e ".services.\"$service\".installed == true" "$manifest" > /dev/null 2>&1
-}
+ALL DATA PATHS under /mnt/data/
+DO NOT change script 1, 3, or 4.
+DO NOT add a 5th script.
 ```
 
 ---
 
-### Step 2: Fix Environment Variables in Docker Compose Files
-
-**Windsurf: Verify these exist in the actual compose files, not just the report:**
-
-```bash
-# Script to VERIFY env vars are actually set (add to script 3):
-verify_subpath_env_vars() {
-  log "INFO" "Verifying sub-path environment variables..."
-  
-  # n8n
-  docker exec n8n env 2>/dev/null | grep -q "N8N_PATH=/n8n/" || \
-    log "ERROR" "n8n: N8N_PATH not set - sub-path will fail"
-    
-  # grafana  
-  docker exec grafana env 2>/dev/null | grep -q "GF_SERVER_SERVE_FROM_SUB_PATH=true" || \
-    log "ERROR" "grafana: GF_SERVER_SERVE_FROM_SUB_PATH not set"
-    
-  # openwebui - THIS WAS LIKELY MISSED
-  docker exec open-webui env 2>/dev/null | grep -q "WEBUI_URL" || \
-    log "WARN" "open-webui: WEBUI_URL not set"
-    
-  # minio
-  docker exec minio env 2>/dev/null | grep -q "MINIO_BROWSER_REDIRECT_URL" || \
-    log "ERROR" "minio: MINIO_BROWSER_REDIRECT_URL not set"
-}
-```
-
----
-
-### Step 3: Windsurf Prompt to Fix the Actual Issue
+## Key Rules to Give Windsurf to Prevent Regression
 
 ```
-TASK: The proxy configuration generator (caddy-generator.sh or 
-nginx-generator.sh) is generating broken configurations.
+GUARDRAILS - never violate these:
 
-SPECIFIC BUGS TO FIX:
+❌ NEVER expose service ports directly to host
+❌ NEVER suggest direct port mapping as a "solution"  
+❌ NEVER remove the Caddy proxy layer
+❌ NEVER create a 5th script
+❌ NEVER use a landing page to replace proper routing
 
-1. CADDY: Replace all `handle /path/*` with `handle_path /path/*` 
-   EXCEPT for grafana (which needs to keep its prefix)
-
-2. DIFY: The /dify/* catch-all is eating API requests.
-   Add specific routes for /dify/api/*, /dify/console/api/*, 
-   /dify/v1/* BEFORE the frontend catch-all. Use `uri strip_prefix` 
-   not `handle_path` for these API routes.
-
-3. WEBSOCKET: Add these headers to n8n, flowise, anythingllm, 
-   open-webui reverse_proxy blocks:
-   header_up Connection {http.request.header.Connection}
-   header_up Upgrade {http.request.header.Upgrade}
-
-4. MINIO: Proxy to port 9001 (console) not 9000 (S3 API).
-   Add separate /minio-api/* route for port 9000.
-
-5. OPEN WEBUI: Add missing env var to docker-compose:
-   WEBUI_URL=https://ai.datasquiz.net/openwebui
-
-6. OPENCLAW: Verify the actual internal port (3002 assumed - check 
-   the docker-compose file for the real port).
-
-7. Add validate_caddyfile() function that runs:
-   docker exec caddy caddy validate --config /etc/caddy/Caddyfile
-   BEFORE doing caddy reload - fail loudly if config is invalid.
-
-DO NOT change the 4-script architecture.
-All changes go in /mnt/data/scripts/lib/caddy-generator.sh
+✅ ALWAYS route through Caddy on 80/443
+✅ ALWAYS validate Caddyfile before reload
+✅ ALWAYS fail loudly with clear error messages
+✅ ALWAYS keep all data under /mnt/data/
 ```
 
----
-
-## Quick Diagnostic Commands
-
-**Give these to run on the server right now to confirm the bugs:**
-
-```bash
-# 1. See what Caddyfile was actually generated
-cat /mnt/data/caddy/Caddyfile
-
-# 2. Check if handle vs handle_path is the issue
-grep -n "handle" /mnt/data/caddy/Caddyfile
-
-# 3. Test each endpoint directly (bypassing caddy)
-docker exec caddy curl -s http://flowise:3000 -o /dev/null -w "%{http_code}"
-docker exec caddy curl -s http://grafana:3000 -o /dev/null -w "%{http_code}"
-docker exec caddy curl -s http://n8n:5678 -o /dev/null -w "%{http_code}"
-
-# 4. Check caddy logs for routing errors
-docker logs caddy --tail 50 2>&1 | grep -E "error|warn|upstream"
-
-# 5. Validate current Caddyfile syntax
-docker exec caddy caddy validate --config /etc/caddy/Caddyfile
-```
-
-The output of `cat /mnt/data/caddy/Caddyfile` will immediately confirm which specific bug is causing failures.
+The services working on direct ports confirms **the underlying containers are healthy** — that's actually good news. The fix is purely in the proxy layer, not in the services themselves.

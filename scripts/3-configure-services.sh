@@ -1,7 +1,8 @@
 #!/bin/bash
 #==============================================================================
-# Script 3: Post-Deployment Configuration & Management
+# Script 3/5: Post-Deployment Configuration & Management
 # Purpose: Configure services, manage SSL, add services, backups
+# Architecture: 5-Script Framework (Setup → Deploy → Configure → Add → Backup)
 # Version: 9.1.0 - Frontier Model Integration
 #==============================================================================
 
@@ -32,13 +33,25 @@ if [ -f "$ENV_FILE" ]; then
         [[ "$line" =~ ^[[:space:]]*# ]] && continue
         [[ "$line" =~ ^[[:space:]]*$ ]] && continue
         
-        # Extract variable name and value
+        # Extract variable name and value safely
         if [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
             var_name="${BASH_REMATCH[1]}"
             var_value="${BASH_REMATCH[2]}"
+            # Remove surrounding quotes if present
+            var_value="${var_value#\"}"
+            var_value="${var_value%\"}"
+            var_value="${var_value#\'}"
+            var_value="${var_value%\'}"
             export "$var_name=$var_value"
         fi
     done < "$ENV_FILE"
+    set +a
+    
+    # Set safe defaults for critical variables
+    PHONE_NUMBER="${PHONE_NUMBER:-+1234567890}"
+    POSTGRES_USER="${POSTGRES_USER:-postgres}"
+    POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-defaultpassword}"
+    REDIS_PASSWORD="${REDIS_PASSWORD:-defaultpassword}"
 else
     echo "Error: .env not found at $ENV_FILE. Run Script 1 first."
     exit 1
@@ -117,12 +130,12 @@ show_main_menu() {
 
 handle_menu_choice() {
     case $1 in
-        1) regenerate_ssl_certificate ;;
-        2) renew_ssl_certificate ;;
-        3) add_new_service ;;
-        4) remove_service ;;
-        5) list_all_services ;;
-        6) regenerate_service_configs ;;
+        1) add_new_service ;;
+        2) remove_service ;;
+        3) list_all_services ;;
+        4) regenerate_service_configs ;;
+        5) regenerate_ssl_certificate ;;
+        6) renew_ssl_certificate ;;
         7) configure_signal ;;
         8) configure_tailscale ;;
         9) configure_openclaw ;;
@@ -784,8 +797,8 @@ main() {
 }
 
 main "$@"
-fi
 
+# Load environment and services after main function
 source "$ENV_FILE"
 
 # Load selected services
@@ -794,7 +807,7 @@ if [ ! -f "$SERVICES_FILE" ]; then
     exit 1
 fi
 
-SELECTED_SERVICES=($(jq -r '.services[].key' "$SERVICES_FILE"))
+SELECTED_SERVICES=($(jq -r '.services[].key' "$SERVICES_FILE" 2>/dev/null || echo ""))
 TOTAL_SERVICES=${#SELECTED_SERVICES[@]}
 
 #============================================================================
