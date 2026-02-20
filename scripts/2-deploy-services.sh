@@ -1724,8 +1724,66 @@ main() {
     fix_permissions_enhanced
     deploy_services_enhanced
     
+    # 🔥 NEW: Health check verification before proxy configuration
+    verify_service_health_before_proxy
+    
     # 🔥 NEW: Generate deployment summary with health checks
     generate_deployment_summary "$deployed" "$failed"
+}
+
+verify_service_health_before_proxy() {
+    log_phase "HEALTH" "🔍" "Service Health Verification"
+    
+    print_info "Verifying service health before proxy configuration..."
+    
+    # Define service ports for health checking
+    local -A SERVICE_PORTS=(
+        ["flowise"]="3002"
+        ["grafana"]="5001"
+        ["n8n"]="5002"
+        ["ollama"]="11434"
+        ["openclaw"]="18789"
+        ["anythingllm"]="5004"
+        ["litellm"]="5005"
+        ["openwebui"]="5006"
+        ["signal"]="8090"
+        ["minio"]="5007"
+        ["dify"]="8082"
+    )
+    
+    # Check each selected service
+    local unhealthy_services=()
+    for service in "${SELECTED_SERVICES[@]}"; do
+        if [[ -n "${SERVICE_PORTS[$service]:-}" ]]; then
+            local port="${SERVICE_PORTS[$service]}"
+            print_info "Checking $service on port $port..."
+            
+            # Try to connect to the service
+            if curl -s --connect-timeout 5 --max-time 10 "http://localhost:$port" >/dev/null 2>&1; then
+                print_success "✅ Service $service is healthy on port $port"
+            else
+                print_error "⚠️ Service $service is not responding on port $port"
+                unhealthy_services+=("$service")
+                
+                # Check if container is running
+                if docker ps --format "table {{.Names}}" | grep -q "^${service}$"; then
+                    print_warning "Container $service is running but not responding"
+                else
+                    print_error "Container $service is not running"
+                fi
+            fi
+        fi
+    done
+    
+    # Report summary
+    if [[ ${#unhealthy_services[@]} -gt 0 ]]; then
+        print_error "⚠️ Found ${#unhealthy_services[@]} unhealthy services: ${unhealthy_services[*]}"
+        print_warning "These services may not work through proxy until they become healthy"
+    else
+        print_success "✅ All selected services are healthy and responding"
+    fi
+    
+    echo ""
 }
 
 generate_deployment_summary() {
@@ -1746,11 +1804,90 @@ generate_deployment_summary() {
     echo "$(date): === CURRENT SERVICE STATUS ===" >> "$log_file"
     sudo docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" >> "$log_file"
     
-    # Test proxy accessibility
-    echo "$(date): === PROXY ACCESSIBILITY TEST ===" >> "$log_file"
+    # Test proxy accessibility with enhanced diagnostics
+    echo "$(date): === ENHANCED PROXY ACCESSIBILITY TEST ===" >> "$log_file"
+    
+    # Define service-specific paths and expected responses
+    local -A SERVICE_CONFIG=(
+        ["webui"]="/webui"
+        ["n8n"]="/n8n"
+        ["flowise"]="/flowise"
+        ["litellm"]="/litellm"
+        ["ollama"]="/ollama"
+        ["grafana"]="/grafana"
+        ["dify"]="/dify"
+        ["openclaw"]="/openclaw"
+        ["anythingllm"]="/anythingllm"
+        ["signal"]="/signal"
+        ["minio"]="/minio"
+    )
+    
+    local -A SERVICE_PATTERNS=(
+        ["webui"]="html"
+        ["n8n"]="html"
+        ["flowise"]="html"
+        ["litellm"]="json"
+        ["ollama"]="json"
+        ["grafana"]="Found"
+        ["dify"]="html"
+        ["openclaw"]="html"
+        ["anythingllm"]="html"
+        ["signal"]="json"
+        ["minio"]="xml"
+    )
+    
     for service in webui n8n flowise litellm ollama grafana dify; do
-        local test_result=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "https://ai.datasquiz.net/$service" 2>/dev/null || echo "000")
-        echo "$(date): $service -> HTTP $test_result" >> "$log_file"
+        local proxy_path="${SERVICE_CONFIG[$service]:-/$service}"
+        local expected_pattern="${SERVICE_PATTERNS[$service]:-html}"
+        
+        print_info "Testing $service via proxy: https://ai.datasquiz.net$proxy_path"
+        
+        # Test with detailed diagnostics
+        local test_result=$(curl -s -o /dev/null -w "%{http_code};%{time_total};%{size_download}" --connect-timeout 10 "https://ai.datasquiz.net$proxy_path" 2>/dev/null || echo "000;0;0")
+        local http_code=$(echo "$test_result" | cut -d';' -f1)
+        local response_time=$(echo "$test_result" | cut -d';' -f2)
+        local response_size=$(echo "$test_result" | cut -d';' -f3)
+        
+        echo "$(date): $service -> HTTP $http_code (${response_time}s, ${response_size} bytes)" >> "$log_file"
+        
+        # Service-specific diagnostics
+        case "$http_code" in
+            200)
+                if [[ "$response_size" -gt 0 ]]; then
+                    print_success "✅ $service: Working (${response_time}s)"
+                else
+                    print_warning "⚠️ $service: HTTP 200 but empty response (${response_time}s)"
+                    echo "$(date): $service -> Empty response, checking container health..." >> "$log_file"
+                    
+                    # Check container health
+                    if docker ps --format "table {{.Names}}" | grep -q "^${service}$"; then
+                        local health=$(docker inspect --format='{{.State.Health.Status}}' "$service" 2>/dev/null || echo "no_healthcheck")
+                        echo "$(date): $service container health: $health" >> "$log_file"
+                    else
+                        echo "$(date): $service container not running" >> "$log_file"
+                    fi
+                fi
+                ;;
+            302|301|302)
+                print_success "✅ $service: Redirecting (${response_time}s)"
+                ;;
+            404)
+                print_warning "⚠️ $service: Not found (404) - check service path"
+                echo "$(date): $service -> Service may expect different path" >> "$log_file"
+                ;;
+            502)
+                print_error "❌ $service: Bad Gateway (502) - container not responding"
+                echo "$(date): $service -> Container likely not running or unhealthy" >> "$log_file"
+                ;;
+            000)
+                print_error "❌ $service: Connection failed - proxy or network issue"
+                echo "$(date): $service -> Check Caddy configuration and network" >> "$log_file"
+                ;;
+            *)
+                print_warning "⚠️ $service: HTTP $http_code - unexpected response"
+                echo "$(date): $service -> Unexpected HTTP code, investigate" >> "$log_file"
+                ;;
+        esac
     done
     
     # Create comprehensive deployment summary
