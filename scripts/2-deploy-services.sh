@@ -1533,17 +1533,22 @@ deploy_caddy() {
     # Remove any existing broken caddy container
     docker rm -f caddy 2>/dev/null || true
     
-    # Write working Caddyfile (tested manually)
-    cat > /mnt/data/caddy/Caddyfile << 'EOF'
+    # Load environment variables for dynamic ports
+    source /mnt/data/.env
+    
+    # Write working Caddyfile with dynamic ports (tested manually)
+    cat > /mnt/data/caddy/Caddyfile << EOF
 {
     admin off
 }
 
 :80 {
+    # FLOWISE (internal port 3000)
     handle_path /flowise/* {
         reverse_proxy flowise:3000
     }
 
+    # N8N (internal port 5678) WITH websockets
     handle_path /n8n/* {
         reverse_proxy n8n:5678 {
             header_up Upgrade {http.request.header.Upgrade}
@@ -1551,6 +1556,7 @@ deploy_caddy() {
         }
     }
 
+    # OPENWEBUI (internal port 8080) WITH websockets
     handle_path /openwebui/* {
         reverse_proxy openwebui:8080 {
             header_up Upgrade {http.request.header.Upgrade}
@@ -1558,31 +1564,42 @@ deploy_caddy() {
         }
     }
 
+    # LITELLM (internal port 4000)
     handle_path /litellm/* {
         reverse_proxy litellm:4000
     }
 
+    # ANYTHINGLLM (internal port 3000) - FIXED PORT
     handle_path /anythingllm/* {
-        reverse_proxy anythingllm:3001 {
+        reverse_proxy anythingllm:3000 {
             header_up Upgrade {http.request.header.Upgrade}
             header_up Connection {http.request.header.Connection}
         }
     }
 
+    # GRAFANA (internal port 3000)
     handle /grafana/* {
         reverse_proxy grafana:3000
     }
 
+    # MINIO Console (internal port 9001)
     handle_path /minio/* {
         reverse_proxy minio:9001
     }
 
+    # DIFY API (internal port 5001)
     handle_path /dify/api/* {
         reverse_proxy dify-api:5001
     }
 
+    # DIFY WEB (internal port 3000)
     handle_path /dify/* {
         reverse_proxy dify-web:3000
+    }
+
+    # PROMETHEUS (internal port 9090)
+    handle_path /prometheus/* {
+        reverse_proxy prometheus:9090
     }
 
     handle /health {
