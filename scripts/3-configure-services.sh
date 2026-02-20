@@ -12,6 +12,7 @@ SCRIPT_DIR="/mnt/data/scripts"
 source "${SCRIPT_DIR}/lib/common.sh"
 source "${SCRIPT_DIR}/lib/manifest.sh"
 source "${SCRIPT_DIR}/lib/health-check.sh"
+source "${SCRIPT_DIR}/lib/env-verification.sh"
 
 # Paths
 REAL_USER="${SUDO_USER:-$USER}"
@@ -1202,6 +1203,10 @@ main() {
     configure_dify
     configure_vector_db
     test_integrations
+    
+    # 🔥 NEW: Verify sub-path environment variables
+    verify_subpath_env_vars
+    
     generate_configuration_summary
     
     echo -e "\n${GREEN}🎉 Configuration completed successfully!${NC}"

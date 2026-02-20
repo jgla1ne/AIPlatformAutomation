@@ -13,7 +13,7 @@ set -euo pipefail
 SCRIPT_DIR="/mnt/data/scripts"
 source "${SCRIPT_DIR}/lib/common.sh"
 source "${SCRIPT_DIR}/lib/manifest.sh"
-source "${SCRIPT_DIR}/lib/nginx-generator.sh"
+source "${SCRIPT_DIR}/lib/caddy-generator.sh"
 source "${SCRIPT_DIR}/lib/health-check.sh"
 
 # Paths

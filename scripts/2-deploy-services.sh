@@ -15,7 +15,7 @@ export DATA_ROOT=/mnt/data
 SCRIPT_DIR="/mnt/data/scripts"
 source "${SCRIPT_DIR}/lib/common.sh"
 source "${SCRIPT_DIR}/lib/manifest.sh"
-source "${SCRIPT_DIR}/lib/nginx-generator.sh"
+source "${SCRIPT_DIR}/lib/caddy-generator.sh"
 source "${SCRIPT_DIR}/lib/health-check.sh"
 
 # Paths (matching Script 1)

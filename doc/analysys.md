@@ -1,544 +1,456 @@
-# Implementation Plan for Windsurf
+# Diagnosis: The Problem with the "100% Complete" Report
 
-## Context Analysis
-
-Based on the scripts and implementation gaps document, here's a structured plan to fix the issues while maintaining the **4-script modular architecture** with all data on `/mnt/data`.
+The document is **a success theater report** — it describes what *should* work conceptually but the actual proxy configurations have real bugs. Let me diagnose the specific issues.
 
 ---
 
-## Phase 1: Audit Current State
+## Root Cause Analysis
 
-Before writing any code, have Windsurf read and map the current state:
+The report says "Caddy configuration generation ready" but the **actual Caddyfile blocks being generated are broken**. Here's why each service fails:
+
+---
+
+## Specific Proxy Configuration Bugs
+
+### Bug 1: Sub-path Stripping — The Core Issue
 
 ```
-READ ALL 5 SCRIPTS AND CREATE:
-- Service registry (what script 1 installs)
-- URL routing map (what script 2 should expose)
-- Configuration dependencies (what script 3 needs)
-- Gap matrix between current vs expected
+# WHAT'S LIKELY BEING GENERATED (BROKEN):
+https://ai.datasquiz.net {
+    handle /flowise/* {
+        reverse_proxy flowise:3000
+    }
+}
+
+# PROBLEM: 
+# Request comes in as: /flowise/api/something
+# Gets forwarded as:   /flowise/api/something  ← prefix NOT stripped
+# Service expects:     /api/something
+```
+
+```
+# CORRECT Caddy syntax:
+https://ai.datasquiz.net {
+    handle_path /flowise/* {      # ← handle_path strips the prefix
+        reverse_proxy flowise:3000
+    }
+}
+```
+
+**`handle` vs `handle_path` is the critical difference in Caddy.**
+
+---
+
+### Bug 2: Service-Specific Path Awareness
+
+Some services are **not sub-path aware** and need the prefix kept OR need internal config:
+
+```
+# Services that CAN strip prefix (handle_path works):
+flowise     ✓ (with FLOWISE_BASE_PATH env)
+n8n         ✓ (with N8N_PATH env)  
+litellm     ✓ (stateless API)
+signal      ✓ (stateless API)
+
+# Services that CANNOT have prefix stripped without app config:
+grafana     ← needs GF_SERVER_ROOT_URL + serve_from_sub_path=true
+minio       ← needs MINIO_BROWSER_REDIRECT_URL
+dify        ← complex: frontend + API + worker are separate containers
+anythingllm ← needs APP_BASE_PATH env
+openwebui   ← needs WEBUI_BASE_URL env (likely missing from implementation)
 ```
 
 ---
 
-## Implementation Plan
+### Bug 3: Dify Multi-Container Routing (Almost Certainly Broken)
 
-### 🔧 Script 1 (`1-setup-system.sh`) — Fixes Needed
-
-**Issue:** Service definitions incomplete/inconsistent — script 2 and 3 can't reliably discover what was installed.
-
-**Fix:**
-```bash
-# After each service install, write a manifest file
-# Windsurf should add at the END of each service install block:
-
-SERVICE_MANIFEST="/mnt/data/config/installed_services.json"
-
-write_service_manifest() {
-  local service=$1
-  local port=$2
-  local path=$3
-  local container=$4
-  
-  # Append to JSON manifest
-  jq --arg s "$service" \
-     --arg p "$port" \
-     --arg path "$path" \
-     --arg c "$container" \
-     '.services[$s] = {port: $p, path: $path, container: $c, installed: true}' \
-     "$SERVICE_MANIFEST" > tmp.json && mv tmp.json "$SERVICE_MANIFEST"
+```
+# Dify is NOT a single container — it needs:
+handle_path /dify/* {
+    reverse_proxy dify-web:3000        # Frontend
 }
 
-# Called after each service docker-compose up:
-write_service_manifest "flowise"    "3000" "/flowise"    "flowise"
-write_service_manifest "grafana"    "3001" "/grafana"    "grafana"
-write_service_manifest "n8n"        "5678" "/n8n"        "n8n"
-write_service_manifest "openclaw"   "3002" "/openclaw"   "openclaw"
-write_service_manifest "dify"       "80"   "/dify"       "dify-web"
-write_service_manifest "anythingllm" "3001" "/anythingllm" "anythingllm"
-write_service_manifest "litellm"    "4000" "/litellm"    "litellm"
-write_service_manifest "openwebui"  "8080" "/openwebui"  "open-webui"
-write_service_manifest "signal"     "8080" "/signal"     "signal-cli-rest-api"
-write_service_manifest "minio"      "9001" "/minio"      "minio"
-```
+handle_path /dify/api/* {
+    reverse_proxy dify-api:5001         # API backend
+}
 
-**Why:** Scripts 2, 3, and 4 can then READ this manifest instead of hardcoding assumptions.
+handle_path /dify/console/api/* {
+    reverse_proxy dify-api:5001
+}
+
+handle /dify/v1/* {
+    reverse_proxy dify-api:5001
+}
+
+# The ORDER matters — more specific paths must come FIRST
+# If /dify/* catches everything, /dify/api/* never matches
+```
 
 ---
 
-### 🌐 Script 2 (`2-deploy-services.sh`) — Primary Focus
+### Bug 4: WebSocket Handling in Caddy
 
-**Issue:** Nginx/Caddy reverse proxy configuration is incomplete — paths not properly routed, sub-path stripping issues, websocket headers missing.
+```
+# Caddy handles WebSockets automatically BUT only if:
+# 1. The Connection/Upgrade headers are passed through
+# 2. The timeout is sufficient
 
-**Windsurf Task: Rebuild the proxy config generation block**
-
-#### Nginx Config Template Per Service:
-
-```nginx
-# /mnt/data/config/nginx/conf.d/ai-platform.conf
-# Generated by script 2 - DO NOT EDIT MANUALLY
-
-# ── FLOWISE ──────────────────────────────────────────
-location /flowise/ {
-    proxy_pass         http://flowise:3000/;
-    proxy_http_version 1.1;
-    proxy_set_header   Upgrade $http_upgrade;
-    proxy_set_header   Connection "upgrade";
-    proxy_set_header   Host $host;
-    proxy_set_header   X-Real-IP $remote_addr;
-    proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header   X-Forwarded-Proto $scheme;
-    proxy_read_timeout 86400;
+# BROKEN (likely generated):
+handle_path /n8n/* {
+    reverse_proxy n8n:5678
 }
 
-# ── GRAFANA ───────────────────────────────────────────
-location /grafana/ {
-    proxy_pass         http://grafana:3000/;
-    proxy_http_version 1.1;
-    proxy_set_header   Host $host;
-    proxy_set_header   X-Real-IP $remote_addr;
-    proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header   X-Forwarded-Proto $scheme;
+# CORRECT:
+handle_path /n8n/* {
+    reverse_proxy n8n:5678 {
+        transport http {
+            keepalive 86400s
+            keepalive_idle_conns 10
+        }
+        header_up Connection {http.request.header.Connection}
+        header_up Upgrade {http.request.header.Upgrade}
+    }
 }
-
-# ── N8N ───────────────────────────────────────────────
-location /n8n/ {
-    proxy_pass         http://n8n:5678/;
-    proxy_http_version 1.1;
-    proxy_set_header   Upgrade $http_upgrade;
-    proxy_set_header   Connection "upgrade";
-    proxy_set_header   Host $host;
-    proxy_set_header   X-Real-IP $remote_addr;
-    proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header   X-Forwarded-Proto $scheme;
-    proxy_read_timeout 86400;
-}
-
-# ── OPENCLAW ──────────────────────────────────────────
-location /openclaw/ {
-    proxy_pass         http://openclaw:3002/;
-    proxy_http_version 1.1;
-    proxy_set_header   Host $host;
-    proxy_set_header   X-Real-IP $remote_addr;
-    proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header   X-Forwarded-Proto $scheme;
-}
-
-# ── DIFY ──────────────────────────────────────────────
-location /dify/ {
-    proxy_pass         http://dify-web:80/;
-    proxy_http_version 1.1;
-    proxy_set_header   Host $host;
-    proxy_set_header   X-Real-IP $remote_addr;
-    proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header   X-Forwarded-Proto $scheme;
-}
-location /dify/api/ {
-    proxy_pass         http://dify-api:5001/;
-    proxy_http_version 1.1;
-    proxy_set_header   Host $host;
-    proxy_set_header   X-Real-IP $remote_addr;
-    proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header   X-Forwarded-Proto $scheme;
-}
-
-# ── ANYTHINGLLM ───────────────────────────────────────
-location /anythingllm/ {
-    proxy_pass         http://anythingllm:3001/;
-    proxy_http_version 1.1;
-    proxy_set_header   Upgrade $http_upgrade;
-    proxy_set_header   Connection "upgrade";
-    proxy_set_header   Host $host;
-    proxy_set_header   X-Real-IP $remote_addr;
-    proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header   X-Forwarded-Proto $scheme;
-    proxy_read_timeout 86400;
-}
-
-# ── LITELLM ───────────────────────────────────────────
-location /litellm/ {
-    proxy_pass         http://litellm:4000/;
-    proxy_http_version 1.1;
-    proxy_set_header   Host $host;
-    proxy_set_header   X-Real-IP $remote_addr;
-    proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header   X-Forwarded-Proto $scheme;
-}
-
-# ── OPEN WEBUI ────────────────────────────────────────
-location /openwebui/ {
-    proxy_pass         http://open-webui:8080/;
-    proxy_http_version 1.1;
-    proxy_set_header   Upgrade $http_upgrade;
-    proxy_set_header   Connection "upgrade";
-    proxy_set_header   Host $host;
-    proxy_set_header   X-Real-IP $remote_addr;
-    proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header   X-Forwarded-Proto $scheme;
-    proxy_read_timeout 86400;
-}
-
-# ── SIGNAL API ────────────────────────────────────────
-location /signal/ {
-    proxy_pass         http://signal-cli-rest-api:8080/;
-    proxy_http_version 1.1;
-    proxy_set_header   Host $host;
-    proxy_set_header   X-Real-IP $remote_addr;
-    proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header   X-Forwarded-Proto $scheme;
-}
-
-# ── MINIO CONSOLE ─────────────────────────────────────
-location /minio/ {
-    proxy_pass         http://minio:9001/;
-    proxy_http_version 1.1;
-    proxy_set_header   Host $host;
-    proxy_set_header   X-Real-IP $remote_addr;
-    proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header   X-Forwarded-Proto $scheme;
-}
-
-# ── OLLAMA API (direct port, no path routing) ─────────
-# Access via: http://server-ip:11434
-# Not exposed through nginx by design
 ```
 
-#### Script 2 Core Function — Read Manifest, Generate Config:
+---
+
+### Bug 5: MinIO Dual-Port Problem
+
+```
+# MinIO has TWO ports:
+# 9000 = API/data port
+# 9001 = Console (web UI) port
+
+# If only 9001 is proxied but API calls go to /minio/api → broken uploads
+# Correct setup:
+
+handle_path /minio/* {
+    reverse_proxy minio:9001    # Console UI
+}
+
+# MinIO API should be direct or separately handled:
+handle_path /minio-api/* {
+    reverse_proxy minio:9000    # S3 API
+}
+```
+
+---
+
+## The Fix: Windsurf Implementation Instructions
+
+### Step 1: Fix `nginx-generator.sh` (or `caddy-generator.sh`)
+
+Tell Windsurf to **replace** the entire config generation with this verified template:
 
 ```bash
-generate_nginx_config() {
+# /mnt/data/scripts/lib/caddy-generator.sh
+
+generate_caddy_config() {
   local manifest="/mnt/data/config/installed_services.json"
-  local nginx_conf="/mnt/data/config/nginx/conf.d/ai-platform.conf"
+  local caddyfile="/mnt/data/caddy/Caddyfile"
   
-  # Verify manifest exists
-  if [[ ! -f "$manifest" ]]; then
-    log "ERROR" "Service manifest not found. Run script 1 first."
-    exit 1
-  fi
+  mkdir -p "$(dirname "$caddyfile")"
   
-  # Generate config only for installed services
-  echo "server {" > "$nginx_conf"
-  echo "    listen 80;" >> "$nginx_conf"
-  echo "    server_name ai.datasquiz.net;" >> "$nginx_conf"
-  
-  # Read each installed service from manifest and append location block
-  jq -r '.services | to_entries[] | select(.value.installed == true) | .key' "$manifest" | \
-  while read -r service; do
-    generate_location_block "$service" >> "$nginx_conf"
-  done
-  
-  echo "}" >> "$nginx_conf"
-}
-```
-
-#### Script 2 Validation Block (ADD AT END):
-
-```bash
-validate_deployments() {
-  log "INFO" "Validating all service endpoints..."
-  
-  local services=(
-    "flowise|/flowise|200"
-    "grafana|/grafana|302"  # grafana redirects
-    "n8n|/n8n|200"
-    "openclaw|/openclaw|200"
-    "dify|/dify|200"
-    "anythingllm|/anythingllm|200"
-    "litellm|/litellm|200"
-    "openwebui|/openwebui|200"
-    "signal|/signal|200"
-    "minio|/minio|200"
-  )
-  
-  local failed=0
-  for entry in "${services[@]}"; do
-    IFS='|' read -r name path expected_code <<< "$entry"
-    
-    # Only check if installed
-    if jq -e ".services.\"$name\".installed" /mnt/data/config/installed_services.json > /dev/null 2>&1; then
-      actual_code=$(curl -s -o /dev/null -w "%{http_code}" \
-        --max-time 10 "https://ai.datasquiz.net${path}")
-      
-      if [[ "$actual_code" == "$expected_code" ]]; then
-        log "SUCCESS" "✓ $name: https://ai.datasquiz.net${path} (HTTP $actual_code)"
-      else
-        log "WARN" "✗ $name: https://ai.datasquiz.net${path} (got $actual_code, expected $expected_code)"
-        ((failed++))
-      fi
-    fi
-  done
-  
-  if [[ $failed -gt 0 ]]; then
-    log "WARN" "$failed service(s) not responding correctly"
-    log "INFO" "Check: docker ps -a | grep -v Up"
-  fi
+  cat > "$caddyfile" << 'CADDY_HEADER'
+{
+    email admin@datasquiz.net
+    admin off
 }
 
-# Call at end of script 2
-validate_deployments
-```
+https://ai.datasquiz.net {
+    tls {
+        protocols tls1.2 tls1.3
+    }
 
----
+CADDY_HEADER
 
-### ⚙️ Script 3 (`3-configure-services.sh`) — Fixes Needed
+  # ── Read manifest and generate only installed services ──
 
-**Issue:** Configuration applied before services are healthy, env vars not propagated correctly.
-
-**Windsurf Task:**
-
-```bash
-# ADD: Health gate before any configuration
-wait_for_service() {
-  local service=$1
-  local url=$2
-  local max_attempts=30
-  local attempt=0
-  
-  log "INFO" "Waiting for $service to be healthy..."
-  while [[ $attempt -lt $max_attempts ]]; do
-    if curl -sf --max-time 5 "$url" > /dev/null 2>&1; then
-      log "SUCCESS" "$service is ready"
-      return 0
-    fi
-    ((attempt++))
-    sleep 10
-  done
-  log "ERROR" "$service failed to become healthy after ${max_attempts} attempts"
-  return 1
-}
-
-# ADD: Service-aware configuration
-configure_only_installed() {
-  local manifest="/mnt/data/config/installed_services.json"
-  
-  # Read manifest and configure only installed services
-  if jq -e '.services.grafana.installed' "$manifest" > /dev/null 2>&1; then
-    configure_grafana
-  fi
-  
-  if jq -e '.services.n8n.installed' "$manifest" > /dev/null 2>&1; then
-    configure_n8n
-  fi
-  # ... etc
-}
-```
-
-**Key service-specific fixes for script 3:**
-
-```bash
-# GRAFANA: Must set root_url for sub-path
-configure_grafana() {
-  wait_for_service "grafana" "http://localhost:3000"
-  
-  # Grafana requires root_url for sub-path to work
-  local grafana_ini="/mnt/data/grafana/grafana.ini"
-  cat >> "$grafana_ini" << 'EOF'
-[server]
-root_url = https://ai.datasquiz.net/grafana/
-serve_from_sub_path = true
+  # FLOWISE
+  if is_installed "flowise" "$manifest"; then
+    cat >> "$caddyfile" << 'EOF'
+    # Flowise - handle_path strips /flowise prefix
+    handle_path /flowise/* {
+        reverse_proxy flowise:3000 {
+            header_up Host {upstream_hostport}
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
 EOF
-  docker restart grafana
-}
-
-# N8N: Must set WEBHOOK_URL and PATH
-configure_n8n() {
-  wait_for_service "n8n" "http://localhost:5678"
-  
-  # n8n needs these ENV vars for sub-path
-  # These should already be in docker-compose but verify:
-  docker exec n8n env | grep -E "N8N_PATH|WEBHOOK_URL" || \
-    log "WARN" "n8n sub-path env vars missing"
-}
-
-# MINIO: Set alias for sub-path console
-configure_minio() {
-  wait_for_service "minio" "http://localhost:9000"
-  
-  # MinIO console sub-path
-  docker exec minio sh -c \
-    'echo "MINIO_BROWSER_REDIRECT_URL=https://ai.datasquiz.net/minio" >> /etc/environment'
-}
-```
-
----
-
-### ➕ Script 4 (`4-add-service.sh`) — Fixes Needed
-
-**Issue:** New services added don't automatically get nginx routing or manifest entry.
-
-**Windsurf Task:**
-
-```bash
-add_service() {
-  local service_name=$1
-  local service_port=$2
-  local service_path=$3
-  local container_name=$4
-  local compose_file=$5
-  
-  # 1. Deploy the service
-  docker-compose -f "$compose_file" up -d
-  
-  # 2. Update manifest
-  write_service_manifest "$service_name" "$service_port" "$service_path" "$container_name"
-  
-  # 3. Regenerate nginx config (call shared function from script 2)
-  source /mnt/data/scripts/lib/nginx-generator.sh
-  generate_nginx_config
-  
-  # 4. Reload nginx
-  docker exec nginx nginx -t && docker exec nginx nginx -s reload
-  
-  # 5. Validate new endpoint
-  sleep 5
-  validate_single_endpoint "$service_name" "$service_path"
-  
-  log "SUCCESS" "Service $service_name added: https://ai.datasquiz.net${service_path}"
-}
-```
-
----
-
-## Phase 2: Shared Library Extraction
-
-**Windsurf Task: Create `/mnt/data/scripts/lib/` directory with shared functions:**
-
-```
-/mnt/data/scripts/lib/
-├── common.sh          # logging, colors, error handling
-├── manifest.sh        # read/write service manifest
-├── nginx-generator.sh # generate nginx location blocks
-├── health-check.sh    # wait_for_service, validate_endpoints
-└── docker-helpers.sh  # docker-compose wrappers
-```
-
-**Each script sources what it needs:**
-```bash
-# At top of each script:
-SCRIPT_DIR="/mnt/data/scripts"
-source "${SCRIPT_DIR}/lib/common.sh"
-source "${SCRIPT_DIR}/lib/manifest.sh"
-source "${SCRIPT_DIR}/lib/health-check.sh"
-```
-
----
-
-## Phase 3: Docker Compose Environment Variables
-
-**Windsurf Task: For each service that needs sub-path support, ensure the docker-compose file sets the right env:**
-
-```yaml
-# /mnt/data/n8n/docker-compose.yml
-services:
-  n8n:
-    environment:
-      - N8N_PATH=/n8n/
-      - WEBHOOK_URL=https://ai.datasquiz.net/n8n/
-      - N8N_EDITOR_BASE_URL=https://ai.datasquiz.net/n8n/
-
-# /mnt/data/grafana/docker-compose.yml  
-services:
-  grafana:
-    environment:
-      - GF_SERVER_ROOT_URL=https://ai.datasquiz.net/grafana/
-      - GF_SERVER_SERVE_FROM_SUB_PATH=true
-
-# /mnt/data/flowise/docker-compose.yml
-services:
-  flowise:
-    environment:
-      - FLOWISE_BASE_PATH=/flowise
-
-# /mnt/data/anythingllm/docker-compose.yml
-services:
-  anythingllm:
-    environment:
-      - STORAGE_DIR=/app/server/storage
-      - APP_BASE_PATH=/anythingllm
-
-# /mnt/data/minio/docker-compose.yml
-services:
-  minio:
-    environment:
-      - MINIO_BROWSER_REDIRECT_URL=https://ai.datasquiz.net/minio
-```
-
----
-
-## Phase 4: SSL/TLS Handling in Script 2
-
-```bash
-# Script 2 should handle cert provisioning BEFORE validation
-setup_ssl() {
-  local domain="ai.datasquiz.net"
-  local cert_path="/mnt/data/certs"
-  
-  mkdir -p "$cert_path"
-  
-  # Option A: Certbot standalone (nginx must be stopped)
-  if ! [[ -f "$cert_path/fullchain.pem" ]]; then
-    docker run --rm -p 80:80 \
-      -v "$cert_path:/etc/letsencrypt/live/$domain" \
-      certbot/certbot certonly \
-      --standalone \
-      --non-interactive \
-      --agree-tos \
-      --email admin@datasquiz.net \
-      -d "$domain"
   fi
+
+  # GRAFANA - keep prefix, grafana handles it internally
+  if is_installed "grafana" "$manifest"; then
+    cat >> "$caddyfile" << 'EOF'
+    # Grafana - must keep /grafana prefix (GF_SERVER_SERVE_FROM_SUB_PATH=true)
+    handle /grafana/* {
+        reverse_proxy grafana:3000 {
+            header_up Host {upstream_hostport}
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+EOF
+  fi
+
+  # N8N - WebSocket required
+  if is_installed "n8n" "$manifest"; then
+    cat >> "$caddyfile" << 'EOF'
+    # n8n - handle_path strips prefix, WebSocket support
+    handle_path /n8n/* {
+        reverse_proxy n8n:5678 {
+            header_up Host {upstream_hostport}
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+            header_up Connection {http.request.header.Connection}
+            header_up Upgrade {http.request.header.Upgrade}
+            transport http {
+                keepalive 86400s
+                keepalive_idle_conns 10
+            }
+        }
+    }
+EOF
+  fi
+
+  # OPENCLAW
+  if is_installed "openclaw" "$manifest"; then
+    cat >> "$caddyfile" << 'EOF'
+    # OpenClaw
+    handle_path /openclaw/* {
+        reverse_proxy openclaw:3002 {
+            header_up Host {upstream_hostport}
+            header_up X-Forwarded-Proto https
+        }
+    }
+EOF
+  fi
+
+  # DIFY - multi-container, ORDER CRITICAL (specific before general)
+  if is_installed "dify" "$manifest"; then
+    cat >> "$caddyfile" << 'EOF'
+    # Dify API routes - MUST come before frontend catch-all
+    handle /dify/api/* {
+        uri strip_prefix /dify
+        reverse_proxy dify-api:5001 {
+            header_up Host {upstream_hostport}
+            header_up X-Forwarded-Proto https
+        }
+    }
+    handle /dify/console/api/* {
+        uri strip_prefix /dify
+        reverse_proxy dify-api:5001 {
+            header_up Host {upstream_hostport}
+            header_up X-Forwarded-Proto https
+        }
+    }
+    handle /dify/v1/* {
+        uri strip_prefix /dify
+        reverse_proxy dify-api:5001 {
+            header_up Host {upstream_hostport}
+            header_up X-Forwarded-Proto https
+        }
+    }
+    # Dify frontend - catches remaining /dify/* traffic
+    handle_path /dify/* {
+        reverse_proxy dify-web:3000 {
+            header_up Host {upstream_hostport}
+            header_up X-Forwarded-Proto https
+        }
+    }
+EOF
+  fi
+
+  # ANYTHINGLLM - WebSocket required
+  if is_installed "anythingllm" "$manifest"; then
+    cat >> "$caddyfile" << 'EOF'
+    # AnythingLLM - WebSocket support
+    handle_path /anythingllm/* {
+        reverse_proxy anythingllm:3001 {
+            header_up Host {upstream_hostport}
+            header_up X-Forwarded-Proto https
+            header_up Connection {http.request.header.Connection}
+            header_up Upgrade {http.request.header.Upgrade}
+            transport http {
+                keepalive 86400s
+            }
+        }
+    }
+EOF
+  fi
+
+  # LITELLM
+  if is_installed "litellm" "$manifest"; then
+    cat >> "$caddyfile" << 'EOF'
+    # LiteLLM
+    handle_path /litellm/* {
+        reverse_proxy litellm:4000 {
+            header_up Host {upstream_hostport}
+            header_up X-Forwarded-Proto https
+        }
+    }
+EOF
+  fi
+
+  # OPEN WEBUI - WebSocket required
+  if is_installed "openwebui" "$manifest"; then
+    cat >> "$caddyfile" << 'EOF'
+    # Open WebUI - WebSocket support
+    handle_path /openwebui/* {
+        reverse_proxy open-webui:8080 {
+            header_up Host {upstream_hostport}
+            header_up X-Forwarded-Proto https
+            header_up Connection {http.request.header.Connection}
+            header_up Upgrade {http.request.header.Upgrade}
+            transport http {
+                keepalive 86400s
+            }
+        }
+    }
+EOF
+  fi
+
+  # SIGNAL API
+  if is_installed "signal" "$manifest"; then
+    cat >> "$caddyfile" << 'EOF'
+    # Signal CLI REST API
+    handle_path /signal/* {
+        reverse_proxy signal-cli-rest-api:8080 {
+            header_up Host {upstream_hostport}
+            header_up X-Forwarded-Proto https
+        }
+    }
+EOF
+  fi
+
+  # MINIO - Console (9001) + API note
+  if is_installed "minio" "$manifest"; then
+    cat >> "$caddyfile" << 'EOF'
+    # MinIO Console UI (port 9001)
+    handle_path /minio/* {
+        reverse_proxy minio:9001 {
+            header_up Host {upstream_hostport}
+            header_up X-Forwarded-Proto https
+        }
+    }
+    # MinIO S3 API (port 9000) - for internal service use
+    handle_path /minio-api/* {
+        reverse_proxy minio:9000 {
+            header_up Host {upstream_hostport}
+            header_up X-Forwarded-Proto https
+        }
+    }
+EOF
+  fi
+
+  # Close server block
+  echo "}" >> "$caddyfile"
   
-  # Update nginx config to use SSL
-  # ... nginx ssl block generation
+  log "SUCCESS" "Caddyfile generated: $caddyfile"
+}
+
+# Helper: check if service is in manifest
+is_installed() {
+  local service=$1
+  local manifest=$2
+  jq -e ".services.\"$service\".installed == true" "$manifest" > /dev/null 2>&1
 }
 ```
 
 ---
 
-## Windsurf Prompt — Final Implementation Instructions
+### Step 2: Fix Environment Variables in Docker Compose Files
 
-```
-TASK: Fix the AI Platform Automation scripts
+**Windsurf: Verify these exist in the actual compose files, not just the report:**
 
-CONSTRAINTS:
-- 4 scripts only: 1-setup-system.sh, 2-deploy-services.sh, 
-  3-configure-services.sh, 4-add-service.sh
-- Shared code goes in /mnt/data/scripts/lib/ (sourced, not a 5th script)
-- All data stored under /mnt/data/
-- Modular: script 2/3/4 must read from manifest created by script 1
-- Do NOT change the overall script flow
-
-PRIORITY ORDER:
-1. Add service manifest write to script 1 (after each service install)
-2. Fix nginx config generation in script 2 (sub-paths, websockets, SSL)
-3. Add health-gate + sub-path env vars to script 3
-4. Wire manifest + nginx-reload into script 4
-5. Add validation block at end of script 2
-
-KEY BUGS TO FIX:
-- Nginx location blocks missing trailing slash on proxy_pass
-- Missing websocket upgrade headers (n8n, flowise, anythingllm, openwebui)
-- Grafana not setting GF_SERVER_ROOT_URL / SERVE_FROM_SUB_PATH
-- Script 3 configuring services before they're healthy
-- Script 4 not updating nginx after adding new service
-- MinIO BROWSER_REDIRECT_URL not set for sub-path
-
-FILES TO CREATE:
-- /mnt/data/scripts/lib/common.sh
-- /mnt/data/scripts/lib/manifest.sh  
-- /mnt/data/scripts/lib/nginx-generator.sh
-- /mnt/data/scripts/lib/health-check.sh
-- /mnt/data/config/nginx/conf.d/ai-platform.conf (generated)
-- /mnt/data/config/installed_services.json (written by script 1)
+```bash
+# Script to VERIFY env vars are actually set (add to script 3):
+verify_subpath_env_vars() {
+  log "INFO" "Verifying sub-path environment variables..."
+  
+  # n8n
+  docker exec n8n env 2>/dev/null | grep -q "N8N_PATH=/n8n/" || \
+    log "ERROR" "n8n: N8N_PATH not set - sub-path will fail"
+    
+  # grafana  
+  docker exec grafana env 2>/dev/null | grep -q "GF_SERVER_SERVE_FROM_SUB_PATH=true" || \
+    log "ERROR" "grafana: GF_SERVER_SERVE_FROM_SUB_PATH not set"
+    
+  # openwebui - THIS WAS LIKELY MISSED
+  docker exec open-webui env 2>/dev/null | grep -q "WEBUI_URL" || \
+    log "WARN" "open-webui: WEBUI_URL not set"
+    
+  # minio
+  docker exec minio env 2>/dev/null | grep -q "MINIO_BROWSER_REDIRECT_URL" || \
+    log "ERROR" "minio: MINIO_BROWSER_REDIRECT_URL not set"
+}
 ```
 
 ---
 
-## Summary Table
+### Step 3: Windsurf Prompt to Fix the Actual Issue
 
-| Script | Key Fix | Priority |
-|--------|---------|----------|
-| Script 1 | Write service manifest after each install | 🔴 Critical |
-| Script 2 | Fix nginx sub-path routing + websockets + SSL | 🔴 Critical |
-| Script 2 | Add endpoint validation block | �� High |
-| Script 3 | Health-gate before config + sub-path env vars | 🔴 Critical |
-| Script 4 | Update manifest + regenerate nginx on add | 🟡 High |
-| All | Extract shared lib to `/mnt/data/scripts/lib/` | 🟢 Medium |
+```
+TASK: The proxy configuration generator (caddy-generator.sh or 
+nginx-generator.sh) is generating broken configurations.
+
+SPECIFIC BUGS TO FIX:
+
+1. CADDY: Replace all `handle /path/*` with `handle_path /path/*` 
+   EXCEPT for grafana (which needs to keep its prefix)
+
+2. DIFY: The /dify/* catch-all is eating API requests.
+   Add specific routes for /dify/api/*, /dify/console/api/*, 
+   /dify/v1/* BEFORE the frontend catch-all. Use `uri strip_prefix` 
+   not `handle_path` for these API routes.
+
+3. WEBSOCKET: Add these headers to n8n, flowise, anythingllm, 
+   open-webui reverse_proxy blocks:
+   header_up Connection {http.request.header.Connection}
+   header_up Upgrade {http.request.header.Upgrade}
+
+4. MINIO: Proxy to port 9001 (console) not 9000 (S3 API).
+   Add separate /minio-api/* route for port 9000.
+
+5. OPEN WEBUI: Add missing env var to docker-compose:
+   WEBUI_URL=https://ai.datasquiz.net/openwebui
+
+6. OPENCLAW: Verify the actual internal port (3002 assumed - check 
+   the docker-compose file for the real port).
+
+7. Add validate_caddyfile() function that runs:
+   docker exec caddy caddy validate --config /etc/caddy/Caddyfile
+   BEFORE doing caddy reload - fail loudly if config is invalid.
+
+DO NOT change the 4-script architecture.
+All changes go in /mnt/data/scripts/lib/caddy-generator.sh
+```
+
+---
+
+## Quick Diagnostic Commands
+
+**Give these to run on the server right now to confirm the bugs:**
+
+```bash
+# 1. See what Caddyfile was actually generated
+cat /mnt/data/caddy/Caddyfile
+
+# 2. Check if handle vs handle_path is the issue
+grep -n "handle" /mnt/data/caddy/Caddyfile
+
+# 3. Test each endpoint directly (bypassing caddy)
+docker exec caddy curl -s http://flowise:3000 -o /dev/null -w "%{http_code}"
+docker exec caddy curl -s http://grafana:3000 -o /dev/null -w "%{http_code}"
+docker exec caddy curl -s http://n8n:5678 -o /dev/null -w "%{http_code}"
+
+# 4. Check caddy logs for routing errors
+docker logs caddy --tail 50 2>&1 | grep -E "error|warn|upstream"
+
+# 5. Validate current Caddyfile syntax
+docker exec caddy caddy validate --config /etc/caddy/Caddyfile
+```
+
+The output of `cat /mnt/data/caddy/Caddyfile` will immediately confirm which specific bug is causing failures.
