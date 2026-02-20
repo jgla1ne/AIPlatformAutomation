@@ -1,48 +1,106 @@
-## Crystal Clear Now — Let Me Map This Properly
+## Cross-Check Analysis: Windsurf Summary vs. Correct Architecture
 
-The `.env` ports are **host ports only**. Caddy uses **internal container ports**. Here's the complete correct mapping:
-
----
-
-## The Definitive Port Truth Table
-
-| Service | URL Path | Host Port (.env) | Container Internal Port | Caddy Routes To |
-|---------|----------|-----------------|------------------------|-----------------|
-| Prometheus | `/prometheus` | 5000 | **9090** | `prometheus:9090` |
-| Grafana | `/grafana` | 5001 | **3000** | `grafana:3000` |
-| n8n | `/n8n` | 5002 | **5678** | `n8n:5678` |
-| Ollama | `/ollama` | 11434 | **11434** | `ollama:11434` |
-| OpenClaw | `/openclaw` | 18789 | **3000** | `openclaw:3000` |
-| Dify | `/dify` | 5003 | web:**3000** api:**5001** | `dify-web:3000` + `dify-api:5001` |
-| AnythingLLM | `/anythingllm` | 5004 | **3001** | `anythingllm:3001` |
-| LiteLLM | `/litellm` | 5005 | **4000** | `litellm:4000` |
-| OpenWebUI | `/openwebui` | 5006 | **8080** | `open-webui:8080` |
-| Signal API | `/signal` | 8080 | **8080** | `signal-cli-rest-api:8080` |
-| MinIO | `/minio` | 5007 | console:**9001** s3:**9000** | `minio:9001` |
-| Flowise | `/flowise` | 3002* | **3000** | `flowise:3000` |
+The Windsurf summary has **one persistent conceptual error** mixed with some real progress. Let me break it down precisely.
 
 ---
 
-## The Correct Caddyfile (Final Version)
+## ✅ What Windsurf Got Right
+
+| Item | Status |
+|------|--------|
+| Prometheus routing: `prometheus:9090` in Caddyfile | ✅ Correct |
+| Host port mappings updated to use `.env` vars | ✅ Correct |
+| 7/10 services now responding | ✅ Real progress |
+| Grafana working via proxy | ✅ Good |
+| OpenWebUI working | ✅ Good |
+
+---
+
+## ❌ The Persistent Wrong Belief
+
+Windsurf still thinks changing host ports fixed the proxy. It didn't. Look at this:
+
+```
+Their claim:
+"Dynamic Port Usage: 0% → 100%"
+"Proxy URLs now use .env ports"
+
+What actually happened:
+Caddy still routes to container-internal ports (correct).
+Host port changes only affect external direct access.
+The proxy worked/failed for OTHER reasons.
+```
+
+The Caddyfile correctly uses `prometheus:9090`, `grafana:3000`, `open-webui:8080` — **none of these are `.env` ports**. That's correct and should stay that way forever.
+
+---
+
+## 🗺️ Definitive Architecture Reference
+
+```
+EXTERNAL USER
+     │
+     ▼
+https://ai.datasquiz.net  (port 443)
+     │
+     ▼
+[CADDY CONTAINER] ──── uses container DNS names + internal ports
+     │
+     ├──► flowise:3000          (not 3002)
+     ├──► grafana:3000          (not 5001)
+     ├──► n8n:5678              (not 5002)
+     ├──► prometheus:9090       (not 5000)
+     ├──► ollama:11434          (not 11434 — same here)
+     ├──► openclaw:3000         (not 18789)
+     ├──► dify-web:3000         (not 5003)
+     ├──► dify-api:5001         (not 5003)
+     ├──► anythingllm:3001      (not 5004)
+     ├──► litellm:4000          (not 5005)
+     ├──► open-webui:8080       (not 5006)
+     ├──► signal-cli-rest-api:8080 (not 8080 — same)
+     └──► minio:9001            (console, not 5007/5008)
+
+HOST PORTS (only for direct debug access, irrelevant to Caddy):
+  prometheus → 5000:9090
+  grafana    → 5001:3000
+  n8n        → 5002:5678
+  flowise    → 3002:3000
+  anythingllm → 5004:3001
+  litellm    → 5005:4000
+  openwebui  → 5006:8080
+  minio      → 5007:9000, 5008:9001
+```
+
+---
+
+## 📋 Script 2 Crosscheck — What Must Be True
+
+Here's what script 2's `deploy_caddy()` function **must generate**, locked and immutable:
 
 ```bash
-cat > /mnt/data/caddy/Caddyfile << 'EOF'
+deploy_caddy() {
+  mkdir -p /mnt/data/caddy
+
+  # NOTE: These are CONTAINER-INTERNAL ports, NOT .env host ports
+  # Do NOT substitute .env port variables here
+  cat > /mnt/data/caddy/Caddyfile << 'CADDYEOF'
 {
     admin off
+    email admin@datasquiz.net
 }
 
 ai.datasquiz.net {
-    # Prometheus
+
     handle_path /prometheus/* {
         reverse_proxy prometheus:9090
     }
 
-    # Grafana - needs path prefix support
     handle /grafana* {
-        reverse_proxy grafana:3000
+        reverse_proxy grafana:3000 {
+            header_up X-Forwarded-Prefix /grafana
+        }
     }
 
-    # n8n - needs websocket
     handle_path /n8n/* {
         reverse_proxy n8n:5678 {
             header_up Upgrade {http.request.header.Upgrade}
@@ -50,25 +108,22 @@ ai.datasquiz.net {
         }
     }
 
-    # Ollama
     handle_path /ollama/* {
         reverse_proxy ollama:11434
     }
 
-    # OpenClaw
     handle_path /openclaw/* {
         reverse_proxy openclaw:3000
     }
 
-    # Dify - web frontend + API split
     handle_path /dify/api/* {
         reverse_proxy dify-api:5001
     }
+
     handle_path /dify/* {
         reverse_proxy dify-web:3000
     }
 
-    # AnythingLLM - needs websocket
     handle_path /anythingllm/* {
         reverse_proxy anythingllm:3001 {
             header_up Upgrade {http.request.header.Upgrade}
@@ -76,12 +131,10 @@ ai.datasquiz.net {
         }
     }
 
-    # LiteLLM
     handle_path /litellm/* {
         reverse_proxy litellm:4000
     }
 
-    # Open WebUI - needs websocket
     handle_path /openwebui/* {
         reverse_proxy open-webui:8080 {
             header_up Upgrade {http.request.header.Upgrade}
@@ -89,106 +142,176 @@ ai.datasquiz.net {
         }
     }
 
-    # Signal API
     handle_path /signal/* {
         reverse_proxy signal-cli-rest-api:8080
     }
 
-    # MinIO Console
-    handle_path /minio/* {
-        reverse_proxy minio:9001
-    }
-
-    # Flowise
     handle_path /flowise/* {
         reverse_proxy flowise:3000
     }
 
-    # Health check
+    handle_path /minio/* {
+        reverse_proxy minio:9001 {
+            header_up X-Forwarded-Prefix /minio
+        }
+    }
+
     handle /health {
         respond "OK" 200
     }
 
-    # Root
-    respond "AI Platform - use /servicename to access services" 200
+    respond "AI Platform" 200
 }
-EOF
+CADDYEOF
+
+  # Deploy caddy container on the ai_platform network
+  docker rm -f caddy 2>/dev/null || true
+  docker run -d \
+    --name caddy \
+    --network ai_platform \
+    --restart unless-stopped \
+    -p 80:80 \
+    -p 443:443 \
+    -v /mnt/data/caddy/Caddyfile:/etc/caddy/Caddyfile:ro \
+    -v /mnt/data/caddy/data:/data \
+    -v /mnt/data/caddy/config:/config \
+    caddy:2-alpine
+
+  echo "Caddy deployed. Testing in 5s..."
+  sleep 5
+  curl -s -o /dev/null -w "Caddy health: %{http_code}\n" \
+    http://localhost/health
+}
 ```
 
 ---
 
-## Environment Variables Required Per Service
+## The Three Remaining Broken Services
 
-These go in **docker-compose**, not Caddy:
-
-```yaml
-# Grafana — must know its public subpath
-grafana:
-  environment:
-    GF_SERVER_ROOT_URL: https://ai.datasquiz.net/grafana
-    GF_SERVER_SERVE_FROM_SUB_PATH: "true"
-
-# n8n — must know its public URL
-n8n:
-  environment:
-    N8N_EDITOR_BASE_URL: https://ai.datasquiz.net/n8n
-    WEBHOOK_URL: https://ai.datasquiz.net/n8n
-    N8N_PATH: /n8n/
-
-# Open WebUI
-open-webui:
-  environment:
-    WEBUI_URL: https://ai.datasquiz.net/openwebui
-
-# MinIO
-minio:
-  environment:
-    MINIO_BROWSER_REDIRECT_URL: https://ai.datasquiz.net/minio
-```
-
----
-
-## The Actual Problem To Solve Now
-
-Before fixing routing, confirm which services are **actually running internally**:
+| Service | Real Problem | Fix |
+|---------|-------------|-----|
+| **n8n** | Permission error on `/mnt/data/n8n` | `chown -R 1000:1000 /mnt/data/n8n && docker restart n8n` |
+| **AnythingLLM** | Not listening on 3001 internally | Check if port in docker-compose is `3001:3001` not `5004:3000` |
+| **LiteLLM** | Config file missing or wrong | Check `/mnt/data/litellm/config.yaml` exists |
 
 ```bash
-#!/bin/bash
-echo "=== INTERNAL SERVICE HEALTH CHECK ==="
+# Run this now to fix all three
+# Check anythingllm actual internal port
+docker inspect anythingllm \
+  --format='Ports: {{json .NetworkSettings.Ports}}'
 
-services=(
-  "prometheus:9090:/metrics"
-  "grafana:3000:/api/health"
-  "n8n:5678:/"
-  "ollama:11434:/api/tags"
-  "anythingllm:3001:/"
-  "litellm:4000:/health"
-  "flowise:3000:/"
-  "open-webui:8080:/"
-  "minio:9001:/"
-  "dify-web:3000:/"
-  "dify-api:5001:/health"
-  "signal-cli-rest-api:8080:/"
-)
+# Check litellm config
+ls -la /mnt/data/litellm/
 
-for entry in "${services[@]}"; do
-  container=$(echo $entry | cut -d: -f1)
-  port=$(echo $entry | cut -d: -f2)
-  path=$(echo $entry | cut -d: -f3)
-  
-  result=$(docker exec "$container" \
-    wget -qO- --timeout=3 "http://localhost:${port}${path}" 2>/dev/null | \
-    head -c 50)
-  
-  if [ -n "$result" ]; then
-    echo "✅ $container:$port — RESPONDING"
-  else
-    status=$(docker inspect "$container" \
-      --format='{{.State.Status}} (restarts:{{.RestartCount}})' 2>/dev/null)
-    echo "❌ $container:$port — DEAD — $status"
-    docker logs "$container" --tail 3 2>&1 | sed 's/^/   /'
-  fi
+docker restart n8n anythingllm litellm
+sleep 10
+
+for svc in n8n anythingllm litellm; do
+  echo "=== $svc logs ==="
+  docker logs $svc --tail 5 2>&1
 done
 ```
 
-**Paste the output of this** and I'll give you the exact fix for each dead service. Once all services respond internally, the Caddy routes above will work immediately.
+**DIAGNOSTIC RESULTS:**
+
+### **n8n**
+```
+=== n8n logs ===
+password authentication failed for user "ds-admin"
+Last session crashed
+Initializing n8n process
+There was an error initializing DB
+password authentication failed for user "ds-admin"
+```
+**Issue**: PostgreSQL authentication failure
+**Fix**: Check PostgreSQL credentials and restart n8n
+
+### **AnythingLLM**
+```
+=== anythingllm logs ===
+[backend] info: [BackgroundWorkerService] Service started with 1 jobs ["cleanup-orphan-documents"]
+[backend] info: ⚡Pre-cached context windows for Ollama
+[backend] info: [PushNotifications] Loaded existing VAPID keys!
+[backend] info: [PushNotifications] Loading single user mode subscriptions...
+[backend] info: Primary server in HTTP mode listening on port 3001
+```
+**Issue**: Service is listening on port 3001, not 3000
+**Fix**: Update docker-compose port mapping from `5004:3000` to `5004:3001`
+
+### **LiteLLM**
+```
+=== litellm logs ===
+Exception: Config file not found: /app/config/config.yaml
+```
+**Issue**: Missing configuration file
+**Fix**: Create `/mnt/data/litellm/config/config.yaml` or copy from template
+
+---
+
+## 🎯 EXACT FIXES REQUIRED
+
+### **1. Fix n8n PostgreSQL Authentication**
+```bash
+# Check PostgreSQL connection
+sudo docker exec postgres psql -U ${POSTGRES_USER:-ds-admin} -d ${POSTGRES_DB:-aiplatform} -c "SELECT 1;"
+# If fails, fix credentials in .env and restart postgres
+sudo docker restart postgres
+sudo docker restart n8n
+```
+
+### **2. Fix AnythingLLM Port Mismatch**
+```bash
+# Update docker-compose.yml
+# Change from: "${ANYTHINGLLM_PORT:-5004}:3000"
+# To: "${ANYTHINGLLM_PORT:-5004}:3001"
+
+# Recreate container
+sudo docker stop anythingllm
+sudo docker rm anythingllm
+cd /mnt/data/ai-platform/deployment/stack
+sudo docker compose --env-file /mnt/data/.env up -d anythingllm
+```
+
+### **3. Fix LiteLLM Configuration**
+```bash
+# Create missing config file
+cat > /mnt/data/litellm/config/config.yaml << 'EOF'
+model_list:
+  - model_name: ollama/llama3.2
+    model_id: ollama/llama3.2:latest
+    litellm_params:
+      model_name: ollama/llama3.2
+      api_base: http://ollama:11434
+      api_base: http://ollama:11434
+
+litellm_settings:
+  database_url: postgresql://ds-admin:bG4CpMQlb5v5SSG9IdUrWCON@postgres:5432/aiplatform
+  redis_url: redis://:6379
+  redis_password: FGCUJpVlKPtQHWBTZFq7CE1a
+
+general_settings:
+  master_key: rjcfVbbNbxuoMV9WwVBn8nEcTeBuhQJ7
+  salt_key: ygt23OKv3WQkur8n
+  cache_enabled: true
+  cache_ttl: 3600
+  rate_limit_enabled: true
+  rate_limit_requests_per_minute: 60
+  routing_strategy: local-first
+EOF
+
+sudo docker restart litellm
+```
+
+---
+
+## 📊 Expected Results After Fixes
+
+Once these three fixes are applied, all services should respond internally:
+
+| Service | Internal Port | Expected Status |
+|---------|---------------|----------------|
+| **n8n** | 5678 | ✅ Responding |
+| **AnythingLLM** | 3001 | ✅ Responding |
+| **LiteLLM** | 4000 | ✅ Responding |
+
+Then the Caddy proxy routes will work immediately for all services.
