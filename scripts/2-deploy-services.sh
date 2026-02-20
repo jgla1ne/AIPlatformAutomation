@@ -1736,7 +1736,7 @@ verify_service_health_before_proxy() {
     
     print_info "Verifying service health before proxy configuration..."
     
-    # Define service ports for health checking
+    # Define service ports and health endpoints for enhanced checking
     local -A SERVICE_PORTS=(
         ["flowise"]="3002"
         ["grafana"]="5001"
@@ -1751,34 +1751,99 @@ verify_service_health_before_proxy() {
         ["dify"]="8082"
     )
     
-    # Check each selected service
+    local -A SERVICE_HEALTH_ENDPOINTS=(
+        ["flowise"]="/api/v1/ping"
+        ["grafana"]="/api/health"
+        ["n8n"]="/healthz"
+        ["openclaw"]="/health"
+        ["dify"]="/health"
+        ["anythingllm"]="/api/health"
+        ["litellm"]="/health/ready"
+        ["openwebui"]="/health"
+        ["minio"]="/minio/health/live"
+    )
+    
+    # Check each selected service with enhanced health verification
     local unhealthy_services=()
     for service in "${SELECTED_SERVICES[@]}"; do
         if [[ -n "${SERVICE_PORTS[$service]:-}" ]]; then
             local port="${SERVICE_PORTS[$service]}"
-            print_info "Checking $service on port $port..."
+            local health_endpoint="${SERVICE_HEALTH_ENDPOINTS[$service]:-"/"}"
+            print_info "Checking $service on port $port (endpoint: $health_endpoint)..."
             
-            # Try to connect to the service
-            if curl -s --connect-timeout 5 --max-time 10 "http://localhost:$port" >/dev/null 2>&1; then
+            # First check if port is open
+            if ! ss -tuln 2>/dev/null | grep -q ":$port "; then
+                print_error "❌ Port $port not in use for $service"
+                unhealthy_services+=("$service")
+                continue
+            fi
+            
+            # Try to connect to the service health endpoint
+            if timeout 5 curl -sSf "http://localhost:$port$health_endpoint" >/dev/null 2>&1; then
                 print_success "✅ Service $service is healthy on port $port"
             else
-                print_error "⚠️ Service $service is not responding on port $port"
+                print_error "⚠️ Service $service not responding on port $port (endpoint: $health_endpoint)"
                 unhealthy_services+=("$service")
                 
                 # Check if container is running
                 if docker ps --format "table {{.Names}}" | grep -q "^${service}$"; then
-                    print_warning "Container $service is running but not responding"
+                    print_warning "Container $service is running but health check failed"
+                    # Try basic connectivity as fallback
+                    if timeout 5 curl -sSf "http://localhost:$port/" >/dev/null 2>&1; then
+                        print_info "✅ Basic connectivity to $service works (health endpoint may be different)"
+                    else
+                        print_error "❌ Basic connectivity to $service also failed"
+                    fi
                 else
-                    print_error "Container $service is not running"
+                    print_error "❌ Container $service is not running"
                 fi
             fi
         fi
     done
     
-    # Report summary
+    # Report summary with enhanced recovery recommendations
     if [[ ${#unhealthy_services[@]} -gt 0 ]]; then
         print_error "⚠️ Found ${#unhealthy_services[@]} unhealthy services: ${unhealthy_services[*]}"
         print_warning "These services may not work through proxy until they become healthy"
+        
+        # Implement timeout handling for problematic services
+        print_info "Implementing enhanced timeout handling for problematic services..."
+        echo "$(date): === ENHANCED TIMEOUT HANDLING ===" >> "$log_file"
+        
+        # Wait for services to stabilize with enhanced monitoring
+        local max_wait=60
+        local wait_count=0
+        while [[ $wait_count -lt $max_wait ]]; do
+            local still_unhealthy=()
+            for service in "${unhealthy_services[@]}"; do
+                local port="${SERVICE_PORTS[$service]:-}"
+                local health_endpoint="${SERVICE_HEALTH_ENDPOINTS[$service]:-"/"}"
+                
+                # Check service-specific health endpoints
+                if timeout 5 curl -sSf "http://localhost:$port$health_endpoint" >/dev/null 2>&1; then
+                    print_success "✅ $service recovered after ${wait_count}s"
+                    # Remove from unhealthy list
+                    still_unhealthy=("${still_unhealthy[@]/$service}")
+                fi
+            done
+            
+            if [[ ${#still_unhealthy[@]} -eq 0 ]]; then
+                print_success "✅ All previously unhealthy services have recovered"
+                break
+            fi
+            
+            wait_count=$((wait_count + 5))
+            echo "$(date): Timeout check ${wait_count}/${max_wait}s - ${#still_unhealthy[@]} services still unhealthy" >> "$log_file"
+            sleep 5
+        done
+        
+        # Final status report
+        if [[ ${#still_unhealthy[@]} -gt 0 ]]; then
+            print_error "❌ ${#still_unhealthy[@]} services still unhealthy after timeout: ${still_unhealthy[*]}"
+            echo "$(date): Services requiring manual intervention: ${still_unhealthy[*]}" >> "$log_file"
+        else
+            print_success "✅ All selected services are healthy and responding"
+        fi
     else
         print_success "✅ All selected services are healthy and responding"
     fi
