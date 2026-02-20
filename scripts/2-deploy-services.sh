@@ -3,7 +3,7 @@
 #==============================================================================
 # Script 2: Non-Root Docker Deployment with AppArmor Security
 # Purpose: Deploy all selected services using Script 1 configuration
-# Version: 7.0.0 - AppArmor Security & Complete Service Coverage
+# Version: 7.1.0 - Frontier Model Integration
 #==============================================================================
 
 set -euo pipefail
@@ -11,15 +11,12 @@ set -euo pipefail
 # Export DATA_ROOT for all docker compose commands
 export DATA_ROOT=/mnt/data
 
-# Color definitions (matching Script 1)
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly CYAN='\033[0;36m'
-readonly MAGENTA='\033[0;35m'
-readonly NC='\033[0m'
-readonly BOLD='\033[1m'
+# Load shared libraries
+SCRIPT_DIR="/mnt/data/scripts"
+source "${SCRIPT_DIR}/lib/common.sh"
+source "${SCRIPT_DIR}/lib/manifest.sh"
+source "${SCRIPT_DIR}/lib/nginx-generator.sh"
+source "${SCRIPT_DIR}/lib/health-check.sh"
 
 # Paths (matching Script 1)
 readonly DATA_ROOT="/mnt/data"
@@ -1541,8 +1538,8 @@ main() {
     echo ""
     echo -e "${BLUE}→ Generating proxy configuration...${NC}"
     
-    generate_proxy_config
-    add_proxy_to_compose
+    # Generate Caddy configuration from manifest
+    generate_caddy_config
     
     echo -e "${GREEN}✓ Proxy configuration ready${NC}"
     echo ""
@@ -1729,6 +1726,9 @@ main() {
     
     # 🔥 NEW: Generate deployment summary with health checks
     generate_deployment_summary "$deployed" "$failed"
+    
+    # 🔥 NEW: Validate all service endpoints via proxy
+    validate_all_endpoints
 }
 
 verify_service_health_before_proxy() {

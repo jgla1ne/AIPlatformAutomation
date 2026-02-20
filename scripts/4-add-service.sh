@@ -4,19 +4,17 @@
 # Script 4: Add Service Dynamically
 # Purpose: Interactive service addition with dependency validation
 # Per README: Modular service addition post-deployment
+# Version: 4.1.0 - Frontier Model Integration
 #==============================================================================
 
 set -euo pipefail
 
-# Color definitions
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly CYAN='\033[0;36m'
-readonly MAGENTA='\033[0;35m'
-readonly NC='\033[0m'
-readonly BOLD='\033[1m'
+# Load shared libraries
+SCRIPT_DIR="/mnt/data/scripts"
+source "${SCRIPT_DIR}/lib/common.sh"
+source "${SCRIPT_DIR}/lib/manifest.sh"
+source "${SCRIPT_DIR}/lib/nginx-generator.sh"
+source "${SCRIPT_DIR}/lib/health-check.sh"
 
 # Paths
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -1006,6 +1004,10 @@ deploy_service() {
     local service_id=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.id')
     local service_name=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.name')
     local compose_file="$COMPOSE_DIR/${service_id}.yml"
+    local service_port=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.port')
+    local service_path=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.path // "/'"$service_id"'"'")
+    local container_name=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.container // "'"${service_id}"'"')
+    local service_image=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.image')
     
     print_info "Deploying $service_name..."
     
@@ -1032,8 +1034,16 @@ deploy_service() {
         return 1
     fi
     
+    # 🔥 NEW: Update manifest with service info
+    write_service_manifest "$service_id" "$service_port" "$service_path" "$container_name" "$service_image" "$service_port"
+    
+    # 🔥 NEW: Regenerate proxy configuration
+    generate_caddy_config
+    
+    # 🔥 NEW: Reload proxy
+    reload_caddy
+    
     # Wait for service to be healthy
-    local service_port=$(echo "$SELECTED_SERVICE_JSON" | jq -r '.port')
     local max_attempts=30
     local attempt=0
     

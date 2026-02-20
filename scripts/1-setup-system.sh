@@ -3,19 +3,15 @@
 #==============================================================================
 # Script 1: System Setup & Configuration Collection
 # Purpose: Complete system preparation with interactive UI
-# Version: 4.0.0
+# Version: 4.1.0 - Frontier Model Integration
 #==============================================================================
 
 set -euo pipefail
 
-# Color definitions
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly CYAN='\033[0;36m'
-readonly NC='\033[0m'
-readonly BOLD='\033[1m'
+# Load shared libraries
+SCRIPT_DIR="/mnt/data/scripts"
+source "${SCRIPT_DIR}/lib/common.sh"
+source "${SCRIPT_DIR}/lib/manifest.sh"
 
 # Paths
 readonly DATA_ROOT="/mnt/data"
@@ -2592,19 +2588,19 @@ COMPOSE_HEADER
     add_redis_service
     
     # Add selected services based on user selection
-    [ "$ENABLE_OLLAMA" = true ] && add_ollama_service
-    [ "$ENABLE_LITELLM" = true ] && add_litellm_service
-    [ "$ENABLE_DIFY" = true ] && add_dify_services
-    [ "$ENABLE_N8N" = true ] && add_n8n_service
-    [ "$ENABLE_FLOWISE" = true ] && add_flowise_service
-    [ "$ENABLE_ANYTHINGLLM" = true ] && add_anythingllm_service
-    [ "$ENABLE_OPENWEBUI" = true ] && add_openwebui_service
-    [ "$ENABLE_MONITORING" = true ] && add_monitoring_services
-    [ "$ENABLE_SIGNAL_API" = true ] && add_signal_api_service
-    [ "$ENABLE_OPENCLAW" = true ] && add_openclaw_service
+    [ "$ENABLE_OLLAMA" = true ] && { add_ollama_service; write_service_manifest "ollama" "11434" "/ollama" "ollama" "ollama/ollama:latest" "$OLLAMA_PORT"; }
+    [ "$ENABLE_LITELLM" = true ] && { add_litellm_service; write_service_manifest "litellm" "4000" "/litellm" "litellm" "ghcr.io/berriai/litellm:main-latest" "$LITELLM_PORT"; }
+    [ "$ENABLE_DIFY" = true ] && { add_dify_services; write_service_manifest "dify" "3000" "/dify" "dify-web" "langgenius/dify-web:latest" "$DIFY_WEB_PORT"; write_service_manifest "dify-api" "5001" "/dify/api" "dify-api" "langgenius/dify-api:latest" "$DIFY_PORT"; }
+    [ "$ENABLE_N8N" = true ] && { add_n8n_service; write_service_manifest "n8n" "5678" "/n8n" "n8n" "n8nio/n8n:latest" "$N8N_PORT"; }
+    [ "$ENABLE_FLOWISE" = true ] && { add_flowise_service; write_service_manifest "flowise" "3000" "/flowise" "flowise" "flowiseai/flowise:latest" "$FLOWISE_PORT"; }
+    [ "$ENABLE_ANYTHINGLLM" = true ] && { add_anythingllm_service; write_service_manifest "anythingllm" "3000" "/anythingllm" "anythingllm" "mintplexlabs/anythingllm:latest" "$ANYTHINGLLM_PORT"; }
+    [ "$ENABLE_OPENWEBUI" = true ] && { add_openwebui_service; write_service_manifest "openwebui" "8080" "/webui" "openwebui" "ghcr.io/open-webui/open-webui:main" "$OPENWEBUI_PORT"; }
+    [ "$ENABLE_MONITORING" = true ] && { add_monitoring_services; write_service_manifest "prometheus" "9090" "/prometheus" "prometheus" "prom/prometheus:latest" "$PROMETHEUS_PORT"; write_service_manifest "grafana" "3000" "/grafana" "grafana" "grafana/grafana:latest" "$GRAFANA_PORT"; }
+    [ "$ENABLE_SIGNAL_API" = true ] && { add_signal_api_service; write_service_manifest "signal" "8090" "/signal" "signal-api" "bbernhard/signal-cli-rest-api:latest" "$SIGNAL_API_PORT"; }
+    [ "$ENABLE_OPENCLAW" = true ] && { add_openclaw_service; write_service_manifest "openclaw" "8082" "/openclaw" "openclaw" "alpine/openclaw:latest" "$OPENCLAW_PORT"; }
     [ "$ENABLE_TAILSCALE" = true ] && add_tailscale_service
-    [ "$ENABLE_MINIO" = true ] && add_minio_service
-    [ "$ENABLE_QDRANT" = true ] && add_qdrant_service
+    [ "$ENABLE_MINIO" = true ] && { add_minio_service; write_service_manifest "minio" "9000" "/minio" "minio" "minio/minio:latest" "$MINIO_API_PORT"; }
+    [ "$ENABLE_QDRANT" = true ] && { add_qdrant_service; write_service_manifest "qdrant" "6333" "/qdrant" "qdrant" "qdrant/qdrant:latest" "6333"; }
     
     chmod 644 "$COMPOSE_FILE"
     chown "${REAL_UID}:${REAL_GID}" "$COMPOSE_FILE"
@@ -3242,6 +3238,9 @@ main() {
     
     # Initialize
     setup_logging
+    
+    # Initialize service manifest
+    init_service_manifest
     
     # Display banner
     print_banner

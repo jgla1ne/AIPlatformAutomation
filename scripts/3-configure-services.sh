@@ -2,10 +2,16 @@
 #==============================================================================
 # Script 3: Post-Deployment Configuration & Management
 # Purpose: Configure services, manage SSL, add services, backups
-# Version: 9.0.0 - Menu-Driven Interface
+# Version: 9.1.0 - Frontier Model Integration
 #==============================================================================
 
 set -euo pipefail
+
+# Load shared libraries
+SCRIPT_DIR="/mnt/data/scripts"
+source "${SCRIPT_DIR}/lib/common.sh"
+source "${SCRIPT_DIR}/lib/manifest.sh"
+source "${SCRIPT_DIR}/lib/health-check.sh"
 
 # Paths
 REAL_USER="${SUDO_USER:-$USER}"
@@ -858,22 +864,8 @@ configure_litellm() {
     
     print_phase "2" "🔗" "LiteLLM Configuration"
     
-    # Wait for LiteLLM container to be ready
-    print_info "Waiting for LiteLLM container..."
-    local retries=0
-    while [ $retries -lt 60 ]; do
-        if docker ps --format '{{.Names}}' | grep -q "^litellm$"; then
-            print_success "LiteLLM container is running"
-            break
-        fi
-        sleep 2
-        retries=$((retries + 1))
-    done
-    
-    if [ $retries -eq 60 ]; then
-        print_error "LiteLLM container failed to start"
-        return 1
-    fi
+    # 🔥 NEW: Health gate before configuration
+    wait_for_service_health "litellm" 30
     
     # Initialize LiteLLM database
     print_info "Initializing LiteLLM database schema..."
@@ -911,24 +903,10 @@ configure_ollama() {
         return 0
     fi
     
-    print_phase "3" "🤖" "Ollama Model Configuration"
+    print_phase "3" "�" "Ollama Model Management"
     
-    # Wait for Ollama container to be ready
-    print_info "Waiting for Ollama container..."
-    local retries=0
-    while [ $retries -lt 60 ]; do
-        if docker ps --format '{{.Names}}' | grep -q "^ollama$"; then
-            print_success "Ollama container is running"
-            break
-        fi
-        sleep 2
-        retries=$((retries + 1))
-    done
-    
-    if [ $retries -eq 60 ]; then
-        print_error "Ollama container failed to start"
-        return 1
-    fi
+    # 🔥 NEW: Health gate before configuration
+    wait_for_service_health "ollama" 60
     
     # Parse model list
     if [ -n "${OLLAMA_MODELS:-}" ]; then
