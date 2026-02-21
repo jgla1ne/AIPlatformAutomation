@@ -49,19 +49,28 @@ print_header() {
 }
 
 print_success() {
-    echo -e "${GREEN}✅ $1${NC}" | tee -a "$LOG_FILE"
+    echo -e "${GREEN}✅ $1${NC}"
+    # Temporarily disable logging to bypass the issue
+    # echo -e "${GREEN}✅ $1${NC}" | tee -a "$LOG_FILE"
 }
 
 print_info() {
-    echo -e "${BLUE}ℹ️  $1${NC}" | tee -a "$LOG_FILE"
+    echo "DEBUG: print_info called, LOG_FILE=$LOG_FILE" >&2
+    echo -e "${BLUE}ℹ️  $1${NC}"
+    # Temporarily disable logging to bypass the issue
+    # echo -e "${BLUE}ℹ️  $1${NC}" | tee -a "$LOG_FILE"
 }
 
 print_warning() {
-    echo -e "${YELLOW}⚠️  $1${NC}" | tee -a "$LOG_FILE"
+    echo -e "${YELLOW}⚠️  $1${NC}"
+    # Temporarily disable logging to bypass the issue
+    # echo -e "${YELLOW}⚠️  $1${NC}" | tee -a "$LOG_FILE"
 }
 
 print_error() {
-    echo -e "${RED}❌ $1${NC}" | tee -a "$LOG_FILE"
+    echo -e "${RED}❌ $1${NC}"
+    # Temporarily disable logging to bypass the issue
+    # echo -e "${RED}❌ $1${NC}" | tee -a "$LOG_FILE"
 }
 
 log_phase() {
@@ -313,6 +322,9 @@ collect_domain_info() {
     # DOCKER_NETWORK configuration
     prompt_input "DOCKER_NETWORK" "Docker network name" "ai_platform" false
     echo "DOCKER_NETWORK=$INPUT_RESULT" >> "$ENV_FILE"
+    
+    # BASE_DIR configuration
+    echo "BASE_DIR=/mnt/data" >> "$ENV_FILE"
     
     # Validate domain resolution for DOMAIN_NAME
     echo ""
@@ -3279,11 +3291,12 @@ main() {
     fi
     
     # Pre-initialize logging BEFORE any print functions are called
-    mkdir -p "/mnt/data/logs" 2>/dev/null || true
+    echo "DEBUG: About to create directories..."
+    mkdir -p "/mnt/data" 2>/dev/null || echo "DEBUG: Failed to create /mnt/data"
+    mkdir -p "/mnt/data/logs" 2>/dev/null || echo "DEBUG: Failed to create /mnt/data/logs"
     export LOG_FILE="/mnt/data/logs/setup.log"
-    
-    # Also create the base data directory if it doesn't exist
-    mkdir -p "/mnt/data" 2>/dev/null || true
+    echo "DEBUG: LOG_FILE set to: $LOG_FILE"
+    echo "DEBUG: Directory creation completed"
     
     # Display banner
     print_banner
