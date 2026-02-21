@@ -3278,7 +3278,7 @@ main() {
         exit 1
     fi
     
-    # Pre-initialize basic logging before volume mounting
+    # Pre-initialize logging BEFORE any print functions are called
     mkdir -p "/mnt/data/logs" 2>/dev/null || true
     export LOG_FILE="/mnt/data/logs/setup.log"
     
