@@ -56,7 +56,7 @@ print_info() {
     echo -e "${BLUE}ℹ️  $1${NC}" | tee -a "$LOG_FILE"
 }
 
-print_warninging() {
+print_warning() {
     echo -e "${YELLOW}⚠️  $1${NC}" | tee -a "$LOG_FILE"
 }
 
@@ -206,7 +206,7 @@ restore_state() {
     local timestamp=$(jq -r '.timestamp' "$STATE_FILE" 2>/dev/null || echo "")
     
     if [[ -z "$current_phase" ]]; then
-        print_warninging "State file corrupted - starting fresh"
+        print_warning "State file corrupted - starting fresh"
         return 1
     fi
     
@@ -559,7 +559,7 @@ update_system() {
         apt update && apt upgrade -y
         print_success "System packages updated"
     else
-        print_warninging "Package manager not detected - skipping system update"
+        print_warning "Package manager not detected - skipping system update"
     fi
     
     # Install basic tools
@@ -952,7 +952,7 @@ collect_configurations() {
         
         if netstat -tuln 2>/dev/null | grep -q ":$port "; then
             local pid=$(netstat -tuln 2>/dev/null | grep ":$port " | awk '{print $7}' | cut -d/ -f1)
-            print_warninging "Port $port is in use by $service (pid: $pid)"
+            print_warning "Port $port is in use by $service (pid: $pid)"
             port_conflicts+=("$port:$service:$pid")
         else
             print_success "Port $port is available for $service"
@@ -1992,9 +1992,9 @@ setup_volumes() {
             if [[ "$current_mount" == "$device_path" ]]; then
                 print_success "Correct volume already mounted: $device_path"
             else
-                print_warninging "Different volume mounted: $current_mount"
+                print_warning "Different volume mounted: $current_mount"
                 print_info "Attempting to remount correct volume..."
-                umount /mnt || print_warninging "Could not unmount current volume"
+                umount /mnt || print_warning "Could not unmount current volume"
                 if mount "$device_path" /mnt; then
                     print_success "Successfully remounted $device_path"
                 else
