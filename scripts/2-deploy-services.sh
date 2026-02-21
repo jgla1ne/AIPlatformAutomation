@@ -357,11 +357,14 @@ deploy_layered_services() {
     # Layer 2: Application Services
     deploy_layer_2_services
     
-    # Layer 3: OpenClaw (restricted)
-    deploy_layer_3_openclaw
+    # Layer 3: Monitoring Services
+    deploy_layer_3_monitoring
     
-    # Layer 4: Caddy (proxy - LAST)
-    deploy_layer_4_proxy
+    # Layer 4: OpenClaw (restricted)
+    deploy_layer_4_openclaw
+    
+    # Layer 5: Caddy (proxy - LAST)
+    deploy_layer_5_proxy
     
     print_success "All services deployed in dependency order"
 }
@@ -409,14 +412,13 @@ deploy_layer_1_databases() {
         --restart unless-stopped \
          \
         -v "${DATA_ROOT}/data/qdrant:/qdrant/storage" \
-        -u "${RUNNING_UID}:${RUNNING_GID}" \
         qdrant/qdrant:latest
     
     # WAIT for all layer 1 to be healthy before proceeding
-    wait_healthy "postgres" "pg_isready -U ${POSTGRES_USER}" 30
-    wait_healthy "redis" "redis-cli -a ${REDIS_PASSWORD} ping" 30
-    # wait_healthy "qdrant" "curl -sf http://localhost:6333/healthz" 30  # Temporarily disabled
-    print_success "Layer 1 databases healthy (qdrant health check disabled)"
+    wait_healthy "postgres" "docker exec postgres pg_isready -U ${POSTGRES_USER}" 30
+    wait_healthy "redis" "docker exec redis redis-cli -a ${REDIS_PASSWORD} ping" 30
+    wait_healthy "qdrant" "docker run --rm --network ${DOCKER_NETWORK} alpine/curl -sf http://qdrant:6333/" 60
+    print_success "Layer 1 databases healthy"
 }
 
 deploy_layer_2_services() {
@@ -485,14 +487,99 @@ deploy_layer_2_services() {
         -u "${RUNNING_UID}:${RUNNING_GID}" \
         ghcr.io/berriai/litellm:main-latest
     
+    # Flowise
+    docker run -d \
+        --name flowise \
+        --network "${DOCKER_NETWORK}" \
+        --restart unless-stopped \
+        -e PORT=3000 \
+        -e FLOWISE_HOST=0.0.0.0 \
+        -e DATABASE_PATH=/root/.flowise \
+        -e APIKEY_PATH=/root/.flowise \
+        -v "${DATA_ROOT}/data/flowise:/root/.flowise" \
+        -u "${RUNNING_UID}:${RUNNING_GID}" \
+        flowiseai/flowise:latest
+    
     # Wait for layer 2
     wait_http "n8n" "http://n8n:5678/healthz" 60
     wait_http "minio" "http://minio:9000/minio/health/live" 60
+    wait_http "flowise" "http://flowise:3000" 60
     # wait_http "litellm" "http://litellm:4000/health" 60  # Temporarily disabled - needs API key
     print_success "Layer 2 application services healthy (litellm health check disabled)"
 }
 
-deploy_layer_3_openclaw() {
+deploy_layer_3_monitoring() {
+    print_header "Layer 3: Monitoring Services"
+    
+    # Create Prometheus config
+    mkdir -p "${DATA_ROOT}/config/prometheus"
+    cat > "${DATA_ROOT}/config/prometheus/prometheus.yml" << EOF
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'n8n'
+    static_configs:
+      - targets: ['n8n:5678']
+  
+  - job_name: 'openwebui'
+    static_configs:
+      - targets: ['openwebui:8080']
+  
+  - job_name: 'litellm'
+    static_configs:
+      - targets: ['litellm:4000']
+  
+  - job_name: 'qdrant'
+    static_configs:
+      - targets: ['qdrant:6333']
+  
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres:5432']
+  
+  - job_name: 'minio'
+    static_configs:
+      - targets: ['minio:9000']
+  
+  - job_name: 'flowise'
+    static_configs:
+      - targets: ['flowise:3000']
+EOF
+    
+    chown "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/config/prometheus/prometheus.yml"
+    
+    # Prometheus
+    docker run -d \
+        --name prometheus \
+        --network "${DOCKER_NETWORK}" \
+        --restart unless-stopped \
+        -v "${DATA_ROOT}/config/prometheus:/etc/prometheus" \
+        -v "${DATA_ROOT}/data/prometheus:/prometheus" \
+        -u "${RUNNING_UID}:${RUNNING_GID}" \
+        prom/prometheus:latest \
+        --config.file=/etc/prometheus/prometheus.yml \
+        --storage.tsdb.path=/prometheus
+    
+    # Grafana
+    docker run -d \
+        --name grafana \
+        --network "${DOCKER_NETWORK}" \
+        --restart unless-stopped \
+        -e GF_SERVER_ROOT_URL="https://${DOMAIN_NAME}/grafana/" \
+        -e GF_SECURITY_ADMIN_PASSWORD="${ADMIN_PASSWORD}" \
+        -v "${DATA_ROOT}/data/grafana:/var/lib/grafana" \
+        -u "${RUNNING_UID}:${RUNNING_GID}" \
+        grafana/grafana:latest
+    
+    # Wait for monitoring services
+    wait_http "prometheus" "http://prometheus:9090/-/healthy" 60
+    wait_http "grafana" "http://grafana:3000/api/health" 60
+    print_success "Layer 3 monitoring services healthy"
+}
+
+deploy_layer_4_openclaw() {
     print_header "Layer 3: OpenClaw (restricted)"
     
     # Temporarily skip OpenClaw - image not available
@@ -520,7 +607,7 @@ deploy_layer_3_openclaw() {
     print_success "Layer 3 OpenClaw healthy (skipped)"
 }
 
-deploy_layer_4_proxy() {
+deploy_layer_5_proxy() {
     print_header "Layer 4: Caddy (last)"
     
     # Caddyfile already written by Script 1
@@ -546,7 +633,7 @@ wait_healthy() {
     local elapsed=0
     
     echo -n "  Waiting for ${container}..."
-    while ! docker exec "${container}" sh -c "${check_cmd}" &>/dev/null; do
+    while ! eval "${check_cmd}" &>/dev/null; do
         sleep 2
         elapsed=$((elapsed + 2))
         echo -n "."

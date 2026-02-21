@@ -1,226 +1,137 @@
-# rsync with Google Drive + Signal Pairing + Step 3 Role Clarification
+# AppArmor Profile Load Failure — Root Cause Analysis
 
-## rsync + Google Drive — The Right Tool Is rclone, Not rsync
-
-```
-rsync = syncs between two filesystems (local↔local or local↔SSH)
-rsync does NOT speak Google Drive API natively
-
-rclone = rsync-style tool but speaks 70+ cloud APIs including Google Drive
-rclone is the correct tool for Google Drive sync
-```
-
-### Where This Lives in the 5-Script Architecture
+## What The Error Actually Means
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  Script 1: Ask user if they want Google Drive sync              │
-│            ENABLE_GDRIVE_SYNC=true/false → written to .env      │
-│            If true: ask for GDRIVE_REMOTE_NAME, GDRIVE_FOLDER   │
-│                                                                  │
-│  Script 2: If ENABLE_GDRIVE_SYNC=true                           │
-│            Install rclone binary (single binary, no daemon)      │
-│            Create rclone config dir under BASE_DIR               │
-│            Deploy rclone as a container with:                    │
-│              - /mnt/data mounted read/write                      │
-│              - cron schedule (every 6h or configurable)          │
-│              - rclone config mounted from BASE_DIR/config/rclone │
-│            NOTE: rclone CANNOT auth headlessly without a token   │
-│            Token must be obtained interactively ONCE             │
-│                                                                  │
-│  Script 3: rclone auth flow (interactive, one-time)             │
-│            rclone config reconnect ${GDRIVE_REMOTE_NAME}:        │
-│            Prints auth URL → user opens in browser              │
-│            Pastes token back → stored in BASE_DIR/config/rclone  │
-│            From this point sync runs automatically via cron      │
-└─────────────────────────────────────────────────────────────────┘
+AppArmor parser error: Could not open 'tunables/global'
 ```
 
-### Why rclone Auth Cannot Be in Script 2
+This is not a permissions error. It is a **missing include path** error.
+
+Every AppArmor profile starts with:
+```
+#include <tunables/global>
+```
+
+The parser resolves this relative to its base directory, which is `/etc/apparmor.d/`. So it looks for:
+```
+/etc/apparmor.d/tunables/global
+```
+
+This file ships with the `apparmor` package. The error means one of two things:
 
 ```
-Script 2 runs non-interactively (or should)
-Google OAuth requires a browser redirect
-The token is user-specific and cannot be pre-baked
-This is exactly what Script 3 is for:
-  one-time interactive configuration that requires human input
+CAUSE A: apparmor package is installed but apparmor-utils is not
+         apparmor-utils contains the tunables directory
+         Fix: apt-get install -y apparmor-utils apparmor-profiles
+
+CAUSE B: The profile files were written without the #include line
+         The script generated bare profiles missing the header
+         Fix: profiles must start with #include <tunables/global>
+
+CAUSE C: The profile template substitution produced malformed output
+         sed replaced BASE_DIR_PLACEHOLDER but mangled the include line
+         Fix: inspect the actual file content at /etc/apparmor.d/ai_platform-default
 ```
 
 ---
 
-## Signal Pairing — Correct Architecture
+## How To Diagnose Right Now
 
-```
-Signal API (signal-cli REST) starts in Script 2
-It becomes accessible at https://ai.datasquiz.net/signal
-
-User pairing flow is:
-  1. Call POST /v1/register/{phone}
-  2. Receive SMS code
-  3. Call POST /v1/register/{phone}/verify/{code}
-  This is done via curl or the Swagger UI at /signal/v1/api-docs
-
-This does NOT require Script 3 at all.
-User does it themselves via the public endpoint.
-Document the URL in the deployment summary printout from Script 2.
-That is sufficient.
-
-Only put Signal in Script 3 if you want to offer:
-  - Re-registration (number change)
-  - Linking a second device
-  - Resetting the signal identity
-```
-
----
-
-## Script 3 — Correct Scope Definition
-
-This is the key design question. Here is the clean split:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  SCRIPT 3 owns: things that need human input OR periodic action │
-│                                                                  │
-│  Category A — One-time interactive setup (run once after S2):   │
-│    ├── rclone Google Drive auth token                           │
-│    ├── Tailscale re-auth if TS_AUTHKEY expired                  │
-│    └── SSL cert force-renew (Caddy normally auto-renews)        │
-│                                                                  │
-│  Category B — Operational actions (run anytime after S2):       │
-│    ├── Restart any specific service                             │
-│    ├── Rotate secrets (generate new API keys → write to .env)  │
-│    ├── Re-run Caddy config reload after domain change           │
-│    └── Re-run vector DB env wiring if DB was switched           │
-│                                                                  │
-│  Category C — Recovery (when a service failed in S2):           │
-│    ├── Retry failed service with debug output                   │
-│    ├── Check logs for specific service                          │
-│    └── Re-run health checks and print current status           │
-│                                                                  │
-│  SCRIPT 3 does NOT own:                                         │
-│    ✗ Deploying new services (that is Script 4)                  │
-│    ✗ Changing the vector DB selection (re-run Script 1+2)       │
-│    ✗ Signal user pairing (user does this via the public URL)    │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Script 3 Menu Structure
+Run these three commands and share output:
 
 ```bash
-# Script 3 presents a numbered menu:
+# Check what is actually in the profile file
+cat /etc/apparmor.d/ai_platform-default
 
-echo "=== Configure Services ==="
-echo "1) Authorize Google Drive sync (rclone - required once)"
-echo "2) Re-authorize Tailscale (if auth key expired)"
-echo "3) Restart a service"
-echo "4) Force SSL certificate renewal"
-echo "5) Rotate API secrets"
-echo "6) View service health status"
-echo "7) Re-wire vector DB config to all services"
-echo "8) View service logs"
-echo "9) Exit"
+# Check if tunables directory exists
+ls /etc/apparmor.d/tunables/
+
+# Check what apparmor packages are installed
+dpkg -l | grep apparmor
 ```
+
+The most likely finding is **Cause B** — the generated profile file does not contain `#include <tunables/global>` as its first line.
 
 ---
 
-## What Goes Into Script 2 Right Now (No New Scope)
+## What A Valid AppArmor Profile Must Look Like
 
 ```
-Script 2 additions needed (confirmed, not new scope):
+#include <tunables/global>          ← LINE 1, non-negotiable
 
-  ADD: rclone container deployment (if ENABLE_GDRIVE_SYNC=true)
-       No auth yet — just deploy the container and mount the config dir
-       Container starts but sync will fail until Script 3 auth is done
-       Deployment summary prints:
-         "Google Drive sync: run Script 3 option 1 to authorize"
+profile ai_platform-default flags=(attach_disconnected) {
+    #include <abstractions/base>
+    #include <abstractions/nameservice>
 
-  ADD: Signal deployment summary line:
-         "Signal API: https://${DOMAIN}/signal"
-         "Signal pairing: open https://${DOMAIN}/signal/v1/api-docs"
-         "Register your number and verify the SMS code to activate"
+    # Allow reads from BASE_DIR
+    /mnt/data/** r,
 
-  NO CHANGE to anything else in Script 2
+    # Deny sensitive paths
+    deny /etc/shadow r,
+    deny /proc/sysrq-trigger rw,
+
+    network,
+}
 ```
+
+Without `#include <tunables/global>` the parser has no variable definitions (like `@{PROC}`, `@{HOME}`) and refuses to parse anything.
 
 ---
 
-## Full Picture Across All 5 Scripts (Current Agreed State)
+## The Secondary Error
 
 ```
-Script 0: Packages, Docker daemon, AppArmor service, NO user creation
-          NO hardcoded UIDs, NO profile loading
-
-Script 1: Interactive collection of all config
-          User/UID creation, directory structure, .env generation
-          AppArmor profile generation (using BASE_DIR from user input)
-          Caddyfile generation (all routes, no openclaw route)
-          chown -R STACK_USER_UID:STACK_USER_GID BASE_DIR
-          chown -R 999:999 BASE_DIR/data/postgres (one exception)
-
-Script 2: Deploy all services in layers
-          Layer 1: postgres, redis, vector DB, minio (health gated)
-          Layer 2: app services with VDBENV_* vars injected
-          Layer 3: Tailscale sidecar → tailscale up → get IP
-          Layer 4: openclaw (--network container:tailscale-openclaw)
-          Layer 5: rclone (if ENABLE_GDRIVE_SYNC=true, no auth yet)
-          Layer 6: Caddy (last, all upstreams verified first)
-          Deployment summary: all URLs + openclaw Tailscale IP
-
-Script 3: Interactive operations menu
-          A: rclone gdrive auth (one-time)
-          B: Tailscale re-auth
-          C: Service restart
-          D: SSL renewal
-          E: Secret rotation
-          F: Health status
-          G: Vector DB re-wire
-          H: Service logs
-
-Script 4: Add new dockerized service to running stack
-          Prompts for: image, port, subdomain path, env vars
-          Appends service to Docker network
-          Appends Caddy route
-          Runs health check
-          Updates deployment summary
+Warning from stdin (line 1): config file '/etc/apparmor/parser.conf' not found
 ```
+
+Note the path: `/etc/apparmor/parser.conf` — not `/etc/apparmor.d/`.
+
+This is a **warning, not a fatal error**. It means apparmor-utils was installed without its default config file. It does not stop profile loading but indicates an incomplete package installation.
 
 ---
 
-## Message for Windsurf
+## Message For Windsurf
 
 ```
-Two additions to Script 2 only. Nothing else changes.
+The AppArmor profiles are failing to load for two reasons.
+Fix both before attempting to load any profile.
 
-ADDITION 1: rclone deployment (after minio, before Caddy)
+FIX 1: Ensure packages are installed before profile loading
+  In the setup_apparmor_profiles() function, before any
+  apparmor_parser call, add:
 
-if [[ "${ENABLE_GDRIVE_SYNC:-false}" == "true" ]]; then
-    mkdir -p ${BASE_DIR}/config/rclone
-    chown ${STACK_USER_UID}:${STACK_USER_GID} ${BASE_DIR}/config/rclone
+  apt-get install -y apparmor apparmor-utils apparmor-profiles 2>/dev/null || true
 
-    docker run -d \
-        --name rclone-gdrive \
-        --network ${DOCKER_NETWORK} \
-        --user ${STACK_USER_UID}:${STACK_USER_GID} \
-        -v ${BASE_DIR}/config/rclone:/config/rclone \
-        -v ${BASE_DIR}/data:/data \
-        rclone/rclone:latest \
-        sync /data gdrive:${GDRIVE_FOLDER:-AIPlatformBackup} \
-        --config /config/rclone/rclone.conf \
-        --create-empty-src-dirs \
-        --log-level INFO
+FIX 2: Every generated profile file must begin with exactly this line:
+  #include <tunables/global>
 
-    echo "[INFO] rclone deployed. Run Script 3 option 1 to authorize Google Drive."
-fi
+  The current template generation is producing files without this header.
+  Each profile written to /etc/apparmor.d/ must have this as line 1.
 
-ADDITION 2: Add to deployment summary printout at end of Script 2
+  Correct structure for each profile file:
 
-echo "Signal API:     https://${DOMAIN}/signal"
-echo "Signal pairing: https://${DOMAIN}/signal/v1/api-docs"
-echo "GDrive sync:    Run './3-configure-services.sh' → option 1 to authorize"
+  #include <tunables/global>
+
+  profile ai_platform-default flags=(attach_disconnected) {
+      #include <abstractions/base>
+      #include <abstractions/nameservice>
+
+      /mnt/data/** rw,
+      deny /etc/shadow r,
+      deny /proc/sysrq-trigger rw,
+
+      network,
+      capability net_bind_service,
+  }
+
+FIX 3: After writing each profile, verify it parses before loading:
+  apparmor_parser --preprocess /etc/apparmor.d/ai_platform-default
+  If that returns non-zero, print the file content and exit 1.
+  Do not silently continue with broken profiles.
+
+VERIFICATION: After fixes, this command must return 0:
+  apparmor_parser -r /etc/apparmor.d/ai_platform-default && echo "OK"
 
 Do not change anything else in Script 2.
-
-Script 3 will be written separately as a menu-driven operations script
-covering: rclone auth, tailscale re-auth, service restart, SSL renewal,
-secret rotation, health status, vector DB re-wire, log viewing.
 ```
