@@ -2041,34 +2041,241 @@ setup_volumes() {
         mkdir -p "$DATA_ROOT/logs" 2>/dev/null || true
 }
 
+generate_caddyfile() {
+    log_phase "9" "🌐" "Caddyfile Generation"
+    
+    print_info "Generating Caddyfile with all service routes..."
+    
+    cat > "${DATA_ROOT}/caddy/Caddyfile" << EOF
+{
+    admin off
+    auto_https off
+    email ${ACME_EMAIL:-admin@${DOMAIN_NAME}}
+}
+
+:80 {
+    # Prometheus
+    handle /prometheus/* {
+        reverse_proxy prometheus:9090
+    }
+
+    # Grafana
+    handle /grafana/* {
+        reverse_proxy grafana:3000
+    }
+
+    # n8n
+    handle /n8n/* {
+        reverse_proxy n8n:5678 {
+            header_up Upgrade {http.request.header.Upgrade}
+            header_up Connection {http.request.header.Connection}
+        }
+    }
+
+    # Dify
+    handle /dify/* {
+        reverse_proxy dify-web:3000
+    }
+
+    # AnythingLLM
+    handle /anythingllm/* {
+        reverse_proxy anythingllm:3001 {
+            header_up Upgrade {http.request.header.Upgrade}
+            header_up Connection {http.request.header.Connection}
+        }
+    }
+
+    # LiteLLM
+    handle /litellm/* {
+        reverse_proxy litellm:4000
+    }
+
+    # Open WebUI
+    handle /openwebui/* {
+        reverse_proxy openwebui:8080 {
+            header_up Upgrade {http.request.header.Upgrade}
+            header_up Connection {http.request.header.Connection}
+        }
+    }
+
+    # MinIO Console
+    handle /minio/* {
+        reverse_proxy minio-console:9001
+    }
+
+    # Signal API
+    handle /signal/* {
+        reverse_proxy signal:8080
+    }
+
+    # OpenClaw
+    handle /openclaw/* {
+        reverse_proxy openclaw:8080
+    }
+
+    # Flowise
+    handle /flowise/* {
+        reverse_proxy flowise:3000
+    }
+
+    # Ollama API (no UI, just API endpoint)
+    handle /ollama/* {
+        reverse_proxy ollama:11434
+    }
+
+    # Health check
+    handle /health {
+        respond "OK" 200
+    }
+
+    # Fallback
+    respond "AI Platform - use /servicename to access services" 200
+}
+EOF
+    
+    chown "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/caddy/Caddyfile"
+    print_success "Caddyfile written with all service routes"
+}
+
+generate_apparmor_profiles() {
+    log_phase "8" "🛡️" "AppArmor Profile Generation"
+    
+    print_info "Generating AppArmor profiles for security..."
+    
+    # Default profile for all services except openclaw
+    cat > "${DATA_ROOT}/apparmor/${DOCKER_NETWORK}-default" << EOF
+#include <tunables/global>
+
+profile ${DOCKER_NETWORK}-default flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+
+  network inet tcp,
+  network inet udp,
+  network netlink raw,
+
+  # Stack data directory - this stack only
+  ${DATA_ROOT}/** rwk,
+
+  # Docker internals
+  /var/lib/docker/** r,
+
+  # Proc/sys
+  @{PROC}/** r,
+  /sys/fs/cgroup/** r,
+}
+EOF
+
+    # OpenClaw profile — strict allowlist
+    cat > "${DATA_ROOT}/apparmor/${DOCKER_NETWORK}-openclaw" << EOF
+#include <tunables/global>
+
+profile ${DOCKER_NETWORK}-openclaw flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+
+  network inet tcp,
+  network inet udp,
+
+  # OpenClaw ONLY gets its own subdirectory
+  ${DATA_ROOT}/data/openclaw/** rwk,
+
+  # Explicit deny everything else under DATA_ROOT
+  deny ${DATA_ROOT}/data/postgres/** rwklx,
+  deny ${DATA_ROOT}/data/n8n/** rwklx,
+  deny ${DATA_ROOT}/data/minio/** rwklx,
+  deny ${DATA_ROOT}/config/** rwklx,
+
+  @{PROC}/** r,
+}
+EOF
+
+    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/apparmor/"
+    print_success "AppArmor profiles written (loaded by Script 2)"
+}
+
 create_directory_structure() {
     log_phase "9" "📁" "Directory Structure Creation"
     
-    print_info "Creating modular directory structure..."
+    print_info "Creating modular directory structure with correct ownership..."
     
-    # Validate /mnt is properly mounted
-    if ! mountpoint -q /mnt 2>/dev/null; then
-        print_error "/mnt is not mounted - running volume setup first"
-        setup_volumes
-    fi
+    # Create ALL directories FIRST with correct ownership
+    local dirs=(
+        "${DATA_ROOT}/config"
+        "${DATA_ROOT}/apparmor"
+        "${DATA_ROOT}/caddy/config"
+        "${DATA_ROOT}/caddy/data"
+        "${DATA_ROOT}/data/postgres"
+        "${DATA_ROOT}/data/redis"
+        "${DATA_ROOT}/data/qdrant"
+        "${DATA_ROOT}/data/minio"
+        "${DATA_ROOT}/data/n8n"
+        "${DATA_ROOT}/data/dify"
+        "${DATA_ROOT}/data/anythingllm"
+        "${DATA_ROOT}/data/litellm"
+        "${DATA_ROOT}/data/openwebui"
+        "${DATA_ROOT}/data/grafana"
+        "${DATA_ROOT}/data/prometheus"
+        "${DATA_ROOT}/data/flowise"
+        "${DATA_ROOT}/data/signal"
+        "${DATA_ROOT}/data/ollama"
+        "${DATA_ROOT}/data/openclaw"
+        "${DATA_ROOT}/postgres-init"
+    )
     
-    # Create directories
-    mkdir -p "$DATA_ROOT"/{compose,env,config,metadata,data,logs,secrets}
+    for dir in "${dirs[@]}"; do
+        mkdir -p "$dir"
+    done
     
-    # Create config subdirectories
-    mkdir -p "$DATA_ROOT/config"/{nginx,traefik,caddy,litellm,postgres,redis,qdrant,prometheus,grafana}
+    # Base ownership: stack user owns everything
+    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}"
+    chmod -R 755 "${DATA_ROOT}"
     
-    # Set proper ownership to running user (not root)
-    RUNNING_USER="${RUNNING_USER:-${SUDO_USER:-$USER}}"
-    RUNNING_UID="${RUNNING_UID:-$(id -u "$RUNNING_USER")}"
-    RUNNING_GID="${RUNNING_GID:-$(id -g "$RUNNING_USER")}"
+    # Service-specific permissions matching container UIDs
+    # postgres runs as UID 999
+    chown -R 999:999 "${DATA_ROOT}/data/postgres"
+    chmod 700 "${DATA_ROOT}/data/postgres"
     
-    print_info "Setting directory ownership to $RUNNING_USER ($RUNNING_UID:$RUNNING_GID)"
-    chown -R "$RUNNING_UID:$RUNNING_GID" "$DATA_ROOT"
+    # grafana runs as UID 472
+    chown -R 472:472 "${DATA_ROOT}/data/grafana"
+    chmod 750 "${DATA_ROOT}/data/grafana"
     
-    print_success "Directory structure created"
-    print_info "Base: $DATA_ROOT"
-    print_info "Ownership: $RUNNING_USER ($RUNNING_UID:$RUNNING_GID)"
+    # prometheus runs as UID 65534 (nobody)
+    chown -R 65534:65534 "${DATA_ROOT}/data/prometheus"
+    chmod 750 "${DATA_ROOT}/data/prometheus"
+    
+    # openwebui writes as root internally - needs 777
+    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/data/openwebui"
+    chmod 777 "${DATA_ROOT}/data/openwebui"
+    
+    # openclaw - locked down, only openclaw UID
+    chown -R "${OPENCLAW_UID}:${OPENCLAW_GID}" "${DATA_ROOT}/data/openclaw"
+    chmod 750 "${DATA_ROOT}/data/openclaw"
+    
+    # Pre-create critical files with correct ownership
+    # OpenWebUI secret key
+    touch "${DATA_ROOT}/data/openwebui/.webui_secret_key"
+    chown "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/data/openwebui/.webui_secret_key"
+    chmod 600 "${DATA_ROOT}/data/openwebui/.webui_secret_key"
+    
+    # PostgreSQL init script
+    mkdir -p "${DATA_ROOT}/postgres-init"
+    cat > "${DATA_ROOT}/postgres-init/init-multiple-dbs.sh" << 'EOF'
+#!/bin/bash
+set -e
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" << EOSQL
+    CREATE DATABASE dify;
+    CREATE DATABASE n8n;
+    CREATE DATABASE anythingllm;
+    GRANT ALL PRIVILEGES ON DATABASE dify TO $POSTGRES_USER;
+    GRANT ALL PRIVILEGES ON DATABASE n8n TO $POSTGRES_USER;
+    GRANT ALL PRIVILEGES ON DATABASE anythingllm TO $POSTGRES_USER;
+EOSQL
+EOF
+    chmod +x "${DATA_ROOT}/postgres-init/init-multiple-dbs.sh"
+    chown 999:999 "${DATA_ROOT}/postgres-init/init-multiple-dbs.sh"
+    
+    print_success "Directory structure created with correct ownership"
 }
 
 validate_system() {
@@ -3373,6 +3580,15 @@ main() {
     mark_phase_complete "collect_configurations"
     create_apparmor_templates
     mark_phase_complete "create_apparmor_templates"
+    
+    # Generate WEBUI_SECRET_KEY for OpenWebUI
+    local webui_secret_key=$(openssl rand -hex 32)
+    echo "WEBUI_SECRET_KEY=$webui_secret_key" >> "$ENV_FILE"
+    
+    # Generate LITELLM_MASTER_KEY
+    local litellm_master_key=$(openssl rand -hex 32)
+    echo "LITELLM_MASTER_KEY=$litellm_master_key" >> "$ENV_FILE"
+    
     generate_compose_templates
     mark_phase_complete "generate_compose_templates"
     

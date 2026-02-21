@@ -344,152 +344,247 @@ deploy_openclaw_standalone() {
 }
 
 # Deploy infrastructure services
-deploy_infrastructure() {
-    print_header "Deploying Infrastructure Services"
+# Main deployment function with layered approach
+deploy_layered_services() {
+    print_header "Deploying Services in Dependency Order"
     
-    # PostgreSQL (if using pgvector or as general database)
-    deploy_service "postgres" "postgres:15" "5432" "5432" \
-        "-e POSTGRES_DB=${POSTGRES_DB:-aiplatform}" \
-        "-e POSTGRES_USER=${POSTGRES_USER:-postgres}" \
-        "-e POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}"
+    # Layer 0: Infrastructure
+    deploy_layer_0_infrastructure
     
-    # Redis (for caching)
-    deploy_service "redis" "redis:7-alpine" "6379" "6379"
+    # Layer 1: Databases
+    deploy_layer_1_databases
     
-    # Vector Database
-    case "${VECTOR_DB}" in
-        qdrant)
-            deploy_service "qdrant" "qdrant/qdrant:latest" "6333" "6333"
-            ;;
-        weaviate)
-            deploy_service "weaviate" "semitechnologies/weaviate:latest" "8080" "8080"
-            ;;
-        chroma)
-            deploy_service "chroma" "chromadb/chroma:latest" "8000" "8000"
-            ;;
-        # pgvector uses postgres, already deployed
-    esac
+    # Layer 2: Application Services
+    deploy_layer_2_services
     
-    # Ollama (for LLM services)
-    deploy_service "ollama" "ollama/ollama:latest" "11434" "11434"
+    # Layer 3: OpenClaw (restricted)
+    deploy_layer_3_openclaw
+    
+    # Layer 4: Caddy (proxy - LAST)
+    deploy_layer_4_proxy
+    
+    print_success "All services deployed in dependency order"
 }
 
-# Deploy AI services
-deploy_ai_services() {
-    print_header "Deploying AI Services"
+deploy_layer_0_infrastructure() {
+    print_header "Layer 0: Network + AppArmor"
     
-    # n8n
-    deploy_service "n8n" "n8nio/n8n:latest" "5678" "${N8N_PORT}" \
-        "-e N8N_BASIC_AUTH_ACTIVE=true" \
-        "-e N8N_BASIC_AUTH_USER=admin" \
-        "-e N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD:-password}"
+    # Load AppArmor profiles FIRST
+    if [[ -f "${DATA_ROOT}/apparmor/${DOCKER_NETWORK}-default" ]]; then
+        apparmor_parser -r "${DATA_ROOT}/apparmor/${DOCKER_NETWORK}-default" 2>/dev/null || print_warning "Failed to load default AppArmor profile"
+    fi
     
-    # AnythingLLM
-    deploy_service "anythingllm" "mintplexlabs/anythingllm:latest" "3001" "${ANYTHINGLLM_PORT}" \
-        "-e STORAGE_DIR=/app/server/storage" \
-        "-e JWT_SECRET=${JWT_SECRET:-your-secret-key}" \
-        "-e LLM_PROVIDER=ollama" \
-        "-e OLLAMA_BASE_PATH=http://ollama:11434" \
-        "-e EMBEDDING_ENGINE=ollama" \
-        "-e EMBEDDING_BASE_PATH=http://ollama:11434"
+    if [[ -f "${DATA_ROOT}/apparmor/${DOCKER_NETWORK}-openclaw" ]]; then
+        apparmor_parser -r "${DATA_ROOT}/apparmor/${DOCKER_NETWORK}-openclaw" 2>/dev/null || print_warning "Failed to load OpenClaw AppArmor profile"
+    fi
     
-    # LiteLLM
-    deploy_service "litellm" "ghcr.io/berriai/litellm:main-latest" "4000" "${LITELLM_PORT}" \
-        "-e LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-your-master-key}" \
-        "-e LITELLM_SALT_KEY=${LITELLM_SALT_KEY:-your-salt-key}"
-    
-    # OpenWebUI
-    deploy_service "openwebui" "ghcr.io/open-webui/open-webui:main" "8080" "${OPENWEBUI_PORT}" \
-        "-e OLLAMA_BASE_URL=http://ollama:11434" \
-        "-e WEBUI_AUTH=true" \
-        "-e WEBUI_SECRET_KEY=${JWT_SECRET:-your-secret-key}"
-    
-    # MinIO (S3-compatible storage)
-    deploy_service "minio" "minio/minio:latest" "9000" "${MINIO_S3_PORT}" \
-        "-e MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}" \
-        "-e MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}"
-    
-    # Deploy MinIO console separately
-    deploy_service "minio-console" "minio/minio:latest" "9001" "${MINIO_CONSOLE_PORT}" \
-        "-e MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}" \
-        "-e MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}"
+    # Create Docker network
+    docker network create "${DOCKER_NETWORK}" 2>/dev/null || true
+    print_success "Infrastructure ready"
 }
 
-# Deploy Caddy reverse proxy
-deploy_caddy() {
-    print_header "Deploying Caddy Reverse Proxy"
+deploy_layer_1_databases() {
+    print_header "Layer 1: Databases"
     
-    # Create Caddyfile
-    mkdir -p "${DATA_ROOT}/caddy"
-    cat > "${DATA_ROOT}/caddy/Caddyfile" << EOF
-{
-    admin off
-    auto_https off
-}
-
-:80 {
-    # N8N (with websockets)
-    handle_path /n8n/* {
-        reverse_proxy n8n:5678 {
-            header_up Upgrade {http.request.header.Upgrade}
-            header_up Connection {http.request.header.Connection}
-        }
-    }
-
-    # OpenWebUI (with websockets)
-    handle_path /openwebui/* {
-        reverse_proxy openwebui:8080 {
-            header_up Upgrade {http.request.header.Upgrade}
-            header_up Connection {http.request.header.Connection}
-        }
-    }
-
-    # AnythingLLM (with websockets)
-    handle_path /anythingllm/* {
-        reverse_proxy anythingllm:3001 {
-            header_up Upgrade {http.request.header.Upgrade}
-            header_up Connection {http.request.header.Connection}
-        }
-    }
-
-    # LiteLLM
-    handle_path /litellm/* {
-        reverse_proxy litellm:4000
-    }
-
-    # OpenClaw (if standalone)
-    handle_path /openclaw/* {
-        reverse_proxy openclaw:8080
-    }
-
-    # MinIO Console
-    handle_path /minio/* {
-        reverse_proxy minio-console:9001
-    }
-
-    # Health check
-    handle /health {
-        respond "OK" 200
-    }
-
-    # Fallback
-    respond "AI Platform - use /servicename to access services" 200
-}
-EOF
-
-    # Deploy Caddy
+    # PostgreSQL with explicit UID and init script
     docker run -d \
-        --name "caddy" \
+        --name postgres \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
-        --user "${RUNNING_UID}:${RUNNING_GID}" \
+        --security-opt "apparmor=${DOCKER_NETWORK}-default" \
+        -e POSTGRES_USER="${POSTGRES_USER}" \
+        -e POSTGRES_PASSWORD="${POSTGRES_PASSWORD}" \
+        -v "${DATA_ROOT}/data/postgres:/var/lib/postgresql/data" \
+        -v "${DATA_ROOT}/postgres-init:/docker-entrypoint-initdb.d" \
+        -u "999:999" \
+        postgres:15-alpine
+    
+    # Redis
+    docker run -d \
+        --name redis \
+        --network "${DOCKER_NETWORK}" \
+        --restart unless-stopped \
+        --security-opt "apparmor=${DOCKER_NETWORK}-default" \
+        -e REDIS_PASSWORD="${REDIS_PASSWORD}" \
+        -v "${DATA_ROOT}/data/redis:/data" \
+        redis:7-alpine --requirepass "${REDIS_PASSWORD}"
+    
+    # Qdrant
+    docker run -d \
+        --name qdrant \
+        --network "${DOCKER_NETWORK}" \
+        --restart unless-stopped \
+        --security-opt "apparmor=${DOCKER_NETWORK}-default" \
+        -v "${DATA_ROOT}/data/qdrant:/qdrant/storage" \
+        -u "${RUNNING_UID}:${RUNNING_GID}" \
+        qdrant/qdrant:latest
+    
+    # WAIT for all layer 1 to be healthy
+    wait_healthy "postgres" "pg_isready -U ${POSTGRES_USER}" 30
+    wait_healthy "redis" "redis-cli -a ${REDIS_PASSWORD} ping" 30
+    wait_healthy "qdrant" "curl -sf http://localhost:6333/healthz" 30
+    print_success "Layer 1 databases healthy"
+}
+
+deploy_layer_2_services() {
+    print_header "Layer 2: Application Services"
+    
+    # MinIO
+    docker run -d \
+        --name minio \
+        --network "${DOCKER_NETWORK}" \
+        --restart unless-stopped \
+        -e MINIO_ROOT_USER="${MINIO_ROOT_USER}" \
+        -e MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD}" \
+        -v "${DATA_ROOT}/data/minio:/data" \
+        -u "${RUNNING_UID}:${RUNNING_GID}" \
+        minio/minio:latest server /data --console-address ":9001"
+    
+    # n8n
+    docker run -d \
+        --name n8n \
+        --network "${DOCKER_NETWORK}" \
+        --restart unless-stopped \
+        -e DB_TYPE=postgresdb \
+        -e DB_POSTGRESDB_HOST=postgres \
+        -e DB_POSTGRESDB_DATABASE=n8n \
+        -e DB_POSTGRESDB_USER="${POSTGRES_USER}" \
+        -e DB_POSTGRESDB_PASSWORD="${POSTGRES_PASSWORD}" \
+        -e N8N_HOST="${DOMAIN_NAME}" \
+        -e N8N_PROTOCOL=https \
+        -e WEBHOOK_URL="https://${DOMAIN_NAME}/n8n/" \
+        -v "${DATA_ROOT}/data/n8n:/home/node/.n8n" \
+        -u "${RUNNING_UID}:${RUNNING_GID}" \
+        n8nio/n8n:latest
+    
+    # OpenWebUI with secret key
+    docker run -d \
+        --name openwebui \
+        --network "${DOCKER_NETWORK}" \
+        --restart unless-stopped \
+        -e WEBUI_SECRET_KEY="${WEBUI_SECRET_KEY}" \
+        -v "${DATA_ROOT}/data/openwebui:/app/backend/data" \
+        -u "${RUNNING_UID}:${RUNNING_GID}" \
+        ghcr.io/open-webui/open-webui:main
+    
+    # AnythingLLM
+    docker run -d \
+        --name anythingllm \
+        --network "${DOCKER_NETWORK}" \
+        --restart unless-stopped \
+        -e VECTOR_DB=qdrant \
+        -e QDRANT_URL=http://qdrant:6333 \
+        -e ADMIN_PASSWORD="${ADMIN_PASSWORD}" \
+        -v "${DATA_ROOT}/data/anythingllm:/app/server/storage/documents" \
+        -v "${DATA_ROOT}/logs/anythingllm:/var/log/anythingllm" \
+        -u "${RUNNING_UID}:${RUNNING_GID}" \
+        mintplexlabs/anythingllm:latest
+    
+    # LiteLLM
+    docker run -d \
+        --name litellm \
+        --network "${DOCKER_NETWORK}" \
+        --restart unless-stopped \
+        -e LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
+        -v "${DATA_ROOT}/data/litellm:/app/data" \
+        -v "${DATA_ROOT}/logs/litellm:/app/logs" \
+        -u "${RUNNING_UID}:${RUNNING_GID}" \
+        ghcr.io/berriai/litellm:main-latest
+    
+    # Wait for layer 2
+    wait_http "n8n" "http://n8n:5678/healthz" 60
+    wait_http "minio" "http://minio:9000/minio/health/live" 60
+    wait_http "litellm" "http://litellm:4000/health" 60
+    print_success "Layer 2 application services healthy"
+}
+
+deploy_layer_3_openclaw() {
+    print_header "Layer 3: OpenClaw (restricted)"
+    
+    docker run -d \
+        --name openclaw \
+        --network "${DOCKER_NETWORK}" \
+        --restart unless-stopped \
+        --security-opt "apparmor=${DOCKER_NETWORK}-openclaw" \
+        -e VECTOR_DB_URL="http://qdrant:6333" \
+        -e HOME=/data/openclaw \
+        -e OPENCLAW_HOME=/data/openclaw \
+        -e OPENCLAW_CONFIG=/data/openclaw/config \
+        -e OPENCLAW_LOGS=/data/openclaw/logs \
+        -e XDG_CONFIG_HOME=/data/openclaw/.config \
+        -e XDG_DATA_HOME=/data/openclaw/.local \
+        -v "${DATA_ROOT}/data/openclaw:/data/openclaw" \
+        -u "${OPENCLAW_UID}:${OPENCLAW_GID}" \
+        --read-only \
+        --tmpfs /tmp:rw,noexec,nosuid \
+        openclaw/openclaw:latest
+    
+    wait_http "openclaw" "http://openclaw:8080/health" 60
+    print_success "Layer 3 OpenClaw healthy"
+}
+
+deploy_layer_4_proxy() {
+    print_header "Layer 4: Caddy (last)"
+    
+    # Caddyfile already written by Script 1
+    docker run -d \
+        --name caddy \
+        --network "${DOCKER_NETWORK}" \
+        --restart unless-stopped \
         -p "80:80" \
         -p "443:443" \
         -v "${DATA_ROOT}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
-        -v "${DATA_ROOT}/ssl:/etc/ssl:ro" \
+        -v "${DATA_ROOT}/caddy/data:/data" \
+        -v "${DATA_ROOT}/caddy/config:/config" \
         caddy:2-alpine
+    
+    sleep 5
+    print_success "Caddy started with all service routes"
+}
 
-    print_success "Caddy deployed with reverse proxy configuration"
+wait_healthy() {
+    local container=$1
+    local check_cmd=$2
+    local timeout=$3
+    local elapsed=0
+    
+    echo -n "  Waiting for ${container}..."
+    while ! docker exec "${container}" sh -c "${check_cmd}" &>/dev/null; do
+        sleep 2
+        elapsed=$((elapsed + 2))
+        echo -n "."
+        if [[ $elapsed -ge $timeout ]]; then
+            echo ""
+            print_error "${container} failed to become healthy after ${timeout}s"
+            print_info "Logs:"
+            docker logs --tail 20 "${container}"
+            exit 1
+        fi
+    done
+    echo " "
+}
+
+wait_http() {
+    local name=$1
+    local url=$2
+    local timeout=$3
+    local elapsed=0
+    
+    echo -n "  Waiting for ${name} HTTP..."
+    while ! docker run --rm --network "${DOCKER_NETWORK}" \
+            curlimages/curl:latest -sf "${url}" &>/dev/null; do
+        sleep 3
+        elapsed=$((elapsed + 3))
+        echo -n "."
+        if [[ $elapsed -ge $timeout ]]; then
+            echo ""
+            print_error "${name} HTTP check failed after ${timeout}s"
+            print_info "Logs:"
+            docker logs --tail 30 "${name}"
+            exit 1
+        fi
+    done
+    echo " "
 }
 
 # Validate deployment
@@ -566,8 +661,8 @@ main() {
     load_apparmor_profiles
     set_vectordb_config
     
-    # Deploy services
-    deploy_infrastructure
+    # Deploy services in dependency order
+    deploy_layered_services
     deploy_ai_services
     deploy_openclaw
     deploy_caddy
