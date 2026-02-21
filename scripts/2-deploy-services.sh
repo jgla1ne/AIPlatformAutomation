@@ -445,7 +445,9 @@ deploy_layer_2_services() {
         -e DB_POSTGRESDB_PASSWORD="${POSTGRES_PASSWORD}" \
         -e N8N_HOST="${DOMAIN_NAME}" \
         -e N8N_PROTOCOL=https \
+        -e N8N_HOME=/home/node/.n8n \
         -e WEBHOOK_URL="https://${DOMAIN_NAME}/n8n/" \
+        -w /home/node \
         -v "${DATA_ROOT}/data/n8n:/home/node/.n8n" \
         -u "${RUNNING_UID}:${RUNNING_GID}" \
         n8nio/n8n:latest
