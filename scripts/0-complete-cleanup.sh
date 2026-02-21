@@ -232,8 +232,13 @@ scan_and_select_stack() {
     echo "🔍 Scanning for mounted EBS volumes..."
     echo ""
     
-    # List all mounted block devices (remove tree characters and filter)
-    local mounted_volumes=($(findmnt -n -o SOURCE,TARGET | grep -E "/mnt|/tmp" | awk '{print $2}' | sed 's/^[├│└─]*//' | grep -v "^/$" | sort -u || true))
+    # List all mounted block devices (simplified approach)
+    local mounted_volumes=()
+    while IFS= read -r line; do
+        if [[ -n "$line" ]]; then
+            mounted_volumes+=("$line")
+        fi
+    done < <(findmnt -n -o TARGET | grep "/mnt" | sed 's/^[├│└─]*//' | grep -v "^/$" | sort -u)
     
     if [[ ${#mounted_volumes[@]} -eq 0 ]]; then
         print_warning "No EBS volumes found mounted"
