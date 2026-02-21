@@ -2,7 +2,7 @@
 # Script 2: Parameterized Deployment
 #
 # NOTE: This script runs as root (required for Docker, AppArmor, system setup)
-# STACK_USER_UID owns BASE_DIR for container permissions
+# RUNNING_UID owns DATA_ROOT for container permissions
 
 set -euo pipefail
 
@@ -54,9 +54,9 @@ print_header() {
 load_configuration() {
     print_header "Loading Configuration"
     
-    if [[ -f "${BASE_DIR:-/mnt/data}/config/.env" ]]; then
-        source "${BASE_DIR:-/mnt/data}/config/.env"
-        print_success "Configuration loaded from ${BASE_DIR}/config/.env"
+    if [[ -f "${DATA_ROOT:-/mnt/data}/config/.env" ]]; then
+        source "${DATA_ROOT:-/mnt/data}/config/.env"
+        print_success "Configuration loaded from ${DATA_ROOT}/config/.env"
     else
         print_error "Configuration file not found. Please run Script 1 first."
         exit 1
@@ -67,13 +67,15 @@ load_configuration() {
 validate_config() {
     print_header "Validating Configuration"
     
-    local required_vars=(BASE_DIR STACK_USER_UID DOCKER_NETWORK DOMAIN_NAME)
+    local required_vars=(DATA_ROOT RUNNING_UID RUNNING_GID DOCKER_NETWORK DOMAIN_NAME)
     for var in "${required_vars[@]}"; do
-        if [[ -z "${!var}" ]]; then
+        local value="${!var:-}"
+        if [[ -z "$value" ]]; then
             print_error "Required variable $var not set in .env"
             exit 1
         fi
     done
+    
     print_success "Configuration validated"
 }
 
@@ -89,7 +91,7 @@ create_network() {
 load_apparmor_profiles() {
     print_header "Loading AppArmor Profiles"
     
-    local profile_dir="${BASE_DIR}/apparmor"
+    local profile_dir="${DATA_ROOT}/apparmor"
 
     for profile in default openclaw tailscale; do
         local src="${profile_dir}/${profile}.profile.tmpl"
@@ -101,8 +103,8 @@ load_apparmor_profiles() {
             continue
         fi
 
-        # Substitute BASE_DIR into template
-        sed "s|BASE_DIR_PLACEHOLDER|${BASE_DIR}|g" "${src}" > "${dst}"
+        # Substitute DATA_ROOT into template
+        sed "s|DATA_ROOT_PLACEHOLDER|${DATA_ROOT}|g" "${src}" > "${dst}"
 
         # Load into kernel
         if apparmor_parser -r "${dst}"; then
@@ -218,9 +220,9 @@ deploy_service() {
     print_info "Deploying ${service_name}..."
     
     # Create service directories
-    mkdir -p "${BASE_DIR}/data/${service_name}" "${BASE_DIR}/logs/${service_name}"
-    chown -R ${STACK_USER_UID}:${STACK_USER_GID} "${BASE_DIR}/data/${service_name}"
-    chown -R ${STACK_USER_UID}:${STACK_USER_GID} "${BASE_DIR}/logs/${service_name}"
+    mkdir -p "${DATA_ROOT}/data/${service_name}" "${DATA_ROOT}/logs/${service_name}"
+    chown -R ${RUNNING_UID}:${RUNNING_GID} "${DATA_ROOT}/data/${service_name}"
+    chown -R ${RUNNING_UID}:${RUNNING_GID} "${DATA_ROOT}/logs/${service_name}"
     
     # Get vector DB environment variables
     build_vectordb_env
@@ -230,10 +232,10 @@ deploy_service() {
         --name "${service_name}" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
-        --user "${STACK_USER_UID}:${STACK_USER_GID}" \
+        --user "${RUNNING_UID}:${RUNNING_GID}" \
         -p "${host_port}:${internal_port}" \
-        -v "${BASE_DIR}/data/${service_name}:/app/data" \
-        -v "${BASE_DIR}/logs/${service_name}:/app/logs" \
+        -v "${DATA_ROOT}/data/${service_name}:/app/data" \
+        -v "${DATA_ROOT}/logs/${service_name}:/app/logs" \
         "${vectordb_env[@]}" \
         "${extra_env[@]}" \
         "${image}"
@@ -275,9 +277,9 @@ deploy_openclaw() {
     fi
 
     # Create OpenClaw directories
-    mkdir -p "${BASE_DIR}/data/openclaw" "${BASE_DIR}/data/tailscale"
-    chown -R ${OPENCLAW_UID}:${OPENCLAW_GID} "${BASE_DIR}/data/openclaw"
-    chown -R ${OPENCLAW_UID}:${OPENCLAW_GID} "${BASE_DIR}/data/tailscale"
+    mkdir -p "${DATA_ROOT}/data/openclaw" "${DATA_ROOT}/data/tailscale"
+    chown -R ${OPENCLAW_UID}:${OPENCLAW_GID} "${DATA_ROOT}/data/openclaw"
+    chown -R ${OPENCLAW_UID}:${OPENCLAW_GID} "${DATA_ROOT}/data/tailscale"
 
     # Step 1: Tailscale sidecar
     print_info "Deploying Tailscale sidecar..."
@@ -289,7 +291,7 @@ deploy_openclaw() {
         --cap-add SYS_MODULE \
         --security-opt "apparmor=${APPARMOR_TAILSCALE}" \
         --user "${OPENCLAW_UID}:${OPENCLAW_GID}" \
-        -v "${BASE_DIR}/data/tailscale:/var/lib/tailscale" \
+        -v "${DATA_ROOT}/data/tailscale:/var/lib/tailscale" \
         -v /dev/net/tun:/dev/net/tun \
         -e "TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY}" \
         -e "TAILSCALE_HOSTNAME=${TAILSCALE_HOSTNAME}" \
@@ -309,8 +311,8 @@ deploy_openclaw() {
         --user "${OPENCLAW_UID}:${OPENCLAW_GID}" \
         --read-only \
         --tmpfs /tmp:rw,noexec,nosuid,size=100m \
-        -v "${BASE_DIR}/data/openclaw:/app/data:rw" \
-        -v "${BASE_DIR}/config/openclaw:/app/config:ro" \
+        -v "${DATA_ROOT}/data/openclaw:/app/data:rw" \
+        -v "${DATA_ROOT}/config/openclaw:/app/config:ro" \
         ${vectordb_env[@]} \
         alpine/openclaw:latest
 
@@ -322,8 +324,8 @@ deploy_openclaw_standalone() {
     print_info "Deploying OpenClaw (standalone mode)..."
     
     # Create OpenClaw directories
-    mkdir -p "${BASE_DIR}/data/openclaw"
-    chown -R ${OPENCLAW_UID}:${OPENCLAW_GID} "${BASE_DIR}/data/openclaw"
+    mkdir -p "${DATA_ROOT}/data/openclaw"
+    chown -R ${OPENCLAW_UID}:${OPENCLAW_GID} "${DATA_ROOT}/data/openclaw"
     
     local vectordb_env=($(build_vectordb_env))
     
@@ -333,8 +335,8 @@ deploy_openclaw_standalone() {
         --restart unless-stopped \
         --user "${OPENCLAW_UID}:${OPENCLAW_GID}" \
         -p "${OPENCLAW_PORT}:8080" \
-        -v "${BASE_DIR}/data/openclaw:/app/data:rw" \
-        -v "${BASE_DIR}/config/openclaw:/app/config:ro" \
+        -v "${DATA_ROOT}/data/openclaw:/app/data:rw" \
+        -v "${DATA_ROOT}/config/openclaw:/app/config:ro" \
         ${vectordb_env[@]} \
         alpine/openclaw:latest
 
@@ -418,8 +420,8 @@ deploy_caddy() {
     print_header "Deploying Caddy Reverse Proxy"
     
     # Create Caddyfile
-    mkdir -p "${BASE_DIR}/caddy"
-    cat > "${BASE_DIR}/caddy/Caddyfile" << EOF
+    mkdir -p "${DATA_ROOT}/caddy"
+    cat > "${DATA_ROOT}/caddy/Caddyfile" << EOF
 {
     admin off
     auto_https off
@@ -480,11 +482,11 @@ EOF
         --name "caddy" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
-        --user "${STACK_USER_UID}:${STACK_USER_GID}" \
+        --user "${RUNNING_UID}:${RUNNING_GID}" \
         -p "80:80" \
         -p "443:443" \
-        -v "${BASE_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
-        -v "${BASE_DIR}/ssl:/etc/ssl:ro" \
+        -v "${DATA_ROOT}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+        -v "${DATA_ROOT}/ssl:/etc/ssl:ro" \
         caddy:2-alpine
 
     print_success "Caddy deployed with reverse proxy configuration"
@@ -519,7 +521,7 @@ display_summary() {
     print_header "Deployment Summary"
     
     echo "📊 Stack Information:"
-    echo "   Base Directory: ${BASE_DIR}"
+    echo "   Base Directory: ${DATA_ROOT}"
     echo "   Network: ${DOCKER_NETWORK}"
     echo "   Domain: ${DOMAIN_NAME}"
     echo ""

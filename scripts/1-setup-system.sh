@@ -327,6 +327,9 @@ collect_domain_info() {
     # BASE_DIR configuration
     echo "BASE_DIR=/mnt/data" >> "$ENV_FILE"
     
+    # COMPOSE_FILE configuration
+    echo "COMPOSE_FILE=/mnt/data/ai-platform/deployment/stack/docker-compose.yml" >> "$ENV_FILE"
+    
     # Validate domain resolution for DOMAIN_NAME
     echo ""
     print_info "Validating domain resolution..."
@@ -1815,6 +1818,7 @@ allocate_port() {
         
         echo "MINIO_API_PORT=$minio_api_port" >> "$ENV_FILE"
         echo "MINIO_CONSOLE_PORT=$minio_console_port" >> "$ENV_FILE"
+        echo "MINIO_S3_PORT=9000" >> "$ENV_FILE"
         
         local minio_buckets="aiplatform-docs,aiplatform-media,aiplatform-backups"
         prompt_input "MINIO_DEFAULT_BUCKETS" "MinIO default buckets" "$minio_buckets" false
