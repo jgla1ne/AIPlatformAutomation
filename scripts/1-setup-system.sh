@@ -3300,6 +3300,14 @@ main() {
     detect_system
     mark_phase_complete "detect_system"
     collect_domain_info
+    print_success "Domain configuration completed"
+    
+    # Load the environment variables so they're available for subsequent phases
+    if [[ -f "$ENV_FILE" ]]; then
+        source "$ENV_FILE"
+        print_info "Environment variables loaded"
+    fi
+    
     mark_phase_complete "collect_domain_info"
     update_system
     mark_phase_complete "update_system"
