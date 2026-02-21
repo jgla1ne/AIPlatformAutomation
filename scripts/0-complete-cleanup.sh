@@ -69,19 +69,33 @@ detect_stack() {
 confirm_teardown() {
     print_header "Teardown Confirmation"
     
-    detect_stack
+    # Only detect stack if not doing --list
+    if [[ "${1:-}" != "--list" ]]; then
+        detect_stack
+    fi
     
     echo "⚠️  WARNING: This will completely remove the AI Platform stack:"
     echo ""
     echo "📊 Stack Information:"
-    echo "   Domain: ${DOMAIN_NAME}"
-    echo "   Network: ${DOCKER_NETWORK}"
-    echo "   Base Directory: ${BASE_DIR}"
+    if [[ -n "${DOMAIN_NAME:-}" ]]; then
+        echo "   Domain: ${DOMAIN_NAME}"
+        echo "   Network: ${DOCKER_NETWORK}"
+        echo "   Base Directory: ${BASE_DIR}"
+    else
+        echo "   No stack detected - will scan for all stacks"
+    fi
     echo ""
     echo "🔍 What will be removed:"
-    echo "   • All containers on network ${DOCKER_NETWORK}"
-    echo "   • Docker network ${DOCKER_NETWORK}"
-    echo "   • AppArmor profiles for ${DOCKER_NETWORK}"
+    if [[ -n "${DOCKER_NETWORK:-}" ]]; then
+        echo "   • All containers on network ${DOCKER_NETWORK}"
+        echo "   • Docker network ${DOCKER_NETWORK}"
+        echo "   • AppArmor profiles for ${DOCKER_NETWORK}"
+    else
+        echo "   • All containers on all stack networks"
+        echo "   • All stack Docker networks"
+        echo "   • All stack AppArmor profiles"
+    fi
+    echo ""
     echo "   • Optionally: All stack data and configuration"
     echo ""
     
@@ -211,11 +225,14 @@ cleanup_docker_resources() {
 remove_stack_data() {
     print_header "Removing Stack Data"
     
-    detect_stack
+    # Only detect stack if not doing --list
+    if [[ "${1:-}" != "--list" ]]; then
+        detect_stack
+    fi
     
     # Check if BASE_DIR exists
-    if [[ ! -d "${BASE_DIR}" ]]; then
-        print_info "Base directory ${BASE_DIR} not found"
+    if [[ ! -d "${BASE_DIR:-}" ]]; then
+        print_info "Base directory ${BASE_DIR:-not set} not found"
         return
     fi
     
@@ -252,9 +269,12 @@ remove_stack_data() {
 create_backup() {
     print_header "Creating Backup"
     
-    detect_stack
+    # Only detect stack if not doing --list
+    if [[ "${1:-}" != "--list" ]]; then
+        detect_stack
+    fi
     
-    local backup_dir="${BASE_DIR}/../backup-$(date +%Y%m%d_%H%M%S)-${DOMAIN_NAME}"
+    local backup_dir="${BASE_DIR:-}/../backup-$(date +%Y%m%d_%H%M%S)-${DOMAIN_NAME:-all-stacks}"
     
     print_info "Creating backup in ${backup_dir}..."
     
