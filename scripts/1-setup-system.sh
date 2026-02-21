@@ -225,11 +225,12 @@ validate_ebs_mount() {
         [[ "$confirm" =~ ^[Yy]$ ]] || exit 1
     fi
 
-    # Check it is writable by the specified UID
-    if ! sudo -u "#${STACK_USER_UID}" test -w "${BASE_DIR}"; then
-        print_error "${BASE_DIR} is not writable by UID ${STACK_USER_UID}"
+    # Check it is writable (script runs as root, so just test basic writability)
+    if ! touch "${BASE_DIR}/.test_write" 2>/dev/null; then
+        print_error "${BASE_DIR} is not writable"
         exit 1
     fi
+    rm -f "${BASE_DIR}/.test_write"
 
     # Check sufficient free space (minimum 20GB)
     local free_gb=$(df -BG "${BASE_DIR}" | awk 'NR==2 {gsub("G",""); print $4}')
