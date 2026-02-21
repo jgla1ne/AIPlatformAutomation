@@ -49,6 +49,58 @@ print_header() {
     echo ""
 }
 
+# Scan all EBS volumes and detect stacks
+scan_all_ebs_volumes() {
+    print_header "Scanning All EBS Volumes & Stacks"
+    
+    echo "🔍 Scanning for mounted EBS volumes..."
+    echo ""
+    
+    # List all mounted block devices
+    local mounted_volumes=($(findmnt -n -o SOURCE,TARGET | grep -E "^/dev/(xvd|sd|nvme)" | awk '{print $2}'))
+    
+    if [[ ${#mounted_volumes[@]} -eq 0 ]]; then
+        print_warning "No EBS volumes found mounted"
+        return
+    fi
+    
+    echo "📋 Found EBS Volumes:"
+    echo ""
+    printf "%-20s %-15s %-15s %-20s %-20s\n" "MOUNT POINT" "STACK" "DOMAIN" "STATUS"
+    echo "────────────────────────────────────────────────────────────────────────"
+    
+    local found_stacks=0
+    
+    for volume in "${mounted_volumes[@]}"; do
+        local env_file="$volume/config/.env"
+        local stack_name="Not Found"
+        local domain_name="Not Found"
+        local status="No Config"
+        
+        if [[ -f "$env_file" ]]; then
+            stack_name=$(grep "^DOMAIN_NAME=" "$env_file" 2>/dev/null | cut -d'=' -f2 || echo "Unknown")
+            domain_name=$(grep "^DOCKER_NETWORK=" "$env_file" 2>/dev/null | cut -d'=' -f2 || echo "Unknown")
+            status="Configured"
+            ((found_stacks++))
+        fi
+        
+        printf "%-20s %-15s %-15s %-20s %-20s\n" "$volume" "$stack_name" "$domain_name" "$status"
+    done
+    
+    echo ""
+    if [[ $found_stacks -gt 0 ]]; then
+        print_success "Found $found_stacks configured stack(s)"
+        echo ""
+        echo "💡 To cleanup a specific stack:"
+        echo "   cd /path/to/stack && sudo ./0-complete-cleanup.sh"
+        echo ""
+        echo "💡 To cleanup all stacks:"
+        echo "   sudo ./0-complete-cleanup.sh --all"
+    else
+        print_warning "No configured stacks found on EBS volumes"
+    fi
+}
+
 # Auto-detect stack from current directory or environment
 detect_stack() {
     if [[ -f "${BASE_DIR:-/mnt/data}/config/.env" ]]; then
@@ -341,6 +393,42 @@ show_summary() {
     print_success "Stack teardown completed successfully!"
 }
 
+# Cleanup all stacks
+cleanup_all_stacks() {
+    print_header "Cleaning Up All Stacks"
+    
+    echo "🔍 Scanning for all configured stacks..."
+    echo ""
+    
+    # Find all stack directories
+    local stack_dirs=($(find /mnt/data* -maxdepth 1 -name "config" -type d 2>/dev/null | sed 's|/config||'))
+    
+    if [[ ${#stack_dirs[@]} -eq 0 ]]; then
+        print_warning "No stack directories found"
+        return
+    fi
+    
+    echo "📋 Found Stack Directories:"
+    for dir in "${stack_dirs[@]}"; do
+        echo "  • $dir"
+    done
+    echo ""
+    
+    read -p "Clean up all ${#stack_dirs[@]} stacks? (y/N): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        print_info "Cleanup cancelled"
+        return
+    fi
+    
+    # Cleanup each stack
+    for dir in "${stack_dirs[@]}"; do
+        print_info "Cleaning up stack at $dir..."
+        BASE_DIR="$dir" bash "$0" --backup
+    done
+    
+    print_success "All stacks cleaned up"
+}
+
 # List all available stacks
 list_stacks() {
     print_header "Available Stacks"
@@ -385,22 +473,31 @@ show_help() {
     echo "Usage: $0 [options]"
     echo ""
     echo "Options:"
-    echo "  --backup, -b        Create backup before teardown"
+    echo "  --scan, -s         Scan all EBS volumes and detect stacks"
     echo "  --list, -l          List all available stacks"
+    echo "  --all, -a           Clean up all stacks"
+    echo "  --backup, -b        Create backup before teardown"
     echo "  --help, -h          Show this help message"
     echo ""
     echo "Examples:"
-    echo "  $0                  Teardown current stack"
-    echo "  $0 --backup         Teardown with backup"
-    echo "  $0 --list           List all stacks"
+    echo "  $0 --scan              Scan EBS volumes for stacks"
+    echo "  $0 --list              List all configured stacks"
+    echo "  $0 --all               Clean up all stacks"
+    echo "  $0                    Teardown current stack"
+    echo "  $0 --backup           Teardown with backup"
+    echo ""
+    echo "Multi-Stack Usage:"
+    echo "  $0 --scan              # See all stacks on all EBS volumes"
+    echo "  $0 --all               # Clean up all stacks safely"
+    echo "  cd /mnt/data1 && $0   # Clean specific stack"
     echo ""
     echo "Environment Variables:"
     echo "  BASE_DIR            Stack base directory (auto-detected)"
     echo ""
     echo "What gets removed:"
-    echo "  • All containers on the stack network"
-    echo "  • Docker network for the stack"
-    echo "  • AppArmor profiles for the stack"
+    echo "  • All containers on stack network(s)"
+    echo "  • Docker network(s) for stack(s)"
+    echo "  • AppArmor profiles for stack(s)"
     echo "  • Optionally: All stack data and configuration"
 }
 
@@ -451,6 +548,14 @@ main() {
     
     # Handle special commands
     case "${1:-}" in
+        --scan|-s)
+            scan_all_ebs_volumes
+            return
+            ;;
+        --all|-a)
+            cleanup_all_stacks
+            return
+            ;;
         --list|-l)
             list_stacks
             return
