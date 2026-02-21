@@ -3659,7 +3659,7 @@ main() {
     mark_phase_complete "validate_final_config"
     
     # Phase 13: Setup Completion
-    log_print_info "Final setup validation completed successfully"
+    print_info "Final setup validation completed successfully"
     print_info "All configurations are ready for deployment"
     
     mark_phase_complete "setup_completion"
