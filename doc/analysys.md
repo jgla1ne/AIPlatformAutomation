@@ -1,6 +1,6 @@
-## Cross-Check Analysis: Windsurf Summary vs. Correct Architecture
+## Analysis of Windsurf's Revised Plan
 
-The Windsurf summary has **one persistent conceptual error** mixed with some real progress. Let me break it down precisely.
+Windsurf correctly picked up the dynamic variable feedback but then **over-engineered into multi-tenancy prematurely**. Here's the precise assessment:
 
 ---
 
@@ -8,310 +8,332 @@ The Windsurf summary has **one persistent conceptual error** mixed with some rea
 
 | Item | Status |
 |------|--------|
-| Prometheus routing: `prometheus:9090` in Caddyfile | ✅ Correct |
-| Host port mappings updated to use `.env` vars | ✅ Correct |
-| 7/10 services now responding | ✅ Real progress |
-| Grafana working via proxy | ✅ Good |
-| OpenWebUI working | ✅ Good |
+| `BASE_DIR` variable instead of hardcoded `/mnt/data` | ✅ Correct direction |
+| `DOMAIN_NAME` variable | ✅ Correct |
+| `LOCALHOST` variable from `.env` | ✅ Correct |
+| `TENANT_UID`/`OPENCLAW_UID` as variables | ✅ Correct |
+| AppArmor profiles under tenant path (not `/etc/apparmor.d`) | ✅ Correct intent |
+| Dynamic port variables from `.env` | ✅ Correct |
 
 ---
 
-## ❌ The Persistent Wrong Belief
+## ❌ What Windsurf Got Wrong — Over-Engineering
 
-Windsurf still thinks changing host ports fixed the proxy. It didn't. Look at this:
-
-```
-Their claim:
-"Dynamic Port Usage: 0% → 100%"
-"Proxy URLs now use .env ports"
-
-What actually happened:
-Caddy still routes to container-internal ports (correct).
-Host port changes only affect external direct access.
-The proxy worked/failed for OTHER reasons.
-```
-
-The Caddyfile correctly uses `prometheus:9090`, `grafana:3000`, `open-webui:8080` — **none of these are `.env` ports**. That's correct and should stay that way forever.
-
----
-
-## 🗺️ Definitive Architecture Reference
+### Problem 1: Multi-tenancy is NOT in scope now
 
 ```
-EXTERNAL USER
-     │
-     ▼
-https://ai.datasquiz.net  (port 443)
-     │
-     ▼
-[CADDY CONTAINER] ──── uses container DNS names + internal ports
-     │
-     ├──► flowise:3000          (not 3002)
-     ├──► grafana:3000          (not 5001)
-     ├──► n8n:5678              (not 5002)
-     ├──► prometheus:9090       (not 5000)
-     ├──► ollama:11434          (not 11434 — same here)
-     ├──► openclaw:3000         (not 18789)
-     ├──► dify-web:3000         (not 5003)
-     ├──► dify-api:5001         (not 5003)
-     ├──► anythingllm:3001      (not 5004)
-     ├──► litellm:4000          (not 5005)
-     ├──► open-webui:8080       (not 5006)
-     ├──► signal-cli-rest-api:8080 (not 8080 — same)
-     └──► minio:9001            (console, not 5007/5008)
-
-HOST PORTS (only for direct debug access, irrelevant to Caddy):
-  prometheus → 5000:9090
-  grafana    → 5001:3000
-  n8n        → 5002:5678
-  flowise    → 3002:3000
-  anythingllm → 5004:3001
-  litellm    → 5005:4000
-  openwebui  → 5006:8080
-  minio      → 5007:9000, 5008:9001
+Windsurf built:                    What was actually asked:
+/mnt/data/tenants/tenant-a/   ←→   /mnt/data/         (single stack)
+tenant-${TENANT_NAME}.env     ←→   .env                (one env file)
+docker network ai-platform-a  ←→   ai_platform         (one network)
+per-tenant port ranges        ←→   ports from .env     (one set)
 ```
 
----
+The **intent** expressed was: *eventually* spin multiple stacks on the same machine under different user profiles with dedicated EBS volumes. That's future architecture. **Current scope = single stack, single tenant.**
 
-## 📋 Script 2 Crosscheck — What Must Be True
+The correct response to that intent is: **build it clean and parameterized NOW so multi-tenancy is possible LATER without refactoring** — not implement multi-tenancy today.
 
-Here's what script 2's `deploy_caddy()` function **must generate**, locked and immutable:
+### Problem 2: AppArmor profiles still go to `/etc/apparmor.d/`
+
+AppArmor profiles **must** be loaded from `/etc/apparmor.d/` by the kernel — that's not configurable. However, the **source files** can live under `${BASE_DIR}` and be symlinked or copied to `/etc/apparmor.d/` at load time:
 
 ```bash
-deploy_caddy() {
-  mkdir -p /mnt/data/caddy
-
-  # NOTE: These are CONTAINER-INTERNAL ports, NOT .env host ports
-  # Do NOT substitute .env port variables here
-  cat > /mnt/data/caddy/Caddyfile << 'CADDYEOF'
-{
-    admin off
-    email admin@datasquiz.net
-}
-
-ai.datasquiz.net {
-
-    handle_path /prometheus/* {
-        reverse_proxy prometheus:9090
-    }
-
-    handle /grafana* {
-        reverse_proxy grafana:3000 {
-            header_up X-Forwarded-Prefix /grafana
-        }
-    }
-
-    handle_path /n8n/* {
-        reverse_proxy n8n:5678 {
-            header_up Upgrade {http.request.header.Upgrade}
-            header_up Connection {http.request.header.Connection}
-        }
-    }
-
-    handle_path /ollama/* {
-        reverse_proxy ollama:11434
-    }
-
-    handle_path /openclaw/* {
-        reverse_proxy openclaw:3000
-    }
-
-    handle_path /dify/api/* {
-        reverse_proxy dify-api:5001
-    }
-
-    handle_path /dify/* {
-        reverse_proxy dify-web:3000
-    }
-
-    handle_path /anythingllm/* {
-        reverse_proxy anythingllm:3001 {
-            header_up Upgrade {http.request.header.Upgrade}
-            header_up Connection {http.request.header.Connection}
-        }
-    }
-
-    handle_path /litellm/* {
-        reverse_proxy litellm:4000
-    }
-
-    handle_path /openwebui/* {
-        reverse_proxy open-webui:8080 {
-            header_up Upgrade {http.request.header.Upgrade}
-            header_up Connection {http.request.header.Connection}
-        }
-    }
-
-    handle_path /signal/* {
-        reverse_proxy signal-cli-rest-api:8080
-    }
-
-    handle_path /flowise/* {
-        reverse_proxy flowise:3000
-    }
-
-    handle_path /minio/* {
-        reverse_proxy minio:9001 {
-            header_up X-Forwarded-Prefix /minio
-        }
-    }
-
-    handle /health {
-        respond "OK" 200
-    }
-
-    respond "AI Platform" 200
-}
-CADDYEOF
-
-  # Deploy caddy container on the ai_platform network
-  docker rm -f caddy 2>/dev/null || true
-  docker run -d \
-    --name caddy \
-    --network ai_platform \
-    --restart unless-stopped \
-    -p 80:80 \
-    -p 443:443 \
-    -v /mnt/data/caddy/Caddyfile:/etc/caddy/Caddyfile:ro \
-    -v /mnt/data/caddy/data:/data \
-    -v /mnt/data/caddy/config:/config \
-    caddy:2-alpine
-
-  echo "Caddy deployed. Testing in 5s..."
-  sleep 5
-  curl -s -o /dev/null -w "Caddy health: %{http_code}\n" \
-    http://localhost/health
-}
-```
-
----
-
-## The Three Remaining Broken Services
-
-| Service | Real Problem | Fix |
-|---------|-------------|-----|
-| **n8n** | Permission error on `/mnt/data/n8n` | `chown -R 1000:1000 /mnt/data/n8n && docker restart n8n` |
-| **AnythingLLM** | Not listening on 3001 internally | Check if port in docker-compose is `3001:3001` not `5004:3000` |
-| **LiteLLM** | Config file missing or wrong | Check `/mnt/data/litellm/config.yaml` exists |
-
-```bash
-# Run this now to fix all three
-# Check anythingllm actual internal port
-docker inspect anythingllm \
-  --format='Ports: {{json .NetworkSettings.Ports}}'
-
-# Check litellm config
-ls -la /mnt/data/litellm/
-
-docker restart n8n anythingllm litellm
-sleep 10
-
-for svc in n8n anythingllm litellm; do
-  echo "=== $svc logs ==="
-  docker logs $svc --tail 5 2>&1
-done
-```
-
-**DIAGNOSTIC RESULTS:**
-
-### **n8n**
-```
-=== n8n logs ===
-password authentication failed for user "ds-admin"
-Last session crashed
-Initializing n8n process
-There was an error initializing DB
-password authentication failed for user "ds-admin"
-```
-**Issue**: PostgreSQL authentication failure
-**Fix**: Check PostgreSQL credentials and restart n8n
-
-### **AnythingLLM**
-```
-=== anythingllm logs ===
-[backend] info: [BackgroundWorkerService] Service started with 1 jobs ["cleanup-orphan-documents"]
-[backend] info: ⚡Pre-cached context windows for Ollama
-[backend] info: [PushNotifications] Loaded existing VAPID keys!
-[backend] info: [PushNotifications] Loading single user mode subscriptions...
-[backend] info: Primary server in HTTP mode listening on port 3001
-```
-**Issue**: Service is listening on port 3001, not 3000
-**Fix**: Update docker-compose port mapping from `5004:3000` to `5004:3001`
-
-### **LiteLLM**
-```
-=== litellm logs ===
-Exception: Config file not found: /app/config/config.yaml
-```
-**Issue**: Missing configuration file
-**Fix**: Create `/mnt/data/litellm/config/config.yaml` or copy from template
-
----
-
-## 🎯 EXACT FIXES REQUIRED
-
-### **1. Fix n8n PostgreSQL Authentication**
-```bash
-# Check PostgreSQL connection
-sudo docker exec postgres psql -U ${POSTGRES_USER:-ds-admin} -d ${POSTGRES_DB:-aiplatform} -c "SELECT 1;"
-# If fails, fix credentials in .env and restart postgres
-sudo docker restart postgres
-sudo docker restart n8n
-```
-
-### **2. Fix AnythingLLM Port Mismatch**
-```bash
-# Update docker-compose.yml
-# Change from: "${ANYTHINGLLM_PORT:-5004}:3000"
-# To: "${ANYTHINGLLM_PORT:-5004}:3001"
-
-# Recreate container
-sudo docker stop anythingllm
-sudo docker rm anythingllm
-cd /mnt/data/ai-platform/deployment/stack
-sudo docker compose --env-file /mnt/data/.env up -d anythingllm
-```
-
-### **3. Fix LiteLLM Configuration**
-```bash
-# Create missing config file
-cat > /mnt/data/litellm/config/config.yaml << 'EOF'
-model_list:
-  - model_name: ollama/llama3.2
-    model_id: ollama/llama3.2:latest
-    litellm_params:
-      model_name: ollama/llama3.2
-      api_base: http://ollama:11434
-      api_base: http://ollama:11434
-
-litellm_settings:
-  database_url: postgresql://ds-admin:bG4CpMQlb5v5SSG9IdUrWCON@postgres:5432/aiplatform
-  redis_url: redis://:6379
-  redis_password: FGCUJpVlKPtQHWBTZFq7CE1a
-
-general_settings:
-  master_key: rjcfVbbNbxuoMV9WwVBn8nEcTeBuhQJ7
-  salt_key: ygt23OKv3WQkur8n
-  cache_enabled: true
-  cache_ttl: 3600
-  rate_limit_enabled: true
-  rate_limit_requests_per_minute: 60
-  routing_strategy: local-first
+# Correct pattern:
+setup_apparmor_profiles() {
+    local profile_dir="${BASE_DIR}/apparmor"
+    mkdir -p "${profile_dir}"
+    
+    # Write profiles to BASE_DIR (tenant-owned)
+    cat > "${profile_dir}/ai-platform-default" << 'EOF'
+    ...
+    /mnt/data/** r,   # ← This still needs BASE_DIR substitution (see below)
 EOF
 
-sudo docker restart litellm
+    # Copy to system location for kernel loading
+    cp "${profile_dir}/ai-platform-default" \
+       /etc/apparmor.d/ai-platform-default
+    
+    apparmor_parser -r /etc/apparmor.d/ai-platform-default
+}
+```
+
+**Key subtlety**: The AppArmor profile content itself has hardcoded paths like `/mnt/data/**` — these need `sed` substitution if `BASE_DIR` changes:
+
+```bash
+# After writing profile template, substitute BASE_DIR
+sed -i "s|/mnt/data|${BASE_DIR}|g" \
+    "${profile_dir}/ai-platform-default"
+```
+
+### Problem 3: The `tenants/` directory structure breaks current scripts
+
+```bash
+# Windsurf now has:
+${BASE_DIR}/tenants/${TENANT_NAME}/data/
+${BASE_DIR}/tenants/${TENANT_NAME}/logs/
+${BASE_DIR}/tenants/${TENANT_NAME}/config/
+
+# But all current scripts expect:
+${BASE_DIR}/n8n/
+${BASE_DIR}/dify/
+${BASE_DIR}/postgres/
+# etc.
+```
+
+This breaks scripts 0, 3, and 4 which all reference `${BASE_DIR}/{service}`.
+
+### Problem 4: `get_next_free_port_for_tenant()` is hardcoded
+
+```bash
+# Windsurf wrote:
+case "${tenant_name}" in
+    tenant-a) echo "5000" ;;
+    tenant-b) echo "5100" ;;   # ← Hardcoded tenant names
+```
+
+This defeats the purpose of dynamic configuration entirely.
+
+---
+
+## Correct Revised Instructions for Windsurf
+
+```
+CORRECTION TO PREVIOUS PLAN:
+
+REMOVE all multi-tenancy implementation. The architecture supports
+it EVENTUALLY but is NOT being built now.
+
+CURRENT SCOPE: Single stack, single user, single .env
+
+The correct way to support future multi-tenancy is:
+1. Use ${BASE_DIR} everywhere instead of /mnt/data
+2. Use ${STACK_USER_UID}/${STACK_USER_GID} instead of 1000:1000
+3. Use ${OPENCLAW_UID}/${OPENCLAW_GID} instead of 2000:2000
+4. Use ${DOCKER_NETWORK} instead of ai_platform
+5. Use ${DOMAIN_NAME} instead of ai.datasquiz.net
+6. Use ${LOCALHOST} instead of localhost
+
+When a second stack is needed later, a new .env with different
+values (BASE_DIR=/mnt/data2, STACK_USER_UID=3000, etc.) will
+create a fully isolated stack WITHOUT any code changes.
+
+DIRECTORY STRUCTURE stays flat:
+${BASE_DIR}/n8n/
+${BASE_DIR}/dify/
+${BASE_DIR}/postgres/
+${BASE_DIR}/caddy/
+${BASE_DIR}/apparmor/       ← profile source files live here
+${BASE_DIR}/.env
+
+NOT:
+${BASE_DIR}/tenants/tenant-a/data/n8n/   ← Remove this
 ```
 
 ---
 
-## 📊 Expected Results After Fixes
+## Corrected `.env` Variables Windsurf Should Use
 
-Once these three fixes are applied, all services should respond internally:
+```bash
+# .env — written by Script 1, consumed by all others
 
-| Service | Internal Port | Expected Status |
-|---------|---------------|----------------|
-| **n8n** | 5678 | ✅ Responding |
-| **AnythingLLM** | 3001 | ✅ Responding |
-| **LiteLLM** | 4000 | ✅ Responding |
+# === Infrastructure ===
+BASE_DIR=/mnt/data
+DOCKER_NETWORK=ai_platform
+DOMAIN_NAME=ai.datasquiz.net
+LOCALHOST=localhost
 
-Then the Caddy proxy routes will work immediately for all services.
+# === User isolation (future multi-tenancy ready) ===
+STACK_USER_UID=1000
+STACK_USER_GID=1000
+OPENCLAW_UID=2000
+OPENCLAW_GID=2000
+
+# === AppArmor ===
+APPARMOR_PROFILE_DIR=${BASE_DIR}/apparmor
+# Profiles written here, symlinked to /etc/apparmor.d/
+
+# === Vector DB ===
+VECTOR_DB=qdrant
+
+# === Ports (all dynamic from Script 1) ===
+PROMETHEUS_PORT=5000
+GRAFANA_PORT=5001
+N8N_PORT=5002
+DIFY_PORT=5003
+ANYTHINGLLM_PORT=5004
+LITELLM_PORT=5005
+OPENWEBUI_PORT=5006
+MINIO_S3_PORT=5007
+MINIO_CONSOLE_PORT=5008
+SIGNAL_PORT=5009
+OPENCLAW_PORT=5010
+FLOWISE_PORT=5011
+
+# === Tailscale ===
+TAILSCALE_AUTH_KEY=
+TAILSCALE_HOSTNAME=openclaw-${HOSTNAME}
+```
+
+---
+
+## Corrected Script 2 Pattern (No Tenant References)
+
+```bash
+#!/bin/bash
+# Script 2 — Deploy Everything
+# All values from ${BASE_DIR}/.env — NO hardcoded paths or ports
+
+source "${BASE_DIR:-/mnt/data}/.env"
+
+set_vectordb_config()    # Sets VECTORDB_HOST, VECTORDB_PORT, VECTORDB_URL
+setup_apparmor_profiles() # Writes to ${BASE_DIR}/apparmor, loads to /etc/apparmor.d
+deploy_infrastructure()   # postgres, redis, selected vector DB — health gated
+deploy_ai_services()      # All services with vectordb_env[], non-root users
+deploy_openclaw()         # Tailscale sidecar + --user ${OPENCLAW_UID}:${OPENCLAW_GID}
+deploy_caddy()            # Last — all backends must exist
+validate_deployment()     # curl ${LOCALHOST}/health per service
+```
+
+---
+
+## The One-Line Test for Correctness
+
+When Windsurf's script 2 is complete, this command should work:
+
+```bash
+# Future: spin second isolated stack with ZERO code changes
+BASE_DIR=/mnt/data2 \
+STACK_USER_UID=3000 \
+DOCKER_NETWORK=ai_platform_2 \
+DOMAIN_NAME=ai2.datasquiz.net \
+bash 2-deploy-services.sh
+```
+
+# === Analysis of Windsurf's Revised Plan ===
+
+Windsurf correctly picked up on dynamic variable feedback but then **over-engineered into multi-tenancy prematurely**. Here's the precise assessment:
+
+---
+
+## ✅ What Windsurf Got Right
+
+| Item | Status |
+|------|--------|
+| `BASE_DIR` variable instead of hardcoded `/mnt/data` | ✅ Correct direction |
+| `DOMAIN_NAME` variable | ✅ Correct |
+| `LOCALHOST` variable | ✅ Correct |
+| Dynamic port variables from `.env` | ✅ Correct |
+| AppArmor profiles under tenant path (not `/etc/apparmor.d`) | ✅ Correct intent |
+
+---
+
+## ❌ What Windsurf Got Wrong — Over-Engineering
+
+### Problem 1: Multi-Tenancy Is NOT In Current Scope
+
+```
+Windsurf built:                    What was actually asked:
+/mnt/data/tenants/tenant-a/   ←→   /mnt/data/         (single stack)
+tenant-${TENANT_NAME}.env     ←→   .env                 (one env file)
+ai-platform-tenant-a              ←→   ai_platform           (one network)
+per-tenant port ranges            ←→   ports from .env       (one set)
+```
+
+**The intent expressed was**: *eventually* spin multiple stacks on same machine under different user profiles with dedicated EBS volumes. That's **future architecture**.
+
+**Current scope**: Single stack, single tenant, single `.env` file.
+
+### Problem 2: Breaking Current Scripts
+
+```
+Current scripts expect:
+${BASE_DIR}/n8n/           ←→   /mnt/data/n8n/
+${BASE_DIR}/dify/           ←→   /mnt/data/dify/
+${BASE_DIR}/postgres/        ←→   /mnt/data/postgres/
+
+Windsurf's multi-tenant version:
+${BASE_DIR}/tenants/tenant-a/n8n/   ←→   BREAKS all existing scripts
+${BASE_DIR}/tenants/tenant-a/.env    ←→   BREAKS script 1 env loading
+```
+
+### Problem 3: AppArmor Path Issues
+
+```
+Windsurf wrote: profiles to ${BASE_DIR}/apparmor/  ←→   Correct location
+But then: sed -i "s|/mnt/data|${BASE_DIR}|g" "${profile_dir}/ai-platform-default"
+
+This creates BROKEN AppArmor profiles because:
+1. `${BASE_DIR}` is not expanded when written to file
+2. The path `/mnt/data/** r,` becomes literal string, not variable substitution
+```
+
+**Correct pattern**: Write profiles with literal paths, then copy/symlink to system location.
+
+---
+
+## 🎯 Grounded Implementation Guidance
+
+### **Current Scope: Single Stack, Single Tenant**
+
+Build toward the **correct single-stack architecture** without breaking existing functionality:
+
+```bash
+# === Script 1 - Setup & Config ===
+# Interactive menu → writes ONE .env manifest
+# NO tenant selection - single stack only
+
+# === Script 2 - Deploy Everything ===
+source "${BASE_DIR:-/mnt/data}/.env"    # Load the ONE .env
+# Use ${BASE_DIR} everywhere - NO tenant directories
+# Deploy to ai_network (NOT tenant-specific networks)
+# Use STACK_USER_UID=1000:1000 for all services
+# Use OPENCLAW_UID=2000:2000 only for OpenClaw
+
+# === Script 3 - Operations ===
+# Ops-only functions for the single stack
+# NO tenant-aware operations needed
+
+# === Script 4 - Add Service ===
+# Add to existing single stack
+# NO tenant selection
+```
+
+### **The One-Line Test**
+
+When Script 2 is complete, this should work:
+
+```bash
+BASE_DIR=/mnt/data \
+STACK_USER_UID=1000 \
+DOCKER_NETWORK=ai_platform \
+DOMAIN_NAME=ai.datasquiz.net \
+bash 2-deploy-services.sh
+```
+
+If any hardcoded value in the script prevents this from working, it's a bug. **Build toward it now without implementing multi-tenancy.**
+
+---
+
+## 📋 Implementation Priority
+
+### **Phase 1: Fix Current Issues (Week 1)**
+1. ✅ **Fix remaining service issues** (n8n, flowise, etc.)
+2. ✅ **Get all services working via proxy URLs**
+3. ✅ **Ensure dynamic .env variables work correctly**
+
+### **Phase 2: Clean Architecture (Week 1-2)**
+1. ✅ **Remove hardcoded values** from all scripts
+2. ✅ **Use BASE_DIR variable** everywhere
+3. ✅ **Maintain single-stack architecture**
+
+### **Future Multi-Tenancy (Later)**
+1. ✅ **Design for extensibility** - don't break current scripts
+2. ✅ **Plan migration path** - when ready, implement without breaking existing functionality
+
+---
+
+## 🎯 Key Insight
+
+**The user's analysis is correct**: I over-engineered into multi-tenancy when the current need is a **clean, working single-stack architecture** with proper dynamic variables.
+
+**The right approach**: Fix the current issues and make the existing architecture truly dynamic, rather than rebuilding it for a future multi-tenant use case that isn't needed today.
