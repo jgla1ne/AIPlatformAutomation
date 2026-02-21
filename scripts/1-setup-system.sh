@@ -206,7 +206,7 @@ restore_state() {
     local timestamp=$(jq -r '.timestamp' "$STATE_FILE" 2>/dev/null || echo "")
     
     if [[ -z "$current_phase" ]]; then
-        print_warn "State file corrupted - starting fresh"
+        print_warning "State file corrupted - starting fresh"
         return 1
     fi
     
