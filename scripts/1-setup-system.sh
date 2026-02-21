@@ -18,15 +18,15 @@ readonly NC='\033[0m'
 readonly BOLD='\033[1m'
 
 # Paths (will be set by volume detection)
-readonly DATA_ROOT="${BASE_DIR:-/mnt/data}"
-readonly METADATA_DIR="$DATA_ROOT/metadata"
-readonly STATE_FILE="$METADATA_DIR/setup_state.json"
-readonly LOG_FILE="$DATA_ROOT/logs/setup.log"
-readonly ENV_FILE="$DATA_ROOT/.env"
-readonly SERVICES_FILE="$METADATA_DIR/selected_services.json"
-readonly COMPOSE_DIR="$DATA_ROOT/compose"
-readonly COMPOSE_FILE="$DATA_ROOT/ai-platform/deployment/stack/docker-compose.yml"
-readonly CONFIG_DIR="$DATA_ROOT/config"
+DATA_ROOT="${BASE_DIR:-/mnt/data}"
+METADATA_DIR="$DATA_ROOT/metadata"
+STATE_FILE="$METADATA_DIR/setup_state.json"
+LOG_FILE="$DATA_ROOT/logs/setup.log"
+ENV_FILE="$DATA_ROOT/.env"
+SERVICES_FILE="$METADATA_DIR/selected_services.json"
+COMPOSE_DIR="$DATA_ROOT/compose"
+COMPOSE_FILE="$DATA_ROOT/ai-platform/deployment/stack/docker-compose.yml"
+CONFIG_DIR="$DATA_ROOT/config"
 readonly CREDENTIALS_FILE="$METADATA_DIR/credentials.json"
 
 # UI Functions
