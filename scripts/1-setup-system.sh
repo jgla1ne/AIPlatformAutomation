@@ -3282,6 +3282,9 @@ main() {
     mkdir -p "/mnt/data/logs" 2>/dev/null || true
     export LOG_FILE="/mnt/data/logs/setup.log"
     
+    # Also create the base data directory if it doesn't exist
+    mkdir -p "/mnt/data" 2>/dev/null || true
+    
     # Display banner
     print_banner
     
