@@ -54,9 +54,14 @@ detect_stack() {
     if [[ -f "${BASE_DIR:-/mnt/data}/config/.env" ]]; then
         source "${BASE_DIR:-/mnt/data}/config/.env"
         print_success "Stack detected: ${DOMAIN_NAME}"
+        return 0
     else
-        print_error "No stack configuration found. Run from stack directory or set BASE_DIR."
-        exit 1
+        # Only exit if not running list command
+        if [[ "${1:-}" != "--list" ]]; then
+            print_error "No stack configuration found. Run from stack directory or set BASE_DIR."
+            exit 1
+        fi
+        return 1
     fi
 }
 
