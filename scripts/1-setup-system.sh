@@ -2017,6 +2017,9 @@ setup_volumes() {
         fi
         
         print_success "Volume mounted successfully"
+        
+        # Create log directory immediately after mounting
+        mkdir -p "$DATA_ROOT/logs" 2>/dev/null || true
 }
 
 create_directory_structure() {
