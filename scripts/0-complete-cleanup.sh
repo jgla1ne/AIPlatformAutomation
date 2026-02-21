@@ -275,8 +275,8 @@ scan_and_select_stack() {
         local status="No Config"
         
         if [[ -f "$env_file" ]]; then
-            stack_name=$(grep "^DOMAIN_NAME=" "$env_file" 2>/dev/null | cut -d'=' -f2 || echo "Unknown")
-            domain_name=$(grep "^DOCKER_NETWORK=" "$env_file" 2>/dev/null | cut -d'=' -f2 || echo "Unknown")
+            stack_name="Configured Stack"
+            domain_name="ai_platform"
             status="Configured"
             stack_volumes+=("$volume")
             ((stack_count++))
