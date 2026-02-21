@@ -264,9 +264,9 @@ scan_and_select_stack() {
     
     local stack_volumes=()
     local stack_count=0
+    local counter=1
     
-    for i in "${!mounted_volumes[@]}"; do
-        local volume="${mounted_volumes[$i]}"
+    for volume in "${mounted_volumes[@]}"; do
         local env_file="$volume/config/.env"
         local stack_name="Not Found"
         local domain_name="Not Found"
@@ -280,7 +280,8 @@ scan_and_select_stack() {
             ((stack_count++))
         fi
         
-        printf "%-5s %-20s %-15s %-20s %-15s\n" "$((i+1))" "$volume" "$stack_name" "$domain_name" "$status"
+        printf "%-5s %-20s %-15s %-20s %-15s\n" "$counter" "$volume" "$stack_name" "$domain_name" "$status"
+        ((counter++))
     done
     
     echo ""
