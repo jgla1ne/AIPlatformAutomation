@@ -288,20 +288,15 @@ scan_and_select_stack() {
         echo "   2. Cancel and run Script 1 to create a stack first"
         echo ""
         read -p "Choose option (1-2): " choice
-        
-        case $choice in
-            1)
-                nuclear_cleanup
-                ;;
-            2)
-                print_info "Cleanup cancelled"
-                exit 0
-                ;;
-            *)
-                print_error "Invalid choice"
-                exit 1
-                ;;
-        esac
+    if [[ "$choice" == "1" ]]; then
+        nuclear_cleanup
+    elif [[ "$choice" == "2" ]]; then
+        print_info "Cleanup cancelled"
+        exit 0
+    else
+        print_error "Invalid choice"
+        exit 1
+    fi
         return
     fi
     
