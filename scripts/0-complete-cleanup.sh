@@ -233,7 +233,7 @@ scan_and_select_stack() {
     echo ""
     
     # List all mounted block devices
-    local mounted_volumes=($(findmnt -n -o SOURCE,TARGET | grep -E "^/dev/(xvd|sd|nvme)" | awk '{print $2}'))
+    local mounted_volumes=($(findmnt -n -o TARGET | grep -E "^/mnt|^/tmp" | grep -v "^/$" || true))
     
     if [[ ${#mounted_volumes[@]} -eq 0 ]]; then
         print_warning "No EBS volumes found mounted"
