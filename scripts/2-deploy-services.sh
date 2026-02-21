@@ -54,9 +54,9 @@ print_header() {
 load_configuration() {
     print_header "Loading Configuration"
     
-    if [[ -f "${DATA_ROOT:-/mnt/data}/config/.env" ]]; then
-        source "${DATA_ROOT:-/mnt/data}/config/.env"
-        print_success "Configuration loaded from ${DATA_ROOT}/config/.env"
+    if [[ -f "${DATA_ROOT:-/mnt/data}/.env" ]]; then
+        source "${DATA_ROOT:-/mnt/data}/.env"
+        print_success "Configuration loaded from ${DATA_ROOT}/.env"
     else
         print_error "Configuration file not found. Please run Script 1 first."
         exit 1
