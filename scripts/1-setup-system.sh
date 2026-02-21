@@ -55,7 +55,6 @@ print_success() {
 }
 
 print_info() {
-    echo "
     echo -e "${BLUE}ℹ️  $1${NC}"
     # Temporarily disable logging to bypass the issue
     # echo -e "${BLUE}ℹ️  $1${NC}" | tee -a "$LOG_FILE"
