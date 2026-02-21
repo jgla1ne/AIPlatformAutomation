@@ -261,6 +261,76 @@ set_ownership() {
     print_success "Ownership set to ${STACK_USER_UID}:${STACK_USER_GID}"
 }
 
+# Service selection
+select_services() {
+    print_header "Service Selection"
+    
+    echo "🔧 Available AI Platform Services:"
+    echo ""
+    printf "%-3s %-20s %-50s\n" "NUM" "SERVICE" "DESCRIPTION"
+    echo "────────────────────────────────────────────────────────────────────────────"
+    printf "%-3s %-20s %-50s\n" "1" "prometheus" "Monitoring and metrics collection"
+    printf "%-3s %-20s %-50s\n" "2" "grafana" "Visualization dashboard for metrics"
+    printf "%-3s %-20s %-50s\n" "3" "n8n" "Workflow automation platform"
+    printf "%-3s %-20s %-50s\n" "4" "dify" "AI application development platform"
+    printf "%-3s %-20s %-50s\n" "5" "anythingllm" "LLM interface and document management"
+    printf "%-3s %-20s %-50s\n" "6" "litellm" "LLM API gateway and load balancer"
+    printf "%-3s %-20s %-50s\n" "7" "openwebui" "Web-based LLM chat interface"
+    printf "%-3s %-20s %-50s\n" "8" "minio" "S3-compatible object storage"
+    printf "%-3s %-20s %-50s\n" "9" "signal" "Real-time messaging and notifications"
+    printf "%-3s %-20s %-50s\n" "10" "openclaw" "Secure container management"
+    printf "%-3s %-20s %-50s\n" "11" "flowise" "Visual workflow builder"
+    printf "%-3s %-20s %-50s\n" "12" "all" "Deploy all services"
+    echo ""
+    
+    while true; do
+        read -p "Select services to deploy (e.g., 1,3,5 or 12 for all): " service_selection
+        
+        if [[ -z "$service_selection" ]]; then
+            print_warning "No services selected"
+            continue
+        fi
+        
+        # Parse selection
+        local selected_services=()
+        if [[ "$service_selection" == "12" ]]; then
+            # Select all services
+            selected_services=(prometheus grafana n8n dify anythingllm litellm openwebui minio signal openclaw flowise)
+            print_success "All services selected"
+            break
+        else
+            # Parse individual selections
+            IFS=',' read -ra selections <<< "$service_selection"
+            for selection in "${selections[@]}"; do
+                selection=$(echo "$selection" | xargs)  # trim whitespace
+                case $selection in
+                    1) selected_services+=(prometheus) ;;
+                    2) selected_services+=(grafana) ;;
+                    3) selected_services+=(n8n) ;;
+                    4) selected_services+=(dify) ;;
+                    5) selected_services+=(anythingllm) ;;
+                    6) selected_services+=(litellm) ;;
+                    7) selected_services+=(openwebui) ;;
+                    8) selected_services+=(minio) ;;
+                    9) selected_services+=(signal) ;;
+                    10) selected_services+=(openclaw) ;;
+                    11) selected_services+=(flowise) ;;
+                    *) print_warning "Invalid selection: $selection" ; continue ;;
+                esac
+            done
+            
+            if [[ ${#selected_services[@]} -gt 0 ]]; then
+                echo ""
+                echo "✅ Selected services: ${selected_services[*]}"
+                break
+            fi
+        fi
+    done
+    
+    # Set global arrays for port allocation
+    SERVICES=("${selected_services[@]}")
+}
+
 # Port allocation (fixed with while-true loop)
 allocate_ports() {
     print_header "Port Allocation"
@@ -460,6 +530,7 @@ main() {
     detect_ebs_volumes
     interactive_config
     validate_ebs_mount
+    select_services
     create_directories
     set_ownership
     allocate_ports
