@@ -242,6 +242,8 @@ scan_and_select_stack() {
         fi
     done < <(findmnt -n -o TARGET | sort -u)
     
+    echo "DEBUG: Volume detection completed. Found ${#mounted_volumes[@]} volumes."
+    
     if [[ ${#mounted_volumes[@]} -eq 0 ]]; then
         print_warning "No EBS volumes found mounted"
         echo ""
@@ -268,23 +270,31 @@ scan_and_select_stack() {
     local stack_count=0
     local counter=1
     
+    echo "DEBUG: About to display table. Volumes: ${#mounted_volumes[@]}"
+    
     for volume in "${mounted_volumes[@]}"; do
+        echo "DEBUG: Inside loop - processing: $volume"
         local env_file="$volume/config/.env"
+        echo "DEBUG: Checking env file: $env_file"
         local stack_name="Not Found"
         local domain_name="Not Found"
         local status="No Config"
         
         if [[ -f "$env_file" ]]; then
-            stack_name="Configured Stack"
-            domain_name="ai_platform"
-            status="Configured"
-            stack_volumes+=("$volume")
-            ((stack_count++))
+            echo "DEBUG: Env file exists!"
+            echo "DEBUG: Setting variables..."
+            # stack_name="Configured Stack"
+            # domain_name="ai_platform"
+            # status="Configured"
+            # stack_volumes+=("$volume")
+            # ((stack_count++))
+            echo "DEBUG: Variables set"
         fi
         
-        printf "%-5s %-20s %-15s %-20s %-15s\n" "$counter" "$volume" "$stack_name" "$domain_name" "$status"
+        echo "DEBUG: Moving to next iteration"
         ((counter++))
     done
+    echo "DEBUG: Loop completed"
     
     echo ""
     
@@ -390,13 +400,53 @@ nuclear_cleanup() {
     echo "   • Will unmount EBS volumes"
     echo ""
     
-    read -p "Are you absolutely sure? Type 'NUCLEAR' to confirm: " confirm
-    if [[ "$confirm" != "NUCLEAR" ]]; then
-        print_info "Nuclear cleanup cancelled"
-        exit 0
+    # Show available EBS volumes
+    local mounted_volumes=()
+    while IFS= read -r line; do
+        clean_line=$(echo "$line" | sed 's/^[├│└─]*//')
+        if [[ -n "$clean_line" && -d "$clean_line" && ( "$clean_line" == /mnt* || "$clean_line" == /tmp* ) ]]; then
+            mounted_volumes+=("$clean_line")
+        fi
+    done < <(findmnt -n -o TARGET | sort -u)
+    
+    if [[ ${#mounted_volumes[@]} -eq 0 ]]; then
+        print_warning "No EBS volumes found mounted"
+        return 1
     fi
     
-    print_info "Starting nuclear cleanup..."
+    echo "📋 Available EBS Volumes for Cleanup:"
+    echo ""
+    printf "%-5s %-20s %-15s\n" "NUM" "MOUNT POINT" "SIZE"
+    echo "─────────────────────────────────────────"
+    
+    local counter=1
+    for volume in "${mounted_volumes[@]}"; do
+        local size=$(df -h "$volume" 2>/dev/null | awk 'NR==2 {print $2}' || echo "Unknown")
+        printf "%-5s %-20s %-15s\n" "$counter" "$volume" "$size"
+        ((counter++))
+    done
+    echo ""
+    
+    while true; do
+        read -p "Select EBS volume to clear (1-${#mounted_volumes[@]}): " selection
+        if [[ "$selection" =~ ^[0-9]+$ ]] && [[ $selection -ge 1 ]] && [[ $selection -le ${#mounted_volumes[@]} ]]; then
+            local selected_volume="${mounted_volumes[$((selection-1))]}"
+            echo ""
+            print_warning "You selected: $selected_volume"
+            echo "This will delete ALL data in $selected_volume"
+            echo ""
+            read -p "Are you absolutely sure? Type 'NUCLEAR' to confirm: " confirm
+            if [[ "$confirm" != "NUCLEAR" ]]; then
+                print_info "Nuclear cleanup cancelled"
+                return 0
+            fi
+            break
+        else
+            print_warning "Please enter a number between 1 and ${#mounted_volumes[@]}"
+        fi
+    done
+    
+    print_info "Starting nuclear cleanup for $selected_volume..."
     
     # STEP 1: Stop all AI Platform containers
     print_info "Step 1: Stopping all AI Platform containers..."
@@ -431,19 +481,16 @@ nuclear_cleanup() {
         rm -f "/etc/apparmor.d/$profile"
     done
     
-    # STEP 5: Delete data on EBS volumes
-    print_info "Step 5: Deleting all AI Platform data on EBS volumes..."
-    for dir in /mnt/data*; do
-        if [[ -d "$dir" ]]; then
-            print_info "Deleting AI Platform data at $dir..."
-            rm -rf "$dir" 2>/dev/null || true
-        fi
-    done
-    
-    # Also clean the main /mnt/data if it exists
-    if [[ -d "/mnt/data" ]]; then
-        print_info "Deleting AI Platform data at /mnt/data..."
-        rm -rf "/mnt/data" 2>/dev/null || true
+    # STEP 5: Delete data on selected EBS volume
+    print_info "Step 5: Deleting AI Platform data in $selected_volume..."
+    if [[ -d "$selected_volume" ]]; then
+        print_info "Deleting AI Platform data at $selected_volume..."
+        rm -rf "$selected_volume"/* 2>/dev/null || true
+        rm -rf "$selected_volume"/.[!.]* 2>/dev/null || true
+        # Also try to remove the directory itself
+        rmdir "$selected_volume" 2>/dev/null || true
+    else
+        print_warning "Volume $selected_volume not found"
     fi
     
     # STEP 6: Unmount EBS volumes
