@@ -428,11 +428,17 @@ nuclear_cleanup() {
     # STEP 5: Delete data on EBS volumes
     print_info "Step 5: Deleting all AI Platform data on EBS volumes..."
     for dir in /mnt/data*; do
-        if [[ -d "$dir" ]] && [[ "$dir" != "/mnt/data" ]] || [[ -f "$dir/config/.env" ]]; then
+        if [[ -d "$dir" ]]; then
             print_info "Deleting AI Platform data at $dir..."
             rm -rf "$dir" 2>/dev/null || true
         fi
     done
+    
+    # Also clean the main /mnt/data if it exists
+    if [[ -d "/mnt/data" ]]; then
+        print_info "Deleting AI Platform data at /mnt/data..."
+        rm -rf "/mnt/data" 2>/dev/null || true
+    fi
     
     # STEP 6: Unmount EBS volumes
     print_info "Step 6: Unmounting EBS volumes..."
