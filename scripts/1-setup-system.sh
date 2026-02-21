@@ -3299,7 +3299,11 @@ main() {
     setup_volumes
     mark_phase_complete "setup_volumes"
     
-    # Initialize logging after volume is mounted
+    # Create directory structure immediately after mounting
+    create_directory_structure
+    mark_phase_complete "create_directory_structure"
+    
+    # Initialize logging after volume is mounted and directories exist
     setup_logging
     
     detect_system
@@ -3324,8 +3328,6 @@ main() {
     mark_phase_complete "select_services"
     collect_configurations
     mark_phase_complete "collect_configurations"
-    create_directory_structure
-    mark_phase_complete "create_directory_structure"
     create_apparmor_templates
     mark_phase_complete "create_apparmor_templates"
     generate_compose_templates
