@@ -1,339 +1,276 @@
-## Analysis of Windsurf's Revised Plan
+Let me fetch all three scripts from the repository.
 
-Windsurf correctly picked up the dynamic variable feedback but then **over-engineered into multi-tenancy prematurely**. Here's the precise assessment:
+**Script 0:**
+https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/0-pre-setup.sh
 
----
+**Script 1:**
+https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/1-setup-system.sh
 
-## ✅ What Windsurf Got Right
-
-| Item | Status |
-|------|--------|
-| `BASE_DIR` variable instead of hardcoded `/mnt/data` | ✅ Correct direction |
-| `DOMAIN_NAME` variable | ✅ Correct |
-| `LOCALHOST` variable from `.env` | ✅ Correct |
-| `TENANT_UID`/`OPENCLAW_UID` as variables | ✅ Correct |
-| AppArmor profiles under tenant path (not `/etc/apparmor.d`) | ✅ Correct intent |
-| Dynamic port variables from `.env` | ✅ Correct |
+**Script 2:**
+https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/2-deploy-services.sh
 
 ---
 
-## ❌ What Windsurf Got Wrong — Over-Engineering
+# Script Analysis: 0, 1, and 2
 
-### Problem 1: Multi-tenancy is NOT in scope now
+---
 
-```
-Windsurf built:                    What was actually asked:
-/mnt/data/tenants/tenant-a/   ←→   /mnt/data/         (single stack)
-tenant-${TENANT_NAME}.env     ←→   .env                (one env file)
-docker network ai-platform-a  ←→   ai_platform         (one network)
-per-tenant port ranges        ←→   ports from .env     (one set)
-```
+## Script 0 — `0-pre-setup.sh`
 
-The **intent** expressed was: *eventually* spin multiple stacks on the same machine under different user profiles with dedicated EBS volumes. That's future architecture. **Current scope = single stack, single tenant.**
+### What It Does
+- Installs system dependencies
+- Configures Docker
+- Sets up AppArmor baseline
+- Creates stack user
 
-The correct response to that intent is: **build it clean and parameterized NOW so multi-tenancy is possible LATER without refactoring** — not implement multi-tenancy today.
-
-### Problem 2: AppArmor profiles still go to `/etc/apparmor.d/`
-
-AppArmor profiles **must** be loaded from `/etc/apparmor.d/` by the kernel — that's not configurable. However, the **source files** can live under `${BASE_DIR}` and be symlinked or copied to `/etc/apparmor.d/` at load time:
-
+### ✅ Correct
 ```bash
-# Correct pattern:
-setup_apparmor_profiles() {
-    local profile_dir="${BASE_DIR}/apparmor"
-    mkdir -p "${profile_dir}"
-    
-    # Write profiles to BASE_DIR (tenant-owned)
-    cat > "${profile_dir}/ai-platform-default" << 'EOF'
-    ...
-    /mnt/data/** r,   # ← This still needs BASE_DIR substitution (see below)
-EOF
+# Checks for root
+# Installs docker, apparmor, ss (iproute2) — correct toolchain
+# Creates docker group if missing
+```
 
-    # Copy to system location for kernel loading
-    cp "${profile_dir}/ai-platform-default" \
-       /etc/apparmor.d/ai-platform-default
-    
-    apparmor_parser -r /etc/apparmor.d/ai-platform-default
+### ❌ Critical Issues
+
+**Issue 0-1: Hardcoded UID/GID — defeats parameterization**
+```bash
+# Windsurf wrote:
+useradd -m -u 1000 -g 1000 -s /bin/bash aiplatform
+groupadd -g 1000 aiplatform
+
+# Problem: If STACK_USER_UID=2000 for User B,
+# Script 0 already created UID 1000 as "aiplatform"
+# Script 1's STACK_USER_UID=2000 will conflict or be ignored
+```
+
+**Fix:**
+```bash
+# Script 0 should NOT create the stack user.
+# Script 1 owns user creation because it knows STACK_USER_UID.
+# Script 0 only installs packages and configures Docker daemon.
+# Remove all useradd/groupadd from Script 0.
+```
+
+---
+
+**Issue 0-2: AppArmor profiles loaded with hardcoded paths**
+```bash
+# Windsurf wrote:
+cat > /etc/apparmor.d/ai-platform-default << 'EOF'
+  /mnt/data/** rw,
+  /mnt/data/openclaw/** rw,
+EOF
+apparmor_parser -r /etc/apparmor.d/ai-platform-default
+```
+
+**Problem:** 
+- Profile hardcodes `/mnt/data` — breaks for User B on `/mnt/data2`
+- Profile name `ai-platform-default` is not network-scoped — two stacks overwrite the same profile
+- Loading in Script 0 is wrong — `BASE_DIR` is not known yet
+
+**Fix:**
+```bash
+# Script 0: do NOT load any AppArmor profiles.
+# Only install apparmor packages and ensure the service is running.
+# Profile TEMPLATES are created by Script 1 in ${BASE_DIR}/apparmor/
+# Profiles are loaded by Script 2 after BASE_DIR is known.
+
+# Script 0 should only do:
+systemctl enable apparmor
+systemctl start apparmor
+echo "✅ AppArmor service enabled — profiles loaded by Script 2"
+```
+
+---
+
+**Issue 0-3: Docker daemon.json hardcodes storage path**
+```bash
+# Windsurf wrote:
+cat > /etc/docker/daemon.json << 'EOF'
+{
+  "data-root": "/mnt/data/docker",
+  "log-driver": "json-file"
+}
+EOF
+```
+
+**Problem:** Docker's `data-root` is a global daemon setting — it cannot be per-tenant. Setting it to `/mnt/data/docker` means User B's containers also store their layers there, defeating EBS isolation.
+
+**Fix:**
+```bash
+# Docker data-root cannot be per-tenant — it's a daemon-level setting.
+# Options:
+# 1. Leave data-root at default (/var/lib/docker) — simplest, correct
+# 2. Set it to the FIRST stack's EBS — document that it's shared
+#
+# Per-tenant isolation of container DATA is achieved through
+# volume mounts into ${BASE_DIR}/data/${service}/ — NOT through data-root.
+#
+# REMOVE data-root from daemon.json:
+cat > /etc/docker/daemon.json << 'EOF'
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  }
+}
+EOF
+```
+
+---
+
+**Issue 0-4: Script 0 teardown logic mixed with setup**
+```bash
+# Windsurf added cleanup functions in Script 0:
+cleanup_previous_installation() {
+    docker rm -f $(docker ps -aq) 2>/dev/null
+    rm -rf /mnt/data/  # ← DESTROYS ALL TENANT DATA
 }
 ```
 
-**Key subtlety**: The AppArmor profile content itself has hardcoded paths like `/mnt/data/**` — these need `sed` substitution if `BASE_DIR` changes:
+**This is catastrophic.** If User B runs Script 0 on a host where User A's stack exists, User A's entire `/mnt/data` is deleted.
 
+**Fix:**
 ```bash
-# After writing profile template, substitute BASE_DIR
-sed -i "s|/mnt/data|${BASE_DIR}|g" \
-    "${profile_dir}/ai-platform-default"
+# Script 0 must NEVER touch /mnt/data or any BASE_DIR.
+# Cleanup is Script 0's job only for:
+#   - Previously installed system packages (if re-running)
+#   - /etc/apparmor.d/ai-platform-* (but only the old hardcoded ones)
+# 
+# Stack-specific cleanup belongs in a future script-0-tenant.sh
+# or handled manually. Script 0 is host-level only.
 ```
 
-### Problem 3: The `tenants/` directory structure breaks current scripts
+---
 
+## Script 1 — `1-setup-system.sh`
+
+### What It Does
+- Interactive configuration collection
+- EBS validation
+- User creation
+- Directory structure creation
+- Port allocation
+- `.env` generation
+- AppArmor template creation
+
+### ✅ Correct
 ```bash
-# Windsurf now has:
-${BASE_DIR}/tenants/${TENANT_NAME}/data/
-${BASE_DIR}/tenants/${TENANT_NAME}/logs/
-${BASE_DIR}/tenants/${TENANT_NAME}/config/
-
-# But all current scripts expect:
-${BASE_DIR}/n8n/
-${BASE_DIR}/dify/
-${BASE_DIR}/postgres/
-# etc.
+# Interactive prompts for BASE_DIR, DOCKER_NETWORK ✅
+# EBS validation using mountpoint -q ✅
+# OPENCLAW_UID = STACK_USER_UID + 1 ✅
+# Port allocation with ss ✅
+# .env written to ${BASE_DIR}/config/.env ✅
 ```
 
-This breaks scripts 0, 3, and 4 which all reference `${BASE_DIR}/{service}`.
+### ❌ Critical Issues
 
-### Problem 4: `get_next_free_port_for_tenant()` is hardcoded
-
+**Issue 1-1: Port retry loop still uses broken pattern**
 ```bash
 # Windsurf wrote:
-case "${tenant_name}" in
-    tenant-a) echo "5000" ;;
-    tenant-b) echo "5100" ;;   # ← Hardcoded tenant names
+for service in "${services[@]}"; do
+    port=${default_ports[$i]}
+    if ss -tlnp | grep -q ":${port} "; then
+        echo "Port in use"
+        # No retry — just increments and moves on
+    fi
+    i=$((i+1))
+done
 ```
 
-This defeats the purpose of dynamic configuration entirely.
-
----
-
-## Correct Revised Instructions for Windsurf
-
-```
-CORRECTION TO PREVIOUS PLAN:
-
-REMOVE all multi-tenancy implementation. The architecture supports
-it EVENTUALLY but is NOT being built now.
-
-CURRENT SCOPE: Single stack, single user, single .env
-
-The correct way to support future multi-tenancy is:
-1. Use ${BASE_DIR} everywhere instead of /mnt/data
-2. Use ${STACK_USER_UID}/${STACK_USER_GID} instead of 1000:1000
-3. Use ${OPENCLAW_UID}/${OPENCLAW_GID} instead of 2000:2000
-4. Use ${DOCKER_NETWORK} instead of ai_platform
-5. Use ${DOMAIN_NAME} instead of ai.datasquiz.net
-6. Use ${LOCALHOST} instead of localhost
-
-When a second stack is needed later, a new .env with different
-values (BASE_DIR=/mnt/data2, STACK_USER_UID=3000, etc.) will
-create a fully isolated stack WITHOUT any code changes.
-
-DIRECTORY STRUCTURE stays flat:
-${BASE_DIR}/n8n/
-${BASE_DIR}/dify/
-${BASE_DIR}/postgres/
-${BASE_DIR}/caddy/
-${BASE_DIR}/apparmor/       ← profile source files live here
-${BASE_DIR}/.env
-
-NOT:
-${BASE_DIR}/tenants/tenant-a/data/n8n/   ← Remove this
-```
-
----
-
-## Corrected `.env` Variables Windsurf Should Use
-
+**Fix (as specified in previous review):**
 ```bash
-# .env — written by Script 1, consumed by all others
+allocate_port() {
+    local service=$1
+    local default_port=$2
+    local port
 
-# === Infrastructure ===
-BASE_DIR=/mnt/data
-DOCKER_NETWORK=ai_platform
-DOMAIN_NAME=ai.datasquiz.net
-LOCALHOST=localhost
+    while true; do
+        read -p "  ${service} port [${default_port}]: " port_input
+        port=${port_input:-$default_port}
 
-# === User isolation (future multi-tenancy ready) ===
-STACK_USER_UID=1000
-STACK_USER_GID=1000
-OPENCLAW_UID=2000
-OPENCLAW_GID=2000
+        if ss -tlnp | grep -q ":${port} "; then
+            echo "  ⚠️  Port ${port} in use — try another"
+        else
+            echo "  ✅ ${service}: ${port}"
+            echo "${service^^}_PORT=${port}" >> "${BASE_DIR}/config/.env"
+            break
+        fi
+    done
+}
 
-# === AppArmor ===
-APPARMOR_PROFILE_DIR=${BASE_DIR}/apparmor
-# Profiles written here, symlinked to /etc/apparmor.d/
-
-# === Vector DB ===
-VECTOR_DB=qdrant
-
-# === Ports (all dynamic from Script 1) ===
-PROMETHEUS_PORT=5000
-GRAFANA_PORT=5001
-N8N_PORT=5002
-DIFY_PORT=5003
-ANYTHINGLLM_PORT=5004
-LITELLM_PORT=5005
-OPENWEBUI_PORT=5006
-MINIO_S3_PORT=5007
-MINIO_CONSOLE_PORT=5008
-SIGNAL_PORT=5009
-OPENCLAW_PORT=5010
-FLOWISE_PORT=5011
-
-# === Tailscale ===
-TAILSCALE_AUTH_KEY=
-TAILSCALE_HOSTNAME=openclaw-${HOSTNAME}
+# Call per service:
+allocate_port "prometheus"   5000
+allocate_port "grafana"      5001
+allocate_port "n8n"          5002
+allocate_port "dify"         5003
+allocate_port "anythingllm"  5004
+allocate_port "litellm"      5005
+allocate_port "openwebui"    5006
+allocate_port "minio_s3"     5007
+allocate_port "minio_console" 5008
+allocate_port "signal"       5009
+allocate_port "openclaw"     5010
+allocate_port "flowise"      5011
 ```
 
 ---
 
-## Corrected Script 2 Pattern (No Tenant References)
-
+**Issue 1-2: AppArmor templates have literal BASE_DIR — not placeholder**
 ```bash
-#!/bin/bash
-# Script 2 — Deploy Everything
-# All values from ${BASE_DIR}/.env — NO hardcoded paths or ports
-
-source "${BASE_DIR:-/mnt/data}/.env"
-
-set_vectordb_config()    # Sets VECTORDB_HOST, VECTORDB_PORT, VECTORDB_URL
-setup_apparmor_profiles() # Writes to ${BASE_DIR}/apparmor, loads to /etc/apparmor.d
-deploy_infrastructure()   # postgres, redis, selected vector DB — health gated
-deploy_ai_services()      # All services with vectordb_env[], non-root users
-deploy_openclaw()         # Tailscale sidecar + --user ${OPENCLAW_UID}:${OPENCLAW_GID}
-deploy_caddy()            # Last — all backends must exist
-validate_deployment()     # curl ${LOCALHOST}/health per service
+# Windsurf wrote:
+cat > "${BASE_DIR}/apparmor/default.profile.tmpl" << EOF
+profile ai-platform-default {
+  ${BASE_DIR}/** rw,   ← This substitutes NOW (double-quote heredoc)
+}
+EOF
 ```
 
----
+This looks correct at first glance — but it means the template IS the final profile (BASE_DIR is baked in at template creation time). This is actually fine IF the template is only used for this stack's Script 2. However it breaks the `BASE_DIR_PLACEHOLDER` pattern referenced throughout the plan.
 
-## The One-Line Test for Correctness
+**Verdict:** The double-quote heredoc approach (substituting at template creation) is actually **simpler and correct** for this use case. The `BASE_DIR_PLACEHOLDER` + sed pattern is only needed if templates are shared across stacks (they are not).
 
-When Windsurf's script 2 is complete, this command should work:
-
+**However:** The profile name inside the template must use `DOCKER_NETWORK`:
 ```bash
-# Future: spin second isolated stack with ZERO code changes
-BASE_DIR=/mnt/data2 \
-STACK_USER_UID=3000 \
-DOCKER_NETWORK=ai_platform_2 \
-DOMAIN_NAME=ai2.datasquiz.net \
-bash 2-deploy-services.sh
+cat > "${BASE_DIR}/apparmor/default.profile.tmpl" << EOF
+profile ${DOCKER_NETWORK}-default flags=(attach_disconnected) {
+  #include <abstractions/base>
+
+  # Stack data directory — this stack only
+  ${BASE_DIR}/** rw,
+
+  # Docker overlay filesystem
+  /var/lib/docker/** r,
+
+  # Network
+  network inet tcp,
+  network inet udp,
+
+  # Deny other mount points
+  deny /mnt/** rw,         # too broad — see Issue 1-3
+}
+EOF
 ```
-
-# === Analysis of Windsurf's Revised Plan ===
-
-Windsurf correctly picked up on dynamic variable feedback but then **over-engineered into multi-tenancy prematurely**. Here's the precise assessment:
 
 ---
 
-## ✅ What Windsurf Got Right
-
-| Item | Status |
-|------|--------|
-| `BASE_DIR` variable instead of hardcoded `/mnt/data` | ✅ Correct direction |
-| `DOMAIN_NAME` variable | ✅ Correct |
-| `LOCALHOST` variable | ✅ Correct |
-| Dynamic port variables from `.env` | ✅ Correct |
-| AppArmor profiles under tenant path (not `/etc/apparmor.d`) | ✅ Correct intent |
-
----
-
-## ❌ What Windsurf Got Wrong — Over-Engineering
-
-### Problem 1: Multi-Tenancy Is NOT In Current Scope
-
-```
-Windsurf built:                    What was actually asked:
-/mnt/data/tenants/tenant-a/   ←→   /mnt/data/         (single stack)
-tenant-${TENANT_NAME}.env     ←→   .env                 (one env file)
-ai-platform-tenant-a              ←→   ai_platform           (one network)
-per-tenant port ranges            ←→   ports from .env       (one set)
-```
-
-**The intent expressed was**: *eventually* spin multiple stacks on same machine under different user profiles with dedicated EBS volumes. That's **future architecture**.
-
-**Current scope**: Single stack, single tenant, single `.env` file.
-
-### Problem 2: Breaking Current Scripts
-
-```
-Current scripts expect:
-${BASE_DIR}/n8n/           ←→   /mnt/data/n8n/
-${BASE_DIR}/dify/           ←→   /mnt/data/dify/
-${BASE_DIR}/postgres/        ←→   /mnt/data/postgres/
-
-Windsurf's multi-tenant version:
-${BASE_DIR}/tenants/tenant-a/n8n/   ←→   BREAKS all existing scripts
-${BASE_DIR}/tenants/tenant-a/.env    ←→   BREAKS script 1 env loading
-```
-
-### Problem 3: AppArmor Path Issues
-
-```
-Windsurf wrote: profiles to ${BASE_DIR}/apparmor/  ←→   Correct location
-But then: sed -i "s|/mnt/data|${BASE_DIR}|g" "${profile_dir}/ai-platform-default"
-
-This creates BROKEN AppArmor profiles because:
-1. `${BASE_DIR}` is not expanded when written to file
-2. The path `/mnt/data/** r,` becomes literal string, not variable substitution
-```
-
-**Correct pattern**: Write profiles with literal paths, then copy/symlink to system location.
-
----
-
-## 🎯 Grounded Implementation Guidance
-
-### **Current Scope: Single Stack, Single Tenant**
-
-Build toward the **correct single-stack architecture** without breaking existing functionality:
-
+**Issue 1-3: AppArmor deny rule blocks own BASE_DIR**
 ```bash
-# === Script 1 - Setup & Config ===
-# Interactive menu → writes ONE .env manifest
-# NO tenant selection - single stack only
+# Windsurf wrote:
+deny /mnt/** rw,
+# Then also:
+${BASE_DIR}/** rw,   ← BASE_DIR = /mnt/data
 
-# === Script 2 - Deploy Everything ===
-source "${BASE_DIR:-/mnt/data}/.env"    # Load the ONE .env
-# Use ${BASE_DIR} everywhere - NO tenant directories
-# Deploy to ai_network (NOT tenant-specific networks)
-# Use STACK_USER_UID=1000:1000 for all services
-# Use OPENCLAW_UID=2000:2000 only for OpenClaw
-
-# === Script 3 - Operations ===
-# Ops-only functions for the single stack
-# NO tenant-aware operations needed
-
-# === Script 4 - Add Service ===
-# Add to existing single stack
-# NO tenant selection
+# AppArmor evaluates deny BEFORE allow.
+# "deny /mnt/**" blocks access to /mnt/data/** regardless of the allow rule.
+# Result: all containers fail to access their data directories.
 ```
 
-### **The One-Line Test**
-
-When Script 2 is complete, this should work:
-
+**Fix:**
 ```bash
-BASE_DIR=/mnt/data \
-STACK_USER_UID=1000 \
-DOCKER_NETWORK=ai_platform \
-DOMAIN_NAME=ai.datasquiz.net \
-bash 2-deploy-services.sh
-```
+# AppArmor deny rules override allows — never deny a parent of an allow.
+# Remove the broad deny. Instead, use a specific deny for OTHER mount points:
 
-If any hardcoded value in the script prevents this from working, it's a bug. **Build toward it now without implementing multi-tenancy.**
-
----
-
-## 📋 Implementation Priority
-
-### **Phase 1: Fix Current Issues (Week 1)**
-1. ✅ **Fix remaining service issues** (n8n, flowise, etc.)
-2. ✅ **Get all services working via proxy URLs**
-3. ✅ **Ensure dynamic .env variables work correctly**
-
-### **Phase 2: Clean Architecture (Week 1-2)**
-1. ✅ **Remove hardcoded values** from all scripts
-2. ✅ **Use BASE_DIR variable** everywhere
-3. ✅ **Maintain single-stack architecture**
-
-### **Future Multi-Tenancy (Later)**
-1. ✅ **Design for extensibility** - don't break current scripts
-2. ✅ **Plan migration path** - when ready, implement without breaking existing functionality
-
----
-
-## 🎯 Key Insight
-
-**The user's analysis is correct**: I over-engineered into multi-tenancy when the current need is a **clean, working single-stack architecture** with proper dynamic variables.
-
-**The right approach**: Fix the current issues and make the existing architecture truly dynamic, rather than rebuilding it for a future multi-tenant use case that isn't needed today.
+# If BASE_DIR=/mnt/data, deny /mnt/data2, /mnt/data3 etc.
+# But this requires
