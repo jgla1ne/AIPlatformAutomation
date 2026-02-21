@@ -435,9 +435,13 @@ collect_domain_info() {
         echo "     - Clean URLs with single domain"
         echo "     - Good for production and public access"
         echo ""
+        echo "  3) Subdomain Access (e.g., n8n.domain.com, chat.domain.com)"
+        echo "     - Professional URLs with dedicated subdomains"
+        echo "     - Best for production and multiple services"
+        echo ""
         
         while true; do
-            echo -n -e "${YELLOW}Select configuration method [1-2]:${NC} "
+            echo -n -e "${YELLOW}Select configuration method [1-3]:${NC} "
             read -r proxy_config_choice
             
             case "$proxy_config_choice" in
@@ -449,6 +453,11 @@ collect_domain_info() {
                 2)
                     echo "PROXY_CONFIG_METHOD=alias" >> "$ENV_FILE"
                     print_success "Path aliases selected"
+                    break
+                    ;;
+                3)
+                    echo "PROXY_CONFIG_METHOD=subdomain" >> "$ENV_FILE"
+                    print_success "Subdomain access selected"
                     break
                     ;;
                 *)
@@ -2058,7 +2067,99 @@ generate_caddyfile() {
     
     print_info "Generating Caddyfile with all service routes..."
     
-    cat > "${DATA_ROOT}/caddy/Caddyfile" << EOF
+    # Check proxy configuration method
+    local proxy_method=$(grep "^PROXY_CONFIG_METHOD=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2 || echo "direct")
+    
+    if [[ "$proxy_method" == "subdomain" ]]; then
+        # Subdomain routing - each service gets its own subdomain
+        cat > "${DATA_ROOT}/caddy/Caddyfile" << EOF
+{
+    admin off
+    auto_https off
+    email ${ACME_EMAIL:-admin@${DOMAIN_NAME}}
+}
+
+# Prometheus
+prometheus.${DOMAIN_NAME} {
+    reverse_proxy prometheus:9090
+}
+
+# Grafana
+grafana.${DOMAIN_NAME} {
+    reverse_proxy grafana:3000
+}
+
+# n8n
+n8n.${DOMAIN_NAME} {
+    reverse_proxy n8n:5678 {
+        header_up Upgrade {http.request.header.Upgrade}
+        header_up Connection {http.request.header.Connection}
+    }
+}
+
+# Dify
+dify.${DOMAIN_NAME} {
+    reverse_proxy dify-web:3000
+}
+
+# AnythingLLM
+anythingllm.${DOMAIN_NAME} {
+    reverse_proxy anythingllm:3001 {
+        header_up Upgrade {http.request.header.Upgrade}
+        header_up Connection {http.request.header.Connection}
+    }
+}
+
+# LiteLLM
+litellm.${DOMAIN_NAME} {
+    reverse_proxy litellm:4000
+}
+
+# Open WebUI
+openwebui.${DOMAIN_NAME} {
+    reverse_proxy openwebui:8080 {
+        header_up Upgrade {http.request.header.Upgrade}
+        header_up Connection {http.request.header.Connection}
+    }
+}
+
+# MinIO Console
+minio.${DOMAIN_NAME} {
+    reverse_proxy minio-console:9001
+}
+
+# Signal API
+signal.${DOMAIN_NAME} {
+    reverse_proxy signal:8080
+}
+
+# OpenClaw
+openclaw.${DOMAIN_NAME} {
+    reverse_proxy openclaw:8080
+}
+
+# Flowise
+flowise.${DOMAIN_NAME} {
+    reverse_proxy flowise:3000
+}
+
+# Ollama API
+ollama.${DOMAIN_NAME} {
+    reverse_proxy ollama:11434
+}
+
+# Default domain - health check and fallback
+${DOMAIN_NAME} {
+    handle /health {
+        respond "OK" 200
+    }
+    
+    respond "AI Platform - Use subdomains: n8n.${DOMAIN_NAME}, grafana.${DOMAIN_NAME}, etc." 200
+}
+EOF
+    else
+        # Path-based routing (existing logic)
+        cat > "${DATA_ROOT}/caddy/Caddyfile" << EOF
 {
     admin off
     auto_https off
@@ -2144,9 +2245,10 @@ generate_caddyfile() {
     respond "AI Platform - use /servicename to access services" 200
 }
 EOF
+    fi
     
     chown "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/caddy/Caddyfile"
-    print_success "Caddyfile written with all service routes"
+    print_success "Caddyfile written with ${proxy_method} routing"
 }
 
 generate_apparmor_profiles() {
