@@ -485,26 +485,47 @@ nuclear_cleanup() {
     print_info "Step 5: Deleting AI Platform data in $selected_volume..."
     if [[ -d "$selected_volume" ]]; then
         print_info "Deleting AI Platform data at $selected_volume..."
+        # Force remove all contents including hidden files
         rm -rf "$selected_volume"/* 2>/dev/null || true
         rm -rf "$selected_volume"/.[!.]* 2>/dev/null || true
-        # Also try to remove the directory itself
-        rmdir "$selected_volume" 2>/dev/null || true
+        rm -rf "$selected_volume"/..?* 2>/dev/null || true
+        # Try to remove the directory itself (but don't fail if it's still mounted)
+        rmdir "$selected_volume" 2>/dev/null || print_warning "Could not remove directory $selected_volume (may still be mounted)"
     else
         print_warning "Volume $selected_volume not found"
     fi
     
-    # STEP 6: Unmount EBS volumes
+    # STEP 6: Unmount EBS volumes BEFORE trying to remove directories
     print_info "Step 6: Unmounting EBS volumes..."
-    local mounted_volumes=($(findmnt -n -o TARGET | grep -E "(/mnt|/tmp)" | grep -v "^/$" | sed 's/^[├│└─]*//' || true))
+    # Get all mounted volumes that match our target
+    local target_volume=$(echo "$selected_volume" | sed 's:/*$::')
+    local mounted_volumes=($(findmnt -n -o TARGET | grep "^${target_volume}" || true))
+    
     for volume in "${mounted_volumes[@]}"; do
-        if [[ "$volume" != "/" ]] && [[ "$volume" != "/boot" ]] && [[ "$volume" != "/home" ]]; then
+        if [[ "$volume" == "$selected_volume" ]] || [[ "$volume" == "${target_volume}" ]]; then
             print_info "Unmounting $volume..."
-            umount "$volume" 2>/dev/null || true
+            # Force unmount even if busy
+            umount -f "$volume" 2>/dev/null || umount -l "$volume" 2>/dev/null || print_warning "Could not unmount $volume"
+            # Wait a moment for unmount to complete
+            sleep 2
         fi
     done
     
-    # STEP 7: Final cleanup
-    print_info "Step 7: Final system cleanup..."
+    # Verify the volume is actually unmounted
+    if findmnt -n -o TARGET | grep -q "^${selected_volume}$"; then
+        print_warning "Volume $selected_volume is still mounted, attempting lazy unmount..."
+        umount -l "$selected_volume" 2>/dev/null || print_warning "Lazy unmount also failed"
+        sleep 3
+    fi
+    
+    # STEP 7: Try to remove the directory again after unmounting
+    print_info "Step 7: Final directory removal..."
+    if [[ -d "$selected_volume" ]]; then
+        rm -rf "$selected_volume" 2>/dev/null || print_warning "Could not remove directory $selected_volume after unmount"
+    fi
+    
+    # STEP 8: Final cleanup
+    print_info "Step 8: Final system cleanup..."
     docker system prune -f 2>/dev/null || true
     
     print_success "Nuclear cleanup completed!"
