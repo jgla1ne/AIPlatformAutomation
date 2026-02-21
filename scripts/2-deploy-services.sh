@@ -153,6 +153,12 @@ set_vectordb_config() {
     esac
     
     print_success "Vector DB configured: ${VECTORDB_TYPE} at ${VECTORDB_URL}"
+    
+    # Fix Docker Compose file to use proper variable substitution
+    sed -i "s/VECTOR_DB: qdrant/VECTOR_DB: \${VECTOR_DB}/g" "$COMPOSE_FILE"
+    sed -i "s/VECTOR_DB: milvus/VECTOR_DB: \${VECTOR_DB}/g" "$COMPOSE_FILE"
+    sed -i "s/VECTOR_DB: chroma/VECTOR_DB: \${VECTOR_DB}/g" "$COMPOSE_FILE"
+    sed -i "s/VECTOR_DB: weaviate/VECTOR_DB: \${VECTOR_DB}/g" "$COMPOSE_FILE"
 }
 
 # Build vector DB environment variables
@@ -162,38 +168,42 @@ build_vectordb_env() {
     case "${VECTOR_DB}" in
         qdrant)
             vectordb_env=(
-                -e "VECTOR_DB=qdrant"
-                -e "QDRANT_ENDPOINT=${VECTORDB_URL}"
-                -e "QDRANT_API_KEY="
-                -e "QDRANT_COLLECTION=${VECTORDB_COLLECTION}"
+                "-e" "VECTOR_DB=qdrant"
+                "-e" "QDRANT_ENDPOINT=${VECTORDB_URL}"
+                "-e" "QDRANT_API_KEY="
+                "-e" "QDRANT_COLLECTION=${VECTORDB_COLLECTION}"
             )
             ;;
         pgvector)
             vectordb_env=(
-                -e "VECTOR_DB=pgvector"
-                -e "PGVECTOR_CONNECTION_STRING=${VECTORDB_URL}"
-                -e "PGVECTOR_SCHEMA=ai_platform"
+                "-e" "VECTOR_DB=pgvector"
+                "-e" "PGVECTOR_CONNECTION_STRING=${VECTORDB_URL}"
+                "-e" "PGVECTOR_SCHEMA=ai_platform"
             )
             ;;
         weaviate)
             vectordb_env=(
-                -e "VECTOR_DB=weaviate"
-                -e "WEAVIATE_ENDPOINT=${VECTORDB_URL}"
-                -e "WEAVIATE_API_KEY="
-                -e "WEAVIATE_CLASS=${VECTORDB_COLLECTION}"
+                "-e" "VECTOR_DB=weaviate"
+                "-e" "WEAVIATE_ENDPOINT=${VECTORDB_URL}"
+                "-e" "WEAVIATE_API_KEY="
+                "-e" "WEAVIATE_CLASS=${VECTORDB_COLLECTION}"
             )
             ;;
         chroma)
             vectordb_env=(
-                -e "VECTOR_DB=chroma"
-                -e "CHROMA_HOST=${VECTORDB_HOST}"
-                -e "CHROMA_PORT=${VECTORDB_PORT}"
-                -e "CHROMA_COLLECTION=${VECTORDB_COLLECTION}"
+                "-e" "VECTOR_DB=chroma"
+                "-e" "CHROMA_ENDPOINT=${VECTORDB_URL}"
+                "-e" "CHROMA_COLLECTION=${VECTORDB_COLLECTION}"
             )
+            ;;
+        *)
+            print_warning "Unknown vector DB: ${VECTOR_DB}, defaulting to qdrant"
+            set_vectordb_config qdrant
             ;;
     esac
     
-    echo "${vectordb_env[@]}"
+    # Set the return array
+    set -- "${vectordb_env[@]}"
 }
 
 # Generic service deployment function
@@ -202,7 +212,8 @@ deploy_service() {
     local image=$2
     local internal_port=$3
     local host_port=$4
-    local extra_env="${5:-}"
+    shift 4
+    local extra_env=("$@")
     
     print_info "Deploying ${service_name}..."
     
@@ -212,19 +223,19 @@ deploy_service() {
     chown -R ${STACK_USER_UID}:${STACK_USER_GID} "${BASE_DIR}/logs/${service_name}"
     
     # Get vector DB environment variables
-    local vectordb_env=($(build_vectordb_env))
+    build_vectordb_env
+    local vectordb_env=("$@")
     
     docker run -d \
         --name "${service_name}" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
-        --security-opt "apparmor=${APPARMOR_DEFAULT}" \
         --user "${STACK_USER_UID}:${STACK_USER_GID}" \
         -p "${host_port}:${internal_port}" \
         -v "${BASE_DIR}/data/${service_name}:/app/data" \
         -v "${BASE_DIR}/logs/${service_name}:/app/logs" \
-        ${vectordb_env[@]} \
-        ${extra_env} \
+        "${vectordb_env[@]}" \
+        "${extra_env[@]}" \
         "${image}"
     
     print_success "${service_name} deployed on port ${host_port}"
@@ -295,14 +306,13 @@ deploy_openclaw() {
         --name "openclaw" \
         --network "container:tailscale" \
         --restart unless-stopped \
-        --security-opt "apparmor=${APPARMOR_OPENCLAW}" \
         --user "${OPENCLAW_UID}:${OPENCLAW_GID}" \
         --read-only \
         --tmpfs /tmp:rw,noexec,nosuid,size=100m \
         -v "${BASE_DIR}/data/openclaw:/app/data:rw" \
         -v "${BASE_DIR}/config/openclaw:/app/config:ro" \
         ${vectordb_env[@]} \
-        openclaw/openclaw:latest
+        alpine/openclaw:latest
 
     print_success "OpenClaw deployed with Tailscale sidecar"
 }
@@ -321,13 +331,12 @@ deploy_openclaw_standalone() {
         --name "openclaw" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
-        --security-opt "apparmor=${APPARMOR_OPENCLAW}" \
         --user "${OPENCLAW_UID}:${OPENCLAW_GID}" \
         -p "${OPENCLAW_PORT}:8080" \
         -v "${BASE_DIR}/data/openclaw:/app/data:rw" \
         -v "${BASE_DIR}/config/openclaw:/app/config:ro" \
         ${vectordb_env[@]} \
-        openclaw/openclaw:latest
+        alpine/openclaw:latest
 
     print_success "OpenClaw deployed (standalone) on port ${OPENCLAW_PORT}"
 }
@@ -401,8 +410,7 @@ deploy_ai_services() {
     # Deploy MinIO console separately
     deploy_service "minio-console" "minio/minio:latest" "9001" "${MINIO_CONSOLE_PORT}" \
         "-e MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}" \
-        "-e MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}" \
-        "server /data --console-address ':9001'"
+        "-e MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}"
 }
 
 # Deploy Caddy reverse proxy
@@ -468,9 +476,16 @@ deploy_caddy() {
 EOF
 
     # Deploy Caddy
-    deploy_service "caddy" "caddy:2-alpine" "80" "80" \
-        "-v ${BASE_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
-        "-v ${BASE_DIR}/ssl:/etc/ssl:ro"
+    docker run -d \
+        --name "caddy" \
+        --network "${DOCKER_NETWORK}" \
+        --restart unless-stopped \
+        --user "${STACK_USER_UID}:${STACK_USER_GID}" \
+        -p "80:80" \
+        -p "443:443" \
+        -v "${BASE_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+        -v "${BASE_DIR}/ssl:/etc/ssl:ro" \
+        caddy:2-alpine
 
     print_success "Caddy deployed with reverse proxy configuration"
 }
