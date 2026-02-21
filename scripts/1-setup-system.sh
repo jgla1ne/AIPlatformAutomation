@@ -55,7 +55,7 @@ print_success() {
 }
 
 print_info() {
-    echo "DEBUG: print_info called, LOG_FILE=$LOG_FILE" >&2
+    echo "
     echo -e "${BLUE}ℹ️  $1${NC}"
     # Temporarily disable logging to bypass the issue
     # echo -e "${BLUE}ℹ️  $1${NC}" | tee -a "$LOG_FILE"
@@ -2492,9 +2492,15 @@ EOF
     [[ "$minio_user" != "minioadmin" ]] && echo "- MinIO User: $minio_user" >> "$urls_file"
     
     # Display summary to user
-    print_success "Setup summary generated: $summary_file"
-    print_success "Service URLs saved: $urls_file"
+    print_success "Setup summary generated: $METADATA_DIR/setup_summary.txt"
+    print_success "Service URLs saved: $METADATA_DIR/service_urls.txt"
     print_info "Review service URLs file for complete access information"
+    
+    # FINAL OWNERSHIP FIX - Ensure everything owned by user
+    print_info "Fixing final ownership..."
+    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/.env" "${DATA_ROOT}/ai-platform"
+    chmod 600 "${DATA_ROOT}/.env"
+    print_success "Ownership fixed: All files owned by ${RUNNING_USER}"
     
     # Display selected services summary
     echo ""
@@ -3642,13 +3648,7 @@ main() {
     mark_phase_complete "validate_final_config"
     
     # Phase 13: Setup Completion
-    log_phase "13" "🎉" "Setup Completion"
-    
-    echo ""
-    print_header "🎉 Setup Completion"
-    echo ""
-    
-    print_info "Final setup validation completed successfully"
+    log_print_info "Final setup validation completed successfully"
     print_info "All configurations are ready for deployment"
     
     mark_phase_complete "setup_completion"
