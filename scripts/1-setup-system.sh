@@ -1608,8 +1608,8 @@ allocate_port() {
         echo ""
         
         # Create dedicated sandbox directory structure
-        local openclaw_sandbox="${BASE_DIR}/data/openclaw"
-        local openclaw_config="${BASE_DIR}/config/openclaw"
+        local openclaw_sandbox="${DATA_ROOT}/data/openclaw"
+        local openclaw_config="${DATA_ROOT}/config/openclaw"
         
         # Set up OpenClaw as dedicated user sandbox
         echo "OPENCLAW_SANDBOX_DIR=${openclaw_sandbox}" >> "$ENV_FILE"
@@ -3399,7 +3399,7 @@ main() {
 create_apparmor_templates() {
     print_header "Creating AppArmor Templates"
     
-    local profile_dir="${BASE_DIR}/apparmor"
+    local profile_dir="${DATA_ROOT}/apparmor"
     mkdir -p "${profile_dir}"
     
     # Default profile template (allowlist-only)
