@@ -21,7 +21,7 @@ print_banner() {
     echo -e "${CYAN}║            AI PLATFORM - COMPLETE STACK TEARDOWN           ║${NC}"
     echo -e "${CYAN}║              Baseline v1.0.0 - Multi-Stack Ready           ║${NC}"
     echo -e "${CYAN}║           Safe Removal with AppArmor Cleanup                 ║${NC}"
-    echo -e "${CYAN}╚══════════════════════════════━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╝${NC}\n"
+    echo -e "${CYAN}╚══════════════════════════════━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╝${NC}\n"
 }
 
 print_success() {
@@ -49,120 +49,9 @@ print_header() {
     echo ""
 }
 
-# Scan all EBS volumes and detect stacks
-scan_all_ebs_volumes() {
-    print_header "Scanning All EBS Volumes & Stacks"
-    
-    echo "🔍 Scanning for mounted EBS volumes..."
-    echo ""
-    
-    # List all mounted block devices
-    local mounted_volumes=($(findmnt -n -o SOURCE,TARGET | grep -E "^/dev/(xvd|sd|nvme)" | awk '{print $2}'))
-    
-    if [[ ${#mounted_volumes[@]} -eq 0 ]]; then
-        print_warning "No EBS volumes found mounted"
-        return
-    fi
-    
-    echo "📋 Found EBS Volumes:"
-    echo ""
-    printf "%-20s %-15s %-15s %-20s %-20s\n" "MOUNT POINT" "STACK" "DOMAIN" "STATUS"
-    echo "────────────────────────────────────────────────────────────────────────"
-    
-    local found_stacks=0
-    
-    for volume in "${mounted_volumes[@]}"; do
-        local env_file="$volume/config/.env"
-        local stack_name="Not Found"
-        local domain_name="Not Found"
-        local status="No Config"
-        
-        if [[ -f "$env_file" ]]; then
-            stack_name=$(grep "^DOMAIN_NAME=" "$env_file" 2>/dev/null | cut -d'=' -f2 || echo "Unknown")
-            domain_name=$(grep "^DOCKER_NETWORK=" "$env_file" 2>/dev/null | cut -d'=' -f2 || echo "Unknown")
-            status="Configured"
-            ((found_stacks++))
-        fi
-        
-        printf "%-20s %-15s %-15s %-20s %-20s\n" "$volume" "$stack_name" "$domain_name" "$status"
-    done
-    
-    echo ""
-    if [[ $found_stacks -gt 0 ]]; then
-        print_success "Found $found_stacks configured stack(s)"
-        echo ""
-        echo "💡 To cleanup a specific stack:"
-        echo "   cd /path/to/stack && sudo ./0-complete-cleanup.sh"
-        echo ""
-        echo "💡 To cleanup all stacks:"
-        echo "   sudo ./0-complete-cleanup.sh --all"
-    else
-        print_warning "No configured stacks found on EBS volumes"
-    fi
-}
-
-# Auto-detect stack from current directory or environment
-detect_stack() {
-    if [[ -f "${BASE_DIR:-/mnt/data}/config/.env" ]]; then
-        source "${BASE_DIR:-/mnt/data}/config/.env"
-        print_success "Stack detected: ${DOMAIN_NAME}"
-        return 0
-    else
-        # Only exit if not running list command
-        if [[ "${1:-}" != "--list" ]]; then
-            print_error "No stack configuration found. Run from stack directory or set BASE_DIR."
-            exit 1
-        fi
-        return 1
-    fi
-}
-
-# Confirm teardown action
-confirm_teardown() {
-    print_header "Teardown Confirmation"
-    
-    # Only detect stack if not doing --list
-    if [[ "${1:-}" != "--list" ]]; then
-        detect_stack
-    fi
-    
-    echo "⚠️  WARNING: This will completely remove the AI Platform stack:"
-    echo ""
-    echo "📊 Stack Information:"
-    if [[ -n "${DOMAIN_NAME:-}" ]]; then
-        echo "   Domain: ${DOMAIN_NAME}"
-        echo "   Network: ${DOCKER_NETWORK}"
-        echo "   Base Directory: ${BASE_DIR}"
-    else
-        echo "   No stack detected - will scan for all stacks"
-    fi
-    echo ""
-    echo "🔍 What will be removed:"
-    if [[ -n "${DOCKER_NETWORK:-}" ]]; then
-        echo "   • All containers on network ${DOCKER_NETWORK}"
-        echo "   • Docker network ${DOCKER_NETWORK}"
-        echo "   • AppArmor profiles for ${DOCKER_NETWORK}"
-    else
-        echo "   • All containers on all stack networks"
-        echo "   • All stack Docker networks"
-        echo "   • All stack AppArmor profiles"
-    fi
-    echo ""
-    echo "   • Optionally: All stack data and configuration"
-    echo ""
-    
-    read -p "Are you sure you want to teardown this stack? (y/N): " confirm
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-        print_info "Teardown cancelled"
-        exit 0
-    fi
-}
-
 # Stop all containers on the network
 stop_containers() {
     print_header "Stopping Containers"
-    
-    detect_stack
     
     local containers=($(docker ps --filter "network=${DOCKER_NETWORK}" --format "{{.Names}}"))
     
@@ -185,8 +74,6 @@ stop_containers() {
 remove_containers() {
     print_header "Removing Containers"
     
-    detect_stack
-    
     local containers=($(docker ps -a --filter "network=${DOCKER_NETWORK}" --format "{{.Names}}"))
     
     if [[ ${#containers[@]} -eq 0 ]]; then
@@ -208,8 +95,6 @@ remove_containers() {
 remove_network() {
     print_header "Removing Docker Network"
     
-    detect_stack
-    
     if docker network ls --format "{{.Name}}" | grep -q "^${DOCKER_NETWORK}$"; then
         print_info "Removing network ${DOCKER_NETWORK}..."
         docker network rm "${DOCKER_NETWORK}" 2>/dev/null || true
@@ -222,8 +107,6 @@ remove_network() {
 # Remove AppArmor profiles
 remove_apparmor_profiles() {
     print_header "Removing AppArmor Profiles"
-    
-    detect_stack
     
     local profiles=($(ls /etc/apparmor.d/ 2>/dev/null | grep "^${DOCKER_NETWORK}-" || true))
     
@@ -255,18 +138,7 @@ cleanup_docker_resources() {
     print_info "Removing unused images..."
     docker image prune -f
     
-    # Remove unused volumes (be careful with this)
-    read -p "Remove unused Docker volumes? (y/N): " remove_volumes
-    if [[ "$remove_volumes" =~ ^[Yy]$ ]]; then
-        print_warning "This will remove ALL unused volumes, not just stack volumes"
-        read -p "Are you sure? (y/N): " confirm_volumes
-        if [[ "$confirm_volumes" =~ ^[Yy]$ ]]; then
-            docker volume prune -f
-            print_success "Unused volumes removed"
-        fi
-    fi
-    
-    # Remove unused networks (excluding any that might be in use by other stacks)
+    # Remove unused networks
     print_info "Removing unused networks..."
     docker network prune -f
     
@@ -277,14 +149,9 @@ cleanup_docker_resources() {
 remove_stack_data() {
     print_header "Removing Stack Data"
     
-    # Only detect stack if not doing --list
-    if [[ "${1:-}" != "--list" ]]; then
-        detect_stack
-    fi
-    
     # Check if BASE_DIR exists
-    if [[ ! -d "${BASE_DIR:-}" ]]; then
-        print_info "Base directory ${BASE_DIR:-not set} not found"
+    if [[ ! -d "${BASE_DIR}" ]]; then
+        print_info "Base directory ${BASE_DIR} not found"
         return
     fi
     
@@ -317,58 +184,9 @@ remove_stack_data() {
     fi
 }
 
-# Create backup before teardown
-create_backup() {
-    print_header "Creating Backup"
-    
-    # Only detect stack if not doing --list
-    if [[ "${1:-}" != "--list" ]]; then
-        detect_stack
-    fi
-    
-    local backup_dir="${BASE_DIR:-}/../backup-$(date +%Y%m%d_%H%M%S)-${DOMAIN_NAME:-all-stacks}"
-    
-    print_info "Creating backup in ${backup_dir}..."
-    
-    mkdir -p "$backup_dir"
-    
-    # Backup configuration
-    if [[ -f "${BASE_DIR}/config/.env" ]]; then
-        cp "${BASE_DIR}/config/.env" "$backup_dir/"
-        print_success "Configuration backed up"
-    fi
-    
-    # Backup AppArmor templates
-    if [[ -d "${BASE_DIR}/apparmor" ]]; then
-        cp -r "${BASE_DIR}/apparmor" "$backup_dir/"
-        print_success "AppArmor templates backed up"
-    fi
-    
-    # Backup Caddy configuration
-    if [[ -d "${BASE_DIR}/caddy" ]]; then
-        cp -r "${BASE_DIR}/caddy" "$backup_dir/"
-        print_success "Caddy configuration backed up"
-    fi
-    
-    # Export container configurations
-    mkdir -p "$backup_dir/containers"
-    local containers=($(docker ps -a --filter "network=${DOCKER_NETWORK}" --format "{{.Names}}" 2>/dev/null || true))
-    for container in "${containers[@]}"; do
-        docker inspect "$container" > "$backup_dir/containers/${container}.json" 2>/dev/null || true
-    done
-    
-    if [[ ${#containers[@]} -gt 0 ]]; then
-        print_success "Container configurations exported"
-    fi
-    
-    print_success "Backup created: $backup_dir"
-}
-
 # Show teardown summary
 show_summary() {
     print_header "Teardown Summary"
-    
-    detect_stack
     
     echo "📊 Stack Information:"
     echo "   Domain: ${DOMAIN_NAME}"
@@ -393,142 +211,158 @@ show_summary() {
     print_success "Stack teardown completed successfully!"
 }
 
-# Cleanup all stacks
-cleanup_all_stacks() {
-    print_header "Cleaning Up All Stacks"
-    
-    echo "🔍 Scanning for all configured stacks..."
-    echo ""
-    
-    # Find all stack directories
-    local stack_dirs=($(find /mnt/data* -maxdepth 1 -name "config" -type d 2>/dev/null | sed 's|/config||'))
-    
-    if [[ ${#stack_dirs[@]} -eq 0 ]]; then
-        print_warning "No stack directories found"
-        return
+# Main function
+main() {
+    # Ensure running as root
+    if [[ $EUID -ne 0 ]]; then
+        print_error "This script must be run as root"
+        exit 1
     fi
-    
-    echo "📋 Found Stack Directories:"
-    for dir in "${stack_dirs[@]}"; do
-        echo "  • $dir"
-    done
-    echo ""
-    
-    read -p "Clean up all ${#stack_dirs[@]} stacks? (y/N): " confirm
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-        print_info "Cleanup cancelled"
-        return
-    fi
-    
-    # Cleanup each stack
-    for dir in "${stack_dirs[@]}"; do
-        print_info "Cleaning up stack at $dir..."
-        BASE_DIR="$dir" bash "$0" --backup
-    done
-    
-    print_success "All stacks cleaned up"
-}
-
-# List all available stacks
-list_stacks() {
-    print_header "Available Stacks"
-    
-    echo "📊 Stacks found on this system:"
-    echo ""
-    
-    local found_stacks=0
-    
-    # Look for .env files in common locations
-    for dir in /mnt/data*; do
-        if [[ -f "$dir/config/.env" ]]; then
-            local domain_name=$(grep "^DOMAIN_NAME=" "$dir/config/.env" | cut -d'=' -f2)
-            local network_name=$(grep "^DOCKER_NETWORK=" "$dir/config/.env" | cut -d'=' -f2)
-            local user_uid=$(grep "^STACK_USER_UID=" "$dir/config/.env" | cut -d'=' -f2)
-            
-            echo "🔧 Stack: $domain_name"
-            echo "   Base Directory: $dir"
-            echo "   Network: $network_name"
-            echo "   User UID: $user_uid"
-            echo ""
-            
-            ((found_stacks++))
-        fi
-    done
-    
-    if [[ $found_stacks -eq 0 ]]; then
-        print_warning "No stacks found"
-    else
-        print_info "Found $found_stacks stack(s)"
-        echo ""
-        echo "💡 To teardown a specific stack:"
-        echo "   cd /path/to/stack && $0"
-        echo "   BASE_DIR=/path/to/stack $0"
-    fi
-}
-
-# Show help
-show_help() {
-    print_header "Teardown Help"
-    
-    echo "Usage: $0 [options]"
-    echo ""
-    echo "Options:"
-    echo "  --scan, -s         Scan all EBS volumes and detect stacks"
-    echo "  --list, -l          List all available stacks"
-    echo "  --all, -a           Clean up all stacks"
-    echo "  --backup, -b        Create backup before teardown"
-    echo "  --help, -h          Show this help message"
-    echo ""
-    echo "Examples:"
-    echo "  $0 --scan              Scan EBS volumes for stacks"
-    echo "  $0 --list              List all configured stacks"
-    echo "  $0 --all               Clean up all stacks"
-    echo "  $0                    Teardown current stack"
-    echo "  $0 --backup           Teardown with backup"
-    echo ""
-    echo "Multi-Stack Usage:"
-    echo "  $0 --scan              # See all stacks on all EBS volumes"
-    echo "  $0 --all               # Clean up all stacks safely"
-    echo "  cd /mnt/data1 && $0   # Clean specific stack"
-    echo ""
-    echo "Environment Variables:"
-    echo "  BASE_DIR            Stack base directory (auto-detected)"
-    echo ""
-    echo "What gets removed:"
-    echo "  • All containers on stack network(s)"
-    echo "  • Docker network(s) for stack(s)"
-    echo "  • AppArmor profiles for stack(s)"
-    echo "  • Optionally: All stack data and configuration"
-}
-
-# Main teardown function
-teardown_stack() {
-    local create_backup=false
-    
-    # Parse arguments
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            --backup|-b)
-                create_backup=true
-                shift
-                ;;
-            *)
-                print_error "Unknown option: $1"
-                show_help
-                exit 1
-                ;;
-        esac
-    done
     
     print_banner
     
-    # Create backup if requested
-    if [[ "$create_backup" == true ]]; then
-        create_backup
+    # Always scan EBS volumes and prompt for selection
+    scan_and_select_stack
+}
+
+# Scan EBS volumes and let user select stack to cleanup
+scan_and_select_stack() {
+    print_header "Scanning EBS Volumes for Stacks"
+    
+    echo "🔍 Scanning for mounted EBS volumes..."
+    echo ""
+    
+    # List all mounted block devices
+    local mounted_volumes=($(findmnt -n -o SOURCE,TARGET | grep -E "^/dev/(xvd|sd|nvme)" | awk '{print $2}'))
+    
+    if [[ ${#mounted_volumes[@]} -eq 0 ]]; then
+        print_warning "No EBS volumes found mounted"
+        echo ""
+        echo "💡 This appears to be a nuclear purge scenario."
+        echo "   Script 1 is responsible for .env creation and folder structure."
+        echo "   If you want to clean everything, this will remove all AI Platform data."
+        echo ""
+        read -p "Proceed with nuclear cleanup of all AI Platform data? (y/N): " nuclear
+        if [[ "$nuclear" =~ ^[Yy]$ ]]; then
+            nuclear_cleanup
+        else
+            print_info "Cleanup cancelled"
+            exit 0
+        fi
+        return
     fi
     
-    # Execute teardown phases
-    confirm_teardown
+    echo "📋 Found EBS Volumes:"
+    echo ""
+    printf "%-5s %-20s %-15s %-20s %-15s\n" "NUM" "MOUNT POINT" "STACK" "DOMAIN" "STATUS"
+    echo "─────────────────────────────────────────────────────────────────────────────────"
+    
+    local stack_volumes=()
+    local stack_count=0
+    
+    for i in "${!mounted_volumes[@]}"; do
+        local volume="${mounted_volumes[$i]}"
+        local env_file="$volume/config/.env"
+        local stack_name="Not Found"
+        local domain_name="Not Found"
+        local status="No Config"
+        
+        if [[ -f "$env_file" ]]; then
+            stack_name=$(grep "^DOMAIN_NAME=" "$env_file" 2>/dev/null | cut -d'=' -f2 || echo "Unknown")
+            domain_name=$(grep "^DOCKER_NETWORK=" "$env_file" 2>/dev/null | cut -d'=' -f2 || echo "Unknown")
+            status="Configured"
+            stack_volumes+=("$volume")
+            ((stack_count++))
+        fi
+        
+        printf "%-5s %-20s %-15s %-20s %-15s\n" "$((i+1))" "$volume" "$stack_name" "$domain_name" "$status"
+    done
+    
+    echo ""
+    
+    if [[ $stack_count -eq 0 ]]; then
+        print_warning "No configured stacks found on EBS volumes"
+        echo ""
+        echo "💡 Available options:"
+        echo "   1. Nuclear cleanup of all AI Platform data"
+        echo "   2. Cancel and run Script 1 to create a stack first"
+        echo ""
+        read -p "Choose option (1-2): " choice
+        
+        case $choice in
+            1)
+                nuclear_cleanup
+                ;;
+            2)
+                print_info "Cleanup cancelled"
+                exit 0
+                ;;
+            *)
+                print_error "Invalid choice"
+                exit 1
+                ;;
+        esac
+        return
+    fi
+    
+    echo "📋 Configured Stacks Available for Cleanup:"
+    for i in "${!stack_volumes[@]}"; do
+        local volume="${stack_volumes[$i]}"
+        local env_file="$volume/config/.env"
+        local stack_name=$(grep "^DOMAIN_NAME=" "$env_file" 2>/dev/null | cut -d'=' -f2 || echo "Unknown")
+        echo "   $((i+1)). $stack_name (at $volume)"
+    done
+    echo ""
+    
+    while true; do
+        read -p "Select stack to cleanup (1-$stack_count): " selection
+        if [[ "$selection" =~ ^[0-9]+$ ]] && [[ $selection -ge 1 ]] && [[ $selection -le $stack_count ]]; then
+            local selected_volume="${stack_volumes[$((selection-1))]}"
+            cleanup_selected_stack "$selected_volume"
+            break
+        else
+            print_warning "Please enter a number between 1 and $stack_count"
+        fi
+    done
+}
+
+# Cleanup selected stack
+cleanup_selected_stack() {
+    local selected_volume="$1"
+    local env_file="$selected_volume/config/.env"
+    
+    if [[ ! -f "$env_file" ]]; then
+        print_error "No stack configuration found at $selected_volume"
+        exit 1
+    fi
+    
+    # Load stack configuration
+    source "$env_file"
+    
+    print_header "Cleaning Up Stack: ${DOMAIN_NAME}"
+    
+    echo "📊 Stack Information:"
+    echo "   Domain: ${DOMAIN_NAME}"
+    echo "   Network: ${DOCKER_NETWORK}"
+    echo "   Base Directory: $selected_volume"
+    echo ""
+    echo "🔍 What will be removed:"
+    echo "   • All containers on network ${DOCKER_NETWORK}"
+    echo "   • Docker network ${DOCKER_NETWORK}"
+    echo "   • AppArmor profiles for ${DOCKER_NETWORK}"
+    echo "   • Stack data and configuration at $selected_volume"
+    echo ""
+    
+    read -p "Are you sure you want to cleanup this stack? (y/N): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        print_info "Cleanup cancelled"
+        exit 0
+    fi
+    
+    # Set BASE_DIR for cleanup functions
+    BASE_DIR="$selected_volume"
+    
+    # Execute cleanup phases
     stop_containers
     remove_containers
     remove_network
@@ -538,36 +372,63 @@ teardown_stack() {
     show_summary
 }
 
-# Main function
-main() {
-    # Ensure running as root
-    if [[ $EUID -ne 0 ]]; then
-        print_error "This script must be run as root"
-        exit 1
+# Nuclear cleanup - remove all AI Platform data
+nuclear_cleanup() {
+    print_header "Nuclear Cleanup - All AI Platform Data"
+    
+    echo "⚠️  WARNING: This will remove ALL AI Platform data from this system!"
+    echo "   • All AI Platform containers"
+    echo "   • All AI Platform Docker networks"
+    echo "   • All AI Platform AppArmor profiles"
+    echo "   • All data in /mnt/data* directories"
+    echo ""
+    
+    read -p "Are you absolutely sure? Type 'NUCLEAR' to confirm: " confirm
+    if [[ "$confirm" != "NUCLEAR" ]]; then
+        print_info "Nuclear cleanup cancelled"
+        exit 0
     fi
     
-    # Handle special commands
-    case "${1:-}" in
-        --scan|-s)
-            scan_all_ebs_volumes
-            return
-            ;;
-        --all|-a)
-            cleanup_all_stacks
-            return
-            ;;
-        --list|-l)
-            list_stacks
-            return
-            ;;
-        --help|-h)
-            show_help
-            return
-            ;;
-    esac
+    print_info "Starting nuclear cleanup..."
     
-    # Run teardown
-    teardown_stack "$@"
+    # Stop all AI Platform containers
+    local ai_containers=($(docker ps --format "{{.Names}}" | grep -E "(n8n|dify|postgres|redis|qdrant|prometheus|grafana|caddy|openclaw|tailscale)" || true))
+    for container in "${ai_containers[@]}"; do
+        print_info "Stopping $container..."
+        docker stop "$container" 2>/dev/null || true
+    done
+    
+    # Remove all AI Platform containers
+    local all_ai_containers=($(docker ps -a --format "{{.Names}}" | grep -E "(n8n|dify|postgres|redis|qdrant|prometheus|grafana|caddy|openclaw|tailscale)" || true))
+    for container in "${all_ai_containers[@]}"; do
+        print_info "Removing $container..."
+        docker rm "$container" 2>/dev/null || true
+    done
+    
+    # Remove all AI Platform networks
+    local ai_networks=($(docker network ls --format "{{.Name}}" | grep -E "(ai_platform|ai-platform)" || true))
+    for network in "${ai_networks[@]}"; do
+        print_info "Removing network $network..."
+        docker network rm "$network" 2>/dev/null || true
+    done
+    
+    # Remove all AI Platform AppArmor profiles
+    local ai_profiles=($(ls /etc/apparmor.d/ 2>/dev/null | grep -E "(ai_platform|ai-platform)" || true))
+    for profile in "${ai_profiles[@]}"; do
+        print_info "Removing AppArmor profile $profile..."
+        apparmor_parser -R "/etc/apparmor.d/$profile" 2>/dev/null || true
+        rm -f "/etc/apparmor.d/$profile"
+    done
+    
+    # Remove all AI Platform data directories
+    for dir in /mnt/data*; do
+        if [[ -d "$dir" ]] && [[ "$dir" != "/mnt/data" ]] || [[ -f "$dir/config/.env" ]]; then
+            print_info "Removing AI Platform data at $dir..."
+            rm -rf "$dir" 2>/dev/null || true
+        fi
+    done
+    
+    print_success "Nuclear cleanup completed!"
 }
 
 # Run main function
