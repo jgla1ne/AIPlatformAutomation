@@ -437,7 +437,7 @@ nuclear_cleanup() {
     
     # STEP 6: Unmount EBS volumes
     print_info "Step 6: Unmounting EBS volumes..."
-    local mounted_volumes=($(findmnt -n -o SOURCE,TARGET | grep -E "^/dev/(xvd|sd|nvme)" | awk '{print $2}'))
+    local mounted_volumes=($(findmnt -n -o TARGET | grep -E "(/mnt|/tmp)" | grep -v "^/$" | sed 's/^[├│└─]*//' || true))
     for volume in "${mounted_volumes[@]}"; do
         if [[ "$volume" != "/" ]] && [[ "$volume" != "/boot" ]] && [[ "$volume" != "/home" ]]; then
             print_info "Unmounting $volume..."
