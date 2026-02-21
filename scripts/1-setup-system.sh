@@ -624,9 +624,9 @@ EOF
     systemctl restart docker
     
     # Create networks
-    docker network create ai-platform 2>/dev/null || true
-    docker network create ai-platform-internal 2>/dev/null || true
-    docker network create ai-platform-monitoring 2>/dev/null || true
+    docker network create ${DOCKER_NETWORK} 2>/dev/null || true
+    docker network create ${DOCKER_NETWORK}_internal 2>/dev/null || true
+    docker network create ${DOCKER_NETWORK}_monitoring 2>/dev/null || true
     
     print_success "Docker configured successfully"
 }
@@ -1115,15 +1115,32 @@ EOF
     
     print_success "Proxy configuration completed"
     
+# Port allocation with retry loop
+allocate_port() {
+    local service=$1
+    local default_port=$2
+    local port
+    
+    while true; do
+        read -p "  ${service} port [${default_port}]: " port_input
+        port=${port_input:-$default_port}
+        
+        if ss -tlnp | grep -q ":${port} "; then
+            echo "  ⚠️  Port ${port} in use — try another"
+        else
+            echo "  ✅ ${service}: ${port}"
+            echo "${service^^}_PORT=${port}" >> "$ENV_FILE"
+            break
+        fi
+    done
+}
+    
     # Service port configuration
     for service_key in "${selected_services[@]}"; do
         case "$service_key" in
             "nginx-proxy-manager"|"traefik"|"caddy"|"openwebui"|"anythingllm"|"n8n"|"dify"|"ollama"|"litellm"|"prometheus"|"grafana"|"signal-api"|"openclaw"|"tailscale"|"postgres"|"redis"|"qdrant"|"milvus"|"chroma"|"weaviate"|"minio")
                 local default_port="${default_ports[$service_key]:-3000}"
-                # Convert service key to uppercase with underscores only
-                local port_var_name=$(echo "$service_key" | tr '-' '_' | tr '[:lower:]' '[:upper:]')_PORT
-                prompt_input "$port_var_name" "$service_key port" "$default_port" false
-                echo "$port_var_name=$INPUT_RESULT" >> "$ENV_FILE"
+                allocate_port "$service_key" "$default_port"
                 ;;
         esac
     done
