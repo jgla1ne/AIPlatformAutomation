@@ -381,6 +381,7 @@ nuclear_cleanup() {
     echo "   • All AI Platform Docker networks"
     echo "   • All AI Platform AppArmor profiles"
     echo "   • All data in /mnt/data* directories"
+    echo "   • Will unmount EBS volumes"
     echo ""
     
     read -p "Are you absolutely sure? Type 'NUCLEAR' to confirm: " confirm
@@ -391,28 +392,32 @@ nuclear_cleanup() {
     
     print_info "Starting nuclear cleanup..."
     
-    # Stop all AI Platform containers
+    # STEP 1: Stop all AI Platform containers
+    print_info "Step 1: Stopping all AI Platform containers..."
     local ai_containers=($(docker ps --format "{{.Names}}" | grep -E "(n8n|dify|postgres|redis|qdrant|prometheus|grafana|caddy|openclaw|tailscale)" || true))
     for container in "${ai_containers[@]}"; do
         print_info "Stopping $container..."
         docker stop "$container" 2>/dev/null || true
     done
     
-    # Remove all AI Platform containers
+    # STEP 2: Remove all AI Platform containers
+    print_info "Step 2: Removing all AI Platform containers..."
     local all_ai_containers=($(docker ps -a --format "{{.Names}}" | grep -E "(n8n|dify|postgres|redis|qdrant|prometheus|grafana|caddy|openclaw|tailscale)" || true))
     for container in "${all_ai_containers[@]}"; do
         print_info "Removing $container..."
         docker rm "$container" 2>/dev/null || true
     done
     
-    # Remove all AI Platform networks
+    # STEP 3: Remove all AI Platform networks
+    print_info "Step 3: Removing all AI Platform networks..."
     local ai_networks=($(docker network ls --format "{{.Name}}" | grep -E "(ai_platform|ai-platform)" || true))
     for network in "${ai_networks[@]}"; do
         print_info "Removing network $network..."
         docker network rm "$network" 2>/dev/null || true
     done
     
-    # Remove all AI Platform AppArmor profiles
+    # STEP 4: Remove all AI Platform AppArmor profiles
+    print_info "Step 4: Removing all AI Platform AppArmor profiles..."
     local ai_profiles=($(ls /etc/apparmor.d/ 2>/dev/null | grep -E "(ai_platform|ai-platform)" || true))
     for profile in "${ai_profiles[@]}"; do
         print_info "Removing AppArmor profile $profile..."
@@ -420,15 +425,31 @@ nuclear_cleanup() {
         rm -f "/etc/apparmor.d/$profile"
     done
     
-    # Remove all AI Platform data directories
+    # STEP 5: Delete data on EBS volumes
+    print_info "Step 5: Deleting all AI Platform data on EBS volumes..."
     for dir in /mnt/data*; do
         if [[ -d "$dir" ]] && [[ "$dir" != "/mnt/data" ]] || [[ -f "$dir/config/.env" ]]; then
-            print_info "Removing AI Platform data at $dir..."
+            print_info "Deleting AI Platform data at $dir..."
             rm -rf "$dir" 2>/dev/null || true
         fi
     done
     
+    # STEP 6: Unmount EBS volumes
+    print_info "Step 6: Unmounting EBS volumes..."
+    local mounted_volumes=($(findmnt -n -o SOURCE,TARGET | grep -E "^/dev/(xvd|sd|nvme)" | awk '{print $2}'))
+    for volume in "${mounted_volumes[@]}"; do
+        if [[ "$volume" != "/" ]] && [[ "$volume" != "/boot" ]] && [[ "$volume" != "/home" ]]; then
+            print_info "Unmounting $volume..."
+            umount "$volume" 2>/dev/null || true
+        fi
+    done
+    
+    # STEP 7: Final cleanup
+    print_info "Step 7: Final system cleanup..."
+    docker system prune -f 2>/dev/null || true
+    
     print_success "Nuclear cleanup completed!"
+    print_info "All AI Platform data removed, volumes unmounted, and system cleaned."
 }
 
 # Run main function
