@@ -3307,8 +3307,6 @@ main() {
     mark_phase_complete "install_docker"
     configure_docker
     mark_phase_complete "configure_docker"
-    install_ollama
-    mark_phase_complete "install_ollama"
     select_services
     mark_phase_complete "select_services"
     collect_configurations
