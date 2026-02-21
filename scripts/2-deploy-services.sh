@@ -494,9 +494,10 @@ deploy_layer_2_services() {
         --restart unless-stopped \
         -e PORT=3000 \
         -e FLOWISE_HOST=0.0.0.0 \
-        -e DATABASE_PATH=/root/.flowise \
-        -e APIKEY_PATH=/root/.flowise \
-        -v "${DATA_ROOT}/data/flowise:/root/.flowise" \
+        -e DATABASE_PATH=/data/flowise \
+        -e APIKEY_PATH=/data/flowise \
+        -e HOME=/data/flowise \
+        -v "${DATA_ROOT}/data/flowise:/data/flowise" \
         -u "${RUNNING_UID}:${RUNNING_GID}" \
         flowiseai/flowise:latest
     
