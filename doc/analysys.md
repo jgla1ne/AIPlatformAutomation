@@ -1,276 +1,226 @@
-Let me fetch all three scripts from the repository.
+# rsync with Google Drive + Signal Pairing + Step 3 Role Clarification
 
-**Script 0:**
-https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/0-pre-setup.sh
+## rsync + Google Drive — The Right Tool Is rclone, Not rsync
 
-**Script 1:**
-https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/1-setup-system.sh
+```
+rsync = syncs between two filesystems (local↔local or local↔SSH)
+rsync does NOT speak Google Drive API natively
 
-**Script 2:**
-https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/2-deploy-services.sh
-
----
-
-# Script Analysis: 0, 1, and 2
-
----
-
-## Script 0 — `0-pre-setup.sh`
-
-### What It Does
-- Installs system dependencies
-- Configures Docker
-- Sets up AppArmor baseline
-- Creates stack user
-
-### ✅ Correct
-```bash
-# Checks for root
-# Installs docker, apparmor, ss (iproute2) — correct toolchain
-# Creates docker group if missing
+rclone = rsync-style tool but speaks 70+ cloud APIs including Google Drive
+rclone is the correct tool for Google Drive sync
 ```
 
-### ❌ Critical Issues
+### Where This Lives in the 5-Script Architecture
 
-**Issue 0-1: Hardcoded UID/GID — defeats parameterization**
-```bash
-# Windsurf wrote:
-useradd -m -u 1000 -g 1000 -s /bin/bash aiplatform
-groupadd -g 1000 aiplatform
-
-# Problem: If STACK_USER_UID=2000 for User B,
-# Script 0 already created UID 1000 as "aiplatform"
-# Script 1's STACK_USER_UID=2000 will conflict or be ignored
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Script 1: Ask user if they want Google Drive sync              │
+│            ENABLE_GDRIVE_SYNC=true/false → written to .env      │
+│            If true: ask for GDRIVE_REMOTE_NAME, GDRIVE_FOLDER   │
+│                                                                  │
+│  Script 2: If ENABLE_GDRIVE_SYNC=true                           │
+│            Install rclone binary (single binary, no daemon)      │
+│            Create rclone config dir under BASE_DIR               │
+│            Deploy rclone as a container with:                    │
+│              - /mnt/data mounted read/write                      │
+│              - cron schedule (every 6h or configurable)          │
+│              - rclone config mounted from BASE_DIR/config/rclone │
+│            NOTE: rclone CANNOT auth headlessly without a token   │
+│            Token must be obtained interactively ONCE             │
+│                                                                  │
+│  Script 3: rclone auth flow (interactive, one-time)             │
+│            rclone config reconnect ${GDRIVE_REMOTE_NAME}:        │
+│            Prints auth URL → user opens in browser              │
+│            Pastes token back → stored in BASE_DIR/config/rclone  │
+│            From this point sync runs automatically via cron      │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-**Fix:**
-```bash
-# Script 0 should NOT create the stack user.
-# Script 1 owns user creation because it knows STACK_USER_UID.
-# Script 0 only installs packages and configures Docker daemon.
-# Remove all useradd/groupadd from Script 0.
+### Why rclone Auth Cannot Be in Script 2
+
+```
+Script 2 runs non-interactively (or should)
+Google OAuth requires a browser redirect
+The token is user-specific and cannot be pre-baked
+This is exactly what Script 3 is for:
+  one-time interactive configuration that requires human input
 ```
 
 ---
 
-**Issue 0-2: AppArmor profiles loaded with hardcoded paths**
-```bash
-# Windsurf wrote:
-cat > /etc/apparmor.d/ai-platform-default << 'EOF'
-  /mnt/data/** rw,
-  /mnt/data/openclaw/** rw,
-EOF
-apparmor_parser -r /etc/apparmor.d/ai-platform-default
+## Signal Pairing — Correct Architecture
+
 ```
+Signal API (signal-cli REST) starts in Script 2
+It becomes accessible at https://ai.datasquiz.net/signal
 
-**Problem:** 
-- Profile hardcodes `/mnt/data` — breaks for User B on `/mnt/data2`
-- Profile name `ai-platform-default` is not network-scoped — two stacks overwrite the same profile
-- Loading in Script 0 is wrong — `BASE_DIR` is not known yet
+User pairing flow is:
+  1. Call POST /v1/register/{phone}
+  2. Receive SMS code
+  3. Call POST /v1/register/{phone}/verify/{code}
+  This is done via curl or the Swagger UI at /signal/v1/api-docs
 
-**Fix:**
-```bash
-# Script 0: do NOT load any AppArmor profiles.
-# Only install apparmor packages and ensure the service is running.
-# Profile TEMPLATES are created by Script 1 in ${BASE_DIR}/apparmor/
-# Profiles are loaded by Script 2 after BASE_DIR is known.
+This does NOT require Script 3 at all.
+User does it themselves via the public endpoint.
+Document the URL in the deployment summary printout from Script 2.
+That is sufficient.
 
-# Script 0 should only do:
-systemctl enable apparmor
-systemctl start apparmor
-echo "✅ AppArmor service enabled — profiles loaded by Script 2"
+Only put Signal in Script 3 if you want to offer:
+  - Re-registration (number change)
+  - Linking a second device
+  - Resetting the signal identity
 ```
 
 ---
 
-**Issue 0-3: Docker daemon.json hardcodes storage path**
-```bash
-# Windsurf wrote:
-cat > /etc/docker/daemon.json << 'EOF'
-{
-  "data-root": "/mnt/data/docker",
-  "log-driver": "json-file"
-}
-EOF
+## Script 3 — Correct Scope Definition
+
+This is the key design question. Here is the clean split:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  SCRIPT 3 owns: things that need human input OR periodic action │
+│                                                                  │
+│  Category A — One-time interactive setup (run once after S2):   │
+│    ├── rclone Google Drive auth token                           │
+│    ├── Tailscale re-auth if TS_AUTHKEY expired                  │
+│    └── SSL cert force-renew (Caddy normally auto-renews)        │
+│                                                                  │
+│  Category B — Operational actions (run anytime after S2):       │
+│    ├── Restart any specific service                             │
+│    ├── Rotate secrets (generate new API keys → write to .env)  │
+│    ├── Re-run Caddy config reload after domain change           │
+│    └── Re-run vector DB env wiring if DB was switched           │
+│                                                                  │
+│  Category C — Recovery (when a service failed in S2):           │
+│    ├── Retry failed service with debug output                   │
+│    ├── Check logs for specific service                          │
+│    └── Re-run health checks and print current status           │
+│                                                                  │
+│  SCRIPT 3 does NOT own:                                         │
+│    ✗ Deploying new services (that is Script 4)                  │
+│    ✗ Changing the vector DB selection (re-run Script 1+2)       │
+│    ✗ Signal user pairing (user does this via the public URL)    │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-**Problem:** Docker's `data-root` is a global daemon setting — it cannot be per-tenant. Setting it to `/mnt/data/docker` means User B's containers also store their layers there, defeating EBS isolation.
+### Script 3 Menu Structure
 
-**Fix:**
 ```bash
-# Docker data-root cannot be per-tenant — it's a daemon-level setting.
-# Options:
-# 1. Leave data-root at default (/var/lib/docker) — simplest, correct
-# 2. Set it to the FIRST stack's EBS — document that it's shared
-#
-# Per-tenant isolation of container DATA is achieved through
-# volume mounts into ${BASE_DIR}/data/${service}/ — NOT through data-root.
-#
-# REMOVE data-root from daemon.json:
-cat > /etc/docker/daemon.json << 'EOF'
-{
-  "log-driver": "json-file",
-  "log-opts": {
-    "max-size": "10m",
-    "max-file": "3"
-  }
-}
-EOF
-```
+# Script 3 presents a numbered menu:
 
----
-
-**Issue 0-4: Script 0 teardown logic mixed with setup**
-```bash
-# Windsurf added cleanup functions in Script 0:
-cleanup_previous_installation() {
-    docker rm -f $(docker ps -aq) 2>/dev/null
-    rm -rf /mnt/data/  # ← DESTROYS ALL TENANT DATA
-}
-```
-
-**This is catastrophic.** If User B runs Script 0 on a host where User A's stack exists, User A's entire `/mnt/data` is deleted.
-
-**Fix:**
-```bash
-# Script 0 must NEVER touch /mnt/data or any BASE_DIR.
-# Cleanup is Script 0's job only for:
-#   - Previously installed system packages (if re-running)
-#   - /etc/apparmor.d/ai-platform-* (but only the old hardcoded ones)
-# 
-# Stack-specific cleanup belongs in a future script-0-tenant.sh
-# or handled manually. Script 0 is host-level only.
+echo "=== Configure Services ==="
+echo "1) Authorize Google Drive sync (rclone - required once)"
+echo "2) Re-authorize Tailscale (if auth key expired)"
+echo "3) Restart a service"
+echo "4) Force SSL certificate renewal"
+echo "5) Rotate API secrets"
+echo "6) View service health status"
+echo "7) Re-wire vector DB config to all services"
+echo "8) View service logs"
+echo "9) Exit"
 ```
 
 ---
 
-## Script 1 — `1-setup-system.sh`
+## What Goes Into Script 2 Right Now (No New Scope)
 
-### What It Does
-- Interactive configuration collection
-- EBS validation
-- User creation
-- Directory structure creation
-- Port allocation
-- `.env` generation
-- AppArmor template creation
-
-### ✅ Correct
-```bash
-# Interactive prompts for BASE_DIR, DOCKER_NETWORK ✅
-# EBS validation using mountpoint -q ✅
-# OPENCLAW_UID = STACK_USER_UID + 1 ✅
-# Port allocation with ss ✅
-# .env written to ${BASE_DIR}/config/.env ✅
 ```
+Script 2 additions needed (confirmed, not new scope):
 
-### ❌ Critical Issues
+  ADD: rclone container deployment (if ENABLE_GDRIVE_SYNC=true)
+       No auth yet — just deploy the container and mount the config dir
+       Container starts but sync will fail until Script 3 auth is done
+       Deployment summary prints:
+         "Google Drive sync: run Script 3 option 1 to authorize"
 
-**Issue 1-1: Port retry loop still uses broken pattern**
-```bash
-# Windsurf wrote:
-for service in "${services[@]}"; do
-    port=${default_ports[$i]}
-    if ss -tlnp | grep -q ":${port} "; then
-        echo "Port in use"
-        # No retry — just increments and moves on
-    fi
-    i=$((i+1))
-done
-```
+  ADD: Signal deployment summary line:
+         "Signal API: https://${DOMAIN}/signal"
+         "Signal pairing: open https://${DOMAIN}/signal/v1/api-docs"
+         "Register your number and verify the SMS code to activate"
 
-**Fix (as specified in previous review):**
-```bash
-allocate_port() {
-    local service=$1
-    local default_port=$2
-    local port
-
-    while true; do
-        read -p "  ${service} port [${default_port}]: " port_input
-        port=${port_input:-$default_port}
-
-        if ss -tlnp | grep -q ":${port} "; then
-            echo "  ⚠️  Port ${port} in use — try another"
-        else
-            echo "  ✅ ${service}: ${port}"
-            echo "${service^^}_PORT=${port}" >> "${BASE_DIR}/config/.env"
-            break
-        fi
-    done
-}
-
-# Call per service:
-allocate_port "prometheus"   5000
-allocate_port "grafana"      5001
-allocate_port "n8n"          5002
-allocate_port "dify"         5003
-allocate_port "anythingllm"  5004
-allocate_port "litellm"      5005
-allocate_port "openwebui"    5006
-allocate_port "minio_s3"     5007
-allocate_port "minio_console" 5008
-allocate_port "signal"       5009
-allocate_port "openclaw"     5010
-allocate_port "flowise"      5011
+  NO CHANGE to anything else in Script 2
 ```
 
 ---
 
-**Issue 1-2: AppArmor templates have literal BASE_DIR — not placeholder**
-```bash
-# Windsurf wrote:
-cat > "${BASE_DIR}/apparmor/default.profile.tmpl" << EOF
-profile ai-platform-default {
-  ${BASE_DIR}/** rw,   ← This substitutes NOW (double-quote heredoc)
-}
-EOF
+## Full Picture Across All 5 Scripts (Current Agreed State)
+
 ```
+Script 0: Packages, Docker daemon, AppArmor service, NO user creation
+          NO hardcoded UIDs, NO profile loading
 
-This looks correct at first glance — but it means the template IS the final profile (BASE_DIR is baked in at template creation time). This is actually fine IF the template is only used for this stack's Script 2. However it breaks the `BASE_DIR_PLACEHOLDER` pattern referenced throughout the plan.
+Script 1: Interactive collection of all config
+          User/UID creation, directory structure, .env generation
+          AppArmor profile generation (using BASE_DIR from user input)
+          Caddyfile generation (all routes, no openclaw route)
+          chown -R STACK_USER_UID:STACK_USER_GID BASE_DIR
+          chown -R 999:999 BASE_DIR/data/postgres (one exception)
 
-**Verdict:** The double-quote heredoc approach (substituting at template creation) is actually **simpler and correct** for this use case. The `BASE_DIR_PLACEHOLDER` + sed pattern is only needed if templates are shared across stacks (they are not).
+Script 2: Deploy all services in layers
+          Layer 1: postgres, redis, vector DB, minio (health gated)
+          Layer 2: app services with VDBENV_* vars injected
+          Layer 3: Tailscale sidecar → tailscale up → get IP
+          Layer 4: openclaw (--network container:tailscale-openclaw)
+          Layer 5: rclone (if ENABLE_GDRIVE_SYNC=true, no auth yet)
+          Layer 6: Caddy (last, all upstreams verified first)
+          Deployment summary: all URLs + openclaw Tailscale IP
 
-**However:** The profile name inside the template must use `DOCKER_NETWORK`:
-```bash
-cat > "${BASE_DIR}/apparmor/default.profile.tmpl" << EOF
-profile ${DOCKER_NETWORK}-default flags=(attach_disconnected) {
-  #include <abstractions/base>
+Script 3: Interactive operations menu
+          A: rclone gdrive auth (one-time)
+          B: Tailscale re-auth
+          C: Service restart
+          D: SSL renewal
+          E: Secret rotation
+          F: Health status
+          G: Vector DB re-wire
+          H: Service logs
 
-  # Stack data directory — this stack only
-  ${BASE_DIR}/** rw,
-
-  # Docker overlay filesystem
-  /var/lib/docker/** r,
-
-  # Network
-  network inet tcp,
-  network inet udp,
-
-  # Deny other mount points
-  deny /mnt/** rw,         # too broad — see Issue 1-3
-}
-EOF
+Script 4: Add new dockerized service to running stack
+          Prompts for: image, port, subdomain path, env vars
+          Appends service to Docker network
+          Appends Caddy route
+          Runs health check
+          Updates deployment summary
 ```
 
 ---
 
-**Issue 1-3: AppArmor deny rule blocks own BASE_DIR**
-```bash
-# Windsurf wrote:
-deny /mnt/** rw,
-# Then also:
-${BASE_DIR}/** rw,   ← BASE_DIR = /mnt/data
+## Message for Windsurf
 
-# AppArmor evaluates deny BEFORE allow.
-# "deny /mnt/**" blocks access to /mnt/data/** regardless of the allow rule.
-# Result: all containers fail to access their data directories.
 ```
+Two additions to Script 2 only. Nothing else changes.
 
-**Fix:**
-```bash
-# AppArmor deny rules override allows — never deny a parent of an allow.
-# Remove the broad deny. Instead, use a specific deny for OTHER mount points:
+ADDITION 1: rclone deployment (after minio, before Caddy)
 
-# If BASE_DIR=/mnt/data, deny /mnt/data2, /mnt/data3 etc.
-# But this requires
+if [[ "${ENABLE_GDRIVE_SYNC:-false}" == "true" ]]; then
+    mkdir -p ${BASE_DIR}/config/rclone
+    chown ${STACK_USER_UID}:${STACK_USER_GID} ${BASE_DIR}/config/rclone
+
+    docker run -d \
+        --name rclone-gdrive \
+        --network ${DOCKER_NETWORK} \
+        --user ${STACK_USER_UID}:${STACK_USER_GID} \
+        -v ${BASE_DIR}/config/rclone:/config/rclone \
+        -v ${BASE_DIR}/data:/data \
+        rclone/rclone:latest \
+        sync /data gdrive:${GDRIVE_FOLDER:-AIPlatformBackup} \
+        --config /config/rclone/rclone.conf \
+        --create-empty-src-dirs \
+        --log-level INFO
+
+    echo "[INFO] rclone deployed. Run Script 3 option 1 to authorize Google Drive."
+fi
+
+ADDITION 2: Add to deployment summary printout at end of Script 2
+
+echo "Signal API:     https://${DOMAIN}/signal"
+echo "Signal pairing: https://${DOMAIN}/signal/v1/api-docs"
+echo "GDrive sync:    Run './3-configure-services.sh' → option 1 to authorize"
+
+Do not change anything else in Script 2.
+
+Script 3 will be written separately as a menu-driven operations script
+covering: rclone auth, tailscale re-auth, service restart, SSL renewal,
+secret rotation, health status, vector DB re-wire, log viewing.
+```
