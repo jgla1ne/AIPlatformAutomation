@@ -56,7 +56,7 @@ print_info() {
     echo -e "${BLUE}ℹ️  $1${NC}" | tee -a "$LOG_FILE"
 }
 
-print_warning() {
+print_warninging() {
     echo -e "${YELLOW}⚠️  $1${NC}" | tee -a "$LOG_FILE"
 }
 
@@ -206,7 +206,7 @@ restore_state() {
     local timestamp=$(jq -r '.timestamp' "$STATE_FILE" 2>/dev/null || echo "")
     
     if [[ -z "$current_phase" ]]; then
-        print_warning "State file corrupted - starting fresh"
+        print_warninging "State file corrupted - starting fresh"
         return 1
     fi
     
@@ -351,7 +351,7 @@ collect_domain_info() {
             print_info "This is normal for load balancers, CDNs, or cloud services"
         fi
     else
-        print_warn "Domain does not resolve or DNS not configured"
+        print_warning "Domain does not resolve or DNS not configured"
         # Still set to true if we can get public IP, as external access is possible
         local public_ip=$(curl -s ifconfig.me 2>/dev/null || echo 'unknown')
         if [[ "$public_ip" != "unknown" ]]; then
@@ -361,7 +361,7 @@ collect_domain_info() {
         else
             echo "DOMAIN_RESOLVES=false" >> "$ENV_FILE"
             echo "PUBLIC_IP=unknown" >> "$ENV_FILE"
-            print_warn "No public IP available - local access only"
+            print_warning "No public IP available - local access only"
         fi
     fi
     
@@ -559,7 +559,7 @@ update_system() {
         apt update && apt upgrade -y
         print_success "System packages updated"
     else
-        print_warn "Package manager not detected - skipping system update"
+        print_warninging "Package manager not detected - skipping system update"
     fi
     
     # Install basic tools
@@ -745,7 +745,7 @@ select_services() {
                         12) service_name="openclaw" ;;
                         13) service_name="prometheus" ;;
                         14) service_name="minio" ;;
-                        *) print_warn "Invalid selection: $num (must be 1-14)"; continue ;;
+                        *) print_warning "Invalid selection: $num (must be 1-14)"; continue ;;
                     esac
                     
                     if [[ -n "${selected_map[$service_name]:-}" ]]; then
@@ -756,7 +756,7 @@ select_services() {
                         print_info "Removed: $service_name"
                     fi
                 else
-                    print_warn "Invalid selection: $num (must be 1-14)"
+                    print_warning "Invalid selection: $num (must be 1-14)"
                 fi
             done
             break
@@ -952,7 +952,7 @@ collect_configurations() {
         
         if netstat -tuln 2>/dev/null | grep -q ":$port "; then
             local pid=$(netstat -tuln 2>/dev/null | grep ":$port " | awk '{print $7}' | cut -d/ -f1)
-            print_warn "Port $port is in use by $service (pid: $pid)"
+            print_warninging "Port $port is in use by $service (pid: $pid)"
             port_conflicts+=("$port:$service:$pid")
         else
             print_success "Port $port is available for $service"
@@ -1172,7 +1172,7 @@ EOF
                         6) selected_models+=("llama3.1:8b") ;;
                         7) selected_models+=("mixtral:8x7b") ;;
                         8) selected_models+=("deepseek-coder:6.7b") ;;
-                        *) print_warn "Invalid model selection: $num" ;;
+                        *) print_warning "Invalid model selection: $num" ;;
                     esac
                 done
                 
@@ -1975,9 +1975,9 @@ setup_volumes() {
             if [[ "$current_mount" == "$device_path" ]]; then
                 print_success "Correct volume already mounted: $device_path"
             else
-                print_warning "Different volume mounted: $current_mount"
+                print_warninging "Different volume mounted: $current_mount"
                 print_info "Attempting to remount correct volume..."
-                umount /mnt || print_warning "Could not unmount current volume"
+                umount /mnt || print_warninging "Could not unmount current volume"
                 if mount "$device_path" /mnt; then
                     print_success "Successfully remounted $device_path"
                 else
@@ -2508,7 +2508,7 @@ EOF
     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
         print_success "Domain resolves correctly - public access available"
     else
-        print_warn "Domain does not resolve - using local access"
+        print_warning "Domain does not resolve - using local access"
     fi
     
     print_success "Summary generation completed"
