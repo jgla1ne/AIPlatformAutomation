@@ -74,18 +74,119 @@ SIGNAL_PORT=""
 OPENCLAW_PORT=""
 FLOWISE_PORT=""
 
+# Detect and mount EBS volumes
+detect_ebs_volumes() {
+    print_header "EBS Volume Detection"
+    
+    echo "🔍 Scanning for available EBS volumes..."
+    echo ""
+    
+    # List available block devices
+    local devices=($(lsblk -d -n -o NAME,SIZE,TYPE | grep -E "^xvd|^sd|^nvme" | awk '{print $1}'))
+    
+    if [[ ${#devices[@]} -eq 0 ]]; then
+        print_error "No EBS volumes detected"
+        print_info "Please attach EBS volumes to this instance first"
+        exit 1
+    fi
+    
+    echo "📋 Available EBS Volumes:"
+    echo ""
+    printf "%-15s %-10s %-15s %-30s\n" "DEVICE" "SIZE" "TYPE" "MOUNT POINT"
+    echo "────────────────────────────────────────────────────────────────"
+    
+    local available_mounts=()
+    
+    for device in "${devices[@]}"; do
+        local device_path="/dev/$device"
+        local size=$(lsblk -d -n -o SIZE "$device_path")
+        local mount_point=$(findmnt -n -o TARGET -S "$device_path" 2>/dev/null || echo "Not mounted")
+        
+        printf "%-15s %-10s %-15s %-30s\n" "$device_path" "$size" "EBS" "$mount_point"
+        
+        if [[ "$mount_point" != "Not mounted" ]]; then
+            available_mounts+=("$mount_point")
+        fi
+    done
+    
+    echo ""
+    
+    # If no mounted volumes found, offer to mount
+    if [[ ${#available_mounts[@]} -eq 0 ]]; then
+        print_warning "No EBS volumes are currently mounted"
+        echo ""
+        echo "Available EBS devices to mount:"
+        for device in "${devices[@]}"; do
+            echo "  /dev/$device"
+        done
+        echo ""
+        
+        read -p "Enter device to mount (e.g., /dev/xvdf): " selected_device
+        if [[ -z "$selected_device" ]]; then
+            print_error "No device selected"
+            exit 1
+        fi
+        
+        if [[ ! -b "$selected_device" ]]; then
+            print_error "Invalid device: $selected_device"
+            exit 1
+        fi
+        
+        read -p "Enter mount point (e.g., /mnt/data): " mount_point
+        if [[ -z "$mount_point" ]]; then
+            mount_point="/mnt/data"
+        fi
+        
+        # Create mount point
+        mkdir -p "$mount_point"
+        
+        # Mount the device
+        if mount "$selected_device" "$mount_point"; then
+            print_success "Mounted $selected_device at $mount_point"
+            available_mounts+=("$mount_point")
+        else
+            print_error "Failed to mount $selected_device"
+            exit 1
+        fi
+    fi
+    
+    echo ""
+    echo "📋 Available Mount Points for Stack:"
+    for i in "${!available_mounts[@]}"; do
+        echo "  $((i+1)). ${available_mounts[$i]}"
+    done
+    echo ""
+    
+    while true; do
+        read -p "Select mount point for this stack (1-${#available_mounts[@]}): " selection
+        if [[ "$selection" =~ ^[0-9]+$ ]] && [[ $selection -ge 1 ]] && [[ $selection -le ${#available_mounts[@]} ]]; then
+            BASE_DIR="${available_mounts[$((selection-1))]}"
+            break
+        else
+            print_warning "Please enter a number between 1 and ${#available_mounts[@]}"
+        fi
+    done
+    
+    print_success "Selected EBS mount: $BASE_DIR"
+}
+
 # Interactive configuration
 interactive_config() {
     print_header "Stack Configuration"
     
-    read -p "EBS mount point for this stack [/mnt/data]: " BASE_DIR
-    BASE_DIR=${BASE_DIR:-/mnt/data}
+    # Show selected EBS volume
+    print_info "Using EBS volume: $BASE_DIR"
     
-    read -p "Service owner UID [1000]: " STACK_USER_UID
-    STACK_USER_UID=${STACK_USER_UID:-1000}
+    # Get current user UID/GID (not root)
+    local current_user=$(logname 2>/dev/null || echo "${SUDO_USER:-$USER}")
+    local current_uid=$(id -u "$current_user" 2>/dev/null || echo "1000")
+    local current_gid=$(id -g "$current_user" 2>/dev/null || echo "1000")
     
-    read -p "Service owner GID [1000]: " STACK_USER_GID
-    STACK_USER_GID=${STACK_USER_GID:-1000}
+    read -p "Service owner UID [$current_uid]: " STACK_USER_UID
+    STACK_USER_UID=${STACK_USER_UID:-$current_uid}
+    
+    read -p "Service owner GID [$current_gid]: " STACK_USER_GID
+    STACK_USER_GID=${STACK_USER_GID:-$current_gid}
     
     read -p "Docker network name [ai_platform]: " DOCKER_NETWORK
     DOCKER_NETWORK=${DOCKER_NETWORK:-ai_platform}
@@ -355,6 +456,7 @@ main() {
     print_banner
     
     # Execute setup phases
+    detect_ebs_volumes
     interactive_config
     validate_ebs_mount
     create_directories
