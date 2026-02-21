@@ -3278,9 +3278,6 @@ main() {
         exit 1
     fi
     
-    # Initialize
-    setup_logging
-    
     # Display banner
     print_banner
     
@@ -3297,6 +3294,10 @@ main() {
     # Execute phases
     setup_volumes
     mark_phase_complete "setup_volumes"
+    
+    # Initialize logging after volume is mounted
+    setup_logging
+    
     detect_system
     mark_phase_complete "detect_system"
     collect_domain_info
