@@ -389,7 +389,7 @@ nuclear_cleanup() {
     
     # STEP 1: Stop all AI Platform containers
     print_info "Step 1: Stopping all AI Platform containers..."
-    local ai_containers=($(docker ps --format "{{.Names}}" | grep -E "(n8n|dify|postgres|redis|qdrant|prometheus|grafana|caddy|openclaw|tailscale)" || true))
+    local ai_containers=($(docker ps --format "{{.Names}}" | grep -E "(n8n|dify|postgres|redis|qdrant|prometheus|grafana|caddy|openclaw|tailscale|anythingllm|litellm|minio|flowise|openwebui|ollama)" || true))
     for container in "${ai_containers[@]}"; do
         print_info "Stopping $container..."
         docker stop "$container" 2>/dev/null || true
@@ -397,7 +397,7 @@ nuclear_cleanup() {
     
     # STEP 2: Remove all AI Platform containers
     print_info "Step 2: Removing all AI Platform containers..."
-    local all_ai_containers=($(docker ps -a --format "{{.Names}}" | grep -E "(n8n|dify|postgres|redis|qdrant|prometheus|grafana|caddy|openclaw|tailscale)" || true))
+    local all_ai_containers=($(docker ps -a --format "{{.Names}}" | grep -E "(n8n|dify|postgres|redis|qdrant|prometheus|grafana|caddy|openclaw|tailscale|anythingllm|litellm|minio|flowise|openwebui|ollama)" || true))
     for container in "${all_ai_containers[@]}"; do
         print_info "Removing $container..."
         docker rm "$container" 2>/dev/null || true
