@@ -287,16 +287,19 @@ scan_and_select_stack() {
         echo "   1. Nuclear cleanup of all AI Platform data"
         echo "   2. Cancel and run Script 1 to create a stack first"
         echo ""
-        read -p "Choose option (1-2): " choice
-    if [[ "$choice" == "1" ]]; then
-        nuclear_cleanup
-    elif [[ "$choice" == "2" ]]; then
-        print_info "Cleanup cancelled"
-        exit 0
-    else
-        print_error "Invalid choice"
-        exit 1
-    fi
+        
+        while true; do
+            read -p "Choose option (1-2): " choice
+            if [[ "$choice" == "1" ]]; then
+                nuclear_cleanup
+                break
+            elif [[ "$choice" == "2" ]]; then
+                print_info "Cleanup cancelled"
+                exit 0
+            else
+                print_warning "Invalid choice. Please enter 1 or 2"
+            fi
+        done
         return
     fi
     
