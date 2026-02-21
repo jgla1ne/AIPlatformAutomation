@@ -17,8 +17,8 @@ readonly CYAN='\033[0;36m'
 readonly NC='\033[0m'
 readonly BOLD='\033[1m'
 
-# Paths
-readonly DATA_ROOT="/mnt/data"
+# Paths (will be set by volume detection)
+readonly DATA_ROOT="${BASE_DIR:-/mnt/data}"
 readonly METADATA_DIR="$DATA_ROOT/metadata"
 readonly STATE_FILE="$METADATA_DIR/setup_state.json"
 readonly LOG_FILE="$DATA_ROOT/logs/setup.log"
@@ -309,6 +309,10 @@ collect_domain_info() {
     # DOMAIN_NAME is what the user enters
     prompt_input "DOMAIN_NAME" "Enter your domain name (e.g., ai.datasquiz.net)" "" false "domain"
     echo "DOMAIN_NAME=$INPUT_RESULT" >> "$ENV_FILE"
+    
+    # DOCKER_NETWORK configuration
+    prompt_input "DOCKER_NETWORK" "Docker network name" "ai_platform" false
+    echo "DOCKER_NETWORK=$INPUT_RESULT" >> "$ENV_FILE"
     
     # Validate domain resolution for DOMAIN_NAME
     echo ""
@@ -2582,11 +2586,11 @@ generate_compose_templates() {
 # AI Platform - Complete Service Stack
 
 networks:
-  ai_platform:
-    name: ai_platform
+  ${DOCKER_NETWORK}:
+    name: ${DOCKER_NETWORK}
     driver: bridge
-  ai_platform_internal:
-    name: ai_platform_internal
+  ${DOCKER_NETWORK}_internal:
+    name: ${DOCKER_NETWORK}_internal
     driver: bridge
     internal: true
 
@@ -2645,7 +2649,7 @@ add_postgres_service() {
       - postgres_data:/var/lib/postgresql/data
       - ${DATA_ROOT}/logs/postgres:/var/log/postgresql
     networks:
-      - ai_platform_internal
+      - ${DOCKER_NETWORK}_internal
     ports:
       - "127.0.0.1:5432:5432"
     healthcheck:
@@ -2672,7 +2676,7 @@ add_redis_service() {
       - redis_data:/data
       - \${DATA_ROOT}/logs/redis:/var/log/redis
     networks:
-      - ai_platform_internal
+      - ${DOCKER_NETWORK}_internal
     ports:
       - "127.0.0.1:6379:6379"
     healthcheck:
@@ -2701,8 +2705,8 @@ add_ollama_service() {
     restart: unless-stopped
     ${runtime_config}
     networks:
-      - ai_platform_internal
-      - ai_platform
+      - ${DOCKER_NETWORK}_internal
+      - ${DOCKER_NETWORK}
     environment:
       - OLLAMA_HOST=0.0.0.0
       - OLLAMA_ORIGINS=*
@@ -2766,8 +2770,8 @@ add_litellm_service() {
       - ${DATA_ROOT}/config/litellm:/app/config
       - ${DATA_ROOT}/logs/litellm:/app/logs
     networks:
-      - ai_platform_internal
-      - ai_platform
+      - ${DOCKER_NETWORK}_internal
+      - ${DOCKER_NETWORK}
     ports:
       - "${LITELLM_PORT:-4000}:4000"
     command: ["--config", "/app/config/config.yaml", "--port", "4000", "--num_workers", "4"]
@@ -2803,8 +2807,8 @@ add_openwebui_service() {
       - ${DATA_ROOT}/open-webui:/app/backend/data
       - ${DATA_ROOT}/logs/open-webui:/app/logs
     networks:
-      - ai_platform_internal
-      - ai_platform
+      - ${DOCKER_NETWORK}_internal
+      - ${DOCKER_NETWORK}
     ports:
       - "${OPENWEBUI_PORT:-3000}:8080"
     healthcheck:
@@ -2854,8 +2858,8 @@ add_dify_services() {
       - ${DATA_ROOT}/dify/storage:/app/storage
       - ${DATA_ROOT}/logs/dify:/app/logs
     networks:
-      - ai_platform_internal
-      - ai_platform
+      - ${DOCKER_NETWORK}_internal
+      - ${DOCKER_NETWORK}
     ports:
       - "${DIFY_PORT:-8080}:5001"
     healthcheck:
@@ -2879,7 +2883,7 @@ add_dify_services() {
       CONSOLE_API_URL: http://dify-api:5001
       APP_API_URL: http://dify-api:5001
     networks:
-      - ai_platform
+      - ${DOCKER_NETWORK}
     ports:
       - "${DIFY_PORT:-8080}:3000"
     healthcheck:
@@ -2918,8 +2922,8 @@ add_n8n_service() {
       - ${DATA_ROOT}/n8n:/home/node/.n8n
       - ${DATA_ROOT}/logs/n8n:/var/log/n8n
     networks:
-      - ai_platform_internal
-      - ai_platform
+      - ${DOCKER_NETWORK}_internal
+      - ${DOCKER_NETWORK}
     ports:
       - "${N8N_PORT:-5678}:5678"
     healthcheck:
@@ -2958,8 +2962,8 @@ add_flowise_service() {
       - ${DATA_ROOT}/flowise:/root/.flowise
       - ${DATA_ROOT}/logs/flowise:/var/log/flowise
     networks:
-      - ai_platform_internal
-      - ai_platform
+      - ${DOCKER_NETWORK}_internal
+      - ${DOCKER_NETWORK}
     ports:
       - "${FLOWISE_PORT:-3002}:3000"
     healthcheck:
@@ -2996,8 +3000,8 @@ add_anythingllm_service() {
       - ${DATA_ROOT}/documents:/app/server/storage/documents
       - ${DATA_ROOT}/logs/anythingllm:/var/log/anythingllm
     networks:
-      - ai_platform_internal
-      - ai_platform
+      - ${DOCKER_NETWORK}_internal
+      - ${DOCKER_NETWORK}
     ports:
       - "${ANYTHINGLLM_PORT:-3001}:3000"
     healthcheck:
@@ -3024,7 +3028,7 @@ add_monitoring_services() {
       - ${DATA_ROOT}/config/prometheus:/etc/prometheus
       - ${DATA_ROOT}/logs/prometheus:/var/log/prometheus
     networks:
-      - ai_platform_internal
+      - ${DOCKER_NETWORK}_internal
     ports:
       - "${PROMETHEUS_PORT:-9090}:9090"
     command:
@@ -3061,8 +3065,8 @@ add_monitoring_services() {
       - ${DATA_ROOT}/grafana:/var/lib/grafana
       - ${DATA_ROOT}/logs/grafana:/var/log/grafana
     networks:
-      - ai_platform_internal
-      - ai_platform
+      - ${DOCKER_NETWORK}_internal
+      - ${DOCKER_NETWORK}
     ports:
       - "${GRAFANA_PORT:-3001}:3000"
     healthcheck:
@@ -3092,8 +3096,8 @@ add_signal_api_service() {
       - ${DATA_ROOT}/signal-api:/home/.local/share/signal-cli
       - ${DATA_ROOT}/logs/signal-api:/var/log/signal-api
     networks:
-      - ai_platform_internal
-      - ai_platform
+      - ${DOCKER_NETWORK}_internal
+      - ${DOCKER_NETWORK}
     ports:
       - "${SIGNAL_API_PORT:-8090}:8090"
     healthcheck:
@@ -3130,8 +3134,8 @@ add_openclaw_service() {
       - ${DATA_ROOT}/openclaw:/app/data
       - ${DATA_ROOT}/logs/openclaw:/var/log/openclaw
     networks:
-      - ai_platform_internal
-      - ai_platform
+      - ${DOCKER_NETWORK}_internal
+      - ${DOCKER_NETWORK}
     ports:
       - "${OPENCLAW_PORT:-18789}:8082"
       - "${OPENCLAW_API_PORT:-8083}:8083"
@@ -3162,7 +3166,7 @@ add_tailscale_service() {
       - ${DATA_ROOT}/tailscale:/var/lib/tailscale
       - ${DATA_ROOT}/logs/tailscale:/var/log/tailscale
     networks:
-      - ai_platform_internal
+      - ${DOCKER_NETWORK}_internal
     cap_add:
       - NET_ADMIN
       - NET_RAW
@@ -3195,8 +3199,8 @@ add_minio_service() {
       - ${DATA_ROOT}/minio:/data
       - ${DATA_ROOT}/logs/minio:/var/log/minio
     networks:
-      - ai_platform_internal
-      - ai_platform
+      - ${DOCKER_NETWORK}_internal
+      - ${DOCKER_NETWORK}
     ports:
       - "${MINIO_API_PORT:-9000}:9000"
       - "${MINIO_CONSOLE_PORT:-9001}:9001"
@@ -3229,8 +3233,8 @@ add_qdrant_service() {
       - ${DATA_ROOT}/qdrant:/qdrant/storage
       - ${DATA_ROOT}/logs/qdrant:/var/log/qdrant
     networks:
-      - ai_platform_internal
-      - ai_platform
+      - ${DOCKER_NETWORK}_internal
+      - ${DOCKER_NETWORK}
     ports:
       - "6333:6333"
     healthcheck:
