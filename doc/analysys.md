@@ -334,6 +334,384 @@ If any hardcoded value in the script prevents this from working, it's a bug. **B
 
 ## 🎯 Key Insight
 
-**The user's analysis is correct**: I over-engineered into multi-tenancy when the current need is a **clean, working single-stack architecture** with proper dynamic variables.
+# === CORRECTED ANALYSIS: Multi-Tenancy Architecture ===
 
-**The right approach**: Fix the current issues and make the existing architecture truly dynamic, rather than rebuilding it for a future multi-tenant use case that isn't needed today.
+## 🎯 Understanding the Correct Multi-Tenancy Model
+
+You're absolutely right - I missed the key point. Here's the **correct architecture**:
+
+### **Multi-Tenancy Flow**
+```
+1. New tenant wants AI platform
+2. Tenant runs Script 1 (as their own user)
+3. Script 1:
+   - Mounts dedicated EBS volume for tenant
+   - Creates tenant-specific UID/GID (e.g., 1001:1001, 1002:1002, etc.)
+   - Sets BASE_DIR to tenant's EBS mount point
+   - Generates .env with tenant-specific ports
+   - Performs port availability check for tenant's UID
+4. Tenant runs Script 2 (as their own user)
+5. Script 2 deploys entire stack under tenant's UID/GID
+6. Multiple stacks run simultaneously under different UIDs
+```
+
+---
+
+## 🏗️ Correct Multi-Tenant Architecture
+
+### **Per-Tenant Isolation**
+```bash
+# Tenant A (UID 1001:1001) - EBS mounted at /mnt/data-tenant-a
+BASE_DIR=/mnt/data-tenant-a
+STACK_USER_UID=1001
+STACK_USER_GID=1001
+DOMAIN_NAME=tenant-a.datasquiz.net
+DOCKER_NETWORK=ai-platform-1001
+PORT_RANGE_START=5000
+
+# Tenant B (UID 1002:1002) - EBS mounted at /mnt/data-tenant-b  
+BASE_DIR=/mnt/data-tenant-b
+STACK_USER_UID=1002
+STACK_USER_GID=1002
+DOMAIN_NAME=tenant-b.datasquiz.net
+DOCKER_NETWORK=ai-platform-1002
+PORT_RANGE_START=5100
+
+# Tenant C (UID 1003:1003) - EBS mounted at /mnt/data-tenant-c
+BASE_DIR=/mnt/data-tenant-c
+STACK_USER_UID=1003
+STACK_USER_GID=1003
+DOMAIN_NAME=tenant-c.datasquiz.net
+DOCKER_NETWORK=ai-platform-1003
+PORT_RANGE_START=5200
+```
+
+### **Directory Structure per Tenant**
+```bash
+# Each tenant gets their own EBS volume with complete isolation
+/mnt/data-tenant-a/          ← Tenant A's EBS volume
+├── apparmor/               ← AppArmor profiles for UID 1001
+├── config/
+│   └── .env                ← Tenant A's configuration
+├── data/
+│   ├── postgres/
+│   ├── n8n/
+│   ├── anythingllm/
+│   └── ... (all services)
+├── logs/
+└── ssl/certs/tenant-a.datasquiz.net/
+
+/mnt/data-tenant-b/          ← Tenant B's EBS volume (completely separate)
+├── apparmor/               ← AppArmor profiles for UID 1002
+├── config/
+│   └── .env                ← Tenant B's configuration
+├── data/
+│   ├── postgres/
+│   ├── n8n/
+│   ├── anythingllm/
+│   └── ... (all services)
+└── logs/
+```
+
+---
+
+## 🔧 Script 1 - Multi-Tenant Setup
+
+### **Enhanced Script 1 for Multi-Tenancy**
+```bash
+#!/bin/bash
+# Script 1: Multi-Tenant Setup & Configuration
+
+# Get current user's UID/GID
+CURRENT_UID=$(id -u)
+CURRENT_GID=$(id -g)
+
+# Determine tenant-specific configuration
+TENANT_NAME="tenant-${CURRENT_UID}"
+BASE_DIR="/mnt/data-${TENANT_NAME}"
+DOMAIN_NAME="${TENANT_NAME}.datasquiz.net"
+
+# Assign port range based on UID
+PORT_RANGE_START=$((5000 + (CURRENT_UID - 1000) * 100))
+
+# Create tenant directory structure
+mkdir -p "${BASE_DIR}/data" "${BASE_DIR}/logs" "${BASE_DIR}/config" "${BASE_DIR}/apparmor"
+
+# Generate tenant-specific .env
+cat > "${BASE_DIR}/config/.env" << EOF
+# === Tenant Configuration ===
+TENANT_NAME=${TENANT_NAME}
+BASE_DIR=${BASE_DIR}
+DOMAIN_NAME=${DOMAIN_NAME}
+LOCALHOST=localhost
+
+# === User Isolation ===
+STACK_USER_UID=${CURRENT_UID}
+STACK_USER_GID=${CURRENT_GID}
+OPENCLAW_UID=$((CURRENT_UID + 1000))
+OPENCLAW_GID=$((CURRENT_UID + 1000))
+
+# === Network ===
+DOCKER_NETWORK=ai-platform-${CURRENT_UID}
+
+# === Port Configuration ===
+PROMETHEUS_PORT=$((PORT_RANGE_START + 0))
+GRAFANA_PORT=$((PORT_RANGE_START + 1))
+N8N_PORT=$((PORT_RANGE_START + 2))
+DIFY_PORT=$((PORT_RANGE_START + 3))
+ANYTHINGLLM_PORT=$((PORT_RANGE_START + 4))
+LITELLM_PORT=$((PORT_RANGE_START + 5))
+OPENWEBUI_PORT=$((PORT_RANGE_START + 6))
+MINIO_S3_PORT=$((PORT_RANGE_START + 7))
+MINIO_CONSOLE_PORT=$((PORT_RANGE_START + 8))
+SIGNAL_PORT=$((PORT_RANGE_START + 9))
+OPENCLAW_PORT=$((PORT_RANGE_START + 10))
+FLOWISE_PORT=$((PORT_RANGE_START + 11))
+
+# === Vector DB ===
+VECTOR_DB=qdrant
+
+# === AppArmor ===
+APPARMOR_PROFILE_DIR=${BASE_DIR}/apparmor
+
+# === Tailscale ===
+TAILSCALE_AUTH_KEY=
+TAILSCALE_HOSTNAME=openclaw-${TENANT_NAME}
+EOF
+
+echo "✅ Tenant ${TENANT_NAME} configured"
+echo "   UID/GID: ${CURRENT_UID}:${CURRENT_GID}"
+echo "   Base Dir: ${BASE_DIR}"
+echo "   Domain: ${DOMAIN_NAME}"
+echo "   Port Range: ${PORT_RANGE_START}-${PORT_RANGE_START + 99}"
+```
+
+---
+
+## 🔧 Script 2 - Multi-Tenant Deployment
+
+### **Tenant-Aware Deployment**
+```bash
+#!/bin/bash
+# Script 2: Multi-Tenant Deployment
+
+# Load tenant configuration
+source "${BASE_DIR}/config/.env"
+
+# Set tenant-specific paths
+TENANT_DATA="${BASE_DIR}/data"
+TENANT_LOGS="${BASE_DIR}/logs"
+TENANT_CONFIG="${BASE_DIR}/config"
+TENANT_APPARMOR="${BASE_DIR}/apparmor"
+
+# Create tenant directories with correct ownership
+mkdir -p "${TENANT_DATA}" "${TENANT_LOGS}" "${TENANT_CONFIG}" "${TENANT_APPARMOR}"
+chown -R ${STACK_USER_UID}:${STACK_USER_GID} "${BASE_DIR}"
+
+# Create tenant-specific Docker network
+docker network create "${DOCKER_NETWORK}" 2>/dev/null || true
+
+# Set vector DB configuration globally
+set_vectordb_config
+
+# Setup tenant-specific AppArmor profiles
+setup_tenant_apparmor_profiles
+
+# Deploy all services under tenant's UID/GID
+deploy_infrastructure
+deploy_ai_services
+deploy_openclaw
+deploy_caddy
+validate_deployment
+```
+
+---
+
+## 🛡️ Multi-Tenant AppArmor Profiles
+
+### **Tenant-Specific Security**
+```bash
+setup_tenant_apparmor_profiles() {
+    # Create tenant-specific AppArmor profiles
+    cat > "${TENANT_APPARMOR}/ai-platform-default" << 'EOF'
+#include <tunables/global>
+
+profile ai-platform-default flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  # Allow access ONLY to tenant's own data directory
+  ${BASE_DIR}/** rw,
+
+  # Deny access to other tenants' data
+  deny /mnt/data-tenant-*/** rw,
+
+  # Deny access to sensitive host paths
+  deny /etc/shadow r,
+  deny /etc/passwd w,
+  deny /root/** rw,
+
+  network,
+  /proc/self/** r,
+  /sys/fs/cgroup/** r,
+}
+EOF
+
+    # OpenClaw gets stricter profile
+    cat > "${TENANT_APPARMOR}/ai-platform-openclaw" << 'EOF'
+#include <tunables/global>
+
+profile ai-platform-openclaw flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  # Strict: only tenant's own data
+  ${BASE_DIR}/data/openclaw/** rw,
+  /tmp/** rw,
+
+  # Deny everything else
+  deny ${BASE_DIR}/data/!openclaw/** rw,
+  deny /etc/** w,
+  deny /root/** rw,
+
+  network,
+  capability net_admin,
+  capability sys_module,
+}
+EOF
+
+    # Copy to system location for kernel loading
+    cp "${TENANT_APPARMOR}/ai-platform-default" \
+       "/etc/apparmor.d/ai-platform-${STACK_USER_UID}"
+    cp "${TENANT_APPARMOR}/ai-platform-openclaw" \
+       "/etc/apparmor.d/ai-platform-openclaw-${OPENCLAW_UID}"
+
+    # Load profiles
+    apparmor_parser -r "/etc/apparmor.d/ai-platform-${STACK_USER_UID}"
+    apparmor_parser -r "/etc/apparmor.d/ai-platform-openclaw-${OPENCLAW_UID}"
+
+    echo "✅ AppArmor profiles loaded for tenant ${TENANT_NAME}"
+}
+```
+
+---
+
+## 🛡️ Multi-Tenant OpenClaw + Tailscale
+
+### **Per-Tenant Isolation**
+```bash
+deploy_openclaw() {
+    if [ -z "${TAILSCALE_AUTH_KEY}" ]; then
+        echo "❌ TAILSCALE_AUTH_KEY missing — OpenClaw requires Tailscale"
+        return 1
+    fi
+
+    # Create OpenClaw directories under tenant's UID
+    mkdir -p "${TENANT_DATA}/openclaw" "${TENANT_DATA}/tailscale"
+    chown -R ${OPENCLAW_UID}:${OPENCLAW_GID} "${TENANT_DATA}/openclaw"
+    chown -R ${OPENCLAW_UID}:${OPENCLAW_GID} "${TENANT_DATA}/tailscale"
+
+    # Step 1: Tailscale sidecar for this tenant
+    docker run -d \
+        --name "tailscale-${TENANT_NAME}" \
+        --network "${DOCKER_NETWORK}" \
+        --restart unless-stopped \
+        --cap-add NET_ADMIN \
+        --cap-add SYS_MODULE \
+        --security-opt "apparmor=ai-platform-openclaw-${OPENCLAW_UID}" \
+        -v "${TENANT_DATA}/tailscale:/var/lib/tailscale" \
+        -v /dev/net/tun:/dev/net/tun \
+        -e "TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY}" \
+        -e "TAILSCALE_HOSTNAME=openclaw-${TENANT_NAME}" \
+        -e "TAILSCALE_STATE_DIR=/var/lib/tailscale" \
+        tailscale/tailscale:latest
+
+    # Wait for Tailscale to authenticate
+    wait_for_tailscale_auth "tailscale-${TENANT_NAME}"
+
+    # Step 2: OpenClaw runs under dedicated UID with strict isolation
+    docker run -d \
+        --name "openclaw-${TENANT_NAME}" \
+        --network "container:tailscale-${TENANT_NAME}" \
+        --restart unless-stopped \
+        --security-opt "apparmor=ai-platform-openclaw-${OPENCLAW_UID}" \
+        --user "${OPENCLAW_UID}:${OPENCLAW_GID}" \
+        --read-only \
+        --tmpfs /tmp:rw,noexec,nosuid,size=100m \
+        -v "${TENANT_DATA}/openclaw:/app/data:rw" \
+        -v "${TENANT_CONFIG}/openclaw:/app/config:ro" \
+        "${vectordb_env[@]}" \
+        openclaw/openclaw:latest
+
+    echo "✅ OpenClaw deployed for tenant ${TENANT_NAME}"
+}
+```
+
+---
+
+## 🧹 Multi-Tenant Operations
+
+### **Script 3 - Per-Tenant Management**
+```bash
+#!/bin/bash
+# Script 3: Multi-Tenant Operations
+
+# Load tenant configuration
+source "${BASE_DIR}/config/.env"
+
+# Operations work on tenant's specific stack
+renew_ssl() {
+    echo "🔄 Renewing SSL for tenant ${TENANT_NAME}"
+    docker exec "caddy-${TENANT_NAME}" caddy reload --config "/etc/caddy/Caddyfile"
+}
+
+restart_service() {
+    local service_name=$1
+    echo "🔄 Restarting ${service_name} for tenant ${TENANT_NAME}"
+    docker restart "${TENANT_NAME}-${service_name}"
+}
+
+show_status() {
+    echo "📊 Status for tenant ${TENANT_NAME} (UID ${STACK_USER_UID}):"
+    docker ps --filter "name=${TENANT_NAME}-" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+}
+```
+
+---
+
+## 🎯 Multi-Tenant Success Criteria
+
+### **Technical Success**
+- ✅ **Complete tenant isolation**: Separate UID/GID, EBS volumes, networks
+- ✅ **No cross-tenant access**: AppArmor profiles prevent data leakage
+- ✅ **Dynamic configuration**: Script 1 generates tenant-specific .env
+- ✅ **Port isolation**: Each tenant gets dedicated port range
+- ✅ **Security**: OpenClaw runs under dedicated UID with strict isolation
+
+### **Operational Success**
+- ✅ **Scalable**: Unlimited tenants with automatic UID/GID assignment
+- ✅ **Isolated operations**: Script 3 works per-tenant
+- ✅ **Extensible**: Script 4 adds services to specific tenants
+- ✅ **Clean teardown**: Script 0 removes entire tenant stack
+
+### **The Multi-Tenant Test**
+```bash
+# Tenant A (UID 1001)
+su - user1001 -c "bash 1-setup-system.sh && bash 2-deploy-services.sh"
+
+# Tenant B (UID 1002) 
+su - user1002 -c "bash 1-setup-system.sh && bash 2-deploy-services.sh"
+
+# Both run simultaneously with complete isolation
+```
+
+---
+
+## 🎯 Key Insight
+
+**The correct multi-tenancy model** is:
+- **Per-tenant UID/GID** for process isolation
+- **Per-tenant EBS volumes** for data isolation  
+- **Per-tenant configuration** generated by Script 1
+- **Per-tenant networks** for network isolation
+- **Per-tenant AppArmor profiles** for security isolation
+
+This allows **multiple AI stacks to run simultaneously** under different users with **complete isolation** while sharing the same host machine.
