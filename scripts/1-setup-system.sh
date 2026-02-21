@@ -157,7 +157,7 @@ prompt_input() {
 
 generate_random_password() {
     local length="${1:-24}"
-    openssl rand -base64 "$length" | tr -d "=+/" | cut -c1-"$length"
+    openssl rand -base64 "$length" | tr -d "=+/\n\r" | cut -c1-"$length"
 }
 
 setup_logging() {
@@ -1142,7 +1142,9 @@ allocate_port() {
             echo "  ⚠️  Port ${port} in use — try another"
         else
             echo "  ✅ ${service}: ${port}"
-            echo "${service^^}_PORT=${port}" >> "$ENV_FILE"
+            # Convert service name to uppercase and replace hyphens with underscores
+            local var_name=$(echo "$service" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
+            echo "${var_name}_PORT=${port}" >> "$ENV_FILE"
             break
         fi
     done
