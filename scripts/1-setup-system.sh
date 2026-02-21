@@ -1030,11 +1030,23 @@ PROXY_TYPE=$existing_proxy_type
 SSL_TYPE=$existing_ssl_type
 SSL_EMAIL=$existing_ssl_email
 
+# Docker Configuration
+DOCKER_NETWORK=ai_platform
+COMPOSE_FILE=/mnt/data/ai-platform/deployment/stack/docker-compose.yml
+
+# Vector Database Configuration
+VECTOR_DB=qdrant
+VECTOR_DB_TYPE=qdrant
+
 # User Configuration
 RUNNING_USER=$RUNNING_USER
 RUNNING_UID=$RUNNING_UID
 RUNNING_GID=$RUNNING_GID
 EOF
+    
+    # Set correct ownership for .env file
+    chown "${RUNNING_UID}:${RUNNING_GID}" "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
     
     # Service Binding Configuration
     echo ""
