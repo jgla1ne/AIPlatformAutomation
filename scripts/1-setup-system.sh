@@ -1009,6 +1009,7 @@ collect_configurations() {
     local existing_ssl_email=$(grep "^SSL_EMAIL=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "")
     local existing_proxy_type=$(grep "^PROXY_TYPE=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "none")
     
+    # Create environment file with correct ownership
     cat > "$ENV_FILE" <<EOF
 # AI Platform Environment
 # Generated: $(date -Iseconds)
@@ -2827,8 +2828,9 @@ generate_compose_templates() {
         esac
     done
     
-    # Ensure compose directory exists
+    # Ensure compose directory exists with correct ownership
     mkdir -p "$(dirname "$COMPOSE_FILE")"
+    chown "${RUNNING_UID}:${RUNNING_GID}" "$(dirname "$COMPOSE_FILE")"
     
     # Ensure user variables are available
     RUNNING_USER="${RUNNING_USER:-${SUDO_USER:-$USER}}"
