@@ -3550,6 +3550,15 @@ main() {
     mark_phase_complete "setup_volumes"
     
     # Create directory structure immediately after mounting
+    # Ensure user variables are available first
+    RUNNING_USER="${RUNNING_USER:-${SUDO_USER:-$USER}}"
+    RUNNING_UID="${RUNNING_UID:-$(id -u "$RUNNING_USER")}"
+    RUNNING_GID="${RUNNING_GID:-$(id -g "$RUNNING_USER")}"
+    
+    # Set OpenClaw user (stack user + 1)
+    OPENCLAW_UID=$((RUNNING_UID + 1))
+    OPENCLAW_GID="$RUNNING_GID"
+    
     create_directory_structure
     mark_phase_complete "create_directory_structure"
     
