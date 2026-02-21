@@ -2848,7 +2848,7 @@ generate_compose_templates() {
     
     # Ensure compose directory exists with correct ownership
     mkdir -p "$(dirname "$COMPOSE_FILE")"
-    chown "${RUNNING_UID}:${RUNNING_GID}" "$(dirname "$COMPOSE_FILE")"
+    sudo chown "${RUNNING_UID}:${RUNNING_GID}" "$(dirname "$COMPOSE_FILE")"
     
     # Ensure user variables are available
     RUNNING_USER="${RUNNING_USER:-${SUDO_USER:-$USER}}"
