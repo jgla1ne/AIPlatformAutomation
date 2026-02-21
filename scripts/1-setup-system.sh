@@ -1581,6 +1581,31 @@ EOF
         echo "OPENCLAW_ENABLE_LITELM=true" >> "$ENV_FILE"
         echo "OPENCLAW_ENABLE_N8N=true" >> "$ENV_FILE"
         
+        # OpenClaw Sandbox Configuration
+        echo ""
+        print_info "OpenClaw Sandbox Setup"
+        echo ""
+        
+        # Create dedicated sandbox directory structure
+        local openclaw_sandbox="${BASE_DIR}/data/openclaw"
+        local openclaw_config="${BASE_DIR}/config/openclaw"
+        
+        # Set up OpenClaw as dedicated user sandbox
+        echo "OPENCLAW_SANDBOX_DIR=${openclaw_sandbox}" >> "$ENV_FILE"
+        echo "OPENCLAW_CONFIG_DIR=${openclaw_config}" >> "$ENV_FILE"
+        
+        # OpenClaw security settings
+        echo "OPENCLAW_READONLY_ROOTFS=true" >> "$ENV_FILE"
+        echo "OPENCLAW_TMPFS_SIZE=100m" >> "$ENV_FILE"
+        echo "OPENCLAW_NETWORK_ISOLATION=true" >> "$ENV_FILE"
+        
+        # OpenClaw integration paths
+        echo "OPENCLAW_DATA_PATH=${openclaw_sandbox}" >> "$ENV_FILE"
+        echo "OPENCLAW_CONFIG_PATH=${openclaw_config}" >> "$ENV_FILE"
+        
+        print_success "OpenClaw sandbox configuration completed"
+        print_info "OpenClaw will run in dedicated sandbox at ${openclaw_sandbox}"
+        
         print_success "OpenClaw configuration completed"
     fi
     echo ""
@@ -3266,6 +3291,8 @@ main() {
     mark_phase_complete "collect_configurations"
     create_directory_structure
     mark_phase_complete "create_directory_structure"
+    create_apparmor_templates
+    mark_phase_complete "create_apparmor_templates"
     generate_compose_templates
     mark_phase_complete "generate_compose_templates"
     
@@ -3336,6 +3363,77 @@ main() {
     echo ""
     
     exit 0
+}
+
+# Create AppArmor templates with BASE_DIR substitution
+create_apparmor_templates() {
+    print_header "Creating AppArmor Templates"
+    
+    local profile_dir="${BASE_DIR}/apparmor"
+    mkdir -p "${profile_dir}"
+    
+    # Default profile template (allowlist-only)
+    cat > "${profile_dir}/default.profile.tmpl" << 'EOF'
+#include <tunables/global>
+
+profile ai-platform-default flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  # Allowlist: only what AI Platform services need
+  BASE_DIR_PLACEHOLDER/data/** rw,
+  BASE_DIR_PLACEHOLDER/logs/** rw,
+  BASE_DIR_PLACEHOLDER/config/** rw,
+  BASE_DIR_PLACEHOLDER/ssl/** r,
+  /tmp/** rw,
+  /var/run/docker.sock rw,
+  /proc/** r,
+  /sys/** r,
+
+  network,
+  capability dac_override,
+  capability setuid,
+  capability setgid,
+  capability chown,
+}
+EOF
+
+    # OpenClaw profile template (allowlist-only)
+    cat > "${profile_dir}/openclaw.profile.tmpl" << 'EOF'
+#include <tunables/global>
+
+profile ai-platform-openclaw flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  # Allowlist: only what OpenClaw needs
+  BASE_DIR_PLACEHOLDER/data/openclaw/** rw,
+  BASE_DIR_PLACEHOLDER/config/openclaw/** r,
+  /tmp/** rw,
+
+  network,
+  capability net_raw,
+}
+EOF
+
+    # Tailscale profile template (allowlist-only)
+    cat > "${profile_dir}/tailscale.profile.tmpl" << 'EOF'
+#include <tunables/global>
+
+profile ai-platform-tailscale flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  # Allowlist: only what Tailscale needs
+  BASE_DIR_PLACEHOLDER/data/tailscale/** rw,
+  /var/lib/tailscale/** rw,
+  /dev/net/tun rw,
+  /etc/resolv.conf r,
+
+  network,
+  capability net_admin,
+  capability sys_module,
+}
+EOF
+
+    print_success "AppArmor templates created in ${profile_dir}"
 }
 
 # Run main function
