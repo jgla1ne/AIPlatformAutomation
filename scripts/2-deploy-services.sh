@@ -382,18 +382,33 @@ deploy_layer_0_infrastructure() {
     docker network create "${DOCKER_NETWORK}" 2>/dev/null || true
     
     # Install RClone if Google Drive sync is enabled
-    if [[ "${ENABLE_RCLONE:-false}" == "true" ]]; then
-        print_info "Installing RClone for Google Drive sync..."
-        if ! command -v rclone &> /dev/null; then
-            # Install RClone
-            curl -fsSL https://rclone.org/install.sh | bash -s beta
-            print_success "RClone installed successfully"
-        else
-            print_success "RClone already installed"
-        fi
+    if [[ "${ENABLE_RCLONE:-false}" == "true" ]] || [[ "${GDRIVE_ENABLED:-false}" == "true" ]]; then
+        print_info "Setting up RClone for Google Drive sync..."
         
-        # Create RClone systemd service
-        create_rclone_service
+        # Deploy rclone container if enabled
+        if [[ "${GDRIVE_ENABLED:-false}" == "true" ]]; then
+            print_info "Deploying RClone container..."
+            
+            docker run -d \
+                --name rclone-gdrive \
+                --network "${DOCKER_NETWORK}" \
+                --restart unless-stopped \
+                --user "${RUNNING_UID}:${RUNNING_GID}" \
+                -v "${DATA_ROOT}/config/rclone:/config/rclone:ro" \
+                -v "${RCLONE_MOUNT_POINT:-${DATA_ROOT}/gdrive}:/data/gdrive" \
+                -v "${DATA_ROOT}/logs/rclone:/logs" \
+                rclone/rclone:latest \
+                sync \
+                gdrive:"${RCLONE_GDRIVE_FOLDER:-}" \
+                /data/gdrive \
+                --config=/config/rclone/rclone.conf \
+                --log-file=/logs/rclone.log \
+                --log-level=INFO \
+                --transfers=4 \
+                --checkers=8
+                
+            print_success "RClone container deployed"
+        fi
     fi
     
     print_success "Infrastructure ready"
@@ -536,8 +551,10 @@ deploy_layer_2_services() {
         -e REDIS_URL="redis://:${REDIS_PASSWORD}@redis:6379" \
         -v "${DATA_ROOT}/data/litellm:/app/data" \
         -v "${DATA_ROOT}/logs/litellm:/app/logs" \
+        -v "${DATA_ROOT}/config/litellm/config.yaml:/app/config.yaml:ro" \
         -u "${RUNNING_UID}:${RUNNING_GID}" \
-        ghcr.io/berriai/litellm:main-latest
+        ghcr.io/berriai/litellm:main-latest \
+        --config /app/config.yaml --port 4000
     
     # Flowise - runs as root (UID 0) due to Node.js user info issues
     docker run -d \
@@ -889,18 +906,180 @@ display_summary() {
     echo "   2. Check service health: docker ps"
     echo "   3. View logs: docker logs <service_name>"
     echo "   4. Monitor certificates: docker exec caddy find /data/caddy/certificates/ -name '*.crt'"
-    if [[ "${ENABLE_RCLONE:-false}" == "true" ]]; then
+    
+    # RClone management section
+    if [[ "${GDRIVE_ENABLED:-false}" == "true" ]]; then
         echo ""
         echo "📁 RClone Google Drive Management:"
-        echo "   - Configure OAuth: rclone config create gdrive"
-        echo "   - Start mount: systemctl start rclone-gdrive"
-        echo "   - Stop mount: systemctl stop rclone-gdrive"
-        echo "   - Check status: systemctl status rclone-gdrive"
-        echo "   - View logs: journalctl -u rclone-gdrive -f"
-        echo "   - Mount point: ${RCLONE_MOUNT_POINT}"
+        echo "   - Run sync now: docker restart rclone-gdrive"
+        echo "   - View logs: docker logs rclone-gdrive --tail 50"
+        echo "   - Check status: docker inspect rclone-gdrive"
+        echo "   - Mount point: ${RCLONE_MOUNT_POINT:-${DATA_ROOT}/gdrive}"
+    fi
+    
+    # Tailscale/OpenClaw section
+    if [[ -n "${TAILSCALE_IP:-}" ]] && [[ "${TAILSCALE_IP}" != "pending" ]]; then
+        echo ""
+        echo "🔒 OpenClaw (internal only):"
+        echo "   URL: http://${TAILSCALE_IP}:18789"
+        echo "   Access via Tailscale VPN only"
+        echo "   Install Tailscale client: https://tailscale.com/download"
     fi
     echo ""
     print_success "Deployment complete! All services are running with SSL certificates."
+}
+
+# LiteLLM configuration generation
+generate_litellm_config() {
+    local conf_path="${DATA_ROOT}/config/litellm/config.yaml"
+    mkdir -p "${DATA_ROOT}/config/litellm"
+
+    cat > "${conf_path}" << EOF
+model_list:
+EOF
+
+    # Add OpenAI models if enabled (check for API key)
+    if [[ -n "${OPENAI_API_KEY:-}" ]]; then
+        cat >> "${conf_path}" << EOF
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: ${OPENAI_API_KEY}
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: ${OPENAI_API_KEY}
+EOF
+    fi
+
+    # Add Anthropic models if enabled (check for API key)
+    if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+        cat >> "${conf_path}" << EOF
+  - model_name: claude-sonnet-4-5
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5
+      api_key: ${ANTHROPIC_API_KEY}
+  - model_name: claude-haiku-3-5
+    litellm_params:
+      model: anthropic/claude-haiku-3-5
+      api_key: ${ANTHROPIC_API_KEY}
+EOF
+    fi
+
+    # Add Ollama model if Ollama is enabled
+    if [[ "${ENABLE_OLLAMO:-false}" == "true" ]]; then
+        cat >> "${conf_path}" << EOF
+  - model_name: ollama-llama3
+    litellm_params:
+      model: ollama/llama3
+      api_base: http://ollama:11434
+EOF
+    fi
+
+    # Always add the general settings block
+    cat >> "${conf_path}" << EOF
+
+general_settings:
+  master_key: ${LITELLM_MASTER_KEY}
+  database_url: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/litellm
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 120
+EOF
+
+    chmod 600 "${conf_path}"
+    chown "${RUNNING_UID}:${RUNNING_GID}" "${conf_path}"
+    print_success "LiteLLM config written to ${conf_path}"
+}
+
+# Tailscale setup and IP retrieval
+setup_tailscale() {
+    if [[ -z "${TAILSCALE_AUTH_KEY:-}" ]]; then
+        print_info "Tailscale auth key not provided - skipping setup"
+        return
+    fi
+    
+    print_info "Setting up Tailscale..."
+    
+    # Install tailscale if not present
+    if ! command -v tailscale &>/dev/null; then
+        print_info "Installing Tailscale..."
+        curl -fsSL https://tailscale.com/install.sh | sh
+    fi
+    
+    # Start tailscaled daemon if not running
+    if ! systemctl is-active --quiet tailscaled; then
+        systemctl enable tailscaled
+        systemctl start tailscaled
+    fi
+    
+    # Authenticate
+    tailscale up \
+        --authkey="${TAILSCALE_AUTH_KEY}" \
+        --hostname="${TAILSCALE_HOSTNAME:-ai-platform}" \
+        --accept-routes \
+        --ssh
+    
+    # Wait for IP assignment (max 30 seconds)
+    local ts_ip=""
+    local attempts=0
+    while [[ -z "$ts_ip" ]] && [[ $attempts -lt 15 ]]; do
+        ts_ip=$(tailscale ip -4 2>/dev/null || true)
+        [[ -z "$ts_ip" ]] && sleep 2
+        attempts=$((attempts + 1))
+    done
+    
+    if [[ -z "$ts_ip" ]]; then
+        print_error "Tailscale did not assign an IP within 30 seconds"
+        print_error "Check: tailscale status"
+        return 1
+    fi
+    
+    # Write IP back to .env (replace placeholder)
+    sed -i "s/TAILSCALE_IP=pending/TAILSCALE_IP=${ts_ip}/" "${ENV_FILE}"
+    
+    print_success "Tailscale IP: ${ts_ip}"
+    print_success "OpenClaw accessible at: http://${ts_ip}:18789"
+}
+
+# RClone configuration generation
+generate_rclone_config() {
+    if [[ "${GDRIVE_ENABLED:-false}" != "true" ]]; then
+        print_info "Google Drive sync disabled — skipping rclone config"
+        return
+    fi
+
+    local conf_path="${DATA_ROOT}/config/rclone/rclone.conf"
+    mkdir -p "${DATA_ROOT}/config/rclone"
+
+    if [[ "${RCLONE_AUTH_METHOD}" == "service_account" ]]; then
+        cat > "${conf_path}" << EOF
+[gdrive]
+type = drive
+scope = drive
+service_account_file = /config/rclone/service-account.json
+EOF
+
+    elif [[ "${RCLONE_AUTH_METHOD}" == "oauth_client" ]]; then
+        # Run headless OAuth flow inside temporary rclone container
+        print_info "Running rclone OAuth headless authorization..."
+        
+        docker run --rm \
+            --user "${RUNNING_UID}:${RUNNING_GID}" \
+            -v "${DATA_ROOT}/config/rclone:/config/rclone" \
+            rclone/rclone:latest \
+            config create gdrive drive \
+                scope=drive \
+                client_id="${RCLONE_OAUTH_CLIENT_ID}" \
+                client_secret="${RCLONE_OAUTH_CLIENT_SECRET}"
+        
+        print_info "OAuth configuration completed"
+    fi
+
+    chmod 600 "${conf_path}"
+    chown "${RUNNING_UID}:${RUNNING_GID}" "${conf_path}"
+    print_success "rclone config written to ${conf_path}"
 }
 
 # RClone service management
@@ -965,6 +1144,13 @@ main() {
     set_vectordb_config
     
     # Deploy services in dependency order
+    # Generate configurations before deployment
+    generate_rclone_config
+    generate_litellm_config
+    
+    # Setup Tailscale before services start
+    setup_tailscale
+    
     deploy_layered_services
     
     # Validate and summarize

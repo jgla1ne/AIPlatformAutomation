@@ -2299,11 +2299,6 @@ signal.${DOMAIN_NAME} {
     reverse_proxy signal:8080
 }
 
-# OpenClaw
-openclaw.${DOMAIN_NAME} {
-    reverse_proxy openclaw:8080
-}
-
 # Flowise
 flowise.${DOMAIN_NAME} {
     reverse_proxy flowise:3000
