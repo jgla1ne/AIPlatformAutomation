@@ -437,7 +437,7 @@ deploy_layer_1_databases() {
 deploy_layer_2_services() {
     print_header "Layer 2: Application Services"
     
-    # MinIO
+    # MinIO - runs as root to handle system directory creation
     docker run -d \
         --name minio \
         --network "${DOCKER_NETWORK}" \
@@ -445,7 +445,6 @@ deploy_layer_2_services() {
         -e MINIO_ROOT_USER="${MINIO_ROOT_USER}" \
         -e MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD}" \
         -v "${DATA_ROOT}/data/minio:/data" \
-        -u "${RUNNING_UID}:${RUNNING_GID}" \
         minio/minio:latest server /data --console-address ":9001"
     
     # n8n
