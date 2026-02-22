@@ -490,10 +490,13 @@ nuclear_cleanup() {
     for volume in "${mounted_volumes[@]}"; do
         if [[ "$volume" == "$selected_volume" ]] || [[ "$volume" == "${target_volume}" ]]; then
             print_info "Unmounting $volume..."
-            # Force unmount even if busy
-            umount -f "$volume" 2>/dev/null || umount -l "$volume" 2>/dev/null || print_warning "Could not unmount $volume"
+            # Force unmount even if busy - try multiple methods
+            umount -f "$volume" 2>/dev/null || true
+            umount -l "$volume" 2>/dev/null || true
+            # Try regular unmount in case force didn't work
+            umount "$volume" 2>/dev/null || true
             # Wait a moment for unmount to complete
-            sleep 2
+            sleep 3
         fi
     done
     
@@ -501,7 +504,15 @@ nuclear_cleanup() {
     if findmnt -n -o TARGET | grep -q "^${selected_volume}$"; then
         print_warning "Volume $selected_volume is still mounted, attempting lazy unmount..."
         umount -l "$selected_volume" 2>/dev/null || print_warning "Lazy unmount also failed"
-        sleep 3
+        sleep 5
+    fi
+    
+    # Final verification
+    if findmnt -n -o TARGET | grep -q "^${selected_volume}$"; then
+        print_error "Failed to unmount $selected_volume - it's still mounted!"
+        print_info "You may need to manually run: sudo umount -l $selected_volume"
+    else
+        print_success "Volume $selected_volume successfully unmounted"
     fi
     
     # STEP 6: Delete data on selected EBS volume AFTER unmounting
