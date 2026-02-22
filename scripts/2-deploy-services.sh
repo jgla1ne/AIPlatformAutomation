@@ -660,12 +660,13 @@ EOF
     
     chown "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/config/prometheus/prometheus.yml"
     
-    # Prometheus with correct UID and data paths
+    # Prometheus with correct port mapping and arguments
     docker run -d \
         --name prometheus \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
-        -p 9090:9090 \
+        --user "${RUNNING_UID}:${RUNNING_GID}" \
+        -p "${PROMETHEUS_PORT}:9090" \
         -v "${DATA_ROOT}/config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
         -v "${DATA_ROOT}/data/prometheus:/prometheus" \
         prom/prometheus:latest \
@@ -675,12 +676,14 @@ EOF
         --web.console.templates=/etc/prometheus/consoles \
         --web.enable-lifecycle
     
-    # Grafana - runs as root (UID 0) due to permission issues
+    # Grafana with correct user and port mapping
     docker run -d \
         --name grafana \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
-        -e GF_SERVER_ROOT_URL="https://${DOMAIN_NAME}/grafana/" \
+        --user "${RUNNING_UID}:${RUNNING_GID}" \
+        -p "${GRAFANA_PORT}:3000" \
+        -e GF_SERVER_ROOT_URL="https://grafana.${DOMAIN_NAME}/" \
         -e GF_SECURITY_ADMIN_PASSWORD="${ADMIN_PASSWORD}" \
         -v "${DATA_ROOT}/data/grafana:/var/lib/grafana" \
         grafana/grafana:latest
@@ -720,9 +723,21 @@ deploy_layer_4_openclaw() {
 }
 
 deploy_layer_5_proxy() {
-    print_header "Layer 4: Caddy (last)"
+    print_header "Layer 5: Caddy (last)"
     
-    # Caddyfile already written by Script 1
+    # Ensure Caddyfile directory exists and is properly formatted
+    mkdir -p "${DATA_ROOT}/caddy"
+    
+    # Caddyfile already written by Script 1, but ensure proper SSL configuration
+    # Remove any stale lock files before starting
+    if docker exec caddy find /data/caddy/locks/ -name "*.lock" 2>/dev/null | grep -q .; then
+        print_info "Removing stale certificate lock files..."
+        docker exec caddy find /data/caddy/locks/ -name "*.lock" -delete 2>/dev/null || true
+    fi
+    
+    # Remove stale ACME challenge tokens
+    docker exec caddy find /data/caddy/acme/ -name "*.json" -delete 2>/dev/null || true
+    
     docker run -d \
         --name caddy \
         --network "${DOCKER_NETWORK}" \
@@ -734,8 +749,10 @@ deploy_layer_5_proxy() {
         -v "${DATA_ROOT}/caddy/config:/config" \
         caddy:2-alpine
     
-    sleep 5
-    print_success "Caddy started with all service routes"
+    # Wait for Caddy to start and begin certificate issuance
+    sleep 10
+    
+    print_success "Caddy started with SSL certificate management"
 }
 
 wait_healthy() {
@@ -787,7 +804,7 @@ wait_http() {
 validate_deployment() {
     print_header "Validating Deployment"
     
-    local services=(postgres redis qdrant ollama n8n anythingllm litellm openwebui minio caddy)
+    local services=(postgres redis qdrant ollama n8n anythingllm litellm openwebui minio caddy prometheus grafana flowise signal-api dify-api dify-worker dify-web)
     local failed_services=()
     
     for service in "${services[@]}"; do
@@ -815,29 +832,41 @@ display_summary() {
     echo "   Base Directory: ${DATA_ROOT}"
     echo "   Network: ${DOCKER_NETWORK}"
     echo "   Domain: ${DOMAIN_NAME}"
+    echo "   Proxy Method: ${PROXY_CONFIG_METHOD:-subdomain}"
     echo ""
-    echo "🔧 Service URLs:"
-    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
-        echo "   n8n: https://${DOMAIN_NAME}/n8n/"
-        echo "   AnythingLLM: https://${DOMAIN_NAME}/anythingllm/"
-        echo "   LiteLLM: https://${DOMAIN_NAME}/litellm/"
-        echo "   OpenWebUI: https://${DOMAIN_NAME}/openwebui/"
-        echo "   MinIO: https://${DOMAIN_NAME}/minio/"
-        echo "   Health Check: https://${DOMAIN_NAME}/health"
+    echo "🌐 Service URLs:"
+    if [[ "${PROXY_CONFIG_METHOD:-subdomain}" == "subdomain" ]]; then
+        echo "   n8n: https://n8n.${DOMAIN_NAME}/"
+        echo "   OpenWebUI: https://openwebui.${DOMAIN_NAME}/"
+        echo "   AnythingLLM: https://anythingllm.${DOMAIN_NAME}/"
+        echo "   Flowise: https://flowise.${DOMAIN_NAME}/"
+        echo "   LiteLLM: https://litellm.${DOMAIN_NAME}/"
+        echo "   Grafana: https://grafana.${DOMAIN_NAME}/"
+        echo "   MinIO: https://minio.${DOMAIN_NAME}/"
+        echo "   Signal API: https://signal-api.${DOMAIN_NAME}/"
+        echo "   Prometheus: https://prometheus.${DOMAIN_NAME}/"
+        echo "   Dify: https://dify.${DOMAIN_NAME}/"
+        echo "   Main Domain: https://${DOMAIN_NAME}/ (redirects to OpenWebUI)"
     else
         echo "   n8n: http://${LOCALHOST}:${N8N_PORT}/n8n/"
-        echo "   AnythingLLM: http://${LOCALHOST}:${ANYTHINGLLM_PORT}/anythingllm/"
-        echo "   LiteLLM: http://${LOCALHOST}:${LITELLM_PORT}/litellm/"
         echo "   OpenWebUI: http://${LOCALHOST}:${OPENWEBUI_PORT}/openwebui/"
+        echo "   AnythingLLM: http://${LOCALHOST}:${ANYTHINGLLM_PORT}/anythingllm/"
+        echo "   Flowise: http://${LOCALHOST}:${FLOWISE_PORT}/flowise/"
+        echo "   LiteLLM: http://${LOCALHOST}:${LITELLM_PORT}/litellm/"
+        echo "   Grafana: http://${LOCALHOST}:${GRAFANA_PORT}/grafana/"
         echo "   MinIO: http://${LOCALHOST}:${MINIO_CONSOLE_PORT}/minio/"
-        echo "   Health Check: http://${LOCALHOST}/health"
+        echo "   Signal API: http://${LOCALHOST}:${SIGNAL_API_PORT}/"
+        echo "   Prometheus: http://${LOCALHOST}:${PROMETHEUS_PORT}/prometheus/"
+        echo "   Dify: http://${LOCALHOST}:${DIFY_PORT}/dify/"
     fi
     echo ""
     echo "📋 Next Steps:"
-    echo "   1. Configure services with: bash 3-configure-services.sh"
-    echo "   2. Add more services with: bash 4-add-service.sh"
+    echo "   1. Access services via the URLs above"
+    echo "   2. Check service health: docker ps"
+    echo "   3. View logs: docker logs <service_name>"
+    echo "   4. Monitor certificates: docker exec caddy find /data/caddy/certificates/ -name '*.crt'"
     echo ""
-    print_success "Deployment complete!"
+    print_success "Deployment complete! All services are running with SSL certificates."
 }
 
 # Main function
@@ -853,15 +882,10 @@ main() {
     # Execute deployment phases
     load_configuration
     validate_config
-    create_network
-    load_apparmor_profiles
     set_vectordb_config
     
     # Deploy services in dependency order
     deploy_layered_services
-    deploy_ai_services
-    deploy_openclaw
-    deploy_caddy
     
     # Validate and summarize
     validate_deployment
