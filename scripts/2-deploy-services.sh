@@ -480,7 +480,7 @@ deploy_layer_2_services() {
         -u "${RUNNING_UID}:${RUNNING_GID}" \
         ghcr.io/open-webui/open-webui:main
     
-    # AnythingLLM - fixed configuration with proper storage path
+    # AnythingLLM - fixed configuration with proper storage path and LiteLLM integration
     docker run -d \
         --name anythingllm \
         --network "${DOCKER_NETWORK}" \
@@ -491,6 +491,11 @@ deploy_layer_2_services() {
         -e STORAGE_DIR=/app/server/storage \
         -e JWT_SECRET="${ANYTHINGLLM_JWT_SECRET}" \
         -e DISABLE_TELEMETRY=true \
+        -e LLM_PROVIDER="litellm" \
+        -e LITELLM_BASE_URL="http://litellm:4000" \
+        -e LITELLM_API_KEY="${LITELLM_MASTER_KEY}" \
+        -e EMBEDDING_PROVIDER="litellm" \
+        -e EMBEDDING_MODEL_PREF="text-embedding-ada-002" \
         mintplexlabs/anythingllm:latest
     
     # Signal API
@@ -504,12 +509,15 @@ deploy_layer_2_services() {
         -v "${DATA_ROOT}/data/signal:/home/.local/share/signal-cli" \
         bbernhard/signal-cli-rest-api:latest
     
-    # LiteLLM
+    # LiteLLM - enhanced configuration for multi-provider routing
     docker run -d \
         --name litellm \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
         -e LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
+        -e LITELLM_SALT_KEY="${LITELLM_MASTER_KEY}" \
+        -e DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}" \
+        -e REDIS_URL="redis://:${REDIS_PASSWORD}@redis:6379" \
         -v "${DATA_ROOT}/data/litellm:/app/data" \
         -v "${DATA_ROOT}/logs/litellm:/app/logs" \
         -u "${RUNNING_UID}:${RUNNING_GID}" \
@@ -527,6 +535,27 @@ deploy_layer_2_services() {
         -e HOME=/root \
         -v "${DATA_ROOT}/data/flowise:/root/.flowise" \
         flowiseai/flowise:latest
+    
+    # Google Drive integration
+    if [[ "${ENABLE_GDRIVE:-false}" == "true" ]]; then
+        print_info "Deploying Google Drive integration..."
+        docker run -d \
+            --name gdrive \
+            --network "${DOCKER_NETWORK}" \
+            --restart unless-stopped \
+            --user "${RUNNING_UID}:${RUNNING_GID}" \
+            -p "${GDRIVE_PORT:-8081}:8080" \
+            -e GDRIVE_CONFIG_DIR=/config/gdrive \
+            -e GDRIVE_DATA_DIR=/data/gdrive \
+            -e GDRIVE_CACHE_DIR=/cache/gdrive \
+            -e GDRIVE_LOGS_DIR=/var/log/gdrive \
+            -v "${DATA_ROOT}/config/gdrive:/config/gdrive" \
+            -v "${DATA_ROOT}/data/gdrive:/data/gdrive" \
+            -v "${DATA_ROOT}/cache/gdrive:/cache/gdrive" \
+            -v "${DATA_ROOT}/logs/gdrive:/var/log/gdrive" \
+            ghcr.io/prasadgupta123/google-drive:latest
+        print_success "Google Drive integration deployed on port ${GDRIVE_PORT:-8081}"
+    fi
     
     # Wait for layer 2
     wait_http "n8n" "http://n8n:5678/healthz" 60
@@ -804,7 +833,7 @@ wait_http() {
 validate_deployment() {
     print_header "Validating Deployment"
     
-    local services=(postgres redis qdrant ollama n8n anythingllm litellm openwebui minio caddy prometheus grafana flowise signal-api dify-api dify-worker dify-web)
+    local services=(postgres redis qdrant ollama n8n anythingllm litellm openwebui minio caddy prometheus grafana flowise signal-api dify-api dify-worker dify-web gdrive)
     local failed_services=()
     
     for service in "${services[@]}"; do
@@ -846,6 +875,7 @@ display_summary() {
         echo "   Signal API: https://signal-api.${DOMAIN_NAME}/"
         echo "   Prometheus: https://prometheus.${DOMAIN_NAME}/"
         echo "   Dify: https://dify.${DOMAIN_NAME}/"
+        echo "   Google Drive: https://gdrive.${DOMAIN_NAME}/"
         echo "   Main Domain: https://${DOMAIN_NAME}/ (redirects to OpenWebUI)"
     else
         echo "   n8n: http://${LOCALHOST}:${N8N_PORT}/n8n/"
@@ -858,6 +888,7 @@ display_summary() {
         echo "   Signal API: http://${LOCALHOST}:${SIGNAL_API_PORT}/"
         echo "   Prometheus: http://${LOCALHOST}:${PROMETHEUS_PORT}/prometheus/"
         echo "   Dify: http://${LOCALHOST}:${DIFY_PORT}/dify/"
+        echo "   Google Drive: http://${LOCALHOST}:${GDRIVE_PORT}/"
     fi
     echo ""
     echo "📋 Next Steps:"
