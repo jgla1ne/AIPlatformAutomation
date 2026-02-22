@@ -1845,152 +1845,124 @@ allocate_port() {
         echo ""
         print_header "Google Drive Sync (rclone)"
         echo ""
-        echo "rclone syncs Google Drive to ${DATA_ROOT}/gdrive on this server."
+        echo "Select authentication method:"
+        echo "  1. Service Account JSON  (RECOMMENDED — fully headless, no browser)"
+        echo "  2. OAuth via SSH tunnel  (personal Google account — requires extra step)"
+        echo "  3. Skip — disable Google Drive sync"
         echo ""
-        echo "Authentication method:"
-        echo "  1. Service Account JSON  (recommended — fully headless)"
-        echo "     Requires a GCP service account with Drive API enabled"
-        echo "     Download JSON key from GCP Console → IAM → Service Accounts"
-        echo ""
-        echo "  2. Pre-authorized token  (personal Google account)"
-        echo "     You must run rclone config on a machine with a browser FIRST"
-        echo "     then paste the resulting config block here"
-        echo ""
-        echo -n -e "${YELLOW}Select method [1/2] or press Enter to skip:${NC} "
-        read -r auth_method
-        
-        if [[ -z "$auth_method" ]]; then
-            echo "GDRIVE_ENABLED=false" >> "$ENV_FILE"
-            print_info "Google Drive sync disabled"
-        elif [[ "$auth_method" == "1" ]]; then
-            # Service Account method
-            echo ""
-            echo -n -e "${YELLOW}Full path to service account JSON file on THIS machine:${NC} "
-            read -r sa_json_path
-            
-            if [[ ! -f "$sa_json_path" ]]; then
-                print_error "File not found: $sa_json_path"
-                print_error "Please provide a valid service account JSON file path"
+        echo -n -e "${YELLOW}Method [1/2/3, default 3]:${NC} "
+        read -r GDRIVE_METHOD
+        GDRIVE_METHOD=${GDRIVE_METHOD:-3}
+
+        case "${GDRIVE_METHOD}" in
+
+          1)  # Service Account
+              echo ""
+              echo "Download your service account JSON from:"
+              echo "  GCP Console → IAM & Admin → Service Accounts → Keys → Add Key → JSON"
+              echo "The service account must have Google Drive API enabled and"
+              echo "the target Drive folder shared with the service account email."
+              echo ""
+              echo -n -e "${YELLOW}Full path to service account JSON file:${NC} "
+              read -r SA_JSON_PATH
+              
+              if [[ ! -f "${SA_JSON_PATH}" ]]; then
+                print_error "File not found: ${SA_JSON_PATH}"
                 exit 1
-            fi
-            
-            # Validate JSON format and service account type
-            if ! jq empty "$sa_json_path" 2>/dev/null; then
-                print_error "Invalid JSON format in file"
+              fi
+              
+              # Validate it's a service account JSON
+              if ! python3 -c "
+import json,sys
+d=json.load(open('${SA_JSON_PATH}'))
+assert d.get('type')=='service_account', 'Not a service account JSON'
+" 2>/dev/null; then
+                print_error "File does not appear to be a GCP service account JSON"
                 exit 1
-            fi
-            
-            if ! jq -e '.type == "service_account"' "$sa_json_path" >/dev/null 2>&1; then
-                print_error "JSON file is not a valid service account"
-                exit 1
-            fi
-            
-            # Copy and secure the service account file
-            mkdir -p "${DATA_ROOT}/config/rclone"
-            cp "$sa_json_path" "${DATA_ROOT}/config/rclone/service-account.json"
-            chmod 600 "${DATA_ROOT}/config/rclone/service-account.json"
-            chown "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/config/rclone/service-account.json"
-            
-            # Write rclone.conf directly
-            cat > "${DATA_ROOT}/config/rclone/rclone.conf" << EOF
+              fi
+              
+              mkdir -p "${DATA_ROOT}/config/rclone"
+              cp "${SA_JSON_PATH}" "${DATA_ROOT}/config/rclone/service-account.json"
+              chmod 600 "${DATA_ROOT}/config/rclone/service-account.json"
+              
+              # Write rclone.conf directly — no interactive auth ever needed
+              cat > "${DATA_ROOT}/config/rclone/rclone.conf" << EOF
 [gdrive]
 type = drive
 scope = drive
 service_account_file = /config/rclone/service-account.json
 EOF
-            chmod 600 "${DATA_ROOT}/config/rclone/rclone.conf"
-            chown "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/config/rclone/rclone.conf"
-            
-            echo -n -e "${YELLOW}Google Drive folder ID or path to sync (blank = My Drive root):${NC} "
-            read -r gdrive_folder
-            echo "RCLONE_GDRIVE_FOLDER=${gdrive_folder}" >> "$ENV_FILE"
-            
-            echo "GDRIVE_ENABLED=true" >> "$ENV_FILE"
-            echo "RCLONE_AUTH_METHOD=service_account" >> "$ENV_FILE"
-            echo "RCLONE_SA_JSON_PATH=${DATA_ROOT}/config/rclone/service-account.json" >> "$ENV_FILE"
-            
-            print_success "Service account configured"
-            
-        elif [[ "$auth_method" == "2" ]]; then
-            # Pre-authorized token method
-            echo ""
-            echo "On your LOCAL machine (with a browser), run:"
-            echo ""
-            echo "  docker run --rm -it \\"
-            echo "    -v \$HOME/.config/rclone:/config/rclone \\"
-            echo "    rclone/rclone:latest \\"
-            echo "    config create gdrive drive scope=drive"
-            echo ""
-            echo "Complete the browser flow. Then run:"
-            echo ""
-            echo "  cat \$HOME/.config/rclone/rclone.conf"
-            echo ""
-            echo "Copy the entire output starting from [gdrive] to end of file."
-            echo "Paste it here, then press Enter then Ctrl+D:"
-            echo ""
-            
-            # Read multi-line input
-            local rclone_conf=""
-            while IFS= read -r line; do
-                if [[ -z "$line" ]]; then
-                    break
-                fi
-                rclone_conf="${rclone_conf}${line}"$'\n'
-            done
-            
-            # Validate config contains required sections
-            if [[ ! "$rclone_conf" =~ ^\[gdrive\] ]] || [[ ! "$rclone_conf" =~ token ]]; then
-                print_error "Invalid rclone config block"
-                print_error "Must contain [gdrive] section and token line"
-                exit 1
-            fi
-            
-            # Write config
-            mkdir -p "${DATA_ROOT}/config/rclone"
-            echo "$rclone_conf" > "${DATA_ROOT}/config/rclone/rclone.conf"
-            chmod 600 "${DATA_ROOT}/config/rclone/rclone.conf"
-            chown "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/config/rclone/rclone.conf"
-            
-            echo -n -e "${YELLOW}Google Drive folder ID or path to sync (blank = My Drive root):${NC} "
-            read -r gdrive_folder
-            echo "RCLONE_GDRIVE_FOLDER=${gdrive_folder}" >> "$ENV_FILE"
-            
-            echo "GDRIVE_ENABLED=true" >> "$ENV_FILE"
-            echo "RCLONE_AUTH_METHOD=token" >> "$ENV_FILE"
-            
-            print_success "Pre-authorized token configured"
-        else
-            print_error "Invalid selection"
-            exit 1
-        fi
+              chmod 600 "${DATA_ROOT}/config/rclone/rclone.conf"
+              
+              echo -n -e "${YELLOW}Google Drive folder ID to sync (blank = root of My Drive):${NC} "
+              read -r RCLONE_GDRIVE_FOLDER
+              echo -n -e "${YELLOW}Sync interval in seconds [3600]:${NC} "
+              read -r RCLONE_SYNC_INTERVAL
+              RCLONE_SYNC_INTERVAL=${RCLONE_SYNC_INTERVAL:-3600}
+              
+              echo "GDRIVE_ENABLED=true" >> "$ENV_FILE"
+              echo "RCLONE_AUTH_METHOD=service_account" >> "$ENV_FILE"
+              echo "RCLONE_GDRIVE_FOLDER=${RCLONE_GDRIVE_FOLDER}" >> "$ENV_FILE"
+              echo "RCLONE_SYNC_INTERVAL=${RCLONE_SYNC_INTERVAL}" >> "$ENV_FILE"
+              echo "RCLONE_MOUNT_POINT=${DATA_ROOT}/gdrive" >> "$ENV_FILE"
+              
+              print_success "Service account configured — no browser interaction needed"
+              ;;
+
+          2)  # OAuth via SSH tunnel
+              echo ""
+              echo "This method requires a ONE-TIME step from your local machine."
+              echo ""
+              echo "You need your GCP OAuth Client ID and Secret."
+              echo "Get them from: GCP Console → APIs & Services → Credentials → OAuth 2.0 Client IDs"
+              echo ""
+              echo -n -e "${YELLOW}GCP OAuth Client ID:${NC} "
+              read -r RCLONE_OAUTH_CLIENT_ID
+              echo -n -e "${YELLOW}GCP OAuth Client Secret:${NC} "
+              read -r -s RCLONE_OAUTH_CLIENT_SECRET
+              echo ""
+              echo -n -e "${YELLOW}Google Drive folder ID to sync (blank = root of My Drive):${NC} "
+              read -r RCLONE_GDRIVE_FOLDER
+              echo -n -e "${YELLOW}Sync interval in seconds [3600]:${NC} "
+              read -r RCLONE_SYNC_INTERVAL
+              RCLONE_SYNC_INTERVAL=${RCLONE_SYNC_INTERVAL:-3600}
+              
+              echo "GDRIVE_ENABLED=true" >> "$ENV_FILE"
+              echo "RCLONE_AUTH_METHOD=oauth_tunnel" >> "$ENV_FILE"
+              echo "RCLONE_OAUTH_CLIENT_ID=${RCLONE_OAUTH_CLIENT_ID}" >> "$ENV_FILE"
+              echo "RCLONE_OAUTH_CLIENT_SECRET=${RCLONE_OAUTH_CLIENT_SECRET}" >> "$ENV_FILE"
+              echo "RCLONE_GDRIVE_FOLDER=${RCLONE_GDRIVE_FOLDER}" >> "$ENV_FILE"
+              echo "RCLONE_SYNC_INTERVAL=${RCLONE_SYNC_INTERVAL}" >> "$ENV_FILE"
+              echo "RCLONE_MOUNT_POINT=${DATA_ROOT}/gdrive" >> "$ENV_FILE"
+              echo "RCLONE_TOKEN_OBTAINED=false" >> "$ENV_FILE"
+              
+              echo ""
+              print_success "Credentials saved."
+              echo ""
+              print_warning "IMPORTANT: Before running Script 2, you must obtain a token."
+              print_info "   Run Script 3 → Google Drive → 'Authorize rclone (SSH tunnel)'"
+              print_info "   OR run this on your LOCAL machine:"
+              echo ""
+              echo "   rclone authorize 'drive' '${RCLONE_OAUTH_CLIENT_ID}' '${RCLONE_OAUTH_CLIENT_SECRET}'"
+              echo ""
+              print_info "   Paste the resulting token into Script 3 → Google Drive → Paste token"
+              ;;
+
+          3)  # Skip
+              echo "GDRIVE_ENABLED=false" >> "$ENV_FILE"
+              print_info "Google Drive sync disabled"
+              ;;
+
+        esac
         
-        # Common prompts for both methods
+        # Create directories for all methods
         if [[ "${GDRIVE_ENABLED:-false}" == "true" ]]; then
-            echo -n -e "${YELLOW}Local sync destination [${DATA_ROOT}/gdrive]:${NC} "
-            read -r local_sync_input
-            if [[ -n "$local_sync_input" ]]; then
-                echo "RCLONE_MOUNT_POINT=${local_sync_input}" >> "$ENV_FILE"
-            else
-                echo "RCLONE_MOUNT_POINT=${DATA_ROOT}/gdrive" >> "$ENV_FILE"
-            fi
-            
-            echo -n -e "${YELLOW}Sync interval in seconds [3600]:${NC} "
-            read -r sync_interval_input
-            if [[ -n "$sync_interval_input" ]] && [[ "$sync_interval_input" =~ ^[0-9]+$ ]]; then
-                echo "RCLONE_SYNC_INTERVAL=${sync_interval_input}" >> "$ENV_FILE"
-            else
-                echo "RCLONE_SYNC_INTERVAL=3600" >> "$ENV_FILE"
-            fi
-            
-            # Create directories
             mkdir -p "${DATA_ROOT}/config/rclone"
-            mkdir -p "${RCLONE_MOUNT_POINT:-${DATA_ROOT}/gdrive}"
+            mkdir -p "${DATA_ROOT}/gdrive"
             mkdir -p "${DATA_ROOT}/logs/rclone"
             chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/config/rclone"
-            chown -R "${RUNNING_UID}:${RUNNING_GID}" "${RCLONE_MOUNT_POINT:-${DATA_ROOT}/gdrive}"
+            chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/gdrive"
             chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/logs/rclone"
-            
-            print_success "Google Drive sync configuration completed"
         fi
     fi
     

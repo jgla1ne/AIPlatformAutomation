@@ -286,6 +286,107 @@ show_metrics() {
     show_detailed_metrics
 }
 
+# Google Drive rclone OAuth authorization
+authorize_rclone_oauth() {
+    # This is the ONE-TIME token acquisition for OAuth method
+    # Two sub-options: SSH tunnel (on server) or paste token from local machine
+
+    echo ""
+    print_header "rclone OAuth Authorization"
+    echo ""
+    echo "Option A — Run on THIS SERVER (requires SSH tunnel from your laptop):"
+    echo ""
+    echo "  1. On your LOCAL machine, open a NEW terminal and run:"
+    echo "     ssh -L 53682:localhost:53682 $(whoami)@<THIS_SERVER_IP>"
+    echo "     Keep this terminal open."
+    echo ""
+    echo "  2. Press Enter below to start rclone authorization..."
+    echo "     When rclone shows a URL, copy the URL."
+    echo "     REPLACE '127.0.0.1' with 'localhost' (already correct for tunnel)."
+    echo "     Open it in your LOCAL browser."
+    echo "     Authorize, then come back here."
+    echo ""
+    echo "Option B — Run on YOUR LOCAL MACHINE (no tunnel needed):"
+    echo ""
+    echo "  On your LOCAL machine (must have rclone installed), run:"
+    echo "  rclone authorize 'drive' \\"
+    echo "    '${RCLONE_OAUTH_CLIENT_ID}' \\"
+    echo "    '${RCLONE_OAUTH_CLIENT_SECRET}'"
+    echo ""
+    echo "  Copy the token JSON that rclone prints."
+    echo "  Select option B below to paste it."
+    echo ""
+    echo -n -e "${YELLOW}Choose [A=SSH tunnel on server / B=paste token from local]:${NC} "
+    read -r AUTH_CHOICE
+
+    case "${AUTH_CHOICE^^}" in
+        A)
+            echo ""
+            print_info "Starting rclone authorization on this server..."
+            print_info "Make sure your SSH tunnel is open first!"
+            echo ""
+            echo -n -e "${YELLOW}Press Enter when SSH tunnel is ready...${NC} "
+            read -r
+            
+            # Run rclone with --auth-no-browser so it prints the URL instead of opening it
+            # The URL will be http://127.0.0.1:53682/auth?... 
+            # which works through the SSH tunnel as http://localhost:53682/auth?...
+            rclone authorize "drive" \
+                --auth-no-browser \
+                "${RCLONE_OAUTH_CLIENT_ID}" \
+                "${RCLONE_OAUTH_CLIENT_SECRET}" \
+                --config "${DATA_ROOT}/config/rclone/rclone.conf"
+            
+            # rclone writes the token directly to rclone.conf
+            if grep -q "token" "${DATA_ROOT}/config/rclone/rclone.conf" 2>/dev/null; then
+                echo "RCLONE_TOKEN_OBTAINED=true" >> "$ENV_FILE"
+                print_success "Token obtained and saved to rclone.conf"
+                offer_to_start_rclone_container
+            else
+                print_error "Token not found in rclone.conf — authorization may have failed"
+            fi
+            ;;
+            
+        B)
+            echo ""
+            print_info "Paste the complete [gdrive] config block from your local rclone config."
+            echo "It should look like:"
+            echo ""
+            echo "  [gdrive]"
+            echo "  type = drive"
+            echo "  client_id = ..."
+            echo "  client_secret = ..."
+            echo "  token = {\"access_token\":\"...\",\"refresh_token\":\"...\", ...}"
+            echo ""
+            echo "Paste below, then press Ctrl+D on an empty line when done:"
+            echo ""
+            
+            mkdir -p "${DATA_ROOT}/config/rclone"
+            cat > "${DATA_ROOT}/config/rclone/rclone.conf"
+            chmod 600 "${DATA_ROOT}/config/rclone/rclone.conf"
+            
+            if grep -q "token" "${DATA_ROOT}/config/rclone/rclone.conf" 2>/dev/null; then
+                echo "RCLONE_TOKEN_OBTAINED=true" >> "$ENV_FILE"
+                print_success "Token saved to rclone.conf"
+                offer_to_start_rclone_container
+            else
+                print_error "Pasted config does not appear to contain a token"
+                print_error "Make sure you included the full [gdrive] block with token line"
+            fi
+            ;;
+    esac
+}
+
+offer_to_start_rclone_container() {
+    echo ""
+    echo -n -e "${YELLOW}Start rclone sync container now? [Y/n]:${NC} "
+    read -r START_NOW
+    if [[ "${START_NOW:-Y}" =~ ^[Yy]$ ]]; then
+        docker compose -f "${DATA_ROOT}/docker/docker-compose.yml" up -d rclone-gdrive
+        print_success "rclone container started"
+    fi
+}
+
 # Google Drive management menu
 gdrive_management() {
     # Load configuration
@@ -431,9 +532,16 @@ gdrive_management() {
         echo "  5. Change sync interval"
         echo "  6. Enable auto-sync (restart container on interval)"
         echo "  7. Disable auto-sync"
-        echo "  8. Back to main menu"
-        echo ""
-        echo -n -e "${YELLOW}Select option [1-8]:${NC} "
+        if [[ "${RCLONE_AUTH_METHOD}" == "oauth_tunnel" && "${RCLONE_TOKEN_OBTAINED:-false}" != "true" ]]; then
+            echo -e "  8. ${YELLOW}Authorize rclone (SSH tunnel or paste token)${NC}"
+            echo "  9. Back to main menu"
+            echo ""
+            echo -n -e "${YELLOW}Select option [1-9]:${NC} "
+        else
+            echo "  8. Back to main menu"
+            echo ""
+            echo -n -e "${YELLOW}Select option [1-8]:${NC} "
+        fi
         read -r choice
         
         case "$choice" in
@@ -491,11 +599,27 @@ gdrive_management() {
                 gdrive_disable_autosync
                 ;;
             8)
-                print_info "Returning to main menu..."
-                break
+                if [[ "${RCLONE_AUTH_METHOD}" == "oauth_tunnel" && "${RCLONE_TOKEN_OBTAINED:-false}" != "true" ]]; then
+                    authorize_rclone_oauth
+                else
+                    print_info "Returning to main menu..."
+                    break
+                fi
+                ;;
+            9)
+                if [[ "${RCLONE_AUTH_METHOD}" == "oauth_tunnel" && "${RCLONE_TOKEN_OBTAINED:-false}" != "true" ]]; then
+                    print_info "Returning to main menu..."
+                    break
+                else
+                    print_warning "Invalid option. Please select 1-8."
+                fi
                 ;;
             *)
-                print_warning "Invalid option. Please select 1-8."
+                if [[ "${RCLONE_AUTH_METHOD}" == "oauth_tunnel" && "${RCLONE_TOKEN_OBTAINED:-false}" != "true" ]]; then
+                    print_warning "Invalid option. Please select 1-9."
+                else
+                    print_warning "Invalid option. Please select 1-8."
+                fi
                 ;;
         esac
     done

@@ -995,70 +995,96 @@ EOF
 
 # Tailscale setup and IP retrieval
 setup_tailscale() {
-    if [[ -z "${TAILSCALE_AUTH_KEY:-}" ]]; then
-        print_info "Tailscale auth key not provided - skipping setup"
-        return
-    fi
-    
     print_info "Setting up Tailscale..."
-    
-    # Install tailscale if not present
+
+    # Install if not present
     if ! command -v tailscale &>/dev/null; then
         print_info "Installing Tailscale..."
         curl -fsSL https://tailscale.com/install.sh | sh
     fi
-    
-    # Start tailscaled daemon if not running
+
+    # Ensure tailscaled daemon is running
     if ! systemctl is-active --quiet tailscaled; then
         systemctl enable tailscaled
         systemctl start tailscaled
+        sleep 3
     fi
-    
-    # Authenticate
+
+    # Bring up tailscale with correct flags for a Docker host
+    print_info "Bringing up Tailscale..."
     tailscale up \
         --authkey="${TAILSCALE_AUTH_KEY}" \
         --hostname="${TAILSCALE_HOSTNAME:-ai-platform}" \
-        --accept-routes \
-        --ssh
-    
-    # Wait for IP assignment (max 30 seconds)
-    local ts_ip=""
-    local attempts=0
-    while [[ -z "$ts_ip" ]] && [[ $attempts -lt 15 ]]; do
-        ts_ip=$(tailscale ip -4 2>/dev/null || true)
-        [[ -z "$ts_ip" ]] && sleep 2
-        attempts=$((attempts + 1))
+        --accept-dns=false \
+        --accept-routes=false \
+        --reset
+    # --accept-dns=false   ← critical: prevents Tailscale overwriting /etc/resolv.conf
+    #                         which breaks Docker DNS
+    # --accept-routes=false ← don't accept subnet routes from other nodes
+    # --reset              ← ensures flags apply cleanly even if previously configured
+
+    # Wait for IP assignment with timeout
+    print_info "Waiting for Tailscale IP assignment..."
+    TAILSCALE_IP=""
+    ATTEMPTS=0
+    MAX_ATTEMPTS=30   # 30 × 2s = 60 seconds max
+
+    while [[ -z "${TAILSCALE_IP}" ]] && [[ "${ATTEMPTS}" -lt "${MAX_ATTEMPTS}" ]]; do
+        TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || true)
+        if [[ -z "${TAILSCALE_IP}" ]]; then
+            sleep 2
+            ATTEMPTS=$((ATTEMPTS + 1))
+        fi
     done
-    
-    if [[ -z "$ts_ip" ]]; then
-        print_error "Tailscale did not assign an IP within 30 seconds"
+
+    if [[ -z "${TAILSCALE_IP}" ]]; then
+        print_error "Tailscale did not assign an IP after 60 seconds."
         print_error "Check: tailscale status"
-        return 1
-    fi
-    
-    # Write IP back to .env (replace placeholder)
-    sed -i "s/TAILSCALE_IP=pending/TAILSCALE_IP=${ts_ip}/" "${ENV_FILE}"
-    
-    print_success "Tailscale IP: ${ts_ip}"
-    print_success "OpenClaw accessible at: http://${ts_ip}:18789"
-}
-
-# RClone configuration generation
-generate_rclone_config() {
-    if [[ "${GDRIVE_ENABLED:-false}" != "true" ]]; then
-        print_info "Google Drive sync disabled — skipping rclone config"
-        return
-    fi
-
-    # Config was already written by Script 1.
-    # Just validate it exists before starting the container.
-    if [[ ! -f "${DATA_ROOT}/config/rclone/rclone.conf" ]]; then
-        print_error "rclone.conf not found at ${DATA_ROOT}/config/rclone/rclone.conf"
-        print_error "Re-run Script 1 and complete the Google Drive setup."
+        print_error "Check: journalctl -u tailscaled -n 50"
         exit 1
     fi
 
-    print_success "rclone config found — container will start syncing on deploy"
+    print_success "Tailscale IP: ${TAILSCALE_IP}"
+
+    # Save to .env for use by other services
+    echo "TAILSCALE_IP=${TAILSCALE_IP}" >> "$ENV_FILE"
+
+    # Verify connectivity
+    if tailscale status | grep -q "100\.[0-9]"; then
+        print_success "Tailscale connected and operational"
+    else
+        print_warning "Tailscale IP assigned but status unclear — check: tailscale status"
+    fi
+}
+
+# RClone configuration generation
+setup_rclone() {
+    if [[ "${GDRIVE_ENABLED:-false}" != "true" ]]; then
+        print_info "Google Drive sync disabled — skipping rclone setup"
+        return 0
+    fi
+
+    print_info "Setting up rclone..."
+    mkdir -p "${DATA_ROOT}/config/rclone"
+    mkdir -p "${DATA_ROOT}/gdrive"
+    mkdir -p "${DATA_ROOT}/logs/rclone"
+
+    # Config must already exist from Script 1
+    if [[ ! -f "${DATA_ROOT}/config/rclone/rclone.conf" ]]; then
+        if [[ "${RCLONE_AUTH_METHOD}" == "service_account" ]]; then
+            print_error "rclone.conf missing. Re-run Script 1 and select Service Account."
+            exit 1
+        elif [[ "${RCLONE_AUTH_METHOD}" == "oauth_tunnel" ]]; then
+            if [[ "${RCLONE_TOKEN_OBTAINED}" != "true" ]]; then
+                print_warning "rclone OAuth token not yet obtained."
+                print_warning "Run Script 3 → Google Drive → Authorize rclone to complete setup."
+                print_warning "rclone container will NOT be started until token is present."
+                return 0   # ← DO NOT HANG. Continue deploy without rclone.
+            fi
+        fi
+    fi
+
+    print_success "rclone config present — container will sync on start"
 }
 
 # RClone service management
