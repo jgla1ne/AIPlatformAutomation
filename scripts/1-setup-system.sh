@@ -2072,6 +2072,7 @@ generate_caddyfile() {
     
     if [[ "$proxy_method" == "subdomain" ]]; then
         # Subdomain routing - each service gets its own subdomain
+        mkdir -p "${DATA_ROOT}/caddy"
         cat > "${DATA_ROOT}/caddy/Caddyfile" << EOF
 {
     admin off
@@ -2159,6 +2160,7 @@ ${DOMAIN_NAME} {
 EOF
     else
         # Path-based routing (existing logic)
+        mkdir -p "${DATA_ROOT}/caddy"
         cat > "${DATA_ROOT}/caddy/Caddyfile" << EOF
 {
     admin off
@@ -2350,13 +2352,43 @@ create_directory_structure() {
     chown -R 999:999 "${DATA_ROOT}/data/postgres"
     chmod 700 "${DATA_ROOT}/data/postgres"
     
+    # redis runs as UID 999
+    chown -R 999:999 "${DATA_ROOT}/data/redis"
+    chmod 700 "${DATA_ROOT}/data/redis"
+    
+    # qdrant runs as UID 1000
+    chown -R 1000:1000 "${DATA_ROOT}/data/qdrant"
+    chmod 750 "${DATA_ROOT}/data/qdrant"
+    
     # grafana runs as UID 472
     chown -R 472:472 "${DATA_ROOT}/data/grafana"
     chmod 750 "${DATA_ROOT}/data/grafana"
     
     # prometheus runs as UID 65534 (nobody)
     chown -R 65534:65534 "${DATA_ROOT}/data/prometheus"
+    chown -R 65534:65534 "${DATA_ROOT}/config/prometheus"
     chmod 750 "${DATA_ROOT}/data/prometheus"
+    chmod 750 "${DATA_ROOT}/config/prometheus"
+    
+    # flowise runs as root (UID 0) - but data owned by stack user
+    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/data/flowise"
+    chmod 750 "${DATA_ROOT}/data/flowise"
+    
+    # minio runs as UID 1000
+    chown -R 1000:1000 "${DATA_ROOT}/data/minio"
+    chmod 750 "${DATA_ROOT}/data/minio"
+    
+    # n8n runs as stack user
+    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/data/n8n"
+    chmod 750 "${DATA_ROOT}/data/n8n"
+    
+    # anythingllm runs as UID 1000
+    chown -R 1000:1000 "${DATA_ROOT}/data/anythingllm"
+    chmod 750 "${DATA_ROOT}/data/anythingllm"
+    
+    # signal runs as UID 1000
+    chown -R 1000:1000 "${DATA_ROOT}/data/signal"
+    chmod 750 "${DATA_ROOT}/data/signal"
     
     # openwebui writes as root internally - needs 777
     chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/data/openwebui"

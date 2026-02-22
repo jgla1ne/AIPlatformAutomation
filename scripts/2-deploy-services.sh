@@ -502,7 +502,7 @@ deploy_layer_2_services() {
         -u "${RUNNING_UID}:${RUNNING_GID}" \
         ghcr.io/berriai/litellm:main-latest
     
-    # Flowise
+    # Flowise - runs as root (UID 0) due to Node.js user info issues
     docker run -d \
         --name flowise \
         --network "${DOCKER_NETWORK}" \
@@ -592,7 +592,7 @@ EOF
         --web.console.templates=/etc/prometheus/consoles \
         --web.enable-lifecycle
     
-    # Grafana
+    # Grafana - runs as root (UID 0) due to permission issues
     docker run -d \
         --name grafana \
         --network "${DOCKER_NETWORK}" \
@@ -600,7 +600,6 @@ EOF
         -e GF_SERVER_ROOT_URL="https://${DOMAIN_NAME}/grafana/" \
         -e GF_SECURITY_ADMIN_PASSWORD="${ADMIN_PASSWORD}" \
         -v "${DATA_ROOT}/data/grafana:/var/lib/grafana" \
-        -u "${RUNNING_UID}:${RUNNING_GID}" \
         grafana/grafana:latest
     
     # Wait for monitoring services
