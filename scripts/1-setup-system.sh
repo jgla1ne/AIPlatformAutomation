@@ -2800,6 +2800,8 @@ EOF
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
                         if [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                             echo "  • AnythingLLM: https://$DOMAIN_NAME/anythingllm"
+                        elif [[ "${PROXY_CONFIG_METHOD:-direct}" == "subdomain" ]]; then
+                            echo "  • AnythingLLM: https://anythingllm.$DOMAIN_NAME"
                         else
                             echo "  • AnythingLLM: https://$DOMAIN_NAME:$anythingllm_port"
                         fi
@@ -2812,6 +2814,8 @@ EOF
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
                         if [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                             echo "  • Dify: https://$DOMAIN_NAME/dify"
+                        elif [[ "${PROXY_CONFIG_METHOD:-direct}" == "subdomain" ]]; then
+                            echo "  • Dify: https://dify.$DOMAIN_NAME"
                         else
                             echo "  • Dify: https://$DOMAIN_NAME:$dify_port"
                         fi
@@ -2824,6 +2828,8 @@ EOF
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
                         if [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                             echo "  • n8n: https://$DOMAIN_NAME/n8n"
+                        elif [[ "${PROXY_CONFIG_METHOD:-direct}" == "subdomain" ]]; then
+                            echo "  • n8n: https://n8n.$DOMAIN_NAME"
                         else
                             echo "  • n8n: https://$DOMAIN_NAME:$n8n_port"
                         fi
@@ -2836,6 +2842,8 @@ EOF
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
                         if [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                             echo "  • Flowise: https://$DOMAIN_NAME/flowise"
+                        elif [[ "${PROXY_CONFIG_METHOD:-direct}" == "subdomain" ]]; then
+                            echo "  • Flowise: https://flowise.$DOMAIN_NAME"
                         else
                             echo "  • Flowise: https://$DOMAIN_NAME:$flowise_port"
                         fi
@@ -2859,7 +2867,9 @@ EOF
                     local signal_api_port=$(grep "^SIGNAL_API_PORT=" "$ENV_FILE" | cut -d= -f2)
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
                         if [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
-                            echo "  • Signal API: https://$DOMAIN_NAME/signal"
+                            echo "  • Signal API: https://$DOMAIN_NAME/signal-api"
+                        elif [[ "${PROXY_CONFIG_METHOD:-direct}" == "subdomain" ]]; then
+                            echo "  • Signal API: https://signal-api.$DOMAIN_NAME"
                         else
                             echo "  • Signal API: https://$DOMAIN_NAME:$signal_api_port"
                         fi
@@ -2872,6 +2882,8 @@ EOF
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
                         if [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                             echo "  • OpenClaw: https://$DOMAIN_NAME/openclaw"
+                        elif [[ "${PROXY_CONFIG_METHOD:-direct}" == "subdomain" ]]; then
+                            echo "  • OpenClaw: https://openclaw.$DOMAIN_NAME"
                         else
                             echo "  • OpenClaw: https://$DOMAIN_NAME:$openclaw_port"
                         fi
@@ -2881,13 +2893,25 @@ EOF
                     ;;
                 "prometheus")
                     local prometheus_port=$(grep "^PROMETHEUS_PORT=" "$ENV_FILE" | cut -d= -f2)
-                    echo "  • Prometheus: http://localhost:$prometheus_port"
+                    if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                        if [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
+                            echo "  • Prometheus: https://$DOMAIN_NAME/prometheus"
+                        elif [[ "${PROXY_CONFIG_METHOD:-direct}" == "subdomain" ]]; then
+                            echo "  • Prometheus: https://prometheus.$DOMAIN_NAME"
+                        else
+                            echo "  • Prometheus: https://$DOMAIN_NAME:$prometheus_port"
+                        fi
+                    else
+                        echo "  • Prometheus: http://localhost:$prometheus_port"
+                    fi
                     ;;
                 "grafana")
                     local grafana_port=$(grep "^GRAFANA_PORT=" "$ENV_FILE" | cut -d= -f2)
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
                         if [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                             echo "  • Grafana: https://$DOMAIN_NAME/grafana"
+                        elif [[ "${PROXY_CONFIG_METHOD:-direct}" == "subdomain" ]]; then
+                            echo "  • Grafana: https://grafana.$DOMAIN_NAME"
                         else
                             echo "  • Grafana: https://$DOMAIN_NAME:$grafana_port"
                         fi
