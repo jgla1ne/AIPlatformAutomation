@@ -1104,7 +1104,7 @@ EOF
         ["litellm"]="5005"
         ["prometheus"]="5000"
         ["grafana"]="5001"
-        ["signal-api"]="8080"
+        ["signal-api"]="8090"
         ["openclaw"]="18789"
         ["tailscale"]="8443"
         ["postgres"]="5432"
@@ -1364,9 +1364,9 @@ allocate_port() {
             selected_providers+=("google")
             provider_keys+=("GOOGLE_API_KEY")
             prompt_input "GOOGLE_API_KEY" "Google AI API key" "" false
-            # API Keys - properly quoted to handle special characters
+            # API Keys - no quotes to avoid literal quote characters
             if [[ -n "$INPUT_RESULT" ]]; then
-                echo "GOOGLE_API_KEY='$INPUT_RESULT'" >> "$ENV_FILE"
+                echo "GOOGLE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
             else
                 echo "GOOGLE_API_KEY=" >> "$ENV_FILE"
             fi
@@ -1377,9 +1377,9 @@ allocate_port() {
             selected_providers+=("groq")
             provider_keys+=("GROQ_API_KEY")
             prompt_input "GROQ_API_KEY" "Groq API key" "" false
-            # API Keys - properly quoted to handle special characters
+            # API Keys - no quotes to avoid literal quote characters
             if [[ -n "$INPUT_RESULT" ]]; then
-                echo "GROQ_API_KEY='$INPUT_RESULT'" >> "$ENV_FILE"
+                echo "GROQ_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
             else
                 echo "GROQ_API_KEY=" >> "$ENV_FILE"
             fi
@@ -1403,9 +1403,9 @@ allocate_port() {
             selected_providers+=("openrouter")
             provider_keys+=("OPENROUTER_API_KEY")
             prompt_input "OPENROUTER_API_KEY" "OpenRouter API key" "" false
-            # API Keys - properly quoted to handle special characters
+            # API Keys - no quotes to avoid literal quote characters
             if [[ -n "$INPUT_RESULT" ]]; then
-                echo "OPENROUTER_API_KEY='$INPUT_RESULT'" >> "$ENV_FILE"
+                echo "OPENROUTER_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
             else
                 echo "OPENROUTER_API_KEY=" >> "$ENV_FILE"
             fi
@@ -3180,7 +3180,6 @@ add_litellm_service() {
       LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aiplatform}
       REDIS_HOST: redis
-      REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       STORE_MODEL_IN_DB: "True"
       PUID: ${RUNNING_UID}
@@ -3265,7 +3264,6 @@ add_dify_services() {
       DB_PORT: 5432
       DB_DATABASE: dify
       REDIS_HOST: redis
-      REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       STORAGE_TYPE: local
       STORAGE_LOCAL_PATH: /app/storage
