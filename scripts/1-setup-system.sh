@@ -2318,6 +2318,7 @@ create_directory_structure() {
     # Create ALL directories FIRST with correct ownership
     local dirs=(
         "${DATA_ROOT}/config"
+        "${DATA_ROOT}/config/prometheus"
         "${DATA_ROOT}/apparmor"
         "${DATA_ROOT}/caddy/config"
         "${DATA_ROOT}/caddy/data"
