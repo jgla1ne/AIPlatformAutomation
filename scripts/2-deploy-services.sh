@@ -383,6 +383,12 @@ deploy_layer_0_infrastructure() {
 deploy_layer_1_databases() {
     print_header "Layer 1: Databases"
     
+    # Ensure qdrant directory has correct ownership (qdrant runs as UID 1000)
+    if [[ -d "${DATA_ROOT}/data/qdrant" ]]; then
+        chown -R 1000:1000 "${DATA_ROOT}/data/qdrant"
+        print_info "Fixed qdrant directory ownership to 1000:1000"
+    fi
+    
     # PostgreSQL with explicit UID and init script
     docker run -d \
         --name postgres \
@@ -418,6 +424,13 @@ deploy_layer_1_databases() {
     wait_healthy "postgres" "docker exec postgres pg_isready -U ${POSTGRES_USER}" 30
     wait_healthy "redis" "docker exec redis redis-cli -a ${REDIS_PASSWORD} ping" 30
     wait_healthy "qdrant" "docker run --rm --network ${DOCKER_NETWORK} alpine/curl -sf http://qdrant:6333/" 60
+    
+    # Create pgvector extension after postgres is ready
+    print_info "Creating pgvector extension..."
+    docker exec postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+        -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null || true
+    print_success "pgvector extension created"
+    
     print_success "Layer 1 databases healthy"
 }
 
@@ -445,10 +458,12 @@ deploy_layer_2_services() {
         -e DB_POSTGRESDB_DATABASE=n8n \
         -e DB_POSTGRESDB_USER="${POSTGRES_USER}" \
         -e DB_POSTGRESDB_PASSWORD="${POSTGRES_PASSWORD}" \
-        -e N8N_HOST="${DOMAIN_NAME}" \
+        -e N8N_HOST="n8n.${DOMAIN_NAME}" \
         -e N8N_PROTOCOL=https \
+        -e N8N_PORT=5678 \
+        -e WEBHOOK_URL="https://n8n.${DOMAIN_NAME}/" \
+        -e N8N_EDITOR_BASE_URL="https://n8n.${DOMAIN_NAME}/" \
         -e HOME=/data/n8n \
-        -e WEBHOOK_URL="https://${DOMAIN_NAME}/n8n/" \
         -v "${DATA_ROOT}/data/n8n:/data/n8n" \
         -u "${RUNNING_UID}:${RUNNING_GID}" \
         n8nio/n8n:latest
@@ -494,11 +509,10 @@ deploy_layer_2_services() {
         --restart unless-stopped \
         -e PORT=3000 \
         -e FLOWISE_HOST=0.0.0.0 \
-        -e DATABASE_PATH=/data/flowise \
-        -e APIKEY_PATH=/data/flowise \
-        -e HOME=/data/flowise \
-        -v "${DATA_ROOT}/data/flowise:/data/flowise" \
-        -u "${RUNNING_UID}:${RUNNING_GID}" \
+        -e DATABASE_PATH=/root/.flowise \
+        -e APIKEY_PATH=/root/.flowise \
+        -e HOME=/root \
+        -v "${DATA_ROOT}/data/flowise:/root/.flowise" \
         flowiseai/flowise:latest
     
     # Wait for layer 2
@@ -506,6 +520,15 @@ deploy_layer_2_services() {
     wait_http "minio" "http://minio:9000/minio/health/live" 60
     wait_http "flowise" "http://flowise:3000" 60
     # wait_http "litellm" "http://litellm:4000/health" 60  # Temporarily disabled - needs API key
+    
+    # Create MinIO buckets after MinIO is ready
+    print_info "Creating MinIO buckets..."
+    docker exec minio mc alias set local http://localhost:9000 "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}" 2>/dev/null || true
+    docker exec minio mc mb local/n8n-data --ignore-existing 2>/dev/null || true
+    docker exec minio mc mb local/anythingllm --ignore-existing 2>/dev/null || true
+    docker exec minio mc mb local/dify --ignore-existing 2>/dev/null || true
+    print_success "MinIO buckets created"
+    
     print_success "Layer 2 application services healthy (litellm health check disabled)"
 }
 
@@ -514,6 +537,9 @@ deploy_layer_3_monitoring() {
     
     # Create Prometheus config
     mkdir -p "${DATA_ROOT}/config/prometheus"
+    mkdir -p "${DATA_ROOT}/data/prometheus"
+    chown -R 65534:65534 "${DATA_ROOT}/data/prometheus"
+    chown -R 65534:65534 "${DATA_ROOT}/config/prometheus"
     cat > "${DATA_ROOT}/config/prometheus/prometheus.yml" << EOF
 global:
   scrape_interval: 15s
@@ -551,17 +577,20 @@ EOF
     
     chown "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/config/prometheus/prometheus.yml"
     
-    # Prometheus
+    # Prometheus with correct UID and data paths
     docker run -d \
         --name prometheus \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
-        -v "${DATA_ROOT}/config/prometheus:/etc/prometheus" \
+        -p 9090:9090 \
+        -v "${DATA_ROOT}/config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
         -v "${DATA_ROOT}/data/prometheus:/prometheus" \
-        -u "${RUNNING_UID}:${RUNNING_GID}" \
         prom/prometheus:latest \
         --config.file=/etc/prometheus/prometheus.yml \
-        --storage.tsdb.path=/prometheus
+        --storage.tsdb.path=/prometheus \
+        --web.console.libraries=/etc/prometheus/console_libraries \
+        --web.console.templates=/etc/prometheus/consoles \
+        --web.enable-lifecycle
     
     # Grafana
     docker run -d \
