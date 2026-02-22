@@ -510,66 +510,6 @@ collect_domain_info() {
         done
     fi
     
-    # Tailscale Configuration
-    echo ""
-    print_header "🔗 Tailscale Configuration (Optional)"
-    echo ""
-    
-    if confirm "Configure Tailscale VPN for private access?"; then
-        print_info "Tailscale Configuration"
-        echo ""
-        
-        echo "Select Tailscale setup method:"
-        echo "  1) Auth Key (Quick setup)"
-        echo "  2) Auth Token (Existing network)"
-        echo "  3) Skip"
-        echo ""
-        
-        while true; do
-            echo -n -e "${YELLOW}Select method [1-3]:${NC} "
-            read -r tailscale_method
-            
-            case "$tailscale_method" in
-                1)
-                    prompt_input "TAILSCALE_AUTH_KEY" "Tailscale auth key" "" false
-                    echo "TAILSCALE_AUTH_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-                    echo "TAILSCALE_SETUP_METHOD=auth_key" >> "$ENV_FILE"
-                    print_success "Tailscale auth key configured"
-                    break
-                    ;;
-                2)
-                    prompt_input "TAILSCALE_AUTH_TOKEN" "Tailscale auth token" "" false
-                    echo "TAILSCALE_AUTH_TOKEN=$INPUT_RESULT" >> "$ENV_FILE"
-                    echo "TAILSCALE_SETUP_METHOD=auth_token" >> "$ENV_FILE"
-                    print_success "Tailscale auth token configured"
-                    break
-                    ;;
-                3)
-                    break
-                    ;;
-                *)
-                    print_error "Invalid selection"
-                    ;;
-            esac
-        done
-        
-        # Tailscale network configuration
-        echo ""
-        prompt_input "TAILSCALE_TAILNET" "Tailscale tailnet name" "default" false
-        echo "TAILSCALE_TAILNET=$INPUT_RESULT" >> "$ENV_FILE"
-        
-        # Optional Tailscale API key
-        if confirm "Configure Tailscale API key (optional)?"; then
-            prompt_input "TAILSCALE_API_KEY" "Tailscale API key" "" false
-            echo "TAILSCALE_API_KEY=$INPUT_RESULT" >> "$ENV_FILE"
-        fi
-        
-        echo "TAILSCALE_EXIT_NODE=false" >> "$ENV_FILE"
-        echo "TAILSCALE_ACCEPT_ROUTES=false" >> "$ENV_FILE"
-        
-        print_success "Tailscale configuration completed"
-    fi
-    
     echo ""
     print_success "Domain configuration completed"
 }
@@ -1673,57 +1613,6 @@ allocate_port() {
         print_info "OpenClaw will run in dedicated sandbox at ${openclaw_sandbox}"
         
         print_success "OpenClaw configuration completed"
-    fi
-    echo ""
-    print_info "Google Drive Integration (Optional)"
-    echo ""
-    
-    if confirm "Configure Google Drive sync?"; then
-        print_info "Google Drive Configuration"
-        echo ""
-        
-        echo "Select authentication method:"
-        echo "  1) OAuth 2.0 (Recommended for personal use)"
-        echo "  2) Service Account (Recommended for server use)"
-        echo "  3) rclone (Advanced)"
-        echo ""
-        
-        while true; do
-            echo -n -e "${YELLOW}Select method [1-3]:${NC} "
-            read -r auth_method
-            
-            case "$auth_method" in
-                1)
-                    echo "GDRIVE_AUTH_METHOD=oauth" >> "$ENV_FILE"
-                    prompt_input "GDRIVE_CLIENT_ID" "Google Client ID" "" false
-                    echo "GDRIVE_CLIENT_ID=$INPUT_RESULT" >> "$ENV_FILE"
-                    prompt_input "GDRIVE_CLIENT_SECRET" "Google Client Secret" "" true
-                    echo "GDRIVE_CLIENT_SECRET=$INPUT_RESULT" >> "$ENV_FILE"
-                    break
-                    ;;
-                2)
-                    echo "GDRIVE_AUTH_METHOD=service_account" >> "$ENV_FILE"
-                    print_info "Service account JSON file path:"
-                    echo -n -e "${YELLOW}Path to service account JSON:${NC} "
-                    read -r json_path
-                    echo "GDRIVE_SERVICE_ACCOUNT_JSON=$json_path" >> "$ENV_FILE"
-                    break
-                    ;;
-                3)
-                    echo "GDRIVE_AUTH_METHOD=rclone" >> "$ENV_FILE"
-                    print_info "rclone configuration will be set up later"
-                    break
-                    ;;
-                *)
-                    print_error "Invalid selection"
-                    ;;
-            esac
-        done
-        
-        prompt_input "GDRIVE_SYNC_INTERVAL" "Sync interval in minutes" "15" false
-        echo "GDRIVE_SYNC_INTERVAL=$INPUT_RESULT" >> "$ENV_FILE"
-        
-        print_success "Google Drive configuration completed"
     fi
     
     # Application-specific configurations
