@@ -1050,36 +1050,15 @@ generate_rclone_config() {
         return
     fi
 
-    local conf_path="${DATA_ROOT}/config/rclone/rclone.conf"
-    mkdir -p "${DATA_ROOT}/config/rclone"
-
-    if [[ "${RCLONE_AUTH_METHOD}" == "service_account" ]]; then
-        cat > "${conf_path}" << EOF
-[gdrive]
-type = drive
-scope = drive
-service_account_file = /config/rclone/service-account.json
-EOF
-
-    elif [[ "${RCLONE_AUTH_METHOD}" == "oauth_client" ]]; then
-        # Run headless OAuth flow inside temporary rclone container
-        print_info "Running rclone OAuth headless authorization..."
-        
-        docker run --rm \
-            --user "${RUNNING_UID}:${RUNNING_GID}" \
-            -v "${DATA_ROOT}/config/rclone:/config/rclone" \
-            rclone/rclone:latest \
-            config create gdrive drive \
-                scope=drive \
-                client_id="${RCLONE_OAUTH_CLIENT_ID}" \
-                client_secret="${RCLONE_OAUTH_CLIENT_SECRET}"
-        
-        print_info "OAuth configuration completed"
+    # Config was already written by Script 1.
+    # Just validate it exists before starting the container.
+    if [[ ! -f "${DATA_ROOT}/config/rclone/rclone.conf" ]]; then
+        print_error "rclone.conf not found at ${DATA_ROOT}/config/rclone/rclone.conf"
+        print_error "Re-run Script 1 and complete the Google Drive setup."
+        exit 1
     fi
 
-    chmod 600 "${conf_path}"
-    chown "${RUNNING_UID}:${RUNNING_GID}" "${conf_path}"
-    print_success "rclone config written to ${conf_path}"
+    print_success "rclone config found — container will start syncing on deploy"
 }
 
 # RClone service management

@@ -1845,143 +1845,152 @@ allocate_port() {
         echo ""
         print_header "Google Drive Sync (rclone)"
         echo ""
+        echo "rclone syncs Google Drive to ${DATA_ROOT}/gdrive on this server."
+        echo ""
+        echo "Authentication method:"
+        echo "  1. Service Account JSON  (recommended — fully headless)"
+        echo "     Requires a GCP service account with Drive API enabled"
+        echo "     Download JSON key from GCP Console → IAM → Service Accounts"
+        echo ""
+        echo "  2. Pre-authorized token  (personal Google account)"
+        echo "     You must run rclone config on a machine with a browser FIRST"
+        echo "     then paste the resulting config block here"
+        echo ""
+        echo -n -e "${YELLOW}Select method [1/2] or press Enter to skip:${NC} "
+        read -r auth_method
         
-        # Enable/disable prompt
-        echo -n -e "${YELLOW}Enable Google Drive sync? [y/N]:${NC} "
-        read -r enable_gdrive
-        
-        if [[ "$enable_gdrive" =~ ^[Yy]$ ]]; then
-            echo "GDRIVE_ENABLED=true" >> "$ENV_FILE"
-            
+        if [[ -z "$auth_method" ]]; then
+            echo "GDRIVE_ENABLED=false" >> "$ENV_FILE"
+            print_info "Google Drive sync disabled"
+        elif [[ "$auth_method" == "1" ]]; then
+            # Service Account method
             echo ""
-            print_info "Select authentication method:"
-            echo "  1. Service Account JSON (recommended — fully headless)"
-            echo "  2. OAuth Client ID + Secret (personal Google account)"
-            echo ""
+            echo -n -e "${YELLOW}Full path to service account JSON file on THIS machine:${NC} "
+            read -r sa_json_path
             
-            local auth_method=""
-            while [[ -z "$auth_method" ]]; do
-                echo -n -e "${YELLOW}Method [1/2]:${NC} "
-                read -r auth_method
-                
-                if [[ "$auth_method" != "1" ]] && [[ "$auth_method" != "2" ]]; then
-                    print_warning "Please enter 1 or 2"
-                    auth_method=""
-                fi
-            done
-            
-            if [[ "$auth_method" == "1" ]]; then
-                # Service Account method
-                echo ""
-                print_info "Service Account Authentication"
-                echo ""
-                
-                local sa_json_path=""
-                while [[ -z "$sa_json_path" ]]; do
-                    echo -n -e "${YELLOW}Full path to service account JSON file:${NC} "
-                    read -r sa_json_path
-                    
-                    if [[ ! -f "$sa_json_path" ]]; then
-                        print_warning "File not found: $sa_json_path"
-                        sa_json_path=""
-                        continue
-                    fi
-                    
-                    # Validate JSON format
-                    if ! jq empty "$sa_json_path" 2>/dev/null; then
-                        print_warning "Invalid JSON format in file"
-                        sa_json_path=""
-                        continue
-                    fi
-                done
-                
-                # Copy and secure the service account file
-                mkdir -p "${DATA_ROOT}/config/rclone"
-                cp "$sa_json_path" "${DATA_ROOT}/config/rclone/service-account.json"
-                chmod 600 "${DATA_ROOT}/config/rclone/service-account.json"
-                chown "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/config/rclone/service-account.json"
-                
-                echo "RCLONE_AUTH_METHOD=service_account" >> "$ENV_FILE"
-                echo "RCLONE_SA_JSON_PATH=${DATA_ROOT}/config/rclone/service-account.json" >> "$ENV_FILE"
-                
-                print_success "Service account file secured"
-                
-            else
-                # OAuth Client method
-                echo ""
-                print_info "OAuth Client Authentication"
-                echo ""
-                
-                local oauth_client_id=""
-                while [[ -z "$oauth_client_id" ]]; do
-                    echo -n -e "${YELLOW}GCP OAuth Client ID:${NC} "
-                    read -r oauth_client_id
-                    
-                    if [[ -z "$oauth_client_id" ]]; then
-                        print_warning "Client ID cannot be empty"
-                    fi
-                done
-                
-                local oauth_client_secret=""
-                while [[ -z "$oauth_client_secret" ]]; do
-                    echo -n -e "${YELLOW}GCP OAuth Client Secret:${NC} "
-                    read -r -s oauth_client_secret
-                    echo ""
-                    
-                    if [[ -z "$oauth_client_secret" ]]; then
-                        print_warning "Client Secret cannot be empty"
-                    fi
-                done
-                
-                echo "RCLONE_AUTH_METHOD=oauth_client" >> "$ENV_FILE"
-                echo "RCLONE_OAUTH_CLIENT_ID=${oauth_client_id}" >> "$ENV_FILE"
-                echo "RCLONE_OAUTH_CLIENT_SECRET=${oauth_client_secret}" >> "$ENV_FILE"
-                
-                print_success "OAuth client credentials saved"
+            if [[ ! -f "$sa_json_path" ]]; then
+                print_error "File not found: $sa_json_path"
+                print_error "Please provide a valid service account JSON file path"
+                exit 1
             fi
             
-            # Common configuration for both methods
-            echo ""
-            print_info "Sync Configuration"
-            echo ""
+            # Validate JSON format and service account type
+            if ! jq empty "$sa_json_path" 2>/dev/null; then
+                print_error "Invalid JSON format in file"
+                exit 1
+            fi
             
-            # Google Drive folder
-            local gdrive_folder=""
-            echo -n -e "${YELLOW}Google Drive folder to sync (blank = root):${NC} "
+            if ! jq -e '.type == "service_account"' "$sa_json_path" >/dev/null 2>&1; then
+                print_error "JSON file is not a valid service account"
+                exit 1
+            fi
+            
+            # Copy and secure the service account file
+            mkdir -p "${DATA_ROOT}/config/rclone"
+            cp "$sa_json_path" "${DATA_ROOT}/config/rclone/service-account.json"
+            chmod 600 "${DATA_ROOT}/config/rclone/service-account.json"
+            chown "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/config/rclone/service-account.json"
+            
+            # Write rclone.conf directly
+            cat > "${DATA_ROOT}/config/rclone/rclone.conf" << EOF
+[gdrive]
+type = drive
+scope = drive
+service_account_file = /config/rclone/service-account.json
+EOF
+            chmod 600 "${DATA_ROOT}/config/rclone/rclone.conf"
+            chown "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/config/rclone/rclone.conf"
+            
+            echo -n -e "${YELLOW}Google Drive folder ID or path to sync (blank = My Drive root):${NC} "
             read -r gdrive_folder
             echo "RCLONE_GDRIVE_FOLDER=${gdrive_folder}" >> "$ENV_FILE"
             
-            # Local sync destination
-            local local_sync_dest="${DATA_ROOT}/gdrive"
-            echo -n -e "${YELLOW}Local sync destination [${local_sync_dest}]:${NC} "
+            echo "GDRIVE_ENABLED=true" >> "$ENV_FILE"
+            echo "RCLONE_AUTH_METHOD=service_account" >> "$ENV_FILE"
+            echo "RCLONE_SA_JSON_PATH=${DATA_ROOT}/config/rclone/service-account.json" >> "$ENV_FILE"
+            
+            print_success "Service account configured"
+            
+        elif [[ "$auth_method" == "2" ]]; then
+            # Pre-authorized token method
+            echo ""
+            echo "On your LOCAL machine (with a browser), run:"
+            echo ""
+            echo "  docker run --rm -it \\"
+            echo "    -v \$HOME/.config/rclone:/config/rclone \\"
+            echo "    rclone/rclone:latest \\"
+            echo "    config create gdrive drive scope=drive"
+            echo ""
+            echo "Complete the browser flow. Then run:"
+            echo ""
+            echo "  cat \$HOME/.config/rclone/rclone.conf"
+            echo ""
+            echo "Copy the entire output starting from [gdrive] to end of file."
+            echo "Paste it here, then press Enter then Ctrl+D:"
+            echo ""
+            
+            # Read multi-line input
+            local rclone_conf=""
+            while IFS= read -r line; do
+                if [[ -z "$line" ]]; then
+                    break
+                fi
+                rclone_conf="${rclone_conf}${line}"$'\n'
+            done
+            
+            # Validate config contains required sections
+            if [[ ! "$rclone_conf" =~ ^\[gdrive\] ]] || [[ ! "$rclone_conf" =~ token ]]; then
+                print_error "Invalid rclone config block"
+                print_error "Must contain [gdrive] section and token line"
+                exit 1
+            fi
+            
+            # Write config
+            mkdir -p "${DATA_ROOT}/config/rclone"
+            echo "$rclone_conf" > "${DATA_ROOT}/config/rclone/rclone.conf"
+            chmod 600 "${DATA_ROOT}/config/rclone/rclone.conf"
+            chown "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/config/rclone/rclone.conf"
+            
+            echo -n -e "${YELLOW}Google Drive folder ID or path to sync (blank = My Drive root):${NC} "
+            read -r gdrive_folder
+            echo "RCLONE_GDRIVE_FOLDER=${gdrive_folder}" >> "$ENV_FILE"
+            
+            echo "GDRIVE_ENABLED=true" >> "$ENV_FILE"
+            echo "RCLONE_AUTH_METHOD=token" >> "$ENV_FILE"
+            
+            print_success "Pre-authorized token configured"
+        else
+            print_error "Invalid selection"
+            exit 1
+        fi
+        
+        # Common prompts for both methods
+        if [[ "${GDRIVE_ENABLED:-false}" == "true" ]]; then
+            echo -n -e "${YELLOW}Local sync destination [${DATA_ROOT}/gdrive]:${NC} "
             read -r local_sync_input
             if [[ -n "$local_sync_input" ]]; then
-                local_sync_dest="$local_sync_input"
+                echo "RCLONE_MOUNT_POINT=${local_sync_input}" >> "$ENV_FILE"
+            else
+                echo "RCLONE_MOUNT_POINT=${DATA_ROOT}/gdrive" >> "$ENV_FILE"
             fi
-            echo "RCLONE_MOUNT_POINT=${local_sync_dest}" >> "$ENV_FILE"
             
-            # Sync interval
-            local sync_interval="3600"
             echo -n -e "${YELLOW}Sync interval in seconds [3600]:${NC} "
             read -r sync_interval_input
             if [[ -n "$sync_interval_input" ]] && [[ "$sync_interval_input" =~ ^[0-9]+$ ]]; then
-                sync_interval="$sync_interval_input"
+                echo "RCLONE_SYNC_INTERVAL=${sync_interval_input}" >> "$ENV_FILE"
+            else
+                echo "RCLONE_SYNC_INTERVAL=3600" >> "$ENV_FILE"
             fi
-            echo "RCLONE_SYNC_INTERVAL=${sync_interval}" >> "$ENV_FILE"
             
             # Create directories
             mkdir -p "${DATA_ROOT}/config/rclone"
-            mkdir -p "${local_sync_dest}"
+            mkdir -p "${RCLONE_MOUNT_POINT:-${DATA_ROOT}/gdrive}"
             mkdir -p "${DATA_ROOT}/logs/rclone"
             chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/config/rclone"
-            chown -R "${RUNNING_UID}:${RUNNING_GID}" "${local_sync_dest}"
+            chown -R "${RUNNING_UID}:${RUNNING_GID}" "${RCLONE_MOUNT_POINT:-${DATA_ROOT}/gdrive}"
             chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/logs/rclone"
             
             print_success "Google Drive sync configuration completed"
-            
-        else
-            echo "GDRIVE_ENABLED=false" >> "$ENV_FILE"
-            print_info "Google Drive sync disabled"
         fi
     fi
     
