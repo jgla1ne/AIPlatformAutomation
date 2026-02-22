@@ -1634,7 +1634,6 @@ allocate_port() {
         done
         
         echo "OPENCLAW_PORT=18789" >> "$ENV_FILE"
-        echo "OPENCLAW_API_PORT=8083" >> "$ENV_FILE"
         
         # OpenClaw integration settings
         echo "OPENCLAW_ENABLE_SIGNAL=true" >> "$ENV_FILE"
@@ -1912,8 +1911,6 @@ allocate_port() {
     if [[ " ${selected_services[*]} " =~ " dify " ]]; then
         local dify_secret=$(generate_random_password 32)
         echo "DIFY_SECRET_KEY=$dify_secret" >> "$ENV_FILE"
-        echo "DIFY_WEB_API_PORT=5001" >> "$ENV_FILE"
-        echo "DIFY_WEB_PORT=3002" >> "$ENV_FILE"
     fi
     
     # MinIO configuration (if selected)
@@ -3448,7 +3445,7 @@ add_monitoring_services() {
     networks:
       - ${DOCKER_NETWORK}_internal
     ports:
-      - "${PROMETHEUS_PORT:-9090}:9090"
+      - "${PROMETHEUS_PORT:-5000}:9090"
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -3541,7 +3538,6 @@ add_openclaw_service() {
       OPENCLAW_ADMIN_USER: ${OPENCLAW_ADMIN_USER:-admin}
       OPENCLAW_ADMIN_PASSWORD: ${OPENCLAW_ADMIN_PASSWORD}
       OPENCLAW_PORT: ${OPENCLAW_PORT:-18789}
-      OPENCLAW_API_PORT: ${OPENCLAW_API_PORT:-8083}
       OPENCLAW_ENABLE_SIGNAL: ${OPENCLAW_ENABLE_SIGNAL:-true}
       OPENCLAW_ENABLE_LITELM: ${OPENCLAW_ENABLE_LITELM:-true}
       OPENCLAW_ENABLE_N8N: ${OPENCLAW_ENABLE_N8N:-true}
@@ -3556,7 +3552,6 @@ add_openclaw_service() {
       - ${DOCKER_NETWORK}
     ports:
       - "${OPENCLAW_PORT:-18789}:8082"
-      - "${OPENCLAW_API_PORT:-8083}:8083"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8082/health"]
       interval: 30s
@@ -3620,7 +3615,6 @@ add_minio_service() {
       - ${DOCKER_NETWORK}_internal
       - ${DOCKER_NETWORK}
     ports:
-      - "${MINIO_API_PORT:-9000}:9000"
       - "${MINIO_CONSOLE_PORT:-9001}:9001"
     command: server /data --console-address ":9001"
     healthcheck:
