@@ -283,13 +283,28 @@ backup_config() {
 
 # Show stack metrics
 show_metrics() {
-    print_header "Stack Metrics"
+    show_detailed_metrics
+}
+
+# Google Drive management menu
+gdrive_management() {
+    # Load configuration
+    local env_file="${DATA_ROOT:-/mnt/data}/.env"
+    if [[ ! -f "$env_file" ]]; then
+        print_error "Configuration file not found: $env_file"
+        print_info "Please run Script 1 first"
+        return 1
+    fi
     
-    detect_stack
+    source "$env_file"
     
-    echo "📊 Resource Usage:"
-    docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}\t{{.BlockIO}}" --filter "network=${DOCKER_NETWORK}"
+    if [[ "${GDRIVE_ENABLED:-false}" != "true" ]]; then
+        print_error "Google Drive sync is not enabled"
+        print_info "Please run Script 1 and enable Google Drive sync"
+        return 1
+    fi
     
+    print_header "Google Drive Sync Management"
     echo ""
     echo "💾 Storage Usage:"
     echo "   Base Directory: $(du -sh ${BASE_DIR} | cut -f1)"
@@ -320,6 +335,7 @@ show_help() {
     echo "  cleanup             Clean up unused Docker resources"
     echo "  backup              Backup stack configuration"
     echo "  metrics             Show detailed stack metrics"
+    echo "  gdrive              Google Drive sync management menu"
     echo "  help                Show this help message"
     echo ""
     echo "Examples:"
@@ -367,6 +383,9 @@ main() {
         metrics)
             show_metrics
             ;;
+        gdrive)
+            gdrive_management
+            ;;
         help|--help|-h)
             show_help
             ;;
@@ -380,3 +399,180 @@ main() {
 
 # Run main function
 main "$@"
+
+# Google Drive management functions
+gdrive_management() {
+    # Load configuration
+    local env_file="${DATA_ROOT:-/mnt/data}/.env"
+    if [[ ! -f "$env_file" ]]; then
+        print_error "Configuration file not found: $env_file"
+        print_info "Please run Script 1 first"
+        return 1
+    fi
+    
+    source "$env_file"
+    
+    if [[ "${GDRIVE_ENABLED:-false}" != "true" ]]; then
+        print_error "Google Drive sync is not enabled"
+        print_info "Please run Script 1 and enable Google Drive sync"
+        return 1
+    fi
+    
+    print_header "Google Drive Sync Management"
+    
+    local choice=""
+    while true; do
+        echo ""
+        echo "Google Drive Sync Options:"
+        echo "  1. Run sync now (one-shot)"
+        echo "  2. View sync logs (last 50 lines)"
+        echo "  3. View sync status (last run result)"
+        echo "  4. Change sync folder"
+        echo "  5. Change sync interval"
+        echo "  6. Enable auto-sync (restart container on interval)"
+        echo "  7. Disable auto-sync"
+        echo "  8. Back to main menu"
+        echo ""
+        echo -n -e "${YELLOW}Select option [1-8]:${NC} "
+        read -r choice
+        
+        case "$choice" in
+            1)
+                print_info "Restarting rclone container for sync..."
+                if docker restart rclone-gdrive; then
+                    print_success "Sync started. View progress with option 2."
+                else
+                    print_error "Failed to restart rclone container"
+                fi
+                ;;
+            2)
+                print_header "RClone Sync Logs"
+                echo "Container logs:"
+                docker logs rclone-gdrive --tail 50 2>/dev/null || print_warning "No container logs found"
+                echo ""
+                echo "Sync logs:"
+                if [[ -f "${DATA_ROOT}/logs/rclone/rclone.log" ]]; then
+                    tail -n 50 "${DATA_ROOT}/logs/rclone/rclone.log"
+                else
+                    print_warning "No sync logs found"
+                fi
+                ;;
+            3)
+                print_header "RClone Container Status"
+                docker inspect rclone-gdrive \
+                    --format "Status: {{.State.Status}} | Exit: {{.State.ExitCode}} | Started: {{.State.StartedAt}}" 2>/dev/null || print_warning "Container not found"
+                ;;
+            4)
+                echo -n -e "${YELLOW}New Google Drive folder path (blank = root):${NC} "
+                read -r new_folder
+                sed -i "s/RCLONE_GDRIVE_FOLDER=.*/RCLONE_GDRIVE_FOLDER=${new_folder}/" "$env_file"
+                print_success "Sync folder updated to: ${new_folder:-root}"
+                print_info "Restart sync with option 1 to apply changes"
+                ;;
+            5)
+                echo -n -e "${YELLOW}New sync interval in seconds:${NC} "
+                read -r new_interval
+                if [[ "$new_interval" =~ ^[0-9]+$ ]]; then
+                    sed -i "s/RCLONE_SYNC_INTERVAL=.*/RCLONE_SYNC_INTERVAL=${new_interval}/" "$env_file"
+                    print_success "Sync interval updated to: ${new_interval} seconds"
+                    if [[ "${RCLONE_AUTOSYNC_ENABLED:-false}" == "true" ]]; then
+                        print_info "Restarting auto-sync to apply new interval..."
+                        gdrive_disable_autosync
+                        gdrive_enable_autosync
+                    fi
+                else
+                    print_error "Invalid interval. Please enter a number."
+                fi
+                ;;
+            6)
+                gdrive_enable_autosync
+                ;;
+            7)
+                gdrive_disable_autosync
+                ;;
+            8)
+                print_info "Returning to main menu..."
+                break
+                ;;
+            *)
+                print_warning "Invalid option. Please select 1-8."
+                ;;
+        esac
+    done
+}
+
+gdrive_enable_autosync() {
+    local env_file="${DATA_ROOT:-/mnt/data}/.env"
+    source "$env_file"
+    
+    if [[ "${RCLONE_AUTOSYNC_ENABLED:-false}" == "true" ]]; then
+        print_warning "Auto-sync is already enabled"
+        return
+    fi
+    
+    print_info "Enabling auto-sync..."
+    
+    # Create autosync script
+    mkdir -p "${DATA_ROOT}/scripts"
+    cat > "${DATA_ROOT}/scripts/gdrive-autosync.sh" << EOF
+#!/bin/bash
+# Auto-sync script for Google Drive
+# This script runs in a loop, restarting rclone container on interval
+
+echo "Starting Google Drive auto-sync..."
+echo "Interval: ${RCLONE_SYNC_INTERVAL:-3600} seconds"
+echo "Press Ctrl+C to stop"
+
+while true; do
+    echo "\$(date): Starting sync..."
+    if docker restart rclone-gdrive; then
+        echo "\$(date): Sync completed successfully"
+    else
+        echo "\$(date): Sync failed - check logs"
+    fi
+    
+    echo "Next sync in \${RCLONE_SYNC_INTERVAL:-3600} seconds..."
+    sleep "${RCLONE_SYNC_INTERVAL:-3600}"
+done
+EOF
+    
+    chmod +x "${DATA_ROOT}/scripts/gdrive-autosync.sh"
+    
+    # Start autosync in background
+    mkdir -p "${DATA_ROOT}/run"
+    nohup bash "${DATA_ROOT}/scripts/gdrive-autosync.sh" > "${DATA_ROOT}/logs/gdrive-autosync.log" 2>&1 &
+    echo $! > "${DATA_ROOT}/run/gdrive-autosync.pid"
+    
+    # Update .env
+    sed -i "s/RCLONE_AUTOSYNC_ENABLED=.*/RCLONE_AUTOSYNC_ENABLED=true/" "$env_file"
+    
+    print_success "Auto-sync enabled"
+    print_info "PID: $(cat "${DATA_ROOT}/run/gdrive-autosync.pid")"
+    print_info "Logs: ${DATA_ROOT}/logs/gdrive-autosync.log"
+}
+
+gdrive_disable_autosync() {
+    local env_file="${DATA_ROOT:-/mnt/data}/.env"
+    
+    if [[ "${RCLONE_AUTOSYNC_ENABLED:-false}" != "true" ]]; then
+        print_warning "Auto-sync is not enabled"
+        return
+    fi
+    
+    print_info "Disabling auto-sync..."
+    
+    # Kill autosync process
+    if [[ -f "${DATA_ROOT}/run/gdrive-autosync.pid" ]]; then
+        local pid=$(cat "${DATA_ROOT}/run/gdrive-autosync.pid")
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid"
+            print_success "Auto-sync process stopped (PID: $pid)"
+        fi
+        rm -f "${DATA_ROOT}/run/gdrive-autosync.pid"
+    fi
+    
+    # Update .env
+    sed -i "s/RCLONE_AUTOSYNC_ENABLED=.*/RCLONE_AUTOSYNC_ENABLED=false/" "$env_file"
+    
+    print_success "Auto-sync disabled"
+}
