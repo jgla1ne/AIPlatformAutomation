@@ -50,21 +50,37 @@ print_header() {
     echo ""
 }
 
-# Load configuration from .env
+# Load configuration from .env with safe handling
 load_config() {
+    # Resolve DATA_ROOT before anything else
+    DATA_ROOT="${DATA_ROOT:-/mnt/data}"
+    ENV_FILE="${DATA_ROOT}/.env"
+    
     if [[ ! -f "$ENV_FILE" ]]; then
         print_error "Configuration file not found: $ENV_FILE"
-        print_info "Please run Script 1 first"
+        print_info "Please run Script 1 first: sudo bash scripts/1-setup-system.sh"
         exit 1
     fi
     
+    # Safe .env loading — handles spaces, quotes, comments
+    set -a
+    # shellcheck disable=SC1090
     source "$ENV_FILE"
+    set +a
     
     # Set tenant prefix for container names
     TENANT_PREFIX="${COMPOSE_PROJECT_NAME:-ai-platform}"
     
+    # Define COMPOSE command with proper project name and env file
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    COMPOSE="docker compose \
+      --project-name ${COMPOSE_PROJECT_NAME} \
+      --env-file ${ENV_FILE} \
+      --file ${SCRIPT_DIR}/docker-compose.yml"
+    
     print_success "Configuration loaded from $ENV_FILE"
     print_info "Tenant: ${TENANT_PREFIX}"
+    print_info "Compose project: ${COMPOSE_PROJECT_NAME}"
 }
 
 # Generate tenant-prefixed container name
@@ -851,27 +867,100 @@ wait_http() {
     echo " "
 }
 
-# Validate deployment
+# Validate deployment with smart health checks that respect ENABLE_* flags
 validate_deployment() {
     print_header "Validating Deployment"
-    
-    local services=(postgres redis qdrant ollama n8n anythingllm litellm openwebui minio caddy prometheus grafana flowise signal-api dify-api dify-worker dify-web)
     local failed_services=()
-    
-    for service in "${services[@]}"; do
-        if docker ps --format "{{.Names}}" | grep -q "^${service}$"; then
-            print_success "${service} is running"
-        else
-            print_warning "${service} is not running"
-            failed_services+=("$service")
+
+    check_service() {
+        local NAME="$1"
+        local CONTAINER_NAME="$2"
+        local ENABLED="$3"
+        local HEALTH_CHECK="$4"
+
+        if [[ "${ENABLED}" != "true" ]]; then
+            echo "  ⏭  ${NAME} — disabled (skipped)"
+            return 0
         fi
-    done
-    
+
+        if docker ps --format "{{.Names}}" | grep -q "^${CONTAINER_NAME}$"; then
+            # Perform health check if provided
+            if [[ -n "${HEALTH_CHECK}" ]]; then
+                if eval "${HEALTH_CHECK}" &>/dev/null; then
+                    echo "  ✅ ${NAME} — OK"
+                else
+                    echo "  ❌ ${NAME} — FAILED (unhealthy)"
+                    failed_services+=("$NAME")
+                fi
+            else
+                echo "  ✅ ${NAME} — running"
+            fi
+        else
+            echo "  ❌ ${NAME} — NOT RUNNING"
+            failed_services+=("$NAME")
+        fi
+    }
+
+    echo "🔍 Service Health Status:"
+    check_service "PostgreSQL" "$(get_container_name postgres)" "${ENABLE_POSTGRES:-true}" \
+        "docker exec $(get_container_name postgres) pg_isready -U ${POSTGRES_USER}"
+
+    check_service "Redis" "$(get_container_name redis)" "${ENABLE_REDIS:-true}" \
+        "docker exec $(get_container_name redis) redis-cli -a ${REDIS_PASSWORD} ping"
+
+    check_service "Qdrant" "$(get_container_name qdrant)" "${ENABLE_QDRANT:-true}" \
+        "docker run --rm --network ${DOCKER_NETWORK} alpine/curl -sf http://$(get_container_name qdrant):6333/"
+
+    check_service "MinIO" "$(get_container_name minio)" "${ENABLE_MINIO:-false}" \
+        "docker run --rm --network ${DOCKER_NETWORK} alpine/curl -sf http://$(get_container_name minio):9000/minio/health/live"
+
+    check_service "n8n" "$(get_container_name n8n)" "${ENABLE_N8N:-false}" \
+        "docker run --rm --network ${DOCKER_NETWORK} alpine/curl -sf http://$(get_container_name n8n):5678/healthz"
+
+    check_service "OpenWebUI" "$(get_container_name openwebui)" "${ENABLE_OPENWEBUI:-false}" \
+        "docker run --rm --network ${DOCKER_NETWORK} alpine/curl -sf http://$(get_container_name openwebui):3000"
+
+    check_service "AnythingLLM" "$(get_container_name anythingllm)" "${ENABLE_ANYTHINGLLM:-false}" \
+        "docker run --rm --network ${DOCKER_NETWORK} alpine/curl -sf http://$(get_container_name anythingllm):3001"
+
+    check_service "Signal API" "$(get_container_name signal-api)" "${ENABLE_SIGNAL_API:-false}" \
+        "docker run --rm --network ${DOCKER_NETWORK} alpine/curl -sf http://$(get_container_name signal-api):8080"
+
+    check_service "LiteLLM" "$(get_container_name litellm)" "${ENABLE_LITELLM:-true}" \
+        "docker run --rm --network ${DOCKER_NETWORK} alpine/curl -sf http://$(get_container_name litellm):4000/health"
+
+    check_service "Flowise" "$(get_container_name flowise)" "${ENABLE_FLOWISE:-false}" \
+        "docker run --rm --network ${DOCKER_NETWORK} alpine/curl -sf http://$(get_container_name flowise):3000"
+
+    check_service "Dify API" "$(get_container_name dify-api)" "${ENABLE_DIFY:-false}" \
+        "docker run --rm --network ${DOCKER_NETWORK} alpine/curl -sf http://$(get_container_name dify-api):5001/health"
+
+    check_service "Dify Web" "$(get_container_name dify-web)" "${ENABLE_DIFY:-false}" \
+        "docker run --rm --network ${DOCKER_NETWORK} alpine/curl -sf http://$(get_container_name dify-web):3000"
+
+    check_service "Prometheus" "$(get_container_name prometheus)" "${ENABLE_PROMETHEUS:-true}" \
+        "docker run --rm --network ${DOCKER_NETWORK} alpine/curl -sf http://$(get_container_name prometheus):9090/-/healthy"
+
+    check_service "Grafana" "$(get_container_name grafana)" "${ENABLE_GRAFANA:-true}" \
+        "docker run --rm --network ${DOCKER_NETWORK} alpine/curl -sf http://$(get_container_name grafana):3000/api/health"
+
+    check_service "Caddy" "$(get_container_name caddy)" "${ENABLE_CADDY:-true}" \
+        "docker run --rm --network ${DOCKER_NETWORK} alpine/curl -sf http://$(get_container_name caddy):80"
+
+    check_service "OpenClaw" "$(get_container_name openclaw)" "${ENABLE_OPENCLAW:-true}" \
+        "docker run --rm --network ${DOCKER_NETWORK} alpine/curl -sf http://$(get_container_name openclaw):8080/health"
+
+    check_service "rclone" "$(get_container_name rclone-gdrive)" "${ENABLE_GDRIVE:-false}" \
+        ""
+
+    echo ""
     if [[ ${#failed_services[@]} -gt 0 ]]; then
-        print_warning "Some services failed to start: ${failed_services[*]}"
-        print_info "Check logs with: docker logs <service_name>"
+        print_warning "${#failed_services[@]} service(s) failed health check: ${failed_services[*]}"
+        print_info "Check logs: ${COMPOSE} logs --tail=50"
+        return 1
     else
-        print_success "All services deployed successfully!"
+        print_success "All enabled services healthy"
+        return 0
     fi
 }
 
@@ -1003,61 +1092,71 @@ EOF
     print_success "LiteLLM config written to ${conf_path}"
 }
 
-# Tailscale setup and IP retrieval
+# Tailscale setup with daemon socket check and key validation
 setup_tailscale() {
+    if [[ "${ENABLE_TAILSCALE:-false}" != "true" ]]; then
+        print_info "Tailscale disabled — skipping"
+        return 0
+    fi
+
     print_info "Setting up Tailscale..."
 
-    # Install if not present
+    # Install if missing
     if ! command -v tailscale &>/dev/null; then
         print_info "Installing Tailscale..."
         curl -fsSL https://tailscale.com/install.sh | sh
     fi
 
-    # Ensure tailscaled daemon is running
-    if ! systemctl is-active --quiet tailscaled; then
-        systemctl enable tailscaled
-        systemctl start tailscaled
-        sleep 3
-    fi
-
-    # Bring up tailscale with correct flags for a Docker host
-    print_info "Bringing up Tailscale..."
-    tailscale up \
-        --authkey="${TAILSCALE_AUTH_KEY}" \
-        --hostname="${TAILSCALE_HOSTNAME:-ai-platform}" \
-        --accept-dns=false \
-        --accept-routes=false \
-        --reset
-    # --accept-dns=false   ← critical: prevents Tailscale overwriting /etc/resolv.conf
-    #                         which breaks Docker DNS
-    # --accept-routes=false ← don't accept subnet routes from other nodes
-    # --reset              ← ensures flags apply cleanly even if previously configured
-
-    # Wait for IP assignment with timeout
-    print_info "Waiting for Tailscale IP assignment..."
-    TAILSCALE_IP=""
-    ATTEMPTS=0
-    MAX_ATTEMPTS=30   # 30 × 2s = 60 seconds max
-
-    while [[ -z "${TAILSCALE_IP}" ]] && [[ "${ATTEMPTS}" -lt "${MAX_ATTEMPTS}" ]]; do
-        TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || true)
-        if [[ -z "${TAILSCALE_IP}" ]]; then
+    # Ensure daemon is running
+    if ! systemctl is-active --quiet tailscaled 2>/dev/null; then
+        print_info "Starting tailscaled..."
+        systemctl enable tailscaled --now
+        # Wait for socket to appear
+        ATTEMPTS=0
+        while [[ ! -S /var/run/tailscale/tailscaled.sock ]] && \
+              [[ "${ATTEMPTS}" -lt 15 ]]; do
             sleep 2
             ATTEMPTS=$((ATTEMPTS + 1))
-        fi
-    done
+        done
+    fi
 
-    if [[ -z "${TAILSCALE_IP}" ]]; then
-        print_error "Tailscale did not assign an IP after 60 seconds."
-        print_error "Check: tailscale status"
-        print_error "Check: journalctl -u tailscaled -n 50"
+    # Validate key format before calling tailscale up
+    if [[ ! "${TAILSCALE_AUTH_KEY}" =~ ^tskey-auth- ]]; then
+        print_error "Invalid Tailscale auth key format: ${TAILSCALE_AUTH_KEY}"
+        print_error "Must start with 'tskey-auth-'"
         exit 1
     fi
 
-    print_success "Tailscale IP: ${TAILSCALE_IP}"
+    # Bring up Tailscale with correct flags for a Docker host
+    print_info "Bringing up Tailscale (hostname: ${TAILSCALE_HOSTNAME})..."
+    tailscale up \
+        --authkey="${TAILSCALE_AUTH_KEY}" \
+        --hostname="${TAILSCALE_HOSTNAME}" \
+        --accept-dns=false \
+        --accept-routes=false \
+        --reset
 
-    # Save to .env for use by other services
-    echo "TAILSCALE_IP=${TAILSCALE_IP}" >> "$ENV_FILE"
+    # Wait for IP with timeout
+    TAILSCALE_IP=""
+    ATTEMPTS=0
+    while [[ -z "${TAILSCALE_IP}" ]] && [[ "${ATTEMPTS}" -lt 30 ]]; do
+        TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || true)
+        [[ -z "${TAILSCALE_IP}" ]] && sleep 2
+        ATTEMPTS=$((ATTEMPTS + 1))
+    done
+
+    if [[ -z "${TAILSCALE_IP}" ]]; then
+        print_error "Tailscale failed to obtain IP after 60 seconds"
+        print_error "Debug: tailscale status"
+        exit 1
+    fi
+
+    # Persist IP for other scripts
+    sed -i "s|^TAILSCALE_IP=.*|TAILSCALE_IP=${TAILSCALE_IP}|" "${ENV_FILE}" || \
+        echo "TAILSCALE_IP=${TAILSCALE_IP}" >> "${ENV_FILE}"
+
+    print_success "Tailscale IP: ${TAILSCALE_IP}"
+    print_success "Tailscale hostname: ${TAILSCALE_HOSTNAME}"
 
     # Verify connectivity
     if tailscale status | grep -q "100\.[0-9]"; then
@@ -1067,34 +1166,99 @@ setup_tailscale() {
     fi
 }
 
-# RClone configuration generation
+# RClone configuration generation with OAuth tunnel fix
 setup_rclone() {
-    if [[ "${GDRIVE_ENABLED:-false}" != "true" ]]; then
+    if [[ "${ENABLE_GDRIVE:-false}" != "true" ]] && [[ "${GDRIVE_ENABLED:-false}" != "true" ]]; then
         print_info "Google Drive sync disabled — skipping rclone setup"
         return 0
     fi
 
     print_info "Setting up rclone..."
     mkdir -p "${DATA_ROOT}/config/rclone"
-    mkdir -p "${DATA_ROOT}/gdrive"
+    mkdir -p "${RCLONE_MOUNT_POINT:-${DATA_ROOT}/gdrive}"
     mkdir -p "${DATA_ROOT}/logs/rclone"
 
-    # Config must already exist from Script 1
-    if [[ ! -f "${DATA_ROOT}/config/rclone/rclone.conf" ]]; then
-        if [[ "${RCLONE_AUTH_METHOD}" == "service_account" ]]; then
-            print_error "rclone.conf missing. Re-run Script 1 and select Service Account."
-            exit 1
-        elif [[ "${RCLONE_AUTH_METHOD}" == "oauth_tunnel" ]]; then
-            if [[ "${RCLONE_TOKEN_OBTAINED}" != "true" ]]; then
-                print_warning "rclone OAuth token not yet obtained."
-                print_warning "Run Script 3 → Google Drive → Authorize rclone to complete setup."
-                print_warning "rclone container will NOT be started until token is present."
-                return 0   # ← DO NOT HANG. Continue deploy without rclone.
-            fi
-        fi
-    fi
+    case "${GDRIVE_AUTH_METHOD:-${RCLONE_AUTH_METHOD:-}}" in
 
-    print_success "rclone config present — container will sync on start"
+        service_account)
+            # Validate service account JSON exists
+            SA_FILE="${DATA_ROOT}/config/rclone/service-account.json"
+            if [[ ! -f "$SA_FILE" ]]; then
+                print_error "Service account JSON not found: $SA_FILE"
+                print_error "Re-run Script 1 and provide service account JSON path"
+                exit 1
+            fi
+
+            # Write rclone.conf (service account — no OAuth)
+            cat > "${DATA_ROOT}/config/rclone/rclone.conf" << EOF
+[gdrive]
+type = drive
+scope = drive
+service_account_file = /data/config/rclone/service-account.json
+root_folder_id = ${RCLONE_GDRIVE_FOLDER:-}
+EOF
+            print_success "rclone config written (service account)"
+            ;;
+
+        oauth_tunnel)
+            RCLONE_CONF="${DATA_ROOT}/config/rclone/rclone.conf"
+
+            # Check if token already obtained
+            if [[ "${RCLONE_TOKEN_OBTAINED}" == "true" ]] && \
+               [[ -f "$RCLONE_CONF" ]] && \
+               grep -q '"access_token"' "$RCLONE_CONF" 2>/dev/null; then
+                print_success "rclone OAuth token already present — starting container"
+            else
+                # Print instructions and defer to Script 3
+                echo ""
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo "  rclone OAuth Authorization Required"
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo ""
+                echo "  Run this on YOUR LOCAL MACHINE (laptop/desktop):"
+                echo ""
+                echo "  Step 1: Open a NEW terminal on your local machine"
+                echo "  Step 2: Run:"
+                echo "    ssh -L 53682:localhost:53682 $(whoami)@$(curl -s ifconfig.me 2>/dev/null || echo 'YOUR_SERVER_IP')"
+                echo ""
+                echo "  Step 3: In ANOTHER local terminal, run:"
+                echo "    rclone authorize \"drive\" \\"
+                echo "      \"${RCLONE_OAUTH_CLIENT_ID}\" \\"
+                echo "      \"${RCLONE_OAUTH_CLIENT_SECRET}\""
+                echo ""
+                echo "  Step 4: Complete the browser auth flow"
+                echo "  Step 5: Copy the token JSON that rclone prints"
+                echo "  Step 6: Run Script 3 to paste the token and complete setup"
+                echo ""
+                echo "  ⚠️  Google Drive sync will be DISABLED until this is done"
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo ""
+                print_warning "rclone setup deferred — run Script 3 to complete"
+
+                # Disable gdrive in this run so other services still start
+                ENABLE_GDRIVE=false
+                GDRIVE_ENABLED=false
+                return 0
+            fi
+            ;;
+
+        paste_token)
+            # Token was already pasted in Script 1 and written to rclone.conf
+            RCLONE_CONF="${DATA_ROOT}/config/rclone/rclone.conf"
+            if [[ ! -f "$RCLONE_CONF" ]]; then
+                print_error "rclone.conf not found — re-run Script 1"
+                exit 1
+            fi
+            print_success "rclone config found (paste_token method)"
+            ;;
+
+        *)
+            print_error "Unknown rclone auth method: ${GDRIVE_AUTH_METHOD:-${RCLONE_AUTH_METHOD}}"
+            exit 1
+            ;;
+    esac
+
+    print_success "rclone configuration completed"
 }
 
 # RClone service management
