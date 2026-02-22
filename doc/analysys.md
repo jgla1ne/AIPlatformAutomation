@@ -1,276 +1,471 @@
-# Exact Problem — DNS Propagation Lag + Stale Certificate Locks
+# Implementation Plan for Windsurf — rclone + Tailscale + OpenClaw + LiteLLM
 
-You said you just fixed the DNS. The diagnostics confirm everything else is correct. Here is the precise state:
+---
+
+## Pre-Implementation Rules
 
 ```
-✅ Caddy is running and bound to 80/443
-✅ Caddyfile syntax is valid
-✅ Ports 80 and 443 are listening
-✅ ai.datasquiz.net resolves to 54.252.80.129
-❌ *.ai.datasquiz.net subdomains not resolving yet (DNS propagation)
-❌ Subdomain certificates stuck in ZeroSSL lock files (stale from failed attempts)
-❌ ai.datasquiz.net certificate is single-domain only (not wildcard)
+DO NOT refactor any code unrelated to these 4 feature areas.
+DO NOT change script structure or menu numbering.
+DO NOT add new scripts.
+Make changes in this exact order — commit after each phase.
+Show a diff after each phase before proceeding to the next.
 ```
 
 ---
 
-## The Lock Files Are the Hidden Time Bomb
+## Phase 1 — Script 1: Collect rclone and Tailscale Credentials
+
+### 1A — rclone Auth Collection
 
 ```
-These lock files are the critical problem:
+In Script 1, find the Google Drive / rclone section.
+Replace whatever is there with this exact flow:
 
-/data/caddy/locks/issue_cert_n8n.ai.datasquiz.net.lock
-/data/caddy/locks/issue_cert_openwebui.ai.datasquiz.net.lock
-... (11 lock files total)
+────────────────────────────────────────────────
+print_section "Google Drive Sync (rclone)"
 
-What they mean:
-Caddy tried to get certificates BEFORE DNS was set up.
-The ACME challenge failed.
-The lock files were left behind.
-Caddy will NOT retry while lock files exist.
-Even after DNS propagates, Caddy sits waiting on stale locks.
+prompt: "Enable Google Drive sync? [y/N]"
+if no → skip entire section, set GDRIVE_ENABLED=false in .env, continue
 
-Result: DNS fixes itself, but certificates never get issued.
+if yes:
+  print:
+  "Select authentication method:
+   1. Service Account JSON (recommended — fully headless)
+   2. OAuth Client ID + Secret (personal Google account)"
+
+  prompt: "Method [1/2]:"
+
+  IF method 1 (Service Account):
+    prompt: "Full path to service account JSON file:"
+    → validate file exists and is valid JSON
+    → copy file to ${DATA_ROOT}/config/rclone/service-account.json
+    → set chmod 600 on the file
+    → write to .env:
+         RCLONE_AUTH_METHOD=service_account
+         RCLONE_SA_JSON_PATH=${DATA_ROOT}/config/rclone/service-account.json
+
+  IF method 2 (OAuth Client):
+    prompt: "GCP OAuth Client ID:"
+    → store as RCLONE_OAUTH_CLIENT_ID
+    prompt: "GCP OAuth Client Secret:"
+    → store as RCLONE_OAUTH_CLIENT_SECRET
+    → write to .env:
+         RCLONE_AUTH_METHOD=oauth_client
+         RCLONE_OAUTH_CLIENT_ID=<value>
+         RCLONE_OAUTH_CLIENT_SECRET=<value>
+
+  COMMON to both methods:
+    prompt: "Google Drive folder to sync (blank = root):"
+    → default to empty string (root)
+    → write to .env: RCLONE_GDRIVE_FOLDER=<value>
+
+    prompt: "Local sync destination (default: ${DATA_ROOT}/gdrive):"
+    → default to ${DATA_ROOT}/gdrive
+    → write to .env: RCLONE_MOUNT_POINT=${DATA_ROOT}/gdrive
+
+    prompt: "Sync interval in seconds (default: 3600):"
+    → default to 3600
+    → validate integer
+    → write to .env: RCLONE_SYNC_INTERVAL=3600
+
+    → write to .env:
+         GDRIVE_ENABLED=true
+
+    → create directories:
+         mkdir -p ${DATA_ROOT}/config/rclone
+         mkdir -p ${DATA_ROOT}/gdrive
+         mkdir -p ${DATA_ROOT}/logs/rclone
+         chown -R ${RUNNING_UID}:${RUNNING_GID} all above dirs
+```
+
+### 1B — Tailscale Credential Collection
+
+```
+In Script 1, find the Tailscale section (or add after networking section).
+Replace/add this exact flow:
+
+────────────────────────────────────────────────
+print_section "Tailscale VPN (required for OpenClaw)"
+
+print:
+"Tailscale is required for OpenClaw internal access.
+ Get an auth key at: https://login.tailscale.com/admin/settings/keys
+ Use a reusable auth key for persistent installs."
+
+prompt: "Tailscale auth key (tskey-auth-...):"
+→ validate starts with "tskey-"
+→ write to .env: TAILSCALE_AUTH_KEY=<value>
+
+prompt: "Tailscale hostname for this machine (default: ai-platform):"
+→ default to ai-platform
+→ write to .env: TAILSCALE_HOSTNAME=<value>
+
+Note: TAILSCALE_IP will be populated automatically by Script 2
+→ write placeholder to .env: TAILSCALE_IP=pending
 ```
 
 ---
 
-## The Fix — Give Windsurf This Exact Sequence
+## Phase 2 — Script 2: Deploy rclone Container and Tailscale
+
+### 2A — Generate rclone.conf Before Container Start
 
 ```
-DNS is now fixed but certificate lock files are blocking cert issuance.
-Execute this sequence exactly in order. Show output of each step.
+In Script 2, in the deployment section, BEFORE docker compose up, add:
 
-═══════════════════════════════════════════════════════════════
-STEP 1: Verify DNS has propagated (do not proceed until this works)
-═══════════════════════════════════════════════════════════════
+────────────────────────────────────────────────
+generate_rclone_config() {
+  if [ "${GDRIVE_ENABLED}" != "true" ]; then
+    log_info "Google Drive sync disabled — skipping rclone config"
+    return
+  fi
 
-dig +short n8n.ai.datasquiz.net @8.8.8.8
-dig +short openwebui.ai.datasquiz.net @8.8.8.8
-dig +short grafana.ai.datasquiz.net @8.8.8.8
+  local conf_path="${DATA_ROOT}/config/rclone/rclone.conf"
 
-# All three MUST return 54.252.80.129 before proceeding.
-# If they return nothing, wait 2 minutes and try again.
-# Do NOT proceed to Step 2 until all three resolve correctly.
+  if [ "${RCLONE_AUTH_METHOD}" = "service_account" ]; then
+    cat > "${conf_path}" << EOF
+[gdrive]
+type = drive
+scope = drive
+service_account_file = /config/rclone/service-account.json
+EOF
 
-═══════════════════════════════════════════════════════════════
-STEP 2: Remove ALL stale certificate lock files
-═══════════════════════════════════════════════════════════════
+  elif [ "${RCLONE_AUTH_METHOD}" = "oauth_client" ]; then
+    # Run headless OAuth flow inside temporary rclone container
+    # This generates a token and writes it to rclone.conf
+    log_info "Running rclone OAuth headless authorization..."
 
-# Find the caddy data volume mount point
-docker inspect caddy | grep -A 5 '"Mounts"'
+    docker run --rm \
+      --user ${RUNNING_UID}:${RUNNING_GID} \
+      -v ${DATA_ROOT}/config/rclone:/config/rclone \
+      rclone/rclone:latest \
+      config create gdrive drive \
+        scope=drive \
+        client_id="${RCLONE_OAUTH_CLIENT_ID}" \
+        client_secret="${RCLONE_OAUTH_CLIENT_SECRET}"
 
-# Remove lock files (adjust path if different from /data/caddy)
-docker exec caddy find /data/caddy/locks/ -name "*.lock" -delete
+    # Headless OAuth will print a URL — user must visit it
+    # and paste the verification code back into the terminal
+    # rclone handles this natively in --config create flow
+  fi
 
-# Verify they are gone
-docker exec caddy ls /data/caddy/locks/ 2>&1
-
-═══════════════════════════════════════════════════════════════
-STEP 3: Remove the stale ZeroSSL challenge tokens
-═══════════════════════════════════════════════════════════════
-
-docker exec caddy find /data/caddy/acme/ -name "*.json" -delete
-
-═══════════════════════════════════════════════════════════════
-STEP 4: Fix the Caddyfile global block to use Let's Encrypt only
-═══════════════════════════════════════════════════════════════
-
-# The current global block is:
-# {
-#     email admin@ai.datasquiz.net      ← wrong email (not from .env)
-# }
-#
-# Caddy defaulted to ZeroSSL as first ACME provider.
-# Force Let's Encrypt explicitly.
-# Also fix the email to use SSL_EMAIL from .env
-
-# Source the env file
-source /mnt/data/.env
-
-# Rewrite the global block at the top of the Caddyfile
-CADDYFILE="/mnt/data/config/caddy/Caddyfile"
-
-# Update the global block
-cat > /tmp/caddy_global.txt << 'GLOBAL'
-{
-    email ${SSL_EMAIL}
-    acme_ca https://acme-v02.api.letsencrypt.org/directory
+  chmod 600 "${conf_path}"
+  chown ${RUNNING_UID}:${RUNNING_GID} "${conf_path}"
+  log_success "rclone config written to ${conf_path}"
 }
-GLOBAL
 
-# Apply using actual env value
-SSL_EMAIL=$(grep SSL_EMAIL /mnt/data/.env | cut -d= -f2)
-sed -i "s/email admin@ai.datasquiz.net/email ${SSL_EMAIL}/" "${CADDYFILE}"
-
-# Add acme_ca directive after the email line
-sed -i "/email ${SSL_EMAIL}/a\\    acme_ca https://acme-v02.api.letsencrypt.org/directory" "${CADDYFILE}"
-
-# Show the result
-head -6 "${CADDYFILE}"
-
-═══════════════════════════════════════════════════════════════
-STEP 5: Restart Caddy completely (not just reload)
-═══════════════════════════════════════════════════════════════
-
-docker restart caddy
-
-# Wait 10 seconds for startup
-sleep 10
-
-# Watch certificate issuance in real time
-docker logs caddy --tail 30 --follow &
-CADDY_LOG_PID=$!
-sleep 30
-kill $CADDY_LOG_PID 2>/dev/null
-
-═══════════════════════════════════════════════════════════════
-STEP 6: Verify certificates were issued
-═══════════════════════════════════════════════════════════════
-
-docker exec caddy find /data/caddy/certificates/ -name "*.crt" 2>&1
-
-curl -v --max-time 15 https://n8n.ai.datasquiz.net 2>&1 | grep -E "SSL|issuer|subject|HTTP/"
-curl -v --max-time 15 https://grafana.ai.datasquiz.net 2>&1 | grep -E "SSL|issuer|subject|HTTP/"
-
-Show me the output of every step.
+Call generate_rclone_config early in the deploy sequence.
 ```
 
----
-
-## Also Fix These Two Caddyfile Problems Noticed in the Diagnostic
+### 2B — rclone Docker Compose Service
 
 ```
-PROBLEM 1: The catch-all route is wrong
-────────────────────────────────────────
-Current:
-  ai.datasquiz.net {
-      handle /* {
-          reverse_proxy localhost:8080   ← nothing listens on localhost:8080
-      }
+In the docker-compose.yml (or equivalent compose block in Script 2),
+add this service IF GDRIVE_ENABLED=true:
+
+  rclone-gdrive:
+    image: rclone/rclone:latest
+    container_name: rclone-gdrive
+    user: "${RUNNING_UID}:${RUNNING_GID}"
+    restart: unless-stopped
+    volumes:
+      - ${DATA_ROOT}/config/rclone:/config/rclone:ro
+      - ${DATA_ROOT}/gdrive:/data/gdrive
+      - ${DATA_ROOT}/logs/rclone:/logs
+    environment:
+      - RCLONE_CONFIG=/config/rclone/rclone.conf
+    command: >
+      sync
+      gdrive:${RCLONE_GDRIVE_FOLDER}
+      /data/gdrive
+      --log-file=/logs/rclone.log
+      --log-level=INFO
+      --transfers=4
+      --checkers=8
+    networks:
+      - ai-platform
+
+Note: This runs a one-shot sync on container start.
+Repeat sync is handled by Script 3 management menu (manual trigger or interval).
+For interval sync, Script 3 will use a wrapper that restarts the container on schedule.
+DO NOT use a cron loop inside the container — keep containers single-purpose.
+```
+
+### 2C — Tailscale Bring-Up and IP Retrieval
+
+```
+In Script 2, after core services are up, add this block:
+
+────────────────────────────────────────────────
+setup_tailscale() {
+  log_info "Setting up Tailscale..."
+
+  # Install tailscale if not present
+  if ! command -v tailscale &>/dev/null; then
+    curl -fsSL https://tailscale.com/install.sh | sh
+  fi
+
+  # Start tailscaled daemon if not running
+  if ! systemctl is-active --quiet tailscaled; then
+    systemctl enable tailscaled
+    systemctl start tailscaled
+  fi
+
+  # Authenticate
+  tailscale up \
+    --authkey="${TAILSCALE_AUTH_KEY}" \
+    --hostname="${TAILSCALE_HOSTNAME}" \
+    --accept-routes \
+    --ssh
+
+  # Wait for IP assignment (max 30 seconds)
+  local ts_ip=""
+  local attempts=0
+  while [ -z "${ts_ip}" ] && [ ${attempts} -lt 15 ]; do
+    ts_ip=$(tailscale ip -4 2>/dev/null || true)
+    [ -z "${ts_ip}" ] && sleep 2
+    attempts=$((attempts + 1))
+  done
+
+  if [ -z "${ts_ip}" ]; then
+    log_error "Tailscale did not assign an IP within 30 seconds"
+    log_error "Check: tailscale status"
+    exit 1
+  fi
+
+  # Write IP back to .env (replace placeholder)
+  sed -i "s/TAILSCALE_IP=pending/TAILSCALE_IP=${ts_ip}/" "${ENV_FILE}"
+
+  log_success "Tailscale IP: ${ts_ip}"
+  log_success "OpenClaw accessible at: http://${ts_ip}:18789"
+}
+
+Call setup_tailscale BEFORE docker compose up so OpenClaw
+has the correct env at start time.
+```
+
+### 2D — OpenClaw: Remove from Caddyfile, Display Tailscale URL
+
+```
+In Script 2, in the Caddyfile generation section:
+
+REMOVE this block entirely if it exists:
+  openclaw.ai.datasquiz.net {
+      reverse_proxy openclaw:18789
   }
 
-This is what caused the 502 errors in the Caddy logs.
-localhost inside the caddy container is not the host.
-It should either be removed or point to a real service.
+OpenClaw is NOT exposed via Caddy. It is Tailscale-only.
 
-Fix: Remove the ai.datasquiz.net block entirely OR
-     point it to openwebui as the default landing:
+INSTEAD, in the final summary printed at end of Script 2, add:
 
-  ai.datasquiz.net {
-      redir https://openwebui.ai.datasquiz.net{uri} permanent
-  }
+  🔒 OpenClaw (internal only):
+     URL: http://${TAILSCALE_IP}:18789
+     Access via Tailscale VPN only
+     Install Tailscale client on your device: https://tailscale.com/download
+```
 
-PROBLEM 2: Path-based routes have wrong order
-──────────────────────────────────────────────
-Current:
-  ai.datasquiz.net {
-      handle /* {          ← this catches EVERYTHING first
-          reverse_proxy localhost:8080
-      }
-      handle /n8n* {       ← never reached because /* catches it
-          reverse_proxy n8n:5678
-      }
-  }
+### 2E — LiteLLM: Generate config.yaml Before Container Start
 
-Caddy evaluates handle blocks in ORDER. The /* catch-all
-must be LAST using handle_path or it swallows all routes.
+```
+In Script 2, before docker compose up, add:
 
-Since you now have subdomain routing working (once DNS propagates),
-the entire path-based section under ai.datasquiz.net should be
-REMOVED from the Caddyfile to eliminate confusion and 502 errors.
-Keep ONLY the subdomain blocks.
+────────────────────────────────────────────────
+generate_litellm_config() {
+  local conf_path="${DATA_ROOT}/config/litellm/config.yaml"
+  mkdir -p "${DATA_ROOT}/config/litellm"
+
+  # Read which providers were selected in Script 1
+  # LITELLM_OPENAI_ENABLED, LITELLM_ANTHROPIC_ENABLED etc from .env
+
+  cat > "${conf_path}" << EOF
+model_list:
+EOF
+
+  if [ "${LITELLM_OPENAI_ENABLED}" = "true" ]; then
+    cat >> "${conf_path}" << EOF
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: ${OPENAI_API_KEY}
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: ${OPENAI_API_KEY}
+EOF
+  fi
+
+  if [ "${LITELLM_ANTHROPIC_ENABLED}" = "true" ]; then
+    cat >> "${conf_path}" << EOF
+  - model_name: claude-sonnet-4-5
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5
+      api_key: ${ANTHROPIC_API_KEY}
+  - model_name: claude-haiku-3-5
+    litellm_params:
+      model: anthropic/claude-haiku-3-5
+      api_key: ${ANTHROPIC_API_KEY}
+EOF
+  fi
+
+  # Always add the general settings block
+  cat >> "${conf_path}" << EOF
+
+general_settings:
+  master_key: ${LITELLM_MASTER_KEY}
+  database_url: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 120
+EOF
+
+  chmod 600 "${conf_path}"
+  chown ${RUNNING_UID}:${RUNNING_GID} "${conf_path}"
+  log_success "LiteLLM config written to ${conf_path}"
+}
+
+Call generate_litellm_config before docker compose up.
+
+Also ensure the litellm service in compose has:
+  volumes:
+    - ${DATA_ROOT}/config/litellm/config.yaml:/app/config.yaml:ro
+  command: ["--config", "/app/config.yaml", "--port", "4000"]
 ```
 
 ---
 
-## Updated Caddyfile Structure for Windsurf to Write
+## Phase 3 — Script 3: rclone Management Menu
 
-```caddyfile
-{
-    email hosting@datasquiz.net
-    acme_ca https://acme-v02.api.letsencrypt.org/directory
-}
+```
+In Script 3, add a menu section for Google Drive management.
+Only show this section if GDRIVE_ENABLED=true.
 
-# Root domain — redirect to main UI
-ai.datasquiz.net {
-    redir https://openwebui.ai.datasquiz.net{uri} permanent
-}
+────────────────────────────────────────────────
+gdrive_management_menu() {
+  while true; do
+    print_section "Google Drive Sync Management"
+    echo "  1. Run sync now (one-shot)"
+    echo "  2. View sync logs (last 50 lines)"
+    echo "  3. View sync status (last run result)"
+    echo "  4. Change sync folder"
+    echo "  5. Change sync interval"
+    echo "  6. Enable auto-sync (restart container on interval)"
+    echo "  7. Disable auto-sync"
+    echo "  8. Back to main menu"
 
-# Service subdomains
-n8n.ai.datasquiz.net {
-    reverse_proxy n8n:5678
-}
+    prompt: "Select option [1-8]:"
 
-openwebui.ai.datasquiz.net {
-    reverse_proxy openwebui:8080
-}
+    case selection:
+      1) # Run sync now
+         docker restart rclone-gdrive
+         echo "Sync started. View progress with option 2."
+         ;;
 
-anythingllm.ai.datasquiz.net {
-    reverse_proxy anythingllm:3001
-}
+      2) # View logs
+         docker logs rclone-gdrive --tail 50
+         tail -n 50 ${DATA_ROOT}/logs/rclone/rclone.log
+         ;;
 
-flowise.ai.datasquiz.net {
-    reverse_proxy flowise:3000
-}
+      3) # Status
+         docker inspect rclone-gdrive \
+           --format "Status: {{.State.Status}} | Exit: {{.State.ExitCode}} | Started: {{.State.StartedAt}}"
+         ;;
 
-litellm.ai.datasquiz.net {
-    reverse_proxy litellm:4000
-}
+      4) # Change folder
+         prompt: "New Google Drive folder path (blank = root):"
+         → update RCLONE_GDRIVE_FOLDER in .env
+         → update docker-compose.yml command line
+         → docker compose up -d rclone-gdrive
+         ;;
 
-grafana.ai.datasquiz.net {
-    reverse_proxy grafana:3000
-}
+      5) # Change interval
+         prompt: "New sync interval in seconds:"
+         → validate integer
+         → update RCLONE_SYNC_INTERVAL in .env
+         → if auto-sync is enabled, restart the interval mechanism
+         ;;
 
-minio.ai.datasquiz.net {
-    reverse_proxy minio:9000
-}
+      6) # Enable auto-sync
+         → Create a systemd timer OR a lightweight wrapper container
+         → Recommended: use a simple bash loop in a wrapper script
+         → Write /mnt/data/scripts/gdrive-autosync.sh:
+              #!/bin/bash
+              while true; do
+                docker restart rclone-gdrive
+                sleep ${RCLONE_SYNC_INTERVAL}
+              done
+         → Run as a detached process: nohup bash /mnt/data/scripts/gdrive-autosync.sh &
+         → Write PID to /mnt/data/run/gdrive-autosync.pid
+         → Update RCLONE_AUTOSYNC_ENABLED=true in .env
+         ;;
 
-signal-api.ai.datasquiz.net {
-    reverse_proxy signal-api:8080
-}
-
-prometheus.ai.datasquiz.net {
-    reverse_proxy prometheus:9090
-}
-
-# Dify requires split routing between API and web frontend
-dify.ai.datasquiz.net {
-    handle /console/api/* {
-        reverse_proxy dify-api:5001
-    }
-    handle /api/* {
-        reverse_proxy dify-api:5001
-    }
-    handle /v1/* {
-        reverse_proxy dify-api:5001
-    }
-    handle /files/* {
-        reverse_proxy dify-api:5001
-    }
-    handle {
-        reverse_proxy dify-web:3000
-    }
+      7) # Disable auto-sync
+         → Read PID from /mnt/data/run/gdrive-autosync.pid
+         → kill PID
+         → Update RCLONE_AUTOSYNC_ENABLED=false in .env
+         ;;
+    esac
+  done
 }
 ```
 
 ---
 
-## Summary of What Happened and Why
+## Phase 4 — Verification Checklist for Windsurf
 
 ```
-Timeline of failures:
+After all changes, run these checks and show output:
 
-1. Script 2 deployed Caddy with subdomain routing
-2. DNS wildcard *.ai.datasquiz.net did not exist
-3. Caddy tried ACME challenges for all 11 subdomains
-4. Challenges failed (no DNS = no HTTP-01 validation)
-5. Lock files written to prevent hammering Let's Encrypt
-6. You fixed DNS
-7. Caddy still blocked by lock files — will not retry
-8. Certificates remain unissued
+1. rclone config:
+   cat ${DATA_ROOT}/config/rclone/rclone.conf
+   → must show [gdrive] block with correct auth method
+   → must NOT show plaintext passwords if service account
 
-Fix:
-  Delete lock files + restart Caddy + DNS resolves = certificates issue automatically
-  Takes ~30-60 seconds after restart for all 11 certs to be issued
+2. rclone container:
+   docker ps --filter name=rclone-gdrive
+   → must show running status
+
+3. Tailscale:
+   tailscale status
+   tailscale ip -4
+   → must show assigned IP
+   grep TAILSCALE_IP ${ENV_FILE}
+   → must NOT show "pending"
+
+4. LiteLLM config:
+   cat ${DATA_ROOT}/config/litellm/config.yaml
+   → must show at least one model in model_list
+   → must show master_key and database_url
+
+5. LiteLLM API:
+   curl -s http://localhost:4000/health \
+     -H "Authorization: Bearer ${LITELLM_MASTER_KEY}"
+   → must return {"status": "healthy"}
+
+6. Caddyfile:
+   grep -i openclaw /mnt/data/config/caddy/Caddyfile
+   → must return NOTHING (openclaw removed from caddy)
+
+7. OpenClaw direct:
+   curl -s http://$(tailscale ip -4):18789
+   → must return a response (not connection refused)
+
+8. Script 3 menu:
+   Run Script 3 → navigate to Google Drive section
+   → must show menu options 1-8
+   → option 1 must restart rclone-gdrive container
+```
+
+---
+
+## Commit Order
+
+```
+Phase 1 complete → commit: "feat(s1): collect rclone auth and tailscale credentials"
+Phase 2A-B complete → commit: "feat(s2): generate rclone.conf and deploy container"
+Phase 2C-D complete → commit: "feat(s2): tailscale bringup, IP retrieval, openclaw caddy removal"
+Phase 2E complete → commit: "feat(s2): generate litellm config.yaml before compose up"
+Phase 3 complete → commit: "feat(s3): gdrive sync management menu"
+Phase 4 complete → commit: "verify: all checklist items passing"
 ```

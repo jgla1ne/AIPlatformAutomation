@@ -1854,25 +1854,6 @@ allocate_port() {
         print_success "MinIO port configuration completed"
     fi
     
-    # Tailscale configuration (if selected)
-    if [[ " ${selected_services[*]} " =~ " tailscale " ]]; then
-        echo ""
-        print_info "Tailscale Configuration"
-        echo ""
-        
-        # Tailscale auth key already collected in system configuration section
-        # Only set exit node configuration here
-        echo "TAILSCALE_EXIT_NODE=false" >> "$ENV_FILE"
-        echo "TAILSCALE_ACCEPT_ROUTES=false" >> "$ENV_FILE"
-        echo "TAILSCALE_USERSPACE=ai-platform" >> "$ENV_FILE"
-        
-        prompt_input "TAILSCALE_EXTRA_ARGS" "Tailscale extra arguments" "" false
-        echo "TAILSCALE_EXTRA_ARGS=$INPUT_RESULT" >> "$ENV_FILE"
-        
-        print_success "Tailscale configuration completed"
-    fi
-    
-    # OpenClaw base URL (if selected)
     if [[ " ${selected_services[*]} " =~ " openclaw " ]]; then
         echo ""
         print_info "OpenClaw Base URL Configuration"
@@ -1883,6 +1864,42 @@ allocate_port() {
         echo "OPENCLAW_LOG_LEVEL=info" >> "$ENV_FILE"
         
         print_success "OpenClaw base URL configuration completed"
+    fi
+    
+    # Tailscale configuration (if selected)
+    if [[ " ${selected_services[*]} " =~ " tailscale " ]]; then
+        echo ""
+        print_header "🔗 Tailscale VPN (required for OpenClaw)"
+        echo ""
+        
+        print_info "Tailscale is required for OpenClaw internal access."
+        print_info "Get an auth key at: https://login.tailscale.com/admin/settings/keys"
+        print_info "Use a reusable auth key for persistent installs."
+        echo ""
+        
+        local tailscale_auth_key=""
+        while [[ -z "$tailscale_auth_key" ]]; do
+            echo -n -e "${YELLOW}Tailscale auth key (tskey-auth-...):${NC} "
+            read -r tailscale_auth_key
+            
+            if [[ ! "$tailscale_auth_key" =~ ^tskey- ]]; then
+                print_warning "Auth key must start with 'tskey-'"
+                tailscale_auth_key=""
+            fi
+        done
+        
+        local tailscale_hostname="ai-platform"
+        echo -n -e "${YELLOW}Tailscale hostname for this machine [ai-platform]:${NC} "
+        read -r tailscale_hostname_input
+        if [[ -n "$tailscale_hostname_input" ]]; then
+            tailscale_hostname="$tailscale_hostname_input"
+        fi
+        
+        echo "TAILSCALE_AUTH_KEY=${tailscale_auth_key}" >> "$ENV_FILE"
+        echo "TAILSCALE_HOSTNAME=${tailscale_hostname}" >> "$ENV_FILE"
+        echo "TAILSCALE_IP=pending" >> "$ENV_FILE"
+        
+        print_success "Tailscale configuration completed"
     fi
     
     # AnythingLLM telemetry (if selected)
@@ -1937,21 +1954,146 @@ allocate_port() {
     
     if [[ " ${selected_services[*]} " =~ " rclone " ]]; then
         echo ""
-        print_info "RClone Google Drive Configuration"
-        echo ""
-        print_info "RClone will be configured for Google Drive sync"
-        echo "OAuth setup will be available in Step 3"
+        print_header "Google Drive Sync (rclone)"
         echo ""
         
-        # RClone configuration variables
-        echo "RCLONE_CONFIG_DIR=${DATA_ROOT}/config/rclone" >> "$ENV_FILE"
-        echo "RCLONE_DATA_DIR=${DATA_ROOT}/data/gdrive" >> "$ENV_FILE"
-        echo "RCLONE_CACHE_DIR=${DATA_ROOT}/cache/rclone" >> "$ENV_FILE"
-        echo "RCLONE_LOGS_DIR=${DATA_ROOT}/logs/rclone" >> "$ENV_FILE"
-        echo "RCLONE_REMOTE_NAME=gdrive" >> "$ENV_FILE"
-        echo "RCLONE_MOUNT_POINT=${DATA_ROOT}/gdrive" >> "$ENV_FILE"
+        # Enable/disable prompt
+        echo -n -e "${YELLOW}Enable Google Drive sync? [y/N]:${NC} "
+        read -r enable_gdrive
         
-        print_success "RClone configuration completed"
+        if [[ "$enable_gdrive" =~ ^[Yy]$ ]]; then
+            echo "GDRIVE_ENABLED=true" >> "$ENV_FILE"
+            
+            echo ""
+            print_info "Select authentication method:"
+            echo "  1. Service Account JSON (recommended — fully headless)"
+            echo "  2. OAuth Client ID + Secret (personal Google account)"
+            echo ""
+            
+            local auth_method=""
+            while [[ -z "$auth_method" ]]; do
+                echo -n -e "${YELLOW}Method [1/2]:${NC} "
+                read -r auth_method
+                
+                if [[ "$auth_method" != "1" ]] && [[ "$auth_method" != "2" ]]; then
+                    print_warning "Please enter 1 or 2"
+                    auth_method=""
+                fi
+            done
+            
+            if [[ "$auth_method" == "1" ]]; then
+                # Service Account method
+                echo ""
+                print_info "Service Account Authentication"
+                echo ""
+                
+                local sa_json_path=""
+                while [[ -z "$sa_json_path" ]]; do
+                    echo -n -e "${YELLOW}Full path to service account JSON file:${NC} "
+                    read -r sa_json_path
+                    
+                    if [[ ! -f "$sa_json_path" ]]; then
+                        print_warning "File not found: $sa_json_path"
+                        sa_json_path=""
+                        continue
+                    fi
+                    
+                    # Validate JSON format
+                    if ! jq empty "$sa_json_path" 2>/dev/null; then
+                        print_warning "Invalid JSON format in file"
+                        sa_json_path=""
+                        continue
+                    fi
+                done
+                
+                # Copy and secure the service account file
+                mkdir -p "${DATA_ROOT}/config/rclone"
+                cp "$sa_json_path" "${DATA_ROOT}/config/rclone/service-account.json"
+                chmod 600 "${DATA_ROOT}/config/rclone/service-account.json"
+                chown "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/config/rclone/service-account.json"
+                
+                echo "RCLONE_AUTH_METHOD=service_account" >> "$ENV_FILE"
+                echo "RCLONE_SA_JSON_PATH=${DATA_ROOT}/config/rclone/service-account.json" >> "$ENV_FILE"
+                
+                print_success "Service account file secured"
+                
+            else
+                # OAuth Client method
+                echo ""
+                print_info "OAuth Client Authentication"
+                echo ""
+                
+                local oauth_client_id=""
+                while [[ -z "$oauth_client_id" ]]; do
+                    echo -n -e "${YELLOW}GCP OAuth Client ID:${NC} "
+                    read -r oauth_client_id
+                    
+                    if [[ -z "$oauth_client_id" ]]; then
+                        print_warning "Client ID cannot be empty"
+                    fi
+                done
+                
+                local oauth_client_secret=""
+                while [[ -z "$oauth_client_secret" ]]; do
+                    echo -n -e "${YELLOW}GCP OAuth Client Secret:${NC} "
+                    read -r -s oauth_client_secret
+                    echo ""
+                    
+                    if [[ -z "$oauth_client_secret" ]]; then
+                        print_warning "Client Secret cannot be empty"
+                    fi
+                done
+                
+                echo "RCLONE_AUTH_METHOD=oauth_client" >> "$ENV_FILE"
+                echo "RCLONE_OAUTH_CLIENT_ID=${oauth_client_id}" >> "$ENV_FILE"
+                echo "RCLONE_OAUTH_CLIENT_SECRET=${oauth_client_secret}" >> "$ENV_FILE"
+                
+                print_success "OAuth client credentials saved"
+            fi
+            
+            # Common configuration for both methods
+            echo ""
+            print_info "Sync Configuration"
+            echo ""
+            
+            # Google Drive folder
+            local gdrive_folder=""
+            echo -n -e "${YELLOW}Google Drive folder to sync (blank = root):${NC} "
+            read -r gdrive_folder
+            echo "RCLONE_GDRIVE_FOLDER=${gdrive_folder}" >> "$ENV_FILE"
+            
+            # Local sync destination
+            local local_sync_dest="${DATA_ROOT}/gdrive"
+            echo -n -e "${YELLOW}Local sync destination [${local_sync_dest}]:${NC} "
+            read -r local_sync_input
+            if [[ -n "$local_sync_input" ]]; then
+                local_sync_dest="$local_sync_input"
+            fi
+            echo "RCLONE_MOUNT_POINT=${local_sync_dest}" >> "$ENV_FILE"
+            
+            # Sync interval
+            local sync_interval="3600"
+            echo -n -e "${YELLOW}Sync interval in seconds [3600]:${NC} "
+            read -r sync_interval_input
+            if [[ -n "$sync_interval_input" ]] && [[ "$sync_interval_input" =~ ^[0-9]+$ ]]; then
+                sync_interval="$sync_interval_input"
+            fi
+            echo "RCLONE_SYNC_INTERVAL=${sync_interval}" >> "$ENV_FILE"
+            
+            # Create directories
+            mkdir -p "${DATA_ROOT}/config/rclone"
+            mkdir -p "${local_sync_dest}"
+            mkdir -p "${DATA_ROOT}/logs/rclone"
+            chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/config/rclone"
+            chown -R "${RUNNING_UID}:${RUNNING_GID}" "${local_sync_dest}"
+            chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/logs/rclone"
+            
+            print_success "Google Drive sync configuration completed"
+            
+        else
+            echo "GDRIVE_ENABLED=false" >> "$ENV_FILE"
+            print_info "Google Drive sync disabled"
+        fi
     fi
     
     # Save configuration summary
