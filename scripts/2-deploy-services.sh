@@ -357,6 +357,9 @@ deploy_layered_services() {
     # Layer 2: Application Services
     deploy_layer_2_services
     
+    # Layer 2.5: Dify Multi-Container Service
+    deploy_layer_2_5_dify
+    
     # Layer 3: Monitoring Services
     deploy_layer_3_monitoring
     
@@ -383,11 +386,11 @@ deploy_layer_0_infrastructure() {
 deploy_layer_1_databases() {
     print_header "Layer 1: Databases"
     
-    # Ensure qdrant directory has correct ownership (qdrant runs as UID 1000)
-    if [[ -d "${DATA_ROOT}/data/qdrant" ]]; then
-        chown -R 1000:1000 "${DATA_ROOT}/data/qdrant"
-        print_info "Fixed qdrant directory ownership to 1000:1000"
-    fi
+    # Set consistent ownership for all service directories
+    print_info "Setting directory ownership..."
+    chown -R ${RUNNING_UID}:${RUNNING_GID} ${DATA_ROOT}/data/
+    chown -R ${RUNNING_UID}:${RUNNING_GID} ${DATA_ROOT}/config/
+    print_success "Directory ownership configured"
     
     # PostgreSQL with explicit UID and init script
     docker run -d \
@@ -477,18 +480,29 @@ deploy_layer_2_services() {
         -u "${RUNNING_UID}:${RUNNING_GID}" \
         ghcr.io/open-webui/open-webui:main
     
-    # AnythingLLM
+    # AnythingLLM - fixed configuration with proper storage path
     docker run -d \
         --name anythingllm \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
-        -e VECTOR_DB=qdrant \
-        -e QDRANT_URL=http://qdrant:6333 \
-        -e ADMIN_PASSWORD="${ADMIN_PASSWORD}" \
-        -v "${DATA_ROOT}/data/anythingllm:/app/server/storage/documents" \
-        -v "${DATA_ROOT}/logs/anythingllm:/var/log/anythingllm" \
-        -u "${RUNNING_UID}:${RUNNING_GID}" \
+        --user "${RUNNING_UID}:${RUNNING_GID}" \
+        -p "${ANYTHINGLLM_PORT}:3001" \
+        -v "${DATA_ROOT}/data/anythingllm:/app/server/storage" \
+        -e STORAGE_DIR=/app/server/storage \
+        -e JWT_SECRET="${ANYTHINGLLM_JWT_SECRET}" \
+        -e DISABLE_TELEMETRY=true \
         mintplexlabs/anythingllm:latest
+    
+    # Signal API
+    docker run -d \
+        --name signal-api \
+        --network "${DOCKER_NETWORK}" \
+        --restart unless-stopped \
+        --user "${RUNNING_UID}:${RUNNING_GID}" \
+        -p "${SIGNAL_API_PORT}:8080" \
+        -e MODE=native \
+        -v "${DATA_ROOT}/data/signal:/home/.local/share/signal-cli" \
+        bbernhard/signal-cli-rest-api:latest
     
     # LiteLLM
     docker run -d \
@@ -529,6 +543,76 @@ deploy_layer_2_services() {
     print_success "MinIO buckets created"
     
     print_success "Layer 2 application services healthy (litellm health check disabled)"
+}
+
+deploy_layer_2_5_dify() {
+    print_header "Layer 2.5: Dify Multi-Container Service"
+    
+    # Create Dify directories
+    mkdir -p "${DATA_ROOT}/data/dify/storage"
+    mkdir -p "${DATA_ROOT}/data/dify/logs"
+    chown -R ${RUNNING_UID}:${RUNNING_GID} "${DATA_ROOT}/data/dify/"
+    
+    # Dify API container
+    docker run -d \
+        --name dify-api \
+        --network "${DOCKER_NETWORK}" \
+        --restart unless-stopped \
+        --user "${RUNNING_UID}:${RUNNING_GID}" \
+        -e MODE=api \
+        -e SECRET_KEY="${DIFY_SECRET_KEY}" \
+        -e DB_USERNAME="${POSTGRES_USER}" \
+        -e DB_PASSWORD="${POSTGRES_PASSWORD}" \
+        -e DB_HOST=postgres \
+        -e DB_PORT=5432 \
+        -e DB_DATABASE="${POSTGRES_DB}" \
+        -e REDIS_HOST=redis \
+        -e REDIS_PORT=6379 \
+        -e REDIS_PASSWORD="${REDIS_PASSWORD}" \
+        -e STORAGE_TYPE=local \
+        -e STORAGE_LOCAL_PATH=/app/api/storage \
+        -e CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/1 \
+        -v "${DATA_ROOT}/data/dify/storage:/app/api/storage" \
+        langgenius/dify-api:latest
+    
+    # Dify Worker container
+    docker run -d \
+        --name dify-worker \
+        --network "${DOCKER_NETWORK}" \
+        --restart unless-stopped \
+        --user "${RUNNING_UID}:${RUNNING_GID}" \
+        -e MODE=worker \
+        -e SECRET_KEY="${DIFY_SECRET_KEY}" \
+        -e DB_USERNAME="${POSTGRES_USER}" \
+        -e DB_PASSWORD="${POSTGRES_PASSWORD}" \
+        -e DB_HOST=postgres \
+        -e DB_PORT=5432 \
+        -e DB_DATABASE="${POSTGRES_DB}" \
+        -e REDIS_HOST=redis \
+        -e REDIS_PORT=6379 \
+        -e REDIS_PASSWORD="${REDIS_PASSWORD}" \
+        -e STORAGE_TYPE=local \
+        -e STORAGE_LOCAL_PATH=/app/api/storage \
+        -e CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/1 \
+        -v "${DATA_ROOT}/data/dify/storage:/app/api/storage" \
+        langgenius/dify-api:latest
+    
+    # Dify Web container
+    docker run -d \
+        --name dify-web \
+        --network "${DOCKER_NETWORK}" \
+        --restart unless-stopped \
+        --user "${RUNNING_UID}:${RUNNING_GID}" \
+        -e EDITION=SELF_HOSTED \
+        -e CONSOLE_API_URL="https://dify.${DOMAIN_NAME}" \
+        -e APP_API_URL="https://dify.${DOMAIN_NAME}" \
+        langgenius/dify-web:latest
+    
+    # Wait for Dify services
+    wait_http "dify-api" "http://dify-api:5001/health" 60
+    wait_http "dify-web" "http://dify-web:3000" 60
+    
+    print_success "Layer 2.5 Dify multi-container service healthy"
 }
 
 deploy_layer_3_monitoring() {
