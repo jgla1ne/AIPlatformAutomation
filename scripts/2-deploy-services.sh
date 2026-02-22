@@ -373,13 +373,29 @@ deploy_layered_services() {
 }
 
 deploy_layer_0_infrastructure() {
-    print_header "Layer 0: Network + AppArmor"
+    print_header "Layer 0: Network + AppArmor + RClone"
     
     # Skip AppArmor profiles temporarily to get services running
     print_warning "AppArmor profiles disabled temporarily for deployment"
     
     # Create Docker network
     docker network create "${DOCKER_NETWORK}" 2>/dev/null || true
+    
+    # Install RClone if Google Drive sync is enabled
+    if [[ "${ENABLE_RCLONE:-false}" == "true" ]]; then
+        print_info "Installing RClone for Google Drive sync..."
+        if ! command -v rclone &> /dev/null; then
+            # Install RClone
+            curl -fsSL https://rclone.org/install.sh | bash -s beta
+            print_success "RClone installed successfully"
+        else
+            print_success "RClone already installed"
+        fi
+        
+        # Create RClone systemd service
+        create_rclone_service
+    fi
+    
     print_success "Infrastructure ready"
 }
 
@@ -535,27 +551,6 @@ deploy_layer_2_services() {
         -e HOME=/root \
         -v "${DATA_ROOT}/data/flowise:/root/.flowise" \
         flowiseai/flowise:latest
-    
-    # Google Drive integration
-    if [[ "${ENABLE_GDRIVE:-false}" == "true" ]]; then
-        print_info "Deploying Google Drive integration..."
-        docker run -d \
-            --name gdrive \
-            --network "${DOCKER_NETWORK}" \
-            --restart unless-stopped \
-            --user "${RUNNING_UID}:${RUNNING_GID}" \
-            -p "${GDRIVE_PORT:-8081}:8080" \
-            -e GDRIVE_CONFIG_DIR=/config/gdrive \
-            -e GDRIVE_DATA_DIR=/data/gdrive \
-            -e GDRIVE_CACHE_DIR=/cache/gdrive \
-            -e GDRIVE_LOGS_DIR=/var/log/gdrive \
-            -v "${DATA_ROOT}/config/gdrive:/config/gdrive" \
-            -v "${DATA_ROOT}/data/gdrive:/data/gdrive" \
-            -v "${DATA_ROOT}/cache/gdrive:/cache/gdrive" \
-            -v "${DATA_ROOT}/logs/gdrive:/var/log/gdrive" \
-            ghcr.io/prasadgupta123/google-drive:latest
-        print_success "Google Drive integration deployed on port ${GDRIVE_PORT:-8081}"
-    fi
     
     # Wait for layer 2
     wait_http "n8n" "http://n8n:5678/healthz" 60
@@ -833,7 +828,7 @@ wait_http() {
 validate_deployment() {
     print_header "Validating Deployment"
     
-    local services=(postgres redis qdrant ollama n8n anythingllm litellm openwebui minio caddy prometheus grafana flowise signal-api dify-api dify-worker dify-web gdrive)
+    local services=(postgres redis qdrant ollama n8n anythingllm litellm openwebui minio caddy prometheus grafana flowise signal-api dify-api dify-worker dify-web)
     local failed_services=()
     
     for service in "${services[@]}"; do
@@ -875,7 +870,6 @@ display_summary() {
         echo "   Signal API: https://signal-api.${DOMAIN_NAME}/"
         echo "   Prometheus: https://prometheus.${DOMAIN_NAME}/"
         echo "   Dify: https://dify.${DOMAIN_NAME}/"
-        echo "   Google Drive: https://gdrive.${DOMAIN_NAME}/"
         echo "   Main Domain: https://${DOMAIN_NAME}/ (redirects to OpenWebUI)"
     else
         echo "   n8n: http://${LOCALHOST}:${N8N_PORT}/n8n/"
@@ -888,7 +882,6 @@ display_summary() {
         echo "   Signal API: http://${LOCALHOST}:${SIGNAL_API_PORT}/"
         echo "   Prometheus: http://${LOCALHOST}:${PROMETHEUS_PORT}/prometheus/"
         echo "   Dify: http://${LOCALHOST}:${DIFY_PORT}/dify/"
-        echo "   Google Drive: http://${LOCALHOST}:${GDRIVE_PORT}/"
     fi
     echo ""
     echo "📋 Next Steps:"
@@ -896,8 +889,64 @@ display_summary() {
     echo "   2. Check service health: docker ps"
     echo "   3. View logs: docker logs <service_name>"
     echo "   4. Monitor certificates: docker exec caddy find /data/caddy/certificates/ -name '*.crt'"
+    if [[ "${ENABLE_RCLONE:-false}" == "true" ]]; then
+        echo ""
+        echo "📁 RClone Google Drive Management:"
+        echo "   - Configure OAuth: rclone config create gdrive"
+        echo "   - Start mount: systemctl start rclone-gdrive"
+        echo "   - Stop mount: systemctl stop rclone-gdrive"
+        echo "   - Check status: systemctl status rclone-gdrive"
+        echo "   - View logs: journalctl -u rclone-gdrive -f"
+        echo "   - Mount point: ${RCLONE_MOUNT_POINT}"
+    fi
     echo ""
     print_success "Deployment complete! All services are running with SSL certificates."
+}
+
+# RClone service management
+create_rclone_service() {
+    print_info "Creating RClone systemd service..."
+    
+    # Create systemd service file
+    cat > "/etc/systemd/system/rclone-gdrive.service" << EOF
+[Unit]
+Description=RClone Google Drive Mount Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${RUNNING_USER}
+Group=${RUNNING_GID}
+ExecStart=/usr/bin/rclone mount ${RCLONE_REMOTE_NAME:-gdrive}: ${RCLONE_MOUNT_POINT} \\
+    --config ${RCLONE_CONFIG_DIR} \\
+    --cache-dir ${RCLONE_CACHE_DIR} \\
+    --log-file ${RCLONE_LOGS_DIR}/rclone.log \\
+    --log-level INFO \\
+    --allow-non-empty \\
+    --vfs-cache-mode writes \\
+    --dir-cache-time 5m \\
+    --poll-interval 1m \\
+    --umask 002
+ExecStop=/bin/fusermount -u ${RCLONE_MOUNT_POINT}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    # Create mount point if it doesn't exist
+    mkdir -p "${RCLONE_MOUNT_POINT}"
+    chown "${RUNNING_UID}:${RUNNING_GID}" "${RCLONE_MOUNT_POINT}"
+    
+    # Reload systemd and enable service
+    systemctl daemon-reload
+    systemctl enable rclone-gdrive.service
+    
+    print_success "RClone service created and enabled"
+    print_info "Use 'systemctl start rclone-gdrive' to start the mount"
+    print_info "Use 'systemctl stop rclone-gdrive' to stop the mount"
 }
 
 # Main function

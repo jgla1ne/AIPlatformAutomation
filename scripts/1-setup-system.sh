@@ -716,7 +716,11 @@ select_services() {
     # Storage
     echo "📦 Storage:"
     echo "  [14] MinIO - S3-compatible storage"
-    echo "  [15] Google Drive - Cloud storage integration"
+    echo ""
+    
+    # Cloud Storage (RClone)
+    echo "☁️  Cloud Storage:"
+    echo "  [15] Google Drive (RClone) - Cloud storage sync"
     echo ""
     
     echo "Select services (space-separated, e.g., '1 3 6'):"
@@ -739,7 +743,7 @@ select_services() {
         ["prometheus"]=1
         ["grafana"]=1
         ["minio"]=1
-        ["gdrive"]=1
+        ["rclone"]=1
     )
     
     while true; do
@@ -771,7 +775,7 @@ select_services() {
                         12) service_name="openclaw" ;;
                         13) service_name="prometheus" ;;
                         14) service_name="minio" ;;
-                        15) service_name="gdrive" ;;
+                        15) service_name="rclone" ;;
                         *) print_warning "Invalid selection: $num (must be 1-15)"; continue ;;
                     esac
                     
@@ -1117,7 +1121,6 @@ EOF
         ["chroma"]="8000"
         ["weaviate"]="8080"
         ["minio"]="5007"
-        ["gdrive"]="8081"
     )
     
     # Proxy port configuration (only if proxy was selected in domain phase)
@@ -1181,7 +1184,7 @@ allocate_port() {
     # Service port configuration
     for service_key in "${selected_services[@]}"; do
         case "$service_key" in
-            "nginx-proxy-manager"|"traefik"|"caddy"|"openwebui"|"anythingllm"|"n8n"|"dify"|"ollama"|"litellm"|"prometheus"|"grafana"|"signal-api"|"openclaw"|"tailscale"|"postgres"|"redis"|"qdrant"|"milvus"|"chroma"|"weaviate"|"minio"|"gdrive")
+            "nginx-proxy-manager"|"traefik"|"caddy"|"openwebui"|"anythingllm"|"n8n"|"dify"|"ollama"|"litellm"|"prometheus"|"grafana"|"signal-api"|"openclaw"|"tailscale"|"postgres"|"redis"|"qdrant"|"milvus"|"chroma"|"weaviate"|"minio"|"rclone")
                 local default_port="${default_ports[$service_key]:-3000}"
                 allocate_port "$service_key" "$default_port"
                 ;;
@@ -1932,18 +1935,23 @@ allocate_port() {
         print_success "MinIO configuration completed"
     fi
     
-    if [[ " ${selected_services[*]} " =~ " gdrive " ]]; then
+    if [[ " ${selected_services[*]} " =~ " rclone " ]]; then
         echo ""
-        print_info "Google Drive Configuration"
+        print_info "RClone Google Drive Configuration"
+        echo ""
+        print_info "RClone will be configured for Google Drive sync"
+        echo "OAuth setup will be available in Step 3"
         echo ""
         
-        # Google Drive uses OAuth2, no credentials stored in .env
-        echo "GDRIVE_CLIENT_ID=" >> "$ENV_FILE"
-        echo "GDRIVE_CLIENT_SECRET=" >> "$ENV_FILE"
-        echo "GDRIVE_REDIRECT_URI=http://localhost:8081/auth" >> "$ENV_FILE"
-        echo "GDRIVE_PORT=8081" >> "$ENV_FILE"
+        # RClone configuration variables
+        echo "RCLONE_CONFIG_DIR=${DATA_ROOT}/config/rclone" >> "$ENV_FILE"
+        echo "RCLONE_DATA_DIR=${DATA_ROOT}/data/gdrive" >> "$ENV_FILE"
+        echo "RCLONE_CACHE_DIR=${DATA_ROOT}/cache/rclone" >> "$ENV_FILE"
+        echo "RCLONE_LOGS_DIR=${DATA_ROOT}/logs/rclone" >> "$ENV_FILE"
+        echo "RCLONE_REMOTE_NAME=gdrive" >> "$ENV_FILE"
+        echo "RCLONE_MOUNT_POINT=${DATA_ROOT}/gdrive" >> "$ENV_FILE"
         
-        print_success "Google Drive configuration completed"
+        print_success "RClone configuration completed"
     fi
     
     # Save configuration summary
@@ -2159,11 +2167,6 @@ flowise.${DOMAIN_NAME} {
     reverse_proxy flowise:3000
 }
 
-# Google Drive
-gdrive.${DOMAIN_NAME} {
-    reverse_proxy gdrive:8080
-}
-
 # Ollama API
 ollama.${DOMAIN_NAME} {
     reverse_proxy ollama:11434
@@ -2339,7 +2342,7 @@ create_directory_structure() {
     local dirs=(
         "${DATA_ROOT}/config"
         "${DATA_ROOT}/config/prometheus"
-        "${DATA_ROOT}/config/gdrive"
+        "${DATA_ROOT}/config/rclone"
         "${DATA_ROOT}/apparmor"
         "${DATA_ROOT}/caddy/config"
         "${DATA_ROOT}/caddy/data"
@@ -2360,6 +2363,7 @@ create_directory_structure() {
         "${DATA_ROOT}/data/openclaw"
         "${DATA_ROOT}/data/gdrive"
         "${DATA_ROOT}/cache/gdrive"
+        "${DATA_ROOT}/cache/rclone"
         "${DATA_ROOT}/postgres-init"
     )
     
@@ -2429,11 +2433,11 @@ create_directory_structure() {
     
     # gdrive runs as stack user
     chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/data/gdrive"
-    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/config/gdrive"
-    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/cache/gdrive"
+    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/config/rclone"
+    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/cache/rclone"
     chmod 750 "${DATA_ROOT}/data/gdrive"
-    chmod 750 "${DATA_ROOT}/config/gdrive"
-    chmod 750 "${DATA_ROOT}/cache/gdrive"
+    chmod 750 "${DATA_ROOT}/config/rclone"
+    chmod 750 "${DATA_ROOT}/cache/rclone"
     
     # Pre-create critical files with correct ownership
     # OpenWebUI secret key
@@ -3021,7 +3025,7 @@ generate_compose_templates() {
     ENABLE_TAILSCALE=false
     ENABLE_MINIO=false
     ENABLE_QDRANT=false
-    ENABLE_GDRIVE=false
+    ENABLE_RCLONE=false
     
     for service in "${selected_services[@]}"; do
         case "$service" in
@@ -3038,7 +3042,7 @@ generate_compose_templates() {
             "tailscale") ENABLE_TAILSCALE=true ;;
             "minio") ENABLE_MINIO=true ;;
             "qdrant") ENABLE_QDRANT=true ;;
-            "gdrive") ENABLE_GDRIVE=true ;;
+            "rclone") ENABLE_RCLONE=true ;;
         esac
     done
     
@@ -3105,7 +3109,6 @@ COMPOSE_HEADER
     [ "$ENABLE_TAILSCALE" = true ] && add_tailscale_service
     [ "$ENABLE_MINIO" = true ] && add_minio_service
     [ "$ENABLE_QDRANT" = true ] && add_qdrant_service
-    [ "$ENABLE_GDRIVE" = true ] && add_gdrive_service
     
     chmod 644 "$COMPOSE_FILE"
     chown "${REAL_UID}:${REAL_GID}" "$COMPOSE_FILE"
@@ -3724,44 +3727,6 @@ add_qdrant_service() {
     labels:
       - "ai-platform.service=qdrant"
       - "ai-platform.type=vector-database"
-
-EOF
-}
-
-add_gdrive_service() {
-    cat >> "$COMPOSE_FILE" <<'EOF'
-  gdrive:
-    image: ghcr.io/prasadgupta123/google-drive:latest
-    container_name: gdrive
-    restart: unless-stopped
-    user: "${RUNNING_UID}:${RUNNING_GID}"
-    environment:
-      PUID: ${RUNNING_UID}
-      PGID: ${RUNNING_GID}
-      TZ: ${TIMEZONE:-UTC}
-      GDRIVE_CONFIG_DIR: /config/gdrive
-      GDRIVE_DATA_DIR: /data/gdrive
-      GDRIVE_CACHE_DIR: /cache/gdrive
-      GDRIVE_LOGS_DIR: /var/log/gdrive
-    volumes:
-      - ${DATA_ROOT}/config/gdrive:/config/gdrive
-      - ${DATA_ROOT}/data/gdrive:/data/gdrive
-      - ${DATA_ROOT}/cache/gdrive:/cache/gdrive
-      - ${DATA_ROOT}/logs/gdrive:/var/log/gdrive
-    networks:
-      - ${DOCKER_NETWORK}_internal
-      - ${DOCKER_NETWORK}
-    ports:
-      - "8081:8080"
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8081/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    labels:
-      - "ai-platform.service=gdrive"
-      - "ai-platform.type=storage"
 
 EOF
 }
