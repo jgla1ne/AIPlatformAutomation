@@ -51,16 +51,26 @@ print_header() {
 }
 
 # Load configuration from .env
-load_configuration() {
-    print_header "Loading Configuration"
-    
-    if [[ -f "${DATA_ROOT:-/mnt/data}/.env" ]]; then
-        source "${DATA_ROOT:-/mnt/data}/.env"
-        print_success "Configuration loaded from ${DATA_ROOT}/.env"
-    else
-        print_error "Configuration file not found. Please run Script 1 first."
+load_config() {
+    if [[ ! -f "$ENV_FILE" ]]; then
+        print_error "Configuration file not found: $ENV_FILE"
+        print_info "Please run Script 1 first"
         exit 1
     fi
+    
+    source "$ENV_FILE"
+    
+    # Set tenant prefix for container names
+    TENANT_PREFIX="${COMPOSE_PROJECT_NAME:-ai-platform}"
+    
+    print_success "Configuration loaded from $ENV_FILE"
+    print_info "Tenant: ${TENANT_PREFIX}"
+}
+
+# Generate tenant-prefixed container name
+get_container_name() {
+    local base_name="$1"
+    echo "${TENANT_PREFIX}-${base_name}"
 }
 
 # Validate configuration
@@ -229,7 +239,7 @@ deploy_service() {
     local vectordb_env=("$@")
     
     docker run -d \
-        --name "${service_name}" \
+        --name "$(get_container_name "${service_name}")" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
         --user "${RUNNING_UID}:${RUNNING_GID}" \
@@ -284,7 +294,7 @@ deploy_openclaw() {
     # Step 1: Tailscale sidecar
     print_info "Deploying Tailscale sidecar..."
     docker run -d \
-        --name "tailscale" \
+        --name "$(get_container_name tailscale)" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
         --cap-add NET_ADMIN \
@@ -298,14 +308,14 @@ deploy_openclaw() {
         tailscale/tailscale:latest
 
     # Wait for Tailscale authentication
-    wait_for_tailscale_auth "tailscale"
+    wait_for_tailscale_auth "$(get_container_name tailscale)"
 
     # Step 2: OpenClaw in shared network namespace
     print_info "Deploying OpenClaw..."
     local vectordb_env=($(build_vectordb_env))
     
     docker run -d \
-        --name "openclaw" \
+        --name "$(get_container_name openclaw)" \
         --network "container:tailscale" \
         --restart unless-stopped \
         --user "${OPENCLAW_UID}:${OPENCLAW_GID}" \
@@ -330,7 +340,7 @@ deploy_openclaw_standalone() {
     local vectordb_env=($(build_vectordb_env))
     
     docker run -d \
-        --name "openclaw" \
+        --name "$(get_container_name openclaw)" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
         --user "${OPENCLAW_UID}:${OPENCLAW_GID}" \
@@ -390,7 +400,7 @@ deploy_layer_0_infrastructure() {
             print_info "Deploying RClone container..."
             
             docker run -d \
-                --name rclone-gdrive \
+                --name "$(get_container_name rclone-gdrive)" \
                 --network "${DOCKER_NETWORK}" \
                 --restart unless-stopped \
                 --user "${RUNNING_UID}:${RUNNING_GID}" \
@@ -425,7 +435,7 @@ deploy_layer_1_databases() {
     
     # PostgreSQL with explicit UID and init script
     docker run -d \
-        --name postgres \
+        --name "$(get_container_name postgres)" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
         -e POSTGRES_USER="${POSTGRES_USER}" \
@@ -437,7 +447,7 @@ deploy_layer_1_databases() {
     
     # Redis
     docker run -d \
-        --name redis \
+        --name "$(get_container_name redis)" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
          \
@@ -447,7 +457,7 @@ deploy_layer_1_databases() {
     
     # Qdrant
     docker run -d \
-        --name qdrant \
+        --name "$(get_container_name qdrant)" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
          \
@@ -455,13 +465,13 @@ deploy_layer_1_databases() {
         qdrant/qdrant:latest
     
     # WAIT for all layer 1 to be healthy before proceeding
-    wait_healthy "postgres" "docker exec postgres pg_isready -U ${POSTGRES_USER}" 30
-    wait_healthy "redis" "docker exec redis redis-cli -a ${REDIS_PASSWORD} ping" 30
-    wait_healthy "qdrant" "docker run --rm --network ${DOCKER_NETWORK} alpine/curl -sf http://qdrant:6333/" 60
+    wait_healthy "postgres" "docker exec $(get_container_name postgres) pg_isready -U ${POSTGRES_USER}" 30
+    wait_healthy "redis" "docker exec $(get_container_name redis) redis-cli -a ${REDIS_PASSWORD} ping" 30
+    wait_healthy "qdrant" "docker run --rm --network ${DOCKER_NETWORK} alpine/curl -sf http://$(get_container_name qdrant):6333/" 60
     
     # Create pgvector extension after postgres is ready
     print_info "Creating pgvector extension..."
-    docker exec postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+    docker exec $(get_container_name postgres) psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
         -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null || true
     print_success "pgvector extension created"
     
@@ -473,7 +483,7 @@ deploy_layer_2_services() {
     
     # MinIO - runs as root to handle system directory creation
     docker run -d \
-        --name minio \
+        --name "$(get_container_name minio)" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
         -e MINIO_ROOT_USER="${MINIO_ROOT_USER}" \
@@ -483,7 +493,7 @@ deploy_layer_2_services() {
     
     # n8n
     docker run -d \
-        --name n8n \
+        --name "$(get_container_name n8n)" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
         -e DB_TYPE=postgresdb \
@@ -503,7 +513,7 @@ deploy_layer_2_services() {
     
     # OpenWebUI with secret key
     docker run -d \
-        --name openwebui \
+        --name "$(get_container_name openwebui)" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
         -e WEBUI_SECRET_KEY="${WEBUI_SECRET_KEY}" \
@@ -513,7 +523,7 @@ deploy_layer_2_services() {
     
     # AnythingLLM - fixed configuration with proper storage path and LiteLLM integration
     docker run -d \
-        --name anythingllm \
+        --name "$(get_container_name anythingllm)" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
         --user "${RUNNING_UID}:${RUNNING_GID}" \
@@ -531,7 +541,7 @@ deploy_layer_2_services() {
     
     # Signal API
     docker run -d \
-        --name signal-api \
+        --name "$(get_container_name signal-api)" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
         --user "${RUNNING_UID}:${RUNNING_GID}" \
@@ -542,7 +552,7 @@ deploy_layer_2_services() {
     
     # LiteLLM - enhanced configuration for multi-provider routing
     docker run -d \
-        --name litellm \
+        --name "$(get_container_name litellm)" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
         -e LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
@@ -558,7 +568,7 @@ deploy_layer_2_services() {
     
     # Flowise - runs as root (UID 0) due to Node.js user info issues
     docker run -d \
-        --name flowise \
+        --name "$(get_container_name flowise)" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
         -e PORT=3000 \
@@ -596,7 +606,7 @@ deploy_layer_2_5_dify() {
     
     # Dify API container
     docker run -d \
-        --name dify-api \
+        --name "$(get_container_name dify-api)" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
         --user "${RUNNING_UID}:${RUNNING_GID}" \
@@ -618,7 +628,7 @@ deploy_layer_2_5_dify() {
     
     # Dify Worker container
     docker run -d \
-        --name dify-worker \
+        --name "$(get_container_name dify-worker)" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
         --user "${RUNNING_UID}:${RUNNING_GID}" \
@@ -640,7 +650,7 @@ deploy_layer_2_5_dify() {
     
     # Dify Web container
     docker run -d \
-        --name dify-web \
+        --name "$(get_container_name dify-web)" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
         --user "${RUNNING_UID}:${RUNNING_GID}" \
@@ -650,8 +660,8 @@ deploy_layer_2_5_dify() {
         langgenius/dify-web:latest
     
     # Wait for Dify services
-    wait_http "dify-api" "http://dify-api:5001/health" 60
-    wait_http "dify-web" "http://dify-web:3000" 60
+    wait_http "dify-api" "http://$(get_container_name dify-api):5001/health" 60
+    wait_http "dify-web" "http://$(get_container_name dify-web):3000" 60
     
     print_success "Layer 2.5 Dify multi-container service healthy"
 }
@@ -703,7 +713,7 @@ EOF
     
     # Prometheus with correct port mapping and arguments
     docker run -d \
-        --name prometheus \
+        --name "$(get_container_name prometheus)" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
         --user "${RUNNING_UID}:${RUNNING_GID}" \
@@ -719,7 +729,7 @@ EOF
     
     # Grafana with correct user and port mapping
     docker run -d \
-        --name grafana \
+        --name "$(get_container_name grafana)" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
         --user "${RUNNING_UID}:${RUNNING_GID}" \
@@ -771,16 +781,16 @@ deploy_layer_5_proxy() {
     
     # Caddyfile already written by Script 1, but ensure proper SSL configuration
     # Remove any stale lock files before starting
-    if docker exec caddy find /data/caddy/locks/ -name "*.lock" 2>/dev/null | grep -q .; then
+    if docker exec $(get_container_name caddy) find /data/caddy/locks/ -name "*.lock" 2>/dev/null | grep -q .; then
         print_info "Removing stale certificate lock files..."
-        docker exec caddy find /data/caddy/locks/ -name "*.lock" -delete 2>/dev/null || true
+        docker exec $(get_container_name caddy) find /data/caddy/locks/ -name "*.lock" -delete 2>/dev/null || true
     fi
     
     # Remove stale ACME challenge tokens
-    docker exec caddy find /data/caddy/acme/ -name "*.json" -delete 2>/dev/null || true
+    docker exec $(get_container_name caddy) find /data/caddy/acme/ -name "*.json" -delete 2>/dev/null || true
     
     docker run -d \
-        --name caddy \
+        --name "$(get_container_name caddy)" \
         --network "${DOCKER_NETWORK}" \
         --restart unless-stopped \
         -p "80:80" \

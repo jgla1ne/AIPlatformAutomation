@@ -658,147 +658,103 @@ select_services() {
     echo "  [14] MinIO - S3-compatible storage"
     echo ""
     
-    # Cloud Storage (RClone)
-    echo "☁️  Cloud Storage:"
-    echo "  [15] Google Drive (RClone) - Cloud storage sync"
-    echo ""
-    
-    echo "Select services (space-separated, e.g., '1 3 6'):"
-    echo "Or enter 'all' to select all recommended services"
-    echo ""
-    
-    local -A selected_map=(
-        ["postgres"]=1
-        ["redis"]=1
-        ["tailscale"]=1
-        ["openwebui"]=1
-        ["anythingllm"]=1
-        ["dify"]=1
-        ["n8n"]=1
-        ["flowise"]=1
-        ["ollama"]=1
-        ["litellm"]=1
-        ["signal-api"]=1
-        ["openclaw"]=1
-        ["prometheus"]=1
-        ["grafana"]=1
-        ["minio"]=1
-        ["rclone"]=1
-    )
-    
-    while true; do
-        echo -n -e "${YELLOW}Enter selection:${NC} "
-        read -r selection
         
-        if [[ "$selection" == "all" ]]; then
-            for service in "${!selected_map[@]}"; do
-                selected_map[$service]=1
-            done
-            print_success "All recommended services selected"
-            break
-        elif [[ "$selection" =~ ^[0-9\ ]+$ ]]; then
-            for num in $selection; do
-                if [[ $num -ge 1 ]] && [[ $num -le 15 ]]; then
-                    local service_name
-                    case $num in
-                        1) service_name="postgres" ;;
-                        2) service_name="redis" ;;
-                        3) service_name="tailscale" ;;
-                        4) service_name="openwebui" ;;
-                        5) service_name="anythingllm" ;;
-                        6) service_name="dify" ;;
-                        7) service_name="n8n" ;;
-                        8) service_name="flowise" ;;
-                        9) service_name="ollama" ;;
-                        10) service_name="litellm" ;;
-                        11) service_name="signal-api" ;;
-                        12) service_name="openclaw" ;;
-                        13) service_name="prometheus" ;;
-                        14) service_name="minio" ;;
-                        15) service_name="rclone" ;;
-                        *) print_warning "Invalid selection: $num (must be 1-15)"; continue ;;
-                    esac
-                    
-                    if [[ -n "${selected_map[$service_name]:-}" ]]; then
-                        selected_map[$service_name]=1
-                        print_success "Added: $service_name"
-                    else
-                        selected_map[$service_name]=0
-                        print_info "Removed: $service_name"
-                    fi
-                else
-                    print_warning "Invalid selection: $num (must be 1-14)"
-                fi
-            done
-            break
-        else
-            print_error "Invalid selection. Please enter numbers 1-14 or 'all'"
-        fi
-    done
-    
-    # Convert selected services to array
-    local selected_services=()
-    for service in "${!selected_map[@]}"; do
-        if [[ "${selected_map[$service]}" == "1" ]]; then
-            selected_services+=("$service")
-        fi
-    done
-    
-    # Vector Database Selection (separate from services)
-    if [[ " ${selected_services[*]} " =~ " litellm " ]] || [[ " ${selected_services[*]} " =~ " openwebui " ]] || [[ " ${selected_services[*]} " =~ " anythingllm " ]] || [[ " ${selected_services[*]} " =~ " dify " ]] || [[ " ${selected_services[*]} " =~ " n8n " ]]; then
+        # Use the existing service selection logic for custom profile
+        local -A selected_map=(
+            ["postgres"]=0
+            ["redis"]=0
+            ["tailscale"]=0
+            ["openwebui"]=0
+            ["anythingllm"]=0
+            ["dify"]=0
+            ["n8n"]=0
+            ["flowise"]=0
+            ["ollama"]=0
+            ["litellm"]=0
+            ["signal-api"]=0
+            ["openclaw"]=0
+            ["prometheus"]=0
+            ["grafana"]=0
+            ["minio"]=0
+            ["rclone"]=0
+        )
+        
+        # Set defaults based on typical recommendations
+        selected_map["postgres"]=1
+        selected_map["redis"]=1
+        selected_map["litellm"]=1
+        selected_map["openclaw"]=1
+        selected_map["prometheus"]=1
+        
+        echo "Recommended services (pre-selected):"
+        echo "  1. postgres     ✓ Database"
+        echo "  2. redis        ✓ Cache"
+        echo "  3. tailscale    VPN"
+        echo "  4. openwebui    Web UI"
+        echo "  5. anythingllm  Web UI"
+        echo "  6. dify         Web UI"
+        echo "  7. n8n          Workflow"
+        echo "  8. flowise      Workflow"
+        echo "  9. ollama       Local LLM"
+        echo " 10. litellm     ✓ LLM Router"
+        echo " 11. signal-api   SMS"
+        echo " 12. openclaw    ✓ UI"
+        echo " 13. prometheus  ✓ Monitoring"
+        echo " 14. grafana      Monitoring"
+        echo " 15. minio        Storage"
+        echo " 16. rclone      Cloud Sync"
         echo ""
-        print_header "🧠 Vector Database Selection"
-        echo ""
-        echo "Select vector database for RAG applications:"
-        echo ""
-        echo "  1) Qdrant (Recommended)"
-        echo "     - REST + gRPC API"
-        echo "     - Web dashboard"
-        echo "     - Production-ready"
-        echo ""
-        echo "  2) Milvus"
-        echo "     - High performance"
-        echo "     - Distributed support"
-        echo "     - Cloud-native"
-        echo ""
-        echo "  3) ChromaDB"
-        echo "     - Python-native"
-        echo "     - Good for development"
-        echo ""
-        echo "  4) Weaviate"
-        echo "     - GraphQL API"
-        echo "     - Semantic search"
-        echo "     - Modular architecture"
-        echo ""
+        echo "Type numbers to toggle, 'all' for all, 'done' to finish"
         
         while true; do
-            echo -n -e "${YELLOW}Select vector database [1-4]:${NC} "
-            read -r vector_db_choice
+            echo -n -e "${YELLOW}Enter selection:${NC} "
+            read -r selection
             
-            case "$vector_db_choice" in
-                1)
-                    echo "VECTOR_DB=qdrant" >> "$ENV_FILE"
-                    echo "VECTOR_DB_TYPE=qdrant" >> "$ENV_FILE"
-                    print_success "Qdrant selected as vector database"
-                    break
-                    ;;
-                2)
-                    echo "VECTOR_DB=milvus" >> "$ENV_FILE"
-                    echo "VECTOR_DB_TYPE=milvus" >> "$ENV_FILE"
-                    print_success "Milvus selected as vector database"
-                    break
-                    ;;
-                3)
-                    echo "VECTOR_DB=chroma" >> "$ENV_FILE"
-                    echo "VECTOR_DB_TYPE=chroma" >> "$ENV_FILE"
-                    print_success "ChromaDB selected as vector database"
-                    break
-                    ;;
-                4)
-                    echo "VECTOR_DB=weaviate" >> "$ENV_FILE"
-                    echo "VECTOR_DB_TYPE=weaviate" >> "$ENV_FILE"
-                    print_success "Weaviate selected as vector database"
-                    break
+            if [[ "$selection" == "done" ]]; then
+                break
+            elif [[ "$selection" == "all" ]]; then
+                for service in "${!selected_map[@]}"; do
+                    selected_map[$service]=1
+                done
+                print_success "All services selected"
+            elif [[ "$selection" =~ ^[0-9\ ]+$ ]]; then
+                for num in $selection; do
+                    if [[ $num -ge 1 ]] && [[ $num -le 16 ]]; then
+                        local service_name
+                        case $num in
+                            1) service_name="postgres" ;;
+                            2) service_name="redis" ;;
+                            3) service_name="tailscale" ;;
+                            4) service_name="openwebui" ;;
+                            5) service_name="anythingllm" ;;
+                            6) service_name="dify" ;;
+                            7) service_name="n8n" ;;
+                            8) service_name="flowise" ;;
+                            9) service_name="ollama" ;;
+                            10) service_name="litellm" ;;
+                            11) service_name="signal-api" ;;
+                            12) service_name="openclaw" ;;
+                            13) service_name="prometheus" ;;
+                            14) service_name="grafana" ;;
+                            15) service_name="minio" ;;
+                            16) service_name="rclone" ;;
+                            *) print_warning "Invalid selection: $num (must be 1-16)"; continue ;;
+                        esac
+                        
+                        if [[ "${selected_map[$service_name]:-}" == "0" ]]; then
+                            selected_map[$service_name]=1
+                            print_success "Added: $service_name"
+                        else
+                            selected_map[$service_name]=0
+                            print_info "Removed: $service_name"
+                        fi
+                    else
+                        print_warning "Invalid selection: $num (must be 1-16)"
+                    fi
+                done
+            else
+                print_warning "Invalid input. Type numbers, 'all', or 'done'"
+            fi
                     ;;
                 *)
                     print_error "Invalid selection"
@@ -952,6 +908,100 @@ collect_configurations() {
     echo ""
     print_header "⚙️ Configuration Collection"
     echo ""
+    
+    # Generate tenant identity for multi-tenant support
+    print_section "Tenant Identity"
+    
+    # Generate a stable tenant ID from the EBS mount point
+    # e.g. /mnt/data-nvme0 → nvme0 → tenant-nvme0
+    VOLUME_SUFFIX=$(basename "${DATA_ROOT}" | sed 's/[^a-zA-Z0-9]/-/g')
+    DEFAULT_TENANT_ID="tenant-${VOLUME_SUFFIX}"
+    
+    echo -n -e "${YELLOW}Tenant/Stack name [${DEFAULT_TENANT_ID}]:${NC} "
+    read -r TENANT_ID
+    TENANT_ID=${TENANT_ID:-${DEFAULT_TENANT_ID}}
+    
+    # Sanitize: lowercase, alphanumeric + hyphen only
+    TENANT_ID=$(echo "${TENANT_ID}" | tr '[:upper:]' '[:lower:]' | \
+                sed 's/[^a-z0-9-]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
+    
+    echo "TENANT_ID=${TENANT_ID}" >> "$ENV_FILE"
+    echo "COMPOSE_PROJECT_NAME=${TENANT_ID}" >> "$ENV_FILE"
+    echo "TAILSCALE_HOSTNAME=${TENANT_ID}" >> "$ENV_FILE"
+    
+    print_success "Tenant ID: ${TENANT_ID}"
+    print_success "Compose project: ${TENANT_ID}"
+    print_success "Tailscale hostname: ${TENANT_ID}"
+    
+    # Stack profile selection
+    print_section "Stack Configuration"
+    echo ""
+    echo "Select your deployment profile:"
+    echo ""
+    echo "  1. Full Stack (RECOMMENDED)"
+    echo "     LiteLLM + Qdrant + OpenClaw + Caddy"
+    echo "     + Tailscale (private mesh access)"
+    echo "     + rclone (Google Drive sync)"
+    echo ""
+    echo "  2. Core Stack (no external integrations)"
+    echo "     LiteLLM + Qdrant + OpenClaw + Caddy"
+    echo "     No Tailscale, no rclone"
+    echo ""
+    echo "  3. API Gateway Only"
+    echo "     LiteLLM + Qdrant only"
+    echo "     No OpenClaw UI, no Caddy"
+    echo "     Tailscale optional"
+    echo ""
+    echo "  4. Custom (choose each service individually)"
+    echo ""
+    echo -n -e "${YELLOW}Profile [1-4, default 1]:${NC} "
+    read -r STACK_PROFILE
+    STACK_PROFILE=${STACK_PROFILE:-1}
+
+    case "${STACK_PROFILE}" in
+      1)
+          ENABLE_LITELLM=true
+          ENABLE_QDRANT=true
+          ENABLE_OPENCLAW=true
+          ENABLE_CADDY=true
+          ENABLE_TAILSCALE=true
+          ENABLE_GDRIVE=true          # will ask sub-questions
+          ;;
+      2)
+          ENABLE_LITELLM=true
+          ENABLE_QDRANT=true
+          ENABLE_OPENCLAW=true
+          ENABLE_CADDY=true
+          ENABLE_TAILSCALE=false
+          ENABLE_GDRIVE=false
+          ;;
+      3)
+          ENABLE_LITELLM=true
+          ENABLE_QDRANT=true
+          ENABLE_OPENCLAW=false
+          ENABLE_CADDY=false
+          ENABLE_TAILSCALE=false      # will ask
+          ENABLE_GDRIVE=false
+          ;;
+      4)
+          # ask each individually — existing logic
+          ENABLE_LITELLM=false
+          ENABLE_QDRANT=false
+          ENABLE_OPENCLAW=false
+          ENABLE_CADDY=false
+          ENABLE_TAILSCALE=false
+          ENABLE_GDRIVE=false
+          ;;
+    esac
+
+    # Write profile flags to .env immediately
+    echo "STACK_PROFILE=${STACK_PROFILE}" >> "$ENV_FILE"
+    echo "ENABLE_LITELLM=${ENABLE_LITELLM}" >> "$ENV_FILE"
+    echo "ENABLE_QDRANT=${ENABLE_QDRANT}" >> "$ENV_FILE"
+    echo "ENABLE_OPENCLAW=${ENABLE_OPENCLAW}" >> "$ENV_FILE"
+    echo "ENABLE_CADDY=${ENABLE_CADDY}" >> "$ENV_FILE"
+    echo "ENABLE_TAILSCALE=${ENABLE_TAILSCALE}" >> "$ENV_FILE"
+    echo "ENABLE_GDRIVE=${ENABLE_GDRIVE}" >> "$ENV_FILE"
     
     # Initialize environment file (preserve existing domain variables)
     # Read existing domain variables if they exist (get last occurrence to avoid duplicates)
@@ -1760,35 +1810,31 @@ allocate_port() {
         echo ""
         print_header "🔗 Tailscale VPN (required for OpenClaw)"
         echo ""
-        
-        print_info "Tailscale is required for OpenClaw internal access."
-        print_info "Get an auth key at: https://login.tailscale.com/admin/settings/keys"
-        print_info "Use a reusable auth key for persistent installs."
+        echo "You need a REUSABLE, NON-EPHEMERAL auth key from:"
+        echo "  https://login.tailscale.com/admin/settings/keys"
+        echo ""
+        echo "  ✅ Use: Reusable key (so re-deploys work)"
+        echo "  ❌ Avoid: Ephemeral key (device disappears on disconnect)"
+        echo "  ❌ Avoid: One-time key (breaks on second deploy)"
         echo ""
         
-        local tailscale_auth_key=""
-        while [[ -z "$tailscale_auth_key" ]]; do
-            echo -n -e "${YELLOW}Tailscale auth key (tskey-auth-...):${NC} "
-            read -r tailscale_auth_key
+        while true; do
+            echo -n -e "${YELLOW}Tailscale Auth Key (tskey-auth-...):${NC} "
+            read -r TAILSCALE_AUTH_KEY
             
-            if [[ ! "$tailscale_auth_key" =~ ^tskey- ]]; then
-                print_warning "Auth key must start with 'tskey-'"
-                tailscale_auth_key=""
+            if [[ "${TAILSCALE_AUTH_KEY}" =~ ^tskey-auth- ]]; then
+                break
+            else
+                echo "❌ Key must start with 'tskey-auth-' — please try again"
             fi
         done
         
-        local tailscale_hostname="ai-platform"
-        echo -n -e "${YELLOW}Tailscale hostname for this machine [ai-platform]:${NC} "
-        read -r tailscale_hostname_input
-        if [[ -n "$tailscale_hostname_input" ]]; then
-            tailscale_hostname="$tailscale_hostname_input"
-        fi
-        
-        echo "TAILSCALE_AUTH_KEY=${tailscale_auth_key}" >> "$ENV_FILE"
-        echo "TAILSCALE_HOSTNAME=${tailscale_hostname}" >> "$ENV_FILE"
+        # Use tenant ID as hostname (already set above)
+        echo "TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY}" >> "$ENV_FILE"
+        # TAILSCALE_HOSTNAME already set from tenant ID
         echo "TAILSCALE_IP=pending" >> "$ENV_FILE"
         
-        print_success "Tailscale configuration completed"
+        print_success "Tailscale key saved"
     fi
     
     # AnythingLLM telemetry (if selected)
