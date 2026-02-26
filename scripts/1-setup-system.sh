@@ -1025,7 +1025,7 @@ collect_configurations() {
     echo ""
     
     # Generate tenant identity for multi-tenant support
-    print_section "Tenant Identity"
+    print_header "Tenant Identity"
     
     # Generate a stable tenant ID from the EBS mount point
     # e.g. /mnt/data-nvme0 → nvme0 → tenant-nvme0
