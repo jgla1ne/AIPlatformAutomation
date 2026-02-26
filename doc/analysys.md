@@ -1,349 +1,548 @@
-Let me fetch the current script 2 from GitHub.
+Let me fetch all 5 scripts first.
 
 **Reading:**
+- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/0-complete-cleanup.sh
+- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/1-setup-system.sh
 - https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/2-deploy-services.sh
+- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/3-configure-services.sh
+- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/4-add-service.sh
 
 ---
 
-## What I See in Script 2
+## Master Diagnosis — Root Causes Across All Scripts
 
-### Structure Overview
+### The Single Biggest Problem
+
 ```
-The script currently handles:
-  1. .env loading from DATA_ROOT
-  2. Docker network creation
-  3. Directory structure validation
-  4. Service deployment via docker compose
-  5. Tailscale setup
-  6. rclone configuration
-  7. Health checks
-  8. Caddy/SSL configuration
+PostgreSQL container runs as UID 999 internally.
+Script creates directories as RUNNING_UID (1001).
+Script then tries chown 999:999 — but if postgres dir
+already has files owned by 999, and script re-runs,
+Docker volume mount resets ownership on re-entry.
+
+The REAL fix is not chown in the script.
+The fix is: use a Docker named volume OR use a
+postgres init container to set ownership INSIDE Docker
+before the main postgres container starts.
+
+Every other problem flows from postgres never starting.
 ```
 
 ---
 
-## Critical Issues Found
+## Comprehensive Fix Instructions for Windsurf
 
-### Issue 1 — .env Loading Is Fragile
+### INSTRUCTION SET A — Script 0 (Cleanup)
+
 ```
-Current code likely does something like:
-  source "${DATA_ROOT}/.env"
-  or
-  export $(cat "${DATA_ROOT}/.env" | xargs)
+PROBLEM: Cleanup script may leave orphaned named volumes
+or stale network preventing Script 2 from creating fresh state.
 
-Problems:
-  - If .env has spaces in values (e.g. passwords), xargs breaks
-  - If .env has comments, they get interpreted as commands
-  - If DATA_ROOT is not set before sourcing, script fails silently
-  - No check that .env actually exists before sourcing
-
-Fix:
+FIND the section that removes containers/networks.
+ENSURE it also runs:
 ────────────────────────────────────────────────────────────────
-# Resolve DATA_ROOT before anything else
-DATA_ROOT="${DATA_ROOT:-/mnt/data}"
-ENV_FILE="${DATA_ROOT}/.env"
+# Remove named volumes to prevent stale ownership
+docker volume rm \
+  "${COMPOSE_PROJECT_NAME}_postgres_data" \
+  "${COMPOSE_PROJECT_NAME}_redis_data" \
+  "${COMPOSE_PROJECT_NAME}_qdrant_data" \
+  2>/dev/null || true
 
-if [ ! -f "${ENV_FILE}" ]; then
-  echo "❌ ERROR: .env not found at ${ENV_FILE}"
-  echo "   Run Script 1 first: sudo bash scripts/1-setup-system.sh"
+# Remove network explicitly
+docker network rm ai_platform 2>/dev/null || true
+docker network rm "${COMPOSE_PROJECT_NAME}_default" 2>/dev/null || true
+
+# Kill any process holding port 80 or 443
+fuser -k 80/tcp 2>/dev/null || true
+fuser -k 443/tcp 2>/dev/null || true
+
+log_success "Cleanup complete — safe to run Script 2"
+────────────────────────────────────────────────────────────────
+```
+
+---
+
+### INSTRUCTION SET B — Script 2, Section 1: .env Loading
+
+```
+FIND: wherever .env is loaded at the top of Script 2
+REPLACE ENTIRELY WITH:
+────────────────────────────────────────────────────────────────
+# ── Environment Loading ──────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# DATA_ROOT must be set before this script runs
+# It is written by Script 1 to /etc/ai-platform/env-pointer
+if [ -f /etc/ai-platform/env-pointer ]; then
+  DATA_ROOT="$(cat /etc/ai-platform/env-pointer)"
+elif [ -n "${DATA_ROOT}" ]; then
+  : # already set in environment
+else
+  echo "❌ DATA_ROOT not found. Run Script 1 first."
   exit 1
 fi
 
-# Safe .env loading — handles spaces, quotes, comments
+ENV_FILE="${DATA_ROOT}/.env"
+
+if [ ! -f "${ENV_FILE}" ]; then
+  echo "❌ .env not found at ${ENV_FILE}"
+  echo "   Run Script 1 first."
+  exit 1
+fi
+
+# Safe load — handles spaces in values, ignores comments
 set -a
 # shellcheck disable=SC1090
 source "${ENV_FILE}"
 set +a
 
-log_success ".env loaded from ${ENV_FILE}"
-────────────────────────────────────────────────────────────────
-```
+# Validate minimum required vars
+for REQUIRED in COMPOSE_PROJECT_NAME DOMAIN DATA_ROOT; do
+  if [ -z "${!REQUIRED}" ]; then
+    echo "❌ Required variable ${REQUIRED} is empty in .env"
+    exit 1
+  fi
+done
 
----
-
-### Issue 2 — Docker Compose Project Name Not Enforced
-```
-If COMPOSE_PROJECT_NAME is not explicitly passed to every
-docker compose call, Docker uses the directory name as project.
-
-This means:
-  Tenant A: /mnt/data-nvme0 → project name "data-nvme0"
-  Tenant B: /mnt/data-nvme1 → project name "data-nvme1"
-
-BUT if both run from the same scripts/ directory:
-  Both get project name "scripts" — containers overwrite each other
-
-Fix — every docker compose call must be:
-────────────────────────────────────────────────────────────────
-# Define once at top of script
+# Define canonical compose command used everywhere in this script
 COMPOSE="docker compose \
   --project-name ${COMPOSE_PROJECT_NAME} \
   --env-file ${ENV_FILE} \
   --file ${SCRIPT_DIR}/docker-compose.yml"
 
-# Then use everywhere:
-${COMPOSE} up -d postgres redis qdrant
-${COMPOSE} up -d litellm
-${COMPOSE} ps
-${COMPOSE} logs --tail=50 openclaw
+log_success ".env loaded | Project: ${COMPOSE_PROJECT_NAME} | Domain: ${DOMAIN}"
+────────────────────────────────────────────────────────────────
+
+ADD to Script 1 — after writing .env:
+────────────────────────────────────────────────────────────────
+# Write env pointer so Script 2 can find .env without DATA_ROOT being set
+mkdir -p /etc/ai-platform
+echo "${DATA_ROOT}" > /etc/ai-platform/env-pointer
+chmod 644 /etc/ai-platform/env-pointer
+log_success "Env pointer written to /etc/ai-platform/env-pointer"
 ────────────────────────────────────────────────────────────────
 ```
 
 ---
 
-### Issue 3 — rclone OAuth Tunnel Still Broken
+### INSTRUCTION SET C — Script 2, Section 2: PostgreSQL Fix (THE CRITICAL FIX)
+
 ```
-If GDRIVE_AUTH_METHOD=oauth_tunnel, Script 2 likely still
-tries to run rclone config which:
-  - Binds to 127.0.0.1:53682 on the SERVER
-  - You cannot reach this from your laptop browser
-  - Hangs forever
-
-The correct flow for oauth_tunnel:
-
-Script 2 should:
-  1. Check if rclone.conf already has a valid token
-     (RCLONE_TOKEN_OBTAINED=true in .env)
-  2. If YES → start rclone container immediately
-  3. If NO  → print SSH tunnel instructions and EXIT
-     Do NOT hang. Do NOT call rclone config.
-     User follows instructions, runs Script 3 to complete.
-
+FIND: the postgres directory creation and deployment block
+REPLACE ENTIRELY WITH:
 ────────────────────────────────────────────────────────────────
-setup_rclone() {
-  if [ "${ENABLE_GDRIVE}" != "true" ]; then
-    log_info "Google Drive sync disabled — skipping rclone"
-    return 0
+deploy_postgres() {
+  print_section "PostgreSQL"
+
+  # Use Docker NAMED VOLUME — not bind mount — to avoid host ownership issues
+  # The named volume is managed by Docker, postgres container owns it internally
+  # This eliminates the UID 999 vs 1001 ownership conflict entirely
+
+  # Check if named volume exists
+  if ! docker volume inspect "${COMPOSE_PROJECT_NAME}_postgres_data" \
+       &>/dev/null; then
+    log_info "Creating postgres named volume..."
+    docker volume create "${COMPOSE_PROJECT_NAME}_postgres_data"
   fi
 
-  case "${GDRIVE_AUTH_METHOD}" in
+  # Write the postgres service with named volume to a override file
+  # This overrides any bind-mount in docker-compose.yml
+  cat > "${SCRIPT_DIR}/docker-compose.postgres-override.yml" << EOF
+version: '3.8'
+services:
+  postgres:
+    volumes:
+      - ${COMPOSE_PROJECT_NAME}_postgres_data:/var/lib/postgresql/data
 
-    service_account)
-      # Validate service account JSON exists
-      SA_FILE="${DATA_ROOT}/config/rclone/service-account.json"
-      if [ ! -f "${SA_FILE}" ]; then
-        log_error "Service account JSON not found: ${SA_FILE}"
-        log_error "Re-run Script 1 and provide the service account JSON path"
-        exit 1
-      fi
-
-      # Write rclone.conf (service account — no OAuth)
-      mkdir -p "${DATA_ROOT}/config/rclone"
-      cat > "${DATA_ROOT}/config/rclone/rclone.conf" << EOF
-[gdrive]
-type = drive
-scope = drive
-service_account_file = /data/config/rclone/service-account.json
-root_folder_id = ${RCLONE_GDRIVE_FOLDER:-}
+volumes:
+  ${COMPOSE_PROJECT_NAME}_postgres_data:
+    external: true
 EOF
-      log_success "rclone config written (service account)"
-      ;;
 
-    oauth_tunnel)
-      RCLONE_CONF="${DATA_ROOT}/config/rclone/rclone.conf"
+  # Deploy postgres using override
+  docker compose \
+    --project-name "${COMPOSE_PROJECT_NAME}" \
+    --env-file "${ENV_FILE}" \
+    --file "${SCRIPT_DIR}/docker-compose.yml" \
+    --file "${SCRIPT_DIR}/docker-compose.postgres-override.yml" \
+    up -d postgres
 
-      # Check if token already obtained
-      if [ "${RCLONE_TOKEN_OBTAINED}" = "true" ] && \
-         [ -f "${RCLONE_CONF}" ] && \
-         grep -q '"access_token"' "${RCLONE_CONF}" 2>/dev/null; then
-        log_success "rclone OAuth token already present — starting container"
-      else
-        # Print instructions and defer to Script 3
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "  rclone OAuth Authorization Required"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
-        echo "  Run this on YOUR LOCAL MACHINE (laptop/desktop):"
-        echo ""
-        echo "  Step 1: Open a NEW terminal on your local machine"
-        echo "  Step 2: Run:"
-        echo "    ssh -L 53682:localhost:53682 $(whoami)@$(curl -s ifconfig.me 2>/dev/null || echo 'YOUR_SERVER_IP')"
-        echo ""
-        echo "  Step 3: In ANOTHER local terminal, run:"
-        echo "    rclone authorize \"drive\" \\"
-        echo "      \"${RCLONE_OAUTH_CLIENT_ID}\" \\"
-        echo "      \"${RCLONE_OAUTH_CLIENT_SECRET}\""
-        echo ""
-        echo "  Step 4: Complete the browser auth flow"
-        echo "  Step 5: Copy the token JSON that rclone prints"
-        echo "  Step 6: Run Script 3 to paste the token and complete setup"
-        echo ""
-        echo "  ⚠️  Google Drive sync will be DISABLED until this is done"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
-        log_warning "rclone setup deferred — run Script 3 to complete"
-
-        # Disable gdrive in this run so other services still start
-        ENABLE_GDRIVE=false
-        return 0
-      fi
-      ;;
-
-    paste_token)
-      # Token was already pasted in Script 1 and written to rclone.conf
-      RCLONE_CONF="${DATA_ROOT}/config/rclone/rclone.conf"
-      if [ ! -f "${RCLONE_CONF}" ]; then
-        log_error "rclone.conf not found — re-run Script 1"
-        exit 1
-      fi
-      log_success "rclone config found (paste_token method)"
-      ;;
-
-  esac
-}
-────────────────────────────────────────────────────────────────
-```
-
----
-
-### Issue 4 — Tailscale Up Called Without Checking tailscaled State
-```
-Current code calls tailscale up immediately.
-If tailscaled is not running yet, tailscale up fails silently.
-
-Fix — add daemon readiness check:
-────────────────────────────────────────────────────────────────
-setup_tailscale() {
-  if [ "${ENABLE_TAILSCALE}" != "true" ]; then
-    log_info "Tailscale disabled — skipping"
-    return 0
-  fi
-
-  # Install if missing
-  if ! command -v tailscale &>/dev/null; then
-    log_info "Installing Tailscale..."
-    curl -fsSL https://tailscale.com/install.sh | sh
-  fi
-
-  # Ensure daemon is running
-  if ! systemctl is-active --quiet tailscaled 2>/dev/null; then
-    log_info "Starting tailscaled..."
-    systemctl enable tailscaled --now
-    # Wait for socket to appear
-    ATTEMPTS=0
-    while [ ! -S /var/run/tailscale/tailscaled.sock ] && \
-          [ "${ATTEMPTS}" -lt 15 ]; do
-      sleep 2
-      ATTEMPTS=$((ATTEMPTS + 1))
-    done
-  fi
-
-  # Validate key format before calling tailscale up
-  if [[ ! "${TAILSCALE_AUTH_KEY}" =~ ^tskey-auth- ]]; then
-    log_error "Invalid Tailscale auth key format: ${TAILSCALE_AUTH_KEY}"
-    log_error "Must start with 'tskey-auth-'"
-    exit 1
-  fi
-
-  log_info "Bringing up Tailscale (hostname: ${TAILSCALE_HOSTNAME})..."
-  tailscale up \
-    --authkey="${TAILSCALE_AUTH_KEY}" \
-    --hostname="${TAILSCALE_HOSTNAME}" \
-    --accept-dns=false \
-    --accept-routes=false \
-    --reset
-
-  # Wait for IP with timeout
-  TAILSCALE_IP=""
+  # Wait for postgres to be genuinely ready
+  log_info "Waiting for PostgreSQL to accept connections..."
   ATTEMPTS=0
-  while [ -z "${TAILSCALE_IP}" ] && [ "${ATTEMPTS}" -lt 30 ]; do
-    TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || true)
-    [ -z "${TAILSCALE_IP}" ] && sleep 2
+  MAX_ATTEMPTS=30
+
+  until docker exec "${COMPOSE_PROJECT_NAME}-postgres-1" \
+        pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+        &>/dev/null 2>&1; do
     ATTEMPTS=$((ATTEMPTS + 1))
+    if [ "${ATTEMPTS}" -ge "${MAX_ATTEMPTS}" ]; then
+      log_error "PostgreSQL did not become ready after 60 seconds"
+      log_error "Logs:"
+      docker logs "${COMPOSE_PROJECT_NAME}-postgres-1" --tail=30
+      exit 1
+    fi
+    sleep 2
   done
 
-  if [ -z "${TAILSCALE_IP}" ]; then
-    log_error "Tailscale failed to obtain IP after 60 seconds"
-    log_error "Debug: tailscale status"
-    exit 1
-  fi
+  log_success "PostgreSQL ready"
 
-  # Persist IP for other scripts
-  sed -i "s|^TAILSCALE_IP=.*|TAILSCALE_IP=${TAILSCALE_IP}|" "${ENV_FILE}" || \
-    echo "TAILSCALE_IP=${TAILSCALE_IP}" >> "${ENV_FILE}"
+  # Create pgvector extension
+  docker exec "${COMPOSE_PROJECT_NAME}-postgres-1" \
+    psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+    -c "CREATE EXTENSION IF NOT EXISTS vector;" \
+    && log_success "pgvector extension created" \
+    || log_warning "pgvector extension creation failed — check if pgvector image is used"
+}
+────────────────────────────────────────────────────────────────
 
-  log_success "Tailscale IP: ${TAILSCALE_IP}"
-  log_success "Tailscale hostname: ${TAILSCALE_HOSTNAME}"
+IMPORTANT: Also update docker-compose.yml to use named volume syntax:
+────────────────────────────────────────────────────────────────
+# In docker-compose.yml postgres service:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: ${COMPOSE_PROJECT_NAME}-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data    # ← named volume
+    networks:
+      - ai_platform
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+# At the bottom of docker-compose.yml add:
+volumes:
+  postgres_data:
+    name: ${COMPOSE_PROJECT_NAME}_postgres_data
+    external: true
+────────────────────────────────────────────────────────────────
+```
+
+---
+
+### INSTRUCTION SET D — Script 2, Section 3: Deployment Order (Layered)
+
+```
+FIND: the main deployment sequence
+REPLACE WITH this strict layered order:
+────────────────────────────────────────────────────────────────
+main_deploy() {
+
+  # ── Layer 0: Infrastructure ───────────────────────────────
+  print_section "Layer 0: Network"
+  docker network create \
+    --driver bridge \
+    --label "project=${COMPOSE_PROJECT_NAME}" \
+    ai_platform 2>/dev/null \
+    || log_info "Network ai_platform already exists"
+
+  # ── Layer 1: Databases ────────────────────────────────────
+  print_section "Layer 1: Databases"
+  deploy_postgres          # uses named volume, waits for pg_isready
+  deploy_redis             # simple, fast
+  deploy_qdrant            # waits for HTTP /health
+
+  # ── Layer 2: Core AI Services ─────────────────────────────
+  print_section "Layer 2: Core Services"
+  [ "${ENABLE_LITELLM}"    = "true" ] && deploy_litellm
+  [ "${ENABLE_OPENWEBUI}"  = "true" ] && deploy_openwebui
+  [ "${ENABLE_N8N}"        = "true" ] && deploy_n8n
+  [ "${ENABLE_FLOWISE}"    = "true" ] && deploy_flowise
+  [ "${ENABLE_ANYTHINGLLM}"= "true" ] && deploy_anythingllm
+  [ "${ENABLE_DIFY}"       = "true" ] && deploy_dify
+  [ "${ENABLE_OPENCLAW}"   = "true" ] && deploy_openclaw
+  [ "${ENABLE_MINIO}"      = "true" ] && deploy_minio
+
+  # ── Layer 3: Reverse Proxy (must come AFTER apps) ─────────
+  print_section "Layer 3: Caddy Reverse Proxy"
+  deploy_caddy             # generates Caddyfile from enabled services
+
+  # ── Layer 4: Monitoring ───────────────────────────────────
+  print_section "Layer 4: Monitoring"
+  [ "${ENABLE_PROMETHEUS}" = "true" ] && deploy_prometheus
+  [ "${ENABLE_GRAFANA}"    = "true" ] && deploy_grafana
+
+  # ── Layer 5: Networking ───────────────────────────────────
+  print_section "Layer 5: Networking"
+  [ "${ENABLE_TAILSCALE}"  = "true" ] && setup_tailscale
+  [ "${ENABLE_GDRIVE}"     = "true" ] && setup_rclone
+
+  # ── Final: Health Report ──────────────────────────────────
+  run_health_checks
 }
 ────────────────────────────────────────────────────────────────
 ```
 
 ---
 
-### Issue 5 — Health Checks Don't Respect Stack Profile
+### INSTRUCTION SET E — Script 2, Section 4: Caddy Dynamic Config
+
 ```
-Current health check section likely checks ALL services
-regardless of which are enabled.
-
-If ENABLE_OPENCLAW=false but the health check tries to
-curl openclaw, it will always fail and mislead the operator.
-
-Fix:
+FIND: Caddy deployment / Caddyfile generation
+REPLACE WITH dynamic generation based on ENABLE_* flags:
 ────────────────────────────────────────────────────────────────
-run_health_checks() {
-  print_section "Health Checks"
-  local FAILED=0
+deploy_caddy() {
+  CADDY_CONFIG_DIR="${DATA_ROOT}/config/caddy"
+  mkdir -p "${CADDY_CONFIG_DIR}"
 
-  check_service() {
-    local NAME="$1"
-    local URL="$2"
+  # Always include global options and health endpoint
+  cat > "${CADDY_CONFIG_DIR}/Caddyfile" << EOF
+{
+  email ${CADDY_EMAIL:-admin@${DOMAIN}}
+  admin off
+}
+
+# Health check endpoint
+:2019 {
+  respond /health 200
+}
+
+EOF
+
+  # Build routes only for enabled services
+  append_route() {
+    local SUBDOMAIN="$1"
+    local BACKEND_PORT="$2"
     local ENABLED="$3"
+    local PATH_PREFIX="${4:-}"
 
-    if [ "${ENABLED}" != "true" ]; then
-      echo "  ⏭  ${NAME} — disabled (skipped)"
-      return 0
-    fi
+    [ "${ENABLED}" != "true" ] && return 0
 
-    if curl -sf --max-time 5 "${URL}" &>/dev/null; then
-      echo "  ✅ ${NAME} — OK"
+    if [ -n "${PATH_PREFIX}" ]; then
+      cat >> "${CADDY_CONFIG_DIR}/Caddyfile" << EOF
+${SUBDOMAIN}.${DOMAIN} {
+  handle ${PATH_PREFIX}* {
+    reverse_proxy localhost:${BACKEND_PORT}
+  }
+}
+
+EOF
     else
-      echo "  ❌ ${NAME} — FAILED (${URL})"
-      FAILED=$((FAILED + 1))
+      cat >> "${CADDY_CONFIG_DIR}/Caddyfile" << EOF
+${SUBDOMAIN}.${DOMAIN} {
+  reverse_proxy localhost:${BACKEND_PORT}
+}
+
+EOF
     fi
   }
 
-  check_service "LiteLLM"  "http://localhost:${LITELLM_PORT}/health"  "${ENABLE_LITELLM}"
-  check_service "Qdrant"   "http://localhost:${QDRANT_PORT}/health"   "${ENABLE_QDRANT}"
-  check_service "OpenClaw" "http://localhost:${OPENCLAW_PORT}/"        "${ENABLE_OPENCLAW}"
+  # Root domain → OpenWebUI (if enabled) else LiteLLM
+  if [ "${ENABLE_OPENWEBUI}" = "true" ]; then
+    cat >> "${CADDY_CONFIG_DIR}/Caddyfile" << EOF
+${DOMAIN} {
+  reverse_proxy localhost:${OPENWEBUI_PORT:-5006}
+}
 
-  if [ "${FAILED}" -gt 0 ]; then
-    log_warning "${FAILED} service(s) failed health check"
-    log_warning "Check logs: docker compose -p ${COMPOSE_PROJECT_NAME} logs --tail=50"
-  else
-    log_success "All enabled services healthy"
+EOF
   fi
+
+  append_route "n8n"          "${N8N_PORT:-5678}"       "${ENABLE_N8N}"
+  append_route "flowise"      "${FLOWISE_PORT:-3001}"   "${ENABLE_FLOWISE}"
+  append_route "anythingllm"  "${ANYTHINGLLM_PORT:-3001}" "${ENABLE_ANYTHINGLLM}"
+  append_route "dify"         "${DIFY_PORT:-3000}"      "${ENABLE_DIFY}"
+  append_route "openclaw"     "${OPENCLAW_PORT:-8080}"  "${ENABLE_OPENCLAW}"
+  append_route "minio"        "${MINIO_CONSOLE_PORT:-9001}" "${ENABLE_MINIO}"
+  append_route "prometheus"   "${PROMETHEUS_PORT:-9090}" "${ENABLE_PROMETHEUS}"
+  append_route "grafana"      "${GRAFANA_PORT:-3000}"   "${ENABLE_GRAFANA}"
+  append_route "signal"       "${SIGNAL_API_PORT:-8090}" "${ENABLE_SIGNAL_API}"
+
+  log_success "Caddyfile written with routes for enabled services"
+
+  # Start Caddy
+  ${COMPOSE} up -d caddy
+
+  # Wait for Caddy admin endpoint
+  ATTEMPTS=0
+  until curl -sf http://localhost:2019/health &>/dev/null; do
+    ATTEMPTS=$((ATTEMPTS + 1))
+    [ "${ATTEMPTS}" -ge 15 ] && { log_error "Caddy failed to start"; \
+      docker logs "${COMPOSE_PROJECT_NAME}-caddy-1" --tail=30; exit 1; }
+    sleep 2
+  done
+
+  log_success "Caddy running and accepting requests"
 }
 ────────────────────────────────────────────────────────────────
 ```
 
 ---
 
-## Summary Table
+### INSTRUCTION SET F — Script 2, Section 5: Redis and Qdrant
 
 ```
-Issue                                    Priority   Impact
-──────────────────────────────────────────────────────────────
-.env loading with set -a / source        🔴 Critical  Script fails on passwords with spaces
-COMPOSE_PROJECT_NAME on every call       🔴 Critical  Multi-tenant containers overwrite each other
-rclone oauth_tunnel hangs on server      🔴 Critical  Script never completes
-tailscaled socket check before up        🟡 High      tailscale up fails silently
-Health checks skip disabled services     🟡 High      False failures mislead operator
-rclone container not started if          🟠 Medium    Drive sync silently disabled
-  oauth not yet completed
+ADD these two deploy functions (currently likely missing proper wait logic):
+────────────────────────────────────────────────────────────────
+deploy_redis() {
+  ${COMPOSE} up -d redis
+
+  ATTEMPTS=0
+  until docker exec "${COMPOSE_PROJECT_NAME}-redis-1" \
+        redis-cli ping 2>/dev/null | grep -q PONG; do
+    ATTEMPTS=$((ATTEMPTS + 1))
+    [ "${ATTEMPTS}" -ge 20 ] && {
+      log_error "Redis did not become ready"
+      docker logs "${COMPOSE_PROJECT_NAME}-redis-1" --tail=20
+      exit 1
+    }
+    sleep 2
+  done
+  log_success "Redis ready"
+}
+
+deploy_qdrant() {
+  # Qdrant runs as UID 1000 internally
+  # Use named volume to avoid host ownership issues (same fix as postgres)
+  docker volume create "${COMPOSE_PROJECT_NAME}_qdrant_data" 2>/dev/null || true
+
+  ${COMPOSE} up -d qdrant
+
+  ATTEMPTS=0
+  until curl -sf "http://localhost:${QDRANT_PORT:-6333}/health" \
+        &>/dev/null; do
+    ATTEMPTS=$((ATTEMPTS + 1))
+    [ "${ATTEMPTS}" -ge 20 ] && {
+      log_error "Qdrant did not become ready"
+      docker logs "${COMPOSE_PROJECT_NAME}-qdrant-1" --tail=20
+      exit 1
+    }
+    sleep 2
+  done
+  log_success "Qdrant ready"
+}
+────────────────────────────────────────────────────────────────
 ```
 
 ---
 
-## Commit Message for Windsurf
+### INSTRUCTION SET G — Script 3: rclone OAuth Completion
 
 ```
-fix(s2): safe .env loading with set -a/source;
-fix(s2): enforce COMPOSE_PROJECT_NAME on all docker compose calls;
-fix(s2): rclone oauth_tunnel never hangs — prints SSH tunnel
-         instructions and defers to Script 3;
-fix(s2): tailscale setup checks tailscaled socket before up;
-fix(s2): health checks respect ENABLE_* flags — skip disabled services;
-fix(s2): rclone container skipped when token not yet obtained,
-         operator informed to run Script 3
+FIND: rclone configuration section in Script 3
+REPLACE WITH:
+────────────────────────────────────────────────────────────────
+configure_rclone_oauth() {
+  if [ "${ENABLE_GDRIVE}" != "true" ]; then
+    log_info "Google Drive disabled — skipping"
+    return 0
+  fi
+
+  if [ "${GDRIVE_AUTH_METHOD}" != "oauth_tunnel" ]; then
+    log_info "rclone auth method is ${GDRIVE_AUTH_METHOD} — no action needed here"
+    return 0
+  fi
+
+  if [ "${RCLONE_TOKEN_OBTAINED}" = "true" ]; then
+    log_success "rclone token already obtained — skipping"
+    return 0
+  fi
+
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  rclone Google Drive OAuth — Token Entry"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+  echo "  On YOUR LOCAL machine run:"
+  echo ""
+  echo "    rclone authorize \"drive\" \\"
+  echo "      \"${RCLONE_OAUTH_CLIENT_ID}\" \\"
+  echo "      \"${RCLONE_OAUTH_CLIENT_SECRET}\""
+  echo ""
+  echo "  Complete the browser flow, then paste the token JSON below."
+  echo "  Token looks like: {\"access_token\":\"ya29...\", ...}"
+  echo ""
+  read -rp "Paste token JSON: " RCLONE_TOKEN_JSON
+  echo ""
+
+  # Validate it looks like JSON with access_token
+  if ! echo "${RCLONE_TOKEN_JSON}" | grep -q '"access_token"'; then
+    log_error "Token does not look valid — missing access_token field"
+    exit 1
+  fi
+
+  # Write rclone.conf
+  RCLONE_CONF_DIR="${DATA_ROOT}/config/rclone"
+  mkdir -p "${RCLONE_CONF_DIR}"
+  cat > "${RCLONE_CONF_DIR}/rclone.conf" << EOF
+[gdrive]
+type = drive
+client_id = ${RCLONE_OAUTH_CLIENT_ID}
+client_secret = ${RCLONE_OAUTH_CLIENT_SECRET}
+scope = drive
+token = ${RCLONE_TOKEN_JSON}
+root_folder_id = ${RCLONE_GDRIVE_FOLDER:-}
+EOF
+
+  # Mark token as obtained in .env
+  sed -i "s|^RCLONE_TOKEN_OBTAINED=.*|RCLONE_TOKEN_OBTAINED=true|" \
+    "${ENV_FILE}" || echo "RCLONE_TOKEN_OBTAINED=true" >> "${ENV_FILE}"
+
+  log_success "rclone.conf written with OAuth token"
+
+  # Start rclone container now that token exists
+  ${COMPOSE} up -d rclone
+  log_success "rclone container started — Google Drive sync active"
+}
+────────────────────────────────────────────────────────────────
+```
+
+---
+
+## Summary: What Windsurf Must Do — In Order
+
+```
+Step  File              Change
+────────────────────────────────────────────────────────────────
+ 1    Script 0          Add named volume removal to cleanup
+
+ 2    Script 1          Write /etc/ai-platform/env-pointer
+                        after .env is created
+
+ 3    docker-compose.yml Change postgres + qdrant + redis to
+                        named volumes (not bind mounts)
+                        Add volumes: block at bottom
+
+ 4    Script 2          Replace .env loading with set -a/source
+                        + validation + COMPOSE var definition
+
+ 5    Script 2          Replace postgres deploy with named volume
+                        + pg_isready wait + pgvector creation
+
+ 6    Script 2          Add deploy_redis with redis-cli ping wait
+
+ 7    Script 2          Add deploy_qdrant with named volume
+                        + HTTP health wait
+
+ 8    Script 2          Replace deployment sequence with strict
+                        5-layer order
+
+ 9    Script 2          Replace Caddyfile generation with dynamic
+                        ENABLE_*-aware route builder
+
+10    Script 2          Replace rclone block — never hang,
+                        print tunnel instructions, set
+                        ENABLE_GDRIVE=false for this run
+
+11    Script 2          Replace Tailscale block with daemon
+                        socket check + retry IP loop
+
+12    Script 3          Add configure_rclone_oauth function
+                        with token paste + rclone.conf write
+────────────────────────────────────────────────────────────────
+
+COMMIT MESSAGE:
+fix: resolve postgres ownership deadlock using named volumes;
+fix: strict 5-layer deploy order with readiness gates at each layer;
+fix: dynamic Caddyfile generation respects ENABLE_* flags;
+fix: rclone oauth never hangs on server — deferred to Script 3;
+fix: tailscale daemon socket check before up;
+fix: .env loaded safely with set -a/source across all scripts;
+fix: Script 0 removes named volumes on cleanup
 ```

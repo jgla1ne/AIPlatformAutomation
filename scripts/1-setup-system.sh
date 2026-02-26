@@ -3970,6 +3970,12 @@ main() {
     # Mark setup as completed
     save_state "completed" "success" "Setup completed successfully"
     
+    # Write env pointer so Script 2 can find .env without DATA_ROOT being set
+    mkdir -p /etc/ai-platform
+    echo "${DATA_ROOT}" > /etc/ai-platform/env-pointer
+    chmod 644 /etc/ai-platform/env-pointer
+    print_success "Env pointer written to /etc/ai-platform/env-pointer"
+    
     # Completion message
     echo ""
     echo "$(printf '═%.0s' {1..80})"

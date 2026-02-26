@@ -50,37 +50,49 @@ print_header() {
     echo ""
 }
 
-# Load configuration from .env with safe handling
-load_config() {
-    # Resolve DATA_ROOT before anything else
-    DATA_ROOT="${DATA_ROOT:-/mnt/data}"
-    ENV_FILE="${DATA_ROOT}/.env"
-    
-    if [[ ! -f "$ENV_FILE" ]]; then
-        print_error "Configuration file not found: $ENV_FILE"
-        print_info "Please run script 1 first to create configuration"
-        exit 1
-    fi
-    
-    # Safe load with set -a to export all variables
-    set -a
-    source "$ENV_FILE"
-    set +a
-    
-    # Set tenant prefix for container names (after loading .env)
-    TENANT_PREFIX="${COMPOSE_PROJECT_NAME:-ai-platform}"
-    
-    # Define COMPOSE command with proper project name and env file
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    COMPOSE="docker compose \
-      --project-name ${COMPOSE_PROJECT_NAME:-ai-platform} \
-      --env-file ${ENV_FILE} \
-      --file ${SCRIPT_DIR}/docker-compose.yml"
-    
-    print_success "Configuration loaded from $ENV_FILE"
-    print_info "Tenant: ${TENANT_PREFIX}"
-    print_info "Compose project: ${COMPOSE_PROJECT_NAME:-ai-platform}"
-}
+# ── Environment Loading ──────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# DATA_ROOT must be set before this script runs
+# It is written by Script 1 to /etc/ai-platform/env-pointer
+if [ -f /etc/ai-platform/env-pointer ]; then
+  DATA_ROOT="$(cat /etc/ai-platform/env-pointer)"
+elif [ -n "${DATA_ROOT}" ]; then
+  : # already set in environment
+else
+  echo "❌ DATA_ROOT not found. Run Script 1 first."
+  exit 1
+fi
+
+ENV_FILE="${DATA_ROOT}/.env"
+
+if [ ! -f "${ENV_FILE}" ]; then
+  echo "❌ .env not found at ${ENV_FILE}"
+  echo "   Run Script 1 first."
+  exit 1
+fi
+
+# Safe load — handles spaces in values, ignores comments
+set -a
+# shellcheck disable=SC1090
+source "${ENV_FILE}"
+set +a
+
+# Validate minimum required vars
+for REQUIRED in COMPOSE_PROJECT_NAME DOMAIN DATA_ROOT; do
+  if [ -z "${!REQUIRED}" ]; then
+    echo "❌ Required variable ${REQUIRED} is empty in .env"
+    exit 1
+  fi
+done
+
+# Define canonical compose command used everywhere in this script
+COMPOSE="docker compose \
+  --project-name ${COMPOSE_PROJECT_NAME} \
+  --env-file ${ENV_FILE} \
+  --file ${SCRIPT_DIR}/docker-compose.yml"
+
+print_success ".env loaded | Project: ${COMPOSE_PROJECT_NAME} | Domain: ${DOMAIN}"
 
 # Generate tenant-prefixed container name
 get_container_name() {

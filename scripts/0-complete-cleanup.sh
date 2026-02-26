@@ -464,16 +464,24 @@ nuclear_cleanup() {
         docker rm "$container" 2>/dev/null || true
     done
     
-    # STEP 3: Remove all AI Platform networks
-    print_info "Step 3: Removing all AI Platform networks..."
+    # STEP 3: Remove all AI Platform named volumes
+    print_info "Step 3: Removing all AI Platform named volumes..."
+    local ai_volumes=($(docker volume ls --format "{{.Name}}" | grep -E "(ai_platform|ai-platform)" || true))
+    for volume in "${ai_volumes[@]}"; do
+        print_info "Removing volume $volume..."
+        docker volume rm "$volume" 2>/dev/null || true
+    done
+    
+    # STEP 4: Remove all AI Platform networks
+    print_info "Step 4: Removing all AI Platform networks..."
     local ai_networks=($(docker network ls --format "{{.Name}}" | grep -E "(ai_platform|ai-platform)" || true))
     for network in "${ai_networks[@]}"; do
         print_info "Removing network $network..."
         docker network rm "$network" 2>/dev/null || true
     done
     
-    # STEP 4: Remove all AI Platform AppArmor profiles
-    print_info "Step 4: Removing all AI Platform AppArmor profiles..."
+    # STEP 5: Remove all AI Platform AppArmor profiles
+    print_info "Step 5: Removing all AI Platform AppArmor profiles..."
     local ai_profiles=($(ls /etc/apparmor.d/ 2>/dev/null | grep -E "(ai_platform|ai-platform)" || true))
     for profile in "${ai_profiles[@]}"; do
         print_info "Removing AppArmor profile $profile..."
@@ -481,8 +489,8 @@ nuclear_cleanup() {
         rm -f "/etc/apparmor.d/$profile"
     done
     
-    # STEP 5: Unmount EBS volumes BEFORE trying to remove directories
-    print_info "Step 5: Unmounting EBS volumes..."
+    # STEP 6: Unmount EBS volumes BEFORE trying to remove directories
+    print_info "Step 6: Unmounting EBS volumes..."
     # Get all mounted volumes that match our target
     local target_volume=$(echo "$selected_volume" | sed 's:/*$::')
     local mounted_volumes=($(findmnt -n -o TARGET | grep "^${target_volume}" || true))
