@@ -481,13 +481,13 @@ deploy_layer_1_databases() {
         qdrant/qdrant:latest
     
     # WAIT for all layer 1 to be healthy before proceeding
-    wait_healthy "postgres" "docker exec $(get_container_name postgres) pg_isready -U ${POSTGRES_USER}" 30
-    wait_healthy "redis" "docker exec $(get_container_name redis) redis-cli -a ${REDIS_PASSWORD} ping" 30
+    wait_healthy "postgres" "docker exec $(get_container_name postgres) pg_isready -U ${POSTGRES_USER:-postgres}" 30
+    wait_healthy "redis" "docker exec $(get_container_name redis) redis-cli -a ${REDIS_PASSWORD:-} ping" 30
     wait_healthy "qdrant" "docker run --rm --network ${DOCKER_NETWORK} alpine/curl -sf http://$(get_container_name qdrant):6333/" 60
     
     # Create pgvector extension after postgres is ready
     print_info "Creating pgvector extension..."
-    docker exec $(get_container_name postgres) psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+    docker exec $(get_container_name postgres) psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-aiplatform}" \
         -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null || true
     print_success "pgvector extension created"
     
@@ -517,11 +517,11 @@ deploy_layer_2_services() {
         -e DB_POSTGRESDB_DATABASE=n8n \
         -e DB_POSTGRESDB_USER="${POSTGRES_USER}" \
         -e DB_POSTGRESDB_PASSWORD="${POSTGRES_PASSWORD}" \
-        -e N8N_HOST="n8n.${DOMAIN_NAME}" \
+        -e N8N_HOST="n8n.${DOMAIN_NAME:-localhost}" \
         -e N8N_PROTOCOL=https \
         -e N8N_PORT=5678 \
-        -e WEBHOOK_URL="https://n8n.${DOMAIN_NAME}/" \
-        -e N8N_EDITOR_BASE_URL="https://n8n.${DOMAIN_NAME}/" \
+        -e WEBHOOK_URL="https://n8n.${DOMAIN_NAME:-localhost}/" \
+        -e N8N_EDITOR_BASE_URL="https://n8n.${DOMAIN_NAME:-localhost}/" \
         -e HOME=/data/n8n \
         -v "${DATA_ROOT}/data/n8n:/data/n8n" \
         -u "${RUNNING_UID}:${RUNNING_GID}" \
@@ -573,8 +573,8 @@ deploy_layer_2_services() {
         --restart unless-stopped \
         -e LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
         -e LITELLM_SALT_KEY="${LITELLM_MASTER_KEY}" \
-        -e DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}" \
-        -e REDIS_URL="redis://:${REDIS_PASSWORD}@redis:6379" \
+        -e DATABASE_URL="postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aiplatform}" \
+        -e REDIS_URL="redis://:${REDIS_PASSWORD:-}@redis:6379" \
         -v "${DATA_ROOT}/data/litellm:/app/data" \
         -v "${DATA_ROOT}/logs/litellm:/app/logs" \
         -v "${DATA_ROOT}/config/litellm/config.yaml:/app/config.yaml:ro" \
@@ -628,17 +628,17 @@ deploy_layer_2_5_dify() {
         --user "${RUNNING_UID}:${RUNNING_GID}" \
         -e MODE=api \
         -e SECRET_KEY="${DIFY_SECRET_KEY}" \
-        -e DB_USERNAME="${POSTGRES_USER}" \
+        -e DB_USERNAME="${POSTGRES_USER:-postgres}" \
         -e DB_PASSWORD="${POSTGRES_PASSWORD}" \
         -e DB_HOST=postgres \
         -e DB_PORT=5432 \
-        -e DB_DATABASE="${POSTGRES_DB}" \
+        -e DB_DATABASE="${POSTGRES_DB:-aiplatform}" \
         -e REDIS_HOST=redis \
         -e REDIS_PORT=6379 \
         -e REDIS_PASSWORD="${REDIS_PASSWORD}" \
         -e STORAGE_TYPE=local \
         -e STORAGE_LOCAL_PATH=/app/api/storage \
-        -e CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/1 \
+        -e CELERY_BROKER_URL="redis://:${REDIS_PASSWORD:-}@redis:6379/1" \
         -v "${DATA_ROOT}/data/dify/storage:/app/api/storage" \
         langgenius/dify-api:latest
     
@@ -650,17 +650,17 @@ deploy_layer_2_5_dify() {
         --user "${RUNNING_UID}:${RUNNING_GID}" \
         -e MODE=worker \
         -e SECRET_KEY="${DIFY_SECRET_KEY}" \
-        -e DB_USERNAME="${POSTGRES_USER}" \
+        -e DB_USERNAME="${POSTGRES_USER:-postgres}" \
         -e DB_PASSWORD="${POSTGRES_PASSWORD}" \
         -e DB_HOST=postgres \
         -e DB_PORT=5432 \
-        -e DB_DATABASE="${POSTGRES_DB}" \
+        -e DB_DATABASE="${POSTGRES_DB:-aiplatform}" \
         -e REDIS_HOST=redis \
         -e REDIS_PORT=6379 \
         -e REDIS_PASSWORD="${REDIS_PASSWORD}" \
         -e STORAGE_TYPE=local \
         -e STORAGE_LOCAL_PATH=/app/api/storage \
-        -e CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/1 \
+        -e CELERY_BROKER_URL="redis://:${REDIS_PASSWORD:-}@redis:6379/1" \
         -v "${DATA_ROOT}/data/dify/storage:/app/api/storage" \
         langgenius/dify-api:latest
     
@@ -671,8 +671,8 @@ deploy_layer_2_5_dify() {
         --restart unless-stopped \
         --user "${RUNNING_UID}:${RUNNING_GID}" \
         -e EDITION=SELF_HOSTED \
-        -e CONSOLE_API_URL="https://dify.${DOMAIN_NAME}" \
-        -e APP_API_URL="https://dify.${DOMAIN_NAME}" \
+        -e CONSOLE_API_URL="https://dify.${DOMAIN_NAME:-localhost}" \
+        -e APP_API_URL="https://dify.${DOMAIN_NAME:-localhost}" \
         langgenius/dify-web:latest
     
     # Wait for Dify services
@@ -750,7 +750,7 @@ EOF
         --restart unless-stopped \
         --user "${RUNNING_UID}:${RUNNING_GID}" \
         -p "${GRAFANA_PORT}:3000" \
-        -e GF_SERVER_ROOT_URL="https://grafana.${DOMAIN_NAME}/" \
+        -e GF_SERVER_ROOT_URL="https://grafana.${DOMAIN_NAME:-localhost}/" \
         -e GF_SECURITY_ADMIN_PASSWORD="${ADMIN_PASSWORD}" \
         -v "${DATA_ROOT}/data/grafana:/var/lib/grafana" \
         grafana/grafana:latest
@@ -903,10 +903,10 @@ validate_deployment() {
 
     echo "🔍 Service Health Status:"
     check_service "PostgreSQL" "$(get_container_name postgres)" "${ENABLE_POSTGRES:-true}" \
-        "docker exec $(get_container_name postgres) pg_isready -U ${POSTGRES_USER}"
+        "docker exec $(get_container_name postgres) pg_isready -U ${POSTGRES_USER:-postgres}"
 
     check_service "Redis" "$(get_container_name redis)" "${ENABLE_REDIS:-true}" \
-        "docker exec $(get_container_name redis) redis-cli -a ${REDIS_PASSWORD} ping"
+        "docker exec $(get_container_name redis) redis-cli -a ${REDIS_PASSWORD:-} ping"
 
     check_service "Qdrant" "$(get_container_name qdrant)" "${ENABLE_QDRANT:-true}" \
         "docker run --rm --network ${DOCKER_NETWORK} alpine/curl -sf http://$(get_container_name qdrant):6333/"
