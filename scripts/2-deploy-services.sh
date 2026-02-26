@@ -446,6 +446,17 @@ deploy_layer_1_databases() {
     print_info "Setting directory ownership..."
     chown -R ${RUNNING_UID}:${RUNNING_GID} ${DATA_ROOT}/data/
     chown -R ${RUNNING_UID}:${RUNNING_GID} ${DATA_ROOT}/config/
+    
+    # Fix postgres directory ownership for postgres user (UID 999)
+    mkdir -p "${DATA_ROOT}/data/postgres"
+    chown 999:999 "${DATA_ROOT}/data/postgres"
+    chmod 700 "${DATA_ROOT}/data/postgres"
+    
+    # Fix redis directory ownership for redis user (UID 999)
+    mkdir -p "${DATA_ROOT}/data/redis"
+    chown 999:999 "${DATA_ROOT}/data/redis"
+    chmod 700 "${DATA_ROOT}/data/redis"
+    
     print_success "Directory ownership configured"
     
     # PostgreSQL with explicit UID and init script
