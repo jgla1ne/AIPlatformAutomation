@@ -541,6 +541,10 @@ nuclear_cleanup() {
     print_info "Step 7: Final system cleanup..."
     docker system prune -f 2>/dev/null || true
     
+    # Remove setup state file to force fresh configuration
+    rm -f "${selected_volume}/data/metadata/setup_state.json" 2>/dev/null || true
+    rm -f "/etc/ai-platform/env-pointer" 2>/dev/null || true
+    
     print_success "Nuclear cleanup completed!"
     print_info "All AI Platform data removed, volumes unmounted, and system cleaned."
 }

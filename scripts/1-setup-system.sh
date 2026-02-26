@@ -1044,6 +1044,14 @@ collect_configurations() {
     echo "COMPOSE_PROJECT_NAME=${TENANT_ID}" >> "$ENV_FILE"
     echo "TAILSCALE_HOSTNAME=${TENANT_ID}" >> "$ENV_FILE"
     
+    # Debug: Verify variables were written
+    print_info "DEBUG: Verifying tenant ID written to .env..."
+    if grep -q "TENANT_ID=${TENANT_ID}" "$ENV_FILE"; then
+        print_success "✅ TENANT_ID written successfully"
+    else
+        print_error "❌ TENANT_ID failed to write"
+    fi
+    
     print_success "Auto-generated Tenant ID: ${TENANT_ID}"
     print_success "Compose project: ${TENANT_ID}"
     print_success "Tailscale hostname: ${TENANT_ID}"
