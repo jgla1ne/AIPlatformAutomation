@@ -607,21 +607,39 @@ EOF
 
   print_success "PostgreSQL ready"
 
-  # Create pgvector extension using docker compose exec with exit code check
-  if ! docker compose \
-    --project-name "${COMPOSE_PROJECT_NAME}" \
-    --env-file "${ENV_FILE}" \
-    --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
-    exec postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
-    -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>&1; then
-    print_warning "pgvector extension failed - is pgvector image in use?"
-    print_info "Check docker-compose.yml postgres image tag should be:"
-    print_info "  - pgvector/pgvector:pg16"
-    print_info "  - or: ankane/pgvector"
-    print_info "Current image may be standard postgres without pgvector support"
-  else
-    print_success "pgvector extension created"
-  fi
+  # Create databases for services
+  create_databases
+}
+
+create_databases() {
+    print_info "Creating databases for services..."
+    
+    local databases=("n8n" "dify" "litellm")
+    
+    for db in "${databases[@]}"; do
+        if docker compose \
+            --project-name "${COMPOSE_PROJECT_NAME}" \
+            --env-file "${ENV_FILE}" \
+            --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+            exec postgres psql -U "${POSTGRES_USER}" -c "CREATE DATABASE ${db} OWNER ${POSTGRES_USER};" &>/dev/null; then
+            print_success "Database '${db}' created"
+        else
+            print_info "Database '${db}' already exists or creation failed"
+        fi
+    done
+    
+    # Create pgvector extension
+    if docker compose \
+        --project-name "${COMPOSE_PROJECT_NAME}" \
+        --env-file "${ENV_FILE}" \
+        --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+        exec postgres psql -U "${POSTGRES_USER}" -c "CREATE EXTENSION IF NOT EXISTS vector;" &>/dev/null; then
+        print_success "pgvector extension created"
+    else
+        print_warning "pgvector extension failed - is pgvector image in use?"
+        print_info "Check docker-compose.yml postgres image tag"
+        print_info "Recommended: pgvector/pgvector:pg16 or ankane/pgvector"
+    fi
 }
 
 deploy_redis() {
@@ -699,122 +717,170 @@ deploy_layer_2_services() {
     print_header "Layer 2: Application Services"
     
     # MinIO - runs as root to handle system directory creation
-    docker run -d \
-        --name "$(get_container_name minio)" \
-        --network "${DOCKER_NETWORK}" \
-        --restart unless-stopped \
-        -e MINIO_ROOT_USER="${MINIO_ROOT_USER}" \
-        -e MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD}" \
-        -v "${DATA_ROOT}/data/minio:/data" \
-        minio/minio:latest server /data --console-address ":9001"
+    if [[ "${ENABLE_MINIO:-true}" == "true" ]]; then
+        print_info "Deploying MinIO..."
+        docker run -d \
+            --name "$(get_container_name minio)" \
+            --network "${DOCKER_NETWORK}" \
+            --restart unless-stopped \
+            -e MINIO_ROOT_USER="${MINIO_ROOT_USER}" \
+            -e MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD}" \
+            -v "${DATA_ROOT}/data/minio:/data" \
+            minio/minio:latest server /data --console-address ":9001"
+    else
+        print_info "MinIO disabled (ENABLE_MINIO=false)"
+    fi
     
     # n8n
-    docker run -d \
-        --name "$(get_container_name n8n)" \
-        --network "${DOCKER_NETWORK}" \
-        --restart unless-stopped \
-        -e DB_TYPE=postgresdb \
-        -e DB_POSTGRESDB_HOST=postgres \
-        -e DB_POSTGRESDB_DATABASE=n8n \
-        -e DB_POSTGRESDB_USER="${POSTGRES_USER}" \
-        -e DB_POSTGRESDB_PASSWORD="${POSTGRES_PASSWORD}" \
-        -e N8N_HOST="n8n.${DOMAIN_NAME:-localhost}" \
-        -e N8N_PROTOCOL=https \
-        -e N8N_PORT=5678 \
-        -e WEBHOOK_URL="https://n8n.${DOMAIN_NAME:-localhost}/" \
-        -e N8N_EDITOR_BASE_URL="https://n8n.${DOMAIN_NAME:-localhost}/" \
-        -e HOME=/data/n8n \
-        -v "${DATA_ROOT}/data/n8n:/data/n8n" \
-        -u "${RUNNING_UID}:${RUNNING_GID}" \
-        n8nio/n8n:latest
+    if [[ "${ENABLE_N8N:-true}" == "true" ]]; then
+        print_info "Deploying n8n..."
+        docker run -d \
+            --name "$(get_container_name n8n)" \
+            --network "${DOCKER_NETWORK}" \
+            --restart unless-stopped \
+            -e DB_TYPE=postgresdb \
+            -e DB_POSTGRESDB_HOST=postgres \
+            -e DB_POSTGRESDB_DATABASE=n8n \
+            -e DB_POSTGRESDB_USER="${POSTGRES_USER}" \
+            -e DB_POSTGRESDB_PASSWORD="${POSTGRES_PASSWORD}" \
+            -e N8N_HOST="n8n.${DOMAIN_NAME:-localhost}" \
+            -e N8N_PROTOCOL=https \
+            -e N8N_PORT=5678 \
+            -e WEBHOOK_URL="https://n8n.${DOMAIN_NAME:-localhost}/" \
+            -e N8N_EDITOR_BASE_URL="https://n8n.${DOMAIN_NAME:-localhost}/" \
+            -e HOME=/data/n8n \
+            -v "${DATA_ROOT}/data/n8n:/data/n8n" \
+            -u "${RUNNING_UID}:${RUNNING_GID}" \
+            n8nio/n8n:latest
+    else
+        print_info "n8n disabled (ENABLE_N8N=false)"
+    fi
     
     # OpenWebUI with secret key
-    docker run -d \
-        --name "$(get_container_name openwebui)" \
-        --network "${DOCKER_NETWORK}" \
-        --restart unless-stopped \
-        -e WEBUI_SECRET_KEY="${WEBUI_SECRET_KEY}" \
-        -v "${DATA_ROOT}/data/openwebui:/app/backend/data" \
-        -u "${RUNNING_UID}:${RUNNING_GID}" \
-        ghcr.io/open-webui/open-webui:main
+    if [[ "${ENABLE_OPENWEBUI:-true}" == "true" ]]; then
+        print_info "Deploying OpenWebUI..."
+        docker run -d \
+            --name "$(get_container_name openwebui)" \
+            --network "${DOCKER_NETWORK}" \
+            --restart unless-stopped \
+            -e WEBUI_SECRET_KEY="${WEBUI_SECRET_KEY}" \
+            -v "${DATA_ROOT}/data/openwebui:/app/backend/data" \
+            -u "${RUNNING_UID}:${RUNNING_GID}" \
+            ghcr.io/open-webui/open-webui:main
+    else
+        print_info "OpenWebUI disabled (ENABLE_OPENWEBUI=false)"
+    fi
     
     # AnythingLLM - fixed configuration with proper storage path and LiteLLM integration
-    docker run -d \
-        --name "$(get_container_name anythingllm)" \
-        --network "${DOCKER_NETWORK}" \
-        --restart unless-stopped \
-        --user "${RUNNING_UID}:${RUNNING_GID}" \
-        -p "${ANYTHINGLLM_PORT}:3001" \
-        -v "${DATA_ROOT}/data/anythingllm:/app/server/storage" \
-        -e STORAGE_DIR=/app/server/storage \
-        -e JWT_SECRET="${ANYTHINGLLM_JWT_SECRET}" \
-        -e DISABLE_TELEMETRY=true \
-        -e LLM_PROVIDER="litellm" \
-        -e LITELLM_BASE_URL="http://litellm:4000" \
-        -e LITELLM_API_KEY="${LITELLM_MASTER_KEY}" \
-        -e EMBEDDING_PROVIDER="litellm" \
-        -e EMBEDDING_MODEL_PREF="text-embedding-ada-002" \
-        mintplexlabs/anythingllm:latest
+    if [[ "${ENABLE_ANYTHINGLLM:-true}" == "true" ]]; then
+        print_info "Deploying AnythingLLM..."
+        docker run -d \
+            --name "$(get_container_name anythingllm)" \
+            --network "${DOCKER_NETWORK}" \
+            --restart unless-stopped \
+            --user "${RUNNING_UID}:${RUNNING_GID}" \
+            -p "${ANYTHINGLLM_PORT}:3001" \
+            -v "${DATA_ROOT}/data/anythingllm:/app/server/storage" \
+            -e STORAGE_DIR=/app/server/storage \
+            -e JWT_SECRET="${ANYTHINGLLM_JWT_SECRET}" \
+            -e DISABLE_TELEMETRY=true \
+            -e LLM_PROVIDER="litellm" \
+            -e LITELLM_BASE_URL="http://litellm:4000" \
+            -e LITELLM_API_KEY="${LITELLM_MASTER_KEY}" \
+            -e EMBEDDING_PROVIDER="litellm" \
+            -e EMBEDDING_MODEL_PREF="text-embedding-ada-002" \
+            mintplexlabs/anythingllm:latest
+    else
+        print_info "AnythingLLM disabled (ENABLE_ANYTHINGLLM=false)"
+    fi
     
     # Signal API
-    docker run -d \
-        --name "$(get_container_name signal-api)" \
-        --network "${DOCKER_NETWORK}" \
-        --restart unless-stopped \
-        --user "${RUNNING_UID}:${RUNNING_GID}" \
-        -p "${SIGNAL_API_PORT}:8080" \
-        -e MODE=native \
-        -v "${DATA_ROOT}/data/signal:/home/.local/share/signal-cli" \
-        bbernhard/signal-cli-rest-api:latest
+    if [[ "${ENABLE_SIGNAL:-true}" == "true" ]]; then
+        print_info "Deploying Signal API..."
+        docker run -d \
+            --name "$(get_container_name signal-api)" \
+            --network "${DOCKER_NETWORK}" \
+            --restart unless-stopped \
+            --user "${RUNNING_UID}:${RUNNING_GID}" \
+            -p "${SIGNAL_API_PORT}:8080" \
+            -e MODE=native \
+            -v "${DATA_ROOT}/data/signal:/home/.local/share/signal-cli" \
+            bbernhard/signal-cli-rest-api:latest
+    else
+        print_info "Signal API disabled (ENABLE_SIGNAL=false)"
+    fi
     
     # LiteLLM - enhanced configuration for multi-provider routing
-    docker run -d \
-        --name "$(get_container_name litellm)" \
-        --network "${DOCKER_NETWORK}" \
-        --restart unless-stopped \
-        -e LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
-        -e LITELLM_SALT_KEY="${LITELLM_MASTER_KEY}" \
-        -e DATABASE_URL="postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aiplatform}" \
-        -e REDIS_URL="redis://:${REDIS_PASSWORD:-}@redis:6379" \
-        -v "${DATA_ROOT}/data/litellm:/app/data" \
-        -v "${DATA_ROOT}/logs/litellm:/app/logs" \
-        -v "${DATA_ROOT}/config/litellm/config.yaml:/app/config.yaml:ro" \
-        -u "${RUNNING_UID}:${RUNNING_GID}" \
-        ghcr.io/berriai/litellm:main-latest \
-        --config /app/config.yaml --port 4000
+    if [[ "${ENABLE_LITELLM:-true}" == "true" ]]; then
+        print_info "Deploying LiteLLM..."
+        docker run -d \
+            --name "$(get_container_name litellm)" \
+            --network "${DOCKER_NETWORK}" \
+            --restart unless-stopped \
+            -e LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
+            -e LITELLM_SALT_KEY="${LITELLM_MASTER_KEY}" \
+            -e DATABASE_URL="postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aiplatform}" \
+            -e REDIS_URL="redis://:${REDIS_PASSWORD:-}@redis:6379" \
+            -v "${DATA_ROOT}/data/litellm:/app/data" \
+            -v "${DATA_ROOT}/logs/litellm:/app/logs" \
+            -v "${DATA_ROOT}/config/litellm/config.yaml:/app/config.yaml:ro" \
+            -u "${RUNNING_UID}:${RUNNING_GID}" \
+            ghcr.io/berriai/litellm:main-latest \
+            --config /app/config.yaml --port 4000
+    else
+        print_info "LiteLLM disabled (ENABLE_LITELLM=false)"
+    fi
     
     # Flowise - runs as root (UID 0) due to Node.js user info issues
-    docker run -d \
-        --name "$(get_container_name flowise)" \
-        --network "${DOCKER_NETWORK}" \
-        --restart unless-stopped \
-        -e PORT=3000 \
-        -e FLOWISE_HOST=0.0.0.0 \
-        -e DATABASE_PATH=/root/.flowise \
-        -e APIKEY_PATH=/root/.flowise \
-        -e HOME=/root \
-        -v "${DATA_ROOT}/data/flowise:/root/.flowise" \
-        flowiseai/flowise:latest
+    if [[ "${ENABLE_FLOWISE:-true}" == "true" ]]; then
+        print_info "Deploying Flowise..."
+        docker run -d \
+            --name "$(get_container_name flowise)" \
+            --network "${DOCKER_NETWORK}" \
+            --restart unless-stopped \
+            -e PORT=3000 \
+            -e FLOWISE_HOST=0.0.0.0 \
+            -e DATABASE_PATH=/root/.flowise \
+            -e APIKEY_PATH=/root/.flowise \
+            -e HOME=/root \
+            -v "${DATA_ROOT}/data/flowise:/root/.flowise" \
+            flowiseai/flowise:latest
+    else
+        print_info "Flowise disabled (ENABLE_FLOWISE=false)"
+    fi
     
     # Wait for layer 2
-    wait_http "n8n" "http://n8n:5678/healthz" 60
-    wait_http "minio" "http://minio:9000/minio/health/live" 60
-    wait_http "flowise" "http://flowise:3000" 60
+    if [[ "${ENABLE_N8N:-true}" == "true" ]]; then
+        wait_http "n8n" "http://n8n:5678/healthz" 60
+    fi
+    if [[ "${ENABLE_MINIO:-true}" == "true" ]]; then
+        wait_http "minio" "http://minio:9000/minio/health/live" 60
+    fi
+    if [[ "${ENABLE_FLOWISE:-true}" == "true" ]]; then
+        wait_http "flowise" "http://flowise:3000" 60
+    fi
     # wait_http "litellm" "http://litellm:4000/health" 60  # Temporarily disabled - needs API key
     
     # Create MinIO buckets after MinIO is ready
-    print_info "Creating MinIO buckets..."
-    docker exec minio mc alias set local http://localhost:9000 "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}" 2>/dev/null || true
-    docker exec minio mc mb local/n8n-data --ignore-existing 2>/dev/null || true
-    docker exec minio mc mb local/anythingllm --ignore-existing 2>/dev/null || true
-    docker exec minio mc mb local/dify --ignore-existing 2>/dev/null || true
-    print_success "MinIO buckets created"
+    if [[ "${ENABLE_MINIO:-true}" == "true" ]]; then
+        print_info "Creating MinIO buckets..."
+        docker exec minio mc alias set local http://localhost:9000 "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}" 2>/dev/null || true
+        docker exec minio mc mb local/n8n-data --ignore-existing 2>/dev/null || true
+        docker exec minio mc mb local/anythingllm --ignore-existing 2>/dev/null || true
+        docker exec minio mc mb local/dify --ignore-existing 2>/dev/null || true
+        print_success "MinIO buckets created"
+    fi
     
     print_success "Layer 2 application services healthy (litellm health check disabled)"
 }
 
 deploy_layer_2_5_dify() {
     print_header "Layer 2.5: Dify Multi-Container Service"
+    
+    if [[ "${ENABLE_DIFY:-true}" != "true" ]]; then
+        print_info "Dify disabled (ENABLE_DIFY=false)"
+        return
+    fi
     
     # Create Dify directories
     mkdir -p "${DATA_ROOT}/data/dify/storage"
@@ -886,6 +952,11 @@ deploy_layer_2_5_dify() {
 deploy_layer_3_monitoring() {
     print_header "Layer 3: Monitoring Services"
     
+    if [[ "${ENABLE_GRAFANA:-true}" != "true" && "${ENABLE_PROMETHEUS:-true}" != "true" ]]; then
+        print_info "Monitoring services disabled (ENABLE_GRAFANA=false and ENABLE_PROMETHEUS=false)"
+        return
+    fi
+    
     # Create Prometheus config
     mkdir -p "${DATA_ROOT}/config/prometheus"
     mkdir -p "${DATA_ROOT}/data/prometheus"
@@ -929,41 +1000,60 @@ EOF
     chown "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/config/prometheus/prometheus.yml"
     
     # Prometheus with correct port mapping and arguments
-    docker run -d \
-        --name "$(get_container_name prometheus)" \
-        --network "${DOCKER_NETWORK}" \
-        --restart unless-stopped \
-        --user "${RUNNING_UID}:${RUNNING_GID}" \
-        -p "${PROMETHEUS_PORT}:9090" \
-        -v "${DATA_ROOT}/config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
-        -v "${DATA_ROOT}/data/prometheus:/prometheus" \
-        prom/prometheus:latest \
-        --config.file=/etc/prometheus/prometheus.yml \
-        --storage.tsdb.path=/prometheus \
-        --web.console.libraries=/etc/prometheus/console_libraries \
-        --web.console.templates=/etc/prometheus/consoles \
-        --web.enable-lifecycle
+    if [[ "${ENABLE_PROMETHEUS:-true}" == "true" ]]; then
+        print_info "Deploying Prometheus..."
+        docker run -d \
+            --name "$(get_container_name prometheus)" \
+            --network "${DOCKER_NETWORK}" \
+            --restart unless-stopped \
+            --user "${RUNNING_UID}:${RUNNING_GID}" \
+            -p "${PROMETHEUS_PORT}:9090" \
+            -v "${DATA_ROOT}/config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
+            -v "${DATA_ROOT}/data/prometheus:/prometheus" \
+            prom/prometheus:latest \
+            --config.file=/etc/prometheus/prometheus.yml \
+            --storage.tsdb.path=/prometheus \
+            --web.console.libraries=/etc/prometheus/console_libraries \
+            --web.console.templates=/etc/prometheus/consoles \
+            --web.enable-lifecycle
+    else
+        print_info "Prometheus disabled (ENABLE_PROMETHEUS=false)"
+    fi
     
     # Grafana with correct user and port mapping
-    docker run -d \
-        --name "$(get_container_name grafana)" \
-        --network "${DOCKER_NETWORK}" \
-        --restart unless-stopped \
-        --user "${RUNNING_UID}:${RUNNING_GID}" \
-        -p "${GRAFANA_PORT}:3000" \
-        -e GF_SERVER_ROOT_URL="https://grafana.${DOMAIN_NAME:-localhost}/" \
-        -e GF_SECURITY_ADMIN_PASSWORD="${ADMIN_PASSWORD}" \
-        -v "${DATA_ROOT}/data/grafana:/var/lib/grafana" \
-        grafana/grafana:latest
+    if [[ "${ENABLE_GRAFANA:-true}" == "true" ]]; then
+        print_info "Deploying Grafana..."
+        docker run -d \
+            --name "$(get_container_name grafana)" \
+            --network "${DOCKER_NETWORK}" \
+            --restart unless-stopped \
+            --user "${RUNNING_UID}:${RUNNING_GID}" \
+            -p "${GRAFANA_PORT}:3000" \
+            -e GF_SERVER_ROOT_URL="https://grafana.${DOMAIN_NAME:-localhost}/" \
+            -e GF_SECURITY_ADMIN_PASSWORD="${ADMIN_PASSWORD}" \
+            -v "${DATA_ROOT}/data/grafana:/var/lib/grafana" \
+            grafana/grafana:latest
+    else
+        print_info "Grafana disabled (ENABLE_GRAFANA=false)"
+    fi
     
     # Wait for monitoring services
-    wait_http "prometheus" "http://prometheus:9090/-/healthy" 60
-    wait_http "grafana" "http://grafana:3000/api/health" 60
+    if [[ "${ENABLE_PROMETHEUS:-true}" == "true" ]]; then
+        wait_http "prometheus" "http://prometheus:9090/-/healthy" 60
+    fi
+    if [[ "${ENABLE_GRAFANA:-true}" == "true" ]]; then
+        wait_http "grafana" "http://grafana:3000/api/health" 60
+    fi
     print_success "Layer 3 monitoring services healthy"
 }
 
 deploy_layer_4_openclaw() {
-    print_header "Layer 3: OpenClaw (restricted)"
+    print_header "Layer 4: OpenClaw (restricted)"
+    
+    if [[ "${ENABLE_OPENCLAW:-true}" != "true" ]]; then
+        print_info "OpenClaw disabled (ENABLE_OPENCLAW=false)"
+        return
+    fi
     
     # Temporarily skip OpenClaw - image not available
     print_warning "OpenClaw deployment skipped - image not available"
@@ -992,6 +1082,11 @@ deploy_layer_4_openclaw() {
 
 deploy_layer_5_proxy() {
     print_header "Layer 5: Caddy (last)"
+    
+    if [[ "${ENABLE_CADDY:-true}" != "true" ]]; then
+        print_info "Caddy disabled (ENABLE_CADDY=false)"
+        return
+    fi
     
     # Ensure Caddyfile directory exists and is properly formatted
     mkdir -p "${DATA_ROOT}/caddy"

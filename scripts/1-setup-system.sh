@@ -2539,8 +2539,8 @@ create_directory_structure() {
     chown -R 1000:1000 "${DATA_ROOT}/data/minio"
     chmod 750 "${DATA_ROOT}/data/minio"
     
-    # n8n runs as stack user
-    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/data/n8n"
+    # n8n runs as node user (uid 1000)
+    chown -R 1000:1000 "${DATA_ROOT}/data/n8n"
     chmod 750 "${DATA_ROOT}/data/n8n"
     
     # anythingllm runs as UID 1000
