@@ -670,7 +670,7 @@ select_services() {
           ENABLE_GDRIVE=false
           ;;
       4)
-          # ask each individually — existing logic
+          # Custom profile - will ask individually
           ENABLE_LITELLM=false
           ENABLE_QDRANT=false
           ENABLE_OPENCLAW=false
@@ -680,48 +680,58 @@ select_services() {
           ;;
     esac
 
-    echo ""
-    print_header "📋 Available Services"
-    echo ""
-    print_info "Select services to deploy. Dependencies will be auto-selected."
-    echo ""
+    # Only show service selection menu for custom profile
+    if [[ "${STACK_PROFILE}" == "4" ]]; then
+        echo ""
+        print_header "📋 Available Services"
+        echo ""
+        print_info "Select services to deploy. Dependencies will be auto-selected."
+        echo ""
+        
+        # Infrastructure Services
+        echo "🏗️  Infrastructure:"
+        echo "  [1] PostgreSQL - Relational database"
+        echo "  [2] Redis - Cache and message queue"
+        echo "  [3] Tailscale - VPN mesh network"
+        echo ""
+        
+        # AI Applications
+        echo "🤖 AI Applications:"
+        echo "  [4] Open WebUI - Modern ChatGPT-like interface"
+        echo "  [5] AnythingLLM - Document-based AI chat"
+        echo "  [6] Dify - LLM application development platform"
+        echo "  [7] n8n - Workflow automation platform"
+        echo "  [8] Flowise - Visual LangChain builder"
+        echo "  [9] Ollama - Local LLM runtime"
+        echo "  [10] LiteLLM - Multi-provider proxy + routing"
+        echo ""
+        
+        # Communication & Integration
+        echo "📱 Communication & Integration:"
+        echo "  [11] Signal API - Private messaging"
+        echo "  [12] OpenClaw UI - Multi-channel orchestration"
+        echo ""
+        
+        # Monitoring
+        echo "📊 Monitoring:"
+        echo "  [13] Prometheus + Grafana - Metrics and visualization"
+        echo ""
+        
+        # Storage
+        echo "📦 Storage:"
+        echo "  [14] MinIO - S3-compatible storage"
+        echo ""
+    fi
     
-    # Infrastructure Services
-    echo "🏗️  Infrastructure:"
-    echo "  [1] PostgreSQL - Relational database"
-    echo "  [2] Redis - Cache and message queue"
-    echo "  [3] Tailscale - VPN mesh network"
-    echo ""
-    
-    # AI Applications
-    echo "🤖 AI Applications:"
-    echo "  [4] Open WebUI - Modern ChatGPT-like interface"
-    echo "  [5] AnythingLLM - Document-based AI chat"
-    echo "  [6] Dify - LLM application development platform"
-    echo "  [7] n8n - Workflow automation platform"
-    echo "  [8] Flowise - Visual LangChain builder"
-    echo "  [9] Ollama - Local LLM runtime"
-    echo "  [10] LiteLLM - Multi-provider proxy + routing"
-    echo ""
-    
-    # Communication & Integration
-    echo "📱 Communication & Integration:"
-    echo "  [11] Signal API - Private messaging"
-    echo "  [12] OpenClaw UI - Multi-channel orchestration"
-    echo ""
-    
-    # Monitoring
-    echo "📊 Monitoring:"
-    echo "  [13] Prometheus + Grafana - Metrics and visualization"
-    echo ""
-    
-    # Storage
-    echo "📦 Storage:"
-    echo "  [14] MinIO - S3-compatible storage"
-    echo ""
+    # Build selected_services array based on profile or custom selection
+    local selected_services=()
     
     if [[ "${STACK_PROFILE}" == "4" ]]; then
-        # Use the existing service selection logic for custom profile
+        # Custom profile - use interactive selection
+        echo ""
+        print_info "Select services to deploy. Dependencies will be auto-selected."
+        echo ""
+        
         local -A selected_map=(
             ["postgres"]=0
             ["redis"]=0
@@ -818,6 +828,54 @@ select_services() {
                 print_warning "Invalid input. Type numbers, 'all', or 'done'"
             fi
         done
+        
+        # Convert selected_map to selected_services array
+        for service in "${!selected_map[@]}"; do
+            if [[ "${selected_map[$service]}" == "1" ]]; then
+                selected_services+=("$service")
+            fi
+        done
+    else
+        # Predefined profiles - build selected_services from ENABLE_* flags
+        [[ "${ENABLE_LITELLM:-false}" == "true" ]] && selected_services+=("litellm")
+        [[ "${ENABLE_QDRANT:-false}" == "true" ]] && selected_services+=("qdrant")
+        [[ "${ENABLE_OPENCLAW:-false}" == "true" ]] && selected_services+=("openclaw")
+        [[ "${ENABLE_CADDY:-false}" == "true" ]] && selected_services+=("caddy")
+        [[ "${ENABLE_TAILSCALE:-false}" == "true" ]] && selected_services+=("tailscale")
+        [[ "${ENABLE_GDRIVE:-false}" == "true" ]] && selected_services+=("rclone")
+        
+        # Always include core infrastructure for predefined profiles
+        selected_services+=("postgres")
+        selected_services+=("redis")
+        selected_services+=("prometheus")
+        selected_services+=("grafana")
+        
+        # Add profile-specific services
+        case "${STACK_PROFILE}" in
+            1) # Full Stack
+                selected_services+=("openwebui")
+                selected_services+=("anythingllm")
+                selected_services+=("dify")
+                selected_services+=("n8n")
+                selected_services+=("flowise")
+                selected_services+=("ollama")
+                selected_services+=("signal-api")
+                selected_services+=("minio")
+                ;;
+            2) # Local Development
+                selected_services+=("openwebui")
+                selected_services+=("anythingllm")
+                selected_services+=("dify")
+                selected_services+=("n8n")
+                selected_services+=("flowise")
+                selected_services+=("ollama")
+                selected_services+=("signal-api")
+                selected_services+=("minio")
+                ;;
+            3) # API Gateway Only
+                # Only core services already added
+                ;;
+        esac
     fi
     
     if [[ ${#selected_services[@]} -eq 0 ]]; then
