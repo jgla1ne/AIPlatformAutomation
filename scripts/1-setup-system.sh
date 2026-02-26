@@ -658,7 +658,7 @@ select_services() {
     echo "  [14] MinIO - S3-compatible storage"
     echo ""
     
-        
+    if [[ "${STACK_PROFILE}" == "4" ]]; then
         # Use the existing service selection logic for custom profile
         local -A selected_map=(
             ["postgres"]=0
@@ -755,11 +755,6 @@ select_services() {
             else
                 print_warning "Invalid input. Type numbers, 'all', or 'done'"
             fi
-                    ;;
-                *)
-                    print_error "Invalid selection"
-                    ;;
-            esac
         done
     fi
     
