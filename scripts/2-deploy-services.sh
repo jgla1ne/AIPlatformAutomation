@@ -57,9 +57,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # It is written by Script 1 to /etc/ai-platform/env-pointer
 if [ -f /etc/ai-platform/env-pointer ]; then
   DATA_ROOT="$(cat /etc/ai-platform/env-pointer)"
-elif [ -n "${DATA_ROOT}" ]; then
-  : # already set in environment
-else
+fi
+
+if [ -z "${DATA_ROOT:-}" ]; then
   echo "❌ DATA_ROOT not found. Run Script 1 first."
   exit 1
 fi
@@ -80,7 +80,7 @@ set +a
 
 # Validate minimum required vars
 for REQUIRED in COMPOSE_PROJECT_NAME DOMAIN DATA_ROOT; do
-  if [ -z "${!REQUIRED}" ]; then
+  if [ -z "${!REQUIRED:-}" ]; then
     echo "❌ Required variable ${REQUIRED} is empty in .env"
     exit 1
   fi
@@ -93,6 +93,9 @@ COMPOSE="docker compose \
   --file ${SCRIPT_DIR}/docker-compose.yml"
 
 print_success ".env loaded | Project: ${COMPOSE_PROJECT_NAME} | Domain: ${DOMAIN}"
+
+# Set tenant prefix for container names
+TENANT_PREFIX="${COMPOSE_PROJECT_NAME:-ai-platform}"
 
 # Generate tenant-prefixed container name
 get_container_name() {
@@ -1340,7 +1343,6 @@ main() {
     print_banner
     
     # Execute deployment phases
-    load_config
     validate_config
     set_vectordb_config
     

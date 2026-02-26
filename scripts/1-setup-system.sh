@@ -1027,14 +1027,14 @@ collect_configurations() {
     # Generate tenant identity for multi-tenant support
     print_header "Tenant Identity"
     
-    # Generate a stable tenant ID from the EBS mount point
-    # e.g. /mnt/data-nvme0 → nvme0 → tenant-nvme0
+    # Generate a unique tenant ID from EBS mount point + UID-GID + timestamp
+    # This ensures uniqueness across different deployments and users
     VOLUME_SUFFIX=$(basename "${DATA_ROOT}" | sed 's/[^a-zA-Z0-9]/-/g')
-    DEFAULT_TENANT_ID="tenant-${VOLUME_SUFFIX}"
+    TIMESTAMP=$(date +%s | tail -c 6)  # Last 5 digits of timestamp
+    UID_SUFFIX="${RUNNING_UID}-${RUNNING_GID}"
     
-    echo -n -e "${YELLOW}Tenant/Stack name [${DEFAULT_TENANT_ID}]:${NC} "
-    read -r TENANT_ID
-    TENANT_ID=${TENANT_ID:-${DEFAULT_TENANT_ID}}
+    # Auto-generate unique tenant ID without user input
+    TENANT_ID="stack-${VOLUME_SUFFIX}-${UID_SUFFIX}-${TIMESTAMP}"
     
     # Sanitize: lowercase, alphanumeric + hyphen only
     TENANT_ID=$(echo "${TENANT_ID}" | tr '[:upper:]' '[:lower:]' | \
@@ -1044,9 +1044,10 @@ collect_configurations() {
     echo "COMPOSE_PROJECT_NAME=${TENANT_ID}" >> "$ENV_FILE"
     echo "TAILSCALE_HOSTNAME=${TENANT_ID}" >> "$ENV_FILE"
     
-    print_success "Tenant ID: ${TENANT_ID}"
+    print_success "Auto-generated Tenant ID: ${TENANT_ID}"
     print_success "Compose project: ${TENANT_ID}"
     print_success "Tailscale hostname: ${TENANT_ID}"
+    print_info "Unique identifier: volume=${VOLUME_SUFFIX}, uid-gid=${UID_SUFFIX}, timestamp=${TIMESTAMP}"
     
     # Write profile flags to .env immediately
     echo "STACK_PROFILE=${STACK_PROFILE}" >> "$ENV_FILE"
