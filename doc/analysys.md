@@ -1,4 +1,4 @@
-Let me fetch all 5 scripts first.
+Let me fetch all current scripts.
 
 **Reading:**
 - https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/0-complete-cleanup.sh
@@ -9,540 +9,359 @@ Let me fetch all 5 scripts first.
 
 ---
 
-## Master Diagnosis — Root Causes Across All Scripts
+## Full Audit — Multi-Tenant Identity & Deploy Confidence
 
-### The Single Biggest Problem
+---
+
+### First: What Script 1 Currently Generates
 
 ```
-PostgreSQL container runs as UID 999 internally.
-Script creates directories as RUNNING_UID (1001).
-Script then tries chown 999:999 — but if postgres dir
-already has files owned by 999, and script re-runs,
-Docker volume mount resets ownership on re-entry.
+After reading Script 1, the tenant identity block produces:
 
-The REAL fix is not chown in the script.
-The fix is: use a Docker named volume OR use a
-postgres init container to set ownership INSIDE Docker
-before the main postgres container starts.
+  TENANT_ID         = u${UID}                     e.g. u1001
+  COMPOSE_PROJECT_NAME = ai-platform-u${UID}      e.g. ai-platform-u1001
+  STACK_USER_UID    = ${UID}                       e.g. 1001
+  STACK_USER_GID    = ${GID}                       e.g. 1001
 
-Every other problem flows from postgres never starting.
+This is CORRECT in principle.
+The problem is what happens DOWNSTREAM in Script 2.
 ```
 
 ---
 
-## Comprehensive Fix Instructions for Windsurf
+## Critical Problems in Script 2
 
-### INSTRUCTION SET A — Script 0 (Cleanup)
-
-```
-PROBLEM: Cleanup script may leave orphaned named volumes
-or stale network preventing Script 2 from creating fresh state.
-
-FIND the section that removes containers/networks.
-ENSURE it also runs:
-────────────────────────────────────────────────────────────────
-# Remove named volumes to prevent stale ownership
-docker volume rm \
-  "${COMPOSE_PROJECT_NAME}_postgres_data" \
-  "${COMPOSE_PROJECT_NAME}_redis_data" \
-  "${COMPOSE_PROJECT_NAME}_qdrant_data" \
-  2>/dev/null || true
-
-# Remove network explicitly
-docker network rm ai_platform 2>/dev/null || true
-docker network rm "${COMPOSE_PROJECT_NAME}_default" 2>/dev/null || true
-
-# Kill any process holding port 80 or 443
-fuser -k 80/tcp 2>/dev/null || true
-fuser -k 443/tcp 2>/dev/null || true
-
-log_success "Cleanup complete — safe to run Script 2"
-────────────────────────────────────────────────────────────────
-```
-
----
-
-### INSTRUCTION SET B — Script 2, Section 1: .env Loading
+### Problem 1 — COMPOSE Variable Built BEFORE .env Is Loaded
 
 ```
-FIND: wherever .env is loaded at the top of Script 2
-REPLACE ENTIRELY WITH:
+CURRENT CODE (Script 2, near top):
 ────────────────────────────────────────────────────────────────
-# ── Environment Loading ──────────────────────────────────────
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# DATA_ROOT must be set before this script runs
-# It is written by Script 1 to /etc/ai-platform/env-pointer
-if [ -f /etc/ai-platform/env-pointer ]; then
-  DATA_ROOT="$(cat /etc/ai-platform/env-pointer)"
-elif [ -n "${DATA_ROOT}" ]; then
-  : # already set in environment
-else
-  echo "❌ DATA_ROOT not found. Run Script 1 first."
-  exit 1
-fi
-
-ENV_FILE="${DATA_ROOT}/.env"
-
-if [ ! -f "${ENV_FILE}" ]; then
-  echo "❌ .env not found at ${ENV_FILE}"
-  echo "   Run Script 1 first."
-  exit 1
-fi
-
-# Safe load — handles spaces in values, ignores comments
-set -a
-# shellcheck disable=SC1090
+COMPOSE="docker compose --project-name ${COMPOSE_PROJECT_NAME} ..."
+# Then later:
 source "${ENV_FILE}"
-set +a
+────────────────────────────────────────────────────────────────
 
-# Validate minimum required vars
-for REQUIRED in COMPOSE_PROJECT_NAME DOMAIN DATA_ROOT; do
-  if [ -z "${!REQUIRED}" ]; then
-    echo "❌ Required variable ${REQUIRED} is empty in .env"
-    exit 1
-  fi
-done
+WHAT HAPPENS:
+  COMPOSE_PROJECT_NAME is empty at the time COMPOSE is built.
+  Every docker compose call uses --project-name ""
+  Docker defaults to directory name: "scripts"
+  
+  Tenant A: project = "scripts"
+  Tenant B: project = "scripts"
+  
+  They OVERWRITE each other. Multi-tenancy is silently broken.
 
-# Define canonical compose command used everywhere in this script
+FIX — COMPOSE must be built AFTER source:
+────────────────────────────────────────────────────────────────
+# 1. Load env first
+set -a; source "${ENV_FILE}"; set +a
+
+# 2. Validate COMPOSE_PROJECT_NAME is not empty
+if [ -z "${COMPOSE_PROJECT_NAME}" ]; then
+  echo "❌ COMPOSE_PROJECT_NAME is empty after loading .env"
+  echo "   Check that Script 1 wrote it to ${ENV_FILE}"
+  exit 1
+fi
+
+# 3. NOW build COMPOSE
 COMPOSE="docker compose \
   --project-name ${COMPOSE_PROJECT_NAME} \
   --env-file ${ENV_FILE} \
   --file ${SCRIPT_DIR}/docker-compose.yml"
 
-log_success ".env loaded | Project: ${COMPOSE_PROJECT_NAME} | Domain: ${DOMAIN}"
-────────────────────────────────────────────────────────────────
-
-ADD to Script 1 — after writing .env:
-────────────────────────────────────────────────────────────────
-# Write env pointer so Script 2 can find .env without DATA_ROOT being set
-mkdir -p /etc/ai-platform
-echo "${DATA_ROOT}" > /etc/ai-platform/env-pointer
-chmod 644 /etc/ai-platform/env-pointer
-log_success "Env pointer written to /etc/ai-platform/env-pointer"
+echo "✅ Project: ${COMPOSE_PROJECT_NAME}"
 ────────────────────────────────────────────────────────────────
 ```
 
 ---
 
-### INSTRUCTION SET C — Script 2, Section 2: PostgreSQL Fix (THE CRITICAL FIX)
+### Problem 2 — Container Name Hardcoded, Not Tenant-Scoped
 
 ```
-FIND: the postgres directory creation and deployment block
-REPLACE ENTIRELY WITH:
+CURRENT CODE scattered through Script 2:
 ────────────────────────────────────────────────────────────────
-deploy_postgres() {
-  print_section "PostgreSQL"
-
-  # Use Docker NAMED VOLUME — not bind mount — to avoid host ownership issues
-  # The named volume is managed by Docker, postgres container owns it internally
-  # This eliminates the UID 999 vs 1001 ownership conflict entirely
-
-  # Check if named volume exists
-  if ! docker volume inspect "${COMPOSE_PROJECT_NAME}_postgres_data" \
-       &>/dev/null; then
-    log_info "Creating postgres named volume..."
-    docker volume create "${COMPOSE_PROJECT_NAME}_postgres_data"
-  fi
-
-  # Write the postgres service with named volume to a override file
-  # This overrides any bind-mount in docker-compose.yml
-  cat > "${SCRIPT_DIR}/docker-compose.postgres-override.yml" << EOF
-version: '3.8'
-services:
-  postgres:
-    volumes:
-      - ${COMPOSE_PROJECT_NAME}_postgres_data:/var/lib/postgresql/data
-
-volumes:
-  ${COMPOSE_PROJECT_NAME}_postgres_data:
-    external: true
-EOF
-
-  # Deploy postgres using override
-  docker compose \
-    --project-name "${COMPOSE_PROJECT_NAME}" \
-    --env-file "${ENV_FILE}" \
-    --file "${SCRIPT_DIR}/docker-compose.yml" \
-    --file "${SCRIPT_DIR}/docker-compose.postgres-override.yml" \
-    up -d postgres
-
-  # Wait for postgres to be genuinely ready
-  log_info "Waiting for PostgreSQL to accept connections..."
-  ATTEMPTS=0
-  MAX_ATTEMPTS=30
-
-  until docker exec "${COMPOSE_PROJECT_NAME}-postgres-1" \
-        pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
-        &>/dev/null 2>&1; do
-    ATTEMPTS=$((ATTEMPTS + 1))
-    if [ "${ATTEMPTS}" -ge "${MAX_ATTEMPTS}" ]; then
-      log_error "PostgreSQL did not become ready after 60 seconds"
-      log_error "Logs:"
-      docker logs "${COMPOSE_PROJECT_NAME}-postgres-1" --tail=30
-      exit 1
-    fi
-    sleep 2
-  done
-
-  log_success "PostgreSQL ready"
-
-  # Create pgvector extension
-  docker exec "${COMPOSE_PROJECT_NAME}-postgres-1" \
-    psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
-    -c "CREATE EXTENSION IF NOT EXISTS vector;" \
-    && log_success "pgvector extension created" \
-    || log_warning "pgvector extension creation failed — check if pgvector image is used"
-}
+docker exec postgres pg_isready ...
+docker exec redis redis-cli ping ...
+docker logs postgres --tail=30
 ────────────────────────────────────────────────────────────────
 
-IMPORTANT: Also update docker-compose.yml to use named volume syntax:
-────────────────────────────────────────────────────────────────
-# In docker-compose.yml postgres service:
-  postgres:
-    image: pgvector/pgvector:pg16
-    container_name: ${COMPOSE_PROJECT_NAME}-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data    # ← named volume
-    networks:
-      - ai_platform
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+WHAT HAPPENS:
+  When docker compose uses --project-name ai-platform-u1001,
+  the actual container name becomes:
+    ai-platform-u1001-postgres-1
+  
+  But the script exec's into "postgres" — which either:
+    a) Finds the WRONG tenant's container
+    b) Fails with "No such container"
 
-# At the bottom of docker-compose.yml add:
+FIX — derive container name from COMPOSE_PROJECT_NAME:
+────────────────────────────────────────────────────────────────
+# Define after COMPOSE_PROJECT_NAME is loaded
+PG_CONTAINER="${COMPOSE_PROJECT_NAME}-postgres-1"
+REDIS_CONTAINER="${COMPOSE_PROJECT_NAME}-redis-1"
+QDRANT_CONTAINER="${COMPOSE_PROJECT_NAME}-qdrant-1"
+CADDY_CONTAINER="${COMPOSE_PROJECT_NAME}-caddy-1"
+
+# Then use everywhere:
+docker exec "${PG_CONTAINER}" pg_isready -U "${POSTGRES_USER}"
+docker exec "${REDIS_CONTAINER}" redis-cli ping
+docker logs "${CADDY_CONTAINER}" --tail=30
+────────────────────────────────────────────────────────────────
+```
+
+---
+
+### Problem 3 — Named Volume Names Not Tenant-Scoped
+
+```
+CURRENT CODE:
+────────────────────────────────────────────────────────────────
+docker volume create postgres_data
+docker volume create qdrant_data
+────────────────────────────────────────────────────────────────
+
+WHAT HAPPENS:
+  Tenant A creates volume: postgres_data
+  Tenant B creates volume: postgres_data  ← same volume
+  Tenant B's postgres reads Tenant A's data.
+  
+  This is a DATA LEAK between tenants.
+
+FIX — prefix every volume with COMPOSE_PROJECT_NAME:
+────────────────────────────────────────────────────────────────
+PG_VOLUME="${COMPOSE_PROJECT_NAME}_postgres_data"
+QDRANT_VOLUME="${COMPOSE_PROJECT_NAME}_qdrant_data"
+REDIS_VOLUME="${COMPOSE_PROJECT_NAME}_redis_data"
+
+docker volume create "${PG_VOLUME}"   2>/dev/null || true
+docker volume create "${QDRANT_VOLUME}" 2>/dev/null || true
+docker volume create "${REDIS_VOLUME}"  2>/dev/null || true
+────────────────────────────────────────────────────────────────
+
+AND in docker-compose.yml the volumes block must use:
+────────────────────────────────────────────────────────────────
 volumes:
   postgres_data:
     name: ${COMPOSE_PROJECT_NAME}_postgres_data
     external: true
+  qdrant_data:
+    name: ${COMPOSE_PROJECT_NAME}_qdrant_data
+    external: true
+  redis_data:
+    name: ${COMPOSE_PROJECT_NAME}_redis_data
+    external: true
 ────────────────────────────────────────────────────────────────
 ```
 
 ---
 
-### INSTRUCTION SET D — Script 2, Section 3: Deployment Order (Layered)
+### Problem 4 — Docker Network Not Tenant-Scoped
 
 ```
-FIND: the main deployment sequence
-REPLACE WITH this strict layered order:
+CURRENT CODE:
 ────────────────────────────────────────────────────────────────
-main_deploy() {
+docker network create ai_platform
+────────────────────────────────────────────────────────────────
 
-  # ── Layer 0: Infrastructure ───────────────────────────────
-  print_section "Layer 0: Network"
-  docker network create \
-    --driver bridge \
-    --label "project=${COMPOSE_PROJECT_NAME}" \
-    ai_platform 2>/dev/null \
-    || log_info "Network ai_platform already exists"
+WHAT HAPPENS:
+  Tenant A creates network: ai_platform
+  Tenant B tries to create: ai_platform — already exists, skips.
+  Tenant B's containers JOIN Tenant A's network.
+  They can see each other's services on that network.
 
-  # ── Layer 1: Databases ────────────────────────────────────
-  print_section "Layer 1: Databases"
-  deploy_postgres          # uses named volume, waits for pg_isready
-  deploy_redis             # simple, fast
-  deploy_qdrant            # waits for HTTP /health
+FIX:
+────────────────────────────────────────────────────────────────
+DOCKER_NETWORK="${COMPOSE_PROJECT_NAME}_net"
 
-  # ── Layer 2: Core AI Services ─────────────────────────────
-  print_section "Layer 2: Core Services"
-  [ "${ENABLE_LITELLM}"    = "true" ] && deploy_litellm
-  [ "${ENABLE_OPENWEBUI}"  = "true" ] && deploy_openwebui
-  [ "${ENABLE_N8N}"        = "true" ] && deploy_n8n
-  [ "${ENABLE_FLOWISE}"    = "true" ] && deploy_flowise
-  [ "${ENABLE_ANYTHINGLLM}"= "true" ] && deploy_anythingllm
-  [ "${ENABLE_DIFY}"       = "true" ] && deploy_dify
-  [ "${ENABLE_OPENCLAW}"   = "true" ] && deploy_openclaw
-  [ "${ENABLE_MINIO}"      = "true" ] && deploy_minio
+docker network create \
+  --driver bridge \
+  --label "tenant=${COMPOSE_PROJECT_NAME}" \
+  "${DOCKER_NETWORK}" 2>/dev/null \
+  || echo "  ℹ Network ${DOCKER_NETWORK} already exists"
+────────────────────────────────────────────────────────────────
 
-  # ── Layer 3: Reverse Proxy (must come AFTER apps) ─────────
-  print_section "Layer 3: Caddy Reverse Proxy"
-  deploy_caddy             # generates Caddyfile from enabled services
-
-  # ── Layer 4: Monitoring ───────────────────────────────────
-  print_section "Layer 4: Monitoring"
-  [ "${ENABLE_PROMETHEUS}" = "true" ] && deploy_prometheus
-  [ "${ENABLE_GRAFANA}"    = "true" ] && deploy_grafana
-
-  # ── Layer 5: Networking ───────────────────────────────────
-  print_section "Layer 5: Networking"
-  [ "${ENABLE_TAILSCALE}"  = "true" ] && setup_tailscale
-  [ "${ENABLE_GDRIVE}"     = "true" ] && setup_rclone
-
-  # ── Final: Health Report ──────────────────────────────────
-  run_health_checks
-}
+AND in docker-compose.yml:
+────────────────────────────────────────────────────────────────
+networks:
+  ai_platform:
+    name: ${COMPOSE_PROJECT_NAME}_net
+    external: true
 ────────────────────────────────────────────────────────────────
 ```
 
 ---
 
-### INSTRUCTION SET E — Script 2, Section 4: Caddy Dynamic Config
+### Problem 5 — Port Collision Between Tenants Not Verified at Deploy Time
 
 ```
-FIND: Caddy deployment / Caddyfile generation
-REPLACE WITH dynamic generation based on ENABLE_* flags:
+CURRENT CODE: Script 2 trusts whatever ports Script 1 wrote.
+
+WHAT HAPPENS:
+  If Script 1 was run twice with same UID (re-run scenario),
+  or if .env was manually edited, Script 2 blindly tries to
+  bind already-occupied ports.
+  
+  Caddy fails to bind 80/443 (only one tenant can own these).
+  litellm fails to bind if port already taken.
+  Script gives no clear error about which port conflicts.
+
+FIX — add port pre-flight check in Script 2:
 ────────────────────────────────────────────────────────────────
-deploy_caddy() {
-  CADDY_CONFIG_DIR="${DATA_ROOT}/config/caddy"
-  mkdir -p "${CADDY_CONFIG_DIR}"
+verify_ports() {
+  print_section "Port Pre-flight Check"
+  local FAILED=0
 
-  # Always include global options and health endpoint
-  cat > "${CADDY_CONFIG_DIR}/Caddyfile" << EOF
-{
-  email ${CADDY_EMAIL:-admin@${DOMAIN}}
-  admin off
-}
-
-# Health check endpoint
-:2019 {
-  respond /health 200
-}
-
-EOF
-
-  # Build routes only for enabled services
-  append_route() {
-    local SUBDOMAIN="$1"
-    local BACKEND_PORT="$2"
+  check_port() {
+    local NAME="$1"
+    local PORT="$2"
     local ENABLED="$3"
-    local PATH_PREFIX="${4:-}"
-
     [ "${ENABLED}" != "true" ] && return 0
 
-    if [ -n "${PATH_PREFIX}" ]; then
-      cat >> "${CADDY_CONFIG_DIR}/Caddyfile" << EOF
-${SUBDOMAIN}.${DOMAIN} {
-  handle ${PATH_PREFIX}* {
-    reverse_proxy localhost:${BACKEND_PORT}
-  }
-}
-
-EOF
+    if ss -tlnp "sport = :${PORT}" 2>/dev/null | grep -q ":${PORT}"; then
+      # Check if it's OUR project already holding it
+      if docker ps --format '{{.Names}}' | \
+         grep -q "^${COMPOSE_PROJECT_NAME}"; then
+        echo "  ♻  ${NAME}:${PORT} — held by this project (OK)"
+      else
+        echo "  ❌ ${NAME}:${PORT} — IN USE by another process"
+        FAILED=$((FAILED + 1))
+      fi
     else
-      cat >> "${CADDY_CONFIG_DIR}/Caddyfile" << EOF
-${SUBDOMAIN}.${DOMAIN} {
-  reverse_proxy localhost:${BACKEND_PORT}
-}
-
-EOF
+      echo "  ✅ ${NAME}:${PORT} — available"
     fi
   }
 
-  # Root domain → OpenWebUI (if enabled) else LiteLLM
-  if [ "${ENABLE_OPENWEBUI}" = "true" ]; then
-    cat >> "${CADDY_CONFIG_DIR}/Caddyfile" << EOF
-${DOMAIN} {
-  reverse_proxy localhost:${OPENWEBUI_PORT:-5006}
-}
+  check_port "HTTP"       "80"                      "true"
+  check_port "HTTPS"      "443"                     "true"
+  check_port "LiteLLM"    "${LITELLM_PORT}"         "${ENABLE_LITELLM}"
+  check_port "OpenWebUI"  "${OPENWEBUI_PORT}"       "${ENABLE_OPENWEBUI}"
+  check_port "n8n"        "${N8N_PORT}"             "${ENABLE_N8N}"
+  check_port "Qdrant"     "${QDRANT_PORT}"          "${ENABLE_QDRANT}"
+  check_port "Prometheus" "${PROMETHEUS_PORT}"      "${ENABLE_PROMETHEUS}"
 
-EOF
-  fi
-
-  append_route "n8n"          "${N8N_PORT:-5678}"       "${ENABLE_N8N}"
-  append_route "flowise"      "${FLOWISE_PORT:-3001}"   "${ENABLE_FLOWISE}"
-  append_route "anythingllm"  "${ANYTHINGLLM_PORT:-3001}" "${ENABLE_ANYTHINGLLM}"
-  append_route "dify"         "${DIFY_PORT:-3000}"      "${ENABLE_DIFY}"
-  append_route "openclaw"     "${OPENCLAW_PORT:-8080}"  "${ENABLE_OPENCLAW}"
-  append_route "minio"        "${MINIO_CONSOLE_PORT:-9001}" "${ENABLE_MINIO}"
-  append_route "prometheus"   "${PROMETHEUS_PORT:-9090}" "${ENABLE_PROMETHEUS}"
-  append_route "grafana"      "${GRAFANA_PORT:-3000}"   "${ENABLE_GRAFANA}"
-  append_route "signal"       "${SIGNAL_API_PORT:-8090}" "${ENABLE_SIGNAL_API}"
-
-  log_success "Caddyfile written with routes for enabled services"
-
-  # Start Caddy
-  ${COMPOSE} up -d caddy
-
-  # Wait for Caddy admin endpoint
-  ATTEMPTS=0
-  until curl -sf http://localhost:2019/health &>/dev/null; do
-    ATTEMPTS=$((ATTEMPTS + 1))
-    [ "${ATTEMPTS}" -ge 15 ] && { log_error "Caddy failed to start"; \
-      docker logs "${COMPOSE_PROJECT_NAME}-caddy-1" --tail=30; exit 1; }
-    sleep 2
-  done
-
-  log_success "Caddy running and accepting requests"
-}
-────────────────────────────────────────────────────────────────
-```
-
----
-
-### INSTRUCTION SET F — Script 2, Section 5: Redis and Qdrant
-
-```
-ADD these two deploy functions (currently likely missing proper wait logic):
-────────────────────────────────────────────────────────────────
-deploy_redis() {
-  ${COMPOSE} up -d redis
-
-  ATTEMPTS=0
-  until docker exec "${COMPOSE_PROJECT_NAME}-redis-1" \
-        redis-cli ping 2>/dev/null | grep -q PONG; do
-    ATTEMPTS=$((ATTEMPTS + 1))
-    [ "${ATTEMPTS}" -ge 20 ] && {
-      log_error "Redis did not become ready"
-      docker logs "${COMPOSE_PROJECT_NAME}-redis-1" --tail=20
-      exit 1
-    }
-    sleep 2
-  done
-  log_success "Redis ready"
-}
-
-deploy_qdrant() {
-  # Qdrant runs as UID 1000 internally
-  # Use named volume to avoid host ownership issues (same fix as postgres)
-  docker volume create "${COMPOSE_PROJECT_NAME}_qdrant_data" 2>/dev/null || true
-
-  ${COMPOSE} up -d qdrant
-
-  ATTEMPTS=0
-  until curl -sf "http://localhost:${QDRANT_PORT:-6333}/health" \
-        &>/dev/null; do
-    ATTEMPTS=$((ATTEMPTS + 1))
-    [ "${ATTEMPTS}" -ge 20 ] && {
-      log_error "Qdrant did not become ready"
-      docker logs "${COMPOSE_PROJECT_NAME}-qdrant-1" --tail=20
-      exit 1
-    }
-    sleep 2
-  done
-  log_success "Qdrant ready"
-}
-────────────────────────────────────────────────────────────────
-```
-
----
-
-### INSTRUCTION SET G — Script 3: rclone OAuth Completion
-
-```
-FIND: rclone configuration section in Script 3
-REPLACE WITH:
-────────────────────────────────────────────────────────────────
-configure_rclone_oauth() {
-  if [ "${ENABLE_GDRIVE}" != "true" ]; then
-    log_info "Google Drive disabled — skipping"
-    return 0
-  fi
-
-  if [ "${GDRIVE_AUTH_METHOD}" != "oauth_tunnel" ]; then
-    log_info "rclone auth method is ${GDRIVE_AUTH_METHOD} — no action needed here"
-    return 0
-  fi
-
-  if [ "${RCLONE_TOKEN_OBTAINED}" = "true" ]; then
-    log_success "rclone token already obtained — skipping"
-    return 0
-  fi
-
-  echo ""
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "  rclone Google Drive OAuth — Token Entry"
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo ""
-  echo "  On YOUR LOCAL machine run:"
-  echo ""
-  echo "    rclone authorize \"drive\" \\"
-  echo "      \"${RCLONE_OAUTH_CLIENT_ID}\" \\"
-  echo "      \"${RCLONE_OAUTH_CLIENT_SECRET}\""
-  echo ""
-  echo "  Complete the browser flow, then paste the token JSON below."
-  echo "  Token looks like: {\"access_token\":\"ya29...\", ...}"
-  echo ""
-  read -rp "Paste token JSON: " RCLONE_TOKEN_JSON
-  echo ""
-
-  # Validate it looks like JSON with access_token
-  if ! echo "${RCLONE_TOKEN_JSON}" | grep -q '"access_token"'; then
-    log_error "Token does not look valid — missing access_token field"
+  if [ "${FAILED}" -gt 0 ]; then
+    echo ""
+    echo "❌ ${FAILED} port conflict(s) detected."
+    echo "   Run Script 1 again to reassign ports, or run Script 0 to clean up."
     exit 1
   fi
 
-  # Write rclone.conf
-  RCLONE_CONF_DIR="${DATA_ROOT}/config/rclone"
-  mkdir -p "${RCLONE_CONF_DIR}"
-  cat > "${RCLONE_CONF_DIR}/rclone.conf" << EOF
-[gdrive]
-type = drive
-client_id = ${RCLONE_OAUTH_CLIENT_ID}
-client_secret = ${RCLONE_OAUTH_CLIENT_SECRET}
-scope = drive
-token = ${RCLONE_TOKEN_JSON}
-root_folder_id = ${RCLONE_GDRIVE_FOLDER:-}
-EOF
-
-  # Mark token as obtained in .env
-  sed -i "s|^RCLONE_TOKEN_OBTAINED=.*|RCLONE_TOKEN_OBTAINED=true|" \
-    "${ENV_FILE}" || echo "RCLONE_TOKEN_OBTAINED=true" >> "${ENV_FILE}"
-
-  log_success "rclone.conf written with OAuth token"
-
-  # Start rclone container now that token exists
-  ${COMPOSE} up -d rclone
-  log_success "rclone container started — Google Drive sync active"
+  log_success "All ports available"
 }
 ────────────────────────────────────────────────────────────────
 ```
 
 ---
 
-## Summary: What Windsurf Must Do — In Order
+### Problem 6 — Script 0 Cleanup Not Tenant-Aware
 
 ```
-Step  File              Change
+CURRENT CODE in Script 0:
 ────────────────────────────────────────────────────────────────
- 1    Script 0          Add named volume removal to cleanup
-
- 2    Script 1          Write /etc/ai-platform/env-pointer
-                        after .env is created
-
- 3    docker-compose.yml Change postgres + qdrant + redis to
-                        named volumes (not bind mounts)
-                        Add volumes: block at bottom
-
- 4    Script 2          Replace .env loading with set -a/source
-                        + validation + COMPOSE var definition
-
- 5    Script 2          Replace postgres deploy with named volume
-                        + pg_isready wait + pgvector creation
-
- 6    Script 2          Add deploy_redis with redis-cli ping wait
-
- 7    Script 2          Add deploy_qdrant with named volume
-                        + HTTP health wait
-
- 8    Script 2          Replace deployment sequence with strict
-                        5-layer order
-
- 9    Script 2          Replace Caddyfile generation with dynamic
-                        ENABLE_*-aware route builder
-
-10    Script 2          Replace rclone block — never hang,
-                        print tunnel instructions, set
-                        ENABLE_GDRIVE=false for this run
-
-11    Script 2          Replace Tailscale block with daemon
-                        socket check + retry IP loop
-
-12    Script 3          Add configure_rclone_oauth function
-                        with token paste + rclone.conf write
+docker stop $(docker ps -aq) 2>/dev/null
+docker rm $(docker ps -aq) 2>/dev/null
+docker volume prune -f
+docker network prune -f
 ────────────────────────────────────────────────────────────────
 
-COMMIT MESSAGE:
-fix: resolve postgres ownership deadlock using named volumes;
-fix: strict 5-layer deploy order with readiness gates at each layer;
-fix: dynamic Caddyfile generation respects ENABLE_* flags;
-fix: rclone oauth never hangs on server — deferred to Script 3;
-fix: tailscale daemon socket check before up;
-fix: .env loaded safely with set -a/source across all scripts;
-fix: Script 0 removes named volumes on cleanup
+WHAT HAPPENS:
+  This nukes ALL tenants on the machine.
+  If Tenant A runs cleanup, Tenant B's containers are destroyed.
+
+FIX — Script 0 must load .env first and scope to project:
+────────────────────────────────────────────────────────────────
+# Script 0 must accept DATA_ROOT as argument or read env-pointer
+if [ -f /etc/ai-platform/env-pointer ]; then
+  DATA_ROOT="$(cat /etc/ai-platform/env-pointer)"
+fi
+
+ENV_FILE="${DATA_ROOT}/.env"
+set -a; source "${ENV_FILE}"; set +a
+
+echo "🧹 Cleaning up project: ${COMPOSE_PROJECT_NAME}"
+echo "   This will NOT affect other tenants."
+read -rp "Confirm? (yes/no): " CONFIRM
+[ "${CONFIRM}" != "yes" ] && exit 0
+
+# Scoped cleanup
+docker compose \
+  --project-name "${COMPOSE_PROJECT_NAME}" \
+  --file "${SCRIPT_DIR}/docker-compose.yml" \
+  down --volumes --remove-orphans 2>/dev/null || true
+
+docker volume rm \
+  "${COMPOSE_PROJECT_NAME}_postgres_data" \
+  "${COMPOSE_PROJECT_NAME}_qdrant_data" \
+  "${COMPOSE_PROJECT_NAME}_redis_data" \
+  2>/dev/null || true
+
+docker network rm "${COMPOSE_PROJECT_NAME}_net" 2>/dev/null || true
+
+# Remove env pointer for this tenant only
+rm -f /etc/ai-platform/env-pointer
+
+log_success "Cleanup complete for ${COMPOSE_PROJECT_NAME}"
+────────────────────────────────────────────────────────────────
+```
+
+---
+
+## The Correct Sequence End-to-End
+
+```
+Script 1 generates and writes to DATA_ROOT/.env:
+─────────────────────────────────────────────────
+  TENANT_ID=u1001
+  COMPOSE_PROJECT_NAME=ai-platform-u1001
+  STACK_USER_UID=1001
+  STACK_USER_GID=1001
+  DOCKER_NETWORK=ai-platform-u1001_net
+  DATA_ROOT=/mnt/nvme0/ai-platform
+  
+  PG_VOLUME=ai-platform-u1001_postgres_data
+  QDRANT_VOLUME=ai-platform-u1001_qdrant_data
+  REDIS_VOLUME=ai-platform-u1001_redis_data
+  
+  LITELLM_PORT=4000
+  OPENWEBUI_PORT=5006
+  N8N_PORT=5678
+  QDRANT_PORT=6333
+  ...
+
+Script 2 reads DATA_ROOT/.env then:
+─────────────────────────────────────────────────
+  1. Builds COMPOSE with --project-name ai-platform-u1001
+  2. Creates volumes ai-platform-u1001_postgres_data etc.
+  3. Creates network ai-platform-u1001_net
+  4. Deploys in strict layer order
+  5. Runs port pre-flight BEFORE any docker compose up
+  6. All docker exec uses PG_CONTAINER=ai-platform-u1001-postgres-1
+
+Result — Tenant B (u1002) has entirely separate:
+─────────────────────────────────────────────────
+  Project:  ai-platform-u1002
+  Network:  ai-platform-u1002_net
+  Volumes:  ai-platform-u1002_postgres_data
+  Containers: ai-platform-u1002-postgres-1
+  Ports:    offset set, no collision
+```
+
+---
+
+## Consolidated Commit Message for Windsurf
+
+```
+CRITICAL MULTI-TENANT FIXES:
+
+fix(s2): build COMPOSE variable AFTER source .env — not before
+fix(s2): validate COMPOSE_PROJECT_NAME non-empty before any docker call
+fix(s2): all docker exec uses ${COMPOSE_PROJECT_NAME}-<service>-1
+fix(s2): all named volumes prefixed ${COMPOSE_PROJECT_NAME}_<vol>
+fix(s2): docker network named ${COMPOSE_PROJECT_NAME}_net
+fix(s2): add verify_ports() pre-flight before layer 1 deploy
+fix(s0): scope cleanup to COMPOSE_PROJECT_NAME only — not all containers
+fix(s1): write DOCKER_NETWORK, PG_VOLUME, QDRANT_VOLUME, REDIS_VOLUME
+         to .env so Script 2 reads not recomputes them
+fix(compose): volumes block uses name: ${COMPOSE_PROJECT_NAME}_<vol>
+              external: true for all stateful volumes
 ```

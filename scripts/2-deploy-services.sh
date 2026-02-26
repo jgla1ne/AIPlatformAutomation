@@ -72,21 +72,20 @@ if [ ! -f "${ENV_FILE}" ]; then
   exit 1
 fi
 
-# Safe load — handles spaces in values, ignores comments
+# 1. Load env FIRST
 set -a
 # shellcheck disable=SC1090
 source "${ENV_FILE}"
 set +a
 
-# Validate minimum required vars
-for REQUIRED in COMPOSE_PROJECT_NAME DOMAIN DATA_ROOT; do
-  if [ -z "${!REQUIRED:-}" ]; then
-    echo "❌ Required variable ${REQUIRED} is empty in .env"
-    exit 1
-  fi
-done
+# 2. Validate COMPOSE_PROJECT_NAME is not empty
+if [ -z "${COMPOSE_PROJECT_NAME}" ]; then
+  echo "❌ COMPOSE_PROJECT_NAME is empty after loading .env"
+  echo "   Check that Script 1 wrote it to ${ENV_FILE}"
+  exit 1
+fi
 
-# Define canonical compose command used everywhere in this script
+# 3. NOW build COMPOSE
 COMPOSE="docker compose \
   --project-name ${COMPOSE_PROJECT_NAME} \
   --env-file ${ENV_FILE} \
@@ -97,10 +96,59 @@ print_success ".env loaded | Project: ${COMPOSE_PROJECT_NAME} | Domain: ${DOMAIN
 # Set tenant prefix for container names
 TENANT_PREFIX="${COMPOSE_PROJECT_NAME:-ai-platform}"
 
+# Define tenant-scoped container names
+PG_CONTAINER="${COMPOSE_PROJECT_NAME}-postgres-1"
+REDIS_CONTAINER="${COMPOSE_PROJECT_NAME}-redis-1"
+QDRANT_CONTAINER="${COMPOSE_PROJECT_NAME}-qdrant-1"
+CADDY_CONTAINER="${COMPOSE_PROJECT_NAME}-caddy-1"
+
 # Generate tenant-prefixed container name
 get_container_name() {
     local base_name="$1"
     echo "${TENANT_PREFIX}-${base_name}"
+}
+
+# Port pre-flight check to prevent conflicts
+verify_ports() {
+  print_header "Port Pre-flight Check"
+  local FAILED=0
+
+  check_port() {
+    local NAME="$1"
+    local PORT="$2"
+    local ENABLED="$3"
+    [ "${ENABLED}" != "true" ] && return 0
+
+    if ss -tlnp "sport = :${PORT}" 2>/dev/null | grep -q ":${PORT}"; then
+      # Check if it's OUR project already holding it
+      if docker ps --format '{{.Names}}' | \
+         grep -q "^${COMPOSE_PROJECT_NAME}"; then
+        echo "  ♻  ${NAME}:${PORT} — held by this project (OK)"
+      else
+        echo "  ❌ ${NAME}:${PORT} — IN USE by another process"
+        FAILED=$((FAILED + 1))
+      fi
+    else
+      echo "  ✅ ${NAME}:${PORT} — available"
+    fi
+  }
+
+  check_port "HTTP"       "80"                      "true"
+  check_port "HTTPS"      "443"                     "true"
+  check_port "LiteLLM"    "${LITELLM_PORT:-4000}"         "${ENABLE_LITELLM}"
+  check_port "OpenWebUI"  "${OPENWEBUI_PORT:-3000}"       "${ENABLE_OPENWEBUI}"
+  check_port "n8n"        "${N8N_PORT:-5678}"             "${ENABLE_N8N}"
+  check_port "Qdrant"     "${QDRANT_PORT:-6333}"          "${ENABLE_QDRANT}"
+  check_port "Prometheus" "${PROMETHEUS_PORT:-9090}"      "${ENABLE_PROMETHEUS}"
+
+  if [ "${FAILED}" -gt 0 ]; then
+    echo ""
+    echo "❌ ${FAILED} port conflict(s) detected."
+    echo "   Run Script 1 again to reassign ports, or run Script 0 to clean up."
+    exit 1
+  fi
+
+  print_success "All ports available"
 }
 
 # Validate configuration
@@ -459,31 +507,29 @@ deploy_layer_0_infrastructure() {
 deploy_postgres() {
   print_header "PostgreSQL"
 
-  # Create networks first if they don't exist
-  docker network create "${DOCKER_NETWORK}" 2>/dev/null || true
-  docker network create "${DOCKER_NETWORK}_internal" 2>/dev/null || true
+  # Create tenant-scoped network first if it doesn't exist
+  docker network create \
+    --driver bridge \
+    --label "tenant=${COMPOSE_PROJECT_NAME}" \
+    "${DOCKER_NETWORK}" 2>/dev/null \
+    || echo "  ℹ Network ${DOCKER_NETWORK} already exists"
 
-  # Use Docker NAMED VOLUME — not bind mount — to avoid host ownership issues
-  # The named volume is managed by Docker, postgres container owns it internally
-  # This eliminates the UID 999 vs 1001 ownership conflict entirely
-
-  # Check if named volume exists
-  if ! docker volume inspect "${COMPOSE_PROJECT_NAME}_postgres_data" \
+  # Use tenant-scoped named volume
+  if ! docker volume inspect "${PG_VOLUME}" \
        &>/dev/null; then
-    print_info "Creating postgres named volume..."
-    docker volume create "${COMPOSE_PROJECT_NAME}_postgres_data"
+    print_info "Creating postgres named volume: ${PG_VOLUME}"
+    docker volume create "${PG_VOLUME}"
   fi
 
-  # Write the postgres service with named volume to a override file
-  # This overrides any bind-mount in docker-compose.yml
+  # Write the postgres service with tenant-scoped named volume to override file
   cat > "${SCRIPT_DIR}/docker-compose.postgres-override.yml" << EOF
 services:
   postgres:
     volumes:
-      - ${COMPOSE_PROJECT_NAME}_postgres_data:/var/lib/postgresql/data
+      - ${PG_VOLUME}:/var/lib/postgresql/data
 
 volumes:
-  ${COMPOSE_PROJECT_NAME}_postgres_data:
+  ${PG_VOLUME}:
     external: true
 EOF
 
@@ -495,19 +541,19 @@ EOF
     --file "${SCRIPT_DIR}/docker-compose.postgres-override.yml" \
     up -d postgres
 
-  # Wait for postgres to be genuinely ready
+  # Wait for postgres to be genuinely ready using tenant-scoped container name
   print_info "Waiting for PostgreSQL to accept connections..."
   ATTEMPTS=0
   MAX_ATTEMPTS=30
 
-  until docker exec "${COMPOSE_PROJECT_NAME}-postgres-1" \
+  until docker exec "${PG_CONTAINER}" \
         pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
         &>/dev/null 2>&1; do
     ATTEMPTS=$((ATTEMPTS + 1))
     if [ "${ATTEMPTS}" -ge "${MAX_ATTEMPTS}" ]; then
       print_error "PostgreSQL did not become ready after 60 seconds"
       print_error "Logs:"
-      docker logs "${COMPOSE_PROJECT_NAME}-postgres-1" --tail=30
+      docker logs "${PG_CONTAINER}" --tail=30
       exit 1
     fi
     sleep 2
@@ -515,8 +561,8 @@ EOF
 
   print_success "PostgreSQL ready"
 
-  # Create pgvector extension
-  docker exec "${COMPOSE_PROJECT_NAME}-postgres-1" \
+  # Create pgvector extension using tenant-scoped container
+  docker exec "${PG_CONTAINER}" \
     psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
     -c "CREATE EXTENSION IF NOT EXISTS vector;" \
     && print_success "pgvector extension created" \
@@ -526,24 +572,24 @@ EOF
 deploy_redis() {
   print_header "Redis"
   
-  # Use named volume for redis as well
-  if ! docker volume inspect "${COMPOSE_PROJECT_NAME}_redis_data" \
+  # Use tenant-scoped named volume
+  if ! docker volume inspect "${REDIS_VOLUME}" \
        &>/dev/null; then
-    print_info "Creating redis named volume..."
-    docker volume create "${COMPOSE_PROJECT_NAME}_redis_data"
+    print_info "Creating redis named volume: ${REDIS_VOLUME}"
+    docker volume create "${REDIS_VOLUME}"
   fi
 
   # Deploy redis using docker-compose
   ${COMPOSE} up -d redis
 
-  # Wait for redis to be ready
+  # Wait for redis to be ready using tenant-scoped container name
   ATTEMPTS=0
-  until docker exec "${COMPOSE_PROJECT_NAME}-redis-1" \
+  until docker exec "${REDIS_CONTAINER}" \
         redis-cli ping 2>/dev/null | grep -q PONG; do
     ATTEMPTS=$((ATTEMPTS + 1))
     [ "${ATTEMPTS}" -ge 20 ] && {
       print_error "Redis did not become ready"
-      docker logs "${COMPOSE_PROJECT_NAME}-redis-1" --tail=20
+      docker logs "${REDIS_CONTAINER}" --tail=20
       exit 1
     }
     sleep 2
@@ -554,25 +600,25 @@ deploy_redis() {
 deploy_qdrant() {
   print_header "Qdrant"
   
-  # Qdrant runs as UID 1000 internally
-  # Use named volume to avoid host ownership issues (same fix as postgres)
-  if ! docker volume inspect "${COMPOSE_PROJECT_NAME}_qdrant_data" \
+  # Use tenant-scoped named volume
+  if ! docker volume inspect "${QDRANT_VOLUME}" \
        &>/dev/null; then
-    print_info "Creating qdrant named volume..."
-    docker volume create "${COMPOSE_PROJECT_NAME}_qdrant_data"
+    print_info "Creating qdrant named volume: ${QDRANT_VOLUME}"
+    docker volume create "${QDRANT_VOLUME}"
   fi
 
   # Deploy qdrant using docker-compose
   ${COMPOSE} up -d qdrant
 
-  # Wait for qdrant to be ready
+  # Wait for qdrant to be ready using tenant-scoped container name
   ATTEMPTS=0
-  until curl -sf "http://localhost:${QDRANT_PORT:-6333}/health" \
+  until docker exec "${QDRANT_CONTAINER}" \
+        curl -sf http://localhost:6333/health \
         &>/dev/null; do
     ATTEMPTS=$((ATTEMPTS + 1))
     [ "${ATTEMPTS}" -ge 20 ] && {
       print_error "Qdrant did not become ready"
-      docker logs "${COMPOSE_PROJECT_NAME}-qdrant-1" --tail=20
+      docker logs "${QDRANT_CONTAINER}" --tail=20
       exit 1
     }
     sleep 2
@@ -1405,6 +1451,7 @@ main() {
     
     # Execute deployment phases
     validate_config
+    verify_ports
     set_vectordb_config
     
     # Deploy services in dependency order

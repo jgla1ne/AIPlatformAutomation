@@ -1044,6 +1044,12 @@ collect_configurations() {
     echo "COMPOSE_PROJECT_NAME=${TENANT_ID}" >> "$ENV_FILE"
     echo "TAILSCALE_HOSTNAME=${TENANT_ID}" >> "$ENV_FILE"
     
+    # Write tenant-scoped infrastructure variables for Script 2
+    echo "DOCKER_NETWORK=${TENANT_ID}_net" >> "$ENV_FILE"
+    echo "PG_VOLUME=${TENANT_ID}_postgres_data" >> "$ENV_FILE"
+    echo "REDIS_VOLUME=${TENANT_ID}_redis_data" >> "$ENV_FILE"
+    echo "QDRANT_VOLUME=${TENANT_ID}_qdrant_data" >> "$ENV_FILE"
+    
     # Debug: Verify variables were written
     print_info "DEBUG: Verifying tenant ID written to .env..."
     if grep -q "TENANT_ID=${TENANT_ID}" "$ENV_FILE"; then
@@ -1055,6 +1061,8 @@ collect_configurations() {
     print_success "Auto-generated Tenant ID: ${TENANT_ID}"
     print_success "Compose project: ${TENANT_ID}"
     print_success "Tailscale hostname: ${TENANT_ID}"
+    print_info "Network: ${TENANT_ID}_net"
+    print_info "Volumes: ${TENANT_ID}_postgres_data, ${TENANT_ID}_redis_data, ${TENANT_ID}_qdrant_data"
     print_info "Unique identifier: volume=${VOLUME_SUFFIX}, uid-gid=${UID_SUFFIX}, timestamp=${TIMESTAMP}"
     
     # Write profile flags to .env immediately
