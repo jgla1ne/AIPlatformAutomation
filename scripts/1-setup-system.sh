@@ -619,6 +619,68 @@ select_services() {
     log_phase "7" "🎯" "Service Selection"
     
     echo ""
+    print_header "📋 Stack Profile Selection"
+    echo ""
+    print_info "Choose a deployment profile:"
+    echo ""
+    echo "  1. Full Stack"
+    echo "     All services including OpenClaw UI and Caddy proxy"
+    echo "     Tailscale enabled for secure access"
+    echo "     Google Drive sync enabled"
+    echo ""
+    echo "  2. Local Development"
+    echo "     All services except Tailscale and Google Drive"
+    echo "     OpenClaw UI and Caddy proxy included"
+    echo "     Ideal for local testing"
+    echo ""
+    echo "  3. API Gateway Only"
+    echo "     LiteLLM + Qdrant only"
+    echo "     No OpenClaw UI, no Caddy"
+    echo "     Tailscale optional"
+    echo ""
+    echo "  4. Custom (choose each service individually)"
+    echo ""
+    echo -n -e "${YELLOW}Profile [1-4, default 1]:${NC} "
+    read -r STACK_PROFILE
+    STACK_PROFILE=${STACK_PROFILE:-1}
+
+    case "${STACK_PROFILE}" in
+      1)
+          ENABLE_LITELLM=true
+          ENABLE_QDRANT=true
+          ENABLE_OPENCLAW=true
+          ENABLE_CADDY=true
+          ENABLE_TAILSCALE=true
+          ENABLE_GDRIVE=true          # will ask sub-questions
+          ;;
+      2)
+          ENABLE_LITELLM=true
+          ENABLE_QDRANT=true
+          ENABLE_OPENCLAW=true
+          ENABLE_CADDY=true
+          ENABLE_TAILSCALE=false
+          ENABLE_GDRIVE=false
+          ;;
+      3)
+          ENABLE_LITELLM=true
+          ENABLE_QDRANT=true
+          ENABLE_OPENCLAW=false
+          ENABLE_CADDY=false
+          ENABLE_TAILSCALE=false      # will ask
+          ENABLE_GDRIVE=false
+          ;;
+      4)
+          # ask each individually — existing logic
+          ENABLE_LITELLM=false
+          ENABLE_QDRANT=false
+          ENABLE_OPENCLAW=false
+          ENABLE_CADDY=false
+          ENABLE_TAILSCALE=false
+          ENABLE_GDRIVE=false
+          ;;
+    esac
+
+    echo ""
     print_header "📋 Available Services"
     echo ""
     print_info "Select services to deploy. Dependencies will be auto-selected."
@@ -928,67 +990,6 @@ collect_configurations() {
     print_success "Compose project: ${TENANT_ID}"
     print_success "Tailscale hostname: ${TENANT_ID}"
     
-    # Stack profile selection
-    print_section "Stack Configuration"
-    echo ""
-    echo "Select your deployment profile:"
-    echo ""
-    echo "  1. Full Stack (RECOMMENDED)"
-    echo "     LiteLLM + Qdrant + OpenClaw + Caddy"
-    echo "     + Tailscale (private mesh access)"
-    echo "     + rclone (Google Drive sync)"
-    echo ""
-    echo "  2. Core Stack (no external integrations)"
-    echo "     LiteLLM + Qdrant + OpenClaw + Caddy"
-    echo "     No Tailscale, no rclone"
-    echo ""
-    echo "  3. API Gateway Only"
-    echo "     LiteLLM + Qdrant only"
-    echo "     No OpenClaw UI, no Caddy"
-    echo "     Tailscale optional"
-    echo ""
-    echo "  4. Custom (choose each service individually)"
-    echo ""
-    echo -n -e "${YELLOW}Profile [1-4, default 1]:${NC} "
-    read -r STACK_PROFILE
-    STACK_PROFILE=${STACK_PROFILE:-1}
-
-    case "${STACK_PROFILE}" in
-      1)
-          ENABLE_LITELLM=true
-          ENABLE_QDRANT=true
-          ENABLE_OPENCLAW=true
-          ENABLE_CADDY=true
-          ENABLE_TAILSCALE=true
-          ENABLE_GDRIVE=true          # will ask sub-questions
-          ;;
-      2)
-          ENABLE_LITELLM=true
-          ENABLE_QDRANT=true
-          ENABLE_OPENCLAW=true
-          ENABLE_CADDY=true
-          ENABLE_TAILSCALE=false
-          ENABLE_GDRIVE=false
-          ;;
-      3)
-          ENABLE_LITELLM=true
-          ENABLE_QDRANT=true
-          ENABLE_OPENCLAW=false
-          ENABLE_CADDY=false
-          ENABLE_TAILSCALE=false      # will ask
-          ENABLE_GDRIVE=false
-          ;;
-      4)
-          # ask each individually — existing logic
-          ENABLE_LITELLM=false
-          ENABLE_QDRANT=false
-          ENABLE_OPENCLAW=false
-          ENABLE_CADDY=false
-          ENABLE_TAILSCALE=false
-          ENABLE_GDRIVE=false
-          ;;
-    esac
-
     # Write profile flags to .env immediately
     echo "STACK_PROFILE=${STACK_PROFILE}" >> "$ENV_FILE"
     echo "ENABLE_LITELLM=${ENABLE_LITELLM}" >> "$ENV_FILE"
