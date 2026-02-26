@@ -58,29 +58,28 @@ load_config() {
     
     if [[ ! -f "$ENV_FILE" ]]; then
         print_error "Configuration file not found: $ENV_FILE"
-        print_info "Please run Script 1 first: sudo bash scripts/1-setup-system.sh"
+        print_info "Please run script 1 first to create configuration"
         exit 1
     fi
     
-    # Safe .env loading — handles spaces, quotes, comments
+    # Safe load with set -a to export all variables
     set -a
-    # shellcheck disable=SC1090
     source "$ENV_FILE"
     set +a
     
-    # Set tenant prefix for container names
+    # Set tenant prefix for container names (after loading .env)
     TENANT_PREFIX="${COMPOSE_PROJECT_NAME:-ai-platform}"
     
     # Define COMPOSE command with proper project name and env file
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     COMPOSE="docker compose \
-      --project-name ${COMPOSE_PROJECT_NAME} \
+      --project-name ${COMPOSE_PROJECT_NAME:-ai-platform} \
       --env-file ${ENV_FILE} \
       --file ${SCRIPT_DIR}/docker-compose.yml"
     
     print_success "Configuration loaded from $ENV_FILE"
     print_info "Tenant: ${TENANT_PREFIX}"
-    print_info "Compose project: ${COMPOSE_PROJECT_NAME}"
+    print_info "Compose project: ${COMPOSE_PROJECT_NAME:-ai-platform}"
 }
 
 # Generate tenant-prefixed container name
@@ -837,7 +836,7 @@ wait_healthy() {
             echo ""
             print_error "${container} failed to become healthy after ${timeout}s"
             print_info "Logs:"
-            docker logs --tail 20 "${container}"
+            docker logs --tail 20 "$(get_container_name ${container})"
             exit 1
         fi
     done
@@ -1324,7 +1323,7 @@ main() {
     
     # Deploy services in dependency order
     # Generate configurations before deployment
-    generate_rclone_config
+    setup_rclone
     generate_litellm_config
     
     # Setup Tailscale before services start
