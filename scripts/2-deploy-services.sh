@@ -90,7 +90,7 @@ done
 COMPOSE="docker compose \
   --project-name ${COMPOSE_PROJECT_NAME} \
   --env-file ${ENV_FILE} \
-  --file ${SCRIPT_DIR}/docker-compose.yml"
+  --file ${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml"
 
 print_success ".env loaded | Project: ${COMPOSE_PROJECT_NAME} | Domain: ${DOMAIN}"
 
@@ -392,7 +392,9 @@ deploy_layered_services() {
     deploy_layer_0_infrastructure
     
     # Layer 1: Databases
-    deploy_layer_1_databases
+    deploy_postgres
+    deploy_redis
+    deploy_qdrant
     
     # Layer 2: Application Services
     deploy_layer_2_services
@@ -454,69 +456,128 @@ deploy_layer_0_infrastructure() {
     print_success "Infrastructure ready"
 }
 
-deploy_layer_1_databases() {
-    print_header "Layer 1: Databases"
-    
-    # Set consistent ownership for all service directories
-    print_info "Setting directory ownership..."
-    chown -R ${RUNNING_UID}:${RUNNING_GID} ${DATA_ROOT}/data/
-    chown -R ${RUNNING_UID}:${RUNNING_GID} ${DATA_ROOT}/config/
-    
-    # Fix postgres directory ownership for postgres user (UID 999)
-    mkdir -p "${DATA_ROOT}/data/postgres"
-    chown 999:999 "${DATA_ROOT}/data/postgres"
-    chmod 700 "${DATA_ROOT}/data/postgres"
-    
-    # Fix redis directory ownership for redis user (UID 999)
-    mkdir -p "${DATA_ROOT}/data/redis"
-    chown 999:999 "${DATA_ROOT}/data/redis"
-    chmod 700 "${DATA_ROOT}/data/redis"
-    
-    print_success "Directory ownership configured"
-    
-    # PostgreSQL with explicit UID and init script
-    docker run -d \
-        --name "$(get_container_name postgres)" \
-        --network "${DOCKER_NETWORK}" \
-        --restart unless-stopped \
-        -e POSTGRES_USER="${POSTGRES_USER}" \
-        -e POSTGRES_PASSWORD="${POSTGRES_PASSWORD}" \
-        -v "${DATA_ROOT}/data/postgres:/var/lib/postgresql/data" \
-        -v "${DATA_ROOT}/postgres-init:/docker-entrypoint-initdb.d" \
-        -u "999:999" \
-        postgres:15-alpine
-    
-    # Redis
-    docker run -d \
-        --name "$(get_container_name redis)" \
-        --network "${DOCKER_NETWORK}" \
-        --restart unless-stopped \
-         \
-        -e REDIS_PASSWORD="${REDIS_PASSWORD}" \
-        -v "${DATA_ROOT}/data/redis:/data" \
-        redis:7-alpine --requirepass "${REDIS_PASSWORD}"
-    
-    # Qdrant
-    docker run -d \
-        --name "$(get_container_name qdrant)" \
-        --network "${DOCKER_NETWORK}" \
-        --restart unless-stopped \
-         \
-        -v "${DATA_ROOT}/data/qdrant:/qdrant/storage" \
-        qdrant/qdrant:latest
-    
-    # WAIT for all layer 1 to be healthy before proceeding
-    wait_healthy "postgres" "docker exec $(get_container_name postgres) pg_isready -U ${POSTGRES_USER:-postgres}" 30
-    wait_healthy "redis" "docker exec $(get_container_name redis) redis-cli -a ${REDIS_PASSWORD:-} ping" 30
-    wait_healthy "qdrant" "docker run --rm --network ${DOCKER_NETWORK} alpine/curl -sf http://$(get_container_name qdrant):6333/" 60
-    
-    # Create pgvector extension after postgres is ready
-    print_info "Creating pgvector extension..."
-    docker exec $(get_container_name postgres) psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-aiplatform}" \
-        -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null || true
-    print_success "pgvector extension created"
-    
-    print_success "Layer 1 databases healthy"
+deploy_postgres() {
+  print_header "PostgreSQL"
+
+  # Create networks first if they don't exist
+  docker network create "${DOCKER_NETWORK}" 2>/dev/null || true
+  docker network create "${DOCKER_NETWORK}_internal" 2>/dev/null || true
+
+  # Use Docker NAMED VOLUME — not bind mount — to avoid host ownership issues
+  # The named volume is managed by Docker, postgres container owns it internally
+  # This eliminates the UID 999 vs 1001 ownership conflict entirely
+
+  # Check if named volume exists
+  if ! docker volume inspect "${COMPOSE_PROJECT_NAME}_postgres_data" \
+       &>/dev/null; then
+    print_info "Creating postgres named volume..."
+    docker volume create "${COMPOSE_PROJECT_NAME}_postgres_data"
+  fi
+
+  # Write the postgres service with named volume to a override file
+  # This overrides any bind-mount in docker-compose.yml
+  cat > "${SCRIPT_DIR}/docker-compose.postgres-override.yml" << EOF
+services:
+  postgres:
+    volumes:
+      - ${COMPOSE_PROJECT_NAME}_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  ${COMPOSE_PROJECT_NAME}_postgres_data:
+    external: true
+EOF
+
+  # Deploy postgres using override
+  docker compose \
+    --project-name "${COMPOSE_PROJECT_NAME}" \
+    --env-file "${ENV_FILE}" \
+    --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+    --file "${SCRIPT_DIR}/docker-compose.postgres-override.yml" \
+    up -d postgres
+
+  # Wait for postgres to be genuinely ready
+  print_info "Waiting for PostgreSQL to accept connections..."
+  ATTEMPTS=0
+  MAX_ATTEMPTS=30
+
+  until docker exec "${COMPOSE_PROJECT_NAME}-postgres-1" \
+        pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+        &>/dev/null 2>&1; do
+    ATTEMPTS=$((ATTEMPTS + 1))
+    if [ "${ATTEMPTS}" -ge "${MAX_ATTEMPTS}" ]; then
+      print_error "PostgreSQL did not become ready after 60 seconds"
+      print_error "Logs:"
+      docker logs "${COMPOSE_PROJECT_NAME}-postgres-1" --tail=30
+      exit 1
+    fi
+    sleep 2
+  done
+
+  print_success "PostgreSQL ready"
+
+  # Create pgvector extension
+  docker exec "${COMPOSE_PROJECT_NAME}-postgres-1" \
+    psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+    -c "CREATE EXTENSION IF NOT EXISTS vector;" \
+    && print_success "pgvector extension created" \
+    || print_warning "pgvector extension creation failed — check if pgvector image is used"
+}
+
+deploy_redis() {
+  print_header "Redis"
+  
+  # Use named volume for redis as well
+  if ! docker volume inspect "${COMPOSE_PROJECT_NAME}_redis_data" \
+       &>/dev/null; then
+    print_info "Creating redis named volume..."
+    docker volume create "${COMPOSE_PROJECT_NAME}_redis_data"
+  fi
+
+  # Deploy redis using docker-compose
+  ${COMPOSE} up -d redis
+
+  # Wait for redis to be ready
+  ATTEMPTS=0
+  until docker exec "${COMPOSE_PROJECT_NAME}-redis-1" \
+        redis-cli ping 2>/dev/null | grep -q PONG; do
+    ATTEMPTS=$((ATTEMPTS + 1))
+    [ "${ATTEMPTS}" -ge 20 ] && {
+      print_error "Redis did not become ready"
+      docker logs "${COMPOSE_PROJECT_NAME}-redis-1" --tail=20
+      exit 1
+    }
+    sleep 2
+  done
+  print_success "Redis ready"
+}
+
+deploy_qdrant() {
+  print_header "Qdrant"
+  
+  # Qdrant runs as UID 1000 internally
+  # Use named volume to avoid host ownership issues (same fix as postgres)
+  if ! docker volume inspect "${COMPOSE_PROJECT_NAME}_qdrant_data" \
+       &>/dev/null; then
+    print_info "Creating qdrant named volume..."
+    docker volume create "${COMPOSE_PROJECT_NAME}_qdrant_data"
+  fi
+
+  # Deploy qdrant using docker-compose
+  ${COMPOSE} up -d qdrant
+
+  # Wait for qdrant to be ready
+  ATTEMPTS=0
+  until curl -sf "http://localhost:${QDRANT_PORT:-6333}/health" \
+        &>/dev/null; do
+    ATTEMPTS=$((ATTEMPTS + 1))
+    [ "${ATTEMPTS}" -ge 20 ] && {
+      print_error "Qdrant did not become ready"
+      docker logs "${COMPOSE_PROJECT_NAME}-qdrant-1" --tail=20
+      exit 1
+    }
+    sleep 2
+  done
+  print_success "Qdrant ready"
 }
 
 deploy_layer_2_services() {

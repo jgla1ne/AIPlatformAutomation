@@ -1,0 +1,8 @@
+services:
+  postgres:
+    volumes:
+      - stack-data-1001-1001-45106_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  stack-data-1001-1001-45106_postgres_data:
+    external: true
