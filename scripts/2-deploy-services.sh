@@ -1318,7 +1318,7 @@ main() {
     print_banner
     
     # Execute deployment phases
-    load_configuration
+    load_config
     validate_config
     set_vectordb_config
     
