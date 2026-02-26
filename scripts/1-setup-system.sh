@@ -1027,18 +1027,22 @@ collect_configurations() {
     # Generate tenant identity for multi-tenant support
     print_header "Tenant Identity"
     
-    # Generate a unique tenant ID from EBS mount point + UID-GID + timestamp
-    # This ensures uniqueness across different deployments and users
-    VOLUME_SUFFIX=$(basename "${DATA_ROOT}" | sed 's/[^a-zA-Z0-9]/-/g')
-    TIMESTAMP=$(date +%s | tail -c 6)  # Last 5 digits of timestamp
-    UID_SUFFIX="${RUNNING_UID}-${RUNNING_GID}"
-    
-    # Auto-generate unique tenant ID without user input
-    TENANT_ID="stack-${VOLUME_SUFFIX}-${UID_SUFFIX}-${TIMESTAMP}"
-    
-    # Sanitize: lowercase, alphanumeric + hyphen only
-    TENANT_ID=$(echo "${TENANT_ID}" | tr '[:upper:]' '[:lower:]' | \
-                sed 's/[^a-z0-9-]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
+    # Check if .env already exists for this UID to preserve data continuity
+    if [ -f "${ENV_FILE}" ] && grep -q "^COMPOSE_PROJECT_NAME=" "${ENV_FILE}"; then
+        EXISTING_PROJECT="$(grep ^COMPOSE_PROJECT_NAME= "${ENV_FILE}" | cut -d= -f2)"
+        print_info "Existing project found: ${EXISTING_PROJECT}"
+        print_info "Preserving project name to maintain data continuity."
+        COMPOSE_PROJECT_NAME="${EXISTING_PROJECT}"
+        TENANT_ID="${COMPOSE_PROJECT_NAME}"
+    else
+        # Generate stable tenant ID from UID only - no random, no path embedding
+        # Format: aip-u${UID} (e.g., aip-u1001) - short, readable, stable
+        TENANT_ID="aip-u${RUNNING_UID}"
+        COMPOSE_PROJECT_NAME="${TENANT_ID}"
+        
+        print_info "Generated new tenant ID: ${TENANT_ID}"
+        print_info "This will be preserved across re-runs to protect your data."
+    fi
     
     echo "TENANT_ID=${TENANT_ID}" >> "$ENV_FILE"
     echo "COMPOSE_PROJECT_NAME=${TENANT_ID}" >> "$ENV_FILE"
@@ -3205,10 +3209,15 @@ networks:
     internal: true
 
 volumes:
-  postgres_data:
-    driver: local
-  redis_data:
-    driver: local
+  ${PG_VOLUME}:
+    name: ${PG_VOLUME}
+    external: true
+  ${REDIS_VOLUME}:
+    name: ${REDIS_VOLUME}
+    external: true
+  ${QDRANT_VOLUME}:
+    name: ${QDRANT_VOLUME}
+    external: true
   ollama_data:
     driver: local
 
@@ -3247,7 +3256,6 @@ add_postgres_service() {
     cat >> "$COMPOSE_FILE" <<'EOF'
   postgres:
     image: postgres:15-alpine
-    container_name: postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -3256,7 +3264,7 @@ add_postgres_service() {
       PGDATA: /var/lib/postgresql/data/pgdata
       TZ: ${TIMEZONE:-UTC}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ${PG_VOLUME}:/var/lib/postgresql/data
       - ${DATA_ROOT}/logs/postgres:/var/log/postgresql
     networks:
       - ${DOCKER_NETWORK}_internal
@@ -3279,11 +3287,10 @@ add_redis_service() {
     cat >> "$COMPOSE_FILE" <<EOF
   redis:
     image: redis:7-alpine
-    container_name: redis
     restart: unless-stopped
     command: redis-server --requirepass \${REDIS_PASSWORD} --appendonly yes
     volumes:
-      - redis_data:/data
+      - ${REDIS_VOLUME}:/data
       - \${DATA_ROOT}/logs/redis:/var/log/redis
     networks:
       - ${DOCKER_NETWORK}_internal
@@ -3827,7 +3834,6 @@ add_qdrant_service() {
     cat >> "$COMPOSE_FILE" <<'EOF'
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: qdrant
     restart: unless-stopped
     user: "${RUNNING_UID}:${RUNNING_GID}"
     environment:
@@ -3835,7 +3841,7 @@ add_qdrant_service() {
       PGID: ${RUNNING_GID}
       TZ: ${TIMEZONE:-UTC}
     volumes:
-      - ${DATA_ROOT}/qdrant:/qdrant/storage
+      - ${QDRANT_VOLUME}:/qdrant/storage
       - ${DATA_ROOT}/logs/qdrant:/var/log/qdrant
     networks:
       - ${DOCKER_NETWORK}_internal

@@ -549,5 +549,67 @@ nuclear_cleanup() {
     print_info "All AI Platform data removed, volumes unmounted, and system cleaned."
 }
 
+# Tenant-scoped cleanup function
+cleanup_tenant() {
+    local data_root="$1"
+    
+    print_header "Tenant-Scoped Cleanup"
+    
+    # Load this tenant's .env
+    ENV_POINTER="/etc/ai-platform/env-pointer"
+    if [ -f "${ENV_POINTER}" ]; then
+        DATA_ROOT="$(cat "${ENV_POINTER}")"
+    else
+        DATA_ROOT="${data_root}"
+    fi
+    
+    ENV_FILE="${DATA_ROOT}/.env"
+    if [ ! -f "${ENV_FILE}" ]; then
+        print_error "Environment file not found: ${ENV_FILE}"
+        print_info "Run Script 1 first to create configuration."
+        exit 1
+    fi
+    
+    # Load tenant configuration
+    set -a
+    # shellcheck disable=SC1090
+    source "${ENV_FILE}"
+    set +a
+    
+    if [ -z "${COMPOSE_PROJECT_NAME}" ]; then
+        print_error "COMPOSE_PROJECT_NAME not found in ${ENV_FILE}"
+        exit 1
+    fi
+    
+    echo "🧹 Cleaning up project: ${COMPOSE_PROJECT_NAME}"
+    echo "   This will NOT affect other tenants."
+    read -rp "Confirm? (yes/no): " CONFIRM
+    [ "${CONFIRM}" != "yes" ] && exit 0
+    
+    # Scoped teardown
+    DOCKER_COMPOSE_FILE="${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml"
+    if [ -f "${DOCKER_COMPOSE_FILE}" ]; then
+        docker compose \
+            --project-name "${COMPOSE_PROJECT_NAME}" \
+            --file "${DOCKER_COMPOSE_FILE}" \
+            down --volumes --remove-orphans 2>/dev/null || true
+    fi
+    
+    # Remove tenant-scoped volumes
+    docker volume rm \
+        "${COMPOSE_PROJECT_NAME}_postgres_data" \
+        "${COMPOSE_PROJECT_NAME}_qdrant_data" \
+        "${COMPOSE_PROJECT_NAME}_redis_data" \
+        2>/dev/null || true
+    
+    # Remove tenant-scoped network
+    docker network rm "${COMPOSE_PROJECT_NAME}_net" 2>/dev/null || true
+    
+    # Remove env pointer for this tenant only
+    rm -f "/etc/ai-platform/env-pointer"
+    
+    print_success "Cleanup complete for ${COMPOSE_PROJECT_NAME}"
+}
+
 # Run main function
 main "$@"

@@ -125,7 +125,22 @@ verify_ports() {
          grep -q "^${COMPOSE_PROJECT_NAME}"; then
         echo "  ♻  ${NAME}:${PORT} — held by this project (OK)"
       else
-        echo "  ❌ ${NAME}:${PORT} — IN USE by another process"
+        # Special handling for HTTP/HTTPS multi-tenant conflict
+        if [ "${PORT}" = "80" ] || [ "${PORT}" = "443" ]; then
+          echo "  ❌ ${NAME}:${PORT} — owned by DIFFERENT tenant's reverse proxy"
+          echo ""
+          echo "   🚨 MULTI-TENANT HTTP ROUTING ISSUE DETECTED"
+          echo "   Only ONE tenant can own ports 80/443 simultaneously."
+          echo "   Solutions:"
+          echo "   • Option A: Shared reverse proxy (Caddy/Traefik) at host level"
+          echo "   • Option B: Tenant-specific external ports (8443, 9443, etc.)"
+          echo "   • Option C: Contact platform admin for subdomain routing setup"
+          echo ""
+          echo "   Current design blocks multi-tenant deployment."
+          echo "   Use Script 0 to clean up the other tenant, or implement shared proxy."
+        else
+          echo "  ❌ ${NAME}:${PORT} — IN USE by another process"
+        fi
         FAILED=$((FAILED + 1))
       fi
     else
