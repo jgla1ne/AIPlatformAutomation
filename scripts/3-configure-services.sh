@@ -52,11 +52,33 @@ print_header() {
 
 # Auto-detect stack from current directory or environment
 detect_stack() {
-    if [[ -f "${BASE_DIR:-/mnt/data}/config/.env" ]]; then
-        source "${BASE_DIR:-/mnt/data}/config/.env"
-        print_success "Stack detected: ${DOMAIN_NAME}"
+    # Load environment using the same pattern as Script 2
+    if [ -f /etc/ai-platform/env-pointer ]; then
+        DATA_ROOT="$(cat /etc/ai-platform/env-pointer)"
+    fi
+    
+    if [ -z "${DATA_ROOT:-}" ]; then
+        DATA_ROOT="${BASE_DIR:-/mnt/data}"
+    fi
+    
+    ENV_FILE="${DATA_ROOT}/.env"
+    
+    if [ ! -f "${ENV_FILE}" ]; then
+        print_error "Environment file not found: ${ENV_FILE}"
+        print_info "Run Script 1 first to create configuration."
+        exit 1
+    fi
+    
+    # Load environment variables
+    set -a
+    # shellcheck disable=SC1090
+    source "${ENV_FILE}"
+    set +a
+    
+    if [[ -f "${ENV_FILE}" ]]; then
+        print_success "Stack detected: ${DOMAIN_NAME:-localhost}"
     else
-        print_error "No stack configuration found. Run from stack directory or set BASE_DIR."
+        print_error "No stack configuration found. Run Script 1 first."
         exit 1
     fi
 }

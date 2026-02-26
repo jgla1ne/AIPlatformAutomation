@@ -136,6 +136,9 @@ add_service() {
     # Reload Caddy
     reload_caddy
     
+    # Verify service is on network
+    verify_service_on_network "$service_name" "${DOCKER_NETWORK}"
+    
     print_success "Service $service_name added to stack ${DOMAIN_NAME}"
     print_info "   Internal port: $internal_port"
     print_info "   Host port: $host_port"
@@ -277,6 +280,23 @@ reload_caddy() {
         fi
     else
         print_warning "Caddy container not found"
+    fi
+}
+
+# Verify service is on network
+verify_service_on_network() {
+    local service_name=$1
+    local network_name=$2
+    
+    print_info "Verifying ${service_name} is on network ${network_name}..."
+    
+    if docker network inspect "${network_name}" --format='{{range .Containers}}{{.Name}} {{end}}' | grep -q "${service_name}"; then
+        print_success "${service_name} is properly connected to ${network_name}"
+    else
+        print_error "${service_name} is not connected to ${network_name}"
+        print_info "Available containers on network:"
+        docker network inspect "${network_name}" --format='{{range .Containers}}{{.Name}} {{end}}'
+        return 1
     fi
 }
 

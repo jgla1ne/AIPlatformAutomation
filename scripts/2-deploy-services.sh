@@ -108,6 +108,25 @@ get_container_name() {
     echo "${TENANT_PREFIX}-${base_name}"
 }
 
+wait_for_caddy() {
+  print_header "Waiting for Caddy to become ready"
+  local max_attempts=30
+  local attempt=0
+  print_info "Waiting for Caddy to bind port 443..."
+  
+  while ! ss -tlnp | grep -q ':443 '; do
+    attempt=$((attempt + 1))
+    if [ ${attempt} -ge ${max_attempts} ]; then
+      print_error "Caddy did not bind port 443 after ${max_attempts}s"
+      print_info "Check: docker logs ${COMPOSE_PROJECT_NAME}-caddy-1"
+      print_info "Common causes: DNS not propagated, ACME rate limit"
+      exit 1
+    fi
+    sleep 2
+  done
+  print_success "Caddy is listening on 443"
+}
+
 # Port pre-flight check to prevent conflicts
 verify_ports() {
   print_header "Port Pre-flight Check"
@@ -523,6 +542,11 @@ deploy_postgres() {
   print_header "PostgreSQL"
 
   # Create tenant-scoped network first if it doesn't exist
+  if [ -z "${DOCKER_NETWORK}" ]; then
+    print_error "DOCKER_NETWORK not set in .env"
+    exit 1
+  fi
+  
   docker network create \
     --driver bridge \
     --label "tenant=${COMPOSE_PROJECT_NAME}" \
@@ -556,19 +580,26 @@ EOF
     --file "${SCRIPT_DIR}/docker-compose.postgres-override.yml" \
     up -d postgres
 
-  # Wait for postgres to be genuinely ready using tenant-scoped container name
+  # Wait for postgres to be genuinely ready using docker compose exec
   print_info "Waiting for PostgreSQL to accept connections..."
   ATTEMPTS=0
   MAX_ATTEMPTS=30
 
-  until docker exec "${PG_CONTAINER}" \
-        pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
-        &>/dev/null 2>&1; do
+  until docker compose \
+    --project-name "${COMPOSE_PROJECT_NAME}" \
+    --env-file "${ENV_FILE}" \
+    --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+    exec postgres pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+    &>/dev/null 2>&1; do
     ATTEMPTS=$((ATTEMPTS + 1))
     if [ "${ATTEMPTS}" -ge "${MAX_ATTEMPTS}" ]; then
       print_error "PostgreSQL did not become ready after 60 seconds"
       print_error "Logs:"
-      docker logs "${PG_CONTAINER}" --tail=30
+      docker compose \
+        --project-name "${COMPOSE_PROJECT_NAME}" \
+        --env-file "${ENV_FILE}" \
+        --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+        logs postgres --tail=30
       exit 1
     fi
     sleep 2
@@ -576,12 +607,21 @@ EOF
 
   print_success "PostgreSQL ready"
 
-  # Create pgvector extension using tenant-scoped container
-  docker exec "${PG_CONTAINER}" \
-    psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
-    -c "CREATE EXTENSION IF NOT EXISTS vector;" \
-    && print_success "pgvector extension created" \
-    || print_warning "pgvector extension creation failed — check if pgvector image is used"
+  # Create pgvector extension using docker compose exec with exit code check
+  if ! docker compose \
+    --project-name "${COMPOSE_PROJECT_NAME}" \
+    --env-file "${ENV_FILE}" \
+    --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+    exec postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+    -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>&1; then
+    print_warning "pgvector extension failed - is pgvector image in use?"
+    print_info "Check docker-compose.yml postgres image tag should be:"
+    print_info "  - pgvector/pgvector:pg16"
+    print_info "  - or: ankane/pgvector"
+    print_info "Current image may be standard postgres without pgvector support"
+  else
+    print_success "pgvector extension created"
+  fi
 }
 
 deploy_redis() {
@@ -597,14 +637,21 @@ deploy_redis() {
   # Deploy redis using docker-compose
   ${COMPOSE} up -d redis
 
-  # Wait for redis to be ready using tenant-scoped container name
+  # Wait for redis to be ready using docker compose exec
   ATTEMPTS=0
-  until docker exec "${REDIS_CONTAINER}" \
-        redis-cli ping 2>/dev/null | grep -q PONG; do
+  until docker compose \
+    --project-name "${COMPOSE_PROJECT_NAME}" \
+    --env-file "${ENV_FILE}" \
+    --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+    exec redis redis-cli ping 2>/dev/null | grep -q PONG; do
     ATTEMPTS=$((ATTEMPTS + 1))
     [ "${ATTEMPTS}" -ge 20 ] && {
       print_error "Redis did not become ready"
-      docker logs "${REDIS_CONTAINER}" --tail=20
+      docker compose \
+        --project-name "${COMPOSE_PROJECT_NAME}" \
+        --env-file "${ENV_FILE}" \
+        --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+        logs redis --tail=20
       exit 1
     }
     sleep 2
@@ -625,15 +672,22 @@ deploy_qdrant() {
   # Deploy qdrant using docker-compose
   ${COMPOSE} up -d qdrant
 
-  # Wait for qdrant to be ready using tenant-scoped container name
+  # Wait for qdrant to be ready using docker compose exec
   ATTEMPTS=0
-  until docker exec "${QDRANT_CONTAINER}" \
-        curl -sf http://localhost:6333/health \
-        &>/dev/null; do
+  until docker compose \
+    --project-name "${COMPOSE_PROJECT_NAME}" \
+    --env-file "${ENV_FILE}" \
+    --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+    exec qdrant curl -sf http://localhost:6333/health \
+    &>/dev/null; do
     ATTEMPTS=$((ATTEMPTS + 1))
     [ "${ATTEMPTS}" -ge 20 ] && {
       print_error "Qdrant did not become ready"
-      docker logs "${QDRANT_CONTAINER}" --tail=20
+      docker compose \
+        --project-name "${COMPOSE_PROJECT_NAME}" \
+        --env-file "${ENV_FILE}" \
+        --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+        logs qdrant --tail=20
       exit 1
     }
     sleep 2
@@ -963,8 +1017,8 @@ deploy_layer_5_proxy() {
         -v "${DATA_ROOT}/caddy/config:/config" \
         caddy:2-alpine
     
-    # Wait for Caddy to start and begin certificate issuance
-    sleep 10
+    # Wait for Caddy to be ready before proceeding to application layer
+    wait_for_caddy
     
     print_success "Caddy started with SSL certificate management"
 }

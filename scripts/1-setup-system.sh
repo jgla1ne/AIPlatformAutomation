@@ -3255,7 +3255,7 @@ COMPOSE_HEADER
 add_postgres_service() {
     cat >> "$COMPOSE_FILE" <<'EOF'
   postgres:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
