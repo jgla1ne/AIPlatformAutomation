@@ -1067,7 +1067,6 @@ collect_configurations() {
     print_success "Tailscale hostname: ${TENANT_ID}"
     print_info "Network: ${TENANT_ID}_net"
     print_info "Volumes: ${TENANT_ID}_postgres_data, ${TENANT_ID}_redis_data, ${TENANT_ID}_qdrant_data"
-    print_info "Unique identifier: volume=${VOLUME_SUFFIX}, uid-gid=${UID_SUFFIX}, timestamp=${TIMESTAMP}"
     
     # Write profile flags to .env immediately
     echo "STACK_PROFILE=${STACK_PROFILE}" >> "$ENV_FILE"
