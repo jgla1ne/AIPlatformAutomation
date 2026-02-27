@@ -1136,8 +1136,8 @@ collect_configurations() {
 # Generated: $(date -Iseconds)
 
 # System Configuration
-DATA_ROOT=$DATA_ROOT
-METADATA_DIR=$METADATA_DIR
+DATA_ROOT=${DATA_ROOT}
+METADATA_DIR=${METADATA_DIR}
 TIMEZONE=UTC
 LOG_LEVEL=info
 
@@ -1179,6 +1179,77 @@ EOF
     # Set correct ownership for .env file
     chown "${TENANT_UID}:${TENANT_GID}" "$ENV_FILE"
     chmod 600 "$ENV_FILE"
+    
+    # ─── EBS VOLUME SELECTION ───────────────────────────────────────────────
+    select_storage() {
+      echo ""
+      echo "═══════════════════════════════════════════"
+      echo "  STORAGE CONFIGURATION for ${TENANT_USER}"
+      echo "═══════════════════════════════════════════"
+      echo ""
+      echo "Option A: Use existing mounted volume (shared EBS, folder per tenant)"
+      echo "Option B: Dedicate a new EBS volume to this tenant"
+      echo ""
+      read -p "Dedicate a new EBS volume to this tenant? [y/N]: " DEDICATE_EBS
+      DEDICATE_EBS=${DEDICATE_EBS:-N}
+
+      if [[ "${DEDICATE_EBS}" =~ ^[Yy]$ ]]; then
+        # Mode B — dedicated EBS
+        echo ""
+        echo "Available unattached block devices:"
+        lsblk -o NAME,SIZE,MOUNTPOINT,FSTYPE | \
+          awk 'NR==1 || ($3=="" && $4=="")'
+        echo ""
+        read -p "Enter device name to use (e.g. nvme1n1, xvdb): " SELECTED_DEVICE
+        DEVICE_PATH="/dev/${SELECTED_DEVICE}"
+
+        if [[ ! -b "${DEVICE_PATH}" ]]; then
+          echo "ERROR: ${DEVICE_PATH} is not a valid block device"
+          exit 1
+        fi
+
+        MOUNT_POINT="/mnt/${TENANT_NAME}"
+        echo "Formatting ${DEVICE_PATH} as ext4..."
+        mkfs.ext4 -F "${DEVICE_PATH}"
+        mkdir -p "${MOUNT_POINT}"
+        mount "${DEVICE_PATH}" "${MOUNT_POINT}"
+
+        # Persist in fstab
+        DEVICE_UUID=$(blkid -s UUID -o value "${DEVICE_PATH}")
+        FSTAB_ENTRY="UUID=${DEVICE_UUID} ${MOUNT_POINT} ext4 defaults,nofail 0 2"
+        if ! grep -q "${DEVICE_UUID}" /etc/fstab; then
+          echo "${FSTAB_ENTRY}" >> /etc/fstab
+          echo "Added to /etc/fstab: ${FSTAB_ENTRY}"
+        fi
+
+        # Update DATA_ROOT by removing readonly and reassigning
+        unset DATA_ROOT
+        DATA_ROOT="${MOUNT_POINT}"
+
+      else
+        # Mode A — shared EBS, folder per tenant
+        echo ""
+        echo "Currently mounted volumes:"
+        lsblk -o NAME,SIZE,MOUNTPOINT | grep -v "loop\|sr0" | grep -v "^$"
+        echo ""
+        read -p "Base mount point to use [/mnt/data]: " MOUNT_BASE
+        MOUNT_BASE=${MOUNT_BASE:-/mnt/data}
+
+        if [[ ! -d "${MOUNT_BASE}" ]]; then
+          echo "ERROR: ${MOUNT_BASE} does not exist or is not mounted"
+          exit 1
+        fi
+
+        # Update DATA_ROOT by removing readonly and reassigning
+        unset DATA_ROOT
+        DATA_ROOT="${MOUNT_BASE}/${TENANT_NAME}"
+      fi
+
+      echo "DATA_ROOT set to: ${DATA_ROOT}"
+    }
+
+    select_storage
+    # ─── END EBS VOLUME SELECTION ───────────────────────────────────────────
     
     # Create tenant directory structure
     create_tenant_directories
