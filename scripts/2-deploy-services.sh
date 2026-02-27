@@ -4,7 +4,7 @@
 # NOTE: This script runs as root (required for Docker, AppArmor, system setup)
 # RUNNING_UID owns DATA_ROOT for container permissions
 
-set -euo pipefail
+set -eo pipefail
 
 # Color definitions
 readonly RED='\033[0;31m'
@@ -64,7 +64,18 @@ if [ -z "${DATA_ROOT:-}" ]; then
   exit 1
 fi
 
-ENV_FILE="${DATA_ROOT}/.env"
+# Get tenant ID from env file or default
+if [ -f "${DATA_ROOT}/u0/.env" ]; then
+  TENANT_ID="u0"
+  ENV_FILE="${DATA_ROOT}/u0/.env"
+elif [ -f "${DATA_ROOT}/u$(id -u)/.env" ]; then
+  TENANT_ID="u$(id -u)"
+  ENV_FILE="${DATA_ROOT}/${TENANT_ID}/.env"
+else
+  echo "❌ No tenant environment file found"
+  echo "   Run Script 1 first."
+  exit 1
+fi
 
 if [ ! -f "${ENV_FILE}" ]; then
   echo "❌ .env not found at ${ENV_FILE}"
@@ -438,6 +449,7 @@ deploy_openclaw() {
         alpine/openclaw:latest
 
     print_success "OpenClaw deployed with Tailscale sidecar"
+}
 
 # Deploy OpenClaw standalone (without Tailscale)
 deploy_openclaw_standalone() {
@@ -706,7 +718,7 @@ deploy_redis() {
     --project-name "${COMPOSE_PROJECT_NAME}" \
     --env-file "${ENV_FILE}" \
     --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
-    exec redis redis-cli ping 2>/dev/null | grep -q PONG; do
+    exec redis redis-cli -a "${REDIS_PASSWORD}" ping 2>/dev/null | grep -q PONG; do
     ATTEMPTS=$((ATTEMPTS + 1))
     [ "${ATTEMPTS}" -ge 20 ] && {
       print_error "Redis did not become ready"

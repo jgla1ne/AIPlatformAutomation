@@ -6,7 +6,7 @@
 # Version: 4.0.0
 #==============================================================================
 
-set -euo pipefail
+set -o pipefail
 
 # ═══════════════════════════════════════════════════════════
 # SECTION 1: CONSTANTS — set once, never reassigned
@@ -330,10 +330,16 @@ detect_system() {
     # GPU Detection
     print_info "GPU Detection..."
     if command -v nvidia-smi >/dev/null 2>&1; then
-        local gpu_info=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits | head -1)
-        print_success "NVIDIA GPU detected: $gpu_info"
-        echo "GPU_TYPE=nvidia" >> "$ENV_FILE"
-        echo "GPU_ACCELERATED=true" >> "$ENV_FILE"
+        local gpu_info=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits | head -1 2>/dev/null || echo "")
+        if [[ -n "$gpu_info" ]]; then
+            print_success "NVIDIA GPU detected: $gpu_info"
+            echo "GPU_TYPE=nvidia" >> "$ENV_FILE"
+            echo "GPU_ACCELERATED=true" >> "$ENV_FILE"
+        else
+            print_info "NVIDIA driver installed but no GPU detected - CPU mode only"
+            echo "GPU_TYPE=none" >> "$ENV_FILE"
+            echo "GPU_ACCELERATED=false" >> "$ENV_FILE"
+        fi
     else
         print_info "No NVIDIA GPU detected - CPU mode only"
         echo "GPU_TYPE=none" >> "$ENV_FILE"
@@ -346,6 +352,9 @@ detect_system() {
 
 collect_domain_info() {
     log_phase "2" "🌐" "Domain & Network Configuration"
+    
+    # Ensure tenant directory exists before any ENV_FILE operations
+    mkdir -p "$TENANT_ROOT"
     
     echo ""
     print_header "🌐 Domain Configuration"
@@ -2843,8 +2852,9 @@ EOF
     
     # FINAL OWNERSHIP FIX - Ensure everything owned by user
     print_info "Fixing final ownership..."
-sudo chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}"
-    sudo chmod 600 "${DATA_ROOT}/.env" sudo chmod 600 "${DATA_ROOT}/.env" "${DATA_ROOT}/ai-platform"
+    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}"
+    [[ -f "${DATA_ROOT}/.env" ]] && chmod 600 "${DATA_ROOT}/.env"
+    [[ -d "${DATA_ROOT}/ai-platform" ]] && chmod 755 "${DATA_ROOT}/ai-platform"
     print_success "Ownership fixed: All files owned by ${RUNNING_USER}"
     
     # Display selected services summary
