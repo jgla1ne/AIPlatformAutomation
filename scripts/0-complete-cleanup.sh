@@ -525,14 +525,34 @@ nuclear_cleanup() {
     
     # STEP 6: Delete data on selected EBS volume AFTER unmounting
     print_info "Step 6: Deleting AI Platform data in $selected_volume..."
-    if [[ -d "$selected_volume" ]]; then
+    
+    # Wait a moment to ensure unmount is fully processed
+    sleep 2
+    
+    # Check if directory still exists and is not mounted
+    if [[ -d "$selected_volume" ]] && ! findmnt -n -o TARGET | grep -q "^${selected_volume}$"; then
         print_info "Deleting AI Platform data at $selected_volume..."
         # Force remove all contents including hidden files
         rm -rf "$selected_volume"/* 2>/dev/null || true
         rm -rf "$selected_volume"/.[!.]* 2>/dev/null || true
         rm -rf "$selected_volume"/..?* 2>/dev/null || true
+        
+        # Additional cleanup for stubborn directories
+        find "$selected_volume" -mindepth 1 -delete 2>/dev/null || true
+        
         # Try to remove the directory itself (but don't fail if it's still mounted)
         rmdir "$selected_volume" 2>/dev/null || print_warning "Could not remove directory $selected_volume (may still be mounted)"
+    elif findmnt -n -o TARGET | grep -q "^${selected_volume}$"; then
+        print_warning "Volume $selected_volume is still mounted, attempting forced cleanup..."
+        # Force unmount one more time
+        umount -l "$selected_volume" 2>/dev/null || true
+        sleep 2
+        # Try cleanup again
+        if [[ -d "$selected_volume" ]]; then
+            rm -rf "$selected_volume"/* 2>/dev/null || true
+            rm -rf "$selected_volume"/.[!.]* 2>/dev/null || true
+            find "$selected_volume" -mindepth 1 -delete 2>/dev/null || true
+        fi
     else
         print_warning "Volume $selected_volume not found"
     fi

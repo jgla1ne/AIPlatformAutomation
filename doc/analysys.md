@@ -1,106 +1,82 @@
-Let me fetch everything needed to diagnose this properly.
+Let me fetch the current repo structure first.
 
 **Fetching:**
 - https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/1-setup-system.sh
 - https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/2-deploy-services.sh
+- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/3-configure-services.sh
+- https://github.com/jgla1ne/AIPlatformAutomation/tree/main/scripts
+
+Let me check what extra files exist:
+- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/0-reset-tenant.sh
+- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/4-add-service.sh
+- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/utils.sh
+- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/gpu-setup.sh
 - https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/docker-compose.yml
-- https://github.com/jgla1ne/AIPlatformAutomation/commits/main
 
 ---
 
-Reading the scripts now in full before making any diagnosis.
+## What I Found
 
-Based on what I can read, here is the full diagnosis:
+```
+CURRENT FILES IN /scripts:
+──────────────────────────────────────────────
+0-reset-tenant.sh        ✅ IS one of the 5
+1-setup-system.sh        ✅ IS one of the 5
+2-deploy-services.sh     ✅ IS one of the 5
+3-configure-services.sh  ✅ IS one of the 5
+4-add-service.sh         ✅ IS one of the 5
+──────────────────────────────────────────────
+utils.sh                 ❌ VIOLATES the rule
+gpu-setup.sh             ❌ VIOLATES the rule
+docker-compose.yml       ✅ Not a script, acceptable
+──────────────────────────────────────────────
+```
+
+The constraint is broken by `utils.sh` and `gpu-setup.sh`. Here is exactly how to fix it.
 
 ---
 
-## Root Cause: GPU/CPU Detection Regression
+## The Fix: Absorb Both Files Into Their Owners
 
-### What Is Happening
+### Where Each File Belongs
 
 ```
-Script 1 runs GPU/CPU detection
-  → Sets COMPUTE_TYPE=gpu or cpu
-  → Writes to .env
-  → STOPS or EXITS unexpectedly
-  
-Script 2 never runs / never reached
+utils.sh     → SPLIT between Script 1 and Script 2
+               (shared functions = top of each script
+                that uses them, not a separate file)
+
+gpu-setup.sh → ABSORBED into Script 1
+               (GPU detection is setup, not deployment)
 ```
 
-### Where The Bug Lives — Script 1
+---
 
-The GPU detection block almost certainly has one of these patterns causing early exit:
+## Concrete Action for Windsurf
+
+### Step 1 — Absorb `gpu-setup.sh` into Script 1
+
+Script 1 currently sources `gpu-setup.sh` like this:
 
 ```bash
-# PATTERN A — detect_gpu() calls exit on failure
-detect_gpu() {
-  if nvidia-smi &>/dev/null; then
-    COMPUTE_TYPE="gpu"
-  else
-    echo "No GPU found"
-    exit 1          # ← KILLS THE ENTIRE SCRIPT
-  fi
-}
-
-# PATTERN B — set -e causes exit on non-zero
-set -e              # ← at top of script
-nvidia-smi          # ← returns non-zero if no GPU
-                    # ← script exits here silently
-
-# PATTERN C — unbound variable kills script
-set -u              # ← strict mode
-echo $GPU_COUNT     # ← GPU_COUNT never set on CPU-only
-                    # ← script dies here
-
-# PATTERN D — subshell return not caught
-COMPUTE_TYPE=$(detect_gpu)   # ← subshell exits with 1
-                             # ← with set -e, parent exits too
+source "$(dirname "$0")/gpu-setup.sh"
+# or
+bash scripts/gpu-setup.sh
 ```
 
----
-
-## Full Verification — Run These Now
+Replace that entire source/call with the function body **inline** inside Script 1:
 
 ```bash
-# 1. Check what's at the top of script 1
-head -20 scripts/1-setup-system.sh
-
-# 2. Find every exit call in gpu detection area
-grep -n "exit\|set -e\|set -u" scripts/1-setup-system.sh | head -30
-
-# 3. Find the gpu detection function
-grep -n -A 20 "detect_gpu\|gpu_detect\|nvidia\|COMPUTE_TYPE" \
-  scripts/1-setup-system.sh
-
-# 4. Find what happens AFTER gpu detection
-grep -n "COMPUTE_TYPE\|GPU\|CPU\|compute" scripts/1-setup-system.sh
-```
-
----
-
-## The Fix — Defensive GPU Detection
-
-This is the pattern that must replace whatever is there now:
-
-```bash
-#!/usr/bin/env bash
-# Script 1 top — safe mode without -e or -u
-set -o pipefail   # pipefail only, NOT set -e, NOT set -u
-
-# ─────────────────────────────────────────────
-# GPU / CPU Detection — NEVER exits on failure
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# SECTION: GPU/CPU Detection  (was gpu-setup.sh — now inline)
+# ─────────────────────────────────────────────────────────────
 detect_compute() {
   log_info "Detecting compute capabilities..."
-  
-  COMPUTE_TYPE="cpu"          # safe default always set first
+
+  COMPUTE_TYPE="cpu"
   GPU_COUNT=0
   GPU_MEMORY_MB=0
-  COMPOSE_GPU_SECTION=""
 
-  # Check nvidia
   if command -v nvidia-smi &>/dev/null; then
-    # Run nvidia-smi but do NOT exit if it fails
     local gpu_info
     gpu_info=$(nvidia-smi --query-gpu=name,memory.total \
                --format=csv,noheader 2>/dev/null) || true
@@ -108,214 +84,135 @@ detect_compute() {
     if [[ -n "$gpu_info" ]]; then
       COMPUTE_TYPE="gpu"
       GPU_COUNT=$(echo "$gpu_info" | wc -l)
-      GPU_MEMORY_MB=$(echo "$gpu_info" | awk -F', ' '{
-                      gsub(/ MiB/,"",$2); sum+=$2} END{print sum}')
-      
-      # Build compose GPU section only when GPU confirmed
-      COMPOSE_GPU_SECTION="
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]"
-      
-      log_success "GPU detected: ${GPU_COUNT}x GPU, ${GPU_MEMORY_MB}MB VRAM"
+      GPU_MEMORY_MB=$(echo "$gpu_info" | awk -F', ' \
+        '{gsub(/ MiB/,"",$2); sum+=$2} END{print sum}')
+      log_success "GPU detected: ${GPU_COUNT} GPU(s), ${GPU_MEMORY_MB}MB VRAM"
     fi
-  fi
-
-  # Check AMD/ROCm — also non-fatal
-  if [[ "$COMPUTE_TYPE" == "cpu" ]] && \
-     command -v rocm-smi &>/dev/null; then
-    if rocm-smi &>/dev/null 2>&1; then
-      COMPUTE_TYPE="gpu"
+  elif command -v rocm-smi &>/dev/null; then
+    rocm-smi &>/dev/null 2>&1 && COMPUTE_TYPE="gpu" || true
+    [[ "$COMPUTE_TYPE" == "gpu" ]] && \
       log_success "AMD GPU detected via ROCm"
-    fi
   fi
 
-  # Always reaches here — log result
-  if [[ "$COMPUTE_TYPE" == "cpu" ]]; then
-    log_info "No GPU detected — deploying CPU-only stack"
-    log_info "Ollama, LiteLLM will use CPU inference"
-  fi
+  [[ "$COMPUTE_TYPE" == "cpu" ]] && \
+    log_info "No GPU found — CPU-only deployment"
 
-  # Export so Script 2 can read from .env
+  # Write to .env — Script 2 reads this
   cat >> "${ENV_FILE}" <<EOF
 
-# ── Compute ──────────────────────────────────
+# Compute
 COMPUTE_TYPE=${COMPUTE_TYPE}
 GPU_COUNT=${GPU_COUNT}
 GPU_MEMORY_MB=${GPU_MEMORY_MB}
 EOF
-
-  return 0    # explicit success — never fails
+  return 0
 }
-
-# ─────────────────────────────────────────────
-# Call it — result does not gate further steps
-# ─────────────────────────────────────────────
-detect_compute
-
-# Script continues REGARDLESS of GPU result
-collect_user_config
-select_services
-generate_env_file
-show_summary
 ```
+
+Then **delete `gpu-setup.sh`**.
 
 ---
 
-## Script 2 — GPU Conditional Deployment
+### Step 2 — Absorb `utils.sh` into Script 1 and Script 2
 
-Script 2 must read `COMPUTE_TYPE` and conditionally apply GPU config, never failing if CPU:
+`utils.sh` typically contains logging, color codes, helper functions. These go at the **top of each script that uses them** as a `# ── UTILITIES ──` section.
+
+Pattern for both Script 1 and Script 2 header:
 
 ```bash
-# At top of Script 2
-source "${ENV_FILE}"
+#!/usr/bin/env bash
+# ═══════════════════════════════════════════════════════════════
+# Script N — [Name]
+# Part of 5-script AI Platform stack
+# ═══════════════════════════════════════════════════════════════
+set -o pipefail
 
-COMPUTE_TYPE="${COMPUTE_TYPE:-cpu}"   # default to cpu if unset
+# ─────────────────────────────────────────────────────────────
+# UTILITIES  (inline — no external utils.sh dependency)
+# ─────────────────────────────────────────────────────────────
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
 
-# ─────────────────────────────────────────────
-# Ollama — GPU or CPU profile
-# ─────────────────────────────────────────────
-deploy_ollama() {
-  if [[ "$COMPUTE_TYPE" == "gpu" ]]; then
-    log_info "Starting Ollama with GPU support..."
-    docker compose \
-      --env-file "${ENV_FILE}" \
-      -f "${COMPOSE_FILE}" \
-      up -d ollama
-  else
-    log_info "Starting Ollama CPU-only..."
-    docker compose \
-      --env-file "${ENV_FILE}" \
-      -f "${COMPOSE_FILE}" \
-      --profile cpu \
-      up -d ollama
-  fi
+log_info()    { echo -e "${BLUE}[INFO]${NC}  $*"; }
+log_success() { echo -e "${GREEN}[OK]${NC}    $*"; }
+log_warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
+log_error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+log_section() { echo -e "\n${CYAN}══ $* ══${NC}"; }
+
+die() {
+  log_error "$*"
+  exit 1
 }
 
-# ─────────────────────────────────────────────
-# LiteLLM — adjust model list based on compute
-# ─────────────────────────────────────────────
-deploy_litellm() {
-  local config_file="${TENANT_ROOT}/litellm/config.yaml"
-  
-  if [[ "$COMPUTE_TYPE" == "gpu" ]]; then
-    # GPU: local models via Ollama + cloud fallback
-    cat > "$config_file" <<EOF
-model_list:
-  - model_name: default
-    litellm_params:
-      model: ollama/llama3
-      api_base: http://ollama:11434
-  - model_name: gpt-4o
-    litellm_params:
-      model: openai/gpt-4o
-      api_key: ${OPENAI_API_KEY:-}
-EOF
-  else
-    # CPU: cloud APIs only, no local inference
-    cat > "$config_file" <<EOF
-model_list:
-  - model_name: default
-    litellm_params:
-      model: openai/gpt-4o-mini
-      api_key: ${OPENAI_API_KEY:-}
-EOF
-  fi
+require_root() {
+  [[ $EUID -eq 0 ]] && die "Do not run as root. Use your deploy user."
 }
+
+check_command() {
+  command -v "$1" &>/dev/null || die "Required command not found: $1"
+}
+# ─────────────────────────────────────────────────────────────
+```
+
+Then **delete `utils.sh`**.
+
+---
+
+## Verified 5-Script Architecture
+
+```
+┌────┬─────────────────────────┬──────────────────────────────────────────┐
+│ #  │ SCRIPT                  │ OWNS                                     │
+├────┼─────────────────────────┼──────────────────────────────────────────┤
+│ 0  │ 0-reset-tenant.sh       │ Full EBS wipe, Docker prune, .env delete │
+│ 1  │ 1-setup-system.sh       │ Packages, users, GPU detect, .env gen,   │
+│    │                         │ service selection, Caddy config, SSL mode │
+│ 2  │ 2-deploy-services.sh    │ Docker up, DB init, healthchecks,        │
+│    │                         │ Tailscale auth, rclone mount, AppArmor   │
+│ 3  │ 3-configure-services.sh │ SSL reconfigure, Tailscale re-auth,      │
+│    │                         │ GDrive re-auth, Signal re-pair, restarts │
+│ 4  │ 4-add-service.sh        │ Add new dockerized service post-deploy,  │
+│    │                         │ generates compose fragment + Caddy route │
+├────┼─────────────────────────┼──────────────────────────────────────────┤
+│    │ docker-compose.yml      │ Not a script — compose definition only   │
+│    │ .env (generated)        │ Not a script — written by Script 1       │
+└────┴─────────────────────────┴──────────────────────────────────────────┘
+
+DELETED:
+  utils.sh     → functions inlined into scripts that use them
+  gpu-setup.sh → detect_compute() inlined into Script 1
 ```
 
 ---
 
-## Docker Compose — GPU Profile Pattern
-
-```yaml
-services:
-
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    restart: unless-stopped
-    user: "${STACK_UID}:${STACK_GID}"
-    volumes:
-      - type: bind
-        source: ${TENANT_ROOT}/ollama
-        target: /root/.ollama
-    ports:
-      - "127.0.0.1:11434:11434"
-    # GPU block only applied when COMPUTE_TYPE=gpu
-    # Controlled by Script 2 which uses --profile gpu
-    profiles:
-      - gpu
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
-  ollama-cpu:
-    image: ollama/ollama:latest
-    container_name: ollama
-    restart: unless-stopped
-    user: "${STACK_UID}:${STACK_GID}"
-    volumes:
-      - type: bind
-        source: ${TENANT_ROOT}/ollama
-        target: /root/.ollama
-    ports:
-      - "127.0.0.1:11434:11434"
-    profiles:
-      - cpu
-    # No deploy block — pure CPU
-```
-
----
-
-## Commit History Pattern — What Likely Happened
+## What To Tell Windsurf
 
 ```
-Based on thread history, the regression likely entered at
-the "all fixes implemented" commit where someone added:
+Instructions for Windsurf:
 
-  set -euo pipefail
+1. Open gpu-setup.sh
+   - Copy ALL function bodies
+   - Paste them into 1-setup-system.sh 
+     after the UTILITIES section
+   - Remove any "source gpu-setup.sh" line in Script 1
+   - Delete gpu-setup.sh
 
-to Script 1 header (common "best practice" addition)
-combined with the GPU detection block not guarding
-nvidia-smi with || true
+2. Open utils.sh  
+   - Copy ALL content
+   - Paste at top of 1-setup-system.sh (after shebang)
+   - Paste at top of 2-deploy-services.sh (after shebang)
+   - Paste at top of 3-configure-services.sh (after shebang)
+   - Paste at top of 4-add-service.sh (after shebang)
+   - Remove any "source utils.sh" lines in all scripts
+   - Delete utils.sh
 
-This is a classic interaction:
-  set -e + any non-zero command = silent script death
-
-The fix is:
-  1. Remove set -e from Script 1
-  2. Keep set -o pipefail only
-  3. Add || true to all detection probes
-  4. Wrap detect_compute return in explicit return 0
+3. Verify final state:
+   ls scripts/
+   # Must show ONLY:
+   # 0-reset-tenant.sh
+   # 1-setup-system.sh
+   # 2-deploy-services.sh
+   # 3-configure-services.sh
+   # 4-add-service.sh
+   # docker-compose.yml
 ```
-
----
-
-## Summary of Required Changes
-
-```
-┌─────────────────────────────────┬──────────┬──────────────────────────────┐
-│ CHANGE                          │ FILE     │ PRIORITY                     │
-├─────────────────────────────────┼──────────┼──────────────────────────────┤
-│ Remove set -e, keep pipefail    │ Script 1 │ 🔴 CRITICAL — fixes the stop │
-│ Add || true to nvidia-smi call  │ Script 1 │ 🔴 CRITICAL                  │
-│ Default COMPUTE_TYPE=cpu        │ Script 1 │ 🔴 CRITICAL                  │
-│ Explicit return 0 in function   │ Script 1 │ 🔴 CRITICAL                  │
-│ Source .env at Script 2 top     │ Script 2 │ 🟠 HIGH                      │
-│ CPU/GPU deploy branches         │ Script 2 │ 🟠 HIGH                      │
-│ Ollama cpu + gpu profiles       │ Compose  │ 🟠 HIGH                      │
-│ LiteLLM config per compute type │ Script 2 │ 🟡 MEDIUM                    │
-│ GPU_MEMORY check for model size │ Script 2 │ 🟡 MEDIUM                    │
-└─────────────────────────────────┴──────────┴──────────────────────────────┘
-```
-
-Send Windsurf the `detect_compute()` function and the `set -e` removal as the immediate fix — everything else is secondary to unblocking the script flow.
