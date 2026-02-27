@@ -555,13 +555,21 @@ deploy_postgres() {
   ATTEMPTS=0
   MAX_ATTEMPTS=30
 
-  until $COMPOSE exec postgres pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+  until docker compose \
+    --project-name "${COMPOSE_PROJECT_NAME}" \
+    --env-file "${ENV_FILE}" \
+    --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+    exec postgres pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
     &>/dev/null 2>&1; do
     ATTEMPTS=$((ATTEMPTS + 1))
     if [ "${ATTEMPTS}" -ge "${MAX_ATTEMPTS}" ]; then
       print_error "PostgreSQL did not become ready after 60 seconds"
       print_error "Logs:"
-      $COMPOSE logs postgres --tail=30
+      docker compose \
+        --project-name "${COMPOSE_PROJECT_NAME}" \
+        --env-file "${ENV_FILE}" \
+        --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+        logs postgres --tail=30
       exit 1
     fi
     sleep 2
