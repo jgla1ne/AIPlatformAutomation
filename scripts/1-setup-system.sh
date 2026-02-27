@@ -3270,6 +3270,8 @@ COMPOSE_HEADER
     [ "$ENABLE_TAILSCALE" = true ] && add_tailscale_service
     [ "$ENABLE_MINIO" = true ] && add_minio_service
     [ "$ENABLE_QDRANT" = true ] && add_qdrant_service
+    [ "$ENABLE_RCLONE" = true ] && add_rclone_service
+    [ "$ENABLE_CADDY" = true ] && add_caddy_service
     
     chmod 644 "$COMPOSE_FILE"
     chown "${REAL_UID}:${REAL_GID}" "$COMPOSE_FILE"
