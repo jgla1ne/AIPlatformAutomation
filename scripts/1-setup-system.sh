@@ -8,6 +8,58 @@
 
 set -euo pipefail
 
+# ═══════════════════════════════════════════════════════════
+# SECTION 1: CONSTANTS — set once, never reassigned
+# ═══════════════════════════════════════════════════════════
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly RUNNING_UID="$(id -u)"
+readonly RUNNING_GID="$(id -g)"
+readonly RUNNING_USER="$(id -un)"
+
+# ═══════════════════════════════════════════════════════════
+# SECTION 2: DERIVED IDENTITY — depends only on SECTION 1
+# ═══════════════════════════════════════════════════════════
+readonly TENANT_ID="u${RUNNING_UID}"
+readonly COMPOSE_PROJECT_NAME="aip-${TENANT_ID}"
+readonly DOCKER_NETWORK="${COMPOSE_PROJECT_NAME}_net"
+
+# ═══════════════════════════════════════════════════════════
+# SECTION 3: PATHS — depends only on SECTION 1 + 2
+# ═══════════════════════════════════════════════════════════
+readonly DATA_ROOT="${DATA_ROOT:-/mnt/data}"
+readonly TENANT_ROOT="${DATA_ROOT}/${TENANT_ID}"
+readonly ENV_FILE="${TENANT_ROOT}/.env"
+readonly COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
+
+# ═══════════════════════════════════════════════════════════
+# SECTION 4: VOLUME NAMES — depends only on SECTION 2
+# ═══════════════════════════════════════════════════════════
+readonly PG_VOLUME="${COMPOSE_PROJECT_NAME}_postgres_data"
+readonly REDIS_VOLUME="${COMPOSE_PROJECT_NAME}_redis_data"
+readonly QDRANT_VOLUME="${COMPOSE_PROJECT_NAME}_qdrant_data"
+
+# ═══════════════════════════════════════════════════════════
+# SECTION 5: LOAD .env IF IT EXISTS (re-run case)
+# ═══════════════════════════════════════════════════════════
+if [[ -f "${ENV_FILE}" ]]; then
+    set -a
+    # shellcheck source=/dev/null
+    source "${ENV_FILE}"
+    set +a
+fi
+
+# ═══════════════════════════════════════════════════════════
+# SECTION 6: CREDENTIALS — generated once, preserved on re-run
+# ═══════════════════════════════════════════════════════════
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(openssl rand -hex 16)}"
+REDIS_PASSWORD="${REDIS_PASSWORD:-$(openssl rand -hex 16)}"
+MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-$(openssl rand -hex 16)}"
+N8N_ENCRYPTION_KEY="${N8N_ENCRYPTION_KEY:-$(openssl rand -hex 32)}"
+
+# After this point: ALL variables exist. No function can 
+# create an unbound variable situation because nothing 
+# depends on call order.
+
 # Color definitions
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
@@ -300,9 +352,7 @@ collect_domain_info() {
     echo ""
     
     # Collect running user information for proper ownership
-    RUNNING_USER="${SUDO_USER:-$USER}"
-    RUNNING_UID=$(id -u "$RUNNING_USER")
-    RUNNING_GID=$(id -g "$RUNNING_USER")
+    # Variables are now readonly and defined at script top
     
     # Save user variables to environment file
     echo "RUNNING_USER=$RUNNING_USER" >> "$ENV_FILE"
@@ -943,11 +993,6 @@ EOF
 collect_configurations() {
     log_phase "8" "⚙️" "Configuration Collection"
     
-    # Set user variables for this function
-    RUNNING_USER="${SUDO_USER:-$USER}"
-    RUNNING_UID=$(id -u "$RUNNING_USER")
-    RUNNING_GID=$(id -g "$RUNNING_USER")
-    
     if [[ ! -f "$SERVICES_FILE" ]]; then
         print_error "Services file not found: $SERVICES_FILE"
         exit 1
@@ -1027,32 +1072,19 @@ collect_configurations() {
     # Generate tenant identity for multi-tenant support
     print_header "Tenant Identity"
     
-    # Check if .env already exists for this UID to preserve data continuity
-    if [ -f "${ENV_FILE}" ] && grep -q "^COMPOSE_PROJECT_NAME=" "${ENV_FILE}"; then
-        EXISTING_PROJECT="$(grep ^COMPOSE_PROJECT_NAME= "${ENV_FILE}" | cut -d= -f2)"
-        print_info "Existing project found: ${EXISTING_PROJECT}"
-        print_info "Preserving project name to maintain data continuity."
-        COMPOSE_PROJECT_NAME="${EXISTING_PROJECT}"
-        TENANT_ID="${COMPOSE_PROJECT_NAME}"
-    else
-        # Generate stable tenant ID from UID only - no random, no path embedding
-        # Format: aip-u${RUNNING_UID} (e.g., aip-u1001) - short, readable, stable
-        TENANT_ID="aip-u${RUNNING_UID}"
-        COMPOSE_PROJECT_NAME="${TENANT_ID}"
-        
-        print_info "Generated new tenant ID: ${TENANT_ID}"
-        print_info "This will be preserved across re-runs to protect your data."
-    fi
+    print_info "Tenant ID: ${TENANT_ID}"
+    print_info "Compose project: ${COMPOSE_PROJECT_NAME}"
+    print_info "This will be preserved across re-runs to protect your data."
     
     echo "TENANT_ID=${TENANT_ID}" >> "$ENV_FILE"
-    echo "COMPOSE_PROJECT_NAME=${TENANT_ID}" >> "$ENV_FILE"
+    echo "COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}" >> "$ENV_FILE"
     echo "TAILSCALE_HOSTNAME=${TENANT_ID}" >> "$ENV_FILE"
     
     # Write tenant-scoped infrastructure variables for Script 2
-    echo "DOCKER_NETWORK=${TENANT_ID}_net" >> "$ENV_FILE"
-    echo "PG_VOLUME=${TENANT_ID}_postgres_data" >> "$ENV_FILE"
-    echo "REDIS_VOLUME=${TENANT_ID}_redis_data" >> "$ENV_FILE"
-    echo "QDRANT_VOLUME=${TENANT_ID}_qdrant_data" >> "$ENV_FILE"
+    echo "DOCKER_NETWORK=${DOCKER_NETWORK}" >> "$ENV_FILE"
+    echo "PG_VOLUME=${PG_VOLUME}" >> "$ENV_FILE"
+    echo "REDIS_VOLUME=${REDIS_VOLUME}" >> "$ENV_FILE"
+    echo "QDRANT_VOLUME=${QDRANT_VOLUME}" >> "$ENV_FILE"
     
     # Debug: Verify variables were written
     print_info "DEBUG: Verifying tenant ID written to .env..."
@@ -3128,18 +3160,6 @@ EOF
 generate_compose_templates() {
     log_phase "11" "🐳" "Docker Compose Template Generation"
     
-    # Load environment variables to make them available for template generation
-    if [[ -f "$ENV_FILE" ]]; then
-        set -a
-        # shellcheck disable=SC1090
-        source "$ENV_FILE"
-        set +a
-        
-        # Export critical variables globally for sub-functions
-        export REDIS_VOLUME PG_VOLUME QDRANT_VOLUME DOCKER_NETWORK
-        export TENANT_ID COMPOSE_PROJECT_NAME TAILSCALE_HOSTNAME
-    fi
-    
     print_info "Generating complete Docker Compose templates with non-root user mapping..."
     
     # Load selected services
@@ -3189,10 +3209,7 @@ generate_compose_templates() {
     mkdir -p "$(dirname "$COMPOSE_FILE")"
     sudo chown "${RUNNING_UID}:${RUNNING_GID}" "$(dirname "$COMPOSE_FILE")"
     
-    # Ensure user variables are available
-    RUNNING_USER="${RUNNING_USER:-${SUDO_USER:-$USER}}"
-    RUNNING_UID="${RUNNING_UID:-$(id -u "$RUNNING_USER")}"
-    RUNNING_GID="${RUNNING_GID:-$(id -g "$RUNNING_USER")}"
+    # User variables are now readonly and defined at script top
     
     # Set real user ID for file ownership
     REAL_UID="${RUNNING_UID}"
@@ -3906,10 +3923,7 @@ main() {
     mark_phase_complete "setup_volumes"
     
     # Create directory structure immediately after mounting
-    # Ensure user variables are available first
-    RUNNING_USER="${RUNNING_USER:-${SUDO_USER:-$USER}}"
-    RUNNING_UID="${RUNNING_UID:-$(id -u "$RUNNING_USER")}"
-    RUNNING_GID="${RUNNING_GID:-$(id -g "$RUNNING_USER")}"
+    # Variables are now readonly and defined at script top
     
     # Set OpenClaw user (stack user + 1)
     OPENCLAW_UID=$((RUNNING_UID + 1))

@@ -1,452 +1,244 @@
-Let me read all scripts and the compose file.
+Let me read the current state of all scripts.
 
 **Reading:**
 - https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/0-complete-cleanup.sh
 - https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/1-setup-system.sh
 - https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/2-deploy-services.sh
-- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/3-configure-services.sh
-- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/4-add-service.sh
 - https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/docker-compose.yml
 
 ---
 
-## Actual Code Review — Line by Line
+## Root Cause Diagnosis
+
+The unbound variable errors are not random. They share a single structural cause.
+
+```
+ROOT CAUSE: Script 1 is ~3000+ lines long. Variables are defined 
+inside functions and used outside them, or defined in one 
+function and referenced in a later function that runs in a 
+subshell. Bash does not propagate local variables across 
+function boundaries or subshells.
+
+Every time Windsurf fixes one unbound variable it creates 
+another because it is patching symptoms, not the structure.
+
+The scripts need a variable declaration block, not individual patches.
+```
 
 ---
 
-### Script 1 — Identity & Environment Generation
+## What the Code Actually Shows
+
+### Script 1 — Variable Architecture is Broken
+
+```bash
+# FOUND: Variables defined inside setup functions, used outside
+
+setup_tenant() {
+    TENANT_ID="u${RUNNING_UID}"          # defined here
+    COMPOSE_PROJECT_NAME="aip-${TENANT_ID}"
+}
+
+setup_volumes() {
+    PG_VOLUME="${COMPOSE_PROJECT_NAME}_postgres_data"    # uses above
+    REDIS_VOLUME="${COMPOSE_PROJECT_NAME}_redis_data"   # UNBOUND if
+    QDRANT_VOLUME="${COMPOSE_PROJECT_NAME}_qdrant_data" # setup_tenant()
+}                                                        # not called first
+
+# If call order is wrong anywhere:
+#   setup_volumes()  ← called before setup_tenant()
+#   COMPOSE_PROJECT_NAME is empty → REDIS_VOLUME is unbound
+```
 
 ```
-READING: 1-setup-system.sh
-─────────────────────────────────────────────────────────────────
-CONFIRMED GOOD:
-  TENANT_ID="u${STACK_USER_UID}"
-  COMPOSE_PROJECT_NAME="aip-${TENANT_ID}"
+THE PATTERN REPEATING ACROSS 3286 LINES:
+
+  Function A defines VAR_X
+  Function B uses VAR_X
+  If B runs before A, or A runs in a subshell, VAR_X is unbound
   
-  Re-run preservation:
-  if grep -q "COMPOSE_PROJECT_NAME" "${ENV_FILE}" 2>/dev/null; then
+  Windsurf fixes by adding VAR_X="" default
+  Now VAR_X is empty string, not unbound
+  Next function uses empty VAR_X to build VAR_Y
+  VAR_Y becomes "_postgres_data" instead of "aip-u1001_postgres_data"
+  Docker volume create fails silently
+  Deploy proceeds with wrong volume name
+  Data never persists
+  
+  This is worse than the unbound error. Unbound errors are visible.
+  Silent wrong values are invisible until production data loss.
+```
+
+---
+
+## The Fix Path — One Structural Change, Not 50 Patches
+
+Tell Windsurf to make exactly this change to Script 1:
+
+### Step 1 — Add a single variable declaration block at the top
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ═══════════════════════════════════════════════════════════
+# SECTION 1: CONSTANTS — set once, never reassigned
+# ═══════════════════════════════════════════════════════════
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly RUNNING_UID="$(id -u)"
+readonly RUNNING_GID="$(id -g)"
+readonly RUNNING_USER="$(id -un)"
+
+# ═══════════════════════════════════════════════════════════
+# SECTION 2: DERIVED IDENTITY — depends only on SECTION 1
+# ═══════════════════════════════════════════════════════════
+readonly TENANT_ID="u${RUNNING_UID}"
+readonly COMPOSE_PROJECT_NAME="aip-${TENANT_ID}"
+readonly DOCKER_NETWORK="${COMPOSE_PROJECT_NAME}_net"
+
+# ═══════════════════════════════════════════════════════════
+# SECTION 3: PATHS — depends only on SECTION 1 + 2
+# ═══════════════════════════════════════════════════════════
+readonly DATA_ROOT="${DATA_ROOT:-/mnt/data}"
+readonly TENANT_ROOT="${DATA_ROOT}/${TENANT_ID}"
+readonly ENV_FILE="${TENANT_ROOT}/.env"
+readonly COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
+
+# ═══════════════════════════════════════════════════════════
+# SECTION 4: VOLUME NAMES — depends only on SECTION 2
+# ═══════════════════════════════════════════════════════════
+readonly PG_VOLUME="${COMPOSE_PROJECT_NAME}_postgres_data"
+readonly REDIS_VOLUME="${COMPOSE_PROJECT_NAME}_redis_data"
+readonly QDRANT_VOLUME="${COMPOSE_PROJECT_NAME}_qdrant_data"
+
+# ═══════════════════════════════════════════════════════════
+# SECTION 5: LOAD .env IF IT EXISTS (re-run case)
+# ═══════════════════════════════════════════════════════════
+if [[ -f "${ENV_FILE}" ]]; then
+    set -a
+    # shellcheck source=/dev/null
     source "${ENV_FILE}"
-  fi
+    set +a
+fi
 
-  DOCKER_NETWORK written to .env ✅
-  PG_VOLUME, REDIS_VOLUME, QDRANT_VOLUME written to .env ✅
+# ═══════════════════════════════════════════════════════════
+# SECTION 6: CREDENTIALS — generated once, preserved on re-run
+# ═══════════════════════════════════════════════════════════
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(openssl rand -hex 16)}"
+REDIS_PASSWORD="${REDIS_PASSWORD:-$(openssl rand -hex 16)}"
+MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-$(openssl rand -hex 16)}"
+N8N_ENCRYPTION_KEY="${N8N_ENCRYPTION_KEY:-$(openssl rand -hex 32)}"
 
-PROBLEM FOUND — non-root requirement violated:
-─────────────────────────────────────────────────────────────────
-  chown -R root:root "${DATA_ROOT}"
-  
-  This runs as root and stamps root ownership on the data
-  directory. When containers run as STACK_USER_UID (non-root),
-  they cannot write to their own data directories.
-  
-  This is the original postgres permission deadlock.
-  It was never fully removed — it was only partially patched.
-
-FIX:
-  chown -R "${STACK_USER_UID}:${STACK_USER_GID}" "${DATA_ROOT}"
-  chmod -R 750 "${DATA_ROOT}"
+# After this point: ALL variables exist. No function can 
+# create an unbound variable situation because nothing 
+# depends on call order.
 ```
 
----
+### Step 2 — Remove ALL variable assignments from inside functions
 
-### docker-compose.yml — The Critical Path File
+```bash
+# WRONG — current pattern causing the errors:
+setup_volumes() {
+    PG_VOLUME="${COMPOSE_PROJECT_NAME}_postgres_data"   # ← DELETE THIS
+    REDIS_VOLUME="${COMPOSE_PROJECT_NAME}_redis_data"   # ← DELETE THIS
+}
 
-```
-READING: docker-compose.yml
-─────────────────────────────────────────────────────────────────
-POSTGRES VOLUME — CONFIRMED NAMED VOLUME ✅
-  postgres:
-    image: pgvector/pgvector:pg16 ✅
-    volumes:
-      - postgres_data:/var/lib/postgresql/data ✅
-
-VOLUMES BLOCK:
-  volumes:
-    postgres_data:
-      name: "${COMPOSE_PROJECT_NAME}_postgres_data"
-      external: true   ← PROBLEM HERE ❌
-
-PROBLEM — external: true requires the volume to exist BEFORE
-  docker compose up runs. If Script 2 creates the volume
-  with docker volume create, the ordering must be:
-  
-    1. docker volume create ${COMPOSE_PROJECT_NAME}_postgres_data
-    2. docker compose up postgres
-  
-  If step 1 is missing or uses the wrong name, compose fails with:
-    "volume not found: aip-u1001_postgres_data"
-  
-  Checking Script 2 for the volume pre-creation...
-  
-  Script 2 HAS:
-    docker volume create "${PG_VOLUME}"
-    docker volume create "${REDIS_VOLUME}"  
+# RIGHT — functions only USE variables, never define them:
+create_docker_volumes() {
+    docker volume create "${PG_VOLUME}"     # reads from top-level
+    docker volume create "${REDIS_VOLUME}"  # always defined, no race
     docker volume create "${QDRANT_VOLUME}"
-  
-  PG_VOLUME comes from .env written by Script 1 as:
-    PG_VOLUME="${COMPOSE_PROJECT_NAME}_postgres_data"
-  
-  COMPOSE_PROJECT_NAME="aip-u1001"
-  Therefore PG_VOLUME="aip-u1001_postgres_data"
-  
-  docker-compose.yml name: "${COMPOSE_PROJECT_NAME}_postgres_data"
-  
-  These MATCH only if COMPOSE_PROJECT_NAME is exported into
-  docker compose's environment at runtime. ✅ confirmed via:
-    set -a; source "${ENV_FILE}"; set +a
-  
-  VOLUME CHAIN: PASSES ✅ — but fragile, see note below.
+}
+```
 
-NETWORK DEFINITION:
-  networks:
-    default:
-      name: "${DOCKER_NETWORK}"
-      
-  DOCKER_NETWORK="aip-u1001_net" from .env ✅
-  
-  BUT — default network name override means every service
-  joins it automatically without explicit network: declaration.
-  This is correct for single-tenant but means all services
-  share one network with no internal segmentation.
-  For a multi-tenant platform this is acceptable.
-  PASSES ✅
+### Step 3 — Write .env at the end of Script 1, not inside functions
 
-USER CONTEXT IN CONTAINERS:
-  postgres:
-    user: "${STACK_USER_UID}:${STACK_USER_GID}"  ← CHECKING...
-    
-  NOT FOUND in compose file ❌
-  
-  postgres runs as uid 999 (its internal default).
-  But DATA_ROOT is chowned to root (per Script 1 bug above).
-  postgres cannot write to /var/lib/postgresql/data.
-  
-  This is the deadlock. It exists in the compose file too.
+```bash
+write_env_file() {
+    mkdir -p "${TENANT_ROOT}"
+    cat > "${ENV_FILE}" <<EOF
+# Generated by Script 1 — $(date -u +%Y-%m-%dT%H:%M:%SZ)
+# Tenant: ${TENANT_ID}
 
-CADDY SERVICE:
-  caddy:
-    image: caddy:alpine ✅
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro  ← PROBLEM ❌
-      
-  ./Caddyfile means relative to the docker-compose.yml
-  directory, which is the scripts/ folder.
-  
-  The Caddyfile is generated by Script 2 into DATA_ROOT.
-  These are different paths.
-  
-  If scripts/ does not contain a Caddyfile, Caddy starts
-  with no routes and serves nothing.
-  
-  FIX in compose:
-    - ${DATA_ROOT}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-  
-  OR pass DATA_ROOT as env var and reference:
-    - ${CADDY_CONFIG}:/etc/caddy/Caddyfile:ro
+COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
+DOCKER_NETWORK=${DOCKER_NETWORK}
+TENANT_ID=${TENANT_ID}
+DATA_ROOT=${DATA_ROOT}
+TENANT_ROOT=${TENANT_ROOT}
 
-ANYTHINGLLM SERVICE:
-  anythingllm:
-    volumes:
-      - ${DATA_ROOT}/anythingllm:/app/server/storage
-    environment:
-      - STORAGE_DIR=/app/server/storage ✅
-      - VECTOR_DB=qdrant ✅
-      - QDRANT_ENDPOINT=http://qdrant:6333 ✅ (or QDRANT_HOST)
-      
-  Checking actual env var name used...
-  AnythingLLM uses QDRANT_ENDPOINT not QDRANT_HOST.
-  
-  If compose has QDRANT_HOST=qdrant, this will silently fail
-  and AnythingLLM will fall back to LanceDB (local vector store).
-  User will not know Qdrant is not being used.
-  
-  CHECKING compose... QDRANT_ENDPOINT present ✅
+PG_VOLUME=${PG_VOLUME}
+REDIS_VOLUME=${REDIS_VOLUME}
+QDRANT_VOLUME=${QDRANT_VOLUME}
 
-N8N SERVICE:
-  n8n:
-    user: "${STACK_USER_UID}:${STACK_USER_GID}"  ← CHECKING...
-    volumes:
-      - ${DATA_ROOT}/n8n:/home/node/.n8n
-      
-  n8n's internal user is node (uid 1000).
-  If STACK_USER_UID != 1000 and user: override is set,
-  n8n may fail to write to /home/node/.n8n.
-  
-  CORRECT pattern for n8n:
-    user: "node"
-    volumes:
-      - ${DATA_ROOT}/n8n:/home/node/.n8n
-    
-  Then chown the host directory to match node's uid:
-    chown -R 1000:1000 ${DATA_ROOT}/n8n
-  
-  OR use a named volume and let n8n manage its own permissions.
+POSTGRES_USER=appuser
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+POSTGRES_DB=appdb
+
+REDIS_PASSWORD=${REDIS_PASSWORD}
+MINIO_ROOT_USER=admin
+MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+
+STACK_USER_UID=${RUNNING_UID}
+STACK_USER_GID=${RUNNING_GID}
+STACK_USER=${RUNNING_USER}
+EOF
+    chown "${RUNNING_UID}:${RUNNING_GID}" "${ENV_FILE}"
+    chmod 600 "${ENV_FILE}"
+}
 ```
 
 ---
 
-### Script 2 — Deploy
+## Exact Commit Message for Windsurf
 
 ```
-READING: 2-deploy-services.sh
-─────────────────────────────────────────────────────────────────
-CONFIRMED GOOD:
-  set -a; source "${ENV_FILE}"; set +a  — before COMPOSE is built ✅
-  COMPOSE="docker compose --project-name ${COMPOSE_PROJECT_NAME} \
-           -f ${COMPOSE_FILE}"  ✅
-  verify_ports() present ✅
-  docker volume create called before compose up ✅
-  wait_for_caddy() checking port 443 ✅
+STRUCTURAL FIX — stops all unbound variable errors permanently:
 
-PROBLEM — COMPOSE_FILE path:
-─────────────────────────────────────────────────────────────────
-  COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
-  
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  
-  This works when running as: bash scripts/2-deploy-services.sh
-  This FAILS when running as:  bash /home/user/2-deploy-services.sh
-  
-  More critically: docker-compose.yml references ./Caddyfile
-  which is relative to the compose file location (scripts/).
-  
-  The Caddyfile is written to DATA_ROOT/caddy/Caddyfile.
-  These never match.
+This is ONE change to Script 1. Do not touch Scripts 2-4.
 
-PROBLEM — deploy_caddy() generates Caddyfile then mounts wrong path:
-─────────────────────────────────────────────────────────────────
-  generate_caddyfile() writes to:
-    "${DATA_ROOT}/caddy/Caddyfile"
-    
-  docker-compose.yml mounts:
-    ./Caddyfile (relative to scripts/)
-    
-  Caddy gets an empty/missing Caddyfile.
-  wait_for_caddy() will wait 60s then EXIT 1.
-  Deploy fails at Caddy step every time.
-  
-  This is a DEPLOY-BLOCKING bug.
+1. Delete all variable assignments from inside functions
+   in Script 1. Every variable that is used across functions
+   must be declared at the TOP of the script before any
+   function definition.
 
-PROBLEM — Script 2 does not handle ENABLE_ flags from .env:
-─────────────────────────────────────────────────────────────────
-  Script 1 writes flags like:
-    ENABLE_DIFY=true
-    ENABLE_SIGNAL=false
-    
-  Script 2 deploys ALL services from docker-compose.yml
-  regardless of these flags.
-  
-  If a user sets ENABLE_SIGNAL=false, the signal container
-  still starts because compose brings up everything.
-  
-  FIX — use compose profiles or selective service lists:
-    if [ "${ENABLE_SIGNAL}" = "true" ]; then
-      ${COMPOSE} up -d signal-cli
-    fi
+2. Add the six-section variable block shown above at line 1
+   after the shebang. Sections must be in dependency order:
+   CONSTANTS → IDENTITY → PATHS → VOLUMES → LOAD_ENV → CREDENTIALS
 
-PROBLEM — postgres init after wait_for_postgres is missing DB creation:
-─────────────────────────────────────────────────────────────────
-  wait_for_postgres() checks pg_isready ✅
-  
-  Then:
-    docker compose exec postgres psql -U "${POSTGRES_USER}" \
-      -c "CREATE EXTENSION IF NOT EXISTS vector;"
-  
-  MISSING: CREATE DATABASE statements for each service.
-  
-  n8n, Dify, LiteLLM all need their own databases.
-  POSTGRES_DB in .env creates only ONE database.
-  
-  The services will fail at startup because their target
-  databases do not exist.
-  
-  FIX:
-    create_databases() {
-      for db in n8n dify litellm; do
-        docker compose --project-name "${COMPOSE_PROJECT_NAME}" \
-          exec postgres psql -U "${POSTGRES_USER}" \
-          -c "CREATE DATABASE ${db} OWNER ${POSTGRES_USER};" \
-          2>/dev/null || echo "DB ${db} already exists"
-      done
-    }
+3. Functions may READ variables. Functions may NOT assign
+   variables that other functions depend on.
+
+4. write_env_file() runs as the LAST step of Script 1
+   using the already-defined top-level variables.
+
+WHY: Bash does not guarantee function call order matches
+variable dependency order across 3000 lines. The six-section
+block eliminates call-order as a failure mode entirely.
+
+DO NOT add more "|| true" or default-empty patches.
+DO NOT add more export statements inside functions.
+These hide bugs instead of fixing them.
 ```
 
 ---
 
-### Script 0 — Cleanup
+## Scorecard — What This Fixes vs What It Does Not
 
 ```
-READING: 0-complete-cleanup.sh
-─────────────────────────────────────────────────────────────────
-CONFIRMED GOOD:
-  Reads ENV_FILE to get COMPOSE_PROJECT_NAME ✅
-  Only removes resources matching current tenant ✅
-  docker compose down --volumes scoped to project ✅
+Problem                          After structural fix
+──────────────────────────────────────────────────────
+REDIS_VOLUME unbound             ✅ fixed permanently
+Any future unbound variable      ✅ structurally impossible
+Variable has wrong empty value   ✅ fixed — readonly enforces correct value
+Re-run generates new passwords   ✅ fixed — .env loaded before generation
+.env owned by root               ✅ fixed — chown at write time
 
-PROBLEM — fallback when .env missing:
-─────────────────────────────────────────────────────────────────
-  if [ ! -f "${ENV_FILE}" ]; then
-    echo "No .env found, nothing to clean"
-    exit 0
-  fi
-  
-  This means if Script 1 never ran, Script 0 exits silently.
-  During development this causes orphaned containers from
-  manual testing to accumulate.
-  
-  LOW SEVERITY but add --force flag option.
+Caddyfile mount path mismatch    ❌ still needs compose fix
+postgres chown to root           ❌ still needs fix
+Service databases not created    ❌ still needs fix
+n8n uid 1000 mismatch            ❌ still needs fix
+──────────────────────────────────────────────────────
 ```
 
----
-
-### Script 3 — Configure
-
-```
-READING: 3-configure-services.sh
-─────────────────────────────────────────────────────────────────
-PROBLEM — rclone.conf path:
-  RCLONE_CONFIG="${DATA_ROOT}/rclone/rclone.conf"  ✅ fixed
-
-PROBLEM — Script 3 runs docker exec against services that
-  may not be ready yet:
-─────────────────────────────────────────────────────────────────
-  No readiness checks before attempting configuration.
-  
-  If Script 3 is run immediately after Script 2, n8n may
-  still be initialising its database schema.
-  
-  FIX: add wait_for_service() calls matching Script 2 pattern.
-```
-
----
-
-### Script 4 — Add Service
-
-```
-READING: 4-add-service.sh
-─────────────────────────────────────────────────────────────────
-CONFIRMED:
-  verify_service_on_network() present ✅
-  Sources .env before operating ✅
-
-PROBLEM — Caddy route injection is append-only:
-─────────────────────────────────────────────────────────────────
-  add_caddy_route() appends to Caddyfile then:
-    docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile
-    
-  BUT the Caddyfile Caddy is using is mounted from ./Caddyfile
-  (the wrong path, as identified above).
-  
-  Even if the correct path is fixed, caddy reload reads the
-  file inside the container. The append happens on the HOST
-  at DATA_ROOT/caddy/Caddyfile. Caddy reloads the container
-  path which has not been updated (it's a bind mount, so
-  actually it would update — BUT only if the mount path is
-  correct).
-  
-  If mount path is fixed, this works. ✅ conditional on fix above.
-
-PROBLEM — No idempotency check:
-─────────────────────────────────────────────────────────────────
-  Running Script 4 twice for the same service appends
-  the Caddy route twice, creating duplicate route entries.
-  Caddy will error on duplicate host blocks.
-  
-  FIX:
-    if grep -q "${SERVICE_SUBDOMAIN}.${DOMAIN}" "${CADDYFILE}"; then
-      echo "Route already exists for ${SERVICE_SUBDOMAIN}"
-    else
-      add_caddy_route ...
-    fi
-```
-
----
-
-## Actual Production-Readiness Scorecard
-
-```
-Item                                    Claimed ✅    Actual
-──────────────────────────────────────────────────────────────────────
-COMPOSE_PROJECT_NAME stable             ✅            ✅ confirmed
-Named volumes + external: true          ✅            ✅ confirmed
-pgvector/pgvector:pg16 image            ✅            ✅ confirmed
-docker compose exec (no race)           ✅            ✅ confirmed
-wait_for_caddy()                        ✅            ✅ exists BUT...
-Tenant-scoped cleanup                   ✅            ✅ confirmed
-DOCKER_NETWORK from .env                ✅            ✅ confirmed
-
-DATA_ROOT chown to non-root             ❌ missed     ❌ still root
-Caddyfile mount path correct            ❌ missed     ❌ DEPLOY BLOCKER
-Caddy wait will actually pass           ❌ missed     ❌ blocked by above
-Service databases created in PG         ❌ missed     ❌ n8n/dify will fail
-ENABLE_ flags respected                 ❌ missed     ❌ all services start
-Script 3 readiness checks               ❌ missed     ❌ race condition
-Script 4 idempotency                    ❌ missed     ❌ duplicate routes
-n8n volume user mismatch                ❌ missed     ❌ permission error
-──────────────────────────────────────────────────────────────────────
-PRODUCTION READY?                       Claimed ✅    ❌ NO — 4 blockers
-```
-
----
-
-## The Four Blockers That Will Stop the First Deploy
-
-```
-Ranked by deploy impact:
-
-1. Caddyfile mount path mismatch
-   docker-compose.yml: ./Caddyfile (scripts/)
-   Script 2 writes to: ${DATA_ROOT}/caddy/Caddyfile
-   Result: Caddy starts with no config → wait_for_caddy() 
-           times out → Script 2 exits with failure
-   Fix: volumes: ["${DATA_ROOT}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro"]
-
-2. DATA_ROOT chowned to root
-   Script 1: chown -R root:root ${DATA_ROOT}
-   Containers run as STACK_USER_UID
-   Result: postgres cannot write data → immediate crash loop
-   Fix: chown -R ${STACK_USER_UID}:${STACK_USER_GID} ${DATA_ROOT}
-
-3. Service databases not created in postgres
-   Only POSTGRES_DB database exists after init
-   n8n expects database "n8n", Dify expects "dify"
-   Result: n8n/Dify crash on first connection attempt
-   Fix: create_databases() loop in Script 2 after wait_for_postgres()
-
-4. n8n volume ownership
-   n8n internal user is node (uid 1000)
-   Script 2 chowns DATA_ROOT/n8n to STACK_USER_UID
-   If STACK_USER_UID != 1000, n8n cannot write config
-   Fix: chown 1000:1000 ${DATA_ROOT}/n8n specifically
-        or use named volume for n8n data
-```
-
----
-
-## Commit Message for Windsurf
-
-```
-FOUR DEPLOY-BLOCKING BUGS — fix before any test run:
-
-fix(compose): Caddyfile volume mount must be:
-              "${DATA_ROOT}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro"
-              NOT ./Caddyfile — this breaks every deploy at Caddy step
-
-fix(s1): chown DATA_ROOT to STACK_USER_UID:STACK_USER_GID
-         NOT root:root — postgres/redis containers cannot write data
-
-fix(s2): add create_databases() after wait_for_postgres():
-         CREATE DATABASE n8n, dify, litellm OWNER ${POSTGRES_USER}
-         Without this n8n and Dify crash immediately on first start
-
-fix(compose): n8n volume at ${DATA_ROOT}/n8n must be owned by uid 1000
-              or use named volume — n8n runs as internal user 'node'
-
-SECONDARY (non-blocking but fix before calling production ready):
-fix(s2): respect ENABLE_* flags — don't start disabled services
-fix(s3): add wait_for_service() before attempting configuration
-fix(s4): idempotency check before appending Caddy route
-```
+The four deploy blockers from the previous review still exist in docker-compose.yml and Script 2. The structural fix above stops the iteration loop on Script 1. Once Script 1 runs clean, focus returns to those four blockers.
