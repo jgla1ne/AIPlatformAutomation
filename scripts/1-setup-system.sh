@@ -1172,6 +1172,9 @@ EOF
     chown "${RUNNING_UID}:${RUNNING_GID}" "$ENV_FILE"
     chmod 600 "$ENV_FILE"
     
+    # Create tenant directory structure
+    create_tenant_directories
+    
     # Service Binding Configuration
     echo ""
     print_header "🔗 Service Binding Configuration"
@@ -4030,6 +4033,33 @@ add_rclone_service() {
       - "ai-platform.type=storage"
 
 EOF
+}
+
+# ── TENANT DIRECTORY SETUP ───────────────────────────────────────────
+create_tenant_directories() {
+    print_info "Creating tenant directory structure..."
+    
+    local dirs=(
+        "${TENANT_DIR}/config/caddy"
+        "${TENANT_DIR}/config/openclaw"
+        "${TENANT_DIR}/config/litellm"
+        "${TENANT_DIR}/config/prometheus"
+        "${TENANT_DIR}/config/grafana"
+        "${TENANT_DIR}/data/openclaw"
+        "${TENANT_DIR}/data/postgres"
+        "${TENANT_DIR}/data/redis"
+        "${TENANT_DIR}/data/qdrant"
+        "${TENANT_DIR}/logs"
+        "${TENANT_DIR}/metadata"
+        "${TENANT_DIR}/cache"
+    )
+    
+    for dir in "${dirs[@]}"; do
+        mkdir -p "${dir}"
+        chown "${RUNNING_UID}:${RUNNING_GID}" "${dir}"
+    done
+    
+    print_success "Tenant directories created in ${TENANT_DIR}"
 }
 
 # Main Execution

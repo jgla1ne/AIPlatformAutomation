@@ -90,7 +90,7 @@ fi
 COMPOSE="docker compose \
   --project-name ${COMPOSE_PROJECT_NAME} \
   --env-file ${ENV_FILE} \
-  --file ${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml"
+  --file ${COMPOSE_FILE}"
 
 print_success ".env loaded | Project: ${COMPOSE_PROJECT_NAME} | Domain: ${DOMAIN}"
 
@@ -548,32 +548,20 @@ deploy_postgres() {
   fi
   
   # Deploy postgres using docker-compose (bind mount already created by Script 1)
-  docker compose \
-    --project-name "${COMPOSE_PROJECT_NAME}" \
-    --env-file "${ENV_FILE}" \
-    --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
-    up -d postgres
+  $COMPOSE up -d postgres
 
   # Wait for postgres to be genuinely ready using docker compose exec
   print_info "Waiting for PostgreSQL to accept connections..."
   ATTEMPTS=0
   MAX_ATTEMPTS=30
 
-  until docker compose \
-    --project-name "${COMPOSE_PROJECT_NAME}" \
-    --env-file "${ENV_FILE}" \
-    --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
-    exec postgres pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+  until $COMPOSE exec postgres pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
     &>/dev/null 2>&1; do
     ATTEMPTS=$((ATTEMPTS + 1))
     if [ "${ATTEMPTS}" -ge "${MAX_ATTEMPTS}" ]; then
       print_error "PostgreSQL did not become ready after 60 seconds"
       print_error "Logs:"
-      docker compose \
-        --project-name "${COMPOSE_PROJECT_NAME}" \
-        --env-file "${ENV_FILE}" \
-        --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
-        logs postgres --tail=30
+      $COMPOSE logs postgres --tail=30
       exit 1
     fi
     sleep 2
