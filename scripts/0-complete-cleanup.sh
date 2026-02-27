@@ -509,16 +509,19 @@ nuclear_cleanup() {
     done
     
     # Verify the volume is actually unmounted
-    if findmnt -n -o TARGET | grep -q "^${selected_volume}$"; then
+    if findmnt -n -o TARGET | grep -q "${selected_volume}$"; then
         print_warning "Volume $selected_volume is still mounted, attempting lazy unmount..."
         umount -l "$selected_volume" 2>/dev/null || print_warning "Lazy unmount also failed"
         sleep 5
     fi
     
-    # Final verification
-    if findmnt -n -o TARGET | grep -q "^${selected_volume}$"; then
+    # Final verification - strip tree characters and check exact match
+    local mounted_check=$(findmnt -n -o TARGET | grep "${selected_volume}$" | sed 's/^[├│└─]*//' | grep "^${selected_volume}$" || true)
+    if [[ -n "$mounted_check" ]]; then
         print_error "Failed to unmount $selected_volume - it's still mounted!"
         print_info "You may need to manually run: sudo umount -l $selected_volume"
+        # Don't proceed with deletion if still mounted
+        return 1
     else
         print_success "Volume $selected_volume successfully unmounted"
     fi
@@ -526,11 +529,18 @@ nuclear_cleanup() {
     # STEP 6: Delete data on selected EBS volume AFTER unmounting
     print_info "Step 6: Deleting AI Platform data in $selected_volume..."
     
-    # Wait a moment to ensure unmount is fully processed
-    sleep 2
+    # Since we successfully unmounted, we need to temporarily remount to delete data
+    # or delete from the raw device. For simplicity, we'll remount, delete, then unmount again
+    print_info "Temporarily remounting to delete data..."
+    mount "$selected_volume" 2>/dev/null || {
+        print_warning "Could not remount $selected_volume for data deletion"
+        print_info "Data will remain on the unmounted volume"
+        return 0
+    }
     
-    # Check if directory still exists and is not mounted
-    if [[ -d "$selected_volume" ]] && ! findmnt -n -o TARGET | grep -q "^${selected_volume}$"; then
+    sleep 1
+    
+    if [[ -d "$selected_volume" ]]; then
         print_info "Deleting AI Platform data at $selected_volume..."
         # Force remove all contents including hidden files
         rm -rf "$selected_volume"/* 2>/dev/null || true
@@ -540,21 +550,23 @@ nuclear_cleanup() {
         # Additional cleanup for stubborn directories
         find "$selected_volume" -mindepth 1 -delete 2>/dev/null || true
         
-        # Try to remove the directory itself (but don't fail if it's still mounted)
-        rmdir "$selected_volume" 2>/dev/null || print_warning "Could not remove directory $selected_volume (may still be mounted)"
-    elif findmnt -n -o TARGET | grep -q "^${selected_volume}$"; then
-        print_warning "Volume $selected_volume is still mounted, attempting forced cleanup..."
-        # Force unmount one more time
-        umount -l "$selected_volume" 2>/dev/null || true
-        sleep 2
-        # Try cleanup again
-        if [[ -d "$selected_volume" ]]; then
-            rm -rf "$selected_volume"/* 2>/dev/null || true
-            rm -rf "$selected_volume"/.[!.]* 2>/dev/null || true
-            find "$selected_volume" -mindepth 1 -delete 2>/dev/null || true
-        fi
+        print_success "Data deletion completed"
     else
-        print_warning "Volume $selected_volume not found"
+        print_warning "Volume $selected_volume not found after remount"
+    fi
+    
+    # Final unmount - leave the filesystem clean and unmounted
+    print_info "Final unmount of $selected_volume..."
+    umount "$selected_volume" 2>/dev/null || umount -l "$selected_volume" 2>/dev/null || true
+    sleep 2
+    
+    # Verify final unmount
+    local final_check=$(findmnt -n -o TARGET | grep "${selected_volume}$" | sed 's/^[├│└─]*//' | grep "^${selected_volume}$" || true)
+    if [[ -n "$final_check" ]]; then
+        print_error "Failed to unmount $selected_volume after cleanup"
+        print_info "The volume is clean but still mounted"
+    else
+        print_success "Volume $selected_volume cleaned and unmounted"
     fi
     
     # STEP 7: Final cleanup
