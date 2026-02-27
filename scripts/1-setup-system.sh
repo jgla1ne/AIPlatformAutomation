@@ -2843,8 +2843,8 @@ EOF
     
     # FINAL OWNERSHIP FIX - Ensure everything owned by user
     print_info "Fixing final ownership..."
-    sudo chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/.env" "${DATA_ROOT}/ai-platform"
-    sudo chmod 600 "${DATA_ROOT}/.env"
+sudo chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}"
+    sudo chmod 600 "${DATA_ROOT}/.env" sudo chmod 600 "${DATA_ROOT}/.env" "${DATA_ROOT}/ai-platform"
     print_success "Ownership fixed: All files owned by ${RUNNING_USER}"
     
     # Display selected services summary
