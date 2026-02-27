@@ -357,7 +357,7 @@ services:
       OLLAMA_BASE_PATH: http://ollama:11434
       EMBEDDING_ENGINE: ollama
       EMBEDDING_BASE_PATH: http://ollama:11434
-      VECTOR_DB: qdrant
+      VECTOR_DB: ${VECTOR_DB}
       QDRANT_ENDPOINT: http://qdrant:6333
       TZ: ${TIMEZONE:-UTC}
     volumes:

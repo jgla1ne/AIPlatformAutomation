@@ -87,10 +87,28 @@ if [ -z "${COMPOSE_PROJECT_NAME}" ]; then
 fi
 
 # 3. NOW build COMPOSE
+COMPOSE_FILE_PROCESSED="/tmp/docker-compose-${COMPOSE_PROJECT_NAME}.yml"
+
+# Process docker-compose.yml to substitute volume variables (Docker Compose limitation)
+process_compose_file() {
+    print_info "Processing docker-compose.yml for volume substitution..."
+    
+    # Substitute volume variables in top-level volumes section
+    sed -e "s/\${PG_VOLUME}/${PG_VOLUME}/g" \
+        -e "s/\${REDIS_VOLUME}/${REDIS_VOLUME}/g" \
+        -e "s/\${QDRANT_VOLUME}/${QDRANT_VOLUME}/g" \
+        "${COMPOSE_FILE}" > "${COMPOSE_FILE_PROCESSED}"
+    
+    print_success "Compose file processed: ${COMPOSE_FILE_PROCESSED}"
+}
+
+# Process the compose file
+process_compose_file
+
 COMPOSE="docker compose \
   --project-name ${COMPOSE_PROJECT_NAME} \
   --env-file ${ENV_FILE} \
-  --file ${COMPOSE_FILE}"
+  --file ${COMPOSE_FILE_PROCESSED}"
 
 print_success ".env loaded | Project: ${COMPOSE_PROJECT_NAME} | Domain: ${DOMAIN}"
 
