@@ -580,7 +580,7 @@ deploy_postgres() {
     if [ "${ATTEMPTS}" -ge "${MAX_ATTEMPTS}" ]; then
       print_error "PostgreSQL did not become ready after 60 seconds"
       print_error "Logs:"
-      \$COMPOSE 
+      $COMPOSE 
         --project-name "${COMPOSE_PROJECT_NAME}" \
         --env-file "${ENV_FILE}" \
         \--file "${COMPOSE_FILE_PROCESSED}" \
@@ -648,7 +648,7 @@ create_databases() {
         esac
         
         # Create database with owner
-        if \$COMPOSE 
+        if $COMPOSE 
             --project-name "${COMPOSE_PROJECT_NAME}" \
             --env-file "${ENV_FILE}" \
             \--file "${COMPOSE_FILE_PROCESSED}" \
@@ -678,7 +678,7 @@ create_databases() {
                 ;;
         esac
         
-        if \$COMPOSE 
+        if $COMPOSE 
             --project-name "${COMPOSE_PROJECT_NAME}" \
             --env-file "${ENV_FILE}" \
             \--file "${COMPOSE_FILE_PROCESSED}" \
@@ -690,7 +690,7 @@ create_databases() {
     done
     
     # Also create extension in default aiplatform database
-    if \$COMPOSE 
+    if $COMPOSE 
         --project-name "${COMPOSE_PROJECT_NAME}" \
         --env-file "${ENV_FILE}" \
         \--file "${COMPOSE_FILE_PROCESSED}" \
@@ -707,7 +707,7 @@ deploy_redis() {
   print_header "Redis"
   
   # Deploy redis using docker-compose (bind mount already created by Script 1)
-  \$COMPOSE 
+  $COMPOSE 
     --project-name "${COMPOSE_PROJECT_NAME}" \
     --env-file "${ENV_FILE}" \
     \--file "${COMPOSE_FILE_PROCESSED}" \
@@ -715,7 +715,7 @@ deploy_redis() {
 
   # Wait for redis to be ready using docker compose exec
   ATTEMPTS=0
-  until \$COMPOSE 
+  until $COMPOSE 
     --project-name "${COMPOSE_PROJECT_NAME}" \
     --env-file "${ENV_FILE}" \
     \--file "${COMPOSE_FILE_PROCESSED}" \
@@ -723,7 +723,7 @@ deploy_redis() {
     ATTEMPTS=$((ATTEMPTS + 1))
     [ "${ATTEMPTS}" -ge 20 ] && {
       print_error "Redis did not become ready"
-      \$COMPOSE 
+      $COMPOSE 
         --project-name "${COMPOSE_PROJECT_NAME}" \
         --env-file "${ENV_FILE}" \
         \--file "${COMPOSE_FILE_PROCESSED}" \
@@ -739,7 +739,7 @@ deploy_qdrant() {
   print_header "Qdrant"
   
   # Deploy qdrant using docker-compose (bind mount already created by Script 1)
-  \$COMPOSE 
+  $COMPOSE 
     --project-name "${COMPOSE_PROJECT_NAME}" \
     --env-file "${ENV_FILE}" \
     \--file "${COMPOSE_FILE_PROCESSED}" \
@@ -747,7 +747,7 @@ deploy_qdrant() {
 
   # Wait for qdrant to be ready using docker compose exec
   ATTEMPTS=0
-  until \$COMPOSE 
+  until $COMPOSE 
     --project-name "${COMPOSE_PROJECT_NAME}" \
     --env-file "${ENV_FILE}" \
     \--file "${COMPOSE_FILE_PROCESSED}" \
@@ -756,7 +756,7 @@ deploy_qdrant() {
     ATTEMPTS=$((ATTEMPTS + 1))
     [ "${ATTEMPTS}" -ge 20 ] && {
       print_error "Qdrant did not become ready"
-      \$COMPOSE 
+      $COMPOSE 
         --project-name "${COMPOSE_PROJECT_NAME}" \
         --env-file "${ENV_FILE}" \
         \--file "${COMPOSE_FILE_PROCESSED}" \
