@@ -574,20 +574,16 @@ deploy_postgres() {
   ATTEMPTS=0
   MAX_ATTEMPTS=30
 
-  until docker compose \
-    --project-name "${COMPOSE_PROJECT_NAME}" \
-    --env-file "${ENV_FILE}" \
-    --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
-    exec postgres pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+  until $COMPOSE exec postgres pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
     &>/dev/null 2>&1; do
     ATTEMPTS=$((ATTEMPTS + 1))
     if [ "${ATTEMPTS}" -ge "${MAX_ATTEMPTS}" ]; then
       print_error "PostgreSQL did not become ready after 60 seconds"
       print_error "Logs:"
-      docker compose \
+      \$COMPOSE 
         --project-name "${COMPOSE_PROJECT_NAME}" \
         --env-file "${ENV_FILE}" \
-        --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+        \--file "${COMPOSE_FILE_PROCESSED}" \
         logs postgres --tail=30
       exit 1
     fi
@@ -652,10 +648,10 @@ create_databases() {
         esac
         
         # Create database with owner
-        if docker compose \
+        if \$COMPOSE 
             --project-name "${COMPOSE_PROJECT_NAME}" \
             --env-file "${ENV_FILE}" \
-            --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+            \--file "${COMPOSE_FILE_PROCESSED}" \
             exec postgres psql -U "${POSTGRES_USER}" -c "CREATE DATABASE ${db_name} OWNER ${POSTGRES_USER};" &>/dev/null; then
             print_success "Database '${db_name}' created for ${service}"
         else
@@ -682,10 +678,10 @@ create_databases() {
                 ;;
         esac
         
-        if docker compose \
+        if \$COMPOSE 
             --project-name "${COMPOSE_PROJECT_NAME}" \
             --env-file "${ENV_FILE}" \
-            --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+            \--file "${COMPOSE_FILE_PROCESSED}" \
             exec postgres psql -U "${POSTGRES_USER}" -d "$db" -c "CREATE EXTENSION IF NOT EXISTS vector;" &>/dev/null; then
             print_success "pgvector extension created in $db database"
         else
@@ -694,10 +690,10 @@ create_databases() {
     done
     
     # Also create extension in default aiplatform database
-    if docker compose \
+    if \$COMPOSE 
         --project-name "${COMPOSE_PROJECT_NAME}" \
         --env-file "${ENV_FILE}" \
-        --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+        \--file "${COMPOSE_FILE_PROCESSED}" \
         exec postgres psql -U "${POSTGRES_USER}" -c "CREATE EXTENSION IF NOT EXISTS vector;" &>/dev/null; then
         print_success "pgvector extension created in default database"
     else
@@ -711,26 +707,26 @@ deploy_redis() {
   print_header "Redis"
   
   # Deploy redis using docker-compose (bind mount already created by Script 1)
-  docker compose \
+  \$COMPOSE 
     --project-name "${COMPOSE_PROJECT_NAME}" \
     --env-file "${ENV_FILE}" \
-    --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+    \--file "${COMPOSE_FILE_PROCESSED}" \
     up -d redis
 
   # Wait for redis to be ready using docker compose exec
   ATTEMPTS=0
-  until docker compose \
+  until \$COMPOSE 
     --project-name "${COMPOSE_PROJECT_NAME}" \
     --env-file "${ENV_FILE}" \
-    --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+    \--file "${COMPOSE_FILE_PROCESSED}" \
     exec redis redis-cli -a "${REDIS_PASSWORD}" ping 2>/dev/null | grep -q PONG; do
     ATTEMPTS=$((ATTEMPTS + 1))
     [ "${ATTEMPTS}" -ge 20 ] && {
       print_error "Redis did not become ready"
-      docker compose \
+      \$COMPOSE 
         --project-name "${COMPOSE_PROJECT_NAME}" \
         --env-file "${ENV_FILE}" \
-        --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+        \--file "${COMPOSE_FILE_PROCESSED}" \
         logs redis --tail=20
       exit 1
     }
@@ -743,27 +739,27 @@ deploy_qdrant() {
   print_header "Qdrant"
   
   # Deploy qdrant using docker-compose (bind mount already created by Script 1)
-  docker compose \
+  \$COMPOSE 
     --project-name "${COMPOSE_PROJECT_NAME}" \
     --env-file "${ENV_FILE}" \
-    --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+    \--file "${COMPOSE_FILE_PROCESSED}" \
     up -d qdrant
 
   # Wait for qdrant to be ready using docker compose exec
   ATTEMPTS=0
-  until docker compose \
+  until \$COMPOSE 
     --project-name "${COMPOSE_PROJECT_NAME}" \
     --env-file "${ENV_FILE}" \
-    --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+    \--file "${COMPOSE_FILE_PROCESSED}" \
     exec qdrant curl -sf http://localhost:6333/health \
     &>/dev/null; do
     ATTEMPTS=$((ATTEMPTS + 1))
     [ "${ATTEMPTS}" -ge 20 ] && {
       print_error "Qdrant did not become ready"
-      docker compose \
+      \$COMPOSE 
         --project-name "${COMPOSE_PROJECT_NAME}" \
         --env-file "${ENV_FILE}" \
-        --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+        \--file "${COMPOSE_FILE_PROCESSED}" \
         logs qdrant --tail=20
       exit 1
     }
