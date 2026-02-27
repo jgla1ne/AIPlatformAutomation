@@ -64,29 +64,19 @@ if [ -z "${DATA_ROOT:-}" ]; then
   exit 1
 fi
 
-# Get tenant ID from env file or default
-if [ -f "${DATA_ROOT}/u0/.env" ]; then
-  TENANT_ID="u0"
-  ENV_FILE="${DATA_ROOT}/u0/.env"
-elif [ -f "${DATA_ROOT}/u$(id -u)/.env" ]; then
-  TENANT_ID="u$(id -u)"
-  ENV_FILE="${DATA_ROOT}/${TENANT_ID}/.env"
-else
-  echo "❌ No tenant environment file found"
-  echo "   Run Script 1 first."
-  exit 1
-fi
+# ── Resolve tenant context ──────────────────────────────────────────
+BASE_DIR="${DATA_ROOT:-/mnt/data}"
+TENANT_ID="${TENANT_ID:-u1001}"
+TENANT_DIR="${BASE_DIR}/${TENANT_ID}"
+ENV_FILE="${TENANT_DIR}/.env"
 
-if [ ! -f "${ENV_FILE}" ]; then
-  echo "❌ .env not found at ${ENV_FILE}"
-  echo "   Run Script 1 first."
-  exit 1
-fi
+[[ -f "${ENV_FILE}" ]] || { echo "❌ FATAL: .env not found at ${ENV_FILE}"; exit 1; }
+source "${ENV_FILE}"
+# ────────────────────────────────────────────────────────────────────
 
 # 1. Load env FIRST
 set -a
 # shellcheck disable=SC1090
-source "${ENV_FILE}"
 set +a
 
 # 2. Validate COMPOSE_PROJECT_NAME is not empty

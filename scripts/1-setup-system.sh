@@ -3983,6 +3983,55 @@ add_qdrant_service() {
 EOF
 }
 
+# ── CADDY SERVICE REGISTRATION ──────────────────────────────────────
+add_caddy_service() {
+  cat >> "$COMPOSE_FILE" <<'EOF'
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ${DATA_ROOT}/caddy/Caddyfile:/etc/caddy/Caddyfile
+      - ${DATA_ROOT}/caddy/data:/data
+      - ${DATA_ROOT}/cache:/cache
+    networks:
+      - ${DOCKER_NETWORK}
+    environment:
+      - DOMAIN_NAME=${DOMAIN_NAME}
+      - SSL_EMAIL=${SSL_EMAIL}
+    labels:
+      - "ai-platform.service=caddy"
+      - "ai-platform.type=reverse-proxy"
+
+EOF
+}
+
+# ── RCLONE SERVICE SETUP ────────────────────────────────────────────
+add_rclone_service() {
+  cat >> "$COMPOSE_FILE" <<'EOF'
+  rclone:
+    image: rclone/rclone:latest
+    container_name: rclone
+    restart: unless-stopped
+    volumes:
+      - ${TENANT_DIR}/config/rclone:/config/rclone
+      - ${RCLONE_MOUNT_POINT}:/data:shared
+    networks:
+      - ${DOCKER_NETWORK}
+    environment:
+      - RCLONE_CONFIG=/config/rclone/rclone.conf
+      - RCLONE_CACHE_DIR=/cache
+    command: mount gdrive:/data --cache-dir /cache --vfs-cache-mode full
+    labels:
+      - "ai-platform.service=rclone"
+      - "ai-platform.type=storage"
+
+EOF
+}
+
 # Main Execution
 main() {
     # Ensure running as root

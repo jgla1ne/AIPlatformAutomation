@@ -1,218 +1,328 @@
-Let me fetch the current repo structure first.
+## Architecture Correction — Multi-Tenant Reality
 
-**Fetching:**
-- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/1-setup-system.sh
-- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/2-deploy-services.sh
-- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/3-configure-services.sh
-- https://github.com/jgla1ne/AIPlatformAutomation/tree/main/scripts
+The folder structure tells the full story:
 
-Let me check what extra files exist:
-- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/0-reset-tenant.sh
-- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/4-add-service.sh
-- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/utils.sh
-- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/gpu-setup.sh
-- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/docker-compose.yml
+```
+/mnt/data/                    ← BASE_DIR (shared platform layer)
+├── apparmor/                 ← shared security profiles
+├── cache/                    ← shared cache
+├── caddy/                    ← shared reverse proxy config
+├── config/                   ← shared service configs
+├── data/                     ← shared data layer
+├── logs/                     ← shared logs
+├── metadata/                 ← shared metadata
+├── postgres-init/            ← shared DB init scripts
+└── u1001/                    ← TENANT ROOT
+    └── .env                  ← tenant-scoped config (correct location)
+```
+
+**The .env lives at `/mnt/data/u1001/.env` — NOT `/mnt/data/.env`**
+
+Every script that reads `ENV_FILE` must point to the tenant path, not the base path.
 
 ---
 
-## What I Found
+## Full Action Plan for Windsurf
 
-```
-CURRENT FILES IN /scripts:
-──────────────────────────────────────────────
-0-reset-tenant.sh        ✅ IS one of the 5
-1-setup-system.sh        ✅ IS one of the 5
-2-deploy-services.sh     ✅ IS one of the 5
-3-configure-services.sh  ✅ IS one of the 5
-4-add-service.sh         ✅ IS one of the 5
-──────────────────────────────────────────────
-utils.sh                 ❌ VIOLATES the rule
-gpu-setup.sh             ❌ VIOLATES the rule
-docker-compose.yml       ✅ Not a script, acceptable
-──────────────────────────────────────────────
-```
-
-The constraint is broken by `utils.sh` and `gpu-setup.sh`. Here is exactly how to fix it.
-
----
-
-## The Fix: Absorb Both Files Into Their Owners
-
-### Where Each File Belongs
-
-```
-utils.sh     → SPLIT between Script 1 and Script 2
-               (shared functions = top of each script
-                that uses them, not a separate file)
-
-gpu-setup.sh → ABSORBED into Script 1
-               (GPU detection is setup, not deployment)
-```
-
----
-
-## Concrete Action for Windsurf
-
-### Step 1 — Absorb `gpu-setup.sh` into Script 1
-
-Script 1 currently sources `gpu-setup.sh` like this:
+### ACTION 1 — Fix ENV_FILE path across ALL 5 scripts
 
 ```bash
-source "$(dirname "$0")/gpu-setup.sh"
-# or
-bash scripts/gpu-setup.sh
+# WRONG (what scripts likely have now):
+ENV_FILE="${BASE_DIR}/.env"
+ENV_FILE="/mnt/data/.env"
+
+# CORRECT (what every script must have):
+TENANT_ID="${TENANT_ID:-u1001}"
+TENANT_DIR="${BASE_DIR}/${TENANT_ID}"
+ENV_FILE="${TENANT_DIR}/.env"
 ```
 
-Replace that entire source/call with the function body **inline** inside Script 1:
-
-```bash
-# ─────────────────────────────────────────────────────────────
-# SECTION: GPU/CPU Detection  (was gpu-setup.sh — now inline)
-# ─────────────────────────────────────────────────────────────
-detect_compute() {
-  log_info "Detecting compute capabilities..."
-
-  COMPUTE_TYPE="cpu"
-  GPU_COUNT=0
-  GPU_MEMORY_MB=0
-
-  if command -v nvidia-smi &>/dev/null; then
-    local gpu_info
-    gpu_info=$(nvidia-smi --query-gpu=name,memory.total \
-               --format=csv,noheader 2>/dev/null) || true
-
-    if [[ -n "$gpu_info" ]]; then
-      COMPUTE_TYPE="gpu"
-      GPU_COUNT=$(echo "$gpu_info" | wc -l)
-      GPU_MEMORY_MB=$(echo "$gpu_info" | awk -F', ' \
-        '{gsub(/ MiB/,"",$2); sum+=$2} END{print sum}')
-      log_success "GPU detected: ${GPU_COUNT} GPU(s), ${GPU_MEMORY_MB}MB VRAM"
-    fi
-  elif command -v rocm-smi &>/dev/null; then
-    rocm-smi &>/dev/null 2>&1 && COMPUTE_TYPE="gpu" || true
-    [[ "$COMPUTE_TYPE" == "gpu" ]] && \
-      log_success "AMD GPU detected via ROCm"
-  fi
-
-  [[ "$COMPUTE_TYPE" == "cpu" ]] && \
-    log_info "No GPU found — CPU-only deployment"
-
-  # Write to .env — Script 2 reads this
-  cat >> "${ENV_FILE}" <<EOF
-
-# Compute
-COMPUTE_TYPE=${COMPUTE_TYPE}
-GPU_COUNT=${GPU_COUNT}
-GPU_MEMORY_MB=${GPU_MEMORY_MB}
-EOF
-  return 0
-}
-```
-
-Then **delete `gpu-setup.sh`**.
-
----
-
-### Step 2 — Absorb `utils.sh` into Script 1 and Script 2
-
-`utils.sh` typically contains logging, color codes, helper functions. These go at the **top of each script that uses them** as a `# ── UTILITIES ──` section.
-
-Pattern for both Script 1 and Script 2 header:
+Every script must resolve `TENANT_ID` first, then derive `ENV_FILE`. The pattern at the top of **each** script:
 
 ```bash
 #!/usr/bin/env bash
-# ═══════════════════════════════════════════════════════════════
-# Script N — [Name]
-# Part of 5-script AI Platform stack
-# ═══════════════════════════════════════════════════════════════
 set -o pipefail
 
-# ─────────────────────────────────────────────────────────────
-# UTILITIES  (inline — no external utils.sh dependency)
-# ─────────────────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
+# ── Resolve tenant context ──────────────────────────────────────────
+BASE_DIR="${BASE_DIR:-/mnt/data}"
+TENANT_ID="${TENANT_ID:-u1001}"
+TENANT_DIR="${BASE_DIR}/${TENANT_ID}"
+ENV_FILE="${TENANT_DIR}/.env"
 
-log_info()    { echo -e "${BLUE}[INFO]${NC}  $*"; }
-log_success() { echo -e "${GREEN}[OK]${NC}    $*"; }
-log_warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-log_error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
-log_section() { echo -e "\n${CYAN}══ $* ══${NC}"; }
-
-die() {
-  log_error "$*"
-  exit 1
-}
-
-require_root() {
-  [[ $EUID -eq 0 ]] && die "Do not run as root. Use your deploy user."
-}
-
-check_command() {
-  command -v "$1" &>/dev/null || die "Required command not found: $1"
-}
-# ─────────────────────────────────────────────────────────────
-```
-
-Then **delete `utils.sh`**.
-
----
-
-## Verified 5-Script Architecture
-
-```
-┌────┬─────────────────────────┬──────────────────────────────────────────┐
-│ #  │ SCRIPT                  │ OWNS                                     │
-├────┼─────────────────────────┼──────────────────────────────────────────┤
-│ 0  │ 0-reset-tenant.sh       │ Full EBS wipe, Docker prune, .env delete │
-│ 1  │ 1-setup-system.sh       │ Packages, users, GPU detect, .env gen,   │
-│    │                         │ service selection, Caddy config, SSL mode │
-│ 2  │ 2-deploy-services.sh    │ Docker up, DB init, healthchecks,        │
-│    │                         │ Tailscale auth, rclone mount, AppArmor   │
-│ 3  │ 3-configure-services.sh │ SSL reconfigure, Tailscale re-auth,      │
-│    │                         │ GDrive re-auth, Signal re-pair, restarts │
-│ 4  │ 4-add-service.sh        │ Add new dockerized service post-deploy,  │
-│    │                         │ generates compose fragment + Caddy route │
-├────┼─────────────────────────┼──────────────────────────────────────────┤
-│    │ docker-compose.yml      │ Not a script — compose definition only   │
-│    │ .env (generated)        │ Not a script — written by Script 1       │
-└────┴─────────────────────────┴──────────────────────────────────────────┘
-
-DELETED:
-  utils.sh     → functions inlined into scripts that use them
-  gpu-setup.sh → detect_compute() inlined into Script 1
+[[ -f "${ENV_FILE}" ]] || { echo "FATAL: .env not found at ${ENV_FILE}"; exit 1; }
+source "${ENV_FILE}"
+# ────────────────────────────────────────────────────────────────────
 ```
 
 ---
 
-## What To Tell Windsurf
+### ACTION 2 — Fix duplicate keys in .env RIGHT NOW
+
+```bash
+ENV_FILE="/mnt/data/u1001/.env"
+
+# Deduplicate — last value wins (awk keeps first occurrence, reverse trick keeps last)
+tac "${ENV_FILE}" | awk -F= '!seen[$1]++' | tac > /tmp/env_clean
+mv /tmp/env_clean "${ENV_FILE}"
+chmod 600 "${ENV_FILE}"
+chown jglaine:jglaine "${ENV_FILE}"
+
+# Verify the problem keys
+grep -E "^DOCKER_NETWORK=|^POSTGRES_PORT=|^REDIS_PORT=|^SIGNAL_API_PORT=|^LITELLM_MASTER_KEY=" "${ENV_FILE}"
+```
+
+Expected clean output:
+```
+DOCKER_NETWORK=aip-u1001_net       ← tenant-scoped only
+POSTGRES_PORT=5432                 ← once
+REDIS_PORT=6379                    ← once
+SIGNAL_API_PORT=8090               ← once (8090 is correct)
+LITELLM_MASTER_KEY=739201db8...    ← once (longer key wins)
+```
+
+---
+
+### ACTION 3 — Fix tenant directory structure
+
+Current state shows `u1001/` only has `.env`. Script 2 must create the full tenant data tree before starting containers:
+
+```bash
+# Script 2 must create this structure under TENANT_DIR:
+setup_tenant_dirs() {
+  local dirs=(
+    "${TENANT_DIR}/data/n8n"
+    "${TENANT_DIR}/data/dify"
+    "${TENANT_DIR}/data/openwebui"
+    "${TENANT_DIR}/data/anythingllm"
+    "${TENANT_DIR}/data/flowise"
+    "${TENANT_DIR}/data/openclaw"
+    "${TENANT_DIR}/data/signal-api"
+    "${TENANT_DIR}/config/n8n"
+    "${TENANT_DIR}/config/dify"
+    "${TENANT_DIR}/config/litellm"
+    "${TENANT_DIR}/config/rclone"
+    "${TENANT_DIR}/logs"
+    "${TENANT_DIR}/backups"
+  )
+
+  for dir in "${dirs[@]}"; do
+    mkdir -p "${dir}"
+    chown "${RUNNING_UID}:${RUNNING_GID}" "${dir}"
+  done
+
+  # Shared platform dirs (not tenant-scoped)
+  mkdir -p "${BASE_DIR}/apparmor"
+  mkdir -p "${BASE_DIR}/caddy"
+  mkdir -p "${BASE_DIR}/postgres-init"
+
+  log_success "Tenant directory tree created under ${TENANT_DIR}"
+}
+```
+
+---
+
+### ACTION 4 — Fix DOCKER_NETWORK consistency
 
 ```
-Instructions for Windsurf:
+# .env must have ONE network entry:
+DOCKER_NETWORK=aip-u1001_net
 
-1. Open gpu-setup.sh
-   - Copy ALL function bodies
-   - Paste them into 1-setup-system.sh 
-     after the UTILITIES section
-   - Remove any "source gpu-setup.sh" line in Script 1
-   - Delete gpu-setup.sh
+# docker-compose.yml must reference it:
+networks:
+  default:
+    name: ${DOCKER_NETWORK}
+    driver: bridge
 
-2. Open utils.sh  
-   - Copy ALL content
-   - Paste at top of 1-setup-system.sh (after shebang)
-   - Paste at top of 2-deploy-services.sh (after shebang)
-   - Paste at top of 3-configure-services.sh (after shebang)
-   - Paste at top of 4-add-service.sh (after shebang)
-   - Remove any "source utils.sh" lines in all scripts
-   - Delete utils.sh
+# Script 2 must create it before docker compose up:
+docker network inspect "${DOCKER_NETWORK}" &>/dev/null || \
+  docker network create "${DOCKER_NETWORK}"
+```
 
-3. Verify final state:
-   ls scripts/
-   # Must show ONLY:
-   # 0-reset-tenant.sh
-   # 1-setup-system.sh
-   # 2-deploy-services.sh
-   # 3-configure-services.sh
-   # 4-add-service.sh
-   # docker-compose.yml
+---
+
+### ACTION 5 — Fix missing functions (add_caddy_service, add_rclone_service)
+
+These must be defined **inline** in Script 2. Full implementations:
+
+```bash
+# ── CADDY SERVICE REGISTRATION ──────────────────────────────────────
+add_caddy_service() {
+  local service_name="$1"
+  local upstream_port="$2"
+  local subdomain="${3:-$service_name}"
+  local caddyfile="${BASE_DIR}/caddy/Caddyfile"
+
+  # Avoid duplicate entries
+  if grep -q "${subdomain}.${DOMAIN_NAME}" "${caddyfile}" 2>/dev/null; then
+    log_info "Caddy route already exists for ${subdomain}.${DOMAIN_NAME}"
+    return 0
+  fi
+
+  cat >> "${caddyfile}" <<EOF
+
+${subdomain}.${DOMAIN_NAME} {
+    reverse_proxy localhost:${upstream_port}
+    tls ${SSL_EMAIL}
+    encode gzip
+    header {
+        X-Frame-Options SAMEORIGIN
+        X-Content-Type-Options nosniff
+    }
+}
+EOF
+  log_success "Caddy route: ${subdomain}.${DOMAIN_NAME} → :${upstream_port}"
+}
+
+# ── RCLONE SERVICE SETUP ────────────────────────────────────────────
+add_rclone_service() {
+  local rclone_conf="${TENANT_DIR}/config/rclone/rclone.conf"
+  mkdir -p "$(dirname "${rclone_conf}")"
+
+  if [[ "${RCLONE_TOKEN_OBTAINED}" == "true" ]]; then
+    log_info "rclone token already obtained — skipping OAuth"
+    return 0
+  fi
+
+  # Write config skeleton
+  cat > "${rclone_conf}" <<EOF
+[gdrive]
+type = drive
+client_id = ${RCLONE_OAUTH_CLIENT_ID}
+client_secret = ${RCLONE_OAUTH_CLIENT_SECRET}
+scope = drive
+token =
+root_folder_id =
+EOF
+  chown "${RUNNING_UID}:${RUNNING_GID}" "${rclone_conf}"
+  chmod 600 "${rclone_conf}"
+
+  log_warn "GDrive OAuth required. Visit this URL to authenticate:"
+  log_warn "${SIGNAL_API_PAIRING_URL}"
+  log_info "Waiting 120s for OAuth completion..."
+
+  # Non-blocking — mark for completion in Script 3
+  log_warn "If OAuth not completed now, re-run: bash 3-configure-services.sh --gdrive"
+}
+```
+
+---
+
+### ACTION 6 — Vector DB injection into AI services
+
+Script 2 must inject Qdrant connection vars into each service **at compose deploy time** via the compose file or via post-start `docker exec`. The compose file must have:
+
+```yaml
+# docker-compose.yml — per service Qdrant wiring
+
+anythingllm:
+  environment:
+    - VECTOR_DB=qdrant
+    - QDRANT_ENDPOINT=http://qdrant:${QDRANT_PORT}
+    - QDRANT_API_KEY=${QDRANT_API_KEY}
+
+dify:
+  environment:
+    - VECTOR_STORE=qdrant
+    - QDRANT_URL=http://qdrant:${QDRANT_PORT}
+    - QDRANT_API_KEY=${QDRANT_API_KEY}
+
+open-webui:
+  environment:
+    - VECTOR_DB=qdrant
+    - QDRANT_URI=http://qdrant:${QDRANT_PORT}
+
+flowise:
+  environment:
+    - FLOWISE_QDRANT_HOST=http://qdrant:${QDRANT_PORT}
+```
+
+---
+
+### ACTION 7 — Tailscale before Caddy
+
+Script 2 execution order must be:
+
+```
+1. create_tenant_dirs()
+2. create_docker_network()
+3. start_infrastructure()     ← postgres, redis, qdrant, minio
+4. wait_for_infrastructure()  ← health gates
+5. init_databases()           ← pgvector ext, minio buckets, qdrant collections
+6. setup_tailscale()          ← get real IP, update .env
+7. generate_caddy_config()    ← uses real TAILSCALE_IP + DOMAIN_NAME
+8. start_all_services()       ← all AI services
+9. setup_rclone()             ← gdrive OAuth prompt
+10. print_service_urls()      ← correct subdomain URLs only
+```
+
+---
+
+### ACTION 8 — Fix service URL output in Script 1
+
+```bash
+# Script 1 final output must be based on PROXY_CONFIG_METHOD:
+
+print_service_summary() {
+  source "${ENV_FILE}"
+
+  echo ""
+  echo "═══════════════════════════════════════════════════"
+  echo "  Tenant: ${TENANT_ID}  |  Domain: ${DOMAIN_NAME}"
+  echo "═══════════════════════════════════════════════════"
+  echo "  Services will be available after Script 2 at:"
+  echo ""
+
+  if [[ "${PROXY_CONFIG_METHOD}" == "subdomain" ]]; then
+    echo "  n8n:          https://n8n.${DOMAIN_NAME}"
+    echo "  Dify:         https://dify.${DOMAIN_NAME}"
+    echo "  AnythingLLM:  https://anythingllm.${DOMAIN_NAME}"
+    echo "  Flowise:      https://flowise.${DOMAIN_NAME}"
+    echo "  OpenWebUI:    https://openwebui.${DOMAIN_NAME}"
+    echo "  LiteLLM:      https://litellm.${DOMAIN_NAME}"
+    echo "  MinIO:        https://minio.${DOMAIN_NAME}"
+    echo "  Grafana:      https://grafana.${DOMAIN_NAME}"
+    echo "  Prometheus:   https://prometheus.${DOMAIN_NAME}"
+    echo "  OpenClaw:     https://openclaw.${DOMAIN_NAME}"
+    echo "  Signal API:   https://signal-api.${DOMAIN_NAME}"
+    echo ""
+    echo "  Internal only (no public route):"
+    echo "  Ollama:       http://ollama:${OLLAMA_PORT}"
+    echo "  Qdrant:       http://qdrant:${QDRANT_PORT}"
+    echo "  Postgres:     postgresql://postgres:${POSTGRES_PORT}"
+    echo "  Redis:        redis://redis:${REDIS_PORT}"
+  fi
+
+  echo ""
+  echo "  Next step: bash 2-deploy-services.sh"
+  echo "═══════════════════════════════════════════════════"
+}
+```
+
+---
+
+## Summary for Windsurf
+
+```
+BEFORE touching Script 2, do these in order:
+
+1. IMMEDIATE — on server now:
+   tac /mnt/data/u1001/.env | awk -F= '!seen[$1]++' | tac > /tmp/env_clean
+   mv /tmp/env_clean /mnt/data/u1001/.env
+   chmod 600 /mnt/data/u1001/.env
+
+2. ALL 5 SCRIPTS — fix ENV_FILE path:
+   TENANT_DIR="${BASE_DIR}/${TENANT_ID}"
+   ENV_FILE="${TENANT_DIR}/.env"
+
+3. SCRIPT 2 — inline add_caddy_service() and add_rclone_service()
+
+4. SCRIPT 2 — enforce execution order (Actions 6 + 7 above)
+
+5. DOCKER-COMPOSE.YML — add Qdrant env vars to all 4 AI services
+
+6. SCRIPT 1 — fix print_service_summary() to use subdomain format
+
+7. SCRIPT 2 — fix DOCKER_NETWORK to use aip-u1001_net consistently
+
+DO NOT run Script 2 until items 1-4 are verified.
 ```
