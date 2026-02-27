@@ -1093,23 +1093,8 @@ collect_configurations() {
     print_info "Compose project: ${COMPOSE_PROJECT_NAME}"
     print_info "This will be preserved across re-runs to protect your data."
     
-    echo "TENANT_ID=${TENANT_ID}" >> "$ENV_FILE"
-    echo "COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}" >> "$ENV_FILE"
-    echo "TAILSCALE_HOSTNAME=${TENANT_ID}" >> "$ENV_FILE"
-    
     # Write tenant-scoped infrastructure variables for Script 2
-    echo "DOCKER_NETWORK=${DOCKER_NETWORK}" >> "$ENV_FILE"
-    echo "PG_VOLUME=${PG_VOLUME}" >> "$ENV_FILE"
-    echo "REDIS_VOLUME=${REDIS_VOLUME}" >> "$ENV_FILE"
-    echo "QDRANT_VOLUME=${QDRANT_VOLUME}" >> "$ENV_FILE"
-    
-    # Debug: Verify variables were written
-    print_info "DEBUG: Verifying tenant ID written to .env..."
-    if grep -q "TENANT_ID=${TENANT_ID}" "$ENV_FILE"; then
-        print_success "✅ TENANT_ID written successfully"
-    else
-        print_error "❌ TENANT_ID failed to write"
-    fi
+    # These will be included in the main .env file generation below
     
     print_success "Auto-generated Tenant ID: ${TENANT_ID}"
     print_success "Compose project: ${TENANT_ID}"
@@ -1147,6 +1132,17 @@ DATA_ROOT=$DATA_ROOT
 METADATA_DIR=$METADATA_DIR
 TIMEZONE=UTC
 LOG_LEVEL=info
+
+# Tenant Identity (Multi-tenant Support)
+TENANT_ID=$TENANT_ID
+COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME
+DOCKER_NETWORK=$DOCKER_NETWORK
+TAILSCALE_HOSTNAME=$TENANT_ID
+
+# Volume Names (Tenant-scoped)
+PG_VOLUME=$PG_VOLUME
+REDIS_VOLUME=$REDIS_VOLUME
+QDRANT_VOLUME=$QDRANT_VOLUME
 
 # Network Configuration (DOMAIN=localhost by default)
 DOMAIN_NAME=$existing_domain_name
