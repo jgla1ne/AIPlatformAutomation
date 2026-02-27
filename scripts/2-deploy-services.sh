@@ -91,12 +91,13 @@ COMPOSE_FILE_PROCESSED="/tmp/docker-compose-${COMPOSE_PROJECT_NAME}.yml"
 
 # Process docker-compose.yml to substitute volume variables (Docker Compose limitation)
 process_compose_file() {
-    print_info "Processing docker-compose.yml for volume substitution..."
+    print_info "Processing docker-compose.yml for volume and network substitution..."
     
-    # Substitute volume variables in top-level volumes section
+    # Substitute volume and network variables that Docker Compose can't handle
     sed -e "s/\${PG_VOLUME}/${PG_VOLUME}/g" \
         -e "s/\${REDIS_VOLUME}/${REDIS_VOLUME}/g" \
         -e "s/\${QDRANT_VOLUME}/${QDRANT_VOLUME}/g" \
+        -e "s/\${DOCKER_NETWORK}/${DOCKER_NETWORK}/g" \
         "${COMPOSE_FILE}" > "${COMPOSE_FILE_PROCESSED}"
     
     print_success "Compose file processed: ${COMPOSE_FILE_PROCESSED}"
