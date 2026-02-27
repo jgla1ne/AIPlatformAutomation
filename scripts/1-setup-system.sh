@@ -3128,6 +3128,14 @@ EOF
 generate_compose_templates() {
     log_phase "11" "🐳" "Docker Compose Template Generation"
     
+    # Load environment variables to make them available for template generation
+    if [[ -f "$ENV_FILE" ]]; then
+        set -a
+        # shellcheck disable=SC1090
+        source "$ENV_FILE"
+        set +a
+    fi
+    
     print_info "Generating complete Docker Compose templates with non-root user mapping..."
     
     # Load selected services
