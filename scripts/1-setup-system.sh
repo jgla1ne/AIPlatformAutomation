@@ -13,21 +13,29 @@ set -o pipefail
 # ═══════════════════════════════════════════════════════════
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Detect original user even when running with sudo
-if [[ -n "${SUDO_USER:-}" ]]; then
-    readonly RUNNING_UID="$(id -u "$SUDO_USER")"
-    readonly RUNNING_GID="$(id -g "$SUDO_USER")"
-    readonly RUNNING_USER="$SUDO_USER"
-else
-    readonly RUNNING_UID="$(id -u)"
-    readonly RUNNING_GID="$(id -g)"
-    readonly RUNNING_USER="$(id -un)"
+# ─── TENANT IDENTITY DETECTION ───────────────────────────────────────────────
+if [[ -z "${SUDO_UID}" ]]; then
+  echo "ERROR: Run this script with sudo: sudo ./1-setup-system.sh"
+  echo "Running without sudo creates files owned by root."
+  exit 1
 fi
+
+TENANT_UID="${SUDO_UID}"
+TENANT_GID="${SUDO_GID}"
+TENANT_USER=$(getent passwd "${TENANT_UID}" | cut -d: -f1)
+
+if [[ -z "${TENANT_USER}" ]]; then
+  echo "ERROR: Cannot resolve username for UID ${TENANT_UID}"
+  echo "Ensure the user account exists before running this script."
+  exit 1
+fi
+
+TENANT_NAME="u${TENANT_UID}"
 
 # ═══════════════════════════════════════════════════════════
 # SECTION 2: DERIVED IDENTITY — depends only on SECTION 1
 # ═══════════════════════════════════════════════════════════
-readonly TENANT_ID="u${RUNNING_UID}"
+readonly TENANT_ID="u${TENANT_UID}"
 readonly COMPOSE_PROJECT_NAME="aip-${TENANT_ID}"
 readonly DOCKER_NETWORK="${COMPOSE_PROJECT_NAME}_net"
 
@@ -372,11 +380,11 @@ collect_domain_info() {
     # Variables are now readonly and defined at script top
     
     # Save user variables to environment file
-    echo "RUNNING_USER=$RUNNING_USER" >> "$ENV_FILE"
-    echo "RUNNING_UID=$RUNNING_UID" >> "$ENV_FILE"
-    echo "RUNNING_GID=$RUNNING_GID" >> "$ENV_FILE"
+    echo "TENANT_USER=$TENANT_USER" >> "$ENV_FILE"
+    echo "TENANT_UID=$TENANT_UID" >> "$ENV_FILE"
+    echo "TENANT_GID=$TENANT_GID" >> "$ENV_FILE"
     
-    print_success "User configuration: $RUNNING_USER (UID:$RUNNING_UID, GID:$RUNNING_GID)"
+    print_success "User configuration: $TENANT_USER (UID:$TENANT_UID, GID:$TENANT_GID)"
     
     # DOMAIN is always localhost for backward compatibility
     echo "DOMAIN=localhost" >> "$ENV_FILE"
@@ -1163,13 +1171,13 @@ VECTOR_DB=qdrant
 VECTOR_DB_TYPE=qdrant
 
 # User Configuration
-RUNNING_USER=$RUNNING_USER
-RUNNING_UID=$RUNNING_UID
-RUNNING_GID=$RUNNING_GID
+TENANT_USER=$TENANT_USER
+TENANT_UID=$TENANT_UID
+TENANT_GID=$TENANT_GID
 EOF
     
     # Set correct ownership for .env file
-    chown "${RUNNING_UID}:${RUNNING_GID}" "$ENV_FILE"
+    chown "${TENANT_UID}:${TENANT_GID}" "$ENV_FILE"
     chmod 600 "$ENV_FILE"
     
     # Create tenant directory structure
@@ -2128,9 +2136,9 @@ EOF
             mkdir -p "${DATA_ROOT}/config/rclone"
             mkdir -p "${DATA_ROOT}/gdrive"
             mkdir -p "${DATA_ROOT}/logs/rclone"
-            chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/config/rclone"
-            chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/gdrive"
-            chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/logs/rclone"
+            chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/config/rclone"
+            chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/gdrive"
+            chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/logs/rclone"
         fi
     fi
     
@@ -2447,7 +2455,7 @@ EOF
 EOF
     fi
     
-    chown "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/caddy/Caddyfile"
+    chown "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/caddy/Caddyfile"
     print_success "Caddyfile written with ${proxy_method} routing"
 }
 
@@ -2504,7 +2512,7 @@ profile ${DOCKER_NETWORK}-openclaw flags=(attach_disconnected,mediate_deleted) {
 }
 EOF
 
-    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/apparmor/"
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/apparmor/"
     print_success "AppArmor profiles written (loaded by Script 2)"
 }
 
@@ -2547,12 +2555,12 @@ create_directory_structure() {
     done
     
     # Base ownership: stack user owns everything
-    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}"
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"
     chmod -R 755 "${DATA_ROOT}"
     
     # Create cache directory
     mkdir -p "${DATA_ROOT}/cache"
-    chown "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/cache"
+    chown "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/cache"
     chmod 755 "${DATA_ROOT}/cache"
     
     # Service-specific permissions matching container UIDs
@@ -2579,7 +2587,7 @@ create_directory_structure() {
     chmod 750 "${DATA_ROOT}/config/prometheus"
     
     # flowise runs as root (UID 0) - but data owned by stack user
-    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/data/flowise"
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/data/flowise"
     chmod 750 "${DATA_ROOT}/data/flowise"
     
     # minio runs as UID 1000
@@ -2599,7 +2607,7 @@ create_directory_structure() {
     chmod 750 "${DATA_ROOT}/data/signal"
     
     # openwebui writes as root internally - needs 777
-    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/data/openwebui"
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/data/openwebui"
     chmod 777 "${DATA_ROOT}/data/openwebui"
     
     # openclaw - locked down, only openclaw UID
@@ -2607,9 +2615,9 @@ create_directory_structure() {
     chmod 750 "${DATA_ROOT}/data/openclaw"
     
     # gdrive runs as stack user
-    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/data/gdrive"
-    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/config/rclone"
-    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/cache/rclone"
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/data/gdrive"
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/config/rclone"
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/cache/rclone"
     chmod 750 "${DATA_ROOT}/data/gdrive"
     chmod 750 "${DATA_ROOT}/config/rclone"
     chmod 750 "${DATA_ROOT}/cache/rclone"
@@ -2617,7 +2625,7 @@ create_directory_structure() {
     # Pre-create critical files with correct ownership
     # OpenWebUI secret key
     touch "${DATA_ROOT}/data/openwebui/.webui_secret_key"
-    chown "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/data/openwebui/.webui_secret_key"
+    chown "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/data/openwebui/.webui_secret_key"
     chmod 600 "${DATA_ROOT}/data/openwebui/.webui_secret_key"
     
     # PostgreSQL init script
@@ -2859,10 +2867,10 @@ EOF
     
     # FINAL OWNERSHIP FIX - Ensure everything owned by user
     print_info "Fixing final ownership..."
-    chown -R "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}"
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"
     [[ -f "${DATA_ROOT}/.env" ]] && chmod 600 "${DATA_ROOT}/.env"
     [[ -d "${DATA_ROOT}/ai-platform" ]] && chmod 755 "${DATA_ROOT}/ai-platform"
-    print_success "Ownership fixed: All files owned by ${RUNNING_USER}"
+    print_success "Ownership fixed: All files owned by ${TENANT_USER}"
     
     # Display selected services summary
     echo ""
@@ -3224,18 +3232,18 @@ generate_compose_templates() {
     
     # Ensure compose directory exists with correct ownership
     mkdir -p "$(dirname "$COMPOSE_FILE")"
-    sudo chown "${RUNNING_UID}:${RUNNING_GID}" "$(dirname "$COMPOSE_FILE")"
+    sudo chown "${TENANT_UID}:${TENANT_GID}" "$(dirname "$COMPOSE_FILE")"
     
     # User variables are now readonly and defined at script top
     
     # Set real user ID for file ownership
-    REAL_UID="${RUNNING_UID}"
-    REAL_GID="${RUNNING_GID}"
+    REAL_UID="${TENANT_UID}"
+    REAL_GID="${TENANT_GID}"
     
     # Set GPU type (default to none for CPU-only)
     GPU_TYPE="${GPU_TYPE:-none}"
     
-    print_info "User mapping: $RUNNING_USER ($RUNNING_UID:$RUNNING_GID)"
+    print_info "User mapping: $TENANT_USER ($TENANT_UID:$TENANT_GID)"
     print_info "GPU type: $GPU_TYPE"
     print_info "Compose file: $COMPOSE_FILE"
     
@@ -3303,7 +3311,7 @@ COMPOSE_HEADER
     chown "${REAL_UID}:${REAL_GID}" "$COMPOSE_FILE"
     
     print_success "Docker Compose templates generated with non-root user mapping"
-    print_info "All containers will run as: $RUNNING_USER ($RUNNING_UID:$RUNNING_GID)"
+    print_info "All containers will run as: $TENANT_USER ($TENANT_UID:$TENANT_GID)"
     mark_phase_complete "generate_compose_templates"
 }
 
@@ -3435,8 +3443,8 @@ add_litellm_service() {
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       STORE_MODEL_IN_DB: "True"
-      PUID: ${RUNNING_UID}
-      PGID: ${RUNNING_GID}
+      PUID: ${TENANT_UID}
+      PGID: ${TENANT_GID}
       TZ: ${TIMEZONE:-UTC}
     volumes:
       - ${DATA_ROOT}/config/litellm:/app/config
@@ -3472,8 +3480,8 @@ add_openwebui_service() {
       OLLAMA_BASE_URL: http://ollama:11434
       WEBUI_AUTH: "True"
       WEBUI_SECRET_KEY: ${JWT_SECRET}
-      PUID: ${RUNNING_UID}
-      PGID: ${RUNNING_GID}
+      PUID: ${TENANT_UID}
+      PGID: ${TENANT_GID}
       TZ: ${TIMEZONE:-UTC}
       VECTOR_DB: ${VECTOR_DB_TYPE:-qdrant}
       QDRANT_URL: http://qdrant:6333
@@ -3526,8 +3534,8 @@ add_dify_services() {
       STORAGE_LOCAL_PATH: /app/storage
       VECTOR_STORE: qdrant
       QDRANT_URL: http://qdrant:6333
-      PUID: ${RUNNING_UID}
-      PGID: ${RUNNING_GID}
+      PUID: ${TENANT_UID}
+      PGID: ${TENANT_GID}
       TZ: ${TIMEZONE:-UTC}
     volumes:
       - ${DATA_ROOT}/dify/storage:/app/storage
@@ -3596,8 +3604,8 @@ add_dify_services() {
       STORAGE_LOCAL_PATH: /app/storage
       VECTOR_STORE: qdrant
       QDRANT_URL: http://qdrant:6333
-      PUID: ${RUNNING_UID}
-      PGID: ${RUNNING_GID}
+      PUID: ${TENANT_UID}
+      PGID: ${TENANT_GID}
       TZ: ${TIMEZONE:-UTC}
     volumes:
       - ${DATA_ROOT}/dify/storage:/app/storage
@@ -3618,8 +3626,8 @@ add_dify_services() {
       GIN_MODE: release
       WORKER_TIMEOUT: 15
       ENABLE_NETWORK: "1"
-      PUID: ${RUNNING_UID}
-      PGID: ${RUNNING_GID}
+      PUID: ${TENANT_UID}
+      PGID: ${TENANT_GID}
       TZ: ${TIMEZONE:-UTC}
     volumes:
       - ${DATA_ROOT}/dify/sandbox:/var/sandbox
@@ -3689,8 +3697,8 @@ add_flowise_service() {
       FLOWISE_USERNAME: admin
       FLOWISE_PASSWORD: ${ADMIN_PASSWORD}
       SECRETKEY_OVERWRITE: ${ENCRYPTION_KEY}
-      PUID: ${RUNNING_UID}
-      PGID: ${RUNNING_GID}
+      PUID: ${TENANT_UID}
+      PGID: ${TENANT_GID}
       TZ: ${TIMEZONE:-UTC}
       VECTOR_DB: ${VECTOR_DB_TYPE:-qdrant}
       QDRANT_URL: http://qdrant:6333
@@ -3795,8 +3803,8 @@ add_monitoring_services() {
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       GF_USERS_ALLOW_SIGN_UP: false
-      PUID: ${RUNNING_UID}
-      PGID: ${RUNNING_GID}
+      PUID: ${TENANT_UID}
+      PGID: ${TENANT_GID}
       TZ: ${TIMEZONE:-UTC}
     volumes:
       - ${DATA_ROOT}/grafana:/var/lib/grafana
@@ -3863,8 +3871,8 @@ add_openclaw_service() {
       OPENCLAW_ENABLE_SIGNAL: ${OPENCLAW_ENABLE_SIGNAL:-true}
       OPENCLAW_ENABLE_LITELM: ${OPENCLAW_ENABLE_LITELM:-true}
       OPENCLAW_ENABLE_N8N: ${OPENCLAW_ENABLE_N8N:-true}
-      PUID: ${RUNNING_UID}
-      PGID: ${RUNNING_GID}
+      PUID: ${TENANT_UID}
+      PGID: ${TENANT_GID}
       TZ: ${TIMEZONE:-UTC}
       VECTOR_DB: ${VECTOR_DB_TYPE:-qdrant}
       QDRANT_URL: http://qdrant:6333
@@ -3960,10 +3968,10 @@ add_qdrant_service() {
   qdrant:
     image: qdrant/qdrant:latest
     restart: unless-stopped
-    user: "${RUNNING_UID}:${RUNNING_GID}"
+    user: "${TENANT_UID}:${TENANT_GID}"
     environment:
-      PUID: ${RUNNING_UID}
-      PGID: ${RUNNING_GID}
+      PUID: ${TENANT_UID}
+      PGID: ${TENANT_GID}
       TZ: ${TIMEZONE:-UTC}
     volumes:
       - ${QDRANT_VOLUME}:/qdrant/storage
@@ -4056,7 +4064,7 @@ create_tenant_directories() {
     
     for dir in "${dirs[@]}"; do
         mkdir -p "${dir}"
-        chown "${RUNNING_UID}:${RUNNING_GID}" "${dir}"
+        chown "${TENANT_UID}:${TENANT_GID}" "${dir}"
     done
     
     print_success "Tenant directories created in ${TENANT_DIR}"
@@ -4099,8 +4107,8 @@ main() {
     # Variables are now readonly and defined at script top
     
     # Set OpenClaw user (stack user + 1)
-    OPENCLAW_UID=$((RUNNING_UID + 1))
-    OPENCLAW_GID="$RUNNING_GID"
+    OPENCLAW_UID=$((TENANT_UID + 1))
+    OPENCLAW_GID="$TENANT_GID"
     
     create_directory_structure
     mark_phase_complete "create_directory_structure"
