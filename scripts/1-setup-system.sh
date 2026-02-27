@@ -1036,7 +1036,7 @@ collect_configurations() {
         TENANT_ID="${COMPOSE_PROJECT_NAME}"
     else
         # Generate stable tenant ID from UID only - no random, no path embedding
-        # Format: aip-u${UID} (e.g., aip-u1001) - short, readable, stable
+        # Format: aip-u${RUNNING_UID} (e.g., aip-u1001) - short, readable, stable
         TENANT_ID="aip-u${RUNNING_UID}"
         COMPOSE_PROJECT_NAME="${TENANT_ID}"
         
@@ -3134,6 +3134,10 @@ generate_compose_templates() {
         # shellcheck disable=SC1090
         source "$ENV_FILE"
         set +a
+        
+        # Export critical variables globally for sub-functions
+        export REDIS_VOLUME PG_VOLUME QDRANT_VOLUME DOCKER_NETWORK
+        export TENANT_ID COMPOSE_PROJECT_NAME TAILSCALE_HOSTNAME
     fi
     
     print_info "Generating complete Docker Compose templates with non-root user mapping..."
