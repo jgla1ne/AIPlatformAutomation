@@ -707,27 +707,15 @@ deploy_redis() {
   print_header "Redis"
   
   # Deploy redis using docker-compose (bind mount already created by Script 1)
-  $COMPOSE 
-    --project-name "${COMPOSE_PROJECT_NAME}" \
-    --env-file "${ENV_FILE}" \
-    \--file "${COMPOSE_FILE_PROCESSED}" \
-    up -d redis
+  $COMPOSE up -d redis
 
   # Wait for redis to be ready using docker compose exec
   ATTEMPTS=0
-  until $COMPOSE 
-    --project-name "${COMPOSE_PROJECT_NAME}" \
-    --env-file "${ENV_FILE}" \
-    \--file "${COMPOSE_FILE_PROCESSED}" \
-    exec redis redis-cli -a "${REDIS_PASSWORD}" ping 2>/dev/null | grep -q PONG; do
+  until $COMPOSE exec redis redis-cli -a "${REDIS_PASSWORD}" ping 2>/dev/null | grep -q PONG; do
     ATTEMPTS=$((ATTEMPTS + 1))
     [ "${ATTEMPTS}" -ge 20 ] && {
       print_error "Redis did not become ready"
-      $COMPOSE 
-        --project-name "${COMPOSE_PROJECT_NAME}" \
-        --env-file "${ENV_FILE}" \
-        \--file "${COMPOSE_FILE_PROCESSED}" \
-        logs redis --tail=20
+      $COMPOSE logs redis --tail=20
       exit 1
     }
     sleep 2
@@ -739,28 +727,16 @@ deploy_qdrant() {
   print_header "Qdrant"
   
   # Deploy qdrant using docker-compose (bind mount already created by Script 1)
-  $COMPOSE 
-    --project-name "${COMPOSE_PROJECT_NAME}" \
-    --env-file "${ENV_FILE}" \
-    \--file "${COMPOSE_FILE_PROCESSED}" \
-    up -d qdrant
+  $COMPOSE up -d qdrant
 
   # Wait for qdrant to be ready using docker compose exec
   ATTEMPTS=0
-  until $COMPOSE 
-    --project-name "${COMPOSE_PROJECT_NAME}" \
-    --env-file "${ENV_FILE}" \
-    \--file "${COMPOSE_FILE_PROCESSED}" \
-    exec qdrant curl -sf http://localhost:6333/health \
+  until $COMPOSE exec qdrant curl -sf http://localhost:6333/health \
     &>/dev/null; do
     ATTEMPTS=$((ATTEMPTS + 1))
     [ "${ATTEMPTS}" -ge 20 ] && {
       print_error "Qdrant did not become ready"
-      $COMPOSE 
-        --project-name "${COMPOSE_PROJECT_NAME}" \
-        --env-file "${ENV_FILE}" \
-        \--file "${COMPOSE_FILE_PROCESSED}" \
-        logs qdrant --tail=20
+      $COMPOSE logs qdrant --tail=20
       exit 1
     }
     sleep 2
