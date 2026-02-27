@@ -12,9 +12,17 @@ set -o pipefail
 # SECTION 1: CONSTANTS — set once, never reassigned
 # ═══════════════════════════════════════════════════════════
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly RUNNING_UID="$(id -u)"
-readonly RUNNING_GID="$(id -g)"
-readonly RUNNING_USER="$(id -un)"
+
+# Detect original user even when running with sudo
+if [[ -n "${SUDO_USER:-}" ]]; then
+    readonly RUNNING_UID="$(id -u "$SUDO_USER")"
+    readonly RUNNING_GID="$(id -g "$SUDO_USER")"
+    readonly RUNNING_USER="$SUDO_USER"
+else
+    readonly RUNNING_UID="$(id -u)"
+    readonly RUNNING_GID="$(id -g)"
+    readonly RUNNING_USER="$(id -un)"
+fi
 
 # ═══════════════════════════════════════════════════════════
 # SECTION 2: DERIVED IDENTITY — depends only on SECTION 1
