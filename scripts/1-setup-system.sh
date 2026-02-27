@@ -1146,7 +1146,7 @@ QDRANT_VOLUME=$QDRANT_VOLUME
 
 # Network Configuration (DOMAIN=localhost by default)
 DOMAIN_NAME=$existing_domain_name
-DOMAIN=$existing_domain
+DOMAIN=${existing_domain_name}
 DOMAIN_RESOLVES=$existing_domain_resolves
 PUBLIC_IP=$existing_public_ip
 PROXY_CONFIG_METHOD=$existing_proxy_config_method
@@ -1155,8 +1155,8 @@ SSL_TYPE=$existing_ssl_type
 SSL_EMAIL=$existing_ssl_email
 
 # Docker Configuration
-DOCKER_NETWORK=ai_platform
-COMPOSE_FILE=/mnt/data/ai-platform/deployment/stack/docker-compose.yml
+DOCKER_NETWORK=$DOCKER_NETWORK
+COMPOSE_FILE=/home/jglaine/AIPlatformAutomation/scripts/docker-compose.yml
 
 # Vector Database Configuration
 VECTOR_DB=qdrant
@@ -1762,8 +1762,8 @@ allocate_port() {
         echo ""
         
         # Create dedicated sandbox directory structure
-        local openclaw_sandbox="${DATA_ROOT}/data/openclaw"
-        local openclaw_config="${DATA_ROOT}/config/openclaw"
+        local openclaw_sandbox="${TENANT_DIR}/data/openclaw"
+        local openclaw_config="${TENANT_DIR}/config/openclaw"
         
         # Set up OpenClaw as dedicated user sandbox
         echo "OPENCLAW_SANDBOX_DIR=${openclaw_sandbox}" >> "$ENV_FILE"

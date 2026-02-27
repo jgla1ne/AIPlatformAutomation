@@ -1,328 +1,230 @@
-## Architecture Correction — Multi-Tenant Reality
+Let me fetch the current Script 2 before giving recommendations.
 
-The folder structure tells the full story:
-
-```
-/mnt/data/                    ← BASE_DIR (shared platform layer)
-├── apparmor/                 ← shared security profiles
-├── cache/                    ← shared cache
-├── caddy/                    ← shared reverse proxy config
-├── config/                   ← shared service configs
-├── data/                     ← shared data layer
-├── logs/                     ← shared logs
-├── metadata/                 ← shared metadata
-├── postgres-init/            ← shared DB init scripts
-└── u1001/                    ← TENANT ROOT
-    └── .env                  ← tenant-scoped config (correct location)
-```
-
-**The .env lives at `/mnt/data/u1001/.env` — NOT `/mnt/data/.env`**
-
-Every script that reads `ENV_FILE` must point to the tenant path, not the base path.
+**Fetching:**
+- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/2-deploy-services.sh
+- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/docker-compose.yml
 
 ---
 
-## Full Action Plan for Windsurf
+## Pre-Run Diagnosis
 
-### ACTION 1 — Fix ENV_FILE path across ALL 5 scripts
+### 🔴 STILL BROKEN — .env has duplicate keys (Script 1 was NOT fixed)
 
-```bash
-# WRONG (what scripts likely have now):
-ENV_FILE="${BASE_DIR}/.env"
-ENV_FILE="/mnt/data/.env"
+```
+DOCKER_NETWORK=aip-u1001_net    ← line 12
+DOCKER_NETWORK=ai_platform      ← line 27  ← STILL THERE, OVERWRITES
 
-# CORRECT (what every script must have):
-TENANT_ID="${TENANT_ID:-u1001}"
-TENANT_DIR="${BASE_DIR}/${TENANT_ID}"
-ENV_FILE="${TENANT_DIR}/.env"
+POSTGRES_PORT=5432              ← line ~38
+POSTGRES_PORT=5432              ← line ~57  ← duplicate
+
+REDIS_PORT=6379                 ← line ~40
+REDIS_PORT=6379                 ← line ~58  ← duplicate
+
+SIGNAL_API_PORT=8080            ← line ~70
+SIGNAL_API_PORT=8090            ← line ~80  ← OVERWRITES, which is correct but 8080 is wrong
+
+LITELLM_MASTER_KEY=Ace1Z3z...   ← line ~60
+LITELLM_MASTER_KEY=5173eef...   ← last line ← OVERWRITES, longer one wins but both active
 ```
 
-Every script must resolve `TENANT_ID` first, then derive `ENV_FILE`. The pattern at the top of **each** script:
-
-```bash
-#!/usr/bin/env bash
-set -o pipefail
-
-# ── Resolve tenant context ──────────────────────────────────────────
-BASE_DIR="${BASE_DIR:-/mnt/data}"
-TENANT_ID="${TENANT_ID:-u1001}"
-TENANT_DIR="${BASE_DIR}/${TENANT_ID}"
-ENV_FILE="${TENANT_DIR}/.env"
-
-[[ -f "${ENV_FILE}" ]] || { echo "FATAL: .env not found at ${ENV_FILE}"; exit 1; }
-source "${ENV_FILE}"
-# ────────────────────────────────────────────────────────────────────
-```
-
----
-
-### ACTION 2 — Fix duplicate keys in .env RIGHT NOW
+**Run this RIGHT NOW before anything else:**
 
 ```bash
 ENV_FILE="/mnt/data/u1001/.env"
 
-# Deduplicate — last value wins (awk keeps first occurrence, reverse trick keeps last)
+# Deduplicate — last value wins (which is correct for all cases above)
 tac "${ENV_FILE}" | awk -F= '!seen[$1]++' | tac > /tmp/env_clean
 mv /tmp/env_clean "${ENV_FILE}"
 chmod 600 "${ENV_FILE}"
 chown jglaine:jglaine "${ENV_FILE}"
 
-# Verify the problem keys
+# Verify the critical ones
 grep -E "^DOCKER_NETWORK=|^POSTGRES_PORT=|^REDIS_PORT=|^SIGNAL_API_PORT=|^LITELLM_MASTER_KEY=" "${ENV_FILE}"
 ```
 
-Expected clean output:
+Expected output after fix:
 ```
-DOCKER_NETWORK=aip-u1001_net       ← tenant-scoped only
-POSTGRES_PORT=5432                 ← once
-REDIS_PORT=6379                    ← once
-SIGNAL_API_PORT=8090               ← once (8090 is correct)
-LITELLM_MASTER_KEY=739201db8...    ← once (longer key wins)
+DOCKER_NETWORK=ai_platform        ← last value wins — THIS IS STILL WRONG
+POSTGRES_PORT=5432
+REDIS_PORT=6379
+SIGNAL_API_PORT=8090
+LITELLM_MASTER_KEY=5173eef88...
 ```
 
----
-
-### ACTION 3 — Fix tenant directory structure
-
-Current state shows `u1001/` only has `.env`. Script 2 must create the full tenant data tree before starting containers:
+⚠️ `DOCKER_NETWORK=ai_platform` will still win because it's the **last** occurrence. You need a hard fix:
 
 ```bash
-# Script 2 must create this structure under TENANT_DIR:
-setup_tenant_dirs() {
-  local dirs=(
-    "${TENANT_DIR}/data/n8n"
-    "${TENANT_DIR}/data/dify"
-    "${TENANT_DIR}/data/openwebui"
-    "${TENANT_DIR}/data/anythingllm"
-    "${TENANT_DIR}/data/flowise"
-    "${TENANT_DIR}/data/openclaw"
-    "${TENANT_DIR}/data/signal-api"
-    "${TENANT_DIR}/config/n8n"
-    "${TENANT_DIR}/config/dify"
-    "${TENANT_DIR}/config/litellm"
-    "${TENANT_DIR}/config/rclone"
-    "${TENANT_DIR}/logs"
-    "${TENANT_DIR}/backups"
-  )
+# After dedup, force the correct tenant network
+sed -i 's/^DOCKER_NETWORK=.*/DOCKER_NETWORK=aip-u1001_net/' "${ENV_FILE}"
 
-  for dir in "${dirs[@]}"; do
-    mkdir -p "${dir}"
-    chown "${RUNNING_UID}:${RUNNING_GID}" "${dir}"
-  done
+# Also fix OPENCLAW paths — they still reference /mnt/data not /mnt/data/u1001
+sed -i 's|OPENCLAW_SANDBOX_DIR=/mnt/data/data/openclaw|OPENCLAW_SANDBOX_DIR=/mnt/data/u1001/data/openclaw|' "${ENV_FILE}"
+sed -i 's|OPENCLAW_CONFIG_DIR=/mnt/data/config/openclaw|OPENCLAW_CONFIG_DIR=/mnt/data/u1001/config/openclaw|' "${ENV_FILE}"
+sed -i 's|OPENCLAW_DATA_PATH=/mnt/data/data/openclaw|OPENCLAW_DATA_PATH=/mnt/data/u1001/data/openclaw|' "${ENV_FILE}"
+sed -i 's|OPENCLAW_CONFIG_PATH=/mnt/data/config/openclaw|OPENCLAW_CONFIG_PATH=/mnt/data/u1001/config/openclaw|' "${ENV_FILE}"
+sed -i 's|OPENCLAW_BASE_URL=http://localhost:8082|OPENCLAW_BASE_URL=http://localhost:18789|' "${ENV_FILE}"
 
-  # Shared platform dirs (not tenant-scoped)
-  mkdir -p "${BASE_DIR}/apparmor"
-  mkdir -p "${BASE_DIR}/caddy"
-  mkdir -p "${BASE_DIR}/postgres-init"
+# Fix SIGNAL pairing URL port (8081 is wrong, should match SIGNAL_API_PORT=8090)
+sed -i 's|SIGNAL_API_PAIRING_URL=http://localhost:8081|SIGNAL_API_PAIRING_URL=http://localhost:8090|' "${ENV_FILE}"
 
-  log_success "Tenant directory tree created under ${TENANT_DIR}"
-}
+# Fix COMPOSE_FILE to tenant path
+sed -i 's|COMPOSE_FILE=/mnt/data/ai-platform/deployment/stack/docker-compose.yml|COMPOSE_FILE=/mnt/data/u1001/docker-compose.yml|' "${ENV_FILE}"
 ```
 
 ---
 
-### ACTION 4 — Fix DOCKER_NETWORK consistency
+### 🔴 CRITICAL — COMPOSE_FILE path is wrong
 
 ```
-# .env must have ONE network entry:
-DOCKER_NETWORK=aip-u1001_net
-
-# docker-compose.yml must reference it:
-networks:
-  default:
-    name: ${DOCKER_NETWORK}
-    driver: bridge
-
-# Script 2 must create it before docker compose up:
-docker network inspect "${DOCKER_NETWORK}" &>/dev/null || \
-  docker network create "${DOCKER_NETWORK}"
+COMPOSE_FILE=/mnt/data/ai-platform/deployment/stack/docker-compose.yml
 ```
+
+That path doesn't exist. The compose file is in the repo at:
+```
+/mnt/data/ai-platform/scripts/docker-compose.yml   ← likely
+# OR wherever the repo was cloned
+```
+
+**Verify actual location:**
+```bash
+find /mnt/data -name "docker-compose.yml" 2>/dev/null
+```
+
+Then fix in .env and ensure Script 2 uses `COMPOSE_FILE` from .env correctly.
 
 ---
 
-### ACTION 5 — Fix missing functions (add_caddy_service, add_rclone_service)
+### 🔴 CRITICAL — `DOMAIN=localhost` conflicts with `DOMAIN_NAME=ai.datasquiz.net`
 
-These must be defined **inline** in Script 2. Full implementations:
+```
+DOMAIN_NAME=ai.datasquiz.net    ← correct public domain
+DOMAIN=localhost                 ← leftover default, used by some services
+```
+
+Script 2 must consistently use `DOMAIN_NAME`. Any service template that interpolates `${DOMAIN}` will generate `localhost` URLs. Fix:
 
 ```bash
-# ── CADDY SERVICE REGISTRATION ──────────────────────────────────────
-add_caddy_service() {
-  local service_name="$1"
-  local upstream_port="$2"
-  local subdomain="${3:-$service_name}"
-  local caddyfile="${BASE_DIR}/caddy/Caddyfile"
-
-  # Avoid duplicate entries
-  if grep -q "${subdomain}.${DOMAIN_NAME}" "${caddyfile}" 2>/dev/null; then
-    log_info "Caddy route already exists for ${subdomain}.${DOMAIN_NAME}"
-    return 0
-  fi
-
-  cat >> "${caddyfile}" <<EOF
-
-${subdomain}.${DOMAIN_NAME} {
-    reverse_proxy localhost:${upstream_port}
-    tls ${SSL_EMAIL}
-    encode gzip
-    header {
-        X-Frame-Options SAMEORIGIN
-        X-Content-Type-Options nosniff
-    }
-}
-EOF
-  log_success "Caddy route: ${subdomain}.${DOMAIN_NAME} → :${upstream_port}"
-}
-
-# ── RCLONE SERVICE SETUP ────────────────────────────────────────────
-add_rclone_service() {
-  local rclone_conf="${TENANT_DIR}/config/rclone/rclone.conf"
-  mkdir -p "$(dirname "${rclone_conf}")"
-
-  if [[ "${RCLONE_TOKEN_OBTAINED}" == "true" ]]; then
-    log_info "rclone token already obtained — skipping OAuth"
-    return 0
-  fi
-
-  # Write config skeleton
-  cat > "${rclone_conf}" <<EOF
-[gdrive]
-type = drive
-client_id = ${RCLONE_OAUTH_CLIENT_ID}
-client_secret = ${RCLONE_OAUTH_CLIENT_SECRET}
-scope = drive
-token =
-root_folder_id =
-EOF
-  chown "${RUNNING_UID}:${RUNNING_GID}" "${rclone_conf}"
-  chmod 600 "${rclone_conf}"
-
-  log_warn "GDrive OAuth required. Visit this URL to authenticate:"
-  log_warn "${SIGNAL_API_PAIRING_URL}"
-  log_info "Waiting 120s for OAuth completion..."
-
-  # Non-blocking — mark for completion in Script 3
-  log_warn "If OAuth not completed now, re-run: bash 3-configure-services.sh --gdrive"
-}
+sed -i 's/^DOMAIN=localhost$/DOMAIN=ai.datasquiz.net/' "${ENV_FILE}"
 ```
 
 ---
 
-### ACTION 6 — Vector DB injection into AI services
+### 🔴 CRITICAL — MINIO port conflict
 
-Script 2 must inject Qdrant connection vars into each service **at compose deploy time** via the compose file or via post-start `docker exec`. The compose file must have:
+```
+MINIO_PORT=5007         ← set in ports section
+MINIO_API_PORT=5007     ← same value
+MINIO_CONSOLE_PORT=5008
+MINIO_S3_PORT=9000
+```
 
-```yaml
-# docker-compose.yml — per service Qdrant wiring
+If docker-compose maps `MINIO_PORT` AND `MINIO_API_PORT` as separate port bindings both to `5007`, MinIO will fail to start. Script 2 must use only one variable for the API port.
 
-anythingllm:
-  environment:
-    - VECTOR_DB=qdrant
-    - QDRANT_ENDPOINT=http://qdrant:${QDRANT_PORT}
-    - QDRANT_API_KEY=${QDRANT_API_KEY}
+---
 
-dify:
-  environment:
-    - VECTOR_STORE=qdrant
-    - QDRANT_URL=http://qdrant:${QDRANT_PORT}
-    - QDRANT_API_KEY=${QDRANT_API_KEY}
+### 🟠 MEDIUM — RCLONE_PORT and SIGNAL port gap
 
-open-webui:
-  environment:
-    - VECTOR_DB=qdrant
-    - QDRANT_URI=http://qdrant:${QDRANT_PORT}
-
-flowise:
-  environment:
-    - FLOWISE_QDRANT_HOST=http://qdrant:${QDRANT_PORT}
+```
+RCLONE_PORT=3000        ← rclone web UI
+SIGNAL_API_PORT=8090    ← correct per SIGNAL_WEBHOOK_URL
+SIGNAL_API_PAIRING_URL=http://localhost:8081/...  ← WRONG PORT (8081 ≠ 8090)
 ```
 
 ---
 
-### ACTION 7 — Tailscale before Caddy
-
-Script 2 execution order must be:
+### 🟠 MEDIUM — Tailscale auth key is single-use
 
 ```
-1. create_tenant_dirs()
-2. create_docker_network()
-3. start_infrastructure()     ← postgres, redis, qdrant, minio
-4. wait_for_infrastructure()  ← health gates
-5. init_databases()           ← pgvector ext, minio buckets, qdrant collections
-6. setup_tailscale()          ← get real IP, update .env
-7. generate_caddy_config()    ← uses real TAILSCALE_IP + DOMAIN_NAME
-8. start_all_services()       ← all AI services
-9. setup_rclone()             ← gdrive OAuth prompt
-10. print_service_urls()      ← correct subdomain URLs only
+TAILSCALE_AUTH_KEY=tskey-auth-kBUfH3Mufi11CNTRL-ke8AertcMqcsqqEM4bGUqcKosUswX5du
+TAILSCALE_IP=pending
 ```
 
----
-
-### ACTION 8 — Fix service URL output in Script 1
+If Script 2 has been run or partially run before (even failed), the auth key may already be consumed. Script 2 must check:
 
 ```bash
-# Script 1 final output must be based on PROXY_CONFIG_METHOD:
-
-print_service_summary() {
-  source "${ENV_FILE}"
-
-  echo ""
-  echo "═══════════════════════════════════════════════════"
-  echo "  Tenant: ${TENANT_ID}  |  Domain: ${DOMAIN_NAME}"
-  echo "═══════════════════════════════════════════════════"
-  echo "  Services will be available after Script 2 at:"
-  echo ""
-
-  if [[ "${PROXY_CONFIG_METHOD}" == "subdomain" ]]; then
-    echo "  n8n:          https://n8n.${DOMAIN_NAME}"
-    echo "  Dify:         https://dify.${DOMAIN_NAME}"
-    echo "  AnythingLLM:  https://anythingllm.${DOMAIN_NAME}"
-    echo "  Flowise:      https://flowise.${DOMAIN_NAME}"
-    echo "  OpenWebUI:    https://openwebui.${DOMAIN_NAME}"
-    echo "  LiteLLM:      https://litellm.${DOMAIN_NAME}"
-    echo "  MinIO:        https://minio.${DOMAIN_NAME}"
-    echo "  Grafana:      https://grafana.${DOMAIN_NAME}"
-    echo "  Prometheus:   https://prometheus.${DOMAIN_NAME}"
-    echo "  OpenClaw:     https://openclaw.${DOMAIN_NAME}"
-    echo "  Signal API:   https://signal-api.${DOMAIN_NAME}"
-    echo ""
-    echo "  Internal only (no public route):"
-    echo "  Ollama:       http://ollama:${OLLAMA_PORT}"
-    echo "  Qdrant:       http://qdrant:${QDRANT_PORT}"
-    echo "  Postgres:     postgresql://postgres:${POSTGRES_PORT}"
-    echo "  Redis:        redis://redis:${REDIS_PORT}"
+setup_tailscale() {
+  # Check if already authenticated
+  if docker exec tailscale tailscale status &>/dev/null; then
+    TS_IP=$(docker exec tailscale tailscale ip -4 2>/dev/null | head -1)
+    log_info "Tailscale already authenticated — IP: ${TS_IP}"
+  else
+    # Use auth key
+    docker exec tailscale tailscale up \
+      --authkey="${TAILSCALE_AUTH_KEY}" \
+      --hostname="${TAILSCALE_HOSTNAME}" \
+      ${TAILSCALE_EXIT_NODE:+--advertise-exit-node} \
+      ${TAILSCALE_ACCEPT_ROUTES:+--accept-routes}
+    TS_IP=$(docker exec tailscale tailscale ip -4 2>/dev/null | head -1)
   fi
 
-  echo ""
-  echo "  Next step: bash 2-deploy-services.sh"
-  echo "═══════════════════════════════════════════════════"
+  [[ -z "${TS_IP}" ]] && { log_error "Tailscale IP not obtained"; return 1; }
+
+  # Write back to .env
+  sed -i "s/^TAILSCALE_IP=.*/TAILSCALE_IP=${TS_IP}/" "${ENV_FILE}"
+  log_success "Tailscale IP: ${TS_IP}"
 }
 ```
 
 ---
 
-## Summary for Windsurf
+## Full Action Plan for Windsurf
 
 ```
-BEFORE touching Script 2, do these in order:
+STEP 1 — Run on server RIGHT NOW (before any code changes):
 
-1. IMMEDIATE — on server now:
-   tac /mnt/data/u1001/.env | awk -F= '!seen[$1]++' | tac > /tmp/env_clean
-   mv /tmp/env_clean /mnt/data/u1001/.env
-   chmod 600 /mnt/data/u1001/.env
+  ENV_FILE="/mnt/data/u1001/.env"
+  tac "${ENV_FILE}" | awk -F= '!seen[$1]++' | tac > /tmp/env_clean
+  mv /tmp/env_clean "${ENV_FILE}"
+  chmod 600 "${ENV_FILE}"
+  chown jglaine:jglaine "${ENV_FILE}"
+  sed -i 's/^DOCKER_NETWORK=.*/DOCKER_NETWORK=aip-u1001_net/' "${ENV_FILE}"
+  sed -i 's/^DOMAIN=localhost$/DOMAIN=ai.datasquiz.net/' "${ENV_FILE}"
+  sed -i 's|OPENCLAW_SANDBOX_DIR=.*|OPENCLAW_SANDBOX_DIR=/mnt/data/u1001/data/openclaw|' "${ENV_FILE}"
+  sed -i 's|OPENCLAW_CONFIG_DIR=.*|OPENCLAW_CONFIG_DIR=/mnt/data/u1001/config/openclaw|' "${ENV_FILE}"
+  sed -i 's|OPENCLAW_DATA_PATH=.*|OPENCLAW_DATA_PATH=/mnt/data/u1001/data/openclaw|' "${ENV_FILE}"
+  sed -i 's|OPENCLAW_CONFIG_PATH=.*|OPENCLAW_CONFIG_PATH=/mnt/data/u1001/config/openclaw|' "${ENV_FILE}"
+  sed -i 's|OPENCLAW_BASE_URL=.*|OPENCLAW_BASE_URL=http://localhost:18789|' "${ENV_FILE}"
+  sed -i 's|SIGNAL_API_PAIRING_URL=.*|SIGNAL_API_PAIRING_URL=http://localhost:8090/v1/qrcodelink?device_name=signal-api|' "${ENV_FILE}"
+  find /mnt/data -name "docker-compose.yml" 2>/dev/null
 
-2. ALL 5 SCRIPTS — fix ENV_FILE path:
-   TENANT_DIR="${BASE_DIR}/${TENANT_ID}"
-   ENV_FILE="${TENANT_DIR}/.env"
+STEP 2 — Fix COMPOSE_FILE in .env:
+  # After finding compose path from step 1:
+  sed -i 's|COMPOSE_FILE=.*|COMPOSE_FILE=<actual_path_from_find>|' "${ENV_FILE}"
 
-3. SCRIPT 2 — inline add_caddy_service() and add_rclone_service()
+STEP 3 — Windsurf code fixes in Script 1 (prevent recurrence):
+  - Write DOCKER_NETWORK only once using tenant ID
+  - Write DOMAIN same as DOMAIN_NAME when domain resolves
+  - Write POSTGRES_PORT, REDIS_PORT only once (not in two sections)
+  - Write SIGNAL_API_PORT only once (8090)
+  - Write LITELLM_MASTER_KEY only once
+  - Fix OPENCLAW paths to use TENANT_DIR not BASE_DIR
+  - Fix print_service_summary() to use subdomain format (no port in URL)
 
-4. SCRIPT 2 — enforce execution order (Actions 6 + 7 above)
+STEP 4 — Windsurf code fixes in Script 2:
+  - ENV_FILE="${BASE_DIR}/${TENANT_ID}/.env" at top
+  - Inline add_caddy_service() function (full implementation above)
+  - Inline add_rclone_service() function (full implementation above)
+  - setup_tailscale() must check if already authed before using key
+  - MINIO: use MINIO_API_PORT for API, MINIO_CONSOLE_PORT for console
+  - Execution order: dirs → network → infra → health → DBs → tailscale → caddy → services → rclone → print
 
-5. DOCKER-COMPOSE.YML — add Qdrant env vars to all 4 AI services
+STEP 5 — Windsurf code fixes in docker-compose.yml:
+  - All services use network: ${DOCKER_NETWORK}
+  - AnythingLLM: VECTOR_DB=qdrant, QDRANT_ENDPOINT=http://qdrant:${QDRANT_PORT}
+  - Dify: VECTOR_STORE=qdrant, QDRANT_URL=http://qdrant:${QDRANT_PORT}
+  - OpenWebUI: VECTOR_DB=qdrant, QDRANT_URI=http://qdrant:${QDRANT_PORT}
+  - Flowise: FLOWISE_QDRANT_HOST=http://qdrant:${QDRANT_PORT}
+  - LiteLLM: internal URL used by AI services = http://litellm:${LITELLM_PORT}
+  - MinIO: only ONE port binding for API (MINIO_API_PORT), one for console
 
-6. SCRIPT 1 — fix print_service_summary() to use subdomain format
-
-7. SCRIPT 2 — fix DOCKER_NETWORK to use aip-u1001_net consistently
-
-DO NOT run Script 2 until items 1-4 are verified.
+STEP 6 — Verify before running Script 2:
+  grep -E "^DOCKER_NETWORK=|^DOMAIN=|^COMPOSE_FILE=" /mnt/data/u1001/.env
+  # Must show:
+  # DOCKER_NETWORK=aip-u1001_net
+  # DOMAIN=ai.datasquiz.net
+  # COMPOSE_FILE=<valid path that exists>
+  ls -la $(grep "^COMPOSE_FILE=" /mnt/data/u1001/.env | cut -d= -f2)
+  # Must show the actual file
 ```
+
+**Do not run Script 2 until Step 1 and Step 2 are verified on the server.**
