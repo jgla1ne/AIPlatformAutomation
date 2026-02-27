@@ -3314,14 +3314,14 @@ EOF
 }
 
 add_redis_service() {
-    cat >> "$COMPOSE_FILE" <<EOF
+    cat >> "$COMPOSE_FILE" <<'EOF'
   redis:
     image: redis:7-alpine
     restart: unless-stopped
     command: redis-server --requirepass \${REDIS_PASSWORD} --appendonly yes
     volumes:
       - ${REDIS_VOLUME}:/data
-      - \${DATA_ROOT}/logs/redis:/var/log/redis
+      - ${DATA_ROOT}/logs/redis:/var/log/redis
     networks:
       - ${DOCKER_NETWORK}_internal
     ports:
@@ -3330,7 +3330,7 @@ add_redis_service() {
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 3
       start_period: 30s
     labels:
       - "ai-platform.service=redis"
@@ -3360,7 +3360,7 @@ add_ollama_service() {
       - TZ=${TIMEZONE:-UTC}
     volumes:
       - ollama_data:/root/.ollama
-      - \${DATA_ROOT}/logs/ollama:/var/log/ollama
+      - ${DATA_ROOT}/logs/ollama:/var/log/ollama
     ports:
       - "\${OLLAMA_PORT:-11434}:11434"
 EOF
