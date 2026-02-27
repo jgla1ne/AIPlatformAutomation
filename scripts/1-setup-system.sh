@@ -3238,14 +3238,23 @@ networks:
 
 volumes:
   ${PG_VOLUME}:
-    name: ${PG_VOLUME}
-    external: true
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_ROOT}/data/postgres
   ${REDIS_VOLUME}:
-    name: ${REDIS_VOLUME}
-    external: true
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_ROOT}/data/redis
   ${QDRANT_VOLUME}:
-    name: ${QDRANT_VOLUME}
-    external: true
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_ROOT}/data/qdrant
   ollama_data:
     driver: local
 
@@ -3449,6 +3458,10 @@ add_openwebui_service() {
       PUID: ${RUNNING_UID}
       PGID: ${RUNNING_GID}
       TZ: ${TIMEZONE:-UTC}
+      VECTOR_DB: ${VECTOR_DB_TYPE:-qdrant}
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      COLLECTION_NAME: ${COMPOSE_PROJECT_NAME}
     volumes:
       - ${DATA_ROOT}/open-webui:/app/backend/data
       - ${DATA_ROOT}/logs/open-webui:/app/logs
@@ -3541,6 +3554,65 @@ add_dify_services() {
       - "ai-platform.service=dify-web"
       - "ai-platform.type=ai-platform"
 
+  dify-worker:
+    image: langgenius/dify-api:latest
+    container_name: dify-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A app.celery.app worker --loglevel=info
+    environment:
+      MODE: worker
+      LOG_LEVEL: INFO
+      SECRET_KEY: ${DIFY_SECRET_KEY}
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: dify
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      STORAGE_TYPE: local
+      STORAGE_LOCAL_PATH: /app/storage
+      VECTOR_STORE: qdrant
+      QDRANT_URL: http://qdrant:6333
+      PUID: ${RUNNING_UID}
+      PGID: ${RUNNING_GID}
+      TZ: ${TIMEZONE:-UTC}
+    volumes:
+      - ${DATA_ROOT}/dify/storage:/app/storage
+      - ${DATA_ROOT}/logs/dify:/app/logs
+    networks:
+      - ${DOCKER_NETWORK}_internal
+      - ${DOCKER_NETWORK}
+    labels:
+      - "ai-platform.service=dify-worker"
+      - "ai-platform.type=ai-platform"
+
+  dify-sandbox:
+    image: langgenius/dify-sandbox:latest
+    container_name: dify-sandbox
+    restart: unless-stopped
+    environment:
+      API_BASE_URL: http://dify-api:5001
+      GIN_MODE: release
+      WORKER_TIMEOUT: 15
+      ENABLE_NETWORK: "1"
+      PUID: ${RUNNING_UID}
+      PGID: ${RUNNING_GID}
+      TZ: ${TIMEZONE:-UTC}
+    volumes:
+      - ${DATA_ROOT}/dify/sandbox:/var/sandbox
+    networks:
+      - ${DOCKER_NETWORK}_internal
+      - ${DOCKER_NETWORK}
+    labels:
+      - "ai-platform.service=dify-sandbox"
+      - "ai-platform.type=ai-platform"
+
 EOF
 }
 
@@ -3603,6 +3675,9 @@ add_flowise_service() {
       PUID: ${RUNNING_UID}
       PGID: ${RUNNING_GID}
       TZ: ${TIMEZONE:-UTC}
+      VECTOR_DB: ${VECTOR_DB_TYPE:-qdrant}
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
     volumes:
       - ${DATA_ROOT}/flowise:/root/.flowise
       - ${DATA_ROOT}/logs/flowise:/var/log/flowise
@@ -3774,6 +3849,9 @@ add_openclaw_service() {
       PUID: ${RUNNING_UID}
       PGID: ${RUNNING_GID}
       TZ: ${TIMEZONE:-UTC}
+      VECTOR_DB: ${VECTOR_DB_TYPE:-qdrant}
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
     volumes:
       - ${DATA_ROOT}/openclaw:/app/data
       - ${DATA_ROOT}/logs/openclaw:/var/log/openclaw

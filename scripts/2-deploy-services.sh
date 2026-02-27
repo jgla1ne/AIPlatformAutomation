@@ -216,23 +216,23 @@ load_apparmor_profiles() {
     local profile_dir="${DATA_ROOT}/apparmor"
 
     for profile in default openclaw tailscale; do
-        local src="${profile_dir}/${profile}.profile.tmpl"
+        local src="${profile_dir}/${DOCKER_NETWORK}-${profile}"
         local dst="/etc/apparmor.d/${DOCKER_NETWORK}-${profile}"
 
-        # Check if template exists
+        # Check if profile exists
         if [[ ! -f "$src" ]]; then
-            print_error "AppArmor template not found: $src"
+            print_error "AppArmor profile not found: $src"
             continue
         fi
 
-        # Substitute DATA_ROOT into template
-        sed "s|DATA_ROOT_PLACEHOLDER|${DATA_ROOT}|g" "${src}" > "${dst}"
+        # Copy to AppArmor directory
+        cp "$src" "$dst"
 
         # Load into kernel
-        if apparmor_parser -r "${dst}"; then
+        if apparmor_parser -r "${dst}" 2>/dev/null; then
             print_success "AppArmor profile loaded: ${DOCKER_NETWORK}-${profile}"
         else
-            print_warning "Failed to load AppArmor profile: ${DOCKER_NETWORK}-${profile}"
+            print_warning "Failed to load AppArmor profile: ${DOCKER_NETWORK}-${profile} (AppArmor may be disabled)"
         fi
     done
 }
@@ -365,29 +365,6 @@ deploy_service() {
     print_success "${service_name} deployed on port ${host_port}"
 }
 
-# Wait for Tailscale authentication
-wait_for_tailscale_auth() {
-    local container_name=$1
-    local max_wait=300  # 5 minutes
-    local wait_time=0
-    
-    print_info "Waiting for Tailscale authentication..."
-    
-    while [[ $wait_time -lt $max_wait ]]; do
-        if docker exec "$container_name" tailscale status 2>/dev/null | grep -q "Logged in"; then
-            print_success "Tailscale authenticated"
-            return 0
-        fi
-        
-        sleep 5
-        wait_time=$((wait_time + 5))
-        echo -n "."
-    done
-    
-    print_error "Tailscale authentication timed out"
-    return 1
-}
-
 # Deploy OpenClaw with Tailscale sidecar
 deploy_openclaw() {
     print_header "Deploying OpenClaw + Tailscale"
@@ -411,7 +388,6 @@ deploy_openclaw() {
         --restart unless-stopped \
         --cap-add NET_ADMIN \
         --cap-add SYS_MODULE \
-         \
         --user "${OPENCLAW_UID}:${OPENCLAW_GID}" \
         -v "${DATA_ROOT}/data/tailscale:/var/lib/tailscale" \
         -v /dev/net/tun:/dev/net/tun \
@@ -419,27 +395,49 @@ deploy_openclaw() {
         -e "TAILSCALE_HOSTNAME=${TAILSCALE_HOSTNAME}" \
         tailscale/tailscale:latest
 
-    # Wait for Tailscale authentication
+    # Wait for container to be ready
+    sleep 5
+    
+    # Authenticate Tailscale inside container
+    print_info "Authenticating Tailscale..."
+    docker exec "$(get_container_name tailscale)" \
+        tailscale up \
+            --authkey="${TAILSCALE_AUTH_KEY}" \
+            --hostname="${TAILSCALE_HOSTNAME}" \
+            --accept-dns=false \
+            --accept-routes=false
+
+    # Wait for authentication and get IP
     wait_for_tailscale_auth "$(get_container_name tailscale)"
+    
+    # Get Tailscale IP and persist it
+    TAILSCALE_IP=$(docker exec "$(get_container_name tailscale)" tailscale ip -4 2>/dev/null || echo "")
+    if [[ -n "${TAILSCALE_IP}" ]]; then
+        sed -i "s|^TAILSCALE_IP=.*|TAILSCALE_IP=${TAILSCALE_IP}|" "${ENV_FILE}" || \
+            echo "TAILSCALE_IP=${TAILSCALE_IP}" >> "${ENV_FILE}"
+        print_success "Tailscale IP: ${TAILSCALE_IP}"
+    else
+        print_error "Failed to get Tailscale IP"
+    fi
 
     # Step 2: OpenClaw in shared network namespace
     print_info "Deploying OpenClaw..."
-    local vectordb_env=($(build_vectordb_env))
     
     docker run -d \
         --name "$(get_container_name openclaw)" \
-        --network "container:tailscale" \
+        --network "container:$(get_container_name tailscale)" \
         --restart unless-stopped \
         --user "${OPENCLAW_UID}:${OPENCLAW_GID}" \
         --read-only \
-        --tmpfs /tmp:rw,noexec,nosuid,size=100m \
-        -v "${DATA_ROOT}/data/openclaw:/app/data:rw" \
-        -v "${DATA_ROOT}/config/openclaw:/app/config:ro" \
+        --tmpfs /tmp \
+        -e "OPENCLAW_UID=${OPENCLAW_UID}" \
+        -e "OPENCLAW_GID=${OPENCLAW_GID}" \
+        -e "DATA_ROOT=${DATA_ROOT}" \
+        -e "COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}" \
         ${vectordb_env[@]} \
         alpine/openclaw:latest
 
     print_success "OpenClaw deployed with Tailscale sidecar"
-}
 
 # Deploy OpenClaw standalone (without Tailscale)
 deploy_openclaw_standalone() {
@@ -499,8 +497,8 @@ deploy_layered_services() {
 deploy_layer_0_infrastructure() {
     print_header "Layer 0: Network + AppArmor + RClone"
     
-    # Skip AppArmor profiles temporarily to get services running
-    print_warning "AppArmor profiles disabled temporarily for deployment"
+    # Load AppArmor profiles
+    load_apparmor_profiles
     
     # Create Docker network
     docker network create "${DOCKER_NETWORK}" 2>/dev/null || true
@@ -547,37 +545,11 @@ deploy_postgres() {
     exit 1
   fi
   
-  docker network create \
-    --driver bridge \
-    --label "tenant=${COMPOSE_PROJECT_NAME}" \
-    "${DOCKER_NETWORK}" 2>/dev/null \
-    || echo "  ℹ Network ${DOCKER_NETWORK} already exists"
-
-  # Use tenant-scoped named volume
-  if ! docker volume inspect "${PG_VOLUME}" \
-       &>/dev/null; then
-    print_info "Creating postgres named volume: ${PG_VOLUME}"
-    docker volume create "${PG_VOLUME}"
-  fi
-
-  # Write the postgres service with tenant-scoped named volume to override file
-  cat > "${SCRIPT_DIR}/docker-compose.postgres-override.yml" << EOF
-services:
-  postgres:
-    volumes:
-      - ${PG_VOLUME}:/var/lib/postgresql/data
-
-volumes:
-  ${PG_VOLUME}:
-    external: true
-EOF
-
-  # Deploy postgres using override
+  # Deploy postgres using docker-compose (bind mount already created by Script 1)
   docker compose \
     --project-name "${COMPOSE_PROJECT_NAME}" \
     --env-file "${ENV_FILE}" \
     --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
-    --file "${SCRIPT_DIR}/docker-compose.postgres-override.yml" \
     up -d postgres
 
   # Wait for postgres to be genuinely ready using docker compose exec
@@ -612,29 +584,105 @@ EOF
 }
 
 create_databases() {
-    print_info "Creating databases for services..."
+    print_info "Creating databases for enabled services..."
     
-    local databases=("n8n" "dify" "litellm")
+    # Define service database mappings
+    declare -A service_databases=(
+        ["n8n"]="n8n"
+        ["dify"]="dify"
+        ["langfuse"]="langfuse"
+        ["mattermost"]="mattermost"
+        ["authentik"]="authentik"
+        ["librechat"]="librechat"
+        ["matrix"]="matrix"
+        ["activepieces"]="activepieces"
+        ["litellm"]="litellm"
+    )
     
-    for db in "${databases[@]}"; do
+    # Create databases only for enabled services
+    for service in "${!service_databases[@]}"; do
+        db_name="${service_databases[$service]}"
+        
+        # Check if service is enabled
+        case "$service" in
+            "n8n")
+                if [[ "${ENABLE_N8N:-false}" != "true" ]]; then continue; fi
+                ;;
+            "dify")
+                if [[ "${ENABLE_DIFY:-false}" != "true" ]]; then continue; fi
+                ;;
+            "langfuse")
+                if [[ "${ENABLE_LANGFUSE:-false}" != "true" ]]; then continue; fi
+                ;;
+            "mattermost")
+                if [[ "${ENABLE_MATTERMOST:-false}" != "true" ]]; then continue; fi
+                ;;
+            "authentik")
+                if [[ "${ENABLE_AUTHENTIK:-false}" != "true" ]]; then continue; fi
+                ;;
+            "librechat")
+                if [[ "${ENABLE_LIBRECHAT:-false}" != "true" ]]; then continue; fi
+                ;;
+            "matrix")
+                if [[ "${ENABLE_MATRIX:-false}" != "true" ]]; then continue; fi
+                ;;
+            "activepieces")
+                if [[ "${ENABLE_ACTIVEPIECES:-false}" != "true" ]]; then continue; fi
+                ;;
+            "litellm")
+                if [[ "${ENABLE_LITELLM:-false}" != "true" ]]; then continue; fi
+                ;;
+        esac
+        
+        # Create database with owner
         if docker compose \
             --project-name "${COMPOSE_PROJECT_NAME}" \
             --env-file "${ENV_FILE}" \
             --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
-            exec postgres psql -U "${POSTGRES_USER}" -c "CREATE DATABASE ${db} OWNER ${POSTGRES_USER};" &>/dev/null; then
-            print_success "Database '${db}' created"
+            exec postgres psql -U "${POSTGRES_USER}" -c "CREATE DATABASE ${db_name} OWNER ${POSTGRES_USER};" &>/dev/null; then
+            print_success "Database '${db_name}' created for ${service}"
         else
-            print_info "Database '${db}' already exists or creation failed"
+            print_info "Database '${db_name}' already exists or creation failed"
         fi
     done
     
-    # Create pgvector extension
+    # Create pgvector extension in all databases that need it
+    local vector_dbs=("dify" "anythingllm" "openwebui" "librechat")
+    for db in "${vector_dbs[@]}"; do
+        # Check if service is enabled
+        case "$db" in
+            "dify")
+                if [[ "${ENABLE_DIFY:-false}" != "true" ]]; then continue; fi
+                ;;
+            "anythingllm")
+                if [[ "${ENABLE_ANYTHINGLLM:-false}" != "true" ]]; then continue; fi
+                ;;
+            "openwebui")
+                if [[ "${ENABLE_OPENWEBUI:-false}" != "true" ]]; then continue; fi
+                ;;
+            "librechat")
+                if [[ "${ENABLE_LIBRECHAT:-false}" != "true" ]]; then continue; fi
+                ;;
+        esac
+        
+        if docker compose \
+            --project-name "${COMPOSE_PROJECT_NAME}" \
+            --env-file "${ENV_FILE}" \
+            --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+            exec postgres psql -U "${POSTGRES_USER}" -d "$db" -c "CREATE EXTENSION IF NOT EXISTS vector;" &>/dev/null; then
+            print_success "pgvector extension created in $db database"
+        else
+            print_warning "pgvector extension failed in $db - is pgvector image in use?"
+        fi
+    done
+    
+    # Also create extension in default aiplatform database
     if docker compose \
         --project-name "${COMPOSE_PROJECT_NAME}" \
         --env-file "${ENV_FILE}" \
         --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
         exec postgres psql -U "${POSTGRES_USER}" -c "CREATE EXTENSION IF NOT EXISTS vector;" &>/dev/null; then
-        print_success "pgvector extension created"
+        print_success "pgvector extension created in default database"
     else
         print_warning "pgvector extension failed - is pgvector image in use?"
         print_info "Check docker-compose.yml postgres image tag"
@@ -645,15 +693,12 @@ create_databases() {
 deploy_redis() {
   print_header "Redis"
   
-  # Use tenant-scoped named volume
-  if ! docker volume inspect "${REDIS_VOLUME}" \
-       &>/dev/null; then
-    print_info "Creating redis named volume: ${REDIS_VOLUME}"
-    docker volume create "${REDIS_VOLUME}"
-  fi
-
-  # Deploy redis using docker-compose
-  ${COMPOSE} up -d redis
+  # Deploy redis using docker-compose (bind mount already created by Script 1)
+  docker compose \
+    --project-name "${COMPOSE_PROJECT_NAME}" \
+    --env-file "${ENV_FILE}" \
+    --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+    up -d redis
 
   # Wait for redis to be ready using docker compose exec
   ATTEMPTS=0
@@ -680,15 +725,12 @@ deploy_redis() {
 deploy_qdrant() {
   print_header "Qdrant"
   
-  # Use tenant-scoped named volume
-  if ! docker volume inspect "${QDRANT_VOLUME}" \
-       &>/dev/null; then
-    print_info "Creating qdrant named volume: ${QDRANT_VOLUME}"
-    docker volume create "${QDRANT_VOLUME}"
-  fi
-
-  # Deploy qdrant using docker-compose
-  ${COMPOSE} up -d qdrant
+  # Deploy qdrant using docker-compose (bind mount already created by Script 1)
+  docker compose \
+    --project-name "${COMPOSE_PROJECT_NAME}" \
+    --env-file "${ENV_FILE}" \
+    --file "${DATA_ROOT}/ai-platform/deployment/stack/docker-compose.yml" \
+    up -d qdrant
 
   # Wait for qdrant to be ready using docker compose exec
   ATTEMPTS=0
@@ -962,39 +1004,95 @@ deploy_layer_3_monitoring() {
     mkdir -p "${DATA_ROOT}/data/prometheus"
     chown -R 65534:65534 "${DATA_ROOT}/data/prometheus"
     chown -R 65534:65534 "${DATA_ROOT}/config/prometheus"
+    # Generate dynamic Prometheus config based on enabled services
     cat > "${DATA_ROOT}/config/prometheus/prometheus.yml" << EOF
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
 scrape_configs:
+EOF
+
+    # Add scrape configs for enabled services only
+    if [[ "${ENABLE_N8N:-false}" == "true" ]]; then
+        cat >> "${DATA_ROOT}/config/prometheus/prometheus.yml" << EOF
   - job_name: 'n8n'
     static_configs:
       - targets: ['n8n:5678']
-  
+EOF
+    fi
+
+    if [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]]; then
+        cat >> "${DATA_ROOT}/config/prometheus/prometheus.yml" << EOF
   - job_name: 'openwebui'
     static_configs:
       - targets: ['openwebui:8080']
-  
+EOF
+    fi
+
+    if [[ "${ENABLE_LITELLM:-false}" == "true" ]]; then
+        cat >> "${DATA_ROOT}/config/prometheus/prometheus.yml" << EOF
   - job_name: 'litellm'
     static_configs:
       - targets: ['litellm:4000']
-  
+EOF
+    fi
+
+    if [[ "${ENABLE_QDRANT:-false}" == "true" ]]; then
+        cat >> "${DATA_ROOT}/config/prometheus/prometheus.yml" << EOF
   - job_name: 'qdrant'
     static_configs:
       - targets: ['qdrant:6333']
-  
+EOF
+    fi
+
+    # Postgres is always enabled
+    cat >> "${DATA_ROOT}/config/prometheus/prometheus.yml" << EOF
   - job_name: 'postgres'
     static_configs:
       - targets: ['postgres:5432']
-  
+EOF
+
+    if [[ "${ENABLE_MINIO:-false}" == "true" ]]; then
+        cat >> "${DATA_ROOT}/config/prometheus/prometheus.yml" << EOF
   - job_name: 'minio'
     static_configs:
       - targets: ['minio:9000']
-  
+EOF
+    fi
+
+    if [[ "${ENABLE_FLOWISE:-false}" == "true" ]]; then
+        cat >> "${DATA_ROOT}/config/prometheus/prometheus.yml" << EOF
   - job_name: 'flowise'
     static_configs:
       - targets: ['flowise:3000']
+EOF
+    fi
+
+    if [[ "${ENABLE_DIFY:-false}" == "true" ]]; then
+        cat >> "${DATA_ROOT}/config/prometheus/prometheus.yml" << EOF
+  - job_name: 'dify-api'
+    static_configs:
+      - targets: ['dify-api:5001']
+  - job_name: 'dify-worker'
+    static_configs:
+      - targets: ['dify-worker:5001']
+EOF
+    fi
+
+    if [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]]; then
+        cat >> "${DATA_ROOT}/config/prometheus/prometheus.yml" << EOF
+  - job_name: 'anythingllm'
+    static_configs:
+      - targets: ['anythingllm:3000']
+EOF
+    fi
+
+    # Add node exporter for system metrics
+    cat >> "${DATA_ROOT}/config/prometheus/prometheus.yml" << EOF
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
 EOF
     
     chown "${RUNNING_UID}:${RUNNING_GID}" "${DATA_ROOT}/config/prometheus/prometheus.yml"
