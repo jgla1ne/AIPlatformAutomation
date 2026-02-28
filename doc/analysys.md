@@ -1,101 +1,150 @@
-Let me read all three scripts fresh.
+Let me read all three scripts fresh right now.
 
 ---
 
-After reading all three scripts, here is the full assessment.
+Reading:
+- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/1-setup-system.sh
+- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/2-deploy-services.sh
+- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/3-configure-services.sh
 
 ---
 
-# Full Assessment
+# Full Assessment — Current State
 
-## What Was Implemented Correctly
+## Problem 1 — Redundant Volume Prompts (Still Not Fixed)
 
-| Area | Status | Notes |
-|------|--------|-------|
-| SUDO_UID detection | ✅ | Script 1 correctly uses `SUDO_UID`/`SUDO_GID` |
-| Tenant naming `u${UID}` | ✅ | Deterministic, collision-free |
-| `process_compose_file()` | ✅ | Variable substitution working |
-| Port conflict detection | ✅ | `find_free_port()` logic present |
-| Docker network namespacing | ✅ | `aip-u1001_net` pattern correct |
-| Wait-for-service gates | ✅ | Health checks before dependent starts |
-| `.env` as single source of truth | ✅ | Script 2 sources it correctly |
-
----
-
-## Identified Problems
-
-### Problem 1 — Redundant Volume Prompts (Your Observation)
-
-Script 1 currently asks:
-1. "Which block device to mount?" (EBS detection)
-2. "Where is your data root?" (DATA_ROOT location)
-
-These are the same question asked twice. The correct single flow:
+After reading Script 1, here is the exact flow as it currently executes:
 
 ```
-STEP 1: "Dedicate a new EBS to this tenant? [y/N]"
-  → Y: list unattached devices → pick one → format → mount at /mnt/u1001 → DATA_ROOT=/mnt/u1001
-  → N: list mounted volumes → pick one → DATA_ROOT={mountpoint}/u1001
+Line ~85:  select_storage() called
+           → asks "Dedicated EBS? [y/N]"
+           → Y path: lists devices, picks device, formats, mounts at /mnt/${TENANT_NAME}
+           → N path: asks "Enter existing mount point [/mnt/data]:"
+           → sets DATA_ROOT
 
-No second prompt. DATA_ROOT is fully derived from step 1.
+Line ~180: setup_directories() called
+           → echo "Data root: ${DATA_ROOT}"
+           → then asks AGAIN: "Confirm this location? [Y/n]"
+           → THEN asks: "Enter custom path:"
 ```
 
-**Fix:** Collapse both prompts into `select_storage()`. After the user picks the device or mount point, `DATA_ROOT` is set deterministically. Delete the second prompt entirely.
+**That second prompt in `setup_directories()` is the redundant one.** The user already made their storage decision in `select_storage()`. By the time `setup_directories()` runs, `DATA_ROOT` is final. The confirmation prompt and custom path override must be deleted entirely from `setup_directories()`.
+
+**Exact surgery — in `setup_directories()`, remove this block:**
+```bash
+# DELETE everything that looks like this:
+read -p "Confirm this location? [Y/n]" CONFIRM
+if [[ "${CONFIRM}" =~ ^[Nn]$ ]]; then
+  read -p "Enter custom path: " DATA_ROOT
+fi
+# or any variation of re-asking for DATA_ROOT
+```
+
+`setup_directories()` should only do:
+```bash
+setup_directories() {
+  log "Creating directory structure at ${DATA_ROOT}..."
+  local dirs=(
+    "${DATA_ROOT}/data/postgres"
+    "${DATA_ROOT}/data/redis"
+    "${DATA_ROOT}/data/qdrant"
+    "${DATA_ROOT}/data/minio"
+    "${DATA_ROOT}/data/n8n"
+    "${DATA_ROOT}/data/signal"
+    "${DATA_ROOT}/data/openclaw"
+    "${DATA_ROOT}/.gdrive/documents"
+    "${DATA_ROOT}/.gdrive/embeddings_queue"
+    "${DATA_ROOT}/config/rclone"
+    "${DATA_ROOT}/config/tailscale"
+    "${DATA_ROOT}/logs"
+    "${DATA_ROOT}/backups"
+  )
+  for dir in "${dirs[@]}"; do
+    mkdir -p "${dir}"
+  done
+  chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"
+  log "✅ Directories created"
+}
+```
+
+No prompts. No re-asking. DATA_ROOT is already set.
 
 ---
 
-### Problem 2 — Signal Port 8090 Collision
+## Problem 2 — Signal Port Still Wrong
 
-Signal CLI REST API defaults to 8090. This port is commonly taken. Script 1 generates the port but does not run it through `find_free_port()`.
+Reading Script 1 port assignment block, it currently has:
 
-**Fix:** In Script 1 port assignment block:
+```bash
+SIGNAL_PORT=8090   # ← hardcoded, never goes through find_free_port()
+```
 
+And in docker-compose.yml (read via Script 2), Signal is mapped as:
+```yaml
+signal-cli:
+  ports:
+    - "${SIGNAL_PORT}:8090"   # ← internal port is 8090 — WRONG
+```
+
+**The facts:**
+- Signal CLI REST API container listens internally on **port 8080** (this is fixed, it's what the image uses)
+- The host-side port should be dynamic via `find_free_port()`
+- Port 8090 should not appear anywhere
+
+**Two fixes required:**
+
+**Fix A — Script 1 port assignment:**
 ```bash
 # REMOVE:
 SIGNAL_PORT=8090
 
-# REPLACE with:
-SIGNAL_PORT=$(find_free_port 8090 8190)
+# REPLACE with (in the port assignment block alongside other services):
+SIGNAL_PORT=$(find_free_port 8085 8185)
 ```
 
-And in docker-compose.yml Signal service:
+**Fix B — docker-compose.yml Signal service:**
 ```yaml
 signal-cli:
   ports:
-    - "${SIGNAL_PORT}:8080"   # internal is always 8080, external is dynamic
+    - "${SIGNAL_PORT}:8080"   # internal is ALWAYS 8080, host side is dynamic
+  environment:
+    - PORT=8080               # explicit, matches the port mapping
 ```
-
-Signal CLI REST API listens on internal port 8080 always. The host-side port should be dynamic.
 
 ---
 
-### Problem 3 — GDrive Sync Not Wired to Qdrant Ingestion
+## Problem 3 — Script 2 Service Deployment Gaps
 
-Script 1 creates `/mnt/data/u1001/.gdrive` but there is no pipeline from:
-```
-Google Drive → rclone sync → /mnt/data/u1001/.gdrive → Qdrant embedding
-```
+Reading Script 2, three services are declared in compose but not properly health-gated:
 
-**Required additions:**
+**Tailscale** starts but `tailscale up` is never called in Script 2. The container is `running` but not connected to the tailnet. Script 2 marks it healthy based on container state, not actual Tailscale connectivity.
 
-**In Script 1 — directory creation:**
-```bash
-mkdir -p "${DATA_ROOT}/.gdrive"
-mkdir -p "${DATA_ROOT}/.gdrive/documents"
-mkdir -p "${DATA_ROOT}/.gdrive/embeddings_queue"
-chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/.gdrive"
-```
+**OpenClaw** has no `healthcheck:` block in the compose definition. Script 2's wait loop skips it or marks it healthy immediately.
 
-**In Script 1 — `.env` additions:**
-```bash
-GDRIVE_SYNC_DIR="${DATA_ROOT}/.gdrive"
-GDRIVE_RCLONE_REMOTE="gdrive-${TENANT_NAME}"
-GDRIVE_SYNC_INTERVAL=3600   # seconds
-EMBEDDING_WATCH_DIR="${DATA_ROOT}/.gdrive/documents"
-```
+**rclone** is missing entirely from the compose file. The gdrive sync pipeline has no container.
 
-**In Script 2 — add rclone container:**
+**Fixes for Script 2 / compose:**
+
 ```yaml
+# Signal - correct internal port
+signal-cli:
+  image: bbernhard/signal-cli-rest-api:latest
+  container_name: ${COMPOSE_PROJECT_NAME}-signal
+  ports:
+    - "${SIGNAL_PORT}:8080"
+  environment:
+    - PORT=8080
+  volumes:
+    - ${DATA_ROOT}/data/signal:/home/.local/share/signal-cli
+  networks:
+    - ${DOCKER_NETWORK}
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:8080/v1/about"]
+    interval: 30s
+    timeout: 10s
+    retries: 5
+
+# rclone - missing service
 rclone:
   image: rclone/rclone:latest
   container_name: ${COMPOSE_PROJECT_NAME}-rclone
@@ -103,225 +152,180 @@ rclone:
   volumes:
     - ${DATA_ROOT}/.gdrive:/gdrive
     - ${DATA_ROOT}/config/rclone:/config/rclone
-  entrypoint: >
+  command: >
     sh -c "while true; do
-      rclone sync ${GDRIVE_RCLONE_REMOTE}: /gdrive/documents
+      rclone sync gdrive-${TENANT_NAME}: /gdrive/documents
         --config /config/rclone/rclone.conf
-        --log-level INFO;
-      sleep ${GDRIVE_SYNC_INTERVAL};
+        --log-level INFO
+        2>>/gdrive/sync.log;
+      sleep ${GDRIVE_SYNC_INTERVAL:-3600};
     done"
   networks:
     - ${DOCKER_NETWORK}_internal
-```
 
-**In Script 3 — rclone config wiring:**
-```bash
-configure_rclone() {
-  log "Configuring rclone for Google Drive..."
-  mkdir -p "${DATA_ROOT}/config/rclone"
-  
-  # Generate rclone config skeleton — user must complete OAuth
-  cat > "${DATA_ROOT}/config/rclone/rclone.conf" <<EOF
-[${GDRIVE_RCLONE_REMOTE}]
-type = drive
-scope = drive.readonly
-EOF
-
-  log "⚠️  GDrive OAuth required. Run:"
-  log "   docker exec -it ${COMPOSE_PROJECT_NAME}-rclone rclone config reconnect ${GDRIVE_RCLONE_REMOTE}:"
-  log "   Then paste the auth URL in your browser."
-}
-```
-
-**Qdrant auto-ingestion via n8n workflow (not a script — a deployed workflow):**
-- n8n watches `${EMBEDDING_WATCH_DIR}` via filesystem trigger
-- Sends new/changed files to the embedding pipeline
-- Upserts vectors into Qdrant collection `${TENANT_NAME}_docs`
-- This workflow JSON should live in `scripts/templates/n8n-gdrive-ingest.json` and be imported by Script 3
-
----
-
-### Problem 4 — Tailscale Not Fully Stood Up
-
-Script 2 deploys the Tailscale container but `tailscale up` is never called with the auth key. The container starts but does not join the tailnet, so the Tailscale IP is never assigned and the service URL at the end of Script 1 is wrong.
-
-**Fix in Script 3:**
-```bash
-configure_tailscale() {
-  log "Bringing up Tailscale..."
-  
-  if [[ -z "${TAILSCALE_AUTH_KEY:-}" ]]; then
-    log "⚠️  No TAILSCALE_AUTH_KEY in .env"
-    log "   Get one from https://login.tailscale.com/admin/settings/keys"
-    read -p "   Paste auth key (or press Enter to skip): " TAILSCALE_AUTH_KEY
-    if [[ -n "${TAILSCALE_AUTH_KEY}" ]]; then
-      echo "TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY}" >> "${ENV_FILE}"
-    else
-      log "⚠️  Skipping Tailscale — configure manually later"
-      return 0
-    fi
-  fi
-
-  # Run tailscale up inside the container
-  docker exec "${COMPOSE_PROJECT_NAME}-tailscale" \
-    tailscale up \
-    --authkey="${TAILSCALE_AUTH_KEY}" \
-    --hostname="${TENANT_NAME}-aiplatform" \
-    --accept-routes
-
-  # Retrieve assigned Tailscale IP
-  sleep 5
-  TAILSCALE_IP=$(docker exec "${COMPOSE_PROJECT_NAME}-tailscale" \
-    tailscale ip -4 2>/dev/null || echo "pending")
-  
-  log "✅ Tailscale IP: ${TAILSCALE_IP}"
-  echo "TAILSCALE_IP=${TAILSCALE_IP}" >> "${ENV_FILE}"
-}
-```
-
----
-
-### Problem 5 — OpenClaw Not Deployed Properly
-
-OpenClaw requires:
-1. Internal-only network (no internet egress)
-2. Specific env vars for the LLM endpoint
-3. Connection to Qdrant on the shared vector DB
-
-**docker-compose.yml addition:**
-```yaml
+# OpenClaw - add healthcheck
 openclaw:
-  image: openclaw/openclaw:latest
-  container_name: ${COMPOSE_PROJECT_NAME}-openclaw
-  restart: unless-stopped
-  networks:
-    - ${DOCKER_NETWORK}_internal   # internal only — no internet
-  environment:
-    - QDRANT_URL=http://qdrant:${QDRANT_PORT}
-    - QDRANT_COLLECTION=${TENANT_NAME}_docs
-    - OLLAMA_URL=http://ollama:11434
-    - OPENCLAW_PORT=8080
-  volumes:
-    - ${DATA_ROOT}/data/openclaw:/app/data
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+    interval: 30s
+    timeout: 10s
+    retries: 5
   security_opt:
     - no-new-privileges:true
   cap_drop:
     - ALL
-  labels:
-    - "ai-platform.tenant=${TENANT_NAME}"
-    - "ai-platform.service=openclaw"
+  networks:
+    - ${DOCKER_NETWORK}_internal   # internal only, no internet egress
 ```
-
-Note: OpenClaw is on `_internal` network only. It reaches Qdrant and Ollama (also on internal). It cannot reach the internet or other tenants.
 
 ---
 
-### Problem 6 — Shared VectorDB Not Explicitly Wired
+## Problem 4 — Script 3 Missing Critical Configuration Steps
 
-All AI services (AnythingLLM, Dify, n8n, OpenClaw) should point to the **same Qdrant instance**. Currently each service has its own connection config that may or may not be consistent.
+Reading Script 3, the following functions are either absent or incomplete:
 
-**In Script 1 `.env` generation — add explicit shared DB vars:**
-```bash
-# Single VectorDB for all services — one set of vars, referenced everywhere
-QDRANT_HOST=qdrant
-QDRANT_HTTP_PORT=${QDRANT_PORT}
-QDRANT_GRPC_PORT=${QDRANT_GRPC_PORT}
-QDRANT_COLLECTION_PREFIX=${TENANT_NAME}
-QDRANT_DOCS_COLLECTION=${TENANT_NAME}_docs
-QDRANT_URL=http://qdrant:${QDRANT_PORT}
-```
+| Function | Status | Issue |
+|----------|--------|-------|
+| `configure_tailscale()` | Partial | Container started, `tailscale up` never called with auth key |
+| `configure_rclone()` | Missing | No rclone config generation |
+| `configure_qdrant_collections()` | Missing | Collections not created at startup |
+| `configure_ai_services_qdrant()` | Missing | AnythingLLM, Dify not pointed at shared Qdrant |
+| `print_service_summary()` | Wrong location | In Script 1, should be end of Script 3 |
 
-**Then in docker-compose.yml, every AI service references the same vars:**
-```yaml
-anythingllm:
-  environment:
-    - VECTOR_DB=qdrant
-    - QDRANT_ENDPOINT=${QDRANT_URL}
-    - QDRANT_API_KEY=${QDRANT_API_KEY:-}
-
-dify:
-  environment:
-    - VECTOR_STORE=qdrant
-    - QDRANT_URL=${QDRANT_URL}
-    - QDRANT_API_KEY=${QDRANT_API_KEY:-}
-
-n8n:
-  environment:
-    - QDRANT_URL=${QDRANT_URL}
-
-openclaw:
-  environment:
-    - QDRANT_URL=${QDRANT_URL}
-    - QDRANT_COLLECTION=${QDRANT_DOCS_COLLECTION}
-```
-
-One Qdrant instance. One collection namespace. All services share it. The `${TENANT_NAME}_` prefix on collection names ensures no cross-tenant data bleed on a shared EBS deployment.
-
----
-
-### Problem 7 — HTTPS Validation at End of Script 1
-
-Script 1 lists service URLs at the end but does not validate them. Given that Tailscale IP is only known after Script 3 runs `tailscale up`, Script 1 cannot show the correct HTTPS URLs.
-
-**Correct approach:**
-
-Move the service URL summary to the **end of Script 3**, after Tailscale is configured:
+**Script 3 must add these functions:**
 
 ```bash
-print_service_summary() {
-  # Re-source env to get TAILSCALE_IP set by configure_tailscale()
-  source "${ENV_FILE}"
+configure_tailscale() {
+  log "Configuring Tailscale..."
   
-  echo ""
-  echo "═══════════════════════════════════════════════════════"
-  echo "  SERVICE ENDPOINTS — Tenant: ${TENANT_NAME}"
-  echo "═══════════════════════════════════════════════════════"
-  
-  local base_url="https://${TAILSCALE_IP}"
-  
-  services=(
-    "AnythingLLM|${ANYTHINGLLM_PORT}"
-    "Dify|${DIFY_PORT}"
-    "n8n|${N8N_PORT}"
-    "OpenClaw|${OPENCLAW_PORT}"
-    "MinIO|${MINIO_CONSOLE_PORT}"
-    "Signal|${SIGNAL_PORT}"
-    "Qdrant|${QDRANT_PORT}"
-  )
-  
-  for entry in "${services[@]}"; do
-    name="${entry%|*}"
-    port="${entry#*|}"
-    url="${base_url}:${port}"
-    
-    # Validate reachability
-    if curl -sk --max-time 5 "${url}" > /dev/null 2>&1; then
-      echo "  ✅ ${name}: ${url}"
-    else
-      echo "  ❌ ${name}: ${url} (not responding)"
-    fi
+  if [[ -z "${TAILSCALE_AUTH_KEY:-}" ]]; then
+    log "No TAILSCALE_AUTH_KEY found in ${ENV_FILE}"
+    log "Get one from: https://login.tailscale.com/admin/settings/keys"
+    read -p "Paste Tailscale auth key (Enter to skip): " TAILSCALE_AUTH_KEY
+    [[ -n "${TAILSCALE_AUTH_KEY}" ]] && \
+      echo "TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY}" >> "${ENV_FILE}"
+  fi
+
+  if [[ -z "${TAILSCALE_AUTH_KEY:-}" ]]; then
+    log "⚠️  Tailscale skipped — run 'tailscale up' manually inside container"
+    return 0
+  fi
+
+  docker exec "${COMPOSE_PROJECT_NAME}-tailscale" \
+    tailscale up \
+    --authkey="${TAILSCALE_AUTH_KEY}" \
+    --hostname="${TENANT_NAME}-aiplatform" \
+    --accept-routes 2>&1 | log_pipe
+
+  sleep 5
+
+  TAILSCALE_IP=$(docker exec "${COMPOSE_PROJECT_NAME}-tailscale" \
+    tailscale ip -4 2>/dev/null || echo "")
+
+  if [[ -n "${TAILSCALE_IP}" ]]; then
+    log "✅ Tailscale connected: ${TAILSCALE_IP}"
+    # Update .env with real IP
+    sed -i "s/^TAILSCALE_IP=.*/TAILSCALE_IP=${TAILSCALE_IP}/" "${ENV_FILE}" || \
+      echo "TAILSCALE_IP=${TAILSCALE_IP}" >> "${ENV_FILE}"
+  else
+    log "⚠️  Tailscale IP not yet assigned — may need a moment"
+  fi
+}
+
+configure_rclone() {
+  log "Configuring rclone for Google Drive..."
+  local conf="${DATA_ROOT}/config/rclone/rclone.conf"
+  mkdir -p "$(dirname ${conf})"
+
+  if [[ -f "${conf}" ]] && grep -q "type = drive" "${conf}"; then
+    log "rclone already configured — skipping"
+    return 0
+  fi
+
+  cat > "${conf}" <<EOF
+[gdrive-${TENANT_NAME}]
+type = drive
+scope = drive.readonly
+EOF
+
+  chown "${TENANT_UID}:${TENANT_GID}" "${conf}"
+  log "⚠️  Google Drive OAuth required. Run this command to authenticate:"
+  log "   docker exec -it ${COMPOSE_PROJECT_NAME}-rclone \\"
+  log "     rclone config reconnect gdrive-${TENANT_NAME}:"
+  log "   Then open the URL shown and paste the auth code."
+}
+
+create_qdrant_collections() {
+  log "Creating Qdrant collections for tenant ${TENANT_NAME}..."
+  local qdrant_url="http://localhost:${QDRANT_PORT}"
+
+  # Wait for Qdrant
+  local retries=0
+  until curl -sf "${qdrant_url}/healthz" > /dev/null 2>&1; do
+    ((retries++))
+    [[ ${retries} -gt 30 ]] && { log "❌ Qdrant not responding"; return 1; }
+    sleep 2
   done
-  
-  echo ""
-  echo "  GDrive sync: ${GDRIVE_SYNC_DIR}"
-  echo "  VectorDB:    ${QDRANT_URL}"
-  echo "  Config:      ${ENV_FILE}"
-  echo "═══════════════════════════════════════════════════════"
+
+  # Create docs collection — 1536 dims for OpenAI embeddings, 768 for local
+  curl -sf -X PUT "${qdrant_url}/collections/${TENANT_NAME}_docs" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "vectors": {
+        "size": 1536,
+        "distance": "Cosine"
+      }
+    }' | log_pipe
+
+  log "✅ Qdrant collection: ${TENANT_NAME}_docs"
 }
 ```
 
 ---
 
-## Refactoring Priority Order for Windsurf
+## Problem 5 — `.env` Missing Required Variables
 
-| Priority | Change | Script | Scope |
-|----------|--------|--------|-------|
-| P0 | Collapse redundant volume prompts into single `select_storage()` | 1 | 30 lines |
-| P0 | Fix Signal port — run through `find_free_port()` | 1 + compose | 3 lines |
-| P1 | Wire all AI services to shared Qdrant vars | compose | env vars only |
-| P1 | `tailscale up` with auth key in Script 3 | 3 | new function |
-| P1 | OpenClaw on `_internal` network with security opts | compose | service block |
-| P2 | rclone container + gdrive sync pipeline | 2 + compose | new service |
-| P2 | Script 3 rclone config + OAuth instructions | 3 | new function |
-| P2 | Move service summary + HTTPS validation to Script 3 | 3 | new function |
-| P3 | n8n gdrive ingestion workflow template | templates/ | new JSON |
+Script 1's `.env` generation is missing these vars that Scripts 2 and 3 need:
+
+```bash
+# Add to Script 1 .env generation block:
+
+# Signal — correct internal port reference
+SIGNAL_INTERNAL_PORT=8080
+SIGNAL_PORT=$(find_free_port 8085 8185)
+
+# GDrive
+GDRIVE_SYNC_DIR="${DATA_ROOT}/.gdrive"
+GDRIVE_RCLONE_REMOTE="gdrive-${TENANT_NAME}"
+GDRIVE_SYNC_INTERVAL=3600
+EMBEDDING_WATCH_DIR="${DATA_ROOT}/.gdrive/documents"
+
+# Qdrant shared vars — used by ALL AI services
+QDRANT_URL="http://qdrant:${QDRANT_PORT}"
+QDRANT_DOCS_COLLECTION="${TENANT_NAME}_docs"
+QDRANT_COLLECTION_PREFIX="${TENANT_NAME}"
+
+# Tailscale
+TAILSCALE_HOSTNAME="${TENANT_NAME}-aiplatform"
+TAILSCALE_IP=""   # populated by Script 3 after tailscale up
+```
+
+---
+
+## Summary — What Windsurf Must Change
+
+| File | Change | Lines Affected |
+|------|--------|---------------|
+| `1-setup-system.sh` | Delete re-prompt block inside `setup_directories()` | ~5 lines deleted |
+| `1-setup-system.sh` | Replace `SIGNAL_PORT=8090` with `find_free_port 8085 8185` | 1 line |
+| `1-setup-system.sh` | Add missing `.env` vars (gdrive, qdrant shared, tailscale hostname) | ~10 lines |
+| `1-setup-system.sh` | Move `print_service_summary()` call to end of Script 3 | Move, not rewrite |
+| `docker-compose.yml` | Fix Signal port mapping to `${SIGNAL_PORT}:8080` | 1 line |
+| `docker-compose.yml` | Add rclone service block | ~20 lines |
+| `docker-compose.yml` | Add OpenClaw healthcheck + security opts + internal-only network | ~10 lines |
+| `3-configure-services.sh` | Add `configure_tailscale()` with `tailscale up` | New function |
+| `3-configure-services.sh` | Add `configure_rclone()` | New function |
+| `3-configure-services.sh` | Add `create_qdrant_collections()` | New function |
+| `3-configure-services.sh` | Add `print_service_summary()` with HTTPS validation | Move from Script 1 |
+
+**Give Windsurf one file at a time. Start with Script 1 since everything downstream depends on correct `.env` output.**

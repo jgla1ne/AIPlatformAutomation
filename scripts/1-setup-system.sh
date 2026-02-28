@@ -42,10 +42,11 @@ readonly DOCKER_NETWORK="${COMPOSE_PROJECT_NAME}_net"
 # ═══════════════════════════════════════════════════════════
 # SECTION 3: PATHS — depends only on SECTION 1 + 2
 # ═══════════════════════════════════════════════════════════
-readonly DATA_ROOT="${DATA_ROOT:-/mnt/data}"
+DATA_ROOT="${DATA_ROOT:-/mnt/data}"
 # ═════════════════════════════════════════════════════════
 # SECTION 2: PATHS — depends only on SECTION 1
 # ═══════════════════════════════════════════════════════════
+readonly BASE_DIR="${DATA_ROOT}"
 readonly TENANT_ROOT="${DATA_ROOT}/${TENANT_ID}"
 readonly ENV_FILE="${TENANT_ROOT}/.env"
 readonly COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
@@ -1161,6 +1162,19 @@ QDRANT_DOCS_COLLECTION=${TENANT_NAME}_docs
 QDRANT_URL=http://${QDRANT_HOST}:${QDRANT_HTTP_PORT}
 QDRANT_API_KEY=${QDRANT_API_KEY:-}
 
+# Signal - correct internal port reference
+SIGNAL_INTERNAL_PORT=8080
+
+# GDrive
+GDRIVE_SYNC_DIR="${DATA_ROOT}/.gdrive"
+GDRIVE_RCLONE_REMOTE="gdrive-${TENANT_NAME}"
+GDRIVE_SYNC_INTERVAL=3600
+EMBEDDING_WATCH_DIR="${DATA_ROOT}/.gdrive/documents"
+
+# Tailscale
+TAILSCALE_HOSTNAME="${TENANT_NAME}-aiplatform"
+TAILSCALE_IP=""   # populated by Script 3 after tailscale up
+
 # Network Configuration (DOMAIN=localhost by default)
 DOMAIN_NAME=$existing_domain_name
 DOMAIN=${existing_domain_name}
@@ -1311,7 +1325,7 @@ EOF
         ["litellm"]="5005"
         ["prometheus"]="5000"
         ["grafana"]="5001"
-        SIGNAL_PORT=$(find_free_port 8090 8190)
+        SIGNAL_PORT=$(find_free_port 8085 8185)
         ["openclaw"]="18789"
         ["tailscale"]="8443"
         ["postgres"]="5432"
