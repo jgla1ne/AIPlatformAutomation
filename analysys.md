@@ -1,3 +1,71 @@
+Let me read all files before writing a single instruction.
+
+**Reading all 9 files now.**
+
+---
+
+After reading everything, here is my complete assessment and the exact instructions for Windsurf.
+
+---
+
+# Root Cause Analysis — Why Script 2 Still Fails
+
+## The Real Problems (in priority order)
+
+### Problem 1 — Script 2 deploys services one-by-one with separate `docker compose up` calls
+
+This is the **architectural root cause** of most failures. Script 2 calls `docker compose up` for postgres alone, waits, then calls it again for redis alone, etc. Each separate invocation:
+
+- Creates the network on the first call
+- On the second call, compose sees the network exists **without the current invocation's project context** and throws the label warning
+- Volumes created by the first call are "owned" by that invocation; subsequent calls see ownership conflicts
+- Health check timing between separate calls causes cascading failures
+
+**The fix is one `docker compose up` call for all infrastructure services together.**
+
+### Problem 2 — Dify requires 12+ containers and a specific startup order
+
+Dify is not a single container. It requires: `dify-api`, `dify-worker`, `dify-web`, `dify-sandbox`, `dify-proxy` — all of which depend on postgres AND redis being healthy first. The current script tries to deploy Dify containers individually without respecting this dependency chain.
+
+### Problem 3 — Volume ownership set before containers define the mount
+
+Script 2 runs `chown` on directories before compose creates the named volumes. Named Docker volumes are managed by Docker, not by the host filesystem path. The `chown` on the host path has no effect on the volume's internal permissions.
+
+### Problem 4 — Signal-CLI still crashing
+
+The `bbernhard/signal-cli-rest-api` image is being pulled for `linux/amd64` but the actual binary inside uses a different architecture layer. Version pinning to `0.84` alone does not fix this — the container needs a capability flag and a specific entrypoint.
+
+### Problem 5 — Health check functions test the wrong endpoints
+
+The `wait_for_service` function in Script 2 uses generic HTTP checks. Postgres health is checked with `curl` instead of `pg_isready`. Qdrant is checked on port 6333 but the REST API is on 6333 and gRPC on 6334 — checking the wrong one returns false negatives.
+
+---
+
+# Complete Solution for Windsurf
+
+## The Architecture Change
+
+Stop deploying service-by-service. Use **dependency groups** with a single compose call per group:
+
+```
+Group 1 (Infrastructure):  postgres, redis, qdrant, minio
+Group 2 (AI Core):         ollama, flowise, n8n, anythingllm  
+Group 3 (Dify):            dify-api, dify-worker, dify-web, dify-sandbox, dify-proxy
+Group 4 (Optional):        signal-api, tailscale
+```
+
+Each group waits for the previous group to be healthy before starting.
+
+---
+
+## COMMIT 1 — Rewrite `scripts/2-deploy-services.sh` completely
+
+```
+TASK: Replace 2-deploy-services.sh entirely with the version below.
+Do not preserve any existing logic. The current architecture is the problem.
+```
+
+```bash
 #!/usr/bin/env bash
 # 2-deploy-services.sh — AI Platform Service Deployment
 # Deploys services in dependency-ordered groups using single compose calls
@@ -320,3 +388,272 @@ TOTAL=$(DC config --services 2>/dev/null | wc -l)
 echo -e "${GREEN}${BOLD}Services running: ${RUNNING}/${TOTAL}${NC}"
 echo ""
 echo "Next step: sudo ./3-configure-services.sh"
+```
+
+---
+
+## COMMIT 2 — Fix `docker-compose.yml` — Named Volumes and TENANT_DIR
+
+```
+TASK: Fix three things in docker-compose.yml.
+
+FIX 1 — Add TENANT_DIR to the volumes block.
+
+Every service that uses a bind mount to ${TENANT_DIR}/something must
+have a corresponding entry in the top-level volumes: block OR must use
+a bind mount type explicitly. 
+
+For ALL services using ${TENANT_DIR} paths, change from:
+  volumes:
+    - ${TENANT_DIR}/postgres:/var/lib/postgresql/data
+
+To named volume style:
+  volumes:
+    - postgres-data:/var/lib/postgresql/data
+
+Then at the bottom of docker-compose.yml add:
+  volumes:
+    postgres-data:
+    redis-data:
+    qdrant-data:
+    minio-data:
+    n8n-data:
+    flowise-data:
+    anythingllm-data:
+    ollama-data:
+    dify-api-data:
+    dify-storage-data:
+    signal-data:
+
+This removes the dependency on TENANT_DIR for volume mounts entirely.
+TENANT_DIR is still used for config files and nginx certs (bind mounts
+for those are fine).
+
+FIX 2 — Add explicit healthchecks to infrastructure services.
+
+FIND the postgres service. ADD if not present:
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+    interval: 10s
+    timeout: 5s
+    retries: 10
+    start_period: 30s
+
+FIND the redis service. ADD if not present:
+  healthcheck:
+    test: ["CMD", "redis-cli", "ping"]
+    interval: 10s
+    timeout: 5s
+    retries: 10
+
+FIND the qdrant service. ADD if not present:
+  healthcheck:
+    test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
+    interval: 15s
+    timeout: 10s
+    retries: 10
+    start_period: 30s
+
+FIX 3 — Fix signal-api service completely.
+
+REPLACE the entire signal-api service definition with:
+
+  signal-api:
+    image: bbernhard/signal-cli-rest-api:0.84
+    platform: linux/amd64
+    container_name: ${COMPOSE_PROJECT_NAME}-signal-api
+    restart: unless-stopped
+    environment:
+      MODE: native
+      PORT: "${SIGNAL_PORT:-8085}"
+      JAVA_OPTS: "-Xmx512m -Xms128m"
+    volumes:
+      - signal-data:/home/.local/share/signal-cli
+    networks:
+      - net_internal
+    ports:
+      - "${SIGNAL_PORT:-8085}:${SIGNAL_PORT:-8085}"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:${SIGNAL_PORT:-8085}/v1/about || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 90s
+    profiles:
+      - signal
+
+IMPORTANT: Adding profiles: [signal] means signal-api only starts when
+DC --profile signal up is called, OR when explicitly named in up -d.
+This prevents it blocking the main deployment.
+
+VERIFICATION:
+  docker compose --env-file /mnt/data/u1001/.env config --quiet
+  Must exit 0 with zero warnings about TENANT_DIR or variables.
+```
+
+---
+
+## COMMIT 3 — Fix `.env` — Add missing variables to `scripts/1-setup-system.sh`
+
+```
+TASK: Add TENANT_DIR and ENABLE_SIGNAL to the .env write block in
+1-setup-system.sh.
+
+FIND the section that writes variables to the .env file. It will have
+lines like:
+  echo "COMPOSE_PROJECT_NAME=${PROJECT_NAME}" >> "$ENV_FILE"
+  echo "DATA_ROOT=${DATA_ROOT}" >> "$ENV_FILE"
+
+ADD these lines immediately after DATA_ROOT:
+  echo "TENANT_DIR=${DATA_ROOT}/${TENANT_NAME}" >> "$ENV_FILE"
+  echo "ENABLE_SIGNAL=false" >> "$ENV_FILE"
+  echo "TAILSCALE_EXTRA_ARGS=" >> "$ENV_FILE"
+
+FIND the port allocation section. Ensure these lines exist:
+  echo "SIGNAL_PORT=${PORTS[signal-api]:-8085}" >> "$ENV_FILE"
+  echo "QDRANT_PORT=${PORTS[qdrant]:-6333}" >> "$ENV_FILE"
+  echo "MINIO_PORT=${PORTS[minio]:-9000}" >> "$ENV_FILE"
+  echo "FLOWISE_PORT=${PORTS[flowise]:-3000}" >> "$ENV_FILE"
+  echo "ANYTHINGLLM_PORT=${PORTS[anythingllm]:-3001}" >> "$ENV_FILE"
+  echo "DIFY_PORT=${PORTS[dify-api]:-5001}" >> "$ENV_FILE"
+  echo "DIFY_WEB_PORT=${PORTS[dify-web]:-3002}" >> "$ENV_FILE"
+
+After this commit, run:
+  sudo ./1-setup-system.sh
+  grep -E "^(TENANT_DIR|ENABLE_SIGNAL|SIGNAL_PORT|TAILSCALE_EXTRA_ARGS)=" \
+    /mnt/data/u1001/.env
+
+All four lines must appear with non-empty values (except TAILSCALE_EXTRA_ARGS
+which is intentionally empty).
+```
+
+---
+
+## COMMIT 4 — Fix `scripts/0-complete-cleanup.sh` — Nuclear option for named volumes
+
+```
+TASK: Ensure cleanup removes named Docker volumes that compose creates.
+
+The current cleanup removes volumes prefixed with the project name but
+compose names volumes as: ${PROJECT_NAME}_${volume_name}
+
+For example: aip-u1001_postgres-data
+
+FIND the volume removal section. REPLACE with:
+
+  # Remove all volumes for this project
+  log "Removing named volumes for project: ${PROJECT_NAME}"
+  
+  # Method 1: Remove by compose project label (most reliable)
+  docker volume ls --filter "label=com.docker.compose.project=${PROJECT_NAME}" \
+    --format '{{.Name}}' | xargs -r docker volume rm -f 2>/dev/null || true
+  
+  # Method 2: Remove by name prefix (catches anything Method 1 misses)
+  docker volume ls --format '{{.Name}}' \
+    | grep -E "^${PROJECT_NAME}[_-]" \
+    | xargs -r docker volume rm -f 2>/dev/null || true
+
+  # Method 3: Prune anonymous volumes
+  docker volume prune -f 2>/dev/null || true
+
+ALSO FIND the network removal section. REPLACE with:
+
+  # Remove all networks for this project
+  log "Removing networks for project: ${PROJECT_NAME}"
+  
+  # Method 1: By compose project label
+  docker network ls --filter "label=com.docker.compose.project=${PROJECT_NAME}" \
+    --format '{{.Name}}' | while read -r net; do
+    docker network disconnect -f "$net" \
+      $(docker network inspect "$net" \
+        --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null) \
+      2>/dev/null || true
+    docker network rm "$net" 2>/dev/null || true
+  done
+  
+  # Method 2: By name prefix
+  docker network ls --format '{{.Name}}' \
+    | grep -E "^${PROJECT_NAME}[_-]" | while read -r net; do
+    docker network rm "$net" 2>/dev/null || true
+  done
+
+VERIFICATION after cleanup:
+  docker volume ls | grep aip-
+  docker network ls | grep aip-
+  Both must return EMPTY.
+```
+
+---
+
+## Pre-Test Cleanup — Run Before Testing
+
+```bash
+# WINDSURF: Run this exact block before the first test of the new scripts
+
+PROJECT="aip-u1001"  # adjust if different
+
+# Stop and remove all containers for this project
+docker ps -aq --filter "name=${PROJECT}" | xargs -r docker rm -f 2>/dev/null || true
+
+# Remove all named volumes with compose label
+docker volume ls \
+  --filter "label=com.docker.compose.project=${PROJECT}" \
+  --format '{{.Name}}' | xargs -r docker volume rm -f 2>/dev/null || true
+
+# Remove by name prefix (belt and braces)
+docker volume ls --format '{{.Name}}' | grep "^${PROJECT}" \
+  | xargs -r docker volume rm -f 2>/dev/null || true
+
+# Remove networks
+docker network ls --format '{{.Name}}' | grep "^${PROJECT}" \
+  | while read net; do
+      docker network rm "$net" 2>/dev/null || true
+    done
+
+# Prune anonymous volumes
+docker volume prune -f
+
+# Verify clean
+echo "=== Must all be empty ==="
+docker ps -a --filter "name=${PROJECT}" --format '{{.Names}}'
+docker volume ls | grep "${PROJECT}"
+docker network ls | grep "${PROJECT}"
+```
+
+---
+
+## Acceptance Test — What Success Looks Like
+
+```bash
+# Run all three scripts and verify
+
+sudo ./1-setup-system.sh
+# Must complete with: ✅ Setup complete
+# Must create .env with TENANT_DIR set
+
+sudo ./2-deploy-services.sh
+# Must show each group completing
+# Must NOT show any "network has incorrect label" errors
+# Must NOT show any "variable is not set" warnings
+# Final output must show at least 8/N services running
+
+sudo ./3-configure-services.sh
+# Must complete without errors
+
+# Final verification
+docker ps --filter "name=aip-u1001" \
+  --format "table {{.Names}}\t{{.Status}}" | sort
+# Every line must say "Up X minutes" or "Up X seconds (healthy)"
+# Zero lines with "Restarting" or "Exited"
+```
+
+---
+
+## Summary
+
+| Commit | File | Core Fix | Eliminates |
+|--------|------|----------|------------|
+| 1 | `2-deploy-services.sh` | Group-based deployment, correct health checks | Network label conflicts, cascade failures |
+| 2 | `docker-compose.yml` | Named volumes, healthchecks, signal profile | TENANT_DIR warnings, signal crash loops |
+| 3 | `1-setup-system.sh` | Write TENANT_DIR + all port vars to .env | "variable not set" warnings |
+| 4 | `0-complete-cleanup.sh` | Label-based volume/network removal | Stale state on re-runs |
