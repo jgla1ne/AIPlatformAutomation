@@ -233,8 +233,8 @@ section "Phase 4: Database Initialisation"
 create_db() {
   local db="$1"
   if docker exec "$PG_CONTAINER" \
-      psql -U "${POSTGRES_USER}" -lqt 2>/dev/null \
-      | cut -d'|' -f1 | grep -qw "$db"; then
+      psql -U "${POSTGRES_USER}" -lqt 2>/dev/null | \
+      cut -d'|' -f1 | grep -qw "$db"; then
     log "  Database exists: ${db}"
   else
     log "  Creating database: ${db}"
