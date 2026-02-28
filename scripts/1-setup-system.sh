@@ -4052,7 +4052,7 @@ main() {
       local index=1
       
       while IFS= read -r line; do
-        if [[ $line =~ ^/dev/nvme ]]; then
+        if [[ $line =~ ^Disk.*nvme ]]; then
           local device=$(echo "$line" | awk '{print $2}' | sed 's/:$//')
           local size=$(echo "$line" | awk '{print $3}')
           
