@@ -2,13 +2,10 @@
 # AI Platform - Complete Service Stack
 
 networks:
-  aip-u1001_net:
-    name: aip-u1001_net
+  net_internal:
     driver: bridge
-  aip-u1001_net_internal:
-    name: aip-u1001_net_internal
+  net_default:
     driver: bridge
-    internal: true
 
 volumes:
   postgres-data:
@@ -32,66 +29,52 @@ volumes:
 services:
   postgres:
     image: pgvector/pgvector:pg16
+    container_name: ${COMPOSE_PROJECT_NAME}-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB:-aiplatform}
-      PGDATA: /var/lib/postgresql/data/pgdata
-      TZ: ${TIMEZONE:-UTC}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ${DATA_ROOT}/logs/postgres:/var/log/postgresql
     networks:
-      - aip-u1001_net_internal
-    ports:
-      - "127.0.0.1:5432:5432"
+      - net_internal
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-aiplatform}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres}"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 12
       start_period: 30s
-    labels:
-      - "ai-platform.service=postgres"
-      - "ai-platform.type=infrastructure"
 
   redis:
     image: redis:7-alpine
+    container_name: ${COMPOSE_PROJECT_NAME}-redis
     restart: unless-stopped
-    command: redis-server --requirepass \${REDIS_PASSWORD} --appendonly yes
+    command: redis-server --requirepass ${REDIS_PASSWORD} --maxmemory 512mb --maxmemory-policy allkeys-lru
     volumes:
       - redis-data:/data
-      - ${DATA_ROOT}/logs/redis:/var/log/redis
     networks:
-      - aip-u1001_net_internal
-    ports:
-      - "127.0.0.1:6379:6379"
+      - net_internal
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD} ping | grep PONG"]
       interval: 10s
       timeout: 5s
-      retries: 103
-      start_period: 30s
-    labels:
-      - "ai-platform.service=redis"
-      - "ai-platform.type=infrastructure"
+      retries: 10
+      start_period: 10s
 
   ollama:
     image: ollama/ollama:latest
-    container_name: ollama
+    container_name: ${COMPOSE_PROJECT_NAME}-ollama
     restart: unless-stopped
     
     networks:
-      - aip-u1001_net_internal
-      - aip-u1001_net
+      - net_internal
+      - net_default
     environment:
       - OLLAMA_HOST=0.0.0.0
       - OLLAMA_ORIGINS=*
-      - TZ=UTC
     volumes:
       - ollama-data:/root/.ollama
-      - ${DATA_ROOT}/logs/ollama:/var/log/ollama
     ports:
       - "${OLLAMA_PORT:-11434}:11434"
     healthcheck:
@@ -100,9 +83,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-    labels:
-      - "ai-platform.service=ollama"
-      - "ai-platform.type=llm"
 
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
@@ -127,8 +107,8 @@ services:
       - ${DATA_ROOT}/config/litellm:/app/config
       - ${DATA_ROOT}/logs/litellm:/app/logs
     networks:
-      - aip-u1001_net_internal
-      - aip-u1001_net
+      - net_internal
+      - net_default
     ports:
       - "${LITELLM_PORT:-4000}:4000"
     command: ["--config", "/app/config/config.yaml", "--port", "4000", "--num_workers", "4"]
@@ -144,7 +124,7 @@ services:
 
   dify-api:
     image: langgenius/dify-api:latest
-    container_name: dify-api
+    container_name: ${COMPOSE_PROJECT_NAME}-dify-api
     restart: unless-stopped
     depends_on:
       postgres:
@@ -153,63 +133,50 @@ services:
         condition: service_healthy
     environment:
       MODE: api
-      LOG_LEVEL: INFO
       SECRET_KEY: ${DIFY_SECRET_KEY}
-      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_USERNAME: ${POSTGRES_USER}
       DB_PASSWORD: ${POSTGRES_PASSWORD}
-      DB_HOST: postgres
+      DB_HOST: ${COMPOSE_PROJECT_NAME}-postgres
       DB_PORT: 5432
       DB_DATABASE: dify
-      REDIS_HOST: redis
+      REDIS_HOST: ${COMPOSE_PROJECT_NAME}-redis
+      REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       STORAGE_TYPE: local
-      STORAGE_LOCAL_PATH: /app/storage
+      STORAGE_LOCAL_PATH: /app/api/storage
       VECTOR_STORE: qdrant
-      QDRANT_URL: http://qdrant:6333
-      PUID: ${TENANT_UID}
-      PGID: ${TENANT_GID}
-      TZ: ${TIMEZONE:-UTC}
+      QDRANT_URL: http://${COMPOSE_PROJECT_NAME}-qdrant:6333
     volumes:
-      - ${DATA_ROOT}/dify/storage:/app/storage
-      - ${DATA_ROOT}/logs/dify:/app/logs
+      - dify-storage-data:/app/api/storage
     networks:
-      - aip-u1001_net_internal
-      - aip-u1001_net
-    ports:
-      - "${DIFY_PORT:-8080}:5001"
+      - net_internal
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:5001/health || exit 1"]
       interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    labels:
-      - "ai-platform.service=dify-api"
-      - "ai-platform.type=ai-platform"
+      timeout: 15s
+      retries: 10
+      start_period: 120s
 
   dify-web:
     image: langgenius/dify-web:latest
-    container_name: dify-web
+    container_name: ${COMPOSE_PROJECT_NAME}-dify-web
     restart: unless-stopped
     depends_on:
       dify-api:
         condition: service_healthy
     environment:
-      CONSOLE_API_URL: http://dify-api:5001
-      APP_API_URL: http://dify-api:5001
+      CONSOLE_API_URL: http://${COMPOSE_PROJECT_NAME}-dify-api:5001
+      APP_API_URL: http://${COMPOSE_PROJECT_NAME}-dify-api:5001
     networks:
-      - aip-u1001_net
+      - net_default
     ports:
-      - "${DIFY_PORT:-8080}:3000"
+      - "${DIFY_WEB_PORT:-3002}:3000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 20s
-    labels:
-      - "ai-platform.service=dify-web"
-      - "ai-platform.type=ai-platform"
 
   dify-worker:
     image: langgenius/dify-api:latest
@@ -243,8 +210,8 @@ services:
       - ${DATA_ROOT}/dify/storage:/app/storage
       - ${DATA_ROOT}/logs/dify:/app/logs
     networks:
-      - aip-u1001_net_internal
-      - aip-u1001_net
+      - net_internal
+      - net_default
     labels:
       - "ai-platform.service=dify-worker"
       - "ai-platform.type=ai-platform"
@@ -264,46 +231,45 @@ services:
     volumes:
       - ${DATA_ROOT}/dify/sandbox:/var/sandbox
     networks:
-      - aip-u1001_net_internal
-      - aip-u1001_net
+      - net_internal
+      - net_default
     labels:
       - "ai-platform.service=dify-sandbox"
       - "ai-platform.type=ai-platform"
 
   n8n:
     image: n8nio/n8n:latest
-    container_name: n8n
+    container_name: ${COMPOSE_PROJECT_NAME}-n8n
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       DB_TYPE: postgresdb
-      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_HOST: ${COMPOSE_PROJECT_NAME}-postgres
       DB_POSTGRESDB_PORT: 5432
       DB_POSTGRESDB_DATABASE: n8n
-      DB_POSTGRESDB_USER: ${POSTGRES_USER:-postgres}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER}
       DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
-      N8N_HOST: ${DOMAIN_NAME:-localhost}
+      WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://localhost:5678}
+      N8N_HOST: 0.0.0.0
       N8N_PORT: 5678
-      N8N_PROTOCOL: http
-      WEBHOOK_URL: http://${DOMAIN_NAME:-localhost}:5678
-      TZ: ${TIMEZONE:-UTC}
     volumes:
-      - ${DATA_ROOT}/n8n:/home/node/.n8n
-      - ${DATA_ROOT}/logs/n8n:/var/log/n8n
+      - n8n-data:/home/node/.n8n
     networks:
-      - aip-u1001_net_internal
-      - aip-u1001_net
+      - net_internal
+      - net_default
     ports:
       - "${N8N_PORT:-5678}:5678"
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5678/healthz"]
-      interval: 30s
+      test: ["CMD-SHELL", "curl -sf http://localhost:5678/healthz || exit 1"]
+      interval: 20s
       timeout: 10s
-      retries: 3
-      start_period: 30s
-    labels:
-      - "ai-platform.service=n8n"
-      - "ai-platform.type=workflow"
+      retries: 8
+      start_period: 60s
 
   flowise:
     image: flowiseai/flowise:latest
@@ -329,8 +295,8 @@ services:
       - ${DATA_ROOT}/flowise:/root/.flowise
       - ${DATA_ROOT}/logs/flowise:/var/log/flowise
     networks:
-      - aip-u1001_net_internal
-      - aip-u1001_net
+      - net_internal
+      - net_default
     ports:
       - "${FLOWISE_PORT:-3002}:3000"
     healthcheck:
@@ -362,8 +328,8 @@ services:
       - ${DATA_ROOT}/documents:/app/server/storage/documents
       - ${DATA_ROOT}/logs/anythingllm:/var/log/anythingllm
     networks:
-      - aip-u1001_net_internal
-      - aip-u1001_net
+      - net_internal
+      - net_default
     ports:
       - "${ANYTHINGLLM_PORT:-3001}:3000"
     healthcheck:
@@ -397,8 +363,8 @@ services:
       - ${DATA_ROOT}/open-webui:/app/backend/data
       - ${DATA_ROOT}/logs/open-webui:/app/logs
     networks:
-      - aip-u1001_net_internal
-      - aip-u1001_net
+      - net_internal
+      - net_default
     ports:
       - "${OPENWEBUI_PORT:-3000}:8080"
     healthcheck:
@@ -420,7 +386,7 @@ services:
       - ${DATA_ROOT}/config/prometheus:/etc/prometheus
       - ${DATA_ROOT}/logs/prometheus:/var/log/prometheus
     networks:
-      - aip-u1001_net_internal
+      - net_internal
     ports:
       - "${PROMETHEUS_PORT:-5000}:9090"
     command:
@@ -457,8 +423,8 @@ services:
       - ${DATA_ROOT}/grafana:/var/lib/grafana
       - ${DATA_ROOT}/logs/grafana:/var/log/grafana
     networks:
-      - aip-u1001_net_internal
-      - aip-u1001_net
+      - net_internal
+      - net_default
     ports:
       - "${GRAFANA_PORT:-3001}:3000"
     healthcheck:
@@ -473,29 +439,26 @@ services:
 
   signal-api:
     image: bbernhard/signal-cli-rest-api:latest
-    container_name: signal-api
+    platform: linux/amd64
+    container_name: ${COMPOSE_PROJECT_NAME}-signal-api
     restart: unless-stopped
     environment:
-      MODE: json-rpc
-      PORT: ${SIGNAL_API_PORT:-8090}
-      TZ: ${TIMEZONE:-UTC}
+      MODE: json
+      PORT: ${SIGNAL_PORT:-8085}
     volumes:
-      - ${DATA_ROOT}/signal-api:/home/.local/share/signal-cli
-      - ${DATA_ROOT}/logs/signal-api:/var/log/signal-api
+      - signal-data:/home/.local/share/signal-cli
     networks:
-      - aip-u1001_net_internal
-      - aip-u1001_net
+      - net_internal
     ports:
-      - "${SIGNAL_API_PORT:-8090}:8090"
+      - "${SIGNAL_PORT:-8085}:${SIGNAL_PORT:-8085}"
+    profiles:
+      - signal
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8090/about"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:${SIGNAL_PORT:-8085}/v1/about || exit 1"]
       interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    labels:
-      - "ai-platform.service=signal-api"
-      - "ai-platform.type=communication"
+      timeout: 15s
+      retries: 5
+      start_period: 90s
 
   openclaw:
     image: alpine/openclaw:latest
@@ -518,8 +481,8 @@ services:
       - ${DATA_ROOT}/openclaw:/app/data
       - ${DATA_ROOT}/logs/openclaw:/var/log/openclaw
     networks:
-      - aip-u1001_net_internal
-      - aip-u1001_net
+      - net_internal
+      - net_default
     ports:
       - "${OPENCLAW_PORT:-18789}:8082"
     healthcheck:
@@ -544,7 +507,7 @@ services:
       - ${DATA_ROOT}/tailscale:/var/lib/tailscale
       - ${DATA_ROOT}/logs/tailscale:/var/log/tailscale
     networks:
-      - aip-u1001_net_internal
+      - net_internal
     cap_add:
       - NET_ADMIN
       - NET_RAW
@@ -562,70 +525,56 @@ services:
 
   minio:
     image: minio/minio:latest
-    container_name: minio
+    container_name: ${COMPOSE_PROJECT_NAME}-minio
     restart: unless-stopped
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      TZ: ${TIMEZONE:-UTC}
     volumes:
-      - ${DATA_ROOT}/minio:/data
-      - ${DATA_ROOT}/logs/minio:/var/log/minio
+      - minio-data:/data
     networks:
-      - aip-u1001_net_internal
-      - aip-u1001_net
+      - net_internal
     ports:
+      - "${MINIO_PORT:-9000}:9000"
       - "${MINIO_CONSOLE_PORT:-9001}:9001"
     command: server /data --console-address ":9001"
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9000/minio/health/live"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
-    labels:
-      - "ai-platform.service=minio"
-      - "ai-platform.type=storage"
 
   qdrant:
     image: qdrant/qdrant:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-qdrant
     restart: unless-stopped
-    environment:
-      TZ: ${TIMEZONE:-UTC}
     volumes:
       - qdrant-data:/qdrant/storage
-      - ${DATA_ROOT}/logs/qdrant:/var/log/qdrant
     networks:
-      - aip-u1001_net_internal
-      - aip-u1001_net
+      - net_internal
     ports:
-      - "6333:6333"
+      - "${QDRANT_PORT:-6333}:6333"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:6333/ || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
       interval: 15s
       timeout: 10s
-      retries: 10
-      start_period: 30s
-    labels:
-      - "ai-platform.service=qdrant"
-      - "ai-platform.type=vector-database"
+      retries: 8
+      start_period: 20s
 
   rclone:
     image: rclone/rclone:latest
-    container_name: rclone
+    container_name: ${COMPOSE_PROJECT_NAME}-rclone
     restart: unless-stopped
     volumes:
       - ${TENANT_DIR}/config/rclone:/config/rclone
-      - ${RCLONE_MOUNT_POINT}:/data:shared
+      - ${RCLONE_MOUNT_POINT:-/mnt/data/rclone}:/data:shared
     networks:
-      - aip-u1001_net
+      - net_default
     environment:
       - RCLONE_CONFIG=/config/rclone/rclone.conf
       - RCLONE_CACHE_DIR=/cache
     command: mount gdrive:/data --cache-dir /cache --vfs-cache-mode full
-    labels:
-      - "ai-platform.service=rclone"
-      - "ai-platform.type=storage"
 
   caddy:
     image: caddy:2-alpine
@@ -639,7 +588,7 @@ services:
       - ${DATA_ROOT}/caddy/data:/data
       - ${DATA_ROOT}/cache:/cache
     networks:
-      - aip-u1001_net
+      - net_default
     environment:
       - DOMAIN_NAME=${DOMAIN_NAME}
       - SSL_EMAIL=${SSL_EMAIL}

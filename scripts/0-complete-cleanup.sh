@@ -7,11 +7,18 @@ set -euo pipefail
 
 # ── Colour helpers ────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-BLUE='\033[0;34m'; NC='\033[0m'; BOLD='\033[1m'
+BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'; BOLD='\033[1m'
 log()  { echo -e "${BLUE}[CLEANUP]${NC} $*"; }
 ok()   { echo -e "${GREEN}✅${NC} $*"; }
 warn() { echo -e "${YELLOW}⚠️ ${NC} $*"; }
 err()  { echo -e "${RED}❌${NC} $*"; }
+section() {
+  echo ""
+  echo -e "${CYAN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${CYAN}${BOLD}  $*${NC}"
+  echo -e "${CYAN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
+}
 
 # ── Must be root ──────────────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
@@ -101,69 +108,80 @@ docker ps -aq --filter "label=com.docker.compose.project" \
 ok "Containers removed"
 
 # ── Phase 2: Remove ALL named volumes ────────────────────────────
-log "Phase 2: Removing named Docker volumes..."
+section "Removing Volumes"
 
-# Remove volumes by tenant project name
+# Named volumes created by compose have this label:
+# com.docker.compose.project=${PROJECT_NAME}
+# We use that label to find them reliably.
+
 for TENANT_DIR in "${MOUNT_POINTS[@]}"; do
   ENV_FILE="${TENANT_DIR}/.env"
   if [[ -f "$ENV_FILE" ]]; then
     PROJECT=$(grep "^COMPOSE_PROJECT_NAME=" "$ENV_FILE" | cut -d= -f2 || true)
     if [[ -n "$PROJECT" ]]; then
-      log "Removing named volumes for project: ${PROJECT}"
-      
-      # Method 1: Remove by compose project label (most reliable)
-      docker volume ls --filter "label=com.docker.compose.project=${PROJECT}" 
-        --format '{{.Name}}' | xargs -r docker volume rm -f 2>/dev/null || true
-      
-      # Method 2: Remove by name prefix (catches anything Method 1 misses)
-      docker volume ls --format '{{.Name}}' 
-        | grep -E "^${PROJECT}[_-]" 
+      log "Removing volumes for project: ${PROJECT}"
+      VOLS="$(docker volume ls \
+        --filter "label=com.docker.compose.project=${PROJECT}" \
+        --format '{{.Name}}' 2>/dev/null || true)"
+
+      if [[ -n "$VOLS" ]]; then
+        echo "$VOLS" | xargs -r docker volume rm -f 2>/dev/null && \
+          ok "Removed $(echo "$VOLS" | wc -l) volumes" || \
+          warn "Some volumes could not be removed (may be in use)"
+      else
+        log "No volumes found for project ${PROJECT}"
+      fi
+
+      # Belt and braces: also remove by name prefix
+      docker volume ls --format '{{.Name}}' \
+        | grep -E "^${PROJECT}[_-]" \
         | xargs -r docker volume rm -f 2>/dev/null || true
-      
-      # Method 3: Prune anonymous volumes
-      docker volume prune -f 2>/dev/null || true
     fi
   fi
 done
 
-# Catch-all: remove any remaining aip- prefixed volumes
-log "Removing any remaining aip- volumes..."
-docker volume ls --format '{{.Name}}' | grep "^aip-" 
-  | xargs -r docker volume rm -f 2>/dev/null || true
+# Remove anonymous volumes
+docker volume prune -f >/dev/null 2>&1 || true
+ok "Volume cleanup complete"
 
-ok "Named volumes removed"
+# ── Phase 3: Remove networks ────────────────────────────────────────
+section "Removing Networks"
 
-# ── Phase 3: Remove networks ──────────────────────────────────────
-log "Phase 3: Removing AI platform networks..."
-
-# Remove networks by tenant project name
 for TENANT_DIR in "${MOUNT_POINTS[@]}"; do
   ENV_FILE="${TENANT_DIR}/.env"
   if [[ -f "$ENV_FILE" ]]; then
     PROJECT=$(grep "^COMPOSE_PROJECT_NAME=" "$ENV_FILE" | cut -d= -f2 || true)
     if [[ -n "$PROJECT" ]]; then
       log "Removing networks for project: ${PROJECT}"
-      
-      # Method 1: By compose project label
-      docker network ls --filter "label=com.docker.compose.project=${PROJECT}" 
-        --format '{{.Name}}' | while read -r net; do
-        docker network disconnect -f "$net" 
-          $(docker network inspect "$net" 
-            --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null) 
-          2>/dev/null || true
-        docker network rm "$net" 2>/dev/null || true
-      done
-      
-      # Method 2: By name prefix
-      docker network ls --format '{{.Name}}' 
-        | grep -E "^${PROJECT}[_-]" | while read -r net; do
-        docker network rm "$net" 2>/dev/null || true
-      done
+      NETS="$(docker network ls \
+        --filter "label=com.docker.compose.project=${PROJECT}" \
+        --format '{{.Name}}' 2>/dev/null || true)"
+
+      # Also get networks by name prefix (catches unlabelled stale networks)
+      NETS_PREFIX="$(docker network ls --format '{{.Name}}' \
+        | grep -E "^${PROJECT}[_-]" || true)"
+
+      ALL_NETS="$(echo -e "${NETS}\n${NETS_PREFIX}" | sort -u | grep -v '^$' || true)"
+
+      if [[ -n "$ALL_NETS" ]]; then
+        while IFS= read -r net; do
+          [[ -z "$net" ]] && continue
+          log "  Removing network: ${net}"
+          # Disconnect all containers first
+          CONNECTED="$(docker network inspect "$net" \
+            --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null || true)"
+          for c in $CONNECTED; do
+            docker network disconnect -f "$net" "$c" 2>/dev/null || true
+          done
+          docker network rm "$net" 2>/dev/null || true
+        done <<< "$ALL_NETS"
+        ok "Network cleanup complete"
+      else
+        log "No networks found for project ${PROJECT}"
+      fi
     fi
   fi
 done
-
-ok "Networks removed"
 
 # ── Phase 4: Remove tenant data directories ───────────────────────
 log "Phase 4: Removing tenant data directories..."

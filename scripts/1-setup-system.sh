@@ -1095,6 +1095,16 @@ collect_configurations() {
     print_header "⚙️ Configuration Collection"
     echo ""
     
+    # Generate all required secrets before writing .env file
+    # Only generate if not already set (preserve existing values)
+    POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(generate_random_password 24)}"
+    REDIS_PASSWORD="${REDIS_PASSWORD:-$(generate_random_password 24)}"
+    N8N_ENCRYPTION_KEY="${N8N_ENCRYPTION_KEY:-$(generate_random_password 64)}"
+    FLOWISE_PASSWORD="${FLOWISE_PASSWORD:-$(generate_random_password 24)}"
+    ANYTHINGLLM_JWT_SECRET="${ANYTHINGLLM_JWT_SECRET:-$(generate_random_password 64)}"
+    MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-$(generate_random_password 32)}"
+    DIFY_SECRET_KEY="${DIFY_SECRET_KEY:-$(openssl rand -hex 32)}"
+    
     # Generate tenant identity for multi-tenant support
     print_header "Tenant Identity"
     
@@ -1138,7 +1148,8 @@ collect_configurations() {
 
 # System Configuration
 DATA_ROOT=${DATA_ROOT}
-TENANT_DIR=${DATA_ROOT}
+TENANT_DIR=${DATA_ROOT}/${TENANT_NAME}
+TENANT_NAME=${TENANT_NAME}
 METADATA_DIR=${METADATA_DIR}
 ENABLE_SIGNAL=false
 TAILSCALE_EXTRA_ARGS=
@@ -1190,7 +1201,7 @@ SSL_EMAIL=$existing_ssl_email
 
 # Docker Configuration
 DOCKER_NETWORK=$DOCKER_NETWORK
-COMPOSE_FILE=/home/jglaine/AIPlatformAutomation/scripts/docker-compose.yml
+COMPOSE_FILE=/home/jglaine/AIPlatformAutomation/docker-compose.yml
 
 # Vector Database Configuration
 VECTOR_DB=qdrant
@@ -1200,6 +1211,41 @@ VECTOR_DB_TYPE=qdrant
 TENANT_USER=$TENANT_USER
 TENANT_UID=$TENANT_UID
 TENANT_GID=$TENANT_GID
+
+# ── PostgreSQL ────────────────────────────────────────────────
+POSTGRES_USER=aip_user
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+POSTGRES_DB=postgres
+
+# ── Redis ─────────────────────────────────────────────────────
+REDIS_PASSWORD=${REDIS_PASSWORD}
+
+# ── Service Secrets ───────────────────────────────────────────
+N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+FLOWISE_PASSWORD=${FLOWISE_PASSWORD}
+ANYTHINGLLM_JWT_SECRET=${ANYTHINGLLM_JWT_SECRET}
+MINIO_ROOT_USER=minioadmin
+MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+DIFY_SECRET_KEY=${DIFY_SECRET_KEY}
+
+# ── Service Ports ─────────────────────────────────────────────
+N8N_PORT=${N8N_PORT:-5678}
+FLOWISE_PORT=${FLOWISE_PORT:-3000}
+ANYTHINGLLM_PORT=${ANYTHINGLLM_PORT:-3001}
+OLLAMA_PORT=${OLLAMA_PORT:-11434}
+QDRANT_PORT=${QDRANT_PORT:-6333}
+MINIO_PORT=${MINIO_PORT:-9000}
+MINIO_CONSOLE_PORT=${MINIO_CONSOLE_PORT:-9001}
+DIFY_PORT=${DIFY_PORT:-5001}
+DIFY_WEB_PORT=${DIFY_WEB_PORT:-3002}
+SIGNAL_PORT=${SIGNAL_PORT:-8085}
+
+# ── Optional Services ─────────────────────────────────────────
+TAILSCALE_AUTH_KEY=
+
+# ── Webhook / External URLs ───────────────────────────────────
+N8N_WEBHOOK_URL=https://${DOMAIN}/n8n
+DOMAIN=${DOMAIN}
 EOF
     
     # Set correct ownership for .env file
