@@ -53,6 +53,36 @@ if [[ ${#MOUNT_POINTS[@]} -eq 0 ]]; then
   MOUNT_POINTS=()
 fi
 
+# ── Tenant Selection ───────────────────────────────────────────────
+if [[ ${#MOUNT_POINTS[@]} -gt 1 ]]; then
+  echo ""
+  echo -e "${CYAN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${CYAN}${BOLD}  Select Tenant to Clean${NC}"
+  echo -e "${CYAN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
+  echo "Multiple tenants found. Select which one to clean:"
+  echo ""
+  
+  PS3="Enter tenant number (or 'all' for all tenants): "
+  select selected_tenant in "all" "${MOUNT_POINTS[@]}"; do
+    if [[ "$selected_tenant" == "all" ]]; then
+      echo -e "${YELLOW}Cleaning ALL tenants${NC}"
+      break
+    elif [[ " ${MOUNT_POINTS[*]} " =~ " ${selected_tenant} " ]]; then
+      echo -e "${YELLOW}Cleaning tenant: ${selected_tenant}${NC}"
+      MOUNT_POINTS=("$selected_tenant")
+      break
+    else
+      echo "Invalid selection. Please try again."
+    fi
+  done
+  echo ""
+elif [[ ${#MOUNT_POINTS[@]} -eq 1 ]]; then
+  echo -e "${CYAN}Found single tenant: ${MOUNT_POINTS[0]}${NC}"
+else
+  echo -e "${YELLOW}No tenants found - cleaning Docker artifacts only${NC}"
+fi
+
 # ── Confirm before destruction ────────────────────────────────────
 echo ""
 echo -e "${RED}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -223,8 +253,7 @@ for TENANT_DIR in "${MOUNT_POINTS[@]}"; do
     fi
     log "  Removing: ${TENANT_DIR}"
     # Unmount any bind mounts inside the directory first
-    mount | grep "${TENANT_DIR}" | awk '{print $3}' 
-      | sort -r | xargs -r umount -f 2>/dev/null || true
+    mount | grep "${TENANT_DIR}" | awk '{print $3}' | sort -r | xargs -r umount -f 2>/dev/null || true
     rm -rf "${TENANT_DIR:?}"
     ok "  Removed: ${TENANT_DIR}"
   fi
