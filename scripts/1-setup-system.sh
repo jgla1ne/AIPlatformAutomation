@@ -1140,6 +1140,8 @@ collect_configurations() {
 DATA_ROOT=${DATA_ROOT}
 TENANT_DIR=${DATA_ROOT}
 METADATA_DIR=${METADATA_DIR}
+ENABLE_SIGNAL=false
+TAILSCALE_EXTRA_ARGS=
 TIMEZONE=UTC
 LOG_LEVEL=info
 
@@ -2030,7 +2032,13 @@ allocate_port() {
     
     # Core service ports (always written)
     echo "SIGNAL_PORT=${SIGNAL_PORT:-8085}" >> "$ENV_FILE"
-    echo "TAILSCALE_EXTRA_ARGS=--accept-dns=false" >> "$ENV_FILE"
+    echo "QDRANT_PORT=${QDRANT_PORT:-6333}" >> "$ENV_FILE"
+    echo "MINIO_PORT=${MINIO_PORT:-9000}" >> "$ENV_FILE"
+    echo "FLOWISE_PORT=${FLOWISE_PORT:-3000}" >> "$ENV_FILE"
+    echo "ANYTHINGLLM_PORT=${ANYTHINGLLM_PORT:-3001}" >> "$ENV_FILE"
+    echo "DIFY_PORT=${DIFY_PORT:-5001}" >> "$ENV_FILE"
+    echo "DIFY_WEB_PORT=${DIFY_WEB_PORT:-3002}" >> "$ENV_FILE"
+    echo "TAILSCALE_EXTRA_ARGS=" >> "$ENV_FILE"
     
     # MinIO configuration (if selected)
     if [[ " ${selected_services[*]} " =~ " minio " ]]; then
