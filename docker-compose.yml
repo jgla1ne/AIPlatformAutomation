@@ -594,6 +594,7 @@ services:
       - ${DATA_ROOT}/cache:/cache
     networks:
       - net_default
+      - net_internal
     environment:
       - DOMAIN_NAME=${DOMAIN_NAME}
       - SSL_EMAIL=${SSL_EMAIL}

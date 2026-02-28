@@ -41,7 +41,8 @@ discover_tenants() {
 docker_compose_cleanup() {
   local tenant="$1"
   local project="aip-${tenant}"
-  local compose_file="${SCRIPT_DIR}/../docker-compose.yml"
+  local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local compose_file="${script_dir}/../docker-compose.yml"
   
   if [[ -f "$compose_file" ]]; then
     log "Running docker compose down for ${project}..."
