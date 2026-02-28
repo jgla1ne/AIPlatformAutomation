@@ -81,11 +81,11 @@ services:
     ports:
       - "${OLLAMA_PORT:-11434}:11434"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/"]
+      test: ["CMD", "curl", "-sf", "http://localhost:11434/api/tags"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 60s
+      retries: 5
+      start_period: 120s
 
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
@@ -168,8 +168,8 @@ services:
       dify-api:
         condition: service_healthy
     environment:
-      CONSOLE_API_URL: http://${COMPOSE_PROJECT_NAME}-dify-api:5001
-      APP_API_URL: http://${COMPOSE_PROJECT_NAME}-dify-api:5001
+      CONSOLE_API_URL: http://dify-api:5001
+      APP_API_URL: http://dify-api:5001
     networks:
       - net_default
     ports:
