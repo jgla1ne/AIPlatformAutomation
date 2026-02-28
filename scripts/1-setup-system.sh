@@ -92,7 +92,7 @@ readonly BOLD='\033[1m'
 # Paths (will be set by volume detection)
 METADATA_DIR="$DATA_ROOT/metadata"
 STATE_FILE="$METADATA_DIR/setup_state.json"
-LOG_FILE="$DATA_ROOT/logs/setup.log"
+LOG_FILE="${DATA_ROOT}/logs/setup.log"
 SERVICES_FILE="$METADATA_DIR/selected_services.json"
 COMPOSE_DIR="$DATA_ROOT/compose"
 CONFIG_DIR="$DATA_ROOT/config"
@@ -2644,6 +2644,10 @@ create_directory_structure() {
     chmod 750 "${DATA_ROOT}/config/rclone"
     chmod 750 "${DATA_ROOT}/cache/rclone"
     
+    # Log directories - owned by stack user for access
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/logs"
+    chmod 755 "${DATA_ROOT}/logs"
+    
     # Pre-create critical files with correct ownership
     # OpenWebUI secret key
     touch "${DATA_ROOT}/data/openwebui/.webui_secret_key"
@@ -4092,6 +4096,24 @@ create_tenant_directories() {
         "${TENANT_DIR}/.gdrive/documents"
         "${TENANT_DIR}/.gdrive/embeddings_queue"
         "${TENANT_DIR}/logs"
+        "${TENANT_DIR}/logs/postgres"
+        "${TENANT_DIR}/logs/redis"
+        "${TENANT_DIR}/logs/qdrant"
+        "${TENANT_DIR}/logs/minio"
+        "${TENANT_DIR}/logs/n8n"
+        "${TENANT_DIR}/logs/flowise"
+        "${TENANT_DIR}/logs/anythingllm"
+        "${TENANT_DIR}/logs/dify"
+        "${TENANT_DIR}/logs/litellm"
+        "${TENANT_DIR}/logs/open-webui"
+        "${TENANT_DIR}/logs/ollama"
+        "${TENANT_DIR}/logs/prometheus"
+        "${TENANT_DIR}/logs/grafana"
+        "${TENANT_DIR}/logs/signal-api"
+        "${TENANT_DIR}/logs/openclaw"
+        "${TENANT_DIR}/logs/tailscale"
+        "${TENANT_DIR}/logs/rclone"
+        "${TENANT_DIR}/logs/gdrive-autosync"
         "${TENANT_DIR}/backups"
         "${TENANT_DIR}/metadata"
         "${TENANT_DIR}/cache"
