@@ -24,8 +24,8 @@ section() { echo -e "\n${CYAN}════════════════�
 # Priority 3: Search under /opt/ai-platform
 if [[ -n "${TENANT_DIR:-}" && -f "${TENANT_DIR}/.env" ]]; then
   ENV_FILE="${TENANT_DIR}/.env"
-elif [[ -f "/mnt/data/.env" ]]; then
-  ENV_FILE="/mnt/data/.env"
+elif [[ -f "/mnt/data/u1001/.env" ]]; then
+  ENV_FILE="/mnt/data/u1001/.env"
 else
   ENV_FILE="$(find /mnt/data /opt/ai-platform -maxdepth 5 \
     -name '.env' -not -path '*/\.*' 2>/dev/null | head -1)"
@@ -55,7 +55,7 @@ ok "Environment loaded. Project: ${COMPOSE_PROJECT_NAME}, Data: ${DATA_ROOT}"
 
 # ── Compose file location ─────────────────────────────────────────────────────
 TENANT_DIR="$(dirname "${ENV_FILE}")"
-COMPOSE_FILE="${TENANT_DIR}/docker-compose.yml"
+COMPOSE_FILE="${SCRIPT_DIR}/../docker-compose.yml"
 [[ ! -f "${COMPOSE_FILE}" ]] && fail "docker-compose.yml not found at: ${COMPOSE_FILE}"
 
 # ── DC() defined after ENV_FILE and COMPOSE_FILE are resolved ─────────────────
@@ -110,7 +110,7 @@ wait_for_postgres() {
   local max_port=60
 
   until docker exec "${PG_CONTAINER}" \
-      pg_isready -U postgres -q 2>/dev/null; do
+      pg_isready -U "${POSTGRES_USER}" -q 2>/dev/null; do
     attempts=$((attempts + 1))
     [[ $attempts -ge $max_port ]] && \
       fail "PostgreSQL port never opened after $((max_port * 3))s. Check container: docker logs ${PG_CONTAINER}"
@@ -124,7 +124,7 @@ wait_for_postgres() {
   attempts=0
   local max_query=40
   until docker exec "${PG_CONTAINER}" \
-      psql -U postgres -c "SELECT 1;" -q --no-align --tuples-only 2>/dev/null \
+      psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "SELECT 1;" -q --no-align --tuples-only 2>/dev/null \
       | grep -q "1"; do
     attempts=$((attempts + 1))
     [[ $attempts -ge $max_query ]] && \
@@ -140,7 +140,7 @@ wait_for_postgres
 log "Waiting for Redis..."
 attempts=0
 until docker exec "${COMPOSE_PROJECT_NAME}-redis" \
-    redis-cli ping 2>/dev/null | grep -q "PONG"; do
+    redis-cli -a "${REDIS_PASSWORD}" ping 2>/dev/null | grep -q "PONG"; do
   attempts=$((attempts + 1))
   [[ $attempts -ge 20 ]] && fail "Redis not ready after 60s. Check: docker logs ${COMPOSE_PROJECT_NAME}-redis"
   sleep 3
@@ -169,7 +169,7 @@ create_database() {
 
   # Check if already exists
   if docker exec "${PG_CONTAINER}" \
-      psql -U postgres -lqt 2>/dev/null \
+      psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -lqt 2>/dev/null \
       | cut -d'|' -f1 | tr -d ' ' | grep -qx "${db}"; then
     ok "  Database already exists: ${db}"
     return 0
@@ -177,11 +177,11 @@ create_database() {
 
   log "  Creating database: ${db}"
 
-  # Create as postgres superuser, owned by app user
+  # Create as POSTGRES_USER (which is the superuser in this setup)
   local create_output
   create_output=$(docker exec "${PG_CONTAINER}" \
-    psql -U postgres \
-    -c "CREATE DATABASE \"${db}\" OWNER \"${POSTGRES_USER}\";" \
+    psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+    -c "CREATE DATABASE \"${db}\";" \
     2>&1)
 
   if echo "${create_output}" | grep -qi "error\|fatal\|permission denied"; then
@@ -189,8 +189,8 @@ create_database() {
     sleep 5
     # Retry
     create_output=$(docker exec "${PG_CONTAINER}" \
-      psql -U postgres \
-      -c "CREATE DATABASE \"${db}\" OWNER \"${POSTGRES_USER}\";" \
+      psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+      -c "CREATE DATABASE \"${db}\";" \
       2>&1)
     if echo "${create_output}" | grep -qi "error\|fatal\|permission denied"; then
       fail "  Cannot create database ${db}: ${create_output}"
@@ -199,7 +199,7 @@ create_database() {
 
   # Verify creation
   if docker exec "${PG_CONTAINER}" \
-      psql -U postgres -lqt 2>/dev/null \
+      psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -lqt 2>/dev/null \
       | cut -d'|' -f1 | tr -d ' ' | grep -qx "${db}"; then
     ok "  Created and verified: ${db}"
   else
@@ -210,7 +210,7 @@ create_database() {
 grant_privileges() {
   local db="$1"
   docker exec "${PG_CONTAINER}" \
-    psql -U postgres \
+    psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
     -c "GRANT ALL PRIVILEGES ON DATABASE \"${db}\" TO \"${POSTGRES_USER}\";" \
     2>/dev/null && ok "  Privileges granted on: ${db}" \
     || warn "  Could not grant privileges on ${db}"
@@ -219,7 +219,7 @@ grant_privileges() {
 enable_pgvector() {
   local db="$1"
   docker exec "${PG_CONTAINER}" \
-    psql -U postgres -d "${db}" \
+    psql -U "${POSTGRES_USER}" -d "${db}" \
     -c "CREATE EXTENSION IF NOT EXISTS vector;" \
     2>/dev/null && ok "  pgvector enabled in: ${db}" \
     || warn "  pgvector not available in ${db} (non-fatal if not using vector search)"
@@ -239,7 +239,7 @@ enable_pgvector "anythingllm"
 # Final verification — list all created databases
 log "Database verification:"
 docker exec "${PG_CONTAINER}" \
-  psql -U postgres -lqt 2>/dev/null \
+  psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -lqt 2>/dev/null \
   | cut -d'|' -f1 | tr -d ' ' | grep -v "^$" \
   | while read -r dbname; do
     ok "  ✓ ${dbname}"
