@@ -325,7 +325,7 @@ services:
       PUID: ${RUNNING_UID}
       PGID: ${RUNNING_GID}
       TZ: ${TIMEZONE:-UTC}
-      VECTOR_DB: ${VECTOR_DB_TYPE:-qdrant}
+      VECTOR_DB: qdrant
       QDRANT_URL: http://qdrant:6333
       QDRANT_API_KEY: ${QDRANT_API_KEY:-}
     volumes:
@@ -392,10 +392,10 @@ services:
       PUID: ${RUNNING_UID}
       PGID: ${RUNNING_GID}
       TZ: ${TIMEZONE:-UTC}
-      VECTOR_DB: ${VECTOR_DB_TYPE:-qdrant}
+      VECTOR_DB: qdrant
       QDRANT_URL: http://qdrant:6333
       QDRANT_API_KEY: ${QDRANT_API_KEY:-}
-      COLLECTION_NAME: ${COMPOSE_PROJECT_NAME}
+      QDRANT_COLLECTION: ${QDRANT_DOCS_COLLECTION}
     volumes:
       - ${DATA_ROOT}/open-webui:/app/backend/data
       - ${DATA_ROOT}/logs/open-webui:/app/logs
@@ -514,7 +514,7 @@ services:
       PUID: ${RUNNING_UID}
       PGID: ${RUNNING_GID}
       TZ: ${TIMEZONE:-UTC}
-      VECTOR_DB: ${VECTOR_DB_TYPE:-qdrant}
+      VECTOR_DB: qdrant
       QDRANT_URL: http://qdrant:6333
       QDRANT_API_KEY: ${QDRANT_API_KEY:-}
     volumes:

@@ -1152,6 +1152,15 @@ PG_VOLUME=$PG_VOLUME
 REDIS_VOLUME=$REDIS_VOLUME
 QDRANT_VOLUME=$QDRANT_VOLUME
 
+# Single VectorDB for all services - one set of vars, referenced everywhere
+QDRANT_HOST=qdrant
+QDRANT_HTTP_PORT=${QDRANT_PORT:-6333}
+QDRANT_GRPC_PORT=${QDRANT_GRPC_PORT:-6334}
+QDRANT_COLLECTION_PREFIX=${TENANT_NAME}
+QDRANT_DOCS_COLLECTION=${TENANT_NAME}_docs
+QDRANT_URL=http://${QDRANT_HOST}:${QDRANT_HTTP_PORT}
+QDRANT_API_KEY=${QDRANT_API_KEY:-}
+
 # Network Configuration (DOMAIN=localhost by default)
 DOMAIN_NAME=$existing_domain_name
 DOMAIN=${existing_domain_name}
