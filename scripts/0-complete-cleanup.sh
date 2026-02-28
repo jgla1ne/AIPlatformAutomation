@@ -109,50 +109,59 @@ for TENANT_DIR in "${MOUNT_POINTS[@]}"; do
   if [[ -f "$ENV_FILE" ]]; then
     PROJECT=$(grep "^COMPOSE_PROJECT_NAME=" "$ENV_FILE" | cut -d= -f2 || true)
     if [[ -n "$PROJECT" ]]; then
-      log "  Removing volumes for project: ${PROJECT}"
-      # List and remove all volumes with this project prefix
-      docker volume ls --format '{{.Name}}' | grep "^${PROJECT}" \
+      log "Removing named volumes for project: ${PROJECT}"
+      
+      # Method 1: Remove by compose project label (most reliable)
+      docker volume ls --filter "label=com.docker.compose.project=${PROJECT}" 
+        --format '{{.Name}}' | xargs -r docker volume rm -f 2>/dev/null || true
+      
+      # Method 2: Remove by name prefix (catches anything Method 1 misses)
+      docker volume ls --format '{{.Name}}' 
+        | grep -E "^${PROJECT}[_-]" 
         | xargs -r docker volume rm -f 2>/dev/null || true
-      # Also try explicit names that compose creates
-      for VOL in postgres-data redis-data qdrant-data minio-data \
-                 n8n-data flowise-data anythingllm-data \
-                 dify-api-data signal-data; do
-        docker volume rm -f "${PROJECT}_${VOL}" 2>/dev/null || true
-      done
+      
+      # Method 3: Prune anonymous volumes
+      docker volume prune -f 2>/dev/null || true
     fi
   fi
 done
 
 # Catch-all: remove any remaining aip- prefixed volumes
-log "  Removing any remaining aip- volumes..."
-docker volume ls --format '{{.Name}}' | grep "^aip-" \
+log "Removing any remaining aip- volumes..."
+docker volume ls --format '{{.Name}}' | grep "^aip-" 
   | xargs -r docker volume rm -f 2>/dev/null || true
-
-# Remove anonymous volumes left over
-docker volume prune -f 2>/dev/null || true
 
 ok "Named volumes removed"
 
 # ── Phase 3: Remove networks ──────────────────────────────────────
 log "Phase 3: Removing AI platform networks..."
 
-# Disconnect all containers from aip- networks first
-docker network ls --format '{{.Name}}' | grep "^aip-" | while read -r net; do
-  log "  Disconnecting containers from network: ${net}"
-  docker network inspect "$net" \
-    --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null \
-    | tr ' ' '\n' \
-    | xargs -r -I{} docker network disconnect -f "$net" {} 2>/dev/null || true
-  docker network rm "$net" 2>/dev/null || true
+# Remove networks by tenant project name
+for TENANT_DIR in "${MOUNT_POINTS[@]}"; do
+  ENV_FILE="${TENANT_DIR}/.env"
+  if [[ -f "$ENV_FILE" ]]; then
+    PROJECT=$(grep "^COMPOSE_PROJECT_NAME=" "$ENV_FILE" | cut -d= -f2 || true)
+    if [[ -n "$PROJECT" ]]; then
+      log "Removing networks for project: ${PROJECT}"
+      
+      # Method 1: By compose project label
+      docker network ls --filter "label=com.docker.compose.project=${PROJECT}" 
+        --format '{{.Name}}' | while read -r net; do
+        docker network disconnect -f "$net" 
+          $(docker network inspect "$net" 
+            --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null) 
+          2>/dev/null || true
+        docker network rm "$net" 2>/dev/null || true
+      done
+      
+      # Method 2: By name prefix
+      docker network ls --format '{{.Name}}' 
+        | grep -E "^${PROJECT}[_-]" | while read -r net; do
+        docker network rm "$net" 2>/dev/null || true
+      done
+    fi
+  fi
 done
-
-# Also remove bridge networks that may have been created manually
-docker network ls --format '{{.Name}} {{.Driver}}' \
-  | grep ' bridge$' \
-  | awk '{print $1}' \
-  | grep -v '^bridge$\|^host$\|^none$' \
-  | grep 'aip\|aiplatform\|net_internal\|net_default' \
-  | xargs -r docker network rm 2>/dev/null || true
 
 ok "Networks removed"
 
