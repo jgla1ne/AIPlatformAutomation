@@ -92,6 +92,28 @@ ok "Disk space: ${FREE_GB}GB free"
 section "Phase 2: Pull Images"
 # =============================================================================
 
+# === Prometheus Configuration ===
+log "Creating Prometheus configuration..."
+PROMETHEUS_CONFIG="${DATA_ROOT}/config/prometheus/prometheus.yml"
+mkdir -p "$(dirname "${PROMETHEUS_CONFIG}")"
+if [[ ! -f "${PROMETHEUS_CONFIG}" ]]; then
+  cat > "${PROMETHEUS_CONFIG}" << 'PROMEOF'
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+PROMEOF
+  chmod 644 "${PROMETHEUS_CONFIG}"
+fi
+ok "Prometheus configuration created"
+
 log "Pulling all service images (this may take several minutes on first run)..."
 DC pull --quiet 2>&1 | grep -v "^$" || warn "Some images could not be pulled — will use cached versions"
 ok "Image pull complete"
@@ -249,8 +271,21 @@ docker exec "${PG_CONTAINER}" \
 section "Phase 5: Deploy Application Services"
 # =============================================================================
 
-log "Starting application services..."
-DC up -d
+# Fix Grafana directory ownership before starting services
+if [[ -d "${DATA_ROOT}/grafana" ]]; then
+  chown -R 472:472 "${DATA_ROOT}/grafana" 2>/dev/null || \
+    warn "Could not chown grafana directory — Grafana may fail to start"
+fi
+
+# Guard rclone startup if credentials not configured
+if [[ -z "${RCLONE_ACCESS_KEY:-}" || -z "${RCLONE_SECRET_KEY:-}" ]]; then
+  warn "rclone credentials not configured — rclone backup disabled"
+  # Remove rclone service from compose startup by setting scale to 0
+  DC up -d --scale rclone=0
+else
+  log "Starting application services..."
+  DC up -d
+fi
 
 # =============================================================================
 section "Phase 6: Wait for Services"

@@ -481,31 +481,53 @@ configure_dify() {
     # Initialize Dify admin account (required before any other API calls)
     log "Initializing Dify admin account..."
     local setup_response
-    setup_response=$(curl -sf -X POST \
-        "http://localhost:${DIFY_PORT:-3002}/console/api/setup" \
+    local setup_http_code
+    
+    # Get HTTP status code and response
+    setup_response=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X POST "http://localhost:${DIFY_PORT:-3002}/console/api/setup" \
         -H "Content-Type: application/json" \
         -d "{
             \"email\": \"${DIFY_ADMIN_EMAIL:-admin@example.com}\",
             \"name\": \"Admin\",
             \"password\": \"${DIFY_ADMIN_PASSWORD:-admin123}\"
-        }" 2>/dev/null) || {
-        log "⚠️ Dify setup failed - checking if already configured"
-        # Check if already set up
-        if curl -sf "http://localhost:${DIFY_PORT:-3002}/console/api/account" >/dev/null 2>&1; then
-            log "✅ Dify already configured"
-        else
-            log "❌ Dify configuration failed"
-            return 1
-        fi
-    }
+        }" 2>/dev/null)
+    setup_http_code=$setup_response
     
-    if echo "${setup_response}" | grep -q '"result":"success"'; then
-        log "✅ Dify admin account created"
-    elif echo "${setup_response}" | grep -q 'already_setup'; then
-        log "✅ Dify already configured"
-    else
-        log "⚠️ Dify setup returned unexpected response: ${setup_response}"
+    # Get response body on success
+    if [[ "${setup_http_code}" =~ ^(200|201)$ ]]; then
+        setup_response=$(curl -sf -X POST \
+            "http://localhost:${DIFY_PORT:-3002}/console/api/setup" \
+            -H "Content-Type: application/json" \
+            -d "{
+                \"email\": \"${DIFY_ADMIN_EMAIL:-admin@example.com}\",
+                \"name\": \"Admin\",
+                \"password\": \"${DIFY_ADMIN_PASSWORD:-admin123}\"
+            }" 2>/dev/null || echo "")
     fi
+    
+    case "${setup_http_code}" in
+        200|201)
+            if echo "${setup_response}" | grep -q '"result":"success"'; then
+                log "✅ Dify admin account created"
+            else
+                log "⚠️ Dify setup returned unexpected response: ${setup_response}"
+            fi
+            ;;
+        400)
+            log "✅ Dify already initialised — skipping"
+            ;;
+        *)
+            log "⚠️ Dify setup failed (HTTP ${setup_http_code}) - checking if already configured"
+            # Check if already set up
+            if curl -sf "http://localhost:${DIFY_PORT:-3002}/console/api/account" >/dev/null 2>&1; then
+                log "✅ Dify already configured"
+            else
+                log "❌ Dify configuration failed"
+                return 1
+            fi
+            ;;
+    esac
     
     log "✅ Dify configuration completed"
 }
@@ -606,6 +628,90 @@ configure_all_services() {
     configure_tailscale
     configure_rclone
     print_service_summary
+}
+
+configure_flowise() {
+    log "Configuring Flowise..."
+    
+    # Wait for Flowise to be ready
+    local retries=0
+    until curl -sf "http://localhost:${FLOWISE_PORT:-3000}/" >/dev/null 2>&1; do
+        ((retries++))
+        [[ ${retries} -gt 60 ]] && { log "❌ Flowise not ready"; return 1; }
+        sleep 5
+    done
+    
+    log "✅ Flowise is ready"
+    
+    # Wait 20s for Flowise database migrations to complete
+    log "Waiting 20s for Flowise database migrations to complete..."
+    sleep 20
+    
+    log "✅ Flowise configuration completed"
+}
+
+configure_signal() {
+    log "Configuring Signal..."
+    
+    # Wait for Signal to be ready
+    local retries=0
+    until curl -sf "http://localhost:${SIGNAL_PORT:-3001}/" >/dev/null 2>&1; do
+        ((retries++))
+        [[ ${retries} -gt 60 ]] && { log "❌ Signal not ready"; return 1; }
+        sleep 5
+    done
+    
+    log "✅ Signal is ready"
+    
+    log "✅ Signal configuration completed"
+}
+
+configure_openclaw() {
+    log "Configuring OpenClaw..."
+    
+    # Wait for OpenClaw to be ready
+    local retries=0
+    until curl -sf "http://localhost:${OPENCLAW_PORT:-3003}/" >/dev/null 2>&1; do
+        ((retries++))
+        [[ ${retries} -gt 60 ]] && { log "❌ OpenClaw not ready"; return 1; }
+        sleep 5
+    done
+    
+    log "✅ OpenClaw is ready"
+    
+    log "✅ OpenClaw configuration completed"
+}
+
+configure_tailscale() {
+    log "Configuring Tailscale..."
+    
+    # Wait for Tailscale to be ready
+    local retries=0
+    until curl -sf "http://localhost:${TAILSCALE_PORT:-3004}/" >/dev/null 2>&1; do
+        ((retries++))
+        [[ ${retries} -gt 60 ]] && { log "❌ Tailscale not ready"; return 1; }
+        sleep 5
+    done
+    
+    log "✅ Tailscale is ready"
+    
+    log "✅ Tailscale configuration completed"
+}
+
+configure_rclone() {
+    log "Configuring RClone..."
+    
+    # Wait for RClone to be ready
+    local retries=0
+    until curl -sf "http://localhost:${RCLONE_PORT:-3005}/" >/dev/null 2>&1; do
+        ((retries++))
+        [[ ${retries} -gt 60 ]] && { log "❌ RClone not ready"; return 1; }
+        sleep 5
+    done
+    
+    log "✅ RClone is ready"
+    
+    log "✅ RClone configuration completed"
 }
 
 load_env() {

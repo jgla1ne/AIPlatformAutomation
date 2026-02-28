@@ -94,4 +94,28 @@ docker compose \
 # Deploy only the new service
 $COMPOSE up -d "${SERVICE}"
 
+# ─── DATABASE CREATION (if needed) ───────────────────────────────────────
+# Check if this service needs a database by looking for POSTGRES_DB in env
+DB_NAME=$(grep "^${SERVICE^^}_POSTGRES_DB=" "${ENV_FILE}" 2>/dev/null | cut -d= -f2 || true)
+if [[ -n "${DB_NAME}" ]]; then
+  echo "Creating database ${DB_NAME} for service ${SERVICE}..."
+  
+  # Wait for postgres to be ready
+  PG_CONTAINER="${COMPOSE_PROJECT_NAME}-postgres"
+  until docker exec "${PG_CONTAINER}" pg_isready -U postgres -q 2>/dev/null; do
+    echo "Waiting for PostgreSQL..."
+    sleep 3
+  done
+  
+  # Create database using postgres superuser
+  if ! docker exec "${PG_CONTAINER}" \
+    psql -U postgres \
+    -c "CREATE DATABASE \"${DB_NAME}\" OWNER \"${POSTGRES_USER}\";" \
+    2>/dev/null; then
+    echo "Database ${DB_NAME} may already exist or failed to create"
+  else
+    echo "✅ Database ${DB_NAME} created successfully"
+  fi
+fi
+
 echo "✅ Service '${SERVICE}' added to tenant ${TENANT_NAME}"
