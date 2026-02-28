@@ -111,6 +111,7 @@ scrape_configs:
       - targets: ['node-exporter:9100']
 PROMEOF
   chmod 644 "${PROMETHEUS_CONFIG}"
+  chown 65534:65534 "${PROMETHEUS_CONFIG}" 2>/dev/null || true
 fi
 ok "Prometheus configuration created"
 
