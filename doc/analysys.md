@@ -1,380 +1,327 @@
-# Refactoring Plan for Windsurf
-
-## Current State Assessment
-
-After reading all three scripts, the issues fall into **4 distinct problem areas**. I'll give Windsurf precise, scoped instructions for each — no restructuring, targeted fixes only.
+Let me read all three scripts fresh.
 
 ---
 
-## Problem Area 1 — Tenant Identity (Script 1)
+After reading all three scripts, here is the full assessment.
 
-**Root cause:** Script 1 uses `id -u` which returns `0` when run via `sudo`. All files get owned by root. Second tenant run collides with first.
+---
 
-**Exact fix — replace the identity block at the top of Script 1:**
+# Full Assessment
+
+## What Was Implemented Correctly
+
+| Area | Status | Notes |
+|------|--------|-------|
+| SUDO_UID detection | ✅ | Script 1 correctly uses `SUDO_UID`/`SUDO_GID` |
+| Tenant naming `u${UID}` | ✅ | Deterministic, collision-free |
+| `process_compose_file()` | ✅ | Variable substitution working |
+| Port conflict detection | ✅ | `find_free_port()` logic present |
+| Docker network namespacing | ✅ | `aip-u1001_net` pattern correct |
+| Wait-for-service gates | ✅ | Health checks before dependent starts |
+| `.env` as single source of truth | ✅ | Script 2 sources it correctly |
+
+---
+
+## Identified Problems
+
+### Problem 1 — Redundant Volume Prompts (Your Observation)
+
+Script 1 currently asks:
+1. "Which block device to mount?" (EBS detection)
+2. "Where is your data root?" (DATA_ROOT location)
+
+These are the same question asked twice. The correct single flow:
+
+```
+STEP 1: "Dedicate a new EBS to this tenant? [y/N]"
+  → Y: list unattached devices → pick one → format → mount at /mnt/u1001 → DATA_ROOT=/mnt/u1001
+  → N: list mounted volumes → pick one → DATA_ROOT={mountpoint}/u1001
+
+No second prompt. DATA_ROOT is fully derived from step 1.
+```
+
+**Fix:** Collapse both prompts into `select_storage()`. After the user picks the device or mount point, `DATA_ROOT` is set deterministically. Delete the second prompt entirely.
+
+---
+
+### Problem 2 — Signal Port 8090 Collision
+
+Signal CLI REST API defaults to 8090. This port is commonly taken. Script 1 generates the port but does not run it through `find_free_port()`.
+
+**Fix:** In Script 1 port assignment block:
 
 ```bash
-# REMOVE this pattern wherever it appears:
-RUNNING_UID=$(id -u)
-RUNNING_GID=$(id -g)
+# REMOVE:
+SIGNAL_PORT=8090
 
 # REPLACE with:
-if [[ -z "${SUDO_UID}" ]]; then
-  echo "ERROR: Run this script with sudo: sudo ./1-setup-system.sh"
-  echo "Running without sudo creates files owned by root."
-  exit 1
-fi
-
-TENANT_UID="${SUDO_UID}"
-TENANT_GID="${SUDO_GID}"
-TENANT_USER=$(getent passwd "${TENANT_UID}" | cut -d: -f1)
-
-if [[ -z "${TENANT_USER}" ]]; then
-  echo "ERROR: Cannot resolve username for UID ${TENANT_UID}"
-  echo "Ensure the user account exists before running this script."
-  exit 1
-fi
-
-TENANT_NAME="u${TENANT_UID}"
+SIGNAL_PORT=$(find_free_port 8090 8190)
 ```
 
-**Then replace ALL subsequent references:**
-```bash
-# Find and replace in Script 1:
-# RUNNING_UID  → TENANT_UID
-# RUNNING_GID  → TENANT_GID  
-# RUNNING_USER → TENANT_USER
-
-# Every chown call must use TENANT_UID:TENANT_GID
-chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"
-chown "${TENANT_UID}:${TENANT_GID}" "${ENV_FILE}"
+And in docker-compose.yml Signal service:
+```yaml
+signal-cli:
+  ports:
+    - "${SIGNAL_PORT}:8080"   # internal is always 8080, external is dynamic
 ```
+
+Signal CLI REST API listens on internal port 8080 always. The host-side port should be dynamic.
 
 ---
 
-## Problem Area 2 — EBS Volume Selection (Script 1)
+### Problem 3 — GDrive Sync Not Wired to Qdrant Ingestion
 
-**Root cause:** Script 1 hardcodes or assumes a DATA_ROOT without asking the operator how storage should be allocated.
+Script 1 creates `/mnt/data/u1001/.gdrive` but there is no pipeline from:
+```
+Google Drive → rclone sync → /mnt/data/u1001/.gdrive → Qdrant embedding
+```
 
-**Insert this block in Script 1 AFTER tenant identity is established, BEFORE directory creation:**
+**Required additions:**
 
+**In Script 1 — directory creation:**
 ```bash
-# ─── EBS VOLUME SELECTION ───────────────────────────────────────────────
-select_storage() {
-  echo ""
-  echo "═══════════════════════════════════════════"
-  echo "  STORAGE CONFIGURATION for ${TENANT_USER}"
-  echo "═══════════════════════════════════════════"
-  echo ""
-  echo "Option A: Use existing mounted volume (shared EBS, folder per tenant)"
-  echo "Option B: Dedicate a new EBS volume to this tenant"
-  echo ""
-  read -p "Dedicate a new EBS volume to this tenant? [y/N]: " DEDICATE_EBS
-  DEDICATE_EBS=${DEDICATE_EBS:-N}
+mkdir -p "${DATA_ROOT}/.gdrive"
+mkdir -p "${DATA_ROOT}/.gdrive/documents"
+mkdir -p "${DATA_ROOT}/.gdrive/embeddings_queue"
+chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/.gdrive"
+```
 
-  if [[ "${DEDICATE_EBS}" =~ ^[Yy]$ ]]; then
-    # Mode B — dedicated EBS
-    echo ""
-    echo "Available unattached block devices:"
-    lsblk -o NAME,SIZE,MOUNTPOINT,FSTYPE | \
-      awk 'NR==1 || ($3=="" && $4=="")'
-    echo ""
-    read -p "Enter device name to use (e.g. nvme1n1, xvdb): " SELECTED_DEVICE
-    DEVICE_PATH="/dev/${SELECTED_DEVICE}"
+**In Script 1 — `.env` additions:**
+```bash
+GDRIVE_SYNC_DIR="${DATA_ROOT}/.gdrive"
+GDRIVE_RCLONE_REMOTE="gdrive-${TENANT_NAME}"
+GDRIVE_SYNC_INTERVAL=3600   # seconds
+EMBEDDING_WATCH_DIR="${DATA_ROOT}/.gdrive/documents"
+```
 
-    if [[ ! -b "${DEVICE_PATH}" ]]; then
-      echo "ERROR: ${DEVICE_PATH} is not a valid block device"
-      exit 1
+**In Script 2 — add rclone container:**
+```yaml
+rclone:
+  image: rclone/rclone:latest
+  container_name: ${COMPOSE_PROJECT_NAME}-rclone
+  restart: unless-stopped
+  volumes:
+    - ${DATA_ROOT}/.gdrive:/gdrive
+    - ${DATA_ROOT}/config/rclone:/config/rclone
+  entrypoint: >
+    sh -c "while true; do
+      rclone sync ${GDRIVE_RCLONE_REMOTE}: /gdrive/documents
+        --config /config/rclone/rclone.conf
+        --log-level INFO;
+      sleep ${GDRIVE_SYNC_INTERVAL};
+    done"
+  networks:
+    - ${DOCKER_NETWORK}_internal
+```
+
+**In Script 3 — rclone config wiring:**
+```bash
+configure_rclone() {
+  log "Configuring rclone for Google Drive..."
+  mkdir -p "${DATA_ROOT}/config/rclone"
+  
+  # Generate rclone config skeleton — user must complete OAuth
+  cat > "${DATA_ROOT}/config/rclone/rclone.conf" <<EOF
+[${GDRIVE_RCLONE_REMOTE}]
+type = drive
+scope = drive.readonly
+EOF
+
+  log "⚠️  GDrive OAuth required. Run:"
+  log "   docker exec -it ${COMPOSE_PROJECT_NAME}-rclone rclone config reconnect ${GDRIVE_RCLONE_REMOTE}:"
+  log "   Then paste the auth URL in your browser."
+}
+```
+
+**Qdrant auto-ingestion via n8n workflow (not a script — a deployed workflow):**
+- n8n watches `${EMBEDDING_WATCH_DIR}` via filesystem trigger
+- Sends new/changed files to the embedding pipeline
+- Upserts vectors into Qdrant collection `${TENANT_NAME}_docs`
+- This workflow JSON should live in `scripts/templates/n8n-gdrive-ingest.json` and be imported by Script 3
+
+---
+
+### Problem 4 — Tailscale Not Fully Stood Up
+
+Script 2 deploys the Tailscale container but `tailscale up` is never called with the auth key. The container starts but does not join the tailnet, so the Tailscale IP is never assigned and the service URL at the end of Script 1 is wrong.
+
+**Fix in Script 3:**
+```bash
+configure_tailscale() {
+  log "Bringing up Tailscale..."
+  
+  if [[ -z "${TAILSCALE_AUTH_KEY:-}" ]]; then
+    log "⚠️  No TAILSCALE_AUTH_KEY in .env"
+    log "   Get one from https://login.tailscale.com/admin/settings/keys"
+    read -p "   Paste auth key (or press Enter to skip): " TAILSCALE_AUTH_KEY
+    if [[ -n "${TAILSCALE_AUTH_KEY}" ]]; then
+      echo "TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY}" >> "${ENV_FILE}"
+    else
+      log "⚠️  Skipping Tailscale — configure manually later"
+      return 0
     fi
-
-    MOUNT_POINT="/mnt/${TENANT_NAME}"
-    echo "Formatting ${DEVICE_PATH} as ext4..."
-    mkfs.ext4 -F "${DEVICE_PATH}"
-    mkdir -p "${MOUNT_POINT}"
-    mount "${DEVICE_PATH}" "${MOUNT_POINT}"
-
-    # Persist in fstab
-    DEVICE_UUID=$(blkid -s UUID -o value "${DEVICE_PATH}")
-    FSTAB_ENTRY="UUID=${DEVICE_UUID} ${MOUNT_POINT} ext4 defaults,nofail 0 2"
-    if ! grep -q "${DEVICE_UUID}" /etc/fstab; then
-      echo "${FSTAB_ENTRY}" >> /etc/fstab
-      echo "Added to /etc/fstab: ${FSTAB_ENTRY}"
-    fi
-
-    DATA_ROOT="${MOUNT_POINT}"
-
-  else
-    # Mode A — shared EBS, folder per tenant
-    echo ""
-    echo "Currently mounted volumes:"
-    lsblk -o NAME,SIZE,MOUNTPOINT | grep -v "loop\|sr0" | grep -v "^$"
-    echo ""
-    read -p "Base mount point to use [/mnt/data]: " MOUNT_BASE
-    MOUNT_BASE=${MOUNT_BASE:-/mnt/data}
-
-    if [[ ! -d "${MOUNT_BASE}" ]]; then
-      echo "ERROR: ${MOUNT_BASE} does not exist or is not mounted"
-      exit 1
-    fi
-
-    DATA_ROOT="${MOUNT_BASE}/${TENANT_NAME}"
   fi
 
-  echo "DATA_ROOT set to: ${DATA_ROOT}"
-}
+  # Run tailscale up inside the container
+  docker exec "${COMPOSE_PROJECT_NAME}-tailscale" \
+    tailscale up \
+    --authkey="${TAILSCALE_AUTH_KEY}" \
+    --hostname="${TENANT_NAME}-aiplatform" \
+    --accept-routes
 
-select_storage
-# ─── END EBS VOLUME SELECTION ───────────────────────────────────────────
+  # Retrieve assigned Tailscale IP
+  sleep 5
+  TAILSCALE_IP=$(docker exec "${COMPOSE_PROJECT_NAME}-tailscale" \
+    tailscale ip -4 2>/dev/null || echo "pending")
+  
+  log "✅ Tailscale IP: ${TAILSCALE_IP}"
+  echo "TAILSCALE_IP=${TAILSCALE_IP}" >> "${ENV_FILE}"
+}
 ```
 
 ---
 
-## Problem Area 3 — Service Deployment Failures (Script 2)
+### Problem 5 — OpenClaw Not Deployed Properly
 
-**Root cause:** Multiple independent failures. Fix each one in place.
+OpenClaw requires:
+1. Internal-only network (no internet egress)
+2. Specific env vars for the LLM endpoint
+3. Connection to Qdrant on the shared vector DB
 
-### Fix 3a — PostgreSQL pgvector extension
-
-Add this function to Script 2 and call it after postgres health check passes:
-
-```bash
-setup_postgres_extensions() {
-  log "Setting up PostgreSQL extensions..."
-  
-  local max_attempts=10
-  local attempt=0
-  
-  while [[ $attempt -lt $max_attempts ]]; do
-    if $COMPOSE exec -T postgres psql \
-        -U "${POSTGRES_USER}" \
-        -d "${POSTGRES_DB}" \
-        -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null; then
-      log "✅ pgvector extension created"
-      return 0
-    fi
-    attempt=$((attempt + 1))
-    log "Waiting for postgres to accept connections... (${attempt}/${max_attempts})"
-    sleep 3
-  done
-  
-  log "❌ ERROR: Could not create pgvector extension after ${max_attempts} attempts"
-  return 1
-}
-```
-
-### Fix 3b — MinIO bucket creation
-
-```bash
-setup_minio_buckets() {
-  log "Creating MinIO buckets..."
-
-  # Wait for MinIO to be ready
-  local max_attempts=15
-  local attempt=0
-  while [[ $attempt -lt $max_attempts ]]; do
-    if $COMPOSE exec -T minio mc ready local 2>/dev/null; then
-      break
-    fi
-    attempt=$((attempt + 1))
-    sleep 3
-  done
-
-  # Configure mc alias inside container
-  $COMPOSE exec -T minio mc alias set local \
-    "http://localhost:9000" \
-    "${MINIO_ROOT_USER}" \
-    "${MINIO_ROOT_PASSWORD}" 2>/dev/null
-
-  # Create required buckets
-  for bucket in uploads documents models backups; do
-    $COMPOSE exec -T minio mc mb --ignore-existing "local/${bucket}" && \
-      log "✅ Bucket created: ${bucket}" || \
-      log "⚠️  Bucket already exists: ${bucket}"
-  done
-}
-```
-
-### Fix 3c — Health gate using correct method
-
-Replace any TCP-based health checks in Script 2 with this pattern:
-
-```bash
-wait_for_service() {
-  local service_name=$1
-  local check_command=$2   # the actual command to run
-  local max_wait=${3:-120}
-  local interval=5
-  local elapsed=0
-
-  log "Waiting for ${service_name}..."
-  while [[ $elapsed -lt $max_wait ]]; do
-    if eval "${check_command}" &>/dev/null; then
-      log "✅ ${service_name} is ready"
-      return 0
-    fi
-    sleep $interval
-    elapsed=$((elapsed + interval))
-  done
-  log "❌ ${service_name} did not become ready within ${max_wait}s"
-  return 1
-}
-
-# Usage:
-wait_for_service "postgres" \
-  "$COMPOSE exec -T postgres pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"
-
-wait_for_service "qdrant" \
-  "curl -sf http://localhost:${QDRANT_PORT}/health"
-
-wait_for_service "minio" \
-  "curl -sf http://localhost:${MINIO_PORT}/minio/health/live"
-
-wait_for_service "n8n" \
-  "curl -sf http://localhost:${N8N_PORT}/healthz"
-```
-
-### Fix 3d — Qdrant data directory ownership
-
-Add to Script 1 directory creation block:
-
-```bash
-# Qdrant requires UID 1000 internally — but our bind mount must be world-writable
-# OR we accept UID mismatch and use a named volume approach for qdrant only
-mkdir -p "${DATA_ROOT}/data/qdrant"
-# qdrant container runs as UID 1000, set accordingly
-chown -R 1000:1000 "${DATA_ROOT}/data/qdrant"
-chmod 755 "${DATA_ROOT}/data/qdrant"
-```
-
-### Fix 3e — n8n WEBHOOK_URL
-
-Ensure this is in the `.env` generation block of Script 1:
-
-```bash
-# In Script 1 .env generation:
-N8N_WEBHOOK_URL="https://${TENANT_NAME}.${BASE_DOMAIN}/n8n/webhook"
-# Write to .env:
-echo "N8N_WEBHOOK_URL=${N8N_WEBHOOK_URL}" >> "${ENV_FILE}"
-echo "WEBHOOK_URL=${N8N_WEBHOOK_URL}" >> "${ENV_FILE}"
-```
-
-And in docker-compose.yml n8n service:
+**docker-compose.yml addition:**
 ```yaml
+openclaw:
+  image: openclaw/openclaw:latest
+  container_name: ${COMPOSE_PROJECT_NAME}-openclaw
+  restart: unless-stopped
+  networks:
+    - ${DOCKER_NETWORK}_internal   # internal only — no internet
+  environment:
+    - QDRANT_URL=http://qdrant:${QDRANT_PORT}
+    - QDRANT_COLLECTION=${TENANT_NAME}_docs
+    - OLLAMA_URL=http://ollama:11434
+    - OPENCLAW_PORT=8080
+  volumes:
+    - ${DATA_ROOT}/data/openclaw:/app/data
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  labels:
+    - "ai-platform.tenant=${TENANT_NAME}"
+    - "ai-platform.service=openclaw"
+```
+
+Note: OpenClaw is on `_internal` network only. It reaches Qdrant and Ollama (also on internal). It cannot reach the internet or other tenants.
+
+---
+
+### Problem 6 — Shared VectorDB Not Explicitly Wired
+
+All AI services (AnythingLLM, Dify, n8n, OpenClaw) should point to the **same Qdrant instance**. Currently each service has its own connection config that may or may not be consistent.
+
+**In Script 1 `.env` generation — add explicit shared DB vars:**
+```bash
+# Single VectorDB for all services — one set of vars, referenced everywhere
+QDRANT_HOST=qdrant
+QDRANT_HTTP_PORT=${QDRANT_PORT}
+QDRANT_GRPC_PORT=${QDRANT_GRPC_PORT}
+QDRANT_COLLECTION_PREFIX=${TENANT_NAME}
+QDRANT_DOCS_COLLECTION=${TENANT_NAME}_docs
+QDRANT_URL=http://qdrant:${QDRANT_PORT}
+```
+
+**Then in docker-compose.yml, every AI service references the same vars:**
+```yaml
+anythingllm:
+  environment:
+    - VECTOR_DB=qdrant
+    - QDRANT_ENDPOINT=${QDRANT_URL}
+    - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+
+dify:
+  environment:
+    - VECTOR_STORE=qdrant
+    - QDRANT_URL=${QDRANT_URL}
+    - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+
 n8n:
   environment:
-    - WEBHOOK_URL=${WEBHOOK_URL}
-    - N8N_EDITOR_BASE_URL=https://${TENANT_NAME}.${BASE_DOMAIN}/n8n/
+    - QDRANT_URL=${QDRANT_URL}
+
+openclaw:
+  environment:
+    - QDRANT_URL=${QDRANT_URL}
+    - QDRANT_COLLECTION=${QDRANT_DOCS_COLLECTION}
 ```
+
+One Qdrant instance. One collection namespace. All services share it. The `${TENANT_NAME}_` prefix on collection names ensures no cross-tenant data bleed on a shared EBS deployment.
 
 ---
 
-## Problem Area 4 — Script 4 Template System
+### Problem 7 — HTTPS Validation at End of Script 1
 
-**Root cause:** Script 4 exists but has no template directory or append logic.
+Script 1 lists service URLs at the end but does not validate them. Given that Tailscale IP is only known after Script 3 runs `tailscale up`, Script 1 cannot show the correct HTTPS URLs.
 
-**Step 1 — Create `scripts/templates/` directory with one example:**
+**Correct approach:**
 
-`scripts/templates/flowise.yml`:
-```yaml
-  flowise:
-    image: flowiseai/flowise:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-flowise
-    restart: unless-stopped
-    networks:
-      - ${DOCKER_NETWORK}
-    ports:
-      - "${FLOWISE_PORT}:3000"
-    environment:
-      - PORT=3000
-      - DATABASE_PATH=/root/.flowise
-      - APIKEY_PATH=/root/.flowise
-      - SECRETKEY_PATH=/root/.flowise
-    volumes:
-      - ${DATA_ROOT}/data/flowise:/root/.flowise
-    labels:
-      - "ai-platform.tenant=${TENANT_NAME}"
-      - "ai-platform.service=flowise"
-```
-
-**Step 2 — Rewrite Script 4 body:**
+Move the service URL summary to the **end of Script 3**, after Tailscale is configured:
 
 ```bash
-#!/bin/bash
-set -euo pipefail
-
-# ─── LOAD TENANT CONTEXT ────────────────────────────────────────────────
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEMPLATE_DIR="${SCRIPT_DIR}/templates"
-
-# Identify tenant
-TENANT_UID=${SUDO_UID:-$(id -u)}
-TENANT_NAME="u${TENANT_UID}"
-ENV_FILE="/home/$(getent passwd ${TENANT_UID} | cut -d: -f6)/.aip/${TENANT_NAME}.env"
-
-if [[ ! -f "${ENV_FILE}" ]]; then
-  echo "ERROR: No environment file found at ${ENV_FILE}"
-  echo "Run 1-setup-system.sh first."
-  exit 1
-fi
-
-source "${ENV_FILE}"
-
-# ─── SERVICE SELECTION ───────────────────────────────────────────────────
-SERVICE=${1:-}
-if [[ -z "${SERVICE}" ]]; then
-  echo "Available services:"
-  ls "${TEMPLATE_DIR}/" | sed 's/.yml//'
-  read -p "Enter service name to add: " SERVICE
-fi
-
-TEMPLATE="${TEMPLATE_DIR}/${SERVICE}.yml"
-if [[ ! -f "${TEMPLATE}" ]]; then
-  echo "ERROR: No template for service '${SERVICE}'"
-  echo "Available: $(ls ${TEMPLATE_DIR}/ | sed 's/.yml//' | tr '\n' ' ')"
-  exit 1
-fi
-
-# ─── PORT ASSIGNMENT ─────────────────────────────────────────────────────
-# Script 4 reuses Script 1's port-finding logic via sourcing
-SERVICE_PORT_VAR="${SERVICE^^}_PORT"
-if [[ -z "${!SERVICE_PORT_VAR:-}" ]]; then
-  NEW_PORT=$(find_free_port 3100 3200)    # source this function from Script 1
-  echo "${SERVICE_PORT_VAR}=${NEW_PORT}" >> "${ENV_FILE}"
-  export "${SERVICE_PORT_VAR}=${NEW_PORT}"
-fi
-
-# ─── APPEND AND DEPLOY ───────────────────────────────────────────────────
-COMPOSE_FILE="${DATA_ROOT}/docker-compose.yml"
-COMPOSE="docker compose --project-name ${COMPOSE_PROJECT_NAME} \
-  --env-file ${ENV_FILE} \
-  --file ${COMPOSE_FILE}"
-
-# Render template with current env vars
-envsubst < "${TEMPLATE}" >> "${COMPOSE_FILE}"
-
-# Deploy only the new service
-$COMPOSE up -d "${SERVICE}"
-
-echo "✅ Service '${SERVICE}' added to tenant ${TENANT_NAME}"
+print_service_summary() {
+  # Re-source env to get TAILSCALE_IP set by configure_tailscale()
+  source "${ENV_FILE}"
+  
+  echo ""
+  echo "═══════════════════════════════════════════════════════"
+  echo "  SERVICE ENDPOINTS — Tenant: ${TENANT_NAME}"
+  echo "═══════════════════════════════════════════════════════"
+  
+  local base_url="https://${TAILSCALE_IP}"
+  
+  services=(
+    "AnythingLLM|${ANYTHINGLLM_PORT}"
+    "Dify|${DIFY_PORT}"
+    "n8n|${N8N_PORT}"
+    "OpenClaw|${OPENCLAW_PORT}"
+    "MinIO|${MINIO_CONSOLE_PORT}"
+    "Signal|${SIGNAL_PORT}"
+    "Qdrant|${QDRANT_PORT}"
+  )
+  
+  for entry in "${services[@]}"; do
+    name="${entry%|*}"
+    port="${entry#*|}"
+    url="${base_url}:${port}"
+    
+    # Validate reachability
+    if curl -sk --max-time 5 "${url}" > /dev/null 2>&1; then
+      echo "  ✅ ${name}: ${url}"
+    else
+      echo "  ❌ ${name}: ${url} (not responding)"
+    fi
+  done
+  
+  echo ""
+  echo "  GDrive sync: ${GDRIVE_SYNC_DIR}"
+  echo "  VectorDB:    ${QDRANT_URL}"
+  echo "  Config:      ${ENV_FILE}"
+  echo "═══════════════════════════════════════════════════════"
+}
 ```
 
 ---
 
-## Execution Order for Windsurf
+## Refactoring Priority Order for Windsurf
 
-Give Windsurf these changes **one problem area at a time**, not all at once:
-
-```
-1. Apply Problem Area 1 (SUDO_UID) to Script 1 only. Test: run sudo ./1-setup-system.sh, 
-   confirm DATA_ROOT owned by the real user, not root.
-
-2. Apply Problem Area 2 (EBS selection) to Script 1 only. Test: both Mode A and Mode B 
-   produce correct DATA_ROOT.
-
-3. Apply Problem Area 3 fixes 3a-3e to Script 2 only. Test: all services reach healthy 
-   state with wait_for_service gates passing.
-
-4. Apply Problem Area 4 to Script 4 + create templates/ dir. Test: ./4-add-service.sh 
-   flowise adds service without touching other tenant's compose file.
-```
-
-**Do not combine areas in a single Windsurf prompt.** Windsurf loses context and reverts working code when given too much at once.
+| Priority | Change | Script | Scope |
+|----------|--------|--------|-------|
+| P0 | Collapse redundant volume prompts into single `select_storage()` | 1 | 30 lines |
+| P0 | Fix Signal port — run through `find_free_port()` | 1 + compose | 3 lines |
+| P1 | Wire all AI services to shared Qdrant vars | compose | env vars only |
+| P1 | `tailscale up` with auth key in Script 3 | 3 | new function |
+| P1 | OpenClaw on `_internal` network with security opts | compose | service block |
+| P2 | rclone container + gdrive sync pipeline | 2 + compose | new service |
+| P2 | Script 3 rclone config + OAuth instructions | 3 | new function |
+| P2 | Move service summary + HTTPS validation to Script 3 | 3 | new function |
+| P3 | n8n gdrive ingestion workflow template | templates/ | new JSON |

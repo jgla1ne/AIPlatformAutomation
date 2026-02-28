@@ -1302,7 +1302,7 @@ EOF
         ["litellm"]="5005"
         ["prometheus"]="5000"
         ["grafana"]="5001"
-        ["signal-api"]="8090"
+        SIGNAL_PORT=$(find_free_port 8090 8190)
         ["openclaw"]="18789"
         ["tailscale"]="8443"
         ["postgres"]="5432"
@@ -2258,90 +2258,10 @@ setup_volumes() {
     
     print_info "Setting up volumes..."
     
-    # Detect available volumes
-    local volume_list=()
-    local i=1
-    local fdisk_volumes=$(fdisk -l 2>/dev/null | grep -B1 "Amazon Elastic Block Store" | grep "^Disk /dev" | awk '{print $2}' | sed 's/://' | sort)
+    # Use the new unified storage selection function
+    select_storage
     
-    if [[ -n "$fdisk_volumes" ]]; then
-        # Build volume list with sizes
-        while read -r device; do
-            local size=$(fdisk -l 2>/dev/null | grep "^Disk $device" | awk -F': ' '{print $2}' | awk '{print $1}')
-            volume_list+=("$i) $device ($size)")
-            ((i++))
-        done <<< "$fdisk_volumes"
-    fi
-    
-    # Check if we found any volumes
-    if [[ ${#volume_list[@]} -eq 0 ]]; then
-        print_error "No suitable data volumes found"
-        print_info "Please attach an EBS volume (100G+) to this instance"
-        exit 1
-    fi
-        
-        # Auto-select largest volume (based on size)
-        if [[ ${#volume_list[@]} -eq 1 ]]; then
-            local selected_device=$(echo "${volume_list[0]}" | awk '{print $2}')
-            print_info "Auto-selected: $selected_device (only available)"
-        else
-            # Let user choose
-            echo "Select volume to mount:"
-            for volume in "${volume_list[@]}"; do
-                echo "$volume"
-            done
-            echo -n "Enter selection [1-${#volume_list[@]}]: "
-            read -r selection
-            
-            if [[ ! "$selection" =~ ^[0-9]+$ ]] || [[ "$selection" -lt 1 ]] || [[ "$selection" -gt ${#volume_list[@]} ]]; then
-                print_error "Invalid selection"
-                exit 1
-            fi
-            
-            local selected_device=$(echo "${volume_list[$((selection-1))]}" | awk '{print $2}')
-            print_info "Selected: $selected_device"
-        fi
-        
-        local device_path="$selected_device"
-        print_info "Mounting to /mnt..."
-        
-        # Create mount point if needed
-        mkdir -p /mnt
-        
-        # Mount the volume
-        if mountpoint -q /mnt; then
-            print_info "/mnt is already mounted"
-            local current_mount=$(findmnt -n -o SOURCE /mnt)
-            if [[ "$current_mount" == "$device_path" ]]; then
-                print_success "Correct volume already mounted: $device_path"
-            else
-                print_warning "Different volume mounted: $current_mount"
-                print_info "Attempting to remount correct volume..."
-                umount /mnt || print_warning "Could not unmount current volume"
-                if mount "$device_path" /mnt; then
-                    print_success "Successfully remounted $device_path"
-                else
-                    print_error "Failed to mount $device_path to /mnt"
-                    exit 1
-                fi
-            fi
-        else
-            if ! mount "$device_path" /mnt; then
-                print_error "Failed to mount $device_path to /mnt"
-                exit 1
-            fi
-            print_success "Volume mounted successfully"
-        fi
-        
-        # Add to fstab for persistence
-        if ! grep -q "$device_path" /etc/fstab; then
-            echo "$device_path /mnt ext4 defaults 0 2" >> /etc/fstab
-            print_success "Added to /etc/fstab for persistence"
-        fi
-        
-        print_success "Volume mounted successfully"
-        
-        # Create log directory immediately after mounting
-        mkdir -p "$DATA_ROOT/logs" 2>/dev/null || true
+    mark_phase_complete "setup_volumes"
 }
 
 generate_caddyfile() {
