@@ -108,8 +108,8 @@ DC() {
 
 # ── Validate compose file ─────────────────────────────────────────────────────
 log "Validating compose file..."
-if ! DC config --quiet 2>/tmp/dc-validate.log; then
-  fail "Compose validation failed:\n$(cat /tmp/dc-validate.log)"
+if ! DC config --quiet 2>"${DATA_ROOT}/logs/dc-validate.log"; then
+  fail "Compose validation failed:\n$(cat "${DATA_ROOT}/logs/dc-validate.log")"
 fi
 ok "Compose file valid"
 
