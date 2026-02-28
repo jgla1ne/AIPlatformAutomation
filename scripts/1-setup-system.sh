@@ -1040,7 +1040,7 @@ collect_configurations() {
         "5678:n8n"
         "8080:Dify"
         "8082:OpenClaw"
-        "8090:Signal API"
+        "8080:Signal API"
         "8443:Tailscale"
         "9000:MinIO"
         "9001:MinIO Console"
@@ -1203,83 +1203,6 @@ EOF
     chown "${TENANT_UID}:${TENANT_GID}" "$ENV_FILE"
     chmod 600 "$ENV_FILE"
     
-    # ─── EBS VOLUME SELECTION ───────────────────────────────────────────────
-    select_storage() {
-      echo ""
-      echo "═══════════════════════════════════════════"
-      echo "  STORAGE CONFIGURATION for ${TENANT_USER}"
-      echo "═══════════════════════════════════════════"
-      echo ""
-      
-      # List available mounted volumes
-      echo "Available mounted volumes:"
-      echo ""
-      lsblk -o NAME,SIZE,MOUNTPOINT,FSTYPE | grep -v "loop\|sr0" | grep -E -v "^$|NAME"
-      echo ""
-      
-      # Let user select which volume to use
-      read -p "Enter mount point to use (e.g. /mnt/data): " SELECTED_MOUNT
-      SELECTED_MOUNT=${SELECTED_MOUNT:-/mnt/data}
-      
-      if [[ ! -d "${SELECTED_MOUNT}" ]]; then
-        echo "ERROR: ${SELECTED_MOUNT} does not exist or is not mounted"
-        exit 1
-      fi
-      
-      echo ""
-      echo "Option A: Use existing volume (shared EBS, folder per tenant)"
-      echo "Option B: Dedicate a new EBS volume to this tenant"
-      echo ""
-      read -p "Dedicate a new EBS volume to this tenant? [y/N]: " DEDICATE_EBS
-      DEDICATE_EBS=${DEDICATE_EBS:-N}
-
-      if [[ "${DEDICATE_EBS}" =~ ^[Yy]$ ]]; then
-        # Mode B — dedicated EBS
-        echo ""
-        echo "Available unattached block devices:"
-        lsblk -o NAME,SIZE,MOUNTPOINT,FSTYPE | \
-          awk 'NR==1 || ($3=="" && $4=="")'
-        echo ""
-        read -p "Enter device name to use (e.g. nvme1n1, xvdb): " SELECTED_DEVICE
-        DEVICE_PATH="/dev/${SELECTED_DEVICE}"
-
-        if [[ ! -b "${DEVICE_PATH}" ]]; then
-          echo "ERROR: ${DEVICE_PATH} is not a valid block device"
-          exit 1
-        fi
-
-        MOUNT_POINT="/mnt/${TENANT_NAME}"
-        echo "Formatting ${DEVICE_PATH} as ext4..."
-        mkfs.ext4 -F "${DEVICE_PATH}"
-        mkdir -p "${MOUNT_POINT}"
-        mount "${DEVICE_PATH}" "${MOUNT_POINT}"
-
-        # Persist in fstab
-        DEVICE_UUID=$(blkid -s UUID -o value "${DEVICE_PATH}")
-        FSTAB_ENTRY="UUID=${DEVICE_UUID} ${MOUNT_POINT} ext4 defaults,nofail 0 2"
-        if ! grep -q "${DEVICE_UUID}" /etc/fstab; then
-          echo "${FSTAB_ENTRY}" >> /etc/fstab
-          echo "Added to /etc/fstab: ${FSTAB_ENTRY}"
-        fi
-
-        # Update DATA_ROOT
-        DATA_ROOT="${MOUNT_POINT}"
-
-      else
-        # Mode A — shared EBS, folder per tenant
-        echo ""
-        echo "Using existing volume: ${SELECTED_MOUNT}"
-        
-        # Update DATA_ROOT
-        DATA_ROOT="${SELECTED_MOUNT}/${TENANT_NAME}"
-      fi
-
-      echo "DATA_ROOT set to: ${DATA_ROOT}"
-    }
-
-    select_storage
-    # ─── END EBS VOLUME SELECTION ───────────────────────────────────────────
-    
     # Create tenant directory structure
     create_tenant_directories
     
@@ -1342,7 +1265,7 @@ EOF
         ["qdrant"]="6333"
         ["milvus"]="19530"
         ["chroma"]="8000"
-        ["weaviate"]="8080"
+        ["weaviate"]="8081"
         ["minio"]="5007"
     )
     
@@ -1764,9 +1687,9 @@ allocate_port() {
             case "$signal_pairing" in
                 1)
                     echo "SIGNAL_PAIRING_METHOD=qr_code" >> "$ENV_FILE"
-                    echo "SIGNAL_QR_URL=http://localhost:8090/v1/qrcode" >> "$ENV_FILE"
+                    echo "SIGNAL_QR_URL=http://localhost:8080/v1/qrcode" >> "$ENV_FILE"
                     print_success "QR code pairing selected"
-                    print_info "QR code will be available at: http://localhost:8090/v1/qrcode"
+                    print_info "QR code will be available at: http://localhost:8080/v1/qrcode"
                     break
                     ;;
                 2)
@@ -1793,7 +1716,7 @@ allocate_port() {
         echo ""
         print_info "Signal Webhook Configuration"
         echo ""
-        echo "SIGNAL_WEBHOOK_URL=http://signal-api:8090/v2/receive" >> "$ENV_FILE"
+        echo "SIGNAL_WEBHOOK_URL=http://signal-api:8080/v2/receive" >> "$ENV_FILE"
         echo "SIGNAL_API_PORT=8080" >> "$ENV_FILE"
         
         print_success "Signal API configuration completed"
@@ -4111,6 +4034,103 @@ main() {
     
     # Display banner
     print_banner
+    
+    # ─── EBS VOLUME SELECTION (AT BEGINNING) ───────────────────────────────────────
+    select_ebs_volume() {
+      echo ""
+      echo "═══════════════════════════════════════════"
+      echo "  EBS VOLUME SELECTION for ${TENANT_USER}"
+      echo "═══════════════════════════════════════════"
+      echo ""
+      
+      # Scan for EBS volumes using fdisk -l
+      echo "Scanning for available EBS volumes..."
+      echo ""
+      
+      # Get list of EBS devices (excluding system disks)
+      local ebs_volumes=()
+      local index=1
+      
+      while IFS= read -r line; do
+        if [[ $line =~ ^/dev/nvme ]]; then
+          local device=$(echo "$line" | awk '{print $1}')
+          local size=$(echo "$line" | awk '{print $5}')
+          
+          # Skip root volumes and system partitions
+          if ! mount | grep -q "$device"; then
+            ebs_volumes+=("$device:$size")
+            echo "  $index) $device ($size)"
+            ((index++))
+          fi
+        fi
+      done < <(fdisk -l | grep -E "^Disk /dev/nvme")
+      
+      if [[ ${#ebs_volumes[@]} -eq 0 ]]; then
+        echo "❌ No unmounted EBS volumes found!"
+        echo "Please attach an EBS volume to this instance first."
+        exit 1
+      fi
+      
+      echo ""
+      read -p "Select EBS volume to mount (1-${#ebs_volumes[@]}): " selection
+      
+      if [[ ! $selection =~ ^[0-9]+$ ]] || [[ $selection -lt 1 ]] || [[ $selection -gt ${#ebs_volumes[@]} ]]; then
+        echo "❌ Invalid selection!"
+        exit 1
+      fi
+      
+      # Parse selected volume
+      local selected_volume="${ebs_volumes[$((selection-1))]}"
+      local DEVICE_PATH="${selected_volume%:*}"
+      local VOLUME_SIZE="${selected_volume#*:}"
+      
+      echo ""
+      echo "Selected: $DEVICE_PATH ($VOLUME_SIZE)"
+      echo ""
+      
+      # Ask about mount point
+      read -p "Mount to /mnt/data? [Y/n]: " mount_confirm
+      mount_confirm=${mount_confirm:-Y}
+      
+      if [[ "${mount_confirm}" =~ ^[Yy]$ ]]; then
+        MOUNT_POINT="/mnt/data"
+      else
+        read -p "Enter custom mount point: " MOUNT_POINT
+      fi
+      
+      echo ""
+      echo "Mounting $DEVICE_PATH to $MOUNT_POINT..."
+      
+      # Create mount point
+      mkdir -p "$MOUNT_POINT"
+      
+      # Format if needed
+      if ! blkid "$DEVICE_PATH" > /dev/null 2>&1; then
+        echo "Formatting $DEVICE_PATH as ext4..."
+        mkfs.ext4 -F "$DEVICE_PATH"
+      fi
+      
+      # Mount the volume
+      mount "$DEVICE_PATH" "$MOUNT_POINT"
+      
+      # Persist in fstab
+      DEVICE_UUID=$(blkid -s UUID -o value "$DEVICE_PATH")
+      FSTAB_ENTRY="UUID=${DEVICE_UUID} ${MOUNT_POINT} ext4 defaults,nofail 0 2"
+      if ! grep -q "${DEVICE_UUID}" /etc/fstab; then
+        echo "${FSTAB_ENTRY}" >> /etc/fstab
+        echo "Added to /etc/fstab: ${FSTAB_ENTRY}"
+      fi
+      
+      # Set DATA_ROOT
+      DATA_ROOT="${MOUNT_POINT}/${TENANT_NAME}"
+      
+      echo "✅ EBS volume mounted successfully!"
+      echo "📁 DATA_ROOT set to: ${DATA_ROOT}"
+    }
+
+    # Run EBS selection first (before any .env creation)
+    select_ebs_volume
+    # ─── END EBS VOLUME SELECTION ───────────────────────────────────────────
     
     # Check for previous state and offer to resume
     if restore_state; then
