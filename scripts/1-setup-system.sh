@@ -1210,7 +1210,24 @@ EOF
       echo "  STORAGE CONFIGURATION for ${TENANT_USER}"
       echo "═══════════════════════════════════════════"
       echo ""
-      echo "Option A: Use existing mounted volume (shared EBS, folder per tenant)"
+      
+      # List available mounted volumes
+      echo "Available mounted volumes:"
+      echo ""
+      lsblk -o NAME,SIZE,MOUNTPOINT,FSTYPE | grep -v "loop\|sr0" | grep -E -v "^$|NAME"
+      echo ""
+      
+      # Let user select which volume to use
+      read -p "Enter mount point to use (e.g. /mnt/data): " SELECTED_MOUNT
+      SELECTED_MOUNT=${SELECTED_MOUNT:-/mnt/data}
+      
+      if [[ ! -d "${SELECTED_MOUNT}" ]]; then
+        echo "ERROR: ${SELECTED_MOUNT} does not exist or is not mounted"
+        exit 1
+      fi
+      
+      echo ""
+      echo "Option A: Use existing volume (shared EBS, folder per tenant)"
       echo "Option B: Dedicate a new EBS volume to this tenant"
       echo ""
       read -p "Dedicate a new EBS volume to this tenant? [y/N]: " DEDICATE_EBS
@@ -1245,27 +1262,16 @@ EOF
           echo "Added to /etc/fstab: ${FSTAB_ENTRY}"
         fi
 
-        # Update DATA_ROOT by removing readonly and reassigning
-        unset DATA_ROOT
+        # Update DATA_ROOT
         DATA_ROOT="${MOUNT_POINT}"
 
       else
         # Mode A — shared EBS, folder per tenant
         echo ""
-        echo "Currently mounted volumes:"
-        lsblk -o NAME,SIZE,MOUNTPOINT | grep -v "loop\|sr0" | grep -v "^$"
-        echo ""
-        read -p "Base mount point to use [/mnt/data]: " MOUNT_BASE
-        MOUNT_BASE=${MOUNT_BASE:-/mnt/data}
-
-        if [[ ! -d "${MOUNT_BASE}" ]]; then
-          echo "ERROR: ${MOUNT_BASE} does not exist or is not mounted"
-          exit 1
-        fi
-
-        # Update DATA_ROOT by removing readonly and reassigning
-        unset DATA_ROOT
-        DATA_ROOT="${MOUNT_BASE}/${TENANT_NAME}"
+        echo "Using existing volume: ${SELECTED_MOUNT}"
+        
+        # Update DATA_ROOT
+        DATA_ROOT="${SELECTED_MOUNT}/${TENANT_NAME}"
       fi
 
       echo "DATA_ROOT set to: ${DATA_ROOT}"
@@ -1312,6 +1318,9 @@ EOF
     print_info "Port Configuration"
     echo ""
     
+    # Generate dynamic Signal port first
+    SIGNAL_PORT=$(find_free_port 8085 8185)
+    
     # Custom port selection for major services
     local -A default_ports=(
         ["nginx-proxy-manager"]="80"
@@ -1325,7 +1334,7 @@ EOF
         ["litellm"]="5005"
         ["prometheus"]="5000"
         ["grafana"]="5001"
-        SIGNAL_PORT=$(find_free_port 8085 8185)
+        ["signal-api"]="${SIGNAL_PORT}"
         ["openclaw"]="18789"
         ["tailscale"]="8443"
         ["postgres"]="5432"
@@ -1785,7 +1794,7 @@ allocate_port() {
         print_info "Signal Webhook Configuration"
         echo ""
         echo "SIGNAL_WEBHOOK_URL=http://signal-api:8090/v2/receive" >> "$ENV_FILE"
-        echo "SIGNAL_API_PORT=8090" >> "$ENV_FILE"
+        echo "SIGNAL_API_PORT=8080" >> "$ENV_FILE"
         
         print_success "Signal API configuration completed"
     fi
