@@ -2817,28 +2817,68 @@ EOF
             "litellm")
                 local litellm_port=$(grep "^LITELLM_PORT=" "$ENV_FILE" | cut -d= -f2)
                 echo "- LiteLLM: http://localhost:$litellm_port" >> "$urls_file"
-                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- LiteLLM (Public): https://$DOMAIN_NAME/litellm" >> "$urls_file"
+                if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                    if [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
+                        echo "- LiteLLM (Public): https://$DOMAIN_NAME/litellm" >> "$urls_file"
+                    elif [[ "${PROXY_CONFIG_METHOD:-direct}" == "subdomain" ]]; then
+                        echo "- LiteLLM (Public): https://litellm.$DOMAIN_NAME" >> "$urls_file"
+                    else
+                        echo "- LiteLLM (Public): https://$DOMAIN_NAME:$litellm_port" >> "$urls_file"
+                    fi
+                fi
                 ;;
             "signal-api")
                 local signal_api_port=$(grep "^SIGNAL_API_PORT=" "$ENV_FILE" | cut -d= -f2)
                 echo "- Signal API: http://localhost:$signal_api_port" >> "$urls_file"
                 echo "- Signal QR: http://localhost:$signal_api_port/v1/qrcode" >> "$urls_file"
-                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Signal API (Public): https://$DOMAIN_NAME/signal-api" >> "$urls_file"
+                if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                    if [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
+                        echo "- Signal API (Public): https://$DOMAIN_NAME/signal-api" >> "$urls_file"
+                    elif [[ "${PROXY_CONFIG_METHOD:-direct}" == "subdomain" ]]; then
+                        echo "- Signal API (Public): https://signal-api.$DOMAIN_NAME" >> "$urls_file"
+                    else
+                        echo "- Signal API (Public): https://$DOMAIN_NAME:$signal_api_port" >> "$urls_file"
+                    fi
+                fi
                 ;;
             "openclaw")
                 local openclaw_port=$(grep "^OPENCLAW_PORT=" "$ENV_FILE" | cut -d= -f2)
                 echo "- OpenClaw: http://localhost:$openclaw_port" >> "$urls_file"
-                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- OpenClaw (Public): https://$DOMAIN_NAME/openclaw" >> "$urls_file"
+                if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                    if [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
+                        echo "- OpenClaw (Public): https://$DOMAIN_NAME/openclaw" >> "$urls_file"
+                    elif [[ "${PROXY_CONFIG_METHOD:-direct}" == "subdomain" ]]; then
+                        echo "- OpenClaw (Public): https://openclaw.$DOMAIN_NAME" >> "$urls_file"
+                    else
+                        echo "- OpenClaw (Public): https://$DOMAIN_NAME:$openclaw_port" >> "$urls_file"
+                    fi
+                fi
                 ;;
             "prometheus")
                 local prometheus_port=$(grep "^PROMETHEUS_PORT=" "$ENV_FILE" | cut -d= -f2)
                 echo "- Prometheus: http://localhost:$prometheus_port" >> "$urls_file"
-                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Prometheus (Public): https://$DOMAIN_NAME/prometheus" >> "$urls_file"
+                if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                    if [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
+                        echo "- Prometheus (Public): https://$DOMAIN_NAME/prometheus" >> "$urls_file"
+                    elif [[ "${PROXY_CONFIG_METHOD:-direct}" == "subdomain" ]]; then
+                        echo "- Prometheus (Public): https://prometheus.$DOMAIN_NAME" >> "$urls_file"
+                    else
+                        echo "- Prometheus (Public): https://$DOMAIN_NAME:$prometheus_port" >> "$urls_file"
+                    fi
+                fi
                 ;;
             "grafana")
                 local grafana_port=$(grep "^GRAFANA_PORT=" "$ENV_FILE" | cut -d= -f2)
                 echo "- Grafana: http://localhost:$grafana_port" >> "$urls_file"
-                [[ "${DOMAIN_RESOLVES:-false}" == "true" ]] && echo "- Grafana (Public): https://$DOMAIN_NAME/grafana" >> "$urls_file"
+                if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                    if [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
+                        echo "- Grafana (Public): https://$DOMAIN_NAME/grafana" >> "$urls_file"
+                    elif [[ "${PROXY_CONFIG_METHOD:-direct}" == "subdomain" ]]; then
+                        echo "- Grafana (Public): https://grafana.$DOMAIN_NAME" >> "$urls_file"
+                    else
+                        echo "- Grafana (Public): https://$DOMAIN_NAME:$grafana_port" >> "$urls_file"
+                    fi
+                fi
                 ;;
             "qdrant")
                 echo "- Qdrant: http://localhost:6333" >> "$urls_file"
@@ -2855,6 +2895,15 @@ EOF
                 local minio_console_port=$(grep "^MINIO_CONSOLE_PORT=" "$ENV_FILE" | cut -d= -f2)
                 echo "- MinIO: http://localhost:$minio_api_port" >> "$urls_file"
                 echo "- MinIO Console: http://localhost:$minio_console_port" >> "$urls_file"
+                if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
+                    if [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
+                        echo "- MinIO (Public): https://$DOMAIN_NAME/minio" >> "$urls_file"
+                    elif [[ "${PROXY_CONFIG_METHOD:-direct}" == "subdomain" ]]; then
+                        echo "- MinIO (Public): https://minio.$DOMAIN_NAME" >> "$urls_file"
+                    else
+                        echo "- MinIO (Public): https://$DOMAIN_NAME:$minio_api_port" >> "$urls_file"
+                    fi
+                fi
                 ;;
         esac
     done
@@ -3041,6 +3090,8 @@ EOF
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
                         if [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                             echo "  • Open WebUI: https://$DOMAIN_NAME/openwebui"
+                        elif [[ "${PROXY_CONFIG_METHOD:-direct}" == "subdomain" ]]; then
+                            echo "  • Open WebUI: https://openwebui.$DOMAIN_NAME"
                         else
                             echo "  • Open WebUI: https://$DOMAIN_NAME:$openwebui_port"
                         fi
@@ -3109,6 +3160,8 @@ EOF
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
                         if [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                             echo "  • LiteLLM: https://$DOMAIN_NAME/litellm"
+                        elif [[ "${PROXY_CONFIG_METHOD:-direct}" == "subdomain" ]]; then
+                            echo "  • LiteLLM: https://litellm.$DOMAIN_NAME"
                         else
                             echo "  • LiteLLM: https://$DOMAIN_NAME:$litellm_port"
                         fi
@@ -3180,6 +3233,8 @@ EOF
                     if [[ "${DOMAIN_RESOLVES:-false}" == "true" ]]; then
                         if [[ "${PROXY_CONFIG_METHOD:-direct}" == "alias" ]]; then
                             echo "  • MinIO: https://$DOMAIN_NAME/minio"
+                        elif [[ "${PROXY_CONFIG_METHOD:-direct}" == "subdomain" ]]; then
+                            echo "  • MinIO: https://minio.$DOMAIN_NAME"
                         else
                             echo "  • MinIO: https://$DOMAIN_NAME:$minio_api_port"
                         fi
