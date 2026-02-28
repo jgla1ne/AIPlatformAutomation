@@ -1101,9 +1101,13 @@ collect_configurations() {
     REDIS_PASSWORD="${REDIS_PASSWORD:-$(generate_random_password 24)}"
     N8N_ENCRYPTION_KEY="${N8N_ENCRYPTION_KEY:-$(generate_random_password 64)}"
     FLOWISE_PASSWORD="${FLOWISE_PASSWORD:-$(generate_random_password 24)}"
+    FLOWISE_SECRET_KEY="${FLOWISE_SECRET_KEY:-$(generate_random_password 32)}"
     ANYTHINGLLM_JWT_SECRET="${ANYTHINGLLM_JWT_SECRET:-$(generate_random_password 64)}"
     MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-$(generate_random_password 32)}"
     DIFY_SECRET_KEY="${DIFY_SECRET_KEY:-$(openssl rand -hex 32)}"
+    
+    # Compute TENANT_DIR as absolute path for expansion
+    TENANT_DIR="${DATA_ROOT}/${TENANT_NAME}"
     
     # Generate tenant identity for multi-tenant support
     print_header "Tenant Identity"
@@ -1148,7 +1152,7 @@ collect_configurations() {
 
 # System Configuration
 DATA_ROOT=${DATA_ROOT}
-TENANT_DIR=${DATA_ROOT}/${TENANT_NAME}
+TENANT_DIR=${TENANT_DIR}
 TENANT_NAME=${TENANT_NAME}
 METADATA_DIR=${METADATA_DIR}
 ENABLE_SIGNAL=false
@@ -1167,68 +1171,22 @@ PG_VOLUME=$PG_VOLUME
 REDIS_VOLUME=$REDIS_VOLUME
 QDRANT_VOLUME=$QDRANT_VOLUME
 
-# Single VectorDB for all services - one set of vars, referenced everywhere
-QDRANT_HOST=qdrant
-QDRANT_HTTP_PORT=${QDRANT_PORT:-6333}
-QDRANT_GRPC_PORT=${QDRANT_GRPC_PORT:-6334}
-QDRANT_COLLECTION_PREFIX=${TENANT_NAME}
-QDRANT_DOCS_COLLECTION=${TENANT_NAME}_docs
-QDRANT_URL=http://${QDRANT_HOST}:${QDRANT_HTTP_PORT}
-QDRANT_API_KEY=${QDRANT_API_KEY:-}
-
-# Signal - correct internal port reference
-SIGNAL_INTERNAL_PORT=8080
-
-# GDrive
-GDRIVE_SYNC_DIR="${DATA_ROOT}/.gdrive"
-GDRIVE_RCLONE_REMOTE="gdrive-${TENANT_NAME}"
-GDRIVE_SYNC_INTERVAL=3600
-EMBEDDING_WATCH_DIR="${DATA_ROOT}/.gdrive/documents"
-
-# Tailscale
-TAILSCALE_HOSTNAME="${TENANT_NAME}-aiplatform"
-TAILSCALE_IP=""   # populated by Script 3 after tailscale up
-
-# Network Configuration (DOMAIN=localhost by default)
-DOMAIN_NAME=$existing_domain_name
-DOMAIN=${existing_domain_name}
-DOMAIN_RESOLVES=$existing_domain_resolves
-PUBLIC_IP=$existing_public_ip
-PROXY_CONFIG_METHOD=$existing_proxy_config_method
-PROXY_TYPE=$existing_proxy_type
-SSL_TYPE=$existing_ssl_type
-SSL_EMAIL=$existing_ssl_email
-
-# Docker Configuration
-DOCKER_NETWORK=$DOCKER_NETWORK
-COMPOSE_FILE=/home/jglaine/AIPlatformAutomation/docker-compose.yml
-
-# Vector Database Configuration
-VECTOR_DB=qdrant
-VECTOR_DB_TYPE=qdrant
-
-# User Configuration
-TENANT_USER=$TENANT_USER
-TENANT_UID=$TENANT_UID
-TENANT_GID=$TENANT_GID
-
-# ── PostgreSQL ────────────────────────────────────────────────
-POSTGRES_USER=aip_user
+# Database Configuration
+POSTGRES_USER=${POSTGRES_USER:-aip_user}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 POSTGRES_DB=postgres
-
-# ── Redis ─────────────────────────────────────────────────────
 REDIS_PASSWORD=${REDIS_PASSWORD}
 
-# ── Service Secrets ───────────────────────────────────────────
+# Service Secrets
 N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
 FLOWISE_PASSWORD=${FLOWISE_PASSWORD}
+FLOWISE_SECRET_KEY=${FLOWISE_SECRET_KEY}
 ANYTHINGLLM_JWT_SECRET=${ANYTHINGLLM_JWT_SECRET}
-MINIO_ROOT_USER=minioadmin
+MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
 MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
 DIFY_SECRET_KEY=${DIFY_SECRET_KEY}
 
-# ── Service Ports ─────────────────────────────────────────────
+# Service Ports
 N8N_PORT=${N8N_PORT:-5678}
 FLOWISE_PORT=${FLOWISE_PORT:-3000}
 ANYTHINGLLM_PORT=${ANYTHINGLLM_PORT:-3001}
@@ -1240,12 +1198,53 @@ DIFY_PORT=${DIFY_PORT:-5001}
 DIFY_WEB_PORT=${DIFY_WEB_PORT:-3002}
 SIGNAL_PORT=${SIGNAL_PORT:-8085}
 
-# ── Optional Services ─────────────────────────────────────────
-TAILSCALE_AUTH_KEY=
+# Network Configuration
+DOMAIN=${DOMAIN:-localhost}
+DOMAIN_NAME=${DOMAIN_NAME:-localhost}
+DOMAIN_RESOLVES=${DOMAIN_RESOLVES:-false}
+PUBLIC_IP=${PUBLIC_IP:-unknown}
+PROXY_CONFIG_METHOD=${PROXY_CONFIG_METHOD:-direct}
+PROXY_TYPE=${PROXY_TYPE:-none}
+SSL_TYPE=${SSL_TYPE:-none}
+SSL_EMAIL=${SSL_EMAIL:-}
 
-# ── Webhook / External URLs ───────────────────────────────────
-N8N_WEBHOOK_URL=https://${DOMAIN}/n8n
-DOMAIN=${DOMAIN}
+# Docker Configuration
+DOCKER_NETWORK=$DOCKER_NETWORK
+COMPOSE_FILE=/home/jglaine/AIPlatformAutomation/docker-compose.yml
+
+# Vector Database Configuration
+VECTOR_DB=qdrant
+VECTOR_DB_TYPE=qdrant
+QDRANT_HOST=qdrant
+QDRANT_HTTP_PORT=${QDRANT_PORT:-6333}
+QDRANT_GRPC_PORT=${QDRANT_GRPC_PORT:-6334}
+QDRANT_COLLECTION_PREFIX=${TENANT_NAME}
+QDRANT_DOCS_COLLECTION=${TENANT_NAME}_docs
+QDRANT_URL=http://${QDRANT_HOST}:${QDRANT_HTTP_PORT}
+QDRANT_API_KEY=${QDRANT_API_KEY:-}
+
+# Signal Configuration
+SIGNAL_INTERNAL_PORT=8080
+ENABLE_SIGNAL=${ENABLE_SIGNAL:-false}
+
+# GDrive Configuration
+GDRIVE_SYNC_DIR="${DATA_ROOT}/.gdrive"
+GDRIVE_RCLONE_REMOTE="gdrive-${TENANT_NAME}"
+GDRIVE_SYNC_INTERVAL=3600
+EMBEDDING_WATCH_DIR="${DATA_ROOT}/.gdrive/documents"
+
+# Tailscale Configuration
+TAILSCALE_HOSTNAME="${TENANT_NAME}-aiplatform"
+TAILSCALE_IP=""
+TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY:-}
+
+# Webhook URLs
+N8N_WEBHOOK_URL=http://${DOMAIN:-localhost}:${N8N_PORT:-5678}
+
+# User Configuration
+TENANT_USER=$TENANT_USER
+TENANT_UID=$TENANT_UID
+TENANT_GID=$TENANT_GID
 EOF
     
     # Set correct ownership for .env file

@@ -89,7 +89,7 @@ for TENANT_DIR in "${MOUNT_POINTS[@]}"; do
     if [[ -n "$PROJECT" ]]; then
       log "  Stopping compose project: ${PROJECT}"
       docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" \
-        down --remove-orphans --timeout 10 2>/dev/null || true
+        down --volumes --remove-orphans --timeout 30 2>/dev/null || true
     fi
   fi
 done
@@ -106,6 +106,29 @@ docker ps -aq --filter "label=com.docker.compose.project" \
   | xargs -r docker rm -f 2>/dev/null || true
 
 ok "Containers removed"
+
+# Explicit named volume removal (belt and braces)
+log "Removing named volumes..."
+for TENANT_DIR in "${MOUNT_POINTS[@]}"; do
+  ENV_FILE="${TENANT_DIR}/.env"
+  if [[ -f "$ENV_FILE" ]]; then
+    PROJECT=$(grep "^COMPOSE_PROJECT_NAME=" "$ENV_FILE" | cut -d= -f2 || true)
+    if [[ -n "$PROJECT" ]]; then
+      log "Removing volumes for project: ${PROJECT}"
+      docker volume ls \
+        --filter "label=com.docker.compose.project=${PROJECT}" \
+        --format '{{.Name}}' \
+        | xargs -r docker volume rm -f 2>/dev/null && ok "Volumes removed" || true
+      
+      docker volume ls --format '{{.Name}}' \
+        | grep -E "^${PROJECT}[_-]" \
+        | xargs -r docker volume rm -f 2>/dev/null || true
+    fi
+  fi
+done
+
+docker volume prune -f >/dev/null 2>&1
+ok "Volume cleanup complete"
 
 # ── Phase 2: Remove ALL named volumes ────────────────────────────
 section "Removing Volumes"

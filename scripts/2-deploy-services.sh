@@ -182,8 +182,13 @@ ELAPSED=0; MAX=120
 until docker exec "$PG_CONTAINER" \
     pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB:-postgres}" -q \
     2>/dev/null; do
+  # Check if container exited (crash loop)
+  STATUS="$(docker inspect --format '{{.State.Status}}' "$PG_CONTAINER" 2>/dev/null || echo 'missing')"
+  if [[ "$STATUS" == "exited" ]]; then
+    fail "PostgreSQL container exited — check: docker logs $PG_CONTAINER"
+  fi
   sleep 3; ELAPSED=$((ELAPSED+3))
-  [[ $ELAPSED -ge $MAX ]] && fail "PostgreSQL not ready after ${MAX}s"
+  [[ $ELAPSED -ge $MAX ]] && fail "PostgreSQL not ready after ${MAX}s — check: docker logs $PG_CONTAINER"
   [[ $((ELAPSED % 15)) -eq 0 ]] && log "  PostgreSQL: ${ELAPSED}s elapsed..."
 done
 ok "PostgreSQL ready (${ELAPSED}s)"
@@ -202,7 +207,7 @@ ok "Redis ready (${ELAPSED}s)"
 # ── Wait for Qdrant ──────────────────────────────────────────────────────────
 log "Waiting for Qdrant..."
 ELAPSED=0; MAX=90
-until curl -sf "http://localhost:${QDRANT_PORT:-6333}/healthz" \
+until curl -sf "http://localhost:${QDRANT_PORT:-6333}/collections" \
     >/dev/null 2>&1; do
   sleep 3; ELAPSED=$((ELAPSED+3))
   [[ $ELAPSED -ge $MAX ]] && { warn "Qdrant not ready after ${MAX}s — continuing"; break; }
@@ -310,7 +315,7 @@ if [[ ${#DIFY_SERVICES[@]} -gt 0 ]]; then
   log "Waiting for Dify API (runs DB migrations, allow 3 minutes)..."
   ELAPSED=0; MAX=180
   until curl -sf --max-time 10 \
-      "http://localhost:${DIFY_PORT:-5001}/health" >/dev/null 2>&1; do
+      "http://localhost:${DIFY_PORT:-5001}/v1/health" >/dev/null 2>&1; do
     sleep 10; ELAPSED=$((ELAPSED+10))
     if [[ $ELAPSED -ge $MAX ]]; then
       warn "Dify API not ready after ${MAX}s — check: docker logs ${COMPOSE_PROJECT_NAME}-dify-api"
