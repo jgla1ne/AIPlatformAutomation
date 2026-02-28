@@ -722,3 +722,131 @@ gdrive_disable_autosync() {
     
     print_success "Auto-sync disabled"
 }
+
+configure_tailscale() {
+    log "Configuring Tailscale..."
+    
+    if [[ -z "${TAILSCALE_AUTH_KEY:-}" ]]; then
+        log "No TAILSCALE_AUTH_KEY found in ${ENV_FILE}"
+        log "Get one from: https://login.tailscale.com/admin/settings/keys"
+        read -p "Paste Tailscale auth key (Enter to skip): " TAILSCALE_AUTH_KEY
+        [[ -n "${TAILSCALE_AUTH_KEY}" ]] && \
+           echo "TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY}" >> "${ENV_FILE}"
+    fi
+    
+    if [[ -z "${TAILSCALE_AUTH_KEY:-}" ]]; then
+        log " Tailscale skipped — run 'tailscale up' manually inside container"
+        return 0
+    fi
+    
+    docker exec "${COMPOSE_PROJECT_NAME}-tailscale" \
+        tailscale up \
+        --authkey="${TAILSCALE_AUTH_KEY}" \
+        --hostname="${TAILSCALE_HOSTNAME}" \
+        --accept-routes 2>&1 | log_pipe
+    
+    sleep 5
+    
+    TAILSCALE_IP=$(docker exec "${COMPOSE_PROJECT_NAME}-tailscale" \
+        tailscale ip -4 2>/dev/null || echo "")
+    
+    if [[ -n "${TAILSCALE_IP}" ]]; then
+        log " Tailscale connected: ${TAILSCALE_IP}"
+        # Update .env with real IP
+        sed -i "s/^TAILSCALE_IP=.*/TAILSCALE_IP=${TAILSCALE_IP}/" "${ENV_FILE}" || \
+          echo "TAILSCALE_IP=${TAILSCALE_IP}" >> "${ENV_FILE}"
+    else
+        log "  Tailscale IP not yet assigned — may need a moment"
+    fi
+}
+
+configure_rclone() {
+    log "Configuring rclone for Google Drive..."
+    local conf="${DATA_ROOT}/config/rclone/rclone.conf"
+    mkdir -p "$(dirname ${conf})"
+    
+    if [[ -f "${conf}" ]] && grep -q "type = drive" "${conf}"; then
+        log "rclone already configured — skipping"
+        return 0
+    fi
+    
+    cat > "${conf}" <<EOF
+[gdrive-${TENANT_NAME}]
+type = drive
+scope = drive.readonly
+EOF
+    
+    chown "${TENANT_UID}:${TENANT_GID}" "${conf}"
+    log "  Google Drive OAuth required. Run this command to authenticate:"
+    log "   docker exec -it ${COMPOSE_PROJECT_NAME}-rclone \\"
+    log "     rclone config reconnect gdrive-${TENANT_NAME}:"
+    log "   Then open the URL shown and paste the auth code."
+}
+
+create_qdrant_collections() {
+    log "Creating Qdrant collections for tenant ${TENANT_NAME}..."
+    local qdrant_url="http://localhost:${QDRANT_PORT}"
+    
+    # Wait for Qdrant
+    local retries=0
+    until curl -sf "${qdrant_url}/healthz" > /dev/null 2>&1; do
+        ((retries++))
+        [[ ${retries} -gt 30 ]] && { log " Qdrant not responding"; return 1; }
+        sleep 2
+    done
+    
+    # Create docs collection — 1536 dims for OpenAI embeddings, 768 for local
+    curl -sf -X PUT "${qdrant_url}/collections/${TENANT_NAME}_docs" \
+        -H "Content-Type: application/json" \
+        -d '{
+          "vectors": {
+            "size": 1536,
+            "distance": "Cosine"
+          }
+        }' | log_pipe
+    
+    log " Qdrant collection: ${TENANT_NAME}_docs"
+}
+
+print_service_summary() {
+    # Re-source env to get TAILSCALE_IP set by configure_tailscale()
+    source "${ENV_FILE}"
+    
+    echo ""
+    echo "═════════════════════════════════════════════════════════"
+    echo "  SERVICE ENDPOINTS — Tenant: ${TENANT_NAME}"
+    echo "═══════════════════════════════════════════════════════"
+    
+    local base_url="https://${TAILSCALE_IP}"
+    
+    services=(
+        "AnythingLLM|${ANYTHINGLLM_PORT}"
+        "Dify|${DIFY_PORT}"
+        "n8n|${N8N_PORT}"
+        "OpenClaw|${OPENCLAW_PORT}"
+        "MinIO|${MINIO_CONSOLE_PORT}"
+        "Signal|${SIGNAL_PORT}"
+        "Qdrant|${QDRANT_PORT}"
+    )
+    
+    for entry in "${services[@]}"; do
+        name="${entry%|*}"
+        port="${entry#*|}"
+        url="${base_url}:${port}"
+        
+        # Validate reachability
+        if curl -sk --max-time 5 "${url}" > /dev/null 2>&1; then
+            echo "  ${name}: ${url}"
+        else
+            echo "  ${name}: ${url} (not responding)"
+        fi
+    done
+    
+    echo ""
+    echo "  GDrive sync: ${GDRIVE_SYNC_DIR}"
+    echo "  VectorDB:    ${QDRANT_URL}"
+    echo "  Config:      ${ENV_FILE}"
+    echo "═════════════════════════════════════════════════════"
+}
+
+# Main execution
