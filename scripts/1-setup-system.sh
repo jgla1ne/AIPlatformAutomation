@@ -1291,8 +1291,21 @@ EOF
     print_info "Port Configuration"
     echo ""
     
-    # Generate dynamic Signal port first
-    SIGNAL_PORT=$(find_free_port 8085 8185)
+    # Helper function to find free port
+    find_free_port() {
+        local start_port=$1
+        local end_port=$2
+        for port in $(seq $start_port $end_port); do
+            if ! netstat -tuln 2>/dev/null | grep -q ":$port "; then
+                echo $port
+                return 0
+            fi
+        done
+        return 1
+    }
+    
+    # Generate dynamic Signal port first (default 8080)
+    SIGNAL_PORT=$(find_free_port 8080 8180)
     
     # Custom port selection for major services
     local -A default_ports=(
@@ -1316,7 +1329,7 @@ EOF
         ["milvus"]="19530"
         ["chroma"]="8000"
         ["weaviate"]="8081"
-        ["minio"]="5007"
+        ["minio"]="9000"
     )
     
     # Proxy port configuration (only if proxy was selected in domain phase)
@@ -1985,7 +1998,11 @@ allocate_port() {
         echo ""
         
         # Use user's port input for MinIO API, calculate console port as API port + 1
-        local minio_api_port=$(grep "^MINIO_PORT=" "$ENV_FILE" | cut -d= -f2)
+        local minio_api_port=$(grep "^MINIO_PORT=" "$ENV_FILE" | cut -d= -f2 | head -1)
+        # Ensure we have a valid port number
+        if [[ -z "$minio_api_port" ]]; then
+            minio_api_port="9000"
+        fi
         local minio_console_port=$((minio_api_port + 1))
         
         echo "MINIO_API_PORT=$minio_api_port" >> "$ENV_FILE"
