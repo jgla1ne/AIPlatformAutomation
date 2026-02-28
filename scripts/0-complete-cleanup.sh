@@ -37,6 +37,28 @@ discover_tenants() {
   printf '%s\n' "${tenants[@]}" | sort -u
 }
 
+# ── DOCKER COMPOSE CLEANUP ───────────────────────────────────────────────────
+docker_compose_cleanup() {
+  local tenant="$1"
+  local project="aip-${tenant}"
+  local compose_file="${SCRIPT_DIR}/../docker-compose.yml"
+  
+  if [[ -f "$compose_file" ]]; then
+    log "Running docker compose down for ${project}..."
+    # Set environment variables for compose
+    export COMPOSE_PROJECT_NAME="$project"
+    export DATA_ROOT="/mnt/data/${tenant}"
+    
+    docker compose -f "$compose_file" \
+      --project-name "$project" \
+      down --volumes --remove-orphans --timeout 30 2>/dev/null || true
+    ok "Docker compose down completed"
+  fi
+  
+  # Prune any remaining networks
+  docker network prune -f 2>/dev/null || true
+}
+
 # ── SELECT TENANT ───────────────────────────────────────────────────────
 select_tenant() {
   local tenants=($(discover_tenants))
@@ -253,6 +275,9 @@ main() {
   echo ""
   echo -e "${YELLOW}Starting systematic cleanup of ${SELECTED_TENANT}...${NC}"
   echo ""
+  
+  # Phase 0: Docker Compose Cleanup (most important first)
+  docker_compose_cleanup "$SELECTED_TENANT"
   
   cleanup_containers "$SELECTED_TENANT"
   cleanup_networks "$SELECTED_TENANT"

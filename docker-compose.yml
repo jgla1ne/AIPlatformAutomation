@@ -89,7 +89,7 @@ services:
 
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
-    container_name: litellm
+    container_name: ${COMPOSE_PROJECT_NAME}-litellm
     restart: unless-stopped
     depends_on:
       postgres:
@@ -183,7 +183,7 @@ services:
 
   dify-worker:
     image: langgenius/dify-api:latest
-    container_name: dify-worker
+    container_name: ${COMPOSE_PROJECT_NAME}-dify-worker
     restart: unless-stopped
     depends_on:
       postgres:
@@ -221,7 +221,7 @@ services:
 
   dify-sandbox:
     image: langgenius/dify-sandbox:latest
-    container_name: dify-sandbox
+    container_name: ${COMPOSE_PROJECT_NAME}-dify-sandbox
     restart: unless-stopped
     environment:
       API_BASE_URL: http://dify-api:5001
@@ -276,7 +276,7 @@ services:
 
   flowise:
     image: flowiseai/flowise:latest
-    container_name: flowise
+    container_name: ${COMPOSE_PROJECT_NAME}-flowise
     restart: unless-stopped
     environment:
       DATABASE_TYPE: postgres
@@ -314,7 +314,7 @@ services:
 
   anythingllm:
     image: mintplexlabs/anythingllm:latest
-    container_name: anythingllm
+    container_name: ${COMPOSE_PROJECT_NAME}-anythingllm
     restart: unless-stopped
     environment:
       STORAGE_DIR: /app/server/storage
@@ -347,7 +347,7 @@ services:
 
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
-    container_name: openwebui
+    container_name: ${COMPOSE_PROJECT_NAME}-openwebui
     restart: unless-stopped
     depends_on:
       - ollama
@@ -382,7 +382,7 @@ services:
 
   prometheus:
     image: prom/prometheus:latest
-    container_name: prometheus
+    container_name: ${COMPOSE_PROJECT_NAME}-prometheus
     restart: unless-stopped
     volumes:
       - ${DATA_ROOT}/prometheus:/prometheus
@@ -411,7 +411,7 @@ services:
 
   grafana:
     image: grafana/grafana:latest
-    container_name: grafana
+    container_name: ${COMPOSE_PROJECT_NAME}-grafana
     restart: unless-stopped
     depends_on:
       prometheus:
@@ -465,7 +465,7 @@ services:
 
   openclaw:
     image: alpine/openclaw:latest
-    container_name: openclaw
+    container_name: ${COMPOSE_PROJECT_NAME}-openclaw
     restart: unless-stopped
     environment:
       OPENCLAW_ADMIN_USER: ${OPENCLAW_ADMIN_USER:-admin}
@@ -500,7 +500,7 @@ services:
 
   tailscale:
     image: tailscale/tailscale:latest
-    container_name: tailscale
+    container_name: ${COMPOSE_PROJECT_NAME}-tailscale
     restart: unless-stopped
     environment:
       TS_USERSPACE: ${TAILSCALE_USERSPACE:-ai-platform}
@@ -583,7 +583,7 @@ services:
 
   caddy:
     image: caddy:2-alpine
-    container_name: caddy
+    container_name: ${COMPOSE_PROJECT_NAME}-caddy
     restart: unless-stopped
     ports:
       - "80:80"

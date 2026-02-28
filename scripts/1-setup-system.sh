@@ -2315,17 +2315,17 @@ generate_caddyfile() {
 
 # Prometheus
 prometheus.${DOMAIN_NAME} {
-    reverse_proxy prometheus:9090
+    reverse_proxy ${COMPOSE_PROJECT_NAME}-prometheus:9090
 }
 
 # Grafana
 grafana.${DOMAIN_NAME} {
-    reverse_proxy grafana:3000
+    reverse_proxy ${COMPOSE_PROJECT_NAME}-grafana:3000
 }
 
 # n8n
 n8n.${DOMAIN_NAME} {
-    reverse_proxy n8n:5678 {
+    reverse_proxy ${COMPOSE_PROJECT_NAME}-n8n:5678 {
         header_up Upgrade {http.request.header.Upgrade}
         header_up Connection {http.request.header.Connection}
     }
@@ -2333,12 +2333,12 @@ n8n.${DOMAIN_NAME} {
 
 # Dify
 dify.${DOMAIN_NAME} {
-    reverse_proxy dify-web:3000
+    reverse_proxy ${COMPOSE_PROJECT_NAME}-dify-web:3000
 }
 
 # AnythingLLM
 anythingllm.${DOMAIN_NAME} {
-    reverse_proxy anythingllm:3001 {
+    reverse_proxy ${COMPOSE_PROJECT_NAME}-anythingllm:3000 {
         header_up Upgrade {http.request.header.Upgrade}
         header_up Connection {http.request.header.Connection}
     }
@@ -2346,12 +2346,12 @@ anythingllm.${DOMAIN_NAME} {
 
 # LiteLLM
 litellm.${DOMAIN_NAME} {
-    reverse_proxy litellm:4000
+    reverse_proxy ${COMPOSE_PROJECT_NAME}-litellm:4000
 }
 
 # Open WebUI
 openwebui.${DOMAIN_NAME} {
-    reverse_proxy openwebui:8080 {
+    reverse_proxy ${COMPOSE_PROJECT_NAME}-openwebui:8080 {
         header_up Upgrade {http.request.header.Upgrade}
         header_up Connection {http.request.header.Connection}
     }
@@ -2359,22 +2359,22 @@ openwebui.${DOMAIN_NAME} {
 
 # MinIO Console
 minio.${DOMAIN_NAME} {
-    reverse_proxy minio-console:9001
+    reverse_proxy ${COMPOSE_PROJECT_NAME}-minio:9001
 }
 
 # Signal API
 signal.${DOMAIN_NAME} {
-    reverse_proxy signal:8080
+    reverse_proxy ${COMPOSE_PROJECT_NAME}-signal-api:8080
 }
 
 # Flowise
 flowise.${DOMAIN_NAME} {
-    reverse_proxy flowise:3000
+    reverse_proxy ${COMPOSE_PROJECT_NAME}-flowise:3000
 }
 
 # Ollama API
 ollama.${DOMAIN_NAME} {
-    reverse_proxy ollama:11434
+    reverse_proxy ${COMPOSE_PROJECT_NAME}-ollama:11434
 }
 
 # Default domain - health check and fallback
@@ -2399,17 +2399,17 @@ EOF
 :80 {
     # Prometheus
     handle /prometheus/* {
-        reverse_proxy prometheus:9090
+        reverse_proxy ${COMPOSE_PROJECT_NAME}-prometheus:9090
     }
 
     # Grafana
     handle /grafana/* {
-        reverse_proxy grafana:3000
+        reverse_proxy ${COMPOSE_PROJECT_NAME}-grafana:3000
     }
 
     # n8n
     handle /n8n/* {
-        reverse_proxy n8n:5678 {
+        reverse_proxy ${COMPOSE_PROJECT_NAME}-n8n:5678 {
             header_up Upgrade {http.request.header.Upgrade}
             header_up Connection {http.request.header.Connection}
         }
@@ -2417,12 +2417,12 @@ EOF
 
     # Dify
     handle /dify/* {
-        reverse_proxy dify-web:3000
+        reverse_proxy ${COMPOSE_PROJECT_NAME}-dify-web:3000
     }
 
     # AnythingLLM
     handle /anythingllm/* {
-        reverse_proxy anythingllm:3001 {
+        reverse_proxy ${COMPOSE_PROJECT_NAME}-anythingllm:3000 {
             header_up Upgrade {http.request.header.Upgrade}
             header_up Connection {http.request.header.Connection}
         }
@@ -2430,12 +2430,12 @@ EOF
 
     # LiteLLM
     handle /litellm/* {
-        reverse_proxy litellm:4000
+        reverse_proxy ${COMPOSE_PROJECT_NAME}-litellm:4000
     }
 
     # Open WebUI
     handle /openwebui/* {
-        reverse_proxy openwebui:8080 {
+        reverse_proxy ${COMPOSE_PROJECT_NAME}-openwebui:8080 {
             header_up Upgrade {http.request.header.Upgrade}
             header_up Connection {http.request.header.Connection}
         }
@@ -2443,27 +2443,27 @@ EOF
 
     # MinIO Console
     handle /minio/* {
-        reverse_proxy minio-console:9001
+        reverse_proxy ${COMPOSE_PROJECT_NAME}-minio:9001
     }
 
     # Signal API
     handle /signal/* {
-        reverse_proxy signal:8080
+        reverse_proxy ${COMPOSE_PROJECT_NAME}-signal-api:8080
     }
 
     # OpenClaw
     handle /openclaw/* {
-        reverse_proxy openclaw:8080
+        reverse_proxy ${COMPOSE_PROJECT_NAME}-openclaw:8080
     }
 
     # Flowise
     handle /flowise/* {
-        reverse_proxy flowise:3000
+        reverse_proxy ${COMPOSE_PROJECT_NAME}-flowise:3000
     }
 
     # Ollama API (no UI, just API endpoint)
     handle /ollama/* {
-        reverse_proxy ollama:11434
+        reverse_proxy ${COMPOSE_PROJECT_NAME}-ollama:11434
     }
 
     # Health check
