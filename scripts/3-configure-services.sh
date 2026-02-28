@@ -465,6 +465,103 @@ configure_postgres() {
     log "✅ PostgreSQL configuration completed"
 }
 
+configure_dify() {
+    log "Configuring Dify..."
+    
+    # Wait for Dify API to be ready
+    local retries=0
+    until curl -sf "http://localhost:${DIFY_PORT:-3002}/v1/health" >/dev/null 2>&1; do
+        ((retries++))
+        [[ ${retries} -gt 60 ]] && { log "❌ Dify API not ready"; return 1; }
+        sleep 5
+    done
+    
+    log "✅ Dify API is ready"
+    
+    # Initialize Dify admin account (required before any other API calls)
+    log "Initializing Dify admin account..."
+    local setup_response
+    setup_response=$(curl -sf -X POST \
+        "http://localhost:${DIFY_PORT:-3002}/console/api/setup" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"email\": \"${DIFY_ADMIN_EMAIL:-admin@example.com}\",
+            \"name\": \"Admin\",
+            \"password\": \"${DIFY_ADMIN_PASSWORD:-admin123}\"
+        }" 2>/dev/null) || {
+        log "⚠️ Dify setup failed - checking if already configured"
+        # Check if already set up
+        if curl -sf "http://localhost:${DIFY_PORT:-3002}/console/api/account" >/dev/null 2>&1; then
+            log "✅ Dify already configured"
+        else
+            log "❌ Dify configuration failed"
+            return 1
+        fi
+    }
+    
+    if echo "${setup_response}" | grep -q '"result":"success"'; then
+        log "✅ Dify admin account created"
+    elif echo "${setup_response}" | grep -q 'already_setup'; then
+        log "✅ Dify already configured"
+    else
+        log "⚠️ Dify setup returned unexpected response: ${setup_response}"
+    fi
+    
+    log "✅ Dify configuration completed"
+}
+
+configure_n8n() {
+    log "Configuring n8n..."
+    
+    # Wait for n8n to be ready
+    local retries=0
+    until curl -sf "http://localhost:${N8N_PORT:-5678}/healthz" >/dev/null 2>&1; do
+        ((retries++))
+        [[ ${retries} -gt 60 ]] && { log "❌ n8n not ready"; return 1; }
+        sleep 5
+    done
+    
+    log "✅ n8n is ready"
+    
+    # Create n8n owner account (required before any API calls)
+    log "Creating n8n owner account..."
+    local setup_response
+    setup_response=$(curl -sf -X POST \
+        "http://localhost:${N8N_PORT:-5678}/api/v1/owner/setup" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"email\": \"${N8N_ADMIN_EMAIL:-admin@example.com}\",
+            \"firstName\": \"Admin\",
+            \"lastName\": \"User\",
+            \"password\": \"${N8N_ADMIN_PASSWORD:-admin123}\"
+        }" 2>/dev/null) || {
+        log "⚠️ n8n setup failed - checking if already configured"
+        # Check if already set up
+        if curl -sf "http://localhost:${N8N_PORT:-5678}/api/v1/owner" >/dev/null 2>&1; then
+            log "✅ n8n already configured"
+        else
+            log "❌ n8n configuration failed"
+            return 1
+        fi
+    }
+    
+    # Extract API key from response for subsequent calls
+    local api_key
+    api_key=$(echo "${setup_response}" | grep -o '"apiKey":"[^"]*"' | cut -d'"' -f4 || echo "")
+    
+    if [[ -n "$api_key" ]]; then
+        log "✅ n8n owner account created with API key"
+        # Store API key for potential future use
+        echo "N8N_API_KEY=${api_key}" >> "${DATA_ROOT:-/mnt/data}/.env" 2>/dev/null || true
+    elif echo "${setup_response}" | grep -q 'already_setup'; then
+        log "✅ n8n already configured"
+    else
+        log "⚠️ n8n setup returned unexpected response: ${setup_response}"
+    fi
+    
+    log "✅ n8n configuration completed"
+}
+
 configure_all_services() {
     print_header "Configuring All Services"
     
