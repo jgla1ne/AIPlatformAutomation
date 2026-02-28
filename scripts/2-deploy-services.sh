@@ -35,10 +35,9 @@ section "Phase 0: Environment Validation"
 
 # Find .env file
 ENV_FILE=""
-# Try paths in order of preference
+# Try paths in order of preference (without using undefined variables)
 for candidate in \
-    "${TENANT_DIR}/.env" \
-    "${DATA_ROOT}/${TENANT_NAME}/.env" \
+    $(find /mnt/data -maxdepth 2 -name '.env' 2>/dev/null | head -3) \
     "${SCRIPT_DIR}/../.env" \
     "${REPO_ROOT}/.env"; do
   candidate="$(realpath "$candidate" 2>/dev/null || true)"
