@@ -179,21 +179,34 @@ DC up -d postgres redis qdrant minio
 
 # ── Wait for PostgreSQL ──────────────────────────────────────────────────────
 PG_CONTAINER="${COMPOSE_PROJECT_NAME}-postgres"
-log "Waiting for PostgreSQL..."
-ELAPSED=0; MAX=120
-until docker exec "$PG_CONTAINER" \
-    pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB:-postgres}" -q \
-    2>/dev/null; do
-  # Check if container exited (crash loop)
-  STATUS="$(docker inspect --format '{{.State.Status}}' "$PG_CONTAINER" 2>/dev/null || echo 'missing')"
-  if [[ "$STATUS" == "exited" ]]; then
-    fail "PostgreSQL container exited — check: docker logs $PG_CONTAINER"
-  fi
-  sleep 3; ELAPSED=$((ELAPSED+3))
-  [[ $ELAPSED -ge $MAX ]] && fail "PostgreSQL not ready after ${MAX}s — check: docker logs $PG_CONTAINER"
-  [[ $((ELAPSED % 15)) -eq 0 ]] && log "  PostgreSQL: ${ELAPSED}s elapsed..."
-done
-ok "PostgreSQL ready (${ELAPSED}s)"
+
+# ─── PostgreSQL: Wait for full readiness ──────────────────────────────────────
+wait_for_postgres() {
+  log "Waiting for PostgreSQL to be fully ready..."
+  local attempts=0
+  local max=60  # 3 minutes maximum
+
+  # Step 1: Wait for pg_isready (port open)
+  until docker exec "$PG_CONTAINER" \
+      pg_isready -U postgres -q 2>/dev/null; do
+    attempts=$((attempts + 1))
+    [[ $attempts -ge $max ]] && fail "PostgreSQL port never opened after ${max} attempts"
+    sleep 3
+  done
+
+  # Step 2: Wait for actual query acceptance (this is what pg_isready misses)
+  attempts=0
+  until docker exec "$PG_CONTAINER" \
+      psql -U postgres -c "SELECT 1;" -q 2>/dev/null | grep -q 1; do
+    attempts=$((attempts + 1))
+    [[ $attempts -ge 20 ]] && fail "PostgreSQL not accepting queries after 60s"
+    sleep 3
+  done
+
+  ok "PostgreSQL is fully ready and accepting queries"
+}
+
+wait_for_postgres
 
 # ── Wait for Redis ───────────────────────────────────────────────────────────
 REDIS_CONTAINER="${COMPOSE_PROJECT_NAME}-redis"
@@ -230,31 +243,63 @@ ok "MinIO ready (${ELAPSED}s)"
 # =============================================================================
 section "Phase 4: Database Initialisation"
 
-create_db() {
-  local db="$1"
-  if docker exec "$PG_CONTAINER" \
-      psql -U "${POSTGRES_USER}" -lqt 2>/dev/null | \
-      cut -d'|' -f1 | grep -qw "$db"; then
-    log "  Database exists: ${db}"
-  else
-    log "  Creating database: ${db}"
+# ─── Database creation — runs as postgres superuser ───────────────────────────
+create_databases() {
+  local databases=("n8n" "flowise" "dify" "anythingllm")
+
+  for db in "${databases[@]}"; do
+    # Check if already exists
+    if docker exec "$PG_CONTAINER" \
+        psql -U postgres -lqt 2>/dev/null \
+        | cut -d'|' -f1 | tr -d ' ' | grep -qx "$db"; then
+      ok "  Database already exists: ${db}"
+      continue
+    fi
+
+    # Create as postgres superuser (not aip_user — avoids permission error)
+    if docker exec "$PG_CONTAINER" \
+        psql -U postgres \
+        -c "CREATE DATABASE \"${db}\" OWNER \"${POSTGRES_USER}\";" \
+        2>/dev/null; then
+
+      # Verify creation actually worked
+      if docker exec "$PG_CONTAINER" \
+          psql -U postgres -lqt 2>/dev/null \
+          | cut -d'|' -f1 | tr -d ' ' | grep -qx "$db"; then
+        ok "  Created and verified: ${db}"
+      else
+        fail "  Database creation reported success but verification failed: ${db}"
+      fi
+    else
+      # Retry once before failing
+      sleep 3
+      docker exec "$PG_CONTAINER" \
+        psql -U postgres \
+        -c "CREATE DATABASE \"${db}\" OWNER \"${POSTGRES_USER}\";" \
+        2>/dev/null || fail "  Failed to create database after retry: ${db}"
+    fi
+  done
+
+  # Grant full privileges on all databases to aip_user
+  for db in "${databases[@]}"; do
     docker exec "$PG_CONTAINER" \
-      psql -U "${POSTGRES_USER}" \
-      -c "CREATE DATABASE \"${db}\";" 2>/dev/null
-    ok "  Created: ${db}"
-  fi
+      psql -U postgres \
+      -c "GRANT ALL PRIVILEGES ON DATABASE \"${db}\" TO \"${POSTGRES_USER}\";" \
+      2>/dev/null && ok "  Granted privileges: ${db}" \
+      || warn "  Could not grant privileges on ${db}"
+  done
+
+  # Enable pgvector extension where needed
+  for db in "dify" "anythingllm"; do
+    docker exec "$PG_CONTAINER" \
+      psql -U postgres -d "$db" \
+      -c "CREATE EXTENSION IF NOT EXISTS vector;" \
+      2>/dev/null && ok "  pgvector enabled in: ${db}" \
+      || warn "  pgvector not available in ${db} — install pgvector image"
+  done
 }
 
-create_db "n8n"
-create_db "flowise"
-create_db "dify"
-
-# Enable pgvector in dify database
-log "Enabling pgvector extension in dify database..."
-docker exec "$PG_CONTAINER" \
-  psql -U "${POSTGRES_USER}" -d "dify" \
-  -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null && \
-  ok "pgvector enabled" || warn "pgvector not available — install pgvector image"
+create_databases
 
 ok "Database initialisation complete"
 
