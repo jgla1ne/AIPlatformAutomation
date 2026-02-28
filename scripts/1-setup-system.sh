@@ -20,8 +20,8 @@ if [[ -z "${SUDO_UID}" ]]; then
   exit 1
 fi
 
-TENANT_UID="${SUDO_UID}"
-TENANT_GID="${SUDO_GID}"
+TENANT_UID="${SUDO_UID:-$(id -u)}"
+TENANT_GID="${SUDO_GID:-$(id -g)}"
 TENANT_USER=$(getent passwd "${TENANT_UID}" | cut -d: -f1)
 
 if [[ -z "${TENANT_USER}" ]]; then
