@@ -64,6 +64,17 @@ COMPOSE="docker compose --project-name ${COMPOSE_PROJECT_NAME} \
 # Render template with current env vars
 envsubst < "${TEMPLATE}" >> "${COMPOSE_FILE}"
 
+# Validate compose file after modification
+docker compose \
+  --env-file "${ENV_FILE}" \
+  --file "${COMPOSE_FILE}" \
+  config --quiet || {
+    echo "ERROR: Compose file invalid after adding ${SERVICE}"
+    echo "Last 10 lines of ${COMPOSE_FILE}:"
+    tail -10 "${COMPOSE_FILE}"
+    exit 1
+  }
+
 # Deploy only the new service
 $COMPOSE up -d "${SERVICE}"
 

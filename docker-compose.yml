@@ -315,7 +315,7 @@ services:
     restart: unless-stopped
     environment:
       STORAGE_DIR: /app/server/storage
-      JWT_SECRET: ${JWT_SECRET}
+      JWT_SECRET: ${ANYTHINGLLM_JWT_SECRET}
       LLM_PROVIDER: ollama
       OLLAMA_BASE_PATH: http://ollama:11434
       EMBEDDING_ENGINE: ollama

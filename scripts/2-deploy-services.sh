@@ -37,8 +37,10 @@ section "Phase 0: Environment Validation"
 ENV_FILE=""
 # Try paths in order of preference
 for candidate in \
-    "${REPO_ROOT}/.env" \
-    "${SCRIPT_DIR}/../.env"; do
+    "${TENANT_DIR}/.env" \
+    "${DATA_ROOT}/${TENANT_NAME}/.env" \
+    "${SCRIPT_DIR}/../.env" \
+    "${REPO_ROOT}/.env"; do
   candidate="$(realpath "$candidate" 2>/dev/null || true)"
   if [[ -n "$candidate" && -f "$candidate" ]]; then
     ENV_FILE="$candidate"

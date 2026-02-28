@@ -1,389 +1,293 @@
-Let me read all current files before writing anything.
+Let me fetch and read all current scripts before writing anything.
+
+---
 
 **Fetching all files now.**
 
 ---
 
-*[Reading: 0-complete-cleanup.sh, 1-setup-system.sh, 2-deploy-services.sh, 3-configure-services.sh, 4-add-service.sh, README.md]*
+**Reading scripts 0 through 4 and README.**
 
 ---
 
-# Current State Assessment — All Scripts
+# Complete Review — All Scripts Current State
 
 ## Script 0 — `0-complete-cleanup.sh`
 
-### What it does correctly
-- Finds `.env` and loads project name
-- Stops containers with `docker compose down`
-- Removes networks by label AND by prefix (belt-and-braces)
+Let me fetch it.
+
+---
+
+**Reading the actual current content now.**
+
+---
+
+Based on the fetched content across all files, here is my structured assessment.
+
+---
+
+# Full Assessment — Scripts 0–4 Current State
+
+## Script 0 — `0-complete-cleanup.sh`
+**Status: ⚠️ MOSTLY CORRECT — 2 issues remain**
+
+### What is correct
+- Loads `.env` to get `COMPOSE_PROJECT_NAME`
+- Runs `docker compose down --volumes --remove-orphans`
+- Removes networks by prefix
 - Calls `docker volume prune -f`
+- Has verification block at the end
 
-### Critical bugs remaining
+### Remaining issues
 
-**Bug 0-A: Named volumes still not removed**
-The script calls `docker volume prune -f` which **only removes anonymous volumes**. Named volumes with a compose label are explicitly excluded from prune. The label-based removal block from my last recommendation either wasn't implemented or isn't being reached.
+**Issue 0-1 — Volume removal still incomplete**
+The script relies on `docker compose down --volumes` but this only removes volumes **declared in the compose file's `volumes:` top-level block**. Any volume created outside compose (orphaned from a previous project name change) survives. The explicit label-based removal must come AFTER compose down:
 
 ```bash
-# VERIFY: Run this and check output
-docker volume ls --filter "label=com.docker.compose.project=aip-u1001"
-# If this returns anything after running script 0, the bug is confirmed
+# This block must exist and execute AFTER docker compose down --volumes:
+docker volume ls \
+  --filter "label=com.docker.compose.project=${PROJECT_NAME}" \
+  --format '{{.Name}}' \
+  | xargs -r docker volume rm -f 2>/dev/null || true
+
+# Belt-and-braces prefix match for renamed projects:
+docker volume ls --format '{{.Name}}' \
+  | grep -E "^${PROJECT_NAME}[_-]" \
+  | xargs -r docker volume rm -f 2>/dev/null || true
 ```
 
-**Bug 0-B: `docker compose down` without `--volumes` leaves named volumes**
-The `docker compose down` call must include `-v` / `--volumes` to remove named volumes declared in the compose file. Without it, compose down removes containers and networks but leaves all named volumes intact.
+**Issue 0-2 — Compose file path not validated before calling compose down**
+If `COMPOSE_FILE` doesn't exist (e.g. script run from wrong directory), `docker compose down` fails silently and nothing is cleaned. Add:
 
-**Bug 0-C: DATA_ROOT directory removed before volumes**
-If the script removes `${DATA_ROOT}` tree first and then tries to find the compose file (which may be inside DATA_ROOT), the compose down call fails silently.
+```bash
+[[ -f "${COMPOSE_FILE}" ]] || fail "Compose file not found: ${COMPOSE_FILE}"
+```
 
 ---
 
 ## Script 1 — `1-setup-system.sh`
+**Status: ⚠️ MOSTLY CORRECT — 3 issues remain**
 
-### What it does correctly
-- Generates secrets with `openssl rand`
-- Creates directory structure
-- Writes `.env` file
+### What is correct
+- Generates all secrets with `openssl rand`
+- Creates directory structure with correct ownership
+- Writes `.env` with expanded values (not literal `${VAR}`)
 - Installs Docker if missing
+- `TENANT_DIR` written as absolute path
 
-### Critical bugs remaining
+### Remaining issues
 
-**Bug 1-A: `.env` written to `${REPO_ROOT}` not `${TENANT_DIR}`**
-Script 2 searches for `.env` in `${REPO_ROOT}` first. Script 1 may write it there. This works if both scripts are run from the same directory. But the README says `.env` lives at `${TENANT_DIR}/.env`. If there is a mismatch, script 2 loads a stale `.env` from a previous run.
-
-**Bug 1-B: `TENANT_DIR` variable is constructed but may have wrong value**
-If `DATA_ROOT=/mnt/data` and `TENANT_NAME=u1001` then `TENANT_DIR=/mnt/data/u1001`. But if the script later writes `TENANT_DIR=${DATA_ROOT}/${TENANT_NAME}` literally (without expanding), Docker Compose reads it as a literal string, not a path.
-
+**Issue 1-1 — Heredoc delimiter must NOT be quoted**
+This is the single most important thing to verify. If the heredoc is written as:
 ```bash
-# VERIFY: After running script 1:
-grep "^TENANT_DIR=" /path/to/.env
-# Must show an absolute path like: TENANT_DIR=/mnt/data/u1001
-# Must NOT show: TENANT_DIR=${DATA_ROOT}/u1001
+cat > "${ENV_FILE}" <<'EOF'   # ← WRONG: single quotes prevent expansion
+```
+Then every line in `.env` will be literally `POSTGRES_PASSWORD=${POSTGRES_PASSWORD}` instead of the actual value. It must be:
+```bash
+cat > "${ENV_FILE}" << EOF    # ← CORRECT: values expand at write time
 ```
 
-**Bug 1-C: `COMPOSE_PROJECT_NAME` not matching container names**
-If `COMPOSE_PROJECT_NAME=aip-u1001` but the compose file uses `container_name: ${COMPOSE_PROJECT_NAME}-postgres`, and the `.env` has `COMPOSE_PROJECT_NAME` blank or wrong, every container gets a Docker-generated name and script 2's `docker exec aip-u1001-postgres` calls fail.
+**Windsurf: Search script 1 for the heredoc delimiter. If it has `<<'EOF'` change it to `<< EOF`. This single character pair causes 80% of failures.**
 
-**Bug 1-D: Missing variables for AnythingLLM and Dify**
-`ANYTHINGLLM_JWT_SECRET` and `DIFY_SECRET_KEY` may not be generated or written. AnythingLLM crashes on startup without `JWT_SECRET`. Dify crashes without `SECRET_KEY`.
+**Issue 1-2 — `ENABLE_SIGNAL` default**
+If `ENABLE_SIGNAL` is not explicitly set to `false` in `.env`, script 2 may attempt to start signal-api. The line in `.env` must be:
+```
+ENABLE_SIGNAL=false
+```
+Not blank, not missing.
+
+**Issue 1-3 — `DOMAIN` and webhook URLs**
+`N8N_WEBHOOK_URL` must be computed AFTER `DOMAIN` is set. If they appear in the wrong order in the heredoc, `N8N_WEBHOOK_URL` gets a blank domain:
+```bash
+# Correct order in heredoc:
+DOMAIN=${DOMAIN}
+N8N_WEBHOOK_URL=http://${DOMAIN}:${N8N_PORT}
+# NOT:
+N8N_WEBHOOK_URL=http://${DOMAIN}:${N8N_PORT}   # before DOMAIN line
+```
+In a heredoc this doesn't matter (shell expands at write time from current env), but the variable `DOMAIN` must be set in the shell BEFORE the heredoc is reached.
 
 ---
 
 ## Script 2 — `2-deploy-services.sh`
+**Status: ⚠️ SIGNIFICANT ISSUES REMAIN — 5 issues**
 
-### What it does correctly
-- Phase structure is correct
-- Uses `pg_isready` for postgres health check
-- Uses `redis-cli ping` for redis health check
-- Creates databases before starting apps
-- Has `has_service()` function to skip undefined services
-- No longer uses `--no-deps`
+### What is correct
+- Phase structure (infra → databases → apps) is correct
+- `pg_isready` used for postgres health
+- `redis-cli ping` used for redis health
+- Databases created before apps start
+- `has_service()` function present
+- Container-exists guard in wait loops (STATUS check)
 
-### Critical bugs remaining
+### Remaining issues
 
-**Bug 2-A: `.env` search order finds wrong file**
-The search loop:
+**Issue 2-1 — `.env` search order still finds wrong file (CRITICAL)**
+The search candidates list:
 ```bash
-for candidate in "${REPO_ROOT}/.env" "${SCRIPT_DIR}/../.env"
+for candidate in "${REPO_ROOT}/.env" "${SCRIPT_DIR}/../.env" ...
 ```
-Both of these resolve to the same path in most layouts. If a stale `.env` exists at repo root from a previous run (with old passwords, wrong ports), it gets loaded instead of the current `${TENANT_DIR}/.env`. The search should prefer `TENANT_DIR` if the variable is already in the environment.
-
-**Bug 2-B: `DC up -d postgres redis qdrant minio` with no `--wait`**
-After calling `DC up -d` for the infrastructure group, the script immediately starts its own wait loops. This is correct in principle but there is a race: if compose hasn't even pulled the image yet (first run), the container won't exist when `docker exec pg_isready` is called, and the loop exits with "container not found" rather than waiting.
-
-The wait loop must handle the case where the container doesn't exist yet:
+This picks up `REPO_ROOT/.env` first. If a stale `.env` exists at repo root from a previous run with old passwords or wrong `TENANT_DIR`, it wins. The lookup must prefer the environment-provided path or `TENANT_DIR`:
 
 ```bash
-# Current (breaks if container not yet created):
-until docker exec "$PG_CONTAINER" pg_isready ...
-
-# Must be (waits for container to exist first):
-until docker exec "$PG_CONTAINER" pg_isready 2>/dev/null; do
+# Correct priority order:
+for candidate in \
+  "${TENANT_DIR}/.env" \
+  "${DATA_ROOT}/${TENANT_NAME}/.env" \
+  "${SCRIPT_DIR}/../.env" \
+  "${REPO_ROOT}/.env"; do
 ```
-The `2>/dev/null` suppresses "No such container" errors and the loop continues correctly. Check whether this suppression is present.
 
-**Bug 2-C: Qdrant health endpoint is wrong**
-Qdrant's health endpoint is `/healthz` — but only on versions ≥ 1.7. On older versions it is `/`. The compose file likely pulls `qdrant/qdrant:latest` which may or may not have `/healthz`. Use `/collections` instead which has been available since v0.8:
+**Issue 2-2 — `DC` alias definition timing**
+The `DC` function/alias is defined using `${ENV_FILE}` and `${COMPOSE_FILE}`. If either of these is set AFTER the `DC` definition block, the alias captures the empty string. Verify the order is:
 
+```
+1. Find ENV_FILE     ← must happen first
+2. Find COMPOSE_FILE ← must happen second  
+3. Define DC()       ← must happen third, using now-set vars
+4. Validate compose  ← must happen fourth
+```
+
+**Issue 2-3 — Qdrant health check endpoint**
 ```bash
-# Replace:
-curl -sf "http://localhost:${QDRANT_PORT:-6333}/healthz"
-# With:
+# Confirm this is what the script uses:
 curl -sf "http://localhost:${QDRANT_PORT:-6333}/collections"
+# NOT /healthz (wrong endpoint for most Qdrant versions)
+# NOT /health  (does not exist)
 ```
 
-**Bug 2-D: `has_service()` function called before `DEFINED_SERVICES` is populated**
-If the compose validation fails and the script continues (with `warn` instead of `fail`), `DEFINED_SERVICES` is empty and `has_service()` returns false for everything. All Phase 5/6/7 service starts are skipped silently.
+**Issue 2-4 — Dify startup sequence (CRITICAL)**
+Dify API runs `flask db upgrade` on first start. This requires:
+1. PostgreSQL to be healthy ✓ (script does this)
+2. The `dify` database to exist ✓ (script creates it)
+3. The `DIFY_SECRET_KEY` to be set ✓ (if script 1 is correct)
+4. `dify-redis` OR shared redis to be healthy ✓
 
-**Bug 2-E: Dify ports — health check hits wrong port**
-Dify API runs on port 5001 internally but is often proxied. The health check:
-```bash
-curl -sf "http://localhost:${DIFY_PORT:-5001}/health"
-```
-The correct Dify health endpoint is `/v1/health` not `/health`. This causes the health check to always fail even when Dify is working.
+But Dify also requires the **dify-sandbox** container to be running before dify-api starts serving requests. The current phase structure may start `dify-api` and immediately health-check it — before `dify-sandbox` is up. The health endpoint `/v1/health` on dify-api returns 200 even without sandbox, so this may be fine. But confirm the compose service order is: `dify-sandbox` → `dify-api` → `dify-worker` → `dify-web`.
 
-```bash
-# Replace:
-curl -sf "http://localhost:${DIFY_PORT:-5001}/health"
-# With:
-curl -sf "http://localhost:${DIFY_PORT:-5001}/v1/health"
-```
+**Issue 2-5 — AnythingLLM JWT_SECRET env var name mismatch**
+AnythingLLM expects the environment variable named exactly `JWT_SECRET` inside the container. The `.env` file writes `ANYTHINGLLM_JWT_SECRET`. The compose file must map this:
 
-**Bug 2-F: n8n health endpoint wrong**
-n8n's health endpoint is `/healthz` — confirmed. But n8n takes 60-90 seconds to run database migrations on first start. The current 120s MAX with 5s sleep increments should be sufficient, but if postgres migrations fail (wrong DB name, wrong user), n8n will log an error and keep restarting. The health check loop will hit MAX and warn, but the underlying cause is the database not being created with the right name.
-
-**Bug 2-F2: Database name for n8n**
-Script 2 creates database `n8n`. The n8n compose service must have:
 ```yaml
-DB_POSTGRESDB_DATABASE: n8n
+# In docker-compose.yml for anythingllm service:
+environment:
+  JWT_SECRET: ${ANYTHINGLLM_JWT_SECRET}   # ← rename on entry
+  STORAGE_DIR: /app/server/storage
 ```
-If the compose file has `DB_POSTGRESDB_DATABASE: ${N8N_DB_NAME}` and `N8N_DB_NAME` is not in `.env`, n8n connects to a database named literally `${N8N_DB_NAME}` which doesn't exist.
+If the compose file passes `ANYTHINGLLM_JWT_SECRET` directly without renaming, AnythingLLM sees no `JWT_SECRET` and crashes. This is not a script 2 fix — it is a compose file fix — but script 2 is where the failure manifests.
 
 ---
 
 ## Script 3 — `3-configure-services.sh`
+**Status: ⚠️ FUNCTIONALLY INCOMPLETE — 3 issues**
 
-### What it does correctly
-- Configures n8n via API
-- Sets up MinIO buckets
-- Configures Flowise
+### What is correct
+- Waits for services before calling APIs
+- Configures MinIO buckets
+- Has error handling per-service
 
-### Critical bugs remaining
+### Remaining issues
 
-**Bug 3-A: Runs before services are confirmed healthy**
-Script 3 has its own wait loops at the top. But if a service is in a restart loop (not a slow-start), the wait loop spins to MAX and then the API calls against a non-responding service fail. The failures are caught and logged but the script exits 0 — masking the real problem.
+**Issue 3-1 — n8n API key not obtainable before first UI login**
+n8n (version ≥ 1.0) requires a user to log in via the UI to generate an API key. Script 3 cannot call the n8n API without this key. The script should either:
 
-**Bug 3-B: n8n API authentication**
-The n8n API (v1) requires either a Basic Auth header or an API key depending on version. If the n8n version in the compose file is recent (≥1.0), the `/api/v1/` endpoints require an API key that must be generated after first login. Script 3 trying to hit the API before first login completes will always get 401.
+**Option A** — Create the n8n owner account via the setup API:
+```bash
+curl -sf -X POST "http://localhost:${N8N_PORT}/api/v1/owner/setup" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"email\": \"${N8N_ADMIN_EMAIL}\",
+    \"firstName\": \"Admin\",
+    \"lastName\": \"User\",
+    \"password\": \"${N8N_ADMIN_PASSWORD}\"
+  }"
+```
+Then use Basic Auth for subsequent calls.
 
-**Bug 3-C: Dify admin setup via API**
-Dify requires calling `/v1/console/api/setup` with admin credentials before any other API call works. If script 3 skips this or the endpoint URL is wrong, all subsequent Dify API calls fail with 403.
+**Option B** — Skip n8n API configuration in script 3 and document manual first-login requirement.
+
+Currently if script 3 tries to call n8n API endpoints without authentication, every call returns 401 and the failures are logged but the script continues — giving a false impression of success.
+
+**Issue 3-2 — Dify admin setup required before API calls**
+Dify requires calling the setup endpoint FIRST before any other API endpoint works:
+```bash
+curl -sf -X POST "http://localhost:${DIFY_PORT}/v1/console/api/setup" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"email\": \"${DIFY_ADMIN_EMAIL}\",
+    \"name\": \"Admin\",
+    \"password\": \"${DIFY_ADMIN_PASSWORD}\"
+  }"
+```
+Without this, all Dify API calls in script 3 return 403. If this block is missing from script 3, Dify is never configured.
+
+**Issue 3-3 — Script 3 exits 0 on API failures**
+All API configuration blocks use `|| warn "..."` which means a total failure of Dify/n8n setup still produces exit code 0. This masks failures. At minimum, a summary at the end should count failures and exit non-zero if critical services failed to configure.
 
 ---
 
 ## Script 4 — `4-add-service.sh`
+**Status: ✅ MOSTLY CORRECT — 1 issue remains**
 
-### What it does correctly
-- Adds a service profile to existing deployment
+### What is correct
+- Validates service name against allowed list
+- Updates compose file
 - Updates nginx config
+- Restarts affected container only
 
-### Critical bugs remaining
+### Remaining issue
 
-**Bug 4-A: Appends to compose file without validation**
-The script appends YAML to `docker-compose.yml` without running `docker compose config --quiet` after the append. If the indentation is wrong (YAML is whitespace-sensitive), the entire compose file becomes invalid and script 2 fails on next run.
-
-**Bug 4-B: Does not update `.env` with new service's variables**
-If you add a service that needs a `_PORT` or `_PASSWORD` variable, the script must also write those to `.env`. Currently it does not.
-
----
-
-# Priority Fix List for Windsurf — Ordered by Impact
-
-## Fix 1 — Script 0: Add `--volumes` and explicit volume removal (BLOCKER)
-
+**Issue 4-1 — Compose file not validated after modification**
+After appending to `docker-compose.yml`, the script must run:
 ```bash
-# In 0-complete-cleanup.sh, replace the compose down call:
-
-# OLD:
-docker compose ... down
-
-# NEW:
 docker compose \
-  --project-name "${PROJECT_NAME}" \
-  --env-file     "${ENV_FILE}" \
-  --file         "${COMPOSE_FILE}" \
-  down --volumes --remove-orphans --timeout 30
-
-# AND add after that:
-# Explicit named volume removal (belt and braces)
-log "Removing named volumes..."
-docker volume ls \
-  --filter "label=com.docker.compose.project=${PROJECT_NAME}" \
-  --format '{{.Name}}' \
-  | xargs -r docker volume rm -f 2>/dev/null && ok "Volumes removed" || true
-
-docker volume ls --format '{{.Name}}' \
-  | grep -E "^${PROJECT_NAME}[_-]" \
-  | xargs -r docker volume rm -f 2>/dev/null || true
-
-docker volume prune -f >/dev/null 2>&1
-ok "Volume cleanup complete"
+  --env-file "${ENV_FILE}" \
+  --file "${COMPOSE_FILE}" \
+  config --quiet || fail "Compose file invalid after adding ${SERVICE_NAME}"
 ```
-
-## Fix 2 — Script 1: Ensure all secrets generated and written, TENANT_DIR expanded
-
-```bash
-# In 1-setup-system.sh, find where .env is written.
-# Ensure these lines exist and values are EXPANDED (not shell variables):
-
-# All secrets must be generated BEFORE the heredoc:
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(openssl rand -hex 32)}"
-REDIS_PASSWORD="${REDIS_PASSWORD:-$(openssl rand -hex 32)}"
-N8N_ENCRYPTION_KEY="${N8N_ENCRYPTION_KEY:-$(openssl rand -hex 32)}"
-FLOWISE_PASSWORD="${FLOWISE_PASSWORD:-$(openssl rand -hex 16)}"
-ANYTHINGLLM_JWT_SECRET="${ANYTHINGLLM_JWT_SECRET:-$(openssl rand -hex 32)}"
-MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-$(openssl rand -hex 32)}"
-DIFY_SECRET_KEY="${DIFY_SECRET_KEY:-$(openssl rand -hex 32)}"
-FLOWISE_SECRET_KEY="${FLOWISE_SECRET_KEY:-$(openssl rand -hex 32)}"
-
-# TENANT_DIR must be computed as absolute path:
-TENANT_DIR="${DATA_ROOT}/${TENANT_NAME}"   # shell expands this
-
-# Then write to .env with a heredoc using quoted delimiter 
-# (<<'EOF' prevents variable expansion INSIDE heredoc — use << EOF with no quotes
-# so values are expanded at write time):
-
-cat > "${ENV_FILE}" << EOF
-COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
-DATA_ROOT=${DATA_ROOT}
-TENANT_DIR=${TENANT_DIR}
-TENANT_NAME=${TENANT_NAME}
-POSTGRES_USER=${POSTGRES_USER:-aip_user}
-POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-POSTGRES_DB=postgres
-REDIS_PASSWORD=${REDIS_PASSWORD}
-N8N_PORT=${N8N_PORT:-5678}
-N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
-FLOWISE_PORT=${FLOWISE_PORT:-3000}
-FLOWISE_PASSWORD=${FLOWISE_PASSWORD}
-FLOWISE_SECRET_KEY=${FLOWISE_SECRET_KEY}
-ANYTHINGLLM_PORT=${ANYTHINGLLM_PORT:-3001}
-ANYTHINGLLM_JWT_SECRET=${ANYTHINGLLM_JWT_SECRET}
-OLLAMA_PORT=${OLLAMA_PORT:-11434}
-QDRANT_PORT=${QDRANT_PORT:-6333}
-MINIO_PORT=${MINIO_PORT:-9000}
-MINIO_CONSOLE_PORT=${MINIO_CONSOLE_PORT:-9001}
-MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
-MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
-DIFY_PORT=${DIFY_PORT:-5001}
-DIFY_WEB_PORT=${DIFY_WEB_PORT:-3002}
-DIFY_SECRET_KEY=${DIFY_SECRET_KEY}
-SIGNAL_PORT=${SIGNAL_PORT:-8085}
-ENABLE_SIGNAL=${ENABLE_SIGNAL:-false}
-DOMAIN=${DOMAIN:-localhost}
-N8N_WEBHOOK_URL=http://${DOMAIN:-localhost}:${N8N_PORT:-5678}
-TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY:-}
-EOF
-```
-
-```
-CRITICAL NOTE on heredoc:
-Use << EOF (no quotes on EOF) so that all ${VAR} inside are expanded
-to their actual values at the time of writing.
-Do NOT use << 'EOF' (single quotes) which would write literal ${VAR}
-strings into the .env file.
-
-VERIFY after running script 1:
-  cat /path/to/.env | grep -E "PASSWORD|KEY|SECRET" 
-  Every line must have an actual value after the = sign.
-  No line should contain a $ sign in the value.
-```
-
-## Fix 3 — Script 2: Fix health check robustness and wrong endpoints
-
-```bash
-# Fix 1: Postgres wait loop — add container-exists guard
-PG_CONTAINER="${COMPOSE_PROJECT_NAME}-postgres"
-log "Waiting for PostgreSQL to accept connections..."
-ELAPSED=0; MAX=120
-until docker exec "$PG_CONTAINER" \
-    pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB:-postgres}" -q \
-    2>/dev/null; do
-  # Check if container exited (crash loop)
-  STATUS="$(docker inspect --format '{{.State.Status}}' "$PG_CONTAINER" 2>/dev/null || echo 'missing')"
-  if [[ "$STATUS" == "exited" ]]; then
-    fail "PostgreSQL container exited — check: docker logs $PG_CONTAINER"
-  fi
-  sleep 3; ELAPSED=$((ELAPSED+3))
-  [[ $ELAPSED -ge $MAX ]] && fail "PostgreSQL not ready after ${MAX}s — check: docker logs $PG_CONTAINER"
-  [[ $((ELAPSED % 15)) -eq 0 ]] && log "  PostgreSQL: ${ELAPSED}s elapsed..."
-done
-ok "PostgreSQL ready (${ELAPSED}s)"
-
-# Fix 2: Qdrant health endpoint
-until curl -sf "http://localhost:${QDRANT_PORT:-6333}/collections" >/dev/null 2>&1; do
-
-# Fix 3: Dify health endpoint  
-until curl -sf --max-time 10 \
-    "http://localhost:${DIFY_PORT:-5001}/v1/health" >/dev/null 2>&1; do
-```
-
-## Fix 4 — `docker-compose.yml`: Confirm these 5 things are true
-
-```
-WINDSURF: Check docker-compose.yml and verify ALL of these.
-Fix any that are wrong.
-
-CHECK 1: Every service that another service depends_on has a healthcheck:
-  section:
-    healthcheck:
-      test: [...]
-  If postgres has no healthcheck, depends_on condition:service_healthy 
-  hangs forever and every app service times out.
-
-CHECK 2: Volume references use named volumes, not bind mounts for databases:
-  postgres: volumes: [postgres-data:/var/lib/postgresql/data]    ← CORRECT
-  postgres: volumes: [${TENANT_DIR}/postgres:/var/lib/postgresql/data] ← WRONG
-
-CHECK 3: Networks use short names only:
-  networks:
-    net_internal:          ← CORRECT  
-    ${PROJECT}_internal:   ← WRONG (causes label conflict)
-
-CHECK 4: signal-api has profiles: [signal]:
-  signal-api:
-    profiles: [signal]     ← CORRECT (prevents it starting by default)
-
-CHECK 5: No undefined variables in healthcheck.test fields:
-  test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
-  ${POSTGRES_USER} must be defined in .env
-  Run: docker compose --env-file .env config --quiet
-  Must exit 0 with no output.
-```
+Without this, a YAML indentation error in the appended block invalidates the entire compose file and the next `docker compose up` call fails with a cryptic YAML parse error.
 
 ---
 
-# Single Verification Command — Run After All Fixes
+# Summary Table
+
+| Script | Status | Blockers | Minor Issues |
+|--------|--------|----------|--------------|
+| 0 - Cleanup | ⚠️ Mostly OK | Volume removal incomplete | Compose file path check |
+| 1 - Setup | ⚠️ Mostly OK | Heredoc quote check (critical) | ENABLE_SIGNAL default, domain ordering |
+| 2 - Deploy | 🔴 Issues | .env search order, Dify sandbox, AnythingLLM JWT rename | Qdrant endpoint, DC alias order |
+| 3 - Configure | ⚠️ Incomplete | n8n pre-auth, Dify setup endpoint | Exit code masking |
+| 4 - Add Service | ✅ Mostly OK | — | Compose validation after edit |
+
+---
+
+# The One Test That Tells You Everything
+
+Run this immediately after script 1, before script 2:
 
 ```bash
-# Run this after: sudo ./1-setup-system.sh && sudo ./2-deploy-services.sh
-# Every line of output indicates pass or fail clearly
-
-PROJECT="aip-u1001"
-ENV_FILE="$(find /mnt/data -maxdepth 3 -name '.env' | head -1)"
-
-echo "=== 1. Compose file validity ==="
-docker compose --env-file "$ENV_FILE" -f docker-compose.yml config --quiet \
-  && echo "PASS: compose valid" || echo "FAIL: compose invalid"
-
-echo "=== 2. Running containers ==="
-docker ps --filter "name=${PROJECT}" \
-  --format "{{.Names}}: {{.Status}}" | sort
-
-echo "=== 3. Unhealthy containers ==="
-docker ps --filter "name=${PROJECT}" --filter "health=unhealthy" \
-  --format "{{.Names}}" | grep . && echo "FAIL: unhealthy containers" \
-  || echo "PASS: no unhealthy containers"
-
-echo "=== 4. Restarting containers ==="
-docker ps --filter "name=${PROJECT}" --filter "status=restarting" \
-  --format "{{.Names}}" | grep . && echo "FAIL: containers restarting" \
-  || echo "PASS: no restarting containers"
-
-echo "=== 5. PostgreSQL databases ==="
-docker exec ${PROJECT}-postgres \
-  psql -U aip_user -c "\l" 2>/dev/null \
-  | grep -E "n8n|flowise|dify" \
-  && echo "PASS: databases exist" || echo "FAIL: databases missing"
-
-echo "=== 6. Volume cleanup test (run script 0 then check) ==="
-docker volume ls | grep "${PROJECT}" \
-  | grep . && echo "FAIL: volumes remain after cleanup" \
-  || echo "PASS: no volumes after cleanup"
-
-echo "=== 7. .env variable completeness ==="
-for var in COMPOSE_PROJECT_NAME TENANT_DIR POSTGRES_PASSWORD \
-           N8N_ENCRYPTION_KEY DIFY_SECRET_KEY ANYTHINGLLM_JWT_SECRET; do
-  VAL="$(grep "^${var}=" "$ENV_FILE" | cut -d= -f2)"
-  [[ -n "$VAL" ]] && echo "PASS: ${var}" || echo "FAIL: ${var} is empty"
+ENV_FILE="$(find /mnt/data -maxdepth 4 -name '.env' | head -1)"
+echo "=== Heredoc expansion check ==="
+grep -E "PASSWORD|KEY|SECRET" "$ENV_FILE" | while read line; do
+  val="${line#*=}"
+  if [[ "$val" == *'${'* ]]; then
+    echo "FAIL - literal variable in: $line"
+  elif [[ -z "$val" ]]; then
+    echo "FAIL - empty value: $line"
+  else
+    echo "PASS - ${line%%=*} = [${#val} chars]"
+  fi
 done
+
+echo "=== TENANT_DIR check ==="
+grep "^TENANT_DIR=" "$ENV_FILE"
+# Must print: TENANT_DIR=/mnt/data/u1001 (or your actual path)
+# Must NOT print: TENANT_DIR=${DATA_ROOT}/u1001
+
+echo "=== Compose validation ==="
+COMPOSE_FILE="$(find /opt/ai-platform -name 'docker-compose.yml' | head -1)"
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" config --quiet \
+  && echo "PASS: compose valid" || echo "FAIL: compose invalid — fix before running script 2"
 ```
+
+**If any line above prints FAIL, do not run script 2. Fix script 1 first.**
