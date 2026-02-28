@@ -27,19 +27,10 @@ while IFS= read -r env_file; do
   MOUNT_POINTS+=("$(dirname "$env_file")")
 done < <(find /mnt/data -maxdepth 2 -name ".env" 2>/dev/null)
 
-# Also check /home for non-EBS setups, but EXCLUDE user home directories
+# Also check /home for non-EBS setups
 while IFS= read -r env_file; do
-  DIR="$(dirname "$env_file")"
-  # Skip if it's a user home directory (contains .ssh, .bashrc, etc.)
-  if [[ -d "${DIR}/.ssh" ]] || [[ -f "${DIR}/.bashrc" ]] || [[ -f "${DIR}/.profile" ]]; then
-    continue
-  fi
-  # Skip common system directories
-  if [[ "$DIR" =~ ^/(root|home|usr|var|etc|opt|boot|sys|proc|dev)$ ]]; then
-    continue
-  fi
-  MOUNT_POINTS+=("$DIR")
-done < <(find /home -maxdepth 3 -name ".env" 2>/dev/null | grep -v '.npm|snap|.config')
+  MOUNT_POINTS+=("$(dirname "$env_file")")
+done < <(find /home -maxdepth 3 -name ".env" 2>/dev/null | grep -v '\.npm\|snap\|\.config')
 
 if [[ ${#MOUNT_POINTS[@]} -eq 0 ]]; then
   warn "No tenant .env files found — will still clean Docker artifacts"
@@ -161,19 +152,9 @@ log "Phase 4: Removing tenant data directories..."
 
 for TENANT_DIR in "${MOUNT_POINTS[@]}"; do
   if [[ -d "$TENANT_DIR" ]]; then
-    # Additional safety check - NEVER remove system directories
-    if [[ "$TENANT_DIR" =~ ^/(root|home|usr|var|etc|opt|boot|sys|proc|dev)$ ]]; then
-      warn "  SAFETY: Skipping system directory: ${TENANT_DIR}"
-      continue
-    fi
-    # Additional safety check - NEVER remove user home directories
-    if [[ -d "${TENANT_DIR}/.ssh" ]] || [[ -f "${TENANT_DIR}/.bashrc" ]] || [[ -f "${TENANT_DIR}/.profile" ]]; then
-      warn "  SAFETY: Skipping user home directory: ${TENANT_DIR}"
-      continue
-    fi
     log "  Removing: ${TENANT_DIR}"
     # Unmount any bind mounts inside the directory first
-    mount | grep "${TENANT_DIR}" | awk '{print $3}' 
+    mount | grep "${TENANT_DIR}" | awk '{print $3}' \
       | sort -r | xargs -r umount -f 2>/dev/null || true
     rm -rf "${TENANT_DIR:?}"
     ok "  Removed: ${TENANT_DIR}"
