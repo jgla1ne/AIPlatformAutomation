@@ -4053,11 +4053,11 @@ main() {
       
       while IFS= read -r line; do
         if [[ $line =~ ^/dev/nvme ]]; then
-          local device=$(echo "$line" | awk '{print $1}')
-          local size=$(echo "$line" | awk '{print $5}')
+          local device=$(echo "$line" | awk '{print $2}' | sed 's/:$//')
+          local size=$(echo "$line" | awk '{print $3}')
           
-          # Skip root volumes and system partitions
-          if ! mount | grep -q "$device"; then
+          # Skip root volumes (check if any partition is mounted)
+          if ! lsblk "$device" -o NAME,MOUNTPOINT | grep -q -E "/(boot|boot/efi|/)$"; then
             ebs_volumes+=("$device:$size")
             echo "  $index) $device ($size)"
             ((index++))
