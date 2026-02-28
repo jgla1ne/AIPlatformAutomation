@@ -557,6 +557,29 @@ deploy_layer_0_infrastructure() {
     print_success "Infrastructure ready"
 }
 
+setup_postgres_extensions() {
+  print_info "Setting up PostgreSQL extensions..."
+  
+  local max_attempts=10
+  local attempt=0
+  
+  while [[ $attempt -lt $max_attempts ]]; do
+    if $COMPOSE exec -T postgres psql \
+        -U "${POSTGRES_USER}" \
+        -d "${POSTGRES_DB}" \
+        -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null; then
+      print_success "pgvector extension created"
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    print_info "Waiting for postgres to accept connections... (${attempt}/${max_attempts})"
+    sleep 3
+  done
+  
+  print_error "Could not create pgvector extension after ${max_attempts} attempts"
+  return 1
+}
+
 deploy_postgres() {
   print_header "PostgreSQL"
 
@@ -570,29 +593,13 @@ deploy_postgres() {
   $COMPOSE up -d postgres
 
   # Wait for postgres to be genuinely ready using docker compose exec
-  print_info "Waiting for PostgreSQL to accept connections..."
-  ATTEMPTS=0
-  MAX_ATTEMPTS=30
-
-  until $COMPOSE exec postgres pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
-    &>/dev/null 2>&1; do
-    ATTEMPTS=$((ATTEMPTS + 1))
-    if [ "${ATTEMPTS}" -ge "${MAX_ATTEMPTS}" ]; then
-      print_error "PostgreSQL did not become ready after 60 seconds"
-      print_error "Logs:"
-      $COMPOSE 
-        --project-name "${COMPOSE_PROJECT_NAME}" \
-        --env-file "${ENV_FILE}" \
-        \--file "${COMPOSE_FILE_PROCESSED}" \
-        logs postgres --tail=30
-      exit 1
-    fi
-    sleep 2
-  done
-
-  print_success "PostgreSQL ready"
-
-  # Create databases for services
+  wait_for_service "postgres" \
+    "$COMPOSE exec -T postgres pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"
+  
+  # Setup pgvector extension
+  setup_postgres_extensions
+  
+  # Create databases for enabled services
   create_databases
 }
 
@@ -658,49 +665,6 @@ create_databases() {
             print_info "Database '${db_name}' already exists or creation failed"
         fi
     done
-    
-    # Create pgvector extension in all databases that need it
-    local vector_dbs=("dify" "anythingllm" "openwebui" "librechat")
-    for db in "${vector_dbs[@]}"; do
-        # Check if service is enabled
-        case "$db" in
-            "dify")
-                if [[ "${ENABLE_DIFY:-false}" != "true" ]]; then continue; fi
-                ;;
-            "anythingllm")
-                if [[ "${ENABLE_ANYTHINGLLM:-false}" != "true" ]]; then continue; fi
-                ;;
-            "openwebui")
-                if [[ "${ENABLE_OPENWEBUI:-false}" != "true" ]]; then continue; fi
-                ;;
-            "librechat")
-                if [[ "${ENABLE_LIBRECHAT:-false}" != "true" ]]; then continue; fi
-                ;;
-        esac
-        
-        if $COMPOSE 
-            --project-name "${COMPOSE_PROJECT_NAME}" \
-            --env-file "${ENV_FILE}" \
-            \--file "${COMPOSE_FILE_PROCESSED}" \
-            exec postgres psql -U "${POSTGRES_USER}" -d "$db" -c "CREATE EXTENSION IF NOT EXISTS vector;" &>/dev/null; then
-            print_success "pgvector extension created in $db database"
-        else
-            print_warning "pgvector extension failed in $db - is pgvector image in use?"
-        fi
-    done
-    
-    # Also create extension in default aiplatform database
-    if $COMPOSE 
-        --project-name "${COMPOSE_PROJECT_NAME}" \
-        --env-file "${ENV_FILE}" \
-        \--file "${COMPOSE_FILE_PROCESSED}" \
-        exec postgres psql -U "${POSTGRES_USER}" -c "CREATE EXTENSION IF NOT EXISTS vector;" &>/dev/null; then
-        print_success "pgvector extension created in default database"
-    else
-        print_warning "pgvector extension failed - is pgvector image in use?"
-        print_info "Check docker-compose.yml postgres image tag"
-        print_info "Recommended: pgvector/pgvector:pg16 or ankane/pgvector"
-    fi
 }
 
 deploy_redis() {
@@ -710,17 +674,8 @@ deploy_redis() {
   $COMPOSE up -d redis
 
   # Wait for redis to be ready using docker compose exec
-  ATTEMPTS=0
-  until $COMPOSE exec redis redis-cli -a "${REDIS_PASSWORD}" ping 2>/dev/null | grep -q PONG; do
-    ATTEMPTS=$((ATTEMPTS + 1))
-    [ "${ATTEMPTS}" -ge 20 ] && {
-      print_error "Redis did not become ready"
-      $COMPOSE logs redis --tail=20
-      exit 1
-    }
-    sleep 2
-  done
-  print_success "Redis ready"
+  wait_for_service "redis" \
+    "$COMPOSE exec -T redis redis-cli -a ${REDIS_PASSWORD} ping"
 }
 
 deploy_qdrant() {
@@ -730,18 +685,56 @@ deploy_qdrant() {
   $COMPOSE up -d qdrant
 
   # Wait for qdrant to be ready using docker compose exec
-  ATTEMPTS=0
-  until $COMPOSE exec qdrant curl -sf http://localhost:6333/health \
-    &>/dev/null; do
-    ATTEMPTS=$((ATTEMPTS + 1))
-    [ "${ATTEMPTS}" -ge 20 ] && {
-      print_error "Qdrant did not become ready"
-      $COMPOSE logs qdrant --tail=20
-      exit 1
-    }
-    sleep 2
+  wait_for_service "qdrant" \
+    "$COMPOSE exec -T qdrant curl -sf http://localhost:6333/health"
+}
+
+wait_for_service() {
+  local service_name=$1
+  local check_command=$2   # actual command to run
+  local max_wait=${3:-120}
+  local interval=5
+  local elapsed=0
+
+  print_info "Waiting for ${service_name}..."
+  while [[ $elapsed -lt $max_wait ]]; do
+    if eval "${check_command}" &>/dev/null; then
+      print_success "${service_name} is ready"
+      return 0
+    fi
+    sleep $interval
+    elapsed=$((elapsed + interval))
   done
-  print_success "Qdrant ready"
+  print_error "${service_name} did not become ready within ${max_wait}s"
+  return 1
+}
+
+setup_minio_buckets() {
+  print_info "Creating MinIO buckets..."
+
+  # Wait for MinIO to be ready
+  local max_attempts=15
+  local attempt=0
+  while [[ $attempt -lt $max_attempts ]]; do
+    if $COMPOSE exec -T minio mc ready local 2>/dev/null; then
+      break
+    fi
+    attempt=$((attempt + 1))
+    sleep 3
+  done
+
+  # Configure mc alias inside container
+  $COMPOSE exec -T minio mc alias set local \
+    "http://localhost:9000" \
+    "${MINIO_ROOT_USER}" \
+    "${MINIO_ROOT_PASSWORD}" 2>/dev/null
+
+  # Create required buckets
+  for bucket in uploads documents models backups; do
+    $COMPOSE exec -T minio mc mb --ignore-existing "local/${bucket}" && \
+      print_success "Bucket created: ${bucket}" || \
+      print_warning "Bucket already exists: ${bucket}"
+  done
 }
 
 deploy_layer_2_services() {
