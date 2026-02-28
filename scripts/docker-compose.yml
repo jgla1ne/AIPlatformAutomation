@@ -47,10 +47,10 @@ services:
     ports:
       - "127.0.0.1:5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-aiplatform}"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 5
       start_period: 30s
     labels:
       - "ai-platform.service=postgres"
@@ -68,10 +68,10 @@ services:
     ports:
       - "127.0.0.1:6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 103
       start_period: 30s
     labels:
       - "ai-platform.service=redis"
@@ -124,7 +124,7 @@ services:
       PGID: ${TENANT_GID}
       TZ: ${TIMEZONE:-UTC}
     volumes:
-      - litellm-data:/app/config
+      - ${DATA_ROOT}/config/litellm:/app/config
       - ${DATA_ROOT}/logs/litellm:/app/logs
     networks:
       - aip-u1001_net_internal
@@ -170,7 +170,7 @@ services:
       PGID: ${TENANT_GID}
       TZ: ${TIMEZONE:-UTC}
     volumes:
-      - dify-storage-data:/app/storage
+      - ${DATA_ROOT}/dify/storage:/app/storage
       - ${DATA_ROOT}/logs/dify:/app/logs
     networks:
       - aip-u1001_net_internal
@@ -240,7 +240,7 @@ services:
       PGID: ${TENANT_GID}
       TZ: ${TIMEZONE:-UTC}
     volumes:
-      - dify-storage-data:/app/storage
+      - ${DATA_ROOT}/dify/storage:/app/storage
       - ${DATA_ROOT}/logs/dify:/app/logs
     networks:
       - aip-u1001_net_internal
@@ -288,7 +288,7 @@ services:
       WEBHOOK_URL: http://${DOMAIN_NAME:-localhost}:5678
       TZ: ${TIMEZONE:-UTC}
     volumes:
-      - n8n-data:/home/node/.n8n
+      - ${DATA_ROOT}/n8n:/home/node/.n8n
       - ${DATA_ROOT}/logs/n8n:/var/log/n8n
     networks:
       - aip-u1001_net_internal
@@ -326,7 +326,7 @@ services:
       QDRANT_URL: http://qdrant:6333
       QDRANT_API_KEY: ${QDRANT_API_KEY:-}
     volumes:
-      - flowise-data:/root/.flowise
+      - ${DATA_ROOT}/flowise:/root/.flowise
       - ${DATA_ROOT}/logs/flowise:/var/log/flowise
     networks:
       - aip-u1001_net_internal
@@ -354,11 +354,11 @@ services:
       OLLAMA_BASE_PATH: http://ollama:11434
       EMBEDDING_ENGINE: ollama
       EMBEDDING_BASE_PATH: http://ollama:11434
-      VECTOR_DB: ${VECTOR_DB}
+      VECTOR_DB: qdrant
       QDRANT_ENDPOINT: http://qdrant:6333
       TZ: ${TIMEZONE:-UTC}
     volumes:
-      - anythingllm-data:/app/server/storage
+      - ${DATA_ROOT}/anythingllm:/app/server/storage
       - ${DATA_ROOT}/documents:/app/server/storage/documents
       - ${DATA_ROOT}/logs/anythingllm:/var/log/anythingllm
     networks:
@@ -394,7 +394,7 @@ services:
       QDRANT_API_KEY: ${QDRANT_API_KEY:-}
       COLLECTION_NAME: ${COMPOSE_PROJECT_NAME}
     volumes:
-      - open-webui-data:/app/backend/data
+      - ${DATA_ROOT}/open-webui:/app/backend/data
       - ${DATA_ROOT}/logs/open-webui:/app/logs
     networks:
       - aip-u1001_net_internal
@@ -416,7 +416,7 @@ services:
     container_name: prometheus
     restart: unless-stopped
     volumes:
-      - prometheus-data:/prometheus
+      - ${DATA_ROOT}/prometheus:/prometheus
       - ${DATA_ROOT}/config/prometheus:/etc/prometheus
       - ${DATA_ROOT}/logs/prometheus:/var/log/prometheus
     networks:
@@ -454,7 +454,7 @@ services:
       PGID: ${TENANT_GID}
       TZ: ${TIMEZONE:-UTC}
     volumes:
-      - grafana-data:/var/lib/grafana
+      - ${DATA_ROOT}/grafana:/var/lib/grafana
       - ${DATA_ROOT}/logs/grafana:/var/log/grafana
     networks:
       - aip-u1001_net_internal
@@ -472,28 +472,30 @@ services:
       - "ai-platform.type=monitoring"
 
   signal-api:
-    image: bbernhard/signal-cli-rest-api:0.84
-    platform: linux/amd64
-    container_name: ${COMPOSE_PROJECT_NAME}-signal-api
+    image: bbernhard/signal-cli-rest-api:latest
+    container_name: signal-api
     restart: unless-stopped
     environment:
-      MODE: native
-      PORT: "${SIGNAL_PORT:-8085}"
-      JAVA_OPTS: "-Xmx512m -Xms128m"
+      MODE: json-rpc
+      PORT: ${SIGNAL_API_PORT:-8090}
+      TZ: ${TIMEZONE:-UTC}
     volumes:
-      - signal-data:/home/.local/share/signal-cli
+      - ${DATA_ROOT}/signal-api:/home/.local/share/signal-cli
+      - ${DATA_ROOT}/logs/signal-api:/var/log/signal-api
     networks:
       - aip-u1001_net_internal
+      - aip-u1001_net
     ports:
-      - "${SIGNAL_PORT:-8085}:${SIGNAL_PORT:-8085}"
+      - "${SIGNAL_API_PORT:-8090}:8090"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:${SIGNAL_PORT:-8085}/v1/about || exit 1"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8090/about"]
       interval: 30s
-      timeout: 15s
-      retries: 5
-      start_period: 90s
-    profiles:
-      - signal
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "ai-platform.service=signal-api"
+      - "ai-platform.type=communication"
 
   openclaw:
     image: alpine/openclaw:latest
@@ -513,7 +515,7 @@ services:
       QDRANT_URL: http://qdrant:6333
       QDRANT_API_KEY: ${QDRANT_API_KEY:-}
     volumes:
-      - openclaw-data:/app/data
+      - ${DATA_ROOT}/openclaw:/app/data
       - ${DATA_ROOT}/logs/openclaw:/var/log/openclaw
     networks:
       - aip-u1001_net_internal
@@ -539,7 +541,7 @@ services:
       TS_EXTRA_ARGS: ${TAILSCALE_EXTRA_ARGS}
       TZ: ${TIMEZONE:-UTC}
     volumes:
-      - tailscale-data:/var/lib/tailscale
+      - ${DATA_ROOT}/tailscale:/var/lib/tailscale
       - ${DATA_ROOT}/logs/tailscale:/var/log/tailscale
     networks:
       - aip-u1001_net_internal
@@ -567,7 +569,7 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       TZ: ${TIMEZONE:-UTC}
     volumes:
-      - minio-data:/data
+      - ${DATA_ROOT}/minio:/data
       - ${DATA_ROOT}/logs/minio:/var/log/minio
     networks:
       - aip-u1001_net_internal
@@ -599,7 +601,7 @@ services:
     ports:
       - "6333:6333"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:6333/ || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 10

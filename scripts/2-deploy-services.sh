@@ -24,6 +24,7 @@ section() { echo -e "\n${CYAN}${BOLD}━━━━━━━━━━━━━━�
 ENV_FILE=""
 for candidate in \
   "${SCRIPT_DIR}/../.env" \
+  "/mnt/data/u1001/.env" \
   "/mnt/data/$(ls /mnt/data 2>/dev/null | head -1)/.env" \
   "/home/ubuntu/aip/.env"; do
   candidate=$(realpath "$candidate" 2>/dev/null || echo "")
@@ -151,7 +152,7 @@ wait_for_redis() {
   local elapsed=0
   log "Waiting for Redis to be ready (max ${max_wait}s)..."
   while [[ $elapsed -lt $max_wait ]]; do
-    if docker exec "$container" redis-cli ping 2>/dev/null | grep -q "PONG"; then
+    if docker exec "$container" redis-cli -a "${REDIS_PASSWORD}" ping 2>/dev/null | grep -q "PONG"; then
       ok "Redis ready (${elapsed}s)"
       return 0
     fi
@@ -182,7 +183,7 @@ wait_for_http() {
 # Wait for Qdrant REST API
 wait_for_qdrant() {
   local port="${QDRANT_PORT:-6333}"
-  wait_for_http "Qdrant" "http://localhost:${port}/healthz" 90
+  wait_for_http "Qdrant" "http://localhost:${port}/" 90
 }
 
 # ── GROUP 1: Infrastructure ────────────────────────────────────────────────
