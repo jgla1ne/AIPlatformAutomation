@@ -150,7 +150,7 @@ ok "Redis is ready"
 # ── Wait for MinIO ─────────────────────────────────────────────────────────────
 log "Waiting for MinIO..."
 attempts=0
-until curl -sf "http://localhost:9001/minio/health/live" >/dev/null 2>&1; do
+until curl -sf "http://localhost:9000/minio/health/live" >/dev/null 2>&1; do
   attempts=$((attempts + 1))
   [[ $attempts -ge 20 ]] && fail "MinIO not ready after 60s. Check: docker logs ${COMPOSE_PROJECT_NAME}-minio"
   sleep 3
@@ -276,6 +276,9 @@ until curl -sf "http://localhost:${FLOWISE_PORT:-3000}/" >/dev/null 2>&1; do
   sleep 3
 done
 [[ $attempts -lt 40 ]] && ok "Flowise is ready"
+
+log "Waiting 15s for Flowise database migrations to complete..."
+sleep 15
 
 # Wait for Dify
 log "Waiting for Dify API to be ready..."

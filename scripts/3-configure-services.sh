@@ -546,8 +546,31 @@ configure_n8n() {
     }
     
     # Extract API key from response for subsequent calls
+    fetch_token_with_retry() {
+      local url="$1" body="$2" token=""
+      local attempts=0
+      until [[ -n "${token}" ]] || [[ $attempts -ge 5 ]]; do
+        token=$(curl -sf -X POST "${url}" \
+          -H "Content-Type: application/json" \
+          -d "${body}" 2>/dev/null | \
+          python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('access_token',''))" \
+          2>/dev/null || true)
+        [[ -z "${token}" ]] && sleep 5
+        ((attempts++))
+      done
+      [[ -z "${token}" ]] && fail "Could not obtain auth token from ${url} after ${attempts} attempts"
+      echo "${token}"
+    }
+    
     local api_key
-    api_key=$(echo "${setup_response}" | grep -o '"apiKey":"[^"]*"' | cut -d'"' -f4 || echo "")
+    api_key=$(fetch_token_with_retry \
+      "http://localhost:${N8N_PORT:-5678}/api/v1/owner/setup" \
+      "{
+        \"email\": \"${N8N_ADMIN_EMAIL:-admin@example.com}\",
+        \"firstName\": \"Admin\",
+        \"lastName\": \"User\",
+        \"password\": \"${N8N_ADMIN_PASSWORD:-admin123}\"
+      }")
     
     if [[ -n "$api_key" ]]; then
         log "✅ n8n owner account created with API key"

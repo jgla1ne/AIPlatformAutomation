@@ -51,12 +51,28 @@ if [[ -z "${!SERVICE_PORT_VAR:-}" ]]; then
   }
   
   NEW_PORT=$(find_free_port 3100 3200)
+  
+  # Check for existing variable to avoid duplicates
+  if grep -q "^${SERVICE_PORT_VAR}=" "${ENV_FILE}" 2>/dev/null; then
+    echo "Variable ${SERVICE_PORT_VAR} already exists in .env - skipping"
+    return 0
+  fi
+  
   echo "${SERVICE_PORT_VAR}=${NEW_PORT}" >> "${ENV_FILE}"
   export "${SERVICE_PORT_VAR}=${NEW_PORT}"
 fi
 
 # ─── APPEND AND DEPLOY ───────────────────────────────────────────────────
 COMPOSE_FILE="${DATA_ROOT}/docker-compose.yml"
+
+# Validate generated compose file before restarting services
+if ! docker compose -f "${COMPOSE_FILE}" config >/dev/null 2>&1; then
+  echo "Generated docker-compose.yml is invalid YAML. Rolling back."
+  # Remove the broken file to avoid using it
+  rm -f "${COMPOSE_FILE}"
+  exit 1
+fi
+
 COMPOSE="docker compose --project-name ${COMPOSE_PROJECT_NAME} \
   --env-file ${ENV_FILE} \
   --file ${COMPOSE_FILE}"

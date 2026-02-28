@@ -73,6 +73,7 @@ Complete automated deployment platform for AI services including vector database
 
 - Ubuntu 20.04+ or CentOS 8+
 - Docker Engine 20.10+ and Docker Compose v2+
+- **EBS volume must be attached and mounted to `/mnt/data` before running any script**
 - At least 8GB RAM and 4 CPU cores
 - 50GB+ storage for data volumes
 - Domain name for SSL certificates
