@@ -148,7 +148,7 @@ services:
       STORAGE_TYPE: local
       STORAGE_LOCAL_PATH: /app/api/storage
       VECTOR_STORE: qdrant
-      QDRANT_URL: http://${COMPOSE_PROJECT_NAME}-qdrant:6333
+      QDRANT_URL: http://qdrant:6333
     volumes:
       - dify-storage-data:/app/api/storage
     networks:
@@ -448,6 +448,7 @@ services:
     environment:
       MODE: json
       PORT: ${SIGNAL_PORT:-8085}
+      SIGNAL_CLI_REST_API_PUBLIC_URL: https://signal.${DOMAIN_NAME}
     volumes:
       - signal-data:/home/.local/share/signal-cli
     networks:

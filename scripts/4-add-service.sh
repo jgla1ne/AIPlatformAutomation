@@ -18,6 +18,12 @@ fi
 
 source "${ENV_FILE}"
 
+# ── STRUCTURED LOGGING SETUP ───────────────────────────────────────────────────────
+LOG_DIR="${DATA_ROOT}/logs"
+mkdir -p "${LOG_DIR}"
+LOG_FILE="${LOG_DIR}/script-4-$(date +%Y%m%d-%H%M%S).log"
+exec > >(tee -a "${LOG_FILE}") 2>&1
+
 # ─── SERVICE SELECTION ───────────────────────────────────────────────────
 SERVICE=${1:-}
 if [[ -z "${SERVICE}" ]]; then

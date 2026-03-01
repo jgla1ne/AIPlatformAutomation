@@ -57,6 +57,12 @@ detect_stack() {
         DATA_ROOT="$(cat /etc/ai-platform/env-pointer)"
     fi
     
+    # ── STRUCTURED LOGGING SETUP ───────────────────────────────────────────────────────
+    LOG_DIR="${DATA_ROOT}/logs"
+    mkdir -p "${LOG_DIR}"
+    LOG_FILE="${LOG_DIR}/script-3-$(date +%Y%m%d-%H%M%S).log"
+    exec > >(tee -a "${LOG_FILE}") 2>&1
+    
     if [ -z "${DATA_ROOT:-}" ]; then
         DATA_ROOT="${BASE_DIR:-/mnt/data}"
     fi

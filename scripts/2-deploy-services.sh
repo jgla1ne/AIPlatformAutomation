@@ -42,6 +42,12 @@ set -a
 source "${ENV_FILE}"
 set +a
 
+# ── STRUCTURED LOGGING SETUP ───────────────────────────────────────────────────────
+LOG_DIR="${DATA_ROOT}/logs"
+mkdir -p "${LOG_DIR}"
+LOG_FILE="${LOG_DIR}/script-2-$(date +%Y%m%d-%H%M%S).log"
+exec > >(tee -a "${LOG_FILE}") 2>&1
+
 # Validate required variables
 required_vars=(
   POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB
@@ -63,6 +69,25 @@ DC() { docker compose --project-name "${COMPOSE_PROJECT_NAME}" \
          -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" "$@"; }
 
 PG_CONTAINER="${COMPOSE_PROJECT_NAME}-postgres"
+
+# ── SELF-PURGE: clean any previous partial deployment ──────────────────
+log "INFO" "Purging any previous deployment before fresh start..."
+
+# Stop and remove all containers on this project network
+docker ps -aq --filter "network=${COMPOSE_PROJECT_NAME}_net" | xargs -r docker rm -f 2>/dev/null || true
+docker ps -aq --filter "name=${COMPOSE_PROJECT_NAME}-" | xargs -r docker rm -f 2>/dev/null || true
+
+# Remove project network if it exists
+docker network rm "${COMPOSE_PROJECT_NAME}_net" 2>/dev/null || true
+
+# Remove orphaned volumes only for this project (named volumes with prefix)
+docker volume ls -q --filter "name=${COMPOSE_PROJECT_NAME}_" | xargs -r docker volume rm 2>/dev/null || true
+
+# Remove old Caddyfile so it is always regenerated fresh
+rm -f "${DATA_ROOT}/caddy/config/Caddyfile" 2>/dev/null || true
+
+log "INFO" "Self-purge complete. Starting fresh deployment."
+# ── END SELF-PURGE ──────────────────────────────────────────────────────
 
 # =============================================================================
 section "Phase 1: Pre-flight Checks"
@@ -179,6 +204,22 @@ until curl -sf "http://localhost:9000/minio/health/live" >/dev/null 2>&1; do
   sleep 3
 done
 ok "MinIO is ready"
+
+# ── RCLONE CONFIG ───────────────────────────────────────────────────────
+if [ -n "${B2_ACCOUNT_ID}" ] && [ -n "${B2_APPLICATION_KEY}" ]; then
+    log "INFO" "Writing rclone Backblaze config..."
+    mkdir -p "${DATA_ROOT}/rclone"
+    cat > "${DATA_ROOT}/rclone/rclone.conf" << RCLONECONF
+[${RCLONE_REMOTE_NAME}]
+type = b2
+account = ${B2_ACCOUNT_ID}
+key = ${B2_APPLICATION_KEY}
+RCLONECONF
+    log "SUCCESS" "rclone config written"
+else
+    log "WARN" "B2_ACCOUNT_ID or B2_APPLICATION_KEY not set — rclone backup not configured"
+fi
+# ── END RCLONE ────────────────────────────────────────────────────────────
 
 # =============================================================================
 section "Phase 4: Create Databases"
@@ -319,13 +360,40 @@ sleep 15
 # Wait for Dify
 log "Waiting for Dify API to be ready..."
 attempts=0
-until curl -sf "http://localhost:${DIFY_PORT:-80}/console/api/setup" \
-    -o /dev/null 2>&1; do
+until curl -sf "http://localhost:${DIFY_PORT:-80}/health" >/dev/null 2>&1 || \
+      curl -sf "http://localhost:${DIFY_PORT:-80}/v1/ping" >/dev/null 2>&1; do
   attempts=$((attempts + 1))
-  [[ $attempts -ge 40 ]] && { warn "Dify API not responding after 120s"; break; }
+  [[ $attempts -ge 40 ]] && { warn "Dify API not responding after 120s — may still be initializing"; break; }
   sleep 3
 done
 [[ $attempts -lt 40 ]] && ok "Dify API is ready"
+
+# ── TAILSCALE ACTIVATION ───────────────────────────────────────────────────────
+log "INFO" "Activating Tailscale..."
+
+# Wait for tailscale daemon to be ready inside container
+TAILSCALE_READY=false
+for i in $(seq 1 30); do
+    if docker exec "${COMPOSE_PROJECT_NAME}-tailscale" tailscale status &>/dev/null; then
+        TAILSCALE_READY=true
+        break
+    fi
+    sleep 2
+done
+
+if [ "$TAILSCALE_READY" = "true" ]; then
+    docker exec "${COMPOSE_PROJECT_NAME}-tailscale" tailscale up \
+        --authkey="${TAILSCALE_AUTH_KEY}" \
+        --hostname="${COMPOSE_PROJECT_NAME}" \
+        --accept-routes \
+        2>&1 | tee -a "${LOG_FILE}"
+    
+    TAILSCALE_IP=$(docker exec "${COMPOSE_PROJECT_NAME}-tailscale" tailscale ip -4 2>/dev/null || echo "pending")
+    log "SUCCESS" "Tailscale activated. IP: ${TAILSCALE_IP}"
+else
+    log "WARN" "Tailscale daemon not ready after 60s — skipping activation (non-fatal)"
+fi
+# ── END TAILSCALE ──────────────────────────────────────────────────────────────
 
 # =============================================================================
 section "Phase 7: Final Validation"
@@ -371,6 +439,78 @@ if [[ -n "${UNHEALTHY}" ]]; then
 else
   ok "All containers are healthy"
 fi
+
+# ── FINAL STATUS REPORT ──────────────────────────────────────────────────
+log "INFO" "======================================================"
+log "INFO" "FINAL DEPLOYMENT STATUS REPORT"
+log "INFO" "======================================================"
+
+# Container health
+log "INFO" "--- Container Status ---"
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" \
+    --filter "network=${COMPOSE_PROJECT_NAME}_net" | tee -a "${LOG_FILE}"
+
+# Internal connectivity (from Caddy container to each service)
+log "INFO" "--- Internal Connectivity (Caddy → Services) ---"
+declare -A SERVICE_INTERNAL=(
+    ["litellm"]="litellm:4000"
+    ["openwebui"]="openwebui:8080"
+    ["anythingllm"]="anythingllm:3000"
+    ["dify"]="dify-web:3000"
+    ["n8n"]="n8n:5678"
+    ["flowise"]="flowise:3000"
+    ["signal-api"]="signal-api:8085"
+    ["openclaw"]="openclaw:8082"
+    ["prometheus"]="prometheus:9090"
+    ["grafana"]="grafana:3000"
+    ["minio"]="minio:9001"
+)
+
+for svc in "${!SERVICE_INTERNAL[@]}"; do
+    target="${SERVICE_INTERNAL[$svc]}"
+    if docker exec "${COMPOSE_PROJECT_NAME}-caddy" wget -q --spider --timeout=5 \
+        "http://${target}" 2>/dev/null; then
+        log "SUCCESS" "  ✅ ${svc} → http://${target} reachable"
+    else
+        log "WARN"    "  ⚠️  ${svc} → http://${target} NOT reachable"
+    fi
+done
+
+# External URL reachability
+log "INFO" "--- External URL Reachability ---"
+EXTERNAL_URLS=(
+    "https://litellm.${DOMAIN_NAME}"
+    "https://openwebui.${DOMAIN_NAME}"
+    "https://anythingllm.${DOMAIN_NAME}"
+    "https://dify.${DOMAIN_NAME}"
+    "https://n8n.${DOMAIN_NAME}"
+    "https://flowise.${DOMAIN_NAME}"
+    "https://signal.${DOMAIN_NAME}"
+    "https://openclaw.${DOMAIN_NAME}"
+    "https://prometheus.${DOMAIN_NAME}"
+    "https://grafana.${DOMAIN_NAME}"
+    "https://minio.${DOMAIN_NAME}"
+)
+
+for url in "${EXTERNAL_URLS[@]}"; do
+    HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" \
+        --max-time 10 --connect-timeout 5 "${url}" 2>/dev/null || echo "000")
+    if [[ "${HTTP_CODE}" =~ ^(200|301|302|303|401|403)$ ]]; then
+        log "SUCCESS" "  ✅ ${url} → HTTP ${HTTP_CODE}"
+    else
+        log "FAIL"    "  ❌ ${url} → HTTP ${HTTP_CODE} (no response or error)"
+    fi
+done
+
+# Tailscale status
+log "INFO" "--- Tailscale Status ---"
+TAILSCALE_IP=$(docker exec "${COMPOSE_PROJECT_NAME}-tailscale" tailscale ip -4 2>/dev/null || echo "not connected")
+log "INFO" "  Tailscale IP: ${TAILSCALE_IP}"
+
+log "INFO" "======================================================"
+log "INFO" "Log file: ${LOG_FILE}"
+log "INFO" "======================================================"
+# ── END STATUS REPORT ────────────────────────────────────────────────────
 
 echo ""
 section "Deployment Complete"

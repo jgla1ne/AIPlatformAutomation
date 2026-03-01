@@ -7,6 +7,11 @@ set -euo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'; BOLD='\033[1m'
 
+# ── STRUCTURED LOGGING ───────────────────────────────────────────────────────
+LOG_FILE="/tmp/script-0-cleanup-$(date +%Y%m%d-%H%M%S).log"
+exec > >(tee -a "${LOG_FILE}") 2>&1
+# ── END LOGGING ─────────────────────────────────────────────────────────────
+
 log()  { echo -e "${BLUE}[CLEANUP]${NC} $*"; }
 ok()   { echo -e "${GREEN}✅${NC} $*"; }
 warn() { echo -e "${YELLOW}⚠️ ${NC} $*"; }
@@ -130,6 +135,22 @@ cleanup_containers() {
   done
   
   ok "All containers for ${tenant} removed"
+}
+
+# ── NETWORK-BASED CONTAINER CLEANUP ───────────────────────────────────
+# Remove ALL containers attached to project network (catches unprefixed names)
+cleanup_network_containers() {
+  local tenant="$1"
+  local project="aip-${tenant}"
+  
+  if docker network inspect "${project}_net" &>/dev/null; then
+    NETWORK_CONTAINERS=$(docker network inspect "${project}_net" \
+        --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null)
+    if [ -n "${NETWORK_CONTAINERS}" ]; then
+      log "Removing containers on ${project}_net: ${NETWORK_CONTAINERS}"
+      echo "${NETWORK_CONTAINERS}" | xargs -r docker rm -f 2>/dev/null || true
+    fi
+  fi
 }
 
 # ── SYSTEMATIC NETWORK CLEANUP ───────────────────────────────────────
@@ -281,6 +302,7 @@ main() {
   docker_compose_cleanup "$SELECTED_TENANT"
   
   cleanup_containers "$SELECTED_TENANT"
+  cleanup_network_containers "$SELECTED_TENANT"
   cleanup_networks "$SELECTED_TENANT"
   cleanup_volumes "$SELECTED_TENANT"
   cleanup_data "$SELECTED_TENANT"

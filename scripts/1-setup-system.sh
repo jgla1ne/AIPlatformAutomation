@@ -69,6 +69,14 @@ if [[ -f "${ENV_FILE}" ]]; then
 fi
 
 # ═══════════════════════════════════════════════════════════
+# SECTION 5.5: STRUCTURED LOGGING SETUP
+# ═══════════════════════════════════════════════════════════
+LOG_DIR="${DATA_ROOT}/logs"
+mkdir -p "${LOG_DIR}"
+LOG_FILE="${LOG_DIR}/script-1-$(date +%Y%m%d-%H%M%S).log"
+exec > >(tee -a "${LOG_FILE}") 2>&1
+
+# ═══════════════════════════════════════════════════════════
 # SECTION 6: CREDENTIALS — generated once, preserved on re-run
 # ═══════════════════════════════════════════════════════════
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(openssl rand -hex 16)}"
@@ -1229,16 +1237,20 @@ QDRANT_API_KEY=${QDRANT_API_KEY:-}
 SIGNAL_INTERNAL_PORT=8080
 ENABLE_SIGNAL=${ENABLE_SIGNAL:-false}
 
+# Tailscale Configuration
+TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY:-""}   # User must populate
+
+# Backblaze B2 / rclone
+B2_ACCOUNT_ID=${B2_ACCOUNT_ID:-""}          # Backblaze Application Key ID
+B2_APPLICATION_KEY=${B2_APPLICATION_KEY:-""}     # Backblaze Application Key
+B2_BUCKET_NAME=${B2_BUCKET_NAME:-""}         # Bucket name for backups
+RCLONE_REMOTE_NAME=${RCLONE_REMOTE_NAME:-"b2backup"}
+
 # GDrive Configuration
 GDRIVE_SYNC_DIR="${DATA_ROOT}/.gdrive"
 GDRIVE_RCLONE_REMOTE="gdrive-${TENANT_NAME}"
 GDRIVE_SYNC_INTERVAL=3600
 EMBEDDING_WATCH_DIR="${DATA_ROOT}/.gdrive/documents"
-
-# Tailscale Configuration
-TAILSCALE_HOSTNAME="${TENANT_NAME}-aiplatform"
-TAILSCALE_IP=""
-TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY:-}
 
 # Webhook URLs
 N8N_WEBHOOK_URL=http://${DOMAIN:-localhost}:${N8N_PORT:-5678}
@@ -2363,7 +2375,7 @@ minio.${DOMAIN_NAME} {
 
 # Signal API
 signal.${DOMAIN_NAME} {
-    reverse_proxy signal-api:8080
+    reverse_proxy signal-api:8085
 }
 
 # Flowise
@@ -2385,6 +2397,21 @@ ${DOMAIN_NAME} {
     respond "AI Platform - Use subdomains: n8n.${DOMAIN_NAME}, grafana.${DOMAIN_NAME}, etc." 200
 }
 EOF
+
+        # ── CADDYFILE VERIFICATION ───────────────────────────────────────────────────────
+        log "INFO" "Verifying Caddyfile variable expansion..."
+        if grep -q '\${DOMAIN_NAME}' "${DATA_ROOT}/caddy/Caddyfile"; then
+            log "FAIL" "Caddyfile still contains literal \${DOMAIN_NAME} — variable expansion failed"
+            log "FAIL" "Check that DOMAIN_NAME is set in ${ENV_FILE} and sourced before this point"
+            exit 1
+        fi
+        if grep -q '\${ACME_EMAIL}' "${DATA_ROOT}/caddy/Caddyfile"; then
+            log "FAIL" "Caddyfile still contains literal \${ACME_EMAIL} — variable expansion failed"
+            exit 1
+        fi
+        log "SUCCESS" "Caddyfile correctly expanded:"
+        cat "${DATA_ROOT}/caddy/Caddyfile"
+        # ── END VERIFICATION ─────────────────────────────────────────────────────────────
     else
         # Path-based routing (existing logic)
         mkdir -p "${DATA_ROOT}/caddy"
@@ -2446,7 +2473,7 @@ EOF
 
     # Signal API
     handle /signal/* {
-        reverse_proxy signal-api:8080
+        reverse_proxy signal-api:8085
     }
 
     # OpenClaw
@@ -2473,6 +2500,21 @@ EOF
     respond "AI Platform - use /servicename to access services" 200
 }
 EOF
+
+        # ── CADDYFILE VERIFICATION ───────────────────────────────────────────────────────
+        log "INFO" "Verifying Caddyfile variable expansion..."
+        if grep -q '\${DOMAIN_NAME}' "${DATA_ROOT}/caddy/Caddyfile"; then
+            log "FAIL" "Caddyfile still contains literal \${DOMAIN_NAME} — variable expansion failed"
+            log "FAIL" "Check that DOMAIN_NAME is set in ${ENV_FILE} and sourced before this point"
+            exit 1
+        fi
+        if grep -q '\${ACME_EMAIL}' "${DATA_ROOT}/caddy/Caddyfile"; then
+            log "FAIL" "Caddyfile still contains literal \${ACME_EMAIL} — variable expansion failed"
+            exit 1
+        fi
+        log "SUCCESS" "Caddyfile correctly expanded:"
+        cat "${DATA_ROOT}/caddy/Caddyfile"
+        # ── END VERIFICATION ─────────────────────────────────────────────────────────────
     fi
     
     chown "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/caddy/Caddyfile"
