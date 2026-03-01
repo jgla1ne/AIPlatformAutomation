@@ -2309,7 +2309,6 @@ generate_caddyfile() {
         cat > "${DATA_ROOT}/caddy/Caddyfile" << EOF
 {
     admin off
-    auto_https off
     email ${ACME_EMAIL:-admin@${DOMAIN_NAME}}
 }
 
@@ -2392,7 +2391,6 @@ EOF
         cat > "${DATA_ROOT}/caddy/Caddyfile" << EOF
 {
     admin off
-    auto_https off
     email ${ACME_EMAIL:-admin@${DOMAIN_NAME}}
 }
 
