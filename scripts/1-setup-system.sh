@@ -125,7 +125,7 @@ check_prerequisites() {
 
 # ─── EBS Volume Detection and Mounting ───────────────────────────────────────────
 detect_and_mount_ebs() {
-    print_step "2" "9" "EBS Volume Detection and Mounting"
+    print_step "3" "11" "EBS Volume Detection and Mounting"
 
     echo -e "  ${BOLD}💾  EBS Volume Detection${NC}"
     echo -e "  ${DIM}Scanning for available EBS volumes to mount${NC}"
@@ -205,7 +205,7 @@ detect_and_mount_ebs() {
 
 # ─── Data Volume Selection ───────────────────────────────────────────────────
 select_data_volume() {
-    print_step "4" "10" "Data Volume Selection"
+    print_step "4" "11" "Data Volume Selection"
 
     echo -e "  ${BOLD}💾  Available Mount Points${NC}"
     echo -e "  ${DIM}Select where to store AI platform data${NC}"
@@ -265,7 +265,7 @@ select_data_volume() {
 
 # ─── Hardware Detection ────────────────────────────────────────────────────
 detect_gpu() {
-    print_step "5" "10" "Hardware Detection"
+    print_step "5" "11" "Hardware Detection"
 
     # Initialize GPU_TYPE to prevent unbound variable error
     GPU_TYPE="cpu"
@@ -326,7 +326,7 @@ check_dns() {
 
 # ─── Rebuild collect_identity to use check_dns ───────────────────────────────
 collect_identity() {
-    print_step "2" "10" "Domain & Identity"
+    print_step "2" "11" "Domain & Identity"
 
     echo -e "  ${BOLD}🌐  Domain Setup${NC}"
     echo -e "  ${DIM}DNS must already point to this server for automatic TLS to work${NC}"
@@ -373,7 +373,7 @@ collect_identity() {
 
 # ─── STEP 5: Stack selection ──────────────────────────────────────────────────
 select_stack() {
-    print_step "5" "9" "Service Stack Selection"
+    print_step "6" "11" "Service Stack Selection"
 
     echo -e "  ${BOLD}📦  Choose a service stack${NC}"
     echo -e "  ${DIM}Stacks are pre-configured bundles — you can customise in the next step${NC}"
@@ -495,7 +495,7 @@ select_stack() {
 
 # ─── Vector DB Selection ───────────────────────────────────────────────────
 select_vector_db() {
-    print_step "6" "10" "Vector Database Selection"
+    print_step "7" "11" "Vector Database Selection"
 
     echo -e "  ${BOLD}🗄️  Choose Vector Database${NC}"
     echo ""
@@ -526,7 +526,7 @@ select_vector_db() {
 
 # ─── LLM Configuration ─────────────────────────────────────────────────────
 collect_llm_config() {
-    print_step "7" "10" "LLM Provider Configuration"
+    print_step "8" "11" "LLM Provider Configuration"
 
     echo -e "  ${BOLD}🔑  LLM Provider API Keys${NC}"
     echo -e "  ${DIM}Enter API keys for providers you want to use (leave blank to skip)${NC}"
@@ -603,9 +603,111 @@ collect_llm_config() {
     log "SUCCESS" "Default model: ${OLLAMA_DEFAULT_MODEL}"
 }
 
+# ─── Network & Security Configuration ───────────────────────────────────────────
+collect_network_config() {
+    print_step "9" "11" "Network & Security Configuration"
+
+    echo -e "  ${BOLD}🔐  Network & Security Settings${NC}"
+    echo -e "  ${DIM}Configure networking, VPN, and security options${NC}"
+    echo ""
+
+    # Tailscale Configuration
+    echo -e "  ${BOLD}🌐  Tailscale VPN${NC}"
+    echo -e "  ${DIM}Zero-trust networking for secure access${NC}"
+    echo ""
+    read -p "  ➤ Tailscale auth key (leave blank to skip): " TAILSCALE_AUTH_KEY
+    read -p "  ➤ Tailscale hostname [aip-${TENANT_ID}]: " TAILSCALE_HOSTNAME
+    TAILSCALE_HOSTNAME="${TAILSCALE_HOSTNAME:-aip-${TENANT_ID}}"
+
+    print_divider
+
+    # Signal API Configuration
+    echo -e "  ${BOLD}📱  Signal API Bridge${NC}"
+    echo -e "  ${DIM}Bridge Signal messaging to web API${NC}"
+    echo ""
+    read -p "  ➤ Signal phone number (with country code, e.g. +1234567890): " SIGNAL_PHONE_NUMBER
+    read -p "  ➤ Signal verification code (leave blank to generate): " SIGNAL_VERIFICATION_CODE
+
+    print_divider
+
+    # Google Drive Integration
+    echo -e "  ${BOLD}💾  Google Drive Integration${NC}"
+    echo -e "  ${DIM}Configure rclone for Google Drive access${NC}"
+    echo ""
+    read -p "  ➤ Enable Google Drive integration? [y/N]: " enable_gdrive
+    if [[ "${enable_gdrive,,}" == "y" ]]; then
+        echo -e "  ${DIM}Get credentials from: https://rclone.org/drive/${NC}"
+        read -p "  ➤ Google Drive client ID: " GDRIVE_CLIENT_ID
+        read -p "  ➤ Google Drive client secret: " GDRIVE_CLIENT_SECRET
+        read -p "  ➤ Google Drive folder name (optional): " GDRIVE_FOLDER_NAME
+    fi
+
+    print_divider
+
+    # Search API Configuration
+    echo -e "  ${BOLD}🔍  Search API Configuration${NC}"
+    echo -e "  ${DIM}Configure search providers for AI services${NC}"
+    echo ""
+    echo -e "  ${CYAN}  1)${NC} Brave Search API"
+    echo -e "  ${CYAN}  2)${NC} SerpApi (Google/Bing/etc)"
+    echo -e "  ${CYAN}  3)${NC} Custom search endpoint"
+    echo -e "  ${CYAN}  4)${NC} Skip search APIs"
+    echo ""
+    read -p "  ➤ Select search provider [1-4]: " search_provider
+
+    case "${search_provider}" in
+        1)
+            read -p "  ➤ Brave Search API key: " BRAVE_API_KEY
+            SEARCH_PROVIDER="brave"
+            ;;
+        2)
+            read -p "  ➤ SerpApi key: " SERPAPI_KEY
+            read -p "  ➤ SerpApi engine [google]: " SERPAPI_ENGINE
+            SERPAPI_ENGINE="${SERPAPI_ENGINE:-google}"
+            SEARCH_PROVIDER="serpapi"
+            ;;
+        3)
+            read -p "  ➤ Custom search endpoint URL: " CUSTOM_SEARCH_URL
+            read -p "  ➤ Custom search API key: " CUSTOM_SEARCH_KEY
+            SEARCH_PROVIDER="custom"
+            ;;
+        4)
+            SEARCH_PROVIDER="none"
+            ;;
+    esac
+
+    print_divider
+
+    # Proxy Configuration
+    echo -e "  ${BOLD}🌍  Proxy Configuration${NC}"
+    echo -e "  ${DIM}Configure proxy settings for external API access${NC}"
+    echo ""
+    read -p "  ➤ Enable HTTP proxy? [y/N]: " enable_proxy
+    if [[ "${enable_proxy,,}" == "y" ]]; then
+        read -p "  ➤ HTTP proxy URL (e.g. http://proxy.example.com:8080): " HTTP_PROXY
+        read -p "  ➤ HTTPS proxy URL (e.g. http://proxy.example.com:8080): " HTTPS_PROXY
+        read -p "  ➤ No proxy domains (comma-separated): " NO_PROXY
+    fi
+
+    print_divider
+
+    # OpenClaw Configuration
+    echo -e "  ${BOLD}🦅  OpenClaw Private Gateway${NC}"
+    echo -e "  ${DIM}Secure private access gateway${NC}"
+    echo ""
+    read -p "  ➤ Enable OpenClaw? [y/N]: " enable_openclaw
+    if [[ "${enable_openclaw,,}" == "y" ]]; then
+        read -p "  ➤ OpenClaw admin password: " OPENCLAW_PASSWORD
+        read -p "  ➤ OpenClaw port [8082]: " OPENCLAW_PORT
+        OPENCLAW_PORT="${OPENCLAW_PORT:-8082}"
+    fi
+
+    log "SUCCESS" "Network & security configuration completed"
+}
+
 # ─── Port Configuration ────────────────────────────────────────────────────
 collect_ports() {
-    print_step "8" "10" "Port Configuration"
+    print_step "10" "11" "Port Configuration"
 
     echo -e "  ${BOLD}🔌  Service Ports${NC}"
     echo -e "  ${DIM}Configure ports for each enabled service${NC}"
@@ -671,7 +773,7 @@ collect_ports() {
 
 # ─── Generate secrets (preserve on re-run) ───────────────────────────────────
 generate_secrets() {
-    print_step "9" "10" "Generating Secrets"
+    print_step "11" "11" "Generating Secrets"
 
     load_existing_secret() {
         local key="${1}" default="${2}"
@@ -744,9 +846,9 @@ GROQ_API_KEY=${GROQ_API_KEY:-}
 OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
 
 # ─── Database ─────────────────────────────────────────────────────────────────
-DB_USER=platform
-DB_PASSWORD=${DB_PASSWORD}
-DB_NAME=platform
+POSTGRES_USER=${POSTGRES_USER:-platform}
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+POSTGRES_DB=${POSTGRES_DB:-platform}
 
 # ─── Redis ────────────────────────────────────────────────────────────────────
 REDIS_PASSWORD=${REDIS_PASSWORD}
@@ -764,10 +866,15 @@ FLOWISE_PASSWORD=${FLOWISE_PASSWORD}
 
 # ─── LiteLLM ──────────────────────────────────────────────────────────────────
 LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+LITELLM_SALT_KEY=${LITELLM_SALT_KEY}
 
 # ─── AnythingLLM ──────────────────────────────────────────────────────────────
+ANYTHINGLLM_API_KEY=${ANYTHINGLLM_API_KEY}
 ANYTHINGLLM_JWT_SECRET=${ANYTHINGLLM_JWT_SECRET}
 ANYTHINGLLM_AUTH_TOKEN=${ANYTHINGLLM_AUTH_TOKEN}
+
+# ─── Qdrant ───────────────────────────────────────────────────────────────────
+QDRANT_API_KEY=${QDRANT_API_KEY}
 
 # ─── Grafana ──────────────────────────────────────────────────────────────────
 GRAFANA_USER=admin
@@ -778,8 +885,43 @@ AUTHENTIK_SECRET_KEY=${AUTHENTIK_SECRET_KEY}
 AUTHENTIK_BOOTSTRAP_EMAIL=${ADMIN_EMAIL}
 AUTHENTIK_BOOTSTRAP_PASSWORD=${AUTHENTIK_BOOTSTRAP_PASSWORD}
 
-# ─── Qdrant ───────────────────────────────────────────────────────────────────
-QDRANT_API_KEY=${QDRANT_API_KEY}
+# ─── MinIO ────────────────────────────────────────────────────────────────────
+MINIO_ROOT_USER=${MINIO_ROOT_USER}
+MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+
+# ─── Dify ─────────────────────────────────────────────────────────────────────
+DIFY_SECRET_KEY=${DIFY_SECRET_KEY}
+DIFY_INNER_API_KEY=${DIFY_INNER_API_KEY}
+
+# ─── Network & Security ───────────────────────────────────────────────────────
+TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY:-}
+TAILSCALE_HOSTNAME=${TAILSCALE_HOSTNAME:-aip-${TENANT_ID}}
+
+# ─── Signal API ───────────────────────────────────────────────────────────────
+SIGNAL_PHONE_NUMBER=${SIGNAL_PHONE_NUMBER:-}
+SIGNAL_VERIFICATION_CODE=${SIGNAL_VERIFICATION_CODE:-}
+
+# ─── Google Drive Integration ───────────────────────────────────────────────────
+GDRIVE_CLIENT_ID=${GDRIVE_CLIENT_ID:-}
+GDRIVE_CLIENT_SECRET=${GDRIVE_CLIENT_SECRET:-}
+GDRIVE_FOLDER_NAME=${GDRIVE_FOLDER_NAME:-}
+
+# ─── Search APIs ───────────────────────────────────────────────────────────────
+SEARCH_PROVIDER=${SEARCH_PROVIDER:-none}
+BRAVE_API_KEY=${BRAVE_API_KEY:-}
+SERPAPI_KEY=${SERPAPI_KEY:-}
+SERPAPI_ENGINE=${SERPAPI_ENGINE:-google}
+CUSTOM_SEARCH_URL=${CUSTOM_SEARCH_URL:-}
+CUSTOM_SEARCH_KEY=${CUSTOM_SEARCH_KEY:-}
+
+# ─── Proxy Configuration ───────────────────────────────────────────────────────
+HTTP_PROXY=${HTTP_PROXY:-}
+HTTPS_PROXY=${HTTPS_PROXY:-}
+NO_PROXY=${NO_PROXY:-}
+
+# ─── OpenClaw ────────────────────────────────────────────────────────────────
+OPENCLAW_PASSWORD=${OPENCLAW_PASSWORD:-}
+OPENCLAW_PORT=${OPENCLAW_PORT:-8082}
 
 # ─── Ports ────────────────────────────────────────────────────────────────────
 CADDY_HTTP_PORT=80
@@ -808,6 +950,10 @@ ENABLE_GRAFANA=${ENABLE_GRAFANA}
 ENABLE_PROMETHEUS=${ENABLE_PROMETHEUS}
 ENABLE_AUTHENTIK=${ENABLE_AUTHENTIK}
 ENABLE_SIGNAL=${ENABLE_SIGNAL}
+ENABLE_TAILSCALE=${ENABLE_TAILSCALE}
+ENABLE_OPENCLAW=${ENABLE_OPENCLAW}
+ENABLE_RCLONE=${ENABLE_RCLONE}
+ENABLE_MINIO=${ENABLE_MINIO}
 EOF
 
     chmod 600 "${ENV_FILE}"
@@ -1041,8 +1187,9 @@ main() {
     select_stack             # Step 6
     select_vector_db         # Step 7
     collect_llm_config       # Step 8
-    collect_ports            # Step 9
-    generate_secrets         # Step 10
+    collect_network_config   # Step 9 - NEW: Network & security configuration
+    collect_ports            # Step 10
+    generate_secrets         # Step 11
     print_summary
     write_env
     create_directories

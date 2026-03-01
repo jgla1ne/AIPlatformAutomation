@@ -14,15 +14,12 @@ fail() { echo -e "${RED}[FAIL]${NC}  $*" >&2; exit 1; }
 
 # ── Load Environment ───────────────────────────────────────────────
 # Priority 1: TENANT_DIR environment variable
-# Priority 2: Search under /mnt/data
+# Priority 2: Search under /mnt/data for most recent .env
 # Priority 3: Search under /opt/ai-platform
 if [[ -n "${TENANT_DIR:-}" && -f "${TENANT_DIR}/.env" ]]; then
   ENV_FILE="${TENANT_DIR}/.env"
-elif [[ -f "/mnt/data/u1001/.env" ]]; then
-  ENV_FILE="/mnt/data/u1001/.env"
 else
-  ENV_FILE="$(find /mnt/data /opt/ai-platform -maxdepth 5 \
-    -name '.env' -not -path '*/\.*' 2>/dev/null | head -1)"
+  ENV_FILE="$(sudo ls -t /mnt/data/*/.env 2>/dev/null | head -1)"
 fi
 
 [[ -z "${ENV_FILE:-}" || ! -f "${ENV_FILE}" ]] && \
@@ -36,6 +33,47 @@ set -a
 source "${ENV_FILE}"
 set +a
 
+# Set defaults for all service flags to prevent unbound variable errors
+ENABLE_OLLAMA="${ENABLE_OLLAMA:-false}"
+ENABLE_OPENWEBUI="${ENABLE_OPENWEBUI:-false}"
+ENABLE_ANYTHINGLLM="${ENABLE_ANYTHINGLLM:-false}"
+ENABLE_DIFY="${ENABLE_DIFY:-false}"
+ENABLE_N8N="${ENABLE_N8N:-false}"
+ENABLE_FLOWISE="${ENABLE_FLOWISE:-false}"
+ENABLE_LITELLM="${ENABLE_LITELLM:-false}"
+ENABLE_QDRANT="${ENABLE_QDRANT:-false}"
+ENABLE_GRAFANA="${ENABLE_GRAFANA:-false}"
+ENABLE_PROMETHEUS="${ENABLE_PROMETHEUS:-false}"
+ENABLE_AUTHENTIK="${ENABLE_AUTHENTIK:-false}"
+ENABLE_SIGNAL="${ENABLE_SIGNAL:-false}"
+ENABLE_TAILSCALE="${ENABLE_TAILSCALE:-false}"
+ENABLE_OPENCLAW="${ENABLE_OPENCLAW:-false}"
+ENABLE_RCLONE="${ENABLE_RCLONE:-false}"
+ENABLE_MINIO="${ENABLE_MINIO:-false}"
+
+# Set project name based on tenant ID
+COMPOSE_PROJECT_NAME="aip-${TENANT_ID:-aip-default}"
+DOCKER_NETWORK="${COMPOSE_PROJECT_NAME}_net"
+
+# Set tenant UID/GID for non-root containers
+TENANT_UID=$(id -u)
+TENANT_GID=$(id -g)
+
+# Set default database credentials
+POSTGRES_USER="${POSTGRES_USER:-platform}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
+POSTGRES_DB="${POSTGRES_DB:-platform}"
+REDIS_PASSWORD="${REDIS_PASSWORD:-}"
+MINIO_ROOT_USER="${MINIO_ROOT_USER:-minioadmin}"
+MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-}"
+LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-}"
+LITELLM_SALT_KEY="${LITELLM_SALT_KEY:-}"
+ANYTHINGLLM_API_KEY="${ANYTHINGLLM_API_KEY:-}"
+ANYTHINGLLM_JWT_SECRET="${ANYTHINGLLM_JWT_SECRET:-}"
+QDRANT_API_KEY="${QDRANT_API_KEY:-}"
+DIFY_SECRET_KEY="${DIFY_SECRET_KEY:-}"
+DIFY_INNER_API_KEY="${DIFY_INNER_API_KEY:-}"
+
 # ── Critical Validations ───────────────────────────────────────────────
 if [ "${DOMAIN}" = "localhost" ] || [ -z "${DOMAIN}" ]; then
     fail "DOMAIN is '${DOMAIN}'. Set DOMAIN_NAME in .env and re-run script 1 first."
@@ -44,6 +82,7 @@ fi
 log "Domain: ${DOMAIN}"
 
 check_tailscale_auth() {
+    TAILSCALE_AUTH_KEY="${TAILSCALE_AUTH_KEY:-}"
     if [ -z "${TAILSCALE_AUTH_KEY}" ]; then
         warn "TAILSCALE_AUTH_KEY not set in .env"
         warn "Tailscale will start but NOT authenticate"
@@ -121,10 +160,18 @@ preflight_checks() {
         exit 1
     fi
 
-    # Check EBS mount
-    if ! mountpoint -q /mnt; then
-        log "ERROR" "/mnt is not a mount point — EBS not attached"
+    # Check EBS mount - look for /mnt/data (mounted EBS) or /mnt (legacy)
+    if ! mountpoint -q /mnt/data && ! mountpoint -q /mnt; then
+        log "ERROR" "No EBS volume mounted at /mnt/data or /mnt — EBS not attached"
+        log "INFO" "Available block devices:"
+        sudo lsblk -d -o NAME,SIZE,TYPE,MOUNTPOINT | grep -E "^nvme|^xvd|^sd" || true
         exit 1
+    fi
+    
+    if mountpoint -q /mnt/data; then
+        log "SUCCESS" "EBS volume mounted at /mnt/data"
+    elif mountpoint -q /mnt; then
+        log "SUCCESS" "EBS volume mounted at /mnt"
     fi
 
     log "SUCCESS" "Pre-flight checks passed"
