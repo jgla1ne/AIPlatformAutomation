@@ -217,27 +217,62 @@ select_data_volume() {
     echo -e "  ${DIM}Select where to store AI platform data${NC}"
     echo ""
 
-    # Enumerate available mounts
+    # Enumerate available mounts and unmounted EBS volumes
     local mounts=()
     local idx=0
     
-    # Add /mnt if it's a mount point
-    if mountpoint -q /mnt 2>/dev/null; then
-        mounts+=("/mnt")
-        echo -e "  ${CYAN}  $((++idx))${NC}  /mnt  ${DIM}$(findmnt /mnt -no SIZE -o SIZE || echo "Unknown size")${NC}"
-    fi
-
-    # Add other potential mount points
-    while IFS= read -r mount; do
-        if [[ "${mount}" != "/mnt" ]] && mountpoint -q "${mount}" 2>/dev/null; then
-            mounts+=("${mount}")
-            echo -e "  ${CYAN}  $((++idx))${NC}  ${mount}  ${DIM}$(findmnt "${mount}" -no SIZE -o SIZE || echo "Unknown size")${NC}"
+    # First, show mounted EBS volumes
+    echo -e "  ${BOLD}📁 Mounted EBS Volumes:${NC}"
+    local has_mounted=false
+    while IFS= read -r device size type mountpoint; do
+        # Skip header row and only process EBS volumes
+        if [[ "${device}" == "NAME" ]]; then
+            continue
         fi
-    done < <(findmnt -l -n -o TARGET | grep -E '^/[^/]' | sort)
-
-    # Add custom option
-    echo -e "  ${CYAN}  $((++idx))${NC}  Custom path"
+        if [[ "${device}" =~ ^(nvme|xvd|sd) ]] && [[ "${type}" == "disk" ]] && [[ -n "${mountpoint}" ]] && [[ "${mountpoint}" != "/" ]]; then
+            echo -e "  ${GREEN}  ✓${NC}  ${device} ${size} → ${mountpoint}"
+            mounts+=("${mountpoint}")
+            has_mounted=true
+            idx=$((idx + 1))
+        fi
+    done < <(lsblk -d -o NAME,SIZE,TYPE,MOUNTPOINT 2>/dev/null)
+    
+    if [ "${has_mounted}" = "false" ]; then
+        echo -e "  ${DIM}No EBS volumes currently mounted${NC}"
+    fi
     echo ""
+    
+    # Then, show unmounted EBS volumes that can be mounted
+    echo -e "  ${BOLD}💾 Available EBS Volumes to Mount:${NC}"
+    local unmounted_count=0
+    while IFS= read -r device size type mountpoint; do
+        # Skip header row
+        if [[ "${device}" == "NAME" ]]; then
+            continue
+        fi
+        # Check if this is an unmounted EBS volume (no mountpoint or mounted as root)
+        if [[ "${device}" =~ ^(nvme|xvd|sd) ]] && [[ "${type}" == "disk" ]] && [[ -z "${mountpoint}" || "${mountpoint}" == "/" ]]; then
+            echo -e "  ${CYAN}  $((idx + 1))${NC}  Mount /dev/${device} (${size}) → /mnt/data"
+            mounts+=("/dev/${device}")
+            unmounted_count=$((unmounted_count + 1))
+            idx=$((idx + 1))
+        fi
+    done < <(lsblk -d -o NAME,SIZE,TYPE,MOUNTPOINT 2>/dev/null)
+    
+    if [ "${unmounted_count}" -eq 0 ]; then
+        echo -e "  ${YELLOW}⚠️  No unmounted EBS volumes found${NC}"
+        echo -e "  ${DIM}All EBS volumes are already mounted or none available${NC}"
+    else
+        echo -e "  ${DIM}Found ${unmounted_count} unmounted EBS volume(s) available for mounting${NC}"
+    fi
+    echo ""
+    
+    # Add option to create /mnt/data on root filesystem
+    echo -e "  ${BOLD}📁 Other Options:${NC}"
+    echo -e "  ${CYAN}  $((idx + 1))${NC}  Create /mnt/data (use root filesystem - NOT recommended for production)"
+    echo -e "  ${CYAN}  $((idx + 2))${NC}  Custom path"
+    echo ""
+    idx=$((idx + 2))
 
     while true; do
         read -p "  ➤ Select volume [1-${idx}]: " choice
@@ -257,8 +292,48 @@ select_data_volume() {
             fi
             echo "  ❌ Path cannot be empty"
         done
+    elif [ "${choice}" -eq $((idx - 1)) ]; then
+        # Create /mnt/data on root filesystem
+        DATA_ROOT="/mnt/data/${TENANT_ID}"
+        echo -e "  ${YELLOW}⚠️  Using root filesystem - NOT recommended for production${NC}"
     else
-        DATA_ROOT="${mounts[$((choice-1))]}/${TENANT_ID}"
+        # Handle mounted volumes or unmounted EBS volumes
+        if [ "${choice}" -le "${#mounts[@]}" ]; then
+            local selected_mount="${mounts[$((choice-1))]}"
+            if [[ "${selected_mount}" =~ ^/dev/ ]]; then
+                # This is an unmounted EBS volume - mount it first
+                local device_name="${selected_mount#/dev/}"
+                log "INFO" "Mounting ${selected_mount} to /mnt/data..."
+                
+                # Create mount point
+                sudo mkdir -p /mnt/data
+                
+                # Mount the volume
+                if sudo mount "${selected_mount}" /mnt/data 2>/dev/null; then
+                    log "SUCCESS" "EBS volume mounted: ${selected_mount} → /mnt/data"
+                    
+                    # Add to /etc/fstab for persistence
+                    if ! grep -q "${selected_mount}" /etc/fstab; then
+                        echo "${selected_mount}  /mnt/data  ext4  defaults  0  2" | sudo tee -a /etc/fstab
+                        log "INFO" "Added to /etc/fstab for persistence"
+                    fi
+                    
+                    DATA_ROOT="/mnt/data/${TENANT_ID}"
+                else
+                    log "ERROR" "Failed to mount ${selected_mount}"
+                    echo -e "  ${DIM}You may need to format the volume first:${NC}"
+                    echo -e "  ${DIM}  sudo mkfs.ext4 ${selected_mount}${NC}"
+                    echo -e "  ${DIM}Then re-run this script${NC}"
+                    exit 1
+                fi
+            else
+                # This is already a mounted volume
+                DATA_ROOT="${selected_mount}/${TENANT_ID}"
+            fi
+        else
+            echo "  ❌ Invalid selection"
+            exit 1
+        fi
     fi
 
     # Set derived paths
@@ -1059,7 +1134,7 @@ ENABLE_PROMETHEUS=${ENABLE_PROMETHEUS}
 ENABLE_AUTHENTIK=${ENABLE_AUTHENTIK}
 ENABLE_SIGNAL=${ENABLE_SIGNAL}
 ENABLE_TAILSCALE=${ENABLE_TAILSCALE}
-ENABLE_OPENCLAW=${ENABLE_OPENCLAW}
+ENABLE_OPENCLAW="${ENABLE_OPENCLAW:-false}"
 ENABLE_RCLONE=${ENABLE_RCLONE}
 ENABLE_MINIO=${ENABLE_MINIO}
 EOF
