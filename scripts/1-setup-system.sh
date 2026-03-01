@@ -134,6 +134,33 @@ ENABLE_SIGNAL=$(ask_service "Signal API (Messaging)" "n")
 ENABLE_TAILSCALE=$(ask_service "Tailscale (VPN access)" "n")
 ENABLE_RCLONE=$(ask_service "Rclone/GDrive sync" "n")
 
+# ── GDrive OAuth Setup (if enabled) ───────────────────────────────
+if [ "${ENABLE_RCLONE}" = "true" ]; then
+    echo ""
+    echo "GDrive sync requires OAuth setup. Options:"
+    echo "  1. Service Account JSON (recommended for servers)"
+    echo "  2. OAuth browser flow (requires local browser)"
+    read -r -p "Choose [1/2]: " gdrive_auth_method
+    if [ "${gdrive_auth_method}" = "1" ]; then
+        read -r -p "Path to service account JSON: " sa_json
+        [ -f "${sa_json}" ] && {
+            mkdir -p "${DATA_ROOT}/rclone/config"
+            cp "${sa_json}" "${DATA_ROOT}/rclone/config/service_account.json"
+            # Generate rclone.conf for service account
+            cat > "${DATA_ROOT}/rclone/config/rclone.conf" << EOF
+[gdrive]
+type = drive
+scope = drive
+service_account_file = /config/service_account.json
+EOF
+        }
+    else
+        echo "Run: docker run --rm -it -v ${DATA_ROOT}/rclone/config:/config rclone/rclone config"
+        echo "Complete OAuth flow, then re-run script 2"
+        ENABLE_RCLONE=false
+    fi
+fi
+
 # ── Vector Database Selection ─────────────────────────────────
 echo ""
 echo "  Select Vector Database:"

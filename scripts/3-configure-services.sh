@@ -186,7 +186,6 @@ configure_litellm() {
 # ─────────────────────────────────────────────────────────────
 configure_postgres() {
     log "Configuring PostgreSQL databases..."
-    wait_for_service "postgres" "http://localhost/nonexistent" 10 || true
     
     # Wait using pg_isready instead of HTTP
     local attempts=0

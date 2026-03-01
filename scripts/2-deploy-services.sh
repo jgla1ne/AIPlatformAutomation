@@ -90,6 +90,52 @@ teardown_existing() {
     log "Teardown complete"
 }
 
+# ── Directory Setup ───────────────────────────────────────────────
+setup_directories() {
+    local dirs=(
+        "${DATA_ROOT}/postgres"
+        "${DATA_ROOT}/redis"
+        "${DATA_ROOT}/caddy/config"
+        "${DATA_ROOT}/caddy/data"
+        "${DATA_ROOT}/prometheus"
+        "${DATA_ROOT}/minio"
+        "${DATA_ROOT}/litellm"
+        "${DATA_ROOT}/logs"
+    )
+
+    [ "${ENABLE_QDRANT}" = "true" ] && dirs+=("${DATA_ROOT}/qdrant")
+    [ "${ENABLE_OLLAMA}" = "true" ] && dirs+=("${DATA_ROOT}/ollama")
+    [ "${ENABLE_N8N}" = "true" ] && dirs+=("${DATA_ROOT}/n8n")
+    [ "${ENABLE_FLOWISE}" = "true" ] && dirs+=("${DATA_ROOT}/flowise")
+    [ "${ENABLE_DIFY}" = "true" ] && \
+        dirs+=("${DATA_ROOT}/dify/storage" "${DATA_ROOT}/dify/logs")
+    [ "${ENABLE_SIGNAL}" = "true" ] && dirs+=("${DATA_ROOT}/signal-api")
+    [ "${ENABLE_TAILSCALE}" = "true" ] && dirs+=("${DATA_ROOT}/tailscale")
+    [ "${ENABLE_RCLONE}" = "true" ] && \
+        dirs+=("${DATA_ROOT}/rclone/config" "${DATA_ROOT}/gdrive")
+    [ "${ENABLE_ANYTHINGLLM}" = "true" ] && dirs+=("${DATA_ROOT}/anythingllm")
+    [ "${ENABLE_OPENCLAW}" = "true" ] && dirs+=("${DATA_ROOT}/openclaw")
+
+    for dir in "${dirs[@]}"; do
+        mkdir -p "${dir}"
+    done
+
+    # Set ownership for all data dirs
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"
+
+    # Special cases — services that run as their own UID
+    # Grafana runs as 472
+    [ "${ENABLE_GRAFANA}" = "true" ] && {
+        mkdir -p "${DATA_ROOT}/grafana"
+        chown -R 472:472 "${DATA_ROOT}/grafana"
+    }
+    # Prometheus runs as 65534
+    mkdir -p "${DATA_ROOT}/prometheus/data"
+    chown -R 65534:65534 "${DATA_ROOT}/prometheus/data"
+
+    log "SUCCESS" "Directories created and ownership set"
+}
+
 # ── Compose Generator (the key function) ────────────────────────
 generate_compose() {
     local compose_file="${DATA_ROOT}/docker-compose.yml"
@@ -562,13 +608,13 @@ append_flowise() {
       - PORT=3000
       - FLOWISE_USERNAME=${FLOWISE_USERNAME}
       - FLOWISE_PASSWORD=${FLOWISE_PASSWORD}
-      - DATABASE_PATH=/root/.flowise
-      - APIKEY_PATH=/root/.flowise
-      - SECRETKEY_PATH=/root/.flowise
-      - LOG_PATH=/root/.flowise/logs
-      - BLOB_STORAGE_PATH=/root/.flowise/storage
+      - DATABASE_PATH=/data/flowise
+      - APIKEY_PATH=/data/flowise
+      - SECRETKEY_PATH=/data/flowise
+      - LOG_PATH=/data/flowise/logs
+      - BLOB_STORAGE_PATH=/data/flowise/storage
     volumes:
-      - ${DATA_ROOT}/flowise:/root/.flowise
+      - ${DATA_ROOT}/flowise:/data/flowise
     networks:
       - ${DOCKER_NETWORK}
     healthcheck:
@@ -1272,6 +1318,9 @@ main() {
 
     # Teardown (idempotent)
     teardown_existing
+
+    # Setup directories with proper ownership
+    setup_directories
 
     # Generate configs
     generate_compose
