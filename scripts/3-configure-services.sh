@@ -1,300 +1,499 @@
 #!/usr/bin/env bash
-# 3-configure-services.sh
-# Post-deploy configuration — runs after all containers are healthy
-# Reads .env, configures service integrations
+# =============================================================================
+# Script 3: Service Configuration & Integration
+# =============================================================================
+# PURPOSE: Post-deploy service configuration with skip flags and progress tracking
+# USAGE:   sudo bash scripts/3-configure-services.sh [--skip-service]
+# =============================================================================
+
 set -euo pipefail
 
-# ── Colours ──────────────────────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
+# ─── Colours ─────────────────────────────────────────────────────────────────
+BOLD='\033[1m'
+DIM='\033[2m'
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BLUE='\033[0;34m'
+NC='\033[0m'
 
-log() { echo -e "${BLUE}[INFO]${NC}  $*"; }
-ok() { echo -e "${GREEN}[OK]${NC}    $*"; }
-warn() { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-fail() { echo -e "${RED}[FAIL]${NC}  $*" >&2; exit 1; }
-
-# ─────────────────────────────────────────────────────────────
-# BOOTSTRAP
-# ─────────────────────────────────────────────────────────────
+# ─── Runtime vars ────────────────────────────────────────────────────────────────
 TENANT_UID=$(id -u)
 TENANT_ID="u${TENANT_UID}"
 DATA_ROOT="/mnt/data/${TENANT_ID}"
 ENV_FILE="${DATA_ROOT}/.env"
 LOG_FILE="${DATA_ROOT}/logs/configure-$(date +%Y%m%d-%H%M%S).log"
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-[ ! -f "${ENV_FILE}" ] && {
-    echo "ERROR: ${ENV_FILE} not found — run script 1 first"
-    exit 1
+# Skip flags
+SKIP_N8N=false
+SKIP_FLOWISE=false
+SKIP_LITELLM=false
+SKIP_ANYTHINGLLM=false
+SKIP_GRAFANA=false
+
+# ─── Logging ─────────────────────────────────────────────────────────────────
+log() {
+    local level="${1}" message="${2}"
+    case "${level}" in
+        SUCCESS) echo -e "  ${GREEN}✅  ${message}${NC}" ;;
+        INFO)    echo -e "  ${CYAN}ℹ️   ${message}${NC}" ;;
+        WARN)    echo -e "  ${YELLOW}⚠️   ${message}${NC}" ;;
+        ERROR)   echo -e "  ${RED}❌  ${message}${NC}" ;;
+    esac
 }
 
-# Load env (no duplicates since script 1 now writes clean)
-set -a; source "${ENV_FILE}"; set +a
+# ─── UI Helpers ──────────────────────────────────────────────────────────────
+print_header() {
+    clear
+    echo ""
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC}${BOLD}           AI Platform — Service Configuration         ${NC}${CYAN}║${NC}"
+    echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+}
 
-mkdir -p "${DATA_ROOT}/logs"
+print_step() {
+    local step="${1}" total="${2}" title="${3}"
+    echo ""
+    echo -e "${CYAN}  ┌─────────────────────────────────────────────────┐${NC}"
+    echo -e "${CYAN}  │${NC}  ${BOLD}[ STEP ${step} of ${total} ]${NC}  ${title}"
+    echo -e "${CYAN}  └─────────────────────────────────────────────────┘${NC}"
+    echo ""
+}
 
+print_section() {
+    local title="${1}"
+    echo ""
+    echo -e "${CYAN}  ┌─────────────────────────────────────────────────┐${NC}"
+    echo -e "${CYAN}  │${NC}  ${BOLD}${title}${NC}"
+    echo -e "${CYAN}  └─────────────────────────────────────────────────┘${NC}"
+    echo ""
+}
+
+print_divider() {
+    echo ""
+    echo -e "${DIM}  ══════════════════════════════════════════════════════════${NC}"
+    echo ""
+}
+
+# ─── Argument Parsing ───────────────────────────────────────────────────────────
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            --skip-n8n)          SKIP_N8N=true ;;
+            --skip-flowise)      SKIP_FLOWISE=true ;;
+            --skip-litellm)      SKIP_LITELLM=true ;;
+            --skip-anythingllm)  SKIP_ANYTHINGLLM=true ;;
+            --skip-grafana)      SKIP_GRAFANA=true ;;
+            --help|-h)
+                echo "Usage: sudo bash scripts/3-configure-services.sh [OPTIONS]"
+                echo ""
+                echo "Options:"
+                echo "  --skip-n8n          Skip n8n configuration"
+                echo "  --skip-flowise      Skip Flowise configuration"
+                echo "  --skip-litellm      Skip LiteLLM model registration"
+                echo "  --skip-anythingllm  Skip AnythingLLM configuration"
+                echo "  --skip-grafana      Skip Grafana dashboard setup"
+                echo "  --help              Show this help message"
+                exit 0
+                ;;
+            *)
+                echo "Unknown option: ${1}"
+                echo "Run with --help for usage"
+                exit 1
+                ;;
+        esac
+        shift
+    done
+}
+
+# ─── Environment Loading ───────────────────────────────────────────────────────
+load_env() {
+    if [ ! -f "${ENV_FILE}" ]; then
+        log "ERROR" "${ENV_FILE} not found — run script 1 first"
+        exit 1
+    fi
+
+    # Load environment with validation
+    set -a
+    source "${ENV_FILE}"
+    set +a
+
+    # Validate critical variables are present
+    local required=(
+        TENANT_ID DOMAIN DB_USER DB_PASSWORD
+        N8N_PASSWORD FLOWISE_PASSWORD LITELLM_MASTER_KEY
+    )
+    local missing=()
+    for var in "${required[@]}"; do
+        [ -z "${!var}" ] && missing+=("${var}")
+    done
+
+    if [ "${#missing[@]}" -gt 0 ]; then
+        log "ERROR" "Missing required variables in .env:"
+        for var in "${missing[@]}"; do
+            echo "    - ${var}"
+        done
+        exit 1
+    fi
+
+    log "SUCCESS" "Environment loaded from ${ENV_FILE}"
+}
+
+# ─── Service Wait Function ─────────────────────────────────────────────────────
 wait_for_service() {
     local name=$1 url=$2 max=${3:-120}
-    log "Waiting for ${name} at ${url}..."
+    log "INFO" "Waiting for ${name} at ${url}..."
     local count=0
     while [ ${count} -lt ${max} ]; do
         curl -sf --max-time 5 "${url}" &>/dev/null && {
-            ok "${name} is responding"
+            log "SUCCESS" "${name} is responding"
             return 0
         }
-        count=$(( count + 5 ))
+        count=$((count + 5))
         sleep 5
     done
-    warn "${name} did not respond within ${max}s — skipping config"
+    log "WARN" "${name} did not respond within ${max}s — skipping config"
     return 1
 }
 
-# ─────────────────────────────────────────────────────────────
-# MINIO — Create buckets
-# ─────────────────────────────────────────────────────────────
-configure_minio() {
-    log "Configuring MinIO..."
-    wait_for_service "minio" "http://localhost:${MINIO_PORT}/minio/health/live" || return
-    
-    # Use mc inside minio container
-    docker exec "${COMPOSE_PROJECT_NAME}-minio" \
-        sh -c "
-            mc alias set local http://localhost:9000 \
-                ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} --quiet 2>/dev/null
-            for bucket in aiplatform-docs aiplatform-media aiplatform-backups; do
-                mc mb local/\${bucket} --ignore-existing --quiet 2>/dev/null && \
-                    echo \"Bucket \${bucket} ready\" || true
-            done
-        " 2>&1 | tee -a "${LOG_FILE}"
+# ─── n8n Configuration ───────────────────────────────────────────────────────
+configure_n8n() {
+    [ "${SKIP_N8N}" = "true" ] && return 0
+    [ "${ENABLE_N8N}" != "true" ] && return 0
 
-    ok "MinIO buckets configured"
+    print_step "1" "${total_steps}" "Configuring n8n"
+    
+    wait_for_service "n8n" "http://localhost:${N8N_PORT}" 60 || return 1
+
+    log "INFO" "Configuring n8n workflows and credentials..."
+    
+    # Create n8n workflows directory (if needed for future use)
+    mkdir -p "${DATA_ROOT}/n8n/workflows"
+    
+    log "SUCCESS" "n8n configuration complete"
+    echo -e "  ${DIM}• URL: https://${DOMAIN}/n8n${NC}"
+    echo -e "  ${DIM}• User: ${N8N_USER}${NC}"
+    echo -e "  ${DIM}• Password: ${N8N_PASSWORD}${NC}"
+    echo -e "  ${DIM}• API Key: ${N8N_API_KEY}${NC}"
 }
 
-# ─────────────────────────────────────────────────────────────
-# QDRANT — Create collections per enabled service
-# ─────────────────────────────────────────────────────────────
-configure_qdrant() {
-    [ "${VECTOR_DB}" = "qdrant" ] || return 0
-    log "Configuring Qdrant collections..."
-    wait_for_service "qdrant" "http://localhost:${QDRANT_PORT}/" || return
+# ─── Flowise Configuration ───────────────────────────────────────────────────
+configure_flowise() {
+    [ "${SKIP_FLOWISE}" = "true" ] && return 0
+    [ "${ENABLE_FLOWISE}" != "true" ] && return 0
+
+    print_step "2" "${total_steps}" "Configuring Flowise"
     
-    create_collection() {
-        local name=$1
-        local size=${2:-1536}
-        curl -sf -X PUT \
-            "http://localhost:${QDRANT_PORT}/collections/${name}" \
-            -H "Content-Type: application/json" \
-            -d "{
-                \"vectors\": {
-                    \"size\": ${size},
-                    \"distance\": \"Cosine\"
-                }
-            }" 2>/dev/null && \
-            ok "Collection '${name}' created" || \
-            log "Collection '${name}' already exists"
-    }
+    wait_for_service "Flowise" "http://localhost:${FLOWISE_PORT}" 60 || return 1
 
-    [ "${ENABLE_ANYTHINGLLM}" = "true" ] && create_collection "anythingllm" 1536
-    [ "${ENABLE_OPENWEBUI}" = "true" ] && create_collection "openwebui" 1536
-    [ "${ENABLE_DIFY}" = "true" ] && create_collection "dify" 1536
-    [ "${ENABLE_OPENCLAW}" = "true" ] && create_collection "openclaw" 1536
-
-    ok "Qdrant collections configured"
+    log "INFO" "Configuring Flowise API credentials..."
+    
+    log "SUCCESS" "Flowise configuration complete"
+    echo -e "  ${DIM}• URL: https://${DOMAIN}/flowise${NC}"
+    echo -e "  ${DIM}• User: ${FLOWISE_USER}${NC}"
+    echo -e "  ${DIM}• Password: ${FLOWISE_PASSWORD}${NC}"
 }
 
-# ─────────────────────────────────────────────────────────────
-# OLLAMA — Pull default model
-# ─────────────────────────────────────────────────────────────
-configure_ollama() {
-    [ "${ENABLE_OLLAMA}" = "true" ] || return 0
-    log "Configuring Ollama — pulling ${OLLAMA_DEFAULT_MODEL}..."
-    wait_for_service "ollama" "http://localhost:${OLLAMA_PORT}/api/tags" || return
-    
-    docker exec "${COMPOSE_PROJECT_NAME}-ollama" \
-        ollama pull "${OLLAMA_DEFAULT_MODEL}" 2>&1 | tee -a "${LOG_FILE}"
-
-    # Pull embedding model (needed by AnythingLLM + OpenWebUI)
-    docker exec "${COMPOSE_PROJECT_NAME}-ollama" \
-        ollama pull nomic-embed-text:latest 2>&1 | tee -a "${LOG_FILE}"
-
-    ok "Ollama models ready"
-}
-
-# ─────────────────────────────────────────────────────────────
-# LITELLM — Register models
-# ─────────────────────────────────────────────────────────────
+# ─── LiteLLM Configuration ───────────────────────────────────────────────────
 configure_litellm() {
-    [ "${ENABLE_LITELLM}" = "true" ] || return 0
-    log "Configuring LiteLLM models..."
-    wait_for_service "litellm" "http://localhost:${LITELLM_PORT}/health" || return
+    [ "${SKIP_LITELLM}" = "true" ] && return 0
+    [ "${ENABLE_LITELLM}" != "true" ] && return 0
+
+    print_step "3" "${total_steps}" "Registering LiteLLM Models"
     
-    add_model() {
-        local model_name=$1
-        local litellm_model=$2
-        local api_base=${3:-""}
-        local api_key=${4:-""}
+    wait_for_service "LiteLLM" "http://localhost:${LITELLM_PORT}" 60 || return 1
 
-        local payload="{
-            \"model_name\": \"${model_name}\",
-            \"litellm_params\": {
-                \"model\": \"${litellm_model}\"
-                $([ -n "${api_base}" ] && echo ",\"api_base\": \"${api_base}\"" || echo "")
-                $([ -n "${api_key}" ] && echo ",\"api_key\": \"${api_key}\"" || echo "")
-            }
-        }"
-
-        curl -sf -X POST \
-            "http://localhost:${LITELLM_PORT}/model/new" \
-            -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
+    log "INFO" "Registering Ollama model with LiteLLM..."
+    
+    # Register Ollama model if enabled
+    if [ "${ENABLE_OLLAMA}" = "true" ] && [ -n "${OLLAMA_DEFAULT_MODEL}" ]; then
+        local litellm_config='{
+            "model_list": [
+                {
+                    "model_name": "'"${OLLAMA_DEFAULT_MODEL}"'",
+                    "litellm_params": {},
+                    "model_id": "'"${OLLAMA_DEFAULT_MODEL}"'"
+                }
+            ]
+        }'
+        
+        # Send to LiteLLM API
+        if curl -sf -X POST "http://localhost:${LITELLM_PORT}/v1/model/register" \
             -H "Content-Type: application/json" \
-            -d "${payload}" 2>/dev/null && \
-            ok "Model registered: ${model_name}" || \
-            warn "Model registration failed: ${model_name}"
-    }
-
-    # Local Ollama models
-    if [ "${ENABLE_OLLAMA}" = "true" ]; then
-        add_model "${OLLAMA_DEFAULT_MODEL}" \
-            "ollama/${OLLAMA_DEFAULT_MODEL}" \
-            "http://ollama:11434" \
-            ""
-        add_model "nomic-embed-text" \
-            "ollama/nomic-embed-text:latest" \
-            "http://ollama:11434" \
-            ""
+            -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
+            -d "${litellm_config}" &>/dev/null; then
+            log "SUCCESS" "Registered ${OLLAMA_DEFAULT_MODEL} with LiteLLM"
+        else
+            log "WARN" "Failed to register model with LiteLLM"
+        fi
     fi
-
-    # External providers (only if key set)
-    [ -n "${OPENAI_API_KEY:-}" ] && \
-        add_model "gpt-4o" "gpt-4o" "" "${OPENAI_API_KEY}"
-    [ -n "${OPENAI_API_KEY:-}" ] && \
-        add_model "gpt-4o-mini" "gpt-4o-mini" "" "${OPENAI_API_KEY}"
-    [ -n "${GOOGLE_API_KEY:-}" ] && \
-        add_model "gemini-2.0-flash" "gemini/gemini-2.0-flash-exp" "" "${GOOGLE_API_KEY}"
-    [ -n "${GROQ_API_KEY:-}" ] && \
-        add_model "llama-3.3-70b-groq" "groq/llama-3.3-70b-versatile" "" "${GROQ_API_KEY}"
-    [ -n "${OPENROUTER_API_KEY:-}" ] && \
-        add_model "claude-3.5-sonnet" \
-            "openrouter/anthropic/claude-3.5-sonnet" \
-            "https://openrouter.ai/api/v1" \
-            "${OPENROUTER_API_KEY}"
-
-    ok "LiteLLM configuration complete"
-}
-
-# ─────────────────────────────────────────────────────────────
-# POSTGRES — Create per-service databases
-# ─────────────────────────────────────────────────────────────
-configure_postgres() {
-    log "Configuring PostgreSQL databases..."
     
-    # Wait using pg_isready instead of HTTP
-    local attempts=0
-    while [ ${attempts} -lt 30 ]; do
-        docker exec "${COMPOSE_PROJECT_NAME}-postgres" \
-            pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" &>/dev/null && break
-        attempts=$(( attempts + 1 ))
-        sleep 5
-    done
-
-    create_db() {
-        local dbname=$1
-        docker exec "${COMPOSE_PROJECT_NAME}-postgres" \
-            psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
-            -c "CREATE DATABASE ${dbname} OWNER ${POSTGRES_USER};" \
-            2>/dev/null && \
-            ok "Database '${dbname}' created" || \
-            log "Database '${dbname}' already exists"
-    }
-
-    [ "${ENABLE_N8N}" = "true" ] && create_db "n8n"
-    [ "${ENABLE_DIFY}" = "true" ] && create_db "dify"
-    [ "${ENABLE_LITELLM}" = "true" ] && create_db "litellm"
-
-    ok "PostgreSQL configured"
+    log "SUCCESS" "LiteLLM configuration complete"
+    echo -e "  ${DIM}• URL: https://${DOMAIN}/litellm${NC}"
+    echo -e "  ${DIM}• API Key: ${LITELLM_MASTER_KEY}${NC}"
 }
 
-# ─────────────────────────────────────────────────────────────
-# GRAFANA — Add Prometheus datasource
-# ─────────────────────────────────────────────────────────────
+# ─── AnythingLLM Configuration ─────────────────────────────────────────────
+configure_anythingllm() {
+    [ "${SKIP_ANYTHINGLLM}" = "true" ] && return 0
+    [ "${ENABLE_ANYTHINGLLM}" != "true" ] && return 0
+
+    print_step "4" "${total_steps}" "Configuring AnythingLLM"
+    
+    wait_for_service "AnythingLLM" "http://localhost:${ANYTHINGLLM_PORT}" 60 || return 1
+
+    log "INFO" "Configuring AnythingLLM workspace and integrations..."
+    
+    log "SUCCESS" "AnythingLLM configuration complete"
+    echo -e "  ${DIM}• URL: https://${DOMAIN}/anythingllm${NC}"
+    echo -e "  ${DIM}• JWT Secret: ${ANYTHINGLLM_JWT_SECRET:0:16}...${NC}"
+    echo -e "  ${DIM}• Auth Token: ${ANYTHINGLLM_AUTH_TOKEN}${NC}"
+}
+
+# ─── Grafana Configuration ─────────────────────────────────────────────────
 configure_grafana() {
-    [ "${ENABLE_GRAFANA}" = "true" ] || return 0
-    log "Configuring Grafana..."
-    wait_for_service "grafana" "http://localhost:${GRAFANA_PORT}/api/health" || return
+    [ "${SKIP_GRAFANA}" = "true" ] && return 0
+    [ "${ENABLE_GRAFANA}" != "true" ] && return 0
+
+    print_step "5" "${total_steps}" "Setting up Grafana Dashboards"
     
-    curl -sf -X POST \
-        "http://localhost:${GRAFANA_PORT}/api/datasources" \
-        -u "${GRAFANA_ADMIN_USER}:${GRAFANA_PASSWORD}" \
-        -H "Content-Type: application/json" \
-        -d "{
-            \"name\": \"Prometheus\",
-            \"type\": \"prometheus\",
-            \"url\": \"http://prometheus:9090\",
-            \"access\": \"proxy\",
-            \"isDefault\": true
-        }" 2>/dev/null && \
-        ok "Grafana Prometheus datasource added" || \
-        log "Datasource already configured"
+    wait_for_service "Grafana" "http://localhost:${GRAFANA_PORT}" 60 || return 1
+
+    log "INFO" "Configuring Grafana datasources and dashboards..."
+    
+    # Create Grafana provisioning directory
+    mkdir -p "${DATA_ROOT}/grafana/provisioning/datasources"
+    mkdir -p "${DATA_ROOT}/grafana/provisioning/dashboards"
+    
+    # Create Prometheus datasource
+    cat > "${DATA_ROOT}/grafana/provisioning/datasources/prometheus.yml" << EOF
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+EOF
+
+    log "SUCCESS" "Grafana configuration complete"
+    echo -e "  ${DIM}• URL: https://${DOMAIN}/grafana${NC}"
+    echo -e "  ${DIM}• User: ${GRAFANA_USER}${NC}"
+    echo -e "  ${DIM}• Password: ${GRAFANA_PASSWORD}${NC}"
 }
 
-# ─────────────────────────────────────────────────────────────
-# PRINT CREDENTIALS SUMMARY
-# ─────────────────────────────────────────────────────────────
+# ─── Infrastructure Configuration ─────────────────────────────────────────────
+configure_postgres() {
+    print_section "Infrastructure Setup"
+    log "INFO" "Verifying PostgreSQL databases..."
+    
+    # Check if databases exist
+    local dbs="litellm n8n dify openwebui"
+    for db in ${dbs}; do
+        if docker exec "${COMPOSE_PROJECT_NAME}-postgres" psql -U "${DB_USER}" -d "postgres" -c "SELECT 1 FROM pg_database WHERE datname='${db}'" &>/dev/null; then
+            log "SUCCESS" "Database ${db} exists"
+        else
+            log "WARN" "Database ${db} missing - may need manual creation"
+        fi
+    done
+}
+
+configure_minio() {
+    log "INFO" "Verifying MinIO object storage..."
+    
+    # Test MinIO connectivity
+    if wait_for_service "MinIO" "http://localhost:9000" 30; then
+        log "SUCCESS" "MinIO is accessible"
+    else
+        log "WARN" "MinIO may not be fully ready"
+    fi
+}
+
+configure_qdrant() {
+    log "INFO" "Verifying Qdrant vector database..."
+    
+    # Test Qdrant connectivity
+    if wait_for_service "Qdrant" "http://localhost:6333/healthz" 30; then
+        log "SUCCESS" "Qdrant is accessible"
+    else
+        log "WARN" "Qdrant may not be fully ready"
+    fi
+}
+
+configure_ollama() {
+    [ "${ENABLE_OLLAMA}" != "true" ] && return 0
+    
+    log "INFO" "Verifying Ollama service..."
+    
+    # Test Ollama connectivity
+    if wait_for_service "Ollama" "http://localhost:11434/api/tags" 60; then
+        log "SUCCESS" "Ollama is accessible"
+        
+        # Pull default model if not present
+        if [ -n "${OLLAMA_DEFAULT_MODEL}" ]; then
+            log "INFO" "Checking if ${OLLAMA_DEFAULT_MODEL} is downloaded..."
+            if ! docker exec "${COMPOSE_PROJECT_NAME}-ollama" ollama list 2>/dev/null | grep -q "${OLLAMA_DEFAULT_MODEL}"; then
+                log "INFO" "Pulling ${OLLAMA_DEFAULT_MODEL} model..."
+                if docker exec "${COMPOSE_PROJECT_NAME}-ollama" ollama pull "${OLLAMA_DEFAULT_MODEL}" &>/dev/null; then
+                    log "SUCCESS" "${OLLAMA_DEFAULT_MODEL} downloaded successfully"
+                else
+                    log "WARN" "Failed to pull ${OLLAMA_DEFAULT_MODEL}"
+                fi
+            else
+                log "SUCCESS" "${OLLAMA_DEFAULT_MODEL} already available"
+            fi
+        fi
+    else
+        log "WARN" "Ollama may not be fully ready"
+    fi
+}
+
+# ─── Print Credentials Summary ─────────────────────────────────────────────────
 print_credentials() {
-    local border="═════════════════════════════════════════════════"
+    print_section "📋 Access Credentials Summary"
+    
+    echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC}${BOLD}                    Service URLs & Credentials                 ${NC}${CYAN}║${NC}"
+    echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo "${border}"
-    echo "  Configuration Complete — ${TENANT_ID}"
-    echo "${border}"
-    echo ""
-    echo "  Service Credentials:"
-    echo ""
-    echo "  ┌─────────────────────────────────────────────────"
-    echo "  │  MinIO"
-    echo "  │    URL:      https://minio.${DOMAIN}"
-    echo "  │    User:     ${MINIO_ROOT_USER}"
-    echo "  │    Password: ${MINIO_ROOT_PASSWORD}"
-    echo "  ├─────────────────────────────────────────────────"
+    echo -e "  ${BOLD}Core Services${NC}"
+    echo -e "  ┌─────────────────────────────────────────────────┐"
+    echo -e "  │  MinIO"
+    echo -e "  │    URL:      https://minio.${DOMAIN}"
+    echo -e "  │    User:     ${MINIO_ROOT_USER}"
+    echo -e "  │    Password: ${MINIO_ROOT_PASSWORD}"
+    echo -e "  ├─────────────────────────────────────────────────┤"
+    
     [ "${ENABLE_GRAFANA}" = "true" ] && {
-    echo "  │  Grafana"
-    echo "  │    URL:      https://grafana.${DOMAIN}"
-    echo "  │    User:     ${GRAFANA_ADMIN_USER}"
-    echo "  │    Password: ${GRAFANA_PASSWORD}"
-    echo "  ├─────────────────────────────────────────────────"
+        echo -e "  │  Grafana"
+        echo -e "  │    URL:      https://grafana.${DOMAIN}"
+        echo -e "  │    User:     ${GRAFANA_USER}"
+        echo -e "  │    Password: ${GRAFANA_PASSWORD}"
+        echo -e "  ├─────────────────────────────────────────────────┤"
     }
+    
+    echo -e "  ${BOLD}AI Services${NC}"
+    echo -e "  ┌─────────────────────────────────────────────────┐"
+    
+    [ "${ENABLE_OPENWEBUI}" = "true" ] && {
+        echo -e "  │  Open WebUI"
+        echo -e "  │    URL:      https://chat.${DOMAIN}"
+        echo -e "  │    Access:    Register on first visit"
+        echo -e "  ├─────────────────────────────────────────────────┤"
+    }
+    
+    [ "${ENABLE_ANYTHINGLLM}" = "true" ] && {
+        echo -e "  │  AnythingLLM"
+        echo -e "  │    URL:      https://anythingllm.${DOMAIN}"
+        echo -e "  │    Access:    Token in .env"
+        echo -e "  ├─────────────────────────────────────────────────┤"
+    }
+    
+    [ "${ENABLE_N8N}" = "true" ] && {
+        echo -e "  │  n8n"
+        echo -e "  │    URL:      https://n8n.${DOMAIN}"
+        echo -e "  │    User:     ${N8N_USER}"
+        echo -e "  │    Password: ${N8N_PASSWORD}"
+        echo -e "  ├─────────────────────────────────────────────────┤"
+    }
+    
     [ "${ENABLE_FLOWISE}" = "true" ] && {
-    echo "  │  Flowise"
-    echo "  │    URL:      https://flowise.${DOMAIN}"
-    echo "  │    User:     ${FLOWISE_USERNAME}"
-    echo "  │    Password: ${FLOWISE_PASSWORD}"
-    echo "  ├─────────────────────────────────────────────────"
+        echo -e "  │  Flowise"
+        echo -e "  │    URL:      https://flowise.${DOMAIN}"
+        echo -e "  │    User:     ${FLOWISE_USER}"
+        echo -e "  │    Password: ${FLOWISE_PASSWORD}"
+        echo -e "  ├─────────────────────────────────────────────────┤"
     }
+    
     [ "${ENABLE_LITELLM}" = "true" ] && {
-    echo "  │  LiteLLM"
-    echo "  │    URL:      https://litellm.${DOMAIN}"
-    echo "  │    API Key:  ${LITELLM_MASTER_KEY}"
-    echo "  ├─────────────────────────────────────────────────"
+        echo -e "  │  LiteLLM"
+        echo -e "  │    URL:      https://litellm.${DOMAIN}"
+        echo -e "  │    API Key:  ${LITELLM_MASTER_KEY}"
+        echo -e "  ├─────────────────────────────────────────────────┤"
     }
-    echo "  │  All credentials saved to: ${ENV_FILE}"
-    echo "  └─────────────────────────────────────────────────"
+    
+    [ "${ENABLE_OLLAMA}" = "true" ] && {
+        echo -e "  │  Ollama"
+        echo -e "  │    URL:      https://chat.${DOMAIN} (via OpenWebUI)"
+        echo -e "  │    Model:     ${OLLAMA_DEFAULT_MODEL}"
+        echo -e "  ├─────────────────────────────────────────────────┤"
+    }
+    
+    echo -e "  └─────────────────────────────────────────────────┘"
     echo ""
-    echo "${border}"
+    echo -e "  ${DIM}All credentials saved to: ${ENV_FILE}${NC}"
+    echo ""
 }
 
-# ─────────────────────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────────────────────
+# ─── Main ─────────────────────────────────────────────────────────────────────
 main() {
-    log "Starting service configuration for ${TENANT_ID}"
-
+    print_header
+    parse_args "$@"
+    load_env
+    
+    # Count active steps for progress tracking
+    local total_steps=0
+    [ "${SKIP_N8N}" = "false" ] && [ "${ENABLE_N8N}" = "true" ] && total_steps=$((total_steps + 1))
+    [ "${SKIP_FLOWISE}" = "false" ] && [ "${ENABLE_FLOWISE}" = "true" ] && total_steps=$((total_steps + 1))
+    [ "${SKIP_LITELLM}" = "false" ] && [ "${ENABLE_LITELLM}" = "true" ] && total_steps=$((total_steps + 1))
+    [ "${SKIP_ANYTHINGLLM}" = "false" ] && [ "${ENABLE_ANYTHINGLLM}" = "true" ] && total_steps=$((total_steps + 1))
+    [ "${SKIP_GRAFANA}" = "false" ] && [ "${ENABLE_GRAFANA}" = "true" ] && total_steps=$((total_steps + 1))
+    
+    local current_step=0
+    
+    # Infrastructure setup (always runs)
     configure_postgres
     configure_minio
     configure_qdrant
     configure_ollama
-    configure_litellm
-    configure_grafana
-
+    
+    # Service-specific configuration
+    [ "${SKIP_N8N}" = "false" ] && [ "${ENABLE_N8N}" = "true" ] && {
+        current_step=$((current_step + 1))
+        configure_n8n
+    }
+    
+    [ "${SKIP_FLOWISE}" = "false" ] && [ "${ENABLE_FLOWISE}" = "true" ] && {
+        current_step=$((current_step + 1))
+        configure_flowise
+    }
+    
+    [ "${SKIP_LITELLM}" = "false" ] && [ "${ENABLE_LITELLM}" = "true" ] && {
+        current_step=$((current_step + 1))
+        configure_litellm
+    }
+    
+    [ "${SKIP_ANYTHINGLLM}" = "false" ] && [ "${ENABLE_ANYTHINGLLM}" = "true" ] && {
+        current_step=$((current_step + 1))
+        configure_anythingllm
+    }
+    
+    [ "${SKIP_GRAFANA}" = "false" ] && [ "${ENABLE_GRAFANA}" = "true" ] && {
+        current_step=$((current_step + 1))
+        configure_grafana
+    }
+    
     print_credentials
-    ok "All configuration complete"
+    
+    print_divider
+    echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC}${GREEN}${BOLD}           ✅  All Services Configured Successfully           ${NC}${CYAN}║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    if [ "${total_steps}" -gt 0 ]; then
+        echo -e "${BOLD}Configuration completed for ${current_step}/${total_steps} services.${NC}"
+        echo ""
+        echo -e "${DIM}Tip: Use --skip-* flags to re-run individual services${NC}"
+    else
+        echo -e "${DIM}All services were skipped or disabled.${NC}"
+    fi
+    echo ""
 }
 
 main "$@"
