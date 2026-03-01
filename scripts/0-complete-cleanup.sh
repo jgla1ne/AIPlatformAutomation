@@ -1,323 +1,48 @@
 #!/usr/bin/env bash
-# SYSTEMATIC Nuclear Cleanup - Removes ALL AI Platform remnants
-# Automatically detects and cleans selected tenant containers
-
+# 0-complete-cleanup.sh
+# Full wipe for a tenant — containers, networks, volumes, EBS data
+# Usage: sudo bash scripts/0-complete-cleanup.sh [--keep-data]
 set -euo pipefail
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'; BOLD='\033[1m'
+TENANT_UID=$(id -u)
+TENANT_ID="u${TENANT_UID}"
+DATA_ROOT="/mnt/data/${TENANT_ID}"
+COMPOSE_PROJECT_NAME="aip-${TENANT_ID}"
+DOCKER_NETWORK="${COMPOSE_PROJECT_NAME}_net"
+KEEP_DATA=false
 
-# ── STRUCTURED LOGGING ───────────────────────────────────────────────────────
-LOG_FILE="/tmp/script-0-cleanup-$(date +%Y%m%d-%H%M%S).log"
-exec > >(tee -a "${LOG_FILE}") 2>&1
-# ── END LOGGING ─────────────────────────────────────────────────────────────
+[[ "${1:-}" == "--keep-data" ]] && KEEP_DATA=true
 
-log()  { echo -e "${BLUE}[CLEANUP]${NC} $*"; }
-ok()   { echo -e "${GREEN}✅${NC} $*"; }
-warn() { echo -e "${YELLOW}⚠️ ${NC} $*"; }
-err()  { echo -e "${RED}❌${NC} $*"; }
+echo "WARNING: This will destroy all containers, networks, volumes for ${TENANT_ID}"
+[ "${KEEP_DATA}" = "false" ] && \
+    echo "AND wipe all data under ${DATA_ROOT}"
+read -r -p "Type tenant ID to confirm [${TENANT_ID}]: " confirm
+[ "${confirm}" != "${TENANT_ID}" ] && { echo "Aborted"; exit 0; }
 
-if [[ $EUID -ne 0 ]]; then
-  echo "Run as root: sudo $0"; exit 1
+# Stop + remove all tenant containers
+docker ps -aq --filter "name=${COMPOSE_PROJECT_NAME}" | \
+    xargs -r docker rm -f 2>/dev/null || true
+
+# Remove all tenant networks
+docker network ls --filter "name=${COMPOSE_PROJECT_NAME}" -q | \
+    xargs -r docker network rm 2>/dev/null || true
+
+# Remove named volumes
+docker volume ls --filter "name=${COMPOSE_PROJECT_NAME}" -q | \
+    xargs -r docker volume rm 2>/dev/null || true
+
+# Prune dangling networks (safe)
+docker network prune -f 2>/dev/null || true
+
+# Wipe EBS data (only if not --keep-data)
+if [ "${KEEP_DATA}" = "false" ]; then
+    echo "Wiping ${DATA_ROOT}..."
+    rm -rf "${DATA_ROOT}"
+    echo "Done — ${DATA_ROOT} removed"
+else
+    echo "Data preserved at ${DATA_ROOT}"
+    echo "Compose file removed (will be regenerated)"
+    rm -f "${DATA_ROOT}/docker-compose.yml"
 fi
 
-# ── DISCOVER TENANTS ───────────────────────────────────────────────────────
-discover_tenants() {
-  local tenants=()
-  
-  # Find tenants by looking for .env files
-  while IFS= read -r env_file; do
-    local tenant_dir="$(dirname "$env_file")"
-    local tenant_name="$(basename "$tenant_dir")"
-    [[ "$tenant_name" =~ ^u[0-9]+$ ]] && tenants+=("$tenant_name")
-  done < <(find /mnt/data -maxdepth 2 -name ".env" 2>/dev/null)
-  
-  # Also check for running containers to find orphaned tenants
-  while IFS= read -r container; do
-    local name="${container#aip-}"
-    [[ "$name" =~ ^u[0-9]+$ ]] && tenants+=("$name")
-  done < <(docker ps --format "{{.Names}}" | grep "^aip-u" | sed 's/^aip-//' 2>/dev/null)
-  
-  # Remove duplicates
-  printf '%s\n' "${tenants[@]}" | sort -u
-}
-
-# ── DOCKER COMPOSE CLEANUP ───────────────────────────────────────────────────
-docker_compose_cleanup() {
-  local tenant="$1"
-  local project="aip-${tenant}"
-  local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  local compose_file="${script_dir}/../docker-compose.yml"
-  
-  if [[ -f "$compose_file" ]]; then
-    log "Running docker compose down for ${project}..."
-    # Set environment variables for compose
-    export COMPOSE_PROJECT_NAME="$project"
-    export DATA_ROOT="/mnt/data/${tenant}"
-    
-    docker compose -f "$compose_file" \
-      --project-name "$project" \
-      down --volumes --remove-orphans --timeout 30 2>/dev/null || true
-    ok "Docker compose down completed"
-  fi
-  
-  # Prune any remaining networks
-  docker network prune -f 2>/dev/null || true
-}
-
-# ── SELECT TENANT ───────────────────────────────────────────────────────
-select_tenant() {
-  local tenants=($(discover_tenants))
-  
-  if [[ ${#tenants[@]} -eq 0 ]]; then
-    echo -e "${YELLOW}No AI Platform tenants found.${NC}"
-    echo "All containers, networks, and volumes appear to be clean."
-    exit 0
-  fi
-  
-  echo -e "${CYAN}${BOLD}Discovered Tenants:${NC}"
-  echo ""
-  for i in "${!tenants[@]}"; do
-    local tenant="${tenants[$i]}"
-    local container_count=$(docker ps --filter "name=aip-${tenant}" --format "{{.Names}}" | wc -l)
-    echo "  $((i+1)). $tenant ($container_count containers running)"
-  done
-  echo ""
-  
-  if [[ ${#tenants[@]} -eq 1 ]]; then
-    echo "Auto-selecting single tenant: ${tenants[0]}"
-    SELECTED_TENANT="${tenants[0]}"
-  else
-    echo -e "${YELLOW}Select tenant to clean (1-${#tenants[@]}):${NC}"
-    read -p "Enter number: " selection
-    
-    if [[ "$selection" =~ ^[0-9]+$ ]] && [[ $selection -ge 1 ]] && [[ $selection -le ${#tenants[@]} ]]; then
-      SELECTED_TENANT="${tenants[$((selection-1))]}"
-    else
-      echo "Invalid selection. Aborting."
-      exit 1
-    fi
-  fi
-  
-  echo -e "${CYAN}Selected tenant: ${SELECTED_TENANT}${NC}"
-}
-
-# ── SYSTEMATIC CONTAINER CLEANUP ───────────────────────────────────────
-cleanup_containers() {
-  local tenant="$1"
-  local project="aip-${tenant}"
-  
-  log "Phase 1: Systematic container cleanup for ${tenant}..."
-  
-  # Get all containers for this tenant (including those not matching naming convention)
-  local containers=()
-  while IFS= read -r container; do
-    containers+=("$container")
-  done < <(docker ps -a --format "{{.Names}}" | grep -E "(aip-${tenant}|${project})" || true)
-  
-  if [[ ${#containers[@]} -eq 0 ]]; then
-    log "No containers found for tenant ${tenant}"
-    return 0
-  fi
-  
-  log "Found ${#containers[@]} containers to clean"
-  
-  # Force stop all containers
-  for container in "${containers[@]}"; do
-    log "  Stopping: $container"
-    docker stop "$container" 2>/dev/null || true
-  done
-  
-  # Force remove all containers
-  for container in "${containers[@]}"; do
-    log "  Removing: $container"
-    docker rm -f "$container" 2>/dev/null || true
-  done
-  
-  ok "All containers for ${tenant} removed"
-}
-
-# ── NETWORK-BASED CONTAINER CLEANUP ───────────────────────────────────
-# Remove ALL containers attached to project network (catches unprefixed names)
-cleanup_network_containers() {
-  local tenant="$1"
-  local project="aip-${tenant}"
-  
-  if docker network inspect "${project}_net" &>/dev/null; then
-    NETWORK_CONTAINERS=$(docker network inspect "${project}_net" \
-        --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null)
-    if [ -n "${NETWORK_CONTAINERS}" ]; then
-      log "Removing containers on ${project}_net: ${NETWORK_CONTAINERS}"
-      echo "${NETWORK_CONTAINERS}" | xargs -r docker rm -f 2>/dev/null || true
-    fi
-  fi
-}
-
-# ── SYSTEMATIC NETWORK CLEANUP ───────────────────────────────────────
-cleanup_networks() {
-  local tenant="$1"
-  local project="aip-${tenant}"
-  
-  log "Phase 2: Systematic network cleanup for ${tenant}..."
-  
-  # Get all networks related to this tenant
-  local networks=()
-  while IFS= read -r network; do
-    networks+=("$network")
-  done < <(docker network ls --format "{{.Name}}" | grep -E "(aip-${tenant}|${project})" || true)
-  
-  if [[ ${#networks[@]} -eq 0 ]]; then
-    log "No networks found for tenant ${tenant}"
-    return 0
-  fi
-  
-  log "Found ${#networks[@]} networks to clean"
-  
-  # Force disconnect all containers from networks first
-  for network in "${networks[@]}"; do
-    log "  Disconnecting containers from: $network"
-    while IFS= read -r container; do
-      docker network disconnect -f "$network" "$container" 2>/dev/null || true
-    done < <(docker network inspect "$network" --format '{{range .Containers}}{{.Name}}{{end}}' 2>/dev/null || true)
-  done
-  
-  # Remove networks
-  for network in "${networks[@]}"; do
-    log "  Removing: $network"
-    docker network rm -f "$network" 2>/dev/null || true
-  done
-  
-  ok "All networks for ${tenant} removed"
-}
-
-# ── SYSTEMATIC VOLUME CLEANUP ───────────────────────────────────────────
-cleanup_volumes() {
-  local tenant="$1"
-  local project="aip-${tenant}"
-  
-  log "Phase 3: Systematic volume cleanup for ${tenant}..."
-  
-  # Get all volumes related to this tenant
-  local volumes=()
-  while IFS= read -r volume; do
-    volumes+=("$volume")
-  done < <(docker volume ls --format "{{.Name}}" | grep -E "(aip-${tenant}|${project})" || true)
-  
-  if [[ ${#volumes[@]} -eq 0 ]]; then
-    log "No volumes found for tenant ${tenant}"
-    return 0
-  fi
-  
-  log "Found ${#volumes[@]} volumes to clean"
-  
-  # Remove volumes
-  for volume in "${volumes[@]}"; do
-    log "  Removing: $volume"
-    docker volume rm -f "$volume" 2>/dev/null || true
-  done
-  
-  ok "All volumes for ${tenant} removed"
-}
-
-# ── SYSTEMATIC DATA CLEANUP ─────────────────────────────────────────────
-cleanup_data() {
-  local tenant="$1"
-  local tenant_dir="/mnt/data/${tenant}"
-  
-  log "Phase 4: Systematic data cleanup for ${tenant}..."
-  
-  if [[ -d "$tenant_dir" ]]; then
-    log "Removing tenant directory: $tenant_dir"
-    rm -rf "$tenant_dir"
-    ok "Tenant data directory removed"
-  else
-    log "No tenant data directory found: $tenant_dir"
-  fi
-}
-
-# ── SYSTEMATIC STATE CLEANUP ───────────────────────────────────────────
-cleanup_state() {
-  log "Phase 5: Systematic state cleanup..."
-  
-  # Remove state files
-  if [[ -d "/mnt/data/metadata" ]]; then
-    log "Removing metadata directory"
-    rm -rf "/mnt/data/metadata"
-  fi
-  
-  # Remove env pointer
-  if [[ -f "/etc/ai-platform/env-pointer" ]]; then
-    log "Removing environment pointer"
-    rm -f "/etc/ai-platform/env-pointer"
-  fi
-  
-  ok "All state files removed"
-}
-
-# ── FINAL DOCKER CLEANUP ───────────────────────────────────────────────
-final_cleanup() {
-  log "Phase 6: Final Docker cleanup..."
-  
-  # Prune everything
-  docker system prune -af --volumes >/dev/null 2>&1 || true
-  docker network prune -f >/dev/null 2>&1 || true
-  
-  ok "Docker system cleanup complete"
-}
-
-# ── VERIFICATION ───────────────────────────────────────────────────────────
-verify_cleanup() {
-  local tenant="$1"
-  local project="aip-${tenant}"
-  
-  log "Phase 7: Verification..."
-  
-  local remaining_containers=$(docker ps -a --format "{{.Names}}" | grep -E "(aip-${tenant}|${project})" | wc -l)
-  local remaining_networks=$(docker network ls --format "{{.Name}}" | grep -E "(aip-${tenant}|${project})" | wc -l)
-  local remaining_volumes=$(docker volume ls --format "{{.Name}}" | grep -E "(aip-${tenant}|${project})" | wc -l)
-  
-  if [[ $remaining_containers -eq 0 ]] && [[ $remaining_networks -eq 0 ]] && [[ $remaining_volumes -eq 0 ]]; then
-    ok "✅ Verification passed - ${tenant} completely cleaned"
-  else
-    warn "⚠️ Some resources may remain:"
-    [[ $remaining_containers -gt 0 ]] && warn "  - $remaining_containers containers"
-    [[ $remaining_networks -gt 0 ]] && warn "  - $remaining_networks networks"
-    [[ $remaining_volumes -gt 0 ]] && warn "  - $remaining_volumes volumes"
-  fi
-}
-
-# ── MAIN EXECUTION ───────────────────────────────────────────────────────
-main() {
-  echo -e "${RED}${BOLD}════════════════════════════════════════════════════════════════════${NC}"
-  echo -e "${RED}${BOLD}  🧹 SYSTEMATIC NUCLEAR CLEANUP 🧹${NC}"
-  echo -e "${RED}${BOLD}════════════════════════════════════════════════════════════════════${NC}"
-  echo ""
-  
-  select_tenant
-  echo ""
-  echo -e "${YELLOW}Starting systematic cleanup of ${SELECTED_TENANT}...${NC}"
-  echo ""
-  
-  # Phase 0: Docker Compose Cleanup (most important first)
-  docker_compose_cleanup "$SELECTED_TENANT"
-  
-  cleanup_containers "$SELECTED_TENANT"
-  cleanup_network_containers "$SELECTED_TENANT"
-  cleanup_networks "$SELECTED_TENANT"
-  cleanup_volumes "$SELECTED_TENANT"
-  cleanup_data "$SELECTED_TENANT"
-  cleanup_state
-  final_cleanup
-  verify_cleanup "$SELECTED_TENANT"
-  
-  echo ""
-  echo -e "${GREEN}${BOLD}════════════════════════════════════════════════════════════════════${NC}"
-  echo -e "${GREEN}${BOLD}  ✅ SYSTEMATIC CLEANUP COMPLETE ✅${NC}"
-  echo -e "${GREEN}${BOLD}════════════════════════════════════════════════════════════════════${NC}"
-  echo ""
-  log "Tenant ${SELECTED_TENANT} has been completely removed"
-  log "You can now run script 1 for a fresh deployment"
-}
-
-# Run main function
-main "$@"
+echo "Cleanup complete for ${TENANT_ID}"
