@@ -440,6 +440,7 @@ VECTOR_DB_HOST=${VECTOR_DB_HOST}
 VECTOR_DB_PORT=${VECTOR_DB_PORT}
 VECTOR_DB_URL=${VECTOR_DB_URL}
 ENABLE_QDRANT=${ENABLE_QDRANT}
+QDRANT_API_KEY=
 
 # ═════════════════════════════════════════════════════════════
 # HOST PORT MAPPINGS (each defined exactly once)

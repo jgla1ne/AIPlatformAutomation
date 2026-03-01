@@ -90,6 +90,46 @@ teardown_existing() {
     log "Teardown complete"
 }
 
+# ── Pre-flight Checks ───────────────────────────────────────────────
+preflight_checks() {
+    log "INFO" "Running pre-flight checks..."
+
+    # Check ports 80 and 443 are not already bound
+    for port in 80 443; do
+        if ss -tlnp 2>/dev/null | grep -q ":${port} "; then
+            log "ERROR" "Port ${port} already in use — Caddy cannot start"
+            log "ERROR" "Run: sudo ss -tlnp | grep :${port} to identify process"
+            exit 1
+        fi
+    done
+
+    # Check DNS resolves to this machine (warn only, not fail)
+    local public_ip
+    public_ip=$(curl -sf --max-time 5 https://api.ipify.org || \
+                curl -sf --max-time 5 http://checkip.amazonaws.com || \
+                echo "unknown")
+
+    if [ "${public_ip}" != "unknown" ]; then
+        log "INFO" "Public IP: ${public_ip}"
+        log "WARN" "Ensure DNS A records point to ${public_ip} before Caddy starts"
+        log "WARN" "Ensure EC2 security group allows inbound port 80 and 443"
+    fi
+
+    # Check Docker daemon is running
+    if ! docker info &>/dev/null; then
+        log "ERROR" "Docker daemon not running"
+        exit 1
+    fi
+
+    # Check EBS mount
+    if ! mountpoint -q /mnt; then
+        log "ERROR" "/mnt is not a mount point — EBS not attached"
+        exit 1
+    fi
+
+    log "SUCCESS" "Pre-flight checks passed"
+}
+
 # ── Directory Setup ───────────────────────────────────────────────
 setup_directories() {
     local dirs=(
@@ -229,6 +269,7 @@ append_postgres() {
       - POSTGRES_DB=${POSTGRES_DB}
     volumes:
       - ${COMPOSE_PROJECT_NAME}_postgres_data:/var/lib/postgresql/data
+      - ${DATA_ROOT}/postgres/init:/docker-entrypoint-initdb.d:ro
     networks:
       - ${DOCKER_NETWORK}
     healthcheck:
@@ -268,6 +309,23 @@ EOF
 # CADDY
 # ─────────────────────────────────────────────────────────────
 append_caddy() {
+    # Build depends_on block dynamically
+    local depends=""
+    [ "${ENABLE_OPENWEBUI}" = "true" ] && \
+        depends+=$'      open-webui:\n        condition: service_healthy\n'
+    [ "${ENABLE_ANYTHINGLLM}" = "true" ] && \
+        depends+=$'      anythingllm:\n        condition: service_healthy\n'
+    [ "${ENABLE_N8N}" = "true" ] && \
+        depends+=$'      n8n:\n        condition: service_healthy\n'
+    [ "${ENABLE_DIFY}" = "true" ] && \
+        depends+=$'      dify-api:\n        condition: service_healthy\n'
+    [ "${ENABLE_FLOWISE}" = "true" ] && \
+        depends+=$'      flowise:\n        condition: service_healthy\n'
+    [ "${ENABLE_LITELLM}" = "true" ] && \
+        depends+=$'      litellm:\n        condition: service_healthy\n'
+    [ "${ENABLE_GRAFANA}" = "true" ] && \
+        depends+=$'      grafana:\n        condition: service_healthy\n'
+
     compose_append << EOF
 
   caddy:
@@ -285,12 +343,18 @@ append_caddy() {
       - ${COMPOSE_PROJECT_NAME}_caddy_data:/config
     networks:
       - ${DOCKER_NETWORK}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+$(echo "${depends}")
     healthcheck:
       test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 60s
 EOF
 }
 
@@ -366,6 +430,28 @@ EOF
       - video
 EOF
     fi
+}
+
+# ─────────────────────────────────────────────────────────────
+# ── PostgreSQL Init Script Generator ────────────────────────────────
+generate_postgres_init() {
+    local init_dir="${DATA_ROOT}/postgres/init"
+    mkdir -p "${init_dir}"
+
+    cat > "${init_dir}/01-create-databases.sh" << EOF
+#!/bin/bash
+set -e
+psql -v ON_ERROR_STOP=1 --username "${POSTGRES_USER}" << EOSQL
+    CREATE DATABASE litellm;
+    CREATE DATABASE n8n;
+    CREATE DATABASE dify;
+    CREATE DATABASE openwebui;
+EOSQL
+EOF
+
+    chmod +x "${init_dir}/01-create-databases.sh"
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${init_dir}"
+    log "SUCCESS" "Postgres init scripts created"
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -494,6 +580,12 @@ append_openwebui() {
       - OPENAI_API_KEY=${LITELLM_MASTER_KEY}
       - WEBUI_SECRET_KEY=${ANYTHINGLLM_JWT_SECRET}
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      # Vector DB connection
+      - VECTOR_DB=qdrant
+      - QDRANT_URI=http://qdrant:6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+      - ENABLE_SIGNUP=false
+      - DEFAULT_USER_ROLE=user
     volumes:
       - ${DATA_ROOT}/openwebui:/app/backend/data
     networks:
@@ -524,11 +616,14 @@ append_anythingllm() {
       - SERVER_PORT=3001
       - STORAGE_DIR=/app/server/storage
       - JWT_SECRET=${ANYTHINGLLM_JWT_SECRET}
+      # Vector DB connection
+      - VECTOR_DB=${VECTOR_DB}
+      - QDRANT_ENDPOINT=${VECTOR_DB_URL}
+      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+      # LLM connection via LiteLLM
       - LLM_PROVIDER=litellm
       - LITELLM_BASE_URL=http://litellm:4000
       - LITELLM_API_KEY=${LITELLM_MASTER_KEY}
-      - VECTOR_DB=${VECTOR_DB}
-      - QDRANT_ENDPOINT=${VECTOR_DB_URL}
       - EMBEDDING_ENGINE=ollama
       - OLLAMA_BASE_PATH=http://ollama:11434
       - EMBEDDING_MODEL_PREF=nomic-embed-text:latest
@@ -979,7 +1074,7 @@ append_signal() {
     restart: unless-stopped
     user: "${TENANT_UID}:${TENANT_GID}"
     ports:
-      - "${SIGNAL_PORT}:8080"
+      - "${SIGNAL_PORT}:8080"   # ALWAYS 8080 internal - never ${SIGNAL_PORT}:${SIGNAL_PORT}
     environment:
       - MODE=native
       - AUTO_RECEIVE_SCHEDULE=0 * * * *
@@ -1241,6 +1336,59 @@ deploy_stack() {
 }
 
 # ─────────────────────────────────────────────────────────────
+# ── Tailscale IP Output ───────────────────────────────────────────────
+output_tailscale_info() {
+    [ "${ENABLE_TAILSCALE}" = "true" ] || return 0
+
+    log "INFO" "Waiting for Tailscale to authenticate..."
+    local max_wait=60
+    local elapsed=0
+
+    while [ ${elapsed} -lt ${max_wait} ]; do
+        local ts_ip
+        ts_ip=$(docker exec "${COMPOSE_PROJECT_NAME}-tailscale" \
+            tailscale ip -4 2>/dev/null || echo "")
+
+        if [ -n "${ts_ip}" ] && [ "${ts_ip}" != "127.0.0.1" ]; then
+            log "SUCCESS" "Tailscale IP: ${ts_ip}"
+
+            # Write to .env for script 3 and 4 to use
+            if grep -q "^TAILSCALE_IP=" "${ENV_FILE}"; then
+                sed -i "s|^TAILSCALE_IP=.*|TAILSCALE_IP=${ts_ip}|" "${ENV_FILE}"
+            else
+                echo "TAILSCALE_IP=${ts_ip}" >> "${ENV_FILE}"
+            fi
+
+            # Print access URLs
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo " TAILSCALE ACCESS URLS"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            [ "${ENABLE_OPENCLAW}" = "true" ] && \
+                echo " OpenClaw  : http://${ts_ip}:${OPENCLAW_PORT}"
+            [ "${ENABLE_OPENWEBUI}" = "true" ] && \
+                echo " OpenWebUI : http://${ts_ip}:${OPENWEBUI_PORT}"
+            [ "${ENABLE_N8N}" = "true" ] && \
+                echo " n8n       : http://${ts_ip}:${N8N_PORT}"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            
+            # Export for subsequent functions
+            export TAILSCALE_IP="${ts_ip}"
+            return 0
+        fi
+
+        sleep 5
+        elapsed=$((elapsed + 5))
+        log "INFO" "Waiting for Tailscale IP... (${elapsed}s/${max_wait}s)"
+    done
+
+    log "WARN" "Tailscale did not authenticate within ${max_wait}s"
+    log "WARN" "Check auth key: docker logs ${COMPOSE_PROJECT_NAME}-tailscale"
+    log "WARN" "Manual check: docker exec ${COMPOSE_PROJECT_NAME}-tailscale tailscale ip -4"
+}
+
+# ─────────────────────────────────────────────────────────────
 # CAPTURE TAILSCALE IP POST-STARTUP
 # ─────────────────────────────────────────────────────────────
 capture_tailscale_ip() {
@@ -1264,12 +1412,10 @@ capture_tailscale_ip() {
             sleep 5
         done
 
-        [ -z "${ts_ip}" ] && log "WARN: Tailscale did not authenticate within 150s"
     fi
 }
 
-# ─────────────────────────────────────────────────────────────
-# WAIT FOR HEALTHY
+# ── WAIT FOR HEALTHY
 # ─────────────────────────────────────────────────────────────
 wait_for_healthy() {
     log "Waiting for services to become healthy (max 5 min)..."
@@ -1316,6 +1462,9 @@ main() {
     # Guards
     check_tailscale_auth
 
+    # Pre-flight checks (ports, DNS, Docker, EBS)
+    preflight_checks
+
     # Teardown (idempotent)
     teardown_existing
 
@@ -1323,16 +1472,18 @@ main() {
     setup_directories
 
     # Generate configs
-    generate_compose
-    generate_caddyfile
+    generate_postgres_init
     generate_prometheus_config
     generate_litellm_config
+    generate_compose
+    generate_caddyfile
 
     # Deploy
     deploy_stack
 
     # Post-startup tasks
-    capture_tailscale_ip
+    output_tailscale_info   # Must be BEFORE print_access_urls
+    verify_deployment       # Health table
     wait_for_healthy
 
     # Print summary
