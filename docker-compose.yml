@@ -271,8 +271,8 @@ services:
       test: ["CMD-SHELL", "curl -sf http://localhost:5678/healthz || exit 1"]
       interval: 20s
       timeout: 10s
-      retries: 8
-      start_period: 60s
+      retries: 5
+      start_period: 120s
 
   flowise:
     image: flowiseai/flowise:latest
