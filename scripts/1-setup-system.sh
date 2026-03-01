@@ -132,32 +132,38 @@ detect_and_mount_ebs() {
     echo ""
 
     # List available block devices
-    echo -e "  ${BOLD}Available Block Devices:${NC}"
-    lsblk -d -o NAME,SIZE,TYPE,MOUNTPOINT | grep -E "^nvme|^xvd|^sd" | while read -r line; do
-        echo -e "  ${CYAN}    ${line}${NC}"
-    done
+    echo -e "  ${BOLD}Available EBS Volumes:${NC}"
+    echo -e "  ${DIM}Scanning for EBS volumes (nvme*, xvd*, sd*)${NC}"
     echo ""
-
-    # Find unmounted EBS volumes
-    local unmounted_volumes=()
-    while IFS= read -r device; do
-        if ! lsblk -n -o MOUNTPOINT "${device}" | grep -q "."; then
-            unmounted_volumes+=("${device}")
+    
+    # Get EBS volumes using lsblk with size information
+    local ebs_volumes=()
+    while IFS= read -r device size type mountpoint; do
+        # Only include EBS volumes (nvme, xvd, sd) and exclude mounted root volumes
+        if [[ "${device}" =~ ^(nvme|xvd|sd) ]] && [[ "${type}" == "disk" ]] && [[ -z "${mountpoint}" || "${mountpoint}" == "/" ]]; then
+            ebs_volumes+=("${device} ${size}")
         fi
-    done < <(lsblk -d -n -o NAME | grep -E "^nvme|^xvd|^sd")
-
-    if [ ${#unmounted_volumes[@]} -eq 0 ]; then
+    done < <(lsblk -d -o NAME,SIZE,TYPE,MOUNTPOINT 2>/dev/null)
+    
+    if [ ${#ebs_volumes[@]} -eq 0 ]; then
         log "INFO" "No unmounted EBS volumes found"
         return
     fi
-
+    
     echo -e "  ${BOLD}Unmounted EBS Volumes:${NC}"
     local idx=0
-    for volume in "${unmounted_volumes[@]}"; do
-        size=$(lsblk -d -n -o SIZE "/dev/${volume}")
-        echo -e "  ${CYAN}  $((++idx))${NC}  /dev/${volume}  ${DIM}(${size})${NC}"
+    for volume in "${ebs_volumes[@]}"; do
+        echo -e "  ${CYAN}  $((++idx))${NC}  ${volume}"
     done
     echo ""
+    
+    echo -e "  ${BOLD}Mounted EBS Volumes:${NC}"
+    idx=0
+    while IFS= read -r device size type mountpoint; do
+        if [[ "${device}" =~ ^(nvme|xvd|sd) ]] && [[ "${type}" == "disk" ]] && [[ -n "${mountpoint}" ]] && [[ "${mountpoint}" != "/" ]]; then
+            echo -e "  ${GREEN}  ✓${NC}  ${device} ${size} → ${mountpoint}"
+        fi
+    done < <(lsblk -d -o NAME,SIZE,TYPE,MOUNTPOINT 2>/dev/null)
 
     # Ask user to select volume to mount
     while true; do
@@ -626,7 +632,29 @@ collect_network_config() {
     echo -e "  ${DIM}Bridge Signal messaging to web API${NC}"
     echo ""
     read -p "  ➤ Signal phone number (with country code, e.g. +1234567890): " SIGNAL_PHONE_NUMBER
-    read -p "  ➤ Signal verification code (leave blank to generate): " SIGNAL_VERIFICATION_CODE
+    
+    echo ""
+    echo -e "  ${DIM}Signal verification options:${NC}"
+    echo -e "  ${CYAN}  1)${NC} Generate verification code (recommended)"
+    echo -e "  ${CYAN} 2)${NC} Enter existing verification code"
+    echo -e "  ${CYAN}  3)${NC} Skip Signal API setup"
+    echo ""
+    read -p "  ➤ Select verification method [1-3]: " signal_verify_method
+    
+    case "${signal_verify_method}" in
+        1)
+            echo -e "  ${DIM}Verification code will be generated automatically after Signal API starts${NC}"
+            SIGNAL_VERIFICATION_CODE=""
+            ;;
+        2)
+            read -p "  ➤ Enter verification code: " SIGNAL_VERIFICATION_CODE
+            ;;
+        3)
+            echo -e "  ${DIM}Skipping Signal API setup${NC}"
+            SIGNAL_PHONE_NUMBER=""
+            SIGNAL_VERIFICATION_CODE=""
+            ;;
+    esac
 
     print_divider
 
@@ -651,9 +679,10 @@ collect_network_config() {
     echo -e "  ${CYAN}  1)${NC} Brave Search API"
     echo -e "  ${CYAN}  2)${NC} SerpApi (Google/Bing/etc)"
     echo -e "  ${CYAN}  3)${NC} Custom search endpoint"
-    echo -e "  ${CYAN}  4)${NC} Skip search APIs"
+    echo -e "  ${CYAN}  4)${NC} Multiple providers"
+    echo -e "  ${CYAN}  5)${NC} Skip search APIs"
     echo ""
-    read -p "  ➤ Select search provider [1-4]: " search_provider
+    read -p "  ➤ Select search provider [1-5]: " search_provider
 
     case "${search_provider}" in
         1)
@@ -672,6 +701,14 @@ collect_network_config() {
             SEARCH_PROVIDER="custom"
             ;;
         4)
+            echo -e "  ${DIM}Multiple providers configuration:${NC}"
+            read -p "  ➤ Brave Search API key: " BRAVE_API_KEY
+            read -p "  ➤ SerpApi key: " SERPAPI_KEY
+            read -p "  ➤ SerpApi engine [google]: " SERPAPI_ENGINE
+            SERPAPI_ENGINE="${SERPAPI_ENGINE:-google}"
+            SEARCH_PROVIDER="multiple"
+            ;;
+        5)
             SEARCH_PROVIDER="none"
             ;;
     esac
@@ -680,13 +717,79 @@ collect_network_config() {
 
     # Proxy Configuration
     echo -e "  ${BOLD}🌍  Proxy Configuration${NC}"
-    echo -e "  ${DIM}Configure proxy settings for external API access${NC}"
+    echo -e "  ${DIM}Configure reverse proxy settings for external access${NC}"
     echo ""
-    read -p "  ➤ Enable HTTP proxy? [y/N]: " enable_proxy
+    read -p "  ➤ Enable reverse proxy? [y/N]: " enable_proxy
     if [[ "${enable_proxy,,}" == "y" ]]; then
-        read -p "  ➤ HTTP proxy URL (e.g. http://proxy.example.com:8080): " HTTP_PROXY
-        read -p "  ➤ HTTPS proxy URL (e.g. http://proxy.example.com:8080): " HTTPS_PROXY
-        read -p "  ➤ No proxy domains (comma-separated): " NO_PROXY
+        echo -e "  ${CYAN}  1)${NC} Caddy (built-in, recommended)"
+        echo -e "  ${CYAN}  2)${NC} Nginx (high performance)"
+        echo -e "  ${CYAN}   ${CYAN} 3)${NC} Traefik (automatic discovery)"
+        echo -e "  ${CYAN}  4)${NC} Custom proxy"
+        echo ""
+        read -p "  ➤ Select proxy type [1-4]: " proxy_type
+        
+        case "${proxy_type}" in
+            1) 
+                PROXY_TYPE="caddy"
+                echo -e "  ${DIM}Using Caddy as reverse proxy${NC}"
+                ;;
+            2) 
+                PROXY_TYPE="nginx"
+                echo -e "  ${DIM}Using Nginx as reverse proxy${NC}"
+                ;;
+            3) 
+                PROXY_TYPE="traefik"
+                echo -e "  ${DIM}Using Traefik as reverse proxy${NC}"
+                ;;
+            4) 
+                read -p "  ➤ Custom proxy image: " CUSTOM_PROXY_IMAGE
+                PROXY_TYPE="custom"
+                ;;
+        esac
+        
+        echo ""
+        echo -e "  ${BOLD}🔄  Routing Method${NC}"
+        echo -e "  ${CYAN}  1)${NC} Direct port mapping (simple)"
+        echo -e "  ${CYAN}  2)${NC} Subdomain routing (recommended)"
+        echo -e "  ${CYAN}  3)${CN}  Path-based routing"
+        echo ""
+        read -p "  ➤ Select routing method [1-3]: " routing_method
+        
+        case "${routing_method}" in
+            1) ROUTING_METHOD="direct" ;;
+            2) ROUTING_METHOD="subdomain" ;;
+            3) ROUTING_METHOD="path" ;;
+        esac
+        
+        echo ""
+        echo -e "  ${BOLD}🔒  SSL Certificate Method${NC}"
+        echo -e "  ${CYAN}  1)${NC} Let's Encrypt (automatic, requires DNS)"
+        echo -e "  ${CYAN}  2)${NC} Self-signed (quick, no DNS needed)"
+        echo -e "  ${CYAN}  3)  ${CYAN} 3)${NC} Custom certificates"
+        echo -e "  ${CYAN}  4)${NC} No SSL (HTTP only)"
+        echo ""
+        read -p "  ➤ Select SSL method [1-4]: " ssl_method
+        
+        case "${ssl_method}" in
+            1) SSL_TYPE="acme" ;;
+            2) SSL_TYPE="selfsigned" ;;
+            3) SSL_TYPE="custom" ;;
+            4) SSL_TYPE="none" ;;
+        esac
+        
+        if [ "${SSL_TYPE}" = "acme" ]; then
+            echo ""
+            echo -e "  ${DIM}Let's Encrypt requires:${NC}"
+            echo -e "  • Domain A record pointing to this server"
+            echo -e "  • Ports 80 and 443 open in firewall"
+            echo -e "  • Valid admin email for cert alerts"
+            echo ""
+            read -p "  ➤ Admin email (for SSL cert alerts): " ADMIN_EMAIL
+            while [[ ! "${ADMIN_EMAIL}" =~ ^[^@]+@[^@]+\.[^@]+$ ]]; do
+                echo "  ❌ Invalid email"
+                read -p "  ➤ Admin email: " ADMIN_EMAIL
+            done
+        fi
     fi
 
     print_divider
@@ -785,8 +888,9 @@ generate_secrets() {
         echo "${default}"
     }
 
-    DB_PASSWORD=$(load_existing_secret    "DB_PASSWORD"                "$(openssl rand -hex 32)")
-    REDIS_PASSWORD=$(load_existing_secret "REDIS_PASSWORD"             "$(openssl rand -hex 32)")
+    DB_PASSWORD=$(load_existing_secret "POSTGRES_PASSWORD" "$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-32)")
+    REDIS_PASSWORD=$(load_existing_secret "REDIS_PASSWORD" "$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-32)")
+    POSTGRES_PASSWORD="${DB_PASSWORD}"
     N8N_ENCRYPTION_KEY=$(load_existing_secret "N8N_ENCRYPTION_KEY"     "$(openssl rand -hex 32)")
     FLOWISE_SECRET_KEY=$(load_existing_secret "FLOWISE_SECRET_KEY"     "$(openssl rand -hex 32)")
     LITELLM_MASTER_KEY=$(load_existing_secret "LITELLM_MASTER_KEY"     "sk-$(openssl rand -hex 32)")
@@ -915,6 +1019,10 @@ CUSTOM_SEARCH_URL=${CUSTOM_SEARCH_URL:-}
 CUSTOM_SEARCH_KEY=${CUSTOM_SEARCH_KEY:-}
 
 # ─── Proxy Configuration ───────────────────────────────────────────────────────
+PROXY_TYPE=${PROXY_TYPE:-caddy}
+ROUTING_METHOD=${ROUTING_METHOD:-subdomain}
+SSL_TYPE=${SSL_TYPE:-acme}
+CUSTOM_PROXY_IMAGE=${CUSTOM_PROXY_IMAGE:-}
 HTTP_PROXY=${HTTP_PROXY:-}
 HTTPS_PROXY=${HTTPS_PROXY:-}
 NO_PROXY=${NO_PROXY:-}
@@ -1126,6 +1234,33 @@ print_summary() {
     [ "${ENABLE_AUTHENTIK}" = "true" ]   && echo -e "    ${GREEN}✓${NC}  Authentik"
     [ "${ENABLE_SIGNAL}" = "true" ]      && echo -e "    ${GREEN}✓${NC}  Signal API   :${SIGNAL_PORT}"
     echo ""
+
+    print_divider
+
+    # Service URLs section
+    if [ -n "${DOMAIN}" ] && [ "${DOMAIN}" != "localhost" ]; then
+        echo -e "  ${BOLD}Expected Service URLs:${NC}"
+        echo -e "  ${DIM}After deployment, services will be available at:${NC}"
+        echo ""
+        
+        [ "${ENABLE_N8N}" = "true" ] && echo -e "    ${CYAN}•${NC} n8n:          https://n8n.${DOMAIN}"
+        [ "${ENABLE_FLOWISE}" = "true" ] && echo -e "    ${CYAN}•${NC} Flowise:      https://flowise.${DOMAIN}"
+        [ "${ENABLE_OPENWEBUI}" = "true" ] && echo -e "    ${CYAN}•${NC} Open WebUI:   https://chat.${DOMAIN}"
+        [ "${ENABLE_ANYTHINGLLM}" = "true" ] && echo -e "    ${CYAN}•${NC} AnythingLLM:  https://anythingllm.${DOMAIN}"
+        [ "${ENABLE_LITELLM}" = "true" ] && echo -e "    ${CYAN}•${NC} LiteLLM:      https://litellm.${DOMAIN}"
+        [ "${ENABLE_GRAFANA}" = "true" ] && echo -e "    ${CYAN}•${NC} Grafana:      https://grafana.${DOMAIN}"
+        [ "${ENABLE_AUTHENTIK}" = "true" ] && echo -e "    ${CYAN}•${NC} Authentik:    https://auth.${DOMAIN}"
+        [ "${ENABLE_DIFY}" = "true" ] && echo -e "    ${CYAN}•${NC} Dify:         https://dify.${DOMAIN}"
+        [ "${ENABLE_OPENCLAW}" = "true" ] && echo -e "    ${CYAN}•${NC} OpenClaw:     https://openclaw.${DOMAIN}"
+        echo ""
+        
+        # Local access URLs
+        echo -e "  ${BOLD}Local Access (if enabled):${NC}"
+        [ "${ENABLE_OLLAMA}" = "true" ] && echo -e "    ${CYAN}•${NC} Ollama API:   http://localhost:${OLLAMA_PORT:-11434}/api/tags"
+        [ "${ENABLE_QDRANT}" = "true" ] && echo -e "    ${CYAN}•${NC} Qdrant API:   http://localhost:${QDRANT_PORT:-6333}"
+        [ "${ENABLE_SIGNAL}" = "true" ] && echo -e "    ${CYAN}•${NC} Signal API:   http://localhost:${SIGNAL_PORT:-8080}"
+        echo ""
+    fi
 
     print_divider
 
