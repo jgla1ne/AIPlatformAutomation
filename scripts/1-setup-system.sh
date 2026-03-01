@@ -61,27 +61,50 @@ else
 fi
 
 # ── Hardware Detection ────────────────────────────────────────
-GPU_TYPE="none"
-GPU_DEVICE=""
+detect_gpu() {
+    # Method 1: nvidia-smi
+    if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
+        GPU_TYPE="nvidia"
+        GPU_COUNT=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
+        log "INFO" "NVIDIA GPU detected: ${GPU_COUNT} GPU(s)"
+        return
+    fi
 
-if command -v nvidia-smi &>/dev/null && nvidia-smi --query-gpu=name --format=csv,noheader &>/dev/null; then
-    GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
-    GPU_TYPE="nvidia"
-    GPU_DEVICE="all"
-    echo "GPU detected: NVIDIA — ${GPU_NAME}"
-elif ls /dev/dri/renderD* &>/dev/null 2>&1; then
-    GPU_TYPE="amd"
-    GPU_DEVICE="/dev/dri/renderD128"
-    echo "GPU detected: AMD/Intel (DRI)"
-else
+    # Method 2: lspci
+    if command -v lspci &>/dev/null; then
+        if lspci 2>/dev/null | grep -qi "nvidia"; then
+            GPU_TYPE="nvidia"
+            log "WARN" "NVIDIA GPU found via lspci but nvidia-smi unavailable"
+            log "WARN" "Install: sudo apt install nvidia-container-toolkit"
+        elif lspci 2>/dev/null | grep -qi "amd.*display\|radeon"; then
+            GPU_TYPE="amd"
+        fi
+        return
+    fi
+
+    # Method 3: /proc/driver/nvidia
+    if [ -d "/proc/driver/nvidia" ]; then
+        GPU_TYPE="nvidia"
+        return
+    fi
+
     GPU_TYPE="cpu"
-    echo "No GPU detected — Ollama will run CPU only"
+    log "INFO" "No GPU detected — using CPU mode"
+}
+
+detect_gpu
+
+GPU_DEVICE=""
+if [ "${GPU_TYPE}" = "nvidia" ]; then
+    GPU_DEVICE="all"
+elif [ "${GPU_TYPE}" = "amd" ]; then
+    GPU_DEVICE="/dev/dri/renderD128"
 fi
 
 # CPU info for sizing
 CPU_CORES=$(nproc)
 TOTAL_RAM_GB=$(awk '/MemTotal/{printf "%.0f", $2/1048576}' /proc/meminfo)
-echo "CPU cores: ${CPU_CORES} | RAM: ${TOTAL_RAM_GB}GB"
+echo "GPU Type: ${GPU_TYPE} | CPU cores: ${CPU_CORES} | RAM: ${TOTAL_RAM_GB}GB"
 
 # ── Service Selection ─────────────────────────────────────────
 echo ""

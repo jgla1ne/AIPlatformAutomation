@@ -267,7 +267,7 @@ append_qdrant() {
     networks:
       - ${DOCKER_NETWORK}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/"]
+      test: ["CMD", "curl", "-f", "http://localhost:6333/readyz"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -418,7 +418,7 @@ EOF
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveliness"]
       interval: 30s
       timeout: 15s
       retries: 5
@@ -447,6 +447,7 @@ append_openwebui() {
       - OPENAI_API_BASE_URL=http://litellm:4000/v1
       - OPENAI_API_KEY=${LITELLM_MASTER_KEY}
       - WEBUI_SECRET_KEY=${ANYTHINGLLM_JWT_SECRET}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
     volumes:
       - ${DATA_ROOT}/openwebui:/app/backend/data
     networks:
@@ -525,6 +526,9 @@ append_n8n() {
       - DB_POSTGRESDB_USER=${POSTGRES_USER}
       - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - QUEUE_BULL_REDIS_HOST=redis
+      - QUEUE_BULL_REDIS_PORT=6379
+      - QUEUE_BULL_REDIS_PASSWORD=${REDIS_PASSWORD}
     volumes:
       - ${DATA_ROOT}/n8n:/home/node/.n8n
     networks:
@@ -620,7 +624,7 @@ append_dify_api() {
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:5001/console/api/setup"]
       interval: 30s
       timeout: 15s
       retries: 10
@@ -816,7 +820,6 @@ append_grafana() {
     image: grafana/grafana:latest
     container_name: ${COMPOSE_PROJECT_NAME}-grafana
     restart: unless-stopped
-    user: "${TENANT_UID}:${TENANT_GID}"
     ports:
       - "${GRAFANA_PORT}:3000"
     environment:
@@ -1047,8 +1050,6 @@ EOF
         cat >> "${cf}" << EOF
 ${subdomain}.${DOMAIN} {
     reverse_proxy ${upstream}:${port} {
-        health_uri /
-        health_interval 30s
         flush_interval -1
     }
     log {
