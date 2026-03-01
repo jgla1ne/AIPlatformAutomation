@@ -42,6 +42,26 @@ set -a
 source "${ENV_FILE}"
 set +a
 
+# ── Critical Validations ───────────────────────────────────────────────────────
+if [ "${DOMAIN}" = "localhost" ] || [ -z "${DOMAIN}" ]; then
+    fail "DOMAIN is '${DOMAIN}'. Set DOMAIN_NAME in .env and re-run script 1 first."
+fi
+
+log "Domain: ${DOMAIN}"
+
+check_tailscale_auth() {
+    if [ -z "${TAILSCALE_AUTH_KEY}" ]; then
+        warn "TAILSCALE_AUTH_KEY not set in .env"
+        warn "Tailscale will start but NOT authenticate"
+        warn "Get a key: https://login.tailscale.com/admin/settings/keys"
+        warn "Add to .env: TAILSCALE_AUTH_KEY=tskey-auth-xxxxx"
+        warn "Then re-run: sudo bash scripts/2-deploy-services.sh"
+    else
+        log "Tailscale auth key found — will auto-authenticate"
+    fi
+}
+check_tailscale_auth
+
 # ── STRUCTURED LOGGING SETUP ───────────────────────────────────────────────────────
 LOG_DIR="${DATA_ROOT}/logs"
 mkdir -p "${LOG_DIR}"
