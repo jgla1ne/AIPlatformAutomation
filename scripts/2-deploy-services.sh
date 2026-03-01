@@ -66,24 +66,27 @@ exec > >(tee -a "${LOG_FILE}") 2>&1
 teardown_existing() {
     log "Tearing down existing ${COMPOSE_PROJECT_NAME} deployment..."
     
-    # Stop and remove containers for this tenant only
-    if [ -f "${COMPOSE_FILE}" ]; then
+    local compose_file="${DATA_ROOT}/docker-compose.yml"
+
+    # If prior compose file exists, use it to bring down cleanly
+    if [ -f "${compose_file}" ]; then
         docker compose \
             --project-name "${COMPOSE_PROJECT_NAME}" \
-            --file "${COMPOSE_FILE}" \
-            --env-file "${ENV_FILE}" \
+            -f "${compose_file}" \
             down --remove-orphans --timeout 30 2>/dev/null || true
     fi
-    
-    # Remove any orphan containers with this project prefix
-    docker ps -a --format '{{.Names}}' | grep "^${COMPOSE_PROJECT_NAME}-" | \
+
+    # Belt-and-suspenders: force-remove any lingering containers
+    docker ps -aq --filter "name=${COMPOSE_PROJECT_NAME}" | \
         xargs -r docker rm -f 2>/dev/null || true
-    
-    # Remove tenant network
-    docker network rm "${DOCKER_NETWORK}" 2>/dev/null || true
-    docker network ls --format '{{.Name}}' | grep "^${COMPOSE_PROJECT_NAME}" | \
+
+    # NOW safe to remove network
+    docker network ls --filter "name=${COMPOSE_PROJECT_NAME}" -q | \
         xargs -r docker network rm 2>/dev/null || true
-    
+
+    # Prune dangling networks
+    docker network prune -f 2>/dev/null || true
+
     log "Teardown complete"
 }
 
@@ -317,6 +320,58 @@ EOF
       - video
 EOF
     fi
+}
+
+# ─────────────────────────────────────────────────────────────
+# LITELM CONFIG GENERATOR
+# ─────────────────────────────────────────────────────────────
+generate_litellm_config() {
+    [ "${ENABLE_LITELLM}" = "true" ] || return 0
+    local litellm_dir="${DATA_ROOT}/litellm"
+    mkdir -p "${litellm_dir}"
+
+    cat > "${litellm_dir}/config.yaml" << EOF
+general_settings:
+  master_key: ${LITELLM_MASTER_KEY}
+  database_url: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm
+
+litellm_settings:
+  drop_params: true
+  cache: true
+  cache_params:
+    type: redis
+    host: redis
+    port: 6379
+    password: ${REDIS_PASSWORD}
+
+model_list:
+EOF
+
+    if [ "${ENABLE_OLLAMA}" = "true" ]; then
+        cat >> "${litellm_dir}/config.yaml" << EOF
+  - model_name: ${OLLAMA_DEFAULT_MODEL}
+    litellm_params:
+      model: ollama/${OLLAMA_DEFAULT_MODEL}
+      api_base: http://ollama:11434
+EOF
+    fi
+
+    [ -n "${OPENAI_API_KEY:-}" ] && cat >> "${litellm_dir}/config.yaml" << EOF
+  - model_name: gpt-4o
+    litellm_params:
+      model: gpt-4o
+      api_key: ${OPENAI_API_KEY}
+EOF
+
+    [ -n "${GOOGLE_API_KEY:-}" ] && cat >> "${litellm_dir}/config.yaml" << EOF
+  - model_name: gemini-2.0-flash
+    litellm_params:
+      model: gemini/gemini-2.0-flash-exp
+      api_key: ${GOOGLE_API_KEY}
+EOF
+
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${litellm_dir}"
+    log "SUCCESS" "LiteLLM config generated at ${litellm_dir}/config.yaml"
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -624,12 +679,14 @@ EOF
 # OPENCLAW (image must be verified — placeholder shown)
 # ─────────────────────────────────────────────────────────────
 append_openclaw() {
-    # WINDSURF: verify this image exists before deploying
-    # Run: docker pull ghcr.io/openclaw/openclaw:latest
+    log "WARN" "OpenClaw: ensure image ${OPENCLAW_IMAGE} exists locally before deploying"
+    # Use configurable image name from .env
+    local image="${OPENCLAVE_IMAGE:-openclaw:latest}"
+    
     compose_append << EOF
 
   openclaw:
-    image: ghcr.io/openclaw/openclaw:latest
+    image: ${image}
     container_name: ${COMPOSE_PROJECT_NAME}-openclaw
     restart: unless-stopped
     user: "${TENANT_UID}:${TENANT_GID}"
@@ -660,6 +717,48 @@ append_openclaw() {
       retries: 5
       start_period: 60s
 EOF
+}
+
+# ─────────────────────────────────────────────────────────────
+# PROMETHEUS CONFIG GENERATOR
+# ─────────────────────────────────────────────────────────────
+generate_prometheus_config() {
+    [ "${ENABLE_GRAFANA}" = "true" ] || return 0
+    local prom_dir="${DATA_ROOT}/prometheus"
+    mkdir -p "${prom_dir}"
+
+    cat > "${prom_dir}/prometheus.yml" << EOF
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'caddy'
+    static_configs:
+      - targets: ['caddy:2019']
+EOF
+
+    # Add per-enabled-service scrape targets
+    [ "${ENABLE_LITELLM}" = "true" ] && cat >> "${prom_dir}/prometheus.yml" << EOF
+
+  - job_name: 'litellm'
+    static_configs:
+      - targets: ['litellm:4000']
+EOF
+
+    [ "${ENABLE_N8N}" = "true" ] && cat >> "${prom_dir}/prometheus.yml" << EOF
+
+  - job_name: 'n8n'
+    static_configs:
+      - targets: ['n8n:5678']
+EOF
+
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${prom_dir}"
+    log "SUCCESS" "Prometheus config generated at ${prom_dir}/prometheus.yml"
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -777,6 +876,18 @@ EOF
 # TAILSCALE
 # ─────────────────────────────────────────────────────────────
 append_tailscale() {
+    local tun_device=""
+    local userspace_extra=""
+    
+    if [ -c "/dev/net/tun" ]; then
+        tun_device="      - /dev/net/tun:/dev/net/tun"
+        log "INFO" "TUN device found — Tailscale kernel mode enabled"
+    else
+        log "WARN" "/dev/net/tun not found — Tailscale will use userspace mode"
+        # Switch to userspace mode
+        userspace_extra="      - TS_USERSPACE=true"
+    fi
+    
     compose_append << EOF
 
   tailscale:
@@ -788,13 +899,14 @@ append_tailscale() {
       - NET_RAW
     volumes:
       - ${DATA_ROOT}/tailscale:/var/lib/tailscale
-      - /dev/net/tun:/dev/net/tun
+${tun_device}
     environment:
       - TS_AUTHKEY=${TAILSCALE_AUTH_KEY}
       - TS_STATE_DIR=/var/lib/tailscale
       - TS_HOSTNAME=${TAILSCALE_HOSTNAME}
       - TS_USERSPACE=false
       - TS_EXTRA_ARGS=${TAILSCALE_EXTRA_ARGS}
+${userspace_extra}
     networks:
       - ${DOCKER_NETWORK}
     healthcheck:
@@ -1063,6 +1175,7 @@ deploy_stack() {
     docker compose \
         --project-name "${COMPOSE_PROJECT_NAME}" \
         -f "${compose_file}" \
+        --env-file "${ENV_FILE}" \
         pull --quiet 2>&1 | tee -a "${LOG_FILE}" || {
         log "WARN: Some images failed to pull — attempting deploy anyway"
     }
@@ -1071,6 +1184,7 @@ deploy_stack() {
     docker compose \
         --project-name "${COMPOSE_PROJECT_NAME}" \
         -f "${compose_file}" \
+        --env-file "${ENV_FILE}" \
         up -d \
         --remove-orphans \
         --timeout 120 \
@@ -1150,7 +1264,7 @@ main() {
     log "  AI Platform Deploy — Tenant: ${TENANT_ID}"
     log "  Domain: ${DOMAIN}"
     log "  Services: $(get_enabled_services)"
-    log "═════════════════════════════════════════════════════"
+    log "═══════════════════════════════════════════════════════"
 
     # Guards
     check_tailscale_auth
@@ -1161,6 +1275,8 @@ main() {
     # Generate configs
     generate_compose
     generate_caddyfile
+    generate_prometheus_config
+    generate_litellm_config
 
     # Deploy
     deploy_stack

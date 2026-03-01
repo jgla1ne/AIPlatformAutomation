@@ -103,7 +103,7 @@ ENABLE_ANYTHINGLLM=$(ask_service "AnythingLLM (RAG + Docs)" "y")
 ENABLE_DIFY=$(ask_service "Dify (LLM App Builder)" "y")
 ENABLE_N8N=$(ask_service "n8n (Workflow Automation)" "y")
 ENABLE_FLOWISE=$(ask_service "Flowise (AI Flows)" "y")
-ENABLE_OPENCLAW=$(ask_service "OpenClaw (AI Agent)" "y")
+ENABLE_OPENCLAW=$(ask_service "OpenClaw (AI Agent)" "n")
 ENABLE_LITELLM=$(ask_service "LiteLLM (LLM Proxy)" "y")
 ENABLE_OLLAMA=$(ask_service "Ollama (Local LLMs)" "y")
 ENABLE_GRAFANA=$(ask_service "Grafana + Prometheus (Monitoring)" "y")
@@ -243,7 +243,8 @@ generate_secret() {
 }
 
 generate_password() {
-    openssl rand -base64 24 | tr -d '/+=' | head -c 20
+    # Alphanumeric only — safe in heredocs, YAML, env vars
+    tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32
 }
 
 # Only generate if not already in existing .env
@@ -480,6 +481,11 @@ OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
 # OLLAMA
 # ═══════════════════════════════════════════════════════════════
 OLLAMA_DEFAULT_MODEL=${OLLAMA_DEFAULT_MODEL:-llama3.2:3b}
+
+# ═════════════════════════════════════════════════════════════════
+# OPENCLAVE
+# ═════════════════════════════════════════════════════════════════
+OPENCLAVE_IMAGE=openclaw:latest
 
 # ═════════════════════════════════════════════════════════════════
 # TAILSCALE
