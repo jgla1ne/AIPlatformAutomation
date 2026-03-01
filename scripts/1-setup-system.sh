@@ -460,30 +460,66 @@ collect_llm_config() {
     print_divider
 
     echo -e "  ${BOLD}🦙  Ollama Model Selection${NC}"
-    echo -e "  ${DIM}Choose a model appropriate for your available RAM${NC}"
+    echo -e "  ${DIM}Choose models appropriate for your available RAM${NC}"
     echo ""
 
     # Get system RAM for suggestion
     TOTAL_RAM_GB=$(awk '/MemTotal/{printf "%.0f", $2/1048576}' /proc/meminfo)
     
-    local suggested_model
-    if [ "${TOTAL_RAM_GB}" -lt 8 ]; then
-        suggested_model="llama3.2:1b"
-    elif [ "${TOTAL_RAM_GB}" -lt 16 ]; then
-        suggested_model="llama3.2:3b"
-    elif [ "${TOTAL_RAM_GB}" -lt 32 ]; then
-        suggested_model="qwen2.5:7b"
+    echo -e "  ${DIM}System RAM: ${TOTAL_RAM_GB}GB${NC}"
+    echo ""
+    
+    # Available models with RAM requirements
+    echo -e "  ${BOLD}Available Models:${NC}"
+    echo -e "  ${CYAN}  1)${NC} llama3.2:1b      ${DIM}~1GB RAM${NC}"
+    echo -e "  ${CYAN}  2)${NC} llama3.2:3b      ${DIM}~4GB RAM${NC}"
+    echo -e "  ${CYAN}  3)${NC} qwen2.5:7b       ${DIM}~8GB RAM${NC}"
+    echo -e "  ${CYAN}  4)${NC} llama3.1:8b      ${DIM}~10GB RAM${NC}"
+    echo -e "  ${CYAN}  5)${NC} llama3.1:70b     ${DIM}~50GB RAM${NC}"
+    echo -e "  ${CYAN}  6)${NC} Custom model     ${DIM}Enter model name manually${NC}"
+    echo ""
+    
+    echo -e "  ${DIM}Select models to download (comma-separated, e.g. 1,2,3)${NC}"
+    read -p "  ➤ Models to install: " model_selection
+    
+    # Parse model selection
+    OLLAMA_MODELS=""
+    if [ -n "${model_selection}" ]; then
+        for num in $(echo "${model_selection}" | tr ',' ' '); do
+            case "${num}" in
+                1) OLLAMA_MODELS="${OLLAMA_MODELS}llama3.2:1b " ;;
+                2) OLLAMA_MODELS="${OLLAMA_MODELS}llama3.2:3b " ;;
+                3) OLLAMA_MODELS="${OLLAMA_MODELS}qwen2.5:7b " ;;
+                4) OLLAMA_MODELS="${OLLAMA_MODELS}llama3.1:8b " ;;
+                5) OLLAMA_MODELS="${OLLAMA_MODELS}llama3.1:70b " ;;
+                6) 
+                    read -p "  ➤ Enter custom model name: " custom_model
+                    [ -n "${custom_model}" ] && OLLAMA_MODELS="${OLLAMA_MODELS}${custom_model} "
+                    ;;
+            esac
+        done
+    fi
+    
+    # Set default model (first selected or suggested)
+    if [ -n "${OLLAMA_MODELS}" ]; then
+        OLLAMA_DEFAULT_MODEL=$(echo "${OLLAMA_MODELS}" | awk '{print $1}')
     else
-        suggested_model="llama3.1:8b"
+        local suggested_model
+        if [ "${TOTAL_RAM_GB}" -lt 8 ]; then
+            suggested_model="llama3.2:1b"
+        elif [ "${TOTAL_RAM_GB}" -lt 16 ]; then
+            suggested_model="llama3.2:3b"
+        elif [ "${TOTAL_RAM_GB}" -lt 32 ]; then
+            suggested_model="qwen2.5:7b"
+        else
+            suggested_model="llama3.1:8b"
+        fi
+        OLLAMA_MODELS="${suggested_model}"
+        OLLAMA_DEFAULT_MODEL="${suggested_model}"
     fi
 
-    echo -e "  ${DIM}System RAM: ${TOTAL_RAM_GB}GB${NC}"
-    echo -e "  ${DIM}Suggested model: ${suggested_model}${NC}"
     echo ""
-
-    read -p "  ➤ Default Ollama model [${suggested_model}]: " OLLAMA_DEFAULT_MODEL
-    OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-${suggested_model}}"
-
+    log "SUCCESS" "Models to download: ${OLLAMA_MODELS}"
     log "SUCCESS" "Default model: ${OLLAMA_DEFAULT_MODEL}"
 }
 
@@ -612,6 +648,7 @@ TOTAL_RAM_GB=${TOTAL_RAM_GB}
 
 # ─── Ollama ───────────────────────────────────────────────────────────────────
 OLLAMA_DEFAULT_MODEL=${OLLAMA_DEFAULT_MODEL:-}
+OLLAMA_MODELS=${OLLAMA_MODELS:-}
 
 # ─── Vector Database ──────────────────────────────────────────────────────────
 VECTOR_DB=${VECTOR_DB:-qdrant}
@@ -850,7 +887,7 @@ print_summary() {
     printf "  ${BOLD}%-22s${NC} %s\n" "LLM providers:" "${LLM_PROVIDERS:-local}"
     echo ""
     echo -e "  ${BOLD}Enabled services:${NC}"
-    [ "${ENABLE_OLLAMA}" = "true" ]      && echo -e "    ${GREEN}✓${NC}  Ollama       (model: ${OLLAMA_DEFAULT_MODEL:-auto})"
+    [ "${ENABLE_OLLAMA}" = "true" ]      && echo -e "    ${GREEN}✓${NC}  Ollama       (models: ${OLLAMA_MODELS:-auto})"
     [ "${ENABLE_OPENWEBUI}" = "true" ]   && echo -e "    ${GREEN}✓${NC}  Open WebUI   :${OPENWEBUI_PORT}"
     [ "${ENABLE_ANYTHINGLLM}" = "true" ] && echo -e "    ${GREEN}✓${NC}  AnythingLLM  :${ANYTHINGLLM_PORT}"
     [ "${ENABLE_DIFY}" = "true" ]        && echo -e "    ${GREEN}✓${NC}  Dify"

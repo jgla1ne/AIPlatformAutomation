@@ -334,8 +334,24 @@ configure_ollama() {
     if wait_for_service "Ollama" "http://localhost:11434/api/tags" 60; then
         log "SUCCESS" "Ollama is accessible"
         
-        # Pull default model if not present
-        if [ -n "${OLLAMA_DEFAULT_MODEL}" ]; then
+        # Pull models if not present
+        if [ -n "${OLLAMA_MODELS}" ]; then
+            log "INFO" "Checking and downloading models..."
+            for model in ${OLLAMA_MODELS}; do
+                log "INFO" "Checking if ${model} is downloaded..."
+                if ! docker exec "${COMPOSE_PROJECT_NAME}-ollama" ollama list 2>/dev/null | grep -q "${model}"; then
+                    log "INFO" "Pulling ${model} model..."
+                    if docker exec "${COMPOSE_PROJECT_NAME}-ollama" ollama pull "${model}" &>/dev/null; then
+                        log "SUCCESS" "${model} downloaded successfully"
+                    else
+                        log "WARN" "Failed to pull ${model}"
+                    fi
+                else
+                    log "SUCCESS" "${model} already available"
+                fi
+            done
+        elif [ -n "${OLLAMA_DEFAULT_MODEL}" ]; then
+            # Fallback to single model if OLLAMA_MODELS not set
             log "INFO" "Checking if ${OLLAMA_DEFAULT_MODEL} is downloaded..."
             if ! docker exec "${COMPOSE_PROJECT_NAME}-ollama" ollama list 2>/dev/null | grep -q "${OLLAMA_DEFAULT_MODEL}"; then
                 log "INFO" "Pulling ${OLLAMA_DEFAULT_MODEL} model..."

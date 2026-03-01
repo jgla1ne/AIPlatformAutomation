@@ -126,14 +126,25 @@ cleanup_networks() {
 cleanup_volumes() {
     log "INFO" "Removing Docker volumes..."
     
-    # Remove named volumes
+    # Remove named volumes matching project pattern
     local volumes
     volumes=$(docker volume ls --filter "name=${COMPOSE_PROJECT_NAME}" -q 2>/dev/null || true)
     if [ -n "${volumes}" ]; then
         echo "${volumes}" | xargs -r docker volume rm 2>/dev/null || true
-        log "SUCCESS" "Volumes removed"
+        log "SUCCESS" "Project volumes removed"
     else
-        log "INFO" "No volumes to remove"
+        log "INFO" "No project volumes to remove"
+    fi
+    
+    # Remove any remaining AI platform related volumes
+    local all_volumes
+    all_volumes=$(docker volume ls -q 2>/dev/null | grep -E "(aip-|stack_|n8n_data|ollama-data|postgres-data|redis-data|qdrant-data|minio-data|dify-)" || true)
+    if [ -n "${all_volumes}" ]; then
+        log "INFO" "Removing additional AI platform volumes..."
+        echo "${all_volumes}" | xargs -r docker volume rm 2>/dev/null || true
+        log "SUCCESS" "Additional volumes removed"
+    else
+        log "INFO" "No additional volumes to remove"
     fi
 }
 
