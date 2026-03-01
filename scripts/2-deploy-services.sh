@@ -119,10 +119,9 @@ section "Phase 2: Pull Images"
 
 # === Prometheus Configuration ===
 log "Creating Prometheus configuration..."
-PROMETHEUS_CONFIG="${DATA_ROOT}/config/prometheus/prometheus.yml"
+PROMETHEUS_CONFIG="${DATA_ROOT}/prometheus/prometheus.yml"
 mkdir -p "$(dirname "${PROMETHEUS_CONFIG}")"
-if [[ ! -f "${PROMETHEUS_CONFIG}" ]]; then
-  cat > "${PROMETHEUS_CONFIG}" << 'PROMEOF'
+cat > "${PROMETHEUS_CONFIG}" << PROMETHEUS_EOF
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
@@ -131,14 +130,19 @@ scrape_configs:
   - job_name: 'prometheus'
     static_configs:
       - targets: ['localhost:9090']
-  - job_name: 'node-exporter'
+
+  - job_name: 'caddy'
+    static_configs:
+      - targets: ['caddy:2019']
+
+  - job_name: 'node'
     static_configs:
       - targets: ['node-exporter:9100']
-PROMEOF
-  chmod 644 "${PROMETHEUS_CONFIG}"
-  chown 65534:65534 "${PROMETHEUS_CONFIG}" 2>/dev/null || true
-fi
-ok "Prometheus configuration created"
+PROMETHEUS_EOF
+
+chmod 644 "${PROMETHEUS_CONFIG}"
+chown 65534:65534 "${PROMETHEUS_CONFIG}" 2>/dev/null || true
+log "INFO" "Prometheus config written to ${PROMETHEUS_CONFIG}"
 
 log "Pulling all service images (this may take several minutes on first run)..."
 DC pull --quiet 2>&1 | grep -v "^$" || warn "Some images could not be pulled — will use cached versions"
@@ -390,6 +394,12 @@ if [ "$TAILSCALE_READY" = "true" ]; then
     
     TAILSCALE_IP=$(docker exec "${COMPOSE_PROJECT_NAME}-tailscale" tailscale ip -4 2>/dev/null || echo "pending")
     log "SUCCESS" "Tailscale activated. IP: ${TAILSCALE_IP}"
+    
+    # Update .env with actual Tailscale IP
+    if [ "${TAILSCALE_IP}" != "pending" ] && [ -n "${ENV_FILE}" ]; then
+        sed -i "s/^TAILSCALE_IP=.*/TAILSCALE_IP=${TAILSCALE_IP}/" "${ENV_FILE}" 2>/dev/null || echo "TAILSCALE_IP=${TAILSCALE_IP}" >> "${ENV_FILE}"
+        log "SUCCESS" "Tailscale IP: ${TAILSCALE_IP} — saved to .env"
+    fi
 else
     log "WARN" "Tailscale daemon not ready after 60s — skipping activation (non-fatal)"
 fi
@@ -479,17 +489,17 @@ done
 # External URL reachability
 log "INFO" "--- External URL Reachability ---"
 EXTERNAL_URLS=(
-    "https://litellm.${DOMAIN_NAME}"
-    "https://openwebui.${DOMAIN_NAME}"
-    "https://anythingllm.${DOMAIN_NAME}"
-    "https://dify.${DOMAIN_NAME}"
-    "https://n8n.${DOMAIN_NAME}"
-    "https://flowise.${DOMAIN_NAME}"
-    "https://signal.${DOMAIN_NAME}"
-    "https://openclaw.${DOMAIN_NAME}"
-    "https://prometheus.${DOMAIN_NAME}"
-    "https://grafana.${DOMAIN_NAME}"
-    "https://minio.${DOMAIN_NAME}"
+    "https://litellm.${DOMAIN}"
+    "https://openwebui.${DOMAIN}"
+    "https://anythingllm.${DOMAIN}"
+    "https://dify.${DOMAIN}"
+    "https://n8n.${DOMAIN}"
+    "https://flowise.${DOMAIN}"
+    "https://signal.${DOMAIN}"
+    "https://openclaw.${DOMAIN}"
+    "https://prometheus.${DOMAIN}"
+    "https://grafana.${DOMAIN}"
+    "https://minio.${DOMAIN}"
 )
 
 for url in "${EXTERNAL_URLS[@]}"; do
@@ -511,6 +521,52 @@ log "INFO" "======================================================"
 log "INFO" "Log file: ${LOG_FILE}"
 log "INFO" "======================================================"
 # ── END STATUS REPORT ────────────────────────────────────────────────────
+
+# ════════════════════════════════════════════════════════════
+echo ""
+echo "╔══════════════════════════════════════════════════════════════╗"
+echo "║         AI PLATFORM — DEPLOYMENT COMPLETE                    ║"
+echo "╠══════════════════════════════════════════════════════════════╣"
+
+echo ""
+echo "── Container Health ───────────────────────────────────────────"
+docker ps --format "  {{.Names}}\t{{.Status}}" \
+    --filter "name=${COMPOSE_PROJECT_NAME}-" | sort | \
+    sed 's/healthy/✅ healthy/; s/unhealthy/❌ unhealthy/; s/starting/⏳ starting/'
+
+echo ""
+echo "── External URLs ──────────────────────────────────────────────"
+
+check_url() {
+    local name=$1 url=$2
+    local code
+    code=$(curl -o /dev/null -s -w "%{http_code}" \
+        --max-time 10 --connect-timeout 5 "${url}" 2>/dev/null || echo "000")
+    local icon="❌"
+    [[ "${code}" =~ ^(200|301|302|401|403)$ ]] && icon="✅"
+    printf "  %s  %-20s %s\n" "${icon}" "${name}" "${url}"
+}
+
+check_url "AnythingLLM"  "https://anythingllm.${DOMAIN}"
+check_url "OpenClaw"     "https://openclaw.${DOMAIN}"
+check_url "Open WebUI"   "https://openwebui.${DOMAIN}"
+check_url "Dify"         "https://dify.${DOMAIN}"
+check_url "n8n"          "https://n8n.${DOMAIN}"
+check_url "Flowise"      "https://flowise.${DOMAIN}"
+check_url "LiteLLM"      "https://litellm.${DOMAIN}/health"
+check_url "Grafana"      "https://grafana.${DOMAIN}"
+check_url "MinIO"        "https://minio.${DOMAIN}"
+check_url "Signal API"   "https://signal.${DOMAIN}/v1/about"
+
+echo ""
+echo "── Tailscale ──────────────────────────────────────────────────"
+TS_IP=$(docker exec "${COMPOSE_PROJECT_NAME}-tailscale" tailscale ip -4 2>/dev/null || echo "not connected")
+echo "  IP: ${TS_IP}"
+
+echo ""
+echo "── Log ────────────────────────────────────────────────────────"
+echo "  ${LOG_FILE}"
+echo "╚══════════════════════════════════════════════════════════════╝"
 
 echo ""
 section "Deployment Complete"

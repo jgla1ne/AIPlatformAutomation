@@ -1074,4 +1074,55 @@ print_service_summary() {
     echo "═════════════════════════════════════════════════════"
 }
 
+# ── OpenClaw → Qdrant collection setup ──────────────────────
+log "INFO" "Setting up OpenClaw Qdrant collection..."
+QDRANT_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+    -X PUT "http://localhost:6333/collections/openclaw_docs" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "vectors": {
+            "size": 768,
+            "distance": "Cosine"
+        },
+        "optimizers_config": {
+            "default_segment_number": 2
+        }
+    }')
+log "INFO" "Qdrant openclaw_docs collection: HTTP ${QDRANT_RESPONSE}"
+
+# ── AnythingLLM → Qdrant collection setup ───────────────────
+curl -s -o /dev/null -w "%{http_code}" \
+    -X PUT "http://localhost:6333/collections/anythingllm_docs" \
+    -H "Content-Type: application/json" \
+    -d '{"vectors":{"size":768,"distance":"Cosine"}}' > /dev/null
+
+# ── AnythingLLM API configuration ───────────────────────────
+# AnythingLLM exposes a setup API on first boot
+log "INFO" "Waiting for AnythingLLM API..."
+for i in $(seq 1 12); do
+    HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+        "http://localhost:3001/api/ping" 2>/dev/null || echo "000")
+    [ "${HTTP}" = "200" ] && break
+    sleep 10
+done
+
+if [ "${HTTP}" = "200" ]; then
+    log "SUCCESS" "AnythingLLM API is up"
+    # Configure LiteLLM as the LLM provider
+    curl -s -X POST "http://localhost:3001/api/system/update-env" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"LLM_PROVIDER\": \"litellm\",
+            \"LITELLM_BASE_URL\": \"http://litellm:4000\",
+            \"LITELLM_API_KEY\": \"${LITELLM_MASTER_KEY}\",
+            \"VECTOR_DB\": \"qdrant\",
+            \"QDRANT_ENDPOINT\": \"http://qdrant:6333\",
+            \"EMBEDDING_ENGINE\": \"ollama\",
+            \"OLLAMA_BASE_PATH\": \"http://ollama:11434\",
+            \"EMBEDDING_MODEL_PREF\": \"nomic-embed-text:latest\"
+        }" | grep -o '"message":"[^"]*"' || true
+else
+    log "WARN" "AnythingLLM API not responding — configure manually via UI"
+fi
+
 # Main execution

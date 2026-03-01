@@ -81,11 +81,11 @@ services:
     ports:
       - "${OLLAMA_PORT:-11434}:11434"
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:11434/api/tags"]
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
       interval: 30s
-      timeout: 10s
+      timeout: 20s
       retries: 5
-      start_period: 120s
+      start_period: 60s
 
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
@@ -175,11 +175,11 @@ services:
     ports:
       - "${DIFY_WEB_PORT:-3002}:3000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 20s
+      retries: 10
+      start_period: 120s
 
   dify-worker:
     image: langgenius/dify-api:latest
@@ -268,11 +268,11 @@ services:
     ports:
       - "${N8N_PORT:-5678}:5678"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:5678/healthz || exit 1"]
-      interval: 20s
+      test: ["CMD", "curl", "-f", "http://localhost:5678/healthz"]
+      interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 120s
+      start_period: 60s
 
   flowise:
     image: flowiseai/flowise:latest
@@ -469,18 +469,13 @@ services:
     container_name: ${COMPOSE_PROJECT_NAME}-openclaw
     restart: unless-stopped
     environment:
-      OPENCLAW_ADMIN_USER: ${OPENCLAW_ADMIN_USER:-admin}
-      OPENCLAW_ADMIN_PASSWORD: ${OPENCLAW_ADMIN_PASSWORD}
-      OPENCLAW_PORT: ${OPENCLAW_PORT:-18789}
-      OPENCLAW_ENABLE_SIGNAL: ${OPENCLAW_ENABLE_SIGNAL:-true}
-      OPENCLAW_ENABLE_LITELM: ${OPENCLAW_ENABLE_LITELM:-true}
-      OPENCLAW_ENABLE_N8N: ${OPENCLAW_ENABLE_N8N:-true}
-      PUID: ${TENANT_UID}
-      PGID: ${TENANT_GID}
-      TZ: ${TIMEZONE:-UTC}
-      VECTOR_DB: ${VECTOR_DB_TYPE:-qdrant}
-      QDRANT_URL: http://qdrant:6333
-      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      - PORT=8082
+      - QDRANT_URL=http://qdrant:6333
+      - LITELLM_BASE_URL=http://litellm:4000
+      - LITELLM_API_KEY=${LITELLM_MASTER_KEY}
+      - PUID=${TENANT_UID}
+      - PGID=${TENANT_GID}
+      - TZ=${TIMEZONE:-UTC}
     volumes:
       - ${DATA_ROOT}/openclaw:/app/data
       - ${DATA_ROOT}/logs/openclaw:/var/log/openclaw
@@ -490,11 +485,11 @@ services:
     ports:
       - "${OPENCLAW_PORT:-18789}:8082"
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8082/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 30s
+      retries: 5
+      start_period: 60s
     labels:
       - "ai-platform.service=openclaw"
       - "ai-platform.type=orchestration"
@@ -503,25 +498,25 @@ services:
     image: tailscale/tailscale:latest
     container_name: ${COMPOSE_PROJECT_NAME}-tailscale
     restart: unless-stopped
-    environment:
-      TS_USERSPACE: ${TAILSCALE_USERSPACE:-ai-platform}
-      TS_EXTRA_ARGS: ${TAILSCALE_EXTRA_ARGS}
-      TZ: ${TIMEZONE:-UTC}
-    volumes:
-      - ${DATA_ROOT}/tailscale:/var/lib/tailscale
-      - ${DATA_ROOT}/logs/tailscale:/var/log/tailscale
-    networks:
-      - net_internal
     cap_add:
       - NET_ADMIN
       - NET_RAW
-    devices:
-      - /dev/net/tun
+    volumes:
+      - ${DATA_ROOT}/tailscale:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - TS_AUTHKEY=${TAILSCALE_AUTH_KEY}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_HOSTNAME=${TAILSCALE_HOSTNAME}
+      - TS_USERSPACE=false
+      - TS_EXTRA_ARGS=--accept-routes --advertise-tags=tag:ai-platform
+    networks:
+      - net_internal
     healthcheck:
       test: ["CMD", "tailscale", "status"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
       start_period: 30s
     labels:
       - "ai-platform.service=tailscale"
@@ -562,11 +557,11 @@ services:
     ports:
       - "${QDRANT_PORT:-6333}:6333"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 8
-      start_period: 20s
+      test: ["CMD", "curl", "-f", "http://localhost:6333/readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   rclone:
     image: rclone/rclone:latest

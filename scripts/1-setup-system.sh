@@ -1154,6 +1154,13 @@ collect_configurations() {
     local existing_ssl_email=$(grep "^SSL_EMAIL=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "")
     local existing_proxy_type=$(grep "^PROXY_TYPE=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2 || echo "none")
     
+    # Determine DOMAIN from DOMAIN_NAME if it resolves, else use PUBLIC_IP
+    if [ "${DOMAIN_RESOLVES}" = "true" ] && [ -n "${DOMAIN_NAME}" ]; then
+        DOMAIN="${DOMAIN_NAME}"
+    else
+        DOMAIN="${PUBLIC_IP}"
+    fi
+
     # Create environment file with correct ownership
     cat > "$ENV_FILE" <<EOF
 # AI Platform Environment
@@ -1196,7 +1203,24 @@ MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
 DIFY_SECRET_KEY=${DIFY_SECRET_KEY}
 CODE_EXECUTION_API_KEY=${CODE_EXECUTION_API_KEY}
 
-# Service Ports
+# Service Ports — internal container ports (what the container listens on)
+ANYTHINGLLM_INTERNAL_PORT=3001
+OPENWEBUI_INTERNAL_PORT=8080
+LITELLM_INTERNAL_PORT=4000
+OLLAMA_INTERNAL_PORT=11434
+QDRANT_INTERNAL_PORT=6333
+N8N_INTERNAL_PORT=5678
+FLOWISE_INTERNAL_PORT=3000
+DIFY_API_INTERNAL_PORT=5001
+DIFY_WEB_INTERNAL_PORT=3000
+OPENCLAW_INTERNAL_PORT=8082
+SIGNAL_INTERNAL_PORT=8080
+MINIO_INTERNAL_PORT=9000
+MINIO_CONSOLE_INTERNAL_PORT=9001
+GRAFANA_INTERNAL_PORT=3000
+PROMETHEUS_INTERNAL_PORT=9090
+
+# External port mappings (host ports)
 N8N_PORT=${N8N_PORT:-5678}
 FLOWISE_PORT=${FLOWISE_PORT:-3000}
 ANYTHINGLLM_PORT=${ANYTHINGLLM_PORT:-3001}
@@ -1209,14 +1233,14 @@ DIFY_WEB_PORT=${DIFY_WEB_PORT:-3002}
 SIGNAL_PORT=${SIGNAL_PORT:-8085}
 
 # Network Configuration
-DOMAIN=${DOMAIN:-localhost}
-DOMAIN_NAME=${DOMAIN_NAME:-localhost}
-DOMAIN_RESOLVES=${DOMAIN_RESOLVES:-false}
-PUBLIC_IP=${PUBLIC_IP:-unknown}
-PROXY_CONFIG_METHOD=${PROXY_CONFIG_METHOD:-direct}
-PROXY_TYPE=${PROXY_TYPE:-none}
-SSL_TYPE=${SSL_TYPE:-none}
-SSL_EMAIL=${SSL_EMAIL:-}
+DOMAIN=${DOMAIN}
+DOMAIN_NAME=${DOMAIN_NAME}
+DOMAIN_RESOLVES=${DOMAIN_RESOLVES}
+PUBLIC_IP=${PUBLIC_IP}
+PROXY_CONFIG_METHOD=${PROXY_CONFIG_METHOD}
+PROXY_TYPE=${PROXY_TYPE}
+SSL_TYPE=${SSL_TYPE}
+SSL_EMAIL=${SSL_EMAIL}
 
 # Docker Configuration
 DOCKER_NETWORK=$DOCKER_NETWORK
@@ -1230,7 +1254,7 @@ QDRANT_HTTP_PORT=${QDRANT_PORT:-6333}
 QDRANT_GRPC_PORT=${QDRANT_GRPC_PORT:-6334}
 QDRANT_COLLECTION_PREFIX=${TENANT_NAME}
 QDRANT_DOCS_COLLECTION=${TENANT_NAME}_docs
-QDRANT_URL=http://${QDRANT_HOST}:${QDRANT_HTTP_PORT}
+QDRANT_URL=http://qdrant:6333
 QDRANT_API_KEY=${QDRANT_API_KEY:-}
 
 # Signal Configuration
@@ -2321,21 +2345,21 @@ generate_caddyfile() {
         cat > "${DATA_ROOT}/caddy/Caddyfile" << EOF
 {
     admin off
-    email ${ACME_EMAIL:-admin@${DOMAIN_NAME}}
+    email ${ACME_EMAIL:-admin@${DOMAIN}}
 }
 
 # Prometheus
-prometheus.${DOMAIN_NAME} {
+prometheus.${DOMAIN} {
     reverse_proxy prometheus:9090
 }
 
 # Grafana
-grafana.${DOMAIN_NAME} {
+grafana.${DOMAIN} {
     reverse_proxy grafana:3000
 }
 
 # n8n
-n8n.${DOMAIN_NAME} {
+n8n.${DOMAIN} {
     reverse_proxy n8n:5678 {
         header_up Upgrade {http.request.header.Upgrade}
         header_up Connection {http.request.header.Connection}
@@ -2343,25 +2367,25 @@ n8n.${DOMAIN_NAME} {
 }
 
 # Dify
-dify.${DOMAIN_NAME} {
+dify.${DOMAIN} {
     reverse_proxy dify-web:3000
 }
 
 # AnythingLLM
-anythingllm.${DOMAIN_NAME} {
-    reverse_proxy anythingllm:3000 {
+anythingllm.${DOMAIN} {
+    reverse_proxy anythingllm:3001 {
         header_up Upgrade {http.request.header.Upgrade}
         header_up Connection {http.request.header.Connection}
     }
 }
 
 # LiteLLM
-litellm.${DOMAIN_NAME} {
+litellm.${DOMAIN} {
     reverse_proxy litellm:4000
 }
 
 # Open WebUI
-openwebui.${DOMAIN_NAME} {
+openwebui.${DOMAIN} {
     reverse_proxy openwebui:8080 {
         header_up Upgrade {http.request.header.Upgrade}
         header_up Connection {http.request.header.Connection}
@@ -2369,40 +2393,40 @@ openwebui.${DOMAIN_NAME} {
 }
 
 # MinIO Console
-minio.${DOMAIN_NAME} {
+minio.${DOMAIN} {
     reverse_proxy minio:9001
 }
 
 # Signal API
-signal.${DOMAIN_NAME} {
+signal.${DOMAIN} {
     reverse_proxy signal-api:8085
 }
 
 # Flowise
-flowise.${DOMAIN_NAME} {
+flowise.${DOMAIN} {
     reverse_proxy flowise:3000
 }
 
 # Ollama API
-ollama.${DOMAIN_NAME} {
+ollama.${DOMAIN} {
     reverse_proxy ollama:11434
 }
 
 # Default domain - health check and fallback
-${DOMAIN_NAME} {
+${DOMAIN} {
     handle /health {
         respond "OK" 200
     }
     
-    respond "AI Platform - Use subdomains: n8n.${DOMAIN_NAME}, grafana.${DOMAIN_NAME}, etc." 200
+    respond "AI Platform - Use subdomains: n8n.${DOMAIN}, grafana.${DOMAIN}, etc." 200
 }
 EOF
 
         # ── CADDYFILE VERIFICATION ───────────────────────────────────────────────────────
         log "INFO" "Verifying Caddyfile variable expansion..."
-        if grep -q '\${DOMAIN_NAME}' "${DATA_ROOT}/caddy/Caddyfile"; then
-            log "FAIL" "Caddyfile still contains literal \${DOMAIN_NAME} — variable expansion failed"
-            log "FAIL" "Check that DOMAIN_NAME is set in ${ENV_FILE} and sourced before this point"
+        if grep -q '\${DOMAIN}' "${DATA_ROOT}/caddy/Caddyfile"; then
+            log "FAIL" "Caddyfile still contains literal \${DOMAIN} — variable expansion failed"
+            log "FAIL" "Check that DOMAIN is set in ${ENV_FILE} and sourced before this point"
             exit 1
         fi
         if grep -q '\${ACME_EMAIL}' "${DATA_ROOT}/caddy/Caddyfile"; then
@@ -2418,7 +2442,7 @@ EOF
         cat > "${DATA_ROOT}/caddy/Caddyfile" << EOF
 {
     admin off
-    email ${ACME_EMAIL:-admin@${DOMAIN_NAME}}
+    email ${ACME_EMAIL:-admin@${DOMAIN}}
 }
 
 :80 {
@@ -2447,7 +2471,7 @@ EOF
 
     # AnythingLLM
     handle /anythingllm/* {
-        reverse_proxy anythingllm:3000 {
+        reverse_proxy anythingllm:3001 {
             header_up Upgrade {http.request.header.Upgrade}
             header_up Connection {http.request.header.Connection}
         }
@@ -2478,7 +2502,7 @@ EOF
 
     # OpenClaw
     handle /openclaw/* {
-        reverse_proxy openclaw:8080
+        reverse_proxy openclaw:8082
     }
 
     # Flowise
@@ -2503,9 +2527,9 @@ EOF
 
         # ── CADDYFILE VERIFICATION ───────────────────────────────────────────────────────
         log "INFO" "Verifying Caddyfile variable expansion..."
-        if grep -q '\${DOMAIN_NAME}' "${DATA_ROOT}/caddy/Caddyfile"; then
-            log "FAIL" "Caddyfile still contains literal \${DOMAIN_NAME} — variable expansion failed"
-            log "FAIL" "Check that DOMAIN_NAME is set in ${ENV_FILE} and sourced before this point"
+        if grep -q '\${DOMAIN}' "${DATA_ROOT}/caddy/Caddyfile"; then
+            log "FAIL" "Caddyfile still contains literal \${DOMAIN} — variable expansion failed"
+            log "FAIL" "Check that DOMAIN is set in ${ENV_FILE} and sourced before this point"
             exit 1
         fi
         if grep -q '\${ACME_EMAIL}' "${DATA_ROOT}/caddy/Caddyfile"; then
