@@ -123,7 +123,7 @@ check_prerequisites() {
     log "SUCCESS" "Docker and Docker Compose are available"
 }
 
-# ─── EBS Volume Detection and Mounting ───────────────────────────────────────────
+# ─── EBS Volume Detection and Mounting ────────────────────────────────────────
 detect_and_mount_ebs() {
     print_step "3" "11" "EBS Volume Detection and Mounting"
 
@@ -132,38 +132,32 @@ detect_and_mount_ebs() {
     echo ""
 
     # List available block devices
-    echo -e "  ${BOLD}Available EBS Volumes:${NC}"
-    echo -e "  ${DIM}Scanning for EBS volumes (nvme*, xvd*, sd*)${NC}"
+    echo -e "  ${BOLD}Available Block Devices:${NC}"
+    lsblk -d -o NAME,SIZE,TYPE,MOUNTPOINT | grep -E "^nvme|^xvd|^sd" | while read -r line; do
+        echo -e "  ${CYAN}    ${line}${NC}"
+    done
     echo ""
-    
-    # Get EBS volumes using lsblk with size information
-    local ebs_volumes=()
-    while IFS= read -r device size type mountpoint; do
-        # Only include EBS volumes (nvme, xvd, sd) and exclude mounted root volumes
-        if [[ "${device}" =~ ^(nvme|xvd|sd) ]] && [[ "${type}" == "disk" ]] && [[ -z "${mountpoint}" || "${mountpoint}" == "/" ]]; then
-            ebs_volumes+=("${device} ${size}")
+
+    # Find unmounted EBS volumes
+    local unmounted_volumes=()
+    while IFS= read -r device; do
+        if ! lsblk -n -o MOUNTPOINT "/dev/${device}" | grep -q "."; then
+            unmounted_volumes+=("${device}")
         fi
-    done < <(lsblk -d -o NAME,SIZE,TYPE,MOUNTPOINT 2>/dev/null)
-    
-    if [ ${#ebs_volumes[@]} -eq 0 ]; then
+    done < <(lsblk -d -n -o NAME | grep -E "^nvme|^xvd|^sd")
+
+    if [ ${#unmounted_volumes[@]} -eq 0 ]; then
         log "INFO" "No unmounted EBS volumes found"
         return
     fi
-    
+
     echo -e "  ${BOLD}Unmounted EBS Volumes:${NC}"
     local idx=0
-    for volume in "${ebs_volumes[@]}"; do
-        echo -e "  ${CYAN}  $((++idx))${NC}  ${volume}"
+    for volume in "${unmounted_volumes[@]}"; do
+        size=$(lsblk -d -n -o SIZE "/dev/${volume}")
+        echo -e "  ${CYAN}  $((++idx))${NC}  /dev/${volume}  ${DIM}(${size})${NC}"
     done
     echo ""
-    
-    echo -e "  ${BOLD}Mounted EBS Volumes:${NC}"
-    idx=0
-    while IFS= read -r device size type mountpoint; do
-        if [[ "${device}" =~ ^(nvme|xvd|sd) ]] && [[ "${type}" == "disk" ]] && [[ -n "${mountpoint}" ]] && [[ "${mountpoint}" != "/" ]]; then
-            echo -e "  ${GREEN}  ✓${NC}  ${device} ${size} → ${mountpoint}"
-        fi
-    done < <(lsblk -d -o NAME,SIZE,TYPE,MOUNTPOINT 2>/dev/null)
 
     # Ask user to select volume to mount
     while true; do
@@ -217,62 +211,33 @@ select_data_volume() {
     echo -e "  ${DIM}Select where to store AI platform data${NC}"
     echo ""
 
-    # Enumerate available mounts and unmounted EBS volumes
+    # Enumerate available mounts
     local mounts=()
     local idx=0
     
-    # First, show mounted EBS volumes
-    echo -e "  ${BOLD}📁 Mounted EBS Volumes:${NC}"
-    local has_mounted=false
-    while IFS= read -r device size type mountpoint; do
-        # Skip header row and only process EBS volumes
-        if [[ "${device}" == "NAME" ]]; then
-            continue
-        fi
-        if [[ "${device}" =~ ^(nvme|xvd|sd) ]] && [[ "${type}" == "disk" ]] && [[ -n "${mountpoint}" ]] && [[ "${mountpoint}" != "/" ]]; then
-            echo -e "  ${GREEN}  ✓${NC}  ${device} ${size} → ${mountpoint}"
-            mounts+=("${mountpoint}")
-            has_mounted=true
-            idx=$((idx + 1))
-        fi
-    done < <(lsblk -d -o NAME,SIZE,TYPE,MOUNTPOINT 2>/dev/null)
-    
-    if [ "${has_mounted}" = "false" ]; then
-        echo -e "  ${DIM}No EBS volumes currently mounted${NC}"
+    # Add /mnt/data if it's a mount point
+    if mountpoint -q /mnt/data 2>/dev/null; then
+        mounts+=("/mnt/data")
+        echo -e "  ${CYAN}  $((++idx))${NC}  /mnt/data  ${DIM}$(findmnt /mnt/data -no SIZE -o SIZE || echo "EBS volume")${NC}"
     fi
-    echo ""
     
-    # Then, show unmounted EBS volumes that can be mounted
-    echo -e "  ${BOLD}💾 Available EBS Volumes to Mount:${NC}"
-    local unmounted_count=0
-    while IFS= read -r device size type mountpoint; do
-        # Skip header row
-        if [[ "${device}" == "NAME" ]]; then
-            continue
-        fi
-        # Check if this is an unmounted EBS volume (no mountpoint or mounted as root)
-        if [[ "${device}" =~ ^(nvme|xvd|sd) ]] && [[ "${type}" == "disk" ]] && [[ -z "${mountpoint}" || "${mountpoint}" == "/" ]]; then
-            echo -e "  ${CYAN}  $((idx + 1))${NC}  Mount /dev/${device} (${size}) → /mnt/data"
-            mounts+=("/dev/${device}")
-            unmounted_count=$((unmounted_count + 1))
-            idx=$((idx + 1))
-        fi
-    done < <(lsblk -d -o NAME,SIZE,TYPE,MOUNTPOINT 2>/dev/null)
-    
-    if [ "${unmounted_count}" -eq 0 ]; then
-        echo -e "  ${YELLOW}⚠️  No unmounted EBS volumes found${NC}"
-        echo -e "  ${DIM}All EBS volumes are already mounted or none available${NC}"
-    else
-        echo -e "  ${DIM}Found ${unmounted_count} unmounted EBS volume(s) available for mounting${NC}"
+    # Add /mnt if it's a mount point (legacy)
+    if mountpoint -q /mnt 2>/dev/null; then
+        mounts+=("/mnt")
+        echo -e "  ${CYAN}  $((++idx))${NC}  /mnt  ${DIM}$(findmnt /mnt -no SIZE -o SIZE || echo "EBS volume")${NC}"
     fi
+
+    # Add other potential mount points
+    while IFS= read -r mount; do
+        if [[ "${mount}" != "/mnt/data" ]] && [[ "${mount}" != "/mnt" ]] && mountpoint -q "${mount}" 2>/dev/null; then
+            mounts+=("${mount}")
+            echo -e "  ${CYAN}  $((++idx))${NC}  ${mount}  ${DIM}$(findmnt "${mount}" -no SIZE -o SIZE || echo "Unknown size")${NC}"
+        fi
+    done < <(findmnt -l -n -o TARGET | grep -E '^/[^/]' | sort)
+
+    # Add custom option
+    echo -e "  ${CYAN}  $((++idx))${NC}  Custom path"
     echo ""
-    
-    # Add option to create /mnt/data on root filesystem
-    echo -e "  ${BOLD}📁 Other Options:${NC}"
-    echo -e "  ${CYAN}  $((idx + 1))${NC}  Create /mnt/data (use root filesystem - NOT recommended for production)"
-    echo -e "  ${CYAN}  $((idx + 2))${NC}  Custom path"
-    echo ""
-    idx=$((idx + 2))
 
     while true; do
         read -p "  ➤ Select volume [1-${idx}]: " choice
@@ -292,48 +257,8 @@ select_data_volume() {
             fi
             echo "  ❌ Path cannot be empty"
         done
-    elif [ "${choice}" -eq $((idx - 1)) ]; then
-        # Create /mnt/data on root filesystem
-        DATA_ROOT="/mnt/data/${TENANT_ID}"
-        echo -e "  ${YELLOW}⚠️  Using root filesystem - NOT recommended for production${NC}"
     else
-        # Handle mounted volumes or unmounted EBS volumes
-        if [ "${choice}" -le "${#mounts[@]}" ]; then
-            local selected_mount="${mounts[$((choice-1))]}"
-            if [[ "${selected_mount}" =~ ^/dev/ ]]; then
-                # This is an unmounted EBS volume - mount it first
-                local device_name="${selected_mount#/dev/}"
-                log "INFO" "Mounting ${selected_mount} to /mnt/data..."
-                
-                # Create mount point
-                sudo mkdir -p /mnt/data
-                
-                # Mount the volume
-                if sudo mount "${selected_mount}" /mnt/data 2>/dev/null; then
-                    log "SUCCESS" "EBS volume mounted: ${selected_mount} → /mnt/data"
-                    
-                    # Add to /etc/fstab for persistence
-                    if ! grep -q "${selected_mount}" /etc/fstab; then
-                        echo "${selected_mount}  /mnt/data  ext4  defaults  0  2" | sudo tee -a /etc/fstab
-                        log "INFO" "Added to /etc/fstab for persistence"
-                    fi
-                    
-                    DATA_ROOT="/mnt/data/${TENANT_ID}"
-                else
-                    log "ERROR" "Failed to mount ${selected_mount}"
-                    echo -e "  ${DIM}You may need to format the volume first:${NC}"
-                    echo -e "  ${DIM}  sudo mkfs.ext4 ${selected_mount}${NC}"
-                    echo -e "  ${DIM}Then re-run this script${NC}"
-                    exit 1
-                fi
-            else
-                # This is already a mounted volume
-                DATA_ROOT="${selected_mount}/${TENANT_ID}"
-            fi
-        else
-            echo "  ❌ Invalid selection"
-            exit 1
-        fi
+        DATA_ROOT="${mounts[$((choice-1))]}/${TENANT_ID}"
     fi
 
     # Set derived paths
@@ -826,7 +751,7 @@ collect_network_config() {
         echo -e "  ${BOLD}🔄  Routing Method${NC}"
         echo -e "  ${CYAN}  1)${NC} Direct port mapping (simple)"
         echo -e "  ${CYAN}  2)${NC} Subdomain routing (recommended)"
-        echo -e "  ${CYAN}  3)${CN}  Path-based routing"
+        echo -e "  ${CYAN}  3)${NC}  Path-based routing"
         echo ""
         read -p "  ➤ Select routing method [1-3]: " routing_method
         
@@ -878,6 +803,9 @@ collect_network_config() {
         read -p "  ➤ OpenClaw admin password: " OPENCLAW_PASSWORD
         read -p "  ➤ OpenClaw port [8082]: " OPENCLAW_PORT
         OPENCLAW_PORT="${OPENCLAW_PORT:-8082}"
+        ENABLE_OPENCLAW="true"
+    else
+        ENABLE_OPENCLAW="false"
     fi
 
     log "SUCCESS" "Network & security configuration completed"
@@ -1044,8 +972,8 @@ FLOWISE_USER=admin
 FLOWISE_PASSWORD=${FLOWISE_PASSWORD}
 
 # ─── LiteLLM ──────────────────────────────────────────────────────────────────
-LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
-LITELLM_SALT_KEY=${LITELLM_SALT_KEY}
+LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-}
+LITELLM_SALT_KEY=${LITELLM_SALT_KEY:-}
 
 # ─── AnythingLLM ──────────────────────────────────────────────────────────────
 ANYTHINGLLM_API_KEY=${ANYTHINGLLM_API_KEY}
