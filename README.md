@@ -25,84 +25,199 @@ This platform uses a **modular architecture** where services are dynamically gen
 
 ## 🚀 Quick Start
 
-| n8n | n8nio/n8n:latest | 5678 | Workflow automation |
-| Flowise | flowiseai/flowise:latest | 3002 | Visual workflow builder |
-| Ollama | ollama/ollama:latest | 11434 | Local LLM serving |
-
-### Monitoring & Management
-
-| Service | Version | Port | Purpose | Status |
-|---------|---------|-------|---------|--------|
-| Prometheus | prom/prometheus:latest | 5000 | Metrics collection |
-| Grafana | grafana/grafana:latest | 3001 | Metrics visualization |
-| Caddy | caddy:2-alpine | 80/443 | Reverse proxy and SSL |
-| Signal API | bbernhard/signal-cli-rest-api:0.84 | 8090 | WhatsApp integration |
-| OpenClaw | alpine/openclaw:latest | 18789 | Platform management |
-
-## Quick Start
-
-### Prerequisites
-
-- Ubuntu 20.04+ or CentOS 8+
-- Docker Engine 20.10+ and Docker Compose v2+
-- **EBS volume must be attached and mounted to `/mnt/data` before running any script**
-- At least 8GB RAM and 4 CPU cores
-- 50GB+ storage for data volumes
-- Domain name for SSL certificates
-
-### Installation
-
-1. **Clone Repository**
-   ```bash
-   git clone https://github.com/jgla1ne/AIPlatformAutomation.git
-   cd AIPlatformAutomation/scripts
-   ```
-
-2. **Run Setup**
-   ```bash
-   sudo ./1-setup-system.sh
-   ```
-
-3. **Deploy Services**
-   ```bash
-   sudo ./2-deploy-services.sh
-   ```
-
-4. **Configure Services**
-   ```bash
-   sudo ./3-configure-services.sh
-   ```
-
-## Configuration
-
-### Environment Variables
-
-Key configuration variables in `/mnt/data/u1001/.env`:
-
 ```bash
-# Core Configuration
-DOMAIN_NAME=ai.datasquiz.net
-TENANT_UID=1001
-TENANT_GID=1001
-DATA_ROOT=/mnt/data/u1001
+# 1. Complete cleanup (optional data preservation)
+sudo bash scripts/0-complete-cleanup.sh
 
-# Database Credentials
-POSTGRES_USER=ds-admin
-POSTGRES_PASSWORD=<generated>
-REDIS_PASSWORD=<generated>
+# 2. Interactive setup (answer questions once)
+sudo bash scripts/1-setup-system.sh
 
-# Security
-ADMIN_PASSWORD=<generated>
-ENCRYPTION_KEY=<generated>
-JWT_SECRET=<generated>
+# 3. Add Tailscale auth key (if using VPN)
+nano /mnt/data/u1001/.env
+# Add: TAILSCALE_AUTH_KEY=tskey-auth-xxxxx
+
+# 4. Deploy (generates compose + caddyfile)
+sudo bash scripts/2-deploy-services.sh
+
+# 5. Configure integrations
+sudo bash scripts/3-configure-services.sh
+
+# 6. Add services dynamically
+sudo bash scripts/4-add-service.sh [service-name]
 ```
 
-### Network Configuration
+## 📋 Available Services
 
-- **Internal Network**: `aip-u1001_net_internal` (isolated)
-- **External Network**: `aip-u1001_net` (internet access)
-- **Service Discovery**: All services use Docker DNS
-- **SSL/TLS**: Managed by Caddy with Let's Encrypt
+| Service | Description | Default Port |
+|----------|-------------|-------------|
+| Open WebUI | Chat interface for local LLMs | 5006 |
+| AnythingLLM | RAG + document management | 5004 |
+| Dify | LLM application builder | 5003 (API) / 3002 (Web) |
+| n8n | Workflow automation | 5002 |
+| Flowise | AI workflow builder | 3000 |
+| OpenClaw | AI agent orchestration | 18789 |
+| LiteLLM | LLM proxy service | 5005 |
+| Ollama | Local LLM server | 11434 |
+| Grafana | Monitoring dashboard | 5001 |
+| MinIO | Object storage | 9000 (API) / 9001 (Console) |
+| Signal | Messaging API | 8085 |
+| Tailscale | VPN access | 41641 |
+| rclone | Cloud sync | - |
+
+## 🌐 Network Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Caddy (Reverse Proxy)                          │
+│  ┌─────────────────────────────────────────────┐    │
+│  │ Open WebUI (5006)                       │    │
+│  │ AnythingLLM (5004)                      │    │
+│  │ Dify (3002)                             │    │
+│  │ n8n (5002)                              │    │
+│  │ Flowise (3000)                           │    │
+│  │ OpenClaw (18789)                        │    │
+│  │ LiteLLM (5005)                          │    │
+│  │ Grafana (5001)                          │    │
+│  │ MinIO (9001/9000)                       │    │
+│  └─────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────┘
+│  ┌─────────────────────────────────────────────┐    │
+│  │ Core Services                                │    │
+│  │ ┌─────────────────────────────────────────┐    │
+│  │ │ PostgreSQL (5432)                     │    │
+│  │ │ Redis (6379)                          │    │
+│  │ │ Ollama (11434)                        │    │
+│  │ │ Qdrant (6333)                        │    │
+│  │ └─────────────────────────────────────────┘    │
+│  └─────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────┘
+│  ┌─────────────────────────────────────────────┐    │
+│  │ Monitoring                                  │    │
+│  │ ┌─────────────────────────────────────────┐    │
+│  │ │ Prometheus (5000)                    │    │
+│  │ │ Grafana (5001)                        │    │
+│  │ └─────────────────────────────────────────┘    │
+│  └─────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────┘
+│  ┌─────────────────────────────────────────────┐    │
+│  │ External Networks                            │    │
+│  │ ┌─────────────────────────────────────────┐    │
+│  │ │ Internet (via Caddy)                │    │
+│  │ └─────────────────────────────────────────┘    │
+│  │ ┌─────────────────────────────────────────┐    │
+│  │ │ VPN (Tailscale)                    │    │
+│  │ └─────────────────────────────────────────┘    │
+│  └─────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────┘
+```
+
+## 🔧 Configuration
+
+All configuration is stored in `/mnt/data/TENANTID/.env` with no duplicate variables. The system automatically:
+
+- Detects hardware capabilities
+- Assigns conflict-free ports based on tenant UID
+- Generates proper SSL certificates
+- Creates necessary databases and storage buckets
+
+## 🌐 Access URLs
+
+Once deployed, services are accessible via HTTPS subdomains:
+
+- `https://openwebui.YOUR_DOMAIN` - Chat interface
+- `https://anythingllm.YOUR_DOMAIN` - Document management
+- `https://dify.YOUR_DOMAIN` - LLM application builder
+- `https://n8n.YOUR_DOMAIN` - Workflow automation
+- `https://flowise.YOUR_DOMAIN` - AI workflows
+- `https://openclaw.YOUR_DOMAIN` - AI agents
+- `https://grafana.YOUR_DOMAIN` - Monitoring dashboard
+- `https://minio.YOUR_DOMAIN` - Object storage
+
+## 📊 Monitoring & Observability
+
+- **Prometheus**: Metrics collection at `http://prometheus:9090`
+- **Grafana**: Visualization dashboard with automatic Prometheus integration
+- **Caddy**: Reverse proxy with automatic SSL and health checks
+- **Service Health**: All containers include health checks with proper dependencies
+
+## 🔐 Security Features
+
+- **Non-root Execution**: All containers run as tenant UID/GID
+- **Secret Management**: Automatic generation of secure keys and passwords
+- **Network Isolation**: Tenant-scoped Docker networks
+- **SSL/TLS**: Automatic Let's Encrypt certificates or self-signed
+
+## 🛠 Development
+
+### Adding New Services
+
+1. Implement service append function in `scripts/2-deploy-services.sh`
+2. Add service selection in `scripts/1-setup-system.sh`
+3. Update available services list in README
+4. Add service configuration in `scripts/3-configure-services.sh`
+
+### Service Template
+
+```yaml
+service_name:
+    image: your-image:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-service_name
+    restart: unless-stopped
+    user: "${TENANT_UID}:${TENANT_GID}"
+    environment:
+      - VAR1=${VALUE1}
+      - VAR2=${VALUE2}
+    volumes:
+      - ${COMPOSE_PROJECT_NAME}_service_data:/data
+    networks:
+      - ${DOCKER_NETWORK}
+    healthcheck:
+      test: ["CMD", "your-health-check"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+```
+
+## 🔄 Multi-Tenant Support
+
+Each tenant is completely isolated:
+
+```
+/mnt/data/
+├── u1001/          # Tenant 1
+│   ├── .env
+│   ├── docker-compose.yml (generated)
+│   ├── caddy/config/
+│   ├── postgres/
+│   ├── ollama/
+│   └── logs/
+├── u1002/          # Tenant 2
+│   ├── .env
+│   ├── docker-compose.yml (generated)
+│   └── ...
+└── u1003/          # Tenant 3
+    ├── .env
+    └── ...
+```
+
+## 🚦 Production Deployment
+
+For production use:
+
+1. Set proper domain in DNS
+2. Configure firewall rules for required ports
+3. Set up monitoring and alerting
+4. Configure backup strategies
+5. Test all SSL certificates
+
+## 🤝 Contributing
+
+1. Follow the existing script patterns
+2. Test all changes with multiple tenants
+3. Update documentation for any new features
+4. Ensure all services have proper health checks
+5. Maintain backward compatibility
 
 ## Deployment Status
 
