@@ -1,58 +1,30 @@
-# AI Platform Automation - Baseline v1.0.0
+# AI Platform Automation
 
-## Overview
+A comprehensive, modular AI platform deployment system with dynamic service orchestration.
 
-Complete automated deployment platform for AI services including vector databases, LLM interfaces, workflow automation, and monitoring tools. Designed for multi-tenant environments with proper security, logging, and resource isolation.
+## 🏗 Architecture Overview
 
-## Architecture
+This platform uses a **modular architecture** where services are dynamically generated based on user selections, eliminating static configuration files.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    AI Platform Stack                     │
-├─────────────────────────────────────────────────────────────────┤
-│  Infrastructure Layer                                    │
-│  ├─ PostgreSQL (pgvector)                               │
-│  ├─ Redis                                              │
-│  ├─ Qdrant (Vector DB)                                  │
-│  └─ MinIO (Object Storage)                               │
-├─────────────────────────────────────────────────────────────────┤
-│  AI Applications                                        │
-│  ├─ LiteLLM (Gateway)                                   │
-│  ├─ Open WebUI (Chat Interface)                            │
-│  ├─ AnythingLLM (Document AI)                              │
-│  ├─ Dify (AI Platform)                                   │
-│  ├─ n8n (Workflow Automation)                              │
-│  ├─ Flowise (Workflow Builder)                              │
-│  └─ Ollama (Local LLM Server)                            │
-├─────────────────────────────────────────────────────────────────┤
-│  Monitoring & Management                                   │
-│  ├─ Prometheus (Metrics)                                   │
-│  ├─ Grafana (Visualization)                               │
-│  ├─ Caddy (Reverse Proxy)                                │
-│  ├─ Signal API (Communication)                             │
-│  └─ OpenClaw (Management)                                │
-└─────────────────────────────────────────────────────────────────┘
-```
+### Core Components
 
-## Services
+- **Script 0**: Complete tenant cleanup with data preservation options
+- **Script 1**: Interactive setup with GPU detection, service selection, and conflict-free port assignment
+- **Script 2**: Dynamic docker-compose.yml generation and deployment
+- **Script 3**: Post-deployment service integration and configuration
+- **Script 4**: Add/remove services from existing deployments
 
-### Core Infrastructure
+### Key Features
 
-| Service | Version | Port | Purpose | Status |
-|---------|---------|-------|---------|--------|
-| PostgreSQL | pgvector/pgvector:pg16 | 5432 | Primary database with pgvector extension |
-| Redis | redis:7-alpine | 6379 | Caching and session storage |
-| Qdrant | qdrant/qdrant:latest | 6333 | Vector database for embeddings |
-| MinIO | minio/minio:latest | 9001 | S3-compatible object storage |
+- 🎯 **Multi-tenant Support**: Each tenant gets isolated environment (`/mnt/data/TENANTID/`)
+- 🔧 **Dynamic Service Selection**: Choose only the services you need
+- 🖥️ **GPU/CPU Detection**: Automatic hardware optimization
+- 🌐 **Intelligent Networking**: Automatic SSL, domain resolution, and subdomain routing
+- 📊 **Built-in Monitoring**: Prometheus + Grafana with automatic datasource configuration
+- 🔐 **Security-First**: Non-root containers, proper secrets management
 
-### AI Applications
+## 🚀 Quick Start
 
-| Service | Version | Port | Purpose | Status |
-|---------|---------|-------|---------|--------|
-| LiteLLM | litellm/litellm:latest | 5005 | LLM gateway and cost management |
-| Open WebUI | ghcr.io/open-webui/open-webui:main | 5006 | Chat interface for multiple LLMs |
-| AnythingLLM | mintplexlabs/anythingllm:latest | 3001 | Document processing and RAG |
-| Dify | langgenius/dify-api:latest | 8080 | Complete AI application platform |
 | n8n | n8nio/n8n:latest | 5678 | Workflow automation |
 | Flowise | flowiseai/flowise:latest | 3002 | Visual workflow builder |
 | Ollama | ollama/ollama:latest | 11434 | Local LLM serving |
