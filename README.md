@@ -388,8 +388,224 @@ AIPlatformAutomation/
 - v1.1.0: Enhanced monitoring
 - v1.2.0: Multi-region support
 
+## Troubleshooting
+
+### 🚨 Common Issues and Solutions
+
+#### A service shows as unhealthy after deploy
+```bash
+# Check container logs
+docker logs <service-name> --tail 50
+
+# Check all service statuses
+docker compose -f /mnt/data/<tenant>/compose/docker-compose.yml ps
+
+# Restart a single service
+docker compose -f /mnt/data/<tenant>/compose/docker-compose.yml restart <service-name>
+```
+
+#### Caddy fails to get TLS certificate
+- **DNS Check**: Ensure your domain's A record points to this server's public IP
+- **Port Access**: Confirm ports 80 and 443 are open in your firewall/security group
+- **Propagation**: DNS changes may take up to 24 hours to propagate
+- **Debug Logs**: `docker logs caddy --tail 50`
+
+```bash
+# Test DNS resolution
+dig +short your-domain.com
+
+# Check certificate status
+docker exec caddy caddy list-certificates
+```
+
+#### Script 3 fails with "cannot authenticate"
+Services may still be starting. Wait 60 seconds then re-run:
+
+```bash
+# Re-run with specific services
+sudo bash scripts/3-configure-services.sh --skip-n8n --skip-flowise
+
+# Check service health first
+docker compose -f /mnt/data/<tenant>/compose/docker-compose.yml ps
+```
+
+#### Ollama models not loading
+```bash
+# Pull a model manually
+docker exec <tenant>-ollama ollama pull llama3.2:3b
+
+# List available models
+docker exec <tenant>-ollama ollama list
+
+# Check model storage
+ls -la /mnt/data/<tenant>/ollama/models/
+```
+
+#### Database connection issues
+```bash
+# Test PostgreSQL connection
+docker exec <tenant>-postgres psql -U platform -d postgres -c "SELECT version();"
+
+# Check Redis connection
+docker exec <tenant>-redis redis-cli ping
+
+# Verify databases exist
+docker exec <tenant>-postgres psql -U platform -d postgres -c "\l"
+```
+
+#### Vector Database (Qdrant) Issues
+```bash
+# Check Qdrant health
+curl http://localhost:6333/healthz
+
+# Test collection creation
+curl -X PUT http://localhost:6333/collections/test \
+  -H "Content-Type: application/json" \
+  -H "api-key: <your-qdrant-key>" \
+  -d '{"vectors": [], "distance": "Cosine"}'
+
+# Check logs
+docker logs <tenant>-qdrant --tail 20
+```
+
+#### Performance Issues
+```bash
+# Monitor resource usage
+docker stats
+
+# Check disk space
+df -h /mnt/data/<tenant>
+
+# Monitor memory usage
+free -h
+
+# Clean up unused Docker resources
+docker system prune -f
+docker volume prune -f
+```
+
+#### Network Connectivity Problems
+```bash
+# Test internal service communication
+docker exec <tenant>-caddy curl http://n8n:5678/healthz
+docker exec <tenant>-n8n curl http://postgres:5432
+
+# Check Docker network
+docker network ls
+docker network inspect <tenant>_net
+
+# Restart networking
+docker compose -f /mnt/data/<tenant>/compose/docker-compose.yml down
+docker compose -f /mnt/data/<tenant>/compose/docker-compose.yml up -d
+```
+
+#### Authentication Issues
+```bash
+# Reset service passwords
+# Edit .env file
+nano /mnt/data/<tenant>/.env
+
+# Reconfigure specific service
+sudo bash scripts/3-configure-services.sh --skip-all --configure-n8n
+
+# Check API keys
+grep -E "(API_KEY|PASSWORD|SECRET)" /mnt/data/<tenant>/.env
+```
+
+### 🔧 Advanced Troubleshooting
+
+#### Complete Reset and Rebuild
+```bash
+# 1. Complete cleanup (preserves data if needed)
+sudo bash scripts/0-complete-cleanup.sh --keep-data
+
+# 2. Fresh setup
+sudo bash scripts/1-setup-system.sh
+
+# 3. Redeploy
+sudo bash scripts/2-deploy-services.sh
+
+# 4. Reconfigure
+sudo bash scripts/3-configure-services.sh
+```
+
+#### Manual Service Intervention
+```bash
+# Access container shell
+docker exec -it <tenant>-<service> /bin/bash
+
+# Access service logs in real-time
+docker logs -f <tenant>-<service>
+
+# Force service restart
+docker restart <tenant>-<service>
+
+# Recreate service (loses data)
+docker compose -f /mnt/data/<tenant>/compose/docker-compose.yml up -d --force-recreate <service>
+```
+
+### 📊 Monitoring and Debugging
+
+#### Enable Debug Logging
+```bash
+# Check compose file for debug settings
+grep -A 5 -B 5 "logging:" /mnt/data/<tenant>/compose/docker-compose.yml
+
+# View real-time logs
+docker compose -f /mnt/data/<tenant>/compose/docker-compose.yml logs -f
+
+# Monitor specific service
+docker logs --tail 100 --follow <tenant>-<service>
+```
+
+#### Health Check Endpoints
+```bash
+# Service health URLs (internal)
+curl http://localhost:5678/healthz          # n8n
+curl http://localhost:3000/api/v1/ping         # Flowise
+curl http://localhost:4000/health              # LiteLLM
+curl http://localhost:3001/health              # AnythingLLM
+curl http://localhost:6333/healthz             # Qdrant
+curl http://localhost:11434/api/tags           # Ollama
+curl http://localhost:8080/health              # OpenWebUI
+```
+
+### 🆘 Getting Help
+
+#### Log Collection for Support
+```bash
+# Create support bundle
+mkdir -p /tmp/support-bundle
+cp /mnt/data/<tenant>/.env /tmp/support-bundle/
+docker compose -f /mnt/data/<tenant>/compose/docker-compose.yml logs --tail 500 > /tmp/support-bundle/logs.txt
+docker ps -a > /tmp/support-bundle/containers.txt
+docker compose -f /mnt/data/<tenant>/compose/docker-compose.yml config > /tmp/support-bundle/compose.yml
+
+# Create compressed archive
+tar -czf /tmp/support-$(date +%Y%m%d-%H%M%S).tar.gz -C /tmp support-bundle/
+```
+
+#### Environment Variables Reference
+All generated credentials are stored at:
+```
+/mnt/data/<tenant>/.env
+```
+
+**⚠️ Security Warning**: Never commit this file to version control. It contains all passwords, API keys, and secrets for your deployment.
+
+#### Key Environment Variables
+| Variable | Purpose | Example |
+|-----------|---------|---------|
+| `DOMAIN` | Primary domain | `ai.example.com` |
+| `DB_PASSWORD` | PostgreSQL password | `generated-32-chars` |
+| `REDIS_PASSWORD` | Redis password | `generated-32-chars` |
+| `LITELLM_MASTER_KEY` | LiteLLM API key | `sk-xxxxx` |
+| `N8N_ENCRYPTION_KEY` | n8n encryption | `generated-32-chars` |
+| `GRAFANA_PASSWORD` | Grafana admin | `generated-16-chars` |
+| `QDRANT_API_KEY` | Vector DB key | `generated-32-chars` |
+
 ---
 
 **Status**: Production Ready (with known limitations)
-**Last Updated**: 2026-02-28
+**Last Updated**: 2026-03-01
 **Maintainer**: Jean-Gabriel Laine <jglaine@example.com>
