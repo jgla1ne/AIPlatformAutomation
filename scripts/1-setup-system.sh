@@ -123,9 +123,89 @@ check_prerequisites() {
     log "SUCCESS" "Docker and Docker Compose are available"
 }
 
+# ─── EBS Volume Detection and Mounting ───────────────────────────────────────────
+detect_and_mount_ebs() {
+    print_step "2" "9" "EBS Volume Detection and Mounting"
+
+    echo -e "  ${BOLD}💾  EBS Volume Detection${NC}"
+    echo -e "  ${DIM}Scanning for available EBS volumes to mount${NC}"
+    echo ""
+
+    # List available block devices
+    echo -e "  ${BOLD}Available Block Devices:${NC}"
+    lsblk -d -o NAME,SIZE,TYPE,MOUNTPOINT | grep -E "^nvme|^xvd|^sd" | while read -r line; do
+        echo -e "  ${CYAN}    ${line}${NC}"
+    done
+    echo ""
+
+    # Find unmounted EBS volumes
+    local unmounted_volumes=()
+    while IFS= read -r device; do
+        if ! lsblk -n -o MOUNTPOINT "${device}" | grep -q "."; then
+            unmounted_volumes+=("${device}")
+        fi
+    done < <(lsblk -d -n -o NAME | grep -E "^nvme|^xvd|^sd")
+
+    if [ ${#unmounted_volumes[@]} -eq 0 ]; then
+        log "INFO" "No unmounted EBS volumes found"
+        return
+    fi
+
+    echo -e "  ${BOLD}Unmounted EBS Volumes:${NC}"
+    local idx=0
+    for volume in "${unmounted_volumes[@]}"; do
+        size=$(lsblk -d -n -o SIZE "/dev/${volume}")
+        echo -e "  ${CYAN}  $((++idx))${NC}  /dev/${volume}  ${DIM}(${size})${NC}"
+    done
+    echo ""
+
+    # Ask user to select volume to mount
+    while true; do
+        read -p "  ➤ Select EBS volume to mount [1-${idx}] (or skip): " choice
+        if [[ -z "${choice}" ]]; then
+            log "INFO" "Skipping EBS mount"
+            break
+        fi
+        if [[ "${choice}" =~ ^[0-9]+$ ]] && [ "${choice}" -ge 1 ] && [ "${choice}" -le "${idx}" ]; then
+            local selected_volume="${unmounted_volumes[$((choice-1))]}"
+            local mount_point="/mnt/data"
+            
+            log "INFO" "Mounting /dev/${selected_volume} to ${mount_point}"
+            
+            # Create mount point if it doesn't exist
+            sudo mkdir -p "${mount_point}"
+            
+            # Check if already mounted
+            if mountpoint -q "${mount_point}" 2>/dev/null; then
+                log "WARN" "${mount_point} is already mounted"
+                break
+            fi
+            
+            # Mount the volume
+            if sudo mount "/dev/${selected_volume}" "${mount_point}" 2>/dev/null; then
+                log "SUCCESS" "EBS volume mounted: /dev/${selected_volume} → ${mount_point}"
+                
+                # Add to /etc/fstab for persistence
+                if ! grep -q "/dev/${selected_volume}" /etc/fstab; then
+                    echo "/dev/${selected_volume}  ${mount_point}  ext4  defaults  0  2" | sudo tee -a /etc/fstab
+                    log "INFO" "Added to /etc/fstab for persistence"
+                fi
+                break
+            else
+                log "ERROR" "Failed to mount /dev/${selected_volume}"
+                echo -e "  ${DIM}You may need to format the volume first:${NC}"
+                echo -e "  ${DIM}  sudo mkfs.ext4 /dev/${selected_volume}${NC}"
+            fi
+            break
+        else
+            echo "  ❌ Enter a number between 1 and ${idx}, or leave empty to skip"
+        fi
+    done
+}
+
 # ─── Data Volume Selection ───────────────────────────────────────────────────
 select_data_volume() {
-    print_step "3" "9" "Data Volume Selection"
+    print_step "4" "10" "Data Volume Selection"
 
     echo -e "  ${BOLD}💾  Available Mount Points${NC}"
     echo -e "  ${DIM}Select where to store AI platform data${NC}"
@@ -185,7 +265,7 @@ select_data_volume() {
 
 # ─── Hardware Detection ────────────────────────────────────────────────────
 detect_gpu() {
-    print_step "4" "9" "Hardware Detection"
+    print_step "5" "10" "Hardware Detection"
 
     # Initialize GPU_TYPE to prevent unbound variable error
     GPU_TYPE="cpu"
@@ -246,7 +326,7 @@ check_dns() {
 
 # ─── Rebuild collect_identity to use check_dns ───────────────────────────────
 collect_identity() {
-    print_step "2" "9" "Domain & Identity"
+    print_step "2" "10" "Domain & Identity"
 
     echo -e "  ${BOLD}🌐  Domain Setup${NC}"
     echo -e "  ${DIM}DNS must already point to this server for automatic TLS to work${NC}"
@@ -415,7 +495,7 @@ select_stack() {
 
 # ─── Vector DB Selection ───────────────────────────────────────────────────
 select_vector_db() {
-    print_step "6" "9" "Vector Database Selection"
+    print_step "6" "10" "Vector Database Selection"
 
     echo -e "  ${BOLD}🗄️  Choose Vector Database${NC}"
     echo ""
@@ -446,7 +526,7 @@ select_vector_db() {
 
 # ─── LLM Configuration ─────────────────────────────────────────────────────
 collect_llm_config() {
-    print_step "7" "9" "LLM Provider Configuration"
+    print_step "7" "10" "LLM Provider Configuration"
 
     echo -e "  ${BOLD}🔑  LLM Provider API Keys${NC}"
     echo -e "  ${DIM}Enter API keys for providers you want to use (leave blank to skip)${NC}"
@@ -525,7 +605,7 @@ collect_llm_config() {
 
 # ─── Port Configuration ────────────────────────────────────────────────────
 collect_ports() {
-    print_step "8" "9" "Port Configuration"
+    print_step "8" "10" "Port Configuration"
 
     echo -e "  ${BOLD}🔌  Service Ports${NC}"
     echo -e "  ${DIM}Configure ports for each enabled service${NC}"
@@ -591,7 +671,7 @@ collect_ports() {
 
 # ─── Generate secrets (preserve on re-run) ───────────────────────────────────
 generate_secrets() {
-    print_step "9" "9" "Generating Secrets"
+    print_step "9" "10" "Generating Secrets"
 
     load_existing_secret() {
         local key="${1}" default="${2}"
@@ -642,13 +722,13 @@ SSL_TYPE=${SSL_TYPE}
 # ─── Hardware ─────────────────────────────────────────────────────────────────
 GPU_TYPE=${GPU_TYPE}
 GPU_COUNT=${GPU_COUNT:-0}
-OLLAMA_GPU_LAYERS=${GPU_LAYERS}
-CPU_CORES=${CPU_CORES}
-TOTAL_RAM_GB=${TOTAL_RAM_GB}
+OLLAMA_GPU_LAYERS=${GPU_LAYERS:-auto}
+CPU_CORES=${CPU_CORES:-$(nproc)}
+TOTAL_RAM_GB=${TOTAL_RAM_GB:-$(awk '/MemTotal/{printf "%.0f", $2/1048576}' /proc/meminfo)}
 
 # ─── Ollama ───────────────────────────────────────────────────────────────────
 OLLAMA_DEFAULT_MODEL=${OLLAMA_DEFAULT_MODEL:-}
-OLLAMA_MODELS=${OLLAMA_MODELS:-}
+OLLAMA_MODELS="${OLLAMA_MODELS}"
 
 # ─── Vector Database ──────────────────────────────────────────────────────────
 VECTOR_DB=${VECTOR_DB:-qdrant}
@@ -954,14 +1034,15 @@ main() {
     print_header
     check_root
     check_prerequisites      # Step 1
-    collect_identity         # Step 2 - Moved up to get TENANT_ID first
-    select_data_volume       # Step 3 - Moved after identity
-    detect_gpu               # Step 4
-    select_stack             # Step 5
-    select_vector_db         # Step 6
-    collect_llm_config       # Step 7
-    collect_ports            # Step 8
-    generate_secrets         # Step 9
+    collect_identity         # Step 2
+    detect_and_mount_ebs     # Step 3 - NEW: EBS detection and mounting
+    select_data_volume       # Step 4
+    detect_gpu               # Step 5
+    select_stack             # Step 6
+    select_vector_db         # Step 7
+    collect_llm_config       # Step 8
+    collect_ports            # Step 9
+    generate_secrets         # Step 10
     print_summary
     write_env
     create_directories

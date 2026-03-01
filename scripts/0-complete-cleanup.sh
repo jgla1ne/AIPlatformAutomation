@@ -156,13 +156,34 @@ cleanup_data() {
             log "SUCCESS" "Compose file removed (will be regenerated)"
         fi
     else
-        log "INFO" "Removing data directory..."
+        log "INFO" "Unmounting EBS volumes and removing data directory..."
+        
+        # Unmount any EBS volumes mounted under /mnt/data
+        if mountpoint -q /mnt/data 2>/dev/null; then
+            log "INFO" "Unmounting /mnt/data..."
+            umount /mnt/data 2>/dev/null || true
+            log "SUCCESS" "/mnt/data unmounted"
+        fi
+        
+        # Check for and unmount tenant-specific mount points
+        if [ -n "${DATA_ROOT}" ] && mountpoint -q "${DATA_ROOT}" 2>/dev/null; then
+            log "INFO" "Unmounting ${DATA_ROOT}..."
+            umount "${DATA_ROOT}" 2>/dev/null || true
+            log "SUCCESS" "${DATA_ROOT} unmounted"
+        fi
+        
+        # Remove data directory
         if [ -d "${DATA_ROOT}" ]; then
             rm -rf "${DATA_ROOT}"
             log "SUCCESS" "Data directory removed: ${DATA_ROOT}"
         else
             log "INFO" "Data directory did not exist"
         fi
+        
+        # Complete Docker system prune
+        log "INFO" "Running complete Docker system prune..."
+        docker system prune -af --volumes 2>/dev/null || true
+        log "SUCCESS" "Docker system pruned - all containers, images, networks, and volumes removed"
     fi
 }
 
