@@ -125,7 +125,7 @@ check_prerequisites() {
 
 # ─── Data Volume Selection ───────────────────────────────────────────────────
 select_data_volume() {
-    print_step "2" "9" "Data Volume Selection"
+    print_step "3" "9" "Data Volume Selection"
 
     echo -e "  ${BOLD}💾  Available Mount Points${NC}"
     echo -e "  ${DIM}Select where to store AI platform data${NC}"
@@ -166,13 +166,13 @@ select_data_volume() {
         while true; do
             read -p "  ➤ Enter custom path: " custom_path
             if [ -n "${custom_path}" ]; then
-                DATA_ROOT="${custom_path}/ai-platform"
+                DATA_ROOT="${custom_path}/${TENANT_ID}"
                 break
             fi
             echo "  ❌ Path cannot be empty"
         done
     else
-        DATA_ROOT="${mounts[$((choice-1))]}/ai-platform"
+        DATA_ROOT="${mounts[$((choice-1))]}/${TENANT_ID}"
     fi
 
     # Set derived paths
@@ -185,7 +185,7 @@ select_data_volume() {
 
 # ─── Hardware Detection ────────────────────────────────────────────────────
 detect_gpu() {
-    print_step "3" "9" "Hardware Detection"
+    print_step "4" "9" "Hardware Detection"
 
     # Initialize GPU_TYPE to prevent unbound variable error
     GPU_TYPE="cpu"
@@ -246,7 +246,7 @@ check_dns() {
 
 # ─── Rebuild collect_identity to use check_dns ───────────────────────────────
 collect_identity() {
-    print_step "4" "9" "Domain & Identity"
+    print_step "2" "9" "Domain & Identity"
 
     echo -e "  ${BOLD}🌐  Domain Setup${NC}"
     echo -e "  ${DIM}DNS must already point to this server for automatic TLS to work${NC}"
@@ -882,7 +882,7 @@ print_summary() {
     printf "  ${BOLD}%-22s${NC} %s\n" "Tenant ID:"    "${TENANT_ID}"
     printf "  ${BOLD}%-22s${NC} %s\n" "Admin email:"  "${ADMIN_EMAIL}"
     printf "  ${BOLD}%-22s${NC} %s\n" "SSL:"          "${SSL_TYPE}"
-    printf "  ${BOLD}%-22s${NC} %s\n" "GPU:"          "${GPU_TYPE} (layers: ${GPU_LAYERS})"
+    printf "  ${BOLD}%-22s${NC} %s\n" "GPU:"          "${GPU_TYPE} (layers: ${GPU_LAYERS:-auto})"
     printf "  ${BOLD}%-22s${NC} %s\n" "Vector DB:"    "${VECTOR_DB:-none}"
     printf "  ${BOLD}%-22s${NC} %s\n" "LLM providers:" "${LLM_PROVIDERS:-local}"
     echo ""
@@ -954,9 +954,9 @@ main() {
     print_header
     check_root
     check_prerequisites      # Step 1
-    select_data_volume       # Step 2
-    detect_gpu               # Step 3
-    collect_identity         # Step 4
+    collect_identity         # Step 2 - Moved up to get TENANT_ID first
+    select_data_volume       # Step 3 - Moved after identity
+    detect_gpu               # Step 4
     select_stack             # Step 5
     select_vector_db         # Step 6
     collect_llm_config       # Step 7
