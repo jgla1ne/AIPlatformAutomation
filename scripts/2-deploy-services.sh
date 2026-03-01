@@ -309,23 +309,7 @@ EOF
 # CADDY
 # ─────────────────────────────────────────────────────────────
 append_caddy() {
-    # Build depends_on block dynamically
-    local depends=""
-    [ "${ENABLE_OPENWEBUI}" = "true" ] && \
-        depends+=$'      open-webui:\n        condition: service_healthy\n'
-    [ "${ENABLE_ANYTHINGLLM}" = "true" ] && \
-        depends+=$'      anythingllm:\n        condition: service_healthy\n'
-    [ "${ENABLE_N8N}" = "true" ] && \
-        depends+=$'      n8n:\n        condition: service_healthy\n'
-    [ "${ENABLE_DIFY}" = "true" ] && \
-        depends+=$'      dify-api:\n        condition: service_healthy\n'
-    [ "${ENABLE_FLOWISE}" = "true" ] && \
-        depends+=$'      flowise:\n        condition: service_healthy\n'
-    [ "${ENABLE_LITELLM}" = "true" ] && \
-        depends+=$'      litellm:\n        condition: service_healthy\n'
-    [ "${ENABLE_GRAFANA}" = "true" ] && \
-        depends+=$'      grafana:\n        condition: service_healthy\n'
-
+    # Write base caddy service
     compose_append << EOF
 
   caddy:
@@ -348,7 +332,40 @@ append_caddy() {
         condition: service_healthy
       redis:
         condition: service_healthy
-$(echo "${depends}")
+EOF
+
+    # Append optional service dependencies — each as a proper YAML block
+    [ "${ENABLE_OPENWEBUI}" = "true" ] && compose_append << EOF
+      open-webui:
+        condition: service_healthy
+EOF
+    [ "${ENABLE_ANYTHINGLLM}" = "true" ] && compose_append << EOF
+      anythingllm:
+        condition: service_healthy
+EOF
+    [ "${ENABLE_N8N}" = "true" ] && compose_append << EOF
+      n8n:
+        condition: service_healthy
+EOF
+    [ "${ENABLE_DIFY}" = "true" ] && compose_append << EOF
+      dify-api:
+        condition: service_healthy
+EOF
+    [ "${ENABLE_FLOWISE}" = "true" ] && compose_append << EOF
+      flowise:
+        condition: service_healthy
+EOF
+    [ "${ENABLE_LITELLM}" = "true" ] && compose_append << EOF
+      litellm:
+        condition: service_healthy
+EOF
+    [ "${ENABLE_GRAFANA}" = "true" ] && compose_append << EOF
+      grafana:
+        condition: service_healthy
+EOF
+
+    # Append healthcheck block
+    compose_append << EOF
     healthcheck:
       test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
       interval: 30s
@@ -438,20 +455,23 @@ generate_postgres_init() {
     local init_dir="${DATA_ROOT}/postgres/init"
     mkdir -p "${init_dir}"
 
-    cat > "${init_dir}/01-create-databases.sh" << EOF
+    # Write using a function to avoid heredoc indentation issues
+    cat > "${init_dir}/01-create-databases.sh" << 'INITEOF'
 #!/bin/bash
 set -e
-psql -v ON_ERROR_STOP=1 --username "${POSTGRES_USER}" << EOSQL
-    CREATE DATABASE litellm;
-    CREATE DATABASE n8n;
-    CREATE DATABASE dify;
-    CREATE DATABASE openwebui;
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" << EOSQL
+CREATE DATABASE litellm;
+CREATE DATABASE n8n;
+CREATE DATABASE dify;
+CREATE DATABASE openwebui;
 EOSQL
-EOF
+INITEOF
 
     chmod +x "${init_dir}/01-create-databases.sh"
     chown -R "${TENANT_UID}:${TENANT_GID}" "${init_dir}"
     log "SUCCESS" "Postgres init scripts created"
+    log "INFO" "NOTE: Init scripts only run on first Postgres start with empty data dir"
+    log "INFO" "If re-deploying with existing data, databases already exist — this is fine"
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -584,6 +604,7 @@ append_openwebui() {
       - VECTOR_DB=qdrant
       - QDRANT_URI=http://qdrant:6333
       - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+      - OLLAMA_BASE_URL=${ollama_url}
       - ENABLE_SIGNUP=false
       - DEFAULT_USER_ROLE=user
     volumes:
@@ -613,17 +634,22 @@ append_anythingllm() {
     ports:
       - "${ANYTHINGLLM_PORT}:3001"
     environment:
-      - SERVER_PORT=3001
       - STORAGE_DIR=/app/server/storage
+      - SERVER_PORT=3001
+      - UID=${TENANT_UID}
+      - GID=${TENANT_GID}
       - JWT_SECRET=${ANYTHINGLLM_JWT_SECRET}
       # Vector DB connection
       - VECTOR_DB=${VECTOR_DB}
-      - QDRANT_ENDPOINT=${VECTOR_DB_URL}
+      - QDRANT_ENDPOINT=http://qdrant:6333
       - QDRANT_API_KEY=${QDRANT_API_KEY:-}
       # LLM connection via LiteLLM
       - LLM_PROVIDER=litellm
       - LITELLM_BASE_URL=http://litellm:4000
       - LITELLM_API_KEY=${LITELLM_MASTER_KEY}
+      - LITE_LLM_MODEL_PREF=${OLLAMA_DEFAULT_MODEL}
+      # Auth
+      - AUTH_TOKEN=${ANYTHINGLLM_API_KEY}
       - EMBEDDING_ENGINE=ollama
       - OLLAMA_BASE_PATH=http://ollama:11434
       - EMBEDDING_MODEL_PREF=nomic-embed-text:latest
@@ -1386,6 +1412,128 @@ output_tailscale_info() {
     log "WARN" "Tailscale did not authenticate within ${max_wait}s"
     log "WARN" "Check auth key: docker logs ${COMPOSE_PROJECT_NAME}-tailscale"
     log "WARN" "Manual check: docker exec ${COMPOSE_PROJECT_NAME}-tailscale tailscale ip -4"
+}
+
+# ─────────────────────────────────────────────────────────────
+# DEPLOYMENT VERIFICATION
+# ─────────────────────────────────────────────────────────────
+verify_deployment() {
+    log "INFO" "Verifying deployment health..."
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf "%-30s %-12s %-12s %s\n" "SERVICE" "DOCKER" "HTTP" "URL"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # Wait for services to stabilise
+    log "INFO" "Waiting 30s for services to stabilise..."
+    sleep 30
+
+    check_service() {
+        local name=$1        # display name
+        local container=$2   # docker container name
+        local url=$3         # http url to check (empty = skip)
+        local internal_url=$4 # internal docker network url (empty = skip)
+
+        # Docker health status
+        local docker_status
+        docker_status=$(docker inspect \
+            --format='{{.State.Health.Status}}' \
+            "${container}" 2>/dev/null || echo "missing")
+
+        # If no healthcheck defined, use running state
+        if [ "${docker_status}" = "" ] || [ "${docker_status}" = "<nil>" ]; then
+            docker_status=$(docker inspect \
+                --format='{{.State.Status}}' \
+                "${container}" 2>/dev/null || echo "missing")
+        fi
+
+        # HTTP check (external via Caddy)
+        local http_status="skip"
+        if [ -n "${url}" ]; then
+            http_status=$(curl -so /dev/null \
+                -w "%{http_code}" \
+                --max-time 10 \
+                --retry 2 \
+                "${url}" 2>/dev/null || echo "fail")
+        fi
+
+        # Colour coding
+        local docker_display http_display
+        case "${docker_status}" in
+            healthy|running) docker_display="✅ ${docker_status}" ;;
+            starting)        docker_display="⏳ starting" ;;
+            *)               docker_display="❌ ${docker_status}" ;;
+        esac
+
+        case "${http_status}" in
+            200|301|302|303) http_display="✅ ${http_status}" ;;
+            skip)            http_display="➖ skip" ;;
+            *)               http_display="❌ ${http_status}" ;;
+        esac
+
+        printf "%-30s %-20s %-20s %s\n" \
+            "${name}" "${docker_display}" "${http_display}" "${url:-internal}"
+    }
+
+    local p="${COMPOSE_PROJECT_NAME}"
+
+    # Infrastructure always present
+    check_service "PostgreSQL"   "${p}-postgres"  "" ""
+    check_service "Redis"        "${p}-redis"     "" ""
+    check_service "MinIO"        "${p}-minio"     "" ""
+    check_service "Caddy"        "${p}-caddy"     "https://${DOMAIN}" ""
+
+    # Optional services
+    [ "${ENABLE_OPENWEBUI}" = "true" ] && \
+        check_service "OpenWebUI" "${p}-open-webui" \
+            "https://chat.${DOMAIN}" ""
+    [ "${ENABLE_ANYTHINGLLM}" = "true" ] && \
+        check_service "AnythingLLM" "${p}-anythingllm" \
+            "https://anythingllm.${DOMAIN}" ""
+    [ "${ENABLE_N8N}" = "true" ] && \
+        check_service "n8n" "${p}-n8n" \
+            "https://n8n.${DOMAIN}" ""
+    [ "${ENABLE_DIFY}" = "true" ] && \
+        check_service "Dify API" "${p}-dify-api" \
+            "https://dify.${DOMAIN}" ""
+    [ "${ENABLE_FLOWISE}" = "true" ] && \
+        check_service "Flowise" "${p}-flowise" \
+            "https://flowise.${DOMAIN}" ""
+    [ "${ENABLE_LITELLM}" = "true" ] && \
+        check_service "LiteLLM" "${p}-litellm" \
+            "https://litellm.${DOMAIN}" ""
+    [ "${ENABLE_OLLAMA}" = "true" ] && \
+        check_service "Ollama" "${p}-ollama" "" ""
+    [ "${ENABLE_QDRANT}" = "true" ] && \
+        check_service "Qdrant" "${p}-qdrant" "" ""
+    [ "${ENABLE_GRAFANA}" = "true" ] && \
+        check_service "Grafana" "${p}-grafana" \
+            "https://grafana.${DOMAIN}" ""
+    [ "${ENABLE_SIGNAL}" = "true" ] && \
+        check_service "Signal API" "${p}-signal-api" "" ""
+    [ "${ENABLE_TAILSCALE}" = "true" ] && \
+        check_service "Tailscale" "${p}-tailscale" "" ""
+    [ "${ENABLE_OPENCLAW}" = "true" ] && \
+        check_service "OpenClaw" "${p}-openclaw" "" ""
+
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+
+    # Print any containers in unhealthy/exited state
+    local unhealthy
+    unhealthy=$(docker ps -a \
+        --filter "name=${p}" \
+        --filter "status=exited" \
+        --format "{{.Names}}" 2>/dev/null)
+
+    if [ -n "${unhealthy}" ]; then
+        log "WARN" "The following containers have exited:"
+        echo "${unhealthy}" | while read -r c; do
+            echo "  → ${c}"
+            echo "    Last 10 log lines:"
+            docker logs --tail 10 "${c}" 2>&1 | sed 's/^/    | /'
+        done
+    fi
 }
 
 # ─────────────────────────────────────────────────────────────
