@@ -26,6 +26,112 @@ COMPOSE_DIR=""
 CADDY_DIR=""
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# ─── Default Values (to prevent unbound variable errors) ───────────────────────
+# Service flags
+ENABLE_OLLAMA="false"
+ENABLE_OPENWEBUI="false"
+ENABLE_ANYTHINGLLM="false"
+ENABLE_DIFY="false"
+ENABLE_N8N="false"
+ENABLE_FLOWISE="false"
+ENABLE_LITELLM="false"
+ENABLE_QDRANT="false"
+ENABLE_GRAFANA="false"
+ENABLE_PROMETHEUS="false"
+ENABLE_AUTHENTIK="false"
+ENABLE_SIGNAL="false"
+ENABLE_TAILSCALE="false"
+ENABLE_OPENCLAW="false"
+ENABLE_RCLONE="false"
+ENABLE_MINIO="false"
+
+# Database defaults
+POSTGRES_USER="platform"
+POSTGRES_PASSWORD=""
+POSTGRES_DB="platform"
+REDIS_PASSWORD=""
+MINIO_ROOT_USER="minioadmin"
+MINIO_ROOT_PASSWORD=""
+
+# Proxy defaults
+PROXY_TYPE="caddy"
+ROUTING_METHOD="subdomain"
+SSL_TYPE="acme"
+CUSTOM_PROXY_IMAGE=""
+HTTP_PROXY=""
+HTTPS_PROXY=""
+NO_PROXY=""
+
+# Hardware defaults
+GPU_TYPE="cpu"
+GPU_COUNT="0"
+GPU_LAYERS="auto"
+CPU_CORES="$(nproc)"
+TOTAL_RAM_GB="$(awk '/MemTotal/{printf "%.0f", $2/1048576}' /proc/meminfo)"
+
+# LLM defaults
+OLLAMA_DEFAULT_MODEL=""
+OLLAMA_MODELS=""
+LLM_PROVIDERS="local"
+OPENAI_API_KEY=""
+GOOGLE_API_KEY=""
+GROQ_API_KEY=""
+OPENROUTER_API_KEY=""
+
+# Vector DB defaults
+VECTOR_DB="qdrant"
+VECTOR_DB_HOST="qdrant"
+VECTOR_DB_PORT="6333"
+VECTOR_DB_URL="http://qdrant:6333"
+
+# Service defaults
+N8N_ENCRYPTION_KEY=""
+N8N_API_KEY=""
+N8N_PASSWORD=""
+FLOWISE_SECRET_KEY=""
+FLOWISE_PASSWORD=""
+LITELLM_MASTER_KEY=""
+LITELLM_SALT_KEY=""
+ANYTHINGLLM_API_KEY=""
+ANYTHINGLLM_JWT_SECRET=""
+ANYTHINGLLM_AUTH_TOKEN=""
+ANYTHINGLLM_PORT="3001"
+QDRANT_API_KEY=""
+GRAFANA_PASSWORD=""
+AUTHENTIK_SECRET_KEY=""
+AUTHENTIK_BOOTSTRAP_PASSWORD=""
+DIFY_SECRET_KEY=""
+DIFY_INNER_API_KEY=""
+
+# Network defaults
+TAILSCALE_AUTH_KEY=""
+TAILSCALE_HOSTNAME=""
+SIGNAL_PHONE_NUMBER=""
+SIGNAL_VERIFICATION_CODE=""
+GDRIVE_CLIENT_ID=""
+GDRIVE_CLIENT_SECRET=""
+GDRIVE_FOLDER_NAME=""
+
+# Search defaults
+SEARCH_PROVIDER="none"
+BRAVE_API_KEY=""
+SERPAPI_KEY=""
+SERPAPI_ENGINE="google"
+CUSTOM_SEARCH_URL=""
+CUSTOM_SEARCH_KEY=""
+
+# Port defaults
+N8N_PORT="5678"
+FLOWISE_PORT="3000"
+OPENWEBUI_PORT="8080"
+LITELLM_PORT="4000"
+GRAFANA_PORT="3000"
+PROMETHEUS_PORT="9090"
+OLLAMA_PORT="11434"
+QDRANT_PORT="6333"
+SIGNAL_PORT="8080"
+OPENCLAW_PORT="8082"
+
 # ─── Logging ─────────────────────────────────────────────────────────────────
 log() {
     local level="${1}" message="${2}"
@@ -916,10 +1022,10 @@ write_env() {
     chmod 700 "${DATA_ROOT}"
 
     cat > "${ENV_FILE}" << EOF
-# ════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
 # AI Platform — Environment Configuration
 # Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-# ════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
 
 # ─── Platform Identity ────────────────────────────────────────────────────────
 TENANT_ID=${TENANT_ID}
@@ -928,34 +1034,56 @@ ADMIN_EMAIL=${ADMIN_EMAIL}
 DATA_ROOT=${DATA_ROOT}
 SSL_TYPE=${SSL_TYPE}
 
+# ─── Service Flags ─────────────────────────────────────────────────────────────
+ENABLE_OLLAMA=${ENABLE_OLLAMA}
+ENABLE_OPENWEBUI=${ENABLE_OPENWEBUI}
+ENABLE_ANYTHINGLLM=${ENABLE_ANYTHINGLLM}
+ENABLE_DIFY=${ENABLE_DIFY}
+ENABLE_N8N=${ENABLE_N8N}
+ENABLE_FLOWISE=${ENABLE_FLOWISE}
+ENABLE_LITELLM=${ENABLE_LITELLM}
+ENABLE_QDRANT=${ENABLE_QDRANT}
+ENABLE_GRAFANA=${ENABLE_GRAFANA}
+ENABLE_PROMETHEUS=${ENABLE_PROMETHEUS}
+ENABLE_AUTHENTIK=${ENABLE_AUTHENTIK}
+ENABLE_SIGNAL=${ENABLE_SIGNAL}
+ENABLE_TAILSCALE=${ENABLE_TAILSCALE}
+ENABLE_OPENCLAW=${ENABLE_OPENCLAW}
+ENABLE_RCLONE=${ENABLE_RCLONE}
+ENABLE_MINIO=${ENABLE_MINIO}
+
+# ─── Project Configuration ───────────────────────────────────────────────────
+COMPOSE_PROJECT_NAME="aip-${TENANT_ID}"
+DOCKER_NETWORK="\${COMPOSE_PROJECT_NAME}_net"
+
 # ─── Hardware ─────────────────────────────────────────────────────────────────
 GPU_TYPE=${GPU_TYPE}
-GPU_COUNT=${GPU_COUNT:-0}
-OLLAMA_GPU_LAYERS=${GPU_LAYERS:-auto}
-CPU_CORES=${CPU_CORES:-$(nproc)}
-TOTAL_RAM_GB=${TOTAL_RAM_GB:-$(awk '/MemTotal/{printf "%.0f", $2/1048576}' /proc/meminfo)}
+GPU_COUNT=${GPU_COUNT}
+OLLAMA_GPU_LAYERS=${GPU_LAYERS}
+CPU_CORES=${CPU_CORES}
+TOTAL_RAM_GB=${TOTAL_RAM_GB}
 
 # ─── Ollama ───────────────────────────────────────────────────────────────────
-OLLAMA_DEFAULT_MODEL=${OLLAMA_DEFAULT_MODEL:-}
+OLLAMA_DEFAULT_MODEL=${OLLAMA_DEFAULT_MODEL}
 OLLAMA_MODELS="${OLLAMA_MODELS}"
 
 # ─── Vector Database ──────────────────────────────────────────────────────────
-VECTOR_DB=${VECTOR_DB:-qdrant}
-VECTOR_DB_HOST=${VECTOR_DB_HOST:-qdrant}
-VECTOR_DB_PORT=${VECTOR_DB_PORT:-6333}
-VECTOR_DB_URL=${VECTOR_DB_URL:-http://qdrant:6333}
+VECTOR_DB=${VECTOR_DB}
+VECTOR_DB_HOST=${VECTOR_DB_HOST}
+VECTOR_DB_PORT=${VECTOR_DB_PORT}
+VECTOR_DB_URL=${VECTOR_DB_URL}
 
 # ─── LLM Providers ────────────────────────────────────────────────────────────
-LLM_PROVIDERS=${LLM_PROVIDERS:-local}
-OPENAI_API_KEY=${OPENAI_API_KEY:-}
-GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
-GROQ_API_KEY=${GROQ_API_KEY:-}
-OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+LLM_PROVIDERS=${LLM_PROVIDERS}
+OPENAI_API_KEY=${OPENAI_API_KEY}
+GOOGLE_API_KEY=${GOOGLE_API_KEY}
+GROQ_API_KEY=${GROQ_API_KEY}
+OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
 
 # ─── Database ─────────────────────────────────────────────────────────────────
-POSTGRES_USER=${POSTGRES_USER:-platform}
+POSTGRES_USER=${POSTGRES_USER}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-POSTGRES_DB=${POSTGRES_DB:-platform}
+POSTGRES_DB=${POSTGRES_DB}
 
 # ─── Redis ────────────────────────────────────────────────────────────────────
 REDIS_PASSWORD=${REDIS_PASSWORD}
@@ -972,13 +1100,14 @@ FLOWISE_USER=admin
 FLOWISE_PASSWORD=${FLOWISE_PASSWORD}
 
 # ─── LiteLLM ──────────────────────────────────────────────────────────────────
-LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-}
-LITELLM_SALT_KEY=${LITELLM_SALT_KEY:-}
+LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+LITELLM_SALT_KEY=${LITELLM_SALT_KEY}
 
-# ─── AnythingLLM ──────────────────────────────────────────────────────────────
+# ─── AnythingLLM ────────────────────────────────────────────────────────────────
 ANYTHINGLLM_API_KEY=${ANYTHINGLLM_API_KEY}
 ANYTHINGLLM_JWT_SECRET=${ANYTHINGLLM_JWT_SECRET}
 ANYTHINGLLM_AUTH_TOKEN=${ANYTHINGLLM_AUTH_TOKEN}
+ANYTHINGLLM_PORT=${ANYTHINGLLM_PORT}
 
 # ─── Qdrant ───────────────────────────────────────────────────────────────────
 QDRANT_API_KEY=${QDRANT_API_KEY}
@@ -1001,38 +1130,38 @@ DIFY_SECRET_KEY=${DIFY_SECRET_KEY}
 DIFY_INNER_API_KEY=${DIFY_INNER_API_KEY}
 
 # ─── Network & Security ───────────────────────────────────────────────────────
-TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY:-}
-TAILSCALE_HOSTNAME=${TAILSCALE_HOSTNAME:-aip-${TENANT_ID}}
+TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY}
+TAILSCALE_HOSTNAME=${TAILSCALE_HOSTNAME}
 
 # ─── Signal API ───────────────────────────────────────────────────────────────
-SIGNAL_PHONE_NUMBER=${SIGNAL_PHONE_NUMBER:-}
-SIGNAL_VERIFICATION_CODE=${SIGNAL_VERIFICATION_CODE:-}
+SIGNAL_PHONE_NUMBER=${SIGNAL_PHONE_NUMBER}
+SIGNAL_VERIFICATION_CODE=${SIGNAL_VERIFICATION_CODE}
 
 # ─── Google Drive Integration ───────────────────────────────────────────────────
-GDRIVE_CLIENT_ID=${GDRIVE_CLIENT_ID:-}
-GDRIVE_CLIENT_SECRET=${GDRIVE_CLIENT_SECRET:-}
-GDRIVE_FOLDER_NAME=${GDRIVE_FOLDER_NAME:-}
+GDRIVE_CLIENT_ID=${GDRIVE_CLIENT_ID}
+GDRIVE_CLIENT_SECRET=${GDRIVE_CLIENT_SECRET}
+GDRIVE_FOLDER_NAME=${GDRIVE_FOLDER_NAME}
 
 # ─── Search APIs ───────────────────────────────────────────────────────────────
-SEARCH_PROVIDER=${SEARCH_PROVIDER:-none}
-BRAVE_API_KEY=${BRAVE_API_KEY:-}
-SERPAPI_KEY=${SERPAPI_KEY:-}
-SERPAPI_ENGINE=${SERPAPI_ENGINE:-google}
-CUSTOM_SEARCH_URL=${CUSTOM_SEARCH_URL:-}
-CUSTOM_SEARCH_KEY=${CUSTOM_SEARCH_KEY:-}
+SEARCH_PROVIDER=${SEARCH_PROVIDER}
+BRAVE_API_KEY=${BRAVE_API_KEY}
+SERPAPI_KEY=${SERPAPI_KEY}
+SERPAPI_ENGINE=${SERPAPI_ENGINE}
+CUSTOM_SEARCH_URL=${CUSTOM_SEARCH_URL}
+CUSTOM_SEARCH_KEY=${CUSTOM_SEARCH_KEY}
 
 # ─── Proxy Configuration ───────────────────────────────────────────────────────
-PROXY_TYPE=${PROXY_TYPE:-caddy}
-ROUTING_METHOD=${ROUTING_METHOD:-subdomain}
-SSL_TYPE=${SSL_TYPE:-acme}
-CUSTOM_PROXY_IMAGE=${CUSTOM_PROXY_IMAGE:-}
-HTTP_PROXY=${HTTP_PROXY:-}
-HTTPS_PROXY=${HTTPS_PROXY:-}
-NO_PROXY=${NO_PROXY:-}
+PROXY_TYPE=${PROXY_TYPE}
+ROUTING_METHOD=${ROUTING_METHOD}
+SSL_TYPE=${SSL_TYPE}
+CUSTOM_PROXY_IMAGE=${CUSTOM_PROXY_IMAGE}
+HTTP_PROXY=${HTTP_PROXY}
+HTTPS_PROXY=${HTTPS_PROXY}
+NO_PROXY=${NO_PROXY}
 
 # ─── OpenClaw ────────────────────────────────────────────────────────────────
-OPENCLAW_PASSWORD=${OPENCLAW_PASSWORD:-}
-OPENCLAW_PORT=${OPENCLAW_PORT:-8082}
+OPENCLAW_PASSWORD=${OPENCLAW_PASSWORD}
+OPENCLAW_PORT=${OPENCLAW_PORT}
 
 # ─── Ports ────────────────────────────────────────────────────────────────────
 CADDY_HTTP_PORT=80
@@ -1121,7 +1250,7 @@ write_caddyfile() {
     acme_ca_root /etc/ssl/certs/ca-certificates.crt
 }
 
-$([ "${ENABLE_N8N}" = "true" ] && cat << 'BLOCK'
+$([ "${ENABLE_N8N}" = "true" ] && cat << BLOCK
 n8n.${DOMAIN} {
     reverse_proxy n8n:5678 {
         header_up Host {host}
@@ -1132,7 +1261,7 @@ n8n.${DOMAIN} {
 }
 BLOCK
 )
-$([ "${ENABLE_FLOWISE}" = "true" ] && cat << 'BLOCK'
+$([ "${ENABLE_FLOWISE}" = "true" ] && cat << BLOCK
 flowise.${DOMAIN} {
     reverse_proxy flowise:3000 {
         header_up Host {host}
@@ -1143,7 +1272,7 @@ flowise.${DOMAIN} {
 }
 BLOCK
 )
-$([ "${ENABLE_OPENWEBUI}" = "true" ] && cat << 'BLOCK'
+$([ "${ENABLE_OPENWEBUI}" = "true" ] && cat << BLOCK
 chat.${DOMAIN} {
     reverse_proxy openwebui:8080 {
         header_up Host {host}
@@ -1154,7 +1283,7 @@ chat.${DOMAIN} {
 }
 BLOCK
 )
-$([ "${ENABLE_ANYTHINGLLM}" = "true" ] && cat << 'BLOCK'
+$([ "${ENABLE_ANYTHINGLLM}" = "true" ] && cat << BLOCK
 anythingllm.${DOMAIN} {
     reverse_proxy anythingllm:3001 {
         header_up Host {host}
@@ -1165,7 +1294,7 @@ anythingllm.${DOMAIN} {
 }
 BLOCK
 )
-$([ "${ENABLE_LITELLM}" = "true" ] && cat << 'BLOCK'
+$([ "${ENABLE_LITELLM}" = "true" ] && cat << BLOCK
 litellm.${DOMAIN} {
     reverse_proxy litellm:4000 {
         header_up Host {host}
@@ -1176,7 +1305,7 @@ litellm.${DOMAIN} {
 }
 BLOCK
 )
-$([ "${ENABLE_GRAFANA}" = "true" ] && cat << 'BLOCK'
+$([ "${ENABLE_GRAFANA}" = "true" ] && cat << BLOCK
 grafana.${DOMAIN} {
     reverse_proxy grafana:3000 {
         header_up Host {host}
@@ -1187,7 +1316,7 @@ grafana.${DOMAIN} {
 }
 BLOCK
 )
-$([ "${ENABLE_AUTHENTIK}" = "true" ] && cat << 'BLOCK'
+$([ "${ENABLE_AUTHENTIK}" = "true" ] && cat << BLOCK
 auth.${DOMAIN} {
     reverse_proxy authentik-server:9000 {
         header_up Host {host}
@@ -1201,8 +1330,6 @@ BLOCK
 )
 EOF
 
-    # Replace placeholder with actual domain
-    sed -i "s/DOMAIN/${DOMAIN}/g" "${CADDY_DIR}/Caddyfile"
     chmod 644 "${CADDY_DIR}/Caddyfile"
     log "SUCCESS" "Caddyfile written"
 }
