@@ -120,17 +120,18 @@ SERPAPI_ENGINE="google"
 CUSTOM_SEARCH_URL=""
 CUSTOM_SEARCH_KEY=""
 
-# Port defaults
+# Port defaults (based on actual Docker internal ports)
 N8N_PORT="5678"
 FLOWISE_PORT="3000"
 OPENWEBUI_PORT="8080"
+ANYTHINGLLM_PORT="3001"
 LITELLM_PORT="4000"
-GRAFANA_PORT="3002"
+GRAFANA_PORT="3002"          # Host port, internal is 3000
 PROMETHEUS_PORT="9090"
 OLLAMA_PORT="11434"
 QDRANT_PORT="6333"
-SIGNAL_PORT="8085"
-OPENCLAW_PORT="18789"
+SIGNAL_PORT="8085"           # Host port, internal is 8080
+OPENCLAW_PORT="18789"        # Host port, internal is 8082
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 log() {
@@ -925,17 +926,18 @@ collect_ports() {
     echo -e "  ${DIM}Configure ports for each enabled service${NC}"
     echo ""
 
-    # Default ports
+    # Default ports (based on actual Docker internal ports)
     local d_n8n="5678"
     local d_flowise="3000"
     local d_openwebui="8080"
     local d_anythingllm="3001"
     local d_litellm="4000"
-    local d_grafana="3002"
+    local d_grafana="3002"          # Host port, internal is 3000
     local d_prometheus="9090"
     local d_ollama="11434"
     local d_qdrant="6333"
-    local d_signal="8085"
+    local d_signal="8085"           # Host port, internal is 8080
+    local d_openclaw="18789"        # Host port, internal is 8082
 
     # Track used ports to prevent conflicts
     local used_ports=""
@@ -980,6 +982,7 @@ collect_ports() {
     [ "${ENABLE_OLLAMA}" = "true" ]      && read_port "Ollama"      "${d_ollama}"      "OLLAMA_PORT"
     [ "${ENABLE_QDRANT}" = "true" ]      && read_port "Qdrant"      "${d_qdrant}"      "QDRANT_PORT"
     [ "${ENABLE_SIGNAL}" = "true" ]      && read_port "Signal API"  "${d_signal}"      "SIGNAL_PORT"
+    [ "${ENABLE_OPENCLAW}" = "true" ]    && read_port "OpenClaw"    "${d_openclaw}"    "OPENCLAW_PORT"
 
     # Set safe defaults for disabled services
     N8N_PORT="${N8N_PORT:-${d_n8n}}"
@@ -992,6 +995,7 @@ collect_ports() {
     OLLAMA_PORT="${OLLAMA_PORT:-${d_ollama}}"
     QDRANT_PORT="${QDRANT_PORT:-${d_qdrant}}"
     SIGNAL_PORT="${SIGNAL_PORT:-${d_signal}}"
+    OPENCLAW_PORT="${OPENCLAW_PORT:-${d_openclaw}}"
 
     log "SUCCESS" "Ports configured"
 }
@@ -1368,9 +1372,10 @@ print_summary() {
     [ "${ENABLE_LITELLM}" = "true" ]     && echo -e "    ${GREEN}✓${NC}  LiteLLM      :${LITELLM_PORT}"
     [ "${ENABLE_QDRANT}" = "true" ]      && echo -e "    ${GREEN}✓${NC}  Qdrant       :${QDRANT_PORT}"
     [ "${ENABLE_GRAFANA}" = "true" ]     && echo -e "    ${GREEN}✓${NC}  Grafana      :${GRAFANA_PORT}"
-      [ "${ENABLE_PROMETHEUS}" = "true" ]  && echo -e "    ${GREEN}✓${NC}  Prometheus   :${PROMETHEUS_PORT}"
+    [ "${ENABLE_PROMETHEUS}" = "true" ]  && echo -e "    ${GREEN}✓${NC}  Prometheus   :${PROMETHEUS_PORT}"
     [ "${ENABLE_AUTHENTIK}" = "true" ]   && echo -e "    ${GREEN}✓${NC}  Authentik"
     [ "${ENABLE_SIGNAL}" = "true" ]      && echo -e "    ${GREEN}✓${NC}  Signal API   :${SIGNAL_PORT}"
+    [ "${ENABLE_OPENCLAW}" = "true" ]    && echo -e "    ${GREEN}✓${NC}  OpenClaw     :${OPENCLAW_PORT}"
     echo ""
 
     print_divider
