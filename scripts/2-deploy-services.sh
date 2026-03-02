@@ -383,7 +383,7 @@ EOF
 
     # Append optional service dependencies — each as a proper YAML block
     [ "${ENABLE_OPENWEBUI}" = "true" ] && compose_append << EOF
-      open-webui:
+      openwebui:
         condition: service_healthy
 EOF
     [ "${ENABLE_ANYTHINGLLM}" = "true" ] && compose_append << EOF
@@ -1047,7 +1047,7 @@ append_grafana() {
     networks:
       - ${DOCKER_NETWORK}
     depends_on:
-      - prometheus:
+      prometheus:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
