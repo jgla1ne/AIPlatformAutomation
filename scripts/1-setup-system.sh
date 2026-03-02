@@ -1268,7 +1268,7 @@ flowise.${DOMAIN} {
 BLOCK
 )
 $([ "${ENABLE_OPENWEBUI}" = "true" ] && cat << BLOCK
-chat.${DOMAIN} {
+openwebui.${DOMAIN} {
     reverse_proxy openwebui:8080 {
         header_up Host {host}
         header_up X-Real-IP {remote_host}
@@ -1369,7 +1369,7 @@ print_summary() {
         echo ""
         [ "${ENABLE_N8N}" = "true" ] && echo -e "    ${CYAN}•${NC} n8n:          https://n8n.${DOMAIN}"
         [ "${ENABLE_FLOWISE}" = "true" ] && echo -e "    ${CYAN}•${NC} Flowise:      https://flowise.${DOMAIN}"
-        [ "${ENABLE_OPENWEBUI}" = "true" ] && echo -e "    ${CYAN}•${NC} Open WebUI:   https://chat.${DOMAIN}"
+        [ "${ENABLE_OPENWEBUI}" = "true" ] && echo -e "    ${CYAN}•${NC} Open WebUI:   https://openwebui.${DOMAIN}"
         [ "${ENABLE_ANYTHINGLLM}" = "true" ] && echo -e "    ${CYAN}•${NC} AnythingLLM:  https://anythingllm.${DOMAIN}"
         [ "${ENABLE_LITELLM}" = "true" ] && echo -e "    ${CYAN}•${NC} LiteLLM:      https://litellm.${DOMAIN}"
         [ "${ENABLE_GRAFANA}" = "true" ] && echo -e "    ${CYAN}•${NC} Grafana:      https://grafana.${DOMAIN}"

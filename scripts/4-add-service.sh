@@ -64,4 +64,7 @@ fi
 echo "Enabled ${SERVICE} in ${ENV_FILE}"
 echo "Re-running script 2 to regenerate and redeploy..."
 
+# Source the append functions from script 2
+source "${SCRIPT2_DIR}/2-deploy-services.sh"
+
 exec bash "${SCRIPT2_DIR}/2-deploy-services.sh"
