@@ -95,14 +95,21 @@ cleanup_containers() {
         cd - > /dev/null
     fi
     
-    # Force remove any remaining containers
+    # Force remove any remaining AI Platform containers (all tenants)
     local containers
-    containers=$(docker ps -aq --filter "name=${COMPOSE_PROJECT_NAME}" 2>/dev/null || true)
-    if [[ -d "/mnt/data/${TENANT_ID}" ]]; then
+    containers=$(docker ps -aq --filter "label=com.ai-platform" 2>/dev/null || true)
+    if [ -n "${containers}" ]; then
         echo "${containers}" | xargs -r docker rm -f 2>/dev/null || true
-        log "SUCCESS" "Containers removed"
+        log "SUCCESS" "AI Platform containers removed"
     else
-        log "INFO" "No containers to remove"
+        log "INFO" "No AI Platform containers to remove"
+    fi
+    
+    # Also remove any containers with aip- prefix (legacy naming)
+    containers=$(docker ps -aq --filter "name=aip-" 2>/dev/null || true)
+    if [ -n "${containers}" ]; then
+        echo "${containers}" | xargs -r docker rm -f 2>/dev/null || true
+        log "SUCCESS" "Legacy aip- containers removed"
     fi
 }
 
