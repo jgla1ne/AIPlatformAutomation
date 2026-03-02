@@ -1367,7 +1367,6 @@ print_summary() {
         echo -e "  ${BOLD}Expected Service URLs:${NC}"
         echo -e "  ${DIM}After deployment, services will be available at:${NC}"
         echo ""
-        
         [ "${ENABLE_N8N}" = "true" ] && echo -e "    ${CYAN}•${NC} n8n:          https://n8n.${DOMAIN}"
         [ "${ENABLE_FLOWISE}" = "true" ] && echo -e "    ${CYAN}•${NC} Flowise:      https://flowise.${DOMAIN}"
         [ "${ENABLE_OPENWEBUI}" = "true" ] && echo -e "    ${CYAN}•${NC} Open WebUI:   https://chat.${DOMAIN}"
@@ -1380,7 +1379,8 @@ print_summary() {
         echo ""
         
         # Local access URLs
-        echo -e "  ${BOLD}Local Access (if enabled):${NC}"
+        echo -e "  ${BOLD}Local Access URLs:${NC}"
+        echo ""
         [ "${ENABLE_OLLAMA}" = "true" ] && echo -e "    ${CYAN}•${NC} Ollama API:   http://localhost:${OLLAMA_PORT:-11434}/api/tags"
         [ "${ENABLE_QDRANT}" = "true" ] && echo -e "    ${CYAN}•${NC} Qdrant API:   http://localhost:${QDRANT_PORT:-6333}"
         [ "${ENABLE_SIGNAL}" = "true" ] && echo -e "    ${CYAN}•${NC} Signal API:   http://localhost:${SIGNAL_PORT:-8080}"

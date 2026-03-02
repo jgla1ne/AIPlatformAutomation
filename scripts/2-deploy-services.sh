@@ -1698,42 +1698,160 @@ get_enabled_services() {
     [ "${ENABLE_GRAFANA}" = "true" ] && services="${services} grafana"
     [ "${ENABLE_SIGNAL}" = "true" ] && services="${services} signal"
     [ "${ENABLE_TAILSCALE}" = "true" ] && services="${services} tailscale"
-    [ "${ENABLE_RCLONE}" = "true" ] && services="${services} rclone"
-    echo "${services}"
-}
 
-print_dashboard() {
-    local border="═══════════════════════════════════════════════════════"
-    echo ""
-    echo "${border}"
-    echo "  AI Platform Ready — ${TENANT_ID}"
-    echo "${border}"
-    echo ""
-    echo "  URLs:"
-    [ "${ENABLE_OPENWEBUI}" = "true" ] && \
-        echo "    Chat UI        → https://openwebui.${DOMAIN}"
-    [ "${ENABLE_ANYTHINGLLM}" = "true" ] && \
-        echo "    AnythingLLM    → https://anythingllm.${DOMAIN}"
-    [ "${ENABLE_DIFY}" = "true" ] && \
-        echo "    Dify           → https://dify.${DOMAIN}"
-    [ "${ENABLE_N8N}" = "true" ] && \
-        echo "    n8n            → https://n8n.${DOMAIN}"
-    [ "${ENABLE_FLOWISE}" = "true" ] && \
-        echo "    Flowise        → https://flowise.${DOMAIN}"
-    [ "${ENABLE_OPENCLAW}" = "true" ] && \
-        echo "    OpenClaw       → https://openclaw.${DOMAIN}"
-    [ "${ENABLE_GRAFANA}" = "true" ] && \
-        echo "    Grafana        → https://grafana.${DOMAIN}"
-    echo "    MinIO          → https://minio.${DOMAIN}"
-    echo ""
-    echo "  Credentials stored in: ${ENV_FILE}"
-    echo ""
-    echo "  Admin password:  ${ADMIN_PASSWORD}"
-    echo "  LiteLLM key:     ${LITELLM_MASTER_KEY}"
-    echo ""
-    echo "  Logs: ${LOG_FILE}"
-    echo "${border}"
-    echo ""
-}
+        while [ "$(date +%s)" -lt "${deadline}" ]; do
+            local unhealthy
+            unhealthy=$(docker ps \
+                --filter "name=${COMPOSE_PROJECT_NAME}" \
+                --filter "health=unhealthy" \
+                --format "{{.Names}}" | wc -l)
 
-main "$@"
+            local starting
+            starting=$(docker ps \
+                --filter "name=${COMPOSE_PROJECT_NAME}" \
+                --filter "health=starting" \
+                --format "{{.Names}}" | wc -l)
+
+            [ "${unhealthy}" -eq 0 ] && [ "${starting}" -eq 0 ] && {
+                log "SUCCESS: All services healthy"
+                return 0
+            }
+
+            log "  Waiting... (${unhealthy} unhealthy, ${starting} starting)"
+            sleep 15
+        done
+
+        log "WARN: Timeout reached — some services may still be starting"
+        docker ps \
+            --filter "name=${COMPOSE_PROJECT_NAME}" \
+            --format "table {{.Names}}\t{{.Status}}" | tee -a "${LOG_FILE}"
+    }
+
+    # ─────────────────────────────────────────────────────────────
+    # MAIN
+    # ─────────────────────────────────────────────────────────────
+    main() {
+        log "═══════════════════════════════════════════════════════"
+        log "  AI Platform Deploy — Tenant: ${TENANT_ID}"
+        log "  Domain: ${DOMAIN}"
+        log "  Services: $(get_enabled_services)"
+        log "═══════════════════════════════════════════════════════"
+
+        # Guards
+        check_tailscale_auth
+
+        # Pre-flight checks (ports, DNS, Docker, EBS)
+        preflight_checks
+
+        # Teardown (idempotent)
+        teardown_existing
+
+        # Setup directories with proper ownership
+        setup_directories
+
+        # Generate configs
+        generate_postgres_init
+        generate_prometheus_config
+        generate_litellm_config
+        generate_compose
+        generate_caddyfile
+
+        # Deploy
+        deploy_stack
+
+        # Post-startup tasks
+        output_tailscale_info   # Must be BEFORE print_access_urls
+        verify_deployment       # Health table
+        wait_for_healthy
+
+        # Print summary
+        print_dashboard
+    }
+
+    get_enabled_services() {
+        local services=""
+        [ "${ENABLE_OPENWEBUI}" = "true" ] && services="${services} openwebui"
+        [ "${ENABLE_ANYTHINGLLM}" = "true" ] && services="${services} anythingllm"
+        [ "${ENABLE_DIFY}" = "true" ] && services="${services} dify"
+        [ "${ENABLE_N8N}" = "true" ] && services="${services} n8n"
+        [ "${ENABLE_FLOWISE}" = "true" ] && services="${services} flowise"
+        [ "${ENABLE_OPENCLAW}" = "true" ] && services="${services} openclaw"
+        [ "${ENABLE_LITELLM}" = "true" ] && services="${services} litellm"
+        [ "${ENABLE_OLLAMA}" = "true" ] && services="${services} ollama"
+        [ "${ENABLE_GRAFANA}" = "true" ] && services="${services} grafana"
+        [ "${ENABLE_SIGNAL}" = "true" ] && services="${services} signal"
+        [ "${ENABLE_TAILSCALE}" = "true" ] && services="${services} tailscale"
+        [ "${ENABLE_RCLONE}" = "true" ] && services="${services} rclone"
+        echo "${services}"
+    }
+
+    print_dashboard() {
+        local border="═══════════════════════════════════════════════════════"
+        echo ""
+        echo "${border}"
+        echo "  AI Platform Ready — ${TENANT_ID}"
+        echo "${border}"
+        echo ""
+        
+        # External URLs (via Caddy + SSL)
+        echo "  🌐 External URLs:"
+        echo "  ───────────────────────────────────────────────────────────"
+        [ "${ENABLE_OPENWEBUI}" = "true" ] && \
+            echo "    Chat UI        → https://openwebui.${DOMAIN}"
+        [ "${ENABLE_ANYTHINGLLM}" = "true" ] && \
+            echo "    AnythingLLM    → https://anythingllm.${DOMAIN}"
+        [ "${ENABLE_DIFY}" = "true" ] && \
+            echo "    Dify           → https://dify.${DOMAIN}"
+        [ "${ENABLE_N8N}" = "true" ] && \
+            echo "    n8n            → https://n8n.${DOMAIN}"
+        [ "${ENABLE_FLOWISE}" = "true" ] && \
+            echo "    Flowise        → https://flowise.${DOMAIN}"
+        [ "${ENABLE_OPENCLAW}" = "true" ] && \
+            echo "    OpenClaw       → https://openclaw.${DOMAIN}"
+        [ "${ENABLE_GRAFANA}" = "true" ] && \
+            echo "    Grafana        → https://grafana.${DOMAIN}"
+        echo "    MinIO          → https://minio.${DOMAIN}"
+        echo ""
+        
+        # Tailscale URLs (if enabled)
+        if [ -n "${TAILSCALE_IP:-}" ] && [ "${TAILSCALE_IP}" != "127.0.0.1" ]; then
+            echo "  🔒 Tailscale URLs:"
+            echo "  ───────────────────────────────────────────────────────────"
+            [ "${ENABLE_OPENWEBUI}" = "true" ] && \
+                printf "    %-20s http://%s:%s\n" "Chat UI (TS)" "${TAILSCALE_IP}" "${OPENWEBUI_PORT}"
+            [ "${ENABLE_ANYTHINGLLM}" = "true" ] && \
+                printf "    %-20s http://%s:%s\n" "AnythingLLM (TS)" "${TAILSCALE_IP}" "${ANYTHINGLLM_PORT}"
+            [ "${ENABLE_N8N}" = "true" ] && \
+                printf "    %-20s http://%s:%s\n" "n8n (TS)" "${TAILSCALE_IP}" "${N8N_PORT}"
+            [ "${ENABLE_OPENCLAW}" = "true" ] && \
+                printf "    %-20s http://%s:%s\n" "OpenClaw (TS)" "${TAILSCALE_IP}" "${OPENCLAW_PORT}"
+            echo "  ───────────────────────────────────────────────────────────"
+        else
+            echo "  🔒 Tailscale: Not available or not authenticated"
+        fi
+        echo ""
+        
+        # Local access URLs
+        echo "  🏠 Local URLs:"
+        echo "  ───────────────────────────────────────────────────────────"
+        [ "${ENABLE_OLLAMA}" = "true" ] && \
+            echo "    Ollama API     → http://localhost:${OLLAMA_PORT:-11434}/api/tags"
+        [ "${ENABLE_QDRANT}" = "true" ] && \
+            echo "    Qdrant API     → http://localhost:${QDRANT_PORT:-6333}"
+        echo ""
+        
+        # Credentials
+        echo "  🔐 Credentials:"
+        echo "  ───────────────────────────────────────────────────────────"
+        echo "    Admin password:  ${ADMIN_PASSWORD}"
+        echo "    LiteLLM key:     ${LITELLM_MASTER_KEY}"
+        echo "    Config file:       ${ENV_FILE}"
+        echo ""
+        
+        echo "  📊 Logs:"
+        echo "    docker compose -f ${COMPOSE_FILE} logs -f"
+        echo "${border}"
+        echo ""
+    }
+
+    main "$@"
