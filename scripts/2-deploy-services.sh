@@ -781,6 +781,19 @@ EOF
 # N8N
 # ─────────────────────────────────────────────────────────────
 append_n8n() {
+    # Set network-aware configuration
+    local n8n_protocol="https"
+    local n8n_host="n8n.${DOMAIN}"
+    local n8n_webhook_url="https://n8n.${DOMAIN}/"
+    local n8n_editor_url="https://n8n.${DOMAIN}/"
+    
+    if [[ "${PROXY_TYPE}" != "caddy" && "${PROXY_TYPE}" != "nginx" && "${PROXY_TYPE}" != "traefik" ]]; then
+        n8n_protocol="http"
+        n8n_host="localhost"
+        n8n_webhook_url="http://localhost:${N8N_PORT}/"
+        n8n_editor_url="http://localhost:${N8N_PORT}/"
+    fi
+    
     compose_append << EOF
 
   n8n:
@@ -791,11 +804,11 @@ append_n8n() {
     ports:
       - "${N8N_PORT}:5678"
     environment:
-      - N8N_HOST=n8n.${DOMAIN}
+      - N8N_HOST=${n8n_host}
       - N8N_PORT=5678
-      - N8N_PROTOCOL=https
-      - WEBHOOK_URL=https://n8n.${DOMAIN}/
-      - N8N_EDITOR_BASE_URL=https://n8n.${DOMAIN}/
+      - N8N_PROTOCOL=${n8n_protocol}
+      - WEBHOOK_URL=${n8n_webhook_url}
+      - N8N_EDITOR_BASE_URL=${n8n_editor_url}
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=postgres
       - DB_POSTGRESDB_PORT=5432
@@ -1091,6 +1104,13 @@ EOF
 }
 
 append_grafana() {
+    # Set network-aware configuration
+    local grafana_root_url="https://grafana.${DOMAIN}"
+    
+    if [[ "${PROXY_TYPE}" != "caddy" && "${PROXY_TYPE}" != "nginx" && "${PROXY_TYPE}" != "traefik" ]]; then
+        grafana_root_url="http://localhost:${GRAFANA_PORT}"
+    fi
+    
     compose_append << EOF
 
   grafana:
@@ -1104,7 +1124,7 @@ append_grafana() {
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
       - GF_PATHS_DATA=/var/lib/grafana
       - GF_PATHS_LOGS=/var/log/grafana
-      - GF_SERVER_ROOT_URL=https://grafana.${DOMAIN}
+      - GF_SERVER_ROOT_URL=${grafana_root_url}
     volumes:
       - ${DATA_ROOT}/grafana:/var/lib/grafana
     networks:
