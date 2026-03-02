@@ -931,26 +931,39 @@ collect_ports() {
     local d_openwebui="8080"
     local d_anythingllm="3001"
     local d_litellm="4000"
-    local d_grafana="3000"
+    local d_grafana="3002"
     local d_prometheus="9090"
     local d_ollama="11434"
     local d_qdrant="6333"
-    local d_signal="8080"
+    local d_signal="8085"
+
+    # Track used ports to prevent conflicts
+    local used_ports=""
 
     read_port() {
         local service="${1}" default="${2}" varname="${3}"
         while true; do
             read -p "  ➤ ${service} port [${default}]: " input
             if [ -z "${input}" ]; then
-                eval "${varname}=${default}"
-                break
-            elif [[ "${input}" =~ ^[0-9]+$ ]] && [ "${input}" -ge 1024 ] && [ "${input}" -le 65535 ]; then
+                input="${default}"
+            fi
+            
+            if [[ "${input}" =~ ^[0-9]+$ ]] && [ "${input}" -ge 1024 ] && [ "${input}" -le 65535 ]; then
+                # Check if port is already in use on system
                 if ss -tuln 2>/dev/null | grep -q ":${input} "; then
-                    log "WARN" "Port ${input} is already in use — choose another"
-                else
-                    eval "${varname}=${input}"
-                    break
+                    log "WARN" "Port ${input} is already in use on system — choose another"
+                    continue
                 fi
+                
+                # Check if port is already assigned to another service
+                if [[ " ${used_ports} " =~ " ${input} " ]]; then
+                    log "WARN" "Port ${input} is already assigned to another service — choose another"
+                    continue
+                fi
+                
+                eval "${varname}=${input}"
+                used_ports="${used_ports} ${input}"
+                break
             else
                 echo "  ❌ Enter a valid port (1024–65535)"
             fi
