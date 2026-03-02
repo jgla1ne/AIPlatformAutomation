@@ -616,9 +616,9 @@ EOF
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      test: ["CMD", "nc", "-z", "localhost", "4000"]
       interval: 30s
-      timeout: 15s
+      timeout: 10s
       retries: 5
       start_period: 60s
 EOF
