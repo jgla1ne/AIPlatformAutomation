@@ -132,6 +132,7 @@ OLLAMA_PORT="11434"
 QDRANT_PORT="6333"
 SIGNAL_PORT="8085"           # Host port, internal is 8080
 OPENCLAW_PORT="18789"        # Host port, internal is 8082
+TAILSCALE_PORT="8443"        # Host port, internal is 443 (for OpenClaw)
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 log() {
@@ -938,6 +939,7 @@ collect_ports() {
     local d_qdrant="6333"
     local d_signal="8085"           # Host port, internal is 8080
     local d_openclaw="18789"        # Host port, internal is 8082
+    local d_tailscale="8443"        # Host port, internal is 443 (for OpenClaw)
 
     # Track used ports to prevent conflicts
     local used_ports=""
@@ -983,6 +985,7 @@ collect_ports() {
     [ "${ENABLE_QDRANT}" = "true" ]      && read_port "Qdrant"      "${d_qdrant}"      "QDRANT_PORT"
     [ "${ENABLE_SIGNAL}" = "true" ]      && read_port "Signal API"  "${d_signal}"      "SIGNAL_PORT"
     [ "${ENABLE_OPENCLAW}" = "true" ]    && read_port "OpenClaw"    "${d_openclaw}"    "OPENCLAW_PORT"
+    [ "${ENABLE_TAILSCALE}" = "true" ]   && read_port "Tailscale"   "${d_tailscale}"   "TAILSCALE_PORT"
 
     # Set safe defaults for disabled services
     N8N_PORT="${N8N_PORT:-${d_n8n}}"
@@ -996,6 +999,7 @@ collect_ports() {
     QDRANT_PORT="${QDRANT_PORT:-${d_qdrant}}"
     SIGNAL_PORT="${SIGNAL_PORT:-${d_signal}}"
     OPENCLAW_PORT="${OPENCLAW_PORT:-${d_openclaw}}"
+    TAILSCALE_PORT="${TAILSCALE_PORT:-${d_tailscale}}"
 
     log "SUCCESS" "Ports configured"
 }
@@ -1376,6 +1380,7 @@ print_summary() {
     [ "${ENABLE_AUTHENTIK}" = "true" ]   && echo -e "    ${GREEN}✓${NC}  Authentik"
     [ "${ENABLE_SIGNAL}" = "true" ]      && echo -e "    ${GREEN}✓${NC}  Signal API   :${SIGNAL_PORT}"
     [ "${ENABLE_OPENCLAW}" = "true" ]    && echo -e "    ${GREEN}✓${NC}  OpenClaw     :${OPENCLAW_PORT}"
+    [ "${ENABLE_TAILSCALE}" = "true" ]   && echo -e "    ${GREEN}✓${NC}  Tailscale    :${TAILSCALE_PORT}"
     echo ""
 
     print_divider

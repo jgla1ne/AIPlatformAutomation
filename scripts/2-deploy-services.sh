@@ -1177,6 +1177,8 @@ append_tailscale() {
     cap_add:
       - NET_ADMIN
       - NET_RAW
+    ports:
+      - "8443:443"  # Alternative HTTPS port for OpenClaw integration
     volumes:
       - ${DATA_ROOT}/tailscale:/var/lib/tailscale
 ${tun_device}
