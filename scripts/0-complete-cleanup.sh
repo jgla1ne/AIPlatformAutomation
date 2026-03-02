@@ -98,7 +98,7 @@ cleanup_containers() {
     # Force remove any remaining containers
     local containers
     containers=$(docker ps -aq --filter "name=${COMPOSE_PROJECT_NAME}" 2>/dev/null || true)
-    if [ -n "${containers}" ]; then
+    if [[ -d "/mnt/data/${TENANT_ID}" ]]; then
         echo "${containers}" | xargs -r docker rm -f 2>/dev/null || true
         log "SUCCESS" "Containers removed"
     else
