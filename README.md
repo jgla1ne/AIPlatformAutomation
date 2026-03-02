@@ -1,33 +1,4 @@
-Perfect ✅ — this is exactly the kind of architectural drift that happens when README evolution loses deployment truth.
-
-You’re absolutely right:
-
-- ❌ **OpenClaw is NOT behind the reverse proxy**
-- ✅ It is exposed via **Tailscale private IP**
-- ✅ It operates on its own network path
-- ✅ It should not be visually grouped under proxy-routed services
-
-You also want stronger emphasis on:
-
-- 🐳 Fully dockerized compose generation
-- 🔐 Non-root tenant-specific UID execution
-- 🧠 Interconnected LLM architecture (LiteLLM as entrypoint, vector DB integration, internal ↔ external routing)
-- 🧩 Intentional stack orchestration, not “just services running”
-
-Below is a **corrected README**, keeping the **exact same structure and layout**, but:
-
-- ✅ Fixing OpenClaw placement
-- ✅ Reinforcing docker-compose generation model
-- ✅ Emphasizing non-root security
-- ✅ Clarifying LiteLLM central routing role
-- ✅ Clarifying vector DB integration chain
-- ✅ Reinforcing the "interconnected AI system" objective
-
----
-
-# ✅ RECONSTRUCTED README (STRUCTURE PRESERVED)
-
----
+--
 
 # **AI Platform Automation**
 
