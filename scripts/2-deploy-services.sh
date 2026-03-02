@@ -502,19 +502,17 @@ generate_postgres_init() {
     local init_dir="${DATA_ROOT}/postgres/init"
     mkdir -p "${init_dir}"
 
-    # Write using a function to avoid heredoc indentation issues
-    cat > "${init_dir}/01-create-databases.sh" << 'INITEOF'
-#!/bin/bash
-set -e
-psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" << EOSQL
-CREATE DATABASE litellm;
-CREATE DATABASE n8n;
-CREATE DATABASE dify;
-CREATE DATABASE openwebui;
-EOSQL
-INITEOF
+    # Write using PostgreSQL-compatible syntax with existence checks
+    cat > "${init_dir}/01-create-databases.sql" << 'EOF'
+SELECT 'CREATE DATABASE litellm' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'litellm')\gexec
+SELECT 'CREATE DATABASE n8n' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'n8n')\gexec
+SELECT 'CREATE DATABASE dify' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'dify')\gexec
+SELECT 'CREATE DATABASE openwebui' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'openwebui')\gexec
+SELECT 'CREATE DATABASE flowise' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'flowise')\gexec
+SELECT 'CREATE DATABASE authentik' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'authentik')\gexec
+EOF
 
-    chmod +x "${init_dir}/01-create-databases.sh"
+    chmod 644 "${init_dir}/01-create-databases.sql"
     chown -R "${TENANT_UID}:${TENANT_GID}" "${init_dir}"
     log "SUCCESS" "Postgres init scripts created"
     log "INFO" "NOTE: Init scripts only run on first Postgres start with empty data dir"
@@ -589,7 +587,7 @@ append_litellm() {
     environment:
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
       - LITELLM_SALT_KEY=${LITELLM_SALT_KEY}
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm
       - STORE_MODEL_IN_DB=True
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -609,6 +607,7 @@ EOF
     compose_append << EOF
     volumes:
       - ${COMPOSE_PROJECT_NAME}_litellm_data:/app/data
+      - ${DATA_ROOT}/litellm/config.yaml:/app/config.yaml:ro
     networks:
       - ${DOCKER_NETWORK}
     depends_on:
@@ -617,7 +616,7 @@ EOF
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveliness"]
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
       interval: 30s
       timeout: 15s
       retries: 5
@@ -736,7 +735,7 @@ append_n8n() {
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=postgres
       - DB_POSTGRESDB_PORT=5432
-      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
+      - DB_POSTGRESDB_DATABASE=n8n
       - DB_POSTGRESDB_USER=${POSTGRES_USER}
       - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
@@ -812,7 +811,7 @@ append_dify_api() {
       - DB_PASSWORD=${POSTGRES_PASSWORD}
       - DB_HOST=postgres
       - DB_PORT=5432
-      - DB_DATABASE=${POSTGRES_DB}
+      - DB_DATABASE=dify
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD}
