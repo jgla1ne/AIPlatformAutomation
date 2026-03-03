@@ -446,6 +446,122 @@ print_credentials() {
     echo ""
 }
 
+# ─── Service Status Check ─────────────────────────────────────────────────────
+print_service_status() {
+    echo ""
+    echo -e "${BOLD}${CYAN}🔍 Service Health Status${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    
+    local total_services=0
+    local healthy_services=0
+    local unhealthy_services=0
+    
+    # Core infrastructure services (always checked)
+    local core_services=(
+        "postgres:${POSTGRES_PORT:-5432}:PostgreSQL Database"
+        "redis:${REDIS_PORT:-6379}:Redis Cache"
+        "caddy:${CADDY_HTTP_PORT:-80}:Caddy Proxy"
+    )
+    
+    # Optional services based on ENABLE flags
+    local optional_services=()
+    [ "${ENABLE_MINIO}" = "true" ] && optional_services+=("minio:${MINIO_PORT:-9000}:MinIO Storage")
+    [ "${ENABLE_OLLAMA}" = "true" ] && optional_services+=("ollama:${OLLAMA_PORT:-11434}:Ollama LLM")
+    [ "${ENABLE_LITELLM}" = "true" ] && optional_services+=("litellm:${LITELLM_PORT:-4000}:LiteLLM Gateway")
+    [ "${ENABLE_OPENWEBUI}" = "true" ] && optional_services+=("openwebui:${OPENWEBUI_PORT:-8080}:OpenWebUI")
+    [ "${ENABLE_ANYTHINGLLM}" = "true" ] && optional_services+=("anythingllm:${ANYTHINGLLM_PORT:-3001}:AnythingLLM")
+    [ "${ENABLE_N8N}" = "true" ] && optional_services+=("n8n:${N8N_PORT:-5678}:n8n Automation")
+    [ "${ENABLE_FLOWISE}" = "true" ] && optional_services+=("flowise:${FLOWISE_PORT:-3000}:Flowise")
+    [ "${ENABLE_DIFY}" = "true" ] && optional_services+=("dify-web:${DIFY_WEB_PORT:-3002}:Dify Web")
+    [ "${ENABLE_GRAFANA}" = "true" ] && optional_services+=("grafana:${GRAFANA_PORT:-3003}:Grafana")
+    [ "${ENABLE_PROMETHEUS}" = "true" ] && optional_services+=("prometheus:${PROMETHEUS_PORT:-9090}:Prometheus")
+    [ "${ENABLE_SIGNAL}" = "true" ] && optional_services+=("signal-api:${SIGNAL_PORT:-8080}:Signal API")
+    [ "${ENABLE_TAILSCALE}" = "true" ] && optional_services+=("tailscale:8443:Tailscale VPN")
+    [ "${ENABLE_RCLONE}" = "true" ] && optional_services+=("rclone:5572:Rclone")
+    
+    # Check core services
+    for service in "${core_services[@]}"; do
+        IFS=':' read -r name port desc <<< "$service"
+        total_services=$((total_services + 1))
+        
+        if check_service_health "$name" "$port" "$desc"; then
+            healthy_services=$((healthy_services + 1))
+        else
+            unhealthy_services=$((unhealthy_services + 1))
+        fi
+    done
+    
+    # Check optional services
+    for service in "${optional_services[@]}"; do
+        IFS=':' read -r name port desc <<< "$service"
+        total_services=$((total_services + 1))
+        
+        if check_service_health "$name" "$port" "$desc"; then
+            healthy_services=$((healthy_services + 1))
+        else
+            unhealthy_services=$((unhealthy_services + 1))
+        fi
+    done
+    
+    # Summary
+    echo ""
+    echo -e "${BOLD}📊 Health Summary:${NC}"
+    echo -e "  Total Services: ${CYAN}${total_services}${NC}"
+    echo -e "  ${GREEN}Healthy: ${healthy_services}${NC}"
+    echo -e "  ${RED}Unhealthy: ${unhealthy_services}${NC}"
+    
+    if [ "$unhealthy_services" -eq 0 ]; then
+        echo -e ""
+        echo -e "${GREEN}${BOLD}🎉 All services are healthy!${NC}"
+    else
+        echo -e ""
+        echo -e "${YELLOW}⚠️  Some services may need time to start up${NC}"
+        echo -e "${DIM}   Run script 3 again in a few minutes${NC}"
+    fi
+}
+
+# Helper function to check individual service health
+check_service_health() {
+    local name="$1"
+    local port="$2"
+    local desc="$3"
+    local container_name="${COMPOSE_PROJECT_NAME}-${name}"
+    
+    # Check if container is running
+    if ! docker ps --format "table {{.Names}}" | grep -q "^${container_name}$"; then
+        echo -e "  ${RED}❌ ${desc}:${NC} ${RED}Container not running${NC}"
+        return 1
+    fi
+    
+    # Check health via Docker health check
+    local health_status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "none")
+    case "$health_status" in
+        "healthy")
+            echo -e "  ${GREEN}✅ ${desc}:${NC} ${GREEN}Healthy${NC}"
+            return 0
+            ;;
+        "unhealthy")
+            echo -e "  ${RED}❌ ${desc}:${NC} ${RED}Unhealthy${NC}"
+            return 1
+            ;;
+        "starting")
+            echo -e "  ${YELLOW}🔄 ${desc}:${NC} ${YELLOW}Starting${NC}"
+            return 1
+            ;;
+        "none")
+            # Fallback to port check if no health check
+            if timeout 3 bash -c "</dev/tcp/localhost/$port" 2>/dev/null; then
+                echo -e "  ${GREEN}✅ ${desc}:${NC} ${GREEN}Running${NC}"
+                return 0
+            else
+                echo -e "  ${RED}❌ ${desc}:${NC} ${RED}Port $port not responding${NC}"
+                return 1
+            fi
+            ;;
+    esac
+}
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 main() {
     print_header
@@ -495,6 +611,9 @@ main() {
     }
     
     print_credentials
+    
+    # ─── Service Status Check ─────────────────────────────────────────────
+    print_service_status
     
     print_divider
     echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"

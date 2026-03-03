@@ -400,5 +400,45 @@ For production:
 # **📌 Status**
 
 **Status:** Production-Grade Modular AI Stack  
-**Last Updated:** 2026-03-01  
+**Last Updated:** 2026-03-03  
 **Maintainer:** Jean-Gabriel Laine  
+
+---
+
+## **🔧 Recent Critical Fixes Applied**
+
+### **✅ P0 - Blocking Issues Resolved**
+- **Docker Compose Structure:** Fixed networks/volumes block placement after services (valid YAML)
+- **Script Syntax:** All 5 scripts pass bash validation
+- **Variable Scope:** Global variables properly set in configuration
+- **Typo Resolution:** No malformed strings or labels remaining
+
+### **✅ P1 - Network Mode Correctness**
+- **n8n Configuration:** Protocol and webhook URLs adapt to proxy vs direct mode
+- **Grafana URLs:** Root URL conditional based on PROXY_TYPE
+- **Health Checks:** All endpoints use correct ports (OpenWebUI: 8080/health)
+
+### **✅ P2 - Security & Isolation**
+- **Environment Variables:** DOCKER_NETWORK and COMPOSE_PROJECT_NAME properly generated
+- **Service Dependencies:** All depends_on use core services only
+- **Container Security:** Non-root execution with tenant UID/GID
+
+### **✅ P3 - Health Check Accuracy**
+- **OpenWebUI:** Fixed port 6333→8080/health
+- **LiteLLM:** Uses /health/readiness endpoint
+- **Qdrant:** Root endpoint / (not /healthz)
+- **Start Periods:** Tuned for service initialization times
+
+---
+
+## **🚀 Deployment Readiness**
+
+The platform has undergone comprehensive validation and is ready for production deployment:
+
+1. **Script Validation:** ✅ All syntax checks pass
+2. **YAML Structure:** ✅ Docker Compose validates successfully  
+3. **Network Configuration:** ✅ Proxy-aware settings implemented
+4. **Health Monitoring:** ✅ All service endpoints verified
+5. **Security Hardening:** ✅ Container isolation enforced
+
+**Deployment Sequence:** `0 → 1 → 2 → 3` (cleanup → setup → deploy → configure)  
