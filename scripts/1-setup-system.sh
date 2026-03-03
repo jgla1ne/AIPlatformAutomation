@@ -1497,8 +1497,9 @@ main() {
     write_env
     
     # Set tenant UID/GID for directory ownership (core principle: tenant owns their data)
-    export TENANT_UID=$(id -u)
-    export TENANT_GID=$(id -g)
+    # Preserve original user when running with sudo
+    export TENANT_UID="${SUDO_UID:-$(id -u)}"
+    export TENANT_GID="${SUDO_GID:-$(id -g)}"
     
     create_directories
     write_caddyfile
