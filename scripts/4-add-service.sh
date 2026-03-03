@@ -13,25 +13,35 @@ ok() { echo -e "${GREEN}[OK]${NC}    $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 fail() { echo -e "${RED}[FAIL]${NC}  $*" >&2; exit 1; }
 
-# ── Load Environment ───────────────────────────────────────────────
-TENANT_UID=$(id -u)
-TENANT_ID="u${TENANT_UID}"
-DATA_ROOT="/mnt/data/${TENANT_ID}"
-ENV_FILE="${DATA_ROOT}/.env"
+# ─── Runtime vars ────────────────────────────────────────────────────────────────
+TENANT_UID="${SUDO_UID:-$(id -u)}"
+TENANT_GID="${SUDO_GID:-$(id -g)}"
+# Load environment from .env file
+if [[ -n "${TENANT_DIR:-}" && -f "${TENANT_DIR}/.env" ]]; then
+  ENV_FILE="${TENANT_DIR}/.env"
+elif [[ -f "$(dirname "${BASH_SOURCE[0]}")/../.env" ]]; then
+  ENV_FILE="$(dirname "${BASH_SOURCE[0]}")/../.env"
+else
+  ENV_FILE="$(sudo ls -t /mnt/data/*/.env 2>/dev/null | head -1)"
+fi
 
 [ ! -f "${ENV_FILE}" ] && {
     echo "ERROR: Run script 1 first"
     exit 1
 }
 
+# Source environment variables
 set -a; source "${ENV_FILE}"; set +a
+
+# Use environment variables
+DATA_ROOT="${DATA_ROOT:-/mnt/data/${TENANT_ID:-default}}"
 
 # Source the service append functions from script 2
 # (script 2 must export them or we duplicate just the needed one)
 SCRIPT2_DIR="$(dirname "$0")"
 
 AVAILABLE_SERVICES="openwebui anythingllm dify n8n flowise openclaw \
-    litellm ollama grafana signal tailscale rclone"
+    litellm ollama grafana signal tailscale rclone authentik minio prometheus qdrant"
 
 SERVICE="${1:-}"
 
