@@ -451,9 +451,9 @@ append_caddy() {
     container_name: ${COMPOSE_PROJECT_NAME}-caddy
     restart: unless-stopped
     ports:
-      - "${CADDY_HTTP_PORT}:80"
-      - "${CADDY_HTTPS_PORT}:443"
-      - "443:443/udp"
+      - "${CADDY_HTTP_PORT}:${CADDY_INTERNAL_HTTP_PORT}"
+      - "${CADDY_HTTPS_PORT}:${CADDY_INTERNAL_HTTPS_PORT}"
+      - "${CADDY_HTTPS_PORT}:443/udp"
       - "2019:2019"
     volumes:
       - ${DATA_ROOT}/caddy/config/Caddyfile:/etc/caddy/Caddyfile:ro
@@ -521,14 +521,14 @@ append_qdrant() {
     restart: unless-stopped
     user: "${TENANT_UID}:${TENANT_GID}"
     ports:
-      - "${QDRANT_PORT}:6333"
-      - "6334:6334"
+      - "${QDRANT_PORT}:${QDRANT_INTERNAL_PORT}"
+      - "${QDRANT_INTERNAL_HTTP_PORT}:${QDRANT_INTERNAL_HTTP_PORT}"
     volumes:
       - ${COMPOSE_PROJECT_NAME}_qdrant_data:/qdrant/storage
     networks:
       - ${DOCKER_NETWORK}
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:6333/"]
+      test: ["CMD", "curl", "-sf", "http://localhost:${QDRANT_INTERNAL_PORT}/"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -549,13 +549,13 @@ append_ollama() {
     restart: unless-stopped
     user: "${TENANT_UID}:${TENANT_GID}"
     ports:
-      - "${OLLAMA_PORT}:11434"
+      - "${OLLAMA_PORT}:${OLLAMA_INTERNAL_PORT}"
     volumes:
       - ${DATA_ROOT}/ollama:/root/.ollama
     networks:
       - ${DOCKER_NETWORK}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD", "curl", "-f", "http://localhost:${OLLAMA_INTERNAL_PORT}/api/tags"]
       interval: 30s
       timeout: 20s
       retries: 5
@@ -987,7 +987,7 @@ append_openwebui() {
     restart: unless-stopped
     user: "${TENANT_UID}:${TENANT_GID}"
     ports:
-      - "${OPENWEBUI_PORT}:8080"
+      - "${OPENWEBUI_PORT}:${OPENWEBUI_INTERNAL_PORT}"
     environment:
       - OLLAMA_BASE_URL=${ollama_url}
       - OPENAI_API_BASE_URL=${LITELLM_API_ENDPOINT}
@@ -1006,7 +1006,7 @@ append_openwebui() {
     networks:
       - ${DOCKER_NETWORK}
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-sf", "http://localhost:${OPENWEBUI_INTERNAL_PORT}/health"]
       interval: 30s
       timeout: 10s
       retries: 35
@@ -1212,7 +1212,7 @@ append_openclaw() {
     restart: unless-stopped
     user: "${TENANT_UID}:${TENANT_GID}"
     ports:
-      - "${OPENCLAW_PORT}:8082"
+      - "${OPENCLAW_PORT}:${OPENCLAW_INTERNAL_PORT}"
     environment:
       - PORT=8082
       - HOST=0.0.0.0
@@ -1232,7 +1232,7 @@ append_openclaw() {
     networks:
       - ${DOCKER_NETWORK}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:${OPENCLAW_INTERNAL_PORT}/health"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -1459,7 +1459,7 @@ append_signal() {
     restart: unless-stopped
     user: "${TENANT_UID}:${TENANT_GID}"
     ports:
-      - "${SIGNAL_PORT}:8080"   # ALWAYS 8080 internal - never ${SIGNAL_PORT}:${SIGNAL_PORT}
+      - "${SIGNAL_PORT}:${SIGNAL_INTERNAL_PORT}"   # ALWAYS 8080 internal - never ${SIGNAL_PORT}:${SIGNAL_PORT}
     environment:
       - MODE=native
       - AUTO_RECEIVE_SCHEDULE=0 * * * *
@@ -1468,7 +1468,7 @@ append_signal() {
     networks:
       - ${DOCKER_NETWORK}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/about"]
+      test: ["CMD", "curl", "-f", "http://localhost:${SIGNAL_INTERNAL_PORT}/v1/about"]
       interval: 30s
       timeout: 10s
       retries: 5
