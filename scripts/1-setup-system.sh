@@ -1246,6 +1246,18 @@ create_directories() {
     for dir in "${dirs[@]}"; do
         idx=$((idx + 1))
         mkdir -p "${dir}"
+        
+        # Set correct ownership based on service type
+        case "${dir}" in
+            */postgres) chown 999:999 "${dir}" ;;
+            */redis) chown 999:999 "${dir}" ;;
+            */grafana) chown 472:472 "${dir}" ;;
+            */prometheus) chown 65534:65534 "${dir}" ;;
+            */caddy) chown root:root "${dir}" ;;
+            */logs) chown 1000:1000 "${dir}" ;;
+            *) chown 1000:1000 "${dir}" ;;  # Default for most services
+        esac
+        
         printf "  ${DIM}[%2d/%d]${NC} Created %s\n" "${idx}" "${total}" "${dir}"
     done
 

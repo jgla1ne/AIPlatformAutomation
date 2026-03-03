@@ -241,52 +241,7 @@ setup_directories() {
         mkdir -p "${dir}"
     done
 
-    # ── Correct ownership for non-root container UIDs ──────────────────────────
-    info "Setting correct ownership on data directories…"
-    
-    # Create aiplatform user if not exists
-    useradd -r -u 1001 -g docker -s /sbin/nologin -d /mnt/data/datasquiz aiplatform 2>/dev/null || true
-    
-    # Fix BASE_DIR ownership (root owns the directory itself)
-    chown root:docker "${DATA_ROOT}"
-    chmod 750 "${DATA_ROOT}"
-    
-    # Service-specific UIDs matching container internal users
-    # PostgreSQL = 999
-    chown -R 999:999 "${DATA_ROOT}/postgres"
-    
-    # Redis = 999
-    chown -R 999:999 "${DATA_ROOT}/redis"
-    
-    # Grafana = 472
-    chown -R 472:472 "${DATA_ROOT}/grafana"
-    
-    # Prometheus = 65534 (nobody)
-    chown -R 65534:65534 "${DATA_ROOT}/prometheus"
-    
-    # Caddy = root (needs port 80/443)
-    chown -R root:root "${DATA_ROOT}/caddy"
-    chmod 750 "${DATA_ROOT}/caddy"
-    
-    # Everything else = 1000:1000
-    for svc in ollama openwebui litellm n8n anythingllm flowise qdrant authentik openclaw signal; do
-        [[ -d "${DATA_ROOT}/${svc}" ]] && chown -R 1000:1000 "${DATA_ROOT}/${svc}"
-    done
-    
-    # Logs dir
-    chown -R 1000:1000 "${DATA_ROOT}/logs"
-    
-    # Secrets stay root-only
-    chown root:root "${DATA_ROOT}/.env"
-    chmod 600 "${DATA_ROOT}/.env"
-    chown root:root "${DATA_ROOT}/.env.backup"
-    chmod 600 "${DATA_ROOT}/.env.backup"
-    
-    # Compose file readable by docker group
-    chown root:docker "${DATA_ROOT}/docker-compose.yml"
-    chmod 640 "${DATA_ROOT}/docker-compose.yml"
-
-    log "SUCCESS" "Directories created and ownership set"
+    log "SUCCESS" "Directories created"
 }
 
 # ── Compose Generator (the key function) ────────────────────────
