@@ -429,6 +429,13 @@ For production:
 - **Qdrant:** Root endpoint / (not /healthz)
 - **Start Periods:** Tuned for service initialization times
 
+### **✅ P4 - Architecture Improvements**
+- **Compose Structure:** Single services: block with proper YAML hierarchy
+- **Volume Management:** Clean volume declarations without orphaned resources
+- **Network Configuration:** Networks declared once, correctly referenced
+- **Container Naming:** Exact name matching prevents multi-container conflicts
+- **Configuration Management:** Parameterized values (QDRANT_VECTOR_SIZE)
+
 ---
 
 ## **🚀 Deployment Readiness**
