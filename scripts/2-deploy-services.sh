@@ -241,9 +241,6 @@ setup_directories() {
         mkdir -p "${dir}"
     done
 
-    # Set ownership for all data dirs
-    chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"
-
     # ── Correct ownership for non-root container UIDs ──────────────────────────
     info "Setting correct ownership on data directories…"
     
