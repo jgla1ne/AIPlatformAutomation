@@ -1497,8 +1497,8 @@ main() {
     write_env
     
     # Set tenant UID/GID for directory ownership (core principle: tenant owns their data)
-    TENANT_UID=$(id -u)
-    TENANT_GID=$(id -g)
+    export TENANT_UID=$(id -u)
+    export TENANT_GID=$(id -g)
     
     create_directories
     write_caddyfile
