@@ -366,7 +366,13 @@ select_data_volume() {
             echo "  ❌ Path cannot be empty"
         done
     else
-        DATA_ROOT="${mounts[$((choice-1))]}/${TENANT_ID}"
+        # Always use /mnt/data as base per runsheet requirements
+        local base_path="${mounts[$((choice-1))]}"
+        # If the selected mount is /mnt, use /mnt/data instead (runsheet requirement)
+        if [ "${base_path}" = "/mnt" ]; then
+            base_path="/mnt/data"
+        fi
+        DATA_ROOT="${base_path}/${TENANT_ID}"
     fi
 
     # Set derived paths
