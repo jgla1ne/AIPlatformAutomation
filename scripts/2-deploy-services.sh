@@ -240,22 +240,8 @@ networks:
     name: ${DOCKER_NETWORK}
     driver: bridge
 
-volumes:
+services:
 COMPOSE_HEADER
-
-    # ── Named Volumes (only for enabled services) ────────────
-    echo "  ${COMPOSE_PROJECT_NAME}_postgres_data:" >> "${compose_file}"
-    echo "  ${COMPOSE_PROJECT_NAME}_redis_data:" >> "${compose_file}"
-    echo "  ${COMPOSE_PROJECT_NAME}_caddy_data:" >> "${compose_file}"
-    [ "${ENABLE_MINIO}" = "true" ] && \
-        echo "  ${COMPOSE_PROJECT_NAME}_minio_data:" >> "${compose_file}"
-    [ "${VECTOR_DB}" = "qdrant" ] && \
-        echo "  ${COMPOSE_PROJECT_NAME}_qdrant_data:" >> "${compose_file}"
-    [ "${ENABLE_LITELLM}" = "true" ] && \
-        echo "  ${COMPOSE_PROJECT_NAME}_litellm_data:" >> "${compose_file}"
-
-    echo "" >> "${compose_file}"
-    echo "services:" >> "${compose_file}"
 
     # ── Core Services (always deployed) ────────────────────────
     append_postgres
@@ -283,6 +269,44 @@ COMPOSE_HEADER
     [ "${ENABLE_SIGNAL}" = "true" ] && append_signal
     [ "${ENABLE_TAILSCALE}" = "true" ] && append_tailscale
     [ "${ENABLE_RCLONE}" = "true" ] && append_rclone
+
+    # ── Named Volumes (must be after all services) ────────────────
+    cat >> "${compose_file}" << VOLUMES_EOF
+
+volumes:
+  ${COMPOSE_PROJECT_NAME}_postgres_data:
+  ${COMPOSE_PROJECT_NAME}_redis_data:
+  ${COMPOSE_PROJECT_NAME}_caddy_data:
+VOLUMES_EOF
+
+    [ "${ENABLE_MINIO}" = "true" ] && \
+        echo "  ${COMPOSE_PROJECT_NAME}_minio_data:" >> "${compose_file}"
+    [ "${VECTOR_DB}" = "qdrant" ] && \
+        echo "  ${COMPOSE_PROJECT_NAME}_qdrant_data:" >> "${compose_file}"
+    [ "${ENABLE_LITELLM}" = "true" ] && \
+        echo "  ${COMPOSE_PROJECT_NAME}_litellm_data:" >> "${compose_file}"
+    [ "${ENABLE_OLLAMA}" = "true" ] && \
+        echo "  ${COMPOSE_PROJECT_NAME}_ollama_data:" >> "${compose_file}"
+    [ "${ENABLE_OPENWEBUI}" = "true" ] && \
+        echo "  ${COMPOSE_PROJECT_NAME}_openwebui_data:" >> "${compose_file}"
+    [ "${ENABLE_ANYTHINGLLM}" = "true" ] && \
+        echo "  ${COMPOSE_PROJECT_NAME}_anythingllm_data:" >> "${compose_file}"
+    [ "${ENABLE_N8N}" = "true" ] && \
+        echo "  ${COMPOSE_PROJECT_NAME}_n8n_data:" >> "${compose_file}"
+    [ "${ENABLE_FLOWISE}" = "true" ] && \
+        echo "  ${COMPOSE_PROJECT_NAME}_flowise_data:" >> "${compose_file}"
+    [ "${ENABLE_DIFY}" = "true" ] && \
+        echo "  ${COMPOSE_PROJECT_NAME}_dify_storage:" >> "${compose_file}"
+    [ "${ENABLE_GRAFANA}" = "true" ] && \
+        echo "  ${COMPOSE_PROJECT_NAME}_grafana_data:" >> "${compose_file}"
+    [ "${ENABLE_PROMETHEUS}" = "true" ] && \
+        echo "  ${COMPOSE_PROJECT_NAME}_prometheus_data:" >> "${compose_file}"
+    [ "${ENABLE_SIGNAL}" = "true" ] && \
+        echo "  ${COMPOSE_PROJECT_NAME}_signal_data:" >> "${compose_file}"
+    [ "${ENABLE_TAILSCALE}" = "true" ] && \
+        echo "  ${COMPOSE_PROJECT_NAME}_tailscale_data:" >> "${compose_file}"
+    [ "${ENABLE_OPENCLAW}" = "true" ] && \
+        echo "  ${COMPOSE_PROJECT_NAME}_openclaw_data:" >> "${compose_file}"
 
     # Validate generated file
     docker compose -f "${compose_file}" config --quiet 2>/dev/null && {
