@@ -938,7 +938,7 @@ append_litellm() {
     restart: unless-stopped
     user: "${TENANT_UID}:${TENANT_GID}"
     ports:
-      - "${LITELLM_PORT}:4000"
+      - "${LITELLM_PORT}:${LITELLM_INTERNAL_PORT}"
     environment:
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
       - LITELLM_SALT_KEY=${LITELLM_SALT_KEY}
@@ -964,7 +964,7 @@ append_litellm() {
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:4000/health/readiness"]
+      test: ["CMD", "curl", "-sf", "http://localhost:${LITELLM_INTERNAL_PORT}/health/readiness"]
       interval: 30s
       timeout: 15s
       retries: 5

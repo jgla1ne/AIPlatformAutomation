@@ -1137,6 +1137,7 @@ collect_ports() {
     OPENWEBUI_PORT="${OPENWEBUI_PORT:-${d_openwebui}}"
     ANYTHINGLLM_PORT="${ANYTHINGLLM_PORT:-${d_anythingllm}}"
     LITELLM_PORT="${LITELLM_PORT:-${d_litellm}}"
+    LITELLM_INTERNAL_PORT="4000"
     GRAFANA_PORT="${GRAFANA_PORT:-${d_grafana}}"
     PROMETHEUS_PORT="${PROMETHEUS_PORT:-${d_prometheus}}"
     OLLAMA_PORT="${OLLAMA_PORT:-${d_ollama}}"
@@ -1266,6 +1267,7 @@ OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
 
 # ─── LiteLLM Routing Strategy ───────────────────────────────────────────────
 LITELLM_ROUTING_STRATEGY=${LITELLM_ROUTING_STRATEGY}
+LITELLM_INTERNAL_PORT=${LITELLM_INTERNAL_PORT}
 
 # ─── Database ─────────────────────────────────────────────────────────────────
 POSTGRES_USER=${POSTGRES_USER}
