@@ -19,11 +19,19 @@ NC='\033[0m'
 
 # ─── Runtime vars ────────────────────────────────────────────────────────────────
 TENANT_UID=$(id -u)
+# Dynamic configuration paths
+DATA_BASE_PATH="/mnt/data"
+COMPOSE_FILENAME="docker-compose.yml"
+PLATFORM_LABEL="com.ai-platform"
+PROJECT_PREFIX="aip-"
+# Dynamic volume patterns for AI services
+VOLUME_PATTERNS="(${PROJECT_PREFIX}|stack_|n8n_data|ollama-data|postgres-data|redis-data|qdrant-data|minio-data|dify-)"
+
 # Auto-detect tenant directories
 detect_tenants() {
     local tenants=()
-    if [ -d "/mnt/data" ]; then
-        for dir in /mnt/data/*/; do
+    if [ -d "${DATA_BASE_PATH}" ]; then
+        for dir in ${DATA_BASE_PATH}/*/; do
             if [ -d "$dir" ]; then
                 local tenant_name=$(basename "$dir")
                 tenants+=("$tenant_name")
@@ -98,13 +106,16 @@ check_tenant_exists() {
 }
 
 check_compose_file() {
-    local compose_file="${DATA_ROOT}/docker-compose.yml"
+    local compose_file="${DATA_ROOT}/${COMPOSE_FILENAME}"
     if [ -n "${DATA_ROOT}" ] && [ ! -f "${compose_file}" ]; then
-        log "WARN" "No docker-compose.yml found at ${compose_file}"
+        log "WARN" "No ${COMPOSE_FILENAME} found at ${compose_file}"
         log "INFO" "Only running generic container cleanup"
-        COMPOSE_FILE=""
-    else
+        DATA_ROOT=""
+    fi
+    
+    if [ -n "${DATA_ROOT}" ] && [ -f "${compose_file}" ]; then
         COMPOSE_FILE="${compose_file}"
+        log "INFO" "Using compose file: ${compose_file}"
     fi
 }
 
@@ -121,7 +132,7 @@ cleanup_containers() {
     
     # Force remove any remaining AI Platform containers (all tenants)
     local containers
-    containers=$(docker ps -aq --filter "label=com.ai-platform" 2>/dev/null || true)
+    containers=$(docker ps -aq --filter "label=${PLATFORM_LABEL}" 2>/dev/null || true)
     if [ -n "${containers}" ]; then
         echo "${containers}" | xargs -r docker rm -f 2>/dev/null || true
         log "SUCCESS" "AI Platform containers removed"
@@ -129,11 +140,11 @@ cleanup_containers() {
         log "INFO" "No AI Platform containers to remove"
     fi
     
-    # Also remove any containers with aip- prefix (legacy naming)
-    containers=$(docker ps -aq --filter "name=aip-" 2>/dev/null || true)
+    # Also remove any containers with project prefix (legacy naming)
+    containers=$(docker ps -aq --filter "name=${PROJECT_PREFIX}" 2>/dev/null || true)
     if [ -n "${containers}" ]; then
         echo "${containers}" | xargs -r docker rm -f 2>/dev/null || true
-        log "SUCCESS" "Legacy aip- containers removed"
+        log "SUCCESS" "Legacy ${PROJECT_PREFIX} containers removed"
     fi
 }
 
@@ -169,7 +180,7 @@ cleanup_volumes() {
     
     # Remove any remaining AI platform related volumes
     local all_volumes
-    all_volumes=$(docker volume ls -q 2>/dev/null | grep -E "(aip-|stack_|n8n_data|ollama-data|postgres-data|redis-data|qdrant-data|minio-data|dify-)" || true)
+    all_volumes=$(docker volume ls -q 2>/dev/null | grep -E "${VOLUME_PATTERNS}" || true)
     if [ -n "${all_volumes}" ]; then
         log "INFO" "Removing additional AI platform volumes..."
         echo "${all_volumes}" | xargs -r docker volume rm 2>/dev/null || true
@@ -182,18 +193,18 @@ cleanup_volumes() {
 cleanup_data() {
     if [ "${KEEP_DATA}" = "true" ]; then
         log "INFO" "Preserving data directory as requested"
-        if [ -f "${DATA_ROOT}/docker-compose.yml" ]; then
-            rm -f "${DATA_ROOT}/docker-compose.yml"
+        if [ -f "${DATA_ROOT}/${COMPOSE_FILENAME}" ]; then
+            rm -f "${DATA_ROOT}/${COMPOSE_FILENAME}"
             log "SUCCESS" "Compose file removed (will be regenerated)"
         fi
     else
         log "INFO" "Unmounting EBS volumes and removing data directory..."
         
-        # Unmount any EBS volumes mounted under /mnt/data
-        if mountpoint -q /mnt/data 2>/dev/null; then
-            log "INFO" "Unmounting /mnt/data..."
-            umount /mnt/data 2>/dev/null || true
-            log "SUCCESS" "/mnt/data unmounted"
+        # Unmount any EBS volumes mounted under data base path
+        if mountpoint -q "${DATA_BASE_PATH}" 2>/dev/null; then
+            log "INFO" "Unmounting ${DATA_BASE_PATH}..."
+            umount "${DATA_BASE_PATH}" 2>/dev/null || true
+            log "SUCCESS" "${DATA_BASE_PATH} unmounted"
         fi
         
         # Check for and unmount tenant-specific mount points
@@ -239,7 +250,7 @@ confirm_destruction() {
     else
         echo -e "${YELLOW}Tenants to be destroyed: ${tenants[*]}${NC}"
         for tenant in "${tenants[@]}"; do
-            local data_root="/mnt/data/${tenant}"
+            local data_root="${DATA_BASE_PATH}/${tenant}"
             if [ ! -d "${data_root}" ]; then
                 data_root="/mnt/${tenant}"
             fi
@@ -296,11 +307,11 @@ main() {
         for tenant in "${tenants[@]}"; do
             log "INFO" "Cleaning up tenant: ${tenant}"
             TENANT_ID="${tenant}"
-            DATA_ROOT="/mnt/data/${tenant}"
+            DATA_ROOT="${DATA_BASE_PATH}/${tenant}"
             if [ ! -d "${DATA_ROOT}" ]; then
                 DATA_ROOT="/mnt/${tenant}"
             fi
-            COMPOSE_PROJECT_NAME="aip-${tenant}"
+            COMPOSE_PROJECT_NAME="${PROJECT_PREFIX}${tenant}"
             DOCKER_NETWORK="${COMPOSE_PROJECT_NAME}_net"
             
             cleanup_containers
