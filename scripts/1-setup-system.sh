@@ -663,12 +663,18 @@ collect_llm_config() {
     echo -e "  ${DIM}System RAM: ${TOTAL_RAM_GB}GB${NC}"
     echo ""
     
-    # Available models with RAM requirements
+    # Available models with RAM requirements - grouped by size
     echo -e "  ${BOLD}Available Models:${NC}"
+    echo ""
+    echo -e "  ${YELLOW}🟢 Small Models (1-8GB RAM):${NC}"
     echo -e "  ${CYAN}  1)${NC} llama3.2:1b      ${DIM}~1GB RAM${NC}"
     echo -e "  ${CYAN}  2)${NC} llama3.2:3b      ${DIM}~4GB RAM${NC}"
     echo -e "  ${CYAN}  3)${NC} qwen2.5:7b       ${DIM}~8GB RAM${NC}"
+    echo ""
+    echo -e "  ${YELLOW}🟡 Medium Models (10-16GB RAM):${NC}"
     echo -e "  ${CYAN}  4)${NC} llama3.1:8b      ${DIM}~10GB RAM${NC}"
+    echo ""
+    echo -e "  ${YELLOW}🔴 Large Models (50GB+ RAM):${NC}"
     echo -e "  ${CYAN}  5)${NC} llama3.1:70b     ${DIM}~50GB RAM${NC}"
     echo -e "  ${CYAN}  6)${NC} Custom model     ${DIM}Enter model name manually${NC}"
     echo ""
@@ -937,6 +943,7 @@ collect_ports() {
     local d_prometheus="9090"
     local d_ollama="11434"
     local d_qdrant="6333"
+    local d_authentik="9000"         # Host port, internal is 9000
     local d_signal="8085"           # Host port, internal is 8080
     local d_openclaw="18789"        # Host port, internal is 8082
     local d_tailscale="8443"        # Host port, internal is 443 (for OpenClaw)
@@ -983,6 +990,7 @@ collect_ports() {
     [ "${ENABLE_PROMETHEUS}" = "true" ]  && read_port "Prometheus"  "${d_prometheus}"  "PROMETHEUS_PORT"
     [ "${ENABLE_OLLAMA}" = "true" ]      && read_port "Ollama"      "${d_ollama}"      "OLLAMA_PORT"
     [ "${ENABLE_QDRANT}" = "true" ]      && read_port "Qdrant"      "${d_qdrant}"      "QDRANT_PORT"
+    [ "${ENABLE_AUTHENTIK}" = "true" ]    && read_port "Authentik"   "${d_authentik}"   "AUTHENTIK_PORT"
     [ "${ENABLE_SIGNAL}" = "true" ]      && read_port "Signal API"  "${d_signal}"      "SIGNAL_PORT"
     [ "${ENABLE_OPENCLAW}" = "true" ]    && read_port "OpenClaw"    "${d_openclaw}"    "OPENCLAW_PORT"
     [ "${ENABLE_TAILSCALE}" = "true" ]   && read_port "Tailscale"   "${d_tailscale}"   "TAILSCALE_PORT"
@@ -997,6 +1005,7 @@ collect_ports() {
     PROMETHEUS_PORT="${PROMETHEUS_PORT:-${d_prometheus}}"
     OLLAMA_PORT="${OLLAMA_PORT:-${d_ollama}}"
     QDRANT_PORT="${QDRANT_PORT:-${d_qdrant}}"
+    AUTHENTIK_PORT="${AUTHENTIK_PORT:-${d_authentik}}"
     SIGNAL_PORT="${SIGNAL_PORT:-${d_signal}}"
     OPENCLAW_PORT="${OPENCLAW_PORT:-${d_openclaw}}"
     TAILSCALE_PORT="${TAILSCALE_PORT:-${d_tailscale}}"
