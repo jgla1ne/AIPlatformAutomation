@@ -691,35 +691,140 @@ litellm_settings:
     host: redis
     port: 6379
     password: ${REDIS_PASSWORD}
+  # Routing strategy for cost/latency optimization
+  set_verbose: "debug"
+  success_callback: ["langfuse"]
+
+# Router configuration for intelligent model selection
+router:
+  # Route based on query complexity and cost
+  - model_group: "fast-cheap"
+    models: ["${OLLAMA_DEFAULT_MODEL}", "gemini-2.0-flash"]
+    routing_strategy: "usage-based-router"
+    default_model: "${OLLAMA_DEFAULT_MODEL}"
+    # Route simple queries to local models first
+    conditions:
+      - query_length: "< 1000"
+        priority: 1
+      - context_length: "< 4000"
+        priority: 2
+  
+  - model_group: "balanced"
+    models: ["gpt-4o", "gemini-2.0-flash", "${OLLAMA_DEFAULT_MODEL}"]
+    routing_strategy: "latency-based-router"
+    default_model: "gpt-4o"
+    # Route medium complexity queries
+    conditions:
+      - query_length: "1000-4000"
+        priority: 1
+      - requires_reasoning: true
+        priority: 2
+  
+  - model_group: "high-capability"
+    models: ["gpt-4o", "claude-3-opus"]
+    routing_strategy: "cost-based-router"
+    default_model: "gpt-4o"
+    # Route complex queries to frontier models
+    conditions:
+      - query_length: "> 4000"
+        priority: 1
+      - requires_analysis: true
+        priority: 2
+      - code_generation: true
+        priority: 3
 
 model_list:
 EOF
 
+    # Add local Ollama models (highest priority for cost)
     if [ "${ENABLE_OLLAMA}" = "true" ]; then
         cat >> "${litellm_dir}/config.yaml" << EOF
   - model_name: ${OLLAMA_DEFAULT_MODEL}
     litellm_params:
       model: ollama/${OLLAMA_DEFAULT_MODEL}
       api_base: http://ollama:11434
+      input_cost: 0.0
+      output_cost: 0.0
+      # Priority: 1 (highest for cost optimization)
+    model_info:
+      mode: "chat"
+      supports_function_calling: false
+      supports_vision: false
+      max_input_tokens: 4096
+      max_output_tokens: 2048
 EOF
     fi
 
+    # Add OpenAI models (balanced capability/cost)
     [ -n "${OPENAI_API_KEY:-}" ] && cat >> "${litellm_dir}/config.yaml" << EOF
   - model_name: gpt-4o
     litellm_params:
       model: gpt-4o
       api_key: ${OPENAI_API_KEY}
+      input_cost: 0.005
+      output_cost: 0.015
+      # Priority: 2 (balanced)
+    model_info:
+      mode: "chat"
+      supports_function_calling: true
+      supports_vision: true
+      max_input_tokens: 128000
+      max_output_tokens: 4096
 EOF
 
+    # Add Google models (fast and capable)
     [ -n "${GOOGLE_API_KEY:-}" ] && cat >> "${litellm_dir}/config.yaml" << EOF
   - model_name: gemini-2.0-flash
     litellm_params:
       model: gemini/gemini-2.0-flash-exp
       api_key: ${GOOGLE_API_KEY}
+      input_cost: 0.000075
+      output_cost: 0.00015
+      # Priority: 1 (very fast and cheap)
+    model_info:
+      mode: "chat"
+      supports_function_calling: true
+      supports_vision: true
+      max_input_tokens: 1000000
+      max_output_tokens: 8192
+EOF
+
+    # Add Groq models (highest speed)
+    [ -n "${GROQ_API_KEY:-}" ] && cat >> "${litellm_dir}/config.yaml" << EOF
+  - model_name: groq-llama-70b
+    litellm_params:
+      model: groq/llama-70b-8192
+      api_key: ${GROQ_API_KEY}
+      input_cost: 0.00059
+      output_cost: 0.00079
+      # Priority: 1 (fastest inference)
+    model_info:
+      mode: "chat"
+      supports_function_calling: true
+      supports_vision: false
+      max_input_tokens: 8192
+      max_output_tokens: 8192
+EOF
+
+    # Add OpenRouter models (fallback)
+    [ -n "${OPENROUTER_API_KEY:-}" ] && cat >> "${litellm_dir}/config.yaml" << EOF
+  - model_name: openrouter-mixtral
+    litellm_params:
+      model: openrouter/mistralai/mixtral-8x7b-instruct
+      api_key: ${OPENROUTER_API_KEY}
+      input_cost: 0.00024
+      output_cost: 0.00024
+      # Priority: 3 (fallback)
+    model_info:
+      mode: "chat"
+      supports_function_calling: true
+      supports_vision: false
+      max_input_tokens: 32768
+      max_output_tokens: 32768
 EOF
 
     chown -R "${TENANT_UID}:${TENANT_GID}" "${litellm_dir}"
-    log "SUCCESS" "LiteLLM config generated at ${litellm_dir}/config.yaml"
+    log "SUCCESS" "LiteLLM config with routing strategy generated at ${litellm_dir}/config.yaml"
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -791,8 +896,8 @@ append_openwebui() {
       - WEBUI_SECRET_KEY=${ANYTHINGLLM_JWT_SECRET}
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       # Vector DB connection
-      - VECTOR_DB=qdrant
-      - QDRANT_URI=http://qdrant:6333
+      - VECTOR_DB=${VECTOR_DB}
+      - QDRANT_URI=${VECTOR_DB_URL}
       - QDRANT_API_KEY=${QDRANT_API_KEY:-}
       - OLLAMA_BASE_URL=${ollama_url}
       - ENABLE_SIGNUP=false
@@ -831,7 +936,7 @@ append_anythingllm() {
       - JWT_SECRET=${ANYTHINGLLM_JWT_SECRET}
       # Vector DB connection
       - VECTOR_DB=${VECTOR_DB}
-      - QDRANT_ENDPOINT=http://qdrant:6333
+      - QDRANT_ENDPOINT=${VECTOR_DB_URL}
       - QDRANT_API_KEY=${QDRANT_API_KEY:-}
       # LLM connection via LiteLLM
       - LLM_PROVIDER=litellm
@@ -899,6 +1004,14 @@ append_n8n() {
       - QUEUE_BULL_REDIS_HOST=redis
       - QUEUE_BULL_REDIS_PORT=6379
       - QUEUE_BULL_REDIS_PASSWORD=${REDIS_PASSWORD}
+      # LLM integration via LiteLLM
+      - N8N_LLM_DEFAULT_MODEL=${OLLAMA_DEFAULT_MODEL}
+      - OPENAI_API_BASE_URL=http://litellm:4000/v1
+      - OPENAI_API_KEY=${LITELLM_MASTER_KEY}
+      # Vector DB integration
+      - VECTOR_DB=${VECTOR_DB}
+      - QDRANT_URL=${VECTOR_DB_URL}
+      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
     volumes:
       - ${DATA_ROOT}/n8n:/home/node/.n8n
     networks:
@@ -937,6 +1050,14 @@ append_flowise() {
       - SECRETKEY_PATH=/data/flowise
       - LOG_PATH=/data/flowise/logs
       - BLOB_STORAGE_PATH=/data/flowise/storage
+      # LLM integration via LiteLLM
+      - OPENAI_API_BASE_URL=http://litellm:4000/v1
+      - OPENAI_API_KEY=${LITELLM_MASTER_KEY}
+      - LLM_DEFAULT_MODEL=${OLLAMA_DEFAULT_MODEL}
+      # Vector DB integration
+      - VECTOR_DB=${VECTOR_DB}
+      - QDRANT_URL=${VECTOR_DB_URL}
+      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
     volumes:
       - ${DATA_ROOT}/flowise:/data/flowise
     networks:
