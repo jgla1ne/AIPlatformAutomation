@@ -23,7 +23,8 @@ TENANT_UID=$(id -u)
 DATA_BASE_PATH="/mnt/data"
 COMPOSE_FILENAME="docker-compose.yml"
 PLATFORM_LABEL="com.ai-platform"
-PROJECT_PREFIX="aip-"
+# Read PROJECT_PREFIX from environment or use default
+PROJECT_PREFIX="${PROJECT_PREFIX:-aip-}"
 # Dynamic volume patterns for AI services
 VOLUME_PATTERNS="(${PROJECT_PREFIX}|stack_|n8n_data|ollama-data|postgres-data|redis-data|qdrant-data|minio-data|dify-)"
 
@@ -311,6 +312,19 @@ main() {
             if [ ! -d "${DATA_ROOT}" ]; then
                 DATA_ROOT="/mnt/${tenant}"
             fi
+            
+            # Read PROJECT_PREFIX from tenant's .env file if exists
+            if [ -f "${DATA_ROOT}/.env" ]; then
+                # Source the .env file to get PROJECT_PREFIX
+                set -a
+                . "${DATA_ROOT}/.env"
+                set +a
+                log "INFO" "Using PROJECT_PREFIX from .env: ${PROJECT_PREFIX:-aip-}"
+            else
+                PROJECT_PREFIX="${PROJECT_PREFIX:-aip-}"
+                log "INFO" "Using default PROJECT_PREFIX: ${PROJECT_PREFIX}"
+            fi
+            
             COMPOSE_PROJECT_NAME="${PROJECT_PREFIX}${tenant}"
             DOCKER_NETWORK="${COMPOSE_PROJECT_NAME}_net"
             

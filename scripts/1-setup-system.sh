@@ -480,7 +480,23 @@ collect_identity() {
 
     print_divider
 
-    echo -e "  ${BOLD}📧  Admin Email${NC}"
+    echo -e "  ${BOLD}�  Project Prefix${NC}"
+    echo -e "  ${DIM}Prefix for Docker resources (compose project, containers, volumes)${NC}"
+    echo ""
+
+    while true; do
+        read -p "  ➤ Project prefix [aip-]: " PROJECT_PREFIX
+        PROJECT_PREFIX="${PROJECT_PREFIX:-aip-}"
+        PROJECT_PREFIX="${PROJECT_PREFIX,,}"
+        if [[ "${PROJECT_PREFIX}" =~ ^[a-z][a-z0-9\-]*-$ ]]; then
+            break
+        fi
+        echo "  ❌ Must end with hyphen, lowercase/numbers/hyphens only"
+    done
+
+    print_divider
+
+    echo -e "  ${BOLD}�  Admin Email${NC}"
     echo ""
     while true; do
         read -p "  ➤ Admin email address: " ADMIN_EMAIL
@@ -743,8 +759,8 @@ collect_network_config() {
     echo -e "  ${DIM}Zero-trust networking for secure access${NC}"
     echo ""
     read -p "  ➤ Tailscale auth key (leave blank to skip): " TAILSCALE_AUTH_KEY
-    read -p "  ➤ Tailscale hostname [aip-${TENANT_ID}]: " TAILSCALE_HOSTNAME
-    TAILSCALE_HOSTNAME="${TAILSCALE_HOSTNAME:-aip-${TENANT_ID}}"
+    read -p "  ➤ Tailscale hostname [${PROJECT_PREFIX}${TENANT_ID}]: " TAILSCALE_HOSTNAME
+    TAILSCALE_HOSTNAME="${TAILSCALE_HOSTNAME:-${PROJECT_PREFIX}${TENANT_ID}}"
     
     # If auth key provided, ask for serve mode
     if [ -n "${TAILSCALE_AUTH_KEY}" ]; then
@@ -1085,6 +1101,7 @@ DOMAIN=${DOMAIN}
 ADMIN_EMAIL=${ADMIN_EMAIL}
 DATA_ROOT=${DATA_ROOT}
 SSL_TYPE=${SSL_TYPE}
+PROJECT_PREFIX=${PROJECT_PREFIX}
 
 # ─── Service Flags ─────────────────────────────────────────────────────────────
 ENABLE_OLLAMA=${ENABLE_OLLAMA}
@@ -1133,7 +1150,7 @@ LITELLM_API_ENDPOINT=${LITELLM_API_ENDPOINT}
 QDRANT_API_ENDPOINT=${QDRANT_API_ENDPOINT}
 
 # ─── Project Configuration ───────────────────────────────────────────────────
-COMPOSE_PROJECT_NAME="aip-${TENANT_ID}"
+COMPOSE_PROJECT_NAME="${PROJECT_PREFIX}${TENANT_ID}"
 DOCKER_NETWORK="\${COMPOSE_PROJECT_NAME}_net"
 
 # ─── Hardware ─────────────────────────────────────────────────────────────────
