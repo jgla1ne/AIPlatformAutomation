@@ -404,6 +404,10 @@ select_data_volume() {
     COMPOSE_DIR="${DATA_ROOT}/compose"
     CADDY_DIR="${DATA_ROOT}/caddy"
 
+    # Set tenant UID/GID for proper ownership (core principle: tenant owns their data)
+    export TENANT_UID="${SUDO_UID:-$(id -u)}"
+    export TENANT_GID="${SUDO_GID:-$(id -g)}"
+    
     # Set dynamic service URLs based on tenant configuration
     VECTOR_DB_URL="http://qdrant:6333"
     OLLAMA_INTERNAL_URL="http://ollama:11434"
@@ -1344,13 +1348,21 @@ create_directories() {
         idx=$((idx + 1))
         mkdir -p "${dir}"
         
-        # Set ownership to tenant UID/GID (core principle: tenant owns their data)
-        chown "${TENANT_UID}:${TENANT_GID}" "${dir}"
+        # Set correct ownership based on service type (core principle: tenant owns their data)
+        case "${dir}" in
+            */postgres) chown 999:999 "${dir}" ;;
+            */redis) chown 999:999 "${dir}" ;;
+            */grafana) chown 472:472 "${dir}" ;;
+            */prometheus) chown 65534:65534 "${dir}" ;;
+            */caddy) chown root:root "${dir}" ;;
+            */logs) chown "${TENANT_UID}:${TENANT_GID}" "${dir}" ;;
+            *) chown "${TENANT_UID}:${TENANT_GID}" "${dir}" ;;  # Default for most services
+        esac
         
-        printf "  ${DIM}[%2d/%d]${NC} Created %s\n" "${idx}" "${total}" "${dir}"
+        printf "  ${DIM}[%2d/%d]${NC} Created %s (owner: $(stat -c '%U:%G' "${dir}"))\n" "${idx}" "${total}" "${dir}"
     done
 
-    log "SUCCESS" "Directory structure ready"
+    log "SUCCESS" "Directory structure ready with proper ownership"
 }
 
 # ─── Write Caddyfile ─────────────────────────────────────────────────────────
@@ -1613,11 +1625,6 @@ main() {
     generate_secrets         # Step 11
     print_summary
     write_env
-    
-    # Set tenant UID/GID for directory ownership (core principle: tenant owns their data)
-    # Preserve original user when running with sudo
-    export TENANT_UID="${SUDO_UID:-$(id -u)}"
-    export TENANT_GID="${SUDO_GID:-$(id -g)}"
     
     create_directories
     write_caddyfile
