@@ -58,8 +58,8 @@ ssh root@<YOUR_SERVER_IP>
 apt-get update -qq && apt-get install -y git curl
 
 # Clone the repo
-git clone https://github.com/jgla1ne/AIPlatformAutomation.git /opt/ai-platform-automation
-cd /opt/ai-platform-automation
+git clone https://github.com/jgla1ne/AIPlatformAutomation.git ~/ai-platform-automation
+cd /ai-platform-automation
 
 # Make all scripts executable
 chmod +x scripts/*.sh
@@ -464,15 +464,15 @@ n8n data
 
 
 GDrive sync logs
-/var/log/rclone-datasquiz.log
+/mnt/data/datasquiz/logs/rclone-datasquiz.log
 
 
 
 COMPLETE COMMAND SEQUENCE (copy-paste)
 # Phase 1
 apt-get update -qq && apt-get install -y git curl
-git clone https://github.com/jgla1ne/AIPlatformAutomation.git /opt/ai-platform-automation
-cd /opt/ai-platform-automation && chmod +x scripts/*.sh
+git clone https://github.com/jgla1ne/AIPlatformAutomation.git /~/ai-platform-automation
+cd /ai-platform-automation && chmod +x scripts/*.sh
 
 # Phase 2
 sudo bash scripts/1-setup-environment.sh
