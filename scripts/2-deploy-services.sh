@@ -684,7 +684,7 @@ generate_litellm_config() {
             cat > "${litellm_dir}/config.yaml" << EOF
 general_settings:
   master_key: ${LITELLM_MASTER_KEY}
-  database_url: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm
+  database_url: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_INTERNAL_PORT}/litellm
 
 litellm_settings:
   drop_params: true
@@ -730,7 +730,7 @@ EOF
             cat > "${litellm_dir}/config.yaml" << EOF
 general_settings:
   master_key: ${LITELLM_MASTER_KEY}
-  database_url: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm
+  database_url: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_INTERNAL_PORT}/litellm
 
 litellm_settings:
   drop_params: true
@@ -778,7 +778,7 @@ EOF
             cat > "${litellm_dir}/config.yaml" << EOF
 general_settings:
   master_key: ${LITELLM_MASTER_KEY}
-  database_url: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm
+  database_url: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_INTERNAL_PORT}/litellm
 
 litellm_settings:
   drop_params: true
@@ -942,7 +942,7 @@ append_litellm() {
     environment:
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
       - LITELLM_SALT_KEY=${LITELLM_SALT_KEY}
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_INTERNAL_PORT}/${POSTGRES_DB}
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - OLLAMA_BASE_URL=${OLLAMA_INTERNAL_URL}
       - QDRANT_URL=${VECTOR_DB_URL}
@@ -1095,7 +1095,7 @@ append_n8n() {
       - N8N_EDITOR_BASE_URL=${n8n_editor_url}
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=postgres
-      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_PORT=${POSTGRES_INTERNAL_PORT}
       - DB_POSTGRESDB_DATABASE=n8n
       - DB_POSTGRESDB_USER=${POSTGRES_USER}
       - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
