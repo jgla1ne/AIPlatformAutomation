@@ -187,11 +187,11 @@ write_stub_caddyfile() {
     
     # Only write stub if a real Caddyfile doesn't already exist
     if [[ -f "${caddyfile}" ]]; then
-        info "Caddyfile already exists — skipping stub write"
+        log "Caddyfile already exists — skipping stub write"
         return
     fi
     
-    info "Writing stub Caddyfile (will be replaced by script 3)…"
+    log "Writing stub Caddyfile (will be replaced by script 3)…"
     cat > "${caddyfile}" << EOF
 # Stub Caddyfile — replaced by 3-configure-services.sh
 # Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -247,7 +247,7 @@ setup_directories() {
 
 # ── Compose Generator (the key function) ────────────────────────
 write_compose_header() {
-    info "Writing docker-compose.yml header…"
+    log "Writing docker-compose.yml header…"
     cat > "${compose_file}" << EOF
 # =============================================================================
 # AI Platform — Generated docker-compose.yml
