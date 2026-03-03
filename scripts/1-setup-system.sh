@@ -793,6 +793,57 @@ collect_llm_config() {
     log "SUCCESS" "Default model: ${OLLAMA_DEFAULT_MODEL}"
 }
 
+# ─── LiteLLM Routing Strategy Configuration ───────────────────────────────
+collect_litellm_routing() {
+    print_step "8.5" "11" "LiteLLM Routing Strategy"
+    
+    echo -e "  ${BOLD}🧠  LiteLLM Routing Strategy${NC}"
+    echo -e "  ${DIM}Configure intelligent model routing for cost/latency optimization${NC}"
+    echo ""
+    
+    echo -e "  ${BOLD}Available Routing Strategies:${NC}"
+    echo ""
+    echo -e "  ${CYAN}  1)${NC} Cost-Optimized (recommended)"
+    echo -e "     ${DIM}Prioritize free/local models, then cheapest paid models${NC}"
+    echo ""
+    echo -e "  ${CYAN}  2)${NC} Speed-Optimized"
+    echo -e "     ${DIM}Prioritize fastest response times (Groq > Gemini > Local)${NC}"
+    echo ""
+    echo -e "  ${CYAN}  3)${NC} Balanced"
+    echo -e "     ${DIM}Balance cost, speed, and capability${NC}"
+    echo ""
+    echo -e "  ${CYAN}  4)${NC} Capability-Optimized"
+    echo -e "     ${DIM}Prioritize most capable models (GPT-4o > Claude-3 > Gemini)${NC}"
+    echo ""
+    
+    read -p "  ➤ Select LiteLLM routing strategy [1-4]: " litellm_routing_choice
+    
+    case "${litellm_routing_choice}" in
+        1) 
+            LITELLM_ROUTING_STRATEGY="cost-optimized"
+            echo -e "  ${GREEN}✅${NC} Cost-optimized routing selected"
+            ;;
+        2) 
+            LITELLM_ROUTING_STRATEGY="speed-optimized"
+            echo -e "  ${GREEN}✅${NC} Speed-optimized routing selected"
+            ;;
+        3) 
+            LITELLM_ROUTING_STRATEGY="balanced"
+            echo -e "  ${GREEN}✅${NC} Balanced routing selected"
+            ;;
+        4) 
+            LITELLM_ROUTING_STRATEGY="capability-optimized"
+            echo -e "  ${GREEN}✅${NC} Capability-optimized routing selected"
+            ;;
+        *) 
+            LITELLM_ROUTING_STRATEGY="cost-optimized"
+            echo -e "  ${YELLOW}⚠️${NC} Defaulting to cost-optimized routing"
+            ;;
+    esac
+    
+    log "SUCCESS" "LiteLLM routing strategy: ${LITELLM_ROUTING_STRATEGY}"
+}
+
 # ─── Network & Security Configuration ───────────────────────────────────────────
 collect_network_config() {
     print_step "9" "11" "Network & Security Configuration"
@@ -1213,6 +1264,9 @@ GOOGLE_API_KEY=${GOOGLE_API_KEY}
 GROQ_API_KEY=${GROQ_API_KEY}
 OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
 
+# ─── LiteLLM Routing Strategy ───────────────────────────────────────────────
+LITELLM_ROUTING_STRATEGY=${LITELLM_ROUTING_STRATEGY}
+
 # ─── Database ─────────────────────────────────────────────────────────────────
 POSTGRES_USER=${POSTGRES_USER}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
@@ -1628,6 +1682,7 @@ main() {
     select_stack             # Step 6
     select_vector_db         # Step 7
     collect_llm_config       # Step 8
+    collect_litellm_routing  # Step 8.5 - LiteLLM routing strategy
     collect_network_config   # Step 9 - NEW: Network & security configuration
     collect_ports            # Step 10
     generate_secrets         # Step 11

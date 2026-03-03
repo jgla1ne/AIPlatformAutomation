@@ -678,7 +678,10 @@ generate_litellm_config() {
     local litellm_dir="${DATA_ROOT}/litellm"
     mkdir -p "${litellm_dir}"
 
-    cat > "${litellm_dir}/config.yaml" << EOF
+    # Use routing strategy from script 1 configuration
+    case "${LITELLM_ROUTING_STRATEGY}" in
+        "speed-optimized")
+            cat > "${litellm_dir}/config.yaml" << EOF
 general_settings:
   master_key: ${LITELLM_MASTER_KEY}
   database_url: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm
@@ -691,7 +694,101 @@ litellm_settings:
     host: redis
     port: 6379
     password: ${REDIS_PASSWORD}
-  # Routing strategy for cost/latency optimization
+  # Speed-optimized routing strategy
+  set_verbose: "debug"
+  success_callback: ["langfuse"]
+
+# Speed-optimized router configuration
+router:
+  # Route based on speed priority (Groq > Gemini > Local > OpenAI)
+  - model_group: "ultra-fast"
+    models: ["groq-llama-70b", "gemini-2.0-flash", "${OLLAMA_DEFAULT_MODEL}"]
+    routing_strategy: "latency-based-router"
+    default_model: "groq-llama-70b"
+    # Route all queries to fastest available model
+    conditions:
+      - query_length: "< 5000"
+        priority: 1
+      - requires_speed: true
+        priority: 2
+  
+  - model_group: "fast-capable"
+    models: ["gpt-4o", "gemini-2.0-flash", "${OLLAMA_DEFAULT_MODEL}"]
+    routing_strategy: "latency-based-router"
+    default_model: "gemini-2.0-flash"
+    # Balance speed with capability
+    conditions:
+      - query_length: "5000-10000"
+        priority: 1
+      - requires_reasoning: true
+        priority: 2
+
+model_list:
+EOF
+            ;;
+        "capability-optimized")
+            cat > "${litellm_dir}/config.yaml" << EOF
+general_settings:
+  master_key: ${LITELLM_MASTER_KEY}
+  database_url: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm
+
+litellm_settings:
+  drop_params: true
+  cache: true
+  cache_params:
+    type: redis
+    host: redis
+    port: 6379
+    password: ${REDIS_PASSWORD}
+  # Capability-optimized routing strategy
+  set_verbose: "debug"
+  success_callback: ["langfuse"]
+
+# Capability-optimized router configuration
+router:
+  # Route based on model capability (GPT-4o > Claude-3 > Gemini > Local)
+  - model_group: "frontier"
+    models: ["gpt-4o", "claude-3-opus", "gemini-2.0-flash"]
+    routing_strategy: "capability-based-router"
+    default_model: "gpt-4o"
+    # Route complex queries to most capable models
+    conditions:
+      - requires_analysis: true
+        priority: 1
+      - code_generation: true
+        priority: 2
+      - complex_reasoning: true
+        priority: 3
+  
+  - model_group: "capable"
+    models: ["gpt-4o", "gemini-2.0-flash", "${OLLAMA_DEFAULT_MODEL}"]
+    routing_strategy: "capability-based-router"
+    default_model: "gpt-4o"
+    # Medium complexity queries
+    conditions:
+      - query_length: "1000-5000"
+        priority: 1
+      - requires_reasoning: true
+        priority: 2
+
+model_list:
+EOF
+            ;;
+        "balanced"|*)
+            cat > "${litellm_dir}/config.yaml" << EOF
+general_settings:
+  master_key: ${LITELLM_MASTER_KEY}
+  database_url: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm
+
+litellm_settings:
+  drop_params: true
+  cache: true
+  cache_params:
+    type: redis
+    host: redis
+    port: 6379
+    password: ${REDIS_PASSWORD}
+  # Balanced routing strategy for cost/latency optimization
   set_verbose: "debug"
   success_callback: ["langfuse"]
 
@@ -735,6 +832,8 @@ router:
 
 model_list:
 EOF
+            ;;
+    esac
 
     # Add local Ollama models (highest priority for cost)
     if [ "${ENABLE_OLLAMA}" = "true" ]; then
