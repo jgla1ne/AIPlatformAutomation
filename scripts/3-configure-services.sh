@@ -397,7 +397,7 @@ datasources:
   - name: Prometheus
     type: prometheus
     access: proxy
-    url: http://prometheus:9090
+    url: http://prometheus:${PROMETHEUS_INTERNAL_PORT}
     isDefault: true
     editable: true
 EOF
@@ -439,7 +439,7 @@ configure_qdrant() {
     log "INFO" "Verifying Qdrant vector database..."
     
     # Test Qdrant connectivity
-    if wait_for_service "Qdrant" "http://localhost:6333/healthz" 30; then
+    if wait_for_service "Qdrant" "http://localhost:${QDRANT_INTERNAL_PORT}/healthz" 30; then
         log "SUCCESS" "Qdrant is accessible"
     else
         log "WARN" "Qdrant may not be fully ready"
@@ -462,7 +462,7 @@ configure_ollama() {
         warn "Ollama container not found — skipping model pull"
         return
     fi
-    if wait_for_service "Ollama" "http://localhost:11434/api/tags" 60; then
+    if wait_for_service "Ollama" "http://localhost:${OLLAMA_INTERNAL_PORT}/api/tags" 60; then
         log "SUCCESS" "Ollama is accessible"
         
         # Pull models if not present
@@ -608,8 +608,8 @@ print_service_status() {
     [ "${ENABLE_GRAFANA}" = "true" ] && optional_services+=("grafana:${GRAFANA_PORT:-3003}:Grafana")
     [ "${ENABLE_PROMETHEUS}" = "true" ] && optional_services+=("prometheus:${PROMETHEUS_PORT:-9090}:Prometheus")
     [ "${ENABLE_SIGNAL}" = "true" ] && optional_services+=("signal-api:${SIGNAL_PORT:-8080}:Signal API")
-    [ "${ENABLE_TAILSCALE}" = "true" ] && optional_services+=("tailscale:8443:Tailscale VPN")
-    [ "${ENABLE_RCLONE}" = "true" ] && optional_services+=("rclone:5572:Rclone")
+    [ "${ENABLE_TAILSCALE}" = "true" ] && optional_services+=("tailscale:${TAILSCALE_INTERNAL_PORT}:Tailscale VPN")
+    [ "${ENABLE_RCLONE}" = "true" ] && optional_services+=("rclone:${RCLONE_INTERNAL_PORT}:Rclone")
     
     # Check core services
     for service in "${core_services[@]}"; do
