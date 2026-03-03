@@ -1132,6 +1132,7 @@ ANYTHINGLLM_PORT=${ANYTHINGLLM_PORT}
 
 # ─── Qdrant ───────────────────────────────────────────────────────────────────
 QDRANT_API_KEY=${QDRANT_API_KEY}
+QDRANT_VECTOR_SIZE=768        # nomic-embed-text=768, mxbai-embed-large=1024
 
 # ─── Grafana ──────────────────────────────────────────────────────────────────
 GRAFANA_ADMIN_USER=admin

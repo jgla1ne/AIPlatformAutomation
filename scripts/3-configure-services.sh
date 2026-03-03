@@ -330,6 +330,16 @@ configure_ollama() {
     log "INFO" "Verifying Ollama service..."
     
     # Test Ollama connectivity
+    local ollama_container
+    ollama_container=$(docker ps --filter "name=^ollama$" --format "{{.Names}}" | head -1)
+    if [[ -z "${ollama_container}" ]]; then
+        # Fallback: try compose-namespaced name
+        ollama_container=$(docker ps --filter "name=ollama" --format "{{.Names}}" | grep -E "[-_]ollama[-_]?1? $" | head -1)
+    fi
+    if [[ -z "${ollama_container}" ]]; then
+        warn "Ollama container not found — skipping model pull"
+        return
+    fi
     if wait_for_service "Ollama" "http://localhost:11434/api/tags" 60; then
         log "SUCCESS" "Ollama is accessible"
         
@@ -338,9 +348,9 @@ configure_ollama() {
             log "INFO" "Checking and downloading models..."
             for model in ${OLLAMA_MODELS}; do
                 log "INFO" "Checking if ${model} is downloaded..."
-                if ! docker exec "${COMPOSE_PROJECT_NAME}-ollama" ollama list 2>/dev/null | grep -q "${model}"; then
+                if ! docker exec "${ollama_container}" ollama list 2>/dev/null | grep -q "${model}"; then
                     log "INFO" "Pulling ${model} model..."
-                    if docker exec "${COMPOSE_PROJECT_NAME}-ollama" ollama pull "${model}" &>/dev/null; then
+                    if docker exec "${ollama_container}" ollama pull "${model}" &>/dev/null; then
                         log "SUCCESS" "${model} downloaded successfully"
                     else
                         log "WARN" "Failed to pull ${model}"
@@ -352,9 +362,9 @@ configure_ollama() {
         elif [ -n "${OLLAMA_DEFAULT_MODEL}" ]; then
             # Fallback to single model if OLLAMA_MODELS not set
             log "INFO" "Checking if ${OLLAMA_DEFAULT_MODEL} is downloaded..."
-            if ! docker exec "${COMPOSE_PROJECT_NAME}-ollama" ollama list 2>/dev/null | grep -q "${OLLAMA_DEFAULT_MODEL}"; then
+            if ! docker exec "${ollama_container}" ollama list 2>/dev/null | grep -q "${OLLAMA_DEFAULT_MODEL}"; then
                 log "INFO" "Pulling ${OLLAMA_DEFAULT_MODEL} model..."
-                if docker exec "${COMPOSE_PROJECT_NAME}-ollama" ollama pull "${OLLAMA_DEFAULT_MODEL}" &>/dev/null; then
+                if docker exec "${ollama_container}" ollama pull "${OLLAMA_DEFAULT_MODEL}" &>/dev/null; then
                     log "SUCCESS" "${OLLAMA_DEFAULT_MODEL} downloaded successfully"
                 else
                     log "WARN" "Failed to pull ${OLLAMA_DEFAULT_MODEL}"
