@@ -1363,21 +1363,14 @@ create_directories() {
         idx=$((idx + 1))
         mkdir -p "${dir}"
         
-        # Set correct ownership based on service type (core principle: tenant owns their data)
-        case "${dir}" in
-            */postgres) chown 999:999 "${dir}" ;;
-            */redis) chown 999:999 "${dir}" ;;
-            */grafana) chown 472:472 "${dir}" ;;
-            */prometheus) chown 65534:65534 "${dir}" ;;
-            */caddy) chown root:root "${dir}" ;;
-            */logs) chown "${TENANT_UID}:${TENANT_GID}" "${dir}" ;;
-            *) chown "${TENANT_UID}:${TENANT_GID}" "${dir}" ;;  # Default for most services
-        esac
+        # CRITICAL: All directories on host must be owned by tenant (core principle: tenant owns their data)
+        # Service users (postgres, grafana, etc.) only exist inside containers, not on host
+        chown "${TENANT_UID}:${TENANT_GID}" "${dir}"
         
         printf "  ${DIM}[%2d/%d]${NC} Created %s (owner: $(stat -c '%U:%G' "${dir}"))\n" "${idx}" "${total}" "${dir}"
     done
 
-    log "SUCCESS" "Directory structure ready with proper ownership"
+    log "SUCCESS" "Directory structure ready with proper tenant ownership"
 }
 
 # ─── Write Caddyfile ─────────────────────────────────────────────────────────
