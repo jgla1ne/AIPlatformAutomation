@@ -1026,7 +1026,7 @@ append_anythingllm() {
     restart: unless-stopped
     user: "${TENANT_UID}:${TENANT_GID}"
     ports:
-      - "${ANYTHINGLLM_PORT}:3001"
+      - "${ANYTHINGLLM_PORT}:${ANYTHINGLLM_INTERNAL_PORT}"
     environment:
       - STORAGE_DIR=/app/server/storage
       - SERVER_PORT=3001
@@ -1053,7 +1053,7 @@ append_anythingllm() {
     networks:
       - ${DOCKER_NETWORK}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/api/ping"]
+      test: ["CMD", "curl", "-f", "http://localhost:${ANYTHINGLLM_INTERNAL_PORT}/api/ping"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -1086,7 +1086,7 @@ append_n8n() {
     restart: unless-stopped
     user: "${TENANT_UID}:${TENANT_GID}"
     ports:
-      - "${N8N_PORT}:5678"
+      - "${N8N_PORT}:${N8N_INTERNAL_PORT}"
     environment:
       - N8N_HOST=${n8n_host}
       - N8N_PORT=5678
@@ -1119,7 +1119,7 @@ append_n8n() {
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5678/healthz"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:${N8N_INTERNAL_PORT}/healthz"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -1139,7 +1139,7 @@ append_flowise() {
     restart: unless-stopped
     user: "${TENANT_UID}:${TENANT_GID}"
     ports:
-      - "${FLOWISE_PORT}:3000"
+      - "${FLOWISE_PORT}:${FLOWISE_INTERNAL_PORT}"
     environment:
       - PORT=3000
       - FLOWISE_USERNAME=${FLOWISE_USERNAME}
@@ -1162,7 +1162,7 @@ append_flowise() {
     networks:
       - ${DOCKER_NETWORK}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/ping"]
+      test: ["CMD", "curl", "-f", "http://localhost:${FLOWISE_INTERNAL_PORT}/api/v1/ping"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -1311,7 +1311,7 @@ PROM
     restart: unless-stopped
     user: "${TENANT_UID}:${TENANT_GID}"
     ports:
-      - "${PROMETHEUS_PORT}:9090"
+      - "${PROMETHEUS_PORT}:${PROMETHEUS_INTERNAL_PORT}"
     volumes:
       - ${DATA_ROOT}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ${DATA_ROOT}/prometheus/data:/prometheus
@@ -1322,7 +1322,7 @@ PROM
     networks:
       - ${DOCKER_NETWORK}
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:${PROMETHEUS_INTERNAL_PORT}/-/healthy"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -1345,7 +1345,7 @@ append_grafana() {
     container_name: ${COMPOSE_PROJECT_NAME}-grafana
     restart: unless-stopped
     ports:
-      - "${GRAFANA_PORT}:3000"
+      - "${GRAFANA_PORT}:${GRAFANA_INTERNAL_PORT}"
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
@@ -1360,7 +1360,7 @@ append_grafana() {
       prometheus:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:${GRAFANA_INTERNAL_PORT}/api/health"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -1380,18 +1380,18 @@ append_minio() {
     restart: unless-stopped
     user: "${TENANT_UID}:${TENANT_GID}"
     ports:
-      - "${MINIO_PORT}:9000"
-      - "${MINIO_CONSOLE_PORT}:9001"
+      - "${MINIO_PORT}:${MINIO_INTERNAL_PORT}"
+      - "${MINIO_CONSOLE_PORT}:${MINIO_CONSOLE_INTERNAL_PORT}"
     environment:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
     volumes:
       - ${COMPOSE_PROJECT_NAME}_minio_data:/data
-    command: server /data --console-address ":9001"
+    command: server /data --console-address ":${MINIO_CONSOLE_INTERNAL_PORT}"
     networks:
       - ${DOCKER_NETWORK}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "curl", "-f", "http://localhost:${MINIO_INTERNAL_PORT}/minio/health/live"]
       interval: 30s
       timeout: 10s
       retries: 5
