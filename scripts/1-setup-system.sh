@@ -1104,6 +1104,34 @@ ENABLE_OPENCLAW="${ENABLE_OPENCLAW:-false}"
 ENABLE_RCLONE=${ENABLE_RCLONE}
 ENABLE_MINIO=${ENABLE_MINIO}
 
+# ─── Service URLs (for dynamic configuration) ───────────────────────────────────
+# Internal service URLs (Docker network communication)
+OLLAMA_INTERNAL_URL="http://ollama:11434"
+LITELLM_INTERNAL_URL="http://litellm:4000"
+QDRANT_INTERNAL_URL="http://qdrant:6333"
+REDIS_INTERNAL_URL="redis://redis:6379"
+POSTGRES_INTERNAL_URL="postgresql://postgres:5432"
+N8N_INTERNAL_URL="http://n8n:5678"
+
+# Service API endpoints
+OLLAMA_API_ENDPOINT="${OLLAMA_INTERNAL_URL}/api/tags"
+LITELLM_API_ENDPOINT="${LITELLM_INTERNAL_URL}/v1"
+QDRANT_API_ENDPOINT="${QDRANT_INTERNAL_URL}"
+
+# ─── Service URLs (for dynamic configuration) ───────────────────────────────────
+# Internal service URLs (Docker network communication)
+OLLAMA_INTERNAL_URL=${OLLAMA_INTERNAL_URL}
+LITELLM_INTERNAL_URL=${LITELLM_INTERNAL_URL}
+QDRANT_INTERNAL_URL=${QDRANT_INTERNAL_URL}
+REDIS_INTERNAL_URL=${REDIS_INTERNAL_URL}
+POSTGRES_INTERNAL_URL=${POSTGRES_INTERNAL_URL}
+N8N_INTERNAL_URL=${N8N_INTERNAL_URL}
+
+# Service API endpoints
+OLLAMA_API_ENDPOINT=${OLLAMA_API_ENDPOINT}
+LITELLM_API_ENDPOINT=${LITELLM_API_ENDPOINT}
+QDRANT_API_ENDPOINT=${QDRANT_API_ENDPOINT}
+
 # ─── Project Configuration ───────────────────────────────────────────────────
 COMPOSE_PROJECT_NAME="aip-${TENANT_ID}"
 DOCKER_NETWORK="\${COMPOSE_PROJECT_NAME}_net"

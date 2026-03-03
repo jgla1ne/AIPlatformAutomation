@@ -742,7 +742,7 @@ EOF
   - model_name: ${OLLAMA_DEFAULT_MODEL}
     litellm_params:
       model: ollama/${OLLAMA_DEFAULT_MODEL}
-      api_base: http://ollama:11434
+      api_base: ${OLLAMA_INTERNAL_URL}
       input_cost: 0.0
       output_cost: 0.0
       # Priority: 1 (highest for cost optimization)
@@ -845,7 +845,7 @@ append_litellm() {
       - LITELLM_SALT_KEY=${LITELLM_SALT_KEY}
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
-      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_BASE_URL=${OLLAMA_INTERNAL_URL}
       - QDRANT_URL=${VECTOR_DB_URL}
       - LITELLM_API_KEY=${LITELLM_MASTER_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -878,7 +878,7 @@ EOF
 # ─────────────────────────────────────────────────────────────
 append_openwebui() {
     local ollama_url=""
-    [ "${ENABLE_OLLAMA}" = "true" ] && ollama_url="http://ollama:11434"
+    [ "${ENABLE_OLLAMA}" = "true" ] && ollama_url="${OLLAMA_INTERNAL_URL}"
     
     compose_append << EOF
 
@@ -891,7 +891,7 @@ append_openwebui() {
       - "${OPENWEBUI_PORT}:8080"
     environment:
       - OLLAMA_BASE_URL=${ollama_url}
-      - OPENAI_API_BASE_URL=http://litellm:4000/v1
+      - OPENAI_API_BASE_URL=${LITELLM_API_ENDPOINT}
       - OPENAI_API_KEY=${LITELLM_MASTER_KEY}
       - WEBUI_SECRET_KEY=${ANYTHINGLLM_JWT_SECRET}
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -940,13 +940,13 @@ append_anythingllm() {
       - QDRANT_API_KEY=${QDRANT_API_KEY:-}
       # LLM connection via LiteLLM
       - LLM_PROVIDER=litellm
-      - LITELLM_BASE_URL=http://litellm:4000
+      - LITELLM_BASE_URL=${LITELLM_INTERNAL_URL}
       - LITELLM_API_KEY=${LITELLM_MASTER_KEY}
       - LITE_LLM_MODEL_PREF=${OLLAMA_DEFAULT_MODEL}
       # Auth
       - AUTH_TOKEN=${ANYTHINGLLM_AUTH_TOKEN}
       - EMBEDDING_ENGINE=ollama
-      - OLLAMA_BASE_PATH=http://ollama:11434
+      - OLLAMA_BASE_PATH=${OLLAMA_INTERNAL_URL}
       - EMBEDDING_MODEL_PREF=nomic-embed-text:latest
       - DISABLE_TELEMETRY=true
     volumes:
@@ -1006,7 +1006,7 @@ append_n8n() {
       - QUEUE_BULL_REDIS_PASSWORD=${REDIS_PASSWORD}
       # LLM integration via LiteLLM
       - N8N_LLM_DEFAULT_MODEL=${OLLAMA_DEFAULT_MODEL}
-      - OPENAI_API_BASE_URL=http://litellm:4000/v1
+      - OPENAI_API_BASE_URL=${LITELLM_API_ENDPOINT}
       - OPENAI_API_KEY=${LITELLM_MASTER_KEY}
       # Vector DB integration
       - VECTOR_DB=${VECTOR_DB}
@@ -1051,7 +1051,7 @@ append_flowise() {
       - LOG_PATH=/data/flowise/logs
       - BLOB_STORAGE_PATH=/data/flowise/storage
       # LLM integration via LiteLLM
-      - OPENAI_API_BASE_URL=http://litellm:4000/v1
+      - OPENAI_API_BASE_URL=${LITELLM_API_ENDPOINT}
       - OPENAI_API_KEY=${LITELLM_MASTER_KEY}
       - LLM_DEFAULT_MODEL=${OLLAMA_DEFAULT_MODEL}
       # Vector DB integration
@@ -1119,9 +1119,9 @@ append_openclaw() {
       - HOST=0.0.0.0
       - LOG_LEVEL=${OPENCLAW_LOG_LEVEL:-info}
       - QDRANT_URL=${VECTOR_DB_URL}
-      - LITELLM_BASE_URL=http://litellm:4000
+      - LITELLM_BASE_URL=${LITELLM_INTERNAL_URL}
       - LITELLM_API_KEY=${LITELLM_MASTER_KEY}
-      - N8N_WEBHOOK_URL=http://n8n:5678
+      - N8N_WEBHOOK_URL=${N8N_INTERNAL_URL}
       - ADMIN_USER=${OPENCLAW_ADMIN_USER}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - DATA_PATH=/data
