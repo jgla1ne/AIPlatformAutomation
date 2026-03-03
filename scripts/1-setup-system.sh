@@ -405,8 +405,18 @@ select_data_volume() {
     CADDY_DIR="${DATA_ROOT}/caddy"
 
     # Set tenant UID/GID for proper ownership (core principle: tenant owns their data)
-    export TENANT_UID="${SUDO_UID:-$(id -u)}"
-    export TENANT_GID="${SUDO_GID:-$(id -g)}"
+    # When running with sudo bash, SUDO_UID/GID are not set, so we need to get the original user
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        # Running with sudo - get original user's UID/GID
+        export TENANT_UID=$(id -u "${SUDO_USER}")
+        export TENANT_GID=$(id -g "${SUDO_USER}")
+    else
+        # Not running with sudo or sudo preserved environment
+        export TENANT_UID="${SUDO_UID:-$(id -u)}"
+        export TENANT_GID="${SUDO_GID:-$(id -g)}"
+    fi
+    
+    log "INFO" "Tenant ownership will be set to: ${TENANT_UID}:${TENANT_GID}"
     
     # Set dynamic service URLs based on tenant configuration
     VECTOR_DB_URL="http://qdrant:6333"
@@ -1125,6 +1135,9 @@ generate_secrets() {
 write_env() {
     mkdir -p "${DATA_ROOT}"
     chmod 700 "${DATA_ROOT}"
+    
+    # CRITICAL: Set tenant ownership for DATA_ROOT (core principle: tenant owns their data)
+    chown "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"
 
     cat > "${ENV_FILE}" << EOF
 # ════════════════════════════════════════════════════════════════════════
@@ -1315,6 +1328,8 @@ MINIO_PORT=9000
 EOF
 
     chmod 600 "${ENV_FILE}"
+    # CRITICAL: Set tenant ownership for .env file (core principle: tenant owns their data)
+    chown "${TENANT_UID}:${TENANT_GID}" "${ENV_FILE}"
     log "SUCCESS" "Configuration written to ${ENV_FILE}"
 }
 
