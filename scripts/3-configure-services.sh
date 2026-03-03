@@ -218,11 +218,28 @@ configure_litellm() {
     [ "${SKIP_LITELLM}" = "true" ] && return 0
     [ "${ENABLE_LITELLM}" != "true" ] && return 0
 
-    print_step "3" "${total_steps}" "Registering LiteLLM Models"
+    print_step "3" "${total_steps}" "Configuring LiteLLM with Routing Strategy"
     
-    wait_for_service "LiteLLM" "http://localhost:${LITELLM_PORT}" 60 || return 1
+    wait_for_service "LiteLLM" "http://localhost:${LITELM_PORT}" 60 || return 1
 
-    log "INFO" "Registering Ollama model with LiteLLM..."
+    # Display current routing strategy
+    log "INFO" "LiteLLM routing strategy: ${LITELLM_ROUTING_STRATEGY}"
+    case "${LITELLM_ROUTING_STRATEGY}" in
+        "speed-optimized")
+            log "INFO" "🚀 Speed-optimized routing: Groq > Gemini > Local priority"
+            ;;
+        "capability-optimized")
+            log "INFO" "🧠 Capability-optimized routing: GPT-4o > Claude-3 > Gemini priority"
+            ;;
+        "balanced")
+            log "INFO" "⚖️ Balanced routing: Cost, speed, and capability balanced"
+            ;;
+        "cost-optimized"|*)
+            log "INFO" "💰 Cost-optimized routing: Local models first, then cheapest paid models"
+            ;;
+    esac
+
+    log "INFO" "Registering models with LiteLLM..."
     
     # Register Ollama model if enabled
     if [ "${ENABLE_OLLAMA}" = "true" ] && [ -n "${OLLAMA_DEFAULT_MODEL}" ]; then
@@ -230,26 +247,114 @@ configure_litellm() {
             "model_list": [
                 {
                     "model_name": "'"${OLLAMA_DEFAULT_MODEL}"'",
-                    "litellm_params": {},
+                    "litellm_params": {
+                        "model": "ollama/'"${OLLAMA_DEFAULT_MODEL}"'",
+                        "api_base": "'"${OLLAMA_INTERNAL_URL}"'",
+                        "input_cost": 0.0,
+                        "output_cost": 0.0
+                    },
                     "model_id": "'"${OLLAMA_DEFAULT_MODEL}"'"
                 }
             ]
         }'
         
         # Send to LiteLLM API
-        if curl -sf -X POST "http://localhost:${LITELLM_PORT}/v1/model/register" \
+        if curl -sf -X POST "http://localhost:${LITELM_PORT}/v1/model/register" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
             -d "${litellm_config}" &>/dev/null; then
-            log "SUCCESS" "Registered ${OLLAMA_DEFAULT_MODEL} with LiteLLM"
+            log "SUCCESS" "Registered ${OLLAMA_DEFAULT_MODEL} with LiteLLM (cost: $0.00)"
         else
             log "WARN" "Failed to register model with LiteLLM"
         fi
     fi
     
-    log "SUCCESS" "LiteLLM configuration complete"
+    # Register OpenAI models if API key available
+    if [ -n "${OPENAI_API_KEY:-}" ]; then
+        local openai_config='{
+            "model_list": [
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {
+                        "model": "gpt-4o",
+                        "api_key": "'"${OPENAI_API_KEY}"'",
+                        "input_cost": 0.005,
+                        "output_cost": 0.015
+                    },
+                    "model_id": "gpt-4o"
+                }
+            ]
+        }'
+        
+        if curl -sf -X POST "http://localhost:${LITELM_PORT}/v1/model/register" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
+            -d "${openai_config}" &>/dev/null; then
+            log "SUCCESS" "Registered gpt-4o with LiteLLM (cost: $0.005/$1K input, $0.015/$1K output)"
+        else
+            log "WARN" "Failed to register gpt-4o with LiteLLM"
+        fi
+    fi
+    
+    # Register Google models if API key available
+    if [ -n "${GOOGLE_API_KEY:-}" ]; then
+        local google_config='{
+            "model_list": [
+                {
+                    "model_name": "gemini-2.0-flash",
+                    "litellm_params": {
+                        "model": "gemini/gemini-2.0-flash-exp",
+                        "api_key": "'"${GOOGLE_API_KEY}"'",
+                        "input_cost": 0.000075,
+                        "output_cost": 0.00015
+                    },
+                    "model_id": "gemini-2.0-flash"
+                }
+            ]
+        }'
+        
+        if curl -sf -X POST "http://localhost:${LITELM_PORT}/v1/model/register" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
+            -d "${google_config}" &>/dev/null; then
+            log "SUCCESS" "Registered gemini-2.0-flash with LiteLLM (cost: $0.000075/$1K input, $0.00015/$1K output)"
+        else
+            log "WARN" "Failed to register gemini-2.0-flash with LiteLLM"
+        fi
+    fi
+    
+    # Register Groq models if API key available
+    if [ -n "${GROQ_API_KEY:-}" ]; then
+        local groq_config='{
+            "model_list": [
+                {
+                    "model_name": "groq-llama-70b",
+                    "litellm_params": {
+                        "model": "groq/llama-70b-8192",
+                        "api_key": "'"${GROQ_API_KEY}"'",
+                        "input_cost": 0.00059,
+                        "output_cost": 0.00079
+                    },
+                    "model_id": "groq-llama-70b"
+                }
+            ]
+        }'
+        
+        if curl -sf -X POST "http://localhost:${LITELM_PORT}/v1/model/register" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
+            -d "${groq_config}" &>/dev/null; then
+            log "SUCCESS" "Registered groq-llama-70b with LiteLLM (cost: $0.00059/$1K input, $0.00079/$1K output)"
+        else
+            log "WARN" "Failed to register groq-llama-70b with LiteLLM"
+        fi
+    fi
+    
+    log "SUCCESS" "LiteLLM configuration complete with ${LITELLM_ROUTING_STRATEGY} routing"
     echo -e "  ${DIM}• URL: https://${DOMAIN}/litellm${NC}"
     echo -e "  ${DIM}• API Key: ${LITELLM_MASTER_KEY}${NC}"
+    echo -e "  ${DIM}• Routing Strategy: ${LITELLM_ROUTING_STRATEGY}${NC}"
+    echo -e "  ${DIM}• Models registered: Check LiteLLM admin panel${NC}"
 }
 
 # ─── AnythingLLM Configuration ─────────────────────────────────────────────
