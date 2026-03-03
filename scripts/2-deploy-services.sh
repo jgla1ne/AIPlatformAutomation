@@ -56,8 +56,9 @@ COMPOSE_PROJECT_NAME="aip-${TENANT_ID:-aip-default}"
 DOCKER_NETWORK="${COMPOSE_PROJECT_NAME}_net"
 
 # Set tenant UID/GID for non-root containers
-TENANT_UID=$(id -u)
-TENANT_GID=$(id -g)
+# Preserve original user when running with sudo
+TENANT_UID="${SUDO_UID:-$(id -u)}"
+TENANT_GID="${SUDO_GID:-$(id -g)}"
 
 # Set default database credentials
 POSTGRES_USER="${POSTGRES_USER:-platform}"
