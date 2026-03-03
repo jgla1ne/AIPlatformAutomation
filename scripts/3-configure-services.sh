@@ -164,20 +164,19 @@ configure_n8n() {
     [ "${SKIP_N8N}" = "true" ] && return 0
     [ "${ENABLE_N8N}" != "true" ] && return 0
 
-    print_step "1" "${total_steps}" "Configuring n8n"
+    print_step "1" "${total_steps}" "Verifying n8n service health"
     
     wait_for_service "n8n" "http://localhost:${N8N_PORT}" 60 || return 1
 
-    log "INFO" "Configuring n8n workflows and credentials..."
+    log "INFO" "n8n is healthy and ready for use"
     
     # Create n8n workflows directory (if needed for future use)
     mkdir -p "${DATA_ROOT}/n8n/workflows"
     
-    log "SUCCESS" "n8n configuration complete"
+    log "SUCCESS" "n8n verification complete"
     echo -e "  ${DIM}• URL: https://${DOMAIN}/n8n${NC}"
-    echo -e "  ${DIM}• User: ${N8N_USER}${NC}"
-    echo -e "  ${DIM}• Password: ${N8N_PASSWORD}${NC}"
-    echo -e "  ${DIM}• API Key: ${N8N_API_KEY}${NC}"
+    echo -e "  ${DIM}• Status: Service is running${NC}"
+    echo -e "  ${DIM}• Note: n8n requires manual owner account creation on first visit${NC}"
 }
 
 # ─── Flowise Configuration ───────────────────────────────────────────────────

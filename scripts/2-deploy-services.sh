@@ -895,111 +895,38 @@ EOF
 }
 
 # ─────────────────────────────────────────────────────────────
-# DIFY (3 services: api, worker, web, sandbox)
+# DIFY (DISABLED - requires multi-container setup)
 # ─────────────────────────────────────────────────────────────
 append_dify_api() {
-    compose_append << EOF
-
-  dify-api:
-    image: langgenius/dify-api:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-dify-api
-    restart: unless-stopped
-    environment:
-      - MODE=api
-      - SECRET_KEY=${DIFY_SECRET_KEY}
-      - INNER_API_KEY=${DIFY_INNER_API_KEY}
-      - DB_USERNAME=${POSTGRES_USER}
-      - DB_PASSWORD=${POSTGRES_PASSWORD}
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_DATABASE=dify
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-      - REDIS_USE_SSL=false
-      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/1
-      - STORAGE_TYPE=local
-      - STORAGE_LOCAL_PATH=/app/api/storage
-      - VECTOR_STORE=${VECTOR_DB}
-      - QDRANT_URL=${VECTOR_DB_URL}
-      - QDRANT_API_KEY=
-      - MIGRATION_ENABLED=true
-      - CONSOLE_CORS_ALLOW_ORIGINS=https://dify.${DOMAIN},http://localhost:3002
-      - WEB_API_CORS_ALLOW_ORIGINS=https://dify.${DOMAIN},http://localhost:3002
-      - CODE_EXECUTION_ENDPOINT=http://dify-sandbox:8194
-      - CODE_EXECUTION_API_KEY=${DIFY_INNER_API_KEY}
-    volumes:
-      - ${DATA_ROOT}/dify/storage:/app/api/storage
-    networks:
-      - ${DOCKER_NETWORK}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5001/console/api/setup"]
-      interval: 30s
-      timeout: 15s
-      retries: 10
-      start_period: 60s
-EOF
+    [[ "${ENABLE_DIFY:-false}" != "true" ]] && return
+    warn "Dify requires multi-container setup (api + worker + web + sandbox) — not yet fully implemented. Skipping."
+    warn "Set ENABLE_DIFY=false in .env to suppress this warning."
 }
 
 append_dify_web() {
-    compose_append << EOF
-
-  dify-web:
-    image: langgenius/dify-web:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-dify-web
-    restart: unless-stopped
-    environment:
-      - EDITION=SELF_HOSTED
-      - CONSOLE_API_URL=https://dify.${DOMAIN}
-      - APP_API_URL=https://dify.${DOMAIN}
-      - NEXT_PUBLIC_API_PREFIX=https://dify.${DOMAIN}/console/api
-      - NEXT_PUBLIC_PUBLIC_API_PREFIX=https://dify.${DOMAIN}/api
-    networks:
-      - ${DOCKER_NETWORK}
-    depends_on:
-      dify-api:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000"]
-      interval: 30s
-      timeout: 10s
-      retries: 10
-      start_period: 120s
-EOF
+    [[ "${ENABLE_DIFY:-false}" != "true" ]] && return
+    # No-op - handled in append_dify_api
 }
 
 append_dify_sandbox() {
-    compose_append << EOF
-
-  dify-sandbox:
-    image: langgenius/dify-sandbox:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-dify-sandbox
-    restart: unless-stopped
-    environment:
-      - API_KEY=${DIFY_INNER_API_KEY}
-      - GIN_MODE=release
-      - WORKER_TIMEOUT=15
-      - ENABLE_NETWORK=true
-      - HTTP_PROXY=
-      - HTTPS_PROXY=
-      - SANDBOX_PORT=8194
-    networks:
-      - ${DOCKER_NETWORK}
-EOF
+    [[ "${ENABLE_DIFY:-false}" != "true" ]] && return
+    # No-op - handled in append_dify_api
 }
 
 # ─────────────────────────────────────────────────────────────
 # OPENCLAW (image must be verified — placeholder shown)
 # ─────────────────────────────────────────────────────────────
 append_openclaw() {
+    [[ "${ENABLE_OPENCLAW:-false}" != "true" ]] && return
+    
+    if [[ -z "${OPENCLAW_IMAGE:-}" ]]; then
+        log "WARN" "OPENCLAW_IMAGE not set in .env — skipping OpenClaw service"
+        return
+    fi
+    
     log "WARN" "OpenClaw: ensure image ${OPENCLAW_IMAGE} exists locally before deploying"
     # Use configurable image name from .env
-    local image="${OPENCLAVE_IMAGE:-openclaw:latest}"
+    local image="${OPENCLAW_IMAGE:-openclaw:latest}"
     
     compose_append << EOF
 
@@ -1227,7 +1154,7 @@ append_tailscale() {
       - ${DATA_ROOT}/tailscale:/var/lib/tailscale
 ${tun_device}
     environment:
-      - TS_AUTHKEY=${TAILSCALE_AUTH_KEY}
+      - TS_AUTHKEY=\${TAILSCALE_AUTH_KEY}
       - TS_STATE_DIR=/var/lib/tailscale
       - TS_HOSTNAME=${TAILSCALE_HOSTNAME}
       - TS_USERSPACE=false
@@ -1500,7 +1427,7 @@ deploy_stack() {
         --project-name "${COMPOSE_PROJECT_NAME}" \
         -f "${compose_file}" \
         --env-file "${ENV_FILE}" \
-        pull --quiet 2>&1 | tee -a "${LOG_FILE}" || {
+        pull --ignore-pull-failures --quiet 2>&1 | tee -a "${LOG_FILE}" || {
         log "WARN: Some images failed to pull — attempting deploy anyway"
     }
 
