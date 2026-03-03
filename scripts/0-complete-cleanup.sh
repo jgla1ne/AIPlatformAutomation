@@ -19,10 +19,34 @@ NC='\033[0m'
 
 # ─── Runtime vars ────────────────────────────────────────────────────────────────
 TENANT_UID=$(id -u)
-TENANT_ID="u${TENANT_UID}"
-DATA_ROOT="/mnt/data/${TENANT_ID}"
-COMPOSE_PROJECT_NAME="aip-${TENANT_ID}"
-DOCKER_NETWORK="${COMPOSE_PROJECT_NAME}_net"
+# Auto-detect tenant directories
+detect_tenants() {
+    local tenants=()
+    if [ -d "/mnt/data" ]; then
+        for dir in /mnt/data/*/; do
+            if [ -d "$dir" ]; then
+                local tenant_name=$(basename "$dir")
+                tenants+=("$tenant_name")
+            fi
+        done
+    fi
+    # Also check /mnt directly for legacy support
+    for dir in /mnt/*/; do
+        if [ -d "$dir" ] && [[ ! "$(basename "$dir")" =~ ^(data|lost\+found)$ ]]; then
+            local tenant_name=$(basename "$dir")
+            # Avoid duplicates
+            if [[ ! " ${tenants[@]} " =~ " ${tenant_name} " ]]; then
+                tenants+=("$tenant_name")
+            fi
+        fi
+    done
+    echo "${tenants[@]}"
+}
+
+TENANT_ID=""
+DATA_ROOT=""
+COMPOSE_PROJECT_NAME=""
+DOCKER_NETWORK=""
 KEEP_DATA=false
 
 # Parse arguments
@@ -198,43 +222,58 @@ cleanup_data() {
 confirm_destruction() {
     print_warning
     
+    # Detect tenants locally for confirmation
+    local tenants=($(detect_tenants))
+    
     echo -e "${BOLD}Tenant to be destroyed:${NC} ${TENANT_ID}"
     echo -e "${BOLD}Data root:${NC}           ${DATA_ROOT:-"None (container/network cleanup only)"}"
     echo ""
+    echo -e "${RED}╔══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║                        ⚠️  DESTRUCTION WARNING                 ║${NC}"
+    echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
     
-    if [ "${KEEP_DATA}" = "true" ]; then
-        echo -e "${YELLOW}🛡️  Data preservation mode enabled${NC}"
-        echo -e "${DIM}Only containers, networks, volumes will be removed${NC}"
-        echo -e "${DIM}Data directory will be preserved${NC}"
-        echo ""
-        echo -e "${BOLD}This will:${NC}"
-        echo -e "  • Stop and remove all containers"
-        echo -e "  • Remove all Docker networks"
-        echo -e "  • Remove all named volumes"
-        echo -e "  • Keep data intact${NC}"
-        echo ""
+    if [ ${#tenants[@]} -eq 0 ]; then
+        echo -e "${YELLOW}No tenant directories found${NC}"
+        echo -e "${DIM}Only generic container/network cleanup will be performed${NC}"
     else
-        echo -e "${RED}🔥  COMPLETE DESTRUCTION MODE${NC}"
-        echo -e "${DIM}This will permanently delete:${NC}"
-        echo ""
-        echo -e "  ${BOLD}• All containers${NC}"
-        echo -e "  ${BOLD}• All Docker networks${NC}"
-        echo -e "  ${BOLD}• All named volumes${NC}"
-        echo -e "  ${BOLD}• All data under ${DATA_ROOT}${NC}"
-        echo -e "  ${BOLD}• All databases, models, uploads${NC}"
-        echo -e "  ${BOLD}• All configuration files${NC}"
-        echo ""
-        echo -e "${RED}This action CANNOT be undone.${NC}"
-        echo ""
+        echo -e "${YELLOW}Tenants to be destroyed: ${tenants[*]}${NC}"
+        for tenant in "${tenants[@]}"; do
+            local data_root="/mnt/data/${tenant}"
+            if [ ! -d "${data_root}" ]; then
+                data_root="/mnt/${tenant}"
+            fi
+            echo -e "${DIM}Data root:           ${data_root}${NC}"
+        done
     fi
     
-    echo -e "${YELLOW}Type '${BOLD}DELETE${NC}${YELLOW}' to confirm destruction of ${TENANT_ID}:${NC}"
     echo ""
-    read -p "  ➤ Confirm: " confirm
+    echo -e "${RED}🔥  COMPLETE DESTRUCTION MODE${NC}"
+    echo -e "${DIM}This will permanently delete:${NC}"
+    echo ""
+    echo -e "${DIM}  • All containers${NC}"
+    echo -e "${DIM}  • All Docker networks${NC}"
+    echo -e "${DIM}  • All named volumes${NC}"
+    if [ ${#tenants[@]} -gt 0 ]; then
+        echo -e "${DIM}  • All data under tenant directories${NC}"
+        echo -e "${DIM}  • All databases, models, uploads${NC}"
+        echo -e "${DIM}  • All configuration files${NC}"
+    fi
+    echo ""
+    echo -e "${RED}This action CANNOT be undone.${NC}"
+    echo ""
     
-    if [ "${confirm}" != "DELETE" ]; then
-        log "INFO" "Aborted - no changes made"
-        exit 0
+    if [ ${#tenants[@]} -eq 0 ]; then
+        read -p "  ➤ Continue with generic cleanup? [y/N]: " confirm
+        [[ "${confirm,,}" == "y" ]] || exit 0
+    else
+        echo -e "Type 'DELETE' to confirm destruction of ${tenants[*]}:"
+        echo ""
+        read -p "  ➤ Confirm: " confirm
+        if [ "${confirm}" != "DELETE" ]; then
+            log "INFO" "Aborted - no changes made"
+            exit 0
+        fi
     fi
 }
 
@@ -242,9 +281,36 @@ confirm_destruction() {
 main() {
     print_header
     check_root
+    
+    # Detect all tenants
+    local tenants=($(detect_tenants))
+    
+    if [ ${#tenants[@]} -eq 0 ]; then
+        log "INFO" "No tenant directories found"
+        log "INFO" "Only generic container cleanup will be performed"
+        TENANT_ID=""
+        DATA_ROOT=""
+    else
+        log "INFO" "Found ${#tenants[@]} tenant(s): ${tenants[*]}"
+        # Clean up each tenant
+        for tenant in "${tenants[@]}"; do
+            log "INFO" "Cleaning up tenant: ${tenant}"
+            TENANT_ID="${tenant}"
+            DATA_ROOT="/mnt/data/${tenant}"
+            if [ ! -d "${DATA_ROOT}" ]; then
+                DATA_ROOT="/mnt/${tenant}"
+            fi
+            COMPOSE_PROJECT_NAME="aip-${tenant}"
+            DOCKER_NETWORK="${COMPOSE_PROJECT_NAME}_net"
+            
+            cleanup_containers
+            cleanup_networks
+            cleanup_volumes
+            cleanup_data
+        done
+    fi
+    
     confirm_destruction
-    check_tenant_exists
-    check_compose_file
     
     echo ""
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -252,10 +318,10 @@ main() {
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     
+    # Final cleanup
     cleanup_containers
     cleanup_networks
     cleanup_volumes
-    cleanup_data
     
     echo ""
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
