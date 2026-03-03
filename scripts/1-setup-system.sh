@@ -563,6 +563,7 @@ select_stack() {
             ENABLE_GRAFANA=true
             ENABLE_PROMETHEUS=true
             ENABLE_AUTHENTIK=true
+            ENABLE_TAILSCALE=true
             STACK_NAME="full"
             log "SUCCESS" "Stack: Full"
             ;;
@@ -744,6 +745,21 @@ collect_network_config() {
     read -p "  ➤ Tailscale auth key (leave blank to skip): " TAILSCALE_AUTH_KEY
     read -p "  ➤ Tailscale hostname [aip-${TENANT_ID}]: " TAILSCALE_HOSTNAME
     TAILSCALE_HOSTNAME="${TAILSCALE_HOSTNAME:-aip-${TENANT_ID}}"
+    
+    # If auth key provided, ask for serve mode
+    if [ -n "${TAILSCALE_AUTH_KEY}" ]; then
+        echo ""
+        echo -e "  ${DIM}Tailscale serve mode (for serving web services):${NC}"
+        read -p "  ➤ Enable serve mode? [y/N]: " enable_serve
+        if [[ "${enable_serve,,}" == "y" ]]; then
+            TAILSCALE_SERVE_MODE="true"
+            echo -e "  ${DIM}✅ Serve mode enabled - services will be accessible via Tailscale${NC}"
+        else
+            TAILSCALE_SERVE_MODE="false"
+        fi
+    else
+        TAILSCALE_SERVE_MODE="false"
+    fi
 
     print_divider
 
@@ -1170,6 +1186,7 @@ DIFY_INNER_API_KEY=${DIFY_INNER_API_KEY}
 # ─── Network & Security ───────────────────────────────────────────────────────
 TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY}
 TAILSCALE_HOSTNAME=${TAILSCALE_HOSTNAME}
+TAILSCALE_SERVE_MODE=${TAILSCALE_SERVE_MODE}
 
 # ─── Signal API ───────────────────────────────────────────────────────────────
 SIGNAL_PHONE_NUMBER=${SIGNAL_PHONE_NUMBER}
@@ -1397,7 +1414,7 @@ print_summary() {
     [ "${ENABLE_QDRANT}" = "true" ]      && echo -e "    ${GREEN}✓${NC}  Qdrant       :${QDRANT_PORT}"
     [ "${ENABLE_GRAFANA}" = "true" ]     && echo -e "    ${GREEN}✓${NC}  Grafana      :${GRAFANA_PORT}"
     [ "${ENABLE_PROMETHEUS}" = "true" ]  && echo -e "    ${GREEN}✓${NC}  Prometheus   :${PROMETHEUS_PORT}"
-    [ "${ENABLE_AUTHENTIK}" = "true" ]   && echo -e "    ${GREEN}✓${NC}  Authentik"
+    [ "${ENABLE_AUTHENTIK}" = "true" ]   && echo -e "    ${GREEN}✓${NC}  Authentik    :${AUTHENTIK_PORT}"
     [ "${ENABLE_SIGNAL}" = "true" ]      && echo -e "    ${GREEN}✓${NC}  Signal API   :${SIGNAL_PORT}"
     [ "${ENABLE_OPENCLAW}" = "true" ]    && echo -e "    ${GREEN}✓${NC}  OpenClaw     :${OPENCLAW_PORT}"
     [ "${ENABLE_TAILSCALE}" = "true" ]   && echo -e "    ${GREEN}✓${NC}  Tailscale    :${TAILSCALE_PORT}"
@@ -1419,6 +1436,7 @@ print_summary() {
         [ "${ENABLE_AUTHENTIK}" = "true" ] && echo -e "    ${CYAN}•${NC} Authentik:    https://auth.${DOMAIN}"
         [ "${ENABLE_DIFY}" = "true" ] && echo -e "    ${CYAN}•${NC} Dify:         https://dify.${DOMAIN}"
         [ "${ENABLE_OPENCLAW}" = "true" ] && echo -e "    ${CYAN}•${NC} OpenClaw:     https://openclaw.${DOMAIN}"
+        [ "${ENABLE_SIGNAL}" = "true" ] && echo -e "    ${CYAN}•${NC} Signal API:   https://signal.${DOMAIN}"
         echo ""
         
         # Local access URLs
@@ -1428,6 +1446,41 @@ print_summary() {
         [ "${ENABLE_QDRANT}" = "true" ] && echo -e "    ${CYAN}•${NC} Qdrant API:   http://localhost:${QDRANT_PORT:-6333}"
         [ "${ENABLE_SIGNAL}" = "true" ] && echo -e "    ${CYAN}•${NC} Signal API:   http://localhost:${SIGNAL_PORT:-8080}"
         echo ""
+        
+        # Service Health & Access Summary
+        echo -e "  ${BOLD}Service Health & Access:${NC}"
+        echo -e "  ${DIM}After deployment, check service health with:${NC}"
+        echo ""
+        echo -e "  ${DIM}  • Health check: sudo docker compose ps${NC}"
+        echo -e "  ${DIM}  • Service logs: sudo docker compose logs [service]${NC}"
+        echo -e "  ${DIM}  • Full status: sudo bash scripts/3-configure-services.sh --check${NC}"
+        echo ""
+        
+        # Special Access Information
+        if [ "${ENABLE_TAILSCALE}" = "true" ] && [ -n "${TAILSCALE_AUTH_KEY}" ]; then
+            echo -e "  ${BOLD}Tailscale VPN Access:${NC}"
+            echo -e "  ${DIM}  • Auth status: Check with 'tailscale status' after deployment${NC}"
+            echo -e "  ${DIM}  • IP address: Will be assigned and available in Tailscale network${NC}"
+            if [ "${TAILSCALE_SERVE_MODE}" = "true" ]; then
+                echo -e "  ${DIM}  • Serve mode: Services accessible via Tailscale IPs${NC}"
+            fi
+            echo ""
+        fi
+        
+        if [ "${ENABLE_OPENCLAW}" = "true" ]; then
+            echo -e "  ${BOLD}OpenClaw Gateway:${NC}"
+            echo -e "  ${DIM}  • Network: Isolated network (per README.md)${NC}"
+            echo -e "  ${DIM}  • Access: Configure DNS CNAME after getting IP from script 2${NC}"
+            echo -e "  ${DIM}  • Port: ${OPENCLAW_PORT} (external) → 8082 (internal)${NC}"
+            echo ""
+        fi
+        
+        if [ "${ENABLE_RCLONE}" = "true" ]; then
+            echo -e "  ${BOLD}Google Drive Integration:${NC}"
+            echo -e "  ${DIM}  • Sync logs: /mnt/data/${TENANT_ID}/logs/rclone-${TENANT_ID}.log${NC}"
+            echo -e "  ${DIM}  • Status: Check with 'sudo docker compose logs rclone'${NC}"
+            echo ""
+        fi
     fi
 
     print_divider
