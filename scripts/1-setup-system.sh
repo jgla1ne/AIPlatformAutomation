@@ -25,6 +25,14 @@ ENV_FILE=""
 COMPOSE_DIR=""
 CADDY_DIR=""
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Dynamic service URLs (will be set after tenant selection)
+VECTOR_DB_URL=""
+OLLAMA_INTERNAL_URL=""
+LITELLM_INTERNAL_URL=""
+QDRANT_INTERNAL_URL=""
+REDIS_INTERNAL_URL=""
+POSTGRES_INTERNAL_URL=""
+N8N_INTERNAL_URL=""
 
 # ─── Default Values (to prevent unbound variable errors) ───────────────────────
 # Service flags
@@ -44,6 +52,22 @@ ENABLE_TAILSCALE="false"
 ENABLE_OPENCLAW="false"
 ENABLE_RCLONE="false"
 ENABLE_MINIO="false"
+
+# Dynamic port configuration (will be set during collection)
+CADDY_HTTP_PORT=""
+CADDY_HTTPS_PORT=""
+N8N_PORT=""
+FLOWISE_PORT=""
+OPENWEBUI_PORT=""
+ANYTHINGLLM_PORT=""
+LITELLM_PORT=""
+GRAFANA_PORT=""
+PROMETHEUS_PORT=""
+OLLAMA_PORT=""
+QDRANT_PORT=""
+SIGNAL_PORT=""
+OPENCLAW_PORT=""
+TAILSCALE_PORT=""
 
 # Database defaults
 POSTGRES_USER="platform"
@@ -82,7 +106,7 @@ OPENROUTER_API_KEY=""
 VECTOR_DB="qdrant"
 VECTOR_DB_HOST="qdrant"
 VECTOR_DB_PORT="6333"
-VECTOR_DB_URL="http://qdrant:6333"
+VECTOR_DB_URL=""
 
 # Service defaults
 N8N_ENCRYPTION_KEY=""
@@ -379,6 +403,15 @@ select_data_volume() {
     ENV_FILE="${DATA_ROOT}/.env"
     COMPOSE_DIR="${DATA_ROOT}/compose"
     CADDY_DIR="${DATA_ROOT}/caddy"
+
+    # Set dynamic service URLs based on tenant configuration
+    VECTOR_DB_URL="http://qdrant:6333"
+    OLLAMA_INTERNAL_URL="http://ollama:11434"
+    LITELLM_INTERNAL_URL="http://litellm:4000"
+    QDRANT_INTERNAL_URL="http://qdrant:6333"
+    REDIS_INTERNAL_URL="redis://redis:6379"
+    POSTGRES_INTERNAL_URL="postgresql://postgres:5432"
+    N8N_INTERNAL_URL="http://n8n:5678"
 
     log "SUCCESS" "Data will be stored in: ${DATA_ROOT}"
 }
@@ -1267,8 +1300,8 @@ OPENCLAW_PORT=${OPENCLAW_PORT}
 OPENCLAW_IMAGE=openclaw:latest
 
 # ─── Ports ────────────────────────────────────────────────────────────────────
-CADDY_HTTP_PORT=80
-CADDY_HTTPS_PORT=443
+CADDY_HTTP_PORT=${CADDY_HTTP_PORT:-80}
+CADDY_HTTPS_PORT=${CADDY_HTTPS_PORT:-443}
 N8N_PORT=${N8N_PORT}
 FLOWISE_PORT=${FLOWISE_PORT}
 OPENWEBUI_PORT=${OPENWEBUI_PORT}
@@ -1280,6 +1313,7 @@ OLLAMA_PORT=${OLLAMA_PORT}
 QDRANT_PORT=${QDRANT_PORT}
 SIGNAL_PORT=${SIGNAL_PORT}
 OPENCLAW_PORT=${OPENCLAW_PORT}
+TAILSCALE_PORT=${TAILSCALE_PORT}
 
 # ─── Additional Variables for Script 2 ───────────────────────────────────────────
 SSL_EMAIL=${ADMIN_EMAIL}

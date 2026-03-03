@@ -19,10 +19,27 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # ─── Runtime vars ────────────────────────────────────────────────────────────────
-TENANT_UID=$(id -u)
-TENANT_ID="u${TENANT_UID}"
-DATA_ROOT="/mnt/data/${TENANT_ID}"
-ENV_FILE="${DATA_ROOT}/.env"
+TENANT_UID="${SUDO_UID:-$(id -u)}"
+TENANT_GID="${SUDO_GID:-$(id -g)}"
+# Load environment from .env file
+if [[ -n "${TENANT_DIR:-}" && -f "${TENANT_DIR}/.env" ]]; then
+  ENV_FILE="${TENANT_DIR}/.env"
+elif [[ -f "$(dirname "${BASH_SOURCE[0]}")/../.env" ]]; then
+  ENV_FILE="$(dirname "${BASH_SOURCE[0]}")/../.env"
+else
+  ENV_FILE="$(sudo ls -t /mnt/data/*/.env 2>/dev/null | head -1)"
+fi
+
+[[ -z "${ENV_FILE:-}" || ! -f "${ENV_FILE}" ]] && \
+  fail "Cannot find .env file. Run script 1 first."
+
+# Source environment variables
+set -a
+. "${ENV_FILE}"
+set +a
+
+# Use environment variables
+DATA_ROOT="${DATA_ROOT:-/mnt/data/${TENANT_ID:-default}}"
 LOG_FILE="${DATA_ROOT}/logs/configure-$(date +%Y%m%d-%H%M%S).log"
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -306,7 +323,7 @@ configure_minio() {
     log "INFO" "Verifying MinIO object storage..."
     
     # Test MinIO connectivity
-    if wait_for_service "MinIO" "http://localhost:9000" 30; then
+    if wait_for_service "MinIO" "http://localhost:${MINIO_PORT:-9000}" 30; then
         log "SUCCESS" "MinIO is accessible"
     else
         log "WARN" "MinIO may not be fully ready"
