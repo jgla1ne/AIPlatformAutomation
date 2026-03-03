@@ -1064,10 +1064,6 @@ ADMIN_EMAIL=${ADMIN_EMAIL}
 DATA_ROOT=${DATA_ROOT}
 SSL_TYPE=${SSL_TYPE}
 
-# ─── Tenant Identity (for proper ownership) ───────────────────────────────────
-TENANT_UID=$(id -u)
-TENANT_GID=$(id -g)
-
 # ─── Service Flags ─────────────────────────────────────────────────────────────
 ENABLE_OLLAMA=${ENABLE_OLLAMA}
 ENABLE_OPENWEBUI=${ENABLE_OPENWEBUI}
@@ -1493,6 +1489,11 @@ main() {
     generate_secrets         # Step 11
     print_summary
     write_env
+    
+    # Set tenant UID/GID for directory ownership (core principle: tenant owns their data)
+    TENANT_UID=$(id -u)
+    TENANT_GID=$(id -g)
+    
     create_directories
     write_caddyfile
     offer_next_step
