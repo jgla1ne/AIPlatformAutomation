@@ -1,67 +1,60 @@
-End-to-End Assessment: Will Scripts 2 & 3 Work?
-The Good News First
-Script 2 is significantly improved:
-
-✅ write_compose_footer() is now correctly called after all services — the structural YAML bug is fixed
-✅ flowise restart policy typo is fixed
-✅ Redis label typo is fixed  
-✅ Per-service elapsed=0 reset is now inside the loop
-
-Script 3 sanity check integration is architecturally correct — the logic is sound and the merge was done cleanly.
-
-Remaining Bugs That Will Break End-to-End
-🔴 BLOCKER 1 — Script 2: depends_on without a healthcheck (openwebui edge case)
-In append_openwebui(), if DEPLOY_OLLAMA=true and DEPLOY_POSTGRES=false, the depends_on: block is written with just the ollama condition, but no closing indentation guard. The healthcheck block then appends at the wrong indent level. This is a pre-existing fragility — not newly introduced, but still present.
-
-🔴 BLOCKER 2 — Script 2: openclaw_net always written to footer, service conditionally written
-In write_compose_footer(), openclaw_net is always declared in the networks block regardless of DEPLOY_OPENCLAW. If OpenClaw is disabled, the network is declared but no service references it. Docker Compose will warn but not fail. However the openclaw_data volume with bind-mount is also always written:
-openclaw_data:
-  driver: local
-  driver_opts:
-    type: none
-    o: bind
-    device: ${BASE_DIR}/openclaw
-If DEPLOY_OPENCLAW=false, this volume is declared but the ${BASE_DIR}/openclaw directory is still created by create_directories(). The bind-mount volume declaration will cause docker compose config to attempt to validate the path. This passes, but is wasteful and will confuse docker compose down -v cleanup.
-More critically: if openclaw_data is always declared as a named volume but the service is not deployed, docker compose up will still create the volume — meaning cleanup script 0 has to handle a phantom volume.
-
-🔴 BLOCKER 3 — Script 2: Dify is still broken
-append_dify() only writes dify-web and references http://dify-api:5001 — but dify-api is never defined. The docker compose config --quiet validation will pass (compose doesn't validate that referenced hostnames exist as services), but dify-web will start and immediately error trying to reach dify-api. This matches what the README advertises as a deployable service, so it's a functional blocker.
-
-🟡 WARN 1 — Script 3: check_service uses local inside a function called from a loop
-check_service() {
-    local name="$1"
+Analysis: Issues Found
+🔴 BLOCKER 1 — Script 2: services: keyword written only by append_postgres
+append_postgres() {
     ...
-    local http_status
-    http_status=$(curl ...)
-This is fine in isolation, but checks_passed, checks_failed, checks_skipped are declared as local in run_sanity_checks() and then incremented with ((checks_passed++)) || true. The || true is correct to avoid set -e tripping on (( 0++ )). ✅ This is actually handled correctly.
+    cat >> "${COMPOSE_FILE}" << EOF
+services:
 
-🟡 WARN 2 — Script 3: Sanity check base URL logic is collapsed
-local base
-if   [[ "${NETWORK_MODE}" == "caddy" ]];     then base="http://localhost"
-elif [[ "${NETWORK_MODE}" == "tailscale" ]]; then base="http://localhost"
-else                                              base="http://localhost"
-fi
-All three branches are identical. In Caddy mode the sanity check hits http://localhost:8080 but Caddy is the only thing listening on 80/443 — the individual service ports may or may not be exposed depending on whether the user is port-forwarding. This will give false negatives in production Caddy mode. The correct base for Caddy mode should either be the subdomain URLs or explicitly note it checks via direct port (which requires ports to be exposed, which they are in the compose).
-For local/tailscale mode http://localhost is correct. For Caddy the current behaviour works only because all services still expose their ports directly in the compose file — which is correct in this implementation. So this is a documentation/clarity issue rather than a functional bug, but it's misleading code.
+  postgres:
+If DEPLOY_POSTGRES=false, the word services: is never written to the compose file. Every other append_* function just writes the service block directly. The compose file will be syntactically invalid — Docker will reject it with mapping values are not allowed.
+Impact: Any deployment where Postgres is disabled fails at docker compose config --quiet validation.
 
-🟡 WARN 3 — Script 3: configure_n8n does nothing meaningful
-configure_n8n() {
-    ...
-    until curl -sf "http://localhost:${N8N_PORT:-5678}/healthz" ...
-    log "n8n database initialised"
-}
-This just waits for n8n to be healthy and logs success. It doesn't actually configure anything. The README implies script 3 does post-deployment configuration. This is harmless but misleading — and option 2 in the menu says "Configure all services (recommended after first deploy)" which implies meaningful setup happens. n8n requires manual setup of credentials via its UI for first use — this is not documented anywhere in the flow.
+🔴 BLOCKER 2 — Script 2: write_compose_header declares networks: ai_net AND write_compose_footer declares it again as external: true
+Header writes:
+networks:
+  ai_net:
+    name: ${COMPOSE_PROJECT_NAME}-net
+    driver: bridge
+Footer writes:
+networks:
+  ai_net:
+    external: true
+These contradict each other. Docker Compose will error: you cannot declare a network as both defined (with driver) and external. The network block in the header is correct; the footer must reference ai_net differently or not redeclare it at all.
+Impact: docker compose up will fail with a network conflict error on every run.
 
-🟡 WARN 4 — Script 2: TAILSCALE_AUTH_KEY written to compose in plaintext
-environment:
-  - TS_AUTHKEY=${TAILSCALE_AUTH_KEY}
-This expands the actual key value into the generated docker-compose.yml file on disk. The .env is chmod 600, but docker-compose.yml is not. Anyone who can read the compose file gets the Tailscale auth key. The README's own security notes say ".env file
-keep goingpermissions: 600" but makes no mention of the compose file. The fix is to use env_file or reference the variable by name without expansion.
+🔴 BLOCKER 3 — Script 2: append_openwebui proxies to openwebui:8080 but the Caddyfile in Script 3 also uses openwebui:8080 — correct — BUT the port mapping is 3000:8080
+The compose maps host port 3000 → container port 8080. The sanity check probes http://localhost:3000. That is correct. However the OPENWEBUI_PORT variable in the .env (generated by script 1, not yet readable here) may be set to 3000 which maps to container 8080. This is fine as long as script 1 sets OPENWEBUI_PORT=3000. This is a dependency risk — unverifiable without reading script 1 — but flagged.
 
-🟡 WARN 5 — Script 2: OPENCLAW_IMAGE never defined in script 1
-As flagged before — OPENCLAW_IMAGE has no default set in the .env generation. The compose falls back to openclaw:latest which doesn't exist on Docker Hub. docker compose pull will fail on this image and by default this will abort the entire pull phase since there's no --ignore-pull-failures flag in the pull command.
+🔴 BLOCKER 4 — Script 2: Tailscale volumes bind-mounts /mnt/data/datasquiz/tailscale but the directory is never created
+create_directories() does not include ${BASE_DIR}/tailscale. The compose bind-mounts:
+- ${BASE_DIR}/tailscale:/var/lib/tailscale
+Docker will auto-create the directory as root-owned with wrong permissions, which may cause Tailscale state persistence to fail silently.
 
-Summary Table
+🔴 BLOCKER 5 — Script 3: configure_caddy writes reverse_proxy flowise:3000 but Flowise container listens on port 3000 internally — correct — BUT the Caddyfile is written before Caddy starts in Script 2
+Script 2 starts all containers including Caddy. Caddy starts with no Caddyfile (the volume mount ${BASE_DIR}/caddy/Caddyfile doesn't exist yet — it's only written in Script 3). Caddy will either crash or serve a default empty config. When Script 3 runs caddy reload, it works — but only if Caddy survived the initial start without a Caddyfile.
+The caddy container will fail to start in Script 2 because /etc/caddy/Caddyfile is bind-mounted read-only and does not exist on the host yet.
+
+🟡 WARN 1 — Script 2: litellm_data volume declared in footer but LiteLLM uses a bind mount
+volumes:
+  - ${BASE_DIR}/litellm:/app/config
+The footer also declares litellm_data: as a named volume. This named volume is never used — it's wasted. Not a blocker but wastes storage and is misleading.
+
+🟡 WARN 2 — Script 3: configure_qdrant creates collection with vector size 768
+768 is the dimension for nomic-embed-text. This is correct for the default config. But it is hardcoded — if the user changes embedding model (e.g. to mxbai-embed-large which is 1024), the collection will silently reject embeddings at runtime. Should use ${QDRANT_VECTOR_SIZE:-768}.
+
+🟡 WARN 3 — Script 3: configure_ollama uses docker exec  $ (docker ps -qf name=ollama)
+The -f name=ollama filter matches any container whose name contains "ollama". If there are multiple containers with "ollama" in the name, this returns multiple IDs and docker exec fails. Should use --filter name=^ollama $  (exact match).
+
+🟡 WARN 4 — Script 2: No services: block written when Postgres is disabled — already flagged as BLOCKER 1
+
+🟡 WARN 5 — Script 3: Sanity check for Caddy probes http://localhost expecting a redirect
+check_http "Caddy (HTTP→HTTPS redirect)" "http://localhost"
+curl -sf follows no redirects by default, and -f fails on HTTP 3xx? Actually -f fails on HTTP >= 400 only. A 301 redirect returns success with -sf. So this works. ✅ Not a bug.
+
+🟡 WARN 6 — Script 2: append_dify warns and returns but Dify directories are always created
+create_directories() always creates ${BASE_DIR}/dify/volumes/... regardless of DEPLOY_DIFY. Eight directories are created unconditionally. Minor but wasteful.
+
+Summary of Blockers
 Copy table
 
 
@@ -76,174 +69,386 @@ Deploy-blocking?
 1
 2
 🔴 BLOCKER
-Dify references dify-api service that doesn't exist — web container starts but is non-functional
-Functional
+services: keyword only written if Postgres enabled
+Yes — invalid YAML
 
 
 2
 2
 🔴 BLOCKER
-openclaw_data bind-mount volume always written to footer even when service disabled
-Compose pollution
+ai_net declared in header AND as external: true in footer — contradiction
+Yes — compose error
 
 
 3
 2
 🔴 BLOCKER
-OPENCLAW_IMAGE undefined — docker pull will fail and abort entire deployment
-Yes
+${BASE_DIR}/tailscale directory never created
+Tailscale state loss
 
 
 4
-3
-🟡 WARN
-Sanity check base URL logic is triply-identical dead code
-Misleading
+2+3
+🔴 BLOCKER
+Caddyfile doesn't exist when Caddy starts in Script 2 — bind mount fails
+Caddy crash on start
 
 
 5
-3
-🟡 WARN
-configure_n8n does nothing — misleads user into thinking n8n is configured
-UX
-
-
-6
 2
 🟡 WARN
-TAILSCALE_AUTH_KEY expanded in plaintext into compose file
-Security
-
-
-7
-2
-🟡 WARN
-openclaw_net always declared in footer network block
+litellm_data named volume declared but never used
 Cosmetic
 
 
+6
+3
+🟡 WARN
+Qdrant vector size hardcoded at 768
+Wrong embeddings if model changes
 
-Exact Instructions for Windsurf
-Paste this verbatim:
 
-Windsurf instructions — fix 3 blockers and 3 warnings in scripts/2-deploy-services.sh and scripts/3-configure-services.sh:
+7
+3
+🟡 WARN
+docker ps -qf name=ollama is substring match not exact
+Fragile in multi-container env
 
-FIX 1 — scripts/2-deploy-services.sh: Guard openclaw_data volume and openclaw_net network behind the deploy flag
-In write_compose_footer(), wrap the openclaw_net network entry and the openclaw_data volume entry in a conditional. Find:
-  openclaw_net:
-    name: ${COMPOSE_PROJECT_NAME}-openclaw-net
+
+8
+2
+🟡 WARN
+Dify dirs always created regardless of deploy flag
+Waste
+
+
+
+4 blockers must be fixed before this works end-to-end. Here are the exact Windsurf instructions:
+
+Windsurf Fix Instructions
+FIX 1 — scripts/2-deploy-services.sh: Move services: keyword to write_compose_header
+Problem: services: is only written if Postgres is deployed.
+In write_compose_header(), at the end of the heredoc, add services:. Find the end of the heredoc in write_compose_header:
+    cat > "${COMPOSE_FILE}" << EOF
+...
+      com.ai-platform.tenant: "${TENANT_ID}"
+
+EOF
+Change it to:
+    cat > "${COMPOSE_FILE}" << EOF
+# =============================================================================
+#
+keep goingAI Platform — Generated docker-compose.yml
+Tenant : ${TENANT_NAME}
+Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+DO NOT EDIT — regenerated by 2-deploy-services.sh
+=============================================================================
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+x-restart: &default-restart
+  restart: unless-stopped
+networks:
+  ai_net:
+    name: ${COMPOSE_PROJECT_NAME}-net
     driver: bridge
-    internal: true
     labels:
       com.ai-platform: "true"
       com.ai-platform.tenant: "${TENANT_ID}"
-Replace with:
+services:
 EOF
 
-    if [[ "${DEPLOY_OPENCLAW:-false}" == "true" ]]; then
-        cat >> "${COMPOSE_FILE}" << EOF
-  openclaw_net:
-    name: ${COMPOSE_PROJECT_NAME}-openclaw-net
-    driver: bridge
-    internal: true
-    labels:
-      com.ai-platform: "true"
-      com.ai-platform.tenant: "${TENANT_ID}"
-EOF
-    fi
+Then in `append_postgres()`, remove the `services:` line so it reads:
 
+```bash
     cat >> "${COMPOSE_FILE}" << EOF
-Do the same for the openclaw_data volume entry at the bottom of the volumes block. Wrap it:
-    if [[ "${DEPLOY_OPENCLAW:-false}" == "true" ]]; then
+  postgres:
+    image: postgres:16-alpine
+    ...
+EOF
+
+FIX 2 — scripts/2-deploy-services.sh: Fix double networks: declaration in footer
+Problem: write_compose_footer re-declares ai_net as external: true, contradicting the header definition.
+Find write_compose_footer(). Replace the entire networks block at the bottom:
+REMOVE this:
+    cat >> "${COMPOSE_FILE}" << 'EOF'
+
+networks:
+  ai_net:
+    external: true
+EOF
+
+    if [[ "${DEPLOY_OPENCLAW:-false}" == "true" && -n "${OPENCLAW_IMAGE:-}" ]]; then
         cat >> "${COMPOSE_FILE}" << EOF
-  openclaw_data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${BASE_DIR}/openclaw
+  openclaw_net:
+    name: ${COMPOSE_PROJECT_NAME}-openclaw-net
+    driver: bridge
+    internal: true
+EOF
+    fi
+REPLACE with:
+    # ai_net is already fully declared in the compose header — no footer redeclaration needed
+    if [[ "${DEPLOY_OPENCLAW:-false}" == "true" && -n "${OPENCLAW_IMAGE:-}" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
+
+  openclaw_net:
+    name: ${COMPOSE_PROJECT_NAME}-openclaw-net
+    driver: bridge
+    internal: true
 EOF
     fi
 
-FIX 2 — scripts/2-deploy-services.sh: Fix OpenClaw pull failure — add --ignore-pull-failures or set a fallback image
-In main(), find the docker pull command:
-docker compose -f "${COMPOSE_FILE}" pull
-Replace with:
-docker compose -f "${COMPOSE_FILE}" pull --ignore-pull-failures || true
-Also in append_openclaw(), add a guard at the top:
-append_openclaw() {
-    [[ "${DEPLOY_OPENCLAW:-false}" != "true" ]] && return
+Note: The networks: top-level key in the footer must still exist to list openclaw_net if OpenClaw is deployed. Since ai_net is defined in the header under networks:, Docker Compose merges the file correctly — but only if there is a single networks: top-level key. To be safe, restructure the footer networks block as:
 
-    if [[ -z "${OPENCLAW_IMAGE:-}" ]]; then
-        warn "OPENCLAW_IMAGE not set in .env — skipping OpenClaw service"
+    echo "" >> "${COMPOSE_FILE}"
+    echo "# ── Additional networks ──────────────────────────────────────────" >> "${COMPOSE_FILE}"
+
+    if [[ "${DEPLOY_OPENCLAW:-false}" == "true" && -n "${OPENCLAW_IMAGE:-}" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
+# openclaw_net is appended here — ai_net defined in header above
+EOF
+        # ai_net already declared — write openclaw_net only
+        # Docker Compose does NOT support split top-level keys in a single file
+        # so we must add openclaw_net under the existing networks: section.
+        # Since we cannot append to it, we use a compose override file instead.
+        cat > "${BASE_DIR}/docker-compose.openclaw.yml" << EOF
+networks:
+  openclaw_net:
+    name: ${COMPOSE_PROJECT_NAME}-openclaw-net
+    driver: bridge
+    internal: true
+EOF
+        warn "OpenClaw network written to docker-compose.openclaw.yml — merge manually or add -f flag to compose commands"
+    fi
+
+Actually — cleaner approach for FIX 2: Remove the networks: block entirely from write_compose_header and write the single authoritative networks: block in write_compose_footer after all volumes. This avoids any duplication:
+FIX 2 (CLEAN VERSION) — Recommended
+Step 2a: In write_compose_header(), remove the networks: block entirely. The header becomes:
+write_compose_header() {
+    info "Writing docker-compose.yml header…"
+    cat > "${COMPOSE_FILE}" << EOF
+# =============================================================================
+# AI Platform — Generated docker-compose.yml
+# Tenant : ${TENANT_NAME}
+# Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# DO NOT EDIT — regenerated by 2-deploy-services.sh
+# =============================================================================
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-restart: &default-restart
+  restart: unless-stopped
+
+services:
+
+EOF
+    log "Compose header written"
+}
+Step 2b: In write_compose_footer(), replace the networks section with a single authoritative block:
+    # ── Networks ─────────────────────────────────────────────────────────────
+    cat >> "${COMPOSE_FILE}" << EOF
+
+networks:
+  ai_net:
+    name: ${COMPOSE_PROJECT_NAME}-net
+    driver: bridge
+    labels:
+      com.ai-platform: "true"
+      com.ai-platform.tenant: "${TENANT_ID}"
+EOF
+
+    if [[ "${DEPLOY_OPENCLAW:-false}" == "true" && -n "${OPENCLAW_IMAGE:-}" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
+  openclaw_net:
+    name: ${COMPOSE_PROJECT_NAME}-openclaw-net
+    driver: bridge
+    internal: true
+EOF
+    fi
+
+FIX 3 — scripts/2-deploy-services.sh: Add tailscale directory to create_directories()
+Find create_directories(). In the dirs array, add the tailscale state directory:
+    local dirs=(
+        "${BASE_DIR}/postgres"
+        "${BASE_DIR}/redis"
+        "${BASE_DIR}/ollama"
+        "${BASE_DIR}/openwebui"
+        "${BASE_DIR}/litellm"
+        "${BASE_DIR}/anythingllm"
+        "${BASE_DIR}/flowise"
+        "${BASE_DIR}/n8n"
+        "${BASE_DIR}/authentik/media"
+        "${BASE_DIR}/authentik/templates"
+        "${BASE_DIR}/authentik/certs"
+        "${BASE_DIR}/caddy/data"
+        "${BASE_DIR}/caddy/config"
+        "${BASE_DIR}/grafana"
+        "${BASE_DIR}/prometheus"
+        "${BASE_DIR}/qdrant"
+        "${BASE_DIR}/tailscale"          # ← ADD THIS LINE
+    )
+And guard the Dify directories behind the deploy flag:
+Find:
+        "${BASE_DIR}/dify/volumes/app/storage"
+        "${BASE_DIR}/dify/volumes/db/data"
+        ...
+These lines appear unconditionally in the dirs array. Move them to a conditional block after the main loop:
+    # ── Dify directories (only if deploying) ─────────────────────────────────
+    if [[ "${DEPLOY_DIFY:-false}" == "true" ]]; then
+        local dify_dirs=(
+            "${BASE_DIR}/dify/volumes/app/storage"
+            "${BASE_DIR}/dify/volumes/db/data"
+            "${BASE_DIR}/dify/volumes/redis/data"
+            "${BASE_DIR}/dify/volumes/weaviate"
+            "${BASE_DIR}/dify/volumes/sandbox/dependencies"
+            "${BASE_DIR}/dify/volumes/ssrf_proxy"
+            "${BASE_DIR}/dify/volumes/certbot/conf"
+            "${BASE_DIR}/dify/volumes/certbot/www"
+        )
+        for d in "${dify_dirs[@]}"; do
+            mkdir -p "${d}"
+        done
+    fi
+
+FIX 4 — scripts/2-deploy-services.sh + scripts/3-configure-services.sh: Write a stub Caddyfile before starting containers
+Problem: Caddy bind-mounts ${BASE_DIR}/caddy/Caddyfile read-only, but this file is only written in Script 3. When Script 2 runs docker compose up -d, Caddy crashes because the source file doesn't exist.
+Fix in scripts/2-deploy-services.sh: Add a function write_stub_caddyfile() called immediately after create_directories() and before write_compose_header():
+# =============================================================================
+# WRITE STUB CADDYFILE (required before Caddy container starts)
+# =============================================================================
+write_stub_caddyfile() {
+    [[ "${PROXY_TYPE:-none}" != "caddy" ]] && return
+
+    local caddyfile="${BASE_DIR}/caddy/Caddyfile"
+
+    # Only write stub if a real Caddyfile doesn't already exist
+    if [[ -f "${caddyfile}" ]]; then
+        info "Caddyfile already exists — skipping stub write"
         return
     fi
-    ...rest of function unchanged...
+
+    info "Writing stub Caddyfile (will be replaced by script 3)…"
+    cat > "${caddyfile}" << EOF
+# Stub Caddyfile — replaced by 3-configure-services.sh
+# Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+{
+    email ${ACME_EMAIL:-admin@${DOMAIN}}
 }
 
-FIX 3 — scripts/2-deploy-services.sh: Fix Dify — add dify-api, dify-worker services or disable Dify entirely until fully implemented
-Option A (recommended — disable until implemented properly): In append_dify(), replace the entire function body with:
-append_dify() {
-    [[ "${DEPLOY_DIFY:-false}" != "true" ]] && return
-    warn "Dify requires multi-container setup (api + worker + web + sandbox) — not yet fully implemented. Skipping."
-    warn "Set DEPLOY_DIFY=false in .env to suppress this warning."
+# Temporary: serve a plain response on all hosts until configured
+:80 {
+    respond "AI Platform starting — run script 3 to complete configuration" 200
 }
-Option B (full fix): Replace append_dify() with a full four-service implementation covering dify-api, dify-worker, dify-web, and dify-sandbox as per the official Dify docker compose reference at https://github.com/langgenius/dify/blob/main/docker/docker-compose.yaml
-
-FIX 4 — scripts/2-deploy-services.sh: Fix Tailscale auth key plaintext in compose file
-In append_tailscale(), change:
-    environment:
-      - TS_AUTHKEY=${TAILSCALE_AUTH_KEY}
-To use the variable name only (not expanded value) so Docker reads it from the environment at runtime:
-    cat >> "${COMPOSE_FILE}" << 'NOEXPAND'
-    environment:
-      - TS_AUTHKEY
-NOEXPAND
-But since the whole heredoc uses << EOF (with expansion), instead write that specific line using printf:
-    # Write environment section without expanding the secret
-    cat >> "${COMPOSE_FILE}" << EOF
-    environment:
-      - TS_AUTHKEY=\${TAILSCALE_AUTH_KEY}
-      - TS_HOSTNAME=${TAILSCALE_HOSTNAME}
-      - TS_EXTRA_ARGS=--accept-routes
-      - TS_STATE_DIR=/var/lib/tailscale
 EOF
-The \${TAILSCALE_AUTH_KEY} with a backslash escape writes a literal ${TAILSCALE_AUTH_KEY} into the compose file, which Docker Compose then resolves from the shell environment at docker compose up time, sourced from the .env file via the --env-file flag or by being in the same directory.
-Also update the docker compose up command in main() to explicitly pass the env file:
-docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d
-
-FIX 5 — scripts/3-configure-services.sh: Fix the dead-code base URL logic in run_sanity_checks()
-Find:
-    local base
-    if   [[ "${NETWORK_MODE}" == "caddy" ]];     then base="http://localhost"
-    elif [[ "${NETWORK_MODE}" == "tailscale" ]]; then base="http://localhost"
-    else                                              base="http://localhost"
-    fi
-Replace with:
-    local base="http://localhost"
-    # All modes check via direct port — services expose ports regardless of network mode
-    # In Caddy mode this requires ports to remain exposed in docker-compose.yml (they are)
-This removes the dead if/elif/else and documents the intentional behaviour clearly.
-
-FIX 6 — scripts/3-configure-services.sh: Make configure_n8n() honest about what it does
-Find the configure_n8n() function. Replace with:
-configure_n8n() {
-    [[ "${DEPLOY_N8N:-false}" != "true" ]] && return
-    [[ "${DEPLOY_POSTGRES:-false}" != "true" ]] && return
-
-    info "Waiting for n8n to become healthy…"
-
-    local elapsed=0 timeout=120
-    until curl -sf "http://localhost:${N8N_PORT:-5678}/healthz" &>/dev/null; do
-        sleep 5; elapsed=$((elapsed+5))
-        [[ $elapsed -ge $timeout ]] && {
-            warn "n8n not reachable after ${timeout}s — complete setup at http://localhost:${N8N_PORT:-5678}"
-            return
-        }
-    done
-
-    log "n8n is healthy — complete initial setup at: http://localhost:${N8N_PORT:-5678}"
-    info "n8n requires manual owner account creation on first visit"
+    log "Stub Caddyfile written to ${caddyfile}"
 }
+Then in main() of Script 2, call it in order:
+main() {
+    create_directories
+    write_stub_caddyfile        # ← ADD before compose generation
+    write_compose_header
+    append_postgres
+    ...
 
-After these 6 fixes, the scripts will be end-to-end deployable for all services except Dify (which requires Fix 3 Option B to be truly functional). Everything else from script 0 through script 3 will run cleanly on a fresh Ubuntu 22.04/24.04 host matching the README's architecture.
+FIX 5 — scripts/3-configure-services.sh: Parameterise Qdrant vector size
+Find in configure_qdrant():
+        -d '{
+            "vectors": {
+                "size": 768,
+                "distance": "Cosine"
+            }
+        }')
+Replace with:
+        -d "{
+            \"vectors\": {
+                \"size\": ${QDRANT_VECTOR_SIZE:-768},
+                \"distance\": \"Cosine\"
+            }
+        }")
+And add to Script 1's .env generation (note for Windsurf — also add this line when generating .env):
+QDRANT_VECTOR_SIZE=768        # nomic-embed-text=768, mxbai-embed-large=1024
+
+FIX 6 — scripts/3-configure-services.sh: Use exact container name match for Ollama
+Find in configure_ollama() (or wherever docker exec is called with the name filter):
+docker exec $(docker ps -qf name=ollama)
+Replace with:
+docker exec  $ (docker ps -qf name=^/ $ {COMPOSE_PROJECT_NAME}-ollama-1$)
+Or more portably:
+local ollama_container
+ollama_container= $ (docker ps --filter "name=^ollama $ " --format "{{.Names}}" | head -1)
+if [[ -z "${ollama_container}" ]]; then
+    # Fallback: try compose-namespaced name
+    ollama_container= $ (docker ps --filter "name=ollama" --format "{{.Names}}" | grep -E "[-_]ollama[-_]?1? $ " | head -1)
+fi
+if [[ -z "${ollama_container}" ]]; then
+    warn "Ollama container not found — skipping model pull"
+    return
+fi
+docker exec "${ollama_container}" ollama pull "${model}"
+
+FIX 7 — scripts/2-deploy-services.sh: Remove unused litellm_data named volume from footer
+Find in write_compose_footer() the volume list:
+    local volume_names=(
+        "postgres_data"
+        "redis_data"
+        "qdrant_data"
+        "ollama_data"
+        "openwebui_data"
+        "litellm_data"       # ← REMOVE THIS
+        "anythingllm_data"
+        "flowise_data"
+        "n8n_data"
+        "grafana_data"
+        "prometheus_data"
+    )
+
+    local deploy_flags=(
+        "${DEPLOY_POSTGRES:-false}"
+        "${DEPLOY_REDIS:-false}"
+        "${DEPLOY_QDRANT:-false}"
+        "${DEPLOY_OLLAMA:-false}"
+        "${DEPLOY_OPENWEBUI:-false}"
+        "${DEPLOY_LITELLM:-false}"   # ← REMOVE THIS (must match index)
+        "${DEPLOY_ANYTHINGLLM:-false}"
+        "${DEPLOY_FLOWISE:-false}"
+        "${DEPLOY_N8N:-false}"
+        "${DEPLOY_GRAFANA:-false}"
+        "${DEPLOY_PROMETHEUS:-false}"
+    )
+Remove the litellm_data entry from both arrays (they are positionally matched — remove the same index from both).
+
+Post-Fix Verification Checklist for Windsurf
+After implementing all 7 fixes, run this validation sequence:
+# 1. Validate compose file syntax
+docker compose -f /mnt/data/datasquiz/docker-compose.yml config --quiet
+echo "Exit code: $?"   # Must be 0
+
+# 2. Check for duplicate top-level keys
+grep -n "^networks:" /mnt/data/datasquiz/docker-compose.yml
+# Must appear EXACTLY ONCE
+
+grep -n "^services:" /mnt/data/datasquiz/docker-compose.yml
+# Must appear EXACTLY ONCE
+
+grep -n "^volumes:" /mnt/data/datasquiz/docker-compose.yml
+# Must appear EXACTLY ONCE
+
+# 3. Verify Caddyfile exists before compose up
+ls -la /mnt/data/datasquiz/caddy/Caddyfile
+# Must exist
+
+# 4. Verify tailscale dir created
+ls -la /mnt/data/datasquiz/tailscale/
+# Must exist
+
+# 5. Verify no dify dirs created when DEPLOY_DIFY=false
+ls /mnt/data/datasquiz/dify 2>/dev/null && echo "EXISTS - CHECK FLAG" || echo "OK - not created"
+
+Once Windsurf confirms all 7 fixes pass the verification checklist, reply here and we will re-read the updated scripts and generate the final clean runsheet.
