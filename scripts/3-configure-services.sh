@@ -189,6 +189,8 @@ configure_n8n() {
     
     # Create n8n workflows directory (if needed for future use)
     mkdir -p "${DATA_ROOT}/n8n/workflows"
+    # CRITICAL: Ensure directory is owned by tenant, not root
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/n8n"
     
     log "SUCCESS" "n8n verification complete"
     echo -e "  ${DIM}• URL: https://${DOMAIN}/n8n${NC}"
@@ -388,6 +390,8 @@ configure_grafana() {
     # Create Grafana provisioning directory
     mkdir -p "${DATA_ROOT}/grafana/provisioning/datasources"
     mkdir -p "${DATA_ROOT}/grafana/provisioning/dashboards"
+    # CRITICAL: Ensure directories are owned by tenant, not root
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/grafana"
     
     # Create Prometheus datasource
     cat > "${DATA_ROOT}/grafana/provisioning/datasources/prometheus.yml" << EOF

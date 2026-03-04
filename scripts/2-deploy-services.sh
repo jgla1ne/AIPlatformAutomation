@@ -699,7 +699,7 @@ litellm_settings:
   cache_params:
     type: redis
     host: redis
-    port: 6379
+    port: ${REDIS_INTERNAL_PORT}
     password: ${REDIS_PASSWORD}
   # Speed-optimized routing strategy
   set_verbose: "debug"
@@ -745,7 +745,7 @@ litellm_settings:
   cache_params:
     type: redis
     host: redis
-    port: 6379
+    port: ${REDIS_INTERNAL_PORT}
     password: ${REDIS_PASSWORD}
   # Capability-optimized routing strategy
   set_verbose: "debug"
@@ -793,7 +793,7 @@ litellm_settings:
   cache_params:
     type: redis
     host: redis
-    port: 6379
+    port: ${REDIS_INTERNAL_PORT}
     password: ${REDIS_PASSWORD}
   # Balanced routing strategy for cost/latency optimization
   set_verbose: "debug"
@@ -950,7 +950,7 @@ append_litellm() {
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
       - LITELLM_SALT_KEY=${LITELLM_SALT_KEY}
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_INTERNAL_PORT}/${POSTGRES_DB}
-      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:${REDIS_INTERNAL_PORT}/0
       - OLLAMA_BASE_URL=${OLLAMA_INTERNAL_URL}
       - QDRANT_URL=${VECTOR_DB_URL}
       - LITELLM_API_KEY=${LITELLM_MASTER_KEY}
@@ -1000,7 +1000,7 @@ append_openwebui() {
       - OPENAI_API_BASE_URL=${LITELLM_API_ENDPOINT}
       - OPENAI_API_KEY=${LITELLM_MASTER_KEY}
       - WEBUI_SECRET_KEY=${ANYTHINGLLM_JWT_SECRET}
-      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:${REDIS_INTERNAL_PORT}/0
       # Vector DB connection
       - VECTOR_DB=${VECTOR_DB}
       - QDRANT_URI=${VECTOR_DB_URL}
