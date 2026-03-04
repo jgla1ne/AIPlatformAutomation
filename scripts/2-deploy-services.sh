@@ -216,6 +216,7 @@ create_directories() {
         "${DATA_ROOT}/compose"
         "${DATA_ROOT}/caddy"
         "${DATA_ROOT}/caddy/config"
+        "${DATA_ROOT}/caddy/data"
         "${DATA_ROOT}/postgres"
         "${DATA_ROOT}/postgres/init"
         "${DATA_ROOT}/redis"
