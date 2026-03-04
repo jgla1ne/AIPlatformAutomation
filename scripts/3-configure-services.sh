@@ -145,7 +145,7 @@ load_env() {
     )
     local missing=()
     for var in "${required[@]}"; do
-        [ -z "${!var}" ] && missing+=("${var}")
+        [ -z "${!var:-}" ] && missing+=("${var}")
     done
 
     if [ "${#missing[@]}" -gt 0 ]; then
