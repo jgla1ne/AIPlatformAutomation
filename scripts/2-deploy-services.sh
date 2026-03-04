@@ -1207,6 +1207,13 @@ append_openclaw() {
         return
     fi
     
+    # Check if image exists locally, if not, skip OpenClaw
+    if ! docker image inspect "${OPENCLAW_IMAGE}" >/dev/null 2>&1; then
+        log "WARN" "OpenClaw image ${OPENCLAW_IMAGE} not found locally — skipping OpenClaw service"
+        log "INFO" "To deploy OpenClaw, build/pull image first or set OPENCLAW_IMAGE to available image"
+        return
+    fi
+    
     log "WARN" "OpenClaw: ensure image ${OPENCLAW_IMAGE} exists locally before deploying"
     # Use configurable image name from .env
     local image="${OPENCLAW_IMAGE:-openclaw:latest}"
