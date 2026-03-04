@@ -2002,7 +2002,7 @@ main() {
     teardown_existing
 
     # Setup directories with proper ownership
-    setup_directories
+    create_directories
 
     # Generate configs
     generate_postgres_init
@@ -2085,7 +2085,7 @@ get_enabled_services() {
         teardown_existing
 
         # Setup directories with proper ownership
-        setup_directories
+        create_directories
 
         # Generate configs
         generate_postgres_init
