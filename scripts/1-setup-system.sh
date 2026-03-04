@@ -416,15 +416,7 @@ select_data_volume() {
         fi
         DATA_ROOT="${base_path}/${TENANT_ID}"
     fi
-
-    # ── Structured Logging Setup ───────────────────────────────────────
-    LOG_DIR="${DATA_ROOT}/logs"
-    mkdir -p "${LOG_DIR}"
-    # CRITICAL: Ensure log directory is owned by tenant, not root
-    chown -R "${TENANT_UID}:${TENANT_GID}" "${LOG_DIR}"
-    LOG_FILE="${LOG_DIR}/script-1-$(date +%Y%m%d-%H%M%S).log"
-    exec > >(tee -a "${LOG_FILE}") 2>&1
-
+    
     # Set derived paths
     ENV_FILE="${DATA_ROOT}/.env"
     COMPOSE_DIR="${DATA_ROOT}/compose"
@@ -443,6 +435,14 @@ select_data_volume() {
     fi
     
     log "INFO" "Tenant ownership will be set to: ${TENANT_UID}:${TENANT_GID}"
+    
+    # ── Structured Logging Setup ───────────────────────────────────────
+    LOG_DIR="${DATA_ROOT}/logs"
+    mkdir -p "${LOG_DIR}"
+    # CRITICAL: Ensure log directory is owned by tenant, not root
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${LOG_DIR}"
+    LOG_FILE="${LOG_DIR}/script-1-$(date +%Y%m%d-%H%M%S).log"
+    exec > >(tee -a "${LOG_FILE}") 2>&1
     
     # Set dynamic service URLs based on tenant configuration
     VECTOR_DB_URL="http://qdrant:6333"
