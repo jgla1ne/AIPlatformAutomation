@@ -35,6 +35,28 @@ Each tenant deployment generates:
 
 ---
 
+## **🔐 Core Architectural Principles**
+
+### **🏗 Foundation Principles (Non-Negotiable)**
+
+✅ **Nothing as root** - All services run under tenant UID/GID (1001:1001)  
+✅ **Data confinement** - Everything under `/mnt/data/tenant/` except cleanup logs in `~/logs/`  
+✅ **Dynamic compose generation** - No static files, compose generated only after all variables set  
+✅ **Zero hardcoded values** - Maximum modularity, all configuration via `.env` variables  
+
+### **🌐 Network Architecture**
+
+✅ **Independent networks** - Tailscale (8443) + OpenClaw (18789) as separate network layers  
+✅ **Service auto-integration** - All AI stack services automatically share salt keys & Qdrant database  
+✅ **LiteLLM proxy routing** - Intelligent routing between local models and frontier models with multiple strategies  
+
+### **📊 Operational Principles**
+
+✅ **Logging strategy** - Centralized logging with known issues documentation  
+✅ **Known issues tracking** - Outbound variables, YAML issues, deprecation warnings documented  
+
+---
+
 ## **🎯 Architectural Goals**
 
 ✅ **Zero hardcoded values** - All 4 scripts 100% dynamic  
@@ -478,7 +500,44 @@ For production:
 
 ---
 
-## **🚀 Deployment Readiness**
+## **� Known Issues & Learnings**
+
+### **📋 Documented Issues**
+
+#### **🚨 Critical Issues (Resolved)**
+- **Docker Compose Stalls** - `condition: service_healthy` caused deployment hangs
+  - **Fix:** Removed all service_healthy conditions from depends_on blocks
+  - **Status:** ✅ Resolved in v2.1.0
+
+#### **⚠️ Minor Issues (Documented)**
+- **Unbound Variables** - `TENANT_UID`/`TENANT_GID` not in initial .env generation
+  - **Workaround:** Manually add to .env or ensure script 1 includes them
+  - **Status:** 📝 Documented, planned fix
+
+- **YAML Version Warning** - Docker Compose v3.8 deprecated warning
+  - **Impact:** Non-breaking, cosmetic warning only
+  - **Status:** 📝 Documented, can ignore
+
+- **Variable Expansion** - Some volume mounts fail variable expansion
+  - **Workaround:** Use absolute paths in compose generation
+  - **Status:** 📝 Documented, needs investigation
+
+#### **🔍 Debugging Learnings**
+- **YAML Validation** - Python yaml.safe_load() passes but docker compose fails
+  - **Learning:** Docker compose has stricter validation than standard YAML
+  - **Solution:** Use docker compose config for validation
+
+- **Service Dependencies** - Complex depends_on structures cause parsing issues
+  - **Learning:** Keep dependencies simple and explicit
+  - **Solution:** Use array format: `- service_name`
+
+- **Container Ownership** - Files created as root break tenant permissions
+  - **Learning:** Always chown to tenant UID/GID after file operations
+  - **Solution:** Automated ownership correction in scripts
+
+---
+
+## **�🚀 Deployment Readiness**
 
 The v2.1.0 platform is production-ready with comprehensive validation:
 
