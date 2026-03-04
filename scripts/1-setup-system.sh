@@ -148,6 +148,7 @@ DIFY_INNER_API_KEY=""
 # Network defaults
 TAILSCALE_AUTH_KEY=""
 TAILSCALE_HOSTNAME=""
+TAILSCALE_FUNNEL="https"
 SIGNAL_PHONE_NUMBER=""
 SIGNAL_VERIFICATION_CODE=""
 GDRIVE_CLIENT_ID=""
@@ -736,6 +737,43 @@ select_vector_db() {
     log "SUCCESS" "Vector database: ${VECTOR_DB}"
 }
 
+# ─── Database Configuration ─────────────────────────────────────────────────────
+collect_database() {
+    print_step "7.5" "11" "Database Configuration"
+
+    echo -e "  ${BOLD}🗄️  Database Configuration${NC}"
+    echo -e "  ${DIM}Configure database settings for the AI platform${NC}"
+    echo ""
+
+    echo -e "  ${BOLD}PostgreSQL Configuration:${NC}"
+    echo -e "  ${DIM}Default username: platform${NC}"
+    read -p "  ➤ PostgreSQL username [platform]: " input_user
+    
+    # Use input if provided, otherwise keep default
+    if [[ -n "${input_user}" ]]; then
+        POSTGRES_USER="${input_user}"
+    else
+        POSTGRES_USER="platform"
+    fi
+
+    echo -e "  ${DIM}Database name: platform${NC}"
+    read -p "  ➤ Database name [platform]: " input_db
+    
+    if [[ -n "${input_db}" ]]; then
+        POSTGRES_DB="${input_db}"
+    else
+        POSTGRES_DB="platform"
+    fi
+
+    echo ""
+    echo -e "  ${BOLD}Redis Configuration:${NC}"
+    echo -e "  ${DIM}Redis will be configured with a secure password${NC}"
+    echo ""
+
+    print_divider
+    log "SUCCESS" "Database configured: ${POSTGRES_USER}/${POSTGRES_DB}"
+}
+
 # ─── LLM Configuration ─────────────────────────────────────────────────────
 collect_llm_config() {
     print_step "8" "11" "LLM Provider Configuration"
@@ -888,7 +926,7 @@ collect_network_config() {
     read -p "  ➤ Tailscale hostname [${PROJECT_PREFIX}${TENANT_ID}]: " TAILSCALE_HOSTNAME
     TAILSCALE_HOSTNAME="${TAILSCALE_HOSTNAME:-${PROJECT_PREFIX}${TENANT_ID}}"
     
-    # If auth key provided, ask for serve mode
+    # If auth key provided, ask for serve mode and funnel
     if [ -n "${TAILSCALE_AUTH_KEY}" ]; then
         echo ""
         echo -e "  ${DIM}Tailscale serve mode (for serving web services):${NC}"
@@ -896,11 +934,29 @@ collect_network_config() {
         if [[ "${enable_serve,,}" == "y" ]]; then
             TAILSCALE_SERVE_MODE="true"
             echo -e "  ${DIM}✅ Serve mode enabled - services will be accessible via Tailscale${NC}"
+            
+            # Ask for funnel configuration
+            echo ""
+            echo -e "  ${DIM}Tailscale Funnel Configuration:${NC}"
+            echo -e "  ${DIM}Choose funnel type for service access:${NC}"
+            echo ""
+            echo -e "  ${CYAN}  1)${NC} HTTPS funnel (recommended, secure)"
+            echo -e "  ${CYAN}  2)${NC} TCP funnel (for specific services)"
+            echo ""
+            read -p "  ➤ Select funnel type [1-2]: " funnel_choice
+            case "${funnel_choice}" in
+                1) TAILSCALE_FUNNEL="https" ;;
+                2) TAILSCALE_FUNNEL="tcp" ;;
+                *) TAILSCALE_FUNNEL="https" ;;
+            esac
+            echo -e "  ${DIM}✅ Funnel type: ${TAILSCALE_FUNNEL}${NC}"
         else
             TAILSCALE_SERVE_MODE="false"
+            TAILSCALE_FUNNEL="https"
         fi
     else
         TAILSCALE_SERVE_MODE="false"
+        TAILSCALE_FUNNEL="https"
     fi
 
     print_divider
@@ -1198,8 +1254,10 @@ generate_secrets() {
     N8N_ENCRYPTION_KEY=$(load_existing_secret "N8N_ENCRYPTION_KEY"     "$(openssl rand -hex 32)")
     FLOWISE_SECRET_KEY=$(load_existing_secret "FLOWISE_SECRET_KEY"     "$(openssl rand -hex 32)")
     LITELLM_MASTER_KEY=$(load_existing_secret "LITELLM_MASTER_KEY"     "sk-$(openssl rand -hex 32)")
+    LITELLM_SALT_KEY=$(load_existing_secret "LITELLM_SALT_KEY"     "$(openssl rand -hex 32)")
     ANYTHINGLLM_JWT_SECRET=$(load_existing_secret "ANYTHINGLLM_JWT_SECRET" "$(openssl rand -hex 32)")
     ANYTHINGLLM_AUTH_TOKEN=$(load_existing_secret "ANYTHINGLLM_AUTH_TOKEN" "$(openssl rand -hex 16)")
+    ANYTHINGLLM_API_KEY=$(load_existing_secret "ANYTHINGLLM_API_KEY" "$(openssl rand -hex 32)")
     GRAFANA_PASSWORD=$(load_existing_secret "GRAFANA_PASSWORD"          "$(openssl rand -hex 16)")
     AUTHENTIK_SECRET_KEY=$(load_existing_secret "AUTHENTIK_SECRET_KEY" "$(openssl rand -hex 32)")
     QDRANT_API_KEY=$(load_existing_secret   "QDRANT_API_KEY"            "$(openssl rand -hex 32)")
@@ -1239,6 +1297,10 @@ ADMIN_EMAIL=${ADMIN_EMAIL}
 DATA_ROOT=${DATA_ROOT}
 SSL_TYPE=${SSL_TYPE}
 PROJECT_PREFIX=${PROJECT_PREFIX}
+
+# ─── Tenant User Configuration ───────────────────────────────────────────────────
+TENANT_UID=${TENANT_UID}
+TENANT_GID=${TENANT_GID}
 
 # ─── Service Flags ─────────────────────────────────────────────────────────────
 ENABLE_OLLAMA=${ENABLE_OLLAMA}
@@ -1329,6 +1391,13 @@ POSTGRES_USER=${POSTGRES_USER}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 POSTGRES_DB=${POSTGRES_DB}
 
+# ─── Database Compatibility (for script 3) ───────────────────────────────
+DB_USER=${POSTGRES_USER}
+DB_PASSWORD=${POSTGRES_PASSWORD}
+
+# ─── Network Configuration (for dynamic references) ───────────────────
+LOCALHOST=localhost
+
 # ─── Redis ────────────────────────────────────────────────────────────────────
 REDIS_PASSWORD=${REDIS_PASSWORD}
 
@@ -1379,6 +1448,7 @@ DIFY_INNER_API_KEY=${DIFY_INNER_API_KEY}
 TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY}
 TAILSCALE_HOSTNAME=${TAILSCALE_HOSTNAME}
 TAILSCALE_SERVE_MODE=${TAILSCALE_SERVE_MODE}
+TAILSCALE_FUNNEL=${TAILSCALE_FUNNEL}
 
 # ─── Signal API ───────────────────────────────────────────────────────────────
 SIGNAL_PHONE_NUMBER=${SIGNAL_PHONE_NUMBER}
@@ -1741,6 +1811,7 @@ main() {
     detect_gpu               # Step 5
     select_stack             # Step 6
     select_vector_db         # Step 7
+    collect_database         # Step 7.5 - Database configuration
     collect_llm_config       # Step 8
     collect_litellm_routing  # Step 8.5 - LiteLLM routing strategy
     collect_network_config   # Step 9 - NEW: Network & security configuration

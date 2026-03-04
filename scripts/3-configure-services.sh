@@ -183,7 +183,7 @@ configure_n8n() {
 
     print_step "1" "${total_steps}" "Verifying n8n service health"
     
-    wait_for_service "n8n" "http://localhost:${N8N_PORT}" 60 || return 1
+    wait_for_service "n8n" "http://${LOCALHOST}:${N8N_PORT}" 60 || return 1
 
     log "INFO" "n8n is healthy and ready for use"
     
@@ -205,7 +205,7 @@ configure_flowise() {
 
     print_step "2" "${total_steps}" "Configuring Flowise"
     
-    wait_for_service "Flowise" "http://localhost:${FLOWISE_PORT}" 60 || return 1
+    wait_for_service "Flowise" "http://${LOCALHOST}:${FLOWISE_PORT}" 60 || return 1
 
     log "INFO" "Configuring Flowise API credentials..."
     
@@ -222,7 +222,7 @@ configure_litellm() {
 
     print_step "3" "${total_steps}" "Configuring LiteLLM with Routing Strategy"
     
-    wait_for_service "LiteLLM" "http://localhost:${LITELM_PORT}" 60 || return 1
+    wait_for_service "LiteLLM" "http://${LOCALHOST}:${LITELM_PORT}" 60 || return 1
 
     # Display current routing strategy
     log "INFO" "LiteLLM routing strategy: ${LITELLM_ROUTING_STRATEGY}"
@@ -261,7 +261,7 @@ configure_litellm() {
         }'
         
         # Send to LiteLLM API
-        if curl -sf -X POST "http://localhost:${LITELM_PORT}/v1/model/register" \
+        if curl -sf -X POST "http://${LOCALHOST}:${LITELM_PORT}/v1/model/register" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
             -d "${litellm_config}" &>/dev/null; then
@@ -288,7 +288,7 @@ configure_litellm() {
             ]
         }'
         
-        if curl -sf -X POST "http://localhost:${LITELM_PORT}/v1/model/register" \
+        if curl -sf -X POST "http://${LOCALHOST}:${LITELM_PORT}/v1/model/register" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
             -d "${openai_config}" &>/dev/null; then
@@ -315,7 +315,7 @@ configure_litellm() {
             ]
         }'
         
-        if curl -sf -X POST "http://localhost:${LITELM_PORT}/v1/model/register" \
+        if curl -sf -X POST "http://${LOCALHOST}:${LITELM_PORT}/v1/model/register" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
             -d "${google_config}" &>/dev/null; then
@@ -342,7 +342,7 @@ configure_litellm() {
             ]
         }'
         
-        if curl -sf -X POST "http://localhost:${LITELM_PORT}/v1/model/register" \
+        if curl -sf -X POST "http://${LOCALHOST}:${LITELM_PORT}/v1/model/register" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
             -d "${groq_config}" &>/dev/null; then
@@ -366,7 +366,7 @@ configure_anythingllm() {
 
     print_step "4" "${total_steps}" "Configuring AnythingLLM"
     
-    wait_for_service "AnythingLLM" "http://localhost:${ANYTHINGLLM_PORT}" 60 || return 1
+    wait_for_service "AnythingLLM" "http://${LOCALHOST}:${ANYTHINGLLM_PORT}" 60 || return 1
 
     log "INFO" "Configuring AnythingLLM workspace and integrations..."
     
@@ -383,7 +383,7 @@ configure_grafana() {
 
     print_step "5" "${total_steps}" "Setting up Grafana Dashboards"
     
-    wait_for_service "Grafana" "http://localhost:${GRAFANA_PORT}" 60 || return 1
+    wait_for_service "Grafana" "http://${LOCALHOST}:${GRAFANA_PORT}" 60 || return 1
 
     log "INFO" "Configuring Grafana datasources and dashboards..."
     
@@ -432,7 +432,7 @@ configure_minio() {
     log "INFO" "Verifying MinIO object storage..."
     
     # Test MinIO connectivity
-    if wait_for_service "MinIO" "http://localhost:${MINIO_PORT:-9000}" 30; then
+    if wait_for_service "MinIO" "http://${LOCALHOST}:${MINIO_PORT:-9000}" 30; then
         log "SUCCESS" "MinIO is accessible"
     else
         log "WARN" "MinIO may not be fully ready"
@@ -443,7 +443,7 @@ configure_qdrant() {
     log "INFO" "Verifying Qdrant vector database..."
     
     # Test Qdrant connectivity
-    if wait_for_service "Qdrant" "http://localhost:${QDRANT_INTERNAL_PORT}/healthz" 30; then
+    if wait_for_service "Qdrant" "http://${LOCALHOST}:${QDRANT_INTERNAL_PORT}/healthz" 30; then
         log "SUCCESS" "Qdrant is accessible"
     else
         log "WARN" "Qdrant may not be fully ready"
@@ -466,7 +466,7 @@ configure_ollama() {
         warn "Ollama container not found — skipping model pull"
         return
     fi
-    if wait_for_service "Ollama" "http://localhost:${OLLAMA_INTERNAL_PORT}/api/tags" 60; then
+    if wait_for_service "Ollama" "http://${LOCALHOST}:${OLLAMA_INTERNAL_PORT}/api/tags" 60; then
         log "SUCCESS" "Ollama is accessible"
         
         # Pull models if not present

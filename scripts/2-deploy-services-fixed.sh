@@ -16,9 +16,9 @@ warn() { echo -e "${YELLOW}[$(date +'%H:%M:%S')] WARNING:${NC} $1"; }
 error(){ echo -e "${RED}[$(date +'%H:%M:%S')] ERROR:${NC} $1"; }
 info() { echo -e "${BLUE}[$(date +'%H:%M:%S')] INFO:${NC} $1"; }
 
-# Configuration paths - loaded from .env
-ENV_FILE="${ENV_FILE:-$(sudo ls -t /mnt/data/*/.env 2>/dev/null | head -1)}"
-TENANT_DIR="$(dirname "${ENV_FILE}")"
+# Configuration paths
+TENANT_DIR="/mnt/data/datasquiz"
+ENV_FILE="${TENANT_DIR}/.env"
 PLATFORM_DIR="${TENANT_DIR}"
 COMPOSE_FILE="${PLATFORM_DIR}/docker-compose.yml"
 
@@ -74,7 +74,7 @@ global:
 scrape_configs:
   - job_name: 'prometheus'
     static_configs:
-      - targets: ['${COMPOSE_PROJECT_NAME}-prometheus:9090']
+      - targets: ['${LOCALHOST}:9090']
 EOF
 
 chown -R "${TENANT_UID}:${TENANT_GID}" "${PLATFORM_DIR}"
@@ -135,7 +135,7 @@ services:
     networks:
       - ai-datasquiz-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${OLLAMA_INTERNAL_PORT}/api/tags"]
+      test: ["CMD", "curl", "-f", "http://${LOCALHOST}:${OLLAMA_INTERNAL_PORT}/api/tags"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -153,7 +153,7 @@ services:
     networks:
       - ai-datasquiz-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${QDRANT_INTERNAL_HTTP_PORT}/health"]
+      test: ["CMD", "curl", "-f", "http://${LOCALHOST}:${QDRANT_INTERNAL_HTTP_PORT}/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -176,7 +176,7 @@ services:
     networks:
       - ai-datasquiz-net
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      test: ["CMD", "wget", "-q", "--spider", "http://${LOCALHOST}:9090/-/healthy"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -201,7 +201,7 @@ services:
     depends_on:
       - prometheus
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      test: ["CMD", "curl", "-f", "http://${LOCALHOST}:3000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
