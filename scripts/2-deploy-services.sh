@@ -53,7 +53,7 @@ ENABLE_MINIO="${ENABLE_MINIO:-false}"
 
 # Set project name based on tenant ID
 COMPOSE_PROJECT_NAME="${PROJECT_PREFIX}${TENANT_ID:-${PROJECT_PREFIX}default}"
-DOCKER_NETWORK="${COMPOSE_PROJECT_NAME}-net"
+DOCKER_NETWORK="ai_net"
 
 # Set tenant UID/GID for non-root containers
 # Preserve original user when running with sudo
@@ -1519,7 +1519,7 @@ write_networks() {
     compose_append << EOF
 
 networks:
-  ${DOCKER_NETWORK}:
+  ai_net:
     name: ${DOCKER_NETWORK}
     driver: bridge
     ipam:
