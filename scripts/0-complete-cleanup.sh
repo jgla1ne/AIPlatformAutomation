@@ -223,6 +223,17 @@ cleanup_data() {
             log "INFO" "Data directory did not exist"
         fi
         
+        # Remove base mount point if empty and exists
+        if [ -d "${DATA_BASE_PATH}" ]; then
+            # Check if directory is empty (only contains . and ..)
+            if [ -z "$(ls -A "${DATA_BASE_PATH}" 2>/dev/null)" ]; then
+                rmdir "${DATA_BASE_PATH}"
+                log "SUCCESS" "Empty mount point removed: ${DATA_BASE_PATH}"
+            else
+                log "INFO" "Mount point not empty, preserving: ${DATA_BASE_PATH}"
+            fi
+        fi
+        
         # Complete Docker system prune
         log "INFO" "Running complete Docker system prune..."
         docker system prune -af --volumes 2>/dev/null || true
