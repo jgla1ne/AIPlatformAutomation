@@ -417,6 +417,14 @@ select_data_volume() {
         DATA_ROOT="${base_path}/${TENANT_ID}"
     fi
 
+    # ── Structured Logging Setup ───────────────────────────────────────
+    LOG_DIR="${DATA_ROOT}/logs"
+    mkdir -p "${LOG_DIR}"
+    # CRITICAL: Ensure log directory is owned by tenant, not root
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${LOG_DIR}"
+    LOG_FILE="${LOG_DIR}/script-1-$(date +%Y%m%d-%H%M%S).log"
+    exec > >(tee -a "${LOG_FILE}") 2>&1
+
     # Set derived paths
     ENV_FILE="${DATA_ROOT}/.env"
     COMPOSE_DIR="${DATA_ROOT}/compose"
@@ -1453,7 +1461,6 @@ create_directories() {
         "${DATA_ROOT}/openwebui"
         "${DATA_ROOT}/signal"
         "${DATA_ROOT}/backups"
-        "${DATA_ROOT}/logs"
     )
 
     local total="${#dirs[@]}"
