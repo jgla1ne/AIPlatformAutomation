@@ -322,6 +322,8 @@ detect_and_mount_ebs() {
             
             # Create mount point if it doesn't exist
             sudo mkdir -p "${mount_point}"
+            # CRITICAL: Ensure mount point is owned by tenant, not root
+            sudo chown "${TENANT_UID}:${TENANT_GID}" "${mount_point}"
             
             # Check if already mounted
             if mountpoint -q "${mount_point}" 2>/dev/null; then
