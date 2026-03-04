@@ -53,7 +53,7 @@ ENABLE_MINIO="${ENABLE_MINIO:-false}"
 
 # Set project name based on tenant ID
 COMPOSE_PROJECT_NAME="${PROJECT_PREFIX}${TENANT_ID:-${PROJECT_PREFIX}default}"
-DOCKER_NETWORK="${COMPOSE_PROJECT_NAME}_net"
+DOCKER_NETWORK="${COMPOSE_PROJECT_NAME}-net"
 
 # Set tenant UID/GID for non-root containers
 # Preserve original user when running with sudo
