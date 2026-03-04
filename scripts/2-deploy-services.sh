@@ -286,6 +286,9 @@ generate_compose() {
     # Write stub Caddyfile first (required before Caddy container starts)
     write_stub_caddyfile
     
+    # ── Networks (must be before services) ─────────────────────────────────
+    write_networks
+    
     # ── Header ─────────────────────────────────────────
     write_compose_header
     
@@ -1510,6 +1513,22 @@ EOF
 }
 
 # ─────────────────────────────────────────────────────────────
+# NETWORKS
+# ─────────────────────────────────────────────────────────────
+write_networks() {
+    compose_append << EOF
+
+networks:
+  ${DOCKER_NETWORK}:
+    name: ${DOCKER_NETWORK}
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+EOF
+}
+
+# ─────────────────────────────────────────────────────────────
 # VOLUMES + NETWORKS FOOTER
 # ─────────────────────────────────────────────────────────────
 append_footer() {
@@ -1532,17 +1551,6 @@ EOF
     [ "${VECTOR_DB}" = "qdrant" ] && compose_append << EOF
   ${COMPOSE_PROJECT_NAME}_qdrant_data:
     name: ${COMPOSE_PROJECT_NAME}_qdrant_data
-EOF
-
-    compose_append << EOF
-
-networks:
-  ${DOCKER_NETWORK}:
-    name: ${DOCKER_NETWORK}
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16
 EOF
 }
 
