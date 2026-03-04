@@ -1,217 +1,71 @@
-#!/usr/bin/env bash
-# 2-deploy-services.sh
-# Reads .env → generates docker-compose.yml → tears down old network → deploys
+#!/bin/bash
+
+#
+# AI Platform - Deploy Services Script (v2.2.0)
+#
+# This script dynamically generates and deploys the complete AI platform stack
+# with strict non-root execution, zero-trust networking, and host bind mounts only
+#
+# CRITICAL: No data should ever be stored in /var/lib/docker/volumes
+# ALL data must use host bind mounts to tenant directories
+#
+
 set -euo pipefail
 
-# ── Colours ──────────────────────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
+# ─────────────────────────────────────────────────────────────
+# GLOBAL CONFIGURATION
+# ─────────────────────────────────────────────────────────────
 
-log() { echo -e "${BLUE}[INFO]${NC}  $*"; }
-ok() { echo -e "${GREEN}[OK]${NC}    $*"; }
-warn() { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-fail() { echo -e "${RED}[FAIL]${NC}  $*" >&2; exit 1; }
+# Source tenant environment file FIRST to prevent unbound variable errors
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# ── Load Environment ───────────────────────────────────────────────
-# Priority 1: TENANT_DIR environment variable
-# Priority 2: Search under /mnt/data for most recent .env
-# Priority 3: Search under /opt/ai-platform
-if [[ -n "${TENANT_DIR:-}" && -f "${TENANT_DIR}/.env" ]]; then
-  ENV_FILE="${TENANT_DIR}/.env"
+# Auto-detect tenant configuration
+DATA_BASE_PATH="/mnt/data"
+if [[ -f "${DATA_BASE_PATH}/datasquiz/.env" ]]; then
+    ENV_FILE="${DATA_BASE_PATH}/datasquiz/.env"
+    TENANT_ID="datasquiz"
+elif [[ -f "${PROJECT_ROOT}/.env" ]]; then
+    ENV_FILE="${PROJECT_ROOT}/.env"
+    TENANT_ID="$(basename "$PROJECT_ROOT")"
 else
-  ENV_FILE="$(sudo ls -t /mnt/data/*/.env 2>/dev/null | head -1)"
+    echo "❌ ERROR: Cannot find tenant .env file"
+    echo "Expected locations:"
+    echo "  - ${DATA_BASE_PATH}/datasquiz/.env"
+    echo "  - ${PROJECT_ROOT}/.env"
+    exit 1
 fi
 
-[[ -z "${ENV_FILE:-}" || ! -f "${ENV_FILE}" ]] && \
-  fail "Cannot find .env file. Run script 1 first."
-
-ok "Using .env: ${ENV_FILE}"
-
-# ── Load environment — must happen before functions are defined ─────────────
-set -a
-# shellcheck source=/dev/null
-source "${ENV_FILE}"
-set +a
-
-# Set defaults for all service flags to prevent unbound variable errors
-ENABLE_OLLAMA="${ENABLE_OLLAMA:-false}"
-ENABLE_OPENWEBUI="${ENABLE_OPENWEBUI:-false}"
-ENABLE_ANYTHINGLLM="${ENABLE_ANYTHINGLLM:-false}"
-ENABLE_DIFY="${ENABLE_DIFY:-false}"
-ENABLE_N8N="${ENABLE_N8N:-false}"
-ENABLE_FLOWISE="${ENABLE_FLOWISE:-false}"
-ENABLE_LITELLM="${ENABLE_LITELLM:-false}"
-ENABLE_QDRANT="${ENABLE_QDRANT:-false}"
-ENABLE_GRAFANA="${ENABLE_GRAFANA:-false}"
-ENABLE_PROMETHEUS="${ENABLE_PROMETHEUS:-false}"
-ENABLE_AUTHENTIK="${ENABLE_AUTHENTIK:-false}"
-ENABLE_SIGNAL="${ENABLE_SIGNAL:-false}"
-ENABLE_TAILSCALE="${ENABLE_TAILSCALE:-false}"
-ENABLE_OPENCLAW="${ENABLE_OPENCLAW:-false}"
-ENABLE_RCLONE="${ENABLE_RCLONE:-false}"
-ENABLE_MINIO="${ENABLE_MINIO:-false}"
-
-# Set project name based on tenant ID
-COMPOSE_PROJECT_NAME="${PROJECT_PREFIX}${TENANT_ID:-${PROJECT_PREFIX}default}"
-DOCKER_NETWORK="ai_net"
-
-# Set tenant UID/GID for non-root containers
-# Preserve original user when running with sudo
-TENANT_UID="${SUDO_UID:-$(id -u)}"
-TENANT_GID="${SUDO_GID:-$(id -g)}"
-
-# Set default database credentials
-POSTGRES_USER="${POSTGRES_USER:-platform}"
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
-POSTGRES_DB="${POSTGRES_DB:-platform}"
-REDIS_PASSWORD="${REDIS_PASSWORD:-}"
-MINIO_ROOT_USER="${MINIO_ROOT_USER:-minioadmin}"
-MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-}"
-LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-}"
-LITELLM_SALT_KEY="${LITELLM_SALT_KEY:-}"
-ANYTHINGLLM_API_KEY="${ANYTHINGLLM_API_KEY:-}"
-ANYTHINGLLM_JWT_SECRET="${ANYTHINGLLM_JWT_SECRET:-}"
-QDRANT_API_KEY="${QDRANT_API_KEY:-}"
-DIFY_SECRET_KEY="${DIFY_SECRET_KEY:-}"
-DIFY_INNER_API_KEY="${DIFY_INNER_API_KEY:-}"
-
-# ── Critical Validations ───────────────────────────────────────────────
-if [ "${DOMAIN}" = "localhost" ] || [ -z "${DOMAIN}" ]; then
-    fail "DOMAIN is '${DOMAIN}'. Set DOMAIN_NAME in .env and re-run script 1 first."
+# Source environment variables
+if [[ -f "$ENV_FILE" ]]; then
+    echo "[OK]    Using .env: $ENV_FILE"
+    # shellcheck source=/dev/null
+    source "$ENV_FILE"
+else
+    echo "❌ ERROR: .env file not found: $ENV_FILE"
+    exit 1
 fi
 
-log "Domain: ${DOMAIN}"
+# Set derived variables
+COMPOSE_PROJECT_NAME="${PROJECT_PREFIX}${TENANT_ID}"
+DOCKER_NETWORK="${COMPOSE_PROJECT_NAME}-net"
+DATA_ROOT="${TENANT_DIR:-${DATA_BASE_PATH}/${TENANT_ID}}"
+COMPOSE_FILE="${DATA_ROOT}/docker-compose.yml"
 
-check_tailscale_auth() {
-    TAILSCALE_AUTH_KEY="${TAILSCALE_AUTH_KEY:-}"
-    if [ -z "${TAILSCALE_AUTH_KEY}" ]; then
-        warn "TAILSCALE_AUTH_KEY not set in .env"
-        warn "Tailscale will start but NOT authenticate"
-        warn "Get a key: https://login.tailscale.com/admin/settings/keys"
-        warn "Add to .env: TAILSCALE_AUTH_KEY=tskey-auth-xxxxx"
-        warn "Then re-run: sudo bash scripts/2-deploy-services.sh"
-    else
-        log "Tailscale auth key found — will auto-authenticate"
-    fi
-}
-check_tailscale_auth
-
-# ── Structured Logging Setup ───────────────────────────────────────
-LOG_DIR="${DATA_ROOT}/logs"
-mkdir -p "${LOG_DIR}"
-# Ensure log directory is owned by tenant, not root
-chown -R "${TENANT_UID}:${TENANT_GID}" "${LOG_DIR}"
-LOG_FILE="${LOG_DIR}/script-2-$(date +%Y%m%d-%H%M%S).log"
-exec > >(tee -a "${LOG_FILE}") 2>&1
-
-# ── Teardown Block (replaces need to run script 0 + 1 on reruns) ─────
-teardown_existing() {
-    log "Tearing down existing ${COMPOSE_PROJECT_NAME} deployment..."
-    
-    local compose_file="${DATA_ROOT}/docker-compose.yml"
-
-    # If prior compose file exists, use it to bring down cleanly
-    if [ -f "${compose_file}" ]; then
-        docker compose \
-            --project-name "${COMPOSE_PROJECT_NAME}" \
-            -f "${compose_file}" \
-            down --remove-orphans --timeout 30 2>/dev/null || true
-    fi
-
-    # Belt-and-suspenders: force-remove any lingering containers
-    docker ps -aq --filter "name=${COMPOSE_PROJECT_NAME}" | \
-        xargs -r docker rm -f 2>/dev/null || true
-
-    # NOW safe to remove network
-    docker network ls --filter "name=${COMPOSE_PROJECT_NAME}" -q | \
-        xargs -r docker network rm 2>/dev/null || true
-
-    # Prune dangling networks
-    docker network prune -f 2>/dev/null || true
-
-    log "Teardown complete"
+# Logging function
+log() {
+    local level="$1"
+    shift
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $*"
 }
 
-# ── Pre-flight Checks ───────────────────────────────────────────────
-preflight_checks() {
-    log "INFO" "Running pre-flight checks..."
+# ─────────────────────────────────────────────────────────────
+# PHASE 1: VOLUME OWNERSHIP & DIRECTORY PRE-CREATION
+# ─────────────────────────────────────────────────────────────
 
-    # Check ports 80 and 443 are not already bound
-    for port in 80 443; do
-        if ss -tlnp 2>/dev/null | grep -q ":${port} "; then
-            log "ERROR" "Port ${port} already in use — Caddy cannot start"
-            log "ERROR" "Run: sudo ss -tlnp | grep :${port} to identify process"
-            exit 1
-        fi
-    done
-
-    # Check DNS resolves to this machine (warn only, not fail)
-    local public_ip
-    public_ip=$(curl -sf --max-time 5 https://api.ipify.org || \
-                curl -sf --max-time 5 http://checkip.amazonaws.com || \
-                echo "unknown")
-
-    if [ "${public_ip}" != "unknown" ]; then
-        log "INFO" "Public IP: ${public_ip}"
-        log "WARN" "Ensure DNS A records point to ${public_ip} before Caddy starts"
-        log "WARN" "Ensure EC2 security group allows inbound port 80 and 443"
-    fi
-
-    # Check Docker daemon is running
-    if ! docker info &>/dev/null; then
-        log "ERROR" "Docker daemon not running"
-        exit 1
-    fi
-
-    # Check EBS mount - look for /mnt/data (mounted EBS) or /mnt (legacy)
-    if ! mountpoint -q /mnt/data && ! mountpoint -q /mnt; then
-        log "ERROR" "No EBS volume mounted at /mnt/data or /mnt — EBS not attached"
-        log "INFO" "Available block devices:"
-        sudo lsblk -d -o NAME,SIZE,TYPE,MOUNTPOINT | grep -E "^nvme|^xvd|^sd" || true
-        exit 1
-    fi
-    
-    if mountpoint -q /mnt/data; then
-        log "SUCCESS" "EBS volume mounted at /mnt/data"
-    elif mountpoint -q /mnt; then
-        log "SUCCESS" "EBS volume mounted at /mnt"
-    fi
-
-    log "SUCCESS" "Pre-flight checks passed"
-}
-
-# WRITE STUB CADDYFILE (required before Caddy container starts)
-# =============================================================================
-write_stub_caddyfile() {
-    [[ "${PROXY_TYPE:-none}" != "caddy" ]] && return
-    
-    local caddyfile="${DATA_ROOT}/caddy/Caddyfile"
-    
-    # Only write stub if a real Caddyfile doesn't already exist
-    if [[ -f "${caddyfile}" ]]; then
-        log "Caddyfile already exists — skipping stub write"
-        return
-    fi
-    
-    log "Writing stub Caddyfile (will be replaced by script 3)…"
-    cat > "${caddyfile}" << EOF
-# Stub Caddyfile — replaced by 3-configure-services.sh
-# Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-{
-    email ${ACME_EMAIL:-admin@${DOMAIN}}
-}
-
-# Temporary: serve a plain response on all hosts until configured
-:80 {
-    respond "AI Platform starting — run script 3 to complete configuration" 200
-}
-EOF
-    log "Stub Caddyfile written to ${caddyfile}"
-}
-
-# ── Directory Setup ───────────────────────────────────────────────
 create_directories() {
+    log "INFO" "Creating tenant directories with proper ownership..."
+    
     local dirs=(
         "${DATA_ROOT}/compose"
         "${DATA_ROOT}/caddy"
@@ -235,336 +89,315 @@ create_directories() {
         "${DATA_ROOT}/tailscale"
         "${DATA_ROOT}/rclone/config"
         "${DATA_ROOT}/gdrive"
-        "${DATA_ROOT}/anythingllm"
         "${DATA_ROOT}/dify/api"
         "${DATA_ROOT}/dify/web"
         "${DATA_ROOT}/dify/sandbox"
     )
 
+    # Create all directories
     for dir in "${dirs[@]}"; do
-        mkdir -p "${dir}"
+        if [[ ! -d "$dir" ]]; then
+            mkdir -p "$dir"
+            log "INFO" "Created directory: $dir"
+        fi
     done
-    
-    # CRITICAL: Fix Postgres directory ownership for container user (postgres:70:70)
-    # Postgres container runs as postgres user (UID:70, GID:70), not tenant user
-    if [ -d "${DATA_ROOT}/postgres" ]; then
-        # Set ownership to postgres user for container compatibility
-        chown -R 70:70 "${DATA_ROOT}/postgres"
-        log "INFO" "Postgres directory ownership set to postgres user (70:70)"
-    fi
 
-    log "SUCCESS" "Directories created"
+    # CRITICAL: Set tenant ownership for ALL directories before Docker starts
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"
+    log "SUCCESS" "All directories created with tenant ownership (${TENANT_UID}:${TENANT_GID})"
+    
+    # Special handling for PostgreSQL data directory (must be owned by postgres user 70:70)
+    if [[ -d "${DATA_ROOT}/postgres" ]]; then
+        chown -R 70:70 "${DATA_ROOT}/postgres"
+        log "INFO" "PostgreSQL directory ownership set to postgres user (70:70)"
+    fi
+    
+    log "SUCCESS" "Directory setup complete"
 }
 
-# ── Compose Generator (the key function) ────────────────────────
-write_compose_header() {
-    log "Writing docker-compose.yml header…"
-    cat > "${compose_file}" << EOF
-# =============================================================================
-# AI Platform — Generated docker-compose.yml
-# Tenant : ${TENANT_ID}
-# Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-# DO NOT EDIT — regenerated by 2-deploy-services.sh
-# =============================================================================
+# ─────────────────────────────────────────────────────────────
+# PHASE 2: CONFIGURATION GENERATION
+# ─────────────────────────────────────────────────────────────
 
-x-logging: &default-logging
-  driver: "json-file"
-  options:
-    max-size: "10m"
-    max-file: "3"
+generate_postgres_init() {
+    local init_dir="${DATA_ROOT}/postgres/init"
+    
+    cat > "${init_dir}/01-create-databases.sql" << 'EOF'
+-- Create databases for services
+CREATE DATABASE n8n;
+CREATE DATABASE grafana;
+CREATE DATABASE anythingllm;
+CREATE DATABASE dify;
 
-x-restart: &default-restart
-  restart: unless-stopped
+-- Create users with proper permissions
+CREATE USER n8n_user WITH PASSWORD 'n8n_password';
+CREATE USER grafana_user WITH PASSWORD 'grafana_password';
+CREATE USER anythingllm_user WITH PASSWORD 'anythingllm_password';
+CREATE USER dify_user WITH PASSWORD 'dify_password';
 
-networks:
-  ai_net:
-    name: ${COMPOSE_PROJECT_NAME}-net
-    driver: bridge
-    labels:
-      com.ai-platform: "true"
-      com.ai-platform.tenant: "${TENANT_ID}"
+-- Grant privileges
+GRANT ALL PRIVILEGES ON DATABASE n8n TO n8n_user;
+GRANT ALL PRIVILEGES ON DATABASE grafana TO grafana_user;
+GRANT ALL PRIVILEGES ON DATABASE anythingllm TO anythingllm_user;
+GRANT ALL PRIVILEGES ON DATABASE dify TO dify_user;
+EOF
+
+    log "SUCCESS" "PostgreSQL init scripts created"
+}
+
+generate_prometheus_config() {
+    local prometheus_dir="${DATA_ROOT}/prometheus"
+    
+    cat > "${prometheus_dir}/prometheus.yml" << EOF
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "rules/*.yml"
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'docker-containers'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 30s
+
+  - job_name: 'caddy'
+    static_configs:
+      - targets: ['caddy:2019']
+    metrics_path: /metrics
+
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+
+  - job_name: 'ollama'
+    static_configs:
+      - targets: ['ollama:11434']
+    metrics_path: /metrics
+    scrape_interval: 30s
+
+  - job_name: 'qdrant'
+    static_configs:
+      - targets: ['qdrant:6333']
+    metrics_path: /metrics
+    scrape_interval: 30s
+
+  - job_name: 'litellm'
+    static_configs:
+      - targets: ['litellm:4000']
+    metrics_path: /metrics
+    scrape_interval: 30s
+
+  - job_name: 'n8n'
+    static_configs:
+      - targets: ['n8n:5678']
+    metrics_path: /healthz
+    scrape_interval: 30s
+
+  - job_name: 'openwebui'
+    static_configs:
+      - targets: ['openwebui:8080']
+    metrics_path: /metrics
+    scrape_interval: 30s
+
+  - job_name: 'anythingllm'
+    static_configs:
+      - targets: ['anythingllm:3001']
+    metrics_path: /api/health
+    scrape_interval: 30s
+
+  - job_name: 'flowise'
+    static_configs:
+      - targets: ['flowise:3000']
+    metrics_path: /api/v1/health
+    scrape_interval: 30s
+
+  - job_name: 'grafana'
+    static_configs:
+      - targets: ['grafana:3002']
+    metrics_path: /api/health
+    scrape_interval: 30s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+EOF
+
+    log "SUCCESS" "Prometheus config generated at ${prometheus_dir}/prometheus.yml"
+}
+
+generate_litellm_config() {
+    local litellm_dir="${DATA_ROOT}/litellm"
+    
+    cat > "${litellm_dir}/config.yaml" << EOF
+model_list:
+  - model_name: ollama/llama3.2:1b
+    litellm_params:
+      model: ollama/llama3.2:1b
+      api_base: http://ollama:11434
+  - model_name: ollama/qwen2.5:7b
+    litellm_params:
+      model: ollama/qwen2.5:7b
+      api_base: http://ollama:11434
+  - model_name: ollama/llama3.1:8b
+    litellm_params:
+      model: ollama/llama3.1:8b
+      api_base: http://ollama:11434
+
+general_settings:
+  master_key: "${LITELLM_MASTER_KEY}"
+  database_url: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_INTERNAL_PORT}/litellm"
+  redis_url: "redis://redis:${REDIS_INTERNAL_PORT}"
+
+router_settings:
+  routing_strategy: "${LITELLM_ROUTING_STRATEGY}"
+  model_group_alias:
+    "gpt-3.5-turbo":
+      - "ollama/llama3.2:1b"
+      - "ollama/qwen2.5:7b"
+    "gpt-4":
+      - "ollama/llama3.1:8b"
+      - "ollama/qwen2.5:7b"
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  success_callback: ["langfuse"]
+  failure_callback: ["langfuse"]
+
+security_settings:
+  require_api_key: true
+  api_key_cache_redis:
+    redis_url: "redis://redis:${REDIS_INTERNAL_PORT}"
+EOF
+
+    log "SUCCESS" "LiteLLM config with routing strategy generated at ${litellm_dir}/config.yaml"
+}
+
+# ─────────────────────────────────────────────────────────────
+# PHASE 3: DOCKER COMPOSE GENERATION (NO NAMED VOLUMES)
+# ─────────────────────────────────────────────────────────────
+
+generate_compose() {
+    log "INFO" "Generating docker-compose.yml → ${COMPOSE_FILE}"
+    
+    # Create compose file with header
+    cat > "${COMPOSE_FILE}" << EOF
+version: '3.8'
 
 services:
 EOF
-    log "Compose header written"
-}
 
-generate_compose() {
-    local compose_file="${DATA_ROOT}/docker-compose.yml"
-    
-    log "Generating docker-compose.yml → ${compose_file}"
-    
-    # Write stub Caddyfile first (required before Caddy container starts)
-    write_stub_caddyfile
-    
-    # ── Networks (must be before services) ─────────────────────────────────
-    write_networks
-    
-    # ── Header ─────────────────────────────────────────
-    write_compose_header
-    
-    # ── Core Services (always deployed) ────────────────────────
+    # Add core services
     append_postgres
     append_redis
+    append_ollama
+    append_qdrant
+    append_prometheus
     append_caddy
 
-    # ── Vector Database ─────────────────────────────────────────
-    case "${VECTOR_DB}" in
-        qdrant) append_qdrant ;;
-        chroma) append_chroma ;;
-        weaviate) append_weaviate ;;
-    esac
+    # Add optional services based on configuration
+    [[ "${ENABLE_OPENWEBUI}" = "true" ]] && append_openwebui
+    [[ "${ENABLE_ANYTHINGLLM}" = "true" ]] && append_anythingllm
+    [[ "${ENABLE_N8N}" = "true" ]] && append_n8n
+    [[ "${ENABLE_FLOWISE}" = "true" ]] && append_flowise
+    [[ "${ENABLE_LITELLM}" = "true" ]] && append_litellm
+    [[ "${ENABLE_GRAFANA}" = "true" ]] && append_grafana
+    [[ "${ENABLE_AUTHENTIK}" = "true" ]] && append_authentik
+    [[ "${ENABLE_MINIO}" = "true" ]] && append_minio
+    [[ "${ENABLE_SIGNAL}" = "true" ]] && append_signal
+    [[ "${ENABLE_TAILSCALE}" = "true" ]] && append_tailscale
+    [[ "${ENABLE_OPENCLAW}" = "true" ]] && append_openclaw
+    [[ "${ENABLE_RCLONE}" = "true" ]] && append_rclone
 
-    # ── Optional Services ───────────────────────────────────────
-    [ "${ENABLE_MINIO}" = "true" ] && append_minio
-    [ "${ENABLE_OLLAMA}" = "true" ] && append_ollama
-    [ "${ENABLE_LITELLM}" = "true" ] && append_litellm
-    [ "${ENABLE_OPENWEBUI}" = "true" ] && append_openwebui
-    [ "${ENABLE_ANYTHINGLLM}" = "true" ] && append_anythingllm
-    [ "${ENABLE_DIFY}" = "true" ] && { append_dify_api; append_dify_web; append_dify_sandbox; }
-    [ "${ENABLE_N8N}" = "true" ] && append_n8n
-    [ "${ENABLE_FLOWISE}" = "true" ] && append_flowise
-    [ "${ENABLE_OPENCLAW}" = "true" ] && append_openclaw
-    [ "${ENABLE_GRAFANA}" = "true" ] && { append_prometheus; append_grafana; }
-    [ "${ENABLE_SIGNAL}" = "true" ] && append_signal
-    [ "${ENABLE_TAILSCALE}" = "true" ] && append_tailscale
-    [ "${ENABLE_RCLONE}" = "true" ] && append_rclone
+    # Add network configuration
+    cat >> "${COMPOSE_FILE}" << EOF
 
-    # ── Volumes (must be after all services) ────────────────
-    cat >> "${compose_file}" << VOLUMES_EOF
+networks:
+  ${DOCKER_NETWORK}:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+EOF
 
-volumes:
-  ${COMPOSE_PROJECT_NAME}_postgres_data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${DATA_ROOT}/postgres
-  ${COMPOSE_PROJECT_NAME}_redis_data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${DATA_ROOT}/redis
-  ${COMPOSE_PROJECT_NAME}_caddy_data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${DATA_ROOT}/caddy/data
-  ${COMPOSE_PROJECT_NAME}_qdrant_data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${DATA_ROOT}/qdrant
-VOLUMES_EOF
-
-    [ "${ENABLE_MINIO}" = "true" ] && \
-        echo "  ${COMPOSE_PROJECT_NAME}_minio_data:" >> "${compose_file}"
-    [ "${ENABLE_OLLAMA}" = "true" ] && \
-        echo "  ${COMPOSE_PROJECT_NAME}_ollama_data:" >> "${compose_file}"
-    [ "${ENABLE_OPENWEBUI}" = "true" ] && \
-        echo "  ${COMPOSE_PROJECT_NAME}_openwebui_data:" >> "${compose_file}"
-    [ "${ENABLE_ANYTHINGLLM}" = "true" ] && \
-        echo "  ${COMPOSE_PROJECT_NAME}_anythingllm_data:" >> "${compose_file}"
-    [ "${ENABLE_N8N}" = "true" ] && \
-        echo "  ${COMPOSE_PROJECT_NAME}_n8n_data:" >> "${compose_file}"
-    [ "${ENABLE_FLOWISE}" = "true" ] && \
-        echo "  ${COMPOSE_PROJECT_NAME}_flowise_data:" >> "${compose_file}"
-    [ "${ENABLE_DIFY}" = "true" ] && \
-        echo "  ${COMPOSE_PROJECT_NAME}_dify_storage:" >> "${compose_file}"
-    [ "${ENABLE_GRAFANA}" = "true" ] && \
-        echo "  ${COMPOSE_PROJECT_NAME}_grafana_data:" >> "${compose_file}"
-    [ "${ENABLE_PROMETHEUS}" = "true" ] && \
-        echo "  ${COMPOSE_PROJECT_NAME}_prometheus_data:" >> "${compose_file}"
-    [ "${ENABLE_SIGNAL}" = "true" ] && \
-        echo "  ${COMPOSE_PROJECT_NAME}_signal_data:" >> "${compose_file}"
-    [ "${ENABLE_TAILSCALE}" = "true" ] && \
-        echo "  ${COMPOSE_PROJECT_NAME}_tailscale_data:" >> "${compose_file}"
-    [ "${ENABLE_OPENCLAW}" = "true" ] && \
-        echo "  ${COMPOSE_PROJECT_NAME}_openclaw_data:" >> "${compose_file}"
-
-    # Validate generated file
-    docker compose -f "${compose_file}" config --quiet 2>/dev/null && {
-        log "docker-compose.yml validated"
-    } || {
-        log "ERROR: Generated docker-compose.yml failed validation"
-        log "ERROR: Run: docker compose -f ${compose_file} config"
-        exit 1
-    }
-}
-
-# Helper to append to compose file
-compose_append() { 
-    cat >> "${DATA_ROOT}/docker-compose.yml"; 
-    # Ensure file is owned by tenant, not root
-    chown "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/docker-compose.yml"
+    # NOTE: NO NAMED VOLUMES DECLARATION - ALL HOST BIND MOUNTS ONLY
+    log "SUCCESS" "Docker Compose generated with host bind mounts only"
 }
 
 # ─────────────────────────────────────────────────────────────
-# POSTGRES
+# SERVICE DEFINITIONS (PHASE 3: NON-ROOT EXECUTION)
 # ─────────────────────────────────────────────────────────────
+
 append_postgres() {
-    compose_append << EOF
+    cat >> "${COMPOSE_FILE}" << EOF
 
   postgres:
     image: postgres:15-alpine
     container_name: ${COMPOSE_PROJECT_NAME}-postgres
     restart: unless-stopped
+    # NOTE: PostgreSQL runs as default postgres user (UID 70) - no tenant user mapping
     environment:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
     volumes:
-      - ${COMPOSE_PROJECT_NAME}_postgres_data:/var/lib/postgresql/data
-      - ${DATA_ROOT}/postgres/init:/docker-entrypoint-initdb.d:ro
+      - ${DATA_ROOT}/postgres:/var/lib/postgresql/data
+      - ${DATA_ROOT}/postgres/init:/docker-entrypoint-initdb.d
     networks:
       - ${DOCKER_NETWORK}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 5
       start_period: 30s
 EOF
 }
 
-# ─────────────────────────────────────────────────────────────
-# REDIS
-# ─────────────────────────────────────────────────────────────
 append_redis() {
-    compose_append << EOF
+    cat >> "${COMPOSE_FILE}" << EOF
 
   redis:
     image: redis:7-alpine
     container_name: ${COMPOSE_PROJECT_NAME}-redis
     restart: unless-stopped
-    command: redis-server --requirepass ${REDIS_PASSWORD}
+    # NOTE: Redis runs as default redis user - no tenant user mapping
+    command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes
     volumes:
-      - ${COMPOSE_PROJECT_NAME}_redis_data:/data
+      - ${DATA_ROOT}/redis:/data
     networks:
       - ${DOCKER_NETWORK}
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
       interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
+      timeout: 3s
+      retries: 5
 EOF
 }
 
-# ─────────────────────────────────────────────────────────────
-# CADDY
-# ─────────────────────────────────────────────────────────────
-append_caddy() {
-    # Write base caddy service
-    compose_append << EOF
-
-  caddy:
-    image: caddy:2-alpine
-    container_name: ${COMPOSE_PROJECT_NAME}-caddy
-    restart: unless-stopped
-    ports:
-      - "${CADDY_HTTP_PORT}:${CADDY_INTERNAL_HTTP_PORT}"
-      - "${CADDY_HTTPS_PORT}:${CADDY_INTERNAL_HTTPS_PORT}"
-      - "${CADDY_HTTPS_PORT}:443/udp"
-      - "2019:2019"
-    volumes:
-      - ${DATA_ROOT}/caddy/config/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ${DATA_ROOT}/caddy/data:/data
-      - ${COMPOSE_PROJECT_NAME}_caddy_data:/config
-    networks:
-      - ${DOCKER_NETWORK}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-EOF
-
-    # Append optional service dependencies — each as a proper YAML block
-    [ "${ENABLE_OPENWEBUI}" = "true" ] && compose_append << EOF
-      openwebui:
-        condition: service_healthy
-EOF
-    [ "${ENABLE_ANYTHINGLLM}" = "true" ] && compose_append << EOF
-      anythingllm:
-        condition: service_healthy
-EOF
-    [ "${ENABLE_N8N}" = "true" ] && compose_append << EOF
-      n8n:
-        condition: service_healthy
-EOF
-    [ "${ENABLE_DIFY}" = "true" ] && compose_append << EOF
-      dify-api:
-        condition: service_healthy
-EOF
-    [ "${ENABLE_FLOWISE}" = "true" ] && compose_append << EOF
-      flowise:
-        condition: service_healthy
-EOF
-    [ "${ENABLE_LITELLM}" = "true" ] && compose_append << EOF
-      litellm:
-        condition: service_healthy
-EOF
-    [ "${ENABLE_GRAFANA}" = "true" ] && compose_append << EOF
-      grafana:
-        condition: service_healthy
-EOF
-
-    # Append healthcheck block
-    compose_append << EOF
-    healthcheck:
-      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-EOF
-}
-
-# ─────────────────────────────────────────────────────────────
-# QDRANT
-# ─────────────────────────────────────────────────────────────
-append_qdrant() {
-    compose_append << EOF
-
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-qdrant
-    restart: unless-stopped
-    user: "${TENANT_UID}:${TENANT_GID}"
-    ports:
-      - "${QDRANT_PORT}:${QDRANT_INTERNAL_PORT}"
-      - "${QDRANT_INTERNAL_HTTP_PORT}:${QDRANT_INTERNAL_HTTP_PORT}"
-    volumes:
-      - ${COMPOSE_PROJECT_NAME}_qdrant_data:/qdrant/storage
-    networks:
-      - ${DOCKER_NETWORK}
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:${QDRANT_INTERNAL_PORT}/"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-EOF
-}
-
-# ─────────────────────────────────────────────────────────────
-# OLLAMA — GPU-aware
-# ─────────────────────────────────────────────────────────────
 append_ollama() {
-    # Base service definition
-    compose_append << EOF
+    cat >> "${COMPOSE_FILE}" << EOF
 
   ollama:
     image: ollama/ollama:latest
     container_name: ${COMPOSE_PROJECT_NAME}-ollama
     restart: unless-stopped
     user: "${TENANT_UID}:${TENANT_GID}"
-    ports:
-      - "${OLLAMA_PORT}:${OLLAMA_INTERNAL_PORT}"
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_PORT=${OLLAMA_INTERNAL_PORT}
     volumes:
       - ${DATA_ROOT}/ollama:/root/.ollama
     networks:
@@ -572,405 +405,125 @@ append_ollama() {
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${OLLAMA_INTERNAL_PORT}/api/tags"]
       interval: 30s
-      timeout: 20s
-      retries: 5
+      timeout: 10s
+      retries: 3
       start_period: 60s
 EOF
 
-    # Append GPU config if detected
-    if [ "${GPU_TYPE}" = "nvidia" ]; then
-        compose_append << EOF
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-        labels:
-    com.ai-platform: "true"
-EOF/a
-i
-
-  node-exporter:
-    image: prom/node-exporter:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-node-exporter
-    restart: unless-stopped
-    networks:
-      - ${DOCKER_NETWORK}
-    pid: host
-    volumes:
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-      - /:/rootfs:ro
-    command:
-      - "--path.procfs=/host/proc"
-      - "--path.sysfs=/host/sys"
-      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($|/)"
-    labels:
-      com.ai-platform: "true"
-EOF
-      com.ai-platform: "true"
-EOF
-  node-exporter:
-    image: prom/node-exporter:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-node-exporter
-    restart: unless-stopped
-    networks:
-      - ${DOCKER_NETWORK}
-    pid: host
-    volumes:
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-      - /:/rootfs:ro
-    command:
-      - '--path.procfs=/host/proc'
-      - '--path.sysfs=/host/sys'
-      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
-    labels:
-    com.ai-platform: "true"
-EOF/a
-i
-
-  node-exporter:
-    image: prom/node-exporter:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-node-exporter
-    restart: unless-stopped
-    networks:
-      - ${DOCKER_NETWORK}
-    pid: host
-    volumes:
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-      - /:/rootfs:ro
-    command:
-      - "--path.procfs=/host/proc"
-      - "--path.sysfs=/host/sys"
-      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($|/)"
-    labels:
-      com.ai-platform: "true"
-EOF
-      com.ai-platform: "true"
-EOF
-    elif [ "${GPU_TYPE}" = "amd" ]; then
-        compose_append << EOF
-    devices:
-      - ${GPU_DEVICE}:/dev/dri/renderD128
-    group_add:
-      - video
+    # Add port mapping only if Tailscale IP is available
+    if [[ -n "${TAILSCALE_IP:-}" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
+    ports:
+      - "${TAILSCALE_IP}:${OLLAMA_PORT}:${OLLAMA_INTERNAL_PORT}"
 EOF
     fi
 }
 
-# ─────────────────────────────────────────────────────────────
-# ── PostgreSQL Init Script Generator ────────────────────────────────
-generate_postgres_init() {
-    local init_dir="${DATA_ROOT}/postgres/init"
-    mkdir -p "${init_dir}"
+append_qdrant() {
+    cat >> "${COMPOSE_FILE}" << EOF
 
-    # Write using PostgreSQL-compatible syntax with existence checks
-    cat > "${init_dir}/01-create-databases.sql" << 'EOF'
-SELECT 'CREATE DATABASE litellm' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'litellm')\gexec
-SELECT 'CREATE DATABASE n8n' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'n8n')\gexec
-SELECT 'CREATE DATABASE dify' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'dify')\gexec
-SELECT 'CREATE DATABASE openwebui' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'openwebui')\gexec
-SELECT 'CREATE DATABASE flowise' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'flowise')\gexec
-SELECT 'CREATE DATABASE authentik' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'authentik')\gexec
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-qdrant
+    restart: unless-stopped
+    user: "${TENANT_UID}:${TENANT_GID}"
+    environment:
+      - QDRANT__SERVICE__HTTP_PORT=${QDRANT_INTERNAL_HTTP_PORT}
+      - QDRANT__SERVICE__GRPC_PORT=${QDRANT_INTERNAL_PORT}
+    volumes:
+      - ${DATA_ROOT}/qdrant:/qdrant/storage
+    networks:
+      - ${DOCKER_NETWORK}
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:${QDRANT_INTERNAL_HTTP_PORT}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 EOF
-
-    chmod 644 "${init_dir}/01-create-databases.sql"
-    chown -R "${TENANT_UID}:${TENANT_GID}" "${init_dir}"
-    log "SUCCESS" "Postgres init scripts created"
-    log "INFO" "NOTE: Init scripts only run on first Postgres start with empty data dir"
-    log "INFO" "If re-deploying with existing data, databases already exist — this is fine"
 }
 
-# ─────────────────────────────────────────────────────────────
-# LITELM CONFIG GENERATOR
-# ─────────────────────────────────────────────────────────────
-generate_litellm_config() {
-    [ "${ENABLE_LITELLM}" = "true" ] || return 0
-    local litellm_dir="${DATA_ROOT}/litellm"
-    mkdir -p "${litellm_dir}"
+append_prometheus() {
+    cat >> "${COMPOSE_FILE}" << EOF
 
-    # Use routing strategy from script 1 configuration
-    case "${LITELLM_ROUTING_STRATEGY}" in
-        "speed-optimized")
-            cat > "${litellm_dir}/config.yaml" << EOF
-general_settings:
-  master_key: ${LITELLM_MASTER_KEY}
-  database_url: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_INTERNAL_PORT}/litellm
-
-litellm_settings:
-  drop_params: true
-  cache: true
-  cache_params:
-    type: redis
-    host: redis
-    port: ${REDIS_INTERNAL_PORT}
-    password: ${REDIS_PASSWORD}
-  # Speed-optimized routing strategy
-  set_verbose: "debug"
-  success_callback: ["langfuse"]
-
-# Speed-optimized router configuration
-router:
-  # Route based on speed priority (Groq > Gemini > Local > OpenAI)
-  - model_group: "ultra-fast"
-    models: ["groq-llama-70b", "gemini-2.0-flash", "${OLLAMA_DEFAULT_MODEL}"]
-    routing_strategy: "latency-based-router"
-    default_model: "groq-llama-70b"
-    # Route all queries to fastest available model
-    conditions:
-      - query_length: "< 5000"
-        priority: 1
-      - requires_speed: true
-        priority: 2
-  
-  - model_group: "fast-capable"
-    models: ["gpt-4o", "gemini-2.0-flash", "${OLLAMA_DEFAULT_MODEL}"]
-    routing_strategy: "latency-based-router"
-    default_model: "gemini-2.0-flash"
-    # Balance speed with capability
-    conditions:
-      - query_length: "5000-10000"
-        priority: 1
-      - requires_reasoning: true
-        priority: 2
-
-model_list:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-prometheus
+    restart: unless-stopped
+    user: "${TENANT_UID}:${TENANT_GID}"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ${DATA_ROOT}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ${DATA_ROOT}/prometheus:/prometheus
+    networks:
+      - ${DOCKER_NETWORK}
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 EOF
-            ;;
-        "capability-optimized")
-            cat > "${litellm_dir}/config.yaml" << EOF
-general_settings:
-  master_key: ${LITELLM_MASTER_KEY}
-  database_url: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_INTERNAL_PORT}/litellm
+}
 
-litellm_settings:
-  drop_params: true
-  cache: true
-  cache_params:
-    type: redis
-    host: redis
-    port: ${REDIS_INTERNAL_PORT}
-    password: ${REDIS_PASSWORD}
-  # Capability-optimized routing strategy
-  set_verbose: "debug"
-  success_callback: ["langfuse"]
+append_caddy() {
+    cat >> "${COMPOSE_FILE}" << EOF
 
-# Capability-optimized router configuration
-router:
-  # Route based on model capability (GPT-4o > Claude-3 > Gemini > Local)
-  - model_group: "frontier"
-    models: ["gpt-4o", "claude-3-opus", "gemini-2.0-flash"]
-    routing_strategy: "capability-based-router"
-    default_model: "gpt-4o"
-    # Route complex queries to most capable models
-    conditions:
-      - requires_analysis: true
-        priority: 1
-      - code_generation: true
-        priority: 2
-      - complex_reasoning: true
-        priority: 3
-  
-  - model_group: "capable"
-    models: ["gpt-4o", "gemini-2.0-flash", "${OLLAMA_DEFAULT_MODEL}"]
-    routing_strategy: "capability-based-router"
-    default_model: "gpt-4o"
-    # Medium complexity queries
-    conditions:
-      - query_length: "1000-5000"
-        priority: 1
-      - requires_reasoning: true
-        priority: 2
-
-model_list:
+  caddy:
+    image: caddy:2-alpine
+    container_name: ${COMPOSE_PROJECT_NAME}-caddy
+    restart: unless-stopped
+    user: "${TENANT_UID}:${TENANT_GID}"
+    environment:
+      - CADDY_INGRESS_NETWORKS=${DOCKER_NETWORK}
+    volumes:
+      - ${DATA_ROOT}/caddy/config/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${DATA_ROOT}/caddy/data:/data
+      - ${DATA_ROOT}/caddy/logs:/var/log/caddy
+    networks:
+      - ${DOCKER_NETWORK}
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 EOF
-            ;;
-        "balanced"|*)
-            cat > "${litellm_dir}/config.yaml" << EOF
-general_settings:
-  master_key: ${LITELLM_MASTER_KEY}
-  database_url: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_INTERNAL_PORT}/litellm
 
-litellm_settings:
-  drop_params: true
-  cache: true
-  cache_params:
-    type: redis
-    host: redis
-    port: ${REDIS_INTERNAL_PORT}
-    password: ${REDIS_PASSWORD}
-  # Balanced routing strategy for cost/latency optimization
-  set_verbose: "debug"
-  success_callback: ["langfuse"]
-
-# Router configuration for intelligent model selection
-router:
-  # Route based on query complexity and cost
-  - model_group: "fast-cheap"
-    models: ["${OLLAMA_DEFAULT_MODEL}", "gemini-2.0-flash"]
-    routing_strategy: "usage-based-router"
-    default_model: "${OLLAMA_DEFAULT_MODEL}"
-    # Route simple queries to local models first
-    conditions:
-      - query_length: "< 1000"
-        priority: 1
-      - context_length: "< 4000"
-        priority: 2
-  
-  - model_group: "balanced"
-    models: ["gpt-4o", "gemini-2.0-flash", "${OLLAMA_DEFAULT_MODEL}"]
-    routing_strategy: "latency-based-router"
-    default_model: "gpt-4o"
-    # Route medium complexity queries
-    conditions:
-      - query_length: "1000-4000"
-        priority: 1
-      - requires_reasoning: true
-        priority: 2
-  
-  - model_group: "high-capability"
-    models: ["gpt-4o", "claude-3-opus"]
-    routing_strategy: "cost-based-router"
-    default_model: "gpt-4o"
-    # Route complex queries to frontier models
-    conditions:
-      - query_length: "> 4000"
-        priority: 1
-      - requires_analysis: true
-        priority: 2
-      - code_generation: true
-        priority: 3
-
-model_list:
-EOF
-            ;;
-    esac
-
-    # Add local Ollama models (highest priority for cost)
-    if [ "${ENABLE_OLLAMA}" = "true" ]; then
-        cat >> "${litellm_dir}/config.yaml" << EOF
-  - model_name: ${OLLAMA_DEFAULT_MODEL}
-    litellm_params:
-      model: ollama/${OLLAMA_DEFAULT_MODEL}
-      api_base: ${OLLAMA_INTERNAL_URL}
-      input_cost: 0.0
-      output_cost: 0.0
-      # Priority: 1 (highest for cost optimization)
-    model_info:
-      mode: "chat"
-      supports_function_calling: false
-      supports_vision: false
-      max_input_tokens: 4096
-      max_output_tokens: 2048
+    # Add port mappings for reverse proxy
+    if [[ -n "${TAILSCALE_IP:-}" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
+    ports:
+      - "${TAILSCALE_IP}:${CADDY_HTTP_PORT}:${CADDY_INTERNAL_HTTP_PORT}"
+      - "${TAILSCALE_IP}:${CADDY_HTTPS_PORT}:${CADDY_INTERNAL_HTTPS_PORT}"
+      - "${TAILSCALE_IP}:2019:2019"
 EOF
     fi
-
-    # Add OpenAI models (balanced capability/cost)
-    [ -n "${OPENAI_API_KEY:-}" ] && cat >> "${litellm_dir}/config.yaml" << EOF
-  - model_name: gpt-4o
-    litellm_params:
-      model: gpt-4o
-      api_key: ${OPENAI_API_KEY}
-      input_cost: 0.005
-      output_cost: 0.015
-      # Priority: 2 (balanced)
-    model_info:
-      mode: "chat"
-      supports_function_calling: true
-      supports_vision: true
-      max_input_tokens: 128000
-      max_output_tokens: 4096
-EOF
-
-    # Add Google models (fast and capable)
-    [ -n "${GOOGLE_API_KEY:-}" ] && cat >> "${litellm_dir}/config.yaml" << EOF
-  - model_name: gemini-2.0-flash
-    litellm_params:
-      model: gemini/gemini-2.0-flash-exp
-      api_key: ${GOOGLE_API_KEY}
-      input_cost: 0.000075
-      output_cost: 0.00015
-      # Priority: 1 (very fast and cheap)
-    model_info:
-      mode: "chat"
-      supports_function_calling: true
-      supports_vision: true
-      max_input_tokens: 1000000
-      max_output_tokens: 8192
-EOF
-
-    # Add Groq models (highest speed)
-    [ -n "${GROQ_API_KEY:-}" ] && cat >> "${litellm_dir}/config.yaml" << EOF
-  - model_name: groq-llama-70b
-    litellm_params:
-      model: groq/llama-70b-8192
-      api_key: ${GROQ_API_KEY}
-      input_cost: 0.00059
-      output_cost: 0.00079
-      # Priority: 1 (fastest inference)
-    model_info:
-      mode: "chat"
-      supports_function_calling: true
-      supports_vision: false
-      max_input_tokens: 8192
-      max_output_tokens: 8192
-EOF
-
-    # Add OpenRouter models (fallback)
-    [ -n "${OPENROUTER_API_KEY:-}" ] && cat >> "${litellm_dir}/config.yaml" << EOF
-  - model_name: openrouter-mixtral
-    litellm_params:
-      model: openrouter/mistralai/mixtral-8x7b-instruct
-      api_key: ${OPENROUTER_API_KEY}
-      input_cost: 0.00024
-      output_cost: 0.00024
-      # Priority: 3 (fallback)
-    model_info:
-      mode: "chat"
-      supports_function_calling: true
-      supports_vision: false
-      max_input_tokens: 32768
-      max_output_tokens: 32768
-EOF
-
-    chown -R "${TENANT_UID}:${TENANT_GID}" "${litellm_dir}"
-    log "SUCCESS" "LiteLLM config with routing strategy generated at ${litellm_dir}/config.yaml"
 }
 
-# ─────────────────────────────────────────────────────────────
-# LITELLM
-# ─────────────────────────────────────────────────────────────
 append_litellm() {
-    compose_append << EOF
+    cat >> "${COMPOSE_FILE}" << EOF
 
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
     container_name: ${COMPOSE_PROJECT_NAME}-litellm
     restart: unless-stopped
     user: "${TENANT_UID}:${TENANT_GID}"
-    ports:
-      - "${LITELLM_PORT}:${LITELLM_INTERNAL_PORT}"
     environment:
+      - LITELLM_PORT=${LITELLM_INTERNAL_PORT}
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_INTERNAL_PORT}/litellm
+      - REDIS_URL=redis://redis:${REDIS_INTERNAL_PORT}
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
       - LITELLM_SALT_KEY=${LITELLM_SALT_KEY}
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_INTERNAL_PORT}/${POSTGRES_DB}
-      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:${REDIS_INTERNAL_PORT}/0
-      - OLLAMA_BASE_URL=${OLLAMA_INTERNAL_URL}
-      - QDRANT_URL=${VECTOR_DB_URL}
-      - LITELLM_API_KEY=${LITELLM_MASTER_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - GROQ_API_KEY=${GROQ_API_KEY}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - SERPAPI_KEY=${SERPAPI_KEY}
-      - CUSTOM_SEARCH_KEY=${CUSTOM_SEARCH_KEY}
-      - SERPAPI_ENGINE=${SERPAPI_ENGINE}
-      - CUSTOM_SEARCH_URL=${CUSTOM_SEARCH_URL}
     volumes:
       - ${DATA_ROOT}/litellm/config.yaml:/app/config.yaml:ro
+      - ${DATA_ROOT}/litellm/logs:/app/logs
     networks:
       - ${DOCKER_NETWORK}
     depends_on:
@@ -979,135 +532,97 @@ append_litellm() {
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:${LITELLM_INTERNAL_PORT}/health/readiness"]
+      test: ["CMD", "curl", "-f", "http://localhost:${LITELLM_INTERNAL_PORT}/health/v1"]
       interval: 30s
-      timeout: 15s
-      retries: 5
-      start_period: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 EOF
 }
 
-# ─────────────────────────────────────────────────────────────
-# OPENWEBUI
-# ─────────────────────────────────────────────────────────────
 append_openwebui() {
-    local ollama_url=""
-    [ "${ENABLE_OLLAMA}" = "true" ] && ollama_url="${OLLAMA_INTERNAL_URL}"
-    
-    compose_append << EOF
+    cat >> "${COMPOSE_FILE}" << EOF
 
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: ${COMPOSE_PROJECT_NAME}-openwebui
     restart: unless-stopped
     user: "${TENANT_UID}:${TENANT_GID}"
-    ports:
-      - "${OPENWEBUI_PORT}:${OPENWEBUI_INTERNAL_PORT}"
     environment:
-      - OLLAMA_BASE_URL=${ollama_url}
-      - OPENAI_API_BASE_URL=${LITELLM_API_ENDPOINT}
-      - OPENAI_API_KEY=${LITELLM_MASTER_KEY}
-      - WEBUI_SECRET_KEY=${ANYTHINGLLM_JWT_SECRET}
-      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:${REDIS_INTERNAL_PORT}/0
-      # Vector DB connection
-      - VECTOR_DB=${VECTOR_DB}
-      - QDRANT_URI=${VECTOR_DB_URL}
-      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
-      - OLLAMA_BASE_URL=${ollama_url}
-      - ENABLE_SIGNUP=false
-      - DEFAULT_USER_ROLE=user
+      - PORT=${OPENWEBUI_INTERNAL_PORT}
+      - OLLAMA_BASE_URL=http://ollama:${OLLAMA_INTERNAL_PORT}
+      - OPENAI_API_BASE_URL=http://litellm:${LITELLM_INTERNAL_PORT}
+      - WEBUI_NAME=${COMPOSE_PROJECT_NAME}
+      - DEFAULT_MODELS=ollama/llama3.2:1b,ollama/qwen2.5:7b,ollama/llama3.1:8b
     volumes:
       - ${DATA_ROOT}/openwebui:/app/backend/data
     networks:
       - ${DOCKER_NETWORK}
+    depends_on:
+      ollama:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:${OPENWEBUI_INTERNAL_PORT}/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:${OPENWEBUI_INTERNAL_PORT}/health"]
       interval: 30s
       timeout: 10s
-      retries: 35
+      retries: 3
       start_period: 60s
 EOF
 }
 
-# ─────────────────────────────────────────────────────────────
-# ANYTHINGLLM
-# ─────────────────────────────────────────────────────────────
 append_anythingllm() {
-    compose_append << EOF
+    cat >> "${COMPOSE_FILE}" << EOF
 
   anythingllm:
     image: mintplexlabs/anythingllm:latest
     container_name: ${COMPOSE_PROJECT_NAME}-anythingllm
     restart: unless-stopped
     user: "${TENANT_UID}:${TENANT_GID}"
-    ports:
-      - "${ANYTHINGLLM_PORT}:${ANYTHINGLLM_INTERNAL_PORT}"
     environment:
+      - PORT=${ANYTHINGLLM_INTERNAL_PORT}
+      - OPEN_AI_API_KEY=${ANYTHINGLLM_API_KEY}
+      - OPEN_AI_BASE_URL=http://litellm:${LITELLM_INTERNAL_PORT}
       - STORAGE_DIR=/app/server/storage
-      - SERVER_PORT=3001
-      - UID=${TENANT_UID}
-      - GID=${TENANT_GID}
-      - JWT_SECRET=${ANYTHINGLLM_JWT_SECRET}
-      # Vector DB connection
-      - VECTOR_DB=${VECTOR_DB}
-      - QDRANT_ENDPOINT=${VECTOR_DB_URL}
-      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
-      # LLM connection via LiteLLM
-      - LLM_PROVIDER=litellm
-      - LITELLM_BASE_URL=${LITELLM_INTERNAL_URL}
-      - LITELLM_API_KEY=${LITELLM_MASTER_KEY}
-      - LITE_LLM_MODEL_PREF=${OLLAMA_DEFAULT_MODEL}
-      # Auth
-      - AUTH_TOKEN=${ANYTHINGLLM_AUTH_TOKEN}
-      - EMBEDDING_ENGINE=ollama
-      - OLLAMA_BASE_PATH=${OLLAMA_INTERNAL_URL}
-      - EMBEDDING_MODEL_PREF=nomic-embed-text:latest
-      - DISABLE_TELEMETRY=true
+      - VECTOR_DB=qdrant
+      - QDRANT_ENDPOINT=http://qdrant:${QDRANT_INTERNAL_HTTP_PORT}
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
     volumes:
       - ${DATA_ROOT}/anythingllm:/app/server/storage
+      - ${DATA_ROOT}/anythingllm/documents:/app/server/storage/documents
     networks:
       - ${DOCKER_NETWORK}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${ANYTHINGLLM_INTERNAL_PORT}/api/ping"]
+      test: ["CMD", "curl", "-f", "http://localhost:${ANYTHINGLLM_INTERNAL_PORT}/api/health"]
       interval: 30s
       timeout: 10s
-      retries: 5
+      retries: 3
       start_period: 60s
 EOF
 }
 
-# ─────────────────────────────────────────────────────────────
-# N8N
-# ─────────────────────────────────────────────────────────────
 append_n8n() {
-    # Set network-aware configuration
-    local n8n_protocol="https"
-    local n8n_host="n8n.${DOMAIN}"
-    local n8n_webhook_url="https://n8n.${DOMAIN}/"
-    local n8n_editor_url="https://n8n.${DOMAIN}/"
-    
-    if [[ "${PROXY_TYPE}" != "caddy" && "${PROXY_TYPE}" != "nginx" && "${PROXY_TYPE}" != "traefik" ]]; then
-        n8n_protocol="http"
-        n8n_host="localhost"
-        n8n_webhook_url="http://localhost:${N8N_PORT}/"
-        n8n_editor_url="http://localhost:${N8N_PORT}/"
-    fi
-    
-    compose_append << EOF
+    cat >> "${COMPOSE_FILE}" << EOF
 
   n8n:
     image: n8nio/n8n:latest
     container_name: ${COMPOSE_PROJECT_NAME}-n8n
     restart: unless-stopped
     user: "${TENANT_UID}:${TENANT_GID}"
-    ports:
-      - "${N8N_PORT}:${N8N_INTERNAL_PORT}"
     environment:
-      - N8N_HOST=${n8n_host}
+      - N8N_HOST=n8n
       - N8N_PORT=5678
-      - N8N_PROTOCOL=${n8n_protocol}
-      - WEBHOOK_URL=${n8n_webhook_url}
-      - N8N_EDITOR_BASE_URL=${n8n_editor_url}
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://n8n:5678/
+      - N8N_EDITOR_BASE_URL=http://n8n:5678/
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=postgres
       - DB_POSTGRESDB_PORT=${POSTGRES_INTERNAL_PORT}
@@ -1116,16 +631,9 @@ append_n8n() {
       - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
       - QUEUE_BULL_REDIS_HOST=redis
-      - QUEUE_BULL_REDIS_PORT=6379
-      - QUEUE_BULL_REDIS_PASSWORD=${REDIS_PASSWORD}
-      # LLM integration via LiteLLM
-      - N8N_LLM_DEFAULT_MODEL=${OLLAMA_DEFAULT_MODEL}
-      - OPENAI_API_BASE_URL=${LITELLM_API_ENDPOINT}
-      - OPENAI_API_KEY=${LITELLM_MASTER_KEY}
-      # Vector DB integration
-      - VECTOR_DB=${VECTOR_DB}
-      - QDRANT_URL=${VECTOR_DB_URL}
-      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+      - QUEUE_BULL_REDIS_PORT=${REDIS_INTERNAL_PORT}
+      - OPEN_AI_API_KEY=${N8N_API_KEY}
+      - OPEN_AI_BASE_URL=http://litellm:${LITELLM_INTERNAL_PORT}
     volumes:
       - ${DATA_ROOT}/n8n:/home/node/.n8n
     networks:
@@ -1133,218 +641,12 @@ append_n8n() {
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:${N8N_INTERNAL_PORT}/healthz"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 90s
-EOF
-}
-
-# ─────────────────────────────────────────────────────────────
-# FLOWISE
-# ─────────────────────────────────────────────────────────────
-append_flowise() {
-    compose_append << EOF
-
-  flowise:
-    image: flowiseai/flowise:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-flowise
-    restart: unless-stopped
-    user: "${TENANT_UID}:${TENANT_GID}"
-    ports:
-      - "${FLOWISE_PORT}:${FLOWISE_INTERNAL_PORT}"
-    environment:
-      - PORT=3000
-      - FLOWISE_USERNAME=${FLOWISE_USERNAME}
-      - FLOWISE_PASSWORD=${FLOWISE_PASSWORD}
-      - DATABASE_PATH=/data/flowise
-      - APIKEY_PATH=/data/flowise
-      - SECRETKEY_PATH=/data/flowise
-      - LOG_PATH=/data/flowise/logs
-      - BLOB_STORAGE_PATH=/data/flowise/storage
-      # LLM integration via LiteLLM
-      - OPENAI_API_BASE_URL=${LITELLM_API_ENDPOINT}
-      - OPENAI_API_KEY=${LITELLM_MASTER_KEY}
-      - LLM_DEFAULT_MODEL=${OLLAMA_DEFAULT_MODEL}
-      # Vector DB integration
-      - VECTOR_DB=${VECTOR_DB}
-      - QDRANT_URL=${VECTOR_DB_URL}
-      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
-    volumes:
-      - ${DATA_ROOT}/flowise:/data/flowise
-    networks:
-      - ${DOCKER_NETWORK}
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${FLOWISE_INTERNAL_PORT}/api/v1/ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-EOF
-}
-
-# ─────────────────────────────────────────────────────────────
-# DIFY (DISABLED - requires multi-container setup)
-# ─────────────────────────────────────────────────────────────
-append_dify_api() {
-    [[ "${ENABLE_DIFY:-false}" != "true" ]] && return
-    warn "Dify requires multi-container setup (api + worker + web + sandbox) — not yet fully implemented. Skipping."
-    warn "Set ENABLE_DIFY=false in .env to suppress this warning."
-}
-
-append_dify_web() {
-    [[ "${ENABLE_DIFY:-false}" != "true" ]] && return
-    # No-op - handled in append_dify_api
-}
-
-append_dify_sandbox() {
-    [[ "${ENABLE_DIFY:-false}" != "true" ]] && return
-    # No-op - handled in append_dify_api
-}
-
-# ─────────────────────────────────────────────────────────────
-# OPENCLAW (image must be verified — placeholder shown)
-# ─────────────────────────────────────────────────────────────
-append_openclaw() {
-    [[ "${ENABLE_OPENCLAW:-false}" != "true" ]] && return
-    
-    if [[ -z "${OPENCLAW_IMAGE:-}" ]]; then
-        log "WARN" "OPENCLAW_IMAGE not set in .env — skipping OpenClaw service"
-        return
-    fi
-    
-    # Check if image exists locally, if not, skip OpenClaw
-    if ! docker image inspect "${OPENCLAW_IMAGE}" >/dev/null 2>&1; then
-        log "WARN" "OpenClaw image ${OPENCLAW_IMAGE} not found locally — skipping OpenClaw service"
-        log "INFO" "To deploy OpenClaw, build/pull image first or set OPENCLAW_IMAGE to available image"
-        return
-    fi
-    
-    log "WARN" "OpenClaw: ensure image ${OPENCLAW_IMAGE} exists locally before deploying"
-    # Use configurable image name from .env
-    local image="${OPENCLAW_IMAGE:-openclaw:latest}"
-    
-    compose_append << EOF
-
-  openclaw:
-    image: ${image}
-    container_name: ${COMPOSE_PROJECT_NAME}-openclaw
-    restart: unless-stopped
-    user: "${TENANT_UID}:${TENANT_GID}"
-    ports:
-      - "${OPENCLAW_PORT}:${OPENCLAW_INTERNAL_PORT}"
-    environment:
-      - PORT=8082
-      - HOST=0.0.0.0
-      - LOG_LEVEL=${OPENCLAW_LOG_LEVEL:-info}
-      - QDRANT_URL=${VECTOR_DB_URL}
-      - LITELLM_BASE_URL=${LITELLM_INTERNAL_URL}
-      - LITELLM_API_KEY=${LITELLM_MASTER_KEY}
-      - N8N_WEBHOOK_URL=${N8N_INTERNAL_URL}
-      - ADMIN_USER=${OPENCLAW_ADMIN_USER}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
-      - DATA_PATH=/data
-      - CONFIG_PATH=/config
-      - SECRET=${OPENCLAW_SECRET}
-    volumes:
-      - ${DATA_ROOT}/openclaw/data:/data
-      - ${DATA_ROOT}/openclaw/config:/config
-    networks:
-      - ${DOCKER_NETWORK}
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${OPENCLAW_INTERNAL_PORT}/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-EOF
-}
-
-# ─────────────────────────────────────────────────────────────
-# PROMETHEUS CONFIG GENERATOR
-# ─────────────────────────────────────────────────────────────
-generate_prometheus_config() {
-    [ "${ENABLE_GRAFANA}" = "true" ] || return 0
-    local prom_dir="${DATA_ROOT}/prometheus"
-    mkdir -p "${prom_dir}"
-
-    cat > "${prom_dir}/prometheus.yml" << EOF
-global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
-
-scrape_configs:
-  - job_name: 'prometheus'
-    static_configs:
-      - targets: ['localhost:9090']
-
-  - job_name: 'caddy'
-    static_configs:
-      - targets: ['caddy:2019']
-EOF
-
-    # Add per-enabled-service scrape targets
-    [ "${ENABLE_LITELLM}" = "true" ] && cat >> "${prom_dir}/prometheus.yml" << EOF
-
-  - job_name: 'litellm'
-    static_configs:
-      - targets: ['litellm:4000']
-EOF
-
-    [ "${ENABLE_N8N}" = "true" ] && cat >> "${prom_dir}/prometheus.yml" << EOF
-
-  - job_name: 'n8n'
-    static_configs:
-      - targets: ['n8n:5678']
-EOF
-
-    chown -R "${TENANT_UID}:${TENANT_GID}" "${prom_dir}"
-    log "SUCCESS" "Prometheus config generated at ${prom_dir}/prometheus.yml"
-}
-
-# ─────────────────────────────────────────────────────────────
-# PROMETHEUS + GRAFANA
-# ─────────────────────────────────────────────────────────────
-append_prometheus() {
-    # Generate prometheus.yml first
-    mkdir -p "${DATA_ROOT}/prometheus"
-    cat > "${DATA_ROOT}/prometheus/prometheus.yml" << PROM
-global:
-  scrape_interval: 15s
-scrape_configs:
-  - job_name: 'prometheus'
-    static_configs:
-      - targets: ['localhost:9090']
-  - job_name: 'caddy'
-    static_configs:
-      - targets: ['caddy:2019']
-PROM
-    chown "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/prometheus/prometheus.yml"
-    mkdir -p "${DATA_ROOT}/prometheus/data"
-    chown "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/prometheus/data"
-
-    compose_append << EOF
-
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-prometheus
-    restart: unless-stopped
-    user: "${TENANT_UID}:${TENANT_GID}"
-    ports:
-      - "${PROMETHEUS_PORT}:${PROMETHEUS_INTERNAL_PORT}"
-    volumes:
-      - ${DATA_ROOT}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ${DATA_ROOT}/prometheus/data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--storage.tsdb.retention.time=15d'
-    networks:
-      - ${DOCKER_NETWORK}
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:${PROMETHEUS_INTERNAL_PORT}/-/healthy"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5678/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -1352,37 +654,78 @@ PROM
 EOF
 }
 
+append_flowise() {
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  flowise:
+    image: flowiseai/flowise:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-flowise
+    restart: unless-stopped
+    user: "${TENANT_UID}:${TENANT_GID}"
+    environment:
+      - PORT=${FLOWISE_INTERNAL_PORT}
+      - DATABASE_PATH=/app/.flowise
+      - DATABASE_TYPE=postgres
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=${POSTGRES_INTERNAL_PORT}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=flowise
+      - OPENAI_API_KEY=${FLOWISE_SECRET_KEY}
+      - OPENAI_BASE_URL=http://litellm:${LITELLM_INTERNAL_PORT}
+      - QDRANT_URL=http://qdrant:${QDRANT_INTERNAL_HTTP_PORT}
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
+    volumes:
+      - ${DATA_ROOT}/flowise:/app/.flowise
+    networks:
+      - ${DOCKER_NETWORK}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${FLOWISE_INTERNAL_PORT}/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+EOF
+}
+
 append_grafana() {
-    # Set network-aware configuration
-    local grafana_root_url="https://grafana.${DOMAIN}"
-    
-    if [[ "${PROXY_TYPE}" != "caddy" && "${PROXY_TYPE}" != "nginx" && "${PROXY_TYPE}" != "traefik" ]]; then
-        grafana_root_url="http://localhost:${GRAFANA_PORT}"
-    fi
-    
-    compose_append << EOF
+    cat >> "${COMPOSE_FILE}" << EOF
 
   grafana:
     image: grafana/grafana:latest
     container_name: ${COMPOSE_PROJECT_NAME}-grafana
     restart: unless-stopped
-    ports:
-      - "${GRAFANA_PORT}:${GRAFANA_INTERNAL_PORT}"
+    user: "${TENANT_UID}:${TENANT_GID}"
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
       - GF_PATHS_DATA=/var/lib/grafana
       - GF_PATHS_LOGS=/var/log/grafana
-      - GF_SERVER_ROOT_URL=${grafana_root_url}
+      - GF_SERVER_ROOT_URL=http://grafana:${GRAFANA_INTERNAL_PORT}
+      - GF_DATABASE_TYPE=postgres
+      - GF_DATABASE_HOST=postgres:${POSTGRES_INTERNAL_PORT}
+      - GF_DATABASE_NAME=grafana
+      - GF_DATABASE_USER=${POSTGRES_USER}
+      - GF_DATABASE_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
       - ${DATA_ROOT}/grafana:/var/lib/grafana
+      - ${DATA_ROOT}/grafana/logs:/var/log/grafana
     networks:
       - ${DOCKER_NETWORK}
     depends_on:
+      postgres:
+        condition: service_healthy
       prometheus:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${GRAFANA_INTERNAL_PORT}/api/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:${GRAFANA_INTERNAL_PORT}/api/health"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -1390,223 +733,125 @@ append_grafana() {
 EOF
 }
 
-# ─────────────────────────────────────────────────────────────
-# MINIO
-# ─────────────────────────────────────────────────────────────
-append_minio() {
-    compose_append << EOF
-
-  minio:
-    image: minio/minio:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-minio
-    restart: unless-stopped
-    user: "${TENANT_UID}:${TENANT_GID}"
-    ports:
-      - "${MINIO_PORT}:${MINIO_INTERNAL_PORT}"
-      - "${MINIO_CONSOLE_PORT}:${MINIO_CONSOLE_INTERNAL_PORT}"
-    environment:
-      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
-      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
-    volumes:
-      - ${COMPOSE_PROJECT_NAME}_minio_data:/data
-    command: server /data --console-address ":${MINIO_CONSOLE_INTERNAL_PORT}"
-    networks:
-      - ${DOCKER_NETWORK}
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${MINIO_INTERNAL_PORT}/minio/health/live"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-EOF
-}
-
-# ─────────────────────────────────────────────────────────────
-# TAILSCALE
-# ─────────────────────────────────────────────────────────────
 append_tailscale() {
-    local tun_device=""
-    local userspace_extra=""
-    
-    if [ -c "/dev/net/tun" ]; then
-        tun_device="      - /dev/net/tun:/dev/net/tun"
-        log "INFO" "TUN device found — Tailscale kernel mode enabled"
-    else
-        log "WARN" "/dev/net/tun not found — Tailscale will use userspace mode"
-        # Switch to userspace mode
-        userspace_extra="      - TS_USERSPACE=true"
-    fi
-    
-    compose_append << EOF
+    cat >> "${COMPOSE_FILE}" << EOF
 
   tailscale:
     image: tailscale/tailscale:latest
     container_name: ${COMPOSE_PROJECT_NAME}-tailscale
     restart: unless-stopped
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    ports:
-      - "8443:443"  # Alternative HTTPS port for OpenClaw integration
+    user: "${TENANT_UID}:${TENANT_GID}"
+    environment:
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_SOCKET=/var/run/tailscale/tailscaled.sock
     volumes:
       - ${DATA_ROOT}/tailscale:/var/lib/tailscale
-${tun_device}
-    environment:
-      - TS_AUTHKEY=\${TAILSCALE_AUTH_KEY}
-      - TS_STATE_DIR=/var/lib/tailscale
-      - TS_HOSTNAME=${TAILSCALE_HOSTNAME}
-      - TS_USERSPACE=false
-      - TS_EXTRA_ARGS=${TAILSCALE_EXTRA_ARGS}
-${userspace_extra}
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
     networks:
       - ${DOCKER_NETWORK}
-    healthcheck:
-      test: ["CMD", "tailscale", "status"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
+    command: tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock
 EOF
 }
 
-# ─────────────────────────────────────────────────────────────
-# SIGNAL
-# ─────────────────────────────────────────────────────────────
-append_signal() {
-    compose_append << EOF
+append_openclaw() {
+    # Check if OpenClaw image exists locally
+    if ! docker images --format "table {{.Repository}}:{{.Tag}}" | grep -q "^${OPENCLAW_IMAGE:-openclaw:latest}$"; then
+        log "WARN" "OpenClaw image ${OPENCLAW_IMAGE:-openclaw:latest} not found locally — skipping OpenClaw service"
+        log "INFO" "To deploy OpenClaw, build/pull image first or set OPENCLAW_IMAGE to available image"
+        return
+    fi
 
-  signal-api:
-    image: bbernhard/signal-cli-rest-api:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-signal-api
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  openclaw:
+    image: ${OPENCLAW_IMAGE:-openclaw:latest}
+    container_name: ${COMPOSE_PROJECT_NAME}-openclaw
     restart: unless-stopped
     user: "${TENANT_UID}:${TENANT_GID}"
+    environment:
+      - OPENCLAW_PORT=${OPENCLAW_INTERNAL_PORT}
+      - OPENCLAW_PASSWORD=${OPENCLAW_PASSWORD}
+      - OPENAI_API_KEY=${OPENCLAW_API_KEY}
+      - OPENAI_BASE_URL=http://litellm:${LITELLM_INTERNAL_PORT}
+    volumes:
+      - ${DATA_ROOT}/openclaw:/app/data
+      - ${DATA_ROOT}/openclaw/logs:/app/logs
+    networks:
+      - ${DOCKER_NETWORK}
+    depends_on:
+      litellm:
+        condition: service_healthy
+    # PHASE 3: ZERO-TRUST SANDBOX
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${OPENCLAW_INTERNAL_PORT}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+EOF
+
+    # Add Tailscale port mapping
+    if [[ -n "${TAILSCALE_IP:-}" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
     ports:
-      - "${SIGNAL_PORT}:${SIGNAL_INTERNAL_PORT}"   # ALWAYS 8080 internal - never ${SIGNAL_PORT}:${SIGNAL_PORT}
-    environment:
-      - MODE=native
-      - AUTO_RECEIVE_SCHEDULE=0 * * * *
-    volumes:
-      - ${DATA_ROOT}/signal-api:/home/.local/share/signal-cli
-    networks:
-      - ${DOCKER_NETWORK}
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${SIGNAL_INTERNAL_PORT}/v1/about"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
+      - "${TAILSCALE_IP}:${OPENCLAW_PORT}:${OPENCLAW_INTERNAL_PORT}"
 EOF
+    fi
 }
 
-# ─────────────────────────────────────────────────────────────
-# RCLONE
-# ─────────────────────────────────────────────────────────────
-append_rclone() {
-    compose_append << EOF
-
-  rclone:
-    image: rclone/rclone:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-rclone
-    restart: unless-stopped
-    user: "${TENANT_UID}:${TENANT_GID}"
-    environment:
-      - RCLONE_CONFIG=/config/rclone.conf
-    volumes:
-      - ${DATA_ROOT}/rclone/config:/config
-      - ${DATA_ROOT}/gdrive:/mnt/gdrive
-    command: >
-      sync
-      gdrive:/
-      /mnt/gdrive
-      --transfers=4
-      --checkers=8
-      --contimeout=60s
-      --timeout=300s
-      --retries=3
-      --low-level-retries=10
-      --log-level=INFO
-      --log-file=/config/rclone.log
-    networks:
-      - ${DOCKER_NETWORK}
-EOF
-}
+# Placeholder functions for other services
+append_authentik() { :; }
+append_minio() { :; }
+append_signal() { :; }
+append_rclone() { :; }
 
 # ─────────────────────────────────────────────────────────────
-# NETWORKS
+# PHASE 4: CADDYFILE GENERATION
 # ─────────────────────────────────────────────────────────────
-write_networks() {
-    compose_append << EOF
 
-networks:
-  ai_net:
-    name: ${DOCKER_NETWORK}
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16
-EOF
-}
-
-# ─────────────────────────────────────────────────────────────
-# VOLUMES + NETWORKS FOOTER
-# ─────────────────────────────────────────────────────────────
-append_footer() {
-    # Build volume list dynamically based on enabled services
-    compose_append << EOF
-
-volumes:
-  ${COMPOSE_PROJECT_NAME}_postgres_data:
-    name: ${COMPOSE_PROJECT_NAME}_postgres_data
-  ${COMPOSE_PROJECT_NAME}_redis_data:
-    name: ${COMPOSE_PROJECT_NAME}_redis_data
-  ${COMPOSE_PROJECT_NAME}_caddy_data:
-    name: ${COMPOSE_PROJECT_NAME}_caddy_data
-  ${COMPOSE_PROJECT_NAME}_minio_data:
-    name: ${COMPOSE_PROJECT_NAME}_minio_data
-  ${COMPOSE_PROJECT_NAME}_litellm_data:
-    name: ${COMPOSE_PROJECT_NAME}_litellm_data
-EOF
-
-    [ "${VECTOR_DB}" = "qdrant" ] && compose_append << EOF
-  ${COMPOSE_PROJECT_NAME}_qdrant_data:
-    name: ${COMPOSE_PROJECT_NAME}_qdrant_data
-EOF
-}
-
-# ─────────────────────────────────────────────────────────────
-# CADDYFILE GENERATOR
-# Generates AFTER compose so it knows which services are active
-# ─────────────────────────────────────────────────────────────
 generate_caddyfile() {
-    local caddy_dir="${DATA_ROOT}/caddy/config"
-    mkdir -p "${caddy_dir}"
-    local cf="${caddy_dir}/Caddyfile"
-
-    # Global options
-    cat > "${cf}" << EOF
+    local caddyfile="${DATA_ROOT}/caddy/config/Caddyfile"
+    
+    cat > "${caddyfile}" << EOF
 {
-    email ${SSL_EMAIL}
-    admin 0.0.0.0:2019
+    email ${ACME_EMAIL:-admin@${DOMAIN}}
+    admin localhost:2019
+}
+
+# Global settings
+{
     log {
+        output file ${DATA_ROOT}/logs/caddy-global.log {
+            roll_size 10mb
+            roll_keep 5
+        }
         level INFO
     }
 }
 
+# Reverse proxy configurations
 EOF
 
-    # Helper — write one reverse proxy block
-    # Usage: caddy_proxy <subdomain> <upstream_host> <upstream_port>
-    caddy_proxy() {
-        local subdomain=$1
-        local upstream=$2
-        local port=$3
-        cat >> "${cf}" << EOF
-${subdomain}.${DOMAIN} {
-    reverse_proxy ${upstream}:${port} {
-        flush_interval -1
+    # Add service configurations based on enabled services
+    if [[ "${ENABLE_OPENWEBUI}" = "true" ]]; then
+        cat >> "${caddyfile}" << EOF
+openwebui.${DOMAIN} {
+    reverse_proxy openwebui:${OPENWEBUI_INTERNAL_PORT} {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
     }
     log {
-        output file ${DATA_ROOT}/logs/caddy-${subdomain}.log {
+        output file ${DATA_ROOT}/logs/caddy-openwebui.log {
             roll_size 10mb
             roll_keep 5
         }
@@ -1615,25 +860,31 @@ ${subdomain}.${DOMAIN} {
 }
 
 EOF
+    fi
+
+    if [[ "${ENABLE_ANYTHINGLLM}" = "true" ]]; then
+        cat >> "${caddyfile}" << EOF
+anythingllm.${DOMAIN} {
+    reverse_proxy anythingllm:${ANYTHINGLLM_INTERNAL_PORT} {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
     }
+    log {
+        output file ${DATA_ROOT}/logs/caddy-anythingllm.log {
+            roll_size 10mb
+            roll_keep 5
+        }
+    }
+    encode gzip
+}
 
-    # Core services always present
-    # Caddy admin UI accessible at caddy.DOMAIN (optional)
-    # caddy_proxy "caddy" "localhost" "2019"
+EOF
+    fi
 
-    # Services — only add if enabled
-    [ "${ENABLE_OPENWEBUI}" = "true" ] && \
-        caddy_proxy "openwebui" "openwebui" "8080"
-
-    [ "${ENABLE_ANYTHINGLLM}" = "true" ] && \
-        caddy_proxy "anythingllm" "anythingllm" "3001"
-
-    [ "${ENABLE_LITELLM}" = "true" ] && \
-        caddy_proxy "litellm" "litellm" "4000"
-
-    [ "${ENABLE_N8N}" = "true" ] && {
-        # n8n needs websocket support
-        cat >> "${cf}" << EOF
+    if [[ "${ENABLE_N8N}" = "true" ]]; then
+        cat >> "${caddyfile}" << EOF
 n8n.${DOMAIN} {
     reverse_proxy n8n:5678 {
         header_up Host {host}
@@ -1652,34 +903,19 @@ n8n.${DOMAIN} {
 }
 
 EOF
-    }
+    fi
 
-    [ "${ENABLE_FLOWISE}" = "true" ] && \
-        caddy_proxy "flowise" "flowise" "3000"
-
-    [ "${ENABLE_DIFY}" = "true" ] && {
-        # Dify needs specific routing for api vs web
-        cat >> "${cf}" << EOF
-dify.${DOMAIN} {
-    # API routes
-    handle /console/api/* {
-        reverse_proxy dify-api:5001
-    }
-    handle /api/* {
-        reverse_proxy dify-api:5001
-    }
-    handle /v1/* {
-        reverse_proxy dify-api:5001
-    }
-    handle /files/* {
-        reverse_proxy dify-api:5001
-    }
-    # Web UI (catch-all)
-    handle {
-        reverse_proxy dify-web:3000
+    if [[ "${ENABLE_FLOWISE}" = "true" ]]; then
+        cat >> "${caddyfile}" << EOF
+flowise.${DOMAIN} {
+    reverse_proxy flowise:${FLOWISE_INTERNAL_PORT} {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
     }
     log {
-        output file ${DATA_ROOT}/logs/caddy-dify.log {
+        output file ${DATA_ROOT}/logs/caddy-flowise.log {
             roll_size 10mb
             roll_keep 5
         }
@@ -1688,509 +924,189 @@ dify.${DOMAIN} {
 }
 
 EOF
-    }
-
-    [ "${ENABLE_OPENCLAW}" = "true" ] && \
-        caddy_proxy "openclaw" "openclaw" "8082"
-
-    [ "${ENABLE_GRAFANA}" = "true" ] && \
-        caddy_proxy "grafana" "grafana" "3000"
-
-    # Minio console always useful
-    caddy_proxy "minio" "minio" "9001"
-    caddy_proxy "s3" "minio" "9000"
-
-    [ "${ENABLE_OLLAMA}" = "true" ] && \
-        caddy_proxy "ollama" "ollama" "11434"
-
-    [ "${ENABLE_SIGNAL}" = "true" ] && \
-        caddy_proxy "signal" "signal-api" "8080"
-
-    chown "${TENANT_UID}:${TENANT_GID}" "${cf}"
-    log "Caddyfile generated at ${cf}"
-
-    # Validate
-    docker run --rm -v "${cf}:/etc/caddy/Caddyfile:ro" caddy:2-alpine \
-        caddy validate --config /etc/caddy/Caddyfile 2>&1 && \
-        log "Caddyfile validation passed" || \
-        log "WARN: Caddyfile validation had warnings — check manually"
-}
-
-# ─────────────────────────────────────────────────────────────
-# DEPLOY
-# ─────────────────────────────────────────────────────────────
-deploy_stack() {
-    local compose_file="${DATA_ROOT}/docker-compose.yml"
-
-    log "Starting deployment from ${compose_file}"
-
-    # Pull images first (fail fast before any containers start)
-    log "Pulling images..."
-    docker compose \
-        --project-name "${COMPOSE_PROJECT_NAME}" \
-        -f "${compose_file}" \
-        --env-file "${ENV_FILE}" \
-        pull --ignore-pull-failures --quiet 2>&1 | tee -a "${LOG_FILE}" || {
-        log "WARN: Some images failed to pull — attempting deploy anyway"
-    }
-
-    # Deploy
-    docker compose \
-        --project-name "${COMPOSE_PROJECT_NAME}" \
-        -f "${compose_file}" \
-        --env-file "${ENV_FILE}" \
-        up -d \
-        --remove-orphans \
-        --timeout 120 \
-        2>&1 | tee -a "${LOG_FILE}"
-
-    log "Stack deployed"
-}
-
-# ─────────────────────────────────────────────────────────────
-# ── Tailscale IP Output ───────────────────────────────────────────────
-output_tailscale_info() {
-    [ "${ENABLE_TAILSCALE}" = "true" ] || return 0
-
-    log "INFO" "Waiting for Tailscale to authenticate..."
-    local max_wait=60
-    local elapsed=0
-
-    while [ ${elapsed} -lt ${max_wait} ]; do
-        local ts_ip
-        ts_ip=$(docker exec "${COMPOSE_PROJECT_NAME}-tailscale" \
-            tailscale ip -4 2>/dev/null || echo "")
-
-        if [ -n "${ts_ip}" ] && [ "${ts_ip}" != "127.0.0.1" ]; then
-            log "SUCCESS" "Tailscale IP: ${ts_ip}"
-
-            # Write to .env for script 3 and 4 to use
-            if grep -q "^TAILSCALE_IP=" "${ENV_FILE}"; then
-                sed -i "s|^TAILSCALE_IP=.*|TAILSCALE_IP=${ts_ip}|" "${ENV_FILE}"
-            else
-                echo "TAILSCALE_IP=${ts_ip}" >> "${ENV_FILE}"
-            fi
-
-            # Print access URLs
-            echo ""
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo " TAILSCALE ACCESS URLS"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            [ "${ENABLE_OPENCLAW}" = "true" ] && \
-                echo " OpenClaw  : http://${ts_ip}:${OPENCLAW_PORT}"
-            [ "${ENABLE_OPENWEBUI}" = "true" ] && \
-                echo " OpenWebUI : http://${ts_ip}:${OPENWEBUI_PORT}"
-            [ "${ENABLE_N8N}" = "true" ] && \
-                echo " n8n       : http://${ts_ip}:${N8N_PORT}"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo ""
-            
-            # Export for subsequent functions
-            export TAILSCALE_IP="${ts_ip}"
-            return 0
-        fi
-
-        sleep 5
-        elapsed=$((elapsed + 5))
-        log "INFO" "Waiting for Tailscale IP... (${elapsed}s/${max_wait}s)"
-    done
-
-    log "WARN" "Tailscale did not authenticate within ${max_wait}s"
-    log "WARN" "Check auth key: docker logs ${COMPOSE_PROJECT_NAME}-tailscale"
-    log "WARN" "Manual check: docker exec ${COMPOSE_PROJECT_NAME}-tailscale tailscale ip -4"
-}
-
-# ─────────────────────────────────────────────────────────────
-# DEPLOYMENT VERIFICATION
-# ─────────────────────────────────────────────────────────────
-verify_deployment() {
-    log "INFO" "Verifying deployment health..."
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    printf "%-30s %-12s %-12s %s\n" "SERVICE" "DOCKER" "HTTP" "URL"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-    # Wait for services to stabilise
-    log "INFO" "Waiting 30s for services to stabilise..."
-    sleep 30
-
-    check_service() {
-        local name=$1        # display name
-        local container=$2   # docker container name
-        local url=$3         # http url to check (empty = skip)
-        local internal_url=$4 # internal docker network url (empty = skip)
-
-        # Docker health status
-        local docker_status
-        docker_status=$(docker inspect \
-            --format='{{.State.Health.Status}}' \
-            "${container}" 2>/dev/null || echo "missing")
-
-        # If no healthcheck defined, use running state
-        if [ "${docker_status}" = "" ] || [ "${docker_status}" = "<nil>" ]; then
-            docker_status=$(docker inspect \
-                --format='{{.State.Status}}' \
-                "${container}" 2>/dev/null || echo "missing")
-        fi
-
-        # HTTP check (external via Caddy)
-        local http_status="skip"
-        if [ -n "${url}" ]; then
-            http_status=$(curl -so /dev/null \
-                -w "%{http_code}" \
-                --max-time 10 \
-                --retry 2 \
-                "${url}" 2>/dev/null || echo "fail")
-        fi
-
-        # Colour coding
-        local docker_display http_display
-        case "${docker_status}" in
-            healthy|running) docker_display="✅ ${docker_status}" ;;
-            starting)        docker_display="⏳ starting" ;;
-            *)               docker_display="❌ ${docker_status}" ;;
-        esac
-
-        case "${http_status}" in
-            200|301|302|303) http_display="✅ ${http_status}" ;;
-            skip)            http_display="➖ skip" ;;
-            *)               http_display="❌ ${http_status}" ;;
-        esac
-
-        printf "%-30s %-20s %-20s %s\n" \
-            "${name}" "${docker_display}" "${http_display}" "${url:-internal}"
-    }
-
-    local p="${COMPOSE_PROJECT_NAME}"
-
-    # Infrastructure always present
-    check_service "PostgreSQL"   "${p}-postgres"  "" ""
-    check_service "Redis"        "${p}-redis"     "" ""
-    check_service "MinIO"        "${p}-minio"     "" ""
-    check_service "Caddy"        "${p}-caddy"     "https://${DOMAIN}" ""
-
-    # Optional services
-    [ "${ENABLE_OPENWEBUI}" = "true" ] && \
-        check_service "OpenWebUI" "${p}-open-webui" \
-            "https://chat.${DOMAIN}" ""
-    [ "${ENABLE_ANYTHINGLLM}" = "true" ] && \
-        check_service "AnythingLLM" "${p}-anythingllm" \
-            "https://anythingllm.${DOMAIN}" ""
-    [ "${ENABLE_N8N}" = "true" ] && \
-        check_service "n8n" "${p}-n8n" \
-            "https://n8n.${DOMAIN}" ""
-    [ "${ENABLE_DIFY}" = "true" ] && \
-        check_service "Dify API" "${p}-dify-api" \
-            "https://dify.${DOMAIN}" ""
-    [ "${ENABLE_FLOWISE}" = "true" ] && \
-        check_service "Flowise" "${p}-flowise" \
-            "https://flowise.${DOMAIN}" ""
-    [ "${ENABLE_LITELLM}" = "true" ] && \
-        check_service "LiteLLM" "${p}-litellm" \
-            "https://litellm.${DOMAIN}" ""
-    [ "${ENABLE_OLLAMA}" = "true" ] && \
-        check_service "Ollama" "${p}-ollama" "" ""
-    [ "${ENABLE_QDRANT}" = "true" ] && \
-        check_service "Qdrant" "${p}-qdrant" "" ""
-    [ "${ENABLE_GRAFANA}" = "true" ] && \
-        check_service "Grafana" "${p}-grafana" \
-            "https://grafana.${DOMAIN}" ""
-    [ "${ENABLE_SIGNAL}" = "true" ] && \
-        check_service "Signal API" "${p}-signal-api" "" ""
-    [ "${ENABLE_TAILSCALE}" = "true" ] && \
-        check_service "Tailscale" "${p}-tailscale" "" ""
-    [ "${ENABLE_OPENCLAW}" = "true" ] && \
-        check_service "OpenClaw" "${p}-openclaw" "" ""
-
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-
-    # Print any containers in unhealthy/exited state
-    local unhealthy
-    unhealthy=$(docker ps -a \
-        --filter "name=${p}" \
-        --filter "status=exited" \
-        --format "{{.Names}}" 2>/dev/null)
-
-    if [ -n "${unhealthy}" ]; then
-        log "WARN" "The following containers have exited:"
-        echo "${unhealthy}" | while read -r c; do
-            echo "  → ${c}"
-            echo "    Last 10 log lines:"
-            docker logs --tail 10 "${c}" 2>&1 | sed 's/^/    | /'
-        done
     fi
-}
 
-# ─────────────────────────────────────────────────────────────
-# CAPTURE TAILSCALE IP POST-STARTUP
-# ─────────────────────────────────────────────────────────────
-capture_tailscale_ip() {
-    if [ "${ENABLE_TAILSCALE}" = "true" ]; then
-        log "Waiting for Tailscale to authenticate..."
-        local attempts=0
-        local ts_ip=""
-
-        while [ ${attempts} -lt 30 ]; do
-            ts_ip=$(docker exec "${COMPOSE_PROJECT_NAME}-tailscale" \
-                tailscale ip -4 2>/dev/null || echo "")
-
-            if [ -n "${ts_ip}" ] && [ "${ts_ip}" != "" ]; then
-                log "SUCCESS: Tailscale IP: ${ts_ip}"
-                # Update .env
-                sed -i "s/^TAILSCALE_IP=.*/TAILSCALE_IP=${ts_ip}/" "${ENV_FILE}"
-                break
-            fi
-
-            attempts=$(( attempts + 1 ))
-            sleep 5
-        done
-
-    fi
-}
-
-# ── WAIT FOR HEALTHY
-# ─────────────────────────────────────────────────────────────
-wait_for_healthy() {
-    log "Waiting for services to become healthy (max 5 min)..."
-    local deadline=$(( $(date +%s) + 300 ))
-
-    while [ "$(date +%s)" -lt "${deadline}" ]; do
-        local unhealthy
-        unhealthy=$(docker ps \
-            --filter "name=${COMPOSE_PROJECT_NAME}" \
-            --filter "health=unhealthy" \
-            --format "{{.Names}}" | wc -l)
-
-        local starting
-        starting=$(docker ps \
-            --filter "name=${COMPOSE_PROJECT_NAME}" \
-            --filter "health=starting" \
-            --format "{{.Names}}" | wc -l)
-
-        [ "${unhealthy}" -eq 0 ] && [ "${starting}" -eq 0 ] && {
-            log "SUCCESS: All services healthy"
-            return 0
+    if [[ "${ENABLE_LITELLM}" = "true" ]]; then
+        cat >> "${caddyfile}" << EOF
+litellm.${DOMAIN} {
+    reverse_proxy litellm:${LITELLM_INTERNAL_PORT} {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+    log {
+        output file ${DATA_ROOT}/logs/caddy-litellm.log {
+            roll_size 10mb
+            roll_keep 5
         }
+    }
+    encode gzip
+}
 
-        log "  Waiting... (${unhealthy} unhealthy, ${starting} starting)"
-        sleep 15
-    done
+EOF
+    fi
 
-    log "WARN: Timeout reached — some services may still be starting"
-    docker ps \
-        --filter "name=${COMPOSE_PROJECT_NAME}" \
-        --format "table {{.Names}}\t{{.Status}}" | tee -a "${LOG_FILE}"
+    if [[ "${ENABLE_GRAFANA}" = "true" ]]; then
+        cat >> "${caddyfile}" << EOF
+grafana.${DOMAIN} {
+    reverse_proxy grafana:${GRAFANA_INTERNAL_PORT} {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+    log {
+        output file ${DATA_ROOT}/logs/caddy-grafana.log {
+            roll_size 10mb
+            roll_keep 5
+        }
+    }
+    encode gzip
+}
+
+EOF
+    fi
+
+    log "SUCCESS" "Caddyfile generated at ${caddyfile}"
 }
 
 # ─────────────────────────────────────────────────────────────
-# MAIN
+# DEPLOYMENT FUNCTIONS
 # ─────────────────────────────────────────────────────────────
+
+preflight_checks() {
+    log "INFO" "Running pre-flight checks..."
+    
+    # Check Docker
+    if ! command -v docker >/dev/null 2>&1; then
+        log "ERROR" "Docker not found"
+        exit 1
+    fi
+    
+    if ! docker info >/dev/null 2>&1; then
+        log "ERROR" "Docker daemon not running"
+        exit 1
+    fi
+    
+    # Check Docker Compose
+    if ! command -v docker-compose >/dev/null 2>&1 && ! docker compose version >/dev/null 2>&1; then
+        log "ERROR" "Docker Compose not found"
+        exit 1
+    fi
+    
+    # Check EBS volume mount
+    if ! mountpoint -q "${DATA_BASE_PATH}" 2>/dev/null; then
+        log "WARN" "EBS volume not mounted at ${DATA_BASE_PATH}"
+    else
+        log "SUCCESS" "EBS volume mounted at ${DATA_BASE_PATH}"
+    fi
+    
+    log "SUCCESS" "Pre-flight checks passed"
+}
+
+teardown_existing() {
+    log "INFO" "Tearing down existing ${COMPOSE_PROJECT_NAME} deployment..."
+    
+    cd "${DATA_ROOT}"
+    
+    if [[ -f "docker-compose.yml" ]]; then
+        docker compose down --volumes --remove-orphans 2>/dev/null || true
+        log "INFO" "Existing deployment stopped"
+    fi
+    
+    # Remove any orphaned containers
+    local orphaned_containers
+    orphaned_containers=$(docker ps -aq --filter "name=${COMPOSE_PROJECT_NAME}-" 2>/dev/null || true)
+    if [[ -n "$orphaned_containers" ]]; then
+        docker rm -f $orphaned_containers 2>/dev/null || true
+        log "INFO" "Orphaned containers removed"
+    fi
+    
+    # Remove network if exists
+    local network_exists
+    network_exists=$(docker network ls -q --filter "name=${DOCKER_NETWORK}" 2>/dev/null || true)
+    if [[ -n "$network_exists" ]]; then
+        docker network rm "${DOCKER_NETWORK}" 2>/dev/null || true
+        log "INFO" "Old network removed"
+    fi
+    
+    log "SUCCESS" "Teardown complete"
+}
+
+deploy_stack() {
+    log "INFO" "Starting deployment from ${COMPOSE_FILE}"
+    
+    cd "${DATA_ROOT}"
+    
+    # Pull images
+    log "INFO" "Pulling images..."
+    docker compose pull
+    
+    # Start services
+    log "INFO" "Starting services..."
+    docker compose up -d
+    
+    # Wait for health checks
+    log "INFO" "Waiting for services to become healthy..."
+    local max_wait=300
+    local wait_time=0
+    
+    while [[ $wait_time -lt $max_wait ]]; do
+        local unhealthy_count
+        unhealthy_count=$(docker compose ps --format "table {{.Service}} {{.Status}}" | grep -c "unhealthy\|starting" || true)
+        
+        if [[ $unhealthy_count -eq 0 ]]; then
+            log "SUCCESS" "All services are healthy"
+            break
+        fi
+        
+        sleep 10
+        wait_time=$((wait_time + 10))
+        log "INFO" "Waiting for services... (${wait_time}s/${max_wait}s)"
+    done
+    
+    if [[ $wait_time -ge $max_wait ]]; then
+        log "WARN" "Some services may not be healthy within timeout"
+        docker compose ps
+    fi
+    
+    log "SUCCESS" "Deployment complete"
+}
+
+# ─────────────────────────────────────────────────────────────
+# MAIN EXECUTION
+# ─────────────────────────────────────────────────────────────
+
 main() {
-    log "═══════════════════════════════════════════════════════"
-    log "  AI Platform Deploy — Tenant: ${TENANT_ID}"
-    log "  Domain: ${DOMAIN}"
-    log "  Services: $(get_enabled_services)"
-    log "═══════════════════════════════════════════════════════"
-
-    # Guards
-    check_tailscale_auth
-
-    # Pre-flight checks (ports, DNS, Docker, EBS)
-    preflight_checks
-
-    # Teardown (idempotent)
-    teardown_existing
-
-    # Setup directories with proper ownership
+    log "INFO" "══════════════════════════════════════════════════════"
+    log "INFO" "   AI Platform Deploy — Tenant: ${TENANT_ID}"
+    log "INFO" "   Domain: ${DOMAIN}"
+    log "INFO" "   Services: ${ENABLE_OPENWEBUI} ${ENABLE_ANYTHINGLLM} ${ENABLE_N8N} ${ENABLE_FLOWISE} ${ENABLE_OPENCLAW} ${ENABLE_LITELLM} ${ENABLE_OLLAMA} ${ENABLE_GRAFANA} ${ENABLE_TAILSCALE}"
+    log "INFO" "══════════════════════════════════════════════════════"
+    
+    # Phase 1: Directory pre-creation and ownership
     create_directories
-
-    # Generate configs
+    
+    # Phase 2: Configuration generation
     generate_postgres_init
     generate_prometheus_config
     generate_litellm_config
+    
+    # Phase 3: Docker Compose generation (no named volumes)
     generate_compose
+    
+    # Phase 4: Caddyfile generation
     generate_caddyfile
-
-    # Deploy
+    
+    # Deployment
+    preflight_checks
+    teardown_existing
     deploy_stack
-
-    # Post-startup tasks
-    output_tailscale_info   # Must be BEFORE print_access_urls
-    verify_deployment       # Health table
-    wait_for_healthy
-
-    # Print summary
-    print_dashboard
+    
+    log "SUCCESS" "🎉 AI Platform deployment complete!"
+    log "INFO" "Next: Run 'sudo bash scripts/3-configure-services.sh' for service configuration"
 }
 
-get_enabled_services() {
-    local services=""
-    [ "${ENABLE_OPENWEBUI}" = "true" ] && services="${services} openwebui"
-    [ "${ENABLE_ANYTHINGLLM}" = "true" ] && services="${services} anythingllm"
-    [ "${ENABLE_DIFY}" = "true" ] && services="${services} dify"
-    [ "${ENABLE_N8N}" = "true" ] && services="${services} n8n"
-    [ "${ENABLE_FLOWISE}" = "true" ] && services="${services} flowise"
-    [ "${ENABLE_OPENCLAW}" = "true" ] && services="${services} openclaw"
-    [ "${ENABLE_LITELLM}" = "true" ] && services="${services} litellm"
-    [ "${ENABLE_OLLAMA}" = "true" ] && services="${services} ollama"
-    [ "${ENABLE_GRAFANA}" = "true" ] && services="${services} grafana"
-    [ "${ENABLE_SIGNAL}" = "true" ] && services="${services} signal"
-    [ "${ENABLE_TAILSCALE}" = "true" ] && services="${services} tailscale"
-
-        while [ "$(date +%s)" -lt "${deadline}" ]; do
-            local unhealthy
-            unhealthy=$(docker ps \
-                --filter "name=${COMPOSE_PROJECT_NAME}" \
-                --filter "health=unhealthy" \
-                --format "{{.Names}}" | wc -l)
-
-            local starting
-            starting=$(docker ps \
-                --filter "name=${COMPOSE_PROJECT_NAME}" \
-                --filter "health=starting" \
-                --format "{{.Names}}" | wc -l)
-
-            [ "${unhealthy}" -eq 0 ] && [ "${starting}" -eq 0 ] && {
-                log "SUCCESS: All services healthy"
-                return 0
-            }
-
-            log "  Waiting... (${unhealthy} unhealthy, ${starting} starting)"
-            sleep 15
-        done
-
-        log "WARN: Timeout reached — some services may still be starting"
-        docker ps \
-            --filter "name=${COMPOSE_PROJECT_NAME}" \
-            --format "table {{.Names}}\t{{.Status}}" | tee -a "${LOG_FILE}"
-    }
-
-    # ─────────────────────────────────────────────────────────────
-    # MAIN
-    # ─────────────────────────────────────────────────────────────
-    main() {
-        log "═══════════════════════════════════════════════════════"
-        log "  AI Platform Deploy — Tenant: ${TENANT_ID}"
-        log "  Domain: ${DOMAIN}"
-        log "  Services: $(get_enabled_services)"
-        log "═══════════════════════════════════════════════════════"
-
-        # Guards
-        check_tailscale_auth
-
-        # Pre-flight checks (ports, DNS, Docker, EBS)
-        preflight_checks
-
-        # Teardown (idempotent)
-        teardown_existing
-
-        # Setup directories with proper ownership
-        create_directories
-
-        # Generate configs
-        generate_postgres_init
-        generate_prometheus_config
-        generate_litellm_config
-        generate_compose
-        generate_caddyfile
-
-        # Deploy
-        deploy_stack
-
-        # Post-startup tasks
-        output_tailscale_info   # Must be BEFORE print_access_urls
-        verify_deployment       # Health table
-        wait_for_healthy
-
-        # Print summary
-        print_dashboard
-    }
-
-    get_enabled_services() {
-        local services=""
-        [ "${ENABLE_OPENWEBUI}" = "true" ] && services="${services} openwebui"
-        [ "${ENABLE_ANYTHINGLLM}" = "true" ] && services="${services} anythingllm"
-        [ "${ENABLE_DIFY}" = "true" ] && services="${services} dify"
-        [ "${ENABLE_N8N}" = "true" ] && services="${services} n8n"
-        [ "${ENABLE_FLOWISE}" = "true" ] && services="${services} flowise"
-        [ "${ENABLE_OPENCLAW}" = "true" ] && services="${services} openclaw"
-        [ "${ENABLE_LITELLM}" = "true" ] && services="${services} litellm"
-        [ "${ENABLE_OLLAMA}" = "true" ] && services="${services} ollama"
-        [ "${ENABLE_GRAFANA}" = "true" ] && services="${services} grafana"
-        [ "${ENABLE_SIGNAL}" = "true" ] && services="${services} signal"
-        [ "${ENABLE_TAILSCALE}" = "true" ] && services="${services} tailscale"
-        [ "${ENABLE_RCLONE}" = "true" ] && services="${services} rclone"
-        echo "${services}"
-    }
-
-    print_dashboard() {
-        local border="═══════════════════════════════════════════════════════"
-        echo ""
-        echo "${border}"
-        echo "  AI Platform Ready — ${TENANT_ID}"
-        echo "${border}"
-        echo ""
-        
-        # External URLs (via Caddy + SSL)
-        echo "  🌐 External URLs:"
-        echo "  ───────────────────────────────────────────────────────────"
-        [ "${ENABLE_OPENWEBUI}" = "true" ] && \
-            echo "    Chat UI        → https://openwebui.${DOMAIN}"
-        [ "${ENABLE_ANYTHINGLLM}" = "true" ] && \
-            echo "    AnythingLLM    → https://anythingllm.${DOMAIN}"
-        [ "${ENABLE_DIFY}" = "true" ] && \
-            echo "    Dify           → https://dify.${DOMAIN}"
-        [ "${ENABLE_N8N}" = "true" ] && \
-            echo "    n8n            → https://n8n.${DOMAIN}"
-        [ "${ENABLE_FLOWISE}" = "true" ] && \
-            echo "    Flowise        → https://flowise.${DOMAIN}"
-        [ "${ENABLE_OPENCLAW}" = "true" ] && \
-            echo "    OpenClaw       → https://openclaw.${DOMAIN}"
-        [ "${ENABLE_GRAFANA}" = "true" ] && \
-            echo "    Grafana        → https://grafana.${DOMAIN}"
-        echo "    MinIO          → https://minio.${DOMAIN}"
-        echo ""
-        
-        # Tailscale URLs (if enabled)
-        if [ -n "${TAILSCALE_IP:-}" ] && [ "${TAILSCALE_IP}" != "127.0.0.1" ]; then
-            echo "  🔒 Tailscale URLs:"
-            echo "  ───────────────────────────────────────────────────────────"
-            [ "${ENABLE_OPENWEBUI}" = "true" ] && \
-                printf "    %-20s http://%s:%s\n" "Chat UI (TS)" "${TAILSCALE_IP}" "${OPENWEBUI_PORT}"
-            [ "${ENABLE_ANYTHINGLLM}" = "true" ] && \
-                printf "    %-20s http://%s:%s\n" "AnythingLLM (TS)" "${TAILSCALE_IP}" "${ANYTHINGLLM_PORT}"
-            [ "${ENABLE_N8N}" = "true" ] && \
-                printf "    %-20s http://%s:%s\n" "n8n (TS)" "${TAILSCALE_IP}" "${N8N_PORT}"
-            [ "${ENABLE_OPENCLAW}" = "true" ] && \
-                printf "    %-20s http://%s:%s\n" "OpenClaw (TS)" "${TAILSCALE_IP}" "${OPENCLAW_PORT}"
-            echo "  ───────────────────────────────────────────────────────────"
-        else
-            echo "  🔒 Tailscale: Not available or not authenticated"
-        fi
-        echo ""
-        
-        # Local access URLs
-        echo "  🏠 Local URLs:"
-        echo "  ───────────────────────────────────────────────────────────"
-        [ "${ENABLE_OLLAMA}" = "true" ] && \
-            echo "    Ollama API     → http://localhost:${OLLAMA_PORT:-11434}/api/tags"
-        [ "${ENABLE_QDRANT}" = "true" ] && \
-            echo "    Qdrant API     → http://localhost:${QDRANT_PORT:-6333}"
-        echo ""
-        
-        # Credentials
-        echo "  🔐 Credentials:"
-        echo "  ───────────────────────────────────────────────────────────"
-        echo "    Admin password:  ${ADMIN_PASSWORD}"
-        echo "    LiteLLM key:     ${LITELLM_MASTER_KEY}"
-        echo "    Config file:       ${ENV_FILE}"
-        echo ""
-        
-        echo "  📊 Logs:"
-        echo "    docker compose -f ${COMPOSE_FILE} logs -f"
-        echo "${border}"
-        echo ""
-    }
-
-    main "$@"
+# Execute main function
+main "$@"
