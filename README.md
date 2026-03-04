@@ -438,15 +438,9 @@ For production:
 ### **✅ Production Ready**
 - **Multi-tenant isolation** with dynamic project naming
 - **Non-root execution** with proper UID/GID preservation
-- **Comprehensive health monitoring** and service checks
-- **Dynamic service management** via script 4
-- **Backward compatibility** with existing deployments
-
----
-
 ## **🔧 Recent Critical Fixes Applied**
 
-### **✅ P0 - Dynamic Architecture (v2.1.0)**
+### **✅ P1 - Dynamic Architecture (v2.1.0)**
 - **Zero hardcoded values:** All scripts 100% dynamic
 - **Environment consistency:** Proper variable naming across scripts
 - **Service coverage:** Complete 18-service support
@@ -457,6 +451,28 @@ For production:
 - **Docker Compose Structure:** Fixed networks/volumes placement
 - **Script Syntax:** All 5 scripts pass bash validation
 - **Variable Scope:** Global variables properly scoped
+- **Container Security:** Non-root execution enforced
+- **Health Checks:** All endpoints verified and working
+
+### **✅ P3 - Production Deployment Fixes**
+- **Function Name Error:** Fixed `setup_directories` → `create_directories`
+- **Missing Directories:** Added `caddy/data` to creation list
+- **OpenClaw Image:** Added existence check to prevent deployment failure
+- **PostgreSQL User:** Removed tenant user, use default postgres user
+- **PostgreSQL Ownership:** Added directory ownership fix (70:70)
+- **Atomic .env Creation:** Prevents root ownership issues
+- **Comprehensive Logging:** Added tenant-owned log directories
+- **Variable Compatibility:** Added missing `REDIS_INTERNAL_PORT` and `POSTGRES_INTERNAL_PORT`
+- **Ownership Enforcement:** Fixed n8n and Grafana directory creation
+- **Hardcoded Values:** Eliminated all hardcoded Redis ports
+
+### **✅ P4 - Critical Infrastructure Improvements**
+- **Tenant Ownership Principle:** "NOTHING SHOULD EVER BE CREATED AS ROOT" enforced
+- **Mount Point Management:** Complete cleanup and verification in script 0
+- **Volume Strategy:** Identified Docker volume vs bind mount ownership conflicts
+- **Error Handling:** Added comprehensive error detection and recovery
+- **Service Dependencies:** Proper health check and dependency management
+- **Network Isolation:** Tenant-scoped Docker networks with dynamic naming
 - **Container Security:** Non-root execution enforced
 - **Health Checks:** All endpoints verified and working
 
