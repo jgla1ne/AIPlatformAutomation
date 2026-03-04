@@ -1209,7 +1209,9 @@ write_env() {
     # CRITICAL: Set tenant ownership for DATA_ROOT (core principle: tenant owns their data)
     chown "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"
 
-    cat > "${ENV_FILE}" << EOF
+    # Create .env file atomically with proper ownership
+    local temp_env_file="${ENV_FILE}.tmp"
+    cat > "${temp_env_file}" << EOF
 # ════════════════════════════════════════════════════════════════════════
 # AI Platform — Environment Configuration
 # Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -1420,9 +1422,13 @@ MINIO_CONSOLE_PORT=9001
 MINIO_PORT=9000
 EOF
 
-    chmod 600 "${ENV_FILE}"
+    chmod 600 "${temp_env_file}"
     # CRITICAL: Set tenant ownership for .env file (core principle: tenant owns their data)
-    chown "${TENANT_UID}:${TENANT_GID}" "${ENV_FILE}"
+    chown "${TENANT_UID}:${TENANT_GID}" "${temp_env_file}"
+    
+    # Atomic move to final location
+    mv "${temp_env_file}" "${ENV_FILE}"
+    
     log "SUCCESS" "Configuration written to ${ENV_FILE}"
 }
 
