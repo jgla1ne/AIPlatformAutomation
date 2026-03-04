@@ -1219,6 +1219,11 @@ write_env() {
 
     # Create .env file atomically with proper ownership
     local temp_env_file="${ENV_FILE}.tmp"
+    
+    # Define project configuration variables
+    local COMPOSE_PROJECT_NAME="${PROJECT_PREFIX}${TENANT_ID}"
+    local DOCKER_NETWORK="${COMPOSE_PROJECT_NAME}-net"
+    
     cat > "${temp_env_file}" << EOF
 # ════════════════════════════════════════════════════════════════════════
 # AI Platform — Environment Configuration
