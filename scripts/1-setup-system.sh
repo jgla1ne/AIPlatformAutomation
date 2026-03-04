@@ -1255,7 +1255,7 @@ QDRANT_API_ENDPOINT="${QDRANT_INTERNAL_URL}"
 
 # ─── Project Configuration ───────────────────────────────────────────────────
 COMPOSE_PROJECT_NAME="${PROJECT_PREFIX}${TENANT_ID}"
-DOCKER_NETWORK="\${COMPOSE_PROJECT_NAME}_net"
+DOCKER_NETWORK=${DOCKER_NETWORK}
 
 # ─── Hardware ─────────────────────────────────────────────────────────────────
 GPU_TYPE=${GPU_TYPE}
