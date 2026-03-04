@@ -211,38 +211,46 @@ EOF
 }
 
 # ── Directory Setup ───────────────────────────────────────────────
-setup_directories() {
+create_directories() {
     local dirs=(
-        "${DATA_ROOT}/postgres"
-        "${DATA_ROOT}/redis"
+        "${DATA_ROOT}/compose"
+        "${DATA_ROOT}/caddy"
         "${DATA_ROOT}/caddy/config"
-        "${DATA_ROOT}/caddy/data"
-        "${DATA_ROOT}/tailscale"
+        "${DATA_ROOT}/postgres"
+        "${DATA_ROOT}/postgres/init"
+        "${DATA_ROOT}/redis"
         "${DATA_ROOT}/ollama"
-        "${DATA_ROOT}/openwebui"
-        "${DATA_ROOT}/litellm"
-        "${DATA_ROOT}/anythingllm"
-        "${DATA_ROOT}/flowise"
         "${DATA_ROOT}/n8n"
-        "${DATA_ROOT}/authentik/media"
-        "${DATA_ROOT}/authentik/templates"
-        "${DATA_ROOT}/authentik/certs"
+        "${DATA_ROOT}/flowise"
+        "${DATA_ROOT}/anythingllm"
+        "${DATA_ROOT}/qdrant"
+        "${DATA_ROOT}/litellm"
         "${DATA_ROOT}/grafana"
         "${DATA_ROOT}/prometheus"
-        "${DATA_ROOT}/qdrant"
+        "${DATA_ROOT}/authentik/media"
+        "${DATA_ROOT}/authentik/certs"
+        "${DATA_ROOT}/openwebui"
+        "${DATA_ROOT}/signal-api"
+        "${DATA_ROOT}/tailscale"
+        "${DATA_ROOT}/rclone/config"
+        "${DATA_ROOT}/gdrive"
+        "${DATA_ROOT}/anythingllm"
+        "${DATA_ROOT}/dify/api"
+        "${DATA_ROOT}/dify/web"
+        "${DATA_ROOT}/dify/sandbox"
     )
-    [ "${ENABLE_DIFY}" = "true" ] && \
-        dirs+=("${DATA_ROOT}/dify/storage" "${DATA_ROOT}/dify/logs")
-    [ "${ENABLE_SIGNAL}" = "true" ] && dirs+=("${DATA_ROOT}/signal-api")
-    [ "${ENABLE_TAILSCALE}" = "true" ] && dirs+=("${DATA_ROOT}/tailscale")
-    [ "${ENABLE_RCLONE}" = "true" ] && \
-        dirs+=("${DATA_ROOT}/rclone/config" "${DATA_ROOT}/gdrive")
-    [ "${ENABLE_ANYTHINGLLM}" = "true" ] && dirs+=("${DATA_ROOT}/anythingllm")
-    [ "${ENABLE_OPENCLAW}" = "true" ] && dirs+=("${DATA_ROOT}/openclaw")
 
     for dir in "${dirs[@]}"; do
         mkdir -p "${dir}"
     done
+    
+    # CRITICAL: Fix Postgres directory ownership for container user (postgres:70:70)
+    # Postgres container runs as postgres user (UID:70, GID:70), not tenant user
+    if [ -d "${DATA_ROOT}/postgres" ]; then
+        # Set ownership to postgres user for container compatibility
+        chown -R 70:70 "${DATA_ROOT}/postgres"
+        log "INFO" "Postgres directory ownership set to postgres user (70:70)"
+    fi
 
     log "SUCCESS" "Directories created"
 }
@@ -403,7 +411,6 @@ append_postgres() {
     image: postgres:15-alpine
     container_name: ${COMPOSE_PROJECT_NAME}-postgres
     restart: unless-stopped
-    user: "${TENANT_UID}:${TENANT_GID}"
     environment:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
