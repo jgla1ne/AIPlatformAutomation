@@ -99,6 +99,8 @@ check_tailscale_auth
 # ── Structured Logging Setup ───────────────────────────────────────
 LOG_DIR="${DATA_ROOT}/logs"
 mkdir -p "${LOG_DIR}"
+# Ensure log directory is owned by tenant, not root
+chown -R "${TENANT_UID}:${TENANT_GID}" "${LOG_DIR}"
 LOG_FILE="${LOG_DIR}/script-2-$(date +%Y%m%d-%H%M%S).log"
 exec > >(tee -a "${LOG_FILE}") 2>&1
 
@@ -387,6 +389,8 @@ VOLUMES_EOF
 # Helper to append to compose file
 compose_append() { 
     cat >> "${DATA_ROOT}/docker-compose.yml"; 
+    # Ensure file is owned by tenant, not root
+    chown "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/docker-compose.yml"
 }
 
 # ─────────────────────────────────────────────────────────────
