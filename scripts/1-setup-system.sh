@@ -1266,8 +1266,8 @@ LITELLM_API_ENDPOINT="${LITELLM_INTERNAL_URL}/v1"
 QDRANT_API_ENDPOINT="${QDRANT_INTERNAL_URL}"
 
 # ─── Project Configuration ───────────────────────────────────────────────────
-COMPOSE_PROJECT_NAME="${PROJECT_PREFIX}${TENANT_ID}"
-DOCKER_NETWORK="${COMPOSE_PROJECT_NAME}-net"
+export COMPOSE_PROJECT_NAME="${PROJECT_PREFIX}${TENANT_ID}"
+export DOCKER_NETWORK="${COMPOSE_PROJECT_NAME}-net"
 
 # ─── Hardware ─────────────────────────────────────────────────────────────────
 GPU_TYPE=${GPU_TYPE}
