@@ -556,7 +556,7 @@ collect_identity() {
 
     print_divider
 
-    echo -e "  ${BOLD}�  Project Prefix${NC}"
+    echo -e "  ${BOLD}  Project Prefix${NC}"
     echo -e "  ${DIM}Prefix for Docker resources (compose project, containers, volumes)${NC}"
     echo ""
 
@@ -572,7 +572,7 @@ collect_identity() {
 
     print_divider
 
-    echo -e "  ${BOLD}�  Admin Email${NC}"
+    echo -e "  ${BOLD}  Admin Email${NC}"
     echo ""
     while true; do
         read -p "  ➤ Admin email address: " ADMIN_EMAIL

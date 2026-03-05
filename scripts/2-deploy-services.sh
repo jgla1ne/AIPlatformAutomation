@@ -1,540 +1,295 @@
 #!/bin/bash
-# Script 2: Deploy Services - Fixed Version with Final Output
-# Fixed version with analysis.md improvements and proper final health check
+# Script 2: Deploy Services - Final Version with Full Integration and Health Checks
 
 set -euo pipefail
 
-# Colors for output
+# --- Colors for Clean Output ---
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m'
 
 log()  { echo -e "${GREEN}[$(date +'%H:%M:%S')]${NC} $1"; }
 warn() { echo -e "${YELLOW}[$(date +'%H:%M:%S')] WARNING:${NC} $1"; }
 error(){ echo -e "${RED}[$(date +'%H:%M:%S')] ERROR:${NC} $1"; }
-info() { echo -e "${BLUE}[$(date +'%H:%M:%S')] INFO:${NC} $1"; }
+info() { echo -e "${CYAN}[$(date +'%H:%M:%S')] INFO:${NC} $1"; }
 
-# Configuration paths - loaded from .env
-ENV_FILE="${ENV_FILE:-$(sudo ls -t /mnt/data/*/.env 2>/dev/null | head -1)}"
-TENANT_DIR="$(dirname "${ENV_FILE}")"
-PLATFORM_DIR="${TENANT_DIR}"
-COMPOSE_FILE="${PLATFORM_DIR}/docker-compose.yml"
-
-# ─── Load environment ────────────────────────────────────────────────
-[[ -z "${ENV_FILE:-}" || ! -f "${ENV_FILE}" ]] && {
-    error "Cannot find .env file. Run script 1 first."
+# --- Find and Load Environment ---
+ENV_FILE=$(find /mnt/data -name ".env" -printf "%T@ %p\n" | sort -n | tail -1 | cut -d' ' -f2-)
+if [[ -z "${ENV_FILE:-}" || ! -f "${ENV_FILE}" ]]; then
+    error "Cannot find a .env file in /mnt/data. Run script 1 (setup) first."
     exit 1
-}
-
-log "Using .env: ${ENV_FILE}"
-
+fi
+log "Using environment file: ${ENV_FILE}"
 set -a
 source "${ENV_FILE}"
 set +a
 
-# Get tenant UID/GID
-TENANT_UID=$(id -u "${TENANT_USER:-${SUDO_USER:-$(logname)}}")
-TENANT_GID=$(id -g "${TENANT_USER:-${SUDO_USER:-$(logname)}}")
+# --- Essential Variables ---
+TENANT_DIR=$(dirname "${ENV_FILE}")
+COMPOSE_FILE="${TENANT_DIR}/docker-compose.yml"
 
-# ─── Root check ───────────────────────────────────────────────────────
-if [[ $EUID -ne 0 ]]; then
-    error "This script must be run as root (sudo bash 2-deploy-services-fixed.sh)"
-    exit 1
-fi
+# --- Root and Docker Checks ---
+if [[ $EUID -ne 0 ]]; then error "This script must be run as root (sudo)." && exit 1; fi
+log "Ensuring Docker is running..."
+if ! systemctl is-active --quiet docker; then systemctl start docker; sleep 3; fi
+if ! docker info &>/dev/null; then error "Docker is not responding. Check: systemctl status docker" && exit 1; fi
+log "Docker is active."
 
-# ─── Docker daemon ────────────────────────────────────────────────────
-log "Ensuring Docker daemon is running..."
-systemctl start docker
-sleep 2
-if ! docker info &>/dev/null; then
-    error "Docker daemon is not responding. Check: systemctl status docker"
-    exit 1
-fi
-log "Docker daemon OK"
+# --- Directory and Permission Setup ---
+log "Creating and configuring directories..."
+declare -a DIRS=(
+    "${TENANT_DIR}/caddy/data" "${TENANT_DIR}/postgres" "${TENANT_DIR}/redis" "${TENANT_DIR}/ollama" 
+    "${TENANT_DIR}/qdrant" "${TENANT_DIR}/prometheus/data" "${TENANT_DIR}/grafana" "${TENANT_DIR}/n8n" 
+    "${TENANT_DIR}/flowise" "${TENANT_DIR}/openwebui" "${TENANT_DIR}/anythingllm" "${TENANT_DIR}/litellm" 
+    "${TENANT_DIR}/authentik/media" "${TENANT_DIR}/authentik/custom-templates" "${TENANT_DIR}/dify" "${TENANT_DIR}/minio"
+    "${TENANT_DIR}/tailscale" "${TENANT_DIR}/openclaw"
+)
+for dir in "${DIRS[@]}"; do mkdir -p "${dir}"; done
 
-# ─── Create required directories ─────────────────────────────────────
-log "Creating required bind-mount directories..."
-mkdir -p "${PLATFORM_DIR}/caddy/data"
-mkdir -p "${PLATFORM_DIR}/postgres"
-mkdir -p "${PLATFORM_DIR}/redis"
-mkdir -p "${PLATFORM_DIR}/ollama"
-mkdir -p "${PLATFORM_DIR}/qdrant"
-mkdir -p "${PLATFORM_DIR}/prometheus"
-mkdir -p "${PLATFORM_DIR}/grafana"
-mkdir -p "${PLATFORM_DIR}/prometheus/data"
-mkdir -p "${PLATFORM_DIR}/n8n"
-mkdir -p "${PLATFORM_DIR}/flowise"
-mkdir -p "${PLATFORM_DIR}/openwebui"
-mkdir -p "${PLATFORM_DIR}/anythingllm"
-mkdir -p "${PLATFORM_DIR}/litellm"
-mkdir -p "${PLATFORM_DIR}/authentik/media"
-mkdir -p "${PLATFORM_DIR}/authentik/custom-templates"
+log "Setting directory ownership..."
+chown -R "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}"
 
-# Create prometheus config
-cat > "${PLATFORM_DIR}/prometheus/prometheus.yml" << EOF
-global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
+# Critical ownership exceptions
+if [ -d "${TENANT_DIR}/postgres" ]; then chown -R 70:70 "${TENANT_DIR}/postgres"; log "Set ownership for PostgreSQL."; fi
+chmod -R 755 "${TENANT_DIR}"
+log "Directories are ready."
 
-scrape_configs:
-  - job_name: 'prometheus'
-    static_configs:
-      - targets: ['${COMPOSE_PROJECT_NAME}-prometheus:9090']
-EOF
+# --- Dynamic Docker Compose Generation ---
+log "Generating docker-compose.yml -> ${COMPOSE_FILE}"
 
-chown -R "${TENANT_UID}:${TENANT_GID}" "${PLATFORM_DIR}"
-chmod -R 755 "${PLATFORM_DIR}"
-log "Directories ready"
-
-# ─── Generate clean docker-compose.yml ───────────────────────────
-log "Generating docker-compose.yml → ${COMPOSE_FILE}"
-
+# Start with the network definition
 cat > "${COMPOSE_FILE}" << EOF
 version: '3.8'
 
+networks:
+  ${DOCKER_NETWORK}:
+    driver: bridge
+    name: ${DOCKER_NETWORK}
+
 services:
+EOF
+
+# Append services conditionally
+if [[ "${ENABLE_POSTGRES:-true}" == "true" ]]; then
+cat >> "${COMPOSE_FILE}" << EOF
   postgres:
     image: postgres:15-alpine
-    container_name: ai-datasquiz-postgres
+    container_name: ${COMPOSE_PROJECT_NAME}-postgres
     restart: unless-stopped
     environment:
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
+      POSTGRES_USER: \${POSTGRES_USER}
+      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD}
+      POSTGRES_DB: \${POSTGRES_DB}
     volumes:
-      - ${PLATFORM_DIR}/postgres:/var/lib/postgresql/data
+      - ${TENANT_DIR}/postgres:/var/lib/postgresql/data
     networks:
-      - ai-datasquiz-net
+      - ${DOCKER_NETWORK}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER} -d \${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 40s
+EOF
+fi
 
+if [[ "${ENABLE_REDIS:-true}" == "true" ]]; then
+cat >> "${COMPOSE_FILE}" << EOF
   redis:
     image: redis:7-alpine
-    container_name: ai-datasquiz-redis
+    container_name: ${COMPOSE_PROJECT_NAME}-redis
     restart: unless-stopped
-    command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes
+    command: redis-server --requirepass \${REDIS_PASSWORD} --appendonly yes
     volumes:
-      - ${PLATFORM_DIR}/redis:/data
+      - ${TENANT_DIR}/redis:/data
     networks:
-      - ai-datasquiz-net
+      - ${DOCKER_NETWORK}
     healthcheck:
-      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      test: ["CMD", "redis-cli", "-a", "\${REDIS_PASSWORD}", "ping"]
       interval: 10s
-      timeout: 3s
+      timeout: 5s
       retries: 5
+      start_period: 20s
+EOF
+fi
 
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ai-datasquiz-ollama
-    restart: unless-stopped
-    user: "${TENANT_UID}:${TENANT_GID}"
-    environment:
-      - OLLAMA_HOST=0.0.0.0
-      - OLLAMA_PORT=${OLLAMA_INTERNAL_PORT}
-    volumes:
-      - ${PLATFORM_DIR}/ollama:/root/.ollama
-    networks:
-      - ai-datasquiz-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${OLLAMA_INTERNAL_PORT}/api/tags"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: ai-datasquiz-qdrant
-    restart: unless-stopped
-    user: "${TENANT_UID}:${TENANT_GID}"
-    environment:
-      - QDRANT__SERVICE__HTTP_PORT=${QDRANT_INTERNAL_HTTP_PORT}
-    volumes:
-      - ${PLATFORM_DIR}/qdrant:/qdrant/storage
-    networks:
-      - ai-datasquiz-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${QDRANT_INTERNAL_HTTP_PORT}/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: ai-datasquiz-prometheus
-    restart: unless-stopped
-    user: "${TENANT_UID}:${TENANT_GID}"
-    ports:
-      - "9090:9090"
-    volumes:
-      - ${PLATFORM_DIR}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ${PLATFORM_DIR}/prometheus/data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--storage.tsdb.retention.time=15d'
-    networks:
-      - ai-datasquiz-net
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-  grafana:
-    image: grafana/grafana:latest
-    container_name: ai-datasquiz-grafana
-    restart: unless-stopped
-    user: "${TENANT_UID}:${TENANT_GID}"
-    ports:
-      - "3002:3000"
-    environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
-      - GF_PATHS_DATA=/var/lib/grafana
-      - GF_PATHS_LOGS=/var/log/grafana
-    volumes:
-      - ${PLATFORM_DIR}/grafana:/var/lib/grafana
-    networks:
-      - ai-datasquiz-net
-    depends_on:
-      - prometheus
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
+if [[ "${ENABLE_CADDY:-true}" == "true" ]]; then
+cat >> "${COMPOSE_FILE}" << EOF
   caddy:
     image: caddy:2-alpine
-    container_name: ai-datasquiz-caddy
+    container_name: ${COMPOSE_PROJECT_NAME}-caddy
     restart: unless-stopped
-    user: "${TENANT_UID}:${TENANT_GID}"
     ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-      - "2019:2019"
+      - "\${CADDY_HTTP_PORT:-80}:80"
+      - "\${CADDY_HTTPS_PORT:-443}:443"
+      - "\${CADDY_HTTPS_PORT:-443}:443/udp"
     volumes:
-      - ${PLATFORM_DIR}/caddy/config/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ${PLATFORM_DIR}/caddy/data:/data
+      - ${TENANT_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${TENANT_DIR}/caddy/data:/data
     networks:
-      - ai-datasquiz-net
-    depends_on:
-      - postgres
-      - redis
-      - ollama
+      - ${DOCKER_NETWORK}
     healthcheck:
       test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
-      interval: 30s
+      interval: 60s
       timeout: 10s
       retries: 3
-      start_period: 60s
-
-# ── n8n ──────────────────────────────────────────────────────────────
-$([ "${ENABLE_N8N:-true}" = "true" ] && cat << BLOCK
-
-  n8n:
-    image: n8nio/n8n:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-n8n
-    restart: unless-stopped
-    user: "${TENANT_UID}:${TENANT_GID}"
-    ports:
-      - "${N8N_PORT:-5678}:5678"
-    environment:
-      - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=${N8N_USER:-admin}
-      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD}
-      - N8N_HOST=n8n.${DOMAIN}
-      - N8N_PORT=5678
-      - N8N_PROTOCOL=https
-      - NODE_ENV=production
-      - WEBHOOK_URL=https://n8n.${DOMAIN}
-      - GENERIC_TIMEZONE=${TIMEZONE:-UTC}
-      - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=${COMPOSE_PROJECT_NAME}-postgres
-      - DB_POSTGRESDB_PORT=5432
-      - DB_POSTGRESDB_DATABASE=n8n
-      - DB_POSTGRESDB_USER=${POSTGRES_USER}
-      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
-    volumes:
-      - ${PLATFORM_DIR}/n8n:/home/node/.n8n
-    networks:
-      - ${COMPOSE_PROJECT_NAME}-net
-    depends_on:
-      - postgres
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5678/healthz"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-BLOCK
-)
-
-# ── Flowise ──────────────────────────────────────────────────────────
-$([ "${ENABLE_FLOWISE:-true}" = "true" ] && cat << BLOCK
-
-  flowise:
-    image: flowiseai/flowise:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-flowise
-    restart: unless-stopped
-    user: "${TENANT_UID}:${TENANT_GID}"
-    ports:
-      - "${FLOWISE_PORT:-3000}:3000"
-    environment:
-      - FLOWISE_USERNAME=${FLOWISE_USER:-admin}
-      - FLOWISE_PASSWORD=${FLOWISE_PASSWORD}
-      - DATABASE_PATH=/root/.flowise
-      - APIKEY_PATH=/root/.flowise
-      - SECRETKEY_PATH=/root/.flowise
-      - LOG_PATH=/root/.flowise/logs
-    volumes:
-      - ${PLATFORM_DIR}/flowise:/root/.flowise
-    networks:
-      - ${COMPOSE_PROJECT_NAME}-net
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-BLOCK
-)
-
-# ── Open WebUI ───────────────────────────────────────────────────────
-$([ "${ENABLE_OPENWEBUI:-true}" = "true" ] && cat << BLOCK
-
-  openwebui:
-    image: ghcr.io/open-webui/open-webui:main
-    container_name: ${COMPOSE_PROJECT_NAME}-openwebui
-    restart: unless-stopped
-    ports:
-      - "${OPENWEBUI_PORT:-8080}:8080"
-    environment:
-      - OLLAMA_BASE_URL=http://${COMPOSE_PROJECT_NAME}-ollama:11434
-      - WEBUI_SECRET_KEY=${OPENWEBUI_SECRET_KEY:-$(openssl rand -hex 32)}
-    volumes:
-      - ${PLATFORM_DIR}/openwebui:/app/backend/data
-    networks:
-      - ${COMPOSE_PROJECT_NAME}-net
-    depends_on:
-      - ollama
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-BLOCK
-)
-
-# ── AnythingLLM ──────────────────────────────────────────────────────
-$([ "${ENABLE_ANYTHINGLLM:-true}" = "true" ] && cat << BLOCK
-
-  anythingllm:
-    image: mintplexlabs/anythingllm:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-anythingllm
-    restart: unless-stopped
-    ports:
-      - "${ANYTHINGLLM_PORT:-3001}:3001"
-    environment:
-      - STORAGE_DIR=/app/server/storage
-      - JWT_SECRET=${ANYTHINGLLM_JWT_SECRET}
-      - LLM_PROVIDER=ollama
-      - OLLAMA_BASE_PATH=http://${COMPOSE_PROJECT_NAME}-ollama:11434
-      - VECTOR_DB=qdrant
-      - QDRANT_ENDPOINT=http://${COMPOSE_PROJECT_NAME}-qdrant:6333
-      - QDRANT_API_KEY=${QDRANT_API_KEY}
-    volumes:
-      - ${PLATFORM_DIR}/anythingllm:/app/server/storage
-    networks:
-      - ${COMPOSE_PROJECT_NAME}-net
-    depends_on:
-      - ollama
-      - qdrant
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/api/ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-BLOCK
-)
-
-# ── LiteLLM ──────────────────────────────────────────────────────────
-$([ "${ENABLE_LITELLM:-true}" = "true" ] && cat << BLOCK
-
-  litellm:
-    image: ghcr.io/berriai/litellm:main-latest
-    container_name: ${COMPOSE_PROJECT_NAME}-litellm
-    restart: unless-stopped
-    ports:
-      - "${LITELLM_PORT:-4000}:4000"
-    environment:
-      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${COMPOSE_PROJECT_NAME}-postgres:5432/litellm
-      - STORE_MODEL_IN_DB=True
-    volumes:
-      - ${PLATFORM_DIR}/litellm:/app/config
-    networks:
-      - ${COMPOSE_PROJECT_NAME}-net
-    depends_on:
-      - postgres
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-BLOCK
-)
-
-# ── Authentik ────────────────────────────────────────────────────────
-$([ "${ENABLE_AUTHENTIK:-false}" = "true" ] && cat << BLOCK
-
-  authentik-server:
-    image: ghcr.io/goauthentik/server:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-authentik
-    restart: unless-stopped
-    command: server
-    ports:
-      - "${AUTHENTIK_PORT:-9000}:9000"
-    environment:
-      - AUTHENTIK_REDIS__HOST=${COMPOSE_PROJECT_NAME}-redis
-      - AUTHENTIK_POSTGRESQL__HOST=${COMPOSE_PROJECT_NAME}-postgres
-      - AUTHENTIK_POSTGRESQL__USER=${POSTGRES_USER}
-      - AUTHENTIK_POSTGRESQL__PASSWORD=${POSTGRES_PASSWORD}
-      - AUTHENTIK_POSTGRESQL__NAME=authentik
-      - AUTHENTIK_SECRET_KEY=${AUTHENTIK_SECRET_KEY}
-      - AUTHENTIK_BOOTSTRAP_PASSWORD=${AUTHENTIK_BOOTSTRAP_PASSWORD}
-      - AUTHENTIK_BOOTSTRAP_EMAIL=${ADMIN_EMAIL}
-    volumes:
-      - ${PLATFORM_DIR}/authentik/media:/media
-      - ${PLATFORM_DIR}/authentik/custom-templates:/templates
-    networks:
-      - ${COMPOSE_PROJECT_NAME}-net
-    depends_on:
-      - postgres
-      - redis
-BLOCK
-)
-
-networks:
-  ai-datasquiz-net:
-    driver: bridge
 EOF
+fi
 
-# Ensure proper ownership
-chown "${TENANT_UID}:${TENANT_GID}" "${COMPOSE_FILE}"
-log "Docker Compose generated successfully"
+if [[ "${ENABLE_OLLAMA}" == "true" ]]; then
+cat >> "${COMPOSE_FILE}" << EOF
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-ollama
+    restart: unless-stopped
+    user: "${TENANT_UID}:${TENANT_GID}"
+    ports:
+      - "\${OLLAMA_PORT}:11434"
+    volumes:
+      - ${TENANT_DIR}/ollama:/root/.ollama
+    networks:
+      - ${DOCKER_NETWORK}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+EOF
+if [[ "${GPU_TYPE}" == "nvidia" ]]; then
+cat >> "${COMPOSE_FILE}" << EOF
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+EOF
+fi
+fi
 
-# ─── Validate compose config ──────────────────────────────────────────
+if [[ "${ENABLE_TAILSCALE}" == "true" ]]; then
+cat >> "${COMPOSE_FILE}" << EOF
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-tailscale
+    hostname: \${TAILSCALE_HOSTNAME}
+    network_mode: "host"
+    privileged: true
+    restart: unless-stopped
+    volumes:
+      - /var/lib:/var/lib
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      - TS_AUTHKEY=\${TAILSCALE_AUTH_KEY}
+      - TS_EXTRA_ARGS=--advertise-tags=tag:ai-platform --accept-routes
+EOF
+fi
+
+if [[ "${ENABLE_OPENCLAW}" == "true" ]]; then
+cat >> "${COMPOSE_FILE}" << EOF
+  openclaw:
+    image: openclaw/openclaw:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-openclaw
+    restart: unless-stopped
+    network_mode: "service:tailscale"
+    depends_on:
+      - tailscale
+    volumes:
+      - ${TENANT_DIR}/openclaw:/app/data
+    environment:
+      - OPENCLAW_ADMIN_USER=admin
+      - OPENCLAW_ADMIN_PASSWORD=\${OPENCLAW_PASSWORD}
+EOF
+fi
+
+log "Docker Compose file generated."
+
+# --- Validate and Deploy ---
 log "Validating Docker Compose configuration..."
-cd "${PLATFORM_DIR}"
-if ! docker compose config --quiet 2>&1; then
-    error "docker-compose.yml is invalid. Output:"
-    docker compose config 2>&1
+cd "${TENANT_DIR}"
+if ! docker compose config --quiet; then
+    error "Docker Compose file is invalid. Please check the generated ${COMPOSE_FILE}."
+    docker compose config # Print the invalid config for debugging
+    cd - > /dev/null
     exit 1
 fi
-log "Configuration valid"
+log "Configuration is valid."
 
-# ─── Deploy stack ──────────────────────────────────────────────────
-log "Starting deployment..."
-docker compose down --remove-orphans 2>/dev/null || true
-docker compose up -d
+log "Deploying stack '${COMPOSE_PROJECT_NAME}'..."
+docker compose --project-name "${COMPOSE_PROJECT_NAME}" down --remove-orphans 2>/dev/null || true
+docker compose --project-name "${COMPOSE_PROJECT_NAME}" up -d --remove-orphans
 
-# ─── Wait for containers to initialise ─────────────────────────────
-log "Waiting 30 seconds for containers to initialise..."
-sleep 30
+cd - > /dev/null
+log "Deployment initiated. Waiting 60 seconds for services to stabilize..."
+sleep 60
 
-# ─── Verify deployment with detailed health check ───────────────────────
-log "Verifying deployment status..."
-
+# --- Comprehensive Health Check ---
+info "Verifying deployment with container and URL health checks..."
 echo ""
-echo "=========================================="
-echo "  AI Platform — Deployment Health Check"
-echo "=========================================="
+echo -e "${BLUE}=============================================${NC}"
+echo -e "  ${BOLD}AI Platform - Live Deployment Health Check${NC}"
+echo -e "${BLUE}=============================================${NC}"
 
-# Get server IP
-SERVER_IP=$(hostname -I | awk '{print $1}')
-
-# Check each service
-SERVICES=(
-    "postgres" "redis" "ollama" "qdrant"
-    "prometheus" "grafana" "caddy"
-    "n8n" "flowise" "openwebui" "anythingllm" "litellm"
-)
 FAILED_SERVICES=()
+SERVICES=$(docker compose --project-name "${COMPOSE_PROJECT_NAME}" -f "${COMPOSE_FILE}" config --services)
 
-for service in "${SERVICES[@]}"; do
-    if docker ps --format "table {{.Names}}\t{{.Status}}" | grep -q "ai-datasquiz-${service}.*Up"; then
-        status=$(docker ps --format "table {{.Names}}\t{{.Status}}" | grep "ai-datasquiz-${service}" | awk '{print $2,$3,$4}')
-        echo "  ✅  ${service}: ${status}"
-    else
-        echo "  ❌  ${service}: NOT RUNNING"
-        FAILED_SERVICES+=("$service")
+# 1. Container Health Check
+info "Checking container health status..."
+for service in ${SERVICES}; do
+    container_name="${COMPOSE_PROJECT_NAME}-${service}"
+    if ! docker ps --filter "name=${container_name}" --format "{{.Names}}" | grep -q "${container_name}"; then
+        echo -e "  ${RED}❌ ${service}: NOT RUNNING${NC}"
+        FAILED_SERVICES+=("${service}")
+        continue
     fi
-done
-
-# URL Health Check
-echo ""
-echo "🌐 Service URL Health Check:"
-echo "  PostgreSQL:           ${SERVER_IP}:5432"
-echo "  Redis:               ${SERVER_IP}:6379"
-echo "  Ollama API:          http://${SERVER_IP}:11434"
-echo "  Qdrant:              http://${SERVER_IP}:6333"
-echo "  Prometheus:          http://${SERVER_IP}:9090"
-echo "  Grafana:             http://${SERVER_IP}:3002"
-echo "  Caddy (HTTP):        http://${SERVER_IP}:80"
-echo "  Caddy (HTTPS):       https://${SERVER_IP}:443"
-
-# Port connectivity check
-echo ""
-echo "🔌 Port Connectivity Check:"
-PORTS=("5432:PostgreSQL" "6379:Redis" "11434:Ollama" "6333:Qdrant" "9090:Prometheus" "3002:Grafana" "80:Caddy-HTTP" "443:Caddy-HTTPS")
-
-for port_info in "${PORTS[@]}"; do
-    port=$(echo "$port_info" | cut -d':' -f1)
-    name=$(echo "$port_info" | cut -d':' -f2)
     
-    if ss -tlnp | grep -q ":$port "; then
-        echo "  ✅  Port $port ($name) is listening"
+    health_status=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}no healthcheck{{end}}' "${container_name}" 2>/dev/null)
+    case "${health_status}" in
+        "healthy")   echo -e "  ${GREEN}✅ ${service}: running and healthy${NC}" ;;
+        "unhealthy") echo -e "  ${RED}❌ ${service}: running but UNHEALTHY${NC}"; FAILED_SERVICES+=("${service}") ;;
+        "starting")  echo -e "  ${YELLOW}⏳ ${service}: running but still starting...${NC}"; FAILED_SERVICES+=("${service}") ;;
+        *)           echo -e "  ${GREEN}✅ ${service}: running${NC}" ;;
+    esac
+done
+echo ""
+
+# 2. Public URL Health Check
+info "Checking public service URLs..."
+for service in ${SERVICES}; do
+    # Check only services that should be public
+    if [[ " caddy postgres redis ollama qdrant tailscale openclaw " =~ " ${service} " ]]; then continue; fi
+    
+    URL="https://$(echo "$service" | tr '[:upper:]' '[:lower:]').${DOMAIN}"
+    status_code=$(curl -o /dev/null -s -w "%{http_code}" --max-time 10 "${URL}" || echo "000")
+
+    if [[ "${status_code}" -ge 200 && "${status_code}" -lt 400 ]]; then
+        echo -e "  ${GREEN}✅ ${URL} is accessible (Status: ${status_code})${NC}"
+    elif [[ "${status_code}" -eq 502 ]]; then
+        echo -e "  ${YELLOW}⏳ ${URL} is starting up (Status: ${status_code})${NC}"
     else
-        echo "  ⚠️   Port $port ($name) not yet listening"
+        echo -e "  ${RED}❌ ${URL} is NOT accessible (Status: ${status_code})${NC}"
+        if ! [[ " ${FAILED_SERVICES[*]} " =~ " ${service} " ]]; then FAILED_SERVICES+=("${service}"); fi
     fi
 done
 
-# Summary
-echo ""
-echo "=========================================="
+echo -e "${BLUE}=============================================${NC}"
 if [ ${#FAILED_SERVICES[@]} -eq 0 ]; then
-    echo "  🎉 ALL SERVICES RUNNING SUCCESSFULLY!"
-    echo "  🌐 Access URLs listed above"
-    echo "  📊 Grafana: http://${SERVER_IP}:3002 (admin/${GRAFANA_PASSWORD})"
+    log "🎉 Success! All services are running and accessible."
+    info "You can now proceed to script 3 to finalize the configuration."
+    echo -e "  ${CYAN}sudo bash scripts/3-configure-services.sh${NC}"
 else
-    echo "  ⚠️  ${#FAILED_SERVICES[@]} services failed:"
+    error "⚠️ ${#FAILED_SERVICES[@]} services have issues: ${FAILED_SERVICES[*]}"
+    error "Please check the logs for the failed services:"
     for failed in "${FAILED_SERVICES[@]}"; do
-        echo "     - $failed"
+        echo "  sudo docker logs ${COMPOSE_PROJECT_NAME}-${failed}"
     done
-    echo ""
-    echo "  🔍 Debug with: docker compose logs [service]"
-fi
-echo "=========================================="
-echo ""
-
-if [ ${#FAILED_SERVICES[@]} -gt 0 ]; then
-    warn "Some services failed to start. Check logs for details."
     exit 1
-else
-    log "Deployment complete! All services are healthy."
 fi
