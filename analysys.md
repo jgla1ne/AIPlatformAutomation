@@ -1,101 +1,120 @@
-# Analysis & Windsurf Implementation Plan
+# Updated Analysis — Post-Fix Issues
 
-## 🔍 PHASE 1: ISSUE IDENTIFICATION
-
-### **Script 2 (`2-deploy-services.sh`) — Critical Issues**
+## 🔍 PHASE 1: CONFIRMED REMAINING ISSUES
 
 ---
 
-#### **ISSUE 1: Missing Newline Before Docker Daemon Block** *(Syntax Error)*
+### **ISSUE 1: 🔴 CRITICAL — `EOFchmod` Still Present in Script 1**
 ```bash
-# Line ~43 — Missing newline causes bash parse error:
+# Found exactly as predicted:
+EOFchmod 644 "${CADDY_DIR}/Caddyfile"
+```
+**The heredoc never closes** — everything after the opening `<< EOF` 
+including the `chmod` becomes part of the file content, not a command.
+
+---
+
+### **ISSUE 2: 🔴 CRITICAL — `fi#` Still Present in Script 2**
+```bash
     exit 1
-fi# ─── Docker daemon ─────  ← BUG: fi# on same line
+fi# ─── Docker daemon ──────
 ```
+**Bash parse error** — script dies before deploying anything.
 
 ---
 
-#### **ISSUE 2: Prometheus Config Uses Literal String Instead of Variable**
-```bash
-# The heredoc uses 'EOF' (single-quoted = no expansion) BUT contains a variable:
-cat > ".../prometheus.yml" << 'EOF'
-  - targets: ['${COMPOSE_PROJECT_NAME}-prometheus:9090']  
-#             ↑ Will NOT expand — literal string in output
-EOF
-```
-
----
-
-#### **ISSUE 3: Incomplete SERVICES Array**
-```bash
-# Only 7 services — missing 5 application services:
-SERVICES=("postgres" "redis" "ollama" "qdrant" "prometheus" "grafana" "caddy")
-# ❌ MISSING: n8n, flowise, openwebui, anythingllm, litellm
-```
-
----
-
-#### **ISSUE 4: Docker Compose YAML Indentation Error**
+### **ISSUE 3: 🔴 CRITICAL — `prometheus:` Block Missing 2-Space Indent**
 ```yaml
-# prometheus block has NO leading spaces (top-level)
-# but grafana block IS indented — YAML is inconsistent:
-prometheus:          ← no indent (wrong)
-    image: ...
-  grafana:           ← 2-space indent (correct)
-    image: ...
+# In the docker-compose.yml heredoc:
+prometheus:           ← TOP-LEVEL (wrong — breaks entire YAML)
+    image: prom/...
+  grafana:            ← correctly indented
+    image: grafana/...
 ```
+This causes **docker compose to reject the entire file**.
 
 ---
 
-#### **ISSUE 5: Typo in Variable Name (`LITELM_PORT`)**
+### **ISSUE 4: 🔴 CRITICAL — APPLICATION SERVICES COMPLETELY ABSENT from `docker-compose.yml`**
+
+This is the **ROOT CAUSE** of "0/6 services deployed".
+
+The `[...]` truncation in the file confirms the compose heredoc only 
+generates **6 core services**. There are **zero service blocks** for:
+
+| Missing Service | Container Name Expected |
+|----------------|------------------------|
+| n8n | ai-datasquiz-n8n |
+| Flowise | ai-datasquiz-flowise |
+| Open WebUI | ai-datasquiz-openwebui |
+| AnythingLLM | ai-datasquiz-anythingllm |
+| LiteLLM | ai-datasquiz-litellm |
+| Authentik | ai-datasquiz-authentik |
+
+The SERVICES array was fixed to **list** them — but the **compose 
+generator never writes their service blocks**.
+
+---
+
+### **ISSUE 5: 🟠 HIGH — Caddy Routes Missing for Application Services**
+
+Script 1 only generates Caddy blocks for `grafana` and `authentik`:
 ```bash
-# Script 3, repeated twice:
-curl -sf -X POST "http://${LOCALHOST}:${LITELM_PORT}/v1/model/register"
-#                                      ↑ Missing 'L' — should be LITELLM_PORT
+$([ "${ENABLE_GRAFANA}" = "true" ]    && cat << BLOCK ... BLOCK)
+$([ "${ENABLE_AUTHENTIK}" = "true" ]  && cat << BLOCK ... BLOCK)
 ```
+**No Caddy blocks exist for:**
+- `n8n.${DOMAIN}`
+- `flowise.${DOMAIN}`
+- `openwebui.${DOMAIN}` / `chat.${DOMAIN}`
+- `anythingllm.${DOMAIN}`
+- `litellm.${DOMAIN}`
 
 ---
 
-#### **ISSUE 6: `4-add-service.sh` Sourcing Script 2 Directly**
+### **ISSUE 6: 🟠 HIGH — Ollama Restart Loop**
+
+From the test report: `ai-datasquiz-ollama → RESTARTING`
+
+Likely causes visible in script 2:
 ```bash
-# This executes ALL of script 2 at source time, not just functions:
-source "${SCRIPT2_DIR}/2-deploy-services.sh"   # ❌ Runs full deployment
-exec bash "${SCRIPT2_DIR}/2-deploy-services.sh" # Then runs it AGAIN
+user: "${TENANT_UID}:${TENANT_GID}"   # ← GPU access requires root/video group
+# Missing: runtime: nvidia  OR  deploy.resources.reservations.devices
+# Missing: /dev/gpu bind mount
 ```
 
 ---
 
-#### **ISSUE 7: `chown` Runs Before Prometheus Config Written Atomically**
+### **ISSUE 7: 🟡 MEDIUM — Hardcoded Username `jglaine`**
 ```bash
-mkdir -p "${PLATFORM_DIR}/prometheus"
-cat > "${PLATFORM_DIR}/prometheus/prometheus.yml" << 'EOF'  # ← written here
-...
-chown -R "${TENANT_UID}:${TENANT_GID}" "${PLATFORM_DIR}"    # ← then chown
-# This is fine ORDER-wise but the literal variable bug (Issue 2) means
-# the file content is wrong before chown even runs
+TENANT_UID=$(id -u jglaine)   # ← Hardcoded — breaks on any other server
+TENANT_GID=$(id -g jglaine)
 ```
+Should use `${TENANT_USER}` or `${SUDO_USER}` from the env file.
 
 ---
 
-#### **ISSUE 8: Script 1 `Caddyfile` Missing EOF Newline**
+### **ISSUE 8: 🟡 MEDIUM — `main "$@"` Has No Newline Before It**
 ```bash
-EOFchmod 644 "${CADDY_DIR}/Caddyfile"  
-# ↑ EOF and chmod on same line — heredoc never closes properly
+    fi
+}main "$@"    ← closing brace and main() on same line
 ```
+Script 3 last line — bash may fail to parse the final function close.
 
 ---
 
-### **Summary Table**
+## 📊 COMPLETE ISSUE REGISTER
 
-| # | Script | Severity | Issue |
-|---|--------|----------|-------|
-| 1 | `2` | 🔴 Critical | `fi#` missing newline — bash syntax error |
-| 2 | `2` | 🔴 Critical | Prometheus heredoc `'EOF'` blocks variable expansion |
-| 3 | `2` | 🔴 Critical | SERVICES array missing 5 services |
-| 4 | `2` | 🟠 High | docker-compose YAML indentation broken |
-| 5 | `3` | 🟠 High | `LITELM_PORT` typo (×2) |
-| 6 | `4` | 🟠 High | `source` + `exec` double-runs script 2 |
-| 7 | `1` | 🔴 Critical | `EOFchmod` — heredoc + command on same line |
+| # | Script | Severity | Category | Issue |
+|---|--------|----------|----------|-------|
+| 1 | `1` | 🔴 Critical | Syntax | `EOFchmod` — heredoc never closes |
+| 2 | `2` | 🔴 Critical | Syntax | `fi#` — bash parse error |
+| 3 | `2` | 🔴 Critical | YAML | `prometheus:` missing 2-space indent |
+| 4 | `2` | 🔴 Critical | Missing Code | No compose blocks for n8n/flowise/openwebui/anythingllm/litellm/authentik |
+| 5 | `1` | 🟠 High | Missing Code | No Caddy subdomain routes for app services |
+| 6 | `2` | 🟠 High | Config | Ollama missing GPU runtime config |
+| 7 | `2` | 🟠 High | Portability | Hardcoded `jglaine` username |
+| 8 | `3` | 🟡 Medium | Syntax | `}main "$@"` missing newline |
 
 ---
 
@@ -103,11 +122,27 @@ EOFchmod 644 "${CADDY_DIR}/Caddyfile"
 
 ---
 
-### **TASK 1 — Fix `fi#` Syntax Error**
-**File:** `scripts/2-deploy-services.sh`
+### **TASK 1 — Fix `EOFchmod` in Script 1**
+**File:** `scripts/1-setup-system.sh`  
+**Type:** Single line fix
 
 ```
-FIND (exact):
+FIND (exact string):
+EOFchmod 644 "${CADDY_DIR}/Caddyfile"
+
+REPLACE WITH:
+EOF
+chmod 644 "${CADDY_DIR}/Caddyfile"
+```
+
+---
+
+### **TASK 2 — Fix `fi#` in Script 2**
+**File:** `scripts/2-deploy-services.sh`  
+**Type:** Single line fix
+
+```
+FIND (exact string):
     exit 1
 fi# ─── Docker daemon
 
@@ -120,180 +155,463 @@ fi
 
 ---
 
-### **TASK 2 — Fix Prometheus Heredoc Variable Expansion**
-**File:** `scripts/2-deploy-services.sh`
+### **TASK 3 — Fix Prometheus YAML Indentation in Script 2**
+**File:** `scripts/2-deploy-services.sh`  
+**Type:** Indentation fix inside heredoc
 
 ```
-FIND:
-cat > "${PLATFORM_DIR}/prometheus/prometheus.yml" << 'EOF'
-global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
-
-scrape_configs:
-  - job_name: 'prometheus'
-    static_configs:
-      - targets: ['${COMPOSE_PROJECT_NAME}-prometheus:9090']
-EOF
+FIND (inside the docker-compose.yml heredoc):
+prometheus:
+    image: prom/prometheus:latest
+    container_name: ai-datasquiz-prometheus
 
 REPLACE WITH:
-cat > "${PLATFORM_DIR}/prometheus/prometheus.yml" << EOF
-global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
-
-scrape_configs:
-  - job_name: 'prometheus'
-    static_configs:
-      - targets: ['${COMPOSE_PROJECT_NAME}-prometheus:9090']
-EOF
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ai-datasquiz-prometheus
 ```
-*(Remove single quotes from `'EOF'` → `EOF` to enable variable expansion)*
 
 ---
 
-### **TASK 3 — Fix Incomplete SERVICES Array**
-**File:** `scripts/2-deploy-services.sh`
+### **TASK 4 — Fix Hardcoded Username in Script 2**
+**File:** `scripts/2-deploy-services.sh`  
+**Type:** Variable substitution
 
 ```
 FIND:
-SERVICES=("postgres" "redis" "ollama" "qdrant" "prometheus" "grafana" "caddy")
+TENANT_UID=$(id -u jglaine)
+TENANT_GID=$(id -g jglaine)
 
 REPLACE WITH:
-SERVICES=(
-    "postgres" "redis" "ollama" "qdrant"
-    "prometheus" "grafana" "caddy"
-    "n8n" "flowise" "openwebui" "anythingllm" "litellm"
+TENANT_UID=$(id -u "${TENANT_USER:-${SUDO_USER:-$(logname)}}")
+TENANT_GID=$(id -g "${TENANT_USER:-${SUDO_USER:-$(logname)}}")
+```
+
+---
+
+### **TASK 5 — Add Missing Service Blocks to docker-compose.yml**
+**File:** `scripts/2-deploy-services.sh`  
+**Type:** Large addition — insert BEFORE the `networks:` block at the end of the heredoc
+
+Add the following 6 service blocks **conditionally** based on ENABLE_ flags:
+
+```bash
+# ── n8n ──────────────────────────────────────────────────────────────
+$([ "${ENABLE_N8N:-true}" = "true" ] && cat << BLOCK
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-n8n
+    restart: unless-stopped
+    user: "${TENANT_UID}:${TENANT_GID}"
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD}
+      - N8N_HOST=n8n.${DOMAIN}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=https
+      - NODE_ENV=production
+      - WEBHOOK_URL=https://n8n.${DOMAIN}
+      - GENERIC_TIMEZONE=${TIMEZONE:-UTC}
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=${COMPOSE_PROJECT_NAME}-postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=n8n
+      - DB_POSTGRESDB_USER=${POSTGRES_USER}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - ${PLATFORM_DIR}/n8n:/home/node/.n8n
+    networks:
+      - ${COMPOSE_PROJECT_NAME}-net
+    depends_on:
+      - postgres
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+BLOCK
+)
+
+# ── Flowise ──────────────────────────────────────────────────────────
+$([ "${ENABLE_FLOWISE:-true}" = "true" ] && cat << BLOCK
+
+  flowise:
+    image: flowiseai/flowise:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-flowise
+    restart: unless-stopped
+    user: "${TENANT_UID}:${TENANT_GID}"
+    ports:
+      - "${FLOWISE_PORT:-3001}:3000"
+    environment:
+      - FLOWISE_USERNAME=${FLOWISE_USER:-admin}
+      - FLOWISE_PASSWORD=${FLOWISE_PASSWORD}
+      - DATABASE_PATH=/root/.flowise
+      - APIKEY_PATH=/root/.flowise
+      - SECRETKEY_PATH=/root/.flowise
+      - LOG_PATH=/root/.flowise/logs
+    volumes:
+      - ${PLATFORM_DIR}/flowise:/root/.flowise
+    networks:
+      - ${COMPOSE_PROJECT_NAME}-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+BLOCK
+)
+
+# ── Open WebUI ───────────────────────────────────────────────────────
+$([ "${ENABLE_OPENWEBUI:-true}" = "true" ] && cat << BLOCK
+
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: ${COMPOSE_PROJECT_NAME}-openwebui
+    restart: unless-stopped
+    ports:
+      - "${OPENWEBUI_PORT:-3003}:8080"
+    environment:
+      - OLLAMA_BASE_URL=http://${COMPOSE_PROJECT_NAME}-ollama:11434
+      - WEBUI_SECRET_KEY=${OPENWEBUI_SECRET_KEY:-$(openssl rand -hex 32)}
+    volumes:
+      - ${PLATFORM_DIR}/openwebui:/app/backend/data
+    networks:
+      - ${COMPOSE_PROJECT_NAME}-net
+    depends_on:
+      - ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+BLOCK
+)
+
+# ── AnythingLLM ──────────────────────────────────────────────────────
+$([ "${ENABLE_ANYTHINGLLM:-true}" = "true" ] && cat << BLOCK
+
+  anythingllm:
+    image: mintplexlabs/anythingllm:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-anythingllm
+    restart: unless-stopped
+    ports:
+      - "${ANYTHINGLLM_PORT:-3004}:3001"
+    environment:
+      - STORAGE_DIR=/app/server/storage
+      - JWT_SECRET=${ANYTHINGLLM_JWT_SECRET:-$(openssl rand -hex 32)}
+      - LLM_PROVIDER=ollama
+      - OLLAMA_BASE_PATH=http://${COMPOSE_PROJECT_NAME}-ollama:11434
+      - VECTOR_DB=qdrant
+      - QDRANT_ENDPOINT=http://${COMPOSE_PROJECT_NAME}-qdrant:6333
+    volumes:
+      - ${PLATFORM_DIR}/anythingllm:/app/server/storage
+    networks:
+      - ${COMPOSE_PROJECT_NAME}-net
+    depends_on:
+      - ollama
+      - qdrant
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+BLOCK
+)
+
+# ── LiteLLM ──────────────────────────────────────────────────────────
+$([ "${ENABLE_LITELLM:-true}" = "true" ] && cat << BLOCK
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: ${COMPOSE_PROJECT_NAME}-litellm
+    restart: unless-stopped
+    ports:
+      - "${LITELLM_PORT:-4000}:4000"
+    environment:
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${COMPOSE_PROJECT_NAME}-postgres:5432/litellm
+      - STORE_MODEL_IN_DB=True
+    volumes:
+      - ${PLATFORM_DIR}/litellm:/app/config
+    networks:
+      - ${COMPOSE_PROJECT_NAME}-net
+    depends_on:
+      - postgres
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+BLOCK
+)
+
+# ── Authentik ────────────────────────────────────────────────────────
+$([ "${ENABLE_AUTHENTIK:-false}" = "true" ] && cat << BLOCK
+
+  authentik-server:
+    image: ghcr.io/goauthentik/server:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-authentik
+    restart: unless-stopped
+    command: server
+    ports:
+      - "${AUTHENTIK_PORT:-9000}:9000"
+    environment:
+      - AUTHENTIK_REDIS__HOST=${COMPOSE_PROJECT_NAME}-redis
+      - AUTHENTIK_POSTGRESQL__HOST=${COMPOSE_PROJECT_NAME}-postgres
+      - AUTHENTIK_POSTGRESQL__USER=${POSTGRES_USER}
+      - AUTHENTIK_POSTGRESQL__PASSWORD=${POSTGRES_PASSWORD}
+      - AUTHENTIK_POSTGRESQL__NAME=authentik
+      - AUTHENTIK_SECRET_KEY=${AUTHENTIK_SECRET_KEY:-$(openssl rand -hex 32)}
+      - AUTHENTIK_BOOTSTRAP_PASSWORD=${AUTHENTIK_BOOTSTRAP_PASSWORD}
+      - AUTHENTIK_BOOTSTRAP_EMAIL=${ADMIN_EMAIL}
+    volumes:
+      - ${PLATFORM_DIR}/authentik/media:/media
+      - ${PLATFORM_DIR}/authentik/custom-templates:/templates
+    networks:
+      - ${COMPOSE_PROJECT_NAME}-net
+    depends_on:
+      - postgres
+      - redis
+BLOCK
+)
+```
+
+Also add to **directory creation block**:
+```bash
+mkdir -p "${PLATFORM_DIR}/n8n"
+mkdir -p "${PLATFORM_DIR}/flowise"
+mkdir -p "${PLATFORM_DIR}/openwebui"
+mkdir -p "${PLATFORM_DIR}/anythingllm"
+mkdir -p "${PLATFORM_DIR}/litellm"
+mkdir -p "${PLATFORM_DIR}/authentik/media"
+mkdir -p "${PLATFORM_DIR}/authentik/custom-templates"
+```
+
+---
+
+### **TASK 6 — Add Caddy Subdomain Routes in Script 1**
+**File:** `scripts/1-setup-system.sh`  
+**Type:** Addition — insert before the `EOFchmod` line (which will be fixed to `EOF`)
+
+```bash
+$([ "${ENABLE_N8N:-true}" = "true" ] && cat << BLOCK
+n8n.${DOMAIN} {
+    reverse_proxy n8n:5678 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}
+BLOCK
+)
+$([ "${ENABLE_FLOWISE:-true}" = "true" ] && cat << BLOCK
+flowise.${DOMAIN} {
+    reverse_proxy flowise:3000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}
+BLOCK
+)
+$([ "${ENABLE_OPENWEBUI:-true}" = "true" ] && cat << BLOCK
+chat.${DOMAIN} {
+    reverse_proxy openwebui:8080 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}
+BLOCK
+)
+$([ "${ENABLE_ANYTHINGLLM:-true}" = "true" ] && cat << BLOCK
+docs.${DOMAIN} {
+    reverse_proxy anythingllm:3001 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}
+BLOCK
+)
+$([ "${ENABLE_LITELLM:-true}" = "true" ] && cat << BLOCK
+api.${DOMAIN} {
+    reverse_proxy litellm:4000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}
+BLOCK
 )
 ```
 
 ---
 
-### **TASK 4 — Fix docker-compose YAML Indentation**
-**File:** `scripts/2-deploy-services.sh`
+### **TASK 7 — Fix Ollama GPU Runtime in Script 2**
+**File:** `scripts/2-deploy-services.sh`  
+**Type:** Add GPU config to Ollama service block
 
-```
-FIND (in the heredoc generating docker-compose.yml):
-prometheus:
-    image: prom/prometheus:latest
+```yaml
+# FIND (inside ollama service block):
+    networks:
+      - ${COMPOSE_PROJECT_NAME}-net
 
-REPLACE WITH:
-  prometheus:
-    image: prom/prometheus:latest
+# REPLACE WITH:
+    networks:
+      - ${COMPOSE_PROJECT_NAME}-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 ```
-*(Add 2-space indent to `prometheus:` block to match all other services)*
+
+Also add a **GPU availability check** before compose up:
+```bash
+# After Docker daemon check:
+if command -v nvidia-smi &>/dev/null; then
+    log "GPU detected: $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
+    GPU_AVAILABLE=true
+else
+    warn "No NVIDIA GPU detected — Ollama will run in CPU mode"
+    GPU_AVAILABLE=false
+fi
+```
 
 ---
 
-### **TASK 5 — Fix `LITELM_PORT` Typo in Script 3**
+### **TASK 8 — Fix `}main "$@"` in Script 3**
 **File:** `scripts/3-configure-services.sh`
 
 ```
-FIND (×2, both occurrences):
-"http://${LOCALHOST}:${LITELM_PORT}/v1/model/register"
+FIND (exact, last line):
+    fi
+}main "$@"
 
 REPLACE WITH:
-"http://${LOCALHOST}:${LITELLM_PORT}/v1/model/register"
+    fi
+}
+
+main "$@"
 ```
 
 ---
 
-### **TASK 6 — Fix Script 4 Double-Execution of Script 2**
-**File:** `scripts/4-add-service.sh`
+## 📋 COMPLETE WINDSURF PROMPT
 
 ```
-FIND:
-# Source the append functions from script 2
-source "${SCRIPT2_DIR}/2-deploy-services.sh"
+Implement the following 8 fixes to the AI Platform Automation scripts.
+Make ONLY the specified changes. Do not refactor or rename anything.
 
-exec bash "${SCRIPT2_DIR}/2-deploy-services.sh"
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FILE: scripts/1-setup-system.sh
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-REPLACE WITH:
-# Re-run script 2 to regenerate compose file and redeploy
-exec bash "${SCRIPT2_DIR}/2-deploy-services.sh"
-```
-*(Remove the `source` line entirely — it executes the full script prematurely)*
+FIX 1 — EOFchmod heredoc collision (CRITICAL):
+  Find:    EOFchmod 644 "${CADDY_DIR}/Caddyfile"
+  Replace: EOF\nchmod 644 "${CADDY_DIR}/Caddyfile"
 
----
+FIX 5 — Add Caddy subdomain routes for app services:
+  Insert the n8n/flowise/openwebui/anythingllm/litellm Caddy blocks
+  immediately BEFORE the line: EOF (the newly fixed heredoc close)
+  Use conditional $([ "${ENABLE_X}" = "true" ] && cat << BLOCK...BLOCK)
+  pattern already used in the file for grafana and authentik.
+  
+  Subdomains to add:
+    n8n.DOMAIN        → n8n:5678
+    flowise.DOMAIN    → flowise:3000
+    chat.DOMAIN       → openwebui:8080
+    docs.DOMAIN       → anythingllm:3001
+    api.DOMAIN        → litellm:4000
 
-### **TASK 7 — Fix Script 1 `EOFchmod` Heredoc Collision**
-**File:** `scripts/1-setup-system.sh`
-
-```
-FIND:
-EOFchmod 644 "${CADDY_DIR}/Caddyfile"
-
-REPLACE WITH:
-EOF
-chmod 644 "${CADDY_DIR}/Caddyfile"
-```
-
----
-
-## 📋 WINDSURF PROMPT (Copy-Paste Ready)
-
-```
-Please implement the following fixes across the AI Platform Automation scripts.
-Make ONLY the changes specified — do not refactor anything else.
-
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 FILE: scripts/2-deploy-services.sh
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-FIX 1 — Missing newline (line ~43):
+FIX 2 — fi# syntax error (CRITICAL):
   Find:    exit 1\nfi# ─── Docker daemon
   Replace: exit 1\nfi\n\n# ─── Docker daemon
 
-FIX 2 — Prometheus heredoc (remove single quotes from EOF delimiter):
-  Find:    << 'EOF'\n...targets: ['${COMPOSE_PROJECT_NAME}-prometheus:9090']\nEOF
-  Replace: << EOF\n...targets: ['${COMPOSE_PROJECT_NAME}-prometheus:9090']\nEOF
+FIX 3 — prometheus YAML indent (CRITICAL):
+  Find:    ^prometheus:\n    image: prom/prometheus:latest
+  Replace: ^  prometheus:\n    image: prom/prometheus:latest
 
-FIX 3 — Expand SERVICES array:
-  Find:    SERVICES=("postgres" "redis" "ollama" "qdrant" "prometheus" "grafana" "caddy")
-  Replace: SERVICES=(\n    "postgres" "redis" "ollama" "qdrant"\n
-           "prometheus" "grafana" "caddy"\n
-           "n8n" "flowise" "openwebui" "anythingllm" "litellm"\n)
+FIX 4 — Hardcoded username:
+  Find:    TENANT_UID=$(id -u jglaine)
+           TENANT_GID=$(id -g jglaine)
+  Replace: TENANT_UID=$(id -u "${TENANT_USER:-${SUDO_USER:-$(logname)}}")
+           TENANT_GID=$(id -g "${TENANT_USER:-${SUDO_USER:-$(logname)}}")
 
-FIX 4 — Fix prometheus YAML indentation in compose heredoc:
-  Find:    ^prometheus:\n    image: prom/prometheus
-  Replace: ^  prometheus:\n    image: prom/prometheus
+FIX 6 — Add missing service directories (before chown line):
+  Add: mkdir -p for n8n, flowise, openwebui, anythingllm, 
+       litellm, authentik/media, authentik/custom-templates
 
+FIX 6b — Add missing service blocks to docker-compose heredoc:
+  Insert BEFORE the networks: section at the end of the heredoc.
+  Add conditional service blocks for:
+    n8n, flowise, openwebui, anythingllm, litellm, authentik-server
+  Each block must:
+    - Be wrapped in $([ "${ENABLE_X:-true}" = "true" ] && cat << BLOCK...BLOCK)
+    - Use ${COMPOSE_PROJECT_NAME} for container names and network
+    - Use ${PLATFORM_DIR} for volumes
+    - Include healthcheck, restart: unless-stopped
+    - Include depends_on where appropriate (postgres, redis, ollama, qdrant)
+
+FIX 7 — Add Ollama GPU runtime:
+  In the ollama service block, add after the networks section:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 FILE: scripts/3-configure-services.sh
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-FIX 5 — Typo LITELM_PORT → LITELLM_PORT (fix both occurrences):
-  Find:    ${LITELM_PORT}
-  Replace: ${LITELLM_PORT}
+FIX 8 — }main on same line:
+  Find:    }main "$@"
+  Replace: }\n\nmain "$@"
 
-FILE: scripts/4-add-service.sh
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+VALIDATION — Run after all changes:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-FIX 6 — Remove premature source of script 2:
-  Delete the line: source "${SCRIPT2_DIR}/2-deploy-services.sh"
-  Keep:            exec bash "${SCRIPT2_DIR}/2-deploy-services.sh"
-
-FILE: scripts/1-setup-system.sh
-
-FIX 7 — Heredoc EOF and chmod on same line:
-  Find:    EOFchmod 644 "${CADDY_DIR}/Caddyfile"
-  Replace: EOF\nchmod 644 "${CADDY_DIR}/Caddyfile"
+bash -n scripts/1-setup-system.sh
+bash -n scripts/2-deploy-services.sh  
+bash -n scripts/3-configure-services.sh
+grep -c "container_name" scripts/2-deploy-services.sh  # expect ≥12
+grep "EOFchmod\|fi#\|}main\|jglaine" scripts/*.sh      # expect 0 results
 ```
 
 ---
 
-## ✅ VALIDATION CHECKLIST FOR WINDSURF
+## ✅ EXPECTED OUTCOME AFTER ALL FIXES
 
-After implementing, verify:
-
-```bash
-# 1. Bash syntax check all scripts
-bash -n scripts/1-setup-system.sh
-bash -n scripts/2-deploy-services.sh
-bash -n scripts/3-configure-services.sh
-bash -n scripts/4-add-service.sh
-
-# 2. Confirm prometheus.yml will expand variables
-grep "COMPOSE_PROJECT_NAME" scripts/2-deploy-services.sh | grep -v "'"
-
-# 3. Confirm all 12 services in array
-grep -A5 "^SERVICES=" scripts/2-deploy-services.sh
-
-# 4. Confirm LITELLM_PORT typo fixed (should return 0 results)
-grep "LITELM_PORT" scripts/3-configure-services.sh | wc -l
-```
+| Check | Before | After |
+|-------|--------|-------|
+| bash -n all scripts | ❌ Parse errors | ✅ Clean |
+| Services deployed | 6/12 | ✅ 12/12 |
+| Subdomains routed | 2/7 | ✅ 7/7 |
+| Ollama GPU | ❌ Restart loop | ✅ GPU enabled |
+| Variable expansion | ✅ Already fixed | ✅ Maintained |
+| Portability | ❌ Hardcoded user | ✅ Dynamic |

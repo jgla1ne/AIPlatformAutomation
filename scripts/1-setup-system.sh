@@ -1638,6 +1638,7 @@ grafana.${DOMAIN} {
 }
 BLOCK
 )
+
 $([ "${ENABLE_AUTHENTIK}" = "true" ] && cat << BLOCK
 auth.${DOMAIN} {
     reverse_proxy authentik-server:9000 {
@@ -1645,11 +1646,11 @@ auth.${DOMAIN} {
         header_up X-Real-IP {remote_host}
         header_up X-Forwarded-For {remote_host}
         header_up X-Forwarded-Proto {scheme}
-        header_up X-Forwarded-Host {host}
     }
 }
 BLOCK
 )
+
 EOF
 
     chmod 644 "${CADDY_DIR}/Caddyfile"

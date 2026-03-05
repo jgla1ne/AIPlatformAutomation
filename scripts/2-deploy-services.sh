@@ -35,8 +35,8 @@ source "${ENV_FILE}"
 set +a
 
 # Get tenant UID/GID
-TENANT_UID=$(id -u jglaine)
-TENANT_GID=$(id -g jglaine)
+TENANT_UID=$(id -u "${TENANT_USER:-${SUDO_USER:-$(logname)}}")
+TENANT_GID=$(id -g "${TENANT_USER:-${SUDO_USER:-$(logname)}}")
 
 # ─── Root check ───────────────────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
@@ -64,6 +64,13 @@ mkdir -p "${PLATFORM_DIR}/qdrant"
 mkdir -p "${PLATFORM_DIR}/prometheus"
 mkdir -p "${PLATFORM_DIR}/grafana"
 mkdir -p "${PLATFORM_DIR}/prometheus/data"
+mkdir -p "${PLATFORM_DIR}/n8n"
+mkdir -p "${PLATFORM_DIR}/flowise"
+mkdir -p "${PLATFORM_DIR}/openwebui"
+mkdir -p "${PLATFORM_DIR}/anythingllm"
+mkdir -p "${PLATFORM_DIR}/litellm"
+mkdir -p "${PLATFORM_DIR}/authentik/media"
+mkdir -p "${PLATFORM_DIR}/authentik/custom-templates"
 
 # Create prometheus config
 cat > "${PLATFORM_DIR}/prometheus/prometheus.yml" << EOF
@@ -232,6 +239,195 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+
+# ── n8n ──────────────────────────────────────────────────────────────
+$([ "${ENABLE_N8N:-true}" = "true" ] && cat << BLOCK
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-n8n
+    restart: unless-stopped
+    user: "${TENANT_UID}:${TENANT_GID}"
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD}
+      - N8N_HOST=n8n.${DOMAIN}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=https
+      - NODE_ENV=production
+      - WEBHOOK_URL=https://n8n.${DOMAIN}
+      - GENERIC_TIMEZONE=${TIMEZONE:-UTC}
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=${COMPOSE_PROJECT_NAME}-postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=n8n
+      - DB_POSTGRESDB_USER=${POSTGRES_USER}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - ${PLATFORM_DIR}/n8n:/home/node/.n8n
+    networks:
+      - ${COMPOSE_PROJECT_NAME}-net
+    depends_on:
+      - postgres
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+BLOCK
+)
+
+# ── Flowise ──────────────────────────────────────────────────────────
+$([ "${ENABLE_FLOWISE:-true}" = "true" ] && cat << BLOCK
+
+  flowise:
+    image: flowiseai/flowise:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-flowise
+    restart: unless-stopped
+    user: "${TENANT_UID}:${TENANT_GID}"
+    ports:
+      - "${FLOWISE_PORT:-3000}:3000"
+    environment:
+      - FLOWISE_USERNAME=${FLOWISE_USER:-admin}
+      - FLOWISE_PASSWORD=${FLOWISE_PASSWORD}
+      - DATABASE_PATH=/root/.flowise
+      - APIKEY_PATH=/root/.flowise
+      - SECRETKEY_PATH=/root/.flowise
+      - LOG_PATH=/root/.flowise/logs
+    volumes:
+      - ${PLATFORM_DIR}/flowise:/root/.flowise
+    networks:
+      - ${COMPOSE_PROJECT_NAME}-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+BLOCK
+)
+
+# ── Open WebUI ───────────────────────────────────────────────────────
+$([ "${ENABLE_OPENWEBUI:-true}" = "true" ] && cat << BLOCK
+
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: ${COMPOSE_PROJECT_NAME}-openwebui
+    restart: unless-stopped
+    ports:
+      - "${OPENWEBUI_PORT:-8080}:8080"
+    environment:
+      - OLLAMA_BASE_URL=http://${COMPOSE_PROJECT_NAME}-ollama:11434
+      - WEBUI_SECRET_KEY=${OPENWEBUI_SECRET_KEY:-$(openssl rand -hex 32)}
+    volumes:
+      - ${PLATFORM_DIR}/openwebui:/app/backend/data
+    networks:
+      - ${COMPOSE_PROJECT_NAME}-net
+    depends_on:
+      - ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+BLOCK
+)
+
+# ── AnythingLLM ──────────────────────────────────────────────────────
+$([ "${ENABLE_ANYTHINGLLM:-true}" = "true" ] && cat << BLOCK
+
+  anythingllm:
+    image: mintplexlabs/anythingllm:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-anythingllm
+    restart: unless-stopped
+    ports:
+      - "${ANYTHINGLLM_PORT:-3001}:3001"
+    environment:
+      - STORAGE_DIR=/app/server/storage
+      - JWT_SECRET=${ANYTHINGLLM_JWT_SECRET}
+      - LLM_PROVIDER=ollama
+      - OLLAMA_BASE_PATH=http://${COMPOSE_PROJECT_NAME}-ollama:11434
+      - VECTOR_DB=qdrant
+      - QDRANT_ENDPOINT=http://${COMPOSE_PROJECT_NAME}-qdrant:6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
+    volumes:
+      - ${PLATFORM_DIR}/anythingllm:/app/server/storage
+    networks:
+      - ${COMPOSE_PROJECT_NAME}-net
+    depends_on:
+      - ollama
+      - qdrant
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+BLOCK
+)
+
+# ── LiteLLM ──────────────────────────────────────────────────────────
+$([ "${ENABLE_LITELLM:-true}" = "true" ] && cat << BLOCK
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: ${COMPOSE_PROJECT_NAME}-litellm
+    restart: unless-stopped
+    ports:
+      - "${LITELLM_PORT:-4000}:4000"
+    environment:
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${COMPOSE_PROJECT_NAME}-postgres:5432/litellm
+      - STORE_MODEL_IN_DB=True
+    volumes:
+      - ${PLATFORM_DIR}/litellm:/app/config
+    networks:
+      - ${COMPOSE_PROJECT_NAME}-net
+    depends_on:
+      - postgres
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+BLOCK
+)
+
+# ── Authentik ────────────────────────────────────────────────────────
+$([ "${ENABLE_AUTHENTIK:-false}" = "true" ] && cat << BLOCK
+
+  authentik-server:
+    image: ghcr.io/goauthentik/server:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-authentik
+    restart: unless-stopped
+    command: server
+    ports:
+      - "${AUTHENTIK_PORT:-9000}:9000"
+    environment:
+      - AUTHENTIK_REDIS__HOST=${COMPOSE_PROJECT_NAME}-redis
+      - AUTHENTIK_POSTGRESQL__HOST=${COMPOSE_PROJECT_NAME}-postgres
+      - AUTHENTIK_POSTGRESQL__USER=${POSTGRES_USER}
+      - AUTHENTIK_POSTGRESQL__PASSWORD=${POSTGRES_PASSWORD}
+      - AUTHENTIK_POSTGRESQL__NAME=authentik
+      - AUTHENTIK_SECRET_KEY=${AUTHENTIK_SECRET_KEY}
+      - AUTHENTIK_BOOTSTRAP_PASSWORD=${AUTHENTIK_BOOTSTRAP_PASSWORD}
+      - AUTHENTIK_BOOTSTRAP_EMAIL=${ADMIN_EMAIL}
+    volumes:
+      - ${PLATFORM_DIR}/authentik/media:/media
+      - ${PLATFORM_DIR}/authentik/custom-templates:/templates
+    networks:
+      - ${COMPOSE_PROJECT_NAME}-net
+    depends_on:
+      - postgres
+      - redis
+BLOCK
+)
 
 networks:
   ai-datasquiz-net:
