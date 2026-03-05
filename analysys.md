@@ -1,391 +1,299 @@
-Windsurf Instructions: Fix & Deploy Script 2
-Context Summary
-Script 1 generates a docker-compose.yml with condition: service_healthy on depends_on. Docker Compose silently exits 0 but starts zero containers because ollama's healthcheck has a start_period: 60s — open-webui never satisfies the dependency and the whole graph stalls. Script 2 attempts a Python patch but the YAML round-trip via PyYAML destroys the version key ordering and can corrupt anchors, and the patch runs after compose config validation — meaning the bad file is already confirmed "valid" before fixing. The fix must be pre-deployment, surgical, and verified.
+# Analysis & Windsurf Implementation Plan
 
-Phase 1 — Rewrite docker-compose.yml Generation in Script 1
-File: scripts/1-setup-system.sh
-Action: Replace the docker-compose.yml heredoc with a clean version that has no condition: service_healthy and uses simple depends_on lists only. This is the root cause fix.
-Tell Windsurf:
+## 🔍 PHASE 1: ISSUE IDENTIFICATION
 
-In scripts/1-setup-system.sh, find the section starting with:
-cat > $PLATFORM_DIR/docker-compose.yml << 'EOF'
-Replace the entire heredoc block (everything between << 'EOF' and the closing EOF) with the following:
+### **Script 2 (`2-deploy-services.sh`) — Critical Issues**
 
-version: '3.8'
+---
 
-networks:
-  ai-network:
-    driver: bridge
+#### **ISSUE 1: Missing Newline Before Docker Daemon Block** *(Syntax Error)*
+```bash
+# Line ~43 — Missing newline causes bash parse error:
+    exit 1
+fi# ─── Docker daemon ─────  ← BUG: fi# on same line
+```
 
-volumes:
-  ollama_data:
-  open_webui_data:
-  n8n_data:
-  qdrant_data:
-  npm_data:
-  npm_letsencrypt:
+---
 
-services:
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: qdrant
-    restart: unless-stopped
-    networks:
-      - ai-network
-    ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      - qdrant_data:/qdrant/storage
+#### **ISSUE 2: Prometheus Config Uses Literal String Instead of Variable**
+```bash
+# The heredoc uses 'EOF' (single-quoted = no expansion) BUT contains a variable:
+cat > ".../prometheus.yml" << 'EOF'
+  - targets: ['${COMPOSE_PROJECT_NAME}-prometheus:9090']  
+#             ↑ Will NOT expand — literal string in output
+EOF
+```
 
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    restart: unless-stopped
-    networks:
-      - ai-network
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
+---
 
-  open-webui:
-    image: ghcr.io/open-webui/open-webui:main
-    container_name: open-webui
-    restart: unless-stopped
-    networks:
-      - ai-network
-    ports:
-      - "3000:8080"
-    volumes:
-      - open_webui_data:/app/backend/data
-    environment:
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
-      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
-    depends_on:
-      - ollama
+#### **ISSUE 3: Incomplete SERVICES Array**
+```bash
+# Only 7 services — missing 5 application services:
+SERVICES=("postgres" "redis" "ollama" "qdrant" "prometheus" "grafana" "caddy")
+# ❌ MISSING: n8n, flowise, openwebui, anythingllm, litellm
+```
 
-  n8n:
-    image: n8nio/n8n:latest
-    container_name: n8n
-    restart: unless-stopped
-    networks:
-      - ai-network
-    ports:
-      - "5678:5678"
-    volumes:
-      - n8n_data:/home/node/.n8n
-    environment:
-      - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}
-      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
-      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
-    depends_on:
-      - qdrant
+---
 
-  nginx-proxy-manager:
-    image: jc21/nginx-proxy-manager:latest
-    container_name: nginx-proxy-manager
-    restart: unless-stopped
-    networks:
-      - ai-network
-    ports:
-      - "80:80"
-      - "443:443"
-      - "81:81"
-    volumes:
-      - npm_data:/data
-      - npm_letsencrypt:/etc/letsencrypt
-Key changes made:
+#### **ISSUE 4: Docker Compose YAML Indentation Error**
+```yaml
+# prometheus block has NO leading spaces (top-level)
+# but grafana block IS indented — YAML is inconsistent:
+prometheus:          ← no indent (wrong)
+    image: ...
+  grafana:           ← 2-space indent (correct)
+    image: ...
+```
 
-✅ Removed ALL healthcheck blocks (eliminates the service_healthy stall)
-✅ Removed ALL condition: service_healthy from depends_on
-✅ Changed depends_on to simple lists only
-✅ Reordered services: qdrant and ollama first (no upstream deps)
-✅ Added Qdrant gRPC port 6334
+---
 
+#### **ISSUE 5: Typo in Variable Name (`LITELM_PORT`)**
+```bash
+# Script 3, repeated twice:
+curl -sf -X POST "http://${LOCALHOST}:${LITELM_PORT}/v1/model/register"
+#                                      ↑ Missing 'L' — should be LITELLM_PORT
+```
 
-Phase 2 — Rewrite scripts/2-deploy-services.sh Completely
-File: scripts/2-deploy-services.sh
-Tell Windsurf:
+---
 
-Replace the entire contents of scripts/2-deploy-services.sh with the following:
+#### **ISSUE 6: `4-add-service.sh` Sourcing Script 2 Directly**
+```bash
+# This executes ALL of script 2 at source time, not just functions:
+source "${SCRIPT2_DIR}/2-deploy-services.sh"   # ❌ Runs full deployment
+exec bash "${SCRIPT2_DIR}/2-deploy-services.sh" # Then runs it AGAIN
+```
 
-#!/bin/bash
-# Script 2: Deploy Services
-# Deploys all Docker services using Docker Compose
+---
 
-# DO NOT use set -e — we want controlled error handling per step
+#### **ISSUE 7: `chown` Runs Before Prometheus Config Written Atomically**
+```bash
+mkdir -p "${PLATFORM_DIR}/prometheus"
+cat > "${PLATFORM_DIR}/prometheus/prometheus.yml" << 'EOF'  # ← written here
+...
+chown -R "${TENANT_UID}:${TENANT_GID}" "${PLATFORM_DIR}"    # ← then chown
+# This is fine ORDER-wise but the literal variable bug (Issue 2) means
+# the file content is wrong before chown even runs
+```
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+---
 
-log()  { echo -e "${GREEN}[$(date +'%H:%M:%S')]${NC} $1"; }
-warn() { echo -e "${YELLOW}[$(date +'%H:%M:%S')] WARNING:${NC} $1"; }
-error(){ echo -e "${RED}[$(date +'%H:%M:%S')] ERROR:${NC} $1"; }
-info() { echo -e "${BLUE}[$(date +'%H:%M:%S')] INFO:${NC} $1"; }
+#### **ISSUE 8: Script 1 `Caddyfile` Missing EOF Newline**
+```bash
+EOFchmod 644 "${CADDY_DIR}/Caddyfile"  
+# ↑ EOF and chmod on same line — heredoc never closes properly
+```
 
-PLATFORM_DIR="/opt/ai-platform"
-COMPOSE_FILE="$PLATFORM_DIR/docker-compose.yml"
+---
 
-# ─── Root check ───────────────────────────────────────────────────────────────
-if [[ $EUID -ne 0 ]]; then
-    error "This script must be run as root (sudo bash 2-deploy-services.sh)"
+### **Summary Table**
+
+| # | Script | Severity | Issue |
+|---|--------|----------|-------|
+| 1 | `2` | 🔴 Critical | `fi#` missing newline — bash syntax error |
+| 2 | `2` | 🔴 Critical | Prometheus heredoc `'EOF'` blocks variable expansion |
+| 3 | `2` | 🔴 Critical | SERVICES array missing 5 services |
+| 4 | `2` | 🟠 High | docker-compose YAML indentation broken |
+| 5 | `3` | 🟠 High | `LITELM_PORT` typo (×2) |
+| 6 | `4` | 🟠 High | `source` + `exec` double-runs script 2 |
+| 7 | `1` | 🔴 Critical | `EOFchmod` — heredoc + command on same line |
+
+---
+
+## 🏗️ PHASE 2: WINDSURF IMPLEMENTATION PLAN
+
+---
+
+### **TASK 1 — Fix `fi#` Syntax Error**
+**File:** `scripts/2-deploy-services.sh`
+
+```
+FIND (exact):
+    exit 1
+fi# ─── Docker daemon
+
+REPLACE WITH:
     exit 1
 fi
 
-# ─── Prerequisites ────────────────────────────────────────────────────────────
-log "Checking prerequisites..."
+# ─── Docker daemon
+```
 
-[[ ! -f "$COMPOSE_FILE" ]] && { error "docker-compose.yml not found at $COMPOSE_FILE — run script 1 first."; exit 1; }
-[[ ! -f "$PLATFORM_DIR/.env" ]] && { error ".env not found at $PLATFORM_DIR/.env — run script 1 first."; exit 1; }
+---
 
-# ─── Docker daemon ────────────────────────────────────────────────────────────
-log "Ensuring Docker daemon is running..."
-systemctl start docker
-sleep 2
-if ! docker info &>/dev/null; then
-    error "Docker daemon is not responding. Check: systemctl status docker"
-    exit 1
-fi
-log "Docker daemon OK"
+### **TASK 2 — Fix Prometheus Heredoc Variable Expansion**
+**File:** `scripts/2-deploy-services.sh`
 
-# ─── Detect compose command ───────────────────────────────────────────────────
-if docker compose version &>/dev/null 2>&1; then
-    COMPOSE_CMD="docker compose"
-elif command -v docker-compose &>/dev/null; then
-    COMPOSE_CMD="docker-compose"
-else
-    error "No Docker Compose found. Re-run script 1 to install it."
-    exit 1
-fi
-log "Using: $COMPOSE_CMD"
+```
+FIND:
+cat > "${PLATFORM_DIR}/prometheus/prometheus.yml" << 'EOF'
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
 
-# ─── Sanitise compose file (belt-and-braces) ─────────────────────────────────
-# Use sed to strip any remaining service_healthy conditions.
-# This protects against the file being regenerated with old script 1.
-log "Sanitising docker-compose.yml (removing service_healthy conditions)..."
-sed -i 's/condition: service_healthy/condition: service_started/g' "$COMPOSE_FILE"
-sed -i 's/condition: service_completed_successfully/condition: service_started/g' "$COMPOSE_FILE"
-log "Sanitisation complete"
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['${COMPOSE_PROJECT_NAME}-prometheus:9090']
+EOF
 
-# ─── Validate compose config ──────────────────────────────────────────────────
-log "Validating Docker Compose configuration..."
-cd "$PLATFORM_DIR"
-if ! $COMPOSE_CMD config --quiet 2>&1; then
-    error "docker-compose.yml is invalid. Output:"
-    $COMPOSE_CMD config 2>&1
-    exit 1
-fi
-log "Configuration valid"
+REPLACE WITH:
+cat > "${PLATFORM_DIR}/prometheus/prometheus.yml" << EOF
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
 
-# ─── Create required directories ─────────────────────────────────────────────
-log "Creating required bind-mount directories..."
-mkdir -p /opt/ai-platform/nginx/data
-mkdir -p /opt/ai-platform/nginx/letsencrypt
-mkdir -p /opt/ai-platform/nginx/logs
-mkdir -p /opt/ai-platform/ollama
-mkdir -p /opt/ai-platform/open-webui
-mkdir -p /opt/ai-platform/n8n
-mkdir -p /opt/ai-platform/qdrant
-chown -R 1000:1000 /opt/ai-platform/n8n 2>/dev/null || true
-chmod -R 755 /opt/ai-platform
-log "Directories ready"
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['${COMPOSE_PROJECT_NAME}-prometheus:9090']
+EOF
+```
+*(Remove single quotes from `'EOF'` → `EOF` to enable variable expansion)*
 
-# ─── Pull images ──────────────────────────────────────────────────────────────
-log "Pulling Docker images (this may take several minutes on first run)..."
-$COMPOSE_CMD pull 2>&1
-PULL_EXIT=$?
-if [[ $PULL_EXIT -ne 0 ]]; then
-    warn "Some images may not have pulled cleanly (exit $PULL_EXIT) — attempting deployment anyway"
-fi
+---
 
-# ─── Tear down any existing stack ─────────────────────────────────────────────
-log "Stopping any existing containers from this stack..."
-$COMPOSE_CMD down --remove-orphans 2>/dev/null || true
-sleep 2
+### **TASK 3 — Fix Incomplete SERVICES Array**
+**File:** `scripts/2-deploy-services.sh`
 
-# ─── Deploy stack ─────────────────────────────────────────────────────────────
-log "Starting all services..."
-$COMPOSE_CMD up -d --remove-orphans 2>&1
-UP_EXIT=$?
+```
+FIND:
+SERVICES=("postgres" "redis" "ollama" "qdrant" "prometheus" "grafana" "caddy")
 
-if [[ $UP_EXIT -ne 0 ]]; then
-    error "docker compose up exited with code $UP_EXIT"
-    error "Compose logs:"
-    $COMPOSE_CMD logs --tail=60 2>&1
-    exit 1
-fi
+REPLACE WITH:
+SERVICES=(
+    "postgres" "redis" "ollama" "qdrant"
+    "prometheus" "grafana" "caddy"
+    "n8n" "flowise" "openwebui" "anythingllm" "litellm"
+)
+```
 
-# ─── Wait for containers to initialise ───────────────────────────────────────
-log "Waiting 20 seconds for containers to initialise..."
-sleep 20
+---
 
-# ─── Verify each service individually ────────────────────────────────────────
-log "Verifying individual service status..."
+### **TASK 4 — Fix docker-compose YAML Indentation**
+**File:** `scripts/2-deploy-services.sh`
 
-SERVICES=("ollama" "open-webui" "n8n" "qdrant" "nginx-proxy-manager")
-FAILED=()
+```
+FIND (in the heredoc generating docker-compose.yml):
+prometheus:
+    image: prom/prometheus:latest
 
-for SVC in "${SERVICES[@]}"; do
-    STATE=$(docker inspect --format '{{.State.Status}}' "$SVC" 2>/dev/null || echo "missing")
-    if [[ "$STATE" == "running" ]]; then
-        log "  ✅  $SVC — running"
-    else
-        warn "  ❌  $SVC — state: $STATE"
-        FAILED+=("$SVC")
-    fi
-done
+REPLACE WITH:
+  prometheus:
+    image: prom/prometheus:latest
+```
+*(Add 2-space indent to `prometheus:` block to match all other services)*
 
-# ─── Retry failed services ────────────────────────────────────────────────────
-if [[ ${#FAILED[@]} -gt 0 ]]; then
-    warn "${#FAILED[@]} service(s) not running: ${FAILED[*]}"
-    warn "Attempting individual restart of failed services..."
-    for SVC in "${FAILED[@]}"; do
-        log "Restarting $SVC..."
-        $COMPOSE_CMD restart "$SVC" 2>&1 || true
-    done
-    sleep 15
+---
 
-    STILL_FAILED=()
-    for SVC in "${FAILED[@]}"; do
-        STATE=$(docker inspect --format '{{.State.Status}}' "$SVC" 2>/dev/null || echo "missing")
-        if [[ "$STATE" == "running" ]]; then
-            log "  ✅  $SVC — now running after restart"
-        else
-            error "  ❌  $SVC — still not running (state: $STATE)"
-            STILL_FAILED+=("$SVC")
-        fi
-    done
+### **TASK 5 — Fix `LITELM_PORT` Typo in Script 3**
+**File:** `scripts/3-configure-services.sh`
 
-    if [[ ${#STILL_FAILED[@]} -gt 0 ]]; then
-        error "The following services failed to start: ${STILL_FAILED[*]}"
-        error "Dumping logs for failed services..."
-        for SVC in "${STILL_FAILED[@]}"; do
-            echo ""
-            echo "===== LOGS: $SVC ====="
-            $COMPOSE_CMD logs --tail=40 "$SVC" 2>&1
-        done
-        exit 1
-    fi
-fi
+```
+FIND (×2, both occurrences):
+"http://${LOCALHOST}:${LITELM_PORT}/v1/model/register"
 
-# ─── Port connectivity spot-checks ───────────────────────────────────────────
-log "Checking port accessibility..."
-PORTS=("11434:Ollama" "3000:Open-WebUI" "5678:n8n" "6333:Qdrant" "81:Nginx-Proxy-Manager")
-for ENTRY in "${PORTS[@]}"; do
-    PORT="${ENTRY%%:*}"
-    NAME="${ENTRY##*:}"
-    if ss -tlnp | grep -q ":$PORT "; then
-        log "  ✅  Port $PORT ($NAME) is listening"
-    else
-        warn "  ⚠️   Port $PORT ($NAME) not yet listening (service may still be starting)"
-    fi
-done
+REPLACE WITH:
+"http://${LOCALHOST}:${LITELLM_PORT}/v1/model/register"
+```
 
-# ─── Summary ──────────────────────────────────────────────────────────────────
-echo ""
-echo "=========================================="
-echo "  AI Platform — Deployment Complete"
-echo "=========================================="
-$COMPOSE_CMD ps
-echo ""
-SERVER_IP=$(hostname -I | awk '{print $1}')
-echo "Access URLs:"
-echo "  Open WebUI:          http://${SERVER_IP}:3000"
-echo "  n8n:                 http://${SERVER_IP}:5678"
-echo "  Qdrant:              http://${SERVER_IP}:6333"
-echo "  Nginx Proxy Manager: http://${SERVER_IP}:81"
-echo ""
-echo "  NPM default login:   admin@example.com / changeme"
-echo "=========================================="
-echo ""
-log "Run script 3 to configure services: sudo bash 3-configure-services.sh"
+---
 
-Phase 3 — Execution Order on the Server
-Tell Windsurf to execute these commands in sequence on the target machine:
-# Step 1: Clean slate
-sudo bash /path/to/scripts/0-complete-cleanup.sh
+### **TASK 6 — Fix Script 4 Double-Execution of Script 2**
+**File:** `scripts/4-add-service.sh`
 
-# Step 2: Re-run setup with the fixed script 1
-sudo bash /path/to/scripts/1-setup-system.sh
+```
+FIND:
+# Source the append functions from script 2
+source "${SCRIPT2_DIR}/2-deploy-services.sh"
 
-# Step 3: Verify the generated compose file has NO service_healthy
-grep -n "service_healthy" /opt/ai-platform/docker-compose.yml
-# Expected output: (nothing — zero matches)
+exec bash "${SCRIPT2_DIR}/2-deploy-services.sh"
 
-# Step 4: Deploy
-sudo bash /path/to/scripts/2-deploy-services.sh
+REPLACE WITH:
+# Re-run script 2 to regenerate compose file and redeploy
+exec bash "${SCRIPT2_DIR}/2-deploy-services.sh"
+```
+*(Remove the `source` line entirely — it executes the full script prematurely)*
 
-# Step 5: Confirm all 5 containers are running
-docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+---
 
-Phase 4 — If Script 2 Still Fails (Diagnostic Escalation)
-Tell Windsurf: If docker ps shows 0 containers after script 2, run these diagnostics and report back:
-# Check compose sees the file correctly
-docker compose -f /opt/ai-platform/docker-compose.yml config 2>&1 | head -40
+### **TASK 7 — Fix Script 1 `EOFchmod` Heredoc Collision**
+**File:** `scripts/1-setup-system.sh`
 
-# Try starting just qdrant in foreground to see raw error
-docker compose -f /opt/ai-platform/docker-compose.yml up qdrant 2>&1
+```
+FIND:
+EOFchmod 644 "${CADDY_DIR}/Caddyfile"
 
-# Check available disk space (images need ~10GB+)
-df -h /var/lib/docker
+REPLACE WITH:
+EOF
+chmod 644 "${CADDY_DIR}/Caddyfile"
+```
 
-# Check if images were actually pulled
-docker images | grep -E "ollama|webui|n8n|qdrant|nginx-proxy"
+---
 
-# Check system memory
-free -h
+## 📋 WINDSURF PROMPT (Copy-Paste Ready)
 
-Summary of All Changes
-Copy table
+```
+Please implement the following fixes across the AI Platform Automation scripts.
+Make ONLY the changes specified — do not refactor anything else.
 
+FILE: scripts/2-deploy-services.sh
 
-File
-Change
-Reason
+FIX 1 — Missing newline (line ~43):
+  Find:    exit 1\nfi# ─── Docker daemon
+  Replace: exit 1\nfi\n\n# ─── Docker daemon
 
+FIX 2 — Prometheus heredoc (remove single quotes from EOF delimiter):
+  Find:    << 'EOF'\n...targets: ['${COMPOSE_PROJECT_NAME}-prometheus:9090']\nEOF
+  Replace: << EOF\n...targets: ['${COMPOSE_PROJECT_NAME}-prometheus:9090']\nEOF
 
+FIX 3 — Expand SERVICES array:
+  Find:    SERVICES=("postgres" "redis" "ollama" "qdrant" "prometheus" "grafana" "caddy")
+  Replace: SERVICES=(\n    "postgres" "redis" "ollama" "qdrant"\n
+           "prometheus" "grafana" "caddy"\n
+           "n8n" "flowise" "openwebui" "anythingllm" "litellm"\n)
 
-1-setup-system.sh
-Remove all healthcheck: blocks from compose heredoc
-Eliminates service_healthy stall condition
+FIX 4 — Fix prometheus YAML indentation in compose heredoc:
+  Find:    ^prometheus:\n    image: prom/prometheus
+  Replace: ^  prometheus:\n    image: prom/prometheus
 
+FILE: scripts/3-configure-services.sh
 
-1-setup-system.sh
-Change depends_on to simple lists
-Removes blocking dependency conditions
+FIX 5 — Typo LITELM_PORT → LITELLM_PORT (fix both occurrences):
+  Find:    ${LITELM_PORT}
+  Replace: ${LITELLM_PORT}
 
+FILE: scripts/4-add-service.sh
 
-2-deploy-services.sh
-Add sed sanitiser before validation
-Catches any residual service_healthy conditions
+FIX 6 — Remove premature source of script 2:
+  Delete the line: source "${SCRIPT2_DIR}/2-deploy-services.sh"
+  Keep:            exec bash "${SCRIPT2_DIR}/2-deploy-services.sh"
 
+FILE: scripts/1-setup-system.sh
 
-2-deploy-services.sh
-Remove PyYAML Python patch block
-PyYAML round-trip corrupts YAML; sed is safer
+FIX 7 — Heredoc EOF and chmod on same line:
+  Find:    EOFchmod 644 "${CADDY_DIR}/Caddyfile"
+  Replace: EOF\nchmod 644 "${CADDY_DIR}/Caddyfile"
+```
 
+---
 
-2-deploy-services.sh
-Add per-container docker inspect verification
-Detects silent failures immediately
+## ✅ VALIDATION CHECKLIST FOR WINDSURF
 
+After implementing, verify:
 
-2-deploy-services.sh
-Add per-service restart retry loop
-Recovers transient startup failures
+```bash
+# 1. Bash syntax check all scripts
+bash -n scripts/1-setup-system.sh
+bash -n scripts/2-deploy-services.sh
+bash -n scripts/3-configure-services.sh
+bash -n scripts/4-add-service.sh
 
+# 2. Confirm prometheus.yml will expand variables
+grep "COMPOSE_PROJECT_NAME" scripts/2-deploy-services.sh | grep -v "'"
 
-2-deploy-services.sh
-Add port listening check via ss
-Confirms services are actually bound
+# 3. Confirm all 12 services in array
+grep -A5 "^SERVICES=" scripts/2-deploy-services.sh
 
-
-2-deploy-services.sh
-Remove set -e
-Allows controlled per-step error handling
+# 4. Confirm LITELLM_PORT typo fixed (should return 0 results)
+grep "LITELM_PORT" scripts/3-configure-services.sh | wc -l
+```

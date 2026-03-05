@@ -66,7 +66,7 @@ mkdir -p "${PLATFORM_DIR}/grafana"
 mkdir -p "${PLATFORM_DIR}/prometheus/data"
 
 # Create prometheus config
-cat > "${PLATFORM_DIR}/prometheus/prometheus.yml" << 'EOF'
+cat > "${PLATFORM_DIR}/prometheus/prometheus.yml" << EOF
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
@@ -273,7 +273,11 @@ echo "=========================================="
 SERVER_IP=$(hostname -I | awk '{print $1}')
 
 # Check each service
-SERVICES=("postgres" "redis" "ollama" "qdrant" "prometheus" "grafana" "caddy")
+SERVICES=(
+    "postgres" "redis" "ollama" "qdrant"
+    "prometheus" "grafana" "caddy"
+    "n8n" "flowise" "openwebui" "anythingllm" "litellm"
+)
 FAILED_SERVICES=()
 
 for service in "${SERVICES[@]}"; do

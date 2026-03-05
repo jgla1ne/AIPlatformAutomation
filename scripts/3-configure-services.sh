@@ -222,7 +222,7 @@ configure_litellm() {
 
     print_step "3" "${total_steps}" "Configuring LiteLLM with Routing Strategy"
     
-    wait_for_service "LiteLLM" "http://${LOCALHOST}:${LITELM_PORT}" 60 || return 1
+    wait_for_service "LiteLLM" "http://${LOCALHOST}:${LITELLM_PORT}" 60 || return 1
 
     # Display current routing strategy
     log "INFO" "LiteLLM routing strategy: ${LITELLM_ROUTING_STRATEGY}"
@@ -261,7 +261,7 @@ configure_litellm() {
         }'
         
         # Send to LiteLLM API
-        if curl -sf -X POST "http://${LOCALHOST}:${LITELM_PORT}/v1/model/register" \
+        if curl -sf -X POST "http://${LOCALHOST}:${LITELLM_PORT}/v1/model/register" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
             -d "${litellm_config}" &>/dev/null; then
@@ -288,7 +288,7 @@ configure_litellm() {
             ]
         }'
         
-        if curl -sf -X POST "http://${LOCALHOST}:${LITELM_PORT}/v1/model/register" \
+        if curl -sf -X POST "http://${LOCALHOST}:${LITELLM_PORT}/v1/model/register" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
             -d "${openai_config}" &>/dev/null; then
@@ -315,7 +315,7 @@ configure_litellm() {
             ]
         }'
         
-        if curl -sf -X POST "http://${LOCALHOST}:${LITELM_PORT}/v1/model/register" \
+        if curl -sf -X POST "http://${LOCALHOST}:${LITELLM_PORT}/v1/model/register" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
             -d "${google_config}" &>/dev/null; then
@@ -342,7 +342,7 @@ configure_litellm() {
             ]
         }'
         
-        if curl -sf -X POST "http://${LOCALHOST}:${LITELM_PORT}/v1/model/register" \
+        if curl -sf -X POST "http://${LOCALHOST}:${LITELLM_PORT}/v1/model/register" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
             -d "${groq_config}" &>/dev/null; then
