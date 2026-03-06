@@ -700,6 +700,21 @@ check_service_health() {
     esac
 }
 
+# --- setup_logging function ---
+setup_logging() {
+    if [[ -z "${DATA_ROOT:-}" ]]; then return; fi
+    local script_name
+    script_name=$(basename "$0" .sh)
+    LOG_DIR="${DATA_ROOT}/logs"
+    mkdir -p "${LOG_DIR}"
+    [[ -n "${TENANT_GID:-}" ]] && chown :"${TENANT_GID}" "${LOG_DIR}"
+    LOG_FILE="${LOG_DIR}/${script_name}-$(date +%Y%m%d-%H%M%S).log"
+
+    # Redirect all subsequent output
+    exec > >(tee -a "${LOG_FILE}") 2>&1
+    log "INFO" "All output is now logged to: ${LOG_FILE}"
+}
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 main() {
     print_header

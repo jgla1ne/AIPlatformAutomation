@@ -1,89 +1,56 @@
 #!/usr/bin/env bash
-# 4-add-service.sh
-# Adds a single service to an existing deployment
-# Usage: sudo bash scripts/4-add-service.sh <TENANT_ID> [service_name]
-set -eo pipefail
+set -euo pipefail
 
-# Accept TENANT_ID as command-line argument for explicit deployment
-TENANT_ID="${1:-}"
-if [[ -z "$TENANT_ID" ]]; then
-    echo "ERROR: TENANT_ID is required as first argument"
-    echo "Usage: sudo bash scripts/4-add-service.sh <TENANT_ID> [service_name]"
-    exit 1
-fi
+# --- Logging functions ---
+log() { echo "[INFO]  $*"; }
+ok() { echo "[OK]    $*"; }
+fail() { echo "[FAIL]  $*" >&2; exit 1; }
 
-# Shift arguments to get service name
-SERVICE="${2:-}"
+# --- setup_logging function ---
+setup_logging() {
+    if [[ -z "${DATA_ROOT:-}" ]]; then return; fi
+    local script_name
+    script_name=$(basename "$0" .sh)
+    LOG_DIR="${DATA_ROOT}/logs"
+    mkdir -p "${LOG_DIR}"
+    [[ -n "${TENANT_GID:-}" ]] && chown :"${TENANT_GID}" "${LOG_DIR}"
+    LOG_FILE="${LOG_DIR}/${script_name}-$(date +%Y%m%d-%H%M%S).log"
 
-# ── Colours ──────────────────────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
-
-log() { echo -e "${BLUE}[INFO]${NC}  $*"; }
-ok() { echo -e "${GREEN}[OK]${NC}    $*"; }
-warn() { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-fail() { echo -e "${RED}[FAIL]${NC}  $*" >&2; exit 1; }
-
-# ─── Runtime vars ────────────────────────────────────────────────────────────────
-TENANT_UID="${SUDO_UID:-$(id -u)}"
-TENANT_GID="${SUDO_GID:-$(id -g)}"
-# Use explicit TENANT_ID from command line
-ENV_FILE="/mnt/data/${TENANT_ID}/.env"
-TENANT_DIR="/mnt/data/${TENANT_ID}"
-
-[ ! -f "${ENV_FILE}" ] && {
-    echo "ERROR: Run script 1 first"
-    exit 1
+    # Redirect all subsequent output
+    exec > >(tee -a "${LOG_FILE}") 2>&1
+    log "INFO" "All output is now logged to: ${LOG_FILE}"
 }
 
-# Source environment variables
-set -a; source "${ENV_FILE}"; set +a
-
-# Use environment variables
-DATA_ROOT="${DATA_ROOT:-/mnt/data/${TENANT_ID:-default}}"
-LOG_FILE="${DATA_ROOT}/logs/add-service-$(date +%Y%m%d-%H%M%S).log"
-
-# Source environment variables
-exec > >(tee -a "${LOG_FILE}") 2>&1
-set -a; source "${ENV_FILE}"; set +a
-
-# Source the service append functions from script 2
-# (script 2 must export them or we duplicate just the needed one)
-SCRIPT2_DIR="$(dirname "$0")"
-
-AVAILABLE_SERVICES="openwebui anythingllm dify n8n flowise openclaw \
-    litellm ollama grafana signal tailscale rclone authentik minio prometheus qdrant"
-
-SERVICE="${1:-}"
-
-if [ -z "${SERVICE}" ]; then
-    echo "Available services:"
-    for svc in ${AVAILABLE_SERVICES}; do
-        current_val=$(grep "^ENABLE_${svc^^}=" "${ENV_FILE}" 2>/dev/null | \
-            cut -d= -f2 || echo "false")
-        printf "  %-20s currently: %s\n" "${svc}" "${current_val}"
-    done
-    echo ""
-    read -r -p "Which service to add? " SERVICE
+# --- Argument & Environment Handling ---
+if [[ -z "${1:-}" || -z "${2:-}" ]]; then
+    fail "Usage: sudo bash $0 <tenant_id> <service_name>"
 fi
 
-SERVICE=$(echo "${SERVICE}" | tr '[:upper:]' '[:lower:]')
+TENANT_ID="$1"
+SERVICE="$2"
+ENV_FILE="/mnt/data/${TENANT_ID}/.env"
+SCRIPT_DIR="$(dirname "$0")"
+
+if [[ ! -f "${ENV_FILE}" ]]; then
+    fail "Environment file not found for tenant '${TENANT_ID}' at ${ENV_FILE}"
+fi
+
+log "Loading environment from: ${ENV_FILE}"
+set -a; source "${ENV_FILE}"; set +a
+
 ENV_KEY="ENABLE_$(echo "${SERVICE}" | tr '[:lower:]' '[:upper:]')"
 
-# Validate service name
-if [[ ! " ${AVAILABLE_SERVICES} " =~ " ${SERVICE} " ]]; then
-    fail "Unknown service: ${SERVICE}. Available: ${AVAILABLE_SERVICES}"
-fi
+log "Adding service '${SERVICE}' to tenant '${TENANT_ID}'..."
 
-# Update .env
+# --- Update .env file ---
 if grep -q "^${ENV_KEY}=" "${ENV_FILE}"; then
     sed -i "s/^${ENV_KEY}=.*/${ENV_KEY}=true/" "${ENV_FILE}"
 else
     echo "${ENV_KEY}=true" >> "${ENV_FILE}"
 fi
 
-echo "Enabled ${SERVICE} in ${ENV_FILE}"
-echo "Re-running script 2 to regenerate and redeploy..."
+ok "Enabled ${SERVICE} in ${ENV_FILE}"
+log "Re-running script 2 to regenerate and redeploy for tenant '${TENANT_ID}'..."
 
-# Re-run script 2 to regenerate compose file and redeploy
-exec bash "${SCRIPT2_DIR}/2-deploy-services.sh" "${TENANT_ID}"
+# --- Re-run script 2 to apply changes ---
+exec bash "${SCRIPT_DIR}/2-deploy-services.sh" "${TENANT_ID}"

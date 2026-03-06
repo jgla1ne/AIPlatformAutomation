@@ -447,6 +447,21 @@ select_data_volume() {
     LOG_FILE="${LOG_DIR}/script-1-$(date +%Y%m%d-%H%M%S).log"
     exec > >(tee -a "${LOG_FILE}") 2>&1
     
+    # --- setup_logging function ---
+setup_logging() {
+    if [[ -z "${DATA_ROOT:-}" ]]; then return; fi
+    local script_name
+    script_name=$(basename "$0" .sh)
+    LOG_DIR="${DATA_ROOT}/logs"
+    mkdir -p "${LOG_DIR}"
+    [[ -n "${TENANT_GID:-}" ]] && chown :"${TENANT_GID}" "${LOG_DIR}"
+    LOG_FILE="${LOG_DIR}/${script_name}-$(date +%Y%m%d-%H%M%S).log"
+
+    # Redirect all subsequent output
+    exec > >(tee -a "${LOG_FILE}") 2>&1
+    log "INFO" "All output is now logged to: ${LOG_FILE}"
+}
+    
     # Set dynamic service URLs based on tenant configuration
     VECTOR_DB_URL="http://qdrant:6333"
     OLLAMA_INTERNAL_URL="http://ollama:11434"
@@ -1780,7 +1795,7 @@ offer_next_step() {
     echo -e "  ${BOLD}Next steps:${NC}"
     echo ""
     echo -e "    ${CYAN}2)${NC}  Deploy services"
-    echo -e "        ${DIM}sudo bash scripts/2-deploy-services.sh${NC}"
+    echo -e "        ${DIM}sudo bash scripts/2-deploy-services.sh <TENANT_ID>${NC}"
     echo ""
     echo -e "    ${CYAN}3)${NC}  Configure services (post-deploy API setup)"
     echo -e "        ${DIM}sudo bash scripts/3-configure-services.sh ${TENANT_ID}${NC}"
