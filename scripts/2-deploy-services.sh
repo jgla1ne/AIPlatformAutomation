@@ -167,9 +167,9 @@ services:
     image: ollama/ollama:latest
     container_name: ai-datasquiz-ollama
     restart: unless-stopped
-    user: "${TENANT_UID}:${TENANT_GID}"
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
     environment:
-      - OLLAMA_HOST=0.0.0.0
       - OLLAMA_PORT=${OLLAMA_INTERNAL_PORT}
     volumes:
       - ${PLATFORM_DIR}/ollama:/root/.ollama
@@ -186,7 +186,8 @@ services:
     image: qdrant/qdrant:latest
     container_name: ai-datasquiz-qdrant
     restart: unless-stopped
-    user: "${TENANT_UID}:${TENANT_GID}"
+    ports:
+      - "${QDRANT_INTERNAL_HTTP_PORT:-6333}:6333"
     environment:
       - QDRANT__SERVICE__HTTP_PORT=${QDRANT_INTERNAL_HTTP_PORT}
     volumes:
@@ -198,7 +199,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 60s
 
   prometheus:
     image: prom/prometheus:latest
@@ -320,22 +321,21 @@ $([ "${ENABLE_FLOWISE:-true}" = "true" ] && cat << BLOCK
 
   flowise:
     image: flowiseai/flowise:latest
-    container_name: \${COMPOSE_PROJECT_NAME}-flowise
+    container_name: ai-datasquiz-flowise
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
     ports:
-      - "\${FLOWISE_PORT:-3000}:3000"
+      - "${FLOWISE_PORT:-3000}:3000"
     environment:
-      - FLOWISE_USERNAME=\${FLOWISE_USER:-admin}
-      - FLOWISE_PASSWORD=\${FLOWISE_PASSWORD}
+      - FLOWISE_USERNAME=${FLOWISE_USER:-admin}
+      - FLOWISE_PASSWORD=${FLOWISE_PASSWORD}
       - DATABASE_PATH=/root/.flowise
       - APIKEY_PATH=/root/.flowise
       - SECRETKEY_PATH=/root/.flowise
       - LOG_PATH=/root/.flowise/logs
     volumes:
-      - \${PLATFORM_DIR}/flowise:/root/.flowise
+      - ${PLATFORM_DIR}/flowise:/root/.flowise
     networks:
-      - \${COMPOSE_PROJECT_NAME}-net
+      - ai-datasquiz-net
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
       interval: 30s
@@ -350,17 +350,17 @@ $([ "${ENABLE_OPENWEBUI:-true}" = "true" ] && cat << BLOCK
 
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
-    container_name: \${COMPOSE_PROJECT_NAME}-openwebui
+    container_name: ai-datasquiz-openwebui
     restart: unless-stopped
     ports:
-      - "\${OPENWEBUI_PORT:-8080}:8080"
+      - "${OPENWEBUI_PORT:-8080}:8080"
     environment:
-      - OLLAMA_BASE_URL=http://\${COMPOSE_PROJECT_NAME}-ollama:11434
-      - WEBUI_SECRET_KEY=\${OPENWEBUI_SECRET_KEY:-\$(openssl rand -hex 32)}
+      - OLLAMA_BASE_URL=http://ai-datasquiz-ollama:11434
+      - WEBUI_SECRET_KEY=${OPENWEBUI_SECRET_KEY:-$(openssl rand -hex 32)}
     volumes:
-      - \${PLATFORM_DIR}/openwebui:/app/backend/data
+      - ${PLATFORM_DIR}/openwebui:/app/backend/data
     networks:
-      - \${COMPOSE_PROJECT_NAME}-net
+      - ai-datasquiz-net
     depends_on:
       - ollama
     healthcheck:
