@@ -34,7 +34,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     if [[ "$line" =~ ^\s*# || -z "$line" ]]; then
         continue
     fi
-    # Handle both 'export KEY=VALUE' and 'KEY=VALUE' formats
+    # Safely export variable - handle quotes and special characters
     if [[ "$line" =~ ^export[[:space:]]*([^=]+)=(.*)$ ]]; then
         # Handle 'export KEY=VALUE' format
         export "${BASH_REMATCH[1]}=${BASH_REMATCH[2]}"
