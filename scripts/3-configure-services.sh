@@ -193,7 +193,7 @@ configure_n8n() {
     chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/n8n"
     
     log "SUCCESS" "n8n verification complete"
-    echo -e "  ${DIM}• URL: https://${DOMAIN}/n8n${NC}"
+    echo -e "  ${DIM}• URL: https://n8n.${DOMAIN}${NC}"
     echo -e "  ${DIM}• Status: Service is running${NC}"
     echo -e "  ${DIM}• Note: n8n requires manual owner account creation on first visit${NC}"
 }
@@ -210,7 +210,7 @@ configure_flowise() {
     log "INFO" "Configuring Flowise API credentials..."
     
     log "SUCCESS" "Flowise configuration complete"
-    echo -e "  ${DIM}• URL: https://${DOMAIN}/flowise${NC}"
+    echo -e "  ${DIM}• URL: https://flowise.${DOMAIN}${NC}"
     echo -e "  ${DIM}• User: ${FLOWISE_USER}${NC}"
     echo -e "  ${DIM}• Password: ${FLOWISE_PASSWORD}${NC}"
 }
@@ -353,7 +353,7 @@ configure_litellm() {
     fi
     
     log "SUCCESS" "LiteLLM configuration complete with ${LITELLM_ROUTING_STRATEGY} routing"
-    echo -e "  ${DIM}• URL: https://${DOMAIN}/litellm${NC}"
+    echo -e "  ${DIM}• URL: https://litellm.${DOMAIN}${NC}"
     echo -e "  ${DIM}• API Key: ${LITELLM_MASTER_KEY}${NC}"
     echo -e "  ${DIM}• Routing Strategy: ${LITELLM_ROUTING_STRATEGY}${NC}"
     echo -e "  ${DIM}• Models registered: Check LiteLLM admin panel${NC}"
@@ -371,7 +371,7 @@ configure_anythingllm() {
     log "INFO" "Configuring AnythingLLM workspace and integrations..."
     
     log "SUCCESS" "AnythingLLM configuration complete"
-    echo -e "  ${DIM}• URL: https://${DOMAIN}/anythingllm${NC}"
+    echo -e "  ${DIM}• URL: https://anythingllm.${DOMAIN}${NC}"
     echo -e "  ${DIM}• JWT Secret: ${ANYTHINGLLM_JWT_SECRET:0:16}...${NC}"
     echo -e "  ${DIM}• Auth Token: ${ANYTHINGLLM_AUTH_TOKEN}${NC}"
 }
@@ -407,7 +407,7 @@ datasources:
 EOF
 
     log "SUCCESS" "Grafana configuration complete"
-    echo -e "  ${DIM}• URL: https://${DOMAIN}/grafana${NC}"
+    echo -e "  ${DIM}• URL: https://openwebui.${DOMAIN}${NC}"
     echo -e "  ${DIM}• User: ${GRAFANA_USER}${NC}"
     echo -e "  ${DIM}• Password: ${GRAFANA_PASSWORD}${NC}"
 }
