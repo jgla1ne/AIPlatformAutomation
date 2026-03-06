@@ -133,18 +133,18 @@ cat > "${COMPOSE_FILE}" << EOF
 services:
   postgres:
     image: postgres:15-alpine
-    container_name: ai-datasquiz-postgres
+    container_name: \${COMPOSE_PROJECT_NAME}-postgres
     restart: unless-stopped
     environment:
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=\${POSTGRES_USER}
+      - POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}
+      - POSTGRES_DB=\${POSTGRES_DB}
     volumes:
-      - ${PLATFORM_DIR}/postgres:/var/lib/postgresql/data
+      - \${PLATFORM_DIR}/postgres:/var/lib/postgresql/data
     networks:
-      - ai-datasquiz-net
+      - \${COMPOSE_PROJECT_NAME}-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER} -d \${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -152,13 +152,15 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: ai-datasquiz-redis
+    container_name: \${COMPOSE_PROJECT_NAME}-redis
     restart: unless-stopped
-    command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes
+    command: redis-server --requirepass \${REDIS_PASSWORD} --appendonly yes
+    ports:
+      - "6379:6379"
     volumes:
-      - ${PLATFORM_DIR}/redis:/data
+      - \${PLATFORM_DIR}/redis:/data
     networks:
-      - ai-datasquiz-net
+      - \${COMPOSE_PROJECT_NAME}-net
     healthcheck:
       test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
       interval: 10s
@@ -167,18 +169,19 @@ services:
 
   ollama:
     image: ollama/ollama:latest
-    container_name: ai-datasquiz-ollama
+    container_name: \${COMPOSE_PROJECT_NAME}-ollama
     restart: unless-stopped
+    user: "\${TENANT_UID}:\${TENANT_GID}"
     ports:
-      - "${OLLAMA_PORT:-11434}:11434"
+      - "\${OLLAMA_PORT:-11434}:11434"
     environment:
-      - OLLAMA_PORT=${OLLAMA_INTERNAL_PORT}
+      - OLLAMA_PORT=\${OLLAMA_INTERNAL_PORT}
     volumes:
-      - ${PLATFORM_DIR}/ollama:/root/.ollama
+      - \${PLATFORM_DIR}/ollama:/root/.ollama
     networks:
-      - ai-datasquiz-net
+      - \${COMPOSE_PROJECT_NAME}-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${OLLAMA_INTERNAL_PORT}/api/tags"]
+      test: ["CMD", "curl", "-f", "http://localhost:\${OLLAMA_INTERNAL_PORT}/api/tags"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -186,18 +189,18 @@ services:
 
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: ai-datasquiz-qdrant
+    container_name: \${COMPOSE_PROJECT_NAME}-qdrant
     restart: unless-stopped
     ports:
-      - "${QDRANT_INTERNAL_HTTP_PORT:-6333}:6333"
+      - "\${QDRANT_INTERNAL_HTTP_PORT:-6333}:6333"
     environment:
-      - QDRANT__SERVICE__HTTP_PORT=${QDRANT_INTERNAL_HTTP_PORT}
+      - QDRANT__SERVICE__HTTP_PORT=\${QDRANT_INTERNAL_HTTP_PORT}
     volumes:
-      - ${PLATFORM_DIR}/qdrant:/qdrant/storage
+      - \${PLATFORM_DIR}/qdrant:/qdrant/storage
     networks:
-      - ai-datasquiz-net
+      - \${COMPOSE_PROJECT_NAME}-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${QDRANT_INTERNAL_HTTP_PORT}/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:\${QDRANT_INTERNAL_HTTP_PORT}/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -205,71 +208,69 @@ services:
 
   prometheus:
     image: prom/prometheus:latest
-    container_name: ai-datasquiz-prometheus
+    container_name: \${COMPOSE_PROJECT_NAME}-prometheus
     restart: unless-stopped
-    user: "${TENANT_UID}:${TENANT_GID}"
+    user: "\${TENANT_UID}:\${TENANT_GID}"
     ports:
       - "9090:9090"
     volumes:
-      - ${PLATFORM_DIR}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ${PLATFORM_DIR}/prometheus/data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--storage.tsdb.retention.time=15d'
+      - \${PLATFORM_DIR}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - \${PLATFORM_DIR}/prometheus/data:/prometheus
     networks:
-      - ai-datasquiz-net
+      - \${COMPOSE_PROJECT_NAME}-net
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/metrics"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 60s
 
   grafana:
     image: grafana/grafana:latest
-    container_name: ai-datasquiz-grafana
+    container_name: \${COMPOSE_PROJECT_NAME}-grafana
     restart: unless-stopped
-    user: "${TENANT_UID}:${TENANT_GID}"
+    user: "\${TENANT_UID}:\${TENANT_GID}"
     ports:
-      - "3002:3000"
+      - "\${GRAFANA_PORT:-3002}:3000"
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
-      - GF_PATHS_DATA=/var/lib/grafana
-      - GF_PATHS_LOGS=/var/log/grafana
+      - GF_SECURITY_ADMIN_PASSWORD=\${GRAFANA_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
     volumes:
-      - ${PLATFORM_DIR}/grafana:/var/lib/grafana
+      - \${PLATFORM_DIR}/grafana:/var/lib/grafana
     networks:
-      - ai-datasquiz-net
-    depends_on:
-      - prometheus
+      - \${COMPOSE_PROJECT_NAME}-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 60s
 
   caddy:
     image: caddy:2-alpine
-    container_name: ai-datasquiz-caddy
+    container_name: \${COMPOSE_PROJECT_NAME}-caddy
     restart: unless-stopped
-    user: "${TENANT_UID}:${TENANT_GID}"
+    user: "\${TENANT_UID}:\${TENANT_GID}"
     ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-      - "2019:2019"
+      - "\${CADDY_HTTP_PORT:-80}:80"
+      - "\${CADDY_HTTPS_PORT:-443}:443"
     volumes:
-      - ${PLATFORM_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ${PLATFORM_DIR}/caddy/data:/data
+      - \${PLATFORM_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - \${PLATFORM_DIR}/caddy/data:/data
     networks:
-      - ai-datasquiz-net
+      - \${COMPOSE_PROJECT_NAME}-net
     depends_on:
       - postgres
       - redis
       - ollama
+      - qdrant
+      - prometheus
+      - grafana
+      - n8n
+      - flowise
+      - openwebui
+      - anythingllm
+      - litellm
     healthcheck:
       test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
       interval: 30s
@@ -278,34 +279,34 @@ services:
       start_period: 60s
 
 # ── n8n ──────────────────────────────────────────────────────────────
-$([ "${ENABLE_N8N:-true}" = "true" ] && cat << BLOCK
+$([ "\${ENABLE_N8N:-true}" = "true" ] && cat << BLOCK
 
   n8n:
     image: n8nio/n8n:latest
-    container_name: ai-datasquiz-n8n
+    container_name: \${COMPOSE_PROJECT_NAME}-n8n
     restart: unless-stopped
     ports:
-      - "${N8N_PORT:-5678}:5678"
+      - "\${N8N_PORT:-5678}:5678"
     environment:
       - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=${N8N_USER:-admin}
-      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD}
-      - N8N_HOST=n8n.${DOMAIN}
+      - N8N_BASIC_AUTH_USER=\${N8N_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=\${N8N_PASSWORD}
+      - N8N_HOST=n8n.\${DOMAIN}
       - N8N_PORT=5678
       - N8N_PROTOCOL=https
       - NODE_ENV=production
-      - WEBHOOK_URL=https://n8n.${DOMAIN}
-      - GENERIC_TIMEZONE=${TIMEZONE:-UTC}
+      - WEBHOOK_URL=https://n8n.\${DOMAIN}
+      - GENERIC_TIMEZONE=\${TIMEZONE:-UTC}
       - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=ai-datasquiz-postgres
+      - DB_POSTGRESDB_HOST=\${COMPOSE_PROJECT_NAME}-postgres
       - DB_POSTGRESDB_PORT=5432
       - DB_POSTGRESDB_DATABASE=n8n
-      - DB_POSTGRESDB_USER=${POSTGRES_USER}
-      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+      - DB_POSTGRESDB_USER=\${POSTGRES_USER}
+      - DB_POSTGRESDB_PASSWORD=\${POSTGRES_PASSWORD}
     volumes:
-      - ${PLATFORM_DIR}/n8n:/home/node/.n8n
+      - \${PLATFORM_DIR}/n8n:/home/node/.n8n
     networks:
-      - ai-datasquiz-net
+      - \${COMPOSE_PROJECT_NAME}-net
     depends_on:
       - postgres
     healthcheck:
@@ -318,25 +319,25 @@ BLOCK
 )
 
 # ── Flowise ──────────────────────────────────────────────────────────
-$([ "${ENABLE_FLOWISE:-true}" = "true" ] && cat << BLOCK
+$([ "\${ENABLE_FLOWISE:-true}" = "true" ] && cat << BLOCK
 
   flowise:
     image: flowiseai/flowise:latest
-    container_name: ai-datasquiz-flowise
+    container_name: \${COMPOSE_PROJECT_NAME}-flowise
     restart: unless-stopped
     ports:
-      - "${FLOWISE_PORT:-3000}:3000"
+      - "\${FLOWISE_PORT:-3000}:3000"
     environment:
-      - FLOWISE_USERNAME=${FLOWISE_USER:-admin}
-      - FLOWISE_PASSWORD=${FLOWISE_PASSWORD}
+      - FLOWISE_USERNAME=\${FLOWISE_USER:-admin}
+      - FLOWISE_PASSWORD=\${FLOWISE_PASSWORD}
       - DATABASE_PATH=/root/.flowise
       - APIKEY_PATH=/root/.flowise
       - SECRETKEY_PATH=/root/.flowise
       - LOG_PATH=/root/.flowise/logs
     volumes:
-      - ${PLATFORM_DIR}/flowise:/root/.flowise
+      - \${PLATFORM_DIR}/flowise:/root/.flowise
     networks:
-      - ai-datasquiz-net
+      - \${COMPOSE_PROJECT_NAME}-net
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
       interval: 30s
@@ -347,21 +348,21 @@ BLOCK
 )
 
 # ── Open WebUI ───────────────────────────────────────────────────────
-$([ "${ENABLE_OPENWEBUI:-true}" = "true" ] && cat << BLOCK
+$([ "\${ENABLE_OPENWEBUI:-true}" = "true" ] && cat << BLOCK
 
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
-    container_name: ai-datasquiz-openwebui
+    container_name: \${COMPOSE_PROJECT_NAME}-openwebui
     restart: unless-stopped
     ports:
-      - "${OPENWEBUI_PORT:-8080}:8080"
+      - "\${OPENWEBUI_PORT:-8080}:8080"
     environment:
-      - OLLAMA_BASE_URL=http://ai-datasquiz-ollama:11434
-      - WEBUI_SECRET_KEY=${OPENWEBUI_SECRET_KEY:-$(openssl rand -hex 32)}
+      - OLLAMA_BASE_URL=http://\${COMPOSE_PROJECT_NAME}-ollama:11434
+      - WEBUI_SECRET_KEY=\${OPENWEBUI_SECRET_KEY:-\$(openssl rand -hex 32)}
     volumes:
-      - ${PLATFORM_DIR}/openwebui:/app/backend/data
+      - \${PLATFORM_DIR}/openwebui:/app/backend/data
     networks:
-      - ai-datasquiz-net
+      - \${COMPOSE_PROJECT_NAME}-net
     depends_on:
       - ollama
     healthcheck:
@@ -374,26 +375,26 @@ BLOCK
 )
 
 # ── AnythingLLM ──────────────────────────────────────────────────────
-$([ "${ENABLE_ANYTHINGLLM:-true}" = "true" ] && cat << BLOCK
+$([ "\${ENABLE_ANYTHINGLLM:-true}" = "true" ] && cat << BLOCK
 
   anythingllm:
     image: mintplexlabs/anythingllm:latest
-    container_name: ai-datasquiz-anythingllm
+    container_name: \${COMPOSE_PROJECT_NAME}-anythingllm
     restart: unless-stopped
     ports:
-      - "${ANYTHINGLLM_PORT:-3001}:3001"
+      - "\${ANYTHINGLLM_PORT:-3001}:3001"
     environment:
-      - JWT_SECRET=${ANYTHINGLLM_JWT_SECRET}
-      - OLLAMA_BASE_PATH=http://ai-datasquiz-ollama:11434
-      - QDRANT_ENDPOINT=http://ai-datasquiz-qdrant:6333
-      - QDRANT_API_KEY=${QDRANT_API_KEY}
+      - JWT_SECRET=\${ANYTHINGLLM_JWT_SECRET}
+      - OLLAMA_BASE_PATH=http://\${COMPOSE_PROJECT_NAME}-ollama:11434
+      - QDRANT_ENDPOINT=http://\${COMPOSE_PROJECT_NAME}-qdrant:6333
+      - QDRANT_API_KEY=\${QDRANT_API_KEY}
       - STORAGE_DIR=/app/server/storage
       - DATABASE_URL=sqlite:///app/server/storage/anythingllm.db
       - DATABASE_PATH=/app/server/storage/anythingllm.db
     volumes:
-      - ${PLATFORM_DIR}/anythingllm:/app/server/storage
+      - \${PLATFORM_DIR}/anythingllm:/app/server/storage
     networks:
-      - ai-datasquiz-net
+      - \${COMPOSE_PROJECT_NAME}-net
     depends_on:
       - ollama
       - qdrant
@@ -407,7 +408,7 @@ BLOCK
 )
 
 # ── LiteLLM ──────────────────────────────────────────────────────────
-$([ "${ENABLE_LITELLM:-true}" = "true" ] && cat << BLOCK
+$([ "\${ENABLE_LITELLM:-true}" = "true" ] && cat << BLOCK
 
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
@@ -417,7 +418,7 @@ $([ "${ENABLE_LITELLM:-true}" = "true" ] && cat << BLOCK
       - "\${LITELLM_PORT:-4000}:4000"
     environment:
       - LITELLM_MASTER_KEY=\${LITELLM_MASTER_KEY}
-      - DATABASE_URL=postgresql://\${POSTGRES_USER}:\${POSTGRES_PASSWORD}@\${COMPOSE_PROJECT_NAME}-postgres:5432/litellm
+      - DATABASE_URL=sqlite:///\${POSTGRES_USER}:\${POSTGRES_PASSWORD}@\${COMPOSE_PROJECT_NAME}-postgres:5432/litellm
       - STORE_MODEL_IN_DB=True
     volumes:
       - \${PLATFORM_DIR}/litellm:/app/config
@@ -704,6 +705,9 @@ echo ""
 
 # Final concise deployment status
 log "======= DEPLOYMENT SUMMARY ======="
+# Calculate success rate
+SUCCESS_RATE=$((${#RUNNING_SERVICES[@]} * 100 / ${#SERVICES[@]}))
+
 log "Success Rate: ${SUCCESS_RATE}% (${#RUNNING_SERVICES[@]}/${#SERVICES[@]} services)"
 log "Failed Services: ${#FAILED_SERVICES[@]}"
 log "Full logs: ${LOG_FILE}"
