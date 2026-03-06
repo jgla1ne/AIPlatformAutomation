@@ -376,19 +376,20 @@ $([ "${ENABLE_ANYTHINGLLM:-true}" = "true" ] && cat << BLOCK
 
   anythingllm:
     image: mintplexlabs/anythingllm:latest
-    container_name: \${COMPOSE_PROJECT_NAME}-anythingllm
+    container_name: ai-datasquiz-anythingllm
     restart: unless-stopped
     ports:
-      - "\${ANYTHINGLLM_PORT:-3001}:3001"
+      - "${ANYTHINGLLM_PORT:-3001}:3001"
     environment:
-      - JWT_SECRET=\${ANYTHINGLLM_JWT_SECRET}
-      - OLLAMA_BASE_PATH=http://\${COMPOSE_PROJECT_NAME}-ollama:11434
-      - QDRANT_ENDPOINT=http://\${COMPOSE_PROJECT_NAME}-qdrant:6333
-      - QDRANT_API_KEY=\${QDRANT_API_KEY}
+      - JWT_SECRET=${ANYTHINGLLM_JWT_SECRET}
+      - OLLAMA_BASE_PATH=http://ai-datasquiz-ollama:11434
+      - QDRANT_ENDPOINT=http://ai-datasquiz-qdrant:6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
+      - STORAGE_DIR=/app/server/storage
     volumes:
-      - \${PLATFORM_DIR}/anythingllm:/app/server/storage
+      - ${PLATFORM_DIR}/anythingllm:/app/server/storage
     networks:
-      - \${COMPOSE_PROJECT_NAME}-net
+      - ai-datasquiz-net
     depends_on:
       - ollama
       - qdrant
