@@ -1783,7 +1783,7 @@ offer_next_step() {
     echo -e "        ${DIM}sudo bash scripts/2-deploy-services.sh${NC}"
     echo ""
     echo -e "    ${CYAN}3)${NC}  Configure services (post-deploy API setup)"
-    echo -e "        ${DIM}sudo bash scripts/3-configure-services.sh${NC}"
+    echo -e "        ${DIM}sudo bash scripts/3-configure-services.sh ${TENANT_ID}${NC}"
     echo ""
     read -p "  ➤ Run script 2 (deploy services) now? [Y/n]: " run_next
     run_next="${run_next:-y}"

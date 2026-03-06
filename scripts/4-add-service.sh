@@ -1,8 +1,19 @@
 #!/usr/bin/env bash
 # 4-add-service.sh
 # Adds a single service to an existing deployment
-# Usage: sudo bash scripts/4-add-service.sh [service_name]
-set -euo pipefail
+# Usage: sudo bash scripts/4-add-service.sh <TENANT_ID> [service_name]
+set -eo pipefail
+
+# Accept TENANT_ID as command-line argument for explicit deployment
+TENANT_ID="${1:-}"
+if [[ -z "$TENANT_ID" ]]; then
+    echo "ERROR: TENANT_ID is required as first argument"
+    echo "Usage: sudo bash scripts/4-add-service.sh <TENANT_ID> [service_name]"
+    exit 1
+fi
+
+# Shift arguments to get service name
+SERVICE="${2:-}"
 
 # ── Colours ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -16,14 +27,9 @@ fail() { echo -e "${RED}[FAIL]${NC}  $*" >&2; exit 1; }
 # ─── Runtime vars ────────────────────────────────────────────────────────────────
 TENANT_UID="${SUDO_UID:-$(id -u)}"
 TENANT_GID="${SUDO_GID:-$(id -g)}"
-# Load environment from .env file
-if [[ -n "${TENANT_DIR:-}" && -f "${TENANT_DIR}/.env" ]]; then
-  ENV_FILE="${TENANT_DIR}/.env"
-elif [[ -f "$(dirname "${BASH_SOURCE[0]}")/../.env" ]]; then
-  ENV_FILE="$(dirname "${BASH_SOURCE[0]}")/../.env"
-else
-  ENV_FILE="$(sudo ls -t /mnt/data/*/.env 2>/dev/null | head -1)"
-fi
+# Use explicit TENANT_ID from command line
+ENV_FILE="/mnt/data/${TENANT_ID}/.env"
+TENANT_DIR="/mnt/data/${TENANT_ID}"
 
 [ ! -f "${ENV_FILE}" ] && {
     echo "ERROR: Run script 1 first"
@@ -75,4 +81,4 @@ echo "Enabled ${SERVICE} in ${ENV_FILE}"
 echo "Re-running script 2 to regenerate and redeploy..."
 
 # Re-run script 2 to regenerate compose file and redeploy
-exec bash "${SCRIPT2_DIR}/2-deploy-services.sh"
+exec bash "${SCRIPT2_DIR}/2-deploy-services.sh" "${TENANT_ID}"

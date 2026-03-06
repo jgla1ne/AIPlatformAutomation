@@ -3,10 +3,18 @@
 # Script 3: Service Configuration & Integration
 # =============================================================================
 # PURPOSE: Post-deploy service configuration with skip flags and progress tracking
-# USAGE:   sudo bash scripts/3-configure-services.sh [--skip-service]
+# USAGE:   sudo bash scripts/3-configure-services.sh <TENANT_ID> [--skip-service]
 # =============================================================================
 
-set -euo pipefail
+# Accept TENANT_ID as command-line argument for explicit deployment
+TENANT_ID="${1:-}"
+if [[ -z "$TENANT_ID" ]]; then
+    echo "ERROR: TENANT_ID is required as first argument"
+    echo "Usage: sudo bash scripts/3-configure-services.sh <TENANT_ID> [--skip-service]"
+    exit 1
+fi
+
+set -eo pipefail
 
 # ─── Colours ─────────────────────────────────────────────────────────────────
 BOLD='\033[1m'
@@ -21,14 +29,9 @@ NC='\033[0m'
 # ─── Runtime vars ────────────────────────────────────────────────────────────────
 TENANT_UID="${SUDO_UID:-$(id -u)}"
 TENANT_GID="${SUDO_GID:-$(id -g)}"
-# Load environment from .env file
-if [[ -n "${TENANT_DIR:-}" && -f "${TENANT_DIR}/.env" ]]; then
-  ENV_FILE="${TENANT_DIR}/.env"
-elif [[ -f "$(dirname "${BASH_SOURCE[0]}")/../.env" ]]; then
-  ENV_FILE="$(dirname "${BASH_SOURCE[0]}")/../.env"
-else
-  ENV_FILE="$(sudo ls -t /mnt/data/*/.env 2>/dev/null | head -1)"
-fi
+# Use explicit TENANT_ID from command line
+ENV_FILE="/mnt/data/${TENANT_ID}/.env"
+TENANT_DIR="/mnt/data/${TENANT_ID}"
 
 [[ -z "${ENV_FILE:-}" || ! -f "${ENV_FILE}" ]] && \
   fail "Cannot find .env file. Run script 1 first."
