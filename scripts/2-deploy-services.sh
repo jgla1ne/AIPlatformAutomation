@@ -2,7 +2,7 @@
 # Script 2: Deploy Services - Fixed Version with Final Output
 # Fixed version with analysis.md improvements and proper final health check
 
-set -euo pipefail
+set -eo pipefail
 
 # Colors for output
 RED='\033[0;31m'
@@ -15,6 +15,16 @@ log()  { echo -e "${GREEN}[$(date +'%H:%M:%S')]${NC} $1"; }
 warn() { echo -e "${YELLOW}[$(date +'%H:%M:%S')] WARNING:${NC} $1"; }
 error(){ echo -e "${RED}[$(date +'%H:%M:%S')] ERROR:${NC} $1"; }
 info() { echo -e "${BLUE}[$(date +'%H:%M:%S')] INFO:${NC} $1"; }
+
+check_var() {
+    # The first argument is the variable name (as a string)
+    # The second argument is the service name (as a string)
+    if [ -z "${!1}" ]; then
+        warn "Skipping service '${2}' because required environment variable '${1}' is not set."
+        return 1
+    fi
+    return 0
+}
 
 # Configuration paths - loaded from .env
 ENV_FILE="${ENV_FILE:-$(sudo ls -t /mnt/data/*/.env 2>/dev/null | head -1)}"
@@ -145,18 +155,18 @@ cat > "${COMPOSE_FILE}" << EOF
 services:
   postgres:
     image: postgres:15-alpine
-    container_name: \$${COMPOSE_PROJECT_NAME}-postgres
+    container_name: \${COMPOSE_PROJECT_NAME}-postgres
     restart: unless-stopped
     environment:
-      - POSTGRES_USER=\$${POSTGRES_USER}
-      - POSTGRES_PASSWORD=\$${POSTGRES_PASSWORD}
-      - POSTGRES_DB=\$${POSTGRES_DB}
+      - POSTGRES_USER=\${POSTGRES_USER}
+      - POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}
+      - POSTGRES_DB=\${POSTGRES_DB}
     volumes:
-      - \$${PLATFORM_DIR}/postgres:/var/lib/postgresql/data
+      - \${PLATFORM_DIR}/postgres:/var/lib/postgresql/data
     networks:
-      - \$${COMPOSE_PROJECT_NAME}-net
+      - \${COMPOSE_PROJECT_NAME}-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \$${POSTGRES_USER} -d \$${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER} -d \${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -164,9 +174,9 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: \$${COMPOSE_PROJECT_NAME}-redis
+    container_name: \${COMPOSE_PROJECT_NAME}-redis
     restart: unless-stopped
-    command: redis-server --requirepass \$${REDIS_PASSWORD} --appendonly yes
+    command: redis-server --requirepass \${REDIS_PASSWORD} --appendonly yes
     ports:
       - "6379:6379"
     volumes:
@@ -291,7 +301,10 @@ services:
       start_period: 60s
 
 # ── n8n ──────────────────────────────────────────────────────────────
-$([ "\${ENABLE_N8N:-true}" = "true" ] && cat << BLOCK
+if [[ "${ENABLE_N8N:-true}" == "true" ]]; then
+  if check_var "N8N_ENCRYPTION_KEY" "n8n" && check_var "N8N_USER" "n8n" && check_var "N8N_PASSWORD" "n8n"; then
+    log "Adding n8n service to docker-compose.yml"
+    cat >> "${COMPOSE_FILE}" << EOF
 
   n8n:
     image: n8nio/n8n:latest
@@ -327,11 +340,15 @@ $([ "\${ENABLE_N8N:-true}" = "true" ] && cat << BLOCK
       timeout: 10s
       retries: 3
       start_period: 60s
-BLOCK
-)
+EOF
+  fi
+fi
 
 # ── Flowise ──────────────────────────────────────────────────────────
-$([ "\${ENABLE_FLOWISE:-true}" = "true" ] && cat << BLOCK
+if [[ "\${ENABLE_FLOWISE:-true}" == "true" ]]; then
+  if check_var "FLOWISE_USERNAME" "flowise" && check_var "FLOWISE_PASSWORD" "flowise"; then
+    log "Adding flowise service to docker-compose.yml"
+    cat >> "\${COMPOSE_FILE}" << EOF
 
   flowise:
     image: flowiseai/flowise:latest
@@ -356,11 +373,15 @@ $([ "\${ENABLE_FLOWISE:-true}" = "true" ] && cat << BLOCK
       timeout: 10s
       retries: 3
       start_period: 60s
-BLOCK
-)
+EOF
+  fi
+fi
 
 # ── Open WebUI ───────────────────────────────────────────────────────
-$([ "\${ENABLE_OPENWEBUI:-true}" = "true" ] && cat << BLOCK
+if [[ "\${ENABLE_OPENWEBUI:-true}" == "true" ]]; then
+  if check_var "OLLAMA_INTERNAL_URL" "openwebui"; then
+    log "Adding openwebui service to docker-compose.yml"
+    cat >> "\${COMPOSE_FILE}" << EOF
 
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
@@ -369,7 +390,7 @@ $([ "\${ENABLE_OPENWEBUI:-true}" = "true" ] && cat << BLOCK
     ports:
       - "\${OPENWEBUI_PORT:-8080}:8080"
     environment:
-      - OLLAMA_BASE_URL=http://\${COMPOSE_PROJECT_NAME}-ollama:11434
+      - OLLAMA_BASE_URL=\${OLLAMA_INTERNAL_URL}
       - WEBUI_SECRET_KEY=\${OPENWEBUI_SECRET_KEY:-\$(openssl rand -hex 32)}
     volumes:
       - \${PLATFORM_DIR}/openwebui:/app/backend/data
@@ -383,11 +404,15 @@ $([ "\${ENABLE_OPENWEBUI:-true}" = "true" ] && cat << BLOCK
       timeout: 10s
       retries: 3
       start_period: 120s
-BLOCK
-)
+EOF
+  fi
+fi
 
 # ── AnythingLLM ──────────────────────────────────────────────────────
-$([ "\${ENABLE_ANYTHINGLLM:-true}" = "true" ] && cat << BLOCK
+if [[ "\${ENABLE_ANYTHINGLLM:-true}" == "true" ]]; then
+  if check_var "VECTOR_DB" "anythingllm" && check_var "QDRANT_INTERNAL_URL" "anythingllm" && check_var "OLLAMA_INTERNAL_URL" "anythingllm"; then
+    log "Adding anythingllm service to docker-compose.yml"
+    cat >> "\${COMPOSE_FILE}" << EOF
 
   anythingllm:
     image: mintplexlabs/anythingllm:latest
@@ -397,8 +422,8 @@ $([ "\${ENABLE_ANYTHINGLLM:-true}" = "true" ] && cat << BLOCK
       - "\${ANYTHINGLLM_PORT:-3001}:3001"
     environment:
       - JWT_SECRET=\${ANYTHINGLLM_JWT_SECRET}
-      - OLLAMA_BASE_PATH=http://\${COMPOSE_PROJECT_NAME}-ollama:11434
-      - QDRANT_ENDPOINT=http://\${COMPOSE_PROJECT_NAME}-qdrant:6333
+      - OLLAMA_BASE_PATH=\${OLLAMA_INTERNAL_URL}
+      - QDRANT_ENDPOINT=\${QDRANT_INTERNAL_URL}
       - QDRANT_API_KEY=\${QDRANT_API_KEY}
       - STORAGE_DIR=/app/server/storage
       - DATABASE_URL=sqlite:///app/server/storage/anythingllm.db
@@ -416,11 +441,15 @@ $([ "\${ENABLE_ANYTHINGLLM:-true}" = "true" ] && cat << BLOCK
       timeout: 10s
       retries: 3
       start_period: 120s
-BLOCK
-)
+EOF
+  fi
+fi
 
 # ── LiteLLM ──────────────────────────────────────────────────────────
-$([ "\${ENABLE_LITELLM:-true}" = "true" ] && cat << BLOCK
+if [[ "\${ENABLE_LITELLM:-true}" == "true" ]]; then
+  if check_var "LITELLM_MASTER_KEY" "litellm"; then
+    log "Adding litellm service to docker-compose.yml"
+    cat >> "\${COMPOSE_FILE}" << EOF
 
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
@@ -444,8 +473,9 @@ $([ "\${ENABLE_LITELLM:-true}" = "true" ] && cat << BLOCK
       timeout: 10s
       retries: 3
       start_period: 60s
-BLOCK
-)
+EOF
+  fi
+fi
 
 # ── Authentik ────────────────────────────────────────────────────────
 $([ "${ENABLE_AUTHENTIK:-false}" = "true" ] && cat << BLOCK
