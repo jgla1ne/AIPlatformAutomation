@@ -706,6 +706,9 @@ main() {
     parse_args "$@"
     load_env
     
+    # Redirect all output to log file
+    exec > >(tee -a "${LOG_FILE}") 2>&1
+    
     # Count active steps for progress tracking
     local total_steps=0
     [ "${SKIP_N8N}" = "false" ] && [ "${ENABLE_N8N}" = "true" ] && total_steps=$((total_steps + 1))

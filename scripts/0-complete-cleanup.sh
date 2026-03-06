@@ -3,30 +3,33 @@
 # Script 0: Complete Cleanup & Reset
 # =============================================================================
 # PURPOSE: Complete tenant cleanup with confirmation and safety checks
-# USAGE:   sudo bash scripts/0-complete-cleanup.sh [--keep-data]
+# USAGE:   sudo bash scripts/0-complete-cleanup.sh <TENANT_ID> [--keep-data]
 # =============================================================================
 
-set -euo pipefail
+# Accept TENANT_ID as command-line argument for explicit cleanup
+TENANT_ID="${1:-}"
+if [[ -z "$TENANT_ID" ]]; then
+    echo "ERROR: TENANT_ID is required as first argument"
+    echo "Usage: sudo bash scripts/0-complete-cleanup.sh <TENANT_ID> [--keep-data]"
+    exit 1
+fi
 
-# ─── Colours ─────────────────────────────────────────────────────────────────
-BOLD='\033[1m'
-DIM='\033[2m'
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+set -eo pipefail
 
 # ─── Runtime vars ────────────────────────────────────────────────────────────────
 TENANT_UID=$(id -u)
 # Dynamic configuration paths
-DATA_BASE_PATH="/mnt/data"
+DATA_ROOT="/mnt/data/${TENANT_ID}"
+LOG_FILE="${DATA_ROOT}/logs/cleanup-$(date +%Y%m%d-%H%M%S).log"
 COMPOSE_FILENAME="docker-compose.yml"
 PLATFORM_LABEL="com.ai-platform"
 # Read PROJECT_PREFIX from environment or use default
 PROJECT_PREFIX="${PROJECT_PREFIX:-aip-}"
 # Dynamic volume patterns for AI services
 VOLUME_PATTERNS="(${PROJECT_PREFIX}|stack_|n8n_data|ollama-data|postgres-data|redis-data|qdrant-data|minio-data|dify-)"
+
+# Redirect all output to log file
+exec > >(tee -a "${LOG_FILE}") 2>&1
 
 # Auto-detect tenant directories
 detect_tenants() {

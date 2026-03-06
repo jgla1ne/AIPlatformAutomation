@@ -41,6 +41,11 @@ set -a; source "${ENV_FILE}"; set +a
 
 # Use environment variables
 DATA_ROOT="${DATA_ROOT:-/mnt/data/${TENANT_ID:-default}}"
+LOG_FILE="${DATA_ROOT}/logs/add-service-$(date +%Y%m%d-%H%M%S).log"
+
+# Source environment variables
+exec > >(tee -a "${LOG_FILE}") 2>&1
+set -a; source "${ENV_FILE}"; set +a
 
 # Source the service append functions from script 2
 # (script 2 must export them or we duplicate just the needed one)
