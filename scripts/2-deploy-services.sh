@@ -266,11 +266,11 @@ services:
       - qdrant
       - prometheus
       - grafana
-      - n8n
-      - flowise
-      - openwebui
-      - anythingllm
-      - litellm
+      - \${COMPOSE_PROJECT_NAME}-openwebui
+      - \${COMPOSE_PROJECT_NAME}-n8n
+      - \${COMPOSE_PROJECT_NAME}-flowise
+      - \${COMPOSE_PROJECT_NAME}-anythingllm
+      - \${COMPOSE_PROJECT_NAME}-litellm
     healthcheck:
       test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
       interval: 30s
