@@ -386,10 +386,10 @@ EOF
 fi
 
 # ── Flowise ──────────────────────────────────────────────────────────
-if [[ "\${ENABLE_FLOWISE:-true}" == "true" ]]; then
+if [[ "${ENABLE_FLOWISE:-true}" == "true" ]]; then
   if check_var "FLOWISE_USERNAME" "flowise" && check_var "FLOWISE_PASSWORD" "flowise"; then
     log "Adding flowise service to docker-compose.yml"
-    cat >> "\${COMPOSE_FILE}" << EOF
+    cat >> "${COMPOSE_FILE}" << EOF
 
   flowise:
     image: flowiseai/flowise:latest
@@ -419,10 +419,10 @@ EOF
 fi
 
 # ── Open WebUI ───────────────────────────────────────────────────────
-if [[ "\${ENABLE_OPENWEBUI:-true}" == "true" ]]; then
+if [[ "${ENABLE_OPENWEBUI:-true}" == "true" ]]; then
   if check_var "OLLAMA_INTERNAL_URL" "openwebui"; then
     log "Adding openwebui service to docker-compose.yml"
-    cat >> "\${COMPOSE_FILE}" << EOF
+    cat >> "${COMPOSE_FILE}" << EOF
 
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
@@ -450,10 +450,10 @@ EOF
 fi
 
 # ── AnythingLLM ──────────────────────────────────────────────────────
-if [[ "\${ENABLE_ANYTHINGLLM:-true}" == "true" ]]; then
+if [[ "${ENABLE_ANYTHINGLLM:-true}" == "true" ]]; then
   if check_var "VECTOR_DB" "anythingllm" && check_var "QDRANT_INTERNAL_URL" "anythingllm" && check_var "OLLAMA_INTERNAL_URL" "anythingllm"; then
     log "Adding anythingllm service to docker-compose.yml"
-    cat >> "\${COMPOSE_FILE}" << EOF
+    cat >> "${COMPOSE_FILE}" << EOF
 
   anythingllm:
     image: mintplexlabs/anythingllm:latest
@@ -487,10 +487,10 @@ EOF
 fi
 
 # ── LiteLLM ──────────────────────────────────────────────────────────
-if [[ "\${ENABLE_LITELLM:-true}" == "true" ]]; then
+if [[ "${ENABLE_LITELLM:-true}" == "true" ]]; then
   if check_var "LITELLM_MASTER_KEY" "litellm"; then
     log "Adding litellm service to docker-compose.yml"
-    cat >> "\${COMPOSE_FILE}" << EOF
+    cat >> "${COMPOSE_FILE}" << EOF
 
   litellm:
     image: ghcr.io/berriai/litellm:main-latest

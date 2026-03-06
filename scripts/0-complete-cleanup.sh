@@ -1,403 +1,98 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script 0: Complete Cleanup & Reset
+# Script 0: Complete System Prune - ROBUST VERSION
 # =============================================================================
-# PURPOSE: Complete tenant cleanup with confirmation and safety checks
-# USAGE:   sudo bash scripts/0-complete-cleanup.sh <TENANT_ID> [--keep-data]
+# PURPOSE: To completely and forcefully wipe all Docker assets and data volumes
+#          to ensure a pristine state for the next deployment.
+# USAGE:   sudo bash scripts/0-complete-cleanup.sh [--keep-data]
 # =============================================================================
 
-# Accept TENANT_ID as command-line argument for explicit cleanup
-TENANT_ID="${1:-}"
-if [[ -z "$TENANT_ID" ]]; then
-    echo "ERROR: TENANT_ID is required as first argument"
-    echo "Usage: sudo bash scripts/0-complete-cleanup.sh <TENANT_ID> [--keep-data]"
+set -euo pipefail
+
+# --- Colors ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+# --- Logging ---
+log() { echo -e "${CYAN}[INFO]${NC}  $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC}  $*"; }
+ok() { echo -e "${GREEN}[OK]${NC}    $*"; }
+
+# --- Configuration ---
+KEEP_DATA=false
+if [[ "${1:-}" == "--keep-data" ]]; then
+    KEEP_DATA=true
+fi
+
+# --- Main Execution ---
+main() {
+    log "Starting complete system prune..."
+
+    # -------------------------------------------------------------------------
+    # STEP 1: Forcefully stop and remove ALL Docker containers.
+    # This is the most critical change. It doesn't rely on names or labels.
+    # It finds all running containers and stops them, then removes all containers.
+    # -------------------------------------------------------------------------
+    log "Forcefully stopping all running Docker containers..."
+    RUNNING_CONTAINERS=$(docker ps -q)
+    if [ -n "$RUNNING_CONTAINERS" ]; then
+        # The `xargs` command handles the case where there are no containers
+        docker stop $RUNNING_CONTAINERS
+        ok "All running containers stopped."
+    else
+        ok "No running containers to stop."
+    fi
+
+    log "Removing all Docker containers..."
+    ALL_CONTAINERS=$(docker ps -a -q)
+    if [ -n "$ALL_CONTAINERS" ]; then
+        docker rm -f $ALL_CONTAINERS
+        ok "All containers removed."
+    else
+        ok "No containers to remove."
+    fi
+
+    # -------------------------------------------------------------------------
+    # STEP 2: Prune other Docker assets.
+    # This removes unused networks, images, and the build cache.
+    # -------------------------------------------------------------------------
+    log "Pruning Docker system (networks, images, build cache)..."
+    docker system prune -af
+    ok "Docker system pruned."
+
+    # -------------------------------------------------------------------------
+    # STEP 3: Handle data volumes.
+    # This part respects the --keep-data flag.
+    # -------------------------------------------------------------------------
+    if [ "$KEEP_DATA" = true ]; then
+        warn "Skipping data volume deletion due to --keep-data flag."
+        log "Manual cleanup of /mnt/data may still be required if issues persist."
+    else
+        warn "DELETING ALL TENANT DATA in /mnt/data..."
+        if [ -d "/mnt/data" ]; then
+            # Recreate the directory to ensure it's empty and permissions are clean
+            rm -rf /mnt/data
+            mkdir -p /mnt/data
+            # Set permissions to be world-writable but with sticky bit to prevent users deleting others' files
+            chmod 777 /mnt/data
+            chmod +t /mnt/data
+            ok "Data volumes at /mnt/data have been wiped."
+        else
+            ok "/mnt/data directory did not exist."
+        fi
+    fi
+
+    echo ""
+    ok "System cleanup is complete. The environment is ready for a fresh deployment."
+}
+
+# --- Root Check & Execution ---
+if [ "$(id -u)" -ne 0 ]; then
+    echo -e "${RED}This script must be run as root (use sudo).${NC}"
     exit 1
 fi
 
-set -eo pipefail
-
-# ─── Runtime vars ────────────────────────────────────────────────────────────────
-TENANT_UID=$(id -u)
-# Dynamic configuration paths
-DATA_ROOT="/mnt/data/${TENANT_ID}"
-LOG_FILE="${DATA_ROOT}/logs/cleanup-$(date +%Y%m%d-%H%M%S).log"
-COMPOSE_FILENAME="docker-compose.yml"
-PLATFORM_LABEL="com.ai-platform"
-# Read PROJECT_PREFIX from environment or use default
-PROJECT_PREFIX="${PROJECT_PREFIX:-aip-}"
-# Dynamic volume patterns for AI services
-VOLUME_PATTERNS="(${PROJECT_PREFIX}|stack_|n8n_data|ollama-data|postgres-data|redis-data|qdrant-data|minio-data|dify-)"
-
-# Redirect all output to log file
-exec > >(tee -a "${LOG_FILE}") 2>&1
-
-# --- setup_logging function ---
-setup_logging() {
-    if [[ -z "${DATA_ROOT:-}" ]]; then return; fi
-    local script_name
-    script_name=$(basename "$0" .sh)
-    LOG_DIR="${DATA_ROOT}/logs"
-    mkdir -p "${LOG_DIR}"
-    [[ -n "${TENANT_GID:-}" ]] && chown :"${TENANT_GID}" "${LOG_DIR}"
-    LOG_FILE="${LOG_DIR}/${script_name}-$(date +%Y%m%d-%H%M%S).log"
-
-    # Redirect all subsequent output
-    exec > >(tee -a "${LOG_FILE}") 2>&1
-    log "INFO" "All output is now logged to: ${LOG_FILE}"
-}
-
-# Auto-detect tenant directories
-detect_tenants() {
-    local tenants=()
-    if [ -d "${DATA_BASE_PATH}" ]; then
-        for dir in ${DATA_BASE_PATH}/*/; do
-            if [ -d "$dir" ]; then
-                local tenant_name=$(basename "$dir")
-                tenants+=("$tenant_name")
-            fi
-        done
-    fi
-    # Also check /mnt directly for legacy support
-    for dir in /mnt/*/; do
-        if [ -d "$dir" ] && [[ ! "$(basename "$dir")" =~ ^(data|lost\+found)$ ]]; then
-            local tenant_name=$(basename "$dir")
-            # Avoid duplicates
-            if [[ ! " ${tenants[@]} " =~ " ${tenant_name} " ]]; then
-                tenants+=("$tenant_name")
-            fi
-        fi
-    done
-    echo "${tenants[@]}"
-}
-
-TENANT_ID=""
-DATA_ROOT=""
-COMPOSE_PROJECT_NAME=""
-DOCKER_NETWORK=""
-KEEP_DATA=false
-
-# Parse arguments
-[[ "${1:-}" == "--keep-data" ]] && KEEP_DATA=true
-
-# ─── Logging ─────────────────────────────────────────────────────────────────
-log() {
-    local level="${1}" message="${2}"
-    case "${level}" in
-        SUCCESS) echo -e "  ${GREEN}✅  ${message}${NC}" ;;
-        INFO)    echo -e "  ${CYAN}ℹ️   ${message}${NC}" ;;
-        WARN)    echo -e "  ${YELLOW}⚠️   ${message}${NC}" ;;
-        ERROR)   echo -e "  ${RED}❌  ${message}${NC}" ;;
-    esac
-}
-
-# ─── UI Helpers ──────────────────────────────────────────────────────────────
-print_header() {
-    clear
-    echo ""
-    echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${NC}${BOLD}              AI Platform — Complete Cleanup                ${NC}${CYAN}║${NC}"
-    echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-}
-
-print_warning() {
-    echo ""
-    echo -e "${RED}╔══════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${RED}║${NC}${BOLD}                        ⚠️  DESTRUCTION WARNING                 ${NC}${RED}║${NC}"
-    echo -e "${RED}╚══════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-}
-
-# ─── Safety Checks ───────────────────────────────────────────────────────────
-check_root() {
-    if [ "$(id -u)" -ne 0 ]; then
-        log "ERROR" "This script must be run as root (use sudo)"
-        exit 1
-    fi
-}
-
-check_tenant_exists() {
-    if [ ! -d "${DATA_ROOT}" ] && [ "${KEEP_DATA}" = "false" ]; then
-        log "WARN" "No data directory found for tenant ${TENANT_ID}"
-        log "INFO" "Only container/network cleanup will be performed"
-        DATA_ROOT=""
-    fi
-}
-
-check_compose_file() {
-    local compose_file="${DATA_ROOT}/${COMPOSE_FILENAME}"
-    if [ -n "${DATA_ROOT}" ] && [ ! -f "${compose_file}" ]; then
-        log "WARN" "No ${COMPOSE_FILENAME} found at ${compose_file}"
-        log "INFO" "Only running generic container cleanup"
-        DATA_ROOT=""
-    fi
-    
-    if [ -n "${DATA_ROOT}" ] && [ -f "${compose_file}" ]; then
-        COMPOSE_FILE="${compose_file}"
-        log "INFO" "Using compose file: ${compose_file}"
-    fi
-}
-
-# ─── Cleanup Functions ───────────────────────────────────────────────────────────
-cleanup_containers() {
-    log "INFO" "Stopping and removing containers..."
-    
-    # Stop containers using compose file if it exists
-    if [ -n "${COMPOSE_FILE:-}" ] && [ -f "${COMPOSE_FILE}" ]; then
-        cd "${DATA_ROOT}"
-        docker compose down --remove-orphans 2>/dev/null || true
-        cd - > /dev/null
-    fi
-    
-    # Force remove any remaining AI Platform containers (all tenants)
-    local containers
-    containers=$(docker ps -aq --filter "label=${PLATFORM_LABEL}" 2>/dev/null || true)
-    if [ -n "${containers}" ]; then
-        echo "${containers}" | xargs -r docker rm -f 2>/dev/null || true
-        log "SUCCESS" "AI Platform containers removed"
-    else
-        log "INFO" "No AI Platform containers to remove"
-    fi
-    
-    # Also remove any containers with project prefix (legacy naming)
-    containers=$(docker ps -aq --filter "name=${PROJECT_PREFIX}" 2>/dev/null || true)
-    if [ -n "${containers}" ]; then
-        echo "${containers}" | xargs -r docker rm -f 2>/dev/null || true
-        log "SUCCESS" "Legacy ${PROJECT_PREFIX} containers removed"
-    fi
-}
-
-cleanup_networks() {
-    log "INFO" "Removing Docker networks..."
-    
-    # Remove project networks
-    local networks
-    networks=$(docker network ls --filter "name=${DOCKER_NETWORK}" -q 2>/dev/null || true)
-    if [ -n "${networks}" ]; then
-        echo "${networks}" | xargs -r docker network rm 2>/dev/null || true
-        log "SUCCESS" "Networks removed"
-    else
-        log "INFO" "No networks to remove"
-    fi
-    
-    # Prune dangling networks (safe)
-    docker network prune -f 2>/dev/null || true
-}
-
-cleanup_volumes() {
-    log "INFO" "Removing Docker volumes..."
-    
-    # Remove named volumes matching project pattern
-    local volumes
-    volumes=$(docker volume ls --filter "name=${COMPOSE_PROJECT_NAME}" -q 2>/dev/null || true)
-    if [ -n "${volumes}" ]; then
-        echo "${volumes}" | xargs -r docker volume rm 2>/dev/null || true
-        log "SUCCESS" "Project volumes removed"
-    else
-        log "INFO" "No project volumes to remove"
-    fi
-    
-    # Remove any remaining AI platform related volumes
-    local all_volumes
-    all_volumes=$(docker volume ls -q 2>/dev/null | grep -E "${VOLUME_PATTERNS}" || true)
-    if [ -n "${all_volumes}" ]; then
-        log "INFO" "Removing additional AI platform volumes..."
-        echo "${all_volumes}" | xargs -r docker volume rm 2>/dev/null || true
-        log "SUCCESS" "Additional volumes removed"
-    else
-        log "INFO" "No additional volumes to remove"
-    fi
-}
-
-cleanup_data() {
-    if [ "${KEEP_DATA}" = "true" ]; then
-        log "INFO" "Preserving data directory as requested"
-        if [ -f "${DATA_ROOT}/${COMPOSE_FILENAME}" ]; then
-            rm -f "${DATA_ROOT}/${COMPOSE_FILENAME}"
-            log "SUCCESS" "Compose file removed (will be regenerated)"
-        fi
-    else
-        log "INFO" "Unmounting EBS volumes and removing data directory..."
-        
-        # Unmount any EBS volumes mounted under data base path
-        if mountpoint -q "${DATA_BASE_PATH}" 2>/dev/null; then
-            log "INFO" "Unmounting ${DATA_BASE_PATH}..."
-            umount "${DATA_BASE_PATH}" 2>/dev/null || true
-            log "SUCCESS" "${DATA_BASE_PATH} unmounted"
-        fi
-        
-        # Check for and unmount tenant-specific mount points
-        if [ -n "${DATA_ROOT}" ] && mountpoint -q "${DATA_ROOT}" 2>/dev/null; then
-            log "INFO" "Unmounting ${DATA_ROOT}..."
-            umount "${DATA_ROOT}" 2>/dev/null || true
-            log "SUCCESS" "${DATA_ROOT} unmounted"
-        fi
-        
-        # Remove data directory
-        if [ -d "${DATA_ROOT}" ]; then
-            rm -rf "${DATA_ROOT}"
-            log "SUCCESS" "Data directory removed: ${DATA_ROOT}"
-        else
-            log "INFO" "Data directory did not exist"
-        fi
-        
-        # Remove base mount point if empty and exists
-        if [ -d "${DATA_BASE_PATH}" ]; then
-            # Check if directory is empty (only contains . and ..)
-            if [ -z "$(ls -A "${DATA_BASE_PATH}" 2>/dev/null)" ]; then
-                rmdir "${DATA_BASE_PATH}"
-                log "SUCCESS" "Empty mount point removed: ${DATA_BASE_PATH}"
-            else
-                log "INFO" "Mount point not empty, preserving: ${DATA_BASE_PATH}"
-            fi
-        fi
-        
-        # Complete Docker system prune
-        log "INFO" "Running complete Docker system prune..."
-        docker system prune -af --volumes 2>/dev/null || true
-        log "SUCCESS" "Docker system pruned - all containers, images, networks, and volumes removed"
-    fi
-}
-
-# ─── Confirmation ─────────────────────────────────────────────────────────────
-confirm_destruction() {
-    print_warning
-    
-    # Detect tenants locally for confirmation
-    local tenants=($(detect_tenants))
-    
-    echo -e "${BOLD}Tenant to be destroyed:${NC} ${TENANT_ID}"
-    echo -e "${BOLD}Data root:${NC}           ${DATA_ROOT:-"None (container/network cleanup only)"}"
-    echo ""
-    echo -e "${RED}╔══════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${RED}║                        ⚠️  DESTRUCTION WARNING                 ║${NC}"
-    echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    
-    if [ ${#tenants[@]} -eq 0 ]; then
-        echo -e "${YELLOW}No tenant directories found${NC}"
-        echo -e "${DIM}Only generic container/network cleanup will be performed${NC}"
-    else
-        echo -e "${YELLOW}Tenants to be destroyed: ${tenants[*]}${NC}"
-        for tenant in "${tenants[@]}"; do
-            local data_root="${DATA_BASE_PATH}/${tenant}"
-            if [ ! -d "${data_root}" ]; then
-                data_root="/mnt/${tenant}"
-            fi
-            echo -e "${DIM}Data root:           ${data_root}${NC}"
-        done
-    fi
-    
-    echo ""
-    echo -e "${RED}🔥  COMPLETE DESTRUCTION MODE${NC}"
-    echo -e "${DIM}This will permanently delete:${NC}"
-    echo ""
-    echo -e "${DIM}  • All containers${NC}"
-    echo -e "${DIM}  • All Docker networks${NC}"
-    echo -e "${DIM}  • All named volumes${NC}"
-    if [ ${#tenants[@]} -gt 0 ]; then
-        echo -e "${DIM}  • All data under tenant directories${NC}"
-        echo -e "${DIM}  • All databases, models, uploads${NC}"
-        echo -e "${DIM}  • All configuration files${NC}"
-    fi
-    echo ""
-    echo -e "${RED}This action CANNOT be undone.${NC}"
-    echo ""
-    
-    if [ ${#tenants[@]} -eq 0 ]; then
-        read -p "  ➤ Continue with generic cleanup? [y/N]: " confirm
-        [[ "${confirm,,}" == "y" ]] || exit 0
-    else
-        echo -e "Type 'DELETE' to confirm destruction of ${tenants[*]}:"
-        echo ""
-        read -p "  ➤ Confirm: " confirm
-        if [ "${confirm}" != "DELETE" ]; then
-            log "INFO" "Aborted - no changes made"
-            exit 0
-        fi
-    fi
-}
-
-# ─── Main ─────────────────────────────────────────────────────────────────────
-main() {
-    print_header
-    check_root
-    
-    # Detect all tenants
-    local tenants=($(detect_tenants))
-    
-    if [ ${#tenants[@]} -eq 0 ]; then
-        log "INFO" "No tenant directories found"
-        log "INFO" "Only generic container cleanup will be performed"
-        TENANT_ID=""
-        DATA_ROOT=""
-    else
-        log "INFO" "Found ${#tenants[@]} tenant(s): ${tenants[*]}"
-        # Clean up each tenant
-        for tenant in "${tenants[@]}"; do
-            log "INFO" "Cleaning up tenant: ${tenant}"
-            TENANT_ID="${tenant}"
-            DATA_ROOT="${DATA_BASE_PATH}/${tenant}"
-            if [ ! -d "${DATA_ROOT}" ]; then
-                DATA_ROOT="/mnt/${tenant}"
-            fi
-            
-            # Read PROJECT_PREFIX from tenant's .env file if exists
-            if [ -f "${DATA_ROOT}/.env" ]; then
-                # Source the .env file to get PROJECT_PREFIX
-                set -a
-                . "${DATA_ROOT}/.env"
-                set +a
-                log "INFO" "Using PROJECT_PREFIX from .env: ${PROJECT_PREFIX:-aip-}"
-            else
-                PROJECT_PREFIX="${PROJECT_PREFIX:-aip-}"
-                log "INFO" "Using default PROJECT_PREFIX: ${PROJECT_PREFIX}"
-            fi
-            
-            COMPOSE_PROJECT_NAME="${PROJECT_PREFIX}${tenant}"
-            DOCKER_NETWORK="${COMPOSE_PROJECT_NAME}_net"
-            
-            cleanup_containers
-            cleanup_networks
-            cleanup_volumes
-            cleanup_data
-        done
-    fi
-    
-    confirm_destruction
-    
-    echo ""
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${CYAN}  ${BOLD}🧹  CLEANING IN PROGRESS${NC}"
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-    
-    # Final cleanup
-    cleanup_containers
-    cleanup_networks
-    cleanup_volumes
-    
-    echo ""
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${GREEN}  ✅  CLEANUP COMPLETE${NC}"
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-    
-    if [ "${KEEP_DATA}" = "true" ]; then
-        echo -e "${GREEN}✅  Tenant ${TENANT_ID} containers cleaned${NC}"
-        echo -e "${DIM}Data preserved at ${DATA_ROOT}${NC}"
-        echo ""
-        echo -e "${BOLD}Next steps:${NC}"
-        echo -e "  • Re-run setup: ${CYAN}sudo bash scripts/1-setup-system.sh${NC}"
-        echo -e "  • Re-deploy:     ${CYAN}sudo bash scripts/2-deploy-services.sh${NC}"
-    else
-        echo -e "${GREEN}✅  Tenant ${TENANT_ID} completely destroyed${NC}"
-        echo ""
-        echo -e "${BOLD}Next steps:${NC}"
-        echo -e "  • Fresh setup:   ${CYAN}sudo bash scripts/1-setup-system.sh${NC}"
-        echo -e "  • Full deploy:    ${CYAN}sudo bash scripts/2-deploy-services.sh${NC}"
-    fi
-    echo ""
-}
-
-main "$@"
+main
