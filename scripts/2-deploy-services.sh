@@ -418,7 +418,7 @@ $([ "\${ENABLE_LITELLM:-true}" = "true" ] && cat << BLOCK
       - "\${LITELLM_PORT:-4000}:4000"
     environment:
       - LITELLM_MASTER_KEY=\${LITELLM_MASTER_KEY}
-      - DATABASE_URL=sqlite:///\${POSTGRES_USER}:\${POSTGRES_PASSWORD}@\${COMPOSE_PROJECT_NAME}-postgres:5432/litellm
+      - DATABASE_URL=sqlite://\${POSTGRES_USER}:\${POSTGRES_PASSWORD}@\${COMPOSE_PROJECT_NAME}-postgres:5432/litellm
       - STORE_MODEL_IN_DB=True
     volumes:
       - \${PLATFORM_DIR}/litellm:/app/config
