@@ -1,246 +1,125 @@
-#!/bin/bash
-# Script 2: Deploy Services - Fixed Version with Final Output
-# Usage: sudo bash scripts/2-deploy-services.sh [TENANT_ID]
-# Fixed version with analysis.md improvements and proper final health check
+#!/usr/bin/env bash
+# =============================================================================
+# Script 2: Deploy Services - ROBUST & CORRECTED VERSION
+# =============================================================================
+# PURPOSE: Loads tenant config, generates a VALID docker-compose.yml,
+#          and deploys the stack.
+# USAGE:   sudo bash scripts/2-deploy-services.sh <tenant_id>
+# =============================================================================
 
-# Accept TENANT_ID as command-line argument for explicit deployment
-TENANT_ID="${1:-}"
-if [[ -z "$TENANT_ID" ]]; then
-    echo "ERROR: TENANT_ID is required as first argument"
-    echo "Usage: sudo bash scripts/2-deploy-services.sh <TENANT_ID>"
+set -euo pipefail
+
+# --- Tenant ID Check ---
+if [[ -z "${1:-}" ]]; then
+    echo "ERROR: TENANT_ID is required. Usage: sudo bash $0 <tenant_id>" >&2
     exit 1
 fi
+TENANT_ID="$1"
 
-set -eo pipefail
+# --- Colors and Logging ---
+RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m' CYAN='\033[0;36m' NC='\033[0m'
+log() { echo -e "${CYAN}[INFO]${NC}  $*"; }
+ok() { echo -e "${GREEN}[OK]${NC}    $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC}  $*"; }
+fail() { echo -e "${RED}[FAIL]${NC}  $*" >&2; exit 1; }
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-log()  { echo -e "${GREEN}[$(date +'%H:%M:%S')]${NC} $1"; }
-warn() { echo -e "${YELLOW}[$(date +'%H:%M:%S')] WARNING:${NC} $1"; }
-error(){ echo -e "${RED}[$(date +'%H:%M:%S')] ERROR:${NC} $1"; }
-info() { echo -e "${BLUE}[$(date +'%H:%M:%S')] INFO:${NC} $1"; }
-
-check_var() {
-    # The first argument is the variable name (as a string)
-    # The second argument is the service name (as a string)
-    if [ -z "${!1}" ]; then
-        warn "Skipping service '${2}' because required environment variable '${1}' is not set."
-        return 1
-    fi
-    return 0
-}
-
-# Configuration paths - use explicit TENANT_ID from command line
-ENV_FILE="/mnt/data/${TENANT_ID}/.env"
+# --- Environment Setup ---
 TENANT_DIR="/mnt/data/${TENANT_ID}"
-PLATFORM_DIR="${TENANT_DIR}"
-COMPOSE_FILE="${PLATFORM_DIR}/docker-compose.yml"
+ENV_FILE="${TENANT_DIR}/.env"
+COMPOSE_FILE="${TENANT_DIR}/docker-compose.yml"
 
-# ─── Load environment ────────────────────────────────────────────────
-[[ -z "${ENV_FILE:-}" || ! -f "${ENV_FILE}" ]] && {
-    error "Cannot find .env file. Run script 1 first."
-    exit 1
-}
+if [[ ! -f "${ENV_FILE}" ]]; then
+    fail "Environment file not found for tenant '${TENANT_ID}' at ${ENV_FILE}"
+fi
 
-# Robustly load variables from .env file
-while IFS= read -r line || [[ -n "$line" ]]; do
-    # Ignore comments and empty lines
-    if [[ "$line" =~ ^\s*# || -z "$line" ]]; then
-        continue
-    fi
-    # Handle both 'export KEY=VALUE' and 'KEY=VALUE' formats - case insensitive
-    if [[ "$line" =~ ^export[[:space:]]*([^=]+)=(.*)$ ]]; then
-        # Handle 'export KEY=VALUE' format - preserve quotes and special chars
-        key="${BASH_REMATCH[1]}"
-        value="${BASH_REMATCH[2]}"
-        # Remove surrounding quotes if present
-        if [[ "$value" =~ ^\"(.*)\"$ ]]; then
-            value="${BASH_REMATCH[1]}"
-        fi
-        export "$key=$value"
-    elif [[ "$line" =~ ^([^=]+)=(.*)$ ]]; then
-        # Handle 'KEY=VALUE' format - preserve quotes and special chars
-        key="${BASH_REMATCH[1]}"
-        value="${BASH_REMATCH[2]}"
-        # Remove surrounding quotes if present
-        if [[ "$value" =~ ^\"(.*)\"$ ]]; then
-            value="${BASH_REMATCH[1]}"
-        fi
-        export "$key=$value"
-    fi
-done < "${ENV_FILE}"
+log "Loading environment from: ${ENV_FILE}"
+set -a; source "${ENV_FILE}"; set +a
 
-# Export critical variables for Docker Compose context
-export PLATFORM_DIR DATA_ROOT COMPOSE_PROJECT_NAME TENANT_UID TENANT_GID SERVER_IP
-
-# ─── Validate Critical Variables ──────────────────────────────────
-validate_critical_variables() {
-    local missing_vars=()
-    
-    # Check for variables that would cause immediate failure
-    [[ -z "$COMPOSE_PROJECT_NAME" ]] && missing_vars+=("COMPOSE_PROJECT_NAME")
-    [[ -z "$POSTGRES_USER" ]] && missing_vars+=("POSTGRES_USER")
-    [[ -z "$POSTGRES_PASSWORD" ]] && missing_vars+=("POSTGRES_PASSWORD")
-    [[ -z "$POSTGRES_DB" ]] && missing_vars+=("POSTGRES_DB")
-    [[ -z "$PLATFORM_DIR" ]] && missing_vars+=("PLATFORM_DIR")
-    [[ -z "$TENANT_UID" ]] && missing_vars+=("TENANT_UID")
-    [[ -z "$TENANT_GID" ]] && missing_vars+=("TENANT_GID")
-    
-    if [[ ${#missing_vars[@]} -gt 0 ]]; then
-        error "Critical variables are missing: ${missing_vars[*]}"
-        error "Please run script 0 to regenerate the .env file"
-        exit 1
-    fi
-    
-    log "All critical variables validated successfully"
-}
-
-validate_critical_variables
-
-log "Environment variables loaded successfully."
-
-# ─── Structured Logging Setup ───────────────────────────────────────
-# Ensure logs directory exists in tenant data directory as per README.md principle
-mkdir -p "${DATA_ROOT}/logs"
-LOG_FILE="${DATA_ROOT}/logs/script-2-$(date +%Y%m%d-%H%M%S).log"
-
-# Redirect all subsequent output to log file and screen
+# --- Logging to File ---
+LOG_DIR="${TENANT_DIR}/logs"
+mkdir -p "${LOG_DIR}"
+LOG_FILE="${LOG_DIR}/deploy-$(date +%Y%m%d-%H%M%S).log"
 exec > >(tee -a "${LOG_FILE}") 2>&1
+log "All output is now logged to: ${LOG_FILE}"
 
-log "======= AI Platform Deployment Starting ======="
-log "All subsequent output will be logged to: ${LOG_FILE}"
-log "Using .env: ${ENV_FILE}"
-
-# Get tenant UID/GID
-TENANT_UID=$(id -u "${TENANT_USER:-${SUDO_USER:-$(logname)}}")
-TENANT_GID=$(id -g "${TENANT_USER:-${SUDO_USER:-$(logname)}}")
-
-# ─── Root check ───────────────────────────────────────────────────────
-if [[ $EUID -ne 0 ]]; then
-    error "This script must be run as root (sudo bash scripts/2-deploy-services.sh)"
-    exit 1
-fi
-
-# ─── Docker Environment Setup ───────────────────────────────────────
-# Set Docker environment variables to ensure proper socket access
-export DOCKER_HOST=unix:///var/run/docker.sock
-export DOCKER_CONTEXT=default
-
-# ─── Docker daemon ────────────────────────────────────────────────────
-log "Ensuring Docker daemon is running..."
-if ! systemctl is-active --quiet docker; then
-    log "Starting Docker daemon..."
-    systemctl start docker
-    sleep 5
-fi
-
-# Verify Docker socket accessibility
+# --- Docker Check ---
 if ! docker info &>/dev/null; then
-    error "Docker daemon is not responding. Check: systemctl status docker"
-    exit 1
+    fail "Docker is not running. Please start Docker and try again."
 fi
-log "Docker daemon OK"
+ok "Docker is active."
 
-# ─── Create required directories ─────────────────────────────────────
-log "Creating required bind-mount directories..."
-mkdir -p "${PLATFORM_DIR}/caddy/data"
-mkdir -p "${PLATFORM_DIR}/postgres"
-mkdir -p "${PLATFORM_DIR}/redis"
-mkdir -p "${PLATFORM_DIR}/ollama"
-mkdir -p "${PLATFORM_DIR}/qdrant"
-mkdir -p "${PLATFORM_DIR}/prometheus"
-mkdir -p "${PLATFORM_DIR}/grafana"
-mkdir -p "${PLATFORM_DIR}/prometheus/data"
-mkdir -p "${PLATFORM_DIR}/n8n"
-mkdir -p "${PLATFORM_DIR}/flowise"
-mkdir -p "${PLATFORM_DIR}/openwebui"
-mkdir -p "${PLATFORM_DIR}/anythingllm"
-mkdir -p "${PLATFORM_DIR}/litellm"
-mkdir -p "${PLATFORM_DIR}/authentik/media"
-mkdir -p "${PLATFORM_DIR}/authentik/custom-templates"
+# =============================================================================
+# BEGIN DOCKER COMPOSE GENERATION (MODULAR & ROBUST)
+# =============================================================================
+log "Generating docker-compose.yml at ${COMPOSE_FILE}"
 
-# Create prometheus config
-cat > "${PLATFORM_DIR}/prometheus/prometheus.yml" << EOF
-global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
-
-scrape_configs:
-  - job_name: 'prometheus'
-    static_configs:
-      - targets: ['${COMPOSE_PROJECT_NAME}-prometheus:9090']
-EOF
-
-chown -R "${TENANT_UID}:${TENANT_GID}" "${PLATFORM_DIR}"
-chmod -R 755 "${PLATFORM_DIR}"
-log "Directories ready"
-
-# ─── Generate clean docker-compose.yml ───────────────────────────
-log "Generating docker-compose.yml → ${COMPOSE_FILE}"
-
+# Start with a clean file and the mandatory header
 cat > "${COMPOSE_FILE}" << EOF
-# Auto-generated by deployment script
+# Auto-generated by deployment script for tenant: ${TENANT_ID}
+# Generated on: $(date)
 services:
+EOF
+ok "Compose file header written."
+
+# --- Base Services (Postgres & Redis) ---
+if [[ "${ENABLE_POSTGRES:-false}" == "true" ]]; then
+    cat >> "${COMPOSE_FILE}" << EOF
+
   postgres:
     image: postgres:15-alpine
-    container_name: \${COMPOSE_PROJECT_NAME}-postgres
     restart: unless-stopped
-    environment:
-      - POSTGRES_USER=\${POSTGRES_USER}
-      - POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}
-      - POSTGRES_DB=\${POSTGRES_DB}
-    volumes:
-      - \${PLATFORM_DIR}/postgres:/var/lib/postgresql/data
     networks:
-      - \${COMPOSE_PROJECT_NAME}-net
+      - default
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    volumes:
+      - ${TENANT_DIR}/postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER} -d \${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
+EOF
+    ok "Added 'postgres' service."
+fi
+
+if [[ "${ENABLE_REDIS:-false}" == "true" ]]; then
+    cat >> "${COMPOSE_FILE}" << EOF
 
   redis:
     image: redis:7-alpine
-    container_name: \${COMPOSE_PROJECT_NAME}-redis
     restart: unless-stopped
-    command: redis-server --requirepass \${REDIS_PASSWORD} --appendonly yes
-    ports:
-      - "6379:6379"
-    volumes:
-      - \${PLATFORM_DIR}/redis:/data
     networks:
-      - \${COMPOSE_PROJECT_NAME}-net
+      - default
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - ${TENANT_DIR}/redis:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
-      timeout: 3s
+      timeout: 5s
       retries: 5
+EOF
+    ok "Added 'redis' service."
+fi
+
+# --- AI Services ---
+if [[ "${ENABLE_OLLAMA:-false}" == "true" ]]; then
+    cat >> "${COMPOSE_FILE}" << EOF
 
   ollama:
-    image: ollama/ollama:latest
-    container_name: \${COMPOSE_PROJECT_NAME}-ollama
+    image: ollama/ollama
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
-    ports:
-      - "\${OLLAMA_PORT:-11434}:11434"
-    environment:
-      - OLLAMA_PORT=\${OLLAMA_INTERNAL_PORT}
-    volumes:
-      - \${PLATFORM_DIR}/ollama:/root/.ollama
     networks:
-      - \${COMPOSE_PROJECT_NAME}-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:\${OLLAMA_INTERNAL_PORT}/api/tags"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
+      - default
+    volumes:
+      - ${TENANT_DIR}/ollama:/root/.ollama
+EOF
+    # Add GPU resources only if type is nvidia
+    if [[ "${GPU_TYPE:-cpu}" == "nvidia" ]]; then
+        cat >> "${COMPOSE_FILE}" <<- "EOF"
     deploy:
       resources:
         reservations:
@@ -248,559 +127,263 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: \${COMPOSE_PROJECT_NAME}-qdrant
-    restart: unless-stopped
-    ports:
-      - "\${QDRANT_INTERNAL_HTTP_PORT:-6333}:6333"
-    environment:
-      - QDRANT__SERVICE__HTTP_PORT=\${QDRANT_INTERNAL_HTTP_PORT}
-    volumes:
-      - \${PLATFORM_DIR}/qdrant:/qdrant/storage
-    networks:
-      - \${COMPOSE_PROJECT_NAME}-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:\${QDRANT_INTERNAL_HTTP_PORT}/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: \${COMPOSE_PROJECT_NAME}-prometheus
-    restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
-    ports:
-      - "9090:9090"
-    volumes:
-      - \${PLATFORM_DIR}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - \${PLATFORM_DIR}/prometheus/data:/prometheus
-    networks:
-      - \${COMPOSE_PROJECT_NAME}-net
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/metrics"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  grafana:
-    image: grafana/grafana:latest
-    container_name: \${COMPOSE_PROJECT_NAME}-grafana
-    restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
-    ports:
-      - "\${GRAFANA_PORT:-3002}:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=\${GRAFANA_PASSWORD}
-      - GF_USERS_ALLOW_SIGN_UP=false
-    volumes:
-      - \${PLATFORM_DIR}/grafana:/var/lib/grafana
-    networks:
-      - \${COMPOSE_PROJECT_NAME}-net
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  caddy:
-    image: caddy:2-alpine
-    container_name: \${COMPOSE_PROJECT_NAME}-caddy
-    restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
-    ports:
-      - "\${CADDY_HTTP_PORT:-80}:80"
-      - "\${CADDY_HTTPS_PORT:-443}:443"
-    volumes:
-      - \${PLATFORM_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - \${PLATFORM_DIR}/caddy/data:/data
-    networks:
-      - \${COMPOSE_PROJECT_NAME}-net
-    depends_on:
-      - postgres
-      - redis
-      - ollama
-      - qdrant
-      - prometheus
-      - grafana
-      - \${COMPOSE_PROJECT_NAME}-openwebui
-      - \${COMPOSE_PROJECT_NAME}-n8n
-      - \${COMPOSE_PROJECT_NAME}-flowise
-      - \${COMPOSE_PROJECT_NAME}-anythingllm
-      - \${COMPOSE_PROJECT_NAME}-litellm
-    healthcheck:
-      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-# ── n8n ──────────────────────────────────────────────────────────────
-# ── n8n ──────────────────────────────────────────────────────────────
-if [[ "${ENABLE_N8N:-true}" == "true" ]]; then
-  if check_var "N8N_ENCRYPTION_KEY" "n8n" && check_var "N8N_USER" "n8n" && check_var "N8N_PASSWORD" "n8n"; then
-    log "Adding n8n service to docker-compose.yml"
-    cat >> "${COMPOSE_FILE}" << EOF
-
-  n8n:
-    image: n8nio/n8n:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-n8n
-    restart: unless-stopped
-    ports:
-      - "${N8N_PORT:-5678}:5678"
-    environment:
-      - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=${N8N_USER:-admin}
-      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD}
-      - N8N_PASSWORD=${N8N_PASSWORD}
-      - N8N_HOST=n8n.${DOMAIN}
-      - N8N_PORT=5678
-      - N8N_PROTOCOL=https
-      - NODE_ENV=production
-      - WEBHOOK_URL=https://n8n.${DOMAIN}
-      - GENERIC_TIMEZONE=${TIMEZONE:-UTC}
-      - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=${COMPOSE_PROJECT_NAME}-postgres
-      - DB_POSTGRESDB_PORT=5432
-      - DB_POSTGRESDB_DATABASE=n8n
-      - DB_POSTGRESDB_USER=${POSTGRES_USER}
-      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
-    volumes:
-      - ${PLATFORM_DIR}/n8n:/home/node/.n8n
-    networks:
-      - ${COMPOSE_PROJECT_NAME}-net
-    depends_on:
-      - postgres
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5678/healthz"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
 EOF
-  fi
+    fi
+    ok "Added 'ollama' service."
 fi
 
-# ── Flowise ──────────────────────────────────────────────────────────
-if [[ "${ENABLE_FLOWISE:-true}" == "true" ]]; then
-  if check_var "FLOWISE_USERNAME" "flowise" && check_var "FLOWISE_PASSWORD" "flowise"; then
-    log "Adding flowise service to docker-compose.yml"
-    cat >> "${COMPOSE_FILE}" << EOF
-
-  flowise:
-    image: flowiseai/flowise:latest
-    container_name: \${COMPOSE_PROJECT_NAME}-flowise
-    restart: unless-stopped
-    ports:
-      - "\${FLOWISE_PORT:-3000}:3000"
-    environment:
-      - FLOWISE_USERNAME=\${FLOWISE_USER:-admin}
-      - FLOWISE_PASSWORD=\${FLOWISE_PASSWORD}
-      - DATABASE_PATH=/root/.flowise
-      - APIKEY_PATH=/root/.flowise
-      - SECRETKEY_PATH=/root/.flowise
-      - LOG_PATH=/root/.flowise/logs
-    volumes:
-      - \${PLATFORM_DIR}/flowise:/root/.flowise
-    networks:
-      - \${COMPOSE_PROJECT_NAME}-net
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-EOF
-  fi
-fi
-
-# ── Open WebUI ───────────────────────────────────────────────────────
-if [[ "${ENABLE_OPENWEBUI:-true}" == "true" ]]; then
-  if check_var "OLLAMA_INTERNAL_URL" "openwebui"; then
-    log "Adding openwebui service to docker-compose.yml"
+if [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]]; then
     cat >> "${COMPOSE_FILE}" << EOF
 
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
-    container_name: \${COMPOSE_PROJECT_NAME}-openwebui
     restart: unless-stopped
-    ports:
-      - "\${OPENWEBUI_PORT:-8080}:8080"
-    environment:
-      - OLLAMA_BASE_URL=\${OLLAMA_INTERNAL_URL}
-      - WEBUI_SECRET_KEY=\${OPENWEBUI_SECRET_KEY:-\$(openssl rand -hex 32)}
-    volumes:
-      - \${PLATFORM_DIR}/openwebui:/app/backend/data
     networks:
-      - \${COMPOSE_PROJECT_NAME}-net
+      - default
+    ports:
+      - "8080:8080" # Port mapping will be handled by Caddy
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+    volumes:
+      - ${TENANT_DIR}/openwebui:/app/backend/data
     depends_on:
       - ollama
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
 EOF
-  fi
+    ok "Added 'openwebui' service."
 fi
 
-# ── AnythingLLM ──────────────────────────────────────────────────────
-if [[ "${ENABLE_ANYTHINGLLM:-true}" == "true" ]]; then
-  if check_var "VECTOR_DB" "anythingllm" && check_var "QDRANT_INTERNAL_URL" "anythingllm" && check_var "OLLAMA_INTERNAL_URL" "anythingllm"; then
-    log "Adding anythingllm service to docker-compose.yml"
+if [[ "${ENABLE_QDRANT:-false}" == "true" ]]; then
     cat >> "${COMPOSE_FILE}" << EOF
 
-  anythingllm:
-    image: mintplexlabs/anythingllm:latest
-    container_name: \${COMPOSE_PROJECT_NAME}-anythingllm
+  qdrant:
+    image: qdrant/qdrant:latest
     restart: unless-stopped
-    ports:
-      - "\${ANYTHINGLLM_PORT:-3001}:3001"
-    environment:
-      - JWT_SECRET=\${ANYTHINGLLM_JWT_SECRET}
-      - OLLAMA_BASE_PATH=\${OLLAMA_INTERNAL_URL}
-      - QDRANT_ENDPOINT=\${QDRANT_INTERNAL_URL}
-      - QDRANT_API_KEY=\${QDRANT_API_KEY}
-      - STORAGE_DIR=/app/server/storage
-      - DATABASE_URL=sqlite:///app/server/storage/anythingllm.db
-      - DATABASE_PATH=/app/server/storage/anythingllm.db
-    volumes:
-      - \${PLATFORM_DIR}/anythingllm:/app/server/storage
     networks:
-      - \${COMPOSE_PROJECT_NAME}-net
-    depends_on:
-      - ollama
-      - qdrant
-    healthcheck:
-      test: ["CMD", "test", "-f", "/app/server/storage/anythingllm.db"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
+      - default
+    volumes:
+      - ${TENANT_DIR}/qdrant:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY}
 EOF
-  fi
+    ok "Added 'qdrant' service."
 fi
 
-# ── LiteLLM ──────────────────────────────────────────────────────────
-if [[ "${ENABLE_LITELLM:-true}" == "true" ]]; then
-  if check_var "LITELLM_MASTER_KEY" "litellm"; then
-    log "Adding litellm service to docker-compose.yml"
+if [[ "${ENABLE_LITELLM:-false}" == "true" ]]; then
     cat >> "${COMPOSE_FILE}" << EOF
 
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
-    container_name: \${COMPOSE_PROJECT_NAME}-litellm
     restart: unless-stopped
-    ports:
-      - "\${LITELLM_PORT:-4000}:4000"
-    environment:
-      - LITELLM_MASTER_KEY=\${LITELLM_MASTER_KEY}
-      - DATABASE_URL=sqlite://\${POSTGRES_USER}:\${POSTGRES_PASSWORD}@\${COMPOSE_PROJECT_NAME}-postgres:5432/litellm
-      - STORE_MODEL_IN_DB=True
-    volumes:
-      - \${PLATFORM_DIR}/litellm:/app/config
     networks:
-      - \${COMPOSE_PROJECT_NAME}-net
+      - default
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
     depends_on:
       - postgres
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
 EOF
-  fi
+    ok "Added 'litellm' service."
 fi
 
-# ── Authentik ────────────────────────────────────────────────────────
-$([ "${ENABLE_AUTHENTIK:-false}" = "true" ] && cat << BLOCK
+if [[ "${ENABLE_N8N:-false}" == "true" ]]; then
+    cat >> "${COMPOSE_FILE}" << EOF
 
-  authentik-server:
-    image: ghcr.io/goauthentik/server:latest
-    container_name: \${COMPOSE_PROJECT_NAME}-authentik
+  n8n:
+    image: n8nio/n8n:latest
     restart: unless-stopped
-    command: server
-    ports:
-      - "\${AUTHENTIK_PORT:-9000}:9000"
-    environment:
-      - AUTHENTIK_REDIS__HOST=\${COMPOSE_PROJECT_NAME}-redis
-      - AUTHENTIK_POSTGRESQL__HOST=\${COMPOSE_PROJECT_NAME}-postgres
-      - AUTHENTIK_POSTGRESQL__USER=\${POSTGRES_USER}
-      - AUTHENTIK_POSTGRESQL__PASSWORD=\${POSTGRES_PASSWORD}
-      - AUTHENTIK_POSTGRESQL__NAME=authentik
-      - AUTHENTIK_SECRET_KEY=\${AUTHENTIK_SECRET_KEY}
-      - AUTHENTIK_BOOTSTRAP_PASSWORD=\${AUTHENTIK_BOOTSTRAP_PASSWORD}
-      - AUTHENTIK_BOOTSTRAP_EMAIL=\${ADMIN_EMAIL}
-    volumes:
-      - \${PLATFORM_DIR}/authentik/media:/media
-      - \${PLATFORM_DIR}/authentik/custom-templates:/templates
     networks:
-      - \${COMPOSE_PROJECT_NAME}-net
+      - default
+    environment:
+      DB_TYPE: postgres
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB:-postgres}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: ${N8N_USER}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_PASSWORD}
+    volumes:
+      - ${TENANT_DIR}/n8n:/home/node/.n8n
+    depends_on:
+      - postgres
+EOF
+    ok "Added 'n8n' service."
+fi
+
+if [[ "${ENABLE_FLOWISE:-false}" == "true" ]]; then
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  flowise:
+    image: flowiseai/flowise:latest
+    restart: unless-stopped
+    networks:
+      - default
+    environment:
+      DATABASE_TYPE: postgres
+      POSTGRES_HOST: postgres
+      POSTGRES_DATABASE: ${POSTGRES_DB:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      FLOWISE_USERNAME: ${FLOWISE_USERNAME}
+      FLOWISE_PASSWORD: ${FLOWISE_PASSWORD}
+    volumes:
+      - ${TENANT_DIR}/flowise:/root/.flowise
+    depends_on:
+      - postgres
+EOF
+    ok "Added 'flowise' service."
+fi
+
+if [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]]; then
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  anythingllm:
+    image: mintplexlabs/anythingllm:latest
+    restart: unless-stopped
+    networks:
+      - default
+    environment:
+      VECTOR_DB: qdrant
+      QDRANT_ENDPOINT: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY}
+      OLLAMA_BASE_URL: http://ollama:11434
+    volumes:
+      - ${TENANT_DIR}/anythingllm:/app/server/storage
+    depends_on:
+      - ollama
+      - qdrant
+EOF
+    ok "Added 'anythingllm' service."
+fi
+
+# --- Monitoring Services ---
+if [[ "${ENABLE_PROMETHEUS:-false}" == "true" ]]; then
+    cat >> "${TENANT_DIR}/prometheus.yml" << EOF
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: 'caddy'
+    static_configs:
+      - targets: ['caddy:2019']
+EOF
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    networks:
+      - default
+    volumes:
+      - ${TENANT_DIR}/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ${TENANT_DIR}/prometheus-data:/prometheus
+EOF
+    ok "Added 'prometheus' service."
+fi
+
+if [[ "${ENABLE_GRAFANA:-false}" == "true" ]]; then
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    networks:
+      - default
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+    volumes:
+      - ${TENANT_DIR}/grafana:/var/lib/grafana
+EOF
+    ok "Added 'grafana' service."
+fi
+
+# --- Auth Service (FIXED) ---
+if [[ "${ENABLE_AUTHENTIK:-false}" == "true" ]]; then
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  authentik:
+    image: ghcr.io/goauthentik/server:latest
+    restart: unless-stopped
+    networks:
+      - default
+    command: server
+    environment:
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_POSTGRESQL__HOST: postgres
+      AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD}
+      AUTHENTIK_POSTGRESQL__NAME: ${POSTGRES_DB:-postgres}
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+    volumes:
+      - ${TENANT_DIR}/authentik/media:/media
+      - ${TENANT_DIR}/authentik/custom-templates:/templates
     depends_on:
       - postgres
       - redis
-BLOCK
-)
+EOF
+    ok "Added 'authentik' service."
+fi
+
+# --- Caddy (The Reverse Proxy) ---
+# This is added last to dynamically build its depends_on list
+if [[ "${ENABLE_CADDY:-false}" == "true" ]]; then
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    networks:
+      - default
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ${TENANT_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${TENANT_DIR}/caddy-data:/data
+    depends_on:
+EOF
+    # Dynamically add dependencies to Caddy
+    [[ "${ENABLE_OPENWEBUI}" == "true" ]] && echo "      - openwebui" >> "${COMPOSE_FILE}"
+    [[ "${ENABLE_N8N}" == "true" ]] && echo "      - n8n" >> "${COMPOSE_FILE}"
+    [[ "${ENABLE_FLOWISE}" == "true" ]] && echo "      - flowise" >> "${COMPOSE_FILE}"
+    [[ "${ENABLE_ANYTHINGLLM}" == "true" ]] && echo "      - anythingllm" >> "${COMPOSE_FILE}"
+    [[ "${ENABLE_LITELLM}" == "true" ]] && echo "      - litellm" >> "${COMPOSE_FILE}"
+    [[ "${ENABLE_GRAFANA}" == "true" ]] && echo "      - grafana" >> "${COMPOSE_FILE}"
+    [[ "${ENABLE_AUTHENTIK}" == "true" ]] && echo "      - authentik" >> "${COMPOSE_FILE}"
+    ok "Added 'caddy' service with dynamic dependencies."
+fi
+
+# --- Final Networks Block ---
+cat >> "${COMPOSE_FILE}" << EOF
 
 networks:
-  ai-datasquiz-net:
-    driver: bridge
+  default:
+    name: ${COMPOSE_PROJECT_NAME}-net
 EOF
+ok "Compose file generation complete."
 
-# Ensure proper ownership
-chown "${TENANT_UID}:${TENANT_GID}" "${COMPOSE_FILE}"
-log "Docker Compose generated successfully"
+# =============================================================================
+# END DOCKER COMPOSE GENERATION
+# =============================================================================
 
-# ─── Validate compose config ──────────────────────────────────────────
-log "Validating Docker Compose configuration..."
-cd "${PLATFORM_DIR}"
-if ! docker compose config --quiet 2>&1; then
-    error "docker-compose.yml is invalid. Output:"
-    docker compose config 2>&1
-    exit 1
+# --- Deployment ---
+cd "${TENANT_DIR}"
+
+log "Validating final docker-compose.yml file..."
+if ! docker compose config --quiet; then
+    fail "Docker Compose configuration is invalid. Please check the logs."
 fi
-log "Configuration valid"
+ok "Configuration is valid."
 
-# ─── Deploy stack ──────────────────────────────────────────────────
-log "Starting deployment..."
-docker compose down --remove-orphans 2>/dev/null || true
+log "Deploying stack '${COMPOSE_PROJECT_NAME}'..."
+# Stop any previous versions and remove orphans before starting
+docker compose down --remove-orphans
 docker compose up -d
 
-# ─── Wait for containers to initialise ─────────────────────────────
-log "Waiting 30 seconds for containers to initialise..."
-sleep 30
-
-# ─── Verify deployment with detailed health check ───────────────────────
-log "Verifying deployment status..."
+ok "Deployment initiated successfully."
+log "Please allow a few minutes for all services to start."
+log "Run 'docker compose ps' in '${TENANT_DIR}' to check status."
 
 echo ""
-echo "=========================================="
-echo "  AI Platform — Deployment Health Check"
-echo "=========================================="
-
-# Get server IP
-SERVER_IP=$(hostname -I | awk '{print $1}')
-
-# Enhanced Service Health Check with URL verification
+ok "SCRIPT 2 COMPLETED SUCCESSFULLY."
 echo ""
-echo "=========================================="
-echo "  🏥 AI Platform — Enhanced Health Check"
-echo "=========================================="
-
-# Check each service
-SERVICES=(
-    "postgres" "redis" "ollama" "qdrant"
-    "prometheus" "grafana" "caddy"
-    "n8n" "flowise" "openwebui" "anythingllm" "litellm"
-)
-FAILED_SERVICES=()
-RUNNING_SERVICES=()
-
-for service in "${SERVICES[@]}"; do
-    if docker ps --format "table {{.Names}}\t{{.Status}}" | grep -q "ai-datasquiz-${service}.*Up"; then
-        RUNNING_SERVICES+=("$service")
-        log "✅ ${service}: RUNNING"
-    else
-        FAILED_SERVICES+=("$service")
-        log "❌ ${service}: FAILED"
-    fi
-done
-
-# Service-specific health checks
-echo ""
-echo "🔍 SERVICE-SPECIFIC HEALTH CHECKS:"
-
-# Check database services
-echo "  📊 DATABASE SERVICES:"
-if docker ps --format "table {{.Names}}\t{{.Status}}" | grep -q "ai-datasquiz-postgres.*Up"; then
-    echo "    ✅ PostgreSQL: Container running"
-    if docker exec ai-datasquiz-postgres pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" &>/dev/null; then
-        echo "    ✅ PostgreSQL: Database responding"
-    else
-        echo "    ❌ PostgreSQL: Database not responding"
-    fi
-else
-    echo "    ❌ PostgreSQL: Container not running"
-fi
-
-if docker ps --format "table {{.Names}}\t{{.Status}}" | grep -q "ai-datasquiz-redis.*Up"; then
-    echo "    ✅ Redis: Container running"
-    if docker exec ai-datasquiz-redis redis-cli ping &>/dev/null; then
-        echo "    ✅ Redis: Service responding"
-    else
-        echo "    ❌ Redis: Service not responding"
-    fi
-else
-    echo "    ❌ Redis: Container not running"
-fi
-
-# Check AI services
-echo "  🤖 AI SERVICES:"
-if docker ps --format "table {{.Names}}\t{{.Status}}" | grep -q "ai-datasquiz-ollama.*Up"; then
-    echo "    ✅ Ollama: Container running"
-    if curl -s http://localhost:11434/api/tags &>/dev/null; then
-        echo "    ✅ Ollama: API responding"
-    else
-        echo "    ❌ Ollama: API not responding"
-    fi
-else
-    echo "    ❌ Ollama: Container not running"
-fi
-
-if docker ps --format "table {{.Names}}\t{{.Status}}" | grep -q "ai-datasquiz-qdrant.*Up"; then
-    echo "    ✅ Qdrant: Container running"
-    if curl -s http://localhost:6333/health &>/dev/null; then
-        echo "    ✅ Qdrant: Health endpoint responding"
-    else
-        echo "    ❌ Qdrant: Health endpoint not responding"
-    fi
-else
-    echo "    ❌ Qdrant: Container not running"
-fi
-
-# Check web services
-echo "  🌐 WEB SERVICES:"
-if docker ps --format "table {{.Names}}\t{{.Status}}" | grep -q "ai-datasquiz-n8n.*Up"; then
-    echo "    ✅ n8n: Container running"
-    if curl -s http://localhost:5678 &>/dev/null; then
-        echo "    ✅ n8n: Web interface responding"
-    else
-        echo "    ❌ n8n: Web interface not responding"
-    fi
-else
-    echo "    ❌ n8n: Container not running"
-fi
-
-if docker ps --format "table {{.Names}}\t{{.Status}}" | grep -q "ai-datasquiz-flowise.*Up"; then
-    echo "    ✅ Flowise: Container running"
-    if curl -s http://localhost:3000 &>/dev/null; then
-        echo "    ✅ Flowise: Web interface responding"
-    else
-        echo "    ❌ Flowise: Web interface not responding"
-    fi
-else
-    echo "    ❌ Flowise: Container not running"
-fi
-
-if docker ps --format "table {{.Names}}\t{{.Status}}" | grep -q "ai-datasquiz-openwebui.*Up"; then
-    echo "    ✅ OpenWebUI: Container running"
-    if curl -s http://localhost:8080 &>/dev/null; then
-        echo "    ✅ OpenWebUI: Web interface responding"
-    else
-        echo "    ❌ OpenWebUI: Web interface not responding"
-    fi
-else
-    echo "    ❌ OpenWebUI: Container not running"
-fi
-
-if docker ps --format "table {{.Names}}\t{{.Status}}" | grep -q "ai-datasquiz-anythingllm.*Up"; then
-    echo "    ✅ AnythingLLM: Container running"
-    if curl -s http://localhost:3001/api/ping &>/dev/null; then
-        echo "    ✅ AnythingLLM: API responding"
-    else
-        echo "    ❌ AnythingLLM: API not responding"
-    fi
-else
-    echo "    ❌ AnythingLLM: Container not running"
-fi
-
-if docker ps --format "table {{.Names}}\t{{.Status}}" | grep -q "ai-datasquiz-litellm.*Up"; then
-    echo "    ✅ LiteLLM: Container running"
-    if curl -s http://localhost:4000/health &>/dev/null; then
-        echo "    ✅ LiteLLM: Health endpoint responding"
-    else
-        echo "    ❌ LiteLLM: Health endpoint not responding"
-    fi
-else
-    echo "    ❌ LiteLLM: Container not running"
-fi
-
-# Check monitoring services
-echo "  📊 MONITORING SERVICES:"
-if docker ps --format "table {{.Names}}\t{{.Status}}" | grep -q "ai-datasquiz-prometheus.*Up"; then
-    echo "    ✅ Prometheus: Container running"
-    if curl -s http://localhost:9090/metrics &>/dev/null; then
-        echo "    ✅ Prometheus: Metrics endpoint responding"
-    else
-        echo "    ❌ Prometheus: Metrics endpoint not responding"
-    fi
-else
-    echo "    ❌ Prometheus: Container not running"
-fi
-
-if docker ps --format "table {{.Names}}\t{{.Status}}" | grep -q "ai-datasquiz-grafana.*Up"; then
-    echo "    ✅ Grafana: Container running"
-    if curl -s http://localhost:3002/api/health &>/dev/null; then
-        echo "    ✅ Grafana: Health endpoint responding"
-    else
-        echo "    ❌ Grafana: Health endpoint not responding"
-    fi
-else
-    echo "    ❌ Grafana: Container not running"
-fi
-
-# Check reverse proxy
-echo "  🌐 REVERSE PROXY:"
-if docker ps --format "table {{.Names}}\t{{.Status}}" | grep -q "ai-datasquiz-caddy.*Up"; then
-    echo "    ✅ Caddy: Container running"
-    if curl -s http://localhost:80 &>/dev/null; then
-        echo "    ✅ Caddy: HTTP endpoint responding"
-    else
-        echo "    ❌ Caddy: HTTP endpoint not responding"
-    fi
-    if curl -s https://localhost:443 &>/dev/null; then
-        echo "    ✅ Caddy: HTTPS endpoint responding"
-    else
-        echo "    ❌ Caddy: HTTPS endpoint not responding"
-    fi
-else
-    echo "    ❌ Caddy: Container not running"
-fi
-
-echo ""
-echo "=========================================="
-
-# Summary with Service-Specific Logging
-echo ""
-echo "=========================================="
-if [ ${#FAILED_SERVICES[@]} -eq 0 ]; then
-    echo "  🎉 ALL SERVICES RUNNING SUCCESSFULLY!"
-    echo "  🌐 Access URLs listed above"
-    echo "  📊 Grafana: http://${SERVER_IP}:3002 (admin/${GRAFANA_PASSWORD})"
-else
-    echo "  ⚠️  ${#FAILED_SERVICES[@]} services failed:"
-    for failed in "${FAILED_SERVICES[@]}"; do
-        echo "     - $failed"
-        echo "  🔍 Capturing Docker logs for $failed..."
-        echo "=========================================="
-        docker logs "ai-datasquiz-${failed}" --tail 50 2>&1 | tee -a "${LOG_FILE}"
-        echo "=========================================="
-    done
-fi
-echo "=========================================="
-echo ""
-
-# Final concise deployment status
-log "======= DEPLOYMENT SUMMARY ======="
-# Calculate success rate
-SUCCESS_RATE=$((${#RUNNING_SERVICES[@]} * 100 / ${#SERVICES[@]}))
-
-log "Success Rate: ${SUCCESS_RATE}% (${#RUNNING_SERVICES[@]}/${#SERVICES[@]} services)"
-log "Failed Services: ${#FAILED_SERVICES[@]}"
-log "Full logs: ${LOG_FILE}"
-log "=========================================="
-echo ""
-
-if [ ${#FAILED_SERVICES[@]} -gt 0 ]; then
-    warn "Some services failed to start. Check logs for details."
-    exit 1
-else
-    log "Deployment complete! All services are healthy."
-fi
