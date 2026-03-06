@@ -1573,8 +1573,9 @@ write_caddyfile() {
     acme_ca https://acme-v02.api.letsencrypt.org/directory
     acme_ca_root /etc/ssl/certs/ca-certificates.crt
 }
+EOF
 
-$([ "${ENABLE_N8N}" = "true" ] && cat << BLOCK
+    $([ "${ENABLE_N8N}" = "true" ] && cat << BLOCK
 n8n.${DOMAIN} {
     reverse_proxy n8n:5678 {
         header_up Host {host}
