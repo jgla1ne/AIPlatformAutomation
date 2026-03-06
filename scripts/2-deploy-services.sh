@@ -506,44 +506,38 @@ SERVICES=(
     "n8n" "flowise" "openwebui" "anythingllm" "litellm"
 )
 FAILED_SERVICES=()
+RUNNING_SERVICES=()
 
 for service in "${SERVICES[@]}"; do
     if docker ps --format "table {{.Names}}\t{{.Status}}" | grep -q "ai-datasquiz-${service}.*Up"; then
-        status=$(docker ps --format "table {{.Names}}\t{{.Status}}" | grep "ai-datasquiz-${service}" | awk '{print $2,$3,$4}')
-        echo "  ✅  ${service}: ${status}"
+        RUNNING_SERVICES+=("$service")
     else
-        echo "  ❌  ${service}: NOT RUNNING"
         FAILED_SERVICES+=("$service")
     fi
 done
 
-# URL Health Check
+# Concise Service Status Summary
+SUCCESS_RATE=$((${#RUNNING_SERVICES[@]} * 100 / ${#SERVICES[@]}))
 echo ""
-echo "🌐 Service URL Health Check:"
-echo "  PostgreSQL:           ${SERVER_IP}:5432"
-echo "  Redis:               ${SERVER_IP}:6379"
-echo "  Ollama API:          http://${SERVER_IP}:11434"
-echo "  Qdrant:              http://${SERVER_IP}:6333"
-echo "  Prometheus:          http://${SERVER_IP}:9090"
-echo "  Grafana:             http://${SERVER_IP}:3002"
-echo "  Caddy (HTTP):        http://${SERVER_IP}:80"
-echo "  Caddy (HTTPS):       https://${SERVER_IP}:443"
+echo "📊 SERVICE STATUS SUMMARY:"
+echo "  Total Services: ${#SERVICES[@]}"
+echo "  ✅ Running: ${#RUNNING_SERVICES[@]} (${SUCCESS_RATE}%)"
+echo "  ❌ Failed: ${#FAILED_SERVICES[@]}"
 
-# Port connectivity check
+if [ ${#RUNNING_SERVICES[@]} -gt 0 ]; then
+    echo "  🟢 Active: ${RUNNING_SERVICES[*]}"
+fi
+
+if [ ${#FAILED_SERVICES[@]} -gt 0 ]; then
+    echo "  🔴 Failed: ${FAILED_SERVICES[*]}"
+fi
+
+# Quick URL Summary
 echo ""
-echo "🔌 Port Connectivity Check:"
-PORTS=("5432:PostgreSQL" "6379:Redis" "11434:Ollama" "6333:Qdrant" "9090:Prometheus" "3002:Grafana" "80:Caddy-HTTP" "443:Caddy-HTTPS")
-
-for port_info in "${PORTS[@]}"; do
-    port=$(echo "$port_info" | cut -d':' -f1)
-    name=$(echo "$port_info" | cut -d':' -f2)
-    
-    if ss -tlnp | grep -q ":$port "; then
-        echo "  ✅  Port $port ($name) is listening"
-    else
-        echo "  ⚠️   Port $port ($name) not yet listening"
-    fi
-done
+echo "🌐 ACCESS URLS:"
+echo "  Grafana: http://${SERVER_IP}:3002 (admin/${GRAFANA_PASSWORD})"
+echo "  Ollama: http://${SERVER_IP}:11434"
+echo "  Caddy: http://${SERVER_IP}:80"
 
 # Summary with Service-Specific Logging
 echo ""
@@ -565,12 +559,11 @@ fi
 echo "=========================================="
 echo ""
 
-# Final comprehensive deployment status
+# Final concise deployment status
 log "======= DEPLOYMENT SUMMARY ======="
-log "Total services: ${#SERVICES[@]}"
-log "Successful: $((${#SERVICES[@]} - ${#FAILED_SERVICES[@]}))"
-log "Failed: ${#FAILED_SERVICES[@]}"
-log "Full logs available at: ${LOG_FILE}"
+log "Success Rate: ${SUCCESS_RATE}% (${#RUNNING_SERVICES[@]}/${#SERVICES[@]} services)"
+log "Failed Services: ${#FAILED_SERVICES[@]}"
+log "Full logs: ${LOG_FILE}"
 log "=========================================="
 echo ""
 
