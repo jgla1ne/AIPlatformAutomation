@@ -319,22 +319,22 @@ $([ "${ENABLE_FLOWISE:-true}" = "true" ] && cat << BLOCK
 
   flowise:
     image: flowiseai/flowise:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-flowise
+    container_name: \${COMPOSE_PROJECT_NAME}-flowise
     restart: unless-stopped
-    user: "${TENANT_UID}:${TENANT_GID}"
+    user: "\${TENANT_UID}:\${TENANT_GID}"
     ports:
-      - "${FLOWISE_PORT:-3000}:3000"
+      - "\${FLOWISE_PORT:-3000}:3000"
     environment:
-      - FLOWISE_USERNAME=${FLOWISE_USER:-admin}
-      - FLOWISE_PASSWORD=${FLOWISE_PASSWORD}
+      - FLOWISE_USERNAME=\${FLOWISE_USER:-admin}
+      - FLOWISE_PASSWORD=\${FLOWISE_PASSWORD}
       - DATABASE_PATH=/root/.flowise
       - APIKEY_PATH=/root/.flowise
       - SECRETKEY_PATH=/root/.flowise
       - LOG_PATH=/root/.flowise/logs
     volumes:
-      - ${PLATFORM_DIR}/flowise:/root/.flowise
+      - \${PLATFORM_DIR}/flowise:/root/.flowise
     networks:
-      - ${COMPOSE_PROJECT_NAME}-net
+      - \${COMPOSE_PROJECT_NAME}-net
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
       interval: 30s
@@ -349,21 +349,21 @@ $([ "${ENABLE_OPENWEBUI:-true}" = "true" ] && cat << BLOCK
 
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
-    container_name: ${COMPOSE_PROJECT_NAME}-openwebui
+    container_name: \${COMPOSE_PROJECT_NAME}-openwebui
     restart: unless-stopped
     ports:
-      - "${OPENWEBUI_PORT:-8080}:8080"
+      - "\${OPENWEBUI_PORT:-8080}:8080"
     environment:
-      - OLLAMA_BASE_URL=http://${COMPOSE_PROJECT_NAME}-ollama:11434
-      - WEBUI_SECRET_KEY=${OPENWEBUI_SECRET_KEY:-$(openssl rand -hex 32)}
+      - OLLAMA_BASE_URL=http://\${COMPOSE_PROJECT_NAME}-ollama:11434
+      - WEBUI_SECRET_KEY=\${OPENWEBUI_SECRET_KEY:-\$(openssl rand -hex 32)}
     volumes:
-      - ${PLATFORM_DIR}/openwebui:/app/backend/data
+      - \${PLATFORM_DIR}/openwebui:/app/backend/data
     networks:
-      - ${COMPOSE_PROJECT_NAME}-net
+      - \${COMPOSE_PROJECT_NAME}-net
     depends_on:
       - ollama
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -376,22 +376,19 @@ $([ "${ENABLE_ANYTHINGLLM:-true}" = "true" ] && cat << BLOCK
 
   anythingllm:
     image: mintplexlabs/anythingllm:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-anythingllm
+    container_name: \${COMPOSE_PROJECT_NAME}-anythingllm
     restart: unless-stopped
     ports:
-      - "${ANYTHINGLLM_PORT:-3001}:3001"
+      - "\${ANYTHINGLLM_PORT:-3001}:3001"
     environment:
-      - STORAGE_DIR=/app/server/storage
-      - JWT_SECRET=${ANYTHINGLLM_JWT_SECRET}
-      - LLM_PROVIDER=ollama
-      - OLLAMA_BASE_PATH=http://${COMPOSE_PROJECT_NAME}-ollama:11434
-      - VECTOR_DB=qdrant
-      - QDRANT_ENDPOINT=http://${COMPOSE_PROJECT_NAME}-qdrant:6333
-      - QDRANT_API_KEY=${QDRANT_API_KEY}
+      - JWT_SECRET=\${ANYTHINGLLM_JWT_SECRET}
+      - OLLAMA_BASE_PATH=http://\${COMPOSE_PROJECT_NAME}-ollama:11434
+      - QDRANT_ENDPOINT=http://\${COMPOSE_PROJECT_NAME}-qdrant:6333
+      - QDRANT_API_KEY=\${QDRANT_API_KEY}
     volumes:
-      - ${PLATFORM_DIR}/anythingllm:/app/server/storage
+      - \${PLATFORM_DIR}/anythingllm:/app/server/storage
     networks:
-      - ${COMPOSE_PROJECT_NAME}-net
+      - \${COMPOSE_PROJECT_NAME}-net
     depends_on:
       - ollama
       - qdrant
@@ -409,18 +406,18 @@ $([ "${ENABLE_LITELLM:-true}" = "true" ] && cat << BLOCK
 
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
-    container_name: ${COMPOSE_PROJECT_NAME}-litellm
+    container_name: \${COMPOSE_PROJECT_NAME}-litellm
     restart: unless-stopped
     ports:
-      - "${LITELLM_PORT:-4000}:4000"
+      - "\${LITELLM_PORT:-4000}:4000"
     environment:
-      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${COMPOSE_PROJECT_NAME}-postgres:5432/litellm
+      - LITELLM_MASTER_KEY=\${LITELLM_MASTER_KEY}
+      - DATABASE_URL=postgresql://\${POSTGRES_USER}:\${POSTGRES_PASSWORD}@\${COMPOSE_PROJECT_NAME}-postgres:5432/litellm
       - STORE_MODEL_IN_DB=True
     volumes:
-      - ${PLATFORM_DIR}/litellm:/app/config
+      - \${PLATFORM_DIR}/litellm:/app/config
     networks:
-      - ${COMPOSE_PROJECT_NAME}-net
+      - \${COMPOSE_PROJECT_NAME}-net
     depends_on:
       - postgres
     healthcheck:
@@ -437,25 +434,25 @@ $([ "${ENABLE_AUTHENTIK:-false}" = "true" ] && cat << BLOCK
 
   authentik-server:
     image: ghcr.io/goauthentik/server:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-authentik
+    container_name: \${COMPOSE_PROJECT_NAME}-authentik
     restart: unless-stopped
     command: server
     ports:
-      - "${AUTHENTIK_PORT:-9000}:9000"
+      - "\${AUTHENTIK_PORT:-9000}:9000"
     environment:
-      - AUTHENTIK_REDIS__HOST=${COMPOSE_PROJECT_NAME}-redis
-      - AUTHENTIK_POSTGRESQL__HOST=${COMPOSE_PROJECT_NAME}-postgres
-      - AUTHENTIK_POSTGRESQL__USER=${POSTGRES_USER}
-      - AUTHENTIK_POSTGRESQL__PASSWORD=${POSTGRES_PASSWORD}
+      - AUTHENTIK_REDIS__HOST=\${COMPOSE_PROJECT_NAME}-redis
+      - AUTHENTIK_POSTGRESQL__HOST=\${COMPOSE_PROJECT_NAME}-postgres
+      - AUTHENTIK_POSTGRESQL__USER=\${POSTGRES_USER}
+      - AUTHENTIK_POSTGRESQL__PASSWORD=\${POSTGRES_PASSWORD}
       - AUTHENTIK_POSTGRESQL__NAME=authentik
-      - AUTHENTIK_SECRET_KEY=${AUTHENTIK_SECRET_KEY}
-      - AUTHENTIK_BOOTSTRAP_PASSWORD=${AUTHENTIK_BOOTSTRAP_PASSWORD}
-      - AUTHENTIK_BOOTSTRAP_EMAIL=${ADMIN_EMAIL}
+      - AUTHENTIK_SECRET_KEY=\${AUTHENTIK_SECRET_KEY}
+      - AUTHENTIK_BOOTSTRAP_PASSWORD=\${AUTHENTIK_BOOTSTRAP_PASSWORD}
+      - AUTHENTIK_BOOTSTRAP_EMAIL=\${ADMIN_EMAIL}
     volumes:
-      - ${PLATFORM_DIR}/authentik/media:/media
-      - ${PLATFORM_DIR}/authentik/custom-templates:/templates
+      - \${PLATFORM_DIR}/authentik/media:/media
+      - \${PLATFORM_DIR}/authentik/custom-templates:/templates
     networks:
-      - ${COMPOSE_PROJECT_NAME}-net
+      - \${COMPOSE_PROJECT_NAME}-net
     depends_on:
       - postgres
       - redis
