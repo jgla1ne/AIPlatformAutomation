@@ -356,6 +356,7 @@ if [[ "${ENABLE_N8N:-true}" == "true" ]]; then
       - N8N_BASIC_AUTH_ACTIVE=true
       - N8N_BASIC_AUTH_USER=\${N8N_USER:-admin}
       - N8N_BASIC_AUTH_PASSWORD=\${N8N_PASSWORD}
+      - N8N_PASSWORD=\${N8N_PASSWORD}
       - N8N_HOST=n8n.\${DOMAIN}
       - N8N_PORT=5678
       - N8N_PROTOCOL=https
