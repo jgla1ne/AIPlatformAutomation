@@ -427,14 +427,14 @@ select_data_volume() {
 
     # Set tenant UID/GID for proper ownership (core principle: tenant owns their data)
     # When running with sudo bash, SUDO_UID/GID are not set, so we need to get the original user
-    if [[ -n "${SUDO_USER:-}" ]]; then
+    if [[ -n "${TENANT_USER:-}" ]]; then
         # Running with sudo - get original user's UID/GID
-        export TENANT_UID=$(id -u "${SUDO_USER}")
-        export TENANT_GID=$(id -g "${SUDO_USER}")
+        export TENANT_UID=$(id -u "${TENANT_USER}")
+        export TENANT_GID=$(id -g "${TENANT_USER}")
     else
         # Not running with sudo or sudo preserved environment
-        export TENANT_UID="${SUDO_UID:-$(id -u)}"
-        export TENANT_GID="${SUDO_GID:-$(id -g)}"
+        export TENANT_UID="${TENANT_UID:-$(id -u)}"
+        export TENANT_GID="${TENANT_GID:-$(id -g)}"
     fi
     
     log "INFO" "Tenant ownership will be set to: ${TENANT_UID}:${TENANT_GID}"
@@ -1641,7 +1641,6 @@ grafana.${DOMAIN} {
 }
 BLOCK
 )
-
 $([ "${ENABLE_AUTHENTIK}" = "true" ] && cat << BLOCK
 auth.${DOMAIN} {
     reverse_proxy authentik-server:9000 {
