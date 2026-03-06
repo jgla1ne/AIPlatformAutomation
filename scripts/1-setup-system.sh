@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script 1: System Setup Wizard
+# Script 1: System Setup Wizard - FINAL CORRECTED VERSION
 # =============================================================================
 # PURPOSE: Interactive setup wizard for AI Platform
 # USAGE:   sudo bash scripts/1-setup-system.sh
@@ -9,13 +9,13 @@
 set -euo pipefail
 
 # --- Colors ---
-BOLD='\033[1m'
-DIM='\033[2m'
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+BOLD=\'\\033[1m\'
+DIM=\'\\033[2m\'
+RED=\'\\033[0;31m\'
+GREEN=\'\\033[0;32m\'
+YELLOW=\'\\033[1;33m\'
+CYAN=\'\\033[0;36m\'
+NC=\'\\033[0m\'
 
 # --- Runtime ---
 DATA_ROOT=""
@@ -30,8 +30,8 @@ log() {
     local level="$1" message="$2"
     case "$level" in
         SUCCESS) echo -e "  ${GREEN}✅  ${message}${NC}" ;;
-        INFO)    echo -e "  ${CYAN}ℹ️  ${message}${NC}" ;;
-        WARN)    echo -e "  ${YELLOW}⚠️  ${message}${NC}" ;;
+        INFO)    echo -e "  ${CYAN}ℹ️   ${message}${NC}" ;;
+        WARN)    echo -e "  ${YELLOW}⚠️   ${message}${NC}" ;;
         ERROR)   echo -e "  ${RED}❌  ${message}${NC}" ;;
     esac
 }
@@ -41,14 +41,14 @@ print_header() {
     clear
     echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║${NC}${BOLD}        🚀  AI Platform — System Setup Wizard                 ${NC}${CYAN}║${NC}"
-    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}\n"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}\\n"
 }
 
 print_step() {
     local step="$1" total="$2" title="$3"
-    echo -e "\n${CYAN}  ┌─────────────────────────────────────────────────────────┐${NC}"
+    echo -e "\\n${CYAN}  ┌─────────────────────────────────────────────────────────┐${NC}"
     echo -e "${CYAN}  │${NC}  ${BOLD}[ STEP ${step} of ${total} ]${NC}  ${title}"
-    echo -e "${CYAN}  └─────────────────────────────────────────────────────────┘${NC}\n"
+    echo -e "${CYAN}  └─────────────────────────────────────────────────────────┘${NC}\\n"
 }
 
 # --- Prereqs ---
@@ -76,13 +76,11 @@ collect_identity() {
 
 select_data_volume() {
     print_step "2" "7" "Data Volume & Paths"
-    # For this environment, we will standardize on /mnt/data
     DATA_ROOT="/mnt/data/${TENANT_ID}"
     ENV_FILE="${DATA_ROOT}/.env"
     CADDY_DIR="${DATA_ROOT}/caddy"
     log "SUCCESS" "Data root set to: ${DATA_ROOT}"
 
-    # Correctly and dynamically set tenant ownership
     export TENANT_UID=$(id -u "${TENANT_USER}")
     export TENANT_GID=$(id -g "${TENANT_USER}")
     log "INFO" "Tenant ownership set to ${TENANT_USER} (${TENANT_UID}:${TENANT_GID})"
@@ -90,39 +88,25 @@ select_data_volume() {
 
 select_stack() {
     print_step "3" "7" "Service Stack Selection"
-
     echo -e "  ${CYAN}1)${NC} ${BOLD}Minimal${NC}     — Ollama, Open WebUI"
     echo -e "  ${CYAN}2)${NC} ${BOLD}Standard${NC}    — Minimal + n8n, Flowise, Qdrant, LiteLLM"
-    echo -e "  ${CYAN}3)${NC} ${BOLD}Full${NC}        — Standard + AnythingLLM, Grafana, Prometheus, Authentik\n"
+    echo -e "  ${CYAN}3)${NC} ${BOLD}Full${NC}        — Standard + AnythingLLM, Grafana, Prometheus, Authentik\\n"
     read -p "  ➤ Select stack [2]: " stack_choice
     stack_choice="${stack_choice:-2}"
 
-    # Set presets
     ENABLE_POSTGRES=false; ENABLE_REDIS=false; ENABLE_CADDY=true; ENABLE_OLLAMA=false; ENABLE_OPENWEBUI=false; ENABLE_ANYTHINGLLM=false; ENABLE_N8N=false; ENABLE_FLOWISE=false; ENABLE_LITELLM=false; ENABLE_QDRANT=false; ENABLE_GRAFANA=false; ENABLE_PROMETHEUS=false; ENABLE_AUTHENTIK=false
 
     case "$stack_choice" in
-        1) # Minimal
-            ENABLE_OLLAMA=true; ENABLE_OPENWEBUI=true
-            ;; 
-        2) # Standard
-            ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_OLLAMA=true; ENABLE_OPENWEBUI=true; ENABLE_N8N=true; ENABLE_FLOWISE=true; ENABLE_LITELLM=true; ENABLE_QDRANT=true
-            ;;            
-        3) # Full
-            ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_OLLAMA=true; ENABLE_OPENWEBUI=true; ENABLE_N8N=true; ENABLE_FLOWISE=true; ENABLE_LITELLM=true; ENABLE_QDRANT=true; ENABLE_ANYTHINGLLM=true; ENABLE_GRAFANA=true; ENABLE_PROMETHEUS=true; ENABLE_AUTHENTIK=true
-            ;; 
+        1) ENABLE_OLLAMA=true; ENABLE_OPENWEBUI=true ;; 
+        2) ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_OLLAMA=true; ENABLE_OPENWEBUI=true; ENABLE_N8N=true; ENABLE_FLOWISE=true; ENABLE_LITELLM=true; ENABLE_QDRANT=true ;;            
+        3) ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_OLLAMA=true; ENABLE_OPENWEBUI=true; ENABLE_N8N=true; ENABLE_FLOWISE=true; ENABLE_LITELLM=true; ENABLE_QDRANT=true; ENABLE_ANYTHINGLLM=true; ENABLE_GRAFANA=true; ENABLE_PROMETHEUS=true; ENABLE_AUTHENTIK=true ;; 
     esac
     log "SUCCESS" "Stack selected."
 }
 
 determine_gpu() {
     print_step "4" "7" "Hardware Detection"
-    if command -v nvidia-smi &>/dev/null; then
-        export GPU_TYPE="nvidia"
-        log "SUCCESS" "NVIDIA GPU detected."
-    else
-        export GPU_TYPE="cpu"
-        log "INFO" "No NVIDIA GPU detected. Using CPU mode."
-    fi
+    if command -v nvidia-smi &>/dev/null; then export GPU_TYPE="nvidia"; log "SUCCESS" "NVIDIA GPU detected."; else export GPU_TYPE="cpu"; log "INFO" "No NVIDIA GPU detected. Using CPU mode."; fi
 }
 
 collect_llm_config() {
@@ -133,16 +117,7 @@ collect_llm_config() {
 
 generate_secrets() {
     print_step "6" "7" "Generating Secrets"
-    # Generate random passwords if they are not already in the file
-    load_or_gen_secret() {
-        local key="$1"
-        if [ -f "$ENV_FILE" ] && grep -q "^${key}=" "$ENV_FILE"; then
-            grep "^${key}=" "$ENV_FILE" | cut -d= -f2-
-        else
-            openssl rand -hex 16
-        fi
-    }
-
+    load_or_gen_secret() { [ -f "$ENV_FILE" ] && grep -q "^$1=" "$ENV_FILE" && grep "^$1=" "$ENV_FILE" | cut -d= -f2- || openssl rand -hex 16; }
     POSTGRES_PASSWORD=$(load_or_gen_secret "POSTGRES_PASSWORD")
     REDIS_PASSWORD=$(load_or_gen_secret "REDIS_PASSWORD")
     N8N_ENCRYPTION_KEY=$(load_or_gen_secret "N8N_ENCRYPTION_KEY")
@@ -158,47 +133,29 @@ generate_secrets() {
 
 finalize_and_write() {
     print_step "7" "7" "Finalizing Configuration"
-
-    # --- Create directories ---
-    mkdir -p "${DATA_ROOT}" "${CADDY_DIR}"
+    mkdir -p "${DATA_ROOT}" "${CADDY_DIR}/config" "${CADDY_DIR}/data"
     chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"
     log "INFO" "Created and secured data directories."
 
-    # --- Write Caddyfile (FIXED) ---
-    cat > "${CADDY_DIR}/Caddyfile" << EOF
+    local CADDYFILE_PATH="${CADDY_DIR}/config/Caddyfile"
+    cat > "${CADDYFILE_PATH}" << EOF
 # AI Platform Caddyfile
 {
     email ${ADMIN_EMAIL}
 }
-
 # --- Application Routing --- #
-$([ "${ENABLE_OPENWEBUI}" = "true" ] && echo "chat.${DOMAIN} {
-    reverse_proxy openwebui:8080
-}")
-$([ "${ENABLE_ANYTHINGLLM}" = "true" ] && echo "docs.${DOMAIN} {
-    reverse_proxy anythingllm:3001
-}")
-$([ "${ENABLE_N8N}" = "true" ] && echo "n8n.${DOMAIN} {
-    reverse_proxy n8n:5678
-}")
-$([ "${ENABLE_FLOWISE}" = "true" ] && echo "flowise.${DOMAIN} {
-    reverse_proxy flowise:3000
-}")
-$([ "${ENABLE_LITELLM}" = "true" ] && echo "litellm.${DOMAIN} {
-    reverse_proxy litellm:4000
-}")
-$([ "${ENABLE_GRAFANA}" = "true" ] && echo "grafana.${DOMAIN} {
-    reverse_proxy grafana:3000
-}")
-$([ "${ENABLE_AUTHENTIK}" = "true" ] && echo "auth.${DOMAIN} {
-    reverse_proxy authentik:9000
-}")
+$([ "${ENABLE_OPENWEBUI}" = "true" ] && echo "chat.${DOMAIN} { reverse_proxy openwebui:8080 }")
+$([ "${ENABLE_ANYTHINGLLM}" = "true" ] && echo "docs.${DOMAIN} { reverse_proxy anythingllm:3001 }")
+$([ "${ENABLE_N8N}" = "true" ] && echo "n8n.${DOMAIN} { reverse_proxy n8n:5678 }")
+$([ "${ENABLE_FLOWISE}" = "true" ] && echo "flowise.${DOMAIN} { reverse_proxy flowise:3000 }")
+$([ "${ENABLE_LITELLM}" = "true" ] && echo "litellm.${DOMAIN} { reverse_proxy litellm:4000 }")
+$([ "${ENABLE_GRAFANA}" = "true" ] && echo "grafana.${DOMAIN} { reverse_proxy grafana:3000 }")
+$([ "${ENABLE_AUTHENTIK}" = "true" ] && echo "auth.${DOMAIN} { reverse_proxy authentik:9000 }")
 EOF
-    # Correctly apply permissions AFTER the heredoc is closed
-    chmod 644 "${CADDY_DIR}/Caddyfile"
+    chmod 644 "${CADDYFILE_PATH}"
     log "SUCCESS" "Caddyfile generated correctly."
 
-    # --- Write .env file ---
+    # --- Write .env file (FIXED: No backslashes on secrets) ---
     cat > "${ENV_FILE}" << EOF
 # AI Platform Environment
 # Generated: $(date)
@@ -258,10 +215,9 @@ EOF
     chown "${TENANT_UID}:${TENANT_GID}" "${ENV_FILE}"
     log "SUCCESS" ".env file written."
     
-    echo -e "\n${BOLD}Configuration complete. Ready to deploy.${NC}"
+    echo -e "\\n${BOLD}Configuration complete. Ready to deploy.${NC}"
     read -p "  ➤ Run script 2 (deploy services) now? [Y/n]: " run_next
     if [[ "${run_next:-y}" =~ ^[Yy]$ ]]; then
-        # Correctly call the next script with sudo
         sudo bash "${SCRIPTS_DIR}/2-deploy-services.sh"
     else
         log "INFO" "Run script 2 when ready: sudo bash ${SCRIPTS_DIR}/2-deploy-services.sh"
