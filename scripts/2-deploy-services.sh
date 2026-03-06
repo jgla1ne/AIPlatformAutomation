@@ -34,8 +34,10 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     if [[ "$line" =~ ^\s*# || -z "$line" ]]; then
         continue
     fi
-    # Export variable to environment
-    export "$line"
+    # Safely export variable - handle quotes and special characters
+    if [[ "$line" =~ ^([^=]+)=(.*)$ ]]; then
+        export "${BASH_REMATCH[1]}=${BASH_REMATCH[2]}"
+    fi
 done < "${ENV_FILE}"
 
 log "Environment variables loaded successfully."
