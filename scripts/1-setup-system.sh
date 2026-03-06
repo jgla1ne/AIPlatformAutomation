@@ -133,11 +133,11 @@ generate_secrets() {
 
 finalize_and_write() {
     print_step "7" "7" "Finalizing Configuration"
-    mkdir -p "${DATA_ROOT}" "${CADDY_DIR}/config" "${CADDY_DIR}/data"
+    mkdir -p "${DATA_ROOT}" "${CADDY_DIR}/config" "${CADDY_DIR}/data" "${DATA_ROOT}/logs"
     chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"
     log "INFO" "Created and secured data directories."
 
-    local CADDYFILE_PATH="${CADDY_DIR}/config/Caddyfile"
+    local CADDYFILE_PATH="${CADDY_DIR}/Caddyfile"
     cat > "${CADDYFILE_PATH}" << EOF
 # AI Platform Caddyfile
 {

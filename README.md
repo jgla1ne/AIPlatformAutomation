@@ -516,7 +516,7 @@ For production:
 
 - **YAML Version Warning** - Docker Compose v3.8 deprecated warning
   - **Impact:** Non-breaking, cosmetic warning only
-  - **Status:** 📝 Documented, can ignore
+  - **Status:** 📝 Documented, need to remove this decalaration to be compliant with the new format
 
 - **Variable Expansion** - Some volume mounts fail variable expansion
   - **Workaround:** Use absolute paths in compose generation
