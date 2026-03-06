@@ -28,6 +28,16 @@ COMPOSE_FILE="${PLATFORM_DIR}/docker-compose.yml"
     exit 1
 }
 
+# ─── Structured Logging Setup ───────────────────────────────────────
+# Ensure logs directory exists in ~/logs/ as per README.md principle
+mkdir -p ~/logs
+LOG_FILE=~/logs/script-2-$(date +%Y%m%d-%H%M%S).log
+
+# Redirect all subsequent output to log file and screen
+exec > >(tee -a "${LOG_FILE}") 2>&1
+
+log "======= AI Platform Deployment Starting ======="
+log "All subsequent output will be logged to: ${LOG_FILE}"
 log "Using .env: ${ENV_FILE}"
 
 set -a
@@ -40,14 +50,24 @@ TENANT_GID=$(id -g "${TENANT_USER:-${SUDO_USER:-$(logname)}}")
 
 # ─── Root check ───────────────────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
-    error "This script must be run as root (sudo bash 2-deploy-services-fixed.sh)"
+    error "This script must be run as root (sudo bash scripts/2-deploy-services.sh)"
     exit 1
 fi
 
+# ─── Docker Environment Setup ───────────────────────────────────────
+# Set Docker environment variables to ensure proper socket access
+export DOCKER_HOST=unix:///var/run/docker.sock
+export DOCKER_CONTEXT=default
+
 # ─── Docker daemon ────────────────────────────────────────────────────
 log "Ensuring Docker daemon is running..."
-systemctl start docker
-sleep 2
+if ! systemctl is-active --quiet docker; then
+    log "Starting Docker daemon..."
+    systemctl start docker
+    sleep 5
+fi
+
+# Verify Docker socket accessibility
 if ! docker info &>/dev/null; then
     error "Docker daemon is not responding. Check: systemctl status docker"
     exit 1
@@ -513,7 +533,7 @@ for port_info in "${PORTS[@]}"; do
     fi
 done
 
-# Summary
+# Summary with Service-Specific Logging
 echo ""
 echo "=========================================="
 if [ ${#FAILED_SERVICES[@]} -eq 0 ]; then
@@ -524,11 +544,22 @@ else
     echo "  ⚠️  ${#FAILED_SERVICES[@]} services failed:"
     for failed in "${FAILED_SERVICES[@]}"; do
         echo "     - $failed"
+        echo "  🔍 Capturing Docker logs for $failed..."
+        echo "=========================================="
+        docker logs "ai-datasquiz-${failed}" --tail 50 2>&1 | tee -a "${LOG_FILE}"
+        echo "=========================================="
     done
-    echo ""
-    echo "  🔍 Debug with: docker compose logs [service]"
 fi
 echo "=========================================="
+echo ""
+
+# Final comprehensive deployment status
+log "======= DEPLOYMENT SUMMARY ======="
+log "Total services: ${#SERVICES[@]}"
+log "Successful: $((${#SERVICES[@]} - ${#FAILED_SERVICES[@]}))"
+log "Failed: ${#FAILED_SERVICES[@]}"
+log "Full logs available at: ${LOG_FILE}"
+log "=========================================="
 echo ""
 
 if [ ${#FAILED_SERVICES[@]} -gt 0 ]; then
