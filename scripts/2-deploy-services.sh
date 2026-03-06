@@ -28,18 +28,6 @@ COMPOSE_FILE="${PLATFORM_DIR}/docker-compose.yml"
     exit 1
 }
 
-# ─── Structured Logging Setup ───────────────────────────────────────
-# Ensure logs directory exists in tenant data directory as per README.md principle
-mkdir -p "${DATA_ROOT}/logs"
-LOG_FILE="${DATA_ROOT}/logs/script-2-$(date +%Y%m%d-%H%M%S).log"
-
-# Redirect all subsequent output to log file and screen
-exec > >(tee -a "${LOG_FILE}") 2>&1
-
-log "======= AI Platform Deployment Starting ======="
-log "All subsequent output will be logged to: ${LOG_FILE}"
-log "Using .env: ${ENV_FILE}"
-
 # Robustly load variables from .env file
 while IFS= read -r line || [[ -n "$line" ]]; do
     # Ignore comments and empty lines
@@ -51,6 +39,18 @@ while IFS= read -r line || [[ -n "$line" ]]; do
 done < "${ENV_FILE}"
 
 log "Environment variables loaded successfully."
+
+# ─── Structured Logging Setup ───────────────────────────────────────
+# Ensure logs directory exists in tenant data directory as per README.md principle
+mkdir -p "${DATA_ROOT}/logs"
+LOG_FILE="${DATA_ROOT}/logs/script-2-$(date +%Y%m%d-%H%M%S).log"
+
+# Redirect all subsequent output to log file and screen
+exec > >(tee -a "${LOG_FILE}") 2>&1
+
+log "======= AI Platform Deployment Starting ======="
+log "All subsequent output will be logged to: ${LOG_FILE}"
+log "Using .env: ${ENV_FILE}"
 
 # Get tenant UID/GID
 TENANT_UID=$(id -u "${TENANT_USER:-${SUDO_USER:-$(logname)}}")
