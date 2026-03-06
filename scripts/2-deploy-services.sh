@@ -280,31 +280,30 @@ $([ "${ENABLE_N8N:-true}" = "true" ] && cat << BLOCK
 
   n8n:
     image: n8nio/n8n:latest
-    container_name: \${COMPOSE_PROJECT_NAME}-n8n
+    container_name: ai-datasquiz-n8n
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
     ports:
-      - "\${N8N_PORT:-5678}:5678"
+      - "${N8N_PORT:-5678}:5678"
     environment:
       - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=\${N8N_USER:-admin}
-      - N8N_BASIC_AUTH_PASSWORD=\${N8N_PASSWORD}
-      - N8N_HOST=n8n.\${DOMAIN}
+      - N8N_BASIC_AUTH_USER=${N8N_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD}
+      - N8N_HOST=n8n.${DOMAIN}
       - N8N_PORT=5678
       - N8N_PROTOCOL=https
       - NODE_ENV=production
-      - WEBHOOK_URL=https://n8n.\${DOMAIN}
-      - GENERIC_TIMEZONE=\${TIMEZONE:-UTC}
+      - WEBHOOK_URL=https://n8n.${DOMAIN}
+      - GENERIC_TIMEZONE=${TIMEZONE:-UTC}
       - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=\${COMPOSE_PROJECT_NAME}-postgres
+      - DB_POSTGRESDB_HOST=ai-datasquiz-postgres
       - DB_POSTGRESDB_PORT=5432
       - DB_POSTGRESDB_DATABASE=n8n
-      - DB_POSTGRESDB_USER=\${POSTGRES_USER}
-      - DB_POSTGRESDB_PASSWORD=\${POSTGRES_PASSWORD}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
-      - \${PLATFORM_DIR}/n8n:/home/node/.n8n
+      - ${PLATFORM_DIR}/n8n:/home/node/.n8n
     networks:
-      - \${COMPOSE_PROJECT_NAME}-net
+      - ai-datasquiz-net
     depends_on:
       - postgres
     healthcheck:
