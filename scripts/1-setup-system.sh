@@ -1789,7 +1789,7 @@ offer_next_step() {
     run_next="${run_next:-y}"
     if [[ "${run_next,,}" =~ ^y ]]; then
         if [ -f "${SCRIPTS_DIR}/2-deploy-services.sh" ]; then
-            bash "${SCRIPTS_DIR}/2-deploy-services.sh"
+            bash "${SCRIPTS_DIR}/2-deploy-services.sh" "${TENANT_ID}"
         else
             log "ERROR" "2-deploy-services.sh not found at ${SCRIPTS_DIR}"
             exit 1
@@ -1798,7 +1798,7 @@ offer_next_step() {
         echo ""
         log "INFO" "Run script 2 when ready:"
         echo ""
-        echo "    sudo bash scripts/2-deploy-services.sh"
+        echo "    sudo bash scripts/2-deploy-services.sh ${TENANT_ID}"
         echo ""
     fi
 }

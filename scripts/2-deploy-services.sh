@@ -1,6 +1,15 @@
 #!/bin/bash
 # Script 2: Deploy Services - Fixed Version with Final Output
+# Usage: sudo bash scripts/2-deploy-services.sh [TENANT_ID]
 # Fixed version with analysis.md improvements and proper final health check
+
+# Accept TENANT_ID as command-line argument for explicit deployment
+TENANT_ID="${1:-}"
+if [[ -z "$TENANT_ID" ]]; then
+    echo "ERROR: TENANT_ID is required as first argument"
+    echo "Usage: sudo bash scripts/2-deploy-services.sh <TENANT_ID>"
+    exit 1
+fi
 
 set -eo pipefail
 
@@ -26,9 +35,9 @@ check_var() {
     return 0
 }
 
-# Configuration paths - loaded from .env
-ENV_FILE="${ENV_FILE:-$(sudo ls -t /mnt/data/*/.env 2>/dev/null | head -1)}"
-TENANT_DIR="$(dirname "${ENV_FILE}")"
+# Configuration paths - use explicit TENANT_ID from command line
+ENV_FILE="/mnt/data/${TENANT_ID}/.env"
+TENANT_DIR="/mnt/data/${TENANT_ID}"
 PLATFORM_DIR="${TENANT_DIR}"
 COMPOSE_FILE="${PLATFORM_DIR}/docker-compose.yml"
 
@@ -68,6 +77,30 @@ done < "${ENV_FILE}"
 
 # Export critical variables for Docker Compose context
 export PLATFORM_DIR DATA_ROOT COMPOSE_PROJECT_NAME TENANT_UID TENANT_GID SERVER_IP
+
+# ─── Validate Critical Variables ──────────────────────────────────
+validate_critical_variables() {
+    local missing_vars=()
+    
+    # Check for variables that would cause immediate failure
+    [[ -z "$COMPOSE_PROJECT_NAME" ]] && missing_vars+=("COMPOSE_PROJECT_NAME")
+    [[ -z "$POSTGRES_USER" ]] && missing_vars+=("POSTGRES_USER")
+    [[ -z "$POSTGRES_PASSWORD" ]] && missing_vars+=("POSTGRES_PASSWORD")
+    [[ -z "$POSTGRES_DB" ]] && missing_vars+=("POSTGRES_DB")
+    [[ -z "$PLATFORM_DIR" ]] && missing_vars+=("PLATFORM_DIR")
+    [[ -z "$TENANT_UID" ]] && missing_vars+=("TENANT_UID")
+    [[ -z "$TENANT_GID" ]] && missing_vars+=("TENANT_GID")
+    
+    if [[ ${#missing_vars[@]} -gt 0 ]]; then
+        error "Critical variables are missing: ${missing_vars[*]}"
+        error "Please run script 0 to regenerate the .env file"
+        exit 1
+    fi
+    
+    log "All critical variables validated successfully"
+}
+
+validate_critical_variables
 
 log "Environment variables loaded successfully."
 
