@@ -38,8 +38,9 @@ log "Creating all service directories for tenant '${TENANT_ID}'..."
 # This list must be exhaustive to prevent Docker from creating a directory as root.
 DIRECTORIES=(
     "logs" "caddy-data" "caddy" "postgres" "redis" "qdrant" "ollama" "openwebui" 
-    "n8n" "flowise" "anythingllm/tmp" "litellm" "authentik/media" 
+    "n8n" "n8n/workflows" "flowise" "anythingllm/tmp" "litellm" "authentik/media" 
     "authentik/custom-templates" "prometheus-data" "grafana/provisioning/datasources"
+    "grafana/provisioning/dashboards"
 )
 for dir in "${DIRECTORIES[@]}"; do
     mkdir -p "${TENANT_DIR}/${dir}"

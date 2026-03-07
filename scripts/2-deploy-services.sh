@@ -275,7 +275,7 @@ add_prometheus() {
   prometheus:
     image: prom/prometheus:latest
     restart: unless-stopped
-    user: "65534:65534"
+    user: "${TENANT_UID}:${TENANT_GID}"
     networks:
       - default
     volumes:
