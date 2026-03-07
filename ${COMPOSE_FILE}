@@ -1,0 +1,4 @@
+
+networks:
+  default:
+    name: ${COMPOSE_PROJECT_NAME}-net

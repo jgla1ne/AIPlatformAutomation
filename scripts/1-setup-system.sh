@@ -1552,6 +1552,7 @@ create_directories() {
         "${DATA_ROOT}/n8n"
         "${DATA_ROOT}/flowise"
         "${DATA_ROOT}/anythingllm"
+        "${DATA_ROOT}/anythingllm/tmp"
         "${DATA_ROOT}/qdrant"
         "${DATA_ROOT}/litellm"
         "${DATA_ROOT}/grafana"

@@ -110,6 +110,12 @@ if [[ "${ENABLE_OLLAMA:-false}" == "true" ]]; then
     restart: unless-stopped
     networks:
       - default
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:11434/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     volumes:
       - ${TENANT_DIR}/ollama:/root/.ollama
 EOF
@@ -136,12 +142,19 @@ if [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]]; then
     restart: unless-stopped
     networks:
       - default
+    user: "\${TENANT_UID}:\${TENANT_GID}"
     ports:
-      - "8080:8080" # Port mapping will be handled by Caddy
+      - "\${OPENWEBUI_PORT:-8080}:8080"
     environment:
       OLLAMA_BASE_URL: http://\${OLLAMA_SERVICE_NAME:-ollama}:\${OLLAMA_PORT:-11434}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     volumes:
-      - ${TENANT_DIR}/openwebui:/app/backend/data
+      - \${TENANT_DIR}/openwebui:/app/backend/data
     depends_on:
       - ollama
 EOF
@@ -213,9 +226,10 @@ if [[ "${ENABLE_FLOWISE:-false}" == "true" ]]; then
   flowise:
     image: flowiseai/flowise:latest
     restart: unless-stopped
+    ports:
+      - "\${FLOWISE_PORT:-3000}:3000"
     networks:
       - default
-    user: "\${TENANT_UID}:\${TENANT_GID}"
     environment:
       DATABASE_TYPE: postgresdb
       POSTGRES_HOST: \${POSTGRES_SERVICE_NAME:-postgres}
@@ -240,14 +254,16 @@ if [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]]; then
     restart: unless-stopped
     networks:
       - default
-    user: "\${TENANT_UID}:\${TENANT_GID}"
     environment:
       VECTOR_DB: qdrant
       QDRANT_ENDPOINT: http://\${QDRANT_SERVICE_NAME:-qdrant}:\${QDRANT_PORT:-6333}
       QDRANT_API_KEY: \${QDRANT_API_KEY}
       OLLAMA_BASE_URL: http://\${OLLAMA_SERVICE_NAME:-ollama}:\${OLLAMA_PORT:-11434}
+      STORAGE_DIR: /app/server/storage
+      DATABASE_PATH: /app/server/storage/anythingllm.db
     volumes:
       - \${TENANT_DIR}/anythingllm:/app/server/storage
+      - \${TENANT_DIR}/anythingllm/tmp:/tmp
     depends_on:
       - ollama
       - qdrant
@@ -257,7 +273,9 @@ fi
 
 # --- Monitoring Services ---
 if [[ "${ENABLE_PROMETHEUS:-false}" == "true" ]]; then
-    cat >> "${TENANT_DIR}/prometheus.yml" << EOF
+    # Create Prometheus config file (only once)
+    if [[ ! -f "${TENANT_DIR}/prometheus.yml" ]]; then
+        cat > "${TENANT_DIR}/prometheus.yml" << EOF
 global:
   scrape_interval: 15s
 scrape_configs:
@@ -265,11 +283,13 @@ scrape_configs:
     static_configs:
       - targets: ['caddy:2019']
 EOF
+    fi
     cat >> "${COMPOSE_FILE}" << EOF
 
   prometheus:
     image: prom/prometheus:latest
     restart: unless-stopped
+    user: "65534:65534"
     networks:
       - default
     volumes:
@@ -280,6 +300,22 @@ EOF
 fi
 
 if [[ "${ENABLE_GRAFANA:-false}" == "true" ]]; then
+    # Create Grafana provisioning files
+    mkdir -p "${TENANT_DIR}/grafana/provisioning/datasources"
+    chown "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}/grafana/provisioning/datasources"
+    
+    cat > "${TENANT_DIR}/grafana/provisioning/datasources/prometheus.yml" << EOF
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://\${PROMETHEUS_SERVICE_NAME:-prometheus}:9090
+    isDefault: true
+    editable: true
+EOF
+
     cat >> "${COMPOSE_FILE}" << EOF
 
   grafana:
@@ -288,11 +324,14 @@ if [[ "${ENABLE_GRAFANA:-false}" == "true" ]]; then
     networks:
       - default
     user: "\${TENANT_UID}:\${TENANT_GID}"
+    ports:
+      - "\${GRAFANA_PORT:-3002}:3000"
     environment:
       GF_SECURITY_ADMIN_USER: \${GRAFANA_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: \${GRAFANA_PASSWORD}
     volumes:
       - \${TENANT_DIR}/grafana:/var/lib/grafana
+      - \${TENANT_DIR}/grafana/provisioning:/etc/grafana/provisioning
 EOF
     ok "Added 'grafana' service."
 fi
@@ -344,6 +383,7 @@ if [[ "${ENABLE_CADDY:-false}" == "true" ]]; then
     depends_on:
 EOF
     # Dynamically add dependencies to Caddy
+    echo "    depends_on:" >> "\${COMPOSE_FILE}"
     [[ "\${ENABLE_OPENWEBUI}" == "true" ]] && echo "      - openwebui" >> "\${COMPOSE_FILE}"
     [[ "\${ENABLE_N8N}" == "true" ]] && echo "      - n8n" >> "\${COMPOSE_FILE}"
     [[ "\${ENABLE_FLOWISE}" == "true" ]] && echo "      - flowise" >> "\${COMPOSE_FILE}"
@@ -351,6 +391,7 @@ EOF
     [[ "\${ENABLE_LITELLM}" == "true" ]] && echo "      - litellm" >> "\${COMPOSE_FILE}"
     [[ "\${ENABLE_GRAFANA}" == "true" ]] && echo "      - grafana" >> "\${COMPOSE_FILE}"
     [[ "\${ENABLE_AUTHENTIK}" == "true" ]] && echo "      - authentik-server" >> "\${COMPOSE_FILE}"
+    echo "    " >> "\${COMPOSE_FILE}"
     ok "Added 'caddy' service with dynamic dependencies."
 fi
 
@@ -455,6 +496,14 @@ fi
 ok "Configuration is valid."
 
 log "Deploying stack '${COMPOSE_PROJECT_NAME}'..."
+
+# Set specific ownership for Prometheus data directory
+if [[ "${ENABLE_PROMETHEUS:-false}" == "true" ]]; then
+    log "Setting specific ownership for Prometheus data directory..."
+    chown -R 65534:65534 "${TENANT_DIR}/prometheus-data"
+    ok "Prometheus ownership set to 65534:65534."
+fi
+
 # Stop any previous versions and remove orphans before starting
 docker compose down --remove-orphans
 docker compose up -d
