@@ -100,6 +100,11 @@ print_divider() {
 
 # ─── Argument Parsing ───────────────────────────────────────────────────────────
 parse_args() {
+    # Skip TENANT_ID if it's the first argument
+    if [[ $# -gt 0 && ! "${1}" =~ ^-- ]]; then
+        shift  # Skip the TENANT_ID
+    fi
+    
     while [[ $# -gt 0 ]]; do
         case "${1}" in
             --skip-n8n)          SKIP_N8N=true ;;
@@ -108,7 +113,7 @@ parse_args() {
             --skip-anythingllm)  SKIP_ANYTHINGLLM=true ;;
             --skip-grafana)      SKIP_GRAFANA=true ;;
             --help|-h)
-                echo "Usage: sudo bash scripts/3-configure-services.sh [OPTIONS]"
+                echo "Usage: sudo bash scripts/3-configure-services.sh <TENANT_ID> [OPTIONS]"
                 echo ""
                 echo "Options:"
                 echo "  --skip-n8n          Skip n8n configuration"

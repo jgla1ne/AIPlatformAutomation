@@ -185,8 +185,13 @@ if [[ "${ENABLE_LITELLM:-false}" == "true" ]]; then
     restart: unless-stopped
     networks:
       - default
+    ports:
+      - "\${LITELLM_PORT:-4000}:4000"
     environment:
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      LITELLM_MASTER_KEY: \${LITELLM_MASTER_KEY}
+      LITELLM_SALT_KEY: \${LITELLM_SALT_KEY}
+    volumes:
+      - \${TENANT_DIR}/litellm:/configce
     depends_on:
       - postgres
 EOF
@@ -202,6 +207,8 @@ if [[ "${ENABLE_N8N:-false}" == "true" ]]; then
     networks:
       - default
     user: "\${TENANT_UID}:\${TENANT_GID}"
+    ports:
+      - "\${N8N_PORT:-5678}:5678"
     environment:
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: \${POSTGRES_SERVICE_NAME:-postgres}
@@ -254,6 +261,8 @@ if [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]]; then
     restart: unless-stopped
     networks:
       - default
+    ports:
+      - "\${ANYTHINGLLM_PORT:-3001}:3001"
     environment:
       VECTOR_DB: qdrant
       QDRANT_ENDPOINT: http://\${QDRANT_SERVICE_NAME:-qdrant}:\${QDRANT_PORT:-6333}
@@ -500,6 +509,7 @@ log "Deploying stack '${COMPOSE_PROJECT_NAME}'..."
 # Set specific ownership for Prometheus data directory
 if [[ "${ENABLE_PROMETHEUS:-false}" == "true" ]]; then
     log "Setting specific ownership for Prometheus data directory..."
+    mkdir -p "${TENANT_DIR}/prometheus-data"
     chown -R 65534:65534 "${TENANT_DIR}/prometheus-data"
     ok "Prometheus ownership set to 65534:65534."
 fi

@@ -1868,8 +1868,34 @@ main() {
     print_summary
     write_env
     
+    # CRITICAL: Ensure tenant ownership variables are set before creating directories
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        export TENANT_UID="${SUDO_UID}"
+        export TENANT_GID="${SUDO_GID}"
+        log "INFO" "Final tenant ownership check: ${SUDO_USER} (UID:${TENANT_UID}, GID:${TENANT_GID})"
+    fi
+    
     create_directories
+    
+    # CRITICAL: Fix any remaining ownership issues (especially log files created early)
+    if [[ -n "${TENANT_UID:-}" && -n "${TENANT_GID:-}" ]]; then
+        # Fix log files created early
+        if [[ -f "${LOG_FILE}" ]]; then
+            chown "${TENANT_UID}:${TENANT_GID}" "${LOG_FILE}"
+        fi
+        # Fix authentik directories
+        if [[ -d "${DATA_ROOT}/authentik" ]]; then
+            chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/authentik"
+        fi
+        log "INFO" "Fixed any remaining root-owned files in tenant directory"
+    fi
     write_caddyfile
+    
+    # Fix Caddyfile ownership (created by write_caddyfile function)
+    if [[ -n "${TENANT_UID:-}" && -n "${TENANT_GID:-}" && -f "${DATA_ROOT}/caddy/Caddyfile" ]]; then
+        chown "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/caddy/Caddyfile"
+        log "INFO" "Fixed Caddyfile ownership"
+    fi
     offer_next_step
 }
 
