@@ -404,7 +404,7 @@ datasources:
   - name: Prometheus
     type: prometheus
     access: proxy
-    url: http://prometheus:${PROMETHEUS_INTERNAL_PORT}
+    url: http://\${PROMETHEUS_SERVICE_NAME:-prometheus}:\${PROMETHEUS_INTERNAL_PORT}
     isDefault: true
     editable: true
 EOF
@@ -597,9 +597,9 @@ print_service_status() {
     
     # Core infrastructure services (always checked)
     local core_services=(
-        "postgres:${POSTGRES_PORT:-5432}:PostgreSQL Database"
-        "redis:${REDIS_PORT:-6379}:Redis Cache"
-        "caddy:${CADDY_HTTP_PORT:-80}:Caddy Proxy"
+        "\${POSTGRES_SERVICE_NAME:-postgres}:\${POSTGRES_PORT:-5432}:PostgreSQL Database"
+        "\${REDIS_SERVICE_NAME:-redis}:\${REDIS_PORT:-6379}:Redis Cache"
+        "\${CADDY_SERVICE_NAME:-caddy}:\${CADDY_HTTP_PORT:-80}:Caddy Proxy"
     )
     
     # Optional services based on ENABLE flags

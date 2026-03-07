@@ -62,8 +62,7 @@ EOF
 ok "Compose file header written."
 
 # --- Base Services (Postgres & Redis) ---
-if [[ "${ENABLE_POSTGRES:-false}" == "true" ]]; then
-    cat >> "${COMPOSE_FILE}" << EOF
+cat >> "${COMPOSE_FILE}" << EOF
 
   postgres:
     image: postgres:15-alpine
@@ -71,39 +70,36 @@ if [[ "${ENABLE_POSTGRES:-false}" == "true" ]]; then
     networks:
       - default
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      POSTGRES_USER: \${POSTGRES_USER}
+      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD}
+      POSTGRES_DB: \${POSTGRES_DB:-postgres}
     volumes:
-      - ${TENANT_DIR}/postgres:/var/lib/postgresql/data
+      - \${TENANT_DIR}/postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER}"]
       interval: 10s
       timeout: 5s
       retries: 5
 EOF
-    ok "Added 'postgres' service."
-fi
+ok "Added 'postgres' service."
 
-if [[ "${ENABLE_REDIS:-false}" == "true" ]]; then
-    cat >> "${COMPOSE_FILE}" << EOF
+cat >> "${COMPOSE_FILE}" << EOF
 
   redis:
     image: redis:7-alpine
     restart: unless-stopped
     networks:
       - default
-    command: redis-server --requirepass ${REDIS_PASSWORD}
+    command: redis-server --requirepass \${REDIS_PASSWORD}
     volumes:
-      - ${TENANT_DIR}/redis:/data
+      - \${TENANT_DIR}/redis:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
       interval: 10s
-      timeout: 5s
+      timeout: 3s
       retries: 5
 EOF
-    ok "Added 'redis' service."
-fi
+ok "Added 'redis' service."
 
 # --- AI Services ---
 if [[ "${ENABLE_OLLAMA:-false}" == "true" ]]; then
@@ -143,7 +139,7 @@ if [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]]; then
     ports:
       - "8080:8080" # Port mapping will be handled by Caddy
     environment:
-      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_BASE_URL: http://\${OLLAMA_SERVICE_NAME:-ollama}:\${OLLAMA_PORT:-11434}
     volumes:
       - ${TENANT_DIR}/openwebui:/app/backend/data
     depends_on:
@@ -192,18 +188,19 @@ if [[ "${ENABLE_N8N:-false}" == "true" ]]; then
     restart: unless-stopped
     networks:
       - default
+    user: "\${TENANT_UID}:\${TENANT_GID}"
     environment:
-      DB_TYPE: postgres
-      DB_POSTGRESDB_HOST: postgres
-      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB:-postgres}
-      DB_POSTGRESDB_USER: ${POSTGRES_USER}
-      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
-      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: \${POSTGRES_SERVICE_NAME:-postgres}
+      DB_POSTGRESDB_DATABASE: \${POSTGRES_DB:-postgres}
+      DB_POSTGRESDB_USER: \${POSTGRES_USER}
+      DB_POSTGRESDB_PASSWORD: \${POSTGRES_PASSWORD}
+      N8N_ENCRYPTION_KEY: \${N8N_ENCRYPTION_KEY}
       N8N_BASIC_AUTH_ACTIVE: "true"
-      N8N_BASIC_AUTH_USER: ${N8N_USER}
-      N8N_BASIC_AUTH_PASSWORD: ${N8N_PASSWORD}
+      N8N_BASIC_AUTH_USER: \${N8N_USER}
+      N8N_BASIC_AUTH_PASSWORD: \${N8N_PASSWORD}
     volumes:
-      - ${TENANT_DIR}/n8n:/home/node/.n8n
+      - \${TENANT_DIR}/n8n:/home/node/.n8n
     depends_on:
       - postgres
 EOF
@@ -218,16 +215,17 @@ if [[ "${ENABLE_FLOWISE:-false}" == "true" ]]; then
     restart: unless-stopped
     networks:
       - default
+    user: "\${TENANT_UID}:\${TENANT_GID}"
     environment:
-      DATABASE_TYPE: postgres
-      POSTGRES_HOST: postgres
-      POSTGRES_DATABASE: ${POSTGRES_DB:-postgres}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      FLOWISE_USERNAME: ${FLOWISE_USERNAME}
-      FLOWISE_PASSWORD: ${FLOWISE_PASSWORD}
+      DATABASE_TYPE: postgresdb
+      POSTGRES_HOST: \${POSTGRES_SERVICE_NAME:-postgres}
+      POSTGRES_DATABASE: \${POSTGRES_DB:-postgres}
+      POSTGRES_USER: \${POSTGRES_USER}
+      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD}
+      FLOWISE_USERNAME: \${FLOWISE_USERNAME}
+      FLOWISE_PASSWORD: \${FLOWISE_PASSWORD}
     volumes:
-      - ${TENANT_DIR}/flowise:/root/.flowise
+      - \${TENANT_DIR}/flowise:/root/.flowise
     depends_on:
       - postgres
 EOF
@@ -242,13 +240,14 @@ if [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]]; then
     restart: unless-stopped
     networks:
       - default
+    user: "\${TENANT_UID}:\${TENANT_GID}"
     environment:
       VECTOR_DB: qdrant
-      QDRANT_ENDPOINT: http://qdrant:6333
-      QDRANT_API_KEY: ${QDRANT_API_KEY}
-      OLLAMA_BASE_URL: http://ollama:11434
+      QDRANT_ENDPOINT: http://\${QDRANT_SERVICE_NAME:-qdrant}:\${QDRANT_PORT:-6333}
+      QDRANT_API_KEY: \${QDRANT_API_KEY}
+      OLLAMA_BASE_URL: http://\${OLLAMA_SERVICE_NAME:-ollama}:\${OLLAMA_PORT:-11434}
     volumes:
-      - ${TENANT_DIR}/anythingllm:/app/server/storage
+      - \${TENANT_DIR}/anythingllm:/app/server/storage
     depends_on:
       - ollama
       - qdrant
@@ -288,11 +287,12 @@ if [[ "${ENABLE_GRAFANA:-false}" == "true" ]]; then
     restart: unless-stopped
     networks:
       - default
+    user: "\${TENANT_UID}:\${TENANT_GID}"
     environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      GF_SECURITY_ADMIN_USER: \${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: \${GRAFANA_PASSWORD}
     volumes:
-      - ${TENANT_DIR}/grafana:/var/lib/grafana
+      - \${TENANT_DIR}/grafana:/var/lib/grafana
 EOF
     ok "Added 'grafana' service."
 fi
@@ -301,22 +301,23 @@ fi
 if [[ "${ENABLE_AUTHENTIK:-false}" == "true" ]]; then
     cat >> "${COMPOSE_FILE}" << EOF
 
-  authentik:
+  authentik-server:
     image: ghcr.io/goauthentik/server:latest
     restart: unless-stopped
     networks:
       - default
     command: server
     environment:
-      AUTHENTIK_REDIS__HOST: redis
-      AUTHENTIK_POSTGRESQL__HOST: postgres
-      AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER}
-      AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD}
-      AUTHENTIK_POSTGRESQL__NAME: ${POSTGRES_DB:-postgres}
-      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_REDIS__HOST: \${REDIS_SERVICE_NAME:-redis}
+      AUTHENTIK_REDIS__PASSWORD: \${REDIS_PASSWORD}
+      AUTHENTIK_POSTGRESQL__HOST: \${POSTGRES_SERVICE_NAME:-postgres}
+      AUTHENTIK_POSTGRESQL__USER: \${POSTGRES_USER}
+      AUTHENTIK_POSTGRESQL__PASSWORD: \${POSTGRES_PASSWORD}
+      AUTHENTIK_POSTGRESQL__NAME: \${POSTGRES_DB:-postgres}
+      AUTHENTIK_SECRET_KEY: \${AUTHENTIK_SECRET_KEY}
     volumes:
-      - ${TENANT_DIR}/authentik/media:/media
-      - ${TENANT_DIR}/authentik/custom-templates:/templates
+      - \${TENANT_DIR}/authentik/media:/media
+      - \${TENANT_DIR}/authentik/custom-templates:/templates
     depends_on:
       - postgres
       - redis
@@ -338,27 +339,27 @@ if [[ "${ENABLE_CADDY:-false}" == "true" ]]; then
       - "80:80"
       - "443:443"
     volumes:
-      - ${TENANT_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ${TENANT_DIR}/caddy-data:/data
+      - \${TENANT_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - \${TENANT_DIR}/caddy-data:/data
     depends_on:
 EOF
     # Dynamically add dependencies to Caddy
-    [[ "${ENABLE_OPENWEBUI}" == "true" ]] && echo "      - openwebui" >> "${COMPOSE_FILE}"
-    [[ "${ENABLE_N8N}" == "true" ]] && echo "      - n8n" >> "${COMPOSE_FILE}"
-    [[ "${ENABLE_FLOWISE}" == "true" ]] && echo "      - flowise" >> "${COMPOSE_FILE}"
-    [[ "${ENABLE_ANYTHINGLLM}" == "true" ]] && echo "      - anythingllm" >> "${COMPOSE_FILE}"
-    [[ "${ENABLE_LITELLM}" == "true" ]] && echo "      - litellm" >> "${COMPOSE_FILE}"
-    [[ "${ENABLE_GRAFANA}" == "true" ]] && echo "      - grafana" >> "${COMPOSE_FILE}"
-    [[ "${ENABLE_AUTHENTIK}" == "true" ]] && echo "      - authentik" >> "${COMPOSE_FILE}"
+    [[ "\${ENABLE_OPENWEBUI}" == "true" ]] && echo "      - openwebui" >> "\${COMPOSE_FILE}"
+    [[ "\${ENABLE_N8N}" == "true" ]] && echo "      - n8n" >> "\${COMPOSE_FILE}"
+    [[ "\${ENABLE_FLOWISE}" == "true" ]] && echo "      - flowise" >> "\${COMPOSE_FILE}"
+    [[ "\${ENABLE_ANYTHINGLLM}" == "true" ]] && echo "      - anythingllm" >> "\${COMPOSE_FILE}"
+    [[ "\${ENABLE_LITELLM}" == "true" ]] && echo "      - litellm" >> "\${COMPOSE_FILE}"
+    [[ "\${ENABLE_GRAFANA}" == "true" ]] && echo "      - grafana" >> "\${COMPOSE_FILE}"
+    [[ "\${ENABLE_AUTHENTIK}" == "true" ]] && echo "      - authentik-server" >> "\${COMPOSE_FILE}"
     ok "Added 'caddy' service with dynamic dependencies."
 fi
 
 # --- Final Networks Block ---
-cat >> "${COMPOSE_FILE}" << EOF
+cat >> "\${COMPOSE_FILE}" << EOF
 
 networks:
   default:
-    name: ${COMPOSE_PROJECT_NAME}-net
+    name: \${COMPOSE_PROJECT_NAME}-net
 EOF
 ok "Compose file generation complete."
 

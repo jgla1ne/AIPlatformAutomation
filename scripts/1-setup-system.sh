@@ -426,15 +426,22 @@ select_data_volume() {
     CADDY_DIR="${DATA_ROOT}/caddy"
 
     # Set tenant UID/GID for proper ownership (core principle: tenant owns their data)
-    # When running with sudo bash, SUDO_UID/GID are not set, so we need to get the original user
-    if [[ -n "${TENANT_USER:-}" ]]; then
+    # When running with sudo, SUDO_UID/GID are set by sudo, but we need the username
+    if [[ -n "${SUDO_USER:-}" ]]; then
         # Running with sudo - get original user's UID/GID
+        export TENANT_UID="${SUDO_UID}"
+        export TENANT_GID="${SUDO_GID}"
+        log "INFO" "Detected sudo user: ${SUDO_USER} (UID:${TENANT_UID}, GID:${TENANT_GID})"
+    elif [[ -n "${TENANT_USER:-}" ]]; then
+        # Running with sudo -u specified user
         export TENANT_UID=$(id -u "${TENANT_USER}")
         export TENANT_GID=$(id -g "${TENANT_USER}")
+        log "INFO" "Using specified tenant user: ${TENANT_USER} (UID:${TENANT_UID}, GID:${TENANT_GID})"
     else
         # Not running with sudo or sudo preserved environment
         export TENANT_UID="${TENANT_UID:-$(id -u)}"
         export TENANT_GID="${TENANT_GID:-$(id -g)}"
+        log "INFO" "Using current user: $(id -un) (UID:${TENANT_UID}, GID:${TENANT_GID})"
     fi
     
     log "INFO" "Tenant ownership will be set to: ${TENANT_UID}:${TENANT_GID}"
@@ -463,13 +470,13 @@ setup_logging() {
 }
     
     # Set dynamic service URLs based on tenant configuration
-    VECTOR_DB_URL="http://qdrant:6333"
-    OLLAMA_INTERNAL_URL="http://ollama:11434"
-    LITELLM_INTERNAL_URL="http://litellm:4000"
-    QDRANT_INTERNAL_URL="http://qdrant:6333"
-    REDIS_INTERNAL_URL="redis://redis:6379"
-    POSTGRES_INTERNAL_URL="postgresql://postgres:5432"
-    N8N_INTERNAL_URL="http://n8n:5678"
+    VECTOR_DB_URL="http://\${QDRANT_SERVICE_NAME:-qdrant}:\${QDRANT_PORT:-6333}"
+    OLLAMA_INTERNAL_URL="http://\${OLLAMA_SERVICE_NAME:-ollama}:\${OLLAMA_PORT:-11434}"
+    LITELLM_INTERNAL_URL="http://\${LITELLM_SERVICE_NAME:-litellm}:\${LITELLM_PORT:-4000}"
+    QDRANT_INTERNAL_URL="http://\${QDRANT_SERVICE_NAME:-qdrant}:\${QDRANT_PORT:-6333}"
+    REDIS_INTERNAL_URL="redis://\${REDIS_SERVICE_NAME:-redis}:\${REDIS_PORT:-6379}"
+    POSTGRES_INTERNAL_URL="postgresql://\${POSTGRES_SERVICE_NAME:-postgres}:\${POSTGRES_PORT:-5432}"
+    N8N_INTERNAL_URL="http://\${N8N_SERVICE_NAME:-n8n}:\${N8N_PORT:-5678}"
 
     log "SUCCESS" "Data will be stored in: ${DATA_ROOT}"
 }
@@ -1337,12 +1344,12 @@ ENABLE_MINIO=${ENABLE_MINIO}
 
 # ─── Service URLs (for dynamic configuration) ───────────────────────────────────
 # Internal service URLs (Docker network communication)
-OLLAMA_INTERNAL_URL="http://ollama:11434"
-LITELLM_INTERNAL_URL="http://litellm:4000"
-QDRANT_INTERNAL_URL="http://qdrant:6333"
-REDIS_INTERNAL_URL="redis://redis:6379"
-POSTGRES_INTERNAL_URL="postgresql://postgres:5432"
-N8N_INTERNAL_URL="http://n8n:5678"
+OLLAMA_INTERNAL_URL="http://\${OLLAMA_SERVICE_NAME:-ollama}:\${OLLAMA_PORT:-11434}"
+LITELLM_INTERNAL_URL="http://\${LITELLM_SERVICE_NAME:-litellm}:\${LITELLM_PORT:-4000}"
+QDRANT_INTERNAL_URL="http://\${QDRANT_SERVICE_NAME:-qdrant}:\${QDRANT_PORT:-6333}"
+REDIS_INTERNAL_URL="redis://\${REDIS_SERVICE_NAME:-redis}:\${REDIS_PORT:-6379}"
+POSTGRES_INTERNAL_URL="postgresql://\${POSTGRES_SERVICE_NAME:-postgres}:\${POSTGRES_PORT:-5432}"
+N8N_INTERNAL_URL="http://\${N8N_SERVICE_NAME:-n8n}:\${N8N_PORT:-5678}"
 
 # Service API endpoints
 OLLAMA_API_ENDPOINT="${OLLAMA_INTERNAL_URL}/api/tags"
@@ -1579,6 +1586,8 @@ write_caddyfile() {
     source "${ENV_FILE}"
 
     local CADDYFILE_PATH="${CADDY_DIR}/Caddyfile"
+    
+    # Start with global config
     cat > "${CADDYFILE_PATH}" << EOF
 # AI Platform Caddyfile
 # Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -1588,10 +1597,13 @@ write_caddyfile() {
     acme_ca https://acme-v02.api.letsencrypt.org/directory
     acme_ca_root /etc/ssl/certs/ca-certificates.crt
 }
+
 EOF
 
-    $([ "${ENABLE_N8N}" = "true" ] && cat << BLOCK
-n8n.${DOMAIN} {
+    # Add service blocks
+    if [[ "${ENABLE_N8N}" = "true" ]]; then
+        cat >> "${CADDYFILE_PATH}" << 'EOF'
+n8n.ai.datasquiz.net {
     reverse_proxy n8n:5678 {
         header_up Host {host}
         header_up X-Real-IP {remote_host}
@@ -1599,10 +1611,13 @@ n8n.${DOMAIN} {
         header_up X-Forwarded-Proto {scheme}
     }
 }
-BLOCK
-)
-$([ "${ENABLE_FLOWISE}" = "true" ] && cat << BLOCK
-flowise.${DOMAIN} {
+
+EOF
+    fi
+
+    if [[ "${ENABLE_FLOWISE}" = "true" ]]; then
+        cat >> "${CADDYFILE_PATH}" << 'EOF'
+flowise.ai.datasquiz.net {
     reverse_proxy flowise:3000 {
         header_up Host {host}
         header_up X-Real-IP {remote_host}
@@ -1610,10 +1625,13 @@ flowise.${DOMAIN} {
         header_up X-Forwarded-Proto {scheme}
     }
 }
-BLOCK
-)
-$([ "${ENABLE_OPENWEBUI}" = "true" ] && cat << BLOCK
-openwebui.${DOMAIN} {
+
+EOF
+    fi
+
+    if [[ "${ENABLE_OPENWEBUI}" = "true" ]]; then
+        cat >> "${CADDYFILE_PATH}" << 'EOF'
+openwebui.ai.datasquiz.net {
     reverse_proxy openwebui:8080 {
         header_up Host {host}
         header_up X-Real-IP {remote_host}
@@ -1621,10 +1639,13 @@ openwebui.${DOMAIN} {
         header_up X-Forwarded-Proto {scheme}
     }
 }
-BLOCK
-)
-$([ "${ENABLE_ANYTHINGLLM}" = "true" ] && cat << BLOCK
-anythingllm.${DOMAIN} {
+
+EOF
+    fi
+
+    if [[ "${ENABLE_ANYTHINGLLM}" = "true" ]]; then
+        cat >> "${CADDYFILE_PATH}" << 'EOF'
+anythingllm.ai.datasquiz.net {
     reverse_proxy anythingllm:3001 {
         header_up Host {host}
         header_up X-Real-IP {remote_host}
@@ -1632,10 +1653,13 @@ anythingllm.${DOMAIN} {
         header_up X-Forwarded-Proto {scheme}
     }
 }
-BLOCK
-)
-$([ "${ENABLE_LITELLM}" = "true" ] && cat << BLOCK
-litellm.${DOMAIN} {
+
+EOF
+    fi
+
+    if [[ "${ENABLE_LITELLM}" = "true" ]]; then
+        cat >> "${CADDYFILE_PATH}" << 'EOF'
+litellm.ai.datasquiz.net {
     reverse_proxy litellm:4000 {
         header_up Host {host}
         header_up X-Real-IP {remote_host}
@@ -1643,10 +1667,13 @@ litellm.${DOMAIN} {
         header_up X-Forwarded-Proto {scheme}
     }
 }
-BLOCK
-)
-$([ "${ENABLE_GRAFANA}" = "true" ] && cat << BLOCK
-grafana.${DOMAIN} {
+
+EOF
+    fi
+
+    if [[ "${ENABLE_GRAFANA}" = "true" ]]; then
+        cat >> "${CADDYFILE_PATH}" << 'EOF'
+grafana.ai.datasquiz.net {
     reverse_proxy grafana:3000 {
         header_up Host {host}
         header_up X-Real-IP {remote_host}
@@ -1654,10 +1681,13 @@ grafana.${DOMAIN} {
         header_up X-Forwarded-Proto {scheme}
     }
 }
-BLOCK
-)
-$([ "${ENABLE_AUTHENTIK}" = "true" ] && cat << BLOCK
-auth.${DOMAIN} {
+
+EOF
+    fi
+
+    if [[ "${ENABLE_AUTHENTIK}" = "true" ]]; then
+        cat >> "${CADDYFILE_PATH}" << 'EOF'
+auth.ai.datasquiz.net {
     reverse_proxy authentik-server:9000 {
         header_up Host {host}
         header_up X-Real-IP {remote_host}
@@ -1665,10 +1695,9 @@ auth.${DOMAIN} {
         header_up X-Forwarded-Proto {scheme}
     }
 }
-BLOCK
-)
 
 EOF
+    fi
 
     chmod 644 "${CADDY_DIR}/Caddyfile"
     log "SUCCESS" "Caddyfile written"

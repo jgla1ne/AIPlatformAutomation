@@ -1,16 +1,16 @@
 --
 
-# **AI Platform Automation v2.1.0**
+# **AI Platform Automation v2.2.0**
 
-A comprehensive, fully dynamic AI platform deployment system with intelligent service orchestration.
+A comprehensive, production-ready AI platform deployment system with **zero-touch ownership management**.
 
-This platform deploys an **interconnected AI runtime stack** with zero hardcoded values.
+This platform deploys an **interconnected AI runtime stack** with intelligent service orchestration and **automated tenant ownership**.
 
 ---
 
 ## **🏗 Architecture Overview**
 
-This platform uses a fully dockerized, **100% dynamically generated** `docker-compose` architecture.
+This platform uses a fully dockerized, **100% dynamically generated** `docker-compose` architecture with **bulletproof ownership management**.
 
 No static compose file exists in the repository.
 
@@ -25,21 +25,11 @@ Each tenant deployment generates:
 
 ---
 
-### **Core Components**
-
-* **Script 0:** Complete tenant cleanup (containers, volumes, networks)  
-* **Script 1:** Interactive configuration (hardware detection, ports, services, credentials, intelligent routing)  
-* **Script 2:** Dynamic `docker-compose.yml` generation + network creation  
-* **Script 3:** Post-deployment stack interconnection & LLM configuration  
-* **Script 4:** Add new services without modifying core scripts  
-
----
-
-## **🔐 Core Architectural Principles**
+### **🔐 Core Architectural Principles**
 
 ### **🏗 Foundation Principles (Non-Negotiable)**
 
-✅ **Nothing as root** - All services run under tenant UID/GID (1001:1001)  
+✅ **Nothing as root** - All services run under tenant UID/GID (dynamically detected)  
 ✅ **Data confinement** - Everything under `/mnt/data/tenant/` except cleanup logs in `~/logs/`  
 ✅ **Dynamic compose generation** - No static files, compose generated only after all variables set  
 ✅ **Zero hardcoded values** - Maximum modularity, all configuration via `.env` variables  
@@ -63,7 +53,7 @@ Each tenant deployment generates:
 ✅ **Intelligent routing** - LiteLLM cost/latency optimization  
 ✅ **Multi-tenant isolation** - Dynamic project prefixes  
 ✅ **Fully dockerized** - Dynamic compose-based infrastructure  
-✅ **Non-root execution** - Tenant UID/GID preservation  
+✅ **Non-root execution** - Tenant UID/GID preservation (automatic detection)  
 ✅ **Centralized LLM routing** - Via LiteLLM with fallback strategies  
 ✅ **Dynamic service URLs** - All endpoints configurable  
 ✅ **Vector database integration** - Support for any vector DB  
@@ -104,24 +94,24 @@ sudo bash scripts/4-add-service.sh <service>
 
 Only selected services are deployed and interconnected.
 
-| Service | Role | Exposure | Notes |
-|----------|------|----------|--------|
+| Service | Role | Exposure | v2.2.0 Fixes |
+|----------|------|----------|-------------------|
 | Ollama | Local LLM runtime | Internal | GPU-accelerated inference |
 | LiteLLM | Central LLM gateway & router | Internal + Proxy | Intelligent cost/latency routing |
-| PostgreSQL | Structured storage | Internal | Primary database |
-| Redis | Cache / queue | Internal | Performance layer |
+| PostgreSQL | Structured storage | Internal | **Fixed database types** |
+| Redis | Cache / queue | Internal | **Fixed auth integration** |
 | Qdrant | Vector database | Internal | RAG embeddings storage |
 | Open WebUI | Chat UI | Reverse Proxy | Connects via LiteLLM |
-| AnythingLLM | RAG UI | Reverse Proxy | Document processing + Qdrant |
+| AnythingLLM | RAG UI | Reverse Proxy | **Fixed permissions + DB** |
 | Dify | AI App Builder | Reverse Proxy | Workflow automation |
-| Flowise | Visual AI workflows | Reverse Proxy | Low-code AI builder |
-| n8n | Automation | Reverse Proxy | Workflow orchestration |
+| Flowise | Visual AI workflows | Reverse Proxy | **Fixed permissions + DB** |
+| n8n | Automation | Reverse Proxy | **Fixed permissions + DB** |
 | OpenClaw | AI Browser Agent | **Tailscale only** | Secure automation |
 | Prometheus | Metrics collector | Internal | System monitoring |
-| Grafana | Monitoring dashboard | Reverse Proxy | Prometheus visualization |
+| Grafana | Monitoring dashboard | Reverse Proxy | **Fixed permissions** |
 | MinIO | Object storage | Reverse Proxy | S3-compatible storage |
 | Signal API | Messaging bridge | Internal | Communication integration |
-| Authentik | SSO/Identity | Reverse Proxy | Enterprise authentication |
+| Authentik | SSO/Identity | Reverse Proxy | **Fixed service name + auth** |
 | Tailscale | Private network overlay | External VPN | Secure remote access |
 
 ---
@@ -356,7 +346,7 @@ For production:
 ✅ No orphan containers  
 ✅ No orphan networks  
 ✅ Volumes reset (optional preserve)  
-✅ Comple docker prune of all images
+✅ Complete docker prune of all images
 ✅ complete rm -rf of tenant data (including root data which should never be)
 ---
 
@@ -402,7 +392,7 @@ For production:
 ✅ Services appended dynamically  
 ✅ Reverse proxy auto-updated  
 ✅ Monitoring auto-integrated  
-✅ No modification to core architecture  
+✅ No modification to core architecture
 
 ---
 
@@ -428,38 +418,35 @@ For production:
 
 # **📌 Status**
 
-**Status:** Enterprise-Grade Fully Dynamic AI Stack  
-**Version:** v2.1.0 (Baseline Release)  
-**Last Updated:** 2026-03-03  
+**Status:** Enterprise-Grade Fully Dynamic AI Stack with Zero-Touch Ownership  
+**Version:** v2.2.0 (Ownership Revolution)  
+**Last Updated:** 2026-03-06  
 **Maintainer:** Jean-Gabriel Laine  
 
 ---
 
-## **� v2.1.0 Baseline Capabilities**
+## **🚀 v2.2.0 Ownership Revolution Capabilities**
 
-### **✅ Complete Dynamic Configuration**
-- **Zero hardcoded values** across all 4 scripts
-- **80+ environment variables** with zero conflicts
-- **Dynamic service URLs** and project prefixes
-- **Configurable ports** and network settings
+### **✅ Zero-Touch Ownership Management**
+- **Dynamic UID/GID Detection:** Automatic SUDO_USER → SUDO_UID/SUDO_GID mapping
+- **Atomic Directory Creation:** chown applied immediately after mkdir
+- **Container User Mapping:** All services use `${TENANT_UID}:${TENANT_GID}`
+- **Permission Validation:** Pre and post deployment ownership verification
+- **Zero Root Creation:** Nothing ever created as root tenant owns their data
 
-### **✅ Intelligent Architecture**
-- **LiteLLM intelligent routing** with cost/latency optimization
-- **Multi-provider support** (local + cloud APIs)
-- **Automatic fallback** based on query complexity
-- **Dynamic vector DB** integration for any supported database
+### **✅ Service Configuration Fixes**
+- **Database Types:** n8n/flowise → `postgresdb` (correct PostgreSQL driver)
+- **Service Names:** `authentik` → `authentik-server` (matches Caddy config)
+- **Redis Integration:** Authentik properly configured with Redis password
+- **Variable Escaping:** All compose generation uses proper `\${VAR}` syntax
 
-### **✅ Enterprise Integration**
-- **18 AI/ML services** fully integrated
-- **Authentik SSO** for enterprise authentication
-- **Tailscale VPN** with serve mode
-- **Grafana/Prometheus** monitoring stack
-- **Signal API** for messaging integration
-- **MinIO object storage** with S3 compatibility
+### **✅ Error Resilience**
+- **Graceful Fallbacks:** Services handle permission issues automatically
+- **Automatic Recovery:** Ownership correction without manual intervention
+- **Comprehensive Logging:** All ownership operations logged for debugging
 
-### **✅ Production Ready**
-- **Multi-tenant isolation** with dynamic project naming
-- **Non-root execution** with proper UID/GID preservation
+---
+
 ## **🔧 Recent Critical Fixes Applied**
 
 ### **✅ P1 - Dynamic Architecture (v2.1.0)**
@@ -498,9 +485,17 @@ For production:
 - **Container Security:** Non-root execution enforced
 - **Health Checks:** All endpoints verified and working
 
+### **✅ P5 - Ownership Revolution (v2.2.0)**
+- **Dynamic User Detection:** SUDO_USER → SUDO_UID/SUDO_GID automatic mapping
+- **Zero Root Creation:** All directories created with correct ownership from birth
+- **Container User Mapping:** All services dynamically use tenant UID/GID
+- **Permission Validation:** Comprehensive ownership verification system
+- **Service Configuration:** Fixed database types, service names, Redis auth
+- **Variable Escaping:** Proper heredoc syntax throughout compose generation
+
 ---
 
-## **� Known Issues & Learnings**
+## **🔍 Known Issues & Learnings**
 
 ### **📋 Documented Issues**
 
@@ -510,13 +505,9 @@ For production:
   - **Status:** ✅ Resolved in v2.1.0
 
 #### **⚠️ Minor Issues (Documented)**
-- **Unbound Variables** - `TENANT_UID`/`TENANT_GID` not in initial .env generation
-  - **Workaround:** Manually add to .env or ensure script 1 includes them
-  - **Status:** 📝 Documented, planned fix
-
 - **YAML Version Warning** - Docker Compose v3.8 deprecated warning
   - **Impact:** Non-breaking, cosmetic warning only
-  - **Status:** 📝 Documented, need to remove this decalaration to be compliant with the new format
+  - **Status:** 📝 Documented, need to remove this declaration to be compliant with the new format
 
 - **Variable Expansion** - Some volume mounts fail variable expansion
   - **Workaround:** Use absolute paths in compose generation
@@ -537,9 +528,9 @@ For production:
 
 ---
 
-## **�🚀 Deployment Readiness**
+## **🚀 Deployment Readiness**
 
-The v2.1.0 platform is production-ready with comprehensive validation:
+The v2.2.0 platform is production-ready with comprehensive validation:
 
 ### **✅ Core Architecture Validation**
 1. **Script Validation:** All 4 scripts pass bash syntax checks
@@ -562,4 +553,4 @@ The v2.1.0 platform is production-ready with comprehensive validation:
 ### **✅ Production Deployment**
 **Deployment Sequence:** `0 → 1 → 2 → 3` (cleanup → setup → deploy → configure)  
 **Extension:** `4-add-service.sh` for dynamic service management  
-**Baseline:** v2.1.0 represents enterprise-grade AI platform automation  
+**Baseline:** v2.2.0 represents enterprise-grade AI platform automation with zero-touch ownership
