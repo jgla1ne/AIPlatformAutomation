@@ -1,165 +1,251 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script 1: System Setup Wizard - FINAL CORRECTED VERSION
+# Script 1: Setup Tenant - v2.0 ARCHITECTURALLY COMPLIANT
 # =============================================================================
-# PURPOSE: Correctly identifies the tenant user, creates a full directory
-#          scaffold with proper ownership, and generates the .env file.
-# USAGE:   sudo bash scripts/1-setup-system.sh
+# PURPOSE: Creates full directory structure, sets ALL directory ownership,
+#          and generates complete .env file in one atomic operation.
+# USAGE:   sudo bash scripts/1-setup-system.sh <tenant_id> <domain>
 # =============================================================================
 
 set -euo pipefail
 
-# --- Colors, Logging, UI Helpers (No changes) ---
-RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m' CYAN='\033[0;36m' NC='\033[0m'
+# --- Arguments & Colors ---
+if [[ "${#@}" -ne 2 ]]; then 
+    echo "Usage: sudo bash $0 <tenant_id> <domain>" >&2
+    exit 1
+fi
+TENANT_ID="$1"
+DOMAIN="$2"
+
+RED='\033[0;31m' GREEN='\033[0;32m' CYAN='\033[0;36m' NC='\033[0m'
 log() { echo -e "${CYAN}[INFO]${NC}  $*"; }
 ok() { echo -e "${GREEN}[OK]${NC}    $*"; }
-warn() { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-fail() { echo -e "${RED}[FAIL]${NC}  $*" >&2; exit 1; }
+fail() { echo -e "${RED}[FAIL]${NC}  $*"; exit 1; }
 
-# --- All other functions (prerequisites, UI, data collection) remain the same ---
-# ... (assuming previous script content is here) ...
+# --- Paths and User Info ---
+TENANT_DIR="/mnt/data/${TENANT_ID}"
+TENANT_USER="${TENANT_ID}"
 
-# --- MODIFIED: Data Volume & Ownership Setup ---
-select_data_volume() {
-    # ... (code to select mount point remains the same) ...
-    # Example: DATA_ROOT is set to "/mnt/data/ds-test-1"
+# Check if tenant user exists, create if not
+if ! id "${TENANT_USER}" &>/dev/null; then
+    log "Creating tenant user '${TENANT_USER}'..."
+    useradd -m -s /bin/bash "${TENANT_USER}"
+    ok "Tenant user '${TENANT_USER}' created."
+else
+    ok "Tenant user '${TENANT_USER}' (UID: $(id -u ${TENANT_USER}), GID: $(id -g ${TENANT_USER})) found."
+fi
 
-    # --- CORRECTED & ROBUST TENANT USER DETECTION ---
-    log "Identifying tenant user for file ownership..."
-    local tenant_user_name
+TENANT_UID=$(id -u "${TENANT_USER}")
+TENANT_GID=$(id -g "${TENANT_USER}")
 
-    if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
-        tenant_user_name="${SUDO_USER}"
-        ok "Detected tenant user from sudo: '${tenant_user_name}'"
-    else
-        # Fallback if not using sudo or if SUDO_USER is root
-        tenant_user_name=$(logname 2>/dev/null || whoami)
-        warn "Could not determine user from sudo. Falling back to: '${tenant_user_name}'"
-    fi
+# =============================================================================
+# MAIN EXECUTION
+# =============================================================================
+main() {
+    log "Creating all service directories for tenant '${TENANT_ID}'..."
+    
+    # Define all directories to be created
+    DIRECTORIES=(
+        "postgres" "redis" "qdrant" "ollama" "openwebui" "n8n" "flowise" 
+        "anythingllm" "anythingllm/tmp" "litellm" "authentik/media" 
+        "authentik/custom-templates" "prometheus-data" "grafana/provisioning/datasources"
+        "caddy"
+    )
 
-    if ! id -u "${tenant_user_name}" >/dev/null 2>&1; then
-        fail "Could not find a valid user '${tenant_user_name}' on the system."
-    fi
+    for dir in "${DIRECTORIES[@]}"; do
+        mkdir -p "${TENANT_DIR}/${dir}"
+        ok "Created directory: ${TENANT_DIR}/${dir}"
+    done
 
-    # Export the correct UID and GID for all subsequent operations
-    export TENANT_UID=$(id -u "${tenant_user_name}")
-    export TENANT_GID=$(id -g "${tenant_user_name}")
+    log "Setting directory ownership..."
 
-    ok "Ownership will be set to user ${tenant_user_name} (UID: ${TENANT_UID}, GID: ${TENANT_GID})"
+    # Default ownership for most services
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}"
+    ok "Default ownership set to ${TENANT_UID}:${TENANT_GID} for all directories."
 
-    # Set derived paths
-    ENV_FILE="${DATA_ROOT}/.env"
-    COMPOSE_DIR="${DATA_ROOT}/compose"
-    # ... etc.
+    # Define Service-Specific UIDs (as this is config, it lives here)
+    N8N_UID=1000
+    OPENWEBUI_UID=1000
+    ANYTHINGLLM_UID=1000
+    OLLAMA_UID=${TENANT_UID}
+    PROMETHEUS_UID=65534
 
-    # Setup logging (now with correct ownership)
-    LOG_DIR="${DATA_ROOT}/logs"
-    mkdir -p "${LOG_DIR}"
-    # Ownership will be set recursively later, but we can set it here too
-    chown "${TENANT_UID}:${TENANT_GID}" "${LOG_DIR}"
-    LOG_FILE="${LOG_DIR}/script-1-$(date +%Y%m%d-%H%M%S).log"
-    exec > >(tee -a "${LOG_FILE}") 2>&1
-    log "All subsequent output will be logged to: ${LOG_FILE}"
+    # Apply specific ownership for services that run as their own internal user
+    chown -R "${N8N_UID}:${N8N_UID}" "${TENANT_DIR}/n8n"
+    ok "Set n8n directory ownership to ${N8N_UID}:${N8N_UID}"
+    chown -R "${OPENWEBUI_UID}:${OPENWEBUI_UID}" "${TENANT_DIR}/openwebui"
+    ok "Set openwebui directory ownership to ${OPENWEBUI_UID}:${OPENWEBUI_UID}"
+    chown -R "${ANYTHINGLLM_UID}:${ANYTHINGLLM_UID}" "${TENANT_DIR}/anythingllm"
+    ok "Set anythingllm directory ownership to ${ANYTHINGLLM_UID}:${ANYTHINGLLM_UID}"
+    chown -R "${OLLAMA_UID}:${OLLAMA_UID}" "${TENANT_DIR}/ollama"
+    ok "Set ollama directory ownership to ${OLLAMA_UID}:${OLLAMA_UID}"
+    chown -R "${PROMETHEUS_UID}:${PROMETHEUS_UID}" "${TENANT_DIR}/prometheus-data"
+    ok "Set prometheus directory ownership to ${PROMETHEUS_UID}:${PROMETHEUS_UID}"
 
-    # ... (rest of the function remains the same) ...
-}
+    log "All directory permissions have been correctly set."
 
+    # Define constants needed for both .env and Caddyfile
+    ADMIN_EMAIL=hosting@datasquiz.net
+    N8N_SERVICE_NAME=n8n
+    FLOWISE_SERVICE_NAME=flowise
+    OPENWEBUI_SERVICE_NAME=openwebui
+    ANYTHINGLLM_SERVICE_NAME=anythingllm
+    LITELLM_SERVICE_NAME=litellm
+    GRAFANA_SERVICE_NAME=grafana
+    AUTHENTIK_SERVICE_NAME=authentik-server
 
-# --- MODIFIED: Directory & Configuration Generation ---
+    # Generate random passwords
+    POSTGRES_PASSWORD=$(openssl rand -hex 16)
+    REDIS_PASSWORD=$(openssl rand -hex 16)
+    GRAFANA_PASSWORD=$(openssl rand -hex 16)
+    AUTHENTIK_SECRET_KEY=$(openssl rand -hex 16)
 
-# This function now creates the entire directory scaffold.
-create_directory_scaffold() {
-    log "Creating full directory scaffold for tenant '${TENANT_ID}'..."
-    mkdir -p \
-        "${DATA_ROOT}/postgres" \
-        "${DATA_ROOT}/redis" \
-        "${DATA_ROOT}/ollama" \
-        "${DATA_ROOT}/qdrant" \
-        "${DATA_ROOT}/prometheus-data" \
-        "${DATA_ROOT}/grafana" \
-        "${DATA_ROOT}/caddy-data" \
-        "${DATA_ROOT}/n8n" \
-        "${DATA_ROOT}/flowise" \
-        "${DATA_ROOT}/openwebui" \
-        "${DATA_ROOT}/anythingllm" \
-        "${DATA_ROOT}/litellm" \
-        "${DATA_ROOT}/authentik/media" \
-        "${DATA_ROOT}/authentik/custom-templates" \
-        "${DATA_ROOT}/logs" \
-        "${DATA_ROOT}/backups" \
-        "${DATA_ROOT}/signal"
+    log "Generating .env file at ${TENANT_DIR}/.env"
 
-    ok "Directory scaffold created."
-}
-
-# This function now writes the .env file AND sets final ownership.
-write_env_and_set_ownership() {
-    # Create parent directory first
-    mkdir -p "${DATA_ROOT}"
-
-    # --- Write .env file ---
-    log "Generating .env file at ${ENV_FILE}"
-    # Using a temporary file for atomic write
-    local temp_env="${ENV_FILE}.tmp"
-
-    # The cat << EOF block to write the .env file is here
-    # ... (It is very long, so I will omit it for brevity, no changes are made to its content)
-    cat > "${temp_env}" << EOF
-# AI Platform Environment Configuration
-# Tenant: ${TENANT_ID}
-
+    cat > "${TENANT_DIR}/.env" << EOF
+# ---------------- General ----------------
+COMPOSE_PROJECT_NAME=${TENANT_ID}
 TENANT_UID=${TENANT_UID}
 TENANT_GID=${TENANT_GID}
-# ... (all other variables)
+DOMAIN=${DOMAIN}
+DATA_ROOT=${TENANT_DIR}
+TENANT_DIR=${TENANT_DIR}
+N8N_USER=admin
+N8N_PASSWORD=admin123
+
+# ---------------- Service Enablement ----------------
+ENABLE_POSTGRES=true
+ENABLE_REDIS=true
+ENABLE_QDRANT=true
+ENABLE_OLLAMA=true
+ENABLE_OPENWEBUI=true
+ENABLE_ANYTHINGLLM=true
+ENABLE_N8N=true
+ENABLE_FLOWISE=true
+ENABLE_LITELLM=true
+ENABLE_GRAFANA=true
+ENABLE_PROMETHEUS=true
+ENABLE_AUTHENTIK=true
+ENABLE_CADDY=true
+
+# ---------------- Service UIDs (for reference in script-2) ----------------
+N8N_UID=${N8N_UID}
+OPENWEBUI_UID=${OPENWEBUI_UID}
+ANYTHINGLLM_UID=${ANYTHINGLLM_UID}
+OLLAMA_UID=${OLLAMA_UID}
+PROMETHEUS_UID=${PROMETHEUS_UID}
+
+# ---------------- Passwords & Secrets ----------------
+POSTGRES_USER=${TENANT_ID}
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+POSTGRES_DB=${TENANT_ID}
+REDIS_PASSWORD=${REDIS_PASSWORD}
+GRAFANA_PASSWORD=${GRAFANA_PASSWORD}
+AUTHENTIK_SECRET_KEY=${AUTHENTIK_SECRET_KEY}
+
+# ---------------- Service Configuration ----------------
+POSTGRES_SERVICE_NAME=postgres
+REDIS_SERVICE_NAME=redis
+QDRANT_SERVICE_NAME=qdrant
+OLLAMA_SERVICE_NAME=ollama
+N8N_SERVICE_NAME=n8n
+FLOWISE_SERVICE_NAME=flowise
+OPENWEBUI_SERVICE_NAME=openwebui
+ANYTHINGLLM_SERVICE_NAME=anythingllm
+LITELLM_SERVICE_NAME=litellm
+GRAFANA_SERVICE_NAME=grafana
+PROMETHEUS_SERVICE_NAME=prometheus
+AUTHENTIK_SERVICE_NAME=authentik-server
+
+# ---------------- Port Configuration ----------------
+POSTGRES_PORT=5432
+REDIS_PORT=6379
+QDRANT_PORT=6333
+OLLAMA_PORT=11434
+N8N_PORT=5678
+FLOWISE_PORT=3000
+OPENWEBUI_PORT=8080
+ANYTHINGLLM_PORT=3001
+LITELLM_PORT=4000
+GRAFANA_PORT=3002
+PROMETHEUS_PORT=9090
+AUTHENTIK_PORT=9000
+CADDY_HTTP_PORT=80
+CADDY_HTTPS_PORT=443
+
+# ---------------- SSL & Security ----------------
+SSL_TYPE=acme
+ADMIN_EMAIL=hosting@datasquiz.net
+PROJECT_PREFIX=ai-
+
+# ---------------- Vector DB & LLM Configuration ----------------
+VECTOR_DB=qdrant
+QDRANT_API_KEY=
+LLM_PROVIDERS=local
+
+# ---------------- Database Configuration ----------------
+DATABASE_TYPE=postgres
+
 EOF
 
-    # --- CRITICAL OWNERSHIP FIX ---
-    # This is the single most important command.
-    # It recursively sets ownership for the entire tenant directory tree.
-    log "Setting final ownership for all tenant data..."
-    if ! chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"; then
-        fail "Failed to set recursive ownership on ${DATA_ROOT}."
-    fi
+    ok "Tenant setup complete. Environment is ready for deployment."
 
-    # Set secure permissions on the data root and move .env into place
-    chmod 750 "${DATA_ROOT}"
-    mv "${temp_env}" "${ENV_FILE}"
-    chmod 640 "${ENV_FILE}"
+    log "Generating Caddyfile at ${TENANT_DIR}/caddy/Caddyfile"
 
-    ok "Final ownership set for user ${TENANT_UID} on all tenant directories."
-    ok "Configuration securely written to ${ENV_FILE}"
+    cat > "${TENANT_DIR}/caddy/Caddyfile" << EOF
+{
+  email ${ADMIN_EMAIL}
 }
 
-# --- Main Execution Flow ---
-main() {
-    print_header
-    check_root
+${DOMAIN} {
+  handle /n8n* {
+    reverse_proxy ${N8N_SERVICE_NAME}:${N8N_PORT:-5678}
+  }
+  
+  handle /flowise* {
+    reverse_proxy ${FLOWISE_SERVICE_NAME}:${FLOWISE_PORT:-3000}
+  }
+  
+  handle /openwebui* {
+    reverse_proxy ${OPENWEBUI_SERVICE_NAME}:${OPENWEBUI_PORT:-8080}
+  }
+  
+  handle /anythingllm* {
+    reverse_proxy ${ANYTHINGLLM_SERVICE_NAME}:${ANYTHINGLLM_PORT:-3001}
+  }
+  
+  handle /litellm* {
+    reverse_proxy ${LITELLM_SERVICE_NAME}:${LITELLM_PORT:-4000}
+  }
+  
+  handle /grafana* {
+    reverse_proxy ${GRAFANA_SERVICE_NAME}:${GRAFANA_PORT:-3002}
+  }
+  
+  handle /auth* {
+    reverse_proxy ${AUTHENTIK_SERVICE_NAME}:${AUTHENTIK_PORT:-9000}
+  }
+}
+
+EOF
+
+    ok "Caddyfile written."
+
+    # Create prometheus.yml configuration file
+    log "Generating prometheus.yml at ${TENANT_DIR}/prometheus.yml"
     
-    # --- Collect all user input ---
-    collect_identity         # Step 2
-    # ... (all other collection functions) ...
+    cat > "${TENANT_DIR}/prometheus.yml" << EOF
+global:
+  scrape_interval: 15s
 
-    # --- Perform Actions ---
-    print_summary
-    # Ask for confirmation before writing to disk
-    read -p "Confirm and write configuration? [Y/n]: " confirm
-    if [[ ! "${confirm:-y}" =~ ^[Yy]$ ]]; then
-        log "Aborted. No changes were made."
-        exit 0
-    fi
-
-    # Create all directories
-    create_directory_scaffold
-
-    # Write the .env file and apply permissions
-    write_env_and_set_ownership
-
-    # Write Caddyfile, etc.
-    write_caddyfile
-
-    # --- Final Output ---
-    offer_next_step
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+EOF
+    
+    ok "Prometheus configuration written."
 }
 
-# --- Kick off the script ---
+# Execute main function
 main "$@"

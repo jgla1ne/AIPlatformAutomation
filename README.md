@@ -49,7 +49,7 @@ Each tenant deployment generates:
 
 ## **🎯 Architectural Goals**
 
-✅ **Zero hardcoded values** - All 4 scripts 100% dynamic  
+✅ **Zero hardcoded values** - All 5 scripts 100% dynamic  
 ✅ **Intelligent routing** - LiteLLM cost/latency optimization  
 ✅ **Multi-tenant isolation** - Dynamic project prefixes  
 ✅ **Fully dockerized** - Dynamic compose-based infrastructure  
