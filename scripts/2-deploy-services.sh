@@ -76,7 +76,7 @@ cat >> "${COMPOSE_FILE}" << EOF
     volumes:
       - \${TENANT_DIR}/postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -364,6 +364,84 @@ EOF
 ok "Compose file generation complete."
 
 # =============================================================================
+# URL TESTING FUNCTION
+# =============================================================================
+test_service_urls() {
+    log "Testing service URLs to verify deployment..."
+    
+    # Colors for output
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[1;33m'
+    NC='\033[0m'
+    
+    # Test function
+    test_url() {
+        local url="$1"
+        local description="$2"
+        
+        echo -n "Testing $description: "
+        echo -n "$url "
+        
+        if curl -s -f -m 10 "$url" > /dev/null 2>&1; then
+            echo -e "${GREEN}✅ SUCCESS${NC}"
+            return 0
+        else
+            echo -e "${RED}❌ FAILED${NC}"
+            return 1
+        fi
+    }
+    
+    echo ""
+    echo "==============================================="
+    echo "🔍 TESTING PROMISED URLS"
+    echo "==============================================="
+    echo ""
+    
+    # External HTTPS URL tests
+    echo "🌐 EXTERNAL HTTPS URL TESTS"
+    echo "================================"
+    local external_success=0
+    local external_total=0
+    
+    [[ "${ENABLE_N8N}" == "true" ]] && { test_url "https://n8n.${DOMAIN}" "n8n" && ((external_success++)) || true; ((external_total++)); }
+    [[ "${ENABLE_FLOWISE}" == "true" ]] && { test_url "https://flowise.${DOMAIN}" "Flowise" && ((external_success++)) || true; ((external_total++)); }
+    [[ "${ENABLE_OPENWEBUI}" == "true" ]] && { test_url "https://openwebui.${DOMAIN}" "Open WebUI" && ((external_success++)) || true; ((external_total++)); }
+    [[ "${ENABLE_ANYTHINGLLM}" == "true" ]] && { test_url "https://anythingllm.${DOMAIN}" "AnythingLLM" && ((external_success++)) || true; ((external_total++)); }
+    [[ "${ENABLE_LITELLM}" == "true" ]] && { test_url "https://litellm.${DOMAIN}" "LiteLLM" && ((external_success++)) || true; ((external_total++)); }
+    [[ "${ENABLE_GRAFANA}" == "true" ]] && { test_url "https://grafana.${DOMAIN}" "Grafana" && ((external_success++)) || true; ((external_total++)); }
+    [[ "${ENABLE_AUTHENTIK}" == "true" ]] && { test_url "https://auth.${DOMAIN}" "Authentik" && ((external_success++)) || true; ((external_total++)); }
+    echo ""
+    
+    # Local access URL tests
+    echo "🏠 LOCAL ACCESS URL TESTS"
+    echo "================================"
+    local local_success=0
+    local local_total=0
+    
+    [[ "${ENABLE_OPENWEBUI}" == "true" ]] && { test_url "http://localhost:${OPENWEBUI_PORT:-8080}" "Open WebUI local" && ((local_success++)) || true; ((local_total++)); }
+    [[ "${ENABLE_OLLAMA}" == "true" ]] && { test_url "http://localhost:${OLLAMA_PORT:-11434}/api/tags" "Ollama API local" && ((local_success++)) || true; ((local_total++)); }
+    [[ "${ENABLE_QDRANT}" == "true" ]] && { test_url "http://localhost:${QDRANT_PORT:-6333}" "Qdrant local" && ((local_success++)) || true; ((local_total++)); }
+    echo ""
+    
+    # Summary
+    echo "==============================================="
+    echo "📊 URL TESTING SUMMARY"
+    echo "==============================================="
+    echo "External URLs: $external_success/$external_total working"
+    echo "Local URLs: $local_success/$local_total working"
+    echo "==============================================="
+    
+    if [[ $external_success -eq $external_total && $local_success -eq $local_total ]]; then
+        ok "All service URLs are accessible!"
+        return 0
+    else
+        warn "Some service URLs are not accessible. Check service logs."
+        return 1
+    fi
+}
+
+# =============================================================================
 # END DOCKER COMPOSE GENERATION
 # =============================================================================
 
@@ -381,10 +459,20 @@ log "Deploying stack '${COMPOSE_PROJECT_NAME}'..."
 docker compose down --remove-orphans
 docker compose up -d
 
-ok "Deployment initiated successfully."
-log "Please allow a few minutes for all services to start."
+ok "Deployment initiated successfully. Please allow a few minutes for all services to start."
 log "Run 'docker compose ps' in '${TENANT_DIR}' to check status."
 
 echo ""
 ok "SCRIPT 2 COMPLETED SUCCESSFULLY."
 echo ""
+
+# Wait for services to start and test URLs
+log "Waiting 30 seconds for services to initialize..."
+sleep 30
+
+# Test service URLs
+if test_service_urls; then
+    ok "Deployment verification complete - all services accessible!"
+else
+    warn "Deployment completed but some services may need additional configuration."
+fi
