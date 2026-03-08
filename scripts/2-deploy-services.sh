@@ -1394,4 +1394,5 @@ print_comprehensive_final_report
 
 }
 
-print_final_summary() {
+# Call main function to execute the script
+main
