@@ -42,9 +42,7 @@ set +a
 LOG_DIR="${TENANT_DIR}/logs"
 mkdir -p "${LOG_DIR}"
 LOG_FILE="${LOG_DIR}/deploy-$(date +%Y%m%d-%H%M%S).log"
-# CRITICAL FIX: Ensure log file is owned by tenant, not root
-touch "${LOG_FILE}"
-chown "${TENANT_UID}:${TENANT_GID}" "${LOG_FILE}"
+# Script-1 should have set correct ownership; we trust the setup
 exec > >(tee -a "${LOG_FILE}") 2>&1
 log "All output is now logged to: ${LOG_FILE}"
 

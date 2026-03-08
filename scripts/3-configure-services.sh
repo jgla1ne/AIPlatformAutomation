@@ -705,7 +705,7 @@ setup_logging() {
     script_name=$(basename "$0" .sh)
     LOG_DIR="${DATA_ROOT}/logs"
     mkdir -p "${LOG_DIR}"
-    [[ -n "${TENANT_GID:-}" ]] && chown :"${TENANT_GID}" "${LOG_DIR}"
+    # Script-1 should have set correct ownership; we trust the setup
     LOG_FILE="${LOG_DIR}/${script_name}-$(date +%Y%m%d-%H%M%S).log"
 
     # Redirect all subsequent output
