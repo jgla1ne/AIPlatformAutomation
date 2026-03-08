@@ -1516,14 +1516,10 @@ EOF
 }
 
 # ─── Write .env ───────────────────────────────────────────────────────────────
-write_env() {
+write_env_file() {
     mkdir -p "${DATA_ROOT}"
-    chmod 700 "${DATA_ROOT}"
-    
-    # CRITICAL: Set tenant ownership for DATA_ROOT (core principle: tenant owns their data)
-    chown "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"
 
-    # Create .env file atomically with proper ownership
+    # Create .env file atomically
     local temp_env_file="${ENV_FILE}.tmp"
     
     # Define project configuration variables
@@ -1849,8 +1845,6 @@ MINIO_PORT=9000
 EOF
 
     chmod 600 "${temp_env_file}"
-    # CRITICAL: Set tenant ownership for .env file (core principle: tenant owns their data)
-    chown "${TENANT_UID}:${TENANT_GID}" "${temp_env_file}"
     
     # Atomic move to final location
     mv "${temp_env_file}" "${ENV_FILE}"
@@ -1862,56 +1856,44 @@ EOF
 # NEW FUNCTION: Apply Final Ownership with Pragmatic Exceptions
 # =============================================================================
 apply_final_ownership() {
-    print_section "Applying Final Ownership Structure"
+    log "Applying Final Ownership Structure..."
 
-    # --- Stage 1: Apply Pragmatic Exceptions ---
-    # Only set ownership for specific directories that run as their own user.
-    # This correctly implements the learning from README.md (Line 537).
-    log "INFO" "Applying ownership exceptions for specific services..."
-
-    # Exception for n8n (runs as user 1000)
-    if [[ -d "${DATA_ROOT}/n8n" ]]; then
-        chown -R 1000:1000 "${DATA_ROOT}/n8n"
-        log "SUCCESS" "Set ownership for 'n8n' to 1000:1000."
+    # --- Stage 1: Set Base Tenant Ownership ---
+    # Set the entire directory to the tenant's ownership first. This is the default.
+    log "Setting base ownership for tenant user ${TENANT_UID} on ${DATA_ROOT}..."
+    if ! chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"; then
+        fail "Failed to set base recursive ownership on ${DATA_ROOT}."
     fi
+    log "SUCCESS" "Base ownership applied."
 
-    # Exception for Grafana (runs as user 472)
+    # --- Stage 2: Apply Ownership Exceptions ---
+    # FOR SERVICES THAT CANNOT RUN AS THE TENANT USER, we override ownership
+    # on their specific data directories. This is a critical, intentional step.
+    log "Applying ownership exceptions for specific services..."
+
+    # Exception for Grafana (requires UID 472)
     if [[ -d "${DATA_ROOT}/grafana" ]]; then
         chown -R 472:472 "${DATA_ROOT}/grafana"
-        log "SUCCESS" "Set ownership for 'grafana' to 472:472."
+        log "SUCCESS" "Set ownership for 'grafana' directory to 472:472."
+    fi
+
+    # Exception for n8n (requires UID 1000)
+    if [[ -d "${DATA_ROOT}/n8n" ]]; then
+        chown -R 1000:1000 "${DATA_ROOT}/n8n"
+        log "SUCCESS" "Set ownership for 'n8n' directory to 1000:1000."
     fi
     
-    # Exception for Prometheus (runs as user 65534)
+    # Exception for Prometheus (requires UID 65534)
     if [[ -d "${DATA_ROOT}/prometheus-data" ]]; then
         chown -R 65534:65534 "${DATA_ROOT}/prometheus-data"
-        log "SUCCESS" "Set ownership for 'prometheus' to 65534:65534."
+        log "SUCCESS" "Set ownership for 'prometheus' directory to 65534:65534."
     fi
-    
-    # Exception for Postgres (runs as user 70)
-    if [[ -d "${DATA_ROOT}/postgres" ]]; then
-        chown -R 70:70 "${DATA_ROOT}/postgres"
-        log "SUCCESS" "Set ownership for 'postgres' to 70:70."
-    fi
-    
-    # Exception for Qdrant (runs as user 1000)
-    if [[ -d "${DATA_ROOT}/qdrant" ]]; then
-        chown -R 1000:1000 "${DATA_ROOT}/qdrant"
-        log "SUCCESS" "Set ownership for 'qdrant' to 1000:1000."
-    fi
-    
-    # Exception for Ollama (runs as user 1001)
-    if [[ -d "${DATA_ROOT}/ollama" ]]; then
-        chown -R 1001:1001 "${DATA_ROOT}/ollama"
-        log "SUCCESS" "Set ownership for 'ollama' to 1001:1001."
-    fi
-    
-    # NOTE: Add any other service exceptions here if they are discovered.
 
-    # --- Stage 2: Secure Permissions ---
-    log "INFO" "Setting final secure permissions on tenant root and .env file..."
+    # --- Stage 3: Secure Final Permissions ---
+    log "Setting secure permissions on tenant root and .env file..."
     chmod 750 "${DATA_ROOT}"
     chmod 640 "${ENV_FILE}"
-    log "SUCCESS" "Secure permissions set."
+    log "SUCCESS" "Secure permissions have been set."
 
     log "SUCCESS" "Final ownership structure is correct and production-ready."
 }
@@ -2265,7 +2247,7 @@ main() {
     collect_ports            # Step 10
     generate_secrets         # Step 11
     print_summary
-    write_env
+    write_env_file
     
     create_directories
     
