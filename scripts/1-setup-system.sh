@@ -1923,8 +1923,24 @@ write_caddyfile() {
 
     local CADDYFILE_PATH="${CADDY_DIR}/Caddyfile"
     
-    # Start with global config
-    cat > "${CADDYFILE_PATH}" << EOF
+    # Start with global config based on SSL method
+    if [[ "${SSL_TYPE}" == "selfsigned" ]]; then
+        cat > "${CADDYFILE_PATH}" << EOF
+# AI Platform Caddyfile
+# Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# Using self-signed certificates for immediate access
+
+{
+    email ${ADMIN_EMAIL}
+    # Internal certificates - bypass Let's Encrypt rate limits
+    tls internal {
+        ca local
+    }
+}
+
+EOF
+    else
+        cat > "${CADDYFILE_PATH}" << EOF
 # AI Platform Caddyfile
 # Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
@@ -1935,6 +1951,7 @@ write_caddyfile() {
 }
 
 EOF
+    fi
 
     # Add service blocks
     if [[ "${ENABLE_N8N}" = "true" ]]; then
