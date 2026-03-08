@@ -1930,6 +1930,42 @@ apply_final_ownership() {
         log "SUCCESS" "Set ownership for 'qdrant' directory to 1000:1000."
     fi
 
+    # Exception for Flowise (requires UID 1000)
+    if [[ -d "${DATA_ROOT}/flowise" ]]; then
+        chown -R 1000:1000 "${DATA_ROOT}/flowise"
+        log "SUCCESS" "Set ownership for 'flowise' directory to 1000:1000."
+    fi
+
+    # Exception for OpenWebUI (requires UID 1000)
+    if [[ -d "${DATA_ROOT}/openwebui" ]]; then
+        chown -R 1000:1000 "${DATA_ROOT}/openwebui"
+        log "SUCCESS" "Set ownership for 'openwebui' directory to 1000:1000."
+    fi
+
+    # Exception for AnythingLLM (requires UID 1000)
+    if [[ -d "${DATA_ROOT}/anythingllm" ]]; then
+        chown -R 1000:1000 "${DATA_ROOT}/anythingllm"
+        log "SUCCESS" "Set ownership for 'anythingllm' directory to 1000:1000."
+    fi
+
+    # Exception for LiteLLM (requires UID 1000)
+    if [[ -d "${DATA_ROOT}/litellm" ]]; then
+        chown -R 1000:1000 "${DATA_ROOT}/litellm"
+        log "SUCCESS" "Set ownership for 'litellm' directory to 1000:1000."
+    fi
+
+    # Exception for Authentik (requires UID 1000)
+    if [[ -d "${DATA_ROOT}/authentik" ]]; then
+        chown -R 1000:1000 "${DATA_ROOT}/authentik"
+        log "SUCCESS" "Set ownership for 'authentik' directory to 1000:1000."
+    fi
+
+    # Exception for Prometheus (already handled above)
+    # Exception for Grafana (already handled above)
+    # Exception for Postgres (already handled above)
+    # Exception for Redis (already handled above)
+    # Exception for Ollama (already handled above)
+
     # --- STAGE 3: Secure Final Permissions ---
     log "INFO" "Setting secure permissions on tenant root and .env file..."
     chmod 750 "${DATA_ROOT}"
