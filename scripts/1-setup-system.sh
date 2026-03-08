@@ -1857,42 +1857,43 @@ EOF
 # DEFINITIVE FUNCTION: Apply Final Ownership with Pragmatic Exceptions
 # =============================================================================
 apply_final_ownership() {
-    log "Applying Final Ownership Structure..."
+    log "INFO" "Applying Final Ownership Structure..."
 
     # --- STAGE 1: Set Base Tenant Ownership (CORRECT and NECESSARY) ---
     # This sets the default for all directories.
-    log "Setting base ownership for tenant user ${TENANT_UID}..."
+    log "INFO" "Setting base ownership for tenant user ${TENANT_UID}..."
     if ! chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"; then
-        fail "Failed to set base recursive ownership on ${DATA_ROOT}."
+        fail "ERROR" "Failed to set base recursive ownership on ${DATA_ROOT}."
     fi
-    ok "Base ownership applied."
+    log "SUCCESS" "Base ownership applied."
 
     # --- STAGE 2: Apply Ownership Exceptions (THE CRITICAL FIX) ---
     # This overrides the default for specific services.
-    log "Applying ownership exceptions for services with specific UIDs..."
+    log "INFO" "Applying ownership exceptions for services with specific UIDs..."
 
     # Exception for Grafana (requires UID 472)
     if [[ -d "${DATA_ROOT}/grafana" ]]; then
         chown -R 472:472 "${DATA_ROOT}/grafana"
-        ok "Set ownership for 'grafana' directory to 472:472."
+        log "SUCCESS" "Set ownership for 'grafana' directory to 472:472."
     fi
 
     # Exception for n8n (requires UID 1000)
     if [[ -d "${DATA_ROOT}/n8n" ]]; then
         chown -R 1000:1000 "${DATA_ROOT}/n8n"
-        ok "Set ownership for 'n8n' directory to 1000:1000."
+        log "SUCCESS" "Set ownership for 'n8n' directory to 1000:1000."
     fi
     
     # Exception for Prometheus (requires UID 65534)
     if [[ -d "${DATA_ROOT}/prometheus-data" ]]; then
         chown -R 65534:65534 "${DATA_ROOT}/prometheus-data"
-        ok "Set ownership for 'prometheus' directory to 65534:65534."
+        log "SUCCESS" "Set ownership for 'prometheus' directory to 65534:65534."
     fi
 
     # --- STAGE 3: Secure Final Permissions ---
+    log "INFO" "Setting secure permissions on tenant root and .env file..."
     chmod 750 "${DATA_ROOT}"
     chmod 640 "${ENV_FILE}"
-    ok "Secure permissions set. Ownership structure is now correct."
+    log "SUCCESS" "Secure permissions set. Ownership structure is now correct."
 }
 
 # ─── Create directory structure ──────────────────────────────────────────────
