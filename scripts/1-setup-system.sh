@@ -1877,40 +1877,40 @@ apply_final_ownership() {
     # This correctly implements the learning from README.md (Line 537).
     log "Applying ownership exceptions for specific services..."
 
-    # Exception for n8n (typically runs as user 1000)
-    if [[ -d "${DATA_ROOT}/n8n" && -n "${N8N_UID:-}" ]]; then
-        chown -R "${N8N_UID}:${N8N_UID}" "${DATA_ROOT}/n8n"
-        ok "Set ownership for 'n8n' to ${N8N_UID}:${N8N_UID}."
+    # Exception for n8n (runs as user 1000)
+    if [[ -d "${DATA_ROOT}/n8n" ]]; then
+        chown -R 1000:1000 "${DATA_ROOT}/n8n"
+        ok "Set ownership for 'n8n' to 1000:1000."
     fi
 
     # Exception for Grafana (runs as user 472)
-    if [[ -d "${DATA_ROOT}/grafana" && -n "${GRAFANA_UID:-}" ]]; then
-        chown -R "${GRAFANA_UID}:${GRAFANA_UID}" "${DATA_ROOT}/grafana"
-        ok "Set ownership for 'grafana' to ${GRAFANA_UID}:${GRAFANA_UID}."
+    if [[ -d "${DATA_ROOT}/grafana" ]]; then
+        chown -R 472:472 "${DATA_ROOT}/grafana"
+        ok "Set ownership for 'grafana' to 472:472."
     fi
     
     # Exception for Prometheus (runs as user 65534)
-    if [[ -d "${DATA_ROOT}/prometheus-data" && -n "${PROMETHEUS_UID:-}" ]]; then
-        chown -R "${PROMETHEUS_UID}:${PROMETHEUS_UID}" "${DATA_ROOT}/prometheus-data"
-        ok "Set ownership for 'prometheus' to ${PROMETHEUS_UID}:${PROMETHEUS_UID}."
+    if [[ -d "${DATA_ROOT}/prometheus-data" ]]; then
+        chown -R 65534:65534 "${DATA_ROOT}/prometheus-data"
+        ok "Set ownership for 'prometheus' to 65534:65534."
     fi
     
     # Exception for Postgres (runs as user 70)
-    if [[ -d "${DATA_ROOT}/postgres" && -n "${POSTGRES_UID:-}" ]]; then
-        chown -R "${POSTGRES_UID}:${POSTGRES_UID}" "${DATA_ROOT}/postgres"
-        ok "Set ownership for 'postgres' to ${POSTGRES_UID}:${POSTGRES_UID}."
+    if [[ -d "${DATA_ROOT}/postgres" ]]; then
+        chown -R 70:70 "${DATA_ROOT}/postgres"
+        ok "Set ownership for 'postgres' to 70:70."
     fi
     
     # Exception for Qdrant (runs as user 1000)
-    if [[ -d "${DATA_ROOT}/qdrant" && -n "${QDRANT_UID:-}" ]]; then
-        chown -R "${QDRANT_UID}:${QDRANT_UID}" "${DATA_ROOT}/qdrant"
-        ok "Set ownership for 'qdrant' to ${QDRANT_UID}:${QDRANT_UID}."
+    if [[ -d "${DATA_ROOT}/qdrant" ]]; then
+        chown -R 1000:1000 "${DATA_ROOT}/qdrant"
+        ok "Set ownership for 'qdrant' to 1000:1000."
     fi
     
     # Exception for Ollama (runs as user 1001)
-    if [[ -d "${DATA_ROOT}/ollama" && -n "${OLLAMA_UID:-}" ]]; then
-        chown -R "${OLLAMA_UID}:${OLLAMA_UID}" "${DATA_ROOT}/ollama"
-        ok "Set ownership for 'ollama' to ${OLLAMA_UID}:${OLLAMA_UID}."
+    if [[ -d "${DATA_ROOT}/ollama" ]]; then
+        chown -R 1001:1001 "${DATA_ROOT}/ollama"
+        ok "Set ownership for 'ollama' to 1001:1001."
     fi
     
     # NOTE: Add any other service exceptions here if they are discovered.
@@ -1926,60 +1926,50 @@ apply_final_ownership() {
 
 # ─── Create directory structure ──────────────────────────────────────────────
 create_directories() {
-    log "INFO" "Creating all service directories with architecturally-compliant ownership..."
+    log "INFO" "Creating all service directories..."
 
-    # This block will read the UID variables we just placed in the .env file.
-    set -a; source "${ENV_FILE}"; set +a
-
-    # This function creates a directory and sets ownership based on the .env file.
-    # It defaults to the TENANT_UID but uses the specific service UID if that variable exists.
-    create_and_own() {
+    # This function creates directories without setting ownership
+    # Ownership will be set correctly by apply_final_ownership function
+    create_dir() {
         local dir_path="$1"
-        # The second argument is the prefix for the UID variable, e.g., "QDRANT" for "QDRANT_UID"
-        local service_uid_var_name="${2:-TENANT}_UID"
-        # Use indirect expansion to get the value of the variable. Fallback to TENANT_UID if not set.
-        local owner_uid="${!service_uid_var_name:-$TENANT_UID}"
-        
         mkdir -p "${DATA_ROOT}/${dir_path}"
-        chown -R "${owner_uid}:${owner_uid}" "${DATA_ROOT}/${dir_path}"
-        printf "  ${DIM}Created '${dir_path}' and set owner to '${owner_uid}'${NC}\n"
+        printf "  ${DIM}Created '${dir_path}'${NC}\n"
     }
 
-    # --- Create all possible directories with the correct owner from the start ---
-    # Compliant services (no second argument) will correctly default to $TENANT_UID.
-    create_and_own "logs"
-    create_and_own "compose"
-    create_and_own "caddy"
-    create_and_own "caddy/config"
-    create_and_own "caddy/data"
-    create_and_own "redis"
-    create_and_own "litellm"
-    create_and_own "authentik/media"
-    create_and_own "authentik/certs"
-    create_and_own "authentik/custom-templates"
-    create_and_own "signal"
-    create_and_own "backups"
+    # --- Create all possible directories ---
+    create_dir "logs"
+    create_dir "compose"
+    create_dir "caddy"
+    create_dir "caddy/config"
+    create_dir "caddy/data"
+    create_dir "redis"
+    create_dir "litellm"
+    create_dir "authentik/media"
+    create_dir "authentik/certs"
+    create_dir "authentik/custom-templates"
+    create_dir "signal"
+    create_dir "backups"
 
-    # Non-compliant services will use their specific UID variable defined in the .env file.
-    create_and_own "postgres"               "POSTGRES"
-    create_and_own "prometheus-data"        "PROMETHEUS"
-    create_and_own "grafana/provisioning/datasources" "GRAFANA"
-    create_and_own "grafana/provisioning/dashboards" "GRAFANA"
-    create_and_own "n8n"                    "N8N"
-    create_and_own "n8n/workflows"         "N8N"
-    create_and_own "qdrant"                 "QDRANT"
-    create_and_own "weaviate"               "WEAVIATE"
-    create_and_own "chromadb"               "CHROMADB"
-    create_and_own "milvus"                 "MILVUS"
-    create_and_own "ollama"                 "OLLAMA"
-    create_and_own "localai"                "LOCALAI"
-    create_and_own "vllm"                   "VLLM"
-    create_and_own "openwebui"              "OPENWEBUI"
-    create_and_own "anythingllm"            "ANYTHINGLLM"
-    create_and_own "anythingllm/tmp"        "ANYTHINGLLM"
-    create_and_own "flowise"                "FLOWISE"
+    # Service-specific directories
+    create_dir "postgres"
+    create_dir "prometheus-data"
+    create_dir "grafana/provisioning/datasources"
+    create_dir "grafana/provisioning/dashboards"
+    create_dir "n8n"
+    create_dir "n8n/workflows"
+    create_dir "qdrant"
+    create_dir "weaviate"
+    create_dir "chromadb"
+    create_dir "milvus"
+    create_dir "ollama"
+    create_dir "localai"
+    create_dir "vllm"
+    create_dir "openwebui"
+    create_dir "anythingllm"
+    create_dir "anythingllm/tmp"
+    create_dir "flowise"
 
-    log "SUCCESS" "All service directories created with correct, final ownership."
+    log "SUCCESS" "All service directories created."
 }
 
 # ─── Write Caddyfile ─────────────────────────────────────────────────────────
