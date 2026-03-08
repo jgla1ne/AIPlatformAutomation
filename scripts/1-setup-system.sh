@@ -1390,7 +1390,7 @@ write_prometheus_config() {
     
     log "INFO" "Generating prometheus.yml..."
     
-    cat > "${DATA_ROOT}/prometheus.yml" << EOF
+    cat > "${DATA_ROOT}/prometheus.yml" << 'EOF'
 global:
   scrape_interval: 15s
 
@@ -1435,6 +1435,25 @@ PROJECT_PREFIX=${PROJECT_PREFIX}
 # ─── Tenant User Configuration ───────────────────────────────────────────────────
 TENANT_UID=${TENANT_UID}
 TENANT_GID=${TENANT_GID}
+
+# ─── Service Ownership UIDs (Pragmatic Exception Pattern) ───────────────────────
+# Per README.md, some services ignore the 'user:' directive and require
+# their internal UID to own their data directory. These are defined here as
+# configurable variables to avoid hardcoding in scripts.
+# If a service is compliant, its variable can be left blank or removed.
+POSTGRES_UID=${POSTGRES_UID:-70}
+PROMETHEUS_UID=${PROMETHEUS_UID:-65534}
+GRAFANA_UID=${GRAFANA_UID:-472}
+N8N_UID=${N8N_UID:-1000}
+QDRANT_UID=${QDRANT_UID:-1000}
+REDIS_UID=${REDIS_UID:-999}
+OPENWEBUI_UID=${OPENWEBUI_UID:-1000}
+ANYTHINGLLM_UID=${ANYTHINGLLM_UID:-1000}
+OLLAMA_UID=${OLLAMA_UID:-1001}
+FLOWISE_UID=${FLOWISE_UID:-1000}
+LITELLM_UID=${LITELLM_UID:-1000}
+AUTHENTIK_UID=${AUTHENTIK_UID:-1000}
+CADDY_UID=${CADDY_UID:-1000}
 
 # ─── Service Flags ─────────────────────────────────────────────────────────────
 ENABLE_POSTGRES=${ENABLE_POSTGRES}
