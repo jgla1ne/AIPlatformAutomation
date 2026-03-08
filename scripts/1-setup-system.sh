@@ -1046,14 +1046,17 @@ collect_network_config() {
         1)
             echo -e "  ${DIM}Verification code will be generated automatically after Signal API starts${NC}"
             SIGNAL_VERIFICATION_CODE=""
+            ENABLE_SIGNAL=true
             ;;
         2)
             read -p "  ➤ Enter verification code: " SIGNAL_VERIFICATION_CODE
+            ENABLE_SIGNAL=true
             ;;
         3)
             echo -e "  ${DIM}Skipping Signal API setup${NC}"
             SIGNAL_PHONE_NUMBER=""
             SIGNAL_VERIFICATION_CODE=""
+            ENABLE_SIGNAL=false
             ;;
     esac
 
