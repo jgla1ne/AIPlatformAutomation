@@ -19,15 +19,21 @@ TENANT_ID="$1"
 # --- Colors and Logging ---
 RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m' CYAN='\033[0;36m' NC='\033[0m'
 log() { 
-    local level="${1:-INFO}" 
-    local message="${2}"
-    case "${level}" in
-        SUCCESS) echo -e "${GREEN}[SUCCESS]${NC}  ${message}" ;;
-        INFO)    echo -e "${CYAN}[INFO]${NC}    ${message}" ;;
-        WARN)    echo -e "${YELLOW}[WARN]${NC}    ${message}" ;;
-        ERROR)   echo -e "${RED}[ERROR]${NC}   ${message}" ;;
-        *)       echo -e "${CYAN}[INFO]${NC}    ${level} ${message}" ;;
-    esac
+    if [[ $# -eq 1 ]]; then
+        # Old format: log "message"
+        echo -e "${CYAN}[INFO]${NC}    $1"
+    else
+        # New format: log LEVEL "message"
+        local level="${1:-INFO}" 
+        local message="${2}"
+        case "${level}" in
+            SUCCESS) echo -e "${GREEN}[SUCCESS]${NC}  ${message}" ;;
+            INFO)    echo -e "${CYAN}[INFO]${NC}    ${message}" ;;
+            WARN)    echo -e "${YELLOW}[WARN]${NC}    ${message}" ;;
+            ERROR)   echo -e "${RED}[ERROR]${NC}   ${message}" ;;
+            *)       echo -e "${CYAN}[INFO]${NC}    ${level} ${message}" ;;
+        esac
+    fi
 }
 ok() { echo -e "${GREEN}[OK]${NC}    $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC}  $*"; }
