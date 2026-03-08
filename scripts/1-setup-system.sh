@@ -1279,22 +1279,29 @@ collect_network_config() {
         esac
         
         echo ""
-        echo -e "  ${BOLD}🌐  Proxy Configuration${NC}"
-        echo -e "  ${DIM}Configure upstream proxy settings (leave empty if none)${NC}"
+        echo -e "  ${BOLD}🔄  Port Redirect Configuration${NC}"
+        echo -e "  ${DIM}Configure HTTP to HTTPS redirect behavior${NC}"
         echo ""
-        read -p "  ➤ HTTP proxy URL (e.g., http://proxy.company.com:8080): " HTTP_PROXY
-        read -p "  ➤ HTTPS proxy URL (e.g., http://proxy.company.com:8080): " HTTPS_PROXY
-        read -p "  ➤ No proxy hosts (comma-separated, e.g., localhost,127.0.0.1,.local): " NO_PROXY
+        read -p "  ➤ Redirect port 80 to 443 (HTTPS only)? [Y/n]: " redirect_http
+        redirect_http="${redirect_http:-y}"
         
-        # Set defaults if empty
+        if [[ "${redirect_http,,}" == "y" ]]; then
+            HTTP_TO_HTTPS_REDIRECT="true"
+            echo -e "  ${DIM}Port 80 will redirect to HTTPS (port 443)${NC}"
+        else
+            HTTP_TO_HTTPS_REDIRECT="false"
+            echo -e "  ${DIM}Port 80 will serve HTTP content${NC}"
+        fi
+        
+        # Auto-detect proxy from environment
         HTTP_PROXY="${HTTP_PROXY:-}"
         HTTPS_PROXY="${HTTPS_PROXY:-}"
-        NO_PROXY="${NO_PROXY:-}"
+        NO_PROXY="${NO_PROXY:-localhost,127.0.0.1,.local}"
         
         if [[ -n "${HTTP_PROXY}" || -n "${HTTPS_PROXY}" ]]; then
-            echo -e "  ${DIM}Proxy configuration will be applied to all services${NC}"
+            echo -e "  ${DIM}Proxy detected from environment variables${NC}"
         else
-            echo -e "  ${DIM}No proxy configured${NC}"
+            echo -e "  ${DIM}No proxy detected${NC}"
         fi
         
         echo ""
@@ -1805,6 +1812,7 @@ CUSTOM_PROXY_IMAGE=${CUSTOM_PROXY_IMAGE}
 HTTP_PROXY=${HTTP_PROXY}
 HTTPS_PROXY=${HTTPS_PROXY}
 NO_PROXY=${NO_PROXY}
+HTTP_TO_HTTPS_REDIRECT=${HTTP_TO_HTTPS_REDIRECT}
 
 # ─── OpenClaw ────────────────────────────────────────────────────────────────
 OPENCLAW_PASSWORD=${OPENCLAW_PASSWORD:-default_password}
