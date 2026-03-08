@@ -520,7 +520,6 @@ add_dify() {
       - CODE_EXECUTION_TIMEOUT=15
       - CODE_MAX_NUMBER=9223372036854775807
       - CODE_SEGMENT_MAX_LENGTH=4000
-      - CODE_MAX_NUMBER=9223372036854775807
     volumes:
       - \${TENANT_DIR}/dify/app:/app/api/storage
     ports:
