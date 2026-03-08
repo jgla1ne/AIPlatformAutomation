@@ -119,6 +119,15 @@ auth.${DOMAIN} {
 EOF
     fi
 
+    if [[ "${ENABLE_DIFY:-false}" == "true" ]]; then
+        cat >> "${caddyfile_path}" << EOF
+dify.${DOMAIN} {
+    reverse_proxy dify-api:5001
+}
+
+EOF
+    fi
+
     # Add Signal API as requested
     if [[ "${ENABLE_SIGNAL:-false}" == "true" ]]; then
         cat >> "${caddyfile_path}" << EOF
@@ -476,6 +485,54 @@ EOF
     ok "Added 'authentik-server' service."
 }
 
+add_dify() {
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  dify-api:
+    image: langgenius/dify-api:latest
+    restart: unless-stopped
+    user: "\${TENANT_UID}:\${TENANT_GID}"
+    networks:
+      - default
+    environment:
+      # --- DATABASE & REDIS CONNECTION (Mandatory) ---
+      - DB_USERNAME=\${POSTGRES_USER}
+      - DB_PASSWORD=\${POSTGRES_PASSWORD}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_DATABASE=\${POSTGRES_DB}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=\${REDIS_PASSWORD}
+      
+      # --- LLM GATEWAY CONNECTION (The Critical Fix) ---
+      - LLM_PROVIDER=openai
+      - OPENAI_API_BASE=http://litellm:4000
+      - OPENAI_API_KEY=\${LITELLM_MASTER_KEY}
+      
+      # --- Dify Configuration ---
+      - SECRET_KEY=\${DIFY_SECRET_KEY:-sk-9f73s3ljTXVcMT3Blb3ljT}
+      - CONSOLE_WEB_URL=https://dify.\${DOMAIN}
+      - CONSOLE_API_URL=https://dify.\${DOMAIN}/console/api
+      - SERVICE_API_URL=https://dify.\${DOMAIN}/v1
+      - APP_WEB_URL=https://dify.\${DOMAIN}
+      - CODE_EXECUTION_ENDPOINT=http://dify-worker:5001
+      - CODE_EXECUTION_TIMEOUT=15
+      - CODE_MAX_NUMBER=9223372036854775807
+      - CODE_SEGMENT_MAX_LENGTH=4000
+      - CODE_MAX_NUMBER=9223372036854775807
+    volumes:
+      - \${TENANT_DIR}/dify/app:/app/api/storage
+    ports:
+      - "\${DIFY_PORT:-5001}:5001"
+    depends_on:
+      - postgres
+      - redis
+
+EOF
+    ok "Added 'dify-api' service."
+}
+
 add_caddy() {
     cat >> "${COMPOSE_FILE}" << EOF
 
@@ -512,6 +569,7 @@ EOF
 [[ "${ENABLE_QDRANT}" == "true" ]] && add_qdrant
 [[ "${ENABLE_PROMETHEUS}" == "true" ]] && add_prometheus
 [[ "${ENABLE_AUTHENTIK}" == "true" ]] && add_authentik
+[[ "${ENABLE_DIFY:-false}" == "true" ]] && add_dify
 [[ "${ENABLE_CADDY}" == "true" ]] && add_caddy
 
 # --- Add Network Configuration ---
@@ -932,6 +990,7 @@ print_comprehensive_final_report() {
     [[ "${ENABLE_LITELLM:-false}" == "true" ]] && echo "  • LiteLLM:      https://litellm.${DOMAIN}"
     [[ "${ENABLE_GRAFANA:-false}" == "true" ]] && echo "  • Grafana:      https://grafana.${DOMAIN}"
     [[ "${ENABLE_AUTHENTIK:-false}" == "true" ]] && echo "  • Authentik:    https://auth.${DOMAIN}"
+    [[ "${ENABLE_DIFY:-false}" == "true" ]] && echo "  • Dify:         https://dify.${DOMAIN}"
     echo ""
     
     # Internal URLs Section
@@ -943,6 +1002,7 @@ print_comprehensive_final_report() {
     [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && echo "  • AnythingLLM:  http://localhost:3001"
     [[ "${ENABLE_LITELLM:-false}" == "true" ]] && echo "  • LiteLLM:      http://localhost:4000"
     [[ "${ENABLE_GRAFANA:-false}" == "true" ]] && echo "  • Grafana:      http://localhost:3002"
+    [[ "${ENABLE_DIFY:-false}" == "true" ]] && echo "  • Dify:         http://localhost:5001"
     [[ "${ENABLE_OLLAMA:-false}" == "true" ]] && echo "  • Ollama API:   http://localhost:11434/api/tags"
     [[ "${ENABLE_QDRANT:-false}" == "true" ]] && echo "  • Qdrant API:   http://localhost:6333"
     [[ "${ENABLE_SIGNAL:-false}" == "true" ]] && echo "  • Signal API:   http://localhost:8080"
@@ -982,6 +1042,7 @@ print_final_summary() {
     [[ "${ENABLE_LITELLM:-false}" == "true" ]] && echo "  • LiteLLM:      https://litellm.${DOMAIN}"
     [[ "${ENABLE_GRAFANA:-false}" == "true" ]] && echo "  • Grafana:      https://grafana.${DOMAIN}"
     [[ "${ENABLE_AUTHENTIK:-false}" == "true" ]] && echo "  • Authentik:    https://auth.${DOMAIN}"
+    [[ "${ENABLE_DIFY:-false}" == "true" ]] && echo "  • Dify:         https://dify.${DOMAIN}"
     [[ "${ENABLE_SIGNAL:-false}" == "true" ]] && echo "  • Signal API:   https://signal.${DOMAIN}"
     
     echo ""
@@ -992,6 +1053,7 @@ print_final_summary() {
     [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && echo "  • AnythingLLM:  http://localhost:3001"
     [[ "${ENABLE_LITELLM:-false}" == "true" ]] && echo "  • LiteLLM:      http://localhost:4000"
     [[ "${ENABLE_GRAFANA:-false}" == "true" ]] && echo "  • Grafana:      http://localhost:3002"
+    [[ "${ENABLE_DIFY:-false}" == "true" ]] && echo "  • Dify:         http://localhost:5001"
     [[ "${ENABLE_OLLAMA:-false}" == "true" ]] && echo "  • Ollama API:   http://localhost:11434/api/tags"
     [[ "${ENABLE_QDRANT:-false}" == "true" ]] && echo "  • Qdrant API:   http://localhost:6333"
     [[ "${ENABLE_SIGNAL:-false}" == "true" ]] && echo "  • Signal API:   http://localhost:8080"
