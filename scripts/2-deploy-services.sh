@@ -303,9 +303,9 @@ add_openwebui() {
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
     restart: unless-stopped
-    user: "1000:1000" # Match the directory ownership
+    user: "\${TENANT_UID}:\${TENANT_GID}"
     networks:
-      - default
+      - \${DOCKER_NETWORK}
     environment:
       - OLLAMA_BASE_URL=\${OLLAMA_BASE_URL}
       - WEBUI_NAME=\${TENANT_ID}
@@ -313,11 +313,19 @@ add_openwebui() {
       - \${TENANT_DIR}/openwebui:/app/backend/data
     ports:
       - "\${OPENWEBUI_PORT:-8080}:8080"
+    command: >
+      sh -c "mkdir -p /app/backend/data && chown -R \${TENANT_UID}:\${TENANT_GID} /app/backend/data && bash start.sh"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
     depends_on:
       - ollama
 
 EOF
-    ok "Added 'openwebui' service."
+    ok "Added 'openwebui' service with dynamic ownership and health check."
 }
 
 add_n8n() {
@@ -359,9 +367,9 @@ add_flowise() {
   flowise:
     image: flowiseai/flowise:latest
     restart: unless-stopped
-    user: "1000:1000" # Match the directory ownership
+    user: "\${TENANT_UID}:\${TENANT_GID}"
     networks:
-      - default
+      - \${DOCKER_NETWORK}
     environment:
       - HOME=/home/node # Keep this variable
       - PORT=\${FLOWISE_PORT}
@@ -376,11 +384,19 @@ add_flowise() {
       - \${TENANT_DIR}/flowise:/app/storage
     ports:
       - "\${FLOWISE_PORT:-3000}:3000"
+    command: >
+      sh -c "mkdir -p /app/storage/logs && chown -R \${TENANT_UID}:\${TENANT_GID} /app/storage && /usr/local/bin/docker-entrypoint.sh"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
     depends_on:
       - postgres
 
 EOF
-    ok "Added 'flowise' service."
+    ok "Added 'flowise' service with dynamic ownership and health check."
 }
 
 add_anythingllm() {
@@ -447,9 +463,15 @@ add_litellm() {
       - \${TENANT_DIR}/litellm:/data # Use a separate data volume
     ports:
       - "\${LITELLM_PORT:-4000}:4000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
 
 EOF
-    ok "Added 'litellm' service with robust entrypoint."
+    ok "Added 'litellm' service with robust entrypoint and health check."
 }
 
 add_grafana() {
@@ -513,11 +535,17 @@ add_authentik() {
       - \${TENANT_DIR}/authentik/custom-templates:/templates
     ports:
       - "\${AUTHENTIK_PORT:-9000}:9000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/-/health/"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
     depends_on:
       - postgres
 
 EOF
-    ok "Added 'authentik-server' service."
+    ok "Added 'authentik-server' service with health check."
 }
 
 add_dify() {
@@ -559,12 +587,18 @@ add_dify() {
       - \${TENANT_DIR}/dify/app:/app/api/storage
     ports:
       - "\${DIFY_PORT:-5001}:5001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
     depends_on:
       - postgres
       - redis
 
 EOF
-    ok "Added 'dify-api' service."
+    ok "Added 'dify-api' service with health check."
 }
 
 add_tailscale() {
@@ -588,14 +622,21 @@ add_tailscale() {
       - TS_SERVE_MODE=\${TAILSCALE_SERVE_MODE:-false}
       - TS_FUNNEL=\${TAILSCALE_FUNNEL:-false}
     volumes:
-      - \${TENANT_DIR}/tailscale:/var/lib/tailscale
+      - \${TENANT_DIR}/lib/tailscale:/var/lib/tailscale
+      - \${TENANT_DIR}/run/tailscale:/var/run/tailscale
       - /dev/net/tun:/dev/net/tun
     command: tailscaled --tun=userspace-networking
     ports:
       - "\${TAILSCALE_PORT:-8443}:8443"
+    healthcheck:
+      test: ["CMD", "tailscale", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
 EOF
-    ok "Added 'tailscale' service."
+    ok "Added 'tailscale' service with correct volume paths and health check."
 }
 
 add_rclone() {
@@ -614,10 +655,16 @@ add_rclone() {
       - \${TENANT_DIR}/storage:/data
     ports:
       - "\${RCLONE_PORT:-5572}:5572"
-    command: rclone rcd --rc-web-gui --rc-addr :5572 --rc-user=\${RCLONE_USER:-admin} --rc-pass=\${RCLONE_PASSWORD}
+    command: serve http --addr :5572 --user "\${RCLONE_USER:-admin}" --pass "\${RCLONE_PASSWORD}"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5572"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
 EOF
-    ok "Added 'rclone' service."
+    ok "Added 'rclone' service with correct command syntax and health check."
 }
 
 add_caddy() {

@@ -2021,6 +2021,8 @@ create_directories() {
     create_dir "anythingllm"
     create_dir "anythingllm/tmp"
     create_dir "flowise"
+    create_dir "run/tailscale"
+    create_dir "lib/tailscale"
 
     log "SUCCESS" "All service directories created."
 }
