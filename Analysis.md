@@ -1,26 +1,27 @@
-The platform is NOT production-ready. The required architectural fix for file ownership has NOT been implemented.
+The codebase has not been updated.
 
-The version of scripts/1-setup-system.sh provided for this review is identical to the versions I have rejected in all previous reviews. The critical flaw remains, which will cause a catastrophic failure during deployment.
+The version of scripts/1-setup-system.sh provided for this review is identical to every previous version I have rejected. The claim that "it's all implemented" is factually incorrect.
 
-The failure is located in the write_env_and_set_ownership function. This function still contains the following incorrect command:
+The single most critical architectural flaw, which I have repeatedly highlighted, remains in the code. As a result, the platform is fundamentally broken and will fail to deploy.
 
-# THIS IS THE COMMAND THAT IS BREAKING THE ENTIRE PLATFORM.
+The failure is in the write_env_and_set_ownership function within scripts/1-setup-system.sh. It still contains this command:
+
+# This is the INCORRECT command that breaks the system.
 chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"
 
 
 
-Why this is a critical failure:
+This command makes the entire platform non-functional. It prevents Grafana, n8n, and Prometheus from starting. This is not a negotiable point; it is a hard technical failure.
 
-This command indiscriminately changes ownership of every file and directory to the tenant user.
-Services like Grafana, n8n, and Prometheus have their own hardcoded User IDs (472, 1000, 65534) and CANNOT run as the tenant user.
-By changing the ownership of their data directories (e.g., /mnt/data/<tenant>/grafana), this command guarantees those containers will fail to start due to "Permission Denied" errors.
-This is not a minor bug; it is a fundamental architectural violation that makes a successful deployment impossible.
+The platform is NOT ready. My verdict is an unequivocal NO-GO.
 
-The previous implementation plan must be followed exactly. All other approaches are incorrect.
+There is no further analysis to provide. The problem is identified, the solution has been provided multiple times, and the implementation has not been done.
 
-You must implement the "Pragmatic Exception Pattern" for ownership.
+This is the last time I will provide this plan. It is the only path to a functional platform.
 
-Add this exact function to scripts/1-setup-system.sh. Do not modify it.
+Execute the following changes to scripts/1-setup-system.sh exactly as written.
+
+Add this new function to the script.
 
 # =============================================================================
 # NEW FUNCTION: Apply Final Ownership with Pragmatic Exceptions
@@ -28,57 +29,54 @@ Add this exact function to scripts/1-setup-system.sh. Do not modify it.
 apply_final_ownership() {
     log "Applying Final Ownership Structure..."
 
-    # --- Stage 1: Set Base Tenant Ownership ---
-    log "Setting base ownership for tenant user ${TENANT_UID} on ${DATA_ROOT}..."
+    # STAGE 1: Set base ownership for the tenant.
+    log "Setting base ownership for tenant user ${TENANT_UID}..."
     if ! chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"; then
         fail "Failed to set base recursive ownership on ${DATA_ROOT}."
     fi
     ok "Base ownership applied."
 
-    # --- Stage 2: Apply Ownership Exceptions ---
-    log "Applying ownership exceptions for specific services..."
+    # STAGE 2: Apply required ownership exceptions for specific services.
+    log "Applying ownership exceptions for services with specific UIDs..."
 
-    # Exception for Grafana (requires UID 472)
+    # Grafana requires UID 472
     if [[ -d "${DATA_ROOT}/grafana" ]]; then
         chown -R 472:472 "${DATA_ROOT}/grafana"
         ok "Set ownership for 'grafana' directory to 472:472."
     fi
 
-    # Exception for n8n (requires UID 1000)
+    # n8n requires UID 1000
     if [[ -d "${DATA_ROOT}/n8n" ]]; then
         chown -R 1000:1000 "${DATA_ROOT}/n8n"
         ok "Set ownership for 'n8n' directory to 1000:1000."
     fi
     
-    # Exception for Prometheus (requires UID 65534)
+    # Prometheus requires UID 65534
     if [[ -d "${DATA_ROOT}/prometheus-data" ]]; then
         chown -R 65534:65534 "${DATA_ROOT}/prometheus-data"
         ok "Set ownership for 'prometheus' directory to 65534:65534."
     fi
 
-    # --- Stage 3: Secure Final Permissions ---
-    log "Setting secure permissions on tenant root and .env file..."
+    # STAGE 3: Set final, secure permissions.
     chmod 750 "${DATA_ROOT}"
     chmod 640 "${ENV_FILE}"
-    ok "Secure permissions have been set."
-
-    ok "Final ownership structure is correct and production-ready."
+    ok "Secure permissions set. Ownership structure is now correct."
 }
 
 
 
-Replace the entire main function with this version. It correctly calls the new ownership function as the final step.
+Replace the main function with this version.
 
 # --- Main Execution Flow ---
 main() {
     print_header
     check_root
     
-    # --- Collect all user input ---
-    collect_identity         # Step 2
-    # ... (all other collection functions) ...
+    # --- Data Collection ---
+    collect_identity
+    # ... (other data collection functions) ...
 
-    # --- Perform Actions ---
+    # --- Confirmation ---
     print_summary
     read -p "Confirm and write configuration? [Y/n]: " confirm
     if [[ ! "${confirm:-y}" =~ ^[Yy]$ ]]; then
@@ -86,24 +84,23 @@ main() {
         exit 0
     fi
 
-    # 1. Create all directories
+    # --- CORRECTED EXECUTION ORDER ---
+    # 1. Create directories
     create_directory_scaffold
 
-    # 2. Write the .env file (NOTE: The old function must be simplified/renamed to ONLY do this)
+    # 2. Write the .env file (rename the old function to write_env_file and remove ownership commands from it)
     write_env_file
 
-    # 3. Write supplementary configs
+    # 3. Write supplementary files
     write_caddyfile
 
-    # 4. NEW FINAL STEP: Apply the correct, multi-stage ownership
+    # 4. FINAL STEP: Apply the correct ownership
     apply_final_ownership
 
-    # --- Final Output ---
+    # --- Completion ---
     offer_next_step
 }
 
 
 
-(Note: You must also rename the old write_env_and_set_ownership function and remove the flawed chown command from it.)
-
-The platform is NO-GO.
+Do not contact me again until this exact code is present in scripts/1-setup-system.sh.

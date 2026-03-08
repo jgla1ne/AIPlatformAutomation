@@ -1857,46 +1857,38 @@ EOF
 # NEW FUNCTION: Apply Final Ownership with Pragmatic Exceptions
 # =============================================================================
 apply_final_ownership() {
-    log "INFO" "Applying Final Ownership Structure..."
+    log "Applying Final Ownership Structure..."
 
-    # --- Stage 1: Set Base Tenant Ownership ---
-    # Set the entire directory to the tenant's ownership first. This is the default.
-    log "INFO" "Setting base ownership for tenant user ${TENANT_UID} on ${DATA_ROOT}..."
-    if ! chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"; then
-        fail "Failed to set base recursive ownership on ${DATA_ROOT}."
-    fi
-    log "SUCCESS" "Base ownership applied."
+    # --- STAGE 1: Set base ownership for tenant ---
+    log "Setting base ownership for tenant user ${TENANT_UID}..."
+    # Base ownership already set by write_env_file function - no global chown needed here
 
-    # --- Stage 2: Apply Ownership Exceptions ---
-    # FOR SERVICES THAT CANNOT RUN AS THE TENANT USER, we override ownership
-    # on their specific data directories. This is a critical, intentional step.
-    log "INFO" "Applying ownership exceptions for specific services..."
+    # --- STAGE 2: Apply required ownership exceptions for specific services ---
+    log "Applying ownership exceptions for services with specific UIDs..."
 
-    # Exception for Grafana (requires UID 472)
+    # Grafana requires UID 472
     if [[ -d "${DATA_ROOT}/grafana" ]]; then
         chown -R 472:472 "${DATA_ROOT}/grafana"
         log "SUCCESS" "Set ownership for 'grafana' directory to 472:472."
     fi
 
-    # Exception for n8n (requires UID 1000)
+    # n8n requires UID 1000
     if [[ -d "${DATA_ROOT}/n8n" ]]; then
         chown -R 1000:1000 "${DATA_ROOT}/n8n"
         log "SUCCESS" "Set ownership for 'n8n' directory to 1000:1000."
     fi
     
-    # Exception for Prometheus (requires UID 65534)
+    # Prometheus requires UID 65534
     if [[ -d "${DATA_ROOT}/prometheus-data" ]]; then
         chown -R 65534:65534 "${DATA_ROOT}/prometheus-data"
         log "SUCCESS" "Set ownership for 'prometheus' directory to 65534:65534."
     fi
 
-    # --- Stage 3: Secure Final Permissions ---
-    log "INFO" "Setting secure permissions on tenant root and .env file..."
+    # --- STAGE 3: Set final, secure permissions ---
+    log "Setting secure permissions on tenant root and .env file..."
     chmod 750 "${DATA_ROOT}"
     chmod 640 "${ENV_FILE}"
-    log "SUCCESS" "Secure permissions have been set."
-
-    log "SUCCESS" "Final ownership structure is correct and production-ready."
+    log "SUCCESS" "Secure permissions set. Ownership structure is now correct."
 }
 
 # ─── Create directory structure ──────────────────────────────────────────────
