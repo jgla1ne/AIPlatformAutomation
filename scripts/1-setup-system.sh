@@ -1598,8 +1598,6 @@ ENABLE_MINIO=${ENABLE_MINIO}
 # their internal UID to own their data directory. These are defined here as
 # configurable variables to avoid hardcoding in scripts.
 # If a service is compliant, its variable can be left blank or removed.
-TENANT_UID=$(id -u "${TENANT_ID}")
-TENANT_GID=$(id -g "${TENANT_ID}")
 POSTGRES_UID=70
 PROMETHEUS_UID=65534
 GRAFANA_UID=472
@@ -1617,6 +1615,9 @@ ANTHROPIC_UID=1000
 LOCALAI_UID=1000
 VLLM_UID=1000
 FLOWISE_UID=1000
+
+# ─── Vector Database Configuration ───────────────────────────────────────────────────
+PINECONE_PROJECT_ID=${PINECONE_PROJECT_ID:-your-project-id}
 
 # ─── Service URLs (for dynamic configuration) ───────────────────────────────────
 # Internal service URLs (Docker network communication)
@@ -1810,7 +1811,7 @@ CUSTOM_PROXY_IMAGE=${CUSTOM_PROXY_IMAGE}
 HTTP_PROXY=${HTTP_PROXY}
 HTTPS_PROXY=${HTTPS_PROXY}
 NO_PROXY=${NO_PROXY}
-HTTP_TO_HTTPS_REDIRECT=${HTTP_TO_HTTPS_REDIRECT}
+HTTP_TO_HTTPS_REDIRECT=${HTTP_TO_HTTPS_REDIRECT:-false}
 
 # ─── OpenClaw ────────────────────────────────────────────────────────────────
 OPENCLAW_PASSWORD=${OPENCLAW_PASSWORD:-default_password}
@@ -1856,11 +1857,11 @@ EOF
 # NEW FUNCTION: Apply Final Ownership with Pragmatic Exceptions
 # =============================================================================
 apply_final_ownership() {
-    log "Applying Final Ownership Structure..."
+    log "INFO" "Applying Final Ownership Structure..."
 
     # --- Stage 1: Set Base Tenant Ownership ---
     # Set the entire directory to the tenant's ownership first. This is the default.
-    log "Setting base ownership for tenant user ${TENANT_UID} on ${DATA_ROOT}..."
+    log "INFO" "Setting base ownership for tenant user ${TENANT_UID} on ${DATA_ROOT}..."
     if ! chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"; then
         fail "Failed to set base recursive ownership on ${DATA_ROOT}."
     fi
@@ -1869,7 +1870,7 @@ apply_final_ownership() {
     # --- Stage 2: Apply Ownership Exceptions ---
     # FOR SERVICES THAT CANNOT RUN AS THE TENANT USER, we override ownership
     # on their specific data directories. This is a critical, intentional step.
-    log "Applying ownership exceptions for specific services..."
+    log "INFO" "Applying ownership exceptions for specific services..."
 
     # Exception for Grafana (requires UID 472)
     if [[ -d "${DATA_ROOT}/grafana" ]]; then
@@ -1890,7 +1891,7 @@ apply_final_ownership() {
     fi
 
     # --- Stage 3: Secure Final Permissions ---
-    log "Setting secure permissions on tenant root and .env file..."
+    log "INFO" "Setting secure permissions on tenant root and .env file..."
     chmod 750 "${DATA_ROOT}"
     chmod 640 "${ENV_FILE}"
     log "SUCCESS" "Secure permissions have been set."
