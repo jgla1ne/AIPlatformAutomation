@@ -199,6 +199,7 @@ exec > >(tee -a "${LOG_FILE}") 2>&1
 log INFO "All output is now logged to: ${LOG_FILE}"
 
 # --- Docker Check ---
+main() {
 if ! docker info &>/dev/null; then
     fail "Docker is not running. Please start Docker and try again."
 fi
@@ -1386,6 +1387,8 @@ for service in "${services[@]}"; do
 done
 
 ok "Complete health status and diagnostics captured in ${LOG_FILE}"
+
+}
 
 # Call main function to execute the script
 main
