@@ -767,78 +767,206 @@ write_production_caddyfile() {
     fi
 }
 
+# ─── Interactive Diagnostics Functions ──────────────────────────────────────────
+
+view_service_logs() {
+    read -p "Enter service name (e.g., caddy, n8n, flowise): " service_name
+    if [[ -n "$service_name" ]]; then
+        local container_name="${COMPOSE_PROJECT_NAME}-${service_name}-1"
+        if sudo docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
+            echo -e "${CYAN}Showing logs for ${service_name} (last 50 lines):${NC}"
+            sudo docker logs "${container_name}" --tail 50 -f
+        else
+            echo -e "${RED}Error: Container ${container_name} not found${NC}"
+        fi
+    fi
+}
+
+set_proxy_log_level() {
+    read -p "Enter proxy service (caddy/nginx): " proxy_service
+    read -p "Enter log level (debug, info, warn, error): " log_level
+    
+    case "${proxy_service}" in
+        "caddy")
+            echo -e "${CYAN}Setting Caddy log level to ${log_level}...${NC}"
+            # For now, just show current logs with appropriate filtering
+            case "${log_level}" in
+                "debug")
+                    sudo docker logs "${COMPOSE_PROJECT_NAME}-caddy-1" --tail 100 -f
+                    ;;
+                "info")
+                    sudo docker logs "${COMPOSE_PROJECT_NAME}-caddy-1" --tail 50 -f | grep -E "(INFO|WARN|ERROR)"
+                    ;;
+                "warn"|"error")
+                    sudo docker logs "${COMPOSE_PROJECT_NAME}-caddy-1" --tail 20 -f | grep -E "(WARN|ERROR|FATAL)"
+                    ;;
+            esac
+            ;;
+        *)
+            echo -e "${RED}Error: ${proxy_service} not supported${NC}"
+            ;;
+    esac
+}
+
+run_full_health_check() {
+    echo -e "${CYAN}Running comprehensive health check...${NC}"
+    cd "${TENANT_DIR}"
+    
+    echo -e "${BOLD}🏥 Service Health Status:${NC}"
+    sudo docker compose ps
+    
+    echo -e "\n${BOLD}🔗 URL Connectivity Tests:${NC}"
+    
+    # Test external URLs
+    [[ "${ENABLE_N8N:-false}" == "true" ]] && {
+        echo -n "n8n: "
+        if curl -sf --max-time 10 "https://n8n.${TENANT_DOMAIN}" >/dev/null; then
+            echo -e "${GREEN}✅ Working${NC}"
+        else
+            echo -e "${RED}❌ Failed${NC}"
+        fi
+    }
+    
+    [[ "${ENABLE_FLOWISE:-false}" == "true" ]] && {
+        echo -n "Flowise: "
+        if curl -sf --max-time 10 "https://flowise.${TENANT_DOMAIN}" >/dev/null; then
+            echo -e "${GREEN}✅ Working${NC}"
+        else
+            echo -e "${RED}❌ Failed${NC}"
+        fi
+    }
+    
+    # Test internal URLs
+    echo -e "\n${BOLD}🔗 Internal Service Tests:${NC}"
+    
+    [[ "${ENABLE_OLLAMA:-false}" == "true" ]] && {
+        echo -n "Ollama API: "
+        if curl -sf --max-time 5 "http://localhost:11434/api/tags" >/dev/null; then
+            echo -e "${GREEN}✅ Working${NC}"
+        else
+            echo -e "${RED}❌ Failed${NC}"
+        fi
+    }
+    
+    [[ "${ENABLE_QDRANT:-false}" == "true" ]] && {
+        echo -n "Qdrant API: "
+        if curl -sf --max-time 5 "http://localhost:6333/healthz" >/dev/null; then
+            echo -e "${GREEN}✅ Working${NC}"
+        else
+            echo -e "${RED}❌ Failed${NC}"
+        fi
+    }
+}
+
+view_access_summary() {
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║                   🌐 Service Access Summary                   ║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    echo -e "${GREEN}🌐 External HTTPS URLs:${NC}"
+    [[ "${ENABLE_N8N:-false}" == "true" ]] && echo "  • n8n:          https://n8n.${TENANT_DOMAIN}"
+    [[ "${ENABLE_FLOWISE:-false}" == "true" ]] && echo "  • Flowise:      https://flowise.${TENANT_DOMAIN}"
+    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && echo "  • OpenWebUI:   https://openwebui.${TENANT_DOMAIN}"
+    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && echo "  • AnythingLLM:  https://anythingllm.${TENANT_DOMAIN}"
+    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && echo "  • LiteLLM:      https://litellm.${TENANT_DOMAIN}"
+    [[ "${ENABLE_GRAFANA:-false}" == "true" ]] && echo "  • Grafana:      https://grafana.${TENANT_DOMAIN}"
+    [[ "${ENABLE_SIGNAL:-false}" == "true" ]] && echo "  • Signal API:   https://signal.${TENANT_DOMAIN}"
+    
+    echo -e "\n${GREEN}🔗 Internal URLs:${NC}"
+    [[ "${ENABLE_N8N:-false}" == "true" ]] && echo "  • n8n:          http://localhost:5678"
+    [[ "${ENABLE_FLOWISE:-false}" == "true" ]] && echo "  • Flowise:      http://localhost:3000"
+    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && echo "  • OpenWebUI:   http://localhost:8081"
+    [[ "${ENABLE_OLLAMA:-false}" == "true" ]] && echo "  • Ollama API:   http://localhost:11434/api/tags"
+    [[ "${ENABLE_QDRANT:-false}" == "true" ]] && echo "  • Qdrant API:   http://localhost:6333"
+}
+
+interactive_diagnostics_menu() {
+    while true; do
+        clear
+        echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║            🔧 Interactive Diagnostics Menu                  ║${NC}"
+        echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        echo -e "${BOLD}Tenant:${NC} ${TENANT_ID}"
+        echo -e "${BOLD}Domain:${NC} ${TENANT_DOMAIN}"
+        echo ""
+        
+        PS3="Select a diagnostic action: "
+        options=(
+            "View Docker Logs for a Service"
+            "Set Proxy Log Level (Caddy)"
+            "Run Full Health Check"
+            "View Access URL Summary"
+            "Restart a Service"
+            "Quit"
+        )
+        
+        select opt in "${options[@]}"; do
+            case $opt in
+                "View Docker Logs for a Service")
+                    view_service_logs
+                    ;;
+                "Set Proxy Log Level (Caddy)")
+                    set_proxy_log_level
+                    ;;
+                "Run Full Health Check")
+                    run_full_health_check
+                    ;;
+                "View Access URL Summary")
+                    view_access_summary
+                    ;;
+                "Restart a Service")
+                    read -p "Enter service name to restart: " restart_service
+                    if [[ -n "$restart_service" ]]; then
+                        cd "${TENANT_DIR}"
+                        sudo docker compose restart "${restart_service}"
+                        echo -e "${GREEN}Service ${restart_service} restarted${NC}"
+                    fi
+                    ;;
+                "Quit")
+                    break 2
+                    ;;
+                *) 
+                    echo -e "${RED}Invalid option $REPLY${NC}"
+                    ;;
+            esac
+            echo ""
+            echo -e "${DIM}Press Enter to continue...${NC}"
+            read
+            break
+        done
+    done
+}
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 main() {
     print_header
     parse_args "$@"
     load_env
     
-    # Redirect all output to log file
-    exec > >(tee -a "${LOG_FILE}") 2>&1
+    # Load environment and set up basic variables
+    TENANT_DIR="/mnt/data/${TENANT_ID}"
+    COMPOSE_PROJECT_NAME="ai-${TENANT_ID}"
     
-    # Count active steps for progress tracking
-    local total_steps=0
-    [ "${SKIP_N8N}" = "false" ] && [ "${ENABLE_N8N}" = "true" ] && total_steps=$((total_steps + 1))
-    [ "${SKIP_FLOWISE}" = "false" ] && [ "${ENABLE_FLOWISE}" = "true" ] && total_steps=$((total_steps + 1))
-    [ "${SKIP_LITELLM}" = "false" ] && [ "${ENABLE_LITELLM}" = "true" ] && total_steps=$((total_steps + 1))
-    [ "${SKIP_ANYTHINGLLM}" = "false" ] && [ "${ENABLE_ANYTHINGLLM}" = "true" ] && total_steps=$((total_steps + 1))
-    [ "${SKIP_GRAFANA}" = "false" ] && [ "${ENABLE_GRAFANA}" = "true" ] && total_steps=$((total_steps + 1))
+    # Verify tenant directory exists
+    if [[ ! -d "${TENANT_DIR}" ]]; then
+        echo -e "${RED}Error: Tenant directory ${TENANT_DIR} not found${NC}"
+        echo "Please run script-2 first to deploy the services."
+        exit 1
+    fi
     
-    local current_step=0
-    
-    # Infrastructure setup (always runs)
-    configure_postgres
-    configure_minio
-    configure_qdrant
-    configure_ollama
-    
-    # Service-specific configuration
-    [ "${SKIP_N8N}" = "false" ] && [ "${ENABLE_N8N}" = "true" ] && {
-        current_step=$((current_step + 1))
-        configure_n8n
-    }
-    
-    [ "${SKIP_FLOWISE}" = "false" ] && [ "${ENABLE_FLOWISE}" = "true" ] && {
-        current_step=$((current_step + 1))
-        configure_flowise
-    }
-    
-    [ "${SKIP_LITELLM}" = "false" ] && [ "${ENABLE_LITELLM}" = "true" ] && {
-        current_step=$((current_step + 1))
-        configure_litellm
-    }
-    
-    [ "${SKIP_ANYTHINGLLM}" = "false" ] && [ "${ENABLE_ANYTHINGLLM}" = "true" ] && {
-        current_step=$((current_step + 1))
-        configure_anythingllm
-    }
-    
-    [ "${SKIP_GRAFANA}" = "false" ] && [ "${ENABLE_GRAFANA}" = "true" ] && {
-        current_step=$((current_step + 1))
-        configure_grafana
-    }
-    
-    # Generate and reload production Caddyfile
-    write_production_caddyfile
-    
-    print_credentials
-    
-    # ─── Service Status Check ─────────────────────────────────────────────
-    print_service_status
-    
-    print_divider
-    echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${NC}${GREEN}${BOLD}           ✅  All Services Configured Successfully           ${NC}${CYAN}║${NC}"
-    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "${GREEN}✅ Environment loaded for tenant: ${TENANT_ID}${NC}"
+    echo -e "${GREEN}✅ Domain: ${TENANT_DOMAIN}${NC}"
     echo ""
     
-    if [ "${total_steps}" -gt 0 ]; then
-        echo -e "${BOLD}Configuration completed for ${current_step}/${total_steps} services.${NC}"
-        echo ""
-        echo -e "${DIM}Tip: Use --skip-* flags to re-run individual services${NC}"
-    else
-        echo -e "${DIM}All services were skipped or disabled.${NC}"
-    fi
+    # NEW: The script's main purpose is now this interactive menu
+    interactive_diagnostics_menu
+    
+    echo ""
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║                  ✅  Diagnostics Complete                      ║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
 

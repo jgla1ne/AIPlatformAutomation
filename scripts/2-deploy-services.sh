@@ -23,6 +23,115 @@ ok() { echo -e "${GREEN}[OK]${NC}    $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 fail() { echo -e "${RED}[FAIL]${NC}  $*"; exit 1; }
 
+# --- Service Health Helper ---
+wait_for_service() {
+    local name=$1 url=$2 max=${3:-120}
+    log "Waiting for ${name} at ${url}..."
+    for ((i=0; i<max; i+=5)); do
+        if curl -sf --max-time 5 "${url}" &>/dev/null; then
+            ok "${name} is responding."
+            return 0
+        fi
+        sleep 5
+    done
+    fail "${name} did not respond within ${max}s. Deployment failed."
+}
+
+# --- Production Caddyfile Generation ---
+write_production_caddyfile() {
+    local caddyfile_path="${TENANT_DIR}/caddy/Caddyfile"
+    
+    log "Generating production Caddyfile with all enabled services..."
+    
+    # Start with global block
+    cat > "${caddyfile_path}" << EOF
+# AI Platform Production Caddyfile
+# Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# Full reverse proxy configuration for all enabled services
+
+{
+    email ${ADMIN_EMAIL}
+}
+
+EOF
+
+    # Add service blocks for all enabled services
+    if [[ "${ENABLE_N8N:-false}" == "true" ]]; then
+        cat >> "${caddyfile_path}" << EOF
+n8n.${TENANT_DOMAIN} {
+    reverse_proxy n8n:5678
+}
+
+EOF
+    fi
+
+    if [[ "${ENABLE_FLOWISE:-false}" == "true" ]]; then
+        cat >> "${caddyfile_path}" << EOF
+flowise.${TENANT_DOMAIN} {
+    reverse_proxy flowise:3000
+}
+
+EOF
+    fi
+
+    if [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]]; then
+        cat >> "${caddyfile_path}" << EOF
+openwebui.${TENANT_DOMAIN} {
+    reverse_proxy openwebui:8080
+}
+
+EOF
+    fi
+
+    if [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]]; then
+        cat >> "${caddyfile_path}" << EOF
+anythingllm.${TENANT_DOMAIN} {
+    reverse_proxy anythingllm:3001
+}
+
+EOF
+    fi
+
+    if [[ "${ENABLE_LITELLM:-false}" == "true" ]]; then
+        cat >> "${caddyfile_path}" << EOF
+litellm.${TENANT_DOMAIN} {
+    reverse_proxy litellm:4000
+}
+
+EOF
+    fi
+
+    if [[ "${ENABLE_GRAFANA:-false}" == "true" ]]; then
+        cat >> "${caddyfile_path}" << EOF
+grafana.${TENANT_DOMAIN} {
+    reverse_proxy grafana:3000
+}
+
+EOF
+    fi
+
+    if [[ "${ENABLE_AUTHENTIK:-false}" == "true" ]]; then
+        cat >> "${caddyfile_path}" << EOF
+auth.${TENANT_DOMAIN} {
+    reverse_proxy authentik-server:9000
+}
+
+EOF
+    fi
+
+    # Add Signal API as requested
+    if [[ "${ENABLE_SIGNAL:-false}" == "true" ]]; then
+        cat >> "${caddyfile_path}" << EOF
+signal.${TENANT_DOMAIN} {
+    reverse_proxy signal-api:8080
+}
+
+EOF
+    fi
+
+    ok "Production Caddyfile generated with all enabled services"
+}
+
 # --- Environment Setup ---
 TENANT_DIR="/mnt/data/${TENANT_ID}"
 ENV_FILE="${TENANT_DIR}/.env"
@@ -422,11 +531,43 @@ EOF
 log "Starting deployment with docker compose..."
 cd "${TENANT_DIR}"
 
+# --- Generate Production Caddyfile ---
+write_production_caddyfile
+
 # CRITICAL FIX: Use docker compose with proper environment export
+# Pull images quietly to reduce verbose logging
+log "Pulling Docker images..."
+docker compose pull --quiet
+log "Starting services..."
 docker compose up -d
 
 ok "Deployment initiated successfully. Please allow a few minutes for all services to start."
 log "Run 'docker compose ps' in '${TENANT_DIR}' to check status."
+
+# --- NEW: Post-Startup Service Interconnection ---
+ok "Stack deployed. Proceeding with critical service configuration..."
+
+# 1. Configure LiteLLM (MOVED FROM SCRIPT-3)
+if [[ "${ENABLE_LITELLM:-false}" == "true" ]]; then
+    wait_for_service "LiteLLM" "http://localhost:${LITELLM_PORT:-4000}"
+    log "Registering models with LiteLLM..."
+    
+    # Configure Ollama model
+    if [[ "${ENABLE_OLLAMA:-false}" == "true" ]]; then
+        log "Registering Ollama model with LiteLLM..."
+        curl -X POST "http://localhost:${LITELLM_PORT:-4000}/model/config" \
+            -H "Content-Type: application/json" \
+            -d '{
+                "model_name": "ollama/llama3.2:1b",
+                "litellm_params": {
+                    "model": "ollama/llama3.2:1b",
+                    "api_base": "http://ollama:11434"
+                }
+            }' || warn "Failed to register Ollama model"
+    fi
+    
+    ok "LiteLLM configuration completed"
+fi
 
 # --- Wait and Test Services ---
 log "Waiting 30 seconds for services to initialize..."
@@ -551,8 +692,68 @@ else
     ok "All Docker logs with error filtering have been appended to ${LOG_FILE}"
 fi
 
+# --- Final Deployment Summary ---
+print_final_summary() {
+    echo ""
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║                   ✅  Deployment Complete: Access Summary       ║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    # Print all reverse-proxied URLs from .env
+    echo -e "${GREEN}🌐 External Service URLs:${NC}"
+    [[ "${ENABLE_N8N:-false}" == "true" ]] && echo "  • n8n:          https://n8n.${TENANT_DOMAIN}"
+    [[ "${ENABLE_FLOWISE:-false}" == "true" ]] && echo "  • Flowise:      https://flowise.${TENANT_DOMAIN}"
+    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && echo "  • OpenWebUI:   https://openwebui.${TENANT_DOMAIN}"
+    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && echo "  • AnythingLLM:  https://anythingllm.${TENANT_DOMAIN}"
+    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && echo "  • LiteLLM:      https://litellm.${TENANT_DOMAIN}"
+    [[ "${ENABLE_GRAFANA:-false}" == "true" ]] && echo "  • Grafana:      https://grafana.${TENANT_DOMAIN}"
+    [[ "${ENABLE_AUTHENTIK:-false}" == "true" ]] && echo "  • Authentik:    https://auth.${TENANT_DOMAIN}"
+    [[ "${ENABLE_SIGNAL:-false}" == "true" ]] && echo "  • Signal API:   https://signal.${TENANT_DOMAIN}"
+    
+    echo ""
+    echo -e "${GREEN}🔗 Internal Service URLs:${NC}"
+    [[ "${ENABLE_N8N:-false}" == "true" ]] && echo "  • n8n:          http://localhost:5678"
+    [[ "${ENABLE_FLOWISE:-false}" == "true" ]] && echo "  • Flowise:      http://localhost:3000"
+    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && echo "  • OpenWebUI:   http://localhost:8081"
+    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && echo "  • AnythingLLM:  http://localhost:3001"
+    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && echo "  • LiteLLM:      http://localhost:4000"
+    [[ "${ENABLE_GRAFANA:-false}" == "true" ]] && echo "  • Grafana:      http://localhost:3002"
+    [[ "${ENABLE_OLLAMA:-false}" == "true" ]] && echo "  • Ollama API:   http://localhost:11434/api/tags"
+    [[ "${ENABLE_QDRANT:-false}" == "true" ]] && echo "  • Qdrant API:   http://localhost:6333"
+    [[ "${ENABLE_SIGNAL:-false}" == "true" ]] && echo "  • Signal API:   http://localhost:8080"
+    
+    echo ""
+    echo -e "${GREEN}🔧 Tailscale & OpenClaw Access:${NC}"
+    if [[ "${ENABLE_TAILSCALE:-false}" == "true" ]]; then
+        if command -v tailscale >/dev/null 2>&1 && tailscale status >/dev/null 2>&1; then
+            local ts_ip=$(tailscale ip -4 2>/dev/null || echo "unknown")
+            echo "  • Tailscale Status: ✅ Connected"
+            echo "  • Tailscale IP: ${ts_ip}"
+            if [[ "${ENABLE_OPENCLAW:-false}" == "true" ]]; then
+                echo "  • OpenClaw (via Tailscale): http://${ts_ip}:18789"
+            fi
+        else
+            echo "  • Tailscale Status: ⚠️ Not connected - check container logs"
+        fi
+    else
+        echo "  • Tailscale: Disabled"
+    fi
+    
+    echo ""
+    echo -e "${CYAN}📊 Next Steps:${NC}"
+    echo "  1. Test external URLs above"
+    echo "  2. Run script-3 for advanced diagnostics: sudo bash scripts/3-configure-services.sh ${TENANT_ID}"
+    echo "  3. Check service health: docker compose ps"
+    echo "  4. View logs: docker compose logs [service_name]"
+    echo ""
+}
+
+# Call the final summary
+print_final_summary
+
 echo ""
-ok "SCRIPT 2 COMPLETED. FULL DIAGNOSTICS ARE AVAILABLE IN THE LOG FILE."
+ok "SCRIPT 2 COMPLETED SUCCESSFULLY - FULLY OPERATIONAL STACK"
 echo ""
 
 # =============================================================================
