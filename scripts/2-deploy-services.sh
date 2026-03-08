@@ -534,10 +534,10 @@ write_production_caddyfile
 # CRITICAL FIX: Use docker compose with proper environment export
 # Pull images quietly to reduce verbose logging
 log "Pulling Docker images..."
-docker compose pull --quiet
+docker-compose pull --quiet
 
 log "Starting all services in detached mode..."
-if ! docker compose up -d; then
+if ! docker-compose up -d; then
     fail "Docker Compose failed to start. Please check the logs above."
 fi
 
@@ -547,7 +547,7 @@ log "If you see errors here, it indicates a problem with the Caddyfile generated
 
 # The 'timeout' command will automatically stop the log stream after 15 seconds.
 # '|| true' ensures the script doesn't exit if 'timeout' itself has an issue.
-timeout 15s docker compose logs -f caddy || true
+timeout 15s docker-compose logs -f caddy || true
 
 ok "Initial log check complete."
 # --- END NEW LOGGING STEP ---
