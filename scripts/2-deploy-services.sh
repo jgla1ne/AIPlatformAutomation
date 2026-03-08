@@ -1387,6 +1387,11 @@ for service in "${services[@]}"; do
 done
 
 ok "Complete health status and diagnostics captured in ${LOG_FILE}"
+
+# Call final report functions
+print_final_summary
+print_comprehensive_final_report
+
 }
 
 print_final_summary() {
