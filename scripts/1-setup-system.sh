@@ -1858,6 +1858,72 @@ EOF
     log "SUCCESS" "Configuration written to ${ENV_FILE}"
 }
 
+# =============================================================================
+# NEW FUNCTION: Apply Final Ownership with Pragmatic Exceptions
+# =============================================================================
+apply_final_ownership() {
+    print_section "Applying Final Ownership Structure"
+
+    # --- Stage 1: Set Base Ownership ---
+    # Set the entire directory to the tenant's ownership first. This is the default.
+    log "Setting base ownership for tenant ${TENANT_UID}:${TENANT_GID} on ${DATA_ROOT}..."
+    if ! chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"; then
+        fail "Failed to set base recursive ownership on ${DATA_ROOT}."
+    fi
+    ok "Base ownership applied."
+
+    # --- Stage 2: Apply Pragmatic Exceptions ---
+    # Now, override ownership for specific directories that run as their own user.
+    # This correctly implements the learning from README.md (Line 537).
+    log "Applying ownership exceptions for specific services..."
+
+    # Exception for n8n (typically runs as user 1000)
+    if [[ -d "${DATA_ROOT}/n8n" && -n "${N8N_UID:-}" ]]; then
+        chown -R "${N8N_UID}:${N8N_UID}" "${DATA_ROOT}/n8n"
+        ok "Set ownership for 'n8n' to ${N8N_UID}:${N8N_UID}."
+    fi
+
+    # Exception for Grafana (runs as user 472)
+    if [[ -d "${DATA_ROOT}/grafana" && -n "${GRAFANA_UID:-}" ]]; then
+        chown -R "${GRAFANA_UID}:${GRAFANA_UID}" "${DATA_ROOT}/grafana"
+        ok "Set ownership for 'grafana' to ${GRAFANA_UID}:${GRAFANA_UID}."
+    fi
+    
+    # Exception for Prometheus (runs as user 65534)
+    if [[ -d "${DATA_ROOT}/prometheus-data" && -n "${PROMETHEUS_UID:-}" ]]; then
+        chown -R "${PROMETHEUS_UID}:${PROMETHEUS_UID}" "${DATA_ROOT}/prometheus-data"
+        ok "Set ownership for 'prometheus' to ${PROMETHEUS_UID}:${PROMETHEUS_UID}."
+    fi
+    
+    # Exception for Postgres (runs as user 70)
+    if [[ -d "${DATA_ROOT}/postgres" && -n "${POSTGRES_UID:-}" ]]; then
+        chown -R "${POSTGRES_UID}:${POSTGRES_UID}" "${DATA_ROOT}/postgres"
+        ok "Set ownership for 'postgres' to ${POSTGRES_UID}:${POSTGRES_UID}."
+    fi
+    
+    # Exception for Qdrant (runs as user 1000)
+    if [[ -d "${DATA_ROOT}/qdrant" && -n "${QDRANT_UID:-}" ]]; then
+        chown -R "${QDRANT_UID}:${QDRANT_UID}" "${DATA_ROOT}/qdrant"
+        ok "Set ownership for 'qdrant' to ${QDRANT_UID}:${QDRANT_UID}."
+    fi
+    
+    # Exception for Ollama (runs as user 1001)
+    if [[ -d "${DATA_ROOT}/ollama" && -n "${OLLAMA_UID:-}" ]]; then
+        chown -R "${OLLAMA_UID}:${OLLAMA_UID}" "${DATA_ROOT}/ollama"
+        ok "Set ownership for 'ollama' to ${OLLAMA_UID}:${OLLAMA_UID}."
+    fi
+    
+    # NOTE: Add any other service exceptions here if they are discovered.
+
+    # --- Stage 3: Secure Permissions ---
+    log "Setting final secure permissions on tenant root and .env file..."
+    chmod 750 "${DATA_ROOT}"
+    chmod 640 "${ENV_FILE}"
+    ok "Secure permissions set."
+
+    ok "Final ownership structure is correct and production-ready."
+}
+
 # ─── Create directory structure ──────────────────────────────────────────────
 create_directories() {
     log "INFO" "Creating all service directories with architecturally-compliant ownership..."
@@ -2220,6 +2286,10 @@ main() {
     write_env
     
     create_directories
+    
+    # Apply the final, correct ownership structure (NEW FINAL STEP)
+    apply_final_ownership
+    
     write_caddyfile
     write_prometheus_config
     offer_next_step

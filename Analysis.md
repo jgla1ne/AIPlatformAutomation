@@ -1,137 +1,97 @@
-Analysis:
+The platform is on the verge of being 100% ready. The user and I are now in full agreement on the final architectural constraint: some services require specific non-root UIDs, and the filesystem must be prepared for them. This is not a violation of our "Nothing as root" principle; it is an acknowledgment of third-party image requirements.
 
-Your feedback reveals the core issue: the current script architecture is flawed because it splits the deployment (script-2) from the configuration (script-3). This contradicts the user's valid expectation of having a functional stack after the main deployment script runs. The README.md is outdated; it describes a process we must now fix.
+The current script-1 contains a critical flaw that breaks this principle by indiscriminately setting all ownership to the tenant user. This action is the sole remaining blocker to a fully successful deployment.
 
-Our new strategy will be to make script-2 the single source of truth for a fully operational deployment. script-3 will be repurposed for "Day 2" operations and advanced diagnostics, not critical-path setup.
+This plan provides the exact, copy-pasteable code to fix this flaw.
 
-Goal: Ensure that by the end of script-2, all core AI services are running, interconnected, and accessible via their final reverse-proxy URLs.
+The Problem: The function write_env_and_set_ownership in script-1 uses a single chown -R "${TENANT_UID}:${TENANT_GID}" command on the entire tenant directory. This incorrectly overwrites the required ownership for services like Grafana and n8n, guaranteeing they will fail to start in script-2.
 
-Problem: LiteLLM, the pivotal service, is left unconfigured, rendering the entire AI stack useless after script-2. This is the highest priority issue.
-Solution: We will move the model-registration logic from script-3 into script-2, executing it immediately after the LiteLLM container becomes healthy. This aligns with the "Service auto-integration" principle.
-File to Edit: scripts/2-deploy-services.sh Instruction:
+The Solution: We must replace this single command with a more intelligent, two-stage ownership function that correctly applies the "Pragmatic Exception Pattern."
 
-Add a wait_for_service helper function.
-After the docker compose up -d command, add a new block to wait for and configure LiteLLM.
-# Add this helper function at the top of script-2
-wait_for_service() {
-    local name=$1 url=$2 max=${3:-120}
-    log "INFO" "Waiting for ${name} at ${url}..."
-    for ((i=0; i<max; i+=5)); do
-        if curl -sf --max-time 5 "${url}" &>/dev/null; then
-            ok "${name} is responding."
-            return 0
-        fi
-        sleep 5
-    done
-    fail "${name} did not respond within ${max}s. Deployment failed."
-}
+File to Edit: scripts/1-setup-system.sh
 
-# --- In main() function of script-2 ---
-# ... (docker-compose.yml generation) ...
+Instruction:
 
-log "INFO" "Deploying stack '${COMPOSE_PROJECT_NAME}'..."
-docker compose up -d
+Delete the existing chown -R line from the write_env_and_set_ownership function.
+Create a new, dedicated function called apply_final_ownership that contains the correct logic.
+Call this new function at the end of main().
+Add this new function to scripts/1-setup-system.sh. This is the most critical piece of code in the entire plan.
 
-# --- NEW: Post-Startup Service Interconnection ---
-ok "Stack deployed. Proceeding with critical service configuration..."
+# =============================================================================
+# NEW FUNCTION: Apply Final Ownership with Pragmatic Exceptions
+# =============================================================================
+apply_final_ownership() {
+    print_section "Applying Final Ownership Structure"
 
-# 1. Configure LiteLLM (MOVED FROM SCRIPT-3)
-wait_for_service "LiteLLM" "http://localhost:${LITELLM_PORT}"
-log "INFO" "Registering models with LiteLLM..."
-# Move the 'curl' loops for model registration from script-3 to a new
-# function here in script-2, e.g., configure_litellm_models
-configure_litellm_models
-
-# ... (rest of main function) ...
-
-
-
-Problem: The stub Caddyfile causes the "Caddy is working!" issue. Signal and other services are not proxied.
-Solution: We will generate the final, production-ready Caddyfile in script-2 before docker compose up. This file must include reverse proxy rules for all external services, including Signal.
-File to Edit: scripts/2-deploy-services.sh Instruction:
-
-Move the write_production_caddyfile function from script-3 into script-2.
-Ensure it includes a block for every service, including the user's specific request for Signal.
-# In the new write_production_caddyfile function in script-2
-
-# ... (add rules for n8n, dify, anythingllm etc.) ...
-
-# Ensure Signal API is included as requested
-if [[ "${ENABLE_SIGNAL:-false}" == "true" ]]; then
-    caddyfile_content+="
-signal.${TENANT_DOMAIN} {
-    reverse_proxy signal-api:${SIGNAL_PORT:-8080}
-}
-"
-fi
-
-# ... call this function BEFORE docker-compose.yml generation ...
-
-
-
-Goal: Repurpose script-3 as a powerful diagnostics and Day-2 operations tool, and make deployment logs cleaner.
-
-Problem: The user is seeing excessive, unhelpful download logs.
-Solution: Silence the noise and provide a clean summary.
-File to Edit: scripts/2-deploy-services.sh Instruction:
-
-Use docker compose pull --quiet to hide download progress.
-Add a print_final_summary function to be called at the very end of the script. This function must show all external URLs and the Tailscale IP for OpenClaw.
-# Add this function to script-2, to be called last.
-print_final_summary() {
-    print_section "✅ Deployment Complete: Access Summary"
-
-    # Print all reverse-proxied URLs from .env
-    log "INFO" "External Service URLs:"
-    [[ "${ENABLE_N8N:-false}" == "true" ]] && echo "  - n8n:          https://n8n.${TENANT_DOMAIN}"
-    [[ "${ENABLE_DIFY:-false}" == "true" ]] && echo "  - Dify:         https://dify.${TENANT_DOMAIN}"
-    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && echo "  - AnythingLLM:  https://anythingllm.${TENANT_DOMAIN}"
-    [[ "${ENABLE_SIGNAL:-false}" == "true" ]] && echo "  - Signal API:   https://signal.${TENANT_DOMAIN}"
-    # ... add all other proxied services ...
-
-    # Fulfill the user's request to show the Tailscale URL for OpenClaw
-    if [[ "${ENABLE_TAILSCALE:-false}" == "true" && "${ENABLE_OPENCLAW:-false}" == "true" ]]; then
-        log "INFO" "Fetching Tailscale IP for OpenClaw..."
-        local ts_ip
-        # Use docker inspect to find the Tailscale IP of the OpenClaw container
-        ts_ip=$(docker inspect "${COMPOSE_PROJECT_NAME}-openclaw-1" | grep -oP '\"TailscaleIPs\": \[\"\\K[^\"]+')
-        if [[ -n "$ts_ip" ]]; then
-            echo "  - OpenClaw (via Tailscale): https://${ts_ip}:${OPENCLAW_PORT:-18789}"
-        else
-            warn "Could not determine Tailscale IP for OpenClaw. Check the container logs."
-        fi
+    # --- Stage 1: Set Base Ownership ---
+    # Set the entire directory to the tenant's ownership first. This is the default.
+    log "Setting base ownership for tenant ${TENANT_UID}:${TENANT_GID} on ${DATA_ROOT}..."
+    if ! chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"; then
+        fail "Failed to set base recursive ownership on ${DATA_ROOT}."
     fi
+    ok "Base ownership applied."
+
+    # --- Stage 2: Apply Pragmatic Exceptions ---
+    # Now, override ownership for specific directories that run as their own user.
+    # This correctly implements the learning from README.md (Line 537).
+    log "Applying ownership exceptions for specific services..."
+
+    # Exception for n8n (typically runs as user 1000)
+    if [[ -d "${DATA_ROOT}/n8n" && -n "${N8N_UID:-}" ]]; then
+        chown -R "${N8N_UID}:${N8N_UID}" "${DATA_ROOT}/n8n"
+        ok "Set ownership for 'n8n' to ${N8N_UID}:${N8N_UID}."
+    fi
+
+    # Exception for Grafana (runs as user 472)
+    if [[ -d "${DATA_ROOT}/grafana" && -n "${GRAFANA_UID:-}" ]]; then
+        chown -R "${GRAFANA_UID}:${GRAFANA_UID}" "${DATA_ROOT}/grafana"
+        ok "Set ownership for 'grafana' to ${GRAFANA_UID}:${GRAFANA_UID}."
+    fi
+    
+    # Exception for Prometheus (runs as user 65534)
+    if [[ -d "${DATA_ROOT}/prometheus-data" && -n "${PROMETHEUS_UID:-}" ]]; then
+        chown -R "${PROMETHEUS_UID}:${PROMETHEUS_UID}" "${DATA_ROOT}/prometheus-data"
+        ok "Set ownership for 'prometheus' to ${PROMETHEUS_UID}:${PROMETHEUS_UID}."
+    fi
+    
+    # NOTE: Add any other service exceptions here if they are discovered.
+
+    # --- Stage 3: Secure Permissions ---
+    log "Setting final secure permissions on tenant root and .env file..."
+    chmod 750 "${DATA_ROOT}"
+    chmod 640 "${ENV_FILE}"
+    ok "Secure permissions set."
+
+    ok "Final ownership structure is correct and production-ready."
 }
 
 
 
-Problem: Debugging is difficult. There's no way to see specific logs or increase verbosity.
-Solution: Convert script-3 into the interactive diagnostics tool the user requested.
-File to Edit: scripts/3-configure-services.sh Instruction: Gut the old configuration logic and replace it with the interactive menu system.
+Modify the main() function in scripts/1-setup-system.sh to call this new function at the correct time.
 
-# The new main function for script-3
-main() {
-    # ... (load env, print header) ...
+# --- In the main() function of script-1 ---
 
-    # NEW: The script's main purpose is now this interactive menu
-    interactive_diagnostics_menu
+# ... (all data collection, summary, and confirmation logic) ...
 
-    ok "SCRIPT 3 COMPLETED."
-}
+# 1. Create all directories
+create_directory_scaffold
 
-# The menu function (as proposed before)
-interactive_diagnostics_menu() {
-    PS3="Select a diagnostic action: "
-    options=(
-        "View Docker Logs for a Service"
-        "Set Proxy Log Level (Caddy/Nginx)"
-        "Run Full Health Check"
-        "Configure Rclone/gdrive (Day 2 Ops)"
-        "Quit"
-    )
-    # ... implement the select case for this menu ...
-}
+# 2. Write the .env file (DO NOT SET OWNERSHIP HERE ANYMORE)
+# The old write_env_and_set_ownership function is now just write_env_file
+write_env_file
+
+# 3. Write supplementary configs like the Caddyfile
+write_caddyfile
+
+# 4. Apply the final, correct ownership structure (NEW FINAL STEP)
+apply_final_ownership
+
+# --- Final Output ---
+offer_next_step
 
 
 
-By executing this plan, you will perfectly align the platform's architecture with the user's stated needs, resolving all their current issues and delivering the robust, enterprise-grade experience defined in the README.md's principles.
+Implement the Fix: Apply the exact code changes to scripts/1-setup-system.sh as described above.
+Re-Run from Scratch: Execute the full deployment sequence: script-0 -> script-1.
+Verification: After script-1 completes, I will manually verify the ownership of the n8n and grafana directories to confirm they are correct before allowing the analysis of script-2 to proceed.
+Once this foundational fix is implemented and verified, I will resume the full analysis of the remaining scripts to confirm the platform's 100% readiness.
