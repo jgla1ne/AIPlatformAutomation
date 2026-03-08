@@ -650,6 +650,42 @@ echo "Note: External URLs require DNS configuration and SSL certificates."
 echo "Local URLs should work if services are running properly."
 
 # =============================================================================
+# COMPREHENSIVE LOGGING: SSL Certificate & Proxy Status
+# =============================================================================
+log "Checking SSL certificate and proxy status..."
+echo -e "\n\n--- SSL CERTIFICATE & PROXY STATUS AT $(date) ---\n" >> "${LOG_FILE}"
+
+# Check Caddy (proxy) status and SSL certificates
+if docker compose ps | grep -q "caddy.*Up"; then
+    echo "✅ Caddy proxy is running" >> "${LOG_FILE}"
+    
+    # Get Caddy logs for SSL certificate status
+    echo -e "\n🔒 SSL Certificate Status:\n" >> "${LOG_FILE}"
+    docker compose logs caddy | grep -i -E "(certificate|ssl|tls|acme|let.*encrypt)" | tail -10 >> "${LOG_FILE}" 2>&1 || echo "No SSL certificate logs found" >> "${LOG_FILE}"
+    
+    # Check if Caddy is responding on HTTP/HTTPS ports
+    echo -e "\n🌐 Proxy Port Tests:\n" >> "${LOG_FILE}"
+    if curl -s --max-time 5 http://localhost:80 >/dev/null 2>&1; then
+        echo "✅ HTTP port 80: Responding" >> "${LOG_FILE}"
+    else
+        echo "❌ HTTP port 80: Not responding" >> "${LOG_FILE}"
+    fi
+    
+    if curl -s --max-time 5 https://localhost:443 >/dev/null 2>&1; then
+        echo "✅ HTTPS port 443: Responding" >> "${LOG_FILE}"
+    else
+        echo "❌ HTTPS port 443: Not responding (expected for self-signed)" >> "${LOG_FILE}"
+    fi
+    
+    # Get Caddy container status
+    echo -e "\n📊 Caddy Container Status:\n" >> "${LOG_FILE}"
+    docker inspect $(docker compose ps -q caddy) --format='Status: {{.State.Status}}, Health: {{.State.Health.Status}}, Uptime: {{.State.StartedAt}}' >> "${LOG_FILE}" 2>&1
+    
+else
+    echo "❌ Caddy proxy is not running" >> "${LOG_FILE}"
+fi
+
+# =============================================================================
 # FINAL STEP: COMPREHENSIVE DOCKER LOGS CAPTURE FOR DIAGNOSTICS
 # =============================================================================
 log "Waiting 30 seconds for services to initialize before capturing logs..."
