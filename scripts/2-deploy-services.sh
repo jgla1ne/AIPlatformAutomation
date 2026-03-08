@@ -154,7 +154,7 @@ add_openwebui() {
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
+    user: "1000:1000" # Match the directory ownership
     networks:
       - default
     environment:
@@ -210,11 +210,11 @@ add_flowise() {
   flowise:
     image: flowiseai/flowise:latest
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
+    user: "1000:1000" # Match the directory ownership
     networks:
       - default
     environment:
-      - HOME=/home/node
+      - HOME=/home/node # Keep this variable
       - PORT=\${FLOWISE_PORT}
       - DATABASE_TYPE=postgres
       - DATABASE_HOST=\${POSTGRES_SERVICE_NAME:-postgres}
@@ -240,7 +240,7 @@ add_anythingllm() {
   anythingllm:
     image: mintplexlabs/anythingllm:latest
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
+    user: "1000:1000" # Match the directory ownership
     networks:
       - default
     environment:
@@ -277,12 +277,17 @@ add_litellm() {
   litellm:
     image: ghcr.io/berriai/litellm:main
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
+    user: "\${TENANT_UID}:\${TENANT_GID}" # Ensure this is present
     networks:
       - default
-    dns:
+    dns: # Keep the DNS fix
       - 8.8.8.8
       - 1.1.1.1
+    # Add a command to fix cache permissions before starting
+    command: >
+      bash -c "mkdir -p /home/user/.cache/pip &&
+               chown -R \${TENANT_UID}:\${TENANT_GID} /home/user/.cache &&
+               /entrypoint.sh"
     environment:
       - DATABASE_URL=sqlite:///app/litellm.db
       - LITELM_MASTER_KEY=\${LITELLM_MASTER_KEY}
@@ -310,7 +315,7 @@ add_grafana() {
       - default
     environment:
       - GF_SECURITY_ADMIN_USER=\${GRAFANA_ADMIN_USER}
-      - GF_SECURITY_ADMIN_PASSWORD=\${GRAFANA_ADMIN_PASSWORD}
+      - GF_SECURITY_ADMIN_PASSWORD=\${GF_SECURITY_ADMIN_PASSWORD}
       - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
     volumes:
       - \${TENANT_DIR}/grafana:/var/lib/grafana
