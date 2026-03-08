@@ -382,31 +382,30 @@ add_litellm() {
   litellm:
     image: ghcr.io/berriai/litellm:main
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}" # Ensure this is present
+    user: "\${TENANT_UID}:\${TENANT_GID}"
     networks:
       - default
-    dns: # Keep the DNS fix
+    dns:
       - 8.8.8.8
       - 1.1.1.1
-    # Add a command to fix cache permissions before starting
-    command: >
-      bash -c "mkdir -p /home/user/.cache/pip &&
-               chown -R \${TENANT_UID}:\${TENANT_GID} /home/user/.cache &&
-               /entrypoint.sh"
+    # Use new robust entrypoint script
+    command: /app/scripts/litellm_entrypoint.sh
     environment:
       - DATABASE_URL=sqlite:///app/litellm.db
       - LITELM_MASTER_KEY=\${LITELLM_MASTER_KEY}
-      - OPENAI_API_KEY=\${OPENAI_API_KEY}
-      - GOOGLE_API_KEY=\${GOOGLE_API_KEY}
-      - ANTHROPIC_API_KEY=\${ANTHROPIC_API_KEY}
+      # Pass TENANT_UID and GID to script
+      - TENANT_UID=\${TENANT_UID}
+      - TENANT_GID=\${TENANT_GID}
       - OLLAMA_API_BASE=\${OLLAMA_INTERNAL_URL}
     volumes:
-      - \${TENANT_DIR}/litellm:/app
+      # Mount entire project directory to access script
+      - ../:/app/
+      - \${TENANT_DIR}/litellm:/data # Use a separate data volume
     ports:
       - "\${LITELLM_PORT:-4000}:4000"
 
 EOF
-    ok "Added 'litellm' service."
+    ok "Added 'litellm' service with robust entrypoint."
 }
 
 add_grafana() {
@@ -558,28 +557,6 @@ log "Run 'docker compose ps' in '${TENANT_DIR}' to check status."
 
 # --- NEW: Post-Startup Service Interconnection ---
 ok "Stack deployed. Proceeding with critical service configuration..."
-
-# 1. Configure LiteLLM (MOVED FROM SCRIPT-3)
-if [[ "${ENABLE_LITELLM:-false}" == "true" ]]; then
-    wait_for_service "LiteLLM" "http://localhost:${LITELLM_PORT:-4000}"
-    log "Registering models with LiteLLM..."
-    
-    # Configure Ollama model
-    if [[ "${ENABLE_OLLAMA:-false}" == "true" ]]; then
-        log "Registering Ollama model with LiteLLM..."
-        curl -X POST "http://localhost:${LITELLM_PORT:-4000}/model/config" \
-            -H "Content-Type: application/json" \
-            -d '{
-                "model_name": "ollama/llama3.2:1b",
-                "litellm_params": {
-                    "model": "ollama/llama3.2:1b",
-                    "api_base": "http://ollama:11434"
-                }
-            }' || warn "Failed to register Ollama model"
-    fi
-    
-    ok "LiteLLM configuration completed"
-fi
 
 # --- Wait and Test Services ---
 log "Waiting 30 seconds for services to initialize..."
