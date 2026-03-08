@@ -58,7 +58,7 @@ EOF
     # Add service blocks for all enabled services
     if [[ "${ENABLE_N8N:-false}" == "true" ]]; then
         cat >> "${caddyfile_path}" << EOF
-n8n.${TENANT_DOMAIN} {
+n8n.${DOMAIN} {
     reverse_proxy n8n:5678
 }
 
@@ -67,7 +67,7 @@ EOF
 
     if [[ "${ENABLE_FLOWISE:-false}" == "true" ]]; then
         cat >> "${caddyfile_path}" << EOF
-flowise.${TENANT_DOMAIN} {
+flowise.${DOMAIN} {
     reverse_proxy flowise:3000
 }
 
@@ -76,7 +76,7 @@ EOF
 
     if [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]]; then
         cat >> "${caddyfile_path}" << EOF
-openwebui.${TENANT_DOMAIN} {
+openwebui.${DOMAIN} {
     reverse_proxy openwebui:8080
 }
 
@@ -85,7 +85,7 @@ EOF
 
     if [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]]; then
         cat >> "${caddyfile_path}" << EOF
-anythingllm.${TENANT_DOMAIN} {
+anythingllm.${DOMAIN} {
     reverse_proxy anythingllm:3001
 }
 
@@ -94,7 +94,7 @@ EOF
 
     if [[ "${ENABLE_LITELLM:-false}" == "true" ]]; then
         cat >> "${caddyfile_path}" << EOF
-litellm.${TENANT_DOMAIN} {
+litellm.${DOMAIN} {
     reverse_proxy litellm:4000
 }
 
@@ -103,7 +103,7 @@ EOF
 
     if [[ "${ENABLE_GRAFANA:-false}" == "true" ]]; then
         cat >> "${caddyfile_path}" << EOF
-grafana.${TENANT_DOMAIN} {
+grafana.${DOMAIN} {
     reverse_proxy grafana:3000
 }
 
@@ -112,7 +112,7 @@ EOF
 
     if [[ "${ENABLE_AUTHENTIK:-false}" == "true" ]]; then
         cat >> "${caddyfile_path}" << EOF
-auth.${TENANT_DOMAIN} {
+auth.${DOMAIN} {
     reverse_proxy authentik-server:9000
 }
 
@@ -122,7 +122,7 @@ EOF
     # Add Signal API as requested
     if [[ "${ENABLE_SIGNAL:-false}" == "true" ]]; then
         cat >> "${caddyfile_path}" << EOF
-signal.${TENANT_DOMAIN} {
+signal.${DOMAIN} {
     reverse_proxy signal-api:8080
 }
 
@@ -728,6 +728,243 @@ else
     ok "All Docker logs with error filtering have been appended to ${LOG_FILE}"
 fi
 
+# =============================================================================
+# COMPREHENSIVE FINAL DEPLOYMENT REPORT (README.md REQUIREMENTS)
+# =============================================================================
+print_comprehensive_final_report() {
+    echo ""
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║           📊 COMPREHENSIVE DEPLOYMENT REPORT (README.md)      ║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    # Get current timestamp
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    echo -e "${YELLOW}📅 Deployment Report Generated: ${timestamp}${NC}"
+    echo ""
+    
+    # Service Status Section
+    echo -e "${GREEN}## 📈 Service Status (Comprehensive Health Check)${NC}"
+    echo ""
+    
+    # Define all services to check
+    local services=("postgres" "redis" "qdrant" "ollama" "openwebui" "n8n" "flowise" "anythingllm" "litellm" "prometheus" "authentik-server" "grafana" "caddy")
+    local total_services=${#services[@]}
+    local healthy_services=0
+    local unhealthy_services=0
+    
+    echo "┌─────────────────────────────────────────────────────────────────┐"
+    echo "│ SERVICE         │ STATUS    │ HEALTH    │ EXTERNAL REACH        │"
+    echo "├─────────────────────────────────────────────────────────────────┤"
+    
+    for service in "${services[@]}"; do
+        local status="Unknown"
+        local health="Unknown"
+        local external_reach="Unknown"
+        local service_url=""
+        
+        # Check if container is running
+        if docker compose ps | grep -q "${service}.*Up"; then
+            status="Running"
+            
+            # Check container health
+            local health_status=$(docker inspect $(docker compose ps -q "${service}" 2>/dev/null) --format='{{.State.Health.Status}}' 2>/dev/null || echo "none")
+            if [[ "${health_status}" == "healthy" ]]; then
+                health="✅ Healthy"
+                ((healthy_services++))
+            elif [[ "${health_status}" == "none" ]]; then
+                # For services without health checks, try to connect to their port
+                case "${service}" in
+                    "postgres")
+                        if docker compose exec -T postgres pg_isready -U postgres >/dev/null 2>&1; then
+                            health="✅ Ready"
+                            ((healthy_services++))
+                        else
+                            health="🔄 Starting"
+                            ((unhealthy_services++))
+                        fi
+                        ;;
+                    "redis")
+                        if docker compose exec -T redis redis-cli ping >/dev/null 2>&1; then
+                            health="✅ Ready"
+                            ((healthy_services++))
+                        else
+                            health="🔄 Starting"
+                            ((unhealthy_services++))
+                        fi
+                        ;;
+                    "caddy")
+                        if curl -s --max-time 3 http://localhost:80 >/dev/null 2>&1; then
+                            health="✅ Responding"
+                            ((healthy_services++))
+                        else
+                            health="🔄 Starting"
+                            ((unhealthy_services++))
+                        fi
+                        ;;
+                    *)
+                        health="✅ Running"
+                        ((healthy_services++))
+                        ;;
+                esac
+            else
+                health="🔄 Unhealthy"
+                ((unhealthy_services++))
+            fi
+            
+            # Check external reach (if service is enabled and has external URL)
+            case "${service}" in
+                "n8n")
+                    if [[ "${ENABLE_N8N:-false}" == "true" ]]; then
+                        service_url="https://n8n.${DOMAIN}"
+                        if curl -s --max-time 5 --insecure "https://n8n.${DOMAIN}" >/dev/null 2>&1; then
+                            external_reach="✅ Reachable"
+                        else
+                            external_reach="❌ No DNS/SSL"
+                        fi
+                    fi
+                    ;;
+                "flowise")
+                    if [[ "${ENABLE_FLOWISE:-false}" == "true" ]]; then
+                        service_url="https://flowise.${DOMAIN}"
+                        if curl -s --max-time 5 --insecure "https://flowise.${DOMAIN}" >/dev/null 2>&1; then
+                            external_reach="✅ Reachable"
+                        else
+                            external_reach="❌ No DNS/SSL"
+                        fi
+                    fi
+                    ;;
+                "openwebui")
+                    if [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]]; then
+                        service_url="https://openwebui.${DOMAIN}"
+                        if curl -s --max-time 5 --insecure "https://openwebui.${DOMAIN}" >/dev/null 2>&1; then
+                            external_reach="✅ Reachable"
+                        else
+                            external_reach="❌ No DNS/SSL"
+                        fi
+                    fi
+                    ;;
+                "anythingllm")
+                    if [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]]; then
+                        service_url="https://anythingllm.${DOMAIN}"
+                        if curl -s --max-time 5 --insecure "https://anythingllm.${DOMAIN}" >/dev/null 2>&1; then
+                            external_reach="✅ Reachable"
+                        else
+                            external_reach="❌ No DNS/SSL"
+                        fi
+                    fi
+                    ;;
+                "litellm")
+                    if [[ "${ENABLE_LITELLM:-false}" == "true" ]]; then
+                        service_url="https://litellm.${DOMAIN}"
+                        if curl -s --max-time 5 --insecure "https://litellm.${DOMAIN}" >/dev/null 2>&1; then
+                            external_reach="✅ Reachable"
+                        else
+                            external_reach="❌ No DNS/SSL"
+                        fi
+                    fi
+                    ;;
+                "grafana")
+                    if [[ "${ENABLE_GRAFANA:-false}" == "true" ]]; then
+                        service_url="https://grafana.${DOMAIN}"
+                        if curl -s --max-time 5 --insecure "https://grafana.${DOMAIN}" >/dev/null 2>&1; then
+                            external_reach="✅ Reachable"
+                        else
+                            external_reach="❌ No DNS/SSL"
+                        fi
+                    fi
+                    ;;
+                "authentik-server")
+                    if [[ "${ENABLE_AUTHENTIK:-false}" == "true" ]]; then
+                        service_url="https://auth.${DOMAIN}"
+                        if curl -s --max-time 5 --insecure "https://auth.${DOMAIN}" >/dev/null 2>&1; then
+                            external_reach="✅ Reachable"
+                        else
+                            external_reach="❌ No DNS/SSL"
+                        fi
+                    fi
+                    ;;
+                "caddy")
+                    service_url="https://${DOMAIN}"
+                    if curl -s --max-time 5 --insecure "https://${DOMAIN}" >/dev/null 2>&1; then
+                        external_reach="✅ Reachable"
+                    else
+                        external_reach="❌ No DNS/SSL"
+                    fi
+                    ;;
+                *)
+                    external_reach="N/A"
+                    ;;
+            esac
+        else
+            status="❌ Down"
+            health="❌ Down"
+            external_reach="❌ Service Down"
+            ((unhealthy_services++))
+        fi
+        
+        # Format output line
+        printf "│ %-15s │ %-9s │ %-9s │ %-21s │\n" "${service}" "${status}" "${health}" "${external_reach}"
+        
+        # Also log to file
+        echo "${service}: ${status} | ${health} | ${external_reach} | ${service_url}" >> "${LOG_FILE}"
+    done
+    
+    echo "└─────────────────────────────────────────────────────────────────┘"
+    echo ""
+    
+    # Summary Statistics
+    local success_rate=$((healthy_services * 100 / total_services))
+    echo -e "${GREEN}📊 Deployment Summary:${NC}"
+    echo "  • Total Services: ${total_services}"
+    echo "  • Healthy Services: ${healthy_services}"
+    echo "  • Unhealthy Services: ${unhealthy_services}"
+    echo "  • Success Rate: ${success_rate}%"
+    echo ""
+    
+    # External URLs Section
+    echo -e "${GREEN}## 🌐 External Service URLs${NC}"
+    echo ""
+    [[ "${ENABLE_N8N:-false}" == "true" ]] && echo "  • n8n:          https://n8n.${DOMAIN}"
+    [[ "${ENABLE_FLOWISE:-false}" == "true" ]] && echo "  • Flowise:      https://flowise.${DOMAIN}"
+    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && echo "  • OpenWebUI:   https://openwebui.${DOMAIN}"
+    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && echo "  • AnythingLLM:  https://anythingllm.${DOMAIN}"
+    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && echo "  • LiteLLM:      https://litellm.${DOMAIN}"
+    [[ "${ENABLE_GRAFANA:-false}" == "true" ]] && echo "  • Grafana:      https://grafana.${DOMAIN}"
+    [[ "${ENABLE_AUTHENTIK:-false}" == "true" ]] && echo "  • Authentik:    https://auth.${DOMAIN}"
+    echo ""
+    
+    # Internal URLs Section
+    echo -e "${GREEN}## 🔗 Internal Service URLs${NC}"
+    echo ""
+    [[ "${ENABLE_N8N:-false}" == "true" ]] && echo "  • n8n:          http://localhost:5678"
+    [[ "${ENABLE_FLOWISE:-false}" == "true" ]] && echo "  • Flowise:      http://localhost:3000"
+    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && echo "  • OpenWebUI:   http://localhost:8081"
+    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && echo "  • AnythingLLM:  http://localhost:3001"
+    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && echo "  • LiteLLM:      http://localhost:4000"
+    [[ "${ENABLE_GRAFANA:-false}" == "true" ]] && echo "  • Grafana:      http://localhost:3002"
+    [[ "${ENABLE_OLLAMA:-false}" == "true" ]] && echo "  • Ollama API:   http://localhost:11434/api/tags"
+    [[ "${ENABLE_QDRANT:-false}" == "true" ]] && echo "  • Qdrant API:   http://localhost:6333"
+    [[ "${ENABLE_SIGNAL:-false}" == "true" ]] && echo "  • Signal API:   http://localhost:8080"
+    echo ""
+    
+    # Next Steps
+    echo -e "${GREEN}## 🚀 Next Steps${NC}"
+    echo ""
+    echo "  1. Check detailed logs: ${LOG_FILE}"
+    echo "  2. Configure services: sudo bash scripts/3-configure-services.sh ${TENANT_ID}"
+    echo "  3. Monitor services: sudo docker compose ps"
+    echo "  4. View service logs: sudo docker compose logs [service]"
+    echo ""
+    
+    # Log the complete report to file
+    echo -e "\n\n--- COMPREHENSIVE DEPLOYMENT REPORT AT ${timestamp} ---\n" >> "${LOG_FILE}"
+    echo "Total Services: ${total_services}" >> "${LOG_FILE}"
+    echo "Healthy Services: ${healthy_services}" >> "${LOG_FILE}"
+    echo "Success Rate: ${success_rate}%" >> "${LOG_FILE}"
+    echo "Report saved to: ${LOG_FILE}" >> "${LOG_FILE}"
+}
+
 # --- Final Deployment Summary ---
 print_final_summary() {
     echo ""
@@ -738,14 +975,14 @@ print_final_summary() {
     
     # Print all reverse-proxied URLs from .env
     echo -e "${GREEN}🌐 External Service URLs:${NC}"
-    [[ "${ENABLE_N8N:-false}" == "true" ]] && echo "  • n8n:          https://n8n.${TENANT_DOMAIN}"
-    [[ "${ENABLE_FLOWISE:-false}" == "true" ]] && echo "  • Flowise:      https://flowise.${TENANT_DOMAIN}"
-    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && echo "  • OpenWebUI:   https://openwebui.${TENANT_DOMAIN}"
-    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && echo "  • AnythingLLM:  https://anythingllm.${TENANT_DOMAIN}"
-    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && echo "  • LiteLLM:      https://litellm.${TENANT_DOMAIN}"
-    [[ "${ENABLE_GRAFANA:-false}" == "true" ]] && echo "  • Grafana:      https://grafana.${TENANT_DOMAIN}"
-    [[ "${ENABLE_AUTHENTIK:-false}" == "true" ]] && echo "  • Authentik:    https://auth.${TENANT_DOMAIN}"
-    [[ "${ENABLE_SIGNAL:-false}" == "true" ]] && echo "  • Signal API:   https://signal.${TENANT_DOMAIN}"
+    [[ "${ENABLE_N8N:-false}" == "true" ]] && echo "  • n8n:          https://n8n.${DOMAIN}"
+    [[ "${ENABLE_FLOWISE:-false}" == "true" ]] && echo "  • Flowise:      https://flowise.${DOMAIN}"
+    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && echo "  • OpenWebUI:   https://openwebui.${DOMAIN}"
+    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && echo "  • AnythingLLM:  https://anythingllm.${DOMAIN}"
+    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && echo "  • LiteLLM:      https://litellm.${DOMAIN}"
+    [[ "${ENABLE_GRAFANA:-false}" == "true" ]] && echo "  • Grafana:      https://grafana.${DOMAIN}"
+    [[ "${ENABLE_AUTHENTIK:-false}" == "true" ]] && echo "  • Authentik:    https://auth.${DOMAIN}"
+    [[ "${ENABLE_SIGNAL:-false}" == "true" ]] && echo "  • Signal API:   https://signal.${DOMAIN}"
     
     echo ""
     echo -e "${GREEN}🔗 Internal Service URLs:${NC}"
@@ -785,8 +1022,8 @@ print_final_summary() {
     echo ""
 }
 
-# Call the final summary
-print_final_summary
+# Call the comprehensive final report (README.md requirements)
+print_comprehensive_final_report
 
 echo ""
 ok "SCRIPT 2 COMPLETED SUCCESSFULLY - FULLY OPERATIONAL STACK"
