@@ -769,6 +769,46 @@ select_stack() {
     fi
 }
 
+# ─── Dify Configuration ───────────────────────────────────────────────────────
+configure_dify() {
+    # Only run if Dify is enabled
+    if [[ "${ENABLE_DIFY}" != "true" ]]; then
+        return
+    fi
+    
+    print_step "6.5" "11" "Dify Configuration"
+    
+    echo -e "  ${BOLD}🏗️  Dify Configuration${NC}"
+    echo -e "  ${DIM}Configure Dify LLM app builder settings${NC}"
+    echo ""
+    
+    # Generate or prompt for Dify secret key
+    if [[ -z "${DIFY_SECRET_KEY}" ]]; then
+        DIFY_SECRET_KEY=$(openssl rand -hex 32)
+        echo -e "  ${DIM}Generated DIFY_SECRET_KEY: ${DIFY_SECRET_KEY}${NC}"
+        read -p "  ➤ Press Enter to accept or enter custom secret key: " custom_key
+        if [[ -n "${custom_key}" ]]; then
+            DIFY_SECRET_KEY="${custom_key}"
+        fi
+    else
+        echo -e "  ${DIM}Using existing DIFY_SECRET_KEY${NC}"
+    fi
+    
+    # Generate or prompt for Dify inner API key
+    if [[ -z "${DIFY_INNER_API_KEY}" ]]; then
+        DIFY_INNER_API_KEY=$(openssl rand -hex 32)
+        echo -e "  ${DIM}Generated DIFY_INNER_API_KEY: ${DIFY_INNER_API_KEY}${NC}"
+        read -p "  ➤ Press Enter to accept or enter custom inner API key: " custom_inner_key
+        if [[ -n "${custom_inner_key}" ]]; then
+            DIFY_INNER_API_KEY="${custom_inner_key}"
+        fi
+    else
+        echo -e "  ${DIM}Using existing DIFY_INNER_API_KEY${NC}"
+    fi
+    
+    log "SUCCESS" "Dify configuration completed"
+}
+
 # ─── Vector DB Selection ───────────────────────────────────────────────────
 select_vector_db() {
     print_step "7" "11" "Vector Database Selection"
@@ -827,6 +867,52 @@ select_vector_db() {
             echo -e "  ${DIM}Note: You'll need to configure external vector DB manually${NC}"
             ;;
     esac
+
+    # Prompt for vector size if local vector database is selected
+    if [[ "${VECTOR_DB}" != "pinecone" && "${VECTOR_DB}" != "none" ]]; then
+        echo ""
+        echo -e "  ${BOLD}🔢  Vector Size Configuration${NC}"
+        echo -e "  ${DIM}Choose the embedding dimension for your vector database${NC}"
+        echo ""
+        echo -e "  ${CYAN}  1)${NC} 768   ${DIM}(nomic-embed-text, all-MiniLM-L6-v2)${NC}"
+        echo -e "  ${CYAN}  2)${NC} 1024  ${DIM}(mxbai-embed-large, text-embedding-ada-002)${NC}"
+        echo -e "  ${CYAN}  3)${NC} 1536  ${DIM}(text-embedding-3-large)${NC}"
+        echo -e "  ${CYAN}  4)${NC} Custom size"
+        echo ""
+        
+        while true; do
+            read -p "  ➤ Select vector size [1-4]: " size_choice
+            size_choice="${size_choice:-1}"
+            case "${size_choice}" in
+                1) 
+                    QDRANT_VECTOR_SIZE=768
+                    break 
+                    ;;
+                2) 
+                    QDRANT_VECTOR_SIZE=1024
+                    break 
+                    ;;
+                3) 
+                    QDRANT_VECTOR_SIZE=1536
+                    break 
+                    ;;
+                4) 
+                    read -p "  ➤ Enter custom vector size: " custom_size
+                    if [[ "${custom_size}" =~ ^[0-9]+$ ]]; then
+                        QDRANT_VECTOR_SIZE="${custom_size}"
+                        break
+                    else
+                        echo "  ❌ Please enter a valid number"
+                    fi
+                    ;;
+                *) 
+                    echo "  ❌ Enter 1, 2, 3 or 4" 
+                    ;;
+            esac
+        done
+        
+        echo -e "  ${DIM}Vector size set to: ${QDRANT_VECTOR_SIZE}${NC}"
+    fi
 
     log "SUCCESS" "Vector database: ${VECTOR_DB}"
 }
@@ -1193,6 +1279,25 @@ collect_network_config() {
         esac
         
         echo ""
+        echo -e "  ${BOLD}🌐  Proxy Configuration${NC}"
+        echo -e "  ${DIM}Configure upstream proxy settings (leave empty if none)${NC}"
+        echo ""
+        read -p "  ➤ HTTP proxy URL (e.g., http://proxy.company.com:8080): " HTTP_PROXY
+        read -p "  ➤ HTTPS proxy URL (e.g., http://proxy.company.com:8080): " HTTPS_PROXY
+        read -p "  ➤ No proxy hosts (comma-separated, e.g., localhost,127.0.0.1,.local): " NO_PROXY
+        
+        # Set defaults if empty
+        HTTP_PROXY="${HTTP_PROXY:-}"
+        HTTPS_PROXY="${HTTPS_PROXY:-}"
+        NO_PROXY="${NO_PROXY:-}"
+        
+        if [[ -n "${HTTP_PROXY}" || -n "${HTTPS_PROXY}" ]]; then
+            echo -e "  ${DIM}Proxy configuration will be applied to all services${NC}"
+        else
+            echo -e "  ${DIM}No proxy configured${NC}"
+        fi
+        
+        echo ""
         echo -e "  ${BOLD}🔒  SSL Certificate Method${NC}"
         echo -e "  ${CYAN}  1)${NC} Let's Encrypt (automatic, requires DNS)"
         echo -e "  ${CYAN}  2)${NC} Self-signed (quick, no DNS needed)"
@@ -1454,6 +1559,7 @@ FLOWISE_UID=${FLOWISE_UID:-1000}
 LITELLM_UID=${LITELLM_UID:-1000}
 AUTHENTIK_UID=${AUTHENTIK_UID:-1000}
 CADDY_UID=${CADDY_UID:-1000}
+# Note: Cloud services (Pinecone, Weaviate, ChromaDB, Milvus, OpenAI, Anthropic, LocalAI, VLLM) don't need UIDs
 
 # ─── Service Flags ─────────────────────────────────────────────────────────────
 ENABLE_POSTGRES=${ENABLE_POSTGRES}
@@ -1480,7 +1586,7 @@ ENABLE_PROMETHEUS=${ENABLE_PROMETHEUS}
 ENABLE_AUTHENTIK=${ENABLE_AUTHENTIK}
 ENABLE_SIGNAL=${ENABLE_SIGNAL}
 ENABLE_TAILSCALE=${ENABLE_TAILSCALE}
-ENABLE_OPENCLAW="${ENABLE_OPENCLAW:-false}"
+ENABLE_OPENCLAW=${ENABLE_OPENCLAW:-false}
 ENABLE_RCLONE=${ENABLE_RCLONE}
 ENABLE_MINIO=${ENABLE_MINIO}
 
@@ -1649,7 +1755,7 @@ TAILSCALE_FUNNEL=${TAILSCALE_FUNNEL}
 
 # ─── Signal API ───────────────────────────────────────────────────────────────
 SIGNAL_PHONE_NUMBER=${SIGNAL_PHONE_NUMBER}
-SIGNAL_VERIFICATION_CODE=${SIGNAL_VERIFICATION_CODE}
+# Note: SIGNAL_VERIFICATION_CODE will be populated in script 2 after user registration
 
 # ─── Google Drive Integration ───────────────────────────────────────────────────
 GDRIVE_CLIENT_ID=${GDRIVE_CLIENT_ID}
@@ -1727,7 +1833,7 @@ TAILSCALE_PORT=${TAILSCALE_PORT}
 SSL_EMAIL=${ADMIN_EMAIL}
 GPU_DEVICE=${GPU_TYPE}
 TENANT_DIR=${DATA_ROOT}
-TAILSCALE_EXTRA_ARGS=""
+TAILSCALE_EXTRA_ARGS="${TAILSCALE_AUTH_KEY:+--authkey ${TAILSCALE_AUTH_KEY}}"
 MINIO_CONSOLE_PORT=9001
 MINIO_PORT=9000
 EOF
@@ -2077,6 +2183,7 @@ main() {
     select_data_volume       # Step 4
     detect_gpu               # Step 5
     select_stack             # Step 6
+    configure_dify           # Step 6.5 - Dify configuration (if enabled)
     select_vector_db         # Step 7
     collect_database         # Step 7.5 - Database configuration
     collect_llm_config       # Step 8
