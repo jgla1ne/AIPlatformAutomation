@@ -1932,10 +1932,8 @@ write_caddyfile() {
 
 {
     email ${ADMIN_EMAIL}
-    # Internal certificates - bypass Let's Encrypt rate limits
-    tls internal {
-        ca local
-    }
+    # Disable HTTPS for self-signed testing
+    auto_https off
 }
 
 EOF
