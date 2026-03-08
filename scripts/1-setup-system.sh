@@ -40,6 +40,10 @@ ENABLE_POSTGRES="false"
 ENABLE_REDIS="false"
 ENABLE_CADDY="false"
 ENABLE_OLLAMA="false"
+ENABLE_OPENAI="false"
+ENABLE_ANTHROPIC="false"
+ENABLE_LOCALAI="false"
+ENABLE_VLLM="false"
 ENABLE_OPENWEBUI="false"
 ENABLE_ANYTHINGLLM="false"
 ENABLE_DIFY="false"
@@ -47,6 +51,10 @@ ENABLE_N8N="false"
 ENABLE_FLOWISE="false"
 ENABLE_LITELLM="false"
 ENABLE_QDRANT="false"
+ENABLE_WEAVIATE="false"
+ENABLE_PINECONE="false"
+ENABLE_CHROMADB="false"
+ENABLE_MILVUS="false"
 ENABLE_GRAFANA="false"
 ENABLE_PROMETHEUS="false"
 ENABLE_AUTHENTIK="false"
@@ -656,7 +664,6 @@ select_stack() {
         1)  # Minimal
             ENABLE_POSTGRES=true
             ENABLE_REDIS=true
-            ENABLE_CADDY=true
             ENABLE_OLLAMA=true
             ENABLE_OPENWEBUI=true
             STACK_NAME="minimal"
@@ -665,26 +672,22 @@ select_stack() {
         2)  # Standard
             ENABLE_POSTGRES=true
             ENABLE_REDIS=true
-            ENABLE_CADDY=true
             ENABLE_OLLAMA=true
             ENABLE_OPENWEBUI=true
             ENABLE_N8N=true
             ENABLE_FLOWISE=true
             ENABLE_LITELLM=true
-            ENABLE_QDRANT=true
             STACK_NAME="standard"
             log "SUCCESS" "Stack: Standard"
             ;;
         3)  # Full
             ENABLE_POSTGRES=true
             ENABLE_REDIS=true
-            ENABLE_CADDY=true
             ENABLE_OLLAMA=true
             ENABLE_OPENWEBUI=true
             ENABLE_N8N=true
             ENABLE_FLOWISE=true
             ENABLE_LITELLM=true
-            ENABLE_QDRANT=true
             ENABLE_ANYTHINGLLM=true
             ENABLE_GRAFANA=true
             ENABLE_PROMETHEUS=true
@@ -718,7 +721,6 @@ select_stack() {
         ask_service "🤖" "AnythingLLM"   "AI assistant & RAG"         "ENABLE_ANYTHINGLLM"   "$( [[ "${ENABLE_ANYTHINGLLM}" == "true" ]]   && echo y || echo n )"
         ask_service "🏗️ " "Dify"          "LLM app builder"            "ENABLE_DIFY"          "$( [[ "${ENABLE_DIFY}" == "true" ]]          && echo y || echo n )"
         ask_service "🔀" "LiteLLM"       "LLM proxy gateway"          "ENABLE_LITELLM"       "$( [[ "${ENABLE_LITELLM}" == "true" ]]       && echo y || echo n )"
-        ask_service "🗄️ " "Qdrant"        "Vector database"            "ENABLE_QDRANT"        "$( [[ "${ENABLE_QDRANT}" == "true" ]]        && echo y || echo n )"
 
         echo ""
         echo -e "  ${BOLD}─── ⚡  Automation ──────────────────────────────────────${NC}"
@@ -747,25 +749,56 @@ select_vector_db() {
     echo -e "  ${BOLD}🗄️  Choose Vector Database${NC}"
     echo ""
     echo -e "  ${CYAN}  1)${NC}  Qdrant     ${DIM}(recommended, high-performance)${NC}"
-    echo -e "  ${CYAN}  2)${NC}  Chroma     ${DIM}(lightweight, embedded)${NC}"
-    echo -e "  ${CYAN}  3)${NC}  Weaviate   ${DIM}(GraphQL API, advanced)${NC}"
-    echo -e "  ${CYAN}  4)${NC}  None       ${DIM}(use external vector DB)${NC}"
+    echo -e "  ${CYAN}  2)${NC}  Weaviate   ${DIM}(GraphQL API, advanced)${NC}"
+    echo -e "  ${CYAN}  3)${NC}  ChromaDB   ${DIM}(lightweight, embedded)${NC}"
+    echo -e "  ${CYAN}  4)${NC}  Milvus     ${DIM}(enterprise-scale)${NC}"
+    echo -e "  ${CYAN}  5)${NC}  Pinecone   ${DIM}(managed service)${NC}"
+    echo -e "  ${CYAN}  6)${NC}  None       ${DIM}(use external vector DB)${NC}"
     echo ""
 
     while true; do
-        read -p "  ➤ Select vector database [1-4]: " choice
+        read -p "  ➤ Select vector database [1-6]: " choice
         choice="${choice:-1}"
         case "${choice}" in
-            1|2|3|4) break ;;
-            *) echo "  ❌ Enter 1, 2, 3 or 4" ;;
+            1|2|3|4|5|6) break ;;
+            *) echo "  ❌ Enter 1, 2, 3, 4, 5 or 6" ;;
         esac
     done
 
+    # First, disable all vector databases
+    ENABLE_QDRANT=false
+    ENABLE_WEAVIATE=false
+    ENABLE_CHROMADB=false
+    ENABLE_MILVUS=false
+    ENABLE_PINECONE=false
+
+    # Then enable the selected one
     case "${choice}" in
-        1) VECTOR_DB="qdrant" ;;
-        2) VECTOR_DB="chroma" ;;
-        3) VECTOR_DB="weaviate" ;;
-        4) VECTOR_DB="none" ;;
+        1) 
+            VECTOR_DB="qdrant"
+            ENABLE_QDRANT=true
+            ;;
+        2) 
+            VECTOR_DB="weaviate"
+            ENABLE_WEAVIATE=true
+            ;;
+        3) 
+            VECTOR_DB="chromadb"
+            ENABLE_CHROMADB=true
+            ;;
+        4) 
+            VECTOR_DB="milvus"
+            ENABLE_MILVUS=true
+            ;;
+        5) 
+            VECTOR_DB="pinecone"
+            ENABLE_PINECONE=true
+            echo -e "  ${DIM}Note: Pinecone is a managed service - no local deployment${NC}"
+            ;;
+        6) 
+            VECTOR_DB="none"
+            echo -e "  ${DIM}Note: You'll need to configure external vector DB manually${NC}"
+            ;;
     esac
 
     log "SUCCESS" "Vector database: ${VECTOR_DB}"
@@ -1160,6 +1193,23 @@ collect_network_config() {
         fi
     fi
 
+    # Dynamic proxy service enablement based on selection
+    if [[ "${enable_proxy,,}" == "y" ]]; then
+        case "${PROXY_TYPE}" in
+            "caddy")
+                ENABLE_CADDY=true
+                log "INFO" "Caddy proxy enabled - ENABLE_CADDY set to true"
+                ;;
+            "nginx"|"traefik"|"custom")
+                ENABLE_CADDY=false
+                log "INFO" "${PROXY_TYPE} proxy selected - ENABLE_CADDY set to false"
+                ;;
+        esac
+    else
+        ENABLE_CADDY=false
+        log "INFO" "No proxy selected - ENABLE_CADDY set to false"
+    fi
+
     print_divider
 
     # OpenClaw Configuration
@@ -1361,6 +1411,10 @@ ENABLE_POSTGRES=${ENABLE_POSTGRES}
 ENABLE_REDIS=${ENABLE_REDIS}
 ENABLE_CADDY=${ENABLE_CADDY}
 ENABLE_OLLAMA=${ENABLE_OLLAMA}
+ENABLE_OPENAI=${ENABLE_OPENAI}
+ENABLE_ANTHROPIC=${ENABLE_ANTHROPIC}
+ENABLE_LOCALAI=${ENABLE_LOCALAI}
+ENABLE_VLLM=${ENABLE_VLLM}
 ENABLE_OPENWEBUI=${ENABLE_OPENWEBUI}
 ENABLE_ANYTHINGLLM=${ENABLE_ANYTHINGLLM}
 ENABLE_DIFY=${ENABLE_DIFY}
@@ -1368,6 +1422,10 @@ ENABLE_N8N=${ENABLE_N8N}
 ENABLE_FLOWISE=${ENABLE_FLOWISE}
 ENABLE_LITELLM=${ENABLE_LITELLM}
 ENABLE_QDRANT=${ENABLE_QDRANT}
+ENABLE_WEAVIATE=${ENABLE_WEAVIATE}
+ENABLE_PINECONE=${ENABLE_PINECONE}
+ENABLE_CHROMADB=${ENABLE_CHROMADB}
+ENABLE_MILVUS=${ENABLE_MILVUS}
 ENABLE_GRAFANA=${ENABLE_GRAFANA}
 ENABLE_PROMETHEUS=${ENABLE_PROMETHEUS}
 ENABLE_AUTHENTIK=${ENABLE_AUTHENTIK}
@@ -1389,16 +1447,32 @@ PROMETHEUS_UID=65534
 GRAFANA_UID=472
 N8N_UID=1000
 QDRANT_UID=1000
+WEAVIATE_UID=1000
+PINECONE_UID=1000
+CHROMADB_UID=1000
+MILVUS_UID=1000
 OPENWEBUI_UID=1000
 ANYTHINGLLM_UID=1000
 OLLAMA_UID=1001
+OPENAI_UID=1000
+ANTHROPIC_UID=1000
+LOCALAI_UID=1000
+VLLM_UID=1000
 FLOWISE_UID=1000
 
 # ─── Service URLs (for dynamic configuration) ───────────────────────────────────
 # Internal service URLs (Docker network communication)
 OLLAMA_INTERNAL_URL="http://\${OLLAMA_SERVICE_NAME:-ollama}:\${OLLAMA_PORT:-11434}"
+OPENAI_INTERNAL_URL="https://api.openai.com/v1"
+ANTHROPIC_INTERNAL_URL="https://api.anthropic.com"
+LOCALAI_INTERNAL_URL="http://\${LOCALAI_SERVICE_NAME:-localai}:\${LOCALAI_PORT:-8080}"
+VLLM_INTERNAL_URL="http://\${VLLM_SERVICE_NAME:-vllm}:\${VLLM_PORT:-8000}"
 LITELLM_INTERNAL_URL="http://\${LITELLM_SERVICE_NAME:-litellm}:\${LITELLM_PORT:-4000}"
 QDRANT_INTERNAL_URL="http://\${QDRANT_SERVICE_NAME:-qdrant}:\${QDRANT_PORT:-6333}"
+WEAVIATE_INTERNAL_URL="http://\${WEAVIATE_SERVICE_NAME:-weaviate}:\${WEAVIATE_PORT:-8080}"
+PINECONE_INTERNAL_URL="https://\${PINECONE_PROJECT_ID}.svc.pinecone.io"
+CHROMADB_INTERNAL_URL="http://\${CHROMADB_SERVICE_NAME:-chromadb}:\${CHROMADB_PORT:-8000}"
+MILVUS_INTERNAL_URL="http://\${MILVUS_SERVICE_NAME:-milvus}:\${MILVUS_PORT:-19530}"
 REDIS_INTERNAL_URL="redis://\${REDIS_SERVICE_NAME:-redis}:\${REDIS_PORT:-6379}"
 POSTGRES_INTERNAL_URL="postgresql://\${POSTGRES_SERVICE_NAME:-postgres}:\${POSTGRES_PORT:-5432}"
 N8N_INTERNAL_URL="http://\${N8N_SERVICE_NAME:-n8n}:\${N8N_PORT:-5678}"
@@ -1636,11 +1710,16 @@ create_directories() {
     create_and_own "n8n"                    "N8N"
     create_and_own "n8n/workflows"         "N8N"
     create_and_own "qdrant"                 "QDRANT"
+    create_and_own "weaviate"               "WEAVIATE"
+    create_and_own "chromadb"               "CHROMADB"
+    create_and_own "milvus"                 "MILVUS"
+    create_and_own "ollama"                 "OLLAMA"
+    create_and_own "localai"                "LOCALAI"
+    create_and_own "vllm"                   "VLLM"
     create_and_own "openwebui"              "OPENWEBUI"
     create_and_own "anythingllm"            "ANYTHINGLLM"
     create_and_own "anythingllm/tmp"        "ANYTHINGLLM"
     create_and_own "flowise"                "FLOWISE"
-    create_and_own "ollama"                 "OLLAMA"
 
     log "SUCCESS" "All service directories created with correct, final ownership."
 }
