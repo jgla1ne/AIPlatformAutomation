@@ -2056,103 +2056,99 @@ EOF
 EOF
     fi
 
-    # Add service blocks
+    # Add service blocks - SIMPLE FORMAT (consistent with script-2)
     if [[ "${ENABLE_N8N}" = "true" ]]; then
-        cat >> "${CADDYFILE_PATH}" << 'EOF'
+        cat >> "${CADDYFILE_PATH}" << EOF
 n8n.ai.datasquiz.net {
-    reverse_proxy n8n:5678 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
-    }
+    reverse_proxy n8n:5678
 }
 
 EOF
     fi
 
     if [[ "${ENABLE_FLOWISE}" = "true" ]]; then
-        cat >> "${CADDYFILE_PATH}" << 'EOF'
+        cat >> "${CADDYFILE_PATH}" << EOF
 flowise.ai.datasquiz.net {
-    reverse_proxy flowise:3000 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
-    }
+    reverse_proxy flowise:3000
 }
 
 EOF
     fi
 
     if [[ "${ENABLE_OPENWEBUI}" = "true" ]]; then
-        cat >> "${CADDYFILE_PATH}" << 'EOF'
+        cat >> "${CADDYFILE_PATH}" << EOF
 openwebui.ai.datasquiz.net {
-    reverse_proxy openwebui:8080 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
-    }
+    reverse_proxy openwebui:8080
 }
 
 EOF
     fi
 
     if [[ "${ENABLE_ANYTHINGLLM}" = "true" ]]; then
-        cat >> "${CADDYFILE_PATH}" << 'EOF'
+        cat >> "${CADDYFILE_PATH}" << EOF
 anythingllm.ai.datasquiz.net {
-    reverse_proxy anythingllm:3001 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
-    }
+    reverse_proxy anythingllm:3001
 }
 
 EOF
     fi
 
     if [[ "${ENABLE_LITELLM}" = "true" ]]; then
-        cat >> "${CADDYFILE_PATH}" << 'EOF'
+        cat >> "${CADDYFILE_PATH}" << EOF
 litellm.ai.datasquiz.net {
-    reverse_proxy litellm:4000 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
-    }
+    reverse_proxy litellm:4000
 }
 
 EOF
     fi
 
     if [[ "${ENABLE_GRAFANA}" = "true" ]]; then
-        cat >> "${CADDYFILE_PATH}" << 'EOF'
+        cat >> "${CADDYFILE_PATH}" << EOF
 grafana.ai.datasquiz.net {
-    reverse_proxy grafana:3000 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
-    }
+    reverse_proxy grafana:3000
 }
 
 EOF
     fi
 
     if [[ "${ENABLE_AUTHENTIK}" = "true" ]]; then
-        cat >> "${CADDYFILE_PATH}" << 'EOF'
+        cat >> "${CADDYFILE_PATH}" << EOF
 auth.ai.datasquiz.net {
-    reverse_proxy authentik-server:9000 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
-    }
+    reverse_proxy authentik-server:9000
 }
 
 EOF
+    fi
+
+    if [[ "${ENABLE_SIGNAL}" = "true" ]]; then
+        cat >> "${CADDYFILE_PATH}" << EOF
+signal.ai.datasquiz.net {
+    reverse_proxy signal-api:8080
+}
+
+EOF
+    fi
+
+    # --- CRITICAL: Validate generated Caddyfile ---
+    log "INFO" "Validating generated Caddyfile configuration..."
+    
+    # 1. Format the file (fixes spacing issues)
+    if command -v caddy >/dev/null 2>&1; then
+        if caddy fmt --overwrite "${CADDYFILE_PATH}" 2>/dev/null; then
+            log "SUCCESS" "Caddyfile formatted successfully"
+        else
+            warn "Caddy formatting failed - continuing anyway"
+        fi
+        
+        # 2. Validate the configuration
+        if caddy validate --config "${CADDYFILE_PATH}" 2>/dev/null; then
+            log "SUCCESS" "Caddyfile validation passed"
+        else
+            local validation_error=$(caddy validate --config "${CADDYFILE_PATH}" 2>&1 || echo "Unknown validation error")
+            fail "ERROR" "Caddyfile validation failed: ${validation_error}"
+        fi
+    else
+        warn "Caddy CLI not available - skipping validation"
     fi
 
     chmod 644 "${CADDY_DIR}/Caddyfile"
