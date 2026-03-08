@@ -112,7 +112,6 @@ add_qdrant() {
   qdrant:
     image: qdrant/qdrant:latest
     restart: unless-stopped
-    user: "\${QDRANT_UID:-\${TENANT_UID}}:\${QDRANT_UID:-\${TENANT_GID}}"
     networks:
       - default
     environment:
@@ -132,7 +131,6 @@ add_ollama() {
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
-    user: "\${OLLAMA_UID:-\${TENANT_UID}}:\${OLLAMA_UID:-\${TENANT_GID}}"
     networks:
       - default
     volumes:
