@@ -1864,16 +1864,8 @@ EOF
 apply_final_ownership() {
     print_section "Applying Final Ownership Structure"
 
-    # --- Stage 1: Set Base Ownership ---
-    # Set the entire directory to the tenant's ownership first. This is the default.
-    log "INFO" "Setting base ownership for tenant ${TENANT_UID}:${TENANT_GID} on ${DATA_ROOT}..."
-    if ! chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"; then
-        fail "Failed to set base recursive ownership on ${DATA_ROOT}."
-    fi
-    log "SUCCESS" "Base ownership applied."
-
-    # --- Stage 2: Apply Pragmatic Exceptions ---
-    # Now, override ownership for specific directories that run as their own user.
+    # --- Stage 1: Apply Pragmatic Exceptions ---
+    # Only set ownership for specific directories that run as their own user.
     # This correctly implements the learning from README.md (Line 537).
     log "INFO" "Applying ownership exceptions for specific services..."
 
@@ -1915,7 +1907,7 @@ apply_final_ownership() {
     
     # NOTE: Add any other service exceptions here if they are discovered.
 
-    # --- Stage 3: Secure Permissions ---
+    # --- Stage 2: Secure Permissions ---
     log "INFO" "Setting final secure permissions on tenant root and .env file..."
     chmod 750 "${DATA_ROOT}"
     chmod 640 "${ENV_FILE}"
