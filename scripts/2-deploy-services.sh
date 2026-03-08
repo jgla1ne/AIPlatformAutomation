@@ -423,8 +423,6 @@ docker compose up -d
 ok "Deployment initiated successfully. Please allow a few minutes for all services to start."
 log "Run 'docker compose ps' in '${TENANT_DIR}' to check status."
 
-ok "SCRIPT 2 COMPLETED SUCCESSFULLY."
-
 # --- Wait and Test Services ---
 log "Waiting 30 seconds for services to initialize..."
 sleep 30
@@ -536,3 +534,87 @@ fi
 echo ""
 ok "SCRIPT 2 COMPLETED. FULL DIAGNOSTICS ARE AVAILABLE IN THE LOG FILE."
 echo ""
+
+# =============================================================================
+# FINAL HEALTH STATUS SUMMARY
+# =============================================================================
+log "Generating final health status summary..."
+echo -e "\n\n--- FINAL HEALTH STATUS SUMMARY AT $(date) ---\n" >> "${LOG_FILE}"
+
+echo "===============================================" >> "${LOG_FILE}"
+echo "🏥 COMPREHENSIVE SERVICE HEALTH STATUS" >> "${LOG_FILE}"
+echo "===============================================" >> "${LOG_FILE}"
+
+# Get container status
+cd "${TENANT_DIR}"
+docker compose ps >> "${LOG_FILE}" 2>&1
+
+echo -e "\n--- SERVICE HEALTH CHECKS ---\n" >> "${LOG_FILE}"
+
+# Check each service
+services=("caddy" "n8n" "flowise" "openwebui" "litellm" "grafana" "authentik-server" "ollama" "qdrant" "postgres" "redis" "prometheus" "anythingllm")
+
+for service in "${services[@]}"; do
+    echo -e "\n--- ${service} Health Check ---" >> "${LOG_FILE}"
+    
+    # Check if container is running
+    if docker compose ps | grep -q "${service}.*Up"; then
+        echo "✅ ${service}: Container is running" >> "${LOG_FILE}"
+        
+        # Get container logs
+        echo -e "Last 10 logs:\n" >> "${LOG_FILE}"
+        docker compose logs --tail 10 "${service}" >> "${LOG_FILE}" 2>&1
+        
+        # Check if service is responding on its port (if applicable)
+        case "${service}" in
+            "caddy")
+                if curl -s --max-time 5 http://localhost:80 >/dev/null 2>&1; then
+                    echo "✅ ${service}: Responding on port 80" >> "${LOG_FILE}"
+                else
+                    echo "❌ ${service}: Not responding on port 80" >> "${LOG_FILE}"
+                fi
+                ;;
+            "n8n")
+                if curl -s --max-time 5 http://localhost:5678 >/dev/null 2>&1; then
+                    echo "✅ ${service}: Responding on port 5678" >> "${LOG_FILE}"
+                else
+                    echo "❌ ${service}: Not responding on port 5678" >> "${LOG_FILE}"
+                fi
+                ;;
+            "openwebui")
+                if curl -s --max-time 5 http://localhost:8081 >/dev/null 2>&1; then
+                    echo "✅ ${service}: Responding on port 8081" >> "${LOG_FILE}"
+                else
+                    echo "❌ ${service}: Not responding on port 8081" >> "${LOG_FILE}"
+                fi
+                ;;
+            "litellm")
+                if curl -s --max-time 5 http://localhost:4000 >/dev/null 2>&1; then
+                    echo "✅ ${service}: Responding on port 4000" >> "${LOG_FILE}"
+                else
+                    echo "❌ ${service}: Not responding on port 4000" >> "${LOG_FILE}"
+                fi
+                ;;
+            "qdrant")
+                if curl -s --max-time 5 http://localhost:6333 >/dev/null 2>&1; then
+                    echo "✅ ${service}: Responding on port 6333" >> "${LOG_FILE}"
+                else
+                    echo "❌ ${service}: Not responding on port 6333" >> "${LOG_FILE}"
+                fi
+                ;;
+            "ollama")
+                if curl -s --max-time 5 http://localhost:11434/api/tags >/dev/null 2>&1; then
+                    echo "✅ ${service}: Responding on port 11434" >> "${LOG_FILE}"
+                else
+                    echo "❌ ${service}: Not responding on port 11434" >> "${LOG_FILE}"
+                fi
+                ;;
+        esac
+    else
+        echo "❌ ${service}: Container is not running" >> "${LOG_FILE}"
+        echo -e "Container status:\n" >> "${LOG_FILE}"
+        docker compose ps | grep "${service}" >> "${LOG_FILE}" 2>&1
+    fi
+done
+
+ok "Complete health status and diagnostics captured in ${LOG_FILE}"
