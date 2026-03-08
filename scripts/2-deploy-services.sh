@@ -1388,7 +1388,5 @@ done
 
 ok "Complete health status and diagnostics captured in ${LOG_FILE}"
 
-}
-
 # Call main function to execute the script
 main
