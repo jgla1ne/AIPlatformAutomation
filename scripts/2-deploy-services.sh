@@ -504,15 +504,16 @@ echo "Note: External URLs require DNS configuration and SSL certificates."
 echo "Local URLs should work if services are running properly."
 
 # =============================================================================
-# FINAL STEP: COMPREHENSIVE LOG CAPTURE FOR DIAGNOSTICS
+# FINAL STEP: COMPREHENSIVE DOCKER LOGS CAPTURE FOR DIAGNOSTICS
 # =============================================================================
 log "Waiting 30 seconds for services to initialize before capturing logs..."
 sleep 30
 
-log "Capturing initial diagnostic logs from all running services..."
-echo -e "\n\n--- COMPREHENSIVE LOGS CAPTURED AT $(date) ---\n" >> "${LOG_FILE}"
+log "Capturing comprehensive Docker logs with error filtering..."
+echo -e "\n\n--- COMPREHENSIVE DOCKER LOGS CAPTURED AT $(date) ---\n" >> "${LOG_FILE}"
 
 # Get all running container IDs for the current project
+cd "${TENANT_DIR}"
 CONTAINER_IDS=$(docker compose ps -q)
 
 if [ -z "$CONTAINER_IDS" ]; then
@@ -522,13 +523,27 @@ else
         service_name=$(docker inspect --format='{{.Name}}' "$container_id" | sed 's!^/!!' | sed "s/^${COMPOSE_PROJECT_NAME}-//;s/-[0-9]*$//")
         
         echo -e "\n\n=================================================" >> "${LOG_FILE}"
-        echo -e "--- LOGS FOR: ${service_name} (Container ID: ${container_id:0:12}) ---" >> "${LOG_FILE}"
+        echo -e "--- DOCKER LOGS FOR: ${service_name} (Container ID: ${container_id:0:12}) ---" >> "${LOG_FILE}"
         echo -e "=================================================\n" >> "${LOG_FILE}"
         
-        # Append the last 100 lines of the container's logs to the main deploy log file
+        # Capture full logs (last 100 lines)
+        echo -e "📋 FULL LOGS (last 100 lines):\n" >> "${LOG_FILE}"
         docker logs --tail 100 "$container_id" &>> "${LOG_FILE}"
+        
+        # Capture ERROR and EXCEPTION filtered logs
+        echo -e "\n🚨 ERROR & EXCEPTION FILTERED LOGS:\n" >> "${LOG_FILE}"
+        docker logs "$container_id" 2>&1 | grep -i -E "(error|exception|failed|fatal|panic|critical|denied|permission|refused)" | tail -20 &>> "${LOG_FILE}" || echo "No errors found in logs" >> "${LOG_FILE}"
+        
+        # Get container status and health
+        echo -e "\n📊 CONTAINER STATUS:\n" >> "${LOG_FILE}"
+        docker inspect "$container_id" --format='Status: {{.State.Status}}, Health: {{.State.Health.Status}}, ExitCode: {{.State.ExitCode}}' &>> "${LOG_FILE}"
+        
+        # Get resource usage
+        echo -e "\n💾 RESOURCE USAGE:\n" >> "${LOG_FILE}"
+        docker stats "$container_id" --no-stream --format "CPU: {{.CPUPerc}}, Memory: {{.MemUsage}}/{{.MemPerc}}" &>> "${LOG_FILE}"
+        
     done
-    ok "All container logs have been appended to ${LOG_FILE}"
+    ok "All Docker logs with error filtering have been appended to ${LOG_FILE}"
 fi
 
 echo ""
