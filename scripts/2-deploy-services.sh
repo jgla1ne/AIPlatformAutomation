@@ -158,7 +158,7 @@ add_openwebui() {
     networks:
       - default
     environment:
-      - OLLAMA_BASE_URL=\${OLLAMA_INTERNAL_URL}
+      - OLLAMA_BASE_URL=\${OLLAMA_BASE_URL}
       - WEBUI_NAME=\${TENANT_ID}
     volumes:
       - \${TENANT_DIR}/openwebui:/app/backend/data
@@ -214,6 +214,7 @@ add_flowise() {
     networks:
       - default
     environment:
+      - HOME=/home/node
       - PORT=\${FLOWISE_PORT}
       - DATABASE_TYPE=postgres
       - DATABASE_HOST=\${POSTGRES_SERVICE_NAME:-postgres}
@@ -279,6 +280,9 @@ add_litellm() {
     user: "\${TENANT_UID}:\${TENANT_GID}"
     networks:
       - default
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     environment:
       - DATABASE_URL=sqlite:///app/litellm.db
       - LITELM_MASTER_KEY=\${LITELLM_MASTER_KEY}

@@ -1625,6 +1625,7 @@ FLOWISE_UID=1000
 # ─── Service URLs (for dynamic configuration) ───────────────────────────────────
 # Internal service URLs (Docker network communication)
 OLLAMA_INTERNAL_URL="http://\${OLLAMA_SERVICE_NAME:-ollama}:\${OLLAMA_PORT:-11434}"
+OLLAMA_BASE_URL="http://\${OLLAMA_SERVICE_NAME:-ollama}:\${OLLAMA_PORT:-11434}"
 OPENAI_INTERNAL_URL="https://api.openai.com/v1"
 ANTHROPIC_INTERNAL_URL="https://api.anthropic.com"
 LOCALAI_INTERNAL_URL="http://\${LOCALAI_SERVICE_NAME:-localai}:\${LOCALAI_PORT:-8080}"

@@ -713,6 +713,60 @@ setup_logging() {
     log "INFO" "All output is now logged to: ${LOG_FILE}"
 }
 
+# ─── Caddy Configuration ─────────────────────────────────────────────────────
+write_production_caddyfile() {
+    log "Generating final production Caddyfile..."
+    
+    local caddyfile_content="{
+    # This email is used for ACME notifications.
+    email \${ACME_EMAIL}
+}
+
+# --- PUBLIC FACING SERVICES ---
+"
+
+    # Dynamically add reverse proxy rules for enabled services
+    [[ "${ENABLE_N8N:-false}" == "true" ]] && caddyfile_content+="\nn8n.\${TENANT_DOMAIN} {
+    reverse_proxy n8n:\${N8N_PORT:-5678}
+}
+"
+    [[ "${ENABLE_QDRANT:-false}" == "true" ]] && caddyfile_content+="\nqdrant.\${TENANT_DOMAIN} {
+    reverse_proxy qdrant:\${QDRANT_PORT:-6333}
+}
+"
+    [[ "${ENABLE_OLLAMA:-false}" == "true" ]] && caddyfile_content+="\nollama.\${TENANT_DOMAIN} {
+    reverse_proxy ollama:\${OLLAMA_PORT:-11434}
+}
+"
+    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && caddyfile_content+="\nopenwebui.\${TENANT_DOMAIN} {
+    reverse_proxy openwebui:8080
+}
+"
+    [[ "${ENABLE_FLOWISE:-false}" == "true" ]] && caddyfile_content+="\nflowise.\${TENANT_DOMAIN} {
+    reverse_proxy flowise:3000
+}
+"
+    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && caddyfile_content+="\nlitellm.\${TENANT_DOMAIN} {
+    reverse_proxy litellm:4000
+}
+"
+    [[ "${ENABLE_GRAFANA:-false}" == "true" ]] && caddyfile_content+="\ngrafana.\${TENANT_DOMAIN} {
+    reverse_proxy grafana:3000
+}
+"
+
+    # Write final file
+    echo -e "${caddyfile_content}" > "${TENANT_DIR}/Caddyfile"
+
+    # Reload Caddy to apply new configuration without downtime
+    log "Reloading Caddy with new production configuration..."
+    if docker exec "${COMPOSE_PROJECT_NAME}-caddy-1" caddy reload --config /etc/caddy/Caddyfile; then
+        ok "Caddy reloaded successfully."
+    else
+        warn "Caddy reload failed. Check Caddy container logs for errors."
+    fi
+}
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 main() {
     print_header
@@ -763,6 +817,9 @@ main() {
         current_step=$((current_step + 1))
         configure_grafana
     }
+    
+    # Generate and reload production Caddyfile
+    write_production_caddyfile
     
     print_credentials
     
