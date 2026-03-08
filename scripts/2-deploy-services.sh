@@ -128,6 +128,24 @@ dify.${DOMAIN} {
 EOF
     fi
 
+    if [[ "${ENABLE_TAILSCALE:-false}" == "true" ]]; then
+        cat >> "${caddyfile_path}" << EOF
+tailscale.${DOMAIN} {
+    reverse_proxy tailscale:8443
+}
+
+EOF
+    fi
+
+    if [[ "${ENABLE_RCLONE:-false}" == "true" ]]; then
+        cat >> "${caddyfile_path}" << EOF
+rclone.${DOMAIN} {
+    reverse_proxy rclone:5572
+}
+
+EOF
+    fi
+
     # Add Signal API as requested
     if [[ "${ENABLE_SIGNAL:-false}" == "true" ]]; then
         cat >> "${caddyfile_path}" << EOF
@@ -532,6 +550,59 @@ EOF
     ok "Added 'dify-api' service."
 }
 
+add_tailscale() {
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  tailscale:
+    image: tailscale/tailscale:latest
+    restart: unless-stopped
+    user: "\${TENANT_UID}:\${TENANT_GID}"
+    networks:
+      - default
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun
+    environment:
+      - TS_AUTHKEY=\${TAILSCALE_AUTH_KEY}
+      - TS_HOSTNAME=\${TAILSCALE_HOSTNAME}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_SERVE_MODE=\${TAILSCALE_SERVE_MODE:-false}
+      - TS_FUNNEL=\${TAILSCALE_FUNNEL:-false}
+    volumes:
+      - \${TENANT_DIR}/tailscale:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    command: tailscaled --tun=userspace-networking
+    ports:
+      - "\${TAILSCALE_PORT:-8443}:8443"
+
+EOF
+    ok "Added 'tailscale' service."
+}
+
+add_rclone() {
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  rclone:
+    image: rclone/rclone:latest
+    restart: unless-stopped
+    user: "\${TENANT_UID}:\${TENANT_GID}"
+    networks:
+      - default
+    environment:
+      - RCLONE_CONFIG=\${RCLONE_CONFIG:-/config/rclone.conf}
+    volumes:
+      - \${TENANT_DIR}/rclone:/config
+      - \${TENANT_DIR}/storage:/data
+    ports:
+      - "\${RCLONE_PORT:-5572}:5572"
+    command: rclone rcd --rc-web-gui --rc-addr :5572 --rc-user=\${RCLONE_USER:-admin} --rc-pass=\${RCLONE_PASSWORD}
+
+EOF
+    ok "Added 'rclone' service."
+}
+
 add_caddy() {
     cat >> "${COMPOSE_FILE}" << EOF
 
@@ -569,6 +640,8 @@ EOF
 [[ "${ENABLE_PROMETHEUS}" == "true" ]] && add_prometheus
 [[ "${ENABLE_AUTHENTIK}" == "true" ]] && add_authentik
 [[ "${ENABLE_DIFY:-false}" == "true" ]] && add_dify
+[[ "${ENABLE_TAILSCALE:-false}" == "true" ]] && add_tailscale
+[[ "${ENABLE_RCLONE:-false}" == "true" ]] && add_rclone
 [[ "${ENABLE_CADDY}" == "true" ]] && add_caddy
 
 # --- Add Network Configuration ---
@@ -685,6 +758,43 @@ if [[ "${ENABLE_QDRANT}" == "true" ]]; then
         log "SUCCESS" "Qdrant is accessible"
     else
         log "WARN" "Qdrant may not be fully ready"
+    fi
+fi
+
+# Configure Tailscale if enabled (MOVED FROM SCRIPT-3)
+if [[ "${ENABLE_TAILSCALE}" == "true" ]]; then
+    log "INFO" "Starting Tailscale VPN..."
+    
+    # Wait for Tailscale container to be ready
+    if wait_for_service "Tailscale" "http://localhost:${TAILSCALE_PORT:-8443}" 60; then
+        log "INFO" "Tailscale container is running"
+        
+        # Get Tailscale IP and update .env
+        local ts_ip=$(docker exec ai-datasquiz-tailscale-1 tailscale ip -4 2>/dev/null || echo "unknown")
+        if [[ "$ts_ip" != "unknown" ]]; then
+            log "SUCCESS" "Tailscale IP: $ts_ip"
+            log "INFO" "Access via Tailscale: http://$ts_ip:8443"
+            
+            # Update .env with Tailscale IP
+            sed -i "s/TAILSCALE_IP=.*/TAILSCALE_IP=$ts_ip/" "${ENV_FILE}"
+        else
+            log "WARN" "Could not retrieve Tailscale IP"
+        fi
+    else
+        log "WARN" "Tailscale did not respond within 60s"
+    fi
+fi
+
+# Configure Rclone if enabled (MOVED FROM SCRIPT-3)
+if [[ "${ENABLE_RCLONE}" == "true" ]]; then
+    log "INFO" "Starting Rclone..."
+    
+    # Wait for Rclone container to be ready
+    if wait_for_service "Rclone" "http://localhost:${RCLONE_PORT:-5572}" 30; then
+        log "SUCCESS" "Rclone is accessible"
+        log "INFO" "Rclone Web UI: https://rclone.${DOMAIN}"
+    else
+        log "WARN" "Rclone may not be fully ready"
     fi
 fi
 
@@ -1069,6 +1179,8 @@ print_comprehensive_final_report() {
     [[ "${ENABLE_GRAFANA:-false}" == "true" ]] && echo "  • Grafana:      https://grafana.${DOMAIN}"
     [[ "${ENABLE_AUTHENTIK:-false}" == "true" ]] && echo "  • Authentik:    https://auth.${DOMAIN}"
     [[ "${ENABLE_DIFY:-false}" == "true" ]] && echo "  • Dify:         https://dify.${DOMAIN}"
+    [[ "${ENABLE_TAILSCALE:-false}" == "true" ]] && echo "  • Tailscale:     https://tailscale.${DOMAIN}"
+    [[ "${ENABLE_RCLONE:-false}" == "true" ]] && echo "  • Rclone:        https://rclone.${DOMAIN}"
     echo ""
     
     # Internal URLs Section
@@ -1081,6 +1193,8 @@ print_comprehensive_final_report() {
     [[ "${ENABLE_LITELLM:-false}" == "true" ]] && echo "  • LiteLLM:      http://localhost:4000"
     [[ "${ENABLE_GRAFANA:-false}" == "true" ]] && echo "  • Grafana:      http://localhost:3002"
     [[ "${ENABLE_DIFY:-false}" == "true" ]] && echo "  • Dify:         http://localhost:5001"
+    [[ "${ENABLE_TAILSCALE:-false}" == "true" ]] && echo "  • Tailscale:     http://localhost:8443"
+    [[ "${ENABLE_RCLONE:-false}" == "true" ]] && echo "  • Rclone:        http://localhost:5572"
     [[ "${ENABLE_OLLAMA:-false}" == "true" ]] && echo "  • Ollama API:   http://localhost:11434/api/tags"
     [[ "${ENABLE_QDRANT:-false}" == "true" ]] && echo "  • Qdrant API:   http://localhost:6333"
     [[ "${ENABLE_SIGNAL:-false}" == "true" ]] && echo "  • Signal API:   http://localhost:8080"
@@ -1121,6 +1235,8 @@ print_final_summary() {
     [[ "${ENABLE_GRAFANA:-false}" == "true" ]] && echo "  • Grafana:      https://grafana.${DOMAIN}"
     [[ "${ENABLE_AUTHENTIK:-false}" == "true" ]] && echo "  • Authentik:    https://auth.${DOMAIN}"
     [[ "${ENABLE_DIFY:-false}" == "true" ]] && echo "  • Dify:         https://dify.${DOMAIN}"
+    [[ "${ENABLE_TAILSCALE:-false}" == "true" ]] && echo "  • Tailscale:     https://tailscale.${DOMAIN}"
+    [[ "${ENABLE_RCLONE:-false}" == "true" ]] && echo "  • Rclone:        https://rclone.${DOMAIN}"
     [[ "${ENABLE_SIGNAL:-false}" == "true" ]] && echo "  • Signal API:   https://signal.${DOMAIN}"
     
     echo ""
@@ -1132,6 +1248,8 @@ print_final_summary() {
     [[ "${ENABLE_LITELLM:-false}" == "true" ]] && echo "  • LiteLLM:      http://localhost:4000"
     [[ "${ENABLE_GRAFANA:-false}" == "true" ]] && echo "  • Grafana:      http://localhost:3002"
     [[ "${ENABLE_DIFY:-false}" == "true" ]] && echo "  • Dify:         http://localhost:5001"
+    [[ "${ENABLE_TAILSCALE:-false}" == "true" ]] && echo "  • Tailscale:     http://localhost:8443"
+    [[ "${ENABLE_RCLONE:-false}" == "true" ]] && echo "  • Rclone:        http://localhost:5572"
     [[ "${ENABLE_OLLAMA:-false}" == "true" ]] && echo "  • Ollama API:   http://localhost:11434/api/tags"
     [[ "${ENABLE_QDRANT:-false}" == "true" ]] && echo "  • Qdrant API:   http://localhost:6333"
     [[ "${ENABLE_SIGNAL:-false}" == "true" ]] && echo "  • Signal API:   http://localhost:8080"
