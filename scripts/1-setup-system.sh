@@ -556,6 +556,27 @@ detect_gpu() {
     log "INFO" "No GPU detected — using CPU mode"
 }
 
+# ─── Utility Functions ─────────────────────────────────────────────────────
+fail() {
+    log "ERROR" "$1"
+    exit 1
+}
+
+ok() {
+    log "SUCCESS" "$1"
+}
+
+# ─── Logging ─────────────────────────────────────────────────────────
+log() {
+    local level="${1}" message="${2}"
+    case "${level}" in
+        SUCCESS) echo -e "  ${GREEN}✅  ${message}${NC}" ;;
+        INFO)    echo -e "  ${CYAN}ℹ️   ${message}${NC}" ;;
+        WARN)    echo -e "  ${YELLOW}⚠️   ${message}${NC}" ;;
+        ERROR)   echo -e "  ${RED}❌  ${message}${NC}" ;;
+    esac
+}
+
 # ─── DNS resolution check (used inside collect_identity) ─────────────────────
 check_dns() {
     local domain="${1}"
@@ -716,6 +737,7 @@ select_stack() {
             ENABLE_FLOWISE=true
             ENABLE_LITELLM=true
             ENABLE_ANYTHINGLLM=true
+            ENABLE_DIFY=true
             ENABLE_GRAFANA=true
             ENABLE_PROMETHEUS=true
             ENABLE_AUTHENTIK=true
@@ -1181,10 +1203,14 @@ collect_network_config() {
     echo ""
     read -p "  ➤ Enable Google Drive integration? [y/N]: " enable_gdrive
     if [[ "${enable_gdrive,,}" == "y" ]]; then
+        ENABLE_RCLONE=true
         echo -e "  ${DIM}Get credentials from: https://rclone.org/drive/${NC}"
         read -p "  ➤ Google Drive client ID: " GDRIVE_CLIENT_ID
         read -p "  ➤ Google Drive client secret: " GDRIVE_CLIENT_SECRET
         read -p "  ➤ Google Drive folder name (optional): " GDRIVE_FOLDER_NAME
+        log "SUCCESS" "Google Drive integration enabled"
+    else
+        ENABLE_RCLONE=false
     fi
 
     print_divider
@@ -1294,8 +1320,8 @@ collect_network_config() {
         fi
         
         # Auto-detect proxy from environment
-        HTTP_PROXY="${HTTP_PROXY:-}"
-        HTTPS_PROXY="${HTTPS_PROXY:-}"
+        HTTP_PROXY="${HTTP_PROXY:-${http_proxy:-}}"
+        HTTPS_PROXY="${HTTPS_PROXY:-${https_proxy:-}}"
         NO_PROXY="${NO_PROXY:-localhost,127.0.0.1,.local}"
         
         if [[ -n "${HTTP_PROXY}" || -n "${HTTPS_PROXY}" ]]; then
@@ -1486,6 +1512,7 @@ generate_secrets() {
     ANYTHINGLLM_API_KEY=$(load_existing_secret "ANYTHINGLLM_API_KEY" "$(openssl rand -hex 32)")
     GRAFANA_PASSWORD=$(load_existing_secret "GRAFANA_PASSWORD"          "$(openssl rand -hex 16)")
     AUTHENTIK_SECRET_KEY=$(load_existing_secret "AUTHENTIK_SECRET_KEY" "$(openssl rand -hex 32)")
+    MINIO_ROOT_PASSWORD=$(load_existing_secret "MINIO_ROOT_PASSWORD" "$(openssl rand -hex 16)")
     QDRANT_API_KEY=$(load_existing_secret   "QDRANT_API_KEY"            "$(openssl rand -hex 32)")
     N8N_API_KEY=$(load_existing_secret      "N8N_API_KEY"               "n8n-$(openssl rand -hex 16)")
     N8N_PASSWORD=$(load_existing_secret     "N8N_PASSWORD"              "$(openssl rand -hex 12)")
@@ -1603,18 +1630,8 @@ PROMETHEUS_UID=65534
 GRAFANA_UID=472
 N8N_UID=1000
 QDRANT_UID=1000
-WEAVIATE_UID=1000
-PINECONE_UID=1000
-CHROMADB_UID=1000
-MILVUS_UID=1000
-OPENWEBUI_UID=1000
-ANYTHINGLLM_UID=1000
+REDIS_UID=999
 OLLAMA_UID=1001
-OPENAI_UID=1000
-ANTHROPIC_UID=1000
-LOCALAI_UID=1000
-VLLM_UID=1000
-FLOWISE_UID=1000
 
 # ─── Vector Database Configuration ───────────────────────────────────────────────────
 PINECONE_PROJECT_ID=${PINECONE_PROJECT_ID:-your-project-id}
@@ -1681,7 +1698,7 @@ OLLAMA_INTERNAL_PORT=${OLLAMA_INTERNAL_PORT}
 QDRANT_INTERNAL_PORT=${QDRANT_INTERNAL_PORT}
 QDRANT_INTERNAL_HTTP_PORT=${QDRANT_INTERNAL_HTTP_PORT}
 OPENWEBUI_INTERNAL_PORT=${OPENWEBUI_INTERNAL_PORT}
-OPENCLAW_INTERNAL_PORT=${OPENCLAW_INTERNAL_PORT}
+OPENCLAW_INTERNAL_PORT=${OPENCLAW_PORT:-8082}
 SIGNAL_INTERNAL_PORT=${SIGNAL_INTERNAL_PORT}
 N8N_INTERNAL_PORT=${N8N_INTERNAL_PORT}
 FLOWISE_INTERNAL_PORT=${FLOWISE_INTERNAL_PORT}
