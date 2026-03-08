@@ -74,7 +74,7 @@ FLOWISE_PORT=""
 OPENWEBUI_PORT=""
 ANYTHINGLLM_PORT=""
 LITELLM_PORT=""
-    OPENWEBUI_INTERNAL_PORT="8080"
+    OPENWEBUI_INTERNAL_PORT="8081"
     OPENCLAW_INTERNAL_PORT="8082"
     SIGNAL_INTERNAL_PORT="8080"
 GRAFANA_PORT=""
@@ -177,7 +177,7 @@ CUSTOM_SEARCH_KEY=""
 # Port defaults (based on actual Docker internal ports)
 N8N_PORT="5678"
 FLOWISE_PORT="3000"
-OPENWEBUI_PORT="8080"
+OPENWEBUI_PORT="8081"
 ANYTHINGLLM_PORT="3001"
 LITELLM_PORT="4000"
 GRAFANA_PORT="3002"          # Host port, internal is 3000
@@ -1243,7 +1243,7 @@ collect_ports() {
     # Default ports (based on actual Docker internal ports)
     local d_n8n="5678"
     local d_flowise="3000"
-    local d_openwebui="8080"
+    local d_openwebui="8081"
     local d_anythingllm="3001"
     local d_litellm="4000"
     local d_grafana="3002"          # Host port, internal is 3000
@@ -1671,7 +1671,7 @@ EOF
 
 # ─── Create directory structure ──────────────────────────────────────────────
 create_directories() {
-    log "Creating all service directories with architecturally-compliant ownership..."
+    log "INFO" "Creating all service directories with architecturally-compliant ownership..."
 
     # This block will read the UID variables we just placed in the .env file.
     set -a; source "${ENV_FILE}"; set +a
