@@ -1866,62 +1866,62 @@ apply_final_ownership() {
 
     # --- Stage 1: Set Base Ownership ---
     # Set the entire directory to the tenant's ownership first. This is the default.
-    log "Setting base ownership for tenant ${TENANT_UID}:${TENANT_GID} on ${DATA_ROOT}..."
+    log "INFO" "Setting base ownership for tenant ${TENANT_UID}:${TENANT_GID} on ${DATA_ROOT}..."
     if ! chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"; then
         fail "Failed to set base recursive ownership on ${DATA_ROOT}."
     fi
-    ok "Base ownership applied."
+    log "SUCCESS" "Base ownership applied."
 
     # --- Stage 2: Apply Pragmatic Exceptions ---
     # Now, override ownership for specific directories that run as their own user.
     # This correctly implements the learning from README.md (Line 537).
-    log "Applying ownership exceptions for specific services..."
+    log "INFO" "Applying ownership exceptions for specific services..."
 
     # Exception for n8n (runs as user 1000)
     if [[ -d "${DATA_ROOT}/n8n" ]]; then
         chown -R 1000:1000 "${DATA_ROOT}/n8n"
-        ok "Set ownership for 'n8n' to 1000:1000."
+        log "SUCCESS" "Set ownership for 'n8n' to 1000:1000."
     fi
 
     # Exception for Grafana (runs as user 472)
     if [[ -d "${DATA_ROOT}/grafana" ]]; then
         chown -R 472:472 "${DATA_ROOT}/grafana"
-        ok "Set ownership for 'grafana' to 472:472."
+        log "SUCCESS" "Set ownership for 'grafana' to 472:472."
     fi
     
     # Exception for Prometheus (runs as user 65534)
     if [[ -d "${DATA_ROOT}/prometheus-data" ]]; then
         chown -R 65534:65534 "${DATA_ROOT}/prometheus-data"
-        ok "Set ownership for 'prometheus' to 65534:65534."
+        log "SUCCESS" "Set ownership for 'prometheus' to 65534:65534."
     fi
     
     # Exception for Postgres (runs as user 70)
     if [[ -d "${DATA_ROOT}/postgres" ]]; then
         chown -R 70:70 "${DATA_ROOT}/postgres"
-        ok "Set ownership for 'postgres' to 70:70."
+        log "SUCCESS" "Set ownership for 'postgres' to 70:70."
     fi
     
     # Exception for Qdrant (runs as user 1000)
     if [[ -d "${DATA_ROOT}/qdrant" ]]; then
         chown -R 1000:1000 "${DATA_ROOT}/qdrant"
-        ok "Set ownership for 'qdrant' to 1000:1000."
+        log "SUCCESS" "Set ownership for 'qdrant' to 1000:1000."
     fi
     
     # Exception for Ollama (runs as user 1001)
     if [[ -d "${DATA_ROOT}/ollama" ]]; then
         chown -R 1001:1001 "${DATA_ROOT}/ollama"
-        ok "Set ownership for 'ollama' to 1001:1001."
+        log "SUCCESS" "Set ownership for 'ollama' to 1001:1001."
     fi
     
     # NOTE: Add any other service exceptions here if they are discovered.
 
     # --- Stage 3: Secure Permissions ---
-    log "Setting final secure permissions on tenant root and .env file..."
+    log "INFO" "Setting final secure permissions on tenant root and .env file..."
     chmod 750 "${DATA_ROOT}"
     chmod 640 "${ENV_FILE}"
-    ok "Secure permissions set."
+    log "SUCCESS" "Secure permissions set."
 
-    ok "Final ownership structure is correct and production-ready."
+    log "SUCCESS" "Final ownership structure is correct and production-ready."
 }
 
 # ─── Create directory structure ──────────────────────────────────────────────
