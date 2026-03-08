@@ -166,8 +166,6 @@ log "Generating docker-compose.yml for tenant '${TENANT_ID}'..."
 
 # Initialize compose file
 cat > "${COMPOSE_FILE}" << EOF
-version: '3.8'
-
 services:
 EOF
 
@@ -712,9 +710,20 @@ else
         echo -e "📋 FULL LOGS (last 100 lines):\n" >> "${LOG_FILE}"
         docker logs --tail 100 "$container_id" &>> "${LOG_FILE}"
         
+        # ALSO DISPLAY SERVICE LOGS TO CONSOLE (last 10 lines)
+        echo -e "\n${CYAN}📋 ${service_name} - Last 10 Log Lines:${NC}"
+        docker logs --tail 10 "$container_id" 2>&1 | head -10
+        
         # Capture ERROR and EXCEPTION filtered logs
         echo -e "\n🚨 ERROR & EXCEPTION FILTERED LOGS:\n" >> "${LOG_FILE}"
         docker logs "$container_id" 2>&1 | grep -i -E "(error|exception|failed|fatal|panic|critical|denied|permission|refused)" | tail -20 &>> "${LOG_FILE}" || echo "No errors found in logs" >> "${LOG_FILE}"
+        
+        # ALSO DISPLAY ERRORS TO CONSOLE
+        local error_logs=$(docker logs "$container_id" 2>&1 | grep -i -E "(error|exception|failed|fatal|panic|critical|denied|permission|refused)" | tail -5)
+        if [[ -n "$error_logs" ]]; then
+            echo -e "\n${RED}🚨 ${service_name} - Recent Errors:${NC}"
+            echo "$error_logs"
+        fi
         
         # Get container status and health
         echo -e "\n📊 CONTAINER STATUS:\n" >> "${LOG_FILE}"

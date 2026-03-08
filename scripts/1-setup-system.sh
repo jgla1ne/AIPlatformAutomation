@@ -1888,6 +1888,12 @@ apply_final_ownership() {
     # This overrides the default for specific services.
     log "INFO" "Applying ownership exceptions for services with specific UIDs..."
 
+    # Exception for Postgres (requires UID 70)
+    if [[ -d "${DATA_ROOT}/postgres" ]]; then
+        chown -R 70:70 "${DATA_ROOT}/postgres"
+        log "SUCCESS" "Set ownership for 'postgres' directory to 70:70."
+    fi
+
     # Exception for Grafana (requires UID 472)
     if [[ -d "${DATA_ROOT}/grafana" ]]; then
         chown -R 472:472 "${DATA_ROOT}/grafana"
@@ -1904,6 +1910,24 @@ apply_final_ownership() {
     if [[ -d "${DATA_ROOT}/prometheus-data" ]]; then
         chown -R 65534:65534 "${DATA_ROOT}/prometheus-data"
         log "SUCCESS" "Set ownership for 'prometheus' directory to 65534:65534."
+    fi
+
+    # Exception for Redis (requires UID 999)
+    if [[ -d "${DATA_ROOT}/redis" ]]; then
+        chown -R 999:999 "${DATA_ROOT}/redis"
+        log "SUCCESS" "Set ownership for 'redis' directory to 999:999."
+    fi
+
+    # Exception for Ollama (requires UID 1001)
+    if [[ -d "${DATA_ROOT}/ollama" ]]; then
+        chown -R 1001:1001 "${DATA_ROOT}/ollama"
+        log "SUCCESS" "Set ownership for 'ollama' directory to 1001:1001."
+    fi
+
+    # Exception for Qdrant (requires UID 1000)
+    if [[ -d "${DATA_ROOT}/qdrant" ]]; then
+        chown -R 1000:1000 "${DATA_ROOT}/qdrant"
+        log "SUCCESS" "Set ownership for 'qdrant' directory to 1000:1000."
     fi
 
     # --- STAGE 3: Secure Final Permissions ---
