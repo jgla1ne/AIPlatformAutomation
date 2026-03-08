@@ -178,6 +178,29 @@ CUSTOM_SEARCH_KEY=""
 PINECONE_PROJECT_ID=""
 PINECONE_API_KEY=""
 
+# Service configuration variables
+WEAVIATE_SERVICE_NAME="weaviate"
+WEAVIATE_PORT="8080"
+CHROMADB_SERVICE_NAME="chromadb"
+CHROMADB_PORT="8000"
+MILVUS_SERVICE_NAME="milvus"
+MILVUS_PORT="19530"
+PINECONE_SERVICE_NAME="pinecone"
+QDRANT_SERVICE_NAME="qdrant"
+QDRANT_PORT="6333"
+REDIS_SERVICE_NAME="redis"
+REDIS_PORT="6379"
+POSTGRES_SERVICE_NAME="postgres"
+POSTGRES_PORT="5432"
+N8N_SERVICE_NAME="n8n"
+N8N_PORT="5678"
+OLLAMA_SERVICE_NAME="ollama"
+OLLAMA_PORT="11434"
+LITELLM_SERVICE_NAME="litellm"
+LITELLM_PORT="4000"
+VLLM_SERVICE_NAME="vllm"
+VLLM_PORT="8000"
+
 # Port defaults (based on actual Docker internal ports)
 N8N_PORT="5678"
 FLOWISE_PORT="3000"
@@ -188,7 +211,7 @@ GRAFANA_PORT="3002"          # Host port, internal is 3000
 PROMETHEUS_PORT="9090"
 OLLAMA_PORT="11434"
 QDRANT_PORT="6333"
-SIGNAL_PORT="8085"           # Host port, internal is 8080
+SIGNAL_PORT="8080"           # Host port, internal is 8080
 OPENCLAW_PORT="18789"        # Host port, internal is 8082
 TAILSCALE_PORT="8443"        # Host port, internal is 443 (for OpenClaw)
 
@@ -1255,7 +1278,7 @@ collect_ports() {
     local d_ollama="11434"
     local d_qdrant="6333"
     local d_authentik="9000"         # Host port, internal is 9000
-    local d_signal="8085"           # Host port, internal is 8080
+    local d_signal="8080"           # Host port, internal is 8080
     local d_openclaw="18789"        # Host port, internal is 8082
     local d_tailscale="8443"        # Host port, internal is 443 (for OpenClaw)
 
@@ -1625,6 +1648,29 @@ CUSTOM_SEARCH_KEY=${CUSTOM_SEARCH_KEY}
 # ─── Pinecone Configuration ───────────────────────────────────────────────────────
 PINECONE_PROJECT_ID=${PINECONE_PROJECT_ID}
 PINECONE_API_KEY=${PINECONE_API_KEY}
+
+# ─── Service Configuration Variables ───────────────────────────────────────────────
+WEAVIATE_SERVICE_NAME=${WEAVIATE_SERVICE_NAME}
+WEAVIATE_PORT=${WEAVIATE_PORT}
+CHROMADB_SERVICE_NAME=${CHROMADB_SERVICE_NAME}
+CHROMADB_PORT=${CHROMADB_PORT}
+MILVUS_SERVICE_NAME=${MILVUS_SERVICE_NAME}
+MILVUS_PORT=${MILVUS_PORT}
+PINECONE_SERVICE_NAME=${PINECONE_SERVICE_NAME}
+QDRANT_SERVICE_NAME=${QDRANT_SERVICE_NAME}
+QDRANT_PORT=${QDRANT_PORT}
+REDIS_SERVICE_NAME=${REDIS_SERVICE_NAME}
+REDIS_PORT=${REDIS_PORT}
+POSTGRES_SERVICE_NAME=${POSTGRES_SERVICE_NAME}
+POSTGRES_PORT=${POSTGRES_PORT}
+N8N_SERVICE_NAME=${N8N_SERVICE_NAME}
+N8N_PORT=${N8N_PORT}
+OLLAMA_SERVICE_NAME=${OLLAMA_SERVICE_NAME}
+OLLAMA_PORT=${OLLAMA_PORT}
+LITELLM_SERVICE_NAME=${LITELLM_SERVICE_NAME}
+LITELLM_PORT=${LITELLM_PORT}
+VLLM_SERVICE_NAME=${VLLM_SERVICE_NAME}
+VLLM_PORT=${VLLM_PORT}
 
 # ─── Proxy Configuration ───────────────────────────────────────────────────────
 PROXY_TYPE=${PROXY_TYPE}
