@@ -174,6 +174,10 @@ SERPAPI_ENGINE="google"
 CUSTOM_SEARCH_URL=""
 CUSTOM_SEARCH_KEY=""
 
+# Pinecone configuration
+PINECONE_PROJECT_ID=""
+PINECONE_API_KEY=""
+
 # Port defaults (based on actual Docker internal ports)
 N8N_PORT="5678"
 FLOWISE_PORT="3000"
@@ -1617,6 +1621,10 @@ SERPAPI_KEY=${SERPAPI_KEY}
 SERPAPI_ENGINE=${SERPAPI_ENGINE}
 CUSTOM_SEARCH_URL=${CUSTOM_SEARCH_URL}
 CUSTOM_SEARCH_KEY=${CUSTOM_SEARCH_KEY}
+
+# ─── Pinecone Configuration ───────────────────────────────────────────────────────
+PINECONE_PROJECT_ID=${PINECONE_PROJECT_ID}
+PINECONE_API_KEY=${PINECONE_API_KEY}
 
 # ─── Proxy Configuration ───────────────────────────────────────────────────────
 PROXY_TYPE=${PROXY_TYPE}
