@@ -1185,6 +1185,8 @@ print_comprehensive_final_report() {
     echo "  • Success Rate: ${success_rate}%"
     echo ""
     
+done
+
     # External URLs Section
     echo -e "${GREEN}## 🌐 External Service URLs${NC}"
     echo ""
