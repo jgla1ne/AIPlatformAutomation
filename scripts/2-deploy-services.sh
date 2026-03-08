@@ -71,7 +71,7 @@ add_postgres() {
   postgres:
     image: postgres:15-alpine
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
+    user: "\${POSTGRES_UID:-\${TENANT_UID}}:\${POSTGRES_UID:-\${TENANT_GID}}"
     networks:
       - default
     environment:
@@ -112,7 +112,7 @@ add_qdrant() {
   qdrant:
     image: qdrant/qdrant:latest
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
+    user: "\${QDRANT_UID:-\${TENANT_UID}}:\${QDRANT_UID:-\${TENANT_GID}}"
     networks:
       - default
     environment:
@@ -132,7 +132,7 @@ add_ollama() {
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
+    user: "\${OLLAMA_UID:-\${TENANT_UID}}:\${OLLAMA_UID:-\${TENANT_GID}}"
     networks:
       - default
     volumes:
@@ -179,7 +179,7 @@ add_n8n() {
   n8n:
     image: n8nio/n8n:latest
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
+    user: "\${N8N_UID:-\${TENANT_UID}}:\${N8N_UID:-\${TENANT_GID}}"
     networks:
       - default
     environment:
@@ -303,7 +303,7 @@ add_grafana() {
   grafana:
     image: grafana/grafana:latest
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
+    user: "\${GRAFANA_UID:-\${TENANT_UID}}:\${GRAFANA_UID:-\${TENANT_GID}}"
     networks:
       - default
     environment:
@@ -326,7 +326,7 @@ add_prometheus() {
   prometheus:
     image: prom/prometheus:latest
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
+    user: "\${PROMETHEUS_UID:-\${TENANT_UID}}:\${PROMETHEUS_UID:-\${TENANT_GID}}"
     networks:
       - default
     volumes:
