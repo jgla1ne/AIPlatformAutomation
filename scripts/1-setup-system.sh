@@ -2232,7 +2232,7 @@ EOF
     # Add service blocks - SIMPLE FORMAT (consistent with script-2)
     if [[ "${ENABLE_N8N}" = "true" ]]; then
         cat >> "${CADDYFILE_PATH}" << EOF
-n8n.ai.datasquiz.net {
+n8n.${DOMAIN} {
     reverse_proxy n8n:5678
 }
 
@@ -2241,7 +2241,7 @@ EOF
 
     if [[ "${ENABLE_FLOWISE}" = "true" ]]; then
         cat >> "${CADDYFILE_PATH}" << EOF
-flowise.ai.datasquiz.net {
+flowise.${DOMAIN} {
     reverse_proxy flowise:3000
 }
 
@@ -2250,7 +2250,7 @@ EOF
 
     if [[ "${ENABLE_OPENWEBUI}" = "true" ]]; then
         cat >> "${CADDYFILE_PATH}" << EOF
-openwebui.ai.datasquiz.net {
+openwebui.${DOMAIN} {
     reverse_proxy openwebui:8080
 }
 
@@ -2259,7 +2259,7 @@ EOF
 
     if [[ "${ENABLE_ANYTHINGLLM}" = "true" ]]; then
         cat >> "${CADDYFILE_PATH}" << EOF
-anythingllm.ai.datasquiz.net {
+anythingllm.${DOMAIN} {
     reverse_proxy anythingllm:3001
 }
 
@@ -2268,7 +2268,7 @@ EOF
 
     if [[ "${ENABLE_LITELLM}" = "true" ]]; then
         cat >> "${CADDYFILE_PATH}" << EOF
-litellm.ai.datasquiz.net {
+litellm.${DOMAIN} {
     reverse_proxy litellm:4000
 }
 
@@ -2277,7 +2277,7 @@ EOF
 
     if [[ "${ENABLE_GRAFANA}" = "true" ]]; then
         cat >> "${CADDYFILE_PATH}" << EOF
-grafana.ai.datasquiz.net {
+grafana.${DOMAIN} {
     reverse_proxy grafana:3000
 }
 
@@ -2286,7 +2286,7 @@ EOF
 
     if [[ "${ENABLE_AUTHENTIK}" = "true" ]]; then
         cat >> "${CADDYFILE_PATH}" << EOF
-auth.ai.datasquiz.net {
+auth.${DOMAIN} {
     reverse_proxy authentik-server:9000
 }
 
@@ -2295,7 +2295,7 @@ EOF
 
     if [[ "${ENABLE_SIGNAL}" = "true" ]]; then
         cat >> "${CADDYFILE_PATH}" << EOF
-signal.ai.datasquiz.net {
+signal.${DOMAIN} {
     reverse_proxy signal-api:8080
 }
 

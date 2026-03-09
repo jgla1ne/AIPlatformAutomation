@@ -290,31 +290,29 @@ EOF
 }
 
 add_openwebui() {
-    cat >> "${COMPOSE_FILE}" << EOF
+    cat >> "${COMPOSE_FILE}" << 'EOF'
 
   openwebui:
-    image: ollama/open-webui:latest
+    image: ghcr.io/open-webui/open-webui:main
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
+    user: "${TENANT_UID}:${TENANT_GID}"
     networks:
-      - \${DOCKER_NETWORK}
+      - default
     environment:
-      - OLLAMA_BASE_URL=\${OLLAMA_INTERNAL_URL}
+      - OLLAMA_BASE_URL=${OLLAMA_INTERNAL_URL}
     volumes:
-      - \${TENANT_DIR}/openwebui:/app/backend/data
+      - ${TENANT_DIR}/openwebui:/app/backend/data
     ports:
-      - "\${OPENWEBUI_PORT:-8080}:8080"
+      - "${OPENWEBUI_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 60s
     depends_on:
       - ollama
-
 EOF
-    ok "Added 'openwebui' service with dynamic ownership and health check."
+    ok "Added 'openwebui' service."
 }
 
 add_n8n() {
@@ -349,36 +347,27 @@ EOF
 }
 
 add_flowise() {
-    cat >> "${COMPOSE_FILE}" << EOF
+    cat >> "${COMPOSE_FILE}" << 'EOF'
 
   flowise:
     image: flowiseai/flowise:latest
     restart: unless-stopped
+    # USER DIRECTIVE IS REMOVED INTENTIONALLY
     networks:
-      - \${DOCKER_NETWORK}
+      - default
     environment:
-      - HOME=/tmp # This gives Node.js a writable directory for its user-related tasks
-      - NODE_OPTIONS=--no-user-system # Disable user system calls that cause ENOENT
-      - PORT=\${FLOWISE_PORT}
       - DATABASE_TYPE=postgres
-      - DATABASE_HOST=\${POSTGRES_SERVICE_NAME:-postgres}
-      - DATABASE_PORT=\${POSTGRES_PORT}
-      - DATABASE_NAME=\${POSTGRES_DB}
-      - DATABASE_USER=\${POSTGRES_USER}
-      - DATABASE_PASSWORD=\${POSTGRES_PASSWORD}
-    volumes:
-      - \${TENANT_DIR}/flowise:/root/.flowise
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=${POSTGRES_DB}
+      - DATABASE_USER=${POSTGRES_USER}
+      - DATABASE_PASSWORD=${POSTGRES_PASSWORD}
     ports:
-      - "\${FLOWISE_PORT:-3000}:3000"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
+      - "${FLOWISE_PORT:-3000}:3000"
+    volumes:
+      - ${TENANT_DIR}/flowise:/root/.flowise
     depends_on:
       - postgres
-
 EOF
     ok "Added 'flowise' service."
 }
@@ -712,15 +701,26 @@ cd "${TENANT_DIR}"
 # --- Generate Production Caddyfile ---
 write_production_caddyfile
 
-# CRITICAL FIX: Use docker compose with proper environment export
-# Pull images quietly to reduce verbose logging
-log INFO "Pulling Docker images..."
-docker-compose pull --quiet
+# CRITICAL FIX: Deploy CORE infrastructure services only
+log INFO "Starting CORE infrastructure services..."
 
-log INFO "Starting all services in detached mode..."
-if ! docker-compose up -d; then
-    fail "Docker Compose failed to start. Please check the logs above."
+# Define the essential base platform services
+CORE_SERVICES="postgres redis qdrant ollama caddy"
+
+# Pull images for all defined services first
+log INFO "Pulling all enabled Docker images..."
+if ! docker-compose pull --quiet; then
+    warn "Could not pre-pull all images. Some may download on first start."
 fi
+
+log INFO "Starting CORE services: ${CORE_SERVICES}"
+if ! docker-compose up -d ${CORE_SERVICES}; then
+    fail "Core Docker Compose services failed to start. Please check the logs."
+fi
+
+ok "CORE services are starting."
+log INFO "Use 'sudo bash scripts/3-configure-services.sh --status' to check."
+log INFO "Use 'sudo bash scripts/3-configure-services.sh --manage' to start application services."
 
 # Verify Tailscale connectivity
 log "INFO" "Verifying Tailscale connectivity..."
