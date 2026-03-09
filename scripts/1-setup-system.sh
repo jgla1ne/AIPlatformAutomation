@@ -1851,12 +1851,29 @@ GDRIVE_FOLDER_ID=${GDRIVE_FOLDER_ID}
 
 # Google Service Account for Rclone (non-interactive)
 if [[ "${GDRIVE_AUTH_METHOD}" == "service_account" && -f "${TENANT_DIR}/secrets/google_sa.json" ]]; then
-    # Read entire JSON file and encode for .env
-    GSA_JSON_CONTENT=$(cat "${TENANT_DIR}/secrets/google_sa.json" | base64 -w 0)
-    echo "RCLONE_GOOGLE_CREDENTIALS_BASE64=${GSA_JSON_CONTENT}" >> "${ENV_FILE}"
-    ok "Google Service Account credentials loaded for Rclone."
-else
-    warn "Google Service Account file not found or not selected. Rclone will use OAuth flow."
+    # Create rclone config directory and file
+    mkdir -p "${TENANT_DIR}/rclone"
+    
+    # Generate rclone.conf for service account
+    cat > "${TENANT_DIR}/rclone/rclone.conf" << EOF
+[gdrive]
+type = drive
+scope = drive
+service_account_file = /config/google_sa.json
+team_drive =
+EOF
+    
+    # Ensure tenant ownership
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}/rclone"
+    
+    # Set environment variable for script-2
+    echo "RCLONE_CONFIG_PATH=${TENANT_DIR}/rclone/rclone.conf" >> "${ENV_FILE}"
+    
+    ok "Rclone configuration generated for Service Account authentication."
+elif [[ "${GDRIVE_AUTH_METHOD}" == "oauth" ]]; then
+    # OAuth method - just set variables for script-2
+    echo "RCLONE_CONFIG_PATH=" >> "${ENV_FILE}"
+    ok "Rclone OAuth configuration will be generated during deployment."
 fi
 
 # ─── Search APIs ───────────────────────────────────────────────────────────────

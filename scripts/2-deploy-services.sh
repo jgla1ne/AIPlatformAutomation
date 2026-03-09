@@ -632,6 +632,7 @@ add_tailscale() {
              PID=\$! &&
              until tailscale status >/dev/null 2>&1; do echo 'Waiting for tailscaled to start...'; sleep 2; done &&
              tailscale up --authkey=${TAILSCALE_AUTH_KEY} --hostname=${TENANT_PROJECT_ID}-claw --accept-routes &&
+             echo 'Tailscale connected. Container will now idle.' &&
              wait \$PID"
     ports:
       - "\${TAILSCALE_PORT:-8443}:8443"
@@ -658,36 +659,30 @@ add_rclone() {
     environment:
       - RCLONE_CONFIG=\${RCLONE_CONFIG:-/config/rclone.conf}
     volumes:
-      - \${TENANT_DIR}/rclone:/data
+      - \${TENANT_DIR}/rclone:/config
+      - \${TENANT_DIR}/storage:/data
     ports:
       - "\${RCLONE_PORT:-5572}:5572"
     command: >
-      sh -c "mkdir -p /data &&
-             chown -R ${TENANT_UID}:${TENANT_GID} /data &&
-             if [ \"\${GDRIVE_AUTH_METHOD}\" = \"service_account\" ] && [ -n \"\${RCLONE_GOOGLE_CREDENTIALS_BASE64}\" ]; then
-               echo \${RCLONE_GOOGLE_CREDENTIALS_BASE64} | base64 -d > /tmp/google_sa.json &&
-               cat > /data/rclone.conf << 'EOF'
+      sh -c "if [ \"\${GDRIVE_AUTH_METHOD}\" = \"oauth\" ]; then
+               # OAuth method - generate config on the fly
+               cat > /config/rclone.conf << 'EOF'
 [gdrive]
 type = drive
 scope = drive
-service_account_file = /tmp/google_sa.json
+client_id = \${GDRIVE_CLIENT_ID}
+client_secret = \${GDRIVE_CLIENT_SECRET}
 EOF
-               rclone rcd --rc-no-auth --log-file=/data/rclone.log --config=/data/rclone.conf
-             elif [ \"\${GDRIVE_AUTH_METHOD}\" = \"oauth\" ] && [ -n \"\${GDRIVE_CLIENT_ID}\" ] && [ -n \"\${GDRIVE_CLIENT_SECRET}\" ]; then
-               cat > /data/rclone.conf << 'EOF'
-[gdrive]
-type = drive
-scope = drive
-client_id = ${GDRIVE_CLIENT_ID}
-client_secret = ${GDRIVE_CLIENT_SECRET}
-EOF
-               rclone rcd --config=/data/rclone.conf --log-file=/data/rclone.log
+               rclone rcd --config=/config/rclone.conf --log-file=/data/rclone.log
+             elif [ \"\${GDRIVE_AUTH_METHOD}\" = \"service_account\" ]; then
+               # Service Account method - use pre-generated config
+               rclone rcd --rc-no-auth --rc-addr :5572 --config=\${RCLONE_CONFIG_PATH} --log-file=/data/rclone.log
              else
                echo 'ERROR: No valid Google Drive configuration found' &&
                exit 1
              fi"
     environment:
-      - RCLONE_GOOGLE_CREDENTIALS_BASE64=\${RCLONE_GOOGLE_CREDENTIALS_BASE64}
+      - RCLONE_CONFIG_PATH=\${RCLONE_CONFIG_PATH}
       - GDRIVE_AUTH_METHOD=\${GDRIVE_AUTH_METHOD}
       - GDRIVE_CLIENT_ID=\${GDRIVE_CLIENT_ID}
       - GDRIVE_CLIENT_SECRET=\${GDRIVE_CLIENT_SECRET}
@@ -779,11 +774,11 @@ fi
 # --- END NEW LOGGING BLOCK ---
 
 # --- POST-DEPLOYMENT HEALTH MONITORING ---
-log INFO "Monitoring service startup..."
+log INFO "Monitoring service startup with intelligent health checking..."
 
-# --- Wait and Test Services ---
-log INFO "Waiting 30 seconds for services to initialize..."
-sleep 30
+# Wait for services to become healthy (up to 2 minutes)
+log INFO "Waiting for services to initialize and become healthy..."
+sleep 120
 
 log INFO "Testing service URLs to verify deployment..."
 
