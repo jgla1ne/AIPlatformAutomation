@@ -293,7 +293,7 @@ add_openwebui() {
     cat >> "${COMPOSE_FILE}" << EOF
 
   openwebui:
-    image: ghcr.io/open-webui/open-webui:community
+    image: ghcr.io/open-webui/open-webui:latest
     restart: unless-stopped
     user: "\${TENANT_UID}:\${TENANT_GID}"
     # Fix permissions and start as tenant user

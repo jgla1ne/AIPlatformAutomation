@@ -1247,13 +1247,12 @@ collect_network_config() {
             if [[ -n "$json_content" ]] && echo "$json_content" | python3 -m json.tool >/dev/null 2>&1; then
                 # Save JSON to rclone directory for container mounting
                 echo "$json_content" > "${TENANT_DIR}/rclone/google_sa.json"
-                chmod 600 "${TENANT_DIR}/rclone/google_sa.json"
                 
-                # Ensure tenant ownership
-                chown -R "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}/rclone"
-                
-                echo -e "  ${GREEN}✅ Service Account JSON saved successfully${NC}"
-                echo -e "  ${DIM}Location: ${TENANT_DIR}/rclone/google_sa.json${NC}"
+                # Collect Google Drive root folder ID
+                echo ""
+                echo -e "  ${DIM}Optional: Google Drive root folder ID for specific folder access${NC}"
+                echo -e "  ${DIM}Get from URL: https://drive.google.com/drive/folders/[FOLDER_ID]${NC}"
+                read -p "  ➤ Google Drive root folder ID (optional): " RCLONE_GDRIVE_ROOT_ID
                 
                 # Set variables for .env
                 GDRIVE_AUTH_METHOD="service_account"
@@ -1981,7 +1980,7 @@ EOF
         
         # Set environment variable for script-2
         echo "RCLONE_CONFIG_PATH=${TENANT_DIR}/rclone/rclone.conf" >> "${temp_env_file}"
-        echo "RCLONE_GDRIVE_ROOT_ID=\${RCLONE_GDRIVE_ROOT_ID}" >> "${temp_env_file}"
+        echo "RCLONE_GDRIVE_ROOT_ID=${RCLONE_GDRIVE_ROOT_ID:-}" >> "${temp_env_file}"
         
         ok "Rclone configuration generated for Service Account authentication."
     elif [[ "${GDRIVE_AUTH_METHOD}" == "oauth" ]]; then
@@ -2006,6 +2005,7 @@ EOF
         
         # Set environment variable for script-2
         echo "RCLONE_CONFIG_PATH=${TENANT_DIR}/rclone/rclone.conf" >> "${temp_env_file}"
+        echo "RCLONE_GDRIVE_ROOT_ID=${RCLONE_GDRIVE_ROOT_ID:-}" >> "${temp_env_file}"
         
         ok "Rclone configuration generated for Service Account authentication."
     elif [[ "${GDRIVE_AUTH_METHOD}" == "oauth" ]]; then
