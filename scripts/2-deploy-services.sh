@@ -221,8 +221,6 @@ add_postgres() {
     image: postgres:15-alpine
     restart: unless-stopped
     user: "\${POSTGRES_UID:-\${TENANT_UID}}:\${POSTGRES_UID:-\${TENANT_GID}}"
-    networks:
-      - default
     environment:
       POSTGRES_USER: "\${POSTGRES_USER}"
       POSTGRES_PASSWORD: "\${POSTGRES_PASSWORD}"
@@ -243,8 +241,6 @@ add_redis() {
     image: redis:7-alpine
     restart: unless-stopped
     user: "\${TENANT_UID}:\${TENANT_GID}"
-    networks:
-      - default
     command: redis-server --requirepass "\${REDIS_PASSWORD}"
     volumes:
       - \${TENANT_DIR}/redis:/data
@@ -261,8 +257,6 @@ add_qdrant() {
   qdrant:
     image: qdrant/qdrant:latest
     restart: unless-stopped
-    networks:
-      - default
     environment:
       QDRANT__SERVICE__HTTP_PORT: "\${QDRANT_PORT:-6333}"
     volumes:
@@ -280,8 +274,6 @@ add_ollama() {
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
-    networks:
-      - default
     volumes:
       - \${TENANT_DIR}/ollama:/root/.ollama
     ports:
@@ -304,8 +296,6 @@ add_openwebui() {
     image: ghcr.io/open-webui/open-webui:main
     restart: unless-stopped
     user: "\${TENANT_UID}:\${TENANT_GID}"
-    networks:
-      - \${DOCKER_NETWORK}
     environment:
       - OLLAMA_BASE_URL=\${OLLAMA_BASE_URL}
       - WEBUI_NAME=\${TENANT_ID}
@@ -334,9 +324,7 @@ add_n8n() {
   n8n:
     image: n8nio/n8n:latest
     restart: unless-stopped
-    user: "\${N8N_UID:-\${TENANT_UID}}:\${N8N_UID:-\${TENANT_GID}}"
-    networks:
-      - default
+    user: "\${N8N_UID:-\${TENANT_UID}}:\${N8N_GID:-\${TENANT_GID}}"
     environment:
       - N8N_BASIC_AUTH_USER=\${N8N_USER}
       - N8N_BASIC_AUTH_PASSWORD=\${N8N_PASSWORD}
@@ -368,8 +356,6 @@ add_flowise() {
     image: flowiseai/flowise:latest
     restart: unless-stopped
     user: "\${TENANT_UID}:\${TENANT_GID}"
-    networks:
-      - \${DOCKER_NETWORK}
     environment:
       - HOME=/home/node # Keep this variable
       - PORT=\${FLOWISE_PORT}
@@ -379,7 +365,6 @@ add_flowise() {
       - DATABASE_NAME=\${POSTGRES_DB}
       - DATABASE_USER=\${POSTGRES_USER}
       - DATABASE_PASSWORD=\${POSTGRES_PASSWORD}
-      - APIKEY_PATH=/app/flowise-apikeys
     volumes:
       - \${TENANT_DIR}/flowise:/app/storage
     ports:
@@ -406,8 +391,6 @@ add_anythingllm() {
     image: mintplexlabs/anythingllm:latest
     restart: unless-stopped
     user: "1000:1000" # Match the directory ownership
-    networks:
-      - default
     environment:
       # CRITICAL FIX: Add missing AnythingLLM environment variables
       - STORAGE_DIR=/app/server/storage
@@ -443,27 +426,23 @@ add_litellm() {
     image: ghcr.io/berriai/litellm:main
     restart: unless-stopped
     user: "\${TENANT_UID}:\${TENANT_GID}"
-    networks:
-      - default
     dns:
       - 8.8.8.8
       - 1.1.1.1
-    # Use direct command with inline ownership fix
-    command: >
-      sh -c "mkdir -p /data && 
-             chown -R ${TENANT_UID}:${TENANT_GID} /data &&
-             exec /app/entrypoint.sh"
+    # Use the new robust, confined entrypoint script
+    command: /app_scripts/litellm_entrypoint.sh
     environment:
-      - DATABASE_URL=sqlite:///app/litellm.db
+      - DATABASE_URL=sqlite:///data/litellm.db # Point to the persistent data volume
       - LITELM_MASTER_KEY=\${LITELLM_MASTER_KEY}
-      # Pass TENANT_UID and GID to script
+      # Pass TENANT_UID and GID to the script
       - TENANT_UID=\${TENANT_UID}
       - TENANT_GID=\${TENANT_GID}
       - OLLAMA_API_BASE=\${OLLAMA_INTERNAL_URL}
     volumes:
-      # Mount entire project directory to access script
-      - ../:/app/
-      - \${TENANT_DIR}/litellm:/data # Use a separate data volume
+      # Mount ONLY the confined scripts directory into the container
+      - \${TENANT_DIR}/_scripts:/app_scripts:ro # Mount as read-only for security
+      # The persistent data volume remains correct
+      - \${TENANT_DIR}/litellm:/data
     ports:
       - "\${LITELLM_PORT:-4000}:4000"
     healthcheck:
@@ -484,8 +463,6 @@ add_grafana() {
     image: grafana/grafana:latest
     restart: unless-stopped
     user: "\${GRAFANA_UID:-\${TENANT_UID}}:\${GRAFANA_UID:-\${TENANT_GID}}"
-    networks:
-      - default
     environment:
       - GF_SECURITY_ADMIN_USER=\${GRAFANA_ADMIN_USER}
       - GF_SECURITY_ADMIN_PASSWORD=\${GF_SECURITY_ADMIN_PASSWORD}
@@ -507,8 +484,6 @@ add_prometheus() {
     image: prom/prometheus:latest
     restart: unless-stopped
     user: "\${PROMETHEUS_UID:-\${TENANT_UID}}:\${PROMETHEUS_UID:-\${TENANT_GID}}"
-    networks:
-      - default
     volumes:
       - \${TENANT_DIR}/prometheus.yml:/etc/prometheus/prometheus.yml
       - \${TENANT_DIR}/prometheus-data:/prometheus
@@ -524,8 +499,6 @@ add_authentik() {
     image: ghcr.io/goauthentik/server:latest
     restart: unless-stopped
     user: "\${TENANT_UID}:\${TENANT_GID}"
-    networks:
-      - default
     environment:
       - AUTHENTIK_SECRET_KEY=\${AUTHENTIK_SECRET_KEY}
       - AUTHENTIK_POSTGRESQL__HOST=\${POSTGRES_SERVICE_NAME:-postgres}
@@ -558,8 +531,6 @@ add_dify() {
     image: langgenius/dify-api:latest
     restart: unless-stopped
     user: "\${TENANT_UID}:\${TENANT_GID}"
-    networks:
-      - default
     environment:
       # --- DATABASE & REDIS CONNECTION (Mandatory) ---
       - DB_USERNAME=\${POSTGRES_USER}
@@ -611,8 +582,6 @@ add_tailscale() {
     image: tailscale/tailscale:latest
     restart: unless-stopped
     user: "\${TENANT_UID}:\${TENANT_GID}"
-    networks:
-      - default
     cap_add:
       - NET_ADMIN
       - SYS_MODULE
@@ -657,8 +626,6 @@ add_rclone() {
     image: rclone/rclone:latest
     restart: unless-stopped
     user: "\${TENANT_UID}:\${TENANT_GID}"
-    networks:
-      - default
     environment:
       - RCLONE_CONFIG=\${RCLONE_CONFIG:-/config/rclone.conf}
     volumes:
