@@ -448,8 +448,11 @@ add_litellm() {
     dns:
       - 8.8.8.8
       - 1.1.1.1
-    # Use new robust entrypoint script
-    command: /app/scripts/litellm_entrypoint.sh
+    # Use direct command with inline ownership fix
+    command: >
+      sh -c "mkdir -p /data && 
+             chown -R ${TENANT_UID}:${TENANT_GID} /data &&
+             exec /app/entrypoint.sh"
     environment:
       - DATABASE_URL=sqlite:///app/litellm.db
       - LITELM_MASTER_KEY=\${LITELLM_MASTER_KEY}
