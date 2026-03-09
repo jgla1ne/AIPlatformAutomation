@@ -6,7 +6,7 @@ set -euo pipefail
 # =============================================================================
 # PURPOSE: Primary interface for managing, debugging, and configuring live platform
 # USAGE:   sudo bash scripts/3-configure-services.sh <tenant_id> [action] [service/argument]
-# ACTIONS:  --start, --stop, --restart, --logs, --status, --test-litellm, --set-routing, --enable-persistence, --verify
+# ACTIONS:  --start, --stop, --restart, --logs, --status, --test-litellm, --set-routing, --enable-persistence, --set-debug, --verify
 # =============================================================================
 
 # --- Source Safety: Allow other scripts to source utilities without executing main ---
@@ -203,9 +203,40 @@ wait_for_service() {
     fail "${name} did not respond within ${max}s."
 }
 
+# Logging Utilities (usable by any script)
+set_debug_logging() {
+    local tenant_id="$1"
+    local tenant_dir="/mnt/data/${tenant_id}"
+    
+    log INFO "Setting debug logging for all services..."
+    cd "$tenant_dir" || return 1
+    
+    # Create debug logs directory
+    mkdir -p "${tenant_dir}/logs/debug"
+    
+    # Set debug level for services that support it
+    local services_with_debug=("postgres" "redis" "qdrant" "ollama")
+    
+    for service in "${services_with_debug[@]}"; do
+        if docker compose ps | grep -q "${service}.*Up"; then
+            log INFO "Setting debug logging for ${service}..."
+            
+            # Create service-specific debug log file
+            local debug_log="${tenant_dir}/logs/debug/${service}-debug.log"
+            
+            # Start capturing debug logs
+            docker compose logs -f --tail=100 "$service" > "$debug_log" 2>&1 &
+            
+            ok "Debug logging enabled for ${service}: $debug_log"
+        fi
+    done
+    
+    ok "Debug logging configured for all services in ${tenant_dir}/logs/debug/"
+}
+
 # Export ALL functions for cross-script modularity
 export -f validate_tailscale_auth_key get_oauth_token test_tailscale_connectivity test_rclone_connectivity run_verification
-export -f start_service stop_service restart_service load_tenant_env wait_for_service
+export -f start_service stop_service restart_service load_tenant_env wait_for_service set_debug_logging
 
 # --- Action Functions (Mission Control Interface) ---
 view_logs() {
@@ -363,6 +394,9 @@ main() {
         --enable-persistence)
             enable_persistence
             ;;
+        --set-debug)
+            set_debug_logging "$TENANT_ID"
+            ;;
         --verify)
             run_verification "$TENANT_ID"
             ;;
@@ -379,6 +413,7 @@ main() {
             echo "  --test-litellm             Verify LiteLLM routing to local and cloud models."
             echo "  --set-routing <strategy>   Change LiteLLM routing (e.g., 'cost-optimized')."
             echo "  --enable-persistence        Create systemd service for auto-boot."
+            echo "  --set-debug                 Enable debug logging for all services."
             echo "  --verify                   Run post-deployment verification of services."
             ;;
     esac

@@ -175,6 +175,10 @@ EOF
     ok "Production Caddyfile generated with all enabled services"
 }
 
+# Import utility functions from Mission Control (modular architecture)
+# Script-3 is now source-safe and will only define functions when sourced
+source "$(dirname "$0")/3-configure-services.sh" 2>/dev/null || true
+
 # --- Environment Setup ---
 TENANT_DIR="/mnt/data/${TENANT_ID}"
 ENV_FILE="${TENANT_DIR}/.env"
@@ -709,13 +713,23 @@ if ! docker-compose pull --quiet; then
 fi
 
 log INFO "Starting CORE services: ${CORE_SERVICES}"
-if ! docker-compose up -d ${CORE_SERVICES}; then
-    fail "Core Docker Compose services failed to start. Please check the logs."
-fi
+
+# Use Mission Control for service management (modular architecture)
+for service in ${CORE_SERVICES}; do
+    if docker-compose config | grep -q "^[[:space:]]*${service}:"; then
+        start_service "$service" "$TENANT_DIR"
+    else
+        log INFO "Service $service not defined in compose, skipping..."
+    fi
+done
 
 ok "CORE services are starting."
 log INFO "Use 'sudo bash scripts/3-configure-services.sh --status' to check."
 log INFO "Use 'sudo bash scripts/3-configure-services.sh --manage' to start application services."
+
+# Enable debug logging for deployment (leveraging Mission Control)
+log INFO "=== ENABLING DEBUG LOGGING ==="
+set_debug_logging "${TENANT_ID}"
 
 # Verify Tailscale connectivity
 log "INFO" "Verifying Tailscale connectivity..."
@@ -1440,10 +1454,14 @@ done
 
 ok "Complete health status and diagnostics captured in ${LOG_FILE}"
 
-# Call final report functions
-print_health_dashboard
-print_final_summary
-print_comprehensive_final_report
+# Call Mission Control for comprehensive status dashboard
+log INFO "=== COMPREHENSIVE PLATFORM STATUS ==="
+show_status
+
+echo ""
+log SUCCESS "--- DEPLOYMENT SUMMARY ---"
+log INFO "Core services have been started. You can now manage your application stack."
+log INFO "Next Step: Use Mission Control via 'sudo bash scripts/3-configure-services.sh ${TENANT_ID} --status'"
 
 # --- POST-DEPLOYMENT VERIFICATION ---
 log INFO "--- POST-DEPLOYMENT VERIFICATION ---"
