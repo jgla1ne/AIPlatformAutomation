@@ -140,29 +140,68 @@ run_verification() {
 # These functions can be called by other scripts using:
 # source "$(dirname "$0")/3-configure-services.sh" && function_name
 
-# Export functions for use by other scripts
-export -f validate_tailscale_auth_key get_oauth_token test_tailscale_connectivity test_rclone_connectivity run_verification
-
-# --- ACTION FUNCTIONS ---
-
-# 1. Start/Stop/Restart Services
+# Service Management Utilities (usable by any script)
 start_service() {
-    log "Starting service: $1..."
-    docker compose up -d "$1"
-    ok "Service '$1' is starting. Check '--status'."
-}
-stop_service() {
-    log "Stopping service: $1..."
-    docker compose stop "$1"
-    ok "Service '$1' stopped."
-}
-restart_service() {
-    log "Restarting service: $1..."
-    docker compose restart "$1"
-    ok "Service '$1' is restarting."
+    local service="$1"
+    local tenant_dir="${2:-$(pwd)}"
+    cd "$tenant_dir" || return 1
+    log "Starting service: $service..."
+    docker compose up -d "$service"
+    ok "Service '$service' is starting. Check '--status'."
 }
 
-# 2. View Service Logs (Your Request)
+stop_service() {
+    local service="$1"
+    local tenant_dir="${2:-$(pwd)}"
+    cd "$tenant_dir" || return 1
+    log "Stopping service: $service..."
+    docker compose stop "$service"
+    ok "Service '$service' stopped."
+}
+
+restart_service() {
+    local service="$1"
+    local tenant_dir="${2:-$(pwd)}"
+    cd "$tenant_dir" || return 1
+    log "Restarting service: $service..."
+    docker compose restart "$service"
+    ok "Service '$service' is restarting."
+}
+
+# Environment Utilities (usable by any script)
+load_tenant_env() {
+    local tenant_id="$1"
+    local env_file="/mnt/data/${tenant_id}/.env"
+    
+    if [[ ! -f "$env_file" ]]; then
+        fail "Environment file not found for tenant '${tenant_id}' at ${env_file}"
+    fi
+    
+    log "Loading environment from: ${env_file}"
+    set -a
+    source "$env_file"
+    set +a
+}
+
+# Health Check Utilities (usable by any script)
+wait_for_service() {
+    local name="$1" url="$2" max="${3:-120}"
+    log INFO "Waiting for ${name} at ${url}..."
+    for ((i=0; i<max; i+=5)); do
+        if curl -sf --max-time 5 "${url}" &>/dev/null; then
+            ok "${name} is responding."
+            return 0
+        fi
+        sleep 5
+    done
+    fail "${name} did not respond within ${max}s."
+}
+
+# Export ALL functions for cross-script modularity
+export -f validate_tailscale_auth_key get_oauth_token test_tailscale_connectivity test_rclone_connectivity run_verification
+export -f start_service stop_service restart_service load_tenant_env wait_for_service
+
+# --- Action Functions (Mission Control Interface) ---
 view_logs() {
     local SERVICE_NAME="$1"
     local LOG_FILE="${TENANT_DIR}/logs/${SERVICE_NAME}.log"
@@ -172,7 +211,6 @@ view_logs() {
     docker compose logs -f "$SERVICE_NAME" | tee -a "${LOG_FILE}"
 }
 
-# 3. Comprehensive Health Status
 show_status() {
     echo "--- AI Platform Status Dashboard for Tenant: ${TENANT_ID} ---"
     docker compose ps --format "table {{.Name}}\t{{.State}}\t{{.Status}}"
@@ -181,7 +219,6 @@ show_status() {
     docker stats
 }
 
-# 4. Test LiteLLM Routing (Your Request)
 test_litellm_routing() {
     if ! docker compose ps | grep -q "litellm.*Up"; then
         fail "LiteLLM container is not running. Cannot perform test."
@@ -220,7 +257,6 @@ test_litellm_routing() {
     fi
 }
 
-# 5. Change LiteLLM Routing Strategy (Your Request)
 set_litellm_routing() {
     local NEW_STRATEGY="$1"
     if [[ ! "$NEW_STRATEGY" =~ ^(cost-optimized|speed-optimized|balanced|capability-optimized)$ ]]; then
@@ -233,7 +269,6 @@ set_litellm_routing() {
     restart_service "litellm"
 }
 
-# 6. Enable Platform Persistence (Action 3.2)
 enable_persistence() {
     local SERVICE_FILE="/etc/systemd/system/aip-tenant-${TENANT_ID}.service"
     log "Creating systemd service for tenant '${TENANT_ID}' for boot persistence..."
