@@ -1223,11 +1223,11 @@ collect_network_config() {
             echo -e "  ${DIM}Get JSON from: Google Cloud Console > IAM & Admin > Service Accounts${NC}"
             echo ""
             
-            # Create secrets directory if it doesn't exist
-            mkdir -p "${TENANT_DIR}/secrets"
+            # Create rclone config directory
+            mkdir -p "${TENANT_DIR}/rclone"
             
             echo -e "  ${YELLOW}Paste the complete JSON content below (press Enter on empty line to finish):${NC}"
-            echo -e "  ${DIM}Example: {\"type\": \"service_account\", \"project_id\": \"...\"}${NC}"
+            echo -e "  ${DIM}Example: {\"type\": \"service_account\", \"project_id\": \"...\"${NC}"
             echo ""
             
             # Read JSON content until empty line
@@ -1241,12 +1241,15 @@ collect_network_config() {
             
             # Validate JSON content
             if [[ -n "$json_content" ]] && echo "$json_content" | python3 -m json.tool >/dev/null 2>&1; then
-                # Save JSON to file
-                echo "$json_content" > "${TENANT_DIR}/secrets/google_sa.json"
-                chmod 600 "${TENANT_DIR}/secrets/google_sa.json"
+                # Save JSON to rclone directory for container mounting
+                echo "$json_content" > "${TENANT_DIR}/rclone/google_sa.json"
+                chmod 600 "${TENANT_DIR}/rclone/google_sa.json"
+                
+                # Ensure tenant ownership
+                chown -R "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}/rclone"
                 
                 echo -e "  ${GREEN}✅ Service Account JSON saved successfully${NC}"
-                echo -e "  ${DIM}Location: ${TENANT_DIR}/secrets/google_sa.json${NC}"
+                echo -e "  ${DIM}Location: ${TENANT_DIR}/rclone/google_sa.json${NC}"
                 
                 # Set variables for .env
                 GDRIVE_AUTH_METHOD="service_account"
@@ -1850,10 +1853,7 @@ GDRIVE_FOLDER_NAME=${GDRIVE_FOLDER_NAME}
 GDRIVE_FOLDER_ID=${GDRIVE_FOLDER_ID}
 
 # Google Service Account for Rclone (non-interactive)
-if [[ "${GDRIVE_AUTH_METHOD}" == "service_account" && -f "${TENANT_DIR}/secrets/google_sa.json" ]]; then
-    # Create rclone config directory and file
-    mkdir -p "${TENANT_DIR}/rclone"
-    
+if [[ "${GDRIVE_AUTH_METHOD}" == "service_account" ]]; then
     # Generate rclone.conf for service account
     cat > "${TENANT_DIR}/rclone/rclone.conf" << EOF
 [gdrive]
