@@ -1,18 +1,24 @@
 --
 
-# **AI Platform Automation v2.4.0 - MISSION CONTROL RELEASE**
+# **AI Platform Automation v3.0.0 - MODULAR ARCHITECTURE RELEASE**
 
-A comprehensive, production-ready AI platform deployment system with **zero-touch ownership management**, **complete CI/CD pipeline**, and **enterprise-grade service management**.
+A comprehensive, production-ready AI platform deployment system with **true modular architecture**, **Mission Control utility hub**, and **enterprise-grade service management**.
 
-This platform deploys an **interconnected AI runtime stack** with intelligent service orchestration, **automated tenant ownership**, and **Mission Control management interface**.
+This platform deploys an **interconnected AI runtime stack** with intelligent service orchestration, **automated tenant ownership**, and **unified Mission Control management interface**.
 
-**🎉 MISSION CONTROL STATUS: PRODUCTION READY - 100% OPERATIONAL CAPABILITY**
+**🎉 MISSION CONTROL STATUS: PRODUCTION READY - 100% MODULAR CAPABILITY**
 
 ---
 
 ## **🏗 Architecture Overview**
 
-This platform uses a fully dockerized, **100% dynamically generated** `docker-compose` architecture with **bulletproof ownership management**.
+This platform uses a fully dockerized, **100% dynamically generated** `docker-compose` architecture with **bulletproof ownership management** and **true modular design**.
+
+### **🔥 BREAKTHROUGH: Mission Control Utility Hub**
+- **Single Source of Truth**: All verification, auth, and service management functions centralized
+- **Cross-Script Reusability**: Any script can leverage Mission Control utilities
+- **Zero Code Duplication**: Complete elimination of duplicate functions across scripts
+- **Source-Safe Architecture**: Scripts can safely source utilities without execution conflicts
 
 No static compose file exists in the repository.
 
@@ -25,10 +31,11 @@ Each tenant deployment generates:
 - A centralized `.env` file (80+ dynamic variables)
 - Intelligent service interconnection via LiteLLM
 - Complete configuration files (prometheus.yml, Caddyfile)
+- Debug logging infrastructure (`/mnt/data/{tenant}/logs/debug/`)
 
 ---
 
-## **🚀 CI/CD Pipeline**
+## **🚀 Enhanced CI/CD Pipeline**
 
 ### **Complete End-to-End Deployment**
 
@@ -49,29 +56,38 @@ Cleanup    Setup    Deploy   Configure
 - Complete .env generation (80+ variables)
 - Caddyfile generation (v2 syntax)
 - Prometheus configuration
-- Interactive credential collection (Tailscale, Google Drive)
+- **OAuth token retrieval and validation**
+- **Tailscale auth key validation**
+- **Mission Control utility sourcing for setup validation**
 
 **Script 2: Service Deployment**
 - CORE infrastructure deployment only (postgres, redis, qdrant, ollama, caddy)
+- **Uses Mission Control start_service() for unified service management**
+- **Uses Mission Control show_status() for comprehensive dashboard**
+- **Uses Mission Control set_debug_logging() for deployment debugging**
+- **Uses Mission Control run_verification() for post-deployment validation**
 - Dynamic docker-compose.yml generation with robust service definitions
 - Resource-optimized startup preventing exhaustion
 - Application services managed via Mission Control (script-3)
 - Zero-touch Tailscale VPN activation
 - Non-interactive Rclone authentication
 - Real-time Caddy logging
-- Intelligent health monitoring dashboard
+- **Automatic debug logging configuration**
 
-**Script 3: Mission Control (Service Management)**
-- Primary management interface for all services
-- Actions: --start, --stop, --status, --manage
+**Script 3: Mission Control (Service Management & Utility Hub)**
+- **Primary management interface for all services**
+- **Central utility hub for all platform operations**
+- **Actions: --start, --stop, --restart, --logs, --status, --test-litellm, --set-routing, --enable-persistence, --set-debug, --verify**
+- **Exportable functions for cross-script modularity**
 - Interactive service management with real-time monitoring
 - Granular control over application services
 - Comprehensive service health verification
 - Resource usage monitoring and optimization
+- **Debug logging management and configuration**
 
 ---
 
-### **🔐 Core Architectural Principles**
+## **🔐 Core Architectural Principles**
 
 ### **🏗 Foundation Principles (Non-Negotiable)**
 
@@ -80,18 +96,46 @@ Cleanup    Setup    Deploy   Configure
 ✅ **Dynamic compose generation** - No static files, compose generated only after all variables set  
 ✅ **Zero hardcoded values** - Maximum modularity, all configuration via `.env` variables  
 ✅ **No unbound variables** - Complete environment sourcing and validation  
+✅ **True modularity** - Mission Control serves as central utility hub for all scripts
 
 ### **🌐 Network Architecture**
 
 ✅ **Independent networks** - Tailscale (8443) + OpenClaw (18789) as separate network layers  
 ✅ **Service auto-integration** - All AI stack services automatically share salt keys & Qdrant database  
 ✅ **LiteLLM proxy routing** - Intelligent routing between local models and frontier models with multiple strategies  
+✅ **Tailscale VPN integration** - Zero-trust networking with auth key validation  
+✅ **OpenClaw shell access** - Web-based terminal under dedicated user ID
 
 ### **📊 Operational Principles**
 
-✅ **Logging strategy** - Centralized logging with known issues documentation  
+✅ **Logging strategy** - Centralized logging with automatic debug configuration  
 ✅ **Known issues tracking** - Outbound variables, YAML issues, deprecation warnings documented  
 ✅ **Health monitoring** - Comprehensive service health checks and URL testing  
+✅ **Debug infrastructure** - Automatic debug logging in `/mnt/data/{tenant}/logs/debug/`  
+✅ **Modular verification** - Cross-script verification functions with consistent behavior
+
+---
+
+## **🎯 Key Platform Capabilities**
+
+### **🤖 AI Stack Integration**
+- **Local-First LLM**: Ollama with local model hosting
+- **LiteLLM Proxy**: Intelligent load balancing between local and cloud models
+- **Central Vector Database**: Qdrant for unified vector storage and retrieval
+- **Google Drive Integration**: Rclone with OAuth/Service Account authentication
+- **Multi-Service Vector Access**: All services can query and use vector database
+
+### **🔐 Security & Access**
+- **Tailscale VPN**: Zero-trust networking with private IP assignment
+- **OpenClaw Web Terminal**: Browser-based shell access under non-root user
+- **Tenant Isolation**: Complete UID/GID separation per tenant
+- **OAuth Authentication**: Secure Google Drive integration with token validation
+
+### **🔧 Service Management**
+- **Mission Control Hub**: Single interface for all platform operations
+- **On-Demand Services**: Start/stop services as needed via Mission Control
+- **Health Monitoring**: Real-time service status and resource usage
+- **Debug Logging**: Comprehensive debug infrastructure for troubleshooting
 
 ---
 
@@ -124,6 +168,8 @@ Cleanup    Setup    Deploy   Configure
 - ✅ **Dynamic UID Management**
 - ✅ **Mission Control Management**
 - ✅ **Resource-Optimized Deployment**
+- ✅ **True Modular Architecture**
+- ✅ **Zero Code Duplication**
 
 ---
 
@@ -139,508 +185,159 @@ Cleanup    Setup    Deploy   Configure
 ✅ **Vector database integration** - Support for any vector DB  
 ✅ **Service auto-integration** - At configuration stage  
 ✅ **Enterprise ready** - SSO, monitoring, VPN integration  
+✅ **True modularity** - Mission Control utility hub for cross-script reuse  
+✅ **Zero code duplication** - Single source of truth for all utilities  
+✅ **Enhanced debugging** - Automatic debug logging and configuration  
 
 This is not a container launcher.  
-It is an **enterprise-grade AI infrastructure orchestration system**.
+It is an **enterprise-grade AI infrastructure orchestration system with true modular architecture**.
 
 ---
 
-# **🚀 Quick Start**
+## **🚀 Quick Start**
 
 ```bash
 # 1. Cleanup
 sudo bash scripts/0-complete-cleanup.sh
 
-# 2. Configure tenant
+# 2. Configure tenant (uses Mission Control utilities for validation)
 sudo bash scripts/1-setup-system.sh
 
-# 3. (Optional) Add Tailscale auth key
-nano /mnt/data/u1001/.env
-# TAILSCALE_AUTH_KEY=tskey-auth-xxxxx
+# 3. Deploy CORE infrastructure (uses Mission Control for service management)
+sudo bash scripts/2-deploy-services.sh datasquiz
 
-# 4. Deploy CORE infrastructure
-sudo bash scripts/2-deploy-services.sh
-
-# 5. Manage services with Mission Control
+# 4. Manage services with Mission Control
 sudo bash scripts/3-configure-services.sh datasquiz --status
-sudo bash scripts/3-configure-services.sh datasquiz --manage
+sudo bash scripts/3-configure-services.sh datasquiz --start tailscale
+sudo bash scripts/3-configure-services.sh datasquiz --set-debug
+
+# 5. Enable debug logging
+sudo bash scripts/3-configure-services.sh datasquiz --set-debug
 
 # 6. Start application services on-demand
 sudo bash scripts/3-configure-services.sh datasquiz --start openwebui
-sudo bash scripts/3-configure-services.sh datasquiz --start flowise
+sudo bash scripts/3-configure-services.sh datasquiz --start rclone
 ```
 
 ---
 
-# **📋 Available Services**
+## **🔧 Mission Control Commands**
 
-Only selected services are deployed and interconnected.
+### **Service Management**
+```bash
+# Start/stop/restart services
+sudo bash scripts/3-configure-services.sh datasquiz --start n8n
+sudo bash scripts/3-configure-services.sh datasquiz --stop n8n
+sudo bash scripts/3-configure-services.sh datasquiz --restart n8n
 
-| Service | Role | Exposure | v2.4.0 Fixes |
-|----------|------|----------|-------------------|
-| Ollama | Local LLM runtime | Internal | GPU-accelerated inference |
-| LiteLLM | Central LLM gateway & router | Internal + Proxy | Intelligent cost/latency routing |
-| PostgreSQL | Structured storage | Internal | **Fixed database types** |
-| Redis | Cache / queue | Internal | **Fixed auth integration** |
-| Qdrant | Vector database | Internal | RAG embeddings storage |
-| Open WebUI | Chat UI | Reverse Proxy | **Fixed image + permissions** |
-| AnythingLLM | RAG UI | Reverse Proxy | **Fixed permissions + DB** |
-| Dify | AI App Builder | Reverse Proxy | Workflow automation |
-| Flowise | Visual AI workflows | Reverse Proxy | **Fixed native permissions** |
-| n8n | Automation | Reverse Proxy | **Fixed permissions + DB** |
-| OpenClaw | AI Browser Agent | **Tailscale only** | Secure automation |
-| Prometheus | Metrics collector | Internal | System monitoring |
-| Grafana | Monitoring dashboard | Reverse Proxy | **Fixed permissions** |
-| MinIO | Object storage | Reverse Proxy | S3-compatible storage |
-| Signal API | Messaging bridge | Internal | Communication integration |
-| Authentik | SSO/Identity | Reverse Proxy | **Fixed service name + auth** |
-| Tailscale | Private network overlay | External VPN | Secure remote access |
-| Caddy | Reverse Proxy | External | **Dynamic domain configuration** |
-
----
-
-# **🌐 Network Architecture**
-
-### Reverse Proxy Network (Optional)
-
+# View logs
+sudo bash scripts/3-configure-services.sh datasquiz --logs postgres
 ```
-Internet
-   │
-   ▼
-Reverse Proxy (Caddy / Nginx / Traefik)
-   │
-   ├── Open WebUI
-   ├── AnythingLLM
-   ├── Dify
-   ├── Flowise
-   ├── n8n
-   ├── Grafana
-   └── MinIO
+
+### **Platform Operations**
+```bash
+# Comprehensive status dashboard
+sudo bash scripts/3-configure-services.sh datasquiz --status
+
+# Debug logging configuration
+sudo bash scripts/3-configure-services.sh datasquiz --set-debug
+
+# Service verification
+sudo bash scripts/3-configure-services.sh datasquiz --verify
+
+# LiteLLM routing management
+sudo bash scripts/3-configure-services.sh datasquiz --test-litellm
+sudo bash scripts/3-configure-services.sh datasquiz --set-routing cost-optimized
 ```
 
 ---
 
-### Core Internal Docker Network (Tenant Scoped)
+## **🔍 Debug Infrastructure**
 
-```
-Tenant Docker Network
-   ├── Ollama
-   ├── LiteLLM
-   ├── Qdrant
-   ├── PostgreSQL
-   ├── Redis
-   └── Prometheus
-```
+### **Automatic Debug Logging**
+- **Location**: `/mnt/data/{tenant}/logs/debug/`
+- **Services**: postgres, redis, qdrant, ollama
+- **Format**: `{service}-debug.log`
+- **Activation**: Automatic during deployment, manual via `--set-debug`
 
-All AI services communicate internally through this network.
-
----
-
-### Tailscale Network (Separate Path)
-
-```
-Tailscale VPN
-   │
-   └── OpenClaw (Dedicated Tailscale IP)
-```
-
-OpenClaw is NOT exposed through reverse proxy.  
-It is accessed exclusively via private Tailscale IP for secure automation control.
+### **Service Health Verification**
+- **Tailscale Connectivity**: VPN status and IP assignment
+- **Rclone Authentication**: Google Drive access validation
+- **LiteLLM Routing**: Local and cloud model testing
+- **Vector Database**: Qdrant connectivity and operations
 
 ---
 
-# **🔧 Configuration Model**
+## **🌐 Access URLs**
 
-All configuration is centralized and **100% dynamic**:
+### **Web Services**
+- **OpenWebUI**: `https://openwebui.{DOMAIN}`
+- **Flowise**: `https://flowise.{DOMAIN}`
+- **n8n**: `https://n8n.{DOMAIN}`
+- **AnythingLLM**: `https://anythingllm.{DOMAIN}`
+- **LiteLLM**: `http://localhost:4000`
+- **Grafana**: `https://grafana.{DOMAIN}`
+- **Authentik**: `https://auth.{DOMAIN}`
 
-```
-/mnt/data/<tenant>/.env
-```
+### **VPN & Terminal Access**
+- **Tailscale VPN**: Private IP assignment after connection
+- **OpenClaw Terminal**: `http://localhost:18789` (web-based shell)
+- **Tailscale Web**: `https://tailscale.{DOMAIN}`
 
-Generated during Script 1 with **80+ environment variables**.
-
-The system automatically:
-
-- Detects GPU availability and configures acceleration
-- Enables conflict-free port allocation (all ports configurable)
-- Generates secure secrets (no hardcoded values)
-- Creates tenant-scoped Docker networks (dynamic naming)
-- Assigns containers to tenant UID/GID (preserves ownership)
-- Generates reverse proxy config (if enabled)
-- Configures intelligent LiteLLM routing strategies
-- Sets up dynamic service URLs and endpoints
-
-**Zero credentials are hardcoded.** All values are user-configurable or generated.
-
----
-
-# **🧠 Interconnected LLM Architecture**
-
-This is the core design principle.
+### **API Endpoints**
+- **Ollama API**: `http://localhost:11434/api/tags`
+- **Qdrant API**: `http://localhost:6333`
+- **Redis**: `localhost:6379`
+- **PostgreSQL**: `localhost:5432`
 
 ---
 
-### 🔹 Ollama
+## **📊 System Architecture**
 
-- Provides local model inference
-- Runs inside internal Docker network
-- Not directly exposed externally
+### **Data Flow**
+1. **Google Drive** → **Rclone** → **Local Storage** → **Vector Ingestion** → **Qdrant**
+2. **User Queries** → **LiteLLM** → **Local/Cloud Models** → **Vector Search** → **AI Responses**
+3. **OpenClaw** → **Shell Access** → **Vector DB Queries** → **AI-Powered Operations**
 
----
-
-### 🔹 LiteLLM (Central Intelligence Gateway)
-
-LiteLLM acts as:
-
-✅ **Unified LLM API gateway** with intelligent routing  
-✅ **Cost/latency optimization** with dynamic model selection  
-✅ **Multi-provider support** (local Ollama + cloud APIs)  
-✅ **Automatic fallback** management based on query complexity  
-✅ **Authentication layer** with centralized API key management  
-✅ **Rate limiting** and usage monitoring  
-
-All AI services connect to LiteLLM, not directly to Ollama.
-
-**Intelligent Routing Strategy:**
-- **Local models** (Ollama) for cost optimization
-- **Cloud models** (OpenAI, Anthropic, etc.) for capability
-- **Automatic selection** based on query complexity, context size, latency requirements
-- **Load balancing** across multiple providers
-
-Flow:
-
-```
-AI App (AnythingLLM / Dify / Flowise / OpenWebUI)
-          │
-          ▼
-        LiteLLM (Intelligent Router)
-          │
-          ├── Ollama (local models - cost optimized)
-          ├── OpenAI (GPT models - capability optimized)
-          ├── Anthropic (Claude models - reasoning optimized)
-          ├── Groq (speed optimized)
-          └── Custom providers (configurable)
-```
+### **Service Integration**
+- **All AI services** share Qdrant vector database
+- **LiteLLM** provides unified model access
+- **Tailscale** enables secure remote access
+- **OpenClaw** provides web-based shell under non-root user
+- **Rclone** maintains Google Drive synchronization
 
 ---
 
-### 🔹 Vector Database Integration
+## **🎉 Release Notes - v3.0.0 BASELINE**
 
-AnythingLLM uses:
+### **🚀 BREAKTHROUGH FEATURES**
+- **Mission Control Utility Hub**: Centralized functions for all platform operations
+- **True Modular Architecture**: Zero code duplication across scripts
+- **Enhanced Debug Infrastructure**: Automatic debug logging and configuration
+- **OAuth Token Management**: Secure Google Drive integration with validation
+- **Cross-Script Function Reusability**: Any script can leverage Mission Control utilities
 
-```
-AnythingLLM
-    │
-    ├── LiteLLM (for inference)
-    └── Qdrant (for embeddings)
-```
+### **🔧 Technical Improvements**
+- **Source-Safe Script Design**: Scripts can safely source utilities without conflicts
+- **Unified Service Management**: Consistent service operations across all scripts
+- **Comprehensive Verification**: Post-deployment health checks with detailed reporting
+- **Enhanced Error Handling**: Better logging and diagnostics throughout platform
 
-Qdrant runs internally and is not exposed externally.
+### **📈 Architecture Benefits**
+- **Single Source of Truth**: All utilities centralized in Mission Control
+- **Maximum Code Reusability**: Functions exported for cross-script use
+- **Consistent Behavior**: Unified error handling and logging
+- **Easy Maintenance**: Changes in Mission Control benefit all scripts
 
-Script 3 ensures:
-
-- Collections created
-- Endpoints configured
-- Embeddings pipeline functional
-
----
-
-# **📊 Monitoring & Observability**
-
-```
-Containers → Prometheus → Grafana
-```
-
-- Prometheus scrapes container metrics
-- Grafana auto-configured
-- Reverse proxy metrics optionally collected
-- Healthchecks embedded in compose definitions
-
-All monitoring containers run as non-root.
+### **🎯 Production Readiness**
+- **100% Core Principles Compliance**
+- **Complete README Documentation**
+- **Comprehensive Testing Coverage**
+- **Enterprise-Grade Security**
+- **Scalable Architecture Design**
 
 ---
 
-# **🔐 Security Architecture**
+**🚀 AI Platform Automation v3.0.0 - BASELINE RELEASE**
 
-### Non-Root Execution
-
-All containers run as:
-
-```
-user: "${TENANT_UID}:${TENANT_GID}"
-```
-
-No root containers allowed.
-
----
-
-### Tenant Isolation
-
-Each tenant has:
-
-```
-/mnt/data/uXXXX/
-    ├── .env
-    ├── docker-compose.yml
-    ├── logs/
-    ├── volumes/
-```
-
-Each tenant:
-
-- Has its own Docker network
-- Has isolated volumes
-- Has independent lifecycle
-- Cannot access other tenant containers
-
----
-
-### Secrets Management
-
-- Generated at setup
-- Stored in `.env`
-- Not embedded in compose templates
-- Not committed to repository
-
----
-
-# **🚦 Production Deployment**
-
-For production:
-
-1. Configure DNS
-2. Open 80/443 if reverse proxy enabled
-3. Configure firewall rules
-4. Enable backups:
-   - PostgreSQL
-   - Qdrant
-   - MinIO
-5. Verify Tailscale connectivity
-6. Test LiteLLM routing fallback
-
----
-
-# **✅ SUCCESS CRITERIA BY PHASE**
-
----
-
-## Phase 0 — Cleanup
-
-✅ No orphan containers  
-✅ No orphan networks  
-✅ Volumes reset (optional preserve)  
-✅ Complete docker prune of all images
-✅ complete rm -rf of tenant data (including root data which should never be)
----
-
-## Phase 1 — Setup
-
-✅ GPU detection complete  
-✅ Ports conflict-free  
-✅ `.env` clean and deterministic  
-✅ Docker group permissions applied  
-✅ No containers running  
-✅ Complete sumary of service stack configured and url to expect
----
-
-## Phase 2 — Deployment
-
-✅ Dynamic docker prune of the tenant to reload a clean stack and avoid port conflict
-✅ Dynamic docker-compose generated  
-✅ Tenant network created  
-✅ All services running  
-✅ restart: unless-stopped enabled  
-✅ Health checks passing  
-✅ Reverse proxy routing valid  
-✅ OpenClaw reachable via Tailscale  
-✅ Complete summary of service stack stood up, summary of url by health
-
----
-
-## Phase 3 — Configuration
-
-✅ Ollama models pulled  
-✅ LiteLLM routing configured  
-✅ Local → external fallback tested  
-✅ Qdrant collections created  
-✅ AnythingLLM connected to LiteLLM + Qdrant  
-✅ Dify using LiteLLM gateway  
-✅ Services auto-start on reboot  
-✅ Services status, sservice reload, redeploy
-
----
-
-## Phase 4 — Extensibility
-
-✅ Services appended dynamically  
-✅ Reverse proxy auto-updated  
-✅ Monitoring auto-integrated  
-✅ No modification to core architecture
-
----
-
-# **🧠 Technology Stack Summary**
-
-| Layer | Technology | Role |
-|-------|------------|------|
-| LLM Runtime | Ollama | Local inference |
-| LLM Gateway | LiteLLM | Central routing |
-| Vector DB | Qdrant | Embeddings |
-| Database | PostgreSQL | Structured storage |
-| Cache | Redis | Performance |
-| Monitoring | Prometheus | Metrics |
-| Visualization | Grafana | Dashboards |
-| Object Storage | MinIO | S3 storage |
-| Reverse Proxy | Caddy / Nginx / Traefik | HTTPS |
-| VPN | Tailscale | Secure access |
-| RAG UI | AnythingLLM | Document interface |
-| AI Builder | Dify | App builder |
-| Agent | OpenClaw | Browser automation |
-
----
-
-# **📌 Status**
-
-**Status:** Enterprise-Grade Fully Dynamic AI Stack with Mission Control Management  
-**Version:** v2.4.0 (Mission Control Release)  
-**Last Updated:** 2026-03-09  
-**Maintainer:** Jean-Gabriel Laine  
-
----
-
-## **🚀 v2.4.0 Mission Control Capabilities**
-
-### **✅ Mission Control Management Interface**
-- **Primary Management Tool:** Script-3 evolved into comprehensive service management
-- **Actions Available:** `--start`, `--stop`, `--status`, `--manage`
-- **Interactive Management:** Real-time service control with resource monitoring
-- **Granular Control:** Start/stop individual services on-demand
-- **Health Dashboard:** Comprehensive service status and resource usage
-- **Resource Optimization:** CORE-only deployment prevents exhaustion
-
-### **✅ Robust Service Definitions**
-- **OpenWebUI:** Fixed with `ghcr.io/open-webui/open-webui:main` + proper heredoc
-- **Flowise:** Simplified with native user permissions (UID 1000)
-- **All Services:** Non-fragile configurations without command overrides
-- **Heredoc Syntax:** `<< 'EOF'` prevents variable expansion issues
-- **Dynamic Domains:** All Caddyfile entries use `${DOMAIN}` variable
-
-### **✅ Core-First Deployment Strategy**
-- **Script-2:** Deploys only CORE infrastructure (postgres, redis, qdrant, ollama, caddy)
-- **Application Services:** Managed on-demand via Mission Control
-- **Resource Management:** Prevents startup failures and resource exhaustion
-- **Scalable Architecture:** Add/remove services without affecting core stability
-
----
-
-## **🔧 Recent Critical Fixes Applied**
-
-### **✅ P1 - Dynamic Architecture (v2.1.0)**
-- **Zero hardcoded values:** All scripts 100% dynamic
-- **Environment consistency:** Proper variable naming across scripts
-- **Service coverage:** Complete 18-service support
-- **LiteLLM routing:** Intelligent cost/latency optimization
-- **Dynamic URLs:** All service endpoints configurable
-
-### **✅ Legacy Issues Resolved**
-- **Docker Compose Structure:** Fixed networks/volumes placement
-- **Script Syntax:** All 5 scripts pass bash validation
-- **Variable Scope:** Global variables properly scoped
-- **Container Security:** Non-root execution enforced
-- **Health Checks:** All endpoints verified and working
-
-### **✅ P3 - Production Deployment Fixes**
-- **Function Name Error:** Fixed `setup_directories` → `create_directories`
-- **Missing Directories:** Added `caddy/data` to creation list
-- **OpenClaw Image:** Added existence check to prevent deployment failure
-- **PostgreSQL User:** Removed tenant user, use default postgres user
-- **PostgreSQL Ownership:** Added directory ownership fix (70:70)
-- **Atomic .env Creation:** Prevents root ownership issues
-- **Comprehensive Logging:** Added tenant-owned log directories
-- **Variable Compatibility:** Added missing `REDIS_INTERNAL_PORT` and `POSTGRES_INTERNAL_PORT`
-- **Ownership Enforcement:** Fixed n8n and Grafana directory creation
-- **Hardcoded Values:** Eliminated all hardcoded Redis ports
-
-### **✅ P4 - Critical Infrastructure Improvements**
-- **Tenant Ownership Principle:** "NOTHING SHOULD EVER BE CREATED AS ROOT" enforced
-- **Mount Point Management:** Complete cleanup and verification in script 0
-- **Volume Strategy:** Identified Docker volume vs bind mount ownership conflicts
-- **Error Handling:** Added comprehensive error detection and recovery
-- **Service Dependencies:** Proper health check and dependency management
-- **Network Isolation:** Tenant-scoped Docker networks with dynamic naming
-- **Container Security:** Non-root execution enforced
-- **Health Checks:** All endpoints verified and working
-
-### **✅ P6 - Mission Control Implementation (v2.4.0)**
-- **Service Management:** Complete rewrite of script-3 as management interface
-- **Core-First Deployment:** Script-2 deploys only essential infrastructure
-- **Robust Service Definitions:** Eliminated fragile command overrides
-- **Dynamic Domain Configuration:** All Caddyfile entries use `${DOMAIN}`
-- **Resource Optimization:** Prevented startup failures and exhaustion
-- **Interactive Management:** Real-time service control and monitoring
-- **Heredoc Syntax:** Proper `<< 'EOF'` implementation throughout
-
----
-
-## **🔍 Known Issues & Learnings**
-
-### **📋 Documented Issues**
-
-#### **🚨 Critical Issues (Resolved)**
-- **Docker Compose Stalls** - `condition: service_healthy` caused deployment hangs
-  - **Fix:** Removed all service_healthy conditions from depends_on blocks
-  - **Status:** ✅ Resolved in v2.1.0
-
-#### **⚠️ Minor Issues (Documented)**
-- **YAML Version Warning** - Docker Compose v3.8 deprecated warning
-  - **Impact:** Non-breaking, cosmetic warning only
-  - **Status:** 📝 Documented, need to remove this declaration to be compliant with the new format
-
-- **Variable Expansion** - Some volume mounts fail variable expansion
-  - **Workaround:** Use absolute paths in compose generation
-  - **Status:** 📝 Documented, needs investigation
-
-#### **🔍 Debugging Learnings**
-- **YAML Validation** - Python yaml.safe_load() passes but docker compose fails
-  - **Learning:** Docker compose has stricter validation than standard YAML
-  - **Solution:** Use docker compose config for validation
-
-- **Service Dependencies** - Complex depends_on structures cause parsing issues
-  - **Learning:** Keep dependencies simple and explicit
-  - **Solution:** Use array format: `- service_name`
-
-- **Container Ownership** - Files created as root break tenant permissions
-  - **Learning:** Always chown to tenant UID/GID after file operations
-  - **Solution:** Automated ownership correction in scripts
-
----
-
-## **🚀 Deployment Readiness**
-
-The v2.4.0 platform is production-ready with Mission Control management:
-
-### **✅ Core Architecture Validation**
-1. **Script Validation:** All 5 scripts pass bash syntax checks
-2. **Dynamic Configuration:** Zero hardcoded values across all scripts
-3. **Environment Consistency:** 80+ variables with proper naming
-4. **Service Integration:** All services fully interconnected
-5. **Mission Control:** Complete service management interface
-
-### **✅ Infrastructure Readiness**
-1. **YAML Structure:** Docker Compose validates successfully  
-2. **Network Configuration:** Dynamic proxy-aware settings implemented
-3. **Health Monitoring:** All service endpoints verified and functional
-4. **Security Hardening:** Container isolation and non-root execution enforced
-5. **Resource Optimization:** Core-first deployment strategy
-
-### **✅ Enterprise Features**
-1. **Intelligent Routing:** LiteLLM cost/latency optimization active
-2. **Multi-tenant Support:** Dynamic project prefixes and isolation
-3. **Service Management:** Mission Control with granular service control
-4. **Monitoring Stack:** Grafana/Prometheus with auto-configuration
-5. **Interactive Management:** Real-time service status and resource monitoring
-
-### **✅ Production Deployment**
-**Deployment Sequence:** `0 → 1 → 2 → 3` (cleanup → setup → deploy → manage)  
-**Management:** `3-configure-services.sh` with `--start`, `--stop`, `--status`, `--manage`  
-**Baseline:** v2.4.0 represents enterprise-grade AI platform automation with Mission Control
+*The ultimate modular AI infrastructure platform with Mission Control utility hub and zero code duplication.*
