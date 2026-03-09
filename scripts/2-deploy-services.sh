@@ -295,24 +295,27 @@ add_openwebui() {
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
+    user: "root"
+    # Use new robust entrypoint script to fix permissions
+    command: /app_scripts/openwebui_entrypoint.sh
     environment:
       - OLLAMA_BASE_URL=\${OLLAMA_BASE_URL}
       - WEBUI_NAME=\${TENANT_ID}
+      - TENANT_UID=\${TENANT_UID}
+      - TENANT_GID=\${TENANT_GID}
     volumes:
+      - \${TENANT_DIR}/_scripts:/app_scripts:ro
       - \${TENANT_DIR}/openwebui:/app/backend/data
     ports:
-      - "\${OPENWEBUI_PORT:-8080}:8080"
-    command: >
-      sh -c "mkdir -p /app/backend/data && chown -R \${TENANT_UID}:\${TENANT_GID} /app/backend/data && bash start.sh"
+      - "\${OPENWEBUI_PORT:-8081}:8080"
+    depends_on:
+      - ollama
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080"]
       interval: 15s
       timeout: 10s
       retries: 10
       start_period: 30s
-    depends_on:
-      - ollama
 
 EOF
     ok "Added 'openwebui' service with dynamic ownership and health check."
@@ -355,7 +358,9 @@ add_flowise() {
   flowise:
     image: flowiseai/flowise:latest
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
+    user: "root"
+    # Use new robust entrypoint script to fix permissions
+    command: /app_scripts/flowise_entrypoint.sh
     environment:
       - HOME=/home/node # Keep this variable
       - PORT=\${FLOWISE_PORT}
@@ -365,20 +370,23 @@ add_flowise() {
       - DATABASE_NAME=\${POSTGRES_DB}
       - DATABASE_USER=\${POSTGRES_USER}
       - DATABASE_PASSWORD=\${POSTGRES_PASSWORD}
+      - TENANT_UID=\${TENANT_UID}
+      - TENANT_GID=\${TENANT_GID}
     volumes:
+      - \${TENANT_DIR}/_scripts:/app_scripts:ro
       - \${TENANT_DIR}/flowise:/app/storage
     ports:
       - "\${FLOWISE_PORT:-3000}:3000"
     command: >
-      sh -c "mkdir -p /app/storage/logs && chown -R \${TENANT_UID}:\${TENANT_GID} /app/storage && /usr/local/bin/docker-entrypoint.sh"
+      sh -c "mkdir -p /app/storage/logs /app/storage/uploads && chown -R \${TENANT_UID}:\${TENANT_GID} /app/storage && /usr/local/bin/docker-entrypoint.sh"
+    depends_on:
+      - postgres
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api"]
       interval: 15s
       timeout: 10s
       retries: 10
       start_period: 30s
-    depends_on:
-      - postgres
 
 EOF
     ok "Added 'flowise' service with dynamic ownership and health check."
@@ -427,8 +435,8 @@ add_litellm() {
     restart: unless-stopped
     user: "\${TENANT_UID}:\${TENANT_GID}"
     dns:
-      - 8.8.8.8
       - 1.1.1.1
+      - 8.8.8.8
     # Use direct command with inline ownership fix
     command: >
       sh -c "mkdir -p /home/user/.cache/pip && 
@@ -505,19 +513,25 @@ add_authentik() {
       - AUTHENTIK_POSTGRESQL__NAME=\${POSTGRES_DB}
       - AUTHENTIK_POSTGRESQL__USER=\${POSTGRES_USER}
       - AUTHENTIK_POSTGRESQL__PASSWORD=\${POSTGRES_PASSWORD}
+      - AUTHENTIK_REDIS__HOST=\${AUTHENTIK_REDIS__HOST}
+      - AUTHENTIK_REDIS__PORT=\${REDIS_PORT}
+      - AUTHENTIK_REDIS__DB=\${REDIS_DB:-0}
+      - AUTHENTIK_REDIS__PASSWORD=\${REDIS_PASSWORD}
     volumes:
       - \${TENANT_DIR}/authentik/media:/media
+      - \${TENANT_DIR}/authentik/certs:/certs
       - \${TENANT_DIR}/authentik/custom-templates:/templates
     ports:
       - "\${AUTHENTIK_PORT:-9000}:9000"
+    depends_on:
+      - postgres
+      - redis
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/-/health/"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/outpost.go"]
       interval: 15s
       timeout: 10s
       retries: 10
       start_period: 30s
-    depends_on:
-      - postgres
 
 EOF
     ok "Added 'authentik-server' service with health check."
@@ -540,21 +554,13 @@ add_dify() {
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=\${REDIS_PASSWORD}
-      
-      # --- LLM GATEWAY CONNECTION (The Critical Fix) ---
-      - LLM_PROVIDER=openai
-      - OPENAI_API_BASE=http://litellm:4000
-      - OPENAI_API_KEY=\${LITELLM_MASTER_KEY}
-      
       # --- Dify Configuration ---
-      - SECRET_KEY=\${DIFY_SECRET_KEY:-sk-9f73s3ljTXVcMT3Blb3ljT}
-      - CONSOLE_WEB_URL=https://dify.\${DOMAIN}
-      - CONSOLE_API_URL=https://dify.\${DOMAIN}/console/api
-      - SERVICE_API_URL=https://dify.\${DOMAIN}/v1
-      - APP_WEB_URL=https://dify.\${DOMAIN}
-      - CODE_EXECUTION_ENDPOINT=http://dify-worker:5001
-      - CODE_EXECUTION_TIMEOUT=15
-      - CODE_MAX_NUMBER=9223372036854775807
+      - DIFY_SECRET_KEY=\${DIFY_SECRET_KEY}
+      - DIFY_INNER_API_KEY=\${DIFY_INNER_API_KEY}
+      - DIFY_LOG_LEVEL=INFO
+      # --- Storage Configuration ---
+      - DIFY_STORAGE_TYPE=\${DIFY_STORAGE_TYPE}
+      - DIFY_STORAGE_LOCAL_ROOT=\${DIFY_STORAGE_LOCAL_ROOT}
       - CODE_SEGMENT_MAX_LENGTH=4000
     volumes:
       - \${TENANT_DIR}/dify/app:/app/api/storage
@@ -602,7 +608,7 @@ add_tailscale() {
              tailscaled --tun=userspace-networking --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
              PID=\$! &&
              until tailscale status >/dev/null 2>&1; do echo 'Waiting for tailscaled to start...'; sleep 2; done &&
-             tailscale up --authkey=${TAILSCALE_AUTH_KEY} --hostname=${TENANT_PROJECT_ID}-claw --accept-routes &&
+             tailscale up --authkey=${TAILSCALE_AUTH_KEY} --hostname=${PROJECT_PREFIX}${TENANT_ID}-claw --accept-routes &&
              echo 'Tailscale connected. Container will now idle.' &&
              wait \$PID"
     ports:
@@ -627,34 +633,22 @@ add_rclone() {
     user: "\${TENANT_UID}:\${TENANT_GID}"
     environment:
       - RCLONE_CONFIG=\${RCLONE_CONFIG:-/config/rclone.conf}
+      - RCLONE_CONFIG_PATH=\${RCLONE_CONFIG_PATH}
+      - GDRIVE_AUTH_METHOD=\${GDRIVE_AUTH_METHOD}
+      - GDRIVE_CLIENT_ID=\${GDRIVE_CLIENT_ID}
+      - GDRIVE_CLIENT_SECRET=\${GDRIVE_CLIENT_SECRET}
     volumes:
       - \${TENANT_DIR}/rclone:/config
       - \${TENANT_DIR}/storage:/data
     ports:
       - "\${RCLONE_PORT:-5572}:5572"
     command: >
-      sh -c "if [ \"\${GDRIVE_AUTH_METHOD}\" = \"oauth\" ]; then
-               # OAuth method - generate config on the fly
-               cat > /config/rclone.conf << 'EOF'
-[gdrive]
-type = drive
-scope = drive
-client_id = \${GDRIVE_CLIENT_ID}
-client_secret = \${GDRIVE_CLIENT_SECRET}
-EOF
-               rclone rcd --config=/config/rclone.conf --log-file=/data/rclone.log
-             elif [ \"\${GDRIVE_AUTH_METHOD}\" = \"service_account\" ]; then
-               # Service Account method - use pre-generated config
+      sh -c "if [ \"\${GDRIVE_AUTH_METHOD}\" = \"service_account\" ]; then
                rclone rcd --rc-no-auth --rc-addr :5572 --config=\${RCLONE_CONFIG_PATH} --log-file=/data/rclone.log
              else
-               echo 'ERROR: No valid Google Drive configuration found' &&
+               echo 'ERROR: OAuth method not supported' &&
                exit 1
              fi"
-    environment:
-      - RCLONE_CONFIG_PATH=\${RCLONE_CONFIG_PATH}
-      - GDRIVE_AUTH_METHOD=\${GDRIVE_AUTH_METHOD}
-      - GDRIVE_CLIENT_ID=\${GDRIVE_CLIENT_ID}
-      - GDRIVE_CLIENT_SECRET=\${GDRIVE_CLIENT_SECRET}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5572"]
       interval: 15s
@@ -1287,6 +1281,8 @@ print_health_dashboard() {
     
     echo -e "${GREEN}✅ HEALTH DASHBOARD COMPLETE${NC}"
 }
+
+print_final_summary() {
     echo ""
     echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║                   ✅  Deployment Complete: Access Summary       ║${NC}"
@@ -1345,7 +1341,6 @@ print_health_dashboard() {
     echo "  2. Run script-3 for advanced diagnostics: sudo bash scripts/3-configure-services.sh ${TENANT_ID}"
     echo "  3. Check service health: docker compose ps"
     echo "  4. View logs: docker compose logs [service_name]"
-    echo ""
 }
 
 # Call the comprehensive final report (README.md requirements)

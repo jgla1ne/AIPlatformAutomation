@@ -1935,6 +1935,13 @@ TENANT_DIR=${DATA_ROOT}
 TAILSCALE_EXTRA_ARGS="${TAILSCALE_AUTH_KEY:+--authkey ${TAILSCALE_AUTH_KEY}}"
 MINIO_CONSOLE_PORT=9001
 MINIO_PORT=9000
+
+# Redis configuration for Authentik
+AUTHENTIK_REDIS__HOST=redis
+
+# Dify storage configuration
+DIFY_STORAGE_TYPE=local
+DIFY_STORAGE_LOCAL_ROOT=/data
 EOF
 
     chmod 600 "${temp_env_file}"
@@ -2128,6 +2135,13 @@ create_directories() {
     create_dir "grafana/provisioning/datasources"
     create_dir "grafana/provisioning/dashboards"
     create_dir "n8n"
+    
+    # Copy necessary runtime scripts to tenant directory
+    log "INFO" "Copying necessary runtime scripts to tenant directory..."
+    mkdir -p "${DATA_ROOT}/_scripts"
+    cp "${SCRIPTS_DIR}/openwebui_entrypoint.sh" "${DATA_ROOT}/_scripts/"
+    cp "${SCRIPTS_DIR}/flowise_entrypoint.sh" "${DATA_ROOT}/_scripts/"
+    printf "  ${DIM}Created '_scripts' with runtime files${NC}\n"
     create_dir "n8n/workflows"
     create_dir "qdrant"
     create_dir "weaviate"
