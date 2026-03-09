@@ -1455,8 +1455,8 @@ collect_network_config() {
     read -p "  ➤ Enable OpenClaw? [y/N]: " enable_openclaw
     if [[ "${enable_openclaw,,}" == "y" ]]; then
         read -p "  ➤ OpenClaw admin password: " OPENCLAW_PASSWORD
-        read -p "  ➤ OpenClaw port [8082]: " OPENCLAW_PORT
-        OPENCLAW_PORT="${OPENCLAW_PORT:-8082}"
+        read -p "  ➤ OpenClaw port [18789]: " OPENCLAW_PORT
+        OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
         ENABLE_OPENCLAW="true"
     else
         ENABLE_OPENCLAW="false"
@@ -1951,6 +1951,21 @@ AUTHENTIK_REDIS__HOST=redis
 # Dify storage configuration
 DIFY_STORAGE_TYPE=local
 DIFY_STORAGE_LOCAL_ROOT=/data
+
+# LiteLLM configuration for central AI gateway
+LITELLM_CONFIG_YAML='
+model_list:
+  - model_name: ${OLLAMA_DEFAULT_MODEL}
+    litellm_params:
+      model: ollama/${OLLAMA_DEFAULT_MODEL}
+      api_base: ${OLLAMA_INTERNAL_URL}
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: ${OPENAI_API_KEY}
+router_settings:
+    routing_strategy: ${LITELLM_ROUTING_STRATEGY}
+'
 EOF
 )
 

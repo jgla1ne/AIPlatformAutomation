@@ -296,9 +296,11 @@ add_openwebui() {
     image: ghcr.io/open-webui/open-webui:latest
     restart: unless-stopped
     user: "\${TENANT_UID}:\${TENANT_GID}"
-    # Fix permissions and start as tenant user
+    # Fix permissions and install Node.js, then start as tenant user
     command: >
-      sh -c "mkdir -p /app/backend/data && 
+      sh -c "apt-get update > /dev/null 2>&1 && 
+             apt-get install -y nodejs npm > /dev/null 2>&1 && 
+             mkdir -p /app/backend/data && 
              npm start"
     environment:
       - OLLAMA_BASE_URL=\${OLLAMA_BASE_URL}
@@ -364,6 +366,7 @@ add_flowise() {
              npm start"
     environment:
       - HOME=/tmp # This gives Node.js a writable directory for its user-related tasks
+      - NODE_OPTIONS=--no-user-system # Disable user system calls that cause ENOENT
       - PORT=\${FLOWISE_PORT}
       - DATABASE_TYPE=postgres
       - DATABASE_HOST=\${POSTGRES_SERVICE_NAME:-postgres}
@@ -428,7 +431,7 @@ add_litellm() {
     cat >> "${COMPOSE_FILE}" << EOF
 
   litellm:
-    image: ghcr.io/berriai/litellm:main
+    image: ghcr.io/berriai/litellm:main-v1.35.10
     restart: unless-stopped
     user: "\${TENANT_UID}:\${TENANT_GID}"
     dns:
@@ -441,12 +444,14 @@ add_litellm() {
              exec /entrypoint.sh"
     environment:
       - DATABASE_URL=sqlite:///data/litellm.db
-      - LITELM_MASTER_KEY=\${LITELLM_MASTER_KEY}
+      - LITELLM_MASTER_KEY=\${LITELLM_MASTER_KEY}
       - TENANT_UID=\${TENANT_UID}
       - TENANT_GID=\${TENANT_GID}
       - OLLAMA_API_BASE=\${OLLAMA_INTERNAL_URL}
+      - LITELLM_CONFIG_YAML=\${LITELLM_CONFIG_YAML}
     volumes:
       - \${TENANT_DIR}/litellm:/data
+      - \${TENANT_DIR}/litellm/config.yaml:/app/config.yaml:ro
     ports:
       - "\${LITELLM_PORT:-4000}:4000"
     healthcheck:
@@ -726,21 +731,20 @@ if ! docker-compose up -d; then
 fi
 
 # Verify Tailscale connectivity
-log INFO "Verifying Tailscale connectivity..."
-TAILSCALE_IP=$(docker-compose exec -T tailscale tailscale ip -4 2>/dev/null || echo "")
-if [ -n "$TAILSCALE_IP" ]; then
-    ok "Tailscale is UP. Private IP: ${TAILSCALE_IP}"
-    # This IP is what you will use to access OpenClaw
+log "INFO" "Verifying Tailscale connectivity..."
+if docker compose exec tailscale tailscale status | grep -q "Logged in"; then
+    TAILSCALE_IP=$(docker compose exec tailscale tailscale ip -4)
+    ok "✅ Tailscale is UP and connected. Private IP: ${TAILSCALE_IP}"
 else
-    fail "Tailscale failed to connect. Check auth key and logs."
+    warn "❌ Tailscale failed to connect. Check auth key and logs."
 fi
 
 # Verify Rclone authentication with Google Drive
 log INFO "Verifying Rclone authentication with Google Drive..."
-if docker-compose exec -T rclone rclone lsd gdrive: > /dev/null 2>&1; then
-    ok "Rclone authentication successful."
+if docker compose exec rclone rclone lsd gdrive: > /dev/null 2>&1; then
+    ok "✅ Rclone authentication successful."
 else
-    fail "Rclone failed to authenticate. Check google_sa.json and config."
+    warn "⚠️ Rclone failed to authenticate. Check google_sa.json and config."
 fi
 
 # --- NEW LOGGING BLOCK ---
