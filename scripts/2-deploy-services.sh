@@ -175,6 +175,68 @@ EOF
     ok "Production Caddyfile generated with all enabled services"
 }
 
+# --- Verification Functions ---
+test_tailscale_connectivity() {
+    local timeout="${1:-30}"
+    
+    log INFO "Testing Tailscale connectivity (timeout: ${timeout}s)..."
+    
+    if timeout "${timeout}s" bash -c "until docker compose exec tailscale tailscale status | grep -q 'Logged in'; do sleep 3; done"; then
+        local tailscale_ip
+        tailscale_ip=$(docker compose exec tailscale tailscale ip -4 2>/dev/null || echo "unknown")
+        ok "✅ Tailscale is UP and connected. Private IP: ${tailscale_ip}"
+        return 0
+    else
+        fail "❌ Tailscale FAILED to connect. Check auth key and container logs: docker compose logs tailscale"
+        return 1
+    fi
+}
+
+test_rclone_connectivity() {
+    local timeout="${1:-10}"
+    
+    log INFO "Testing Rclone connectivity..."
+    
+    # Give Rclone time to start
+    sleep "$timeout"
+    
+    if docker compose exec rclone rclone lsd gdrive: --max-depth 1 > /dev/null 2>&1; then
+        ok "✅ Rclone is UP and authenticated with Google Drive."
+        return 0
+    else
+        warn "⚠️ Rclone authentication FAILED. Check config and logs: docker compose logs rclone"
+        return 1
+    fi
+}
+
+run_post_deployment_verification() {
+    log INFO "--- POST-DEPLOYMENT VERIFICATION ---"
+    
+    local verification_failed=false
+    
+    # Tailscale Verification
+    if [[ "${ENABLE_TAILSCALE}" == "true" ]]; then
+        if ! test_tailscale_connectivity; then
+            verification_failed=true
+        fi
+    fi
+    
+    # Rclone Verification
+    if [[ "${ENABLE_RCLONE}" == "true" ]]; then
+        if ! test_rclone_connectivity; then
+            verification_failed=true
+        fi
+    fi
+    
+    if [[ "$verification_failed" == "true" ]]; then
+        warn "⚠️ Some services failed verification. Check logs for details."
+        return 1
+    else
+        ok "✅ All services passed verification."
+        return 0
+    fi
+}
+
 # --- Environment Setup ---
 TENANT_DIR="/mnt/data/${TENANT_ID}"
 ENV_FILE="${TENANT_DIR}/.env"
@@ -614,6 +676,8 @@ add_rclone() {
     image: rclone/rclone:latest
     restart: unless-stopped
     user: "\${TENANT_UID}:\${TENANT_GID}"
+    entrypoint: ["rclone"]
+    command: ["rcd", "--rc-no-auth", "--rc-addr", ":5572", "--config=\${RCLONE_CONFIG_PATH}", "--log-file=/data/rclone.log"]
     environment:
       - RCLONE_CONFIG=\${RCLONE_CONFIG:-/config/rclone.conf}
       - RCLONE_CONFIG_PATH=\${RCLONE_CONFIG_PATH}
@@ -625,13 +689,6 @@ add_rclone() {
       - \${TENANT_DIR}/storage:/data
     ports:
       - "\${RCLONE_PORT:-5572}:5572"
-    command: >
-      sh -c "if [ \"\${GDRIVE_AUTH_METHOD}\" = \"service_account\" ]; then
-               rclone rcd --rc-no-auth --rc-addr :5572 --config=\${RCLONE_CONFIG_PATH} --log-file=/data/rclone.log
-             else
-               echo 'ERROR: OAuth method not supported' &&
-               exit 1
-             fi"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5572"]
       interval: 15s
@@ -640,7 +697,7 @@ add_rclone() {
       start_period: 30s
 
 EOF
-    ok "Added 'rclone' service with correct command syntax and health check."
+    ok "Added 'rclone' service with OAuth support and health check."
 }
 
 add_caddy() {
@@ -1449,6 +1506,14 @@ ok "Complete health status and diagnostics captured in ${LOG_FILE}"
 print_health_dashboard
 print_final_summary
 print_comprehensive_final_report
+
+# --- POST-DEPLOYMENT VERIFICATION ---
+run_post_deployment_verification
+
+echo ""
+log SUCCESS "--- DEPLOYMENT SUMMARY ---"
+log INFO "Core services have been started. You can now manage your application stack."
+log INFO "Next Step: Use Mission Control via 'sudo bash scripts/3-configure-services.sh ${TENANT_ID} --status'"
 
 }
 

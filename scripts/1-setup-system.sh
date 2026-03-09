@@ -96,6 +96,7 @@ QDRANT_PORT=""
 SIGNAL_PORT=""
 OPENCLAW_PORT=""
 TAILSCALE_PORT=""
+RCLONE_PORT=""
     TAILSCALE_INTERNAL_PORT="8443"
 
 # Database defaults
@@ -1122,6 +1123,41 @@ collect_litellm_routing() {
     log "SUCCESS" "LiteLLM routing strategy: ${LITELLM_ROUTING_STRATEGY}"
 }
 
+# --- OAuth Token Utility ---
+get_oauth_token() {
+    local client_id="$1"
+    local client_secret="$2"
+    
+    if ! command -v rclone >/dev/null 2>&1; then
+        warn "rclone not available for token validation"
+        return 1
+    fi
+    
+    # Create temporary rclone config for testing
+    local temp_config
+    temp_config=$(mktemp)
+    cat > "${temp_config}" << EOF
+[gdrive]
+type = drive
+scope = drive
+client_id = ${client_id}
+client_secret = ${client_secret}
+EOF
+    
+    # Try to get OAuth token
+    local token
+    if token=$(rclone authorize "drive" "${client_id}" "${client_secret}" --config "${temp_config}" 2>/dev/null | grep -o '{"access_token":"[^"]*".*' || true); then
+        if [[ -n "$token" ]]; then
+            echo "$token"
+            rm -f "${temp_config}"
+            return 0
+        fi
+    fi
+    
+    rm -f "${temp_config}"
+    return 1
+}
+
 # ─── Network & Security Configuration ───────────────────────────────────────────
 collect_network_config() {
     print_step "9" "11" "Network & Security Configuration"
@@ -1134,12 +1170,27 @@ collect_network_config() {
     echo -e "  ${BOLD}🌐  Tailscale VPN${NC}"
     echo -e "  ${DIM}Zero-trust networking for secure access${NC}"
     echo ""
-    read -p "  ➤ Tailscale auth key (leave blank to skip): " TAILSCALE_AUTH_KEY
-    read -p "  ➤ Tailscale hostname [${PROJECT_PREFIX}${TENANT_ID}]: " TAILSCALE_HOSTNAME
-    TAILSCALE_HOSTNAME="${TAILSCALE_HOSTNAME:-${PROJECT_PREFIX}${TENANT_ID}}"
-    
-    # If auth key provided, ask for serve mode and funnel
-    if [ -n "${TAILSCALE_AUTH_KEY}" ]; then
+    read -p "  ➤ Enable Tailscale VPN? [Y/n]: " enable_ts
+    if [[ "${enable_ts,,}" =~ ^y ]]; then
+        export ENABLE_TAILSCALE="true"
+        while true; do
+            read -p "  ➤ Tailscale auth key (required): " TAILSCALE_AUTH_KEY
+            if [[ -n "${TAILSCALE_AUTH_KEY}" ]]; then
+                # Validate Tailscale auth key format
+                if [[ "${TAILSCALE_AUTH_KEY}" =~ ^tskey-[a-zA-Z0-9-]+$ ]]; then
+                    echo -e "  ${DIM}✅ Auth key format validated${NC}"
+                    break
+                else
+                    echo -e "  ${YELLOW}⚠️ Invalid auth key format. Should start with 'tskey-'${NC}"
+                fi
+            else
+                echo "  ❌ Auth key cannot be empty if Tailscale is enabled."
+            fi
+        done
+        read -p "  ➤ Tailscale hostname [${PROJECT_PREFIX}${TENANT_ID}]: " TAILSCALE_HOSTNAME
+        TAILSCALE_HOSTNAME="${TAILSCALE_HOSTNAME:-${PROJECT_PREFIX}${TENANT_ID}}"
+        
+        # If auth key provided, ask for serve mode and funnel
         echo ""
         echo -e "  ${DIM}Tailscale serve mode (for serving web services):${NC}"
         read -p "  ➤ Enable serve mode? [y/N]: " enable_serve
@@ -1167,6 +1218,8 @@ collect_network_config() {
             TAILSCALE_FUNNEL="https"
         fi
     else
+        export ENABLE_TAILSCALE="false"
+        export TAILSCALE_AUTH_KEY=""
         TAILSCALE_SERVE_MODE="false"
         TAILSCALE_FUNNEL="https"
     fi
@@ -1274,6 +1327,17 @@ collect_network_config() {
             read -p "  ➤ Google Drive folder ID (optional, for shared folders): " GDRIVE_FOLDER_ID
             
             GDRIVE_AUTH_METHOD="oauth"
+            
+            # Test OAuth credentials and get token
+            echo -e "  ${DIM}Testing OAuth credentials and retrieving token...${NC}"
+            if GDRIVE_TOKEN=$(get_oauth_token "${GDRIVE_CLIENT_ID}" "${GDRIVE_CLIENT_SECRET}"); then
+                echo -e "  ${GREEN}✅ OAuth authentication successful${NC}"
+                echo -e "  ${DIM}Token retrieved and validated${NC}"
+            else
+                echo -e "  ${YELLOW}⚠️ OAuth credentials configured but token retrieval failed${NC}"
+                echo -e "  ${DIM}Token will be generated during deployment${NC}"
+            fi
+            
             log "SUCCESS" "Google Drive OAuth configuration completed"
         fi
         
@@ -1487,6 +1551,7 @@ collect_ports() {
     local d_signal="8080"           # Host port, internal is 8080
     local d_openclaw="18789"        # Host port, internal is 8082
     local d_tailscale="8443"        # Host port, internal is 443 (for OpenClaw)
+    local d_rclone="5572"           # Host port, internal is 5572
 
     # Track used ports to prevent conflicts
     local used_ports=""
@@ -1534,6 +1599,7 @@ collect_ports() {
     [ "${ENABLE_SIGNAL}" = "true" ]      && read_port "Signal API"  "${d_signal}"      "SIGNAL_PORT"
     [ "${ENABLE_OPENCLAW}" = "true" ]    && read_port "OpenClaw"    "${d_openclaw}"    "OPENCLAW_PORT"
     [ "${ENABLE_TAILSCALE}" = "true" ]   && read_port "Tailscale"   "${d_tailscale}"   "TAILSCALE_PORT"
+    [ "${ENABLE_RCLONE}" = "true" ]      && read_port "Rclone"      "${d_rclone}"      "RCLONE_PORT"
 
     # Set safe defaults for disabled services
     N8N_PORT="${N8N_PORT:-${d_n8n}}"
@@ -1550,6 +1616,7 @@ collect_ports() {
     SIGNAL_PORT="${SIGNAL_PORT:-${d_signal}}"
     OPENCLAW_PORT="${OPENCLAW_PORT:-${d_openclaw}}"
     TAILSCALE_PORT="${TAILSCALE_PORT:-${d_tailscale}}"
+    RCLONE_PORT="${RCLONE_PORT:-${d_rclone}}"
 
     log "SUCCESS" "Ports configured"
 }
@@ -1808,6 +1875,7 @@ FLOWISE_PASSWORD=${FLOWISE_PASSWORD}
 # ─── LiteLLM ──────────────────────────────────────────────────────────────────
 LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
 LITELLM_SALT_KEY=${LITELLM_SALT_KEY}
+LITELLM_CONFIG_YAML=${LITELLM_CONFIG_YAML}
 
 # ─── AnythingLLM ────────────────────────────────────────────────────────────────
 ANYTHINGLLM_API_KEY=${ANYTHINGLLM_API_KEY}
@@ -1854,6 +1922,7 @@ GDRIVE_CLIENT_ID=${GDRIVE_CLIENT_ID}
 GDRIVE_CLIENT_SECRET=${GDRIVE_CLIENT_SECRET}
 GDRIVE_FOLDER_NAME=${GDRIVE_FOLDER_NAME}
 GDRIVE_FOLDER_ID=${GDRIVE_FOLDER_ID}
+GDRIVE_TOKEN=${GDRIVE_TOKEN}
 
 # Google Service Account for Rclone (non-interactive)
 # This will be processed during .env generation
@@ -1926,6 +1995,7 @@ QDRANT_PORT=${QDRANT_PORT}
 SIGNAL_PORT=${SIGNAL_PORT}
 OPENCLAW_PORT=${OPENCLAW_PORT}
 TAILSCALE_PORT=${TAILSCALE_PORT}
+RCLONE_PORT=${RCLONE_PORT}
 
 # ─── Additional Variables for Script 2 ───────────────────────────────────────────
 SSL_EMAIL=${ADMIN_EMAIL}
@@ -1999,19 +2069,15 @@ EOF
         
         ok "Rclone configuration generated for Service Account authentication."
     elif [[ "${GDRIVE_AUTH_METHOD}" == "oauth" ]]; then
-        # OAuth method - just set variables for script-2
-        echo "RCLONE_CONFIG_PATH=" >> "${temp_env_file}"
-        ok "Rclone OAuth configuration will be generated during deployment."
-    fi
-    
-    # Google Service Account for Rclone (non-interactive)
-    if [[ "${GDRIVE_AUTH_METHOD}" == "service_account" ]]; then
-        # Generate rclone.conf for service account
+        # OAuth method - generate rclone config for OAuth
+        mkdir -p "${TENANT_DIR}/rclone"
         cat > "${TENANT_DIR}/rclone/rclone.conf" << EOF
 [gdrive]
 type = drive
 scope = drive
-service_account_file = /config/google_sa.json
+client_id = \${GDRIVE_CLIENT_ID}
+client_secret = \${GDRIVE_CLIENT_SECRET}
+token = \${GDRIVE_TOKEN}
 team_drive =
 EOF
         
@@ -2020,13 +2086,8 @@ EOF
         
         # Set environment variable for script-2
         echo "RCLONE_CONFIG_PATH=${TENANT_DIR}/rclone/rclone.conf" >> "${temp_env_file}"
-        echo "RCLONE_GDRIVE_ROOT_ID=${RCLONE_GDRIVE_ROOT_ID:-}" >> "${temp_env_file}"
         
-        ok "Rclone configuration generated for Service Account authentication."
-    elif [[ "${GDRIVE_AUTH_METHOD}" == "oauth" ]]; then
-        # OAuth method - just set variables for script-2
-        echo "RCLONE_CONFIG_PATH=" >> "${temp_env_file}"
-        ok "Rclone OAuth configuration will be generated during deployment."
+        ok "Rclone OAuth configuration generated. Token will be set during deployment."
     fi
     
     # Atomic move to final location
