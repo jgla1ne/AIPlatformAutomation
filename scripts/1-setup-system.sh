@@ -165,6 +165,8 @@ SIGNAL_VERIFICATION_CODE=""
 GDRIVE_CLIENT_ID=""
 GDRIVE_CLIENT_SECRET=""
 GDRIVE_FOLDER_NAME=""
+GDRIVE_FOLDER_ID=""
+GDRIVE_AUTH_METHOD=""
 
 # Search defaults
 SEARCH_PROVIDER="none"
@@ -1208,11 +1210,67 @@ collect_network_config() {
     read -p "  ➤ Enable Google Drive integration? [y/N]: " enable_gdrive
     if [[ "${enable_gdrive,,}" == "y" ]]; then
         ENABLE_RCLONE=true
-        echo -e "  ${DIM}Get credentials from: https://rclone.org/drive/${NC}"
-        read -p "  ➤ Google Drive client ID: " GDRIVE_CLIENT_ID
-        read -p "  ➤ Google Drive client secret: " GDRIVE_CLIENT_SECRET
-        read -p "  ➤ Google Drive folder name (optional): " GDRIVE_FOLDER_NAME
-        log "SUCCESS" "Google Drive integration enabled"
+        
+        echo -e "  ${DIM}Choose authentication method:${NC}"
+        echo -e "  ${CYAN}  1)${NC} OAuth Client Credentials (recommended for personal use)"
+        echo -e "  ${CYAN}  2)${NC} Service Account JSON (recommended for server/automated use)"
+        echo ""
+        read -p "  ➤ Select method [1/2]: " auth_method
+        
+        if [[ "$auth_method" == "2" ]]; then
+            # Service Account JSON method
+            echo -e "  ${DIM}Service Account JSON Configuration${NC}"
+            echo -e "  ${DIM}Get JSON from: Google Cloud Console > IAM & Admin > Service Accounts${NC}"
+            echo ""
+            
+            # Create secrets directory if it doesn't exist
+            mkdir -p "${TENANT_DIR}/secrets"
+            
+            echo -e "  ${YELLOW}Paste the complete JSON content below (press Enter on empty line to finish):${NC}"
+            echo -e "  ${DIM}Example: {\"type\": \"service_account\", \"project_id\": \"...\"}${NC}"
+            echo ""
+            
+            # Read JSON content until empty line
+            json_content=""
+            while IFS= read -r line; do
+                if [[ -z "$line" ]]; then
+                    break
+                fi
+                json_content+="$line"$'\n'
+            done
+            
+            # Validate JSON content
+            if [[ -n "$json_content" ]] && echo "$json_content" | python3 -m json.tool >/dev/null 2>&1; then
+                # Save JSON to file
+                echo "$json_content" > "${TENANT_DIR}/secrets/google_sa.json"
+                chmod 600 "${TENANT_DIR}/secrets/google_sa.json"
+                
+                echo -e "  ${GREEN}✅ Service Account JSON saved successfully${NC}"
+                echo -e "  ${DIM}Location: ${TENANT_DIR}/secrets/google_sa.json${NC}"
+                
+                # Set variables for .env
+                GDRIVE_AUTH_METHOD="service_account"
+                log "SUCCESS" "Google Drive Service Account configuration completed"
+            else
+                echo -e "  ${RED}❌ Invalid JSON content. Please check your input.${NC}"
+                echo -e "  ${DIM}Google Drive integration will be skipped.${NC}"
+                ENABLE_RCLONE=false
+            fi
+            
+        else
+            # OAuth Client Credentials method
+            echo -e "  ${DIM}OAuth Client Credentials Configuration${NC}"
+            echo -e "  ${DIM}Get credentials from: https://rclone.org/drive/${NC}"
+            echo ""
+            read -p "  ➤ Google Drive client ID: " GDRIVE_CLIENT_ID
+            read -p "  ➤ Google Drive client secret: " GDRIVE_CLIENT_SECRET
+            read -p "  ➤ Google Drive folder name (optional): " GDRIVE_FOLDER_NAME
+            read -p "  ➤ Google Drive folder ID (optional, for shared folders): " GDRIVE_FOLDER_ID
+            
+            GDRIVE_AUTH_METHOD="oauth"
+            log "SUCCESS" "Google Drive OAuth configuration completed"
+        fi
+        
     else
         ENABLE_RCLONE=false
     fi
@@ -1785,18 +1843,20 @@ SIGNAL_PHONE_NUMBER=${SIGNAL_PHONE_NUMBER}
 # Note: SIGNAL_VERIFICATION_CODE will be populated in script 2 after user registration
 
 # ─── Google Drive Integration ───────────────────────────────────────────────────
+GDRIVE_AUTH_METHOD=${GDRIVE_AUTH_METHOD}
 GDRIVE_CLIENT_ID=${GDRIVE_CLIENT_ID}
 GDRIVE_CLIENT_SECRET=${GDRIVE_CLIENT_SECRET}
 GDRIVE_FOLDER_NAME=${GDRIVE_FOLDER_NAME}
+GDRIVE_FOLDER_ID=${GDRIVE_FOLDER_ID}
 
 # Google Service Account for Rclone (non-interactive)
-if [[ -f "${TENANT_DIR}/secrets/google_sa.json" ]]; then
+if [[ "${GDRIVE_AUTH_METHOD}" == "service_account" && -f "${TENANT_DIR}/secrets/google_sa.json" ]]; then
     # Read entire JSON file and encode for .env
     GSA_JSON_CONTENT=$(cat "${TENANT_DIR}/secrets/google_sa.json" | base64 -w 0)
     echo "RCLONE_GOOGLE_CREDENTIALS_BASE64=${GSA_JSON_CONTENT}" >> "${ENV_FILE}"
     ok "Google Service Account credentials loaded for Rclone."
 else
-    warn "Google Service Account file not found at '${TENANT_DIR}/secrets/google_sa.json'. Rclone will use OAuth flow."
+    warn "Google Service Account file not found or not selected. Rclone will use OAuth flow."
 fi
 
 # ─── Search APIs ───────────────────────────────────────────────────────────────

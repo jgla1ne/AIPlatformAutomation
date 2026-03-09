@@ -664,10 +664,16 @@ add_rclone() {
     command: >
       sh -c "mkdir -p /data &&
              chown -R ${TENANT_UID}:${TENANT_GID} /data &&
-             if [ -n \"\${RCLONE_GOOGLE_CREDENTIALS_BASE64}\" ]; then
+             if [ \"\${GDRIVE_AUTH_METHOD}\" = \"service_account\" ] && [ -n \"\${RCLONE_GOOGLE_CREDENTIALS_BASE64}\" ]; then
                echo \${RCLONE_GOOGLE_CREDENTIALS_BASE64} | base64 -d > /tmp/google_sa.json &&
-               rclone rcd --rc-no-auth --log-file=/data/rclone.log --config=/data/rclone.conf --drive-service-account-file=/tmp/google_sa.json
-             else
+               cat > /data/rclone.conf << 'EOF'
+[gdrive]
+type = drive
+scope = drive
+service_account_file = /tmp/google_sa.json
+EOF
+               rclone rcd --rc-no-auth --log-file=/data/rclone.log --config=/data/rclone.conf
+             elif [ \"\${GDRIVE_AUTH_METHOD}\" = \"oauth\" ] && [ -n \"\${GDRIVE_CLIENT_ID}\" ] && [ -n \"\${GDRIVE_CLIENT_SECRET}\" ]; then
                cat > /data/rclone.conf << 'EOF'
 [gdrive]
 type = drive
@@ -676,9 +682,15 @@ client_id = ${GDRIVE_CLIENT_ID}
 client_secret = ${GDRIVE_CLIENT_SECRET}
 EOF
                rclone rcd --config=/data/rclone.conf --log-file=/data/rclone.log
+             else
+               echo 'ERROR: No valid Google Drive configuration found' &&
+               exit 1
              fi"
     environment:
       - RCLONE_GOOGLE_CREDENTIALS_BASE64=\${RCLONE_GOOGLE_CREDENTIALS_BASE64}
+      - GDRIVE_AUTH_METHOD=\${GDRIVE_AUTH_METHOD}
+      - GDRIVE_CLIENT_ID=\${GDRIVE_CLIENT_ID}
+      - GDRIVE_CLIENT_SECRET=\${GDRIVE_CLIENT_SECRET}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5572"]
       interval: 15s
