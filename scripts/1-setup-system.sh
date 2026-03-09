@@ -2135,13 +2135,6 @@ create_directories() {
     create_dir "grafana/provisioning/datasources"
     create_dir "grafana/provisioning/dashboards"
     create_dir "n8n"
-    
-    # Copy necessary runtime scripts to tenant directory
-    log "INFO" "Copying necessary runtime scripts to tenant directory..."
-    mkdir -p "${DATA_ROOT}/_scripts"
-    cp "${SCRIPTS_DIR}/openwebui_entrypoint.sh" "${DATA_ROOT}/_scripts/"
-    cp "${SCRIPTS_DIR}/flowise_entrypoint.sh" "${DATA_ROOT}/_scripts/"
-    printf "  ${DIM}Created '_scripts' with runtime files${NC}\n"
     create_dir "n8n/workflows"
     create_dir "qdrant"
     create_dir "weaviate"

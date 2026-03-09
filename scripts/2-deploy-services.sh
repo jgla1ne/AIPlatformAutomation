@@ -295,16 +295,15 @@ add_openwebui() {
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
     restart: unless-stopped
-    user: "root"
-    # Use new robust entrypoint script to fix permissions
-    command: /app_scripts/openwebui_entrypoint.sh
+    user: "\${TENANT_UID}:\${TENANT_GID}"
+    # Fix permissions and start as tenant user
+    command: >
+      sh -c "mkdir -p /app/backend/data && 
+             npm start"
     environment:
       - OLLAMA_BASE_URL=\${OLLAMA_BASE_URL}
       - WEBUI_NAME=\${TENANT_ID}
-      - TENANT_UID=\${TENANT_UID}
-      - TENANT_GID=\${TENANT_GID}
     volumes:
-      - \${TENANT_DIR}/_scripts:/app_scripts:ro
       - \${TENANT_DIR}/openwebui:/app/backend/data
     ports:
       - "\${OPENWEBUI_PORT:-8081}:8080"
@@ -358,9 +357,11 @@ add_flowise() {
   flowise:
     image: flowiseai/flowise:latest
     restart: unless-stopped
-    user: "root"
-    # Use new robust entrypoint script to fix permissions
-    command: /app_scripts/flowise_entrypoint.sh
+    user: "\${TENANT_UID}:\${TENANT_GID}"
+    # Fix permissions and start as tenant user
+    command: >
+      sh -c "mkdir -p /app/storage/logs /app/storage/uploads && 
+             npm start"
     environment:
       - HOME=/home/node # Keep this variable
       - PORT=\${FLOWISE_PORT}
@@ -370,15 +371,10 @@ add_flowise() {
       - DATABASE_NAME=\${POSTGRES_DB}
       - DATABASE_USER=\${POSTGRES_USER}
       - DATABASE_PASSWORD=\${POSTGRES_PASSWORD}
-      - TENANT_UID=\${TENANT_UID}
-      - TENANT_GID=\${TENANT_GID}
     volumes:
-      - \${TENANT_DIR}/_scripts:/app_scripts:ro
       - \${TENANT_DIR}/flowise:/app/storage
     ports:
       - "\${FLOWISE_PORT:-3000}:3000"
-    command: >
-      sh -c "mkdir -p /app/storage/logs /app/storage/uploads && chown -R \${TENANT_UID}:\${TENANT_GID} /app/storage && /usr/local/bin/docker-entrypoint.sh"
     depends_on:
       - postgres
     healthcheck:
