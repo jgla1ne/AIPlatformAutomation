@@ -2070,6 +2070,12 @@ apply_final_ownership() {
         chown -R 1000:1000 "${DATA_ROOT}/n8n"
         log "SUCCESS" "Set ownership for 'n8n' directory to 1000:1000."
     fi
+
+    # Exception for Flowise (requires UID 1000)
+    if [[ -d "${DATA_ROOT}/flowise" ]]; then
+        chown -R 1000:1000 "${DATA_ROOT}/flowise"
+        log "SUCCESS" "Set ownership for 'flowise' directory to 1000:1000."
+    fi
     
     # Exception for Prometheus (requires UID 65534)
     if [[ -d "${DATA_ROOT}/prometheus-data" ]]; then

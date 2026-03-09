@@ -293,30 +293,25 @@ add_openwebui() {
     cat >> "${COMPOSE_FILE}" << EOF
 
   openwebui:
-    image: ghcr.io/open-webui/open-webui:latest
+    image: ollama/open-webui:latest
     restart: unless-stopped
     user: "\${TENANT_UID}:\${TENANT_GID}"
-    # Fix permissions and install Node.js, then start as tenant user
-    command: >
-      sh -c "apt-get update > /dev/null 2>&1 && 
-             apt-get install -y nodejs npm > /dev/null 2>&1 && 
-             mkdir -p /app/backend/data && 
-             npm start"
+    networks:
+      - \${DOCKER_NETWORK}
     environment:
-      - OLLAMA_BASE_URL=\${OLLAMA_BASE_URL}
-      - WEBUI_NAME=\${TENANT_ID}
+      - OLLAMA_BASE_URL=\${OLLAMA_INTERNAL_URL}
     volumes:
       - \${TENANT_DIR}/openwebui:/app/backend/data
     ports:
-      - "\${OPENWEBUI_PORT:-8081}:8080"
+      - "\${OPENWEBUI_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     depends_on:
       - ollama
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080"]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-      start_period: 30s
 
 EOF
     ok "Added 'openwebui' service with dynamic ownership and health check."
@@ -359,11 +354,8 @@ add_flowise() {
   flowise:
     image: flowiseai/flowise:latest
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
-    # Fix permissions and start as tenant user
-    command: >
-      sh -c "mkdir -p /app/storage/logs /app/storage/uploads && 
-             npm start"
+    networks:
+      - \${DOCKER_NETWORK}
     environment:
       - HOME=/tmp # This gives Node.js a writable directory for its user-related tasks
       - NODE_OPTIONS=--no-user-system # Disable user system calls that cause ENOENT
@@ -375,20 +367,20 @@ add_flowise() {
       - DATABASE_USER=\${POSTGRES_USER}
       - DATABASE_PASSWORD=\${POSTGRES_PASSWORD}
     volumes:
-      - \${TENANT_DIR}/flowise:/app/storage
+      - \${TENANT_DIR}/flowise:/root/.flowise
     ports:
       - "\${FLOWISE_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     depends_on:
       - postgres
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api"]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-      start_period: 30s
 
 EOF
-    ok "Added 'flowise' service with dynamic ownership and health check."
+    ok "Added 'flowise' service."
 }
 
 add_anythingllm() {
