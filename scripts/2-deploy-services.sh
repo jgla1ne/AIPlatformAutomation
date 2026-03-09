@@ -429,19 +429,18 @@ add_litellm() {
     dns:
       - 8.8.8.8
       - 1.1.1.1
-    # Use the new robust, confined entrypoint script
-    command: /app_scripts/litellm_entrypoint.sh
+    # Use direct command with inline ownership fix
+    command: >
+      sh -c "mkdir -p /home/user/.cache/pip && 
+             chown -R \${TENANT_UID}:\${TENANT_GID} /home/user/.cache &&
+             exec /entrypoint.sh"
     environment:
-      - DATABASE_URL=sqlite:///data/litellm.db # Point to the persistent data volume
+      - DATABASE_URL=sqlite:///data/litellm.db
       - LITELM_MASTER_KEY=\${LITELLM_MASTER_KEY}
-      # Pass TENANT_UID and GID to the script
       - TENANT_UID=\${TENANT_UID}
       - TENANT_GID=\${TENANT_GID}
       - OLLAMA_API_BASE=\${OLLAMA_INTERNAL_URL}
     volumes:
-      # Mount ONLY the confined scripts directory into the container
-      - \${TENANT_DIR}/_scripts:/app_scripts:ro # Mount as read-only for security
-      # The persistent data volume remains correct
       - \${TENANT_DIR}/litellm:/data
     ports:
       - "\${LITELLM_PORT:-4000}:4000"

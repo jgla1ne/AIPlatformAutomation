@@ -638,6 +638,8 @@ collect_identity() {
         if [[ "${TENANT_ID}" =~ ^[a-z][a-z0-9\-]{2,29}$ ]]; then
             # Define TENANT_DIR right after TENANT_ID is set
             TENANT_DIR="/mnt/data/${TENANT_ID}"
+            # Define TENANT_DIR right after TENANT_ID is set
+            TENANT_DIR="/mnt/data/${TENANT_ID}"
             break
         fi
         echo "  ❌ Must start with a letter, 3–30 chars, lowercase/numbers/hyphens only"
@@ -1961,6 +1963,30 @@ EOF
         ok "Rclone OAuth configuration will be generated during deployment."
     fi
     
+    # Google Service Account for Rclone (non-interactive)
+    if [[ "${GDRIVE_AUTH_METHOD}" == "service_account" ]]; then
+        # Generate rclone.conf for service account
+        cat > "${TENANT_DIR}/rclone/rclone.conf" << EOF
+[gdrive]
+type = drive
+scope = drive
+service_account_file = /config/google_sa.json
+team_drive =
+EOF
+        
+        # Ensure tenant ownership
+        chown -R "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}/rclone"
+        
+        # Set environment variable for script-2
+        echo "RCLONE_CONFIG_PATH=${TENANT_DIR}/rclone/rclone.conf" >> "${temp_env_file}"
+        
+        ok "Rclone configuration generated for Service Account authentication."
+    elif [[ "${GDRIVE_AUTH_METHOD}" == "oauth" ]]; then
+        # OAuth method - just set variables for script-2
+        echo "RCLONE_CONFIG_PATH=" >> "${temp_env_file}"
+        ok "Rclone OAuth configuration will be generated during deployment."
+    fi
+    
     # Atomic move to final location
     mv "${temp_env_file}" "${ENV_FILE}"
     
@@ -2101,42 +2127,6 @@ create_directories() {
     create_dir "prometheus-data"
     create_dir "grafana/provisioning/datasources"
     create_dir "grafana/provisioning/dashboards"
-    
-    # Copy necessary runtime scripts to tenant directory
-    log "INFO" "Copying necessary runtime scripts to tenant directory..."
-    mkdir -p "${DATA_ROOT}/_scripts"
-    
-    # Copy litellm_entrypoint.sh if it exists
-    if [[ -f "${SCRIPTS_DIR}/litellm_entrypoint.sh" ]]; then
-        cp "${SCRIPTS_DIR}/litellm_entrypoint.sh" "${DATA_ROOT}/_scripts/"
-        printf "  ${DIM}Created '_scripts' with runtime files${NC}\n"
-    else
-        warn "litellm_entrypoint.sh not found in ${SCRIPTS_DIR}. Creating minimal entrypoint..."
-        # Create minimal entrypoint if file doesn't exist
-        cat > "${DATA_ROOT}/_scripts/litellm_entrypoint.sh" << 'EOF'
-#!/bin/bash
-set -euxo pipefail
-
-echo "[INFO] LiteLLM custom entrypoint started."
-echo "[INFO] Forcing ownership of cache directory to user ${TENANT_UID}:${TENANT_GID}..."
-
-# Create directory if it doesn't exist
-mkdir -p /home/user/.cache/pip
-
-# Change ownership and log result.
-if chown -R "${TENANT_UID}:${TENANT_GID}" /home/user/.cache; then
-  echo "[OK] Cache directory ownership set."
-else
-  echo "[FAIL] Could not set ownership on cache directory." >&2
-  exit 1
-fi
-
-echo "[INFO] Handing over to original LiteLLM entrypoint..."
-exec /entrypoint.sh
-EOF
-        chmod +x "${DATA_ROOT}/_scripts/litellm_entrypoint.sh"
-        printf "  ${DIM}Created '_scripts' with generated runtime files${NC}\n"
-    fi
     create_dir "n8n"
     create_dir "n8n/workflows"
     create_dir "qdrant"
