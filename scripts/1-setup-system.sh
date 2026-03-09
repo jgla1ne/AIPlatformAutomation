@@ -2,6 +2,7 @@
 set -euo pipefail
 
 # Import utility functions from Mission Control (modular architecture)
+# Script-3 is now source-safe and will only define functions when sourced
 source "$(dirname "$0")/3-configure-services.sh" 2>/dev/null || true
 
 # =============================================================================

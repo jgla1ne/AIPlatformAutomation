@@ -9,6 +9,12 @@ set -euo pipefail
 # ACTIONS:  --start, --stop, --restart, --logs, --status, --test-litellm, --set-routing, --enable-persistence, --verify
 # =============================================================================
 
+# --- Source Safety: Allow other scripts to source utilities without executing main ---
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+    # This file is being sourced, not executed
+    return 0 2>/dev/null || exit 0
+fi
+
 # --- Color Definitions ---
 RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m' CYAN='\033[0;36m' NC='\033[0m'
 log() { echo -e "${CYAN}[INFO]${NC}    $*"; }
@@ -114,14 +120,14 @@ run_verification() {
     local verification_failed=false
     
     # Tailscale Verification
-    if [[ "${ENABLE_TAILSCALE}" == "true" ]]; then
+    if [[ "${ENABLE_TAILSCALE:-false}" == "true" ]]; then
         if ! test_tailscale_connectivity "$tenant_dir"; then
             verification_failed=true
         fi
     fi
     
     # Rclone Verification
-    if [[ "${ENABLE_RCLONE}" == "true" ]]; then
+    if [[ "${ENABLE_RCLONE:-false}" == "true" ]]; then
         if ! test_rclone_connectivity "$tenant_dir"; then
             verification_failed=true
         fi
