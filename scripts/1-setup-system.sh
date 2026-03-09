@@ -1789,6 +1789,16 @@ GDRIVE_CLIENT_ID=${GDRIVE_CLIENT_ID}
 GDRIVE_CLIENT_SECRET=${GDRIVE_CLIENT_SECRET}
 GDRIVE_FOLDER_NAME=${GDRIVE_FOLDER_NAME}
 
+# Google Service Account for Rclone (non-interactive)
+if [[ -f "${TENANT_DIR}/secrets/google_sa.json" ]]; then
+    # Read entire JSON file and encode for .env
+    GSA_JSON_CONTENT=$(cat "${TENANT_DIR}/secrets/google_sa.json" | base64 -w 0)
+    echo "RCLONE_GOOGLE_CREDENTIALS_BASE64=${GSA_JSON_CONTENT}" >> "${ENV_FILE}"
+    ok "Google Service Account credentials loaded for Rclone."
+else
+    warn "Google Service Account file not found at '${TENANT_DIR}/secrets/google_sa.json'. Rclone will use OAuth flow."
+fi
+
 # ─── Search APIs ───────────────────────────────────────────────────────────────
 SEARCH_PROVIDER=${SEARCH_PROVIDER}
 BRAVE_API_KEY=${BRAVE_API_KEY}

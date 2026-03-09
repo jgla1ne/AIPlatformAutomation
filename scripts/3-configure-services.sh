@@ -381,6 +381,74 @@ configure_anythingllm() {
     echo -e "  ${DIM}• Auth Token: ${ANYTHINGLLM_AUTH_TOKEN}${NC}"
 }
 
+# ─── LiteLLM Configuration ───────────────────────────────────────────────────
+configure_litellm() {
+    [ "${SKIP_LITELLM}" = "true" ] && return 0
+    [ "${ENABLE_LITELLM}" != "true" ] && return 0
+
+    print_step "4" "${total_steps}" "Configuring LiteLLM Model Gateway"
+    
+    wait_for_service "LiteLLM" "http://localhost:${LITELLM_PORT:-4000}" 60 || return 1
+    
+    log "INFO" "Registering models with LiteLLM..."
+    
+    # Register Ollama model if enabled
+    if [[ "${ENABLE_OLLAMA}" == "true" ]] && [[ -n "${OLLAMA_DEFAULT_MODEL}" ]]; then
+        local litellm_config='{
+            "model_list": [
+                {
+                    "model_name": "'"${OLLAMA_DEFAULT_MODEL}"'",
+                    "litellm_params": {
+                        "model": "ollama/'"${OLLAMA_DEFAULT_MODEL}"'",
+                        "api_base": "'"${OLLAMA_INTERNAL_URL}"'",
+                        "input_cost": 0.0,
+                        "output_cost": 0.0
+                    },
+                    "model_id": "'"${OLLAMA_DEFAULT_MODEL}"'"
+                }
+            ]
+        }'
+        
+        if curl -sf -X POST "http://localhost:${LITELLM_PORT:-4000}/v1/model/register" \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
+                -d "${litellm_config}" &>/dev/null; then
+            log "SUCCESS" "Registered ${OLLAMA_DEFAULT_MODEL} with LiteLLM (cost: $0.00)"
+        else
+            log "WARN" "Failed to register model with LiteLLM"
+        fi
+    fi
+    
+    # Register OpenAI models if API key available
+    if [[ -n "${OPENAI_API_KEY:-}" ]]; then
+        local openai_config='{
+            "model_list": [
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {
+                        "model": "gpt-4o",
+                        "api_key": "'"${OPENAI_API_KEY}"'",
+                        "input_cost": 0.005,
+                        "output_cost": 0.015
+                    },
+                    "model_id": "gpt-4o"
+                }
+            ]
+        }'
+        
+        if curl -sf -X POST "http://localhost:${LITELLM_PORT:-4000}/v1/model/register" \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
+                -d "${openai_config}" &>/dev/null; then
+            log "SUCCESS" "Registered gpt-4o with LiteLLM (cost: $0.005/$1K input, $0.015/$1K output)"
+        else
+            log "WARN" "Failed to register gpt-4o with LiteLLM"
+        fi
+    fi
+    
+    ok "LiteLLM model configuration complete."
+}
+
 # ─── Grafana Configuration ─────────────────────────────────────────────────
 configure_grafana() {
     [ "${SKIP_GRAFANA}" = "true" ] && return 0
