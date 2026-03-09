@@ -1465,19 +1465,37 @@ log INFO "Next Step: Use Mission Control via 'sudo bash scripts/3-configure-serv
 
 # --- POST-DEPLOYMENT VERIFICATION ---
 log INFO "--- POST-DEPLOYMENT VERIFICATION ---"
-log INFO "Running verification via Mission Control..."
+cd "${TENANT_DIR}" # Ensure we are in the correct directory
 
-# Use Mission Control for verification (modular architecture)
-if sudo bash "$(dirname "$0")/3-configure-services.sh" "${TENANT_ID}" --verify; then
-    ok "✅ All services passed verification."
-else
-    warn "⚠️ Some services failed verification. Check logs for details."
+# --- Tailscale Verification ---
+if [[ "${ENABLE_TAILSCALE}" == "true" ]]; then
+    log INFO "Verifying Tailscale connectivity..."
+    # Give Tailscale up to 30 seconds to connect
+    if timeout 30s bash -c "until docker compose exec tailscale tailscale status 2>/dev/null | grep -q 'Logged in'; do sleep 3; done"; then
+        TAILSCALE_IP=$(docker compose exec tailscale tailscale ip -4)
+        ok "✅ Tailscale is UP and connected. Private IP: ${TAILSCALE_IP}"
+    else
+        fail "❌ Tailscale FAILED to connect. Check auth key and container logs: 'sudo bash scripts/3-configure-services.sh ${TENANT_ID} --logs tailscale'"
+    fi
+fi
+
+# --- Rclone Verification ---
+if [[ "${ENABLE_RCLONE}" == "true" ]]; then
+    log INFO "Verifying Rclone authentication..."
+    # Give Rclone time to start its remote control server
+    sleep 5
+    if docker compose exec rclone rclone lsd gdrive: --max-depth 1 > /dev/null 2>&1; then
+        ok "✅ Rclone is UP and authenticated with Google Drive."
+    else
+        warn "⚠️ Rclone authentication FAILED. Check config and logs: 'sudo bash scripts/3-configure-services.sh ${TENANT_ID} --logs rclone'"
+    fi
 fi
 
 echo ""
-log SUCCESS "--- DEPLOYMENT SUMMARY ---"
-log INFO "Core services have been started. You can now manage your application stack."
-log INFO "Next Step: Use Mission Control via 'sudo bash scripts/3-configure-services.sh ${TENANT_ID} --status'"
+log SUCCESS "--- CORE DEPLOYMENT COMPLETE ---"
+log INFO "The core infrastructure is running. You are now ready to use Mission Control."
+log INFO "Next Step: 'sudo bash scripts/3-configure-services.sh ${TENANT_ID} --status' to see the dashboard."
+log INFO "Then: 'sudo bash scripts/3-configure-services.sh ${TENANT_ID} --manage' to start your applications."
 
 }
 
