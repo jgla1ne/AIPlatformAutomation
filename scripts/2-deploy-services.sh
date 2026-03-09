@@ -293,7 +293,7 @@ add_openwebui() {
     cat >> "${COMPOSE_FILE}" << EOF
 
   openwebui:
-    image: ghcr.io/open-webui/open-webui:main
+    image: ghcr.io/open-webui/open-webui:community
     restart: unless-stopped
     user: "\${TENANT_UID}:\${TENANT_GID}"
     # Fix permissions and start as tenant user
@@ -363,7 +363,7 @@ add_flowise() {
       sh -c "mkdir -p /app/storage/logs /app/storage/uploads && 
              npm start"
     environment:
-      - HOME=/home/node # Keep this variable
+      - HOME=/tmp # This gives Node.js a writable directory for its user-related tasks
       - PORT=\${FLOWISE_PORT}
       - DATABASE_TYPE=postgres
       - DATABASE_HOST=\${POSTGRES_SERVICE_NAME:-postgres}
@@ -413,6 +413,7 @@ add_anythingllm() {
     volumes:
       - \${TENANT_DIR}/anythingllm:/app/server/storage
       - \${TENANT_DIR}/anythingllm/tmp:/tmp
+      - \${TENANT_DIR}/gdrive_mount:/app/server/storage/gdrive:ro # Mount as read-only
     ports:
       - "\${ANYTHINGLLM_PORT:-3001}:3001"
     depends_on:
@@ -722,6 +723,24 @@ docker-compose pull --quiet
 log INFO "Starting all services in detached mode..."
 if ! docker-compose up -d; then
     fail "Docker Compose failed to start. Please check the logs above."
+fi
+
+# Verify Tailscale connectivity
+log INFO "Verifying Tailscale connectivity..."
+TAILSCALE_IP=$(docker-compose exec -T tailscale tailscale ip -4 2>/dev/null || echo "")
+if [ -n "$TAILSCALE_IP" ]; then
+    ok "Tailscale is UP. Private IP: ${TAILSCALE_IP}"
+    # This IP is what you will use to access OpenClaw
+else
+    fail "Tailscale failed to connect. Check auth key and logs."
+fi
+
+# Verify Rclone authentication with Google Drive
+log INFO "Verifying Rclone authentication with Google Drive..."
+if docker-compose exec -T rclone rclone lsd gdrive: > /dev/null 2>&1; then
+    ok "Rclone authentication successful."
+else
+    fail "Rclone failed to authenticate. Check google_sa.json and config."
 fi
 
 # --- NEW LOGGING BLOCK ---

@@ -1944,6 +1944,24 @@ DIFY_STORAGE_TYPE=local
 DIFY_STORAGE_LOCAL_ROOT=/data
 EOF
 
+    # Use robust file write pattern for critical service variables
+    VARS_TO_ADD=$(cat <<EOF
+# Redis configuration for Authentik
+AUTHENTIK_REDIS__HOST=redis
+
+# Dify storage configuration
+DIFY_STORAGE_TYPE=local
+DIFY_STORAGE_LOCAL_ROOT=/data
+EOF
+)
+
+    # Append variables and immediately force a sync to disk
+    echo "${VARS_TO_ADD}" >> "${temp_env_file}" && sync
+
+    # Verify ownership immediately after writing
+    chown "${TENANT_UID}:${TENANT_GID}" "${temp_env_file}"
+    ok "Appended and synced service variables to .env file."
+
     chmod 600 "${temp_env_file}"
     
     # Google Service Account for Rclone (non-interactive)
@@ -1955,6 +1973,7 @@ type = drive
 scope = drive
 service_account_file = /config/google_sa.json
 team_drive =
+root_folder_id = \${RCLONE_GDRIVE_ROOT_ID}
 EOF
         
         # Ensure tenant ownership
@@ -1962,6 +1981,7 @@ EOF
         
         # Set environment variable for script-2
         echo "RCLONE_CONFIG_PATH=${TENANT_DIR}/rclone/rclone.conf" >> "${temp_env_file}"
+        echo "RCLONE_GDRIVE_ROOT_ID=\${RCLONE_GDRIVE_ROOT_ID}" >> "${temp_env_file}"
         
         ok "Rclone configuration generated for Service Account authentication."
     elif [[ "${GDRIVE_AUTH_METHOD}" == "oauth" ]]; then
