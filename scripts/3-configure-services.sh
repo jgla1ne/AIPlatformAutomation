@@ -107,11 +107,11 @@ case "${2:-status}" in
         
         # Check HTTPS endpoints
         echo -e "${CYAN}Service Health Check:${NC}"
-        local failed_services=()
-        local url=""
-        local port=""
+        failed_services=()
         
         for service in "${services[@]}"; do
+            url=""
+            port=""
             
             case "${service}" in
                 "openwebui")
