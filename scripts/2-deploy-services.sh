@@ -175,68 +175,6 @@ EOF
     ok "Production Caddyfile generated with all enabled services"
 }
 
-# --- Verification Functions ---
-test_tailscale_connectivity() {
-    local timeout="${1:-30}"
-    
-    log INFO "Testing Tailscale connectivity (timeout: ${timeout}s)..."
-    
-    if timeout "${timeout}s" bash -c "until docker compose exec tailscale tailscale status | grep -q 'Logged in'; do sleep 3; done"; then
-        local tailscale_ip
-        tailscale_ip=$(docker compose exec tailscale tailscale ip -4 2>/dev/null || echo "unknown")
-        ok "✅ Tailscale is UP and connected. Private IP: ${tailscale_ip}"
-        return 0
-    else
-        fail "❌ Tailscale FAILED to connect. Check auth key and container logs: docker compose logs tailscale"
-        return 1
-    fi
-}
-
-test_rclone_connectivity() {
-    local timeout="${1:-10}"
-    
-    log INFO "Testing Rclone connectivity..."
-    
-    # Give Rclone time to start
-    sleep "$timeout"
-    
-    if docker compose exec rclone rclone lsd gdrive: --max-depth 1 > /dev/null 2>&1; then
-        ok "✅ Rclone is UP and authenticated with Google Drive."
-        return 0
-    else
-        warn "⚠️ Rclone authentication FAILED. Check config and logs: docker compose logs rclone"
-        return 1
-    fi
-}
-
-run_post_deployment_verification() {
-    log INFO "--- POST-DEPLOYMENT VERIFICATION ---"
-    
-    local verification_failed=false
-    
-    # Tailscale Verification
-    if [[ "${ENABLE_TAILSCALE}" == "true" ]]; then
-        if ! test_tailscale_connectivity; then
-            verification_failed=true
-        fi
-    fi
-    
-    # Rclone Verification
-    if [[ "${ENABLE_RCLONE}" == "true" ]]; then
-        if ! test_rclone_connectivity; then
-            verification_failed=true
-        fi
-    fi
-    
-    if [[ "$verification_failed" == "true" ]]; then
-        warn "⚠️ Some services failed verification. Check logs for details."
-        return 1
-    else
-        ok "✅ All services passed verification."
-        return 0
-    fi
-}
-
 # --- Environment Setup ---
 TENANT_DIR="/mnt/data/${TENANT_ID}"
 ENV_FILE="${TENANT_DIR}/.env"
@@ -1508,7 +1446,15 @@ print_final_summary
 print_comprehensive_final_report
 
 # --- POST-DEPLOYMENT VERIFICATION ---
-run_post_deployment_verification
+log INFO "--- POST-DEPLOYMENT VERIFICATION ---"
+log INFO "Running verification via Mission Control..."
+
+# Use Mission Control for verification (modular architecture)
+if sudo bash "$(dirname "$0")/3-configure-services.sh" "${TENANT_ID}" --verify; then
+    ok "✅ All services passed verification."
+else
+    warn "⚠️ Some services failed verification. Check logs for details."
+fi
 
 echo ""
 log SUCCESS "--- DEPLOYMENT SUMMARY ---"

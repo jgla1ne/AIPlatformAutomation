@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
+# Import utility functions from Mission Control (modular architecture)
+source "$(dirname "$0")/3-configure-services.sh" 2>/dev/null || true
+
 # =============================================================================
-# Script 1: System Setup Wizard
+# Script 1: Tenant Setup - Complete System Configurationzard
 # =============================================================================
 # PURPOSE: Interactive setup wizard for AI Platform
 # USAGE:   sudo bash scripts/1-setup-system.sh
@@ -1121,41 +1126,6 @@ collect_litellm_routing() {
     esac
     
     log "SUCCESS" "LiteLLM routing strategy: ${LITELLM_ROUTING_STRATEGY}"
-}
-
-# --- OAuth Token Utility ---
-get_oauth_token() {
-    local client_id="$1"
-    local client_secret="$2"
-    
-    if ! command -v rclone >/dev/null 2>&1; then
-        warn "rclone not available for token validation"
-        return 1
-    fi
-    
-    # Create temporary rclone config for testing
-    local temp_config
-    temp_config=$(mktemp)
-    cat > "${temp_config}" << EOF
-[gdrive]
-type = drive
-scope = drive
-client_id = ${client_id}
-client_secret = ${client_secret}
-EOF
-    
-    # Try to get OAuth token
-    local token
-    if token=$(rclone authorize "drive" "${client_id}" "${client_secret}" --config "${temp_config}" 2>/dev/null | grep -o '{"access_token":"[^"]*".*' || true); then
-        if [[ -n "$token" ]]; then
-            echo "$token"
-            rm -f "${temp_config}"
-            return 0
-        fi
-    fi
-    
-    rm -f "${temp_config}"
-    return 1
 }
 
 # ─── Network & Security Configuration ───────────────────────────────────────────

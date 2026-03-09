@@ -6,31 +6,142 @@ set -euo pipefail
 # =============================================================================
 # PURPOSE: Primary interface for managing, debugging, and configuring live platform
 # USAGE:   sudo bash scripts/3-configure-services.sh <tenant_id> [action] [service/argument]
-# ACTIONS:  --start, --stop, --restart, --logs, --status, --test-litellm, --set-routing, --enable-persistence
+# ACTIONS:  --start, --stop, --restart, --logs, --status, --test-litellm, --set-routing, --enable-persistence, --verify
 # =============================================================================
 
-# --- Tenant ID Check & Environment Loading ---
-if [[ -z "${1:-}" ]]; then
-    echo "ERROR: TENANT_ID is required. Usage: sudo bash $0 <tenant_id> [action]" >&2
-    exit 1
-fi
-TENANT_ID="$1"
-TENANT_DIR="/mnt/data/${TENANT_ID}"
-ENV_FILE="${TENANT_DIR}/.env"
-
-if [[ ! -f "${ENV_FILE}" ]]; then
-    echo "ERROR: Environment file not found for tenant '${TENANT_ID}'" >&2
-    exit 1
-fi
-set -a; source "${ENV_FILE}"; set +a
-cd "${TENANT_DIR}" # CRITICAL: Run all docker commands from here
-
-# --- Logging Helpers ---
+# --- Color Definitions ---
 RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m' CYAN='\033[0;36m' NC='\033[0m'
 log() { echo -e "${CYAN}[INFO]${NC}    $*"; }
 ok() { echo -e "${GREEN}[OK]${NC}      $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
 fail() { echo -e "${RED}[FAIL]${NC}    $*"; exit 1; }
+
+# --- Verification Functions (Reusable Across Scripts) ---
+validate_tailscale_auth_key() {
+    local auth_key="$1"
+    if [[ "${auth_key}" =~ ^tskey-[a-zA-Z0-9-]+$ ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+get_oauth_token() {
+    local client_id="$1"
+    local client_secret="$2"
+    
+    if ! command -v rclone >/dev/null 2>&1; then
+        warn "rclone not available for token validation"
+        return 1
+    fi
+    
+    # Create temporary rclone config for testing
+    local temp_config
+    temp_config=$(mktemp)
+    cat > "${temp_config}" << EOF
+[gdrive]
+type = drive
+scope = drive
+client_id = ${client_id}
+client_secret = ${client_secret}
+EOF
+    
+    # Try to get OAuth token
+    local token
+    if token=$(rclone authorize "drive" "${client_id}" "${client_secret}" --config "${temp_config}" 2>/dev/null | grep -o '{"access_token":"[^"]*".*' || true); then
+        if [[ -n "$token" ]]; then
+            echo "$token"
+            rm -f "${temp_config}"
+            return 0
+        fi
+    fi
+    
+    rm -f "${temp_config}"
+    return 1
+}
+
+test_tailscale_connectivity() {
+    local tenant_dir="$1"
+    local timeout="${2:-30}"
+    
+    cd "${tenant_dir}" || return 1
+    
+    log INFO "Testing Tailscale connectivity (timeout: ${timeout}s)..."
+    
+    if timeout "${timeout}s" bash -c "until docker compose exec tailscale tailscale status | grep -q 'Logged in'; do sleep 3; done"; then
+        local tailscale_ip
+        tailscale_ip=$(docker compose exec tailscale tailscale ip -4 2>/dev/null || echo "unknown")
+        ok "✅ Tailscale is UP and connected. Private IP: ${tailscale_ip}"
+        return 0
+    else
+        warn "❌ Tailscale FAILED to connect. Check auth key and container logs: docker compose logs tailscale"
+        return 1
+    fi
+}
+
+test_rclone_connectivity() {
+    local tenant_dir="$1"
+    local timeout="${2:-10}"
+    
+    cd "${tenant_dir}" || return 1
+    
+    log INFO "Testing Rclone connectivity..."
+    
+    # Give Rclone time to start
+    sleep "$timeout"
+    
+    if docker compose exec rclone rclone lsd gdrive: --max-depth 1 > /dev/null 2>&1; then
+        ok "✅ Rclone is UP and authenticated with Google Drive."
+        return 0
+    else
+        warn "⚠️ Rclone authentication FAILED. Check config and logs: docker compose logs rclone"
+        return 1
+    fi
+}
+
+run_verification() {
+    local tenant_id="$1"
+    local tenant_dir="/mnt/data/${tenant_id}"
+    
+    log INFO "--- POST-DEPLOYMENT VERIFICATION ---"
+    cd "${tenant_dir}" || return 1
+    
+    # Load environment
+    set -a
+    source "${tenant_dir}/.env"
+    set +a
+    
+    local verification_failed=false
+    
+    # Tailscale Verification
+    if [[ "${ENABLE_TAILSCALE}" == "true" ]]; then
+        if ! test_tailscale_connectivity "$tenant_dir"; then
+            verification_failed=true
+        fi
+    fi
+    
+    # Rclone Verification
+    if [[ "${ENABLE_RCLONE}" == "true" ]]; then
+        if ! test_rclone_connectivity "$tenant_dir"; then
+            verification_failed=true
+        fi
+    fi
+    
+    if [[ "$verification_failed" == "true" ]]; then
+        warn "⚠️ Some services failed verification."
+        return 1
+    else
+        ok "✅ All services passed verification."
+        return 0
+    fi
+}
+
+# --- Utility Functions (Can be sourced by other scripts) ---
+# These functions can be called by other scripts using:
+# source "$(dirname "$0")/3-configure-services.sh" && function_name
+
+# Export functions for use by other scripts
+export -f validate_tailscale_auth_key get_oauth_token test_tailscale_connectivity test_rclone_connectivity run_verification
 
 # --- ACTION FUNCTIONS ---
 
@@ -154,8 +265,32 @@ EOF
 
 # --- Main Script Logic (The "Router") ---
 main() {
-    ACTION=${2:---status} # Default to --status
-    SERVICE=${3:-}
+    # Tenant ID Check & Environment Loading
+    if [[ -z "${1:-}" ]]; then
+        echo "ERROR: TENANT_ID is required. Usage: sudo bash $0 <tenant_id> [action]" >&2
+        exit 1
+    fi
+    local TENANT_ID="$1"
+    local TENANT_DIR="/mnt/data/${TENANT_ID}"
+    local ENV_FILE="${TENANT_DIR}/.env"
+
+    if [[ ! -f "${ENV_FILE}" ]]; then
+        echo "ERROR: Environment file not found for tenant '${TENANT_ID}'" >&2
+        exit 1
+    fi
+    
+    # Special case for verification (load environment inside function)
+    if [[ "${2:-}" == "--verify" ]]; then
+        run_verification "$TENANT_ID"
+        exit $?
+    fi
+    
+    # Load environment for other actions
+    set -a; source "${ENV_FILE}"; set +a
+    cd "${TENANT_DIR}" # CRITICAL: Run all docker commands from here
+
+    local ACTION=${2:---status} # Default to --status
+    local SERVICE=${3:-}
     
     case "$ACTION" in
         --start)
@@ -187,6 +322,9 @@ main() {
         --enable-persistence)
             enable_persistence
             ;;
+        --verify)
+            run_verification "$TENANT_ID"
+            ;;
         *)
             echo "AI Platform Mission Control for Tenant: ${TENANT_ID}"
             echo "Usage: sudo bash $0 ${TENANT_ID} [action] [service/argument]"
@@ -200,6 +338,7 @@ main() {
             echo "  --test-litellm             Verify LiteLLM routing to local and cloud models."
             echo "  --set-routing <strategy>   Change LiteLLM routing (e.g., 'cost-optimized')."
             echo "  --enable-persistence        Create systemd service for auto-boot."
+            echo "  --verify                   Run post-deployment verification of services."
             ;;
     esac
 }
