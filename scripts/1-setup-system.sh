@@ -1306,6 +1306,9 @@ collect_network_config() {
             echo -e "  ${DIM}💡 TIP: Copy the entire JSON including all quotes and brackets${NC}"
             echo ""
             
+            # Create rclone directory first (ensure it exists)
+            mkdir -p "${TENANT_DIR}/rclone"
+            
             # Create a temporary file for JSON input
             local temp_json_file="${TENANT_DIR}/rclone/temp_json_input.txt"
             
@@ -1371,18 +1374,37 @@ collect_network_config() {
                     # Extract client_id and client_secret safely
                     local client_id=$(echo "$json_content" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('client_id', ''))" 2>/dev/null || echo "")
                     local client_secret=$(echo "$json_content" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('client_secret', ''))" 2>/dev/null || echo "")
+                    local private_key=$(echo "$json_content" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('private_key', ''))" 2>/dev/null || echo "")
                     
-                    if [[ -n "$client_id" && -n "$client_secret" ]]; then
+                    if [[ -n "$private_key" ]]; then
+                        # Service Account uses private_key, not client_id/client_secret
+                        cat > "$temp_config" << EOF
+[gdrive_sa]
+type = drive
+scope = drive
+service_account_file = ${TENANT_DIR}/rclone/google_sa.json
+token = {"access_token":"test"}
+EOF
+                        echo -e "  ${DIM}   Using Service Account private_key authentication${NC}"
+                    elif [[ -n "$client_id" && -n "$client_secret" ]]; then
+                        # OAuth credentials
                         cat > "$temp_config" << EOF
 [gdrive_sa]
 type = drive
 scope = drive
 client_id = ${client_id}
 client_secret = ${client_secret}
-service_account_file = ${TENANT_DIR}/rclone/google_sa.json
 token = {"access_token":"test"}
 EOF
-                        
+                        echo -e "  ${DIM}   Using OAuth client credentials${NC}"
+                    else
+                        echo -e "  ${RED}❌ Could not extract authentication credentials from JSON${NC}"
+                        echo -e "  ${DIM}   JSON should have either private_key (Service Account) or client_id/client_secret (OAuth)${NC}"
+                        GDRIVE_TOKEN=""
+                        rm -f "$temp_config" 2>/dev/null
+                    fi
+                    
+                    if [[ -f "$temp_config" ]]; then
                         echo -e "  ${DIM}🔐 Attempting token generation (with retry mechanism)...${NC}"
                         
                         # Retry mechanism for token generation
@@ -1420,7 +1442,7 @@ EOF
                             GDRIVE_TOKEN=""
                         fi
                     else
-                        echo -e "  ${RED}❌ Could not extract client_id/client_secret from JSON${NC}"
+                        echo -e "  ${YELLOW}⚠️ No valid authentication method found${NC}"
                         echo -e "  ${DIM}   Token will be generated automatically when Rclone container starts${NC}"
                         GDRIVE_TOKEN=""
                     fi
@@ -1697,6 +1719,7 @@ collect_ports() {
     local d_openwebui="8081"
     local d_anythingllm="3001"
     local d_litellm="4000"
+    local d_vllm="8000"
     local d_grafana="3002"          # Host port, internal is 3000
     local d_prometheus="9090"
     local d_ollama="11434"
@@ -1745,6 +1768,7 @@ collect_ports() {
     [ "${ENABLE_OPENWEBUI}" = "true" ]   && read_port "Open WebUI"  "${d_openwebui}"   "OPENWEBUI_PORT"
     [ "${ENABLE_ANYTHINGLLM}" = "true" ] && read_port "AnythingLLM" "${d_anythingllm}" "ANYTHINGLLM_PORT"
     [ "${ENABLE_LITELLM}" = "true" ]     && read_port "LiteLLM"     "${d_litellm}"     "LITELLM_PORT"
+    [ "${ENABLE_VLLM}" = "true" ]         && read_port "VLLM"        "${d_vllm}"        "VLLM_PORT"
     [ "${ENABLE_GRAFANA}" = "true" ]     && read_port "Grafana"     "${d_grafana}"     "GRAFANA_PORT"
     [ "${ENABLE_PROMETHEUS}" = "true" ]  && read_port "Prometheus"  "${d_prometheus}"  "PROMETHEUS_PORT"
     [ "${ENABLE_OLLAMA}" = "true" ]      && read_port "Ollama"      "${d_ollama}"      "OLLAMA_PORT"
@@ -1761,6 +1785,7 @@ collect_ports() {
     OPENWEBUI_PORT="${OPENWEBUI_PORT:-${d_openwebui}}"
     ANYTHINGLLM_PORT="${ANYTHINGLLM_PORT:-${d_anythingllm}}"
     LITELLM_PORT="${LITELLM_PORT:-${d_litellm}}"
+    VLLM_PORT="${VLLM_PORT:-${d_vllm}}"
     LITELLM_INTERNAL_PORT="4000"
     GRAFANA_PORT="${GRAFANA_PORT:-${d_grafana}}"
     PROMETHEUS_PORT="${PROMETHEUS_PORT:-${d_prometheus}}"
