@@ -69,8 +69,6 @@ add_postgres() {
       POSTGRES_DB: "${POSTGRES_DB}"
     volumes:
       - ${TENANT_DIR}/postgres:/var/lib/postgresql/data
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
 EOF
     ok "Added 'postgres' service."
 }
@@ -87,8 +85,6 @@ add_redis() {
     command: redis-server --requirepass "${REDIS_PASSWORD}"
     volumes:
       - ${TENANT_DIR}/redis:/data
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
 EOF
     ok "Added 'redis' service."
 }
@@ -106,8 +102,6 @@ add_qdrant() {
       - QDRANT__SERVICE__HTTP_PORT=${QDRANT_PORT:-6333}
     volumes:
       - ${TENANT_DIR}/qdrant:/qdrant/storage
-    ports:
-      - "${QDRANT_PORT:-6333}:6333"
 EOF
     ok "Added 'qdrant' service."
 }
@@ -128,8 +122,6 @@ add_grafana() {
     volumes:
       - ${TENANT_DIR}/grafana:/var/lib/grafana
       - ${TENANT_DIR}/grafana/provisioning:/etc/grafana/provisioning
-    ports:
-      - "${GRAFANA_PORT:-3000}:3000"
 EOF
     ok "Added 'grafana' service."
 }
@@ -158,8 +150,6 @@ add_ollama() {
     restart: unless-stopped
     volumes:
       - ${TENANT_DIR}/ollama:/root/.ollama
-    ports:
-      - "${OLLAMA_PORT:-11434}:11434"
     environment:
       - OLLAMA_GPU_LAYERS=${OLLAMA_GPU_LAYERS:-auto}
 EOF
@@ -180,8 +170,6 @@ add_litellm() {
     volumes:
       - ${TENANT_DIR}/litellm:/data
       - ${TENANT_DIR}/litellm/config.yaml:/app/config.yaml:ro
-    ports:
-      - "${LITELLM_PORT:-4000}:4000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
       interval: 15s
@@ -203,8 +191,6 @@ add_openwebui() {
       - WEBUI_NAME=${OPENWEBUI_NAME:-Open WebUI}
     volumes:
       - ${TENANT_DIR}/openwebui:/app/backend/data
-    ports:
-      - "${OPENWEBUI_PORT:-3001}:8080"
 EOF
     ok "Added 'openwebui' service."
 }
@@ -225,7 +211,7 @@ add_tailscale() {
     environment:
       - TS_AUTHKEY=${TAILSCALE_AUTH_KEY}
       - TS_STATE_DIR=/var/lib/tailscale
-      - TS_EXTRA_ARGS=--accept-routes
+      - TS_EXTRA_ARGS=--serve=tcp://:18789/tcp://openclaw:8082
 EOF
     ok "Added 'tailscale' service (Official Docker Method)."
 }
@@ -249,8 +235,6 @@ add_rclone() {
     volumes:
       - ${TENANT_DIR}/rclone:/config
       - ${TENANT_DIR}/storage:/data
-    ports:
-      - "${RCLONE_PORT:-5572}:5572"
 EOF
     ok "Added 'rclone' service."
 }

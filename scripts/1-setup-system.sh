@@ -2368,68 +2368,49 @@ create_directories() {
 }
 
 # ─── Write Caddyfile ─────────────────────────────────────────────────────────
-/tmp/new_caddyfile_function.sh
+write_caddyfile() {
+    print_step "X" "X" "Generating Production Caddyfile with Correct Internal Ports"
 
-EOF
-    else
-        cat > "${CADDYFILE_PATH}" << EOF
-# AI Platform Caddyfile
-# Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    mkdir -p "$(dirname "${CADDYFILE_PATH}")"
+    chown -R "${TENANT_UID}:${TENANT_GID}" "$(dirname "${CADDYFILE_PATH}")"
 
+    # Start with a clean file
+    cat > "${CADDYFILE_PATH}" << EOF
+# AI Platform Production Caddyfile
+# Generated: $(date -u --iso-8601=seconds)
+# This configuration uses INTERNAL container ports, not host ports.
 {
-    email ${ADMIN_EMAIL}
-    acme_ca https://acme-v02.api.letsencrypt.org/directory
-    acme_ca_root /etc/ssl/certs/ca-certificates.crt
+    email ${LETSENCRYPT_EMAIL}
 }
-
 EOF
+
+    # --- Dynamically Append Service Blocks using CORRECT INTERNAL PORTS ---
+
+    if [[ "${ENABLE_GRAFANA}" == "true" ]]; then
+        echo "grafana.${DOMAIN} { reverse_proxy grafana:3000 }" >> "${CADDYFILE_PATH}"
+    fi
+    if [[ "${ENABLE_OPENWEBUI}" == "true" ]]; then
+        echo "openwebui.${DOMAIN} { reverse_proxy openwebui:8080 }" >> "${CADDYFILE_PATH}"
+    fi
+    if [[ "${ENABLE_ANYTHINGLLM}" == "true" ]]; then
+        echo "anythingllm.${DOMAIN} { reverse_proxy anythingllm:3001 }" >> "${CADDYFILE_PATH}"
+    fi
+    if [[ "${ENABLE_DIFY}" == "true" ]]; then
+        # Dify's web UI container is named 'dify-web' and listens on 3000
+        echo "dify.${DOMAIN} { reverse_proxy dify-web:3000 }" >> "${CADDYFILE_PATH}"
+    fi
+    if [[ "${ENABLE_FLOWISE}" == "true" ]]; then
+        echo "flowise.${DOMAIN} { reverse_proxy flowise:3000 }" >> "${CADDYFILE_PATH}"
+    fi
+    if [[ "${ENABLE_N8N}" == "true" ]]; then
+        echo "n8n.${DOMAIN} { reverse_proxy n8n:5678 }" >> "${CADDYFILE_PATH}"
+    fi
+    if [[ "${ENABLE_AUTHENTIK}" == "true" ]]; then
+        echo "auth.${DOMAIN} { reverse_proxy authentik-server:9000 }" >> "${CADDYFILE_PATH}"
     fi
 
-    # Add service blocks - SIMPLE FORMAT (consistent with script-2)
-    if [[ "${ENABLE_N8N}" = "true" ]]; then
-        cat >> "${CADDYFILE_PATH}" << EOF
-n8n.${DOMAIN} {
-    reverse_proxy n8n:5678
+    log "SUCCESS" "Production Caddyfile generated with All enabled services."
 }
-
-EOF
-    fi
-
-    if [[ "${ENABLE_FLOWISE}" = "true" ]]; then
-        cat >> "${CADDYFILE_PATH}" << EOF
-flowise.${DOMAIN} {
-    reverse_proxy flowise:3000
-}
-
-EOF
-    fi
-
-    if [[ "${ENABLE_OPENWEBUI}" = "true" ]]; then
-        cat >> "${CADDYFILE_PATH}" << EOF
-openwebui.${DOMAIN} {
-    reverse_proxy openwebui:8080
-}
-
-EOF
-    fi
-
-    if [[ "${ENABLE_ANYTHINGLLM}" = "true" ]]; then
-        cat >> "${CADDYFILE_PATH}" << EOF
-anythingllm.${DOMAIN} {
-    reverse_proxy anythingllm:3001
-}
-
-EOF
-    fi
-
-    if [[ "${ENABLE_LITELLM}" = "true" ]]; then
-        cat >> "${CADDYFILE_PATH}" << EOF
-litellm.${DOMAIN} {
-    reverse_proxy litellm:4000
-}
-
-EOF
-    fi
 
     if [[ "${ENABLE_GRAFANA}" = "true" ]]; then
         cat >> "${CADDYFILE_PATH}" << EOF

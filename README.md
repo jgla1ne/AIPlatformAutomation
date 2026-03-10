@@ -21,59 +21,86 @@ This platform uses a fully dockerized, **100% dynamically generated** `docker-co
 - **Source-Safe Architecture**: Scripts can safely source utilities without execution conflicts
 - **Production-Ready**: All critical showstopper bugs resolved
 
-No static compose file exists in the repository.
-
-Each tenant deployment generates:
-
-- A custom `docker-compose.yml` (fully dynamic with proper variable escaping)
-- A dedicated Docker network (dynamic naming)
-- A non-root runtime configuration (tenant UID/GID)
-- Reverse proxy configuration (Caddy v2)
-- A centralized `.env` file (80+ dynamic variables with proper quoting)
-- Intelligent service interconnection via LiteLLM
-- Complete configuration files (prometheus.yml, Caddyfile)
-- Debug logging infrastructure (`/mnt/data/{tenant}/logs/debug/`)
-
----
-
-## **🚀 Enhanced CI/CD Pipeline**
+### **🚀 Enhanced CI/CD Pipeline**
 
 ### **Complete End-to-End Deployment**
-
 ```
 Script 0 → Script 1 → Script 2 → Script 3
-  ↓         ↓         ↓         ↓
+   ↓         ↓         ↓         ↓
 Cleanup    Setup    Deploy   Configure
 ```
 
 **Script 0: Complete Cleanup**
 - System-wide Docker prune
-- Data volume cleanup
-- Environment preparation
+- All containers stopped and removed
+- Dynamic permissions reset with service-aware UIDs
+- Clean slate for fresh deployment
 
-**Script 1: Tenant Setup**
-- Directory creation with proper ownership
-- Dynamic UID assignment per service
-- Complete .env generation (80+ variables with proper quoting)
-- Caddyfile generation (v2 syntax)
-- Prometheus configuration
-- **OAuth token retrieval and validation**
-- **Tailscale auth key validation**
-- **Mission Control utility sourcing for setup validation**
-- **✅ FIXED: Stack preset logic now properly applies user selection**
-- **✅ FIXED: .env variable escaping prevents unbound variable errors**
-- **✅ FIXED: All environment variables properly quoted**
+**Script 1: Interactive Setup**
+- Tenant identity collection and validation
+- Dynamic directory creation with service-aware permissions
+- Environment file generation with proper escaping
+- Caddyfile generation with correct internal ports
+- Service-specific configuration (Tailscale, Rclone, LiteLLM)
 
-**Script 2: Service Deployment**
-- CORE infrastructure deployment only (postgres, redis, qdrant, ollama, caddy)
-- **Uses Mission Control start_service() for unified service management**
-- **Uses Mission Control show_status() for comprehensive dashboard**
-- **Uses Mission Control set_debug_logging() for deployment debugging**
-- **Uses Mission Control run_verification() for post-deployment validation**
-- Dynamic docker-compose.yml generation with robust service definitions
-- **✅ FIXED: Critical heredoc bug - all service definitions now use proper quoting**
-- **✅ FIXED: Docker Compose variables properly written to .env format**
-- Resource-optimized startup preventing exhaustion
+**Script 2: Master Deployment Orchestrator**
+- Complete docker-compose.yml generation with ALL enabled services
+- Dependency-aware service startup (databases → AI infrastructure → applications)
+- Health verification in tiers (core dependencies → AI services → external configs)
+- Post-deployment configuration (Tailscale VPN, Rclone integration)
+- Production-ready Caddy configuration with HTTPS
+
+**Script 3: Mission Control Hub**
+- Service health monitoring and diagnostics
+- Log aggregation and analysis
+- Service lifecycle management (start/stop/restart)
+- Configuration management and validation
+- Performance monitoring and alerting
+
+### **📋 Production Deployment Features**
+
+Each tenant deployment generates:
+- A custom `docker-compose.yml` (fully dynamic with proper variable escaping)
+- A dedicated Docker network (dynamic naming)
+- A non-root runtime configuration (tenant UID/GID)
+- Reverse proxy configuration (Caddy v2 with automatic HTTPS)
+- A centralized `.env` file (80+ dynamic variables with proper quoting)
+- Intelligent service interconnection via LiteLLM
+- Complete configuration files (prometheus.yml, Caddyfile)
+- Debug logging infrastructure (`/mnt/data/{tenant}/logs/debug/`)
+
+### **� Service Stack Capabilities**
+
+**Core Infrastructure:**
+- PostgreSQL (persistent database with proper UID 70)
+- Redis (caching with authentication)
+- Caddy (reverse proxy with automatic HTTPS)
+- Prometheus (metrics collection with UID 65534)
+
+**AI Runtime Services:**
+- Ollama (local LLM inference)
+- LiteLLM (unified LLM proxy gateway)
+- Qdrant (vector database with UID 1000)
+- OpenWebUI (AI chat interface)
+
+**Enterprise Services:**
+- Grafana (monitoring dashboard with UID 472)
+- n8n (workflow automation)
+- Flowise (AI workflow builder)
+- AnythingLLM (document AI)
+
+**Security & Networking:**
+- Tailscale (VPN with proxy configuration for isolated services)
+- Rclone (Google Drive integration with Service Account)
+- Authentik (identity management)
+
+### **🌐 Network Architecture**
+
+**Docker Network Design:**
+- All services communicate via internal Docker network
+- Caddy acts as reverse proxy for external access
+- Tailscale provides VPN access to isolated services
+- Service discovery via Docker DNS (service names)
 - Application services managed via Mission Control (script-3)
 - Zero-touch Tailscale VPN activation
 - Non-interactive Rclone authentication
