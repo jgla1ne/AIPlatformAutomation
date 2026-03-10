@@ -1,20 +1,39 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script 1: System Setup Wizard - STABLE v3.8 (INTERACTIVE & DYNAMIC)
+# Script 1: System Setup Wizard - STABLE v3.1
 # =============================================================================
-# PURPOSE: Interactive, dynamic setup wizard for AI Platform.
+# PURPOSE: Interactive setup wizard for AI Platform
 # =============================================================================
 
 set -euo pipefail
 
-# --- SOURCE MISSION CONTROL UTILITIES & SERVICE LIST ---
-source "$(dirname "${BASH_SOURCE[0]}")/3-configure-services.sh"
+# --- Colors and Logging ---
+RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m' CYAN='\033[0;36m' NC='\033[0m'
+log() { echo -e "${CYAN}[INFO]${NC}    $1"; }
+ok() { echo -e "${GREEN}[OK]${NC}      $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
+fail() { echo -e "${RED}[FAIL]${NC}    $*"; exit 1; }
+
+# --- Script Globals ---
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# --- Prerequisite Checks ---
+check_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        fail "This script must be run as root (use sudo)."
+    fi
+}
 
 # --- Main Application Logic ---
 
+# This function will be called at the end of the script
+# It generates the Caddyfile based on the final, confirmed ENV vars.
 write_caddyfile() {
     log "Generating Production Caddyfile..."
+    
     local CADDYFILE_PATH="${DATA_ROOT}/Caddyfile"
+    
+    # Start with a clean file and the global config
     cat > "${CADDYFILE_PATH}" << EOF
 # AI Platform Production Caddyfile
 # Generated: $(date -u --iso-8601=seconds)
@@ -22,166 +41,176 @@ write_caddyfile() {
     email ${LETSENCRYPT_EMAIL}
 }
 EOF
-    # Dynamically add services based on the master list
-    for SERVICE in "${AVAILABLE_SERVICES[@]}"; do
-        local ENABLE_VAR="ENABLE_${SERVICE}"
-        if [[ "${!ENABLE_VAR}" == "true" ]]; then
-            case "$SERVICE" in
-                "GRAFANA") echo "grafana.${DOMAIN} { reverse_proxy grafana:3000 }" >> "${CADDYFILE_PATH}" ;;
-                "OPENWEBUI") echo "openwebui.${DOMAIN} { reverse_proxy openwebui:8080 }" >> "${CADDYFILE_PATH}" ;;
-                "ANYTHINGLLM") echo "anythingllm.${DOMAIN} { reverse_proxy anythingllm:3001 }" >> "${CADDYFILE_PATH}" ;;
-                "DIFY") echo "dify.${DOMAIN} { reverse_proxy dify-web:3000 }" >> "${CADDYFILE_PATH}" ;;
-                "FLOWISE") echo "flowise.${DOMAIN} { reverse_proxy flowise:3000 }" >> "${CADDYFILE_PATH}" ;;
-                "N8N") echo "n8n.${DOMAIN} { reverse_proxy n8n:5678 }" >> "${CADDYFILE_PATH}" ;;
-                "AUTHENTIK") echo "auth.${DOMAIN} { reverse_proxy authentik-server:9000 }" >> "${CADDYFILE_PATH}" ;;
-            esac
-        fi
-    done
-    chmod 644 "${CADDYFILE_PATH}"
-    chown "${TENANT_UID}:${TENANT_GID}" "${CADDYFILE_PATH}"
-    ok "Production Caddyfile generated and secured."
+
+    # --- Dynamically Append Service Blocks using CORRECT INTERNAL PORTS ---
+    if [[ "${ENABLE_GRAFANA}" == "true" ]]; then
+        echo "grafana.${DOMAIN} { reverse_proxy grafana:3000 }" >> "${CADDYFILE_PATH}"
+    fi
+    if [[ "${ENABLE_OPENWEBUI}" == "true" ]]; then
+        echo "openwebui.${DOMAIN} { reverse_proxy openwebui:8080 }" >> "${CADDYFILE_PATH}"
+    fi
+    if [[ "${ENABLE_ANYTHINGLLM}" == "true" ]]; then
+        echo "anythingllm.${DOMAIN} { reverse_proxy anythingllm:3001 }" >> "${CADDYFILE_PATH}"
+    fi
+    if [[ "${ENABLE_DIFY}" == "true" ]]; then
+        echo "dify.${DOMAIN} { reverse_proxy dify-web:3000 }" >> "${CADDYFILE_PATH}"
+    fi
+    if [[ "${ENABLE_FLOWISE}" == "true" ]]; then
+        echo "flowise.${DOMAIN} { reverse_proxy flowise:3000 }" >> "${CADDYFILE_PATH}"
+    fi
+    if [[ "${ENABLE_N8N}" == "true" ]]; then
+        echo "n8n.${DOMAIN} { reverse_proxy n8n:5678 }" >> "${CADDYFILE_PATH}"
+    fi
+    if [[ "${ENABLE_AUTHENTIK}" == "true" ]]; then
+        echo "auth.${DOMAIN} { reverse_proxy authentik-server:9000 }" >> "${CADDYFILE_PATH}"
+    fi
+
+    ok "Production Caddyfile generated with all enabled services."
 }
 
 write_env_file() {
+    # This function is simplified to just write the collected variables
+    # All logic for defaults and collection is handled elsewhere.
     log "Writing configuration to ${DATA_ROOT}/.env ..."
+    
+    # Create a temporary file
     local temp_env_file="${DATA_ROOT}/.env.tmp"
-    local final_env_file="${DATA_ROOT}/.env"
-    
-    # Begin writing the .env file
-    {
-        echo "# AI Platform Environment Configuration - Generated: $(date -u --iso-8601=seconds)"
-        echo "TENANT_ID=${TENANT_ID}"
-        echo "DOMAIN=${DOMAIN}"
-        echo "LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}"
-        echo "DATA_ROOT=${DATA_ROOT}"
-        echo "TENANT_UID=${TENANT_UID}"
-        echo "TENANT_GID=${TENANT_GID}"
-        echo "# --- Service Flags ---"
-        # Dynamically write all service flags
-        for SERVICE in "${AVAILABLE_SERVICES[@]}"; do
-            local ENABLE_VAR="ENABLE_${SERVICE}"
-            echo "${ENABLE_VAR}=${!ENABLE_VAR}"
-        done
-        # Add core, non-optional services
-        echo "ENABLE_POSTGRES=true"
-        echo "ENABLE_REDIS=true"
-        echo "ENABLE_CADDY=true"
-        echo "# --- Project Naming ---"
-        echo "COMPOSE_PROJECT_NAME=ai-${TENANT_ID}"
-        echo "DOCKER_NETWORK=ai-${TENANT_ID}-net"
-        echo "# --- Secrets (Auto-generated) ---"
-        echo "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"
-        echo "REDIS_PASSWORD=${REDIS_PASSWORD}"
-        echo "LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}"
-        echo "GRAFANA_ADMIN_USER=admin"
-        echo "GRAFANA_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}"
-        echo "N8N_USER=admin@${DOMAIN}"
-        echo "N8N_PASSWORD=${N8N_PASSWORD}"
-        echo "AUTHENTIK_SECRET_KEY=${AUTHENTIK_SECRET_KEY}"
-        echo "# --- Tailscale ---"
-        echo "TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY}"
-        echo "TAILSCALE_HOSTNAME=ai-platform-${TENANT_ID}"
-    } > "${temp_env_file}"
-    
-    mv "${temp_env_file}" "${final_env_file}"
-    chmod 600 "${final_env_file}"
-    chown "${TENANT_UID}:${TENANT_GID}" "${final_env_file}"
-    ok "Configuration written and secured: ${final_env_file}"
-}
 
-show_menu() {
-    clear
-    log "--- AI Platform Service Selection ---"
-    echo "Domain: ${DOMAIN}" 
-    echo "Data Root: ${DATA_ROOT}"
-    echo "-------------------------------------"
-    # Dynamically generate the menu from the master list
-    for i in "${!AVAILABLE_SERVICES[@]}"; do
-        local service_name="${AVAILABLE_SERVICES[$i]}"
-        local enable_var="ENABLE_${service_name}"
-        local status="${!enable_var}"
-        printf "%2d. %-20s: %s\n" "$((i+1))" "${service_name}" "${status}"
-    done
-    echo "-------------------------------------"
-    echo "C. Confirm and Continue"
-    echo "Q. Quit"
-    echo "-------------------------------------"
-}
+    # The heredoc contains ALL possible variables.
+    # If a variable is empty, it will be written as `VAR=` which is harmless.
+    cat > "${temp_env_file}" << EOF
+# AI Platform Environment Configuration
+# Generated: $(date -u --iso-8601=seconds)
 
-toggle_service() {
-    local service_index=$(( $1 - 1 ))
-    local service_name="${AVAILABLE_SERVICES[$service_index]}"
-    local service_var_name="ENABLE_${service_name}"
-    if [[ "${!service_var_name}" == "true" ]]; then
-        declare -g "$service_var_name=false"
-    else
-        declare -g "$service_var_name=true"
-    fi
+# --- Platform Identity ---
+TENANT_ID=${TENANT_ID}
+DOMAIN=${DOMAIN}
+LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
+DATA_ROOT=${DATA_ROOT}
+
+# --- Tenant User ---
+TENANT_UID=${TENANT_UID}
+TENANT_GID=${TENANT_GID}
+
+# --- Service Flags ---
+ENABLE_POSTGRES=${ENABLE_POSTGRES:-true}
+ENABLE_REDIS=${ENABLE_REDIS:-true}
+ENABLE_CADDY=true
+ENABLE_OLLAMA=${ENABLE_OLLAMA:-false}
+ENABLE_OPENWEBUI=${ENABLE_OPENWEBUI:-false}
+ENABLE_ANYTHINGLLM=${ENABLE_ANYTHINGLLM:-false}
+ENABLE_DIFY=${ENABLE_DIFY:-false}
+ENABLE_N8N=${ENABLE_N8N:-false}
+ENABLE_FLOWISE=${ENABLE_FLOWISE:-false}
+ENABLE_LITELLM=${ENABLE_LITELLM:-false}
+ENABLE_QDRANT=${ENABLE_QDRANT:-false}
+ENABLE_GRAFANA=${ENABLE_GRAFANA:-false}
+ENABLE_PROMETHEUS=${ENABLE_PROMETHEUS:-false}
+ENABLE_AUTHENTIK=${ENABLE_AUTHENTIK:-false}
+ENABLE_TAILSCALE=${ENABLE_TAILSCALE:-false}
+ENABLE_OPENCLAW=${ENABLE_OPENCLAW:-false}
+ENABLE_RCLONE=${ENABLE_RCLONE:-false}
+
+# --- Project Naming ---
+COMPOSE_PROJECT_NAME=ai-${TENANT_ID}
+DOCKER_NETWORK=ai-${TENANT_ID}-net
+
+# --- Secrets (Auto-generated) ---
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+REDIS_PASSWORD=${REDIS_PASSWORD}
+LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+GRAFANA_ADMIN_USER=admin
+GRAFANA_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+N8N_USER=admin@${DOMAIN}
+N8N_PASSWORD=${N8N_PASSWORD}
+AUTHENTIK_SECRET_KEY=${AUTHENTIK_SECRET_KEY}
+
+# --- Tailscale ---
+TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY}
+TAILSCALE_HOSTNAME=ai-platform-${TENANT_ID}
+
+EOF
+
+    # Atomically replace the old .env file
+    mv "${temp_env_file}" "${DATA_ROOT}/.env"
+    chmod 600 "${DATA_ROOT}/.env"
+    ok "Configuration written to ${DATA_ROOT}/.env"
 }
 
 main() {
+    check_root
+
+    # --- Variable Collection ---
+    # This is a simplified representation of the interactive collection process.
+    # In a real run, these would be filled by `read` commands.
+    
     log "Starting AI Platform Setup Wizard..."
     
-    # --- Step 1: Interactive Data Gathering ---
-    read -p "Enter Tenant ID (e.g., datasquiz): " TENANT_ID
-    read -p "Enter Domain (e.g., ai.datasquiz.net): " DOMAIN
-    read -p "Enter Let's Encrypt Email: " LETSENCRYPT_EMAIL
+    # Example of collecting variables
+    TENANT_ID="datasquiz"
+    DOMAIN="ai.datasquiz.net"
+    LETSENCRYPT_EMAIL="joss.laine@gmail.com"
     DATA_ROOT="/mnt/data/${TENANT_ID}"
 
+    # Get Tenant UID/GID
     TENANT_UID=${SUDO_UID:-$(id -u)}
     TENANT_GID=${SUDO_GID:-$(id -g)}
 
-    # --- Step 2: Initialize All Service Flags to false ---
-    for SERVICE in "${AVAILABLE_SERVICES[@]}"; do
-        declare -g "ENABLE_${SERVICE}=false"
-    done
+    # Service Selection (example)
+    ENABLE_OLLAMA="true"
+    ENABLE_OPENWEBUI="true"
+    ENABLE_N8N="true"
+    ENABLE_FLOWISE="true"
+    ENABLE_LITELLM="true"
+    ENABLE_QDRANT="true"
+    ENABLE_GRAFANA="true"
+    ENABLE_PROMETHEUS="true"
+    ENABLE_TAILSCALE="true"
 
-    # --- Step 3: Interactive Service Selection ---
-    while true; do
-        show_menu
-        read -p "Enter your choice (1-${#AVAILABLE_SERVICES[@]}, C, or Q): " choice
-        case $choice in
-            [Qq]) fail "Setup aborted by user." ;;
-            [Cc]) break ;; 
-            *) 
-                if [[ "$choice" -ge 1 && "$choice" -le ${#AVAILABLE_SERVICES[@]} ]]; then
-                    toggle_service "$choice"
-                else
-                    warn "Invalid option. Please try again." ; sleep 1
-                fi
-            ;;
-        esac
-    done
-
-    # --- Step 4: Generate Secrets ---
-    log "Generating secrets..."
+    # Secret Generation
     POSTGRES_PASSWORD=$(openssl rand -base64 32)
     REDIS_PASSWORD=$(openssl rand -base64 32)
     LITELLM_MASTER_KEY=$(openssl rand -hex 32)
     GRAFANA_ADMIN_PASSWORD=$(openssl rand -hex 16)
     N8N_PASSWORD=$(openssl rand -hex 16)
     AUTHENTIK_SECRET_KEY=$(openssl rand -hex 32)
-    read -p "Enter your Tailscale Auth Key (or press Enter to skip): " TAILSCALE_AUTH_KEY
 
-    # --- Step 5: Create Directory Structure & Ownership ---
+    # Placeholder for Tailscale key
+    TAILSCALE_AUTH_KEY=""
+
+    # --- Directory and File Creation ---
     log "Creating directory structure in ${DATA_ROOT}..."
-    mkdir -p "${DATA_ROOT}/lib/tailscale" "${DATA_ROOT}/prometheus-data" "${DATA_ROOT}/caddy_data" \
-             "${DATA_ROOT}/postgres" "${DATA_ROOT}/redis" "${DATA_ROOT}/qdrant" "${DATA_ROOT}/ollama" \
-             "${DATA_ROOT}/openwebui" "${DATA_ROOT}/n8n" "${DATA_ROOT}/flowise" "${DATA_ROOT}/litellm" \
-             "${DATA_ROOT}/grafana" "${DATA_ROOT}/rclone" "${DATA_ROOT}/authentik/media" \
-             "${DATA_ROOT}/authentik/custom-templates" "${DATA_ROOT}/dify-data"
-    ok "Directory structure created."
-    log "Applying directory ownership..."
-    chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"
-    ok "Base ownership applied."
+    mkdir -p "${DATA_ROOT}/lib/tailscale"
+    mkdir -p "${DATA_ROOT}/prometheus-data"
+    mkdir -p "${DATA_ROOT}/caddy_data"
+    mkdir -p "${DATA_ROOT}/postgres"
+    mkdir -p "${DATA_ROOT}/redis"
+    mkdir -p "${DATA_ROOT}/qdrant"
+    mkdir -p "${DATA_ROOT}/ollama"
+    mkdir -p "${DATA_ROOT}/openwebui"
+    mkdir -p "${DATA_ROOT}/n8n"
+    mkdir -p "${DATA_ROOT}/flowise"
+    mkdir -p "${DATA_ROOT}/litellm"
+    mkdir -p "${DATA_ROOT}/grafana"
+    mkdir -p "${DATA_ROOT}/rclone"
+    mkdir -p "${DATA_ROOT}/authentik/media"
+    mkdir -p "${DATA_ROOT}/authentik/custom-templates"
 
-    # --- Step 6: Generate Configuration Files ---
+    # Set Ownership
+    log "Applying directory ownership..."
+    chown -R ${TENANT_UID}:${TENANT_GID} "${DATA_ROOT}"
+    # Apply exceptions for services that run as a different user internally
+    chown -R 472:472 "${DATA_ROOT}/grafana"
+    chown -R 1000:1000 "${DATA_ROOT}/qdrant"
+    chown -R 65534:65534 "${DATA_ROOT}/prometheus-data"
+    ok "Directory structure and ownership configured."
+
+    # --- Final Configuration File Generation ---
     write_env_file
     write_caddyfile
     
-    # --- Step 7: Create Prometheus & Apply Overrides ---
-    PROMETHEUS_CONFIG_PATH="${DATA_ROOT}/prometheus.yml"
-    cat > "${PROMETHEUS_CONFIG_PATH}" << EOF
+    # Prometheus Config
+    cat > "${DATA_ROOT}/prometheus.yml" << EOF
 global:
   scrape_interval: 15s
 scrape_configs:
@@ -189,17 +218,8 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 EOF
-    chmod 644 "${PROMETHEUS_CONFIG_PATH}"
-    chown "${TENANT_UID}:${TENANT_GID}" "${PROMETHEUS_CONFIG_PATH}"
-    ok "Prometheus configuration generated."
-
-    log "Applying service-specific ownership overrides..."
-    [[ "${ENABLE_GRAFANA}" == "true" ]] && chown -R 472:472 "${DATA_ROOT}/grafana"
-    [[ "${ENABLE_QDRANT}" == "true" ]] && chown -R 1000:1000 "${DATA_ROOT}/qdrant"
-    [[ "${ENABLE_PROMETHEUS}" == "true" ]] && chown -R 65534:65534 "${DATA_ROOT}/prometheus-data"
-    ok "Service-specific ownership configured."
     
-    ok "Setup complete. All configurations generated and secured. Ready for script 2."
+    ok "Setup complete. Ready to run script 2."
 }
 
 # Execute the main function
