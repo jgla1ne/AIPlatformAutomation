@@ -9,8 +9,15 @@
 
 set -euo pipefail
 
+# --- Script Globals ---
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # --- SOURCE MISSION CONTROL UTILITIES (Logging & Validation) ---
-source "$(dirname "${BASH_SOURCE[0]}")/3-configure-services.sh"
+source "${SCRIPTS_DIR}/3-configure-services.sh"
+
+# --- Source Script 3 for Modular Infrastructure ---
+# This provides access to verification functions for Tailscale and Rclone
+source "${SCRIPTS_DIR}/3-configure-services.sh"
 
 # --- Default Values ---
 # All values are collected interactively. These are for safety and clarity.
@@ -80,9 +87,18 @@ configure_ports() { print_step "7" "Service Port Configuration"; read -p "Custom
 # --- Step 8: Network, Secrets & Files ---
 collect_and_generate() {
     print_step "8" "Network, Secrets & Files"
-    if [[ "${ENABLE_TAILSCALE}" == "true" ]]; then 
-        while true; do read -p "Enter Tailscale Auth Key: " TAILSCALE_AUTH_KEY; if validate_tailscale_key "${TAILSCALE_AUTH_KEY}"; then ok "Tailscale key valid."; break; fi; done;
-        read -p "Tailscale Extra Args [${TAILSCALE_EXTRA_ARGS}]: " args; TAILSCALE_EXTRA_ARGS=${args:-${TAILSCALE_EXTRA_ARGS}};
+    if [[ "${ENABLE_TAILSCALE}" == "true" ]]; then
+        while true; do 
+            read -p "Enter Tailscale Auth Key: " TAILSCALE_AUTH_KEY
+            if validate_tailscale_key "${TAILSCALE_AUTH_KEY}"; then 
+                ok "Tailscale key valid."
+                break
+            else
+                warn "Invalid Tailscale key. Please try again."
+            fi
+        done
+        read -p "Tailscale Extra Args [${TAILSCALE_EXTRA_ARGS}]: " args
+        TAILSCALE_EXTRA_ARGS=${args:-${TAILSCALE_EXTRA_ARGS}}
     fi
     read -p "Enable Rclone? [y/N]: " rclone; if [[ "${rclone,,}" == "y" ]]; then ENABLE_RCLONE=true; echo "Rclone auth: ${CYAN}1)${NC} OAuth, ${CYAN}2)${NC} Service Account JSON"; read -p "[1]: " m; if [[ "$m" == "2" ]]; then GDRIVE_AUTH_METHOD="service_account"; log "Paste JSON, then CTRL+D."; json_input=""; while IFS= read -r line; do json_input+="$line\n"; done; if validate_json "${json_input}"; then RCLONE_JSON="${json_input}"; ok "Rclone JSON valid."; else fail "Invalid JSON."; fi; else GDRIVE_AUTH_METHOD="oauth"; read -p "Client ID: " GDRIVE_CLIENT_ID; read -p "Client Secret: " GDRIVE_CLIENT_SECRET; fi; fi
     read -p "Postgres User [platform]: " u; POSTGRES_USER=${u:-platform}; read -p "Postgres DB [platform]: " d; POSTGRES_DB=${d:-platform}
