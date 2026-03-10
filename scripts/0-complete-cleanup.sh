@@ -1,83 +1,53 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script 0: Complete Cleanup and Fresh Deployment
+# Script 0: Complete Cleanup - STABLE v3.1
 # =============================================================================
-# PURPOSE: Clean slate deployment after architectural fixes
+# PURPOSE: Wipes the tenant's environment for a clean deployment.
 # USAGE:   sudo bash scripts/0-complete-cleanup.sh <tenant_id>
 # =============================================================================
 
 set -euo pipefail
 
-# --- Colors ---
-RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m' CYAN='\033[0;36m' NC='\033[0m'
-
-log() { echo -e "${CYAN}[INFO]${NC}    $*"; }
-ok() { echo -e "${GREEN}[OK]${NC}      $*"; }
-warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
-fail() { echo -e "${RED}[FAIL]${NC}    $*"; exit 1; }
+# --- SOURCE MISSION CONTROL UTILITIES ---
+# All logging and utility functions are now sourced from the central script.
+source "$(dirname "${BASH_SOURCE[0]}")/3-configure-services.sh"
 
 # --- Tenant ID Check ---
 if [[ -z "${1:-}" ]]; then
-    echo "ERROR: TENANT_ID is required. Usage: sudo bash $0 <tenant_id>" >&2
-    exit 1
+    fail "TENANT_ID is required. Usage: sudo bash $0 <tenant_id>"
 fi
-
 TENANT_ID="$1"
-DATA_ROOT="/mnt/data/datasquiz"
+DATA_ROOT="/mnt/data/${TENANT_ID}"
 
-log "INFO" "Starting complete cleanup for tenant '${TENANT_ID}'..."
+log "Starting complete cleanup for tenant '${TENANT_ID}'..."
 
-# --- 1. Stop All Containers ---
-log "INFO" "Stopping all running containers..."
-cd "${DATA_ROOT}"
-if docker compose ps -q | grep -q .; then
-    docker compose down --remove-orphans
-    ok "All containers stopped and removed."
+# --- 1. Stop and Remove All Containers ---
+log "Stopping all running containers for tenant '${TENANT_ID}'..."
+if [[ -f "${DATA_ROOT}/docker-compose.yml" ]]; then
+    cd "${DATA_ROOT}"
+    if docker compose ps -q | grep -q .; then
+        docker compose down --remove-orphans -v
+        ok "All containers for tenant stopped and removed."
+    else
+        ok "No containers were running for this tenant."
+    fi
 else
-    ok "No containers were running."
+    warn "No docker-compose.yml found for tenant. Skipping container cleanup."
 fi
 
 # --- 2. Clean Up Docker Resources ---
-log "INFO" "Cleaning up Docker resources..."
-docker system prune -f
-ok "Docker resources cleaned up."
+# This is a global cleanup, use with caution if other Docker apps are running.
+log "Performing global Docker system prune..."
+docker system prune -af
+ok "Docker system resources cleaned up."
 
-# --- 3. Reset Permissions with Script 3 Functions ---
-log "INFO" "Resetting permissions with dynamic service-aware ownership..."
-
-# Load environment variables
-ENV_FILE="${DATA_ROOT}/.env"
-if [[ -f "${ENV_FILE}" ]]; then
-    source "${ENV_FILE}"
+# --- 3. Delete Tenant Data Directory ---
+log "Deleting all data for tenant '${TENANT_ID}' at ${DATA_ROOT}..."
+if [ -d "${DATA_ROOT}" ]; then
+    rm -rf "${DATA_ROOT}"
+    ok "Tenant data directory deleted."
+else
+    warn "Tenant data directory not found, skipping deletion."
 fi
 
-source "/home/jglaine/AIPlatformAutomation/scripts/3-configure-services.sh"
-
-# Apply correct permissions for all services
-ALL_SERVICES="postgres redis qdrant grafana prometheus litellm authentik signal n8n weaviate chromadb milvus ollama localai vllm openwebui anythingllm flowise"
-
-for service in ${ALL_SERVICES}; do
-    permissions_set_ownership "${service}"
-done
-
-ok "All service permissions reset with dynamic UIDs."
-
-# --- 4. Fresh Deployment ---
-log "INFO" "Ready for fresh deployment with architectural fixes..."
-echo ""
-echo "🎯 CLEANUP COMPLETE - READY FOR FRESH DEPLOYMENT"
-echo ""
-echo "✅ All containers stopped and cleaned"
-echo "✅ Docker resources pruned"  
-echo "✅ Permissions reset with dynamic UIDs"
-echo "✅ Script 3 functions loaded and ready"
-echo ""
-echo "🚀 NEXT STEP: Run Script 2 for fresh deployment"
-echo "   sudo bash scripts/2-deploy-services.sh ${TENANT_ID}"
-echo ""
-echo "📊 This will deploy with:"
-echo "   • Complete Caddyfile generation"
-echo "   • All enabled services" 
-echo "   • Dynamic permissions (qdrant: 1000:1000)"
-echo "   • Zero hardcoding principles"
-echo "   • Modular architecture working"
+ok "Cleanup for tenant '${TENANT_ID}' is complete."
