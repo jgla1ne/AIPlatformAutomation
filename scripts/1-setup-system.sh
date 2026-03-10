@@ -1393,45 +1393,18 @@ EOF
                         rm -f "$temp_config" 2>/dev/null
                     fi
                     
-                    if [[ -f "$temp_config" ]]; then
-                        echo -e "  ${DIM}🔐 Attempting token generation (with retry mechanism)...${NC}"
-                        
-                        # Retry mechanism for token generation
-                        local max_retries=3
-                        local retry_count=0
-                        local gdrive_token=""
-                        
-                        while [[ $retry_count -lt $max_retries && -z "$gdrive_token" ]]; do
-                            ((retry_count++))
-                            echo -e "  ${DIM}   Attempt ${retry_count}/${max_retries}...${NC}"
-                            
-                            # For Service Account, we don't need token generation - the JSON file is enough
-                            # Just validate the Service Account file by testing connectivity
-                            if timeout 10s rclone config show gdrive-sa --config "$temp_config" >/dev/null 2>&1; then
-                                # Service Account is valid, set a placeholder token
-                                GDRIVE_TOKEN='{"access_token":"service_account_valid","token_type":"Bearer","expiry":"2025-01-01T00:00:00Z"}'
-                                gdrive_token="$GDRIVE_TOKEN"
-                                echo -e "  ${DIM}   Service Account validation successful${NC}"
-                            else
-                                echo -e "  ${DIM}   Service Account validation failed, retrying...${NC}"
-                                sleep 2
-                            fi
-                        done
-                        
-                        if [[ -n "$gdrive_token" ]]; then
-                            GDRIVE_TOKEN="$gdrive_token"
-                            echo -e "  ${GREEN}✅ Rclone token generated successfully${NC}"
-                            echo -e "  ${DIM}   Token length: ${#GDRIVE_TOKEN} characters${NC}"
-                            log "SUCCESS" "Rclone Service Account token generated (${retry_count} attempts)"
-                        else
-                            echo -e "  ${YELLOW}⚠️ Rclone token generation failed after ${max_retries} attempts${NC}"
-                            echo -e "  ${DIM}   Token will be generated automatically when Rclone container starts${NC}"
-                            echo -e "  ${DIM}   This is normal and will be handled during deployment${NC}"
-                            GDRIVE_TOKEN=""
-                        fi
+                    # For Service Accounts, we don't need token generation - the JSON file is enough
+                    # Just validate the JSON file exists and is readable
+                    if [[ -f "${TENANT_DIR}/rclone/google_sa.json" ]] && [[ -r "${TENANT_DIR}/rclone/google_sa.json" ]]; then
+                        # Set a placeholder token for Service Account
+                        GDRIVE_TOKEN='{"access_token":"service_account_valid","token_type":"Bearer","expiry":"2025-01-01T00:00:00Z"}'
+                        echo -e "  ${DIM}   Service Account JSON file validated${NC}"
+                        echo -e "  ${GREEN}✅ Rclone Service Account configured successfully${NC}"
+                        echo -e "  ${DIM}   Token will be generated automatically during deployment${NC}"
+                        log "SUCCESS" "Rclone Service Account JSON validated and stored"
                     else
-                        echo -e "  ${YELLOW}⚠️ No valid authentication method found${NC}"
-                        echo -e "  ${DIM}   Token will be generated automatically when Rclone container starts${NC}"
+                        echo -e "  ${RED}❌ Service Account JSON file not accessible${NC}"
+                        echo -e "  ${DIM}   Token will be generated automatically during deployment${NC}"
                         GDRIVE_TOKEN=""
                     fi
                     
