@@ -9,11 +9,14 @@
 set -euo pipefail
 
 # --- Tenant ID Check ---
-if [[ -z "${1:-}" ]]; then
+if [[ -z "${1:-}" ]] && [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     echo "ERROR: TENANT_ID is required. Usage: sudo bash $0 <tenant_id>" >&2
     exit 1
 fi
-TENANT_ID="$1"
+# Only set TENANT_ID if this script is being executed directly, not sourced
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    TENANT_ID="$1"
+fi
 
 # --- Colors and Logging ---
 RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m' CYAN='\033[0;36m' BOLD='\033[1m' DIM='\033[2m' NC='\033[0m'
@@ -23,17 +26,20 @@ warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
 fail() { echo -e "${RED}[FAIL]${NC}    $*"; exit 1; }
 
 # --- Environment Setup ---
-TENANT_DIR="/mnt/data/${TENANT_ID}"
-ENV_FILE="${TENANT_DIR}/.env"
+# Only set up tenant-specific variables if TENANT_ID is defined
+if [[ -n "${TENANT_ID:-}" ]]; then
+    TENANT_DIR="/mnt/data/${TENANT_ID}"
+    ENV_FILE="${TENANT_DIR}/.env"
 
-if [[ ! -f "${ENV_FILE}" ]]; then
-    fail "Environment file not found for tenant '${TENANT_ID}' at ${ENV_FILE}"
+    if [[ ! -f "${ENV_FILE}" ]]; then
+        fail "Environment file not found for tenant '${TENANT_ID}' at ${ENV_FILE}"
+    fi
+
+    log "Loading environment from: ${ENV_FILE}"
+    set -a
+    source "${ENV_FILE}" 2>/dev/null || true
+    set +a
 fi
-
-log "Loading environment from: ${ENV_FILE}"
-set -a
-source "${ENV_FILE}" 2>/dev/null || true
-set +a
 
 # --- DEFINITIVE HEALTH CHECK FUNCTION ---
 healthcheck_services() {
@@ -107,6 +113,19 @@ ENABLE_GRAFANA=${ENABLE_GRAFANA:-false}
 ENABLE_PROMETHEUS=${ENABLE_PROMETHEUS:-false}
 ENABLE_AUTHENTIK=${ENABLE_AUTHENTIK:-false}
 
+# --- Permissions Function (needed by Script 1) ---
+permissions_set_ownership() {
+    local service="$1"
+    local uid="$2"
+    local gid="$3"
+    local dir="${DATA_ROOT}/${service}"
+    
+    if [[ -d "${dir}" ]]; then
+        chown -R "${uid}:${gid}" "${dir}"
+        log "Set ownership for '${service}' directory to ${uid}:${gid}."
+    fi
+}
+
 # --- DEFINITIVE TAILSCALE CONFIGURATION ---
 configure_tailscale() {
     if [[ "${ENABLE_TAILSCALE}" != "true" ]]; then
@@ -166,5 +185,7 @@ main() {
     echo ""
 }
 
-# Execute the main function
-main "$@"
+# Execute the main function only when run directly, not when sourced
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
