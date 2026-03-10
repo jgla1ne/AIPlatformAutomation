@@ -2340,54 +2340,31 @@ apply_final_ownership() {
     log "SUCCESS" "Secure permissions set. Ownership structure is now correct."
 }
 
-# ─── Create directory structure ──────────────────────────────────────────────
+# ─── Create directory structure with dynamic permissions ────────────────────────
 create_directories() {
-    log "INFO" "Creating all service directories..."
+    log "INFO" "Creating all service directories with dynamic permissions..."
 
-    # This function creates directories without setting ownership
-    # Ownership will be set correctly by apply_final_ownership function
-    create_dir() {
-        local dir_path="$1"
-        mkdir -p "${DATA_ROOT}/${dir_path}"
-        printf "  ${DIM}Created '${dir_path}'${NC}\n"
-    }
-
-    # --- Create all possible directories ---
-    create_dir "logs"
-    create_dir "compose"
-    create_dir "caddy"
-    create_dir "caddy/config"
-    create_dir "caddy/data"
-    create_dir "redis"
-    create_dir "litellm"
-    create_dir "authentik/media"
-    create_dir "authentik/certs"
-    create_dir "authentik/custom-templates"
-    create_dir "signal"
-    create_dir "backups"
-
-    # Service-specific directories
-    create_dir "postgres"
-    create_dir "prometheus-data"
-    create_dir "grafana/provisioning/datasources"
-    create_dir "grafana/provisioning/dashboards"
-    create_dir "n8n"
-    create_dir "n8n/workflows"
-    create_dir "qdrant"
-    create_dir "weaviate"
-    create_dir "chromadb"
-    create_dir "milvus"
-    create_dir "ollama"
-    create_dir "localai"
-    create_dir "vllm"
-    create_dir "openwebui"
-    create_dir "anythingllm"
-    create_dir "anythingllm/tmp"
-    create_dir "flowise"
-    create_dir "run/tailscale"
-    create_dir "lib/tailscale"
-
-    log "SUCCESS" "All service directories created."
+    # Create base directories first
+    mkdir -p "${DATA_ROOT}/logs" "${DATA_ROOT}/compose" "${DATA_ROOT}/caddy" "${DATA_ROOT}/backups"
+    
+    # Loop through all possible services and set dynamic permissions
+    ALL_SERVICES="postgres redis qdrant grafana prometheus litellm authentik signal n8n weaviate chromadb milvus ollama localai vllm openwebui anythingllm flowise"
+    
+    for service in ${ALL_SERVICES}; do
+        # Check if the service is enabled via the ENABLE_SERVICENAME variable
+        if [[ $(declare -p "ENABLE_${service^^}" 2>/dev/null) =~ "true" ]]; then
+            permissions_set_ownership "${service}"
+        fi
+    done
+    
+    # Special directories that don't follow the service pattern
+    mkdir -p "${DATA_ROOT}/caddy/config" "${DATA_ROOT}/caddy/data"
+    mkdir -p "${DATA_ROOT}/grafana/provisioning/datasources" "${DATA_ROOT}/grafana/provisioning/dashboards"
+    mkdir -p "${DATA_ROOT}/n8n/workflows" "${DATA_ROOT}/anythingllm/tmp"
+    mkdir -p "${DATA_ROOT}/run/tailscale" "${DATA_ROOT}/lib/tailscale"
+    mkdir -p "${DATA_ROOT}/rclone" "${DATA_ROOT}/storage" "${DATA_ROOT}/gdrive"
+    
+    log "SUCCESS" "All service directories created with dynamic permissions."
 }
 
 # ─── Write Caddyfile ─────────────────────────────────────────────────────────

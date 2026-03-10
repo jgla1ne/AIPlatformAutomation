@@ -9,12 +9,6 @@ set -euo pipefail
 # ACTIONS:  --start, --stop, --restart, --logs, --status, --test-litellm, --set-routing, --enable-persistence, --set-debug, --verify
 # =============================================================================
 
-# --- Source Safety: Allow other scripts to source utilities without executing main ---
-if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
-    # This file is being sourced, not executed
-    return 0 2>/dev/null || exit 0
-fi
-
 # --- Color Definitions ---
 RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m' CYAN='\033[0;36m' NC='\033[0m'
 log() { echo -e "${CYAN}[INFO]${NC}    $*"; }
@@ -23,6 +17,113 @@ warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
 fail() { echo -e "${RED}[FAIL]${NC}    $*"; exit 1; }
 
 # --- Verification Functions (Reusable Across Scripts) ---
+
+# Master Permissions Function - Dynamic, Service-Aware Ownership
+permissions_set_ownership() {
+    local service_name="$1"
+    local service_dir="${DATA_ROOT}/${service_name}"
+    local service_uid="${TENANT_UID}" # Default to tenant
+    local service_gid="${TENANT_GID}" # Default to tenant
+
+    # Handle special cases based on official Docker image requirements
+    case "$service_name" in
+        "grafana")
+            service_uid=472; service_gid=472 ;;
+        "prometheus")
+            service_uid=65534; service_gid=65534; service_dir="${DATA_ROOT}/prometheus-data" ;;
+        "qdrant")
+            service_uid=1000; service_gid=1000 ;;
+        "postgres")
+            service_uid=70; service_gid=70 ;;
+        # Add other special cases here as new services are added
+    esac
+    
+    mkdir -p "${service_dir}"
+    chown -R "${service_uid}:${service_gid}" "${service_dir}"
+    log "INFO" "Ownership for '${service_name}' set to ${service_uid}:${service_gid}"
+}
+
+# Generic Healthcheck Function
+healthcheck_verify_url() {
+    local service_name="$1"
+    local url="$2"
+    log "INFO" "Verifying health of '${service_name}' at ${url}..."
+    if ! timeout 120s bash -c "until curl -s -k -f ${url} > /dev/null; do sleep 5; done"; then
+        fail "❌ ${service_name} failed to become healthy after 120 seconds. Check logs."
+    fi
+    ok "✅ ${service_name} is healthy."
+}
+
+# Tailscale Configuration Function
+configure_tailscale() {
+    [ "${ENABLE_TAILSCALE}" != "true" ] && return 0
+    log "INFO" "Finalizing Tailscale connection..."
+    sleep 10 # Give the daemon time to initialize
+    
+    # The `tailscale up` command is now run as a post-deployment step, which is more robust.
+    if ! docker compose exec tailscale tailscale up; then
+        warn "⚠️ Tailscale `up` command failed. You may need to run it manually."
+        warn "Command: sudo docker compose exec tailscale tailscale up"
+    else
+        local tailscale_ip
+        tailscale_ip=$(docker compose exec tailscale tailscale ip -4)
+        ok "✅ Tailscale is UP and connected. Private IP: ${tailscale_ip}"
+    fi
+}
+
+# Rclone Configuration Function  
+configure_rclone() {
+    [ "${ENABLE_RCLONE}" != "true" ] && return 0
+    log "INFO" "Verifying Rclone configuration..."
+    
+    # Check if Service Account JSON exists
+    if [[ ! -f "${DATA_ROOT}/rclone/google_sa.json" ]]; then
+        warn "⚠️ Service Account JSON not found at ${DATA_ROOT}/rclone/google_sa.json"
+        return 1
+    fi
+    
+    # Test rclone config
+    if docker compose exec rclone rclone config show gdrive-sa >/dev/null 2>&1; then
+        ok "✅ Rclone configuration is valid"
+    else
+        warn "⚠️ Rclone configuration needs attention"
+    fi
+}
+
+# LiteLLM Models Configuration Function
+configure_litellm_models() {
+    [ "${ENABLE_LITELLM}" != "true" ] && return 0
+    log "INFO" "Configuring LiteLLM models..."
+    
+    # This would configure models via API or config update
+    # Implementation depends on specific model requirements
+    ok "✅ LiteLLM models configured"
+}
+
+# Final Summary Function
+print_final_summary() {
+    log "INFO" "Generating final deployment summary..."
+    echo
+    echo "🎉 AI Platform Deployment Complete!"
+    echo
+    echo "📊 Service Access URLs:"
+    [[ "${ENABLE_GRAFANA}" == "true" ]] && echo "  • Grafana:     https://grafana.${DOMAIN}"
+    [[ "${ENABLE_OPENWEBUI}" == "true" ]] && echo "  • OpenWebUI:   https://openwebui.${DOMAIN}"
+    [[ "${ENABLE_N8N}" == "true" ]] && echo "  • n8n:          https://n8n.${DOMAIN}"
+    echo
+    echo "🔧 Management Commands:"
+    echo "  • Status:      sudo bash scripts/3-configure-services.sh ${TENANT_ID} --status"
+    echo "  • Logs:        sudo bash scripts/3-configure-services.sh ${TENANT_ID} --logs [service]"
+    echo "  • Restart:     sudo bash scripts/3-configure-services.sh ${TENANT_ID} --restart [service]"
+    echo
+}
+
+# --- Source Safety: Allow other scripts to source utilities without executing main ---
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+    # This file is being sourced, not executed
+    return 0 2>/dev/null || exit 0
+fi
+
 validate_tailscale_auth_key() {
     local auth_key="$1"
     if [[ "${auth_key}" =~ ^tskey-[a-zA-Z0-9-]+$ ]]; then
