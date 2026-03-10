@@ -563,6 +563,52 @@ warn() {
     log "WARN" "$1"
 }
 
+# ─── Tailscale Auth Key Validation ───────────────────────────────────────────
+validate_tailscale_auth_key() {
+    local auth_key="$1"
+    
+    # Check if auth key is provided
+    if [[ -z "${auth_key}" ]]; then
+        return 1
+    fi
+    
+    # Validate format: should start with 'tskey-' followed by alphanumeric chars and hyphens
+    if [[ ! "${auth_key}" =~ ^tskey-[a-zA-Z0-9-]+$ ]]; then
+        echo -e "  ${DIM}Auth key format: should start with 'tskey-' followed by alphanumeric characters${NC}"
+        return 1
+    fi
+    
+    # Optional: Test the auth key against Tailscale API
+    echo -e "  ${DIM}Testing auth key against Tailscale API...${NC}"
+    
+    # Extract the key prefix for API testing (remove tskey- prefix for some API calls)
+    local key_id="${auth_key#tskey-}"
+    
+    # Use curl to test the key (this is a basic validation)
+    if command -v curl >/dev/null 2>&1; then
+        # Test with a simple API call - this validates the key format and basic structure
+        local api_test
+        api_test=$(curl -s --max-time 10 \
+            -H "Authorization: Bearer ${auth_key}" \
+            "https://api.tailscale.com/api/v2/device" 2>/dev/null || echo "failed")
+        
+        if [[ "${api_test}" == "failed" ]]; then
+            echo -e "  ${YELLOW}⚠️ Could not validate auth key against API (network issue?)${NC}"
+            echo -e "  ${DIM}Proceeding with format validation only...${NC}"
+            return 0  # Don't fail on network issues, just proceed
+        elif [[ "${api_test}" =~ "error" ]]; then
+            echo -e "  ${RED}❌ Auth key validation failed (invalid or expired key)${NC}"
+            return 1
+        else
+            echo -e "  ${GREEN}✅ Auth key validated against Tailscale API${NC}"
+            return 0
+        fi
+    else
+        echo -e "  ${YELLOW}⚠️ curl not available, skipping API validation${NC}"
+        return 0  # Don't fail if curl is not available
+    fi
+}
+
 # ─── Logging ─────────────────────────────────────────────────────────
 log() {
     local level="${1}" message="${2}"
@@ -1132,6 +1178,30 @@ collect_network_config() {
         done
         read -p "  ➤ Tailscale hostname [${PROJECT_PREFIX}${TENANT_ID}]: " TAILSCALE_HOSTNAME
         TAILSCALE_HOSTNAME="${TAILSCALE_HOSTNAME:-${PROJECT_PREFIX}${TENANT_ID}}"
+        
+        # Validate Tailscale auth key before proceeding
+        echo ""
+        echo -e "  ${DIM}Validating Tailscale auth key...${NC}"
+        if validate_tailscale_auth_key "${TAILSCALE_AUTH_KEY}"; then
+            echo -e "  ${GREEN}✅ Auth key format validated${NC}"
+        else
+            echo -e "  ${RED}❌ Invalid auth key format. Please check your auth key.${NC}"
+            echo -e "  ${DIM}Auth keys should start with 'tskey-' followed by alphanumeric characters${NC}"
+            # Allow retry instead of failing completely
+            while true; do
+                read -p "  ➤ Re-enter Tailscale auth key (or press Enter to skip): " TAILSCALE_AUTH_KEY
+                if [[ -z "${TAILSCALE_AUTH_KEY}" ]]; then
+                    echo -e "  ${YELLOW}⚠️ Skipping Tailscale configuration${NC}"
+                    export ENABLE_TAILSCALE="false"
+                    break
+                elif validate_tailscale_auth_key "${TAILSCALE_AUTH_KEY}"; then
+                    echo -e "  ${GREEN}✅ Auth key format validated${NC}"
+                    break
+                else
+                    echo -e "  ${RED}❌ Invalid format. Try again or press Enter to skip.${NC}"
+                fi
+            done
+        fi
         
         # If auth key provided, ask for serve mode and funnel
         echo ""
