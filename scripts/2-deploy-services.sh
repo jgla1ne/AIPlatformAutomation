@@ -583,21 +583,13 @@ add_tailscale() {
       - TS_AUTHKEY=\${TAILSCALE_AUTH_KEY}
       - TS_HOSTNAME=\${TAILSCALE_HOSTNAME}
       - TS_STATE_DIR=/var/lib/tailscale
-      - TS_SERVE_MODE=\${TAILSCALE_SERVE_MODE:-false}
-      - TS_FUNNEL=\${TAILSCALE_FUNNEL:-false}
+      - TS_SERVE_CONFIG=\${TS_SERVE_CONFIG}
+      - TS_ACCEPT_DNS=true
+      - TS_EXTRA_ARGS=\${TAILSCALE_EXTRA_ARGS}
     volumes:
       - \${TENANT_DIR}/lib/tailscale:/var/lib/tailscale
       - \${TENANT_DIR}/run/tailscale:/var/run/tailscale
       - /dev/net/tun:/dev/net/tun
-    command: >
-      sh -c "mkdir -p /var/run/tailscale /var/lib/tailscale && 
-             chown -R ${TENANT_UID}:${TENANT_GID} /var/run/tailscale /var/lib/tailscale &&
-             tailscaled --tun=userspace-networking --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
-             PID=\$! &&
-             until tailscale status >/dev/null 2>&1; do echo 'Waiting for tailscaled to start...'; sleep 2; done &&
-             tailscale up --authkey=${TAILSCALE_AUTH_KEY} --hostname=${PROJECT_PREFIX}${TENANT_ID}-claw --accept-routes &&
-             echo 'Tailscale connected. Container will now idle.' &&
-             wait \$PID"
     ports:
       - "\${TAILSCALE_PORT:-8443}:8443"
     healthcheck:
@@ -608,7 +600,7 @@ add_tailscale() {
       start_period: 30s
 
 EOF
-    ok "Added 'tailscale' service with correct volume paths and health check."
+    ok "Added 'tailscale' service with proper environment variables."
 }
 
 add_rclone() {
