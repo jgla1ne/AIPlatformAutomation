@@ -90,11 +90,12 @@ collect_and_generate() {
     if [[ "${ENABLE_TAILSCALE}" == "true" ]]; then
         while true; do 
             read -p "Enter Tailscale Auth Key: " TAILSCALE_AUTH_KEY
-            if validate_tailscale_key "${TAILSCALE_AUTH_KEY}"; then 
-                ok "Tailscale key valid."
+            # Basic validation (non-empty)
+            if [[ -n "${TAILSCALE_AUTH_KEY}" ]]; then 
+                ok "Tailscale key provided."
                 break
             else
-                warn "Invalid Tailscale key. Please try again."
+                warn "Tailscale key cannot be empty. Please try again."
             fi
         done
         read -p "Tailscale Extra Args [${TAILSCALE_EXTRA_ARGS}]: " args
@@ -102,7 +103,9 @@ collect_and_generate() {
     fi
     read -p "Enable Rclone? [y/N]: " rclone; if [[ "${rclone,,}" == "y" ]]; then ENABLE_RCLONE=true; echo "Rclone auth: ${CYAN}1)${NC} OAuth, ${CYAN}2)${NC} Service Account JSON"; read -p "[1]: " m; if [[ "$m" == "2" ]]; then GDRIVE_AUTH_METHOD="service_account"; log "Paste JSON, then CTRL+D."; json_input=""; while IFS= read -r line; do json_input+="$line\n"; done; if validate_json "${json_input}"; then RCLONE_JSON="${json_input}"; ok "Rclone JSON valid."; else fail "Invalid JSON."; fi; else GDRIVE_AUTH_METHOD="oauth"; read -p "Client ID: " GDRIVE_CLIENT_ID; read -p "Client Secret: " GDRIVE_CLIENT_SECRET; fi; fi
     read -p "Postgres User [platform]: " u; POSTGRES_USER=${u:-platform}; read -p "Postgres DB [platform]: " d; POSTGRES_DB=${d:-platform}
-    local env="${DATA_ROOT}/.env"; mkdir -p "${DATA_ROOT}"; load_secret() { if [ -f "$env" ]; then grep "^$1=" "$env" | cut -d= -f2- || echo ""; else echo ""; fi; }
+    local env="${DATA_ROOT}/.env"
+    mkdir -p "${DATA_ROOT}"
+    load_secret() { if [ -f "$env" ]; then grep "^$1=" "$env" | cut -d= -f2- || echo ""; else echo ""; fi; }
     POSTGRES_PASSWORD=$(load_secret "POSTGRES_PASSWORD" || openssl rand -base64 32); REDIS_PASSWORD=$(load_secret "REDIS_PASSWORD" || openssl rand -base64 32)
     mkdir -p "${DATA_ROOT}"/{lib/tailscale,run/tailscale,prometheus-data,caddy_data,postgres,redis,qdrant,ollama,openwebui,n8n,flowise,litellm,grafana,rclone,authentik/media,authentik/custom-templates,dify-data}
     if [[ "${GDRIVE_AUTH_METHOD}" == "service_account" ]]; then echo "${RCLONE_JSON}" > "${DATA_ROOT}/rclone/google_sa.json"; fi

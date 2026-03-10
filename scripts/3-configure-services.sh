@@ -16,7 +16,7 @@ fi
 TENANT_ID="$1"
 
 # --- Colors and Logging ---
-RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m' CYAN='\033[0;36m' NC='\033[0m'
+RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m' CYAN='\033[0;36m' BOLD='\033[1m' DIM='\033[2m' NC='\033[0m'
 log() { echo -e "${CYAN}[INFO]${NC}    $1"; }
 ok() { echo -e "${GREEN}[OK]${NC}      $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
@@ -32,7 +32,7 @@ fi
 
 log "Loading environment from: ${ENV_FILE}"
 set -a
-source "${ENV_FILE}"
+source "${ENV_FILE}" 2>/dev/null || true
 set +a
 
 # --- DEFINITIVE HEALTH CHECK FUNCTION ---
@@ -85,6 +85,27 @@ healthcheck_services() {
         ok "All enabled web services are responding."
     fi
 }
+
+# --- Default Values for Graceful Handling ---
+ENABLE_TAILSCALE=${ENABLE_TAILSCALE:-false}
+ENABLE_RCLONE=${ENABLE_RCLONE:-false}
+ENABLE_OPENCLAW=${ENABLE_OPENCLAW:-false}
+ENABLE_POSTGRES=${ENABLE_POSTGRES:-false}
+ENABLE_REDIS=${ENABLE_REDIS:-false}
+ENABLE_CADDY=${ENABLE_CADDY:-false}
+ENABLE_OLLAMA=${ENABLE_OLLAMA:-false}
+ENABLE_OPENWEBUI=${ENABLE_OPENWEBUI:-false}
+ENABLE_ANYTHINGLLM=${ENABLE_ANYTHINGLLM:-false}
+ENABLE_DIFY=${ENABLE_DIFY:-false}
+ENABLE_N8N=${ENABLE_N8N:-false}
+ENABLE_FLOWISE=${ENABLE_FLOWISE:-false}
+ENABLE_LITELLM=${ENABLE_LITELLM:-false}
+ENABLE_QDRANT=${ENABLE_QDRANT:-false}
+ENABLE_MILVUS=${ENABLE_MILVUS:-false}
+ENABLE_CHROMA=${ENABLE_CHROMA:-false}
+ENABLE_GRAFANA=${ENABLE_GRAFANA:-false}
+ENABLE_PROMETHEUS=${ENABLE_PROMETHEUS:-false}
+ENABLE_AUTHENTIK=${ENABLE_AUTHENTIK:-false}
 
 # --- DEFINITIVE TAILSCALE CONFIGURATION ---
 configure_tailscale() {

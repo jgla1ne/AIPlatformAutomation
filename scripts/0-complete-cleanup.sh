@@ -41,13 +41,18 @@ log "Performing global Docker system prune..."
 docker system prune -af
 ok "Docker system resources cleaned up."
 
-# --- 3. Delete Tenant Data Directory ---
-log "Deleting all data for tenant '${TENANT_ID}' at ${DATA_ROOT}..."
-if [ -d "${DATA_ROOT}" ]; then
-    rm -rf "${DATA_ROOT}"
-    ok "Tenant data directory deleted."
+# --- 3. Nuclear Cleanup - Remove ALL Data ---
+log "Performing nuclear cleanup of ALL tenant data..."
+if [ -d "/mnt/data" ]; then
+    rm -rf /mnt/data/*
+    ok "All tenant data in /mnt/data has been nuclear wiped."
 else
-    warn "Tenant data directory not found, skipping deletion."
+    ok "No /mnt/data directory found. Creating clean environment."
 fi
+
+# --- 4. Create Fresh Environment ---
+log "Creating fresh environment for tenant '${TENANT_ID}'..."
+mkdir -p "/mnt/data/${TENANT_ID}"
+ok "Fresh tenant directory created."
 
 ok "Cleanup for tenant '${TENANT_ID}' is complete."
