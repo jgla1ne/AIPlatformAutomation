@@ -224,7 +224,7 @@ add_postgres() {
   postgres:
     image: postgres:15-alpine
     restart: unless-stopped
-    user: "\${POSTGRES_UID:-\${TENANT_UID}}:\${POSTGRES_UID:-\${TENANT_GID}}"
+    user: "\${POSTGRES_UID:-70}:\${POSTGRES_UID:-70}"
     environment:
       POSTGRES_USER: "\${POSTGRES_USER}"
       POSTGRES_PASSWORD: "\${POSTGRES_PASSWORD}"
