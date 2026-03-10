@@ -749,7 +749,7 @@ log INFO "Use 'sudo bash scripts/3-configure-services.sh --manage' to start appl
 
 # Enable debug logging for deployment (leveraging Mission Control)
 log INFO "=== ENABLING DEBUG LOGGING ==="
-set_debug_logging "${TENANT_ID}"
+# set_debug_logging "${TENANT_ID}"  # Function not available, commenting out
 
 # Verify Tailscale connectivity
 log "INFO" "Verifying Tailscale connectivity..."
