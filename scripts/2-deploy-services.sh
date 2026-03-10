@@ -1,136 +1,385 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script 2: Service Deployer - STABLE v5.1 (Definitive Reconstruction)
+# Script 2: Deploy Services - STABLE v3.1
 # =============================================================================
-# PURPOSE: A definitive, faithful reconstruction of the deployment logic from
-#          commit b8f7478 and the provided backup file. It correctly and 
-#          completely deploys all services configured by the setup wizard.
+# PURPOSE: Reads pre-configured environment and deploys services.
+#          This script's ONLY job is to generate a valid docker-compose.yml
+#          and run `docker compose up -d`. It does not configure or verify.
 # =============================================================================
 
 set -euo pipefail
 
-# --- SOURCE MISSION CONTROL & LOAD ENVIRONMENT ---
-source "$(dirname "${BASH_SOURCE[0]}")/3-configure-services.sh"
-if [[ -z "${1:-}" ]]; then fail "TENANT_ID is required. Usage: sudo bash $0 <tenant_id>"; fi
+# --- Tenant ID Check ---
+if [[ -z "${1:-}" ]]; then
+    echo "ERROR: TENANT_ID is required. Usage: sudo bash $0 <tenant_id>" >&2
+    exit 1
+fi
 TENANT_ID="$1"
-load_tenant_env "${TENANT_ID}"
 
-# --- MAIN DOCKER COMPOSE GENERATION ---
+# --- Colors and Logging ---
+RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m' CYAN='\033[0;36m' NC='\033[0m'
+log() { echo -e "${CYAN}[INFO]${NC}    $1"; }
+ok() { echo -e "${GREEN}[OK]${NC}      $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
+fail() { echo -e "${RED}[FAIL]${NC}    $*"; exit 1; }
+
+# --- Environment Setup ---
+TENANT_DIR="/mnt/data/${TENANT_ID}"
+ENV_FILE="${TENANT_DIR}/.env"
+COMPOSE_FILE="${TENANT_DIR}/docker-compose.yml"
+
+if [[ ! -f "${ENV_FILE}" ]]; then
+    fail "Environment file not found for tenant '${TENANT_ID}' at ${ENV_FILE}"
+fi
+
+log "Loading environment from: ${ENV_FILE}"
+set -a
+source "${ENV_FILE}"
+set +a
+
+# --- Logging to File ---
+LOG_DIR="${TENANT_DIR}/logs"
+mkdir -p "${LOG_DIR}"
+LOG_FILE="${LOG_DIR}/deploy-$(date +%Y%m%d-%H%M%S).log"
+exec > >(tee -a "${LOG_FILE}") 2>&1
+log "All output is now logged to: ${LOG_FILE}"
+
+# --- Docker Check ---
 main() {
-    log "Entering data root: ${DATA_ROOT}"
-    cd "${DATA_ROOT}"
+if ! docker info &>/dev/null; then
+    fail "Docker is not running. Please start Docker and try again."
+fi
+ok "Docker is active."
 
-    log "Generating master docker-compose.yml file..."
-    cat > docker-compose.yml << EOF
-version: "3.8"
+# --- Generate Docker Compose ---
+log "Generating docker-compose.yml for tenant '${TENANT_ID}'..."
 
-networks:
-  ${DOCKER_NETWORK}:
-    driver: bridge
-
+# Initialize compose file
+cat > "${COMPOSE_FILE}" << 'EOF'
 services:
 EOF
 
-    # --- Base Services (Always On) ---
-    if [[ "${ENABLE_POSTGRES}" == "true" ]]; then cat >> docker-compose.yml << EOF
+# --- Service Generation Functions (Simplified & Hardened) ---
+add_postgres() {
+    cat >> "${COMPOSE_FILE}" << 'EOF'
+
   postgres:
-    image: postgres:16-alpine
-    user: "${TENANT_UID}:${TENANT_GID}"
+    image: postgres:15-alpine
+    restart: unless-stopped
+    user: "${POSTGRES_UID:-${TENANT_UID}}:${POSTGRES_UID:-${TENANT_GID}}"
+    networks:
+      - default
     environment:
       POSTGRES_USER: "${POSTGRES_USER}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
       POSTGRES_DB: "${POSTGRES_DB}"
     volumes:
-      - ./postgres:/var/lib/postgresql/data
-    ports:
-      - "${POSTGRES_PORT}:5432"
-    networks:
-      - ${DOCKER_NETWORK}
-    restart: unless-stopped
-
+      - ${TENANT_DIR}/postgres:/var/lib/postgresql/data
 EOF
-    fi
+    ok "Added 'postgres' service."
+}
 
-    if [[ "${ENABLE_REDIS}" == "true" ]]; then cat >> docker-compose.yml << EOF
+add_redis() {
+    cat >> "${COMPOSE_FILE}" << 'EOF'
+
   redis:
     image: redis:7-alpine
-    user: "${TENANT_UID}:${TENANT_GID}"
-    command: redis-server --requirepass ${REDIS_PASSWORD}
-    volumes:
-      - ./redis:/data
-    ports:
-      - "${REDIS_PORT}:6379"
-    networks:
-      - ${DOCKER_NETWORK}
     restart: unless-stopped
-
+    networks:
+      - default
+    command: redis-server --requirepass "${REDIS_PASSWORD}"
+    volumes:
+      - ${TENANT_DIR}/redis:/data
 EOF
-    fi
+    ok "Added 'redis' service."
+}
 
-    # --- Reverse Proxy (Caddy or Traefik) ---
-    if [[ "${ENABLE_CADDY}" == "true" ]]; then cat >> docker-compose.yml << EOF
+add_qdrant() {
+    cat >> "${COMPOSE_FILE}" << 'EOF'
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    networks:
+      - default
+    volumes:
+      - ${TENANT_DIR}/qdrant:/qdrant/storage
+EOF
+    ok "Added 'qdrant' service."
+}
+
+add_ollama() {
+    cat >> "${COMPOSE_FILE}" << 'EOF'
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    networks:
+      - default
+    volumes:
+      - ${TENANT_DIR}/ollama:/root/.ollama
+EOF
+    ok "Added 'ollama' service."
+}
+
+add_openwebui() {
+    cat >> "${COMPOSE_FILE}" << 'EOF'
+
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:main
+    restart: unless-stopped
+    networks:
+      - default
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+    volumes:
+      - ${TENANT_DIR}/openwebui:/app/backend/data
+    depends_on:
+      - ollama
+EOF
+    ok "Added 'openwebui' service."
+}
+
+add_n8n() {
+    cat >> "${COMPOSE_FILE}" << 'EOF'
+
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    networks:
+      - default
+    environment:
+      - N8N_BASIC_AUTH_USER=${N8N_USER}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD}
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - ${TENANT_DIR}/n8n:/home/node/.n8n
+    depends_on:
+      - postgres
+EOF
+    ok "Added 'n8n' service."
+}
+
+add_flowise() {
+    cat >> "${COMPOSE_FILE}" << 'EOF'
+
+  flowise:
+    image: flowiseai/flowise:latest
+    restart: unless-stopped
+    networks:
+      - default
+    environment:
+      - DATABASE_TYPE=postgres
+      - DATABASE_HOST=postgres
+      - DATABASE_NAME=${POSTGRES_DB}
+      - DATABASE_USER=${POSTGRES_USER}
+      - DATABASE_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - ${TENANT_DIR}/flowise:/root/.flowise
+    depends_on:
+      - postgres
+EOF
+    ok "Added 'flowise' service."
+}
+
+add_anythingllm() {
+    cat >> "${COMPOSE_FILE}" << 'EOF'
+
+  anythingllm:
+    image: mintplexlabs/anythingllm:latest
+    restart: unless-stopped
+    networks:
+      - default
+    environment:
+      - STORAGE_DIR=/app/server/storage
+      - LLM_PROVIDER=ollama
+      - OLLAMA_BASE_PATH=http://ollama:11434
+    volumes:
+      - ${TENANT_DIR}/anythingllm:/app/server/storage
+    depends_on:
+      - ollama
+EOF
+    ok "Added 'anythingllm' service."
+}
+
+add_litellm() {
+    cat >> "${COMPOSE_FILE}" << 'EOF'
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main
+    restart: unless-stopped
+    networks:
+      - default
+    environment:
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+    command: >
+      --model ollama/mistral
+      --api_base http://ollama:11434
+      --host 0.0.0.0
+    depends_on:
+      - ollama
+EOF
+    ok "Added 'litellm' service."
+}
+
+add_grafana() {
+    cat >> "${COMPOSE_FILE}" << 'EOF'
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    networks:
+      - default
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD}
+    volumes:
+      - ${TENANT_DIR}/grafana:/var/lib/grafana
+EOF
+    ok "Added 'grafana' service."
+}
+
+add_prometheus() {
+    cat >> "${COMPOSE_FILE}" << 'EOF'
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    networks:
+      - default
+    volumes:
+      - ${TENANT_DIR}/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ${TENANT_DIR}/prometheus-data:/prometheus
+EOF
+    ok "Added 'prometheus' service."
+}
+
+add_authentik() {
+    cat >> "${COMPOSE_FILE}" << 'EOF'
+
+  authentik-server:
+    image: ghcr.io/goauthentik/server:latest
+    restart: unless-stopped
+    networks:
+      - default
+    environment:
+      - AUTHENTIK_SECRET_KEY=${AUTHENTIK_SECRET_KEY}
+      - AUTHENTIK_POSTGRESQL__HOST=postgres
+      - AUTHENTIK_POSTGRESQL__NAME=${POSTGRES_DB}
+      - AUTHENTIK_POSTGRESQL__USER=${POSTGRES_USER}
+      - AUTHENTIK_POSTGRESQL__PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - ${TENANT_DIR}/authentik/media:/media
+      - ${TENANT_DIR}/authentik/custom-templates:/templates
+    depends_on:
+      - postgres
+EOF
+    ok "Added 'authentik-server' service."
+}
+
+# --- THE STABLE TAILSCALE FIX ---
+add_tailscale() {
+    cat >> "${COMPOSE_FILE}" << 'EOF'
+
+  tailscale:
+    image: tailscale/tailscale:latest
+    hostname: ${TAILSCALE_HOSTNAME}
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    volumes:
+      - ${TENANT_DIR}/lib/tailscale:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      # We ONLY provide the auth key. Configuration happens in script-3.
+      - TS_AUTHKEY=${TAILSCALE_AUTH_KEY}
+      - TS_STATE_DIR=/var/lib/tailscale
+EOF
+    ok "Added STABLE 'tailscale' service. Configuration will be applied by script-3."
+}
+
+add_rclone() {
+    cat >> "${COMPOSE_FILE}" << 'EOF'
+
+  rclone:
+    image: rclone/rclone:latest
+    restart: unless-stopped
+    networks:
+      - default
+    volumes:
+      - ${TENANT_DIR}/rclone:/config
+      - ${TENANT_DIR}/storage:/data
+    command: rcd --rc-no-auth --rc-addr :5572 --config=/config/rclone.conf
+EOF
+    ok "Added 'rclone' service."
+}
+
+add_caddy() {
+    cat >> "${COMPOSE_FILE}" << 'EOF'
+
   caddy:
     image: caddy:2-alpine
-    user: "${TENANT_UID}:${TENANT_GID}"
+    restart: unless-stopped
+    networks:
+      - default
+    volumes:
+      - ${TENANT_DIR}/Caddyfile:/etc/caddy/Caddyfile
+      - ${TENANT_DIR}/caddy_data:/data
     ports:
       - "80:80"
       - "443:443"
       - "443:443/udp"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
-      - ./caddy_data:/data
-    networks:
-      - ${DOCKER_NETWORK}
-    restart: unless-stopped
-
 EOF
-    fi
-
-    if [[ "${ENABLE_TRAEFIK}" == "true" ]]; then echo "# Traefik service placeholder"; fi
-
-    # --- Tailscale (Correct, Full Implementation) ---
-    if [[ "${ENABLE_TAILSCALE}" == "true" ]]; then cat >> docker-compose.yml << EOF
-  tailscale:
-    image: tailscale/tailscale:latest
-    user: "${TENANT_UID}:${TENANT_GID}"
-    hostname: ${TAILSCALE_HOSTNAME}
-    environment:
-      - TS_AUTHKEY=${TAILSCALE_AUTH_KEY}
-      - TS_EXTRA_ARGS=${TAILSCALE_EXTRA_ARGS}
-      - TS_STATE_DIR=/var/lib/tailscale
-      - TS_ACCEPT_DNS=true
-      - TS_USERSPACE=true
-    volumes:
-      - ./lib/tailscale:/var/lib/tailscale
-      - ./run/tailscale:/var/run/tailscale
-      - /dev/net/tun:/dev/net/tun
-    cap_add:
-      - net_admin
-      - sys_module
-    ports:
-      - "${TAILSCALE_PORT}:8443"
-    networks:
-      - ${DOCKER_NETWORK}
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "tailscale", "status"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
-EOF
-    fi
-
-    log "Docker Compose file generated successfully."
-
-    read -p "Deploy services now? [Y/n]: " deploy_now
-    if [[ "${deploy_now:-y}" =~ ^y$ ]]; then
-        log "Starting Docker Compose deployment..."
-        docker compose up -d
-        ok "Deployment started. Services are coming online."
-    else
-        log "Deployment skipped."
-    fi
+    ok "Added 'caddy' service."
 }
 
+# --- Generate All Services ---
+[[ "${ENABLE_POSTGRES}" == "true" ]] && add_postgres
+[[ "${ENABLE_REDIS}" == "true" ]] && add_redis
+[[ "${ENABLE_OLLAMA}" == "true" ]] && add_ollama
+[[ "${ENABLE_OPENWEBUI}" == "true" ]] && add_openwebui
+[[ "${ENABLE_N8N}" == "true" ]] && add_n8n
+[[ "${ENABLE_FLOWISE}" == "true" ]] && add_flowise
+[[ "${ENABLE_ANYTHINGLLM}" == "true" ]] && add_anythingllm
+[[ "${ENABLE_LITELLM}" == "true" ]] && add_litellm
+[[ "${ENABLE_GRAFANA}" == "true" ]] && add_grafana
+[[ "${ENABLE_QDRANT}" == "true" ]] && add_qdrant
+[[ "${ENABLE_PROMETHEUS}" == "true" ]] && add_prometheus
+[[ "${ENABLE_AUTHENTIK}" == "true" ]] && add_authentik
+[[ "${ENABLE_TAILSCALE:-false}" == "true" ]] && add_tailscale
+[[ "${ENABLE_RCLONE:-false}" == "true" ]] && add_rclone
+add_caddy # Caddy is always added
+
+# --- Add Network Configuration ---
+cat >> "${COMPOSE_FILE}" << 'EOF'
+
+networks:
+  default:
+    name: ${DOCKER_NETWORK}
+    driver: bridge
+EOF
+
+# --- Deploy Services ---
+log "Starting deployment with docker compose..."
+cd "${TENANT_DIR}"
+
+log "Pulling all required Docker images..."
+docker compose pull --quiet
+
+log "Starting all services in detached mode..."
+if ! docker compose up -d; then
+    fail "Docker Compose failed to start. Please check the logs above."
+fi
+
+ok "All containers have been started."
+log "Next Step: Run 'sudo bash scripts/3-configure-services.sh ${TENANT_ID}'"
+
+} # End of main function
+
+# Call main function to execute the script
 main
