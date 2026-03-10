@@ -756,6 +756,10 @@ log "INFO" "Verifying Tailscale connectivity..."
 if docker compose exec tailscale tailscale status | grep -q "Logged in"; then
     TAILSCALE_IP=$(docker compose exec tailscale tailscale ip -4)
     ok "✅ Tailscale is UP and connected. Private IP: ${TAILSCALE_IP}"
+    
+    # Store Tailscale IP in .env for persistent access
+    echo "TAILSCALE_IP=${TAILSCALE_IP}" >> "${ENV_FILE}"
+    log "INFO" "Tailscale IP stored in .env: ${TAILSCALE_IP}"
 else
     warn "❌ Tailscale failed to connect. Check auth key and logs."
 fi
@@ -1499,6 +1503,10 @@ if [[ "${ENABLE_TAILSCALE}" == "true" ]]; then
     if timeout 30s bash -c "until docker compose exec tailscale tailscale status 2>/dev/null | grep -q 'Logged in'; do sleep 3; done"; then
         TAILSCALE_IP=$(docker compose exec tailscale tailscale ip -4)
         ok "✅ Tailscale is UP and connected. Private IP: ${TAILSCALE_IP}"
+        
+        # Store Tailscale IP in .env for persistent access
+        echo "TAILSCALE_IP=${TAILSCALE_IP}" >> "${ENV_FILE}"
+        log "INFO" "Tailscale IP stored in .env: ${TAILSCALE_IP}"
     else
         fail "❌ Tailscale FAILED to connect. Check auth key and container logs: 'sudo bash scripts/3-configure-services.sh ${TENANT_ID} --logs tailscale'"
     fi

@@ -1874,7 +1874,10 @@ GDRIVE_CLIENT_ID="${GDRIVE_CLIENT_ID}"
 GDRIVE_CLIENT_SECRET="${GDRIVE_CLIENT_SECRET}"
 GDRIVE_FOLDER_NAME="${GDRIVE_FOLDER_NAME}"
 GDRIVE_FOLDER_ID="${GDRIVE_FOLDER_ID}"
-GDRIVE_TOKEN="${GDRIVE_TOKEN}"
+# Only export GDRIVE_TOKEN for OAuth method (Service Account doesn't use tokens)
+if [[ "${GDRIVE_AUTH_METHOD}" == "oauth" ]]; then
+    GDRIVE_TOKEN="${GDRIVE_TOKEN}"
+fi
 
 # Google Service Account for Rclone (non-interactive)
 # This will be processed during .env generation
