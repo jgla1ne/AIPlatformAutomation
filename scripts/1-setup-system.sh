@@ -284,6 +284,14 @@ check_root() {
 check_prerequisites() {
     print_step "1" "9" "System Prerequisites"
 
+    # Check if running interactively (safety check)
+    if [[ ! -t 0 ]]; then
+        log "ERROR" "Script 1 must be run interactively (TTY required)"
+        log "ERROR" "This script collects user input and cannot run non-interactively"
+        log "ERROR" "Run: sudo bash scripts/1-setup-system.sh"
+        exit 1
+    fi
+
     # Check Docker
     if ! command -v docker &> /dev/null; then
         log "ERROR" "Docker not installed. Install Docker first."
