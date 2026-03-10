@@ -1,26 +1,15 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script 1: System Setup Wizard - STABLE v3.3
+# Script 1: System Setup Wizard - STABLE v3.4
 # =============================================================================
-# PURPOSE: Interactive setup wizard for AI Platform
+# PURPOSE: Interactive setup wizard for AI Platform, aligned with Mission Control.
 # =============================================================================
 
 set -euo pipefail
 
-# --- Colors and Logging ---
-<<<<<<< HEAD
-RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m' CYAN='\033[0;36m' NC='\033[0m'
-=======
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m'
->>>>>>> AIplatform/main
-log() { echo -e "${CYAN}[INFO]${NC}    $1"; }
-ok() { echo -e "${GREEN}[OK]${NC}      $*"; }
-warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
-fail() { echo -e "${RED}[FAIL]${NC}    $*"; exit 1; }
+# --- SOURCE MISSION CONTROL UTILITIES ---
+# All logging and utility functions are now sourced from the central script.
+source "$(dirname "${BASH_SOURCE[0]}")/3-configure-services.sh"
 
 # --- Main Application Logic ---
 
@@ -48,7 +37,7 @@ EOF
     [[ "${ENABLE_N8N}" == "true" ]] && echo "n8n.${DOMAIN} { reverse_proxy n8n:5678 }" >> "${CADDYFILE_PATH}"
     [[ "${ENABLE_AUTHENTIK}" == "true" ]] && echo "auth.${DOMAIN} { reverse_proxy authentik-server:9000 }" >> "${CADDYFILE_PATH}"
 
-    # --- Set Correct Permissions and Ownership ATOMCIALLY ---
+    # --- Set Correct Permissions and Ownership ATOMICALLY ---
     chmod 644 "${CADDYFILE_PATH}"
     chown "${TENANT_UID}:${TENANT_GID}" "${CADDYFILE_PATH}"
 
@@ -136,7 +125,6 @@ main() {
     DATA_ROOT="/mnt/data/${TENANT_ID}"
 
     # Use SUDO_UID/GID if available, otherwise fall back to current user.
-    # This is critical for ensuring the user running sudo owns the files.
     TENANT_UID=${SUDO_UID:-$(id -u)}
     TENANT_GID=${SUDO_GID:-$(id -g)}
 
@@ -170,13 +158,11 @@ main() {
     ok "Directory structure created."
 
     # --- Step 5: Set Ownership ---
-    # This is a broad ownership setting. The functions below will set more granular permissions.
     log "Applying base directory ownership..."
     chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"
     ok "Base ownership applied."
 
     # --- Step 6: Generate Configuration Files ---
-    # These functions now handle their own permissions, making the process more robust.
     write_env_file
     write_caddyfile
     
@@ -195,6 +181,7 @@ EOF
     ok "Prometheus configuration generated."
 
     # --- Step 8: Apply Service-Specific Ownership Exceptions ---
+    # This is where we will call the Mission Control function in the next step
     log "Applying service-specific ownership overrides..."
     chown -R 472:472 "${DATA_ROOT}/grafana"
     chown -R 1000:1000 "${DATA_ROOT}/qdrant"
