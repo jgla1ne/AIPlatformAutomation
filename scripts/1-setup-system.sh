@@ -1396,8 +1396,8 @@ EOF
                     # For Service Accounts, we don't need token generation - the JSON file is enough
                     # Just validate the JSON file exists and is readable
                     if [[ -f "${TENANT_DIR}/rclone/google_sa.json" ]] && [[ -r "${TENANT_DIR}/rclone/google_sa.json" ]]; then
-                        # Set a placeholder token for Service Account
-                        GDRIVE_TOKEN='{"access_token":"service_account_valid","token_type":"Bearer","expiry":"2025-01-01T00:00:00Z"}'
+                        # Set a simple placeholder token for Service Account (no quotes to avoid .env issues)
+                        GDRIVE_TOKEN='service_account_valid'
                         echo -e "  ${DIM}   Service Account JSON file validated${NC}"
                         echo -e "  ${GREEN}✅ Rclone Service Account configured successfully${NC}"
                         echo -e "  ${DIM}   Token will be generated automatically during deployment${NC}"
