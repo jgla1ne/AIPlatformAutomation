@@ -1,98 +1,83 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script 0: Complete System Prune - ROBUST VERSION
+# Script 0: Complete Cleanup and Fresh Deployment
 # =============================================================================
-# PURPOSE: To completely and forcefully wipe all Docker assets and data volumes
-#          to ensure a pristine state for the next deployment.
-# USAGE:   sudo bash scripts/0-complete-cleanup.sh [--keep-data]
+# PURPOSE: Clean slate deployment after architectural fixes
+# USAGE:   sudo bash scripts/0-complete-cleanup.sh <tenant_id>
 # =============================================================================
 
 set -euo pipefail
 
 # --- Colors ---
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m' CYAN='\033[0;36m' NC='\033[0m'
 
-# --- Logging ---
-log() { echo -e "${CYAN}[INFO]${NC}  $*"; }
-warn() { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-ok() { echo -e "${GREEN}[OK]${NC}    $*"; }
+log() { echo -e "${CYAN}[INFO]${NC}    $*"; }
+ok() { echo -e "${GREEN}[OK]${NC}      $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
+fail() { echo -e "${RED}[FAIL]${NC}    $*"; exit 1; }
 
-# --- Configuration ---
-KEEP_DATA=false
-if [[ "${1:-}" == "--keep-data" ]]; then
-    KEEP_DATA=true
-fi
-
-# --- Main Execution ---
-main() {
-    log "Starting complete system prune..."
-
-    # -------------------------------------------------------------------------
-    # STEP 1: Forcefully stop and remove ALL Docker containers.
-    # This is the most critical change. It doesn't rely on names or labels.
-    # It finds all running containers and stops them, then removes all containers.
-    # -------------------------------------------------------------------------
-    log "Forcefully stopping all running Docker containers..."
-    RUNNING_CONTAINERS=$(docker ps -q)
-    if [ -n "$RUNNING_CONTAINERS" ]; then
-        # The `xargs` command handles the case where there are no containers
-        docker stop $RUNNING_CONTAINERS
-        ok "All running containers stopped."
-    else
-        ok "No running containers to stop."
-    fi
-
-    log "Removing all Docker containers..."
-    ALL_CONTAINERS=$(docker ps -a -q)
-    if [ -n "$ALL_CONTAINERS" ]; then
-        docker rm -f $ALL_CONTAINERS
-        ok "All containers removed."
-    else
-        ok "No containers to remove."
-    fi
-
-    # -------------------------------------------------------------------------
-    # STEP 2: Prune other Docker assets.
-    # This removes unused networks, images, and the build cache.
-    # -------------------------------------------------------------------------
-    log "Pruning Docker system (networks, images, build cache)..."
-    docker system prune -af
-    ok "Docker system pruned."
-
-    # -------------------------------------------------------------------------
-    # STEP 3: Handle data volumes.
-    # This part respects the --keep-data flag.
-    # -------------------------------------------------------------------------
-    if [ "$KEEP_DATA" = true ]; then
-        warn "Skipping data volume deletion due to --keep-data flag."
-        log "Manual cleanup of /mnt/data may still be required if issues persist."
-    else
-        warn "DELETING ALL TENANT DATA in /mnt/data..."
-        if [ -d "/mnt/data" ]; then
-            # Recreate the directory to ensure it's empty and permissions are clean
-            rm -rf /mnt/data
-            mkdir -p /mnt/data
-            # Set permissions to be world-writable but with sticky bit to prevent users deleting others' files
-            chmod 777 /mnt/data
-            chmod +t /mnt/data
-            ok "Data volumes at /mnt/data have been wiped."
-        else
-            ok "/mnt/data directory did not exist."
-        fi
-    fi
-
-    echo ""
-    ok "System cleanup is complete. The environment is ready for a fresh deployment."
-}
-
-# --- Root Check & Execution ---
-if [ "$(id -u)" -ne 0 ]; then
-    echo -e "${RED}This script must be run as root (use sudo).${NC}"
+# --- Tenant ID Check ---
+if [[ -z "${1:-}" ]]; then
+    echo "ERROR: TENANT_ID is required. Usage: sudo bash $0 <tenant_id>" >&2
     exit 1
 fi
 
-main
+TENANT_ID="$1"
+DATA_ROOT="/mnt/data/datasquiz"
+
+log "INFO" "Starting complete cleanup for tenant '${TENANT_ID}'..."
+
+# --- 1. Stop All Containers ---
+log "INFO" "Stopping all running containers..."
+cd "${DATA_ROOT}"
+if docker compose ps -q | grep -q .; then
+    docker compose down --remove-orphans
+    ok "All containers stopped and removed."
+else
+    ok "No containers were running."
+fi
+
+# --- 2. Clean Up Docker Resources ---
+log "INFO" "Cleaning up Docker resources..."
+docker system prune -f
+ok "Docker resources cleaned up."
+
+# --- 3. Reset Permissions with Script 3 Functions ---
+log "INFO" "Resetting permissions with dynamic service-aware ownership..."
+
+# Load environment variables
+ENV_FILE="${DATA_ROOT}/.env"
+if [[ -f "${ENV_FILE}" ]]; then
+    source "${ENV_FILE}"
+fi
+
+source "/home/jglaine/AIPlatformAutomation/scripts/3-configure-services.sh"
+
+# Apply correct permissions for all services
+ALL_SERVICES="postgres redis qdrant grafana prometheus litellm authentik signal n8n weaviate chromadb milvus ollama localai vllm openwebui anythingllm flowise"
+
+for service in ${ALL_SERVICES}; do
+    permissions_set_ownership "${service}"
+done
+
+ok "All service permissions reset with dynamic UIDs."
+
+# --- 4. Fresh Deployment ---
+log "INFO" "Ready for fresh deployment with architectural fixes..."
+echo ""
+echo "🎯 CLEANUP COMPLETE - READY FOR FRESH DEPLOYMENT"
+echo ""
+echo "✅ All containers stopped and cleaned"
+echo "✅ Docker resources pruned"  
+echo "✅ Permissions reset with dynamic UIDs"
+echo "✅ Script 3 functions loaded and ready"
+echo ""
+echo "🚀 NEXT STEP: Run Script 2 for fresh deployment"
+echo "   sudo bash scripts/2-deploy-services.sh ${TENANT_ID}"
+echo ""
+echo "📊 This will deploy with:"
+echo "   • Complete Caddyfile generation"
+echo "   • All enabled services" 
+echo "   • Dynamic permissions (qdrant: 1000:1000)"
+echo "   • Zero hardcoding principles"
+echo "   • Modular architecture working"

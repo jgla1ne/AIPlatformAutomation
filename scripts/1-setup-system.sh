@@ -8,7 +8,15 @@
 set -euo pipefail
 
 # --- Colors and Logging ---
+<<<<<<< HEAD
 RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m' CYAN='\033[0;36m' NC='\033[0m'
+=======
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+>>>>>>> AIplatform/main
 log() { echo -e "${CYAN}[INFO]${NC}    $1"; }
 ok() { echo -e "${GREEN}[OK]${NC}      $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
