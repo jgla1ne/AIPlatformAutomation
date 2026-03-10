@@ -711,7 +711,7 @@ networks:
     name: \${DOCKER_NETWORK}
     driver: bridge
 
-'EOF
+EOF
 
 # --- Deploy Services ---
 log INFO "Starting deployment with docker compose..."
