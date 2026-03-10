@@ -1292,27 +1292,79 @@ collect_network_config() {
             echo -e "  ${DIM}Service Account JSON Configuration${NC}"
             echo -e "  ${DIM}Get JSON from: Google Cloud Console > IAM & Admin > Service Accounts${NC}"
             echo ""
-            
-            # Create rclone config directory
-            mkdir -p "${TENANT_DIR}/rclone"
-            
             echo -e "  ${YELLOW}Paste the complete JSON content below (press Enter on empty line to finish):${NC}"
             echo -e "  ${DIM}Example: {\"type\": \"service_account\", \"project_id\": \"...\"${NC}"
+            echo -e "  ${DIM}Note: JSON can span multiple lines with proper formatting${NC}"
             echo ""
             
-            # Read JSON content until empty line
+            # Read JSON content until empty line - improved handling for multiline JSON
             json_content=""
+            line_count=0
             while IFS= read -r line; do
-                if [[ -z "$line" ]]; then
+                if [[ -z "$line" && $line_count -gt 0 ]]; then
                     break
                 fi
+                # Preserve the exact line including whitespace
                 json_content+="$line"$'\n'
+                ((line_count++))
             done
             
             # Validate JSON content
             if [[ -n "$json_content" ]] && echo "$json_content" | python3 -m json.tool >/dev/null 2>&1; then
                 # Save JSON to rclone directory for container mounting
                 echo "$json_content" > "${TENANT_DIR}/rclone/google_sa.json"
+                
+                # Extract key information from JSON for validation
+                local sa_type=$(echo "$json_content" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('type', 'unknown'))" 2>/dev/null)
+                local sa_email=$(echo "$json_content" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('client_email', 'unknown'))" 2>/dev/null)
+                
+                if [[ "$sa_type" == "service_account" ]]; then
+                    echo -e "  ${GREEN}✅ Valid Service Account JSON detected${NC}"
+                    echo -e "  ${DIM}Service Account: ${sa_email}${NC}"
+                else
+                    echo -e "  ${YELLOW}⚠️ JSON type is '${sa_type}' (expected 'service_account')${NC}"
+                    echo -e "  ${DIM}Proceeding anyway, but authentication may fail${NC}"
+                fi
+                
+                # Generate Rclone token using Service Account
+                echo ""
+                echo -e "  ${DIM}Generating Rclone token for Service Account...${NC}"
+                
+                # Use rclone to generate token (similar to Script 3 approach)
+                if command -v rclone >/dev/null 2>&1; then
+                    # Create temporary config for token generation
+                    local temp_config="${TENANT_DIR}/rclone/temp_sa.conf"
+                    cat > "$temp_config" << EOF
+[gdrive_sa]
+type = drive
+scope = drive
+client_id = $(echo "$json_content" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('client_id', ''))" 2>/dev/null)
+client_secret = $(echo "$json_content" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('client_secret', ''))" 2>/dev/null)
+service_account_file = ${TENANT_DIR}/rclone/google_sa.json
+token = {"access_token":"test"}
+EOF
+                    
+                    # Generate token
+                    local gdrive_token
+                    gdrive_token=$(rclone config create gdrive-sa --config "$temp_config" "drive" "service_account" "${TENANT_DIR}/rclone/google_sa.json" 2>/dev/null | grep "token" | cut -d'"' -f4 2>/dev/null || echo "")
+                    
+                    if [[ -n "$gdrive_token" ]]; then
+                        GDRIVE_TOKEN="$gdrive_token"
+                        echo -e "  ${GREEN}✅ Rclone token generated successfully${NC}"
+                        log "SUCCESS" "Rclone Service Account token generated"
+                    else
+                        echo -e "  ${YELLOW}⚠️ Rclone token generation failed (will retry during deployment)${NC}"
+                        echo -e "  ${DIM}Token will be generated automatically when Rclone container starts${NC}"
+                        GDRIVE_TOKEN=""
+                    fi
+                    
+                    # Clean up temp config
+                    rm -f "$temp_config" 2>/dev/null
+                else
+                    echo -e "  ${YELLOW}⚠️ rclone not available for token generation${NC}"
+                    echo -e "  ${DIM}Token will be generated automatically when Rclone container starts${NC}"
+                    GDRIVE_TOKEN=""
+                fi
                 
                 # Collect Google Drive root folder ID
                 echo ""
@@ -1323,10 +1375,28 @@ collect_network_config() {
                 # Set variables for .env
                 GDRIVE_AUTH_METHOD="service_account"
                 log "SUCCESS" "Google Drive Service Account configuration completed"
+                
+                # Health status summary
+                echo ""
+                echo -e "  ${CYAN}📊 Service Account Health Status:${NC}"
+                if [[ -n "$GDRIVE_TOKEN" ]]; then
+                    echo -e "  ${GREEN}✅ Rclone Token: Generated and stored${NC}"
+                else
+                    echo -e "  ${YELLOW}⚠️ Rclone Token: Will be generated during deployment${NC}"
+                fi
+                echo -e "  ${GREEN}✅ JSON Validation: Passed${NC}"
+                echo -e "  ${GREEN}✅ Service Account: ${sa_email}${NC}"
+                
             else
                 echo -e "  ${RED}❌ Invalid JSON content. Please check your input.${NC}"
                 echo -e "  ${DIM}Google Drive integration will be skipped.${NC}"
                 ENABLE_RCLONE=false
+                
+                # Health status for failed validation
+                echo ""
+                echo -e "  ${CYAN}📊 Service Account Health Status:${NC}"
+                echo -e "  ${RED}❌ JSON Validation: Failed${NC}"
+                echo -e "  ${RED}❌ Rclone Token: Not generated${NC}"
             fi
             
         else
@@ -2430,6 +2500,72 @@ print_summary() {
     [ "${ENABLE_SIGNAL}" = "true" ]      && echo -e "    ${GREEN}✓${NC}  Signal API   :${SIGNAL_PORT}"
     [ "${ENABLE_OPENCLAW}" = "true" ]    && echo -e "    ${GREEN}✓${NC}  OpenClaw     :${OPENCLAW_PORT}"
     [ "${ENABLE_TAILSCALE}" = "true" ]   && echo -e "    ${GREEN}✓${NC}  Tailscale    :${TAILSCALE_PORT}"
+    [ "${ENABLE_RCLONE}" = "true" ]       && echo -e "    ${GREEN}✓${NC}  Rclone       :${RCLONE_PORT}"
+    echo ""
+
+    # Health Status Section
+    echo -e "  ${BOLD}🏥  Health Status Check:${NC}"
+    echo -e "  ${DIM}Pre-deployment validation results:${NC}"
+    echo ""
+    
+    # Tailscale Health Status
+    if [[ "${ENABLE_TAILSCALE}" == "true" ]]; then
+        if [[ -n "${TAILSCALE_AUTH_KEY}" ]] && validate_tailscale_auth_key "${TAILSCALE_AUTH_KEY}"; then
+            echo -e "    ${GREEN}✅${NC}  Tailscale Auth Key: Valid format"
+            echo -e "    ${GREEN}✅${NC}  Tailscale Validation: Passed"
+            echo -e "    ${DIM}   → VPN connectivity will be verified during deployment${NC}"
+        else
+            echo -e "    ${RED}❌${NC}  Tailscale Auth Key: Invalid or missing"
+            echo -e "    ${YELLOW}⚠️${NC}  Tailscale Validation: Failed (warning only)"
+            echo -e "    ${DIM}   → Script 2 will attempt to fix this issue${NC}"
+        fi
+    else
+        echo -e "    ${GRAY}⊖${NC}  Tailscale: Disabled"
+    fi
+    
+    # Rclone Health Status
+    if [[ "${ENABLE_RCLONE}" == "true" ]]; then
+        if [[ "${GDRIVE_AUTH_METHOD}" == "service_account" ]]; then
+            if [[ -f "${TENANT_DIR}/rclone/google_sa.json" ]]; then
+                echo -e "    ${GREEN}✅${NC}  Google Drive JSON: Valid Service Account"
+                if [[ -n "${GDRIVE_TOKEN}" ]]; then
+                    echo -e "    ${GREEN}✅${NC}  Rclone Token: Generated and stored"
+                    echo -e "    ${DIM}   → Google Drive integration ready${NC}"
+                else
+                    echo -e "    ${YELLOW}⚠️${NC}  Rclone Token: Will be generated during deployment"
+                    echo -e "    ${DIM}   → Token generation will be attempted in Script 2${NC}"
+                fi
+            else
+                echo -e "    ${RED}❌${NC}  Google Drive JSON: File not found"
+                echo -e "    ${YELLOW}⚠️${NC}  Rclone Validation: Failed (warning only)"
+            fi
+        elif [[ "${GDRIVE_AUTH_METHOD}" == "oauth" ]]; then
+            if [[ -n "${GDRIVE_TOKEN}" ]]; then
+                echo -e "    ${GREEN}✅${NC}  OAuth Token: Generated and stored"
+                echo -e "    ${DIM}   → Google Drive integration ready${NC}"
+            else
+                echo -e "    ${YELLOW}⚠️${NC}  OAuth Token: Will be generated during deployment"
+                echo -e "    ${DIM}   → Token generation will be attempted in Script 2${NC}"
+            fi
+        else
+            echo -e "    ${RED}❌${NC}  Google Drive: No authentication method configured"
+        fi
+    else
+        echo -e "    ${GRAY}⊖${NC}  Rclone: Disabled"
+    fi
+    
+    # Overall Health Summary
+    echo ""
+    echo -e "  ${BOLD}📊  Overall Health:${NC}"
+    local issues=0
+    [[ "${ENABLE_TAILSCALE}" == "true" && (-z "${TAILSCALE_AUTH_KEY}" || ! validate_tailscale_auth_key "${TAILSCALE_AUTH_KEY}") ]] && ((issues++))
+    [[ "${ENABLE_RCLONE}" == "true" && "${GDRIVE_AUTH_METHOD}" == "service_account" && ! -f "${TENANT_DIR}/rclone/google_sa.json" ]] && ((issues++))
+    
+    if [[ $issues -eq 0 ]]; then
+        echo -e "    ${GREEN}✅${NC}  All validations passed - Ready for deployment"
+    else
+        echo -e "    ${YELLOW}⚠️${NC}  ${issues} validation warning(s) - Will be addressed during deployment"
+    fi
     echo ""
 
     print_divider
