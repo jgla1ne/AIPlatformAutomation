@@ -617,6 +617,7 @@ add_rclone() {
       - GDRIVE_AUTH_METHOD=\${GDRIVE_AUTH_METHOD}
       - GDRIVE_CLIENT_ID=\${GDRIVE_CLIENT_ID}
       - GDRIVE_CLIENT_SECRET=\${GDRIVE_CLIENT_SECRET}
+      - GDRIVE_TOKEN=\${GDRIVE_TOKEN}
     volumes:
       - \${TENANT_DIR}/rclone:/config
       - \${TENANT_DIR}/storage:/data

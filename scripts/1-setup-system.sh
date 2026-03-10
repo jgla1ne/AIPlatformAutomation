@@ -686,67 +686,55 @@ select_stack() {
     echo ""
 
     while true; do
-        read -p "  ➤ Select stack [1-4]: " stack_choice
+        read -p "  ➤ Select stack [1-5]: " stack_choice
         stack_choice="${stack_choice:-2}"
         case "${stack_choice}" in
-            1|2|3|4) break ;;
-            *) echo "  ❌ Enter 1, 2, 3 or 4" ;;
+            1|2|3|4|5) break ;;
+            *) echo "  ❌ Enter 1, 2, 3, 4 or 5" ;;
         esac
     done
 
     # ── Apply stack presets ───────────────────────────────────────────────────
-    # First zero everything out
-    ENABLE_OLLAMA=false
-    ENABLE_OPENWEBUI=false
-    ENABLE_ANYTHINGLLM=false
-    ENABLE_DIFY=false
-    ENABLE_N8N=false
-    ENABLE_FLOWISE=false
-    ENABLE_LITELLM=false
-    ENABLE_QDRANT=false
-    ENABLE_GRAFANA=false
-    ENABLE_PROMETHEUS=false
-    ENABLE_AUTHENTIK=false
-    ENABLE_SIGNAL=false
+    # First, zero everything out
+    ENABLE_POSTGRES=false; ENABLE_REDIS=false; ENABLE_OLLAMA=false; ENABLE_OPENWEBUI=false;
+    ENABLE_ANYTHINGLLM=false; ENABLE_DIFY=false; ENABLE_N8N=false; ENABLE_FLOWISE=false;
+    ENABLE_LITELLM=false; ENABLE_QDRANT=false; ENABLE_GRAFANA=false; ENABLE_PROMETHEUS=false;
+    ENABLE_AUTHENTIK=false; ENABLE_SIGNAL=false; ENABLE_OPENCLAW=false; ENABLE_TAILSCALE=false;
+    ENABLE_RCLONE=false; ENABLE_CADDY=true # Caddy is always on
 
     case "${stack_choice}" in
-        1)  # Minimal
-            ENABLE_POSTGRES=true
-            ENABLE_REDIS=true
-            ENABLE_OLLAMA=true
-            ENABLE_OPENWEBUI=true
-            STACK_NAME="minimal"
-            log "SUCCESS" "Stack: Minimal — Ollama + Open WebUI"
+        1) # Lite Stack
+            log "INFO" "Applying 'Lite' preset: OpenWebUI, Ollama, Qdrant, LiteLLM"
+            ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_OLLAMA=true;
+            ENABLE_OPENWEBUI=true; ENABLE_QDRANT=true; ENABLE_LITELLM=true;
+            STACK_NAME="lite"
             ;;
-        2)  # Standard
-            ENABLE_POSTGRES=true
-            ENABLE_REDIS=true
-            ENABLE_OLLAMA=true
-            ENABLE_OPENWEBUI=true
-            ENABLE_N8N=true
-            ENABLE_FLOWISE=true
-            ENABLE_LITELLM=true
-            STACK_NAME="standard"
-            log "SUCCESS" "Stack: Standard"
+        2) # Local LLM Developer Stack
+            log "INFO" "Applying 'Local LLM Developer' preset: All local AI tools"
+            ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_OLLAMA=true;
+            ENABLE_OPENWEBUI=true; ENABLE_ANYTHINGLLM=true; ENABLE_DIFY=true;
+            ENABLE_N8N=true; ENABLE_FLOWISE=true; ENABLE_LITELLM=true;
+            ENABLE_QDRANT=true;
+            STACK_NAME="local-llm-dev"
             ;;
-        3)  # Full
-            ENABLE_POSTGRES=true
-            ENABLE_REDIS=true
-            ENABLE_OLLAMA=true
-            ENABLE_OPENWEBUI=true
-            ENABLE_N8N=true
-            ENABLE_FLOWISE=true
-            ENABLE_LITELLM=true
-            ENABLE_ANYTHINGLLM=true
-            ENABLE_DIFY=true
-            ENABLE_GRAFANA=true
-            ENABLE_PROMETHEUS=true
-            ENABLE_AUTHENTIK=true
-            ENABLE_TAILSCALE=true
+        3) # Monitoring & Security Stack
+            log "INFO" "Applying 'Monitoring & Security' preset: Core DBs, Monitoring, Security"
+            ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_QDRANT=true;
+            ENABLE_GRAFANA=true; ENABLE_PROMETHEUS=true; ENABLE_AUTHENTIK=true;
+            ENABLE_TAILSCALE=true;
+            STACK_NAME="monitoring-security"
+            ;;
+        4) # Full Stack (All Services)
+            log "WARN" "Applying 'Full Stack' preset. This requires significant system resources."
+            ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_OLLAMA=true;
+            ENABLE_OPENWEBUI=true; ENABLE_ANYTHINGLLM=true; ENABLE_DIFY=true;
+            ENABLE_N8N=true; ENABLE_FLOWISE=true; ENABLE_LITELLM=true;
+            ENABLE_QDRANT=true; ENABLE_GRAFANA=true; ENABLE_PROMETHEUS=true;
+            ENABLE_AUTHENTIK=true; ENABLE_SIGNAL=true; ENABLE_OPENCLAW=true;
+            ENABLE_TAILSCALE=true; ENABLE_RCLONE=true;
             STACK_NAME="full"
-            log "SUCCESS" "Stack: Full"
             ;;
-        4)  # Custom — all off, user picks in next step
+        5) # Custom — all off, user picks in next step
             STACK_NAME="custom"
             log "INFO" "Stack: Custom — configure individually below"
             ;;
@@ -755,7 +743,7 @@ select_stack() {
     print_divider
 
     # ── Always offer fine-grained override ────────────────────────────────────
-    if [ "${stack_choice}" != "4" ]; then
+    if [ "${stack_choice}" != "5" ]; then
         echo -e "  ${DIM}Stack applied. Would you like to customise individual services?${NC}"
         echo ""
         read -p "  ➤ Customise service selection? [y/N]: " customise
@@ -1764,22 +1752,20 @@ TOTAL_RAM_GB=${TOTAL_RAM_GB}
 OLLAMA_DEFAULT_MODEL=${OLLAMA_DEFAULT_MODEL}
 OLLAMA_MODELS="${OLLAMA_MODELS}"
 
-# ─── Vector Database ──────────────────────────────────────────────────────────
-VECTOR_DB=${VECTOR_DB}
-VECTOR_DB_HOST=${VECTOR_DB_HOST}
-VECTOR_DB_PORT=${VECTOR_DB_PORT}
-VECTOR_DB_URL=${VECTOR_DB_URL}
+# ─── Pinecone Configuration ───────────────────────────────────────────────────────
+PINECONE_PROJECT_ID="${PINECONE_PROJECT_ID}"
+PINECONE_API_KEY="${PINECONE_API_KEY}"
 
 # ─── LLM Providers ────────────────────────────────────────────────────────────
-LLM_PROVIDERS=${LLM_PROVIDERS}
-OPENAI_API_KEY=${OPENAI_API_KEY}
-GOOGLE_API_KEY=${GOOGLE_API_KEY}
-GROQ_API_KEY=${GROQ_API_KEY}
-OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+LLM_PROVIDERS="${LLM_PROVIDERS}"
+OPENAI_API_KEY="${OPENAI_API_KEY}"
+GOOGLE_API_KEY="${GOOGLE_API_KEY}"
+GROQ_API_KEY="${GROQ_API_KEY}"
+OPENROUTER_API_KEY="${OPENROUTER_API_KEY}"
 
 # ─── LiteLLM Routing Strategy ───────────────────────────────────────────────
-LITELLM_ROUTING_STRATEGY=${LITELLM_ROUTING_STRATEGY}
-LITELLM_INTERNAL_PORT=${LITELLM_INTERNAL_PORT}
+LITELLM_ROUTING_STRATEGY="${LITELLM_ROUTING_STRATEGY}"
+LITELLM_INTERNAL_PORT="${LITELLM_INTERNAL_PORT}"
 
 # ─── Internal Service Ports ───────────────────────────────────────────────
 CADDY_INTERNAL_HTTP_PORT=${CADDY_INTERNAL_HTTP_PORT}
@@ -1802,30 +1788,30 @@ POSTGRES_INTERNAL_PORT=${POSTGRES_INTERNAL_PORT}
 REDIS_INTERNAL_PORT=${REDIS_INTERNAL_PORT}
 
 # ─── Database ─────────────────────────────────────────────────────────────────
-POSTGRES_USER=${POSTGRES_USER}
-POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-POSTGRES_DB=${POSTGRES_DB}
+POSTGRES_USER="${POSTGRES_USER}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD}"
+POSTGRES_DB="${POSTGRES_DB}"
 
 # ─── Database Compatibility (for script 3) ───────────────────────────────
-DB_USER=${POSTGRES_USER}
-DB_PASSWORD=${POSTGRES_PASSWORD}
+DB_USER="${POSTGRES_USER}"
+DB_PASSWORD="${POSTGRES_PASSWORD}"
 
 # ─── Network Configuration (for dynamic references) ───────────────────
 LOCALHOST=localhost
 
 # ─── Redis ────────────────────────────────────────────────────────────────────
-REDIS_PASSWORD=${REDIS_PASSWORD}
+REDIS_PASSWORD="${REDIS_PASSWORD}"
 
 # ─── n8n ──────────────────────────────────────────────────────────────────────
-N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
-N8N_API_KEY=${N8N_API_KEY}
-N8N_USER=admin@${DOMAIN}
-N8N_PASSWORD=${N8N_PASSWORD}
+N8N_ENCRYPTION_KEY="${N8N_ENCRYPTION_KEY}"
+N8N_API_KEY="${N8N_API_KEY}"
+N8N_USER="admin@${DOMAIN}"
+N8N_PASSWORD="${N8N_PASSWORD}"
 
 # ─── Flowise ──────────────────────────────────────────────────────────────────
-FLOWISE_SECRET_KEY=${FLOWISE_SECRET_KEY}
+FLOWISE_SECRET_KEY="${FLOWISE_SECRET_KEY}"
 FLOWISE_USERNAME=admin
-FLOWISE_PASSWORD=${FLOWISE_PASSWORD}
+FLOWISE_PASSWORD="${FLOWISE_PASSWORD}"
 
 # LiteLLM configuration for central AI gateway
 LITELLM_CONFIG_YAML='
@@ -1842,65 +1828,65 @@ model_list:
 '
 
 # ─── LiteLLM ──────────────────────────────────────────────────────────────────
-LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
-LITELLM_SALT_KEY=${LITELLM_SALT_KEY}
+LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}"
+LITELLM_SALT_KEY="${LITELLM_SALT_KEY}"
 
 # ─── AnythingLLM ────────────────────────────────────────────────────────────────
-ANYTHINGLLM_API_KEY=${ANYTHINGLLM_API_KEY}
-ANYTHINGLLM_JWT_SECRET=${ANYTHINGLLM_JWT_SECRET}
-ANYTHINGLLM_AUTH_TOKEN=${ANYTHINGLLM_AUTH_TOKEN}
-ANYTHINGLLM_PORT=${ANYTHINGLLM_PORT}
+ANYTHINGLLM_API_KEY="${ANYTHINGLLM_API_KEY}"
+ANYTHINGLLM_JWT_SECRET="${ANYTHINGLLM_JWT_SECRET}"
+ANYTHINGLLM_AUTH_TOKEN="${ANYTHINGLLM_AUTH_TOKEN}"
+ANYTHINGLLM_PORT="${ANYTHINGLLM_PORT}"
 
 # ─── Qdrant ───────────────────────────────────────────────────────────────────
-QDRANT_API_KEY=${QDRANT_API_KEY}
-QDRANT_VECTOR_SIZE=768        # nomic-embed-text=768, mxbai-embed-large=1024
+QDRANT_API_KEY="${QDRANT_API_KEY}"
+QDRANT_VECTOR_SIZE="768"
 
 # ─── Grafana ──────────────────────────────────────────────────────────────────
-GRAFANA_ADMIN_USER=admin
-GRAFANA_PASSWORD=${GRAFANA_PASSWORD}
-GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+GRAFANA_ADMIN_USER="admin"
+GRAFANA_PASSWORD="${GRAFANA_PASSWORD}"
+GF_SECURITY_ADMIN_PASSWORD="${GRAFANA_PASSWORD}"
 
 # ─── Authentik ────────────────────────────────────────────────────────────────
-AUTHENTIK_SECRET_KEY=${AUTHENTIK_SECRET_KEY}
-AUTHENTIK_BOOTSTRAP_EMAIL=${ADMIN_EMAIL}
-AUTHENTIK_BOOTSTRAP_PASSWORD=${AUTHENTIK_BOOTSTRAP_PASSWORD}
-ADMIN_PASSWORD=${AUTHENTIK_BOOTSTRAP_PASSWORD}
+AUTHENTIK_SECRET_KEY="${AUTHENTIK_SECRET_KEY}"
+AUTHENTIK_BOOTSTRAP_EMAIL="${ADMIN_EMAIL}"
+AUTHENTIK_BOOTSTRAP_PASSWORD="${AUTHENTIK_BOOTSTRAP_PASSWORD}"
+ADMIN_PASSWORD="${AUTHENTIK_BOOTSTRAP_PASSWORD}"
 
 # ─── MinIO ────────────────────────────────────────────────────────────────────
-MINIO_ROOT_USER=${MINIO_ROOT_USER}
-MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+MINIO_ROOT_USER="${MINIO_ROOT_USER}"
+MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD}"
 
 # ─── Dify ─────────────────────────────────────────────────────────────────────
-DIFY_SECRET_KEY=${DIFY_SECRET_KEY}
-DIFY_INNER_API_KEY=${DIFY_INNER_API_KEY}
+DIFY_SECRET_KEY="${DIFY_SECRET_KEY}"
+DIFY_INNER_API_KEY="${DIFY_INNER_API_KEY}"
 
 # ─── Network & Security ───────────────────────────────────────────────────────
-TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY}
-TAILSCALE_HOSTNAME=${TAILSCALE_HOSTNAME}
-TAILSCALE_SERVE_MODE=${TAILSCALE_SERVE_MODE}
-TAILSCALE_FUNNEL=${TAILSCALE_FUNNEL}
-SIGNAL_PHONE_NUMBER=${SIGNAL_PHONE_NUMBER}
+TAILSCALE_AUTH_KEY="${TAILSCALE_AUTH_KEY}"
+TAILSCALE_HOSTNAME="${TAILSCALE_HOSTNAME}"
+TAILSCALE_SERVE_MODE="${TAILSCALE_SERVE_MODE}"
+TAILSCALE_FUNNEL="${TAILSCALE_FUNNEL}"
+SIGNAL_PHONE_NUMBER="${SIGNAL_PHONE_NUMBER}"
 # Note: SIGNAL_VERIFICATION_CODE will be populated in script 2 after user registration
 
 # ─── Google Drive Integration ───────────────────────────────────────────────────
-GDRIVE_AUTH_METHOD=${GDRIVE_AUTH_METHOD}
-GDRIVE_CLIENT_ID=${GDRIVE_CLIENT_ID}
-GDRIVE_CLIENT_SECRET=${GDRIVE_CLIENT_SECRET}
-GDRIVE_FOLDER_NAME=${GDRIVE_FOLDER_NAME}
-GDRIVE_FOLDER_ID=${GDRIVE_FOLDER_ID}
-GDRIVE_TOKEN=${GDRIVE_TOKEN}
+GDRIVE_AUTH_METHOD="${GDRIVE_AUTH_METHOD}"
+GDRIVE_CLIENT_ID="${GDRIVE_CLIENT_ID}"
+GDRIVE_CLIENT_SECRET="${GDRIVE_CLIENT_SECRET}"
+GDRIVE_FOLDER_NAME="${GDRIVE_FOLDER_NAME}"
+GDRIVE_FOLDER_ID="${GDRIVE_FOLDER_ID}"
+GDRIVE_TOKEN="${GDRIVE_TOKEN}"
 
 # Google Service Account for Rclone (non-interactive)
 # This will be processed during .env generation
-RCLONE_AUTH_METHOD=${GDRIVE_AUTH_METHOD}
+RCLONE_AUTH_METHOD="${GDRIVE_AUTH_METHOD}"
 
 # ─── Search APIs ───────────────────────────────────────────────────────────────
-SEARCH_PROVIDER=${SEARCH_PROVIDER}
-BRAVE_API_KEY=${BRAVE_API_KEY}
-SERPAPI_KEY=${SERPAPI_KEY}
-SERPAPI_ENGINE=${SERPAPI_ENGINE}
-CUSTOM_SEARCH_URL=${CUSTOM_SEARCH_URL}
-CUSTOM_SEARCH_KEY=${CUSTOM_SEARCH_KEY}
+SEARCH_PROVIDER="${SEARCH_PROVIDER}"
+BRAVE_API_KEY="${BRAVE_API_KEY}"
+SERPAPI_KEY="${SERPAPI_KEY}"
+SERPAPI_ENGINE="${SERPAPI_ENGINE}"
+CUSTOM_SEARCH_URL="${CUSTOM_SEARCH_URL}"
+CUSTOM_SEARCH_KEY="${CUSTOM_SEARCH_KEY}"
 
 # ─── Pinecone Configuration ───────────────────────────────────────────────────────
 PINECONE_PROJECT_ID=${PINECONE_PROJECT_ID}
