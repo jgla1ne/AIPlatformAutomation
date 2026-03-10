@@ -155,7 +155,7 @@ LITELLM_SALT_KEY=""
 ANYTHINGLLM_API_KEY=""
 ANYTHINGLLM_JWT_SECRET=""
 ANYTHINGLLM_AUTH_TOKEN=""
-ANYTHINGLLM_PORT="3001"
+ANYTHINGLLM_PORT=""
 QDRANT_API_KEY=""
 GRAFANA_PASSWORD=""
 AUTHENTIK_SECRET_KEY=""
@@ -206,23 +206,7 @@ N8N_PORT="5678"
 OLLAMA_SERVICE_NAME="ollama"
 OLLAMA_PORT="11434"
 LITELLM_SERVICE_NAME="litellm"
-LITELLM_PORT="4000"
 VLLM_SERVICE_NAME="vllm"
-VLLM_PORT="8000"
-
-# Port defaults (based on actual Docker internal ports)
-N8N_PORT="5678"
-FLOWISE_PORT="3000"
-OPENWEBUI_PORT="8081"
-ANYTHINGLLM_PORT="3001"
-LITELLM_PORT="4000"
-GRAFANA_PORT="3002"          # Host port, internal is 3000
-PROMETHEUS_PORT="9090"
-OLLAMA_PORT="11434"
-QDRANT_PORT="6333"
-SIGNAL_PORT="8080"           # Host port, internal is 8080
-OPENCLAW_PORT="18789"        # Host port, internal is 8082
-TAILSCALE_PORT="8443"        # Host port, internal is 443 (for OpenClaw)
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 log() {
