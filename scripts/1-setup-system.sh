@@ -1371,13 +1371,12 @@ collect_network_config() {
                     # Create temporary config for token generation
                     local temp_config="${TENANT_DIR}/rclone/temp_sa.conf"
                     
-                    # Extract client_id and client_secret safely
-                    local client_id=$(echo "$json_content" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('client_id', ''))" 2>/dev/null || echo "")
-                    local client_secret=$(echo "$json_content" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('client_secret', ''))" 2>/dev/null || echo "")
+                    # Extract Service Account credentials
                     local private_key=$(echo "$json_content" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('private_key', ''))" 2>/dev/null || echo "")
+                    local client_email=$(echo "$json_content" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('client_email', ''))" 2>/dev/null || echo "")
                     
-                    if [[ -n "$private_key" ]]; then
-                        # Service Account uses private_key, not client_id/client_secret
+                    if [[ -n "$private_key" && -n "$client_email" ]]; then
+                        # Service Account uses private_key and JSON file directly
                         cat > "$temp_config" << EOF
 [gdrive_sa]
 type = drive
@@ -1385,21 +1384,11 @@ scope = drive
 service_account_file = ${TENANT_DIR}/rclone/google_sa.json
 token = {"access_token":"test"}
 EOF
-                        echo -e "  ${DIM}   Using Service Account private_key authentication${NC}"
-                    elif [[ -n "$client_id" && -n "$client_secret" ]]; then
-                        # OAuth credentials
-                        cat > "$temp_config" << EOF
-[gdrive_sa]
-type = drive
-scope = drive
-client_id = ${client_id}
-client_secret = ${client_secret}
-token = {"access_token":"test"}
-EOF
-                        echo -e "  ${DIM}   Using OAuth client credentials${NC}"
+                        echo -e "  ${DIM}   Using Service Account JSON file authentication${NC}"
+                        echo -e "  ${DIM}   Service Account: ${client_email}${NC}"
                     else
-                        echo -e "  ${RED}❌ Could not extract authentication credentials from JSON${NC}"
-                        echo -e "  ${DIM}   JSON should have either private_key (Service Account) or client_id/client_secret (OAuth)${NC}"
+                        echo -e "  ${RED}❌ Could not extract Service Account credentials from JSON${NC}"
+                        echo -e "  ${DIM}   JSON should have private_key and client_email for Service Account${NC}"
                         GDRIVE_TOKEN=""
                         rm -f "$temp_config" 2>/dev/null
                     fi
@@ -2690,6 +2679,26 @@ print_summary() {
         [ "${ENABLE_OPENCLAW}" = "true" ] && echo -e "    ${CYAN}•${NC} OpenClaw:     https://openclaw.${DOMAIN}"
         [ "${ENABLE_SIGNAL}" = "true" ] && echo -e "    ${CYAN}•${NC} Signal API:   https://signal.${DOMAIN}"
         echo ""
+        
+        # Tailscale VPN URLs (if IP is available)
+        if [[ "${ENABLE_TAILSCALE}" == "true" ]]; then
+            # Try to get Tailscale IP
+            local tailscale_ip=$(tailscale status --json 2>/dev/null | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('Self', {}).get('TailscaleIPs', [''])[0] if data.get('Self', {}).get('TailscaleIPs') else '')" 2>/dev/null || echo "")
+            
+            if [[ -n "$tailscale_ip" && "$tailscale_ip" != "" ]]; then
+                echo -e "  ${BOLD}Tailscale VPN URLs:${NC}"
+                echo -e "  ${DIM}Services accessible via Tailscale network:${NC}"
+                echo ""
+                [ "${ENABLE_OPENCLAW}" = "true" ] && echo -e "    ${GREEN}•${NC} OpenClaw:     https://${tailscale_ip}:${OPENCLAW_PORT:-18789}"
+                [ "${ENABLE_SIGNAL}" = "true" ] && echo -e "    ${GREEN}•${NC} Signal API:   http://${tailscale_ip}:${SIGNAL_PORT:-8080}"
+                [ "${ENABLE_GRAFANA}" = "true" ] && echo -e "    ${GREEN}•${NC} Grafana:      http://${tailscale_ip}:${GRAFANA_PORT:-3002}"
+                [ "${ENABLE_AUTHENTIK}" = "true" ] && echo -e "    ${GREEN}•${NC} Authentik:    http://${tailscale_ip}:${AUTHENTIK_PORT:-9000}"
+                echo ""
+            else
+                echo -e "  ${DIM}📡 Tailscale VPN URLs: Will be available after deployment${NC}"
+                echo ""
+            fi
+        fi
         
         # Local access URLs
         echo -e "  ${BOLD}Local Access URLs:${NC}"
