@@ -219,7 +219,7 @@ EOF
 
 # --- Service Generation Functions ---
 add_postgres() {
-    cat >> "${COMPOSE_FILE}" << EOF
+    cat >> "${COMPOSE_FILE}" << 'EOF'
 
   postgres:
     image: postgres:15-alpine
@@ -239,7 +239,7 @@ EOF
 }
 
 add_redis() {
-    cat >> "${COMPOSE_FILE}" << EOF
+    cat >> "${COMPOSE_FILE}" << 'EOF'
 
   redis:
     image: redis:7-alpine
@@ -256,7 +256,7 @@ EOF
 }
 
 add_qdrant() {
-    cat >> "${COMPOSE_FILE}" << EOF
+    cat >> "${COMPOSE_FILE}" << 'EOF'
 
   qdrant:
     image: qdrant/qdrant:latest
@@ -273,7 +273,7 @@ EOF
 }
 
 add_ollama() {
-    cat >> "${COMPOSE_FILE}" << EOF
+    cat >> "${COMPOSE_FILE}" << 'EOF'
 
   ollama:
     image: ollama/ollama:latest
@@ -320,7 +320,7 @@ EOF
 }
 
 add_n8n() {
-    cat >> "${COMPOSE_FILE}" << EOF
+    cat >> "${COMPOSE_FILE}" << 'EOF'
 
   n8n:
     image: n8nio/n8n:latest
@@ -377,7 +377,7 @@ EOF
 }
 
 add_anythingllm() {
-    cat >> "${COMPOSE_FILE}" << EOF
+    cat >> "${COMPOSE_FILE}" << 'EOF'
 
   anythingllm:
     image: mintplexlabs/anythingllm:latest
@@ -413,7 +413,7 @@ EOF
 }
 
 add_litellm() {
-    cat >> "${COMPOSE_FILE}" << EOF
+    cat >> "${COMPOSE_FILE}" << 'EOF'
 
   litellm:
     image: ghcr.io/berriai/litellm:main-v1.35.10
@@ -451,7 +451,7 @@ EOF
 }
 
 add_grafana() {
-    cat >> "${COMPOSE_FILE}" << EOF
+    cat >> "${COMPOSE_FILE}" << 'EOF'
 
   grafana:
     image: grafana/grafana:latest
@@ -472,7 +472,7 @@ EOF
 }
 
 add_prometheus() {
-    cat >> "${COMPOSE_FILE}" << EOF
+    cat >> "${COMPOSE_FILE}" << 'EOF'
 
   prometheus:
     image: prom/prometheus:latest
@@ -487,7 +487,7 @@ EOF
 }
 
 add_authentik() {
-    cat >> "${COMPOSE_FILE}" << EOF
+    cat >> "${COMPOSE_FILE}" << 'EOF'
 
   authentik-server:
     image: ghcr.io/goauthentik/server:latest
@@ -525,7 +525,7 @@ EOF
 }
 
 add_dify() {
-    cat >> "${COMPOSE_FILE}" << EOF
+    cat >> "${COMPOSE_FILE}" << 'EOF'
 
   dify-api:
     image: langgenius/dify-api:latest
@@ -568,7 +568,7 @@ EOF
 }
 
 add_tailscale() {
-    cat >> "${COMPOSE_FILE}" << EOF
+    cat >> "${COMPOSE_FILE}" << 'EOF'
 
   tailscale:
     image: tailscale/tailscale:latest
@@ -603,7 +603,7 @@ EOF
 }
 
 add_rclone() {
-    cat >> "${COMPOSE_FILE}" << EOF
+    cat >> "${COMPOSE_FILE}" << 'EOF'
 
   rclone:
     image: rclone/rclone:latest
@@ -635,7 +635,7 @@ EOF
 }
 
 add_openclaw() {
-    cat >> "${COMPOSE_FILE}" << EOF
+    cat >> "${COMPOSE_FILE}" << 'EOF'
 
   openclaw:
     image: ghcr.io/openclaw/openclaw:latest
@@ -662,7 +662,7 @@ EOF
 }
 
 add_caddy() {
-    cat >> "${COMPOSE_FILE}" << EOF
+    cat >> "${COMPOSE_FILE}" << 'EOF'
 
   caddy:
     image: caddy:2-alpine
@@ -704,14 +704,14 @@ EOF
 [[ "${ENABLE_CADDY}" == "true" ]] && add_caddy
 
 # --- Add Network Configuration ---
-cat >> "${COMPOSE_FILE}" << EOF
+cat >> "${COMPOSE_FILE}" << 'EOF'
 
 networks:
   default:
     name: \${DOCKER_NETWORK}
     driver: bridge
 
-EOF
+'EOF
 
 # --- Deploy Services ---
 log INFO "Starting deployment with docker compose..."
