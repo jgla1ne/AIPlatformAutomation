@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script 3: Mission Control - Utility Library - STABLE v3.9
+# Script 3: Mission Control - Utility Library - STABLE v4.0
 # =============================================================================
 # PURPOSE: Central utility library for logging and common functions.
 # =============================================================================
@@ -8,6 +8,8 @@
 set -euo pipefail
 
 # --- Color and Logging Definitions (Exportable) ---
+BOLD='\033[1m'
+DIM='\033[2m'
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
