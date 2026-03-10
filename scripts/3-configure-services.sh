@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script 3: Mission Control - Complete Service Management Interface - STABLE v3.8
+# Script 3: Mission Control - Utility Library - STABLE v3.9
 # =============================================================================
-# PURPOSE: Primary interface, central utility library, and SINGLE SOURCE OF TRUTH.
+# PURPOSE: Central utility library for logging and common functions.
 # =============================================================================
 
 set -euo pipefail
@@ -17,24 +17,6 @@ log() { echo -e "${CYAN}[INFO]${NC}    $*"; }
 ok() { echo -e "${GREEN}[OK]${NC}      $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
 fail() { echo -e "${RED}[FAIL]${NC}    $*"; exit 1; }
-
-# --- SINGLE SOURCE OF TRUTH: All available modular services ---
-declare -r AVAILABLE_SERVICES=(
-    "OLLAMA"
-    "OPENWEBUI"
-    "N8N"
-    "FLOWISE"
-    "LITELLM"
-    "QDRANT"
-    "GRAFANA"
-    "PROMETHEUS"
-    "TAILSCALE"
-    "ANYTHINGLLM"
-    "AUTHENTIK"
-    "DIFY"
-    "RCLONE"
-    "OPENCLAW"
-)
 
 # =============================================================================
 # --- UTILITY FUNCTIONS (Available to all scripts that source this file) ---
@@ -61,9 +43,8 @@ start_service() {
     ok "Service '$service' is starting. Check '--status'."
 }
 
-# --- Export all utility functions AND the service list for other scripts to use ---
+# --- Export all utility functions for other scripts to use ---
 export -f log ok warn fail load_tenant_env start_service
-export -a AVAILABLE_SERVICES
 
 # =============================================================================
 # --- MAIN EXECUTION BLOCK (Only runs when script is executed directly) ---
