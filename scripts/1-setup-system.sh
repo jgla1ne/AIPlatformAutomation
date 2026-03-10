@@ -2368,24 +2368,7 @@ create_directories() {
 }
 
 # ─── Write Caddyfile ─────────────────────────────────────────────────────────
-write_caddyfile() {
-    # shellcheck source=/dev/null
-    source "${ENV_FILE}"
-
-    local CADDYFILE_PATH="${CADDY_DIR}/Caddyfile"
-    
-    # Start with global config based on SSL method
-    if [[ "${SSL_TYPE}" == "selfsigned" ]]; then
-        cat > "${CADDYFILE_PATH}" << EOF
-# AI Platform Caddyfile
-# Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-# Using self-signed certificates for immediate access
-
-{
-    email ${ADMIN_EMAIL}
-    # Disable HTTPS for self-signed testing
-    auto_https off
-}
+/tmp/new_caddyfile_function.sh
 
 EOF
     else

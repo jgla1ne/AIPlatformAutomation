@@ -99,7 +99,7 @@ add_qdrant() {
   qdrant:
     image: qdrant/qdrant:latest
     restart: unless-stopped
-    user: "${TENANT_UID}:${TENANT_GID}"
+    user: "1000:1000"
     networks:
       - default
     environment:

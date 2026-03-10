@@ -40,7 +40,7 @@ permissions_set_ownership() {
     
     mkdir -p "${service_dir}"
     chown -R "${service_uid}:${service_gid}" "${service_dir}"
-    log "INFO" "Ownership for '${service_name}' set to ${service_uid}:${service_gid}"
+    log "INFO" "Ownership for '${service_name}' directory ('${service_dir}') set to ${service_uid}:${service_gid}"
 }
 
 # Generic Healthcheck Function
