@@ -224,17 +224,19 @@ add_postgres() {
   postgres:
     image: postgres:15-alpine
     restart: unless-stopped
-    user: "${POSTGRES_UID}:${POSTGRES_UID}"
+    user: "${POSTGRES_UID:-${TENANT_UID}}:${POSTGRES_UID:-${TENANT_GID}}"
+    networks:
+      - default
     environment:
       POSTGRES_USER: "${POSTGRES_USER}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
-      POSTGRES_DB: "\${POSTGRES_DB}"
+      POSTGRES_DB: "${POSTGRES_DB}"
     volumes:
-      - \${TENANT_DIR}/postgres:/var/lib/postgresql/data
+      - ${TENANT_DIR}/postgres:/var/lib/postgresql/data
     ports:
-      - "\${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
 
-EOF
+    'EOF'
     ok "Added 'postgres' service."
 }
 
@@ -244,14 +246,16 @@ add_redis() {
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
-    command: redis-server --requirepass "\${REDIS_PASSWORD}"
+    user: "${TENANT_UID}:${TENANT_GID}"
+    networks:
+      - default
+    command: redis-server --requirepass "${REDIS_PASSWORD}"
     volumes:
-      - \${TENANT_DIR}/redis:/data
+      - ${TENANT_DIR}/redis:/data
     ports:
-      - "\${REDIS_PORT:-6379}:6379"
+      - "${REDIS_PORT:-6379}:6379"
 
-EOF
+    'EOF'
     ok "Added 'redis' service."
 }
 
@@ -261,12 +265,15 @@ add_qdrant() {
   qdrant:
     image: qdrant/qdrant:latest
     restart: unless-stopped
+    user: "${TENANT_UID}:${TENANT_GID}"
+    networks:
+      - default
     environment:
-      QDRANT__SERVICE__HTTP_PORT: "\${QDRANT_PORT:-6333}"
+      - QDRANT__SERVICE__HTTP_PORT=${QDRANT_PORT:-6333}
     volumes:
-      - \${TENANT_DIR}/qdrant:/qdrant/storage
+      - ${TENANT_DIR}/qdrant:/qdrant/storage
     ports:
-      - "\${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_PORT:-6333}:6333"
 
 EOF
     ok "Added 'qdrant' service."
@@ -279,11 +286,11 @@ add_ollama() {
     image: ollama/ollama:latest
     restart: unless-stopped
     volumes:
-      - \${TENANT_DIR}/ollama:/root/.ollama
+      - {{TENANT_DIR}/ollama:/root/.ollama
     ports:
-      - "\${OLLAMA_PORT:-11434}:11434"
+      - "{{OLLAMA_PORT:-11434}:11434"
     environment:
-      - OLLAMA_GPU_LAYERS=\${OLLAMA_GPU_LAYERS:-auto}
+      - OLLAMA_GPU_LAYERS={{OLLAMA_GPU_LAYERS:-auto}
     deploy:
       resources:
         limits:
@@ -325,24 +332,24 @@ add_n8n() {
   n8n:
     image: n8nio/n8n:latest
     restart: unless-stopped
-    user: "\${N8N_UID:-\${TENANT_UID}}:\${N8N_GID:-\${TENANT_GID}}"
+    user: "{{N8N_UID:-{{TENANT_UID}}:{{N8N_GID:-{{TENANT_GID}}"
     environment:
-      - N8N_BASIC_AUTH_USER=\${N8N_USER}
-      - N8N_BASIC_AUTH_PASSWORD=\${N8N_PASSWORD}
+      - N8N_BASIC_AUTH_USER={{N8N_USER}
+      - N8N_BASIC_AUTH_PASSWORD={{N8N_PASSWORD}
       - N8N_HOST=n8n
-      - N8N_PORT=\${N8N_PORT}
+      - N8N_PORT={{N8N_PORT}
       - N8N_PROTOCOL=http
-      - WEBHOOK_URL=http://\${N8N_SERVICE_NAME:-n8n}:\${N8N_PORT}
+      - WEBHOOK_URL=http://{{N8N_SERVICE_NAME:-n8n}:{{N8N_PORT}
       - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=\${POSTGRES_SERVICE_NAME:-postgres}
-      - DB_POSTGRESDB_PORT=\${POSTGRES_PORT}
-      - DB_POSTGRESDB_DATABASE=\${POSTGRES_DB}
-      - DB_POSTGRESDB_USER=\${POSTGRES_USER}
-      - DB_POSTGRESDB_PASSWORD=\${POSTGRES_PASSWORD}
+      - DB_POSTGRESDB_HOST={{POSTGRES_SERVICE_NAME:-postgres}
+      - DB_POSTGRESDB_PORT={{POSTGRES_PORT}
+      - DB_POSTGRESDB_DATABASE={{POSTGRES_DB}
+      - DB_POSTGRESDB_USER={{POSTGRES_USER}
+      - DB_POSTGRESDB_PASSWORD={{POSTGRES_PASSWORD}
     volumes:
-      - \${TENANT_DIR}/n8n:/home/node/.n8n
+      - {{TENANT_DIR}/n8n:/home/node/.n8n
     ports:
-      - "\${N8N_PORT:-5678}:5678"
+      - "{{N8N_PORT:-5678}:5678"
     depends_on:
       - postgres
 
@@ -388,22 +395,22 @@ add_anythingllm() {
       - STORAGE_DIR=/app/server/storage
       - DATABASE_PATH=/app/server/storage/anythingllm.db
       - DATABASE_URL=sqlite:///app/server/storage/anythingllm.db
-      - VECTOR_DB=\${VECTOR_DB}
-      - QDRANT_ENDPOINT=\${QDRANT_INTERNAL_URL}
-      - QDRANT_API_KEY=\${QDRANT_API_KEY}
+      - VECTOR_DB={{VECTOR_DB}
+      - QDRANT_ENDPOINT={{QDRANT_INTERNAL_URL}
+      - QDRANT_API_KEY={{QDRANT_API_KEY}
       - LLM_PROVIDER=ollama
       - OLLAMA_BASE_PATH=/app/server/storage/models
       - OLLAMA_MODEL_PATH=/app/server/storage/models
-      - OLLAMA_HOST=\${OLLAMA_SERVICE_NAME:-ollama}
-      - OLLAMA_PORT=\${OLLAMA_PORT}
+      - OLLAMA_HOST={{OLLAMA_SERVICE_NAME:-ollama}
+      - OLLAMA_PORT={{OLLAMA_PORT}
       - TELEMETRY_ENABLED=false
       - DISABLE_TELEMETRY=true
     volumes:
-      - \${TENANT_DIR}/anythingllm:/app/server/storage
-      - \${TENANT_DIR}/anythingllm/tmp:/tmp
-      - \${TENANT_DIR}/gdrive_mount:/app/server/storage/gdrive:ro # Mount as read-only
+      - {{TENANT_DIR}/anythingllm:/app/server/storage
+      - {{TENANT_DIR}/anythingllm/tmp:/tmp
+      - {{TENANT_DIR}/gdrive_mount:/app/server/storage/gdrive:ro # Mount as read-only
     ports:
-      - "\${ANYTHINGLLM_PORT:-3001}:3001"
+      - "{{ANYTHINGLLM_PORT:-3001}:3001"
     depends_on:
       - qdrant
       - ollama
@@ -418,27 +425,27 @@ add_litellm() {
   litellm:
     image: ghcr.io/berriai/litellm:main-v1.35.10
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
+    user: "{{TENANT_UID}:{{TENANT_GID}"
     dns:
       - 1.1.1.1
       - 8.8.8.8
     # Use direct command with inline ownership fix
     command: >
       sh -c "mkdir -p /home/user/.cache/pip && 
-             chown -R \${TENANT_UID}:\${TENANT_GID} /home/user/.cache &&
+             chown -R {{TENANT_UID}:{{TENANT_GID} /home/user/.cache &&
              exec /entrypoint.sh"
     environment:
       - DATABASE_URL=sqlite:///data/litellm.db
-      - LITELLM_MASTER_KEY=\${LITELLM_MASTER_KEY}
-      - TENANT_UID=\${TENANT_UID}
-      - TENANT_GID=\${TENANT_GID}
-      - OLLAMA_API_BASE=\${OLLAMA_INTERNAL_URL}
-      - LITELLM_CONFIG_YAML=\${LITELLM_CONFIG_YAML}
+      - LITELLM_MASTER_KEY={{LITELLM_MASTER_KEY}
+      - TENANT_UID={{TENANT_UID}
+      - TENANT_GID={{TENANT_GID}
+      - OLLAMA_API_BASE={{OLLAMA_INTERNAL_URL}
+      - LITELLM_CONFIG_YAML={{LITELLM_CONFIG_YAML}
     volumes:
-      - \${TENANT_DIR}/litellm:/data
-      - \${TENANT_DIR}/litellm/config.yaml:/app/config.yaml:ro
+      - {{TENANT_DIR}/litellm:/data
+      - {{TENANT_DIR}/litellm/config.yaml:/app/config.yaml:ro
     ports:
-      - "\${LITELLM_PORT:-4000}:4000"
+      - "{{LITELLM_PORT:-4000}:4000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
       interval: 15s
@@ -457,17 +464,19 @@ add_grafana() {
     image: grafana/grafana:latest
     restart: unless-stopped
     user: "${GRAFANA_UID}:${GRAFANA_UID}"
+    networks:
+      - default
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER}
       - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD}
       - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
     volumes:
-      - \${TENANT_DIR}/grafana:/var/lib/grafana
-      - \${TENANT_DIR}/grafana/provisioning:/etc/grafana/provisioning
+      - ${TENANT_DIR}/grafana:/var/lib/grafana
+      - ${TENANT_DIR}/grafana/provisioning:/etc/grafana/provisioning
     ports:
-      - "\${GRAFANA_PORT:-3000}:3000"
+      - "${GRAFANA_PORT:-3000}:3000"
 
-EOF
+    'EOF'
     ok "Added 'grafana' service."
 }
 
@@ -478,11 +487,13 @@ add_prometheus() {
     image: prom/prometheus:latest
     restart: unless-stopped
     user: "${PROMETHEUS_UID}:${PROMETHEUS_UID}"
+    networks:
+      - default
     volumes:
       - ${TENANT_DIR}/prometheus.yml:/etc/prometheus/prometheus.yml
       - ${TENANT_DIR}/prometheus-data:/prometheus
 
-EOF
+    'EOF'
     ok "Added 'prometheus' service."
 }
 
@@ -492,24 +503,24 @@ add_authentik() {
   authentik-server:
     image: ghcr.io/goauthentik/server:latest
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
+    user: "{{TENANT_UID}:{{TENANT_GID}"
     environment:
-      - AUTHENTIK_SECRET_KEY=\${AUTHENTIK_SECRET_KEY}
-      - AUTHENTIK_POSTGRESQL__HOST=\${POSTGRES_SERVICE_NAME:-postgres}
-      - AUTHENTIK_POSTGRESQL__PORT=\${POSTGRES_PORT}
-      - AUTHENTIK_POSTGRESQL__NAME=\${POSTGRES_DB}
-      - AUTHENTIK_POSTGRESQL__USER=\${POSTGRES_USER}
-      - AUTHENTIK_POSTGRESQL__PASSWORD=\${POSTGRES_PASSWORD}
-      - AUTHENTIK_REDIS__HOST=\${AUTHENTIK_REDIS__HOST}
-      - AUTHENTIK_REDIS__PORT=\${REDIS_PORT}
-      - AUTHENTIK_REDIS__DB=\${REDIS_DB:-0}
-      - AUTHENTIK_REDIS__PASSWORD=\${REDIS_PASSWORD}
+      - AUTHENTIK_SECRET_KEY={{AUTHENTIK_SECRET_KEY}
+      - AUTHENTIK_POSTGRESQL__HOST={{POSTGRES_SERVICE_NAME:-postgres}
+      - AUTHENTIK_POSTGRESQL__PORT={{POSTGRES_PORT}
+      - AUTHENTIK_POSTGRESQL__NAME={{POSTGRES_DB}
+      - AUTHENTIK_POSTGRESQL__USER={{POSTGRES_USER}
+      - AUTHENTIK_POSTGRESQL__PASSWORD={{POSTGRES_PASSWORD}
+      - AUTHENTIK_REDIS__HOST={{AUTHENTIK_REDIS__HOST}
+      - AUTHENTIK_REDIS__PORT={{REDIS_PORT}
+      - AUTHENTIK_REDIS__DB={{REDIS_DB:-0}
+      - AUTHENTIK_REDIS__PASSWORD={{REDIS_PASSWORD}
     volumes:
-      - \${TENANT_DIR}/authentik/media:/media
-      - \${TENANT_DIR}/authentik/certs:/certs
-      - \${TENANT_DIR}/authentik/custom-templates:/templates
+      - {{TENANT_DIR}/authentik/media:/media
+      - {{TENANT_DIR}/authentik/certs:/certs
+      - {{TENANT_DIR}/authentik/custom-templates:/templates
     ports:
-      - "\${AUTHENTIK_PORT:-9000}:9000"
+      - "{{AUTHENTIK_PORT:-9000}:9000"
     depends_on:
       - postgres
       - redis
@@ -530,29 +541,29 @@ add_dify() {
   dify-api:
     image: langgenius/dify-api:latest
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
+    user: "{{TENANT_UID}:{{TENANT_GID}"
     environment:
       # --- DATABASE & REDIS CONNECTION (Mandatory) ---
-      - DB_USERNAME=\${POSTGRES_USER}
-      - DB_PASSWORD=\${POSTGRES_PASSWORD}
+      - DB_USERNAME={{POSTGRES_USER}
+      - DB_PASSWORD={{POSTGRES_PASSWORD}
       - DB_HOST=postgres
       - DB_PORT=5432
-      - DB_DATABASE=\${POSTGRES_DB}
+      - DB_DATABASE={{POSTGRES_DB}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - REDIS_PASSWORD=\${REDIS_PASSWORD}
+      - REDIS_PASSWORD={{REDIS_PASSWORD}
       # --- Dify Configuration ---
-      - DIFY_SECRET_KEY=\${DIFY_SECRET_KEY}
-      - DIFY_INNER_API_KEY=\${DIFY_INNER_API_KEY}
+      - DIFY_SECRET_KEY={{DIFY_SECRET_KEY}
+      - DIFY_INNER_API_KEY={{DIFY_INNER_API_KEY}
       - DIFY_LOG_LEVEL=INFO
       # --- Storage Configuration ---
-      - DIFY_STORAGE_TYPE=\${DIFY_STORAGE_TYPE}
-      - DIFY_STORAGE_LOCAL_ROOT=\${DIFY_STORAGE_LOCAL_ROOT}
+      - DIFY_STORAGE_TYPE={{DIFY_STORAGE_TYPE}
+      - DIFY_STORAGE_LOCAL_ROOT={{DIFY_STORAGE_LOCAL_ROOT}
       - CODE_SEGMENT_MAX_LENGTH=4000
     volumes:
-      - \${TENANT_DIR}/dify/app:/app/api/storage
+      - {{TENANT_DIR}/dify/app:/app/api/storage
     ports:
-      - "\${DIFY_PORT:-5001}:5001"
+      - "{{DIFY_PORT:-5001}:5001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
       interval: 15s
@@ -573,7 +584,7 @@ add_tailscale() {
   tailscale:
     image: tailscale/tailscale:latest
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
+    user: "{{TENANT_UID}:{{TENANT_GID}"
     cap_add:
       - NET_ADMIN
       - SYS_MODULE
@@ -586,11 +597,11 @@ add_tailscale() {
       - TS_ACCEPT_DNS=true
       - TS_EXTRA_ARGS=${TAILSCALE_EXTRA_ARGS}
     volumes:
-      - \${TENANT_DIR}/lib/tailscale:/var/lib/tailscale
-      - \${TENANT_DIR}/run/tailscale:/var/run/tailscale
+      - {{TENANT_DIR}/lib/tailscale:/var/lib/tailscale
+      - {{TENANT_DIR}/run/tailscale:/var/run/tailscale
       - /dev/net/tun:/dev/net/tun
     ports:
-      - "\${TAILSCALE_PORT:-8443}:8443"
+      - "{{TAILSCALE_PORT:-8443}:8443"
     healthcheck:
       test: ["CMD", "tailscale", "status"]
       interval: 30s
@@ -608,21 +619,21 @@ add_rclone() {
   rclone:
     image: rclone/rclone:latest
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
+    user: "{{TENANT_UID}:{{TENANT_GID}"
     entrypoint: ["rclone"]
-    command: ["rcd", "--rc-no-auth", "--rc-addr", ":5572", "--config=\${RCLONE_CONFIG_PATH}", "--log-file=/data/rclone.log"]
+    command: ["rcd", "--rc-no-auth", "--rc-addr", ":5572", "--config={{RCLONE_CONFIG_PATH}", "--log-file=/data/rclone.log"]
     environment:
-      - RCLONE_CONFIG=\${RCLONE_CONFIG:-/config/rclone.conf}
-      - RCLONE_CONFIG_PATH=\${RCLONE_CONFIG_PATH}
-      - GDRIVE_AUTH_METHOD=\${GDRIVE_AUTH_METHOD}
-      - GDRIVE_CLIENT_ID=\${GDRIVE_CLIENT_ID}
-      - GDRIVE_CLIENT_SECRET=\${GDRIVE_CLIENT_SECRET}
-      - GDRIVE_TOKEN=\${GDRIVE_TOKEN}
+      - RCLONE_CONFIG={{RCLONE_CONFIG:-/config/rclone.conf}
+      - RCLONE_CONFIG_PATH={{RCLONE_CONFIG_PATH}
+      - GDRIVE_AUTH_METHOD={{GDRIVE_AUTH_METHOD}
+      - GDRIVE_CLIENT_ID={{GDRIVE_CLIENT_ID}
+      - GDRIVE_CLIENT_SECRET={{GDRIVE_CLIENT_SECRET}
+      - GDRIVE_TOKEN={{GDRIVE_TOKEN}
     volumes:
-      - \${TENANT_DIR}/rclone:/config
-      - \${TENANT_DIR}/storage:/data
+      - {{TENANT_DIR}/rclone:/config
+      - {{TENANT_DIR}/storage:/data
     ports:
-      - "\${RCLONE_PORT:-5572}:5572"
+      - "{{RCLONE_PORT:-5572}:5572"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5572"]
       interval: 15s
@@ -640,16 +651,16 @@ add_openclaw() {
   openclaw:
     image: ghcr.io/openclaw/openclaw:latest
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
+    user: "{{TENANT_UID}:{{TENANT_GID}"
     networks:
       - default
     environment:
-      - OPENCLAW_ADMIN_PASSWORD=\${OPENCLAW_ADMIN_PASSWORD}
+      - OPENCLAW_ADMIN_PASSWORD={{OPENCLAW_ADMIN_PASSWORD}
       - OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1
     volumes:
-      - \${TENANT_DIR}/openclaw:/home/node
+      - {{TENANT_DIR}/openclaw:/home/node
     ports:
-      - "\${OPENCLAW_PORT:-18789}:18789"
+      - "{{OPENCLAW_PORT:-18789}:18789"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:18789/health"]
       interval: 30s
@@ -667,18 +678,18 @@ add_caddy() {
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
-    user: "\${TENANT_UID}:\${TENANT_GID}"
+    user: "{{TENANT_UID}:{{TENANT_GID}"
     networks:
       - default
     environment:
       ACME_AGREE: "true"
     volumes:
-      - \${TENANT_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile
-      - \${TENANT_DIR}/caddy/data:/data
-      - \${TENANT_DIR}/caddy/config:/config
+      - {{TENANT_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile
+      - {{TENANT_DIR}/caddy/data:/data
+      - {{TENANT_DIR}/caddy/config:/config
     ports:
-      - "\${CADDY_HTTP_PORT:-80}:80"
-      - "\${CADDY_HTTPS_PORT:-443}:443"
+      - "{{CADDY_HTTP_PORT:-80}:80"
+      - "{{CADDY_HTTPS_PORT:-443}:443"
 
 EOF
     ok "Added 'caddy' service."
@@ -708,7 +719,7 @@ cat >> "${COMPOSE_FILE}" << 'EOF'
 
 networks:
   default:
-    name: \${DOCKER_NETWORK}
+    name: {{DOCKER_NETWORK}
     driver: bridge
 
 EOF
