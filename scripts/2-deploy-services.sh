@@ -456,7 +456,7 @@ add_grafana() {
   grafana:
     image: grafana/grafana:latest
     restart: unless-stopped
-    user: "\${GRAFANA_UID:-\${TENANT_UID}}:\${GRAFANA_UID:-\${TENANT_GID}}"
+    user: "\${GRAFANA_UID:-472}:\${GRAFANA_UID:-472}"
     environment:
       - GF_SECURITY_ADMIN_USER=\${GRAFANA_ADMIN_USER}
       - GF_SECURITY_ADMIN_PASSWORD=\${GF_SECURITY_ADMIN_PASSWORD}
@@ -477,7 +477,7 @@ add_prometheus() {
   prometheus:
     image: prom/prometheus:latest
     restart: unless-stopped
-    user: "\${PROMETHEUS_UID:-\${TENANT_UID}}:\${PROMETHEUS_UID:-\${TENANT_GID}}"
+    user: "\${PROMETHEUS_UID:-65534}:\${PROMETHEUS_UID:-65534}"
     volumes:
       - \${TENANT_DIR}/prometheus.yml:/etc/prometheus/prometheus.yml
       - \${TENANT_DIR}/prometheus-data:/prometheus
