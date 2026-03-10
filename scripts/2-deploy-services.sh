@@ -642,6 +642,33 @@ EOF
     ok "Added 'rclone' service with OAuth support and health check."
 }
 
+add_openclaw() {
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  openclaw:
+    image: ghcr.io/openclaw/openclaw:latest
+    restart: unless-stopped
+    user: "\${TENANT_UID}:\${TENANT_GID}"
+    networks:
+      - default
+    environment:
+      - OPENCLAW_ADMIN_PASSWORD=\${OPENCLAW_ADMIN_PASSWORD}
+      - OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1
+    volumes:
+      - \${TENANT_DIR}/openclaw:/home/node
+    ports:
+      - "\${OPENCLAW_PORT:-18789}:18789"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:18789/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+EOF
+    ok "Added 'openclaw' service with health check."
+}
+
 add_caddy() {
     cat >> "${COMPOSE_FILE}" << EOF
 
@@ -680,6 +707,7 @@ EOF
 [[ "${ENABLE_AUTHENTIK}" == "true" ]] && add_authentik
 [[ "${ENABLE_DIFY:-false}" == "true" ]] && add_dify
 [[ "${ENABLE_TAILSCALE:-false}" == "true" ]] && add_tailscale
+[[ "${ENABLE_OPENCLAW:-false}" == "true" ]] && add_openclaw
 [[ "${ENABLE_RCLONE:-false}" == "true" ]] && add_rclone
 [[ "${ENABLE_CADDY}" == "true" ]] && add_caddy
 
@@ -1144,6 +1172,7 @@ print_comprehensive_final_report() {
     [[ "${ENABLE_AUTHENTIK:-false}" == "true" ]] && echo "  • Authentik:    https://auth.${DOMAIN}"
     [[ "${ENABLE_DIFY:-false}" == "true" ]] && echo "  • Dify:         https://dify.${DOMAIN}"
     [[ "${ENABLE_TAILSCALE:-false}" == "true" ]] && echo "  • Tailscale:     https://tailscale.${DOMAIN}"
+    [[ "${ENABLE_OPENCLAW:-false}" == "true" ]] && echo "  • OpenClaw:     https://openclaw.${DOMAIN}"
     [[ "${ENABLE_RCLONE:-false}" == "true" ]] && echo "  • Rclone:        https://rclone.${DOMAIN}"
     echo ""
     
@@ -1158,6 +1187,7 @@ print_comprehensive_final_report() {
     [[ "${ENABLE_GRAFANA:-false}" == "true" ]] && echo "  • Grafana:      http://localhost:3002"
     [[ "${ENABLE_DIFY:-false}" == "true" ]] && echo "  • Dify:         http://localhost:5001"
     [[ "${ENABLE_TAILSCALE:-false}" == "true" ]] && echo "  • Tailscale:     http://localhost:8443"
+    [[ "${ENABLE_OPENCLAW:-false}" == "true" ]] && echo "  • OpenClaw:     http://localhost:18789"
     [[ "${ENABLE_RCLONE:-false}" == "true" ]] && echo "  • Rclone:        http://localhost:5572"
     [[ "${ENABLE_OLLAMA:-false}" == "true" ]] && echo "  • Ollama API:   http://localhost:11434/api/tags"
     [[ "${ENABLE_QDRANT:-false}" == "true" ]] && echo "  • Qdrant API:   http://localhost:6333"
@@ -1205,6 +1235,7 @@ print_health_dashboard() {
     [[ "${ENABLE_GRAFANA}" == "true" ]] && services+=("grafana")
     [[ "${ENABLE_CADDY}" == "true" ]] && services+=("caddy")
     [[ "${ENABLE_TAILSCALE}" == "true" ]] && services+=("tailscale")
+    [[ "${ENABLE_OPENCLAW}" == "true" ]] && services+=("openclaw")
     [[ "${ENABLE_RCLONE}" == "true" ]] && services+=("rclone")
     
     local total_services=${#services[@]}
@@ -1320,6 +1351,7 @@ print_final_summary() {
     [[ "${ENABLE_AUTHENTIK:-false}" == "true" ]] && echo "  • Authentik:    https://auth.${DOMAIN}"
     [[ "${ENABLE_DIFY:-false}" == "true" ]] && echo "  • Dify:         https://dify.${DOMAIN}"
     [[ "${ENABLE_TAILSCALE:-false}" == "true" ]] && echo "  • Tailscale:     https://tailscale.${DOMAIN}"
+    [[ "${ENABLE_OPENCLAW:-false}" == "true" ]] && echo "  • OpenClaw:     https://openclaw.${DOMAIN}"
     [[ "${ENABLE_RCLONE:-false}" == "true" ]] && echo "  • Rclone:        https://rclone.${DOMAIN}"
     [[ "${ENABLE_SIGNAL:-false}" == "true" ]] && echo "  • Signal API:   https://signal.${DOMAIN}"
     
@@ -1333,6 +1365,7 @@ print_final_summary() {
     [[ "${ENABLE_GRAFANA:-false}" == "true" ]] && echo "  • Grafana:      http://localhost:3002"
     [[ "${ENABLE_DIFY:-false}" == "true" ]] && echo "  • Dify:         http://localhost:5001"
     [[ "${ENABLE_TAILSCALE:-false}" == "true" ]] && echo "  • Tailscale:     http://localhost:8443"
+    [[ "${ENABLE_OPENCLAW:-false}" == "true" ]] && echo "  • OpenClaw:     http://localhost:18789"
     [[ "${ENABLE_RCLONE:-false}" == "true" ]] && echo "  • Rclone:        http://localhost:5572"
     [[ "${ENABLE_OLLAMA:-false}" == "true" ]] && echo "  • Ollama API:   http://localhost:11434/api/tags"
     [[ "${ENABLE_QDRANT:-false}" == "true" ]] && echo "  • Qdrant API:   http://localhost:6333"
