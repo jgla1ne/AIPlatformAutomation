@@ -1168,29 +1168,9 @@ collect_network_config() {
                 *) TAILSCALE_FUNNEL="https" ;;
             esac
             echo -e "  ${DIM}✅ Funnel type: ${TAILSCALE_FUNNEL}${NC}"
-            
-            # Generate TS_SERVE_CONFIG based on serve mode
-            if [[ "${TAILSCALE_SERVE_MODE}" == "true" ]]; then
-                # Basic serve configuration for web services
-                TS_SERVE_CONFIG='{
-  "tcp": {
-    "443": "http://127.0.0.1:8080"
-  },
-  "https": {
-    "443": {
-      "handlers": ["tls", "http"]
-    }
-  }
-}'
-            else
-                # Empty config when serve mode is disabled
-                TS_SERVE_CONFIG='{}'
-            fi
-            echo -e "  ${DIM}✅ TS_SERVE_CONFIG generated for serve mode${NC}"
         else
             TAILSCALE_SERVE_MODE="false"
             TAILSCALE_FUNNEL="https"
-            TS_SERVE_CONFIG='{}'
         fi
     else
         export ENABLE_TAILSCALE="false"
@@ -1899,9 +1879,6 @@ TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY}
 TAILSCALE_HOSTNAME=${TAILSCALE_HOSTNAME}
 TAILSCALE_SERVE_MODE=${TAILSCALE_SERVE_MODE}
 TAILSCALE_FUNNEL=${TAILSCALE_FUNNEL}
-TS_SERVE_CONFIG=${TS_SERVE_CONFIG}
-
-# ─── Signal API ───────────────────────────────────────────────────────────────
 SIGNAL_PHONE_NUMBER=${SIGNAL_PHONE_NUMBER}
 # Note: SIGNAL_VERIFICATION_CODE will be populated in script 2 after user registration
 

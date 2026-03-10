@@ -580,12 +580,11 @@ add_tailscale() {
     devices:
       - /dev/net/tun
     environment:
-      - TS_AUTHKEY=\${TAILSCALE_AUTH_KEY}
-      - TS_HOSTNAME=\${TAILSCALE_HOSTNAME}
+      - TS_AUTHKEY=${TAILSCALE_AUTH_KEY}
+      - TS_HOSTNAME=${TAILSCALE_HOSTNAME}
       - TS_STATE_DIR=/var/lib/tailscale
-      - TS_SERVE_CONFIG=\${TS_SERVE_CONFIG}
       - TS_ACCEPT_DNS=true
-      - TS_EXTRA_ARGS=\${TAILSCALE_EXTRA_ARGS}
+      - TS_EXTRA_ARGS=${TAILSCALE_EXTRA_ARGS}
     volumes:
       - \${TENANT_DIR}/lib/tailscale:/var/lib/tailscale
       - \${TENANT_DIR}/run/tailscale:/var/run/tailscale
