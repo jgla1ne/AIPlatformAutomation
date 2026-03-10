@@ -1843,10 +1843,23 @@ FLOWISE_SECRET_KEY=${FLOWISE_SECRET_KEY}
 FLOWISE_USERNAME=admin
 FLOWISE_PASSWORD=${FLOWISE_PASSWORD}
 
+# LiteLLM configuration for central AI gateway
+LITELLM_CONFIG_YAML='
+model_list:
+  - model_name: ${OLLAMA_DEFAULT_MODEL}
+    litellm_params:
+      model: ${OLLAMA_DEFAULT_MODEL}
+      api_base: http://${OLLAMA_INTERNAL_URL}
+      rpm_limit: 6
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+      rpm_limit: 100
+'
+
 # ─── LiteLLM ──────────────────────────────────────────────────────────────────
 LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
 LITELLM_SALT_KEY=${LITELLM_SALT_KEY}
-LITELLM_CONFIG_YAML=${LITELLM_CONFIG_YAML}
 
 # ─── AnythingLLM ────────────────────────────────────────────────────────────────
 ANYTHINGLLM_API_KEY=${ANYTHINGLLM_API_KEY}
@@ -1992,21 +2005,6 @@ AUTHENTIK_REDIS__HOST=redis
 # Dify storage configuration
 DIFY_STORAGE_TYPE=local
 DIFY_STORAGE_LOCAL_ROOT=/data
-
-# LiteLLM configuration for central AI gateway
-LITELLM_CONFIG_YAML='
-model_list:
-  - model_name: ${OLLAMA_DEFAULT_MODEL}
-    litellm_params:
-      model: ollama/${OLLAMA_DEFAULT_MODEL}
-      api_base: ${OLLAMA_INTERNAL_URL}
-  - model_name: gpt-4o
-    litellm_params:
-      model: openai/gpt-4o
-      api_key: ${OPENAI_API_KEY}
-router_settings:
-    routing_strategy: ${LITELLM_ROUTING_STRATEGY}
-'
 EOF
 )
 
