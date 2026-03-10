@@ -105,6 +105,26 @@ test_rclone_connectivity() {
     fi
 }
 
+test_openclaw_connectivity() {
+    local tenant_dir="$1"
+    local timeout="${2:-15}"
+    
+    cd "${tenant_dir}" || return 1
+    
+    log INFO "Testing OpenClaw connectivity..."
+    
+    # Give OpenClaw time to start
+    sleep "$timeout"
+    
+    if docker compose exec openclaw curl -f http://localhost:18789/health > /dev/null 2>&1; then
+        ok "✅ OpenClaw is UP and responding on port 18789."
+        return 0
+    else
+        warn "⚠️ OpenClaw FAILED to respond. Check logs: docker compose logs openclaw"
+        return 1
+    fi
+}
+
 run_verification() {
     local tenant_id="$1"
     local tenant_dir="/mnt/data/${tenant_id}"
@@ -129,6 +149,13 @@ run_verification() {
     # Rclone Verification
     if [[ "${ENABLE_RCLONE:-false}" == "true" ]]; then
         if ! test_rclone_connectivity "$tenant_dir"; then
+            verification_failed=true
+        fi
+    fi
+    
+    # OpenClaw Verification
+    if [[ "${ENABLE_OPENCLAW:-false}" == "true" ]]; then
+        if ! test_openclaw_connectivity "$tenant_dir"; then
             verification_failed=true
         fi
     fi
