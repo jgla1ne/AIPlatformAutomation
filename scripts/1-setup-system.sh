@@ -1295,19 +1295,39 @@ collect_network_config() {
             echo -e "  ${YELLOW}Paste the complete JSON content below (press Enter on empty line to finish):${NC}"
             echo -e "  ${DIM}Example: {\"type\": \"service_account\", \"project_id\": \"...\"${NC}"
             echo -e "  ${DIM}Note: JSON can span multiple lines with proper formatting${NC}"
+            echo -e "  ${DIM}💡 TIP: Copy the entire JSON including all quotes and brackets${NC}"
             echo ""
             
-            # Read JSON content until empty line - improved handling for multiline JSON
+            # Create a temporary file for JSON input
+            local temp_json_file="${TENANT_DIR}/rclone/temp_json_input.txt"
+            
+            echo -e "  ${CYAN}📝 Ready for JSON input...${NC}"
+            echo -e "  ${DIM}Paste JSON content now, then press Enter on an empty line when done:${NC}"
+            echo ""
+            
+            # Read JSON content using a more robust method
             json_content=""
-            line_count=0
+            echo "" > "$temp_json_file"  # Initialize temp file
+            
+            # Use a different approach - read until we detect the JSON structure
             while IFS= read -r line; do
-                if [[ -z "$line" && $line_count -gt 0 ]]; then
+                # If we get an empty line and have some content, break
+                if [[ -z "$line" && -s "$temp_json_file" ]]; then
                     break
                 fi
-                # Preserve the exact line including whitespace
-                json_content+="$line"$'\n'
-                ((line_count++))
+                
+                # Add line to temp file
+                echo "$line" >> "$temp_json_file"
             done
+            
+            # Read the complete JSON from temp file
+            json_content=$(cat "$temp_json_file" 2>/dev/null || echo "")
+            
+            # Clean up temp file
+            rm -f "$temp_json_file" 2>/dev/null
+            
+            echo ""
+            echo -e "  ${DIM}Processing JSON content...${NC}"
             
             # Validate JSON content
             if [[ -n "$json_content" ]] && echo "$json_content" | python3 -m json.tool >/dev/null 2>&1; then
@@ -1328,41 +1348,84 @@ collect_network_config() {
                 
                 # Generate Rclone token using Service Account
                 echo ""
-                echo -e "  ${DIM}Generating Rclone token for Service Account...${NC}"
+                echo -e "  ${DIM}🔄 Generating Rclone token for Service Account...${NC}"
                 
                 # Use rclone to generate token (similar to Script 3 approach)
                 if command -v rclone >/dev/null 2>&1; then
+                    echo -e "  ${DIM}⏳ Initializing Rclone configuration...${NC}"
+                    
+                    # Pause for 2 seconds to ensure JSON file is fully written
+                    sleep 2
+                    
                     # Create temporary config for token generation
                     local temp_config="${TENANT_DIR}/rclone/temp_sa.conf"
-                    cat > "$temp_config" << EOF
+                    
+                    # Extract client_id and client_secret safely
+                    local client_id=$(echo "$json_content" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('client_id', ''))" 2>/dev/null || echo "")
+                    local client_secret=$(echo "$json_content" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('client_secret', ''))" 2>/dev/null || echo "")
+                    
+                    if [[ -n "$client_id" && -n "$client_secret" ]]; then
+                        cat > "$temp_config" << EOF
 [gdrive_sa]
 type = drive
 scope = drive
-client_id = $(echo "$json_content" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('client_id', ''))" 2>/dev/null)
-client_secret = $(echo "$json_content" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('client_secret', ''))" 2>/dev/null)
+client_id = ${client_id}
+client_secret = ${client_secret}
 service_account_file = ${TENANT_DIR}/rclone/google_sa.json
 token = {"access_token":"test"}
 EOF
-                    
-                    # Generate token
-                    local gdrive_token
-                    gdrive_token=$(rclone config create gdrive-sa --config "$temp_config" "drive" "service_account" "${TENANT_DIR}/rclone/google_sa.json" 2>/dev/null | grep "token" | cut -d'"' -f4 2>/dev/null || echo "")
-                    
-                    if [[ -n "$gdrive_token" ]]; then
-                        GDRIVE_TOKEN="$gdrive_token"
-                        echo -e "  ${GREEN}✅ Rclone token generated successfully${NC}"
-                        log "SUCCESS" "Rclone Service Account token generated"
+                        
+                        echo -e "  ${DIM}🔐 Attempting token generation (with retry mechanism)...${NC}"
+                        
+                        # Retry mechanism for token generation
+                        local max_retries=3
+                        local retry_count=0
+                        local gdrive_token=""
+                        
+                        while [[ $retry_count -lt $max_retries && -z "$gdrive_token" ]]; do
+                            ((retry_count++))
+                            echo -e "  ${DIM}   Attempt ${retry_count}/${max_retries}...${NC}"
+                            
+                            # Generate token with timeout
+                            gdrive_token=$(timeout 30s rclone config create gdrive-sa --config "$temp_config" "drive" "service_account" "${TENANT_DIR}/rclone/google_sa.json" 2>/dev/null)
+                            
+                            # Extract token from output
+                            gdrive_token=$(echo "$gdrive_token" 2>/dev/null | grep -o '"token":"[^"]*"' | cut -d'"' -f4 2>/dev/null || echo "")
+                            
+                            if [[ -n "$gdrive_token" ]]; then
+                                break
+                            else
+                                echo -e "  ${YELLOW}   ⚠️  Token generation failed, retrying in 5 seconds...${NC}"
+                                sleep 5
+                            fi
+                        done
+                        
+                        if [[ -n "$gdrive_token" ]]; then
+                            GDRIVE_TOKEN="$gdrive_token"
+                            echo -e "  ${GREEN}✅ Rclone token generated successfully${NC}"
+                            echo -e "  ${DIM}   Token length: ${#GDRIVE_TOKEN} characters${NC}"
+                            log "SUCCESS" "Rclone Service Account token generated (${retry_count} attempts)"
+                        else
+                            echo -e "  ${YELLOW}⚠️ Rclone token generation failed after ${max_retries} attempts${NC}"
+                            echo -e "  ${DIM}   Token will be generated automatically when Rclone container starts${NC}"
+                            echo -e "  ${DIM}   This is normal and will be handled during deployment${NC}"
+                            GDRIVE_TOKEN=""
+                        fi
                     else
-                        echo -e "  ${YELLOW}⚠️ Rclone token generation failed (will retry during deployment)${NC}"
-                        echo -e "  ${DIM}Token will be generated automatically when Rclone container starts${NC}"
+                        echo -e "  ${RED}❌ Could not extract client_id/client_secret from JSON${NC}"
+                        echo -e "  ${DIM}   Token will be generated automatically when Rclone container starts${NC}"
                         GDRIVE_TOKEN=""
                     fi
                     
                     # Clean up temp config
                     rm -f "$temp_config" 2>/dev/null
+                    
+                    # Final pause to ensure everything is settled
+                    sleep 1
+                    
                 else
                     echo -e "  ${YELLOW}⚠️ rclone not available for token generation${NC}"
-                    echo -e "  ${DIM}Token will be generated automatically when Rclone container starts${NC}"
+                    echo -e "  ${DIM}   Token will be generated automatically when Rclone container starts${NC}"
                     GDRIVE_TOKEN=""
                 fi
                 
@@ -2558,8 +2621,16 @@ print_summary() {
     echo ""
     echo -e "  ${BOLD}📊  Overall Health:${NC}"
     local issues=0
-    [[ "${ENABLE_TAILSCALE}" == "true" && (-z "${TAILSCALE_AUTH_KEY}" || ! validate_tailscale_auth_key "${TAILSCALE_AUTH_KEY}") ]] && ((issues++))
-    [[ "${ENABLE_RCLONE}" == "true" && "${GDRIVE_AUTH_METHOD}" == "service_account" && ! -f "${TENANT_DIR}/rclone/google_sa.json" ]] && ((issues++))
+    if [[ "${ENABLE_TAILSCALE}" == "true" ]]; then
+        if [[ -z "${TAILSCALE_AUTH_KEY}" ]] || ! validate_tailscale_auth_key "${TAILSCALE_AUTH_KEY}"; then
+            ((issues++))
+        fi
+    fi
+    if [[ "${ENABLE_RCLONE}" == "true" && "${GDRIVE_AUTH_METHOD}" == "service_account" ]]; then
+        if [[ ! -f "${TENANT_DIR}/rclone/google_sa.json" ]]; then
+            ((issues++))
+        fi
+    fi
     
     if [[ $issues -eq 0 ]]; then
         echo -e "    ${GREEN}✅${NC}  All validations passed - Ready for deployment"
