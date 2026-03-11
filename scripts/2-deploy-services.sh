@@ -340,9 +340,9 @@ add_caddy() {
       - \${TENANT_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile
       - \${TENANT_DIR}/caddy/data:/data
     ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
+      - "${CADDY_HTTP_PORT:-80}:80"
+      - "${CADDY_HTTPS_PORT:-443}:443"
+      - "${CADDY_HTTPS_PORT:-443}:443/udp"
 EOF
     ok "Added 'caddy' service."
 }
@@ -474,6 +474,23 @@ EOF
 
     # Verify core services health
     verify_core_services
+
+    log "INFO" "Performing Caddy Post-Deployment Health Check..."
+    # Wait up to 30 seconds for Caddy ports to be bound to the host
+    for i in {1..6}; do
+        if nc -z localhost "${CADDY_HTTP_PORT:-80}"; then
+            break
+        fi
+        log "INFO" "Waiting for Caddy HTTP port to become available..."
+        sleep 5
+    done
+
+    if nc -z localhost "${CADDY_HTTP_PORT:-80}"; then
+        ok "Caddy HTTP Port ${CADDY_HTTP_PORT:-80} is open and accessible from the host."
+    else
+        fail "CRITICAL FAILURE: Caddy HTTP Port is NOT accessible. Port mapping has failed."
+        exit 1
+    fi
 
     # Capture initial service logs
     capture_initial_logs

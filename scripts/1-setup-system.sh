@@ -1836,6 +1836,10 @@ write_caddyfile() {
     # 2. Main Domain Route
     cat >> "$TMP_CADDY" <<-EOF
 	${DOMAIN} {
+	    # Add the tls directive here
+	    tls internal {
+	        on_demand
+	    }
 	    respond "AI Platform v3.2.0 is active. Welcome." 200
 	}
 
@@ -1845,6 +1849,7 @@ write_caddyfile() {
     if [[ "${ENABLE_GRAFANA}" == "true" ]]; then
         cat >> "$TMP_CADDY" <<-EOF
 	grafana.${DOMAIN} {
+	    tls internal
 	    reverse_proxy grafana:${GRAFANA_INTERNAL_PORT}
 	}
 
@@ -1855,6 +1860,7 @@ write_caddyfile() {
     if [[ "${ENABLE_PROMETHEUS}" == "true" ]]; then
         cat >> "$TMP_CADDY" <<-EOF
 	prometheus.${DOMAIN} {
+	    tls internal
 	    reverse_proxy prometheus:${PROMETHEUS_INTERNAL_PORT}
 	}
 
@@ -1865,6 +1871,7 @@ write_caddyfile() {
     if [[ "${ENABLE_QDRANT}" == "true" ]]; then
         cat >> "$TMP_CADDY" <<-EOF
 	qdrant.${DOMAIN} {
+	    tls internal
 	    reverse_proxy qdrant:${QDRANT_INTERNAL_PORT}
 	}
 
@@ -1875,6 +1882,7 @@ write_caddyfile() {
     if [[ "${ENABLE_OLLAMA}" == "true" ]]; then
         cat >> "$TMP_CADDY" <<-EOF
 	ollama.${DOMAIN} {
+	    tls internal
 	    reverse_proxy ollama:${OLLAMA_INTERNAL_PORT}
 	}
 
@@ -1885,6 +1893,7 @@ write_caddyfile() {
     if [[ "${ENABLE_OPENWEBUI}" == "true" ]]; then
         cat >> "$TMP_CADDY" <<-EOF
 	openwebui.${DOMAIN} {
+	    tls internal
 	    reverse_proxy openwebui:${OPENWEBUI_INTERNAL_PORT}
 	}
 
