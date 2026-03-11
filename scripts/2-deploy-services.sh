@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script 2: Deploy Services - COMPREHENSIVE DEBUG LOGGING ENGINE
+# Script 2: Deploy Services - COMPREHENSIVE DEBUG LOGGING ENGINE (DEBUG BY DEFAULT)
+# =============================================================================
+# Usage: sudo bash 2-deploy-services.sh [tenant_id]
+# Default tenant: datasquiz
+# Debug mode: ENABLED BY DEFAULT
+# Output: All logs piped to single timestamped file
 # =============================================================================
 set -euo pipefail
 
-# --- DEBUG MODE FLAG ---
-DEBUG_MODE="${DEBUG_MODE:-false}"
+# --- DEBUG MODE FLAG - DEBUG ENABLED BY DEFAULT ---
+DEBUG_MODE="${DEBUG_MODE:-true}"
 if [[ "${DEBUG_MODE}" == "true" ]]; then
     set -x
 fi
@@ -140,11 +145,9 @@ test_service_urls() {
     log "=== END URL TESTING ==="
 }
 
-# --- Tenant ID Check ---
-if [[ -z "${1:-}" ]]; then
-    fail "TENANT_ID is required. Usage: sudo bash $0 <tenant_id> [--debug]"
-fi
-TENANT_ID="$1"
+# --- Tenant ID Setup - DEFAULT TO DATASQUIZ ---
+TENANT_ID="${1:-datasquiz}"
+log "Using tenant ID: ${TENANT_ID}"
 
 # --- Environment Setup ---
 TENANT_DIR="/mnt/data/${TENANT_ID}"
