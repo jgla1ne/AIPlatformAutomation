@@ -296,7 +296,7 @@ add_grafana() {
       - default
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
       - GF_LOG_LEVEL=${GF_LOG_LEVEL:-info}
       - GF_LOG_MODE=${GF_LOG_MODE:-console,file}
     volumes:
