@@ -117,32 +117,69 @@ capture_docker_logs() {
     fi
 }
 
-test_service_urls() {
-    log "=== COMPREHENSIVE URL TESTING ==="
+verify_core_services() {
+    log "=== VERIFYING CORE SERVICES HEALTH ==="
+    local core_services=("postgres" "redis" "caddy")
+    local all_healthy=true
     
-    local test_results=()
-    
-    # Test internal URLs
-    test_results+=("INTERNAL: http://localhost:5432 - $(nc -z localhost 5432 && echo "✅ OPEN" || echo "❌ CLOSED")")
-    test_results+=("INTERNAL: http://localhost:6379 - $(nc -z localhost 6379 && echo "✅ OPEN" || echo "❌ CLOSED")")
-    test_results+=("INTERNAL: http://localhost:6333/health - $(curl -s -f http://localhost:6333/health >/dev/null 2>&1 && echo "✅ HEALTHY" || echo "❌ UNHEALTHY")")
-    test_results+=("INTERNAL: http://localhost:3000/api/health - $(curl -s -f http://localhost:3000/api/health >/dev/null 2>&1 && echo "✅ HEALTHY" || echo "❌ UNHEALTHY")")
-    test_results+=("INTERNAL: http://localhost:9090/-/healthy - $(curl -s -f http://localhost:9090/-/healthy >/dev/null 2>&1 && echo "✅ HEALTHY" || echo "❌ UNHEALTHY")")
-    test_results+=("INTERNAL: http://localhost:80 - $(curl -s -f http://localhost:80 >/dev/null 2>&1 && echo "✅ HEALTHY" || echo "❌ UNHEALTHY")")
-    
-    # Test external URLs if DOMAIN is set
-    if [[ -n "${DOMAIN:-}" ]]; then
-        test_results+=("EXTERNAL: https://${DOMAIN} - $(curl -s -f https://${DOMAIN} >/dev/null 2>&1 && echo "✅ REACHABLE" || echo "❌ NOT REACHABLE")")
-        test_results+=("EXTERNAL: https://grafana.${DOMAIN} - $(curl -s -f https://grafana.${DOMAIN} >/dev/null 2>&1 && echo "✅ REACHABLE" || echo "❌ NOT REACHABLE")")
-        test_results+=("EXTERNAL: https://prometheus.${DOMAIN} - $(curl -s -f https://prometheus.${DOMAIN} >/dev/null 2>&1 && echo "✅ REACHABLE" || echo "❌ NOT REACHABLE")")
-    fi
-    
-    # Log all test results
-    for result in "${test_results[@]}"; do
-        log "URL TEST: $result"
+    for service in "${core_services[@]}"; do
+        log "Checking ${service} health..."
+        local container_name="${COMPOSE_PROJECT_NAME}-${service}-1"
+        
+        # Wait up to 60 seconds for the service to become healthy
+        for i in {1..12}; do
+            local status=$(docker ps --filter "name=${container_name}" --format "{{.Status}}" 2>/dev/null || echo "not found")
+            
+            if [[ "$status" == *"healthy"* ]] || [[ "$status" == *"Up"* ]]; then
+                ok "${service} is healthy and running."
+                break
+            elif [[ "$status" == *"Restarting"* ]]; then
+                if [[ $i -eq 12 ]]; then
+                    warn "${service} is still restarting after 60 seconds."
+                    all_healthy=false
+                fi
+            elif [[ "$status" == *"Exited"* ]] || [[ "$status" == *"not found"* ]]; then
+                if [[ $i -eq 12 ]]; then
+                    fail "${service} failed to start. Status: ${status}"
+                fi
+            fi
+            
+            sleep 5
+        done
+        
+        # Final status check
+        local final_status=$(docker ps --filter "name=${container_name}" --format "{{.Status}}" 2>/dev/null || echo "not found")
+        if [[ "$final_status" != *"Up"* ]]; then
+            warn "${service} final status: ${final_status}"
+            all_healthy=false
+        fi
     done
     
-    log "=== END URL TESTING ==="
+    if [[ "$all_healthy" == "true" ]]; then
+        ok "All core services are healthy!"
+    else
+        warn "Some core services may not be fully healthy. Check individual service logs."
+    fi
+    log "=== END CORE SERVICES VERIFICATION ==="
+}
+
+capture_initial_logs() {
+    log "=== CAPTURING INITIAL SERVICE LOGS ==="
+    
+    for service in $(docker compose ps --services 2>/dev/null); do
+        local container_name="${COMPOSE_PROJECT_NAME}-${service}-1"
+        local service_log_file="${LOG_DIR}/deploy-${service}-initial.log"
+        
+        if docker ps --filter "name=${container_name}" --format "{{.Names}}" | grep -q "${container_name}"; then
+            log "Capturing initial logs for ${service}..."
+            docker logs "${container_name}" --tail 50 &> "${service_log_file}" 2>&1
+            log "Initial logs for ${service} saved to ${service_log_file}"
+        else
+            log "Container ${container_name} not running, skipping log capture."
+        fi
+    done
+    
+    log "=== END INITIAL LOG CAPTURE ==="
 }
 
 # --- Tenant ID Setup - DEFAULT TO DATASQUIZ ---
@@ -310,6 +347,34 @@ EOF
     ok "Added 'caddy' service."
 }
 
+test_service_urls() {
+    log "=== COMPREHENSIVE URL TESTING ==="
+    
+    local test_results=()
+    
+    # Test internal URLs
+    test_results+=("INTERNAL: http://localhost:5432 - $(nc -z localhost 5432 && echo "✅ OPEN" || echo "❌ CLOSED")")
+    test_results+=("INTERNAL: http://localhost:6379 - $(nc -z localhost 6379 && echo "✅ OPEN" || echo "❌ CLOSED")")
+    test_results+=("INTERNAL: http://localhost:6333/health - $(curl -s -f http://localhost:6333/health >/dev/null 2>&1 && echo "✅ HEALTHY" || echo "❌ UNHEALTHY")")
+    test_results+=("INTERNAL: http://localhost:3000/api/health - $(curl -s -f http://localhost:3000/api/health >/dev/null 2>&1 && echo "✅ HEALTHY" || echo "❌ UNHEALTHY")")
+    test_results+=("INTERNAL: http://localhost:9090/-/healthy - $(curl -s -f http://localhost:9090/-/healthy >/dev/null 2>&1 && echo "✅ HEALTHY" || echo "❌ UNHEALTHY")")
+    test_results+=("INTERNAL: http://localhost:80 - $(curl -s -f http://localhost:80 >/dev/null 2>&1 && echo "✅ HEALTHY" || echo "❌ UNHEALTHY")")
+    
+    # Test external URLs if DOMAIN is set
+    if [[ -n "${DOMAIN:-}" ]]; then
+        test_results+=("EXTERNAL: https://${DOMAIN} - $(curl -s -f https://${DOMAIN} >/dev/null 2>&1 && echo "✅ REACHABLE" || echo "❌ NOT REACHABLE")")
+        test_results+=("EXTERNAL: https://grafana.${DOMAIN} - $(curl -s -f https://grafana.${DOMAIN} >/dev/null 2>&1 && echo "✅ REACHABLE" || echo "❌ NOT REACHABLE")")
+        test_results+=("EXTERNAL: https://prometheus.${DOMAIN} - $(curl -s -f https://prometheus.${DOMAIN} >/dev/null 2>&1 && echo "✅ REACHABLE" || echo "❌ NOT REACHABLE")")
+    fi
+    
+    # Log all test results
+    for result in "${test_results[@]}"; do
+        log "URL TEST: $result"
+    done
+    
+    log "=== END URL TESTING ==="
+}
+
 # --- Main Function ---
 main() {
     # --- Docker Check ---
@@ -368,6 +433,7 @@ EOF
     docker compose pull --quiet >> "${LOG_FILE}" 2>&1
 
     log "Starting all services in detached mode..."
+    log "Executing docker compose up -d... Output logged to ${LOG_FILE}"
     if ! docker compose up -d >> "${LOG_FILE}" 2>&1; then
         log "=== DEPLOYMENT FAILURE DEBUG ==="
         log "Docker compose logs:"
@@ -376,11 +442,17 @@ EOF
         fail "Docker Compose failed to start. Please check the logs above."
     fi
 
-    # Wait for services to start
+    # Wait for services to initialize
     log "Waiting for services to initialize..."
-    sleep 15
+    sleep 10
 
-    # Start deep log capture for all services
+    # Verify core services health
+    verify_core_services
+
+    # Capture initial service logs
+    capture_initial_logs
+
+    # Start deep log capture for all services if in debug mode
     if [[ "${DEBUG_MODE}" == "true" ]]; then
         log "=== STARTING DEEP LOG CAPTURE ==="
         [[ "${ENABLE_POSTGRES}" == "true" ]] && capture_docker_logs "postgres"

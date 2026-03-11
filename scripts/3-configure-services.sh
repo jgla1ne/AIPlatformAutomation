@@ -353,21 +353,45 @@ main() {
             show_logging_dashboard
             ;;
         "health")
-            log "Starting comprehensive health checks..."
+            log "Running comprehensive health checks for tenant: ${TENANT_ID}"
             
-            # Test internal URLs
-            test_internal_urls
-            
-            # Test external URLs
-            test_external_urls
-            
-            # Show container status
+            # 1. Check Container Status
             log "=== CONTAINER STATUS ==="
             cd "${TENANT_DIR}"
-            docker compose ps
-            log "=== END CONTAINER STATUS ==="
+            docker ps --filter "name=${COMPOSE_PROJECT_NAME}"
             
-            ok "Health checks completed."
+            # 2. Test Port Connectivity
+            log "=== PORT CONNECTIVITY TESTS ==="
+            nc -z localhost "${POSTGRES_PORT:-5432}" && ok "PostgreSQL port ${POSTGRES_PORT:-5432} is open." || warn "PostgreSQL port is closed."
+            nc -z localhost "${REDIS_PORT:-6379}" && ok "Redis port ${REDIS_PORT:-6379} is open." || warn "Redis port is closed."
+            nc -z localhost "${QDRANT_PORT:-6333}" && ok "Qdrant port ${QDRANT_PORT:-6333} is open." || warn "Qdrant port is closed."
+            
+            # 3. Test URL Accessibility (Internal and External)
+            log "=== URL ACCESSIBILITY TESTS ==="
+            curl --silent --fail http://localhost:${OLLAMA_PORT:-11434}/api/tags > /dev/null && ok "Ollama API is responsive." || warn "Ollama API is not responsive."
+            curl --silent --fail http://localhost:${QDRANT_PORT:-6333} > /dev/null && ok "Qdrant API is responsive." || warn "Qdrant API is not responsive."
+            curl --silent --fail http://localhost:80 > /dev/null && ok "Caddy HTTP is responsive." || warn "Caddy HTTP is not responsive."
+            
+            if [[ -n "${DOMAIN:-}" ]]; then
+                curl --silent --fail https://grafana.${DOMAIN} > /dev/null && ok "Grafana URL is accessible." || warn "Grafana URL is not accessible."
+                curl --silent --fail https://prometheus.${DOMAIN} > /dev/null && ok "Prometheus URL is accessible." || warn "Prometheus URL is not accessible."
+                curl --silent --fail https://${DOMAIN} > /dev/null && ok "Main domain URL is accessible." || warn "Main domain URL is not accessible."
+            fi
+            
+            # 4. Service Health Summary
+            log "=== HEALTH SUMMARY ==="
+            local total_containers=$(docker ps --filter "name=${COMPOSE_PROJECT_NAME}" --format "{{.Names}}" | wc -l)
+            local running_containers=$(docker ps --filter "name=${COMPOSE_PROJECT_NAME}" --filter "status=running" --format "{{.Names}}" | wc -l)
+            log "Total containers: ${total_containers}"
+            log "Running containers: ${running_containers}"
+            
+            if [[ $running_containers -eq $total_containers ]]; then
+                ok "All containers are running!"
+            else
+                warn "Some containers may not be running properly."
+            fi
+            
+            log "Health check complete."
             ;;
         *)
             echo "Usage: sudo bash $0 <tenant_id> [action]"
