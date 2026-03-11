@@ -46,16 +46,16 @@ log "All output is now logged to: ${LOG_FILE}"
 
 # --- Docker Check ---
 main() {
-if ! docker info &>/dev/null; then
-    fail "Docker is not running. Please start Docker and try again."
-fi
-ok "Docker is active."
+    if ! docker info &>/dev/null; then
+        fail "Docker is not running. Please start Docker and try again."
+    fi
+    ok "Docker is active."
 
-# --- Generate Docker Compose ---
-log "Generating docker-compose.yml for tenant '${TENANT_ID}'..."
+    # --- Generate Docker Compose ---
+    log "Generating docker-compose.yml for tenant '${TENANT_ID}'..."
 
-# Initialize compose file
-cat > "${COMPOSE_FILE}" << 'EOF'
+    # Initialize compose file
+    cat > "${COMPOSE_FILE}" << 'EOF'
 services:
 EOF
 
@@ -78,6 +78,23 @@ add_postgres() {
 EOF
     ok "Added 'postgres' service."
 }
+
+# --- Generate All Services ---
+    [[ "${ENABLE_POSTGRES}" == "true" ]] && add_postgres
+    [[ "${ENABLE_REDIS}" == "true" ]] && add_redis
+    [[ "${ENABLE_OLLAMA}" == "true" ]] && add_ollama
+    [[ "${ENABLE_OPENWEBUI}" == "true" ]] && add_openwebui
+    [[ "${ENABLE_N8N}" == "true" ]] && add_n8n
+    [[ "${ENABLE_FLOWISE}" == "true" ]] && add_flowise
+    [[ "${ENABLE_ANYTHINGLLM}" == "true" ]] && add_anythingllm
+    [[ "${ENABLE_LITELLM}" == "true" ]] && add_litellm
+    [[ "${ENABLE_GRAFANA}" == "true" ]] && add_grafana
+    [[ "${ENABLE_QDRANT}" == "true" ]] && add_qdrant
+    [[ "${ENABLE_PROMETHEUS}" == "true" ]] && add_prometheus
+    [[ "${ENABLE_AUTHENTIK}" == "true" ]] && add_authentik
+    [[ "${ENABLE_TAILSCALE:-false}" == "true" ]] && add_tailscale
+    [[ "${ENABLE_RCLONE:-false}" == "true" ]] && add_rclone
+    add_caddy # Caddy is always added
 
 add_redis() {
     cat >> "${COMPOSE_FILE}" << 'EOF'
@@ -365,14 +382,8 @@ EOF
 [[ "${ENABLE_LITELLM}" == "true" ]] && add_litellm
 [[ "${ENABLE_GRAFANA}" == "true" ]] && add_grafana
 [[ "${ENABLE_QDRANT}" == "true" ]] && add_qdrant
-[[ "${ENABLE_PROMETHEUS}" == "true" ]] && add_prometheus
-[[ "${ENABLE_AUTHENTIK}" == "true" ]] && add_authentik
-[[ "${ENABLE_TAILSCALE:-false}" == "true" ]] && add_tailscale
-[[ "${ENABLE_RCLONE:-false}" == "true" ]] && add_rclone
-add_caddy # Caddy is always added
-
 # --- Add Network Configuration ---
-cat >> "${COMPOSE_FILE}" << 'EOF'
+    cat >> "${COMPOSE_FILE}" << 'EOF'
 
 networks:
   default:
@@ -380,20 +391,20 @@ networks:
     driver: bridge
 EOF
 
-# --- Deploy Services ---
-log "Starting deployment with docker compose..."
-cd "${TENANT_DIR}"
+    # --- Deploy Services ---
+    log "Starting deployment with docker compose..."
+    cd "${TENANT_DIR}"
 
-log "Pulling all required Docker images..."
-docker compose pull --quiet
+    log "Pulling all required Docker images..."
+    docker compose pull --quiet
 
-log "Starting all services in detached mode..."
-if ! docker compose up -d; then
-    fail "Docker Compose failed to start. Please check the logs above."
-fi
+    log "Starting all services in detached mode..."
+    if ! docker compose up -d; then
+        fail "Docker Compose failed to start. Please check the logs above."
+    fi
 
-ok "All containers have been started."
-log "Next Step: Run 'sudo bash scripts/3-configure-services.sh ${TENANT_ID}'"
+    ok "All containers have been started."
+    log "Next Step: Run 'sudo bash scripts/3-configure-services.sh ${TENANT_ID}'"
 
 } # End of main function
 
