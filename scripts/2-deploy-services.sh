@@ -235,7 +235,7 @@ add_postgres() {
   postgres:
     image: postgres:15-alpine
     restart: unless-stopped
-    user: "\${POSTGRES_UID:-70}:\${POSTGRES_UID:-70}"
+    user: "\${POSTGRES_UID:-70}:\${TENANT_GID:-1001}"
     networks:
       - default
     environment:
@@ -257,7 +257,7 @@ add_redis() {
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    user: "\${REDIS_UID:-1001}:\${REDIS_UID:-1001}"
+    user: "\${REDIS_UID:-999}:\${TENANT_GID:-1001}"
     networks:
       - default
     command: redis-server --requirepass "\${REDIS_PASSWORD}" --loglevel "\${REDIS_LOGLEVEL:-notice}"
@@ -273,7 +273,7 @@ add_qdrant() {
   qdrant:
     image: qdrant/qdrant:latest
     restart: unless-stopped
-    user: "\${QDRANT_UID:-1000}:\${QDRANT_UID:-1000}"
+    user: "${QDRANT_UID:-1000}:${TENANT_GID:-1001}"
     networks:
       - default
     environment:
@@ -291,7 +291,7 @@ add_grafana() {
   grafana:
     image: grafana/grafana:latest
     restart: unless-stopped
-    user: "\${GRAFANA_UID:-472}:\${GRAFANA_UID:-472}"
+    user: "${GRAFANA_UID:-472}:${TENANT_GID:-1001}"
     networks:
       - default
     environment:
@@ -311,7 +311,7 @@ add_prometheus() {
   prometheus:
     image: prom/prometheus:latest
     restart: unless-stopped
-    user: "\${PROMETHEUS_UID:-1001}:\${PROMETHEUS_UID:-1001}"
+    user: "${PROMETHEUS_UID:-65534}:${TENANT_GID:-1001}"
     networks:
       - default
     environment:
@@ -330,7 +330,7 @@ add_caddy() {
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
-    user: "\${CADDY_UID:-1001}:\${CADDY_UID:-1001}"
+    user: "${CADDY_UID:-1001}:${TENANT_GID:-1001}"
     networks:
       - default
     environment:

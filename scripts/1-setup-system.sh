@@ -1817,6 +1817,94 @@ EOF
     log "SUCCESS" "Prometheus configuration written to ${DATA_ROOT}/prometheus.yml"
 }
 
+write_caddyfile() {
+    # shellcheck source=/dev/null
+    source "${ENV_FILE}"
+    
+    log "INFO" "Generating dynamic Caddyfile..."
+    
+    # Create caddy directory
+    mkdir -p "${DATA_ROOT}/caddy"
+    
+    # Start with the global options block
+    cat > "${DATA_ROOT}/caddy/Caddyfile" << EOF
+{
+    email ${LETSENCRYPT_EMAIL:-admin@${DOMAIN}}
+    debug
+}
+
+# Main domain entry
+${DOMAIN} {
+    respond "AI Platform is running. Access services via subdomains." 200
+}
+EOF
+
+    # Dynamically add reverse_proxy blocks ONLY for enabled services
+    if [[ "${ENABLE_GRAFANA}" == "true" ]]; then
+        cat >> "${DATA_ROOT}/caddy/Caddyfile" << EOF
+
+grafana.${DOMAIN} {
+    reverse_proxy grafana:${GRAFANA_INTERNAL_PORT:-3000}
+}
+EOF
+        log "INFO" "Added Grafana to Caddyfile."
+    fi
+    
+    if [[ "${ENABLE_PROMETHEUS}" == "true" ]]; then
+        cat >> "${DATA_ROOT}/caddy/Caddyfile" << EOF
+
+prometheus.${DOMAIN} {
+    reverse_proxy prometheus:${PROMETHEUS_INTERNAL_PORT:-9090}
+}
+EOF
+        log "INFO" "Added Prometheus to Caddyfile."
+    fi
+    
+    if [[ "${ENABLE_QDRANT}" == "true" ]]; then
+        cat >> "${DATA_ROOT}/caddy/Caddyfile" << EOF
+
+qdrant.${DOMAIN} {
+    reverse_proxy qdrant:${QDRANT_INTERNAL_PORT:-6333}
+}
+EOF
+        log "INFO" "Added Qdrant to Caddyfile."
+    fi
+    
+    if [[ "${ENABLE_OLLAMA}" == "true" ]]; then
+        cat >> "${DATA_ROOT}/caddy/Caddyfile" << EOF
+
+ollama.${DOMAIN} {
+    reverse_proxy ollama:${OLLAMA_INTERNAL_PORT:-11434}
+}
+EOF
+        log "INFO" "Added Ollama to Caddyfile."
+    fi
+    
+    if [[ "${ENABLE_OPENWEBUI}" == "true" ]]; then
+        cat >> "${DATA_ROOT}/caddy/Caddyfile" << EOF
+
+openwebui.${DOMAIN} {
+    reverse_proxy openwebui:${OPENWEBUI_INTERNAL_PORT:-8081}
+}
+EOF
+        log "INFO" "Added OpenWebUI to Caddyfile."
+    fi
+    
+    if [[ "${ENABLE_N8N}" == "true" ]]; then
+        cat >> "${DATA_ROOT}/caddy/Caddyfile" << EOF
+
+n8n.${DOMAIN} {
+    reverse_proxy n8n:${N8N_INTERNAL_PORT:-5678}
+}
+EOF
+        log "INFO" "Added N8N to Caddyfile."
+    fi
+    
+    # Finally, apply correct permissions
+    chown "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/caddy/Caddyfile"
+    log "SUCCESS" "Dynamic Caddyfile generated successfully at ${DATA_ROOT}/caddy/Caddyfile"
+}
+
 # ─── Write .env ───────────────────────────────────────────────────────────────
 write_env_file() {
     mkdir -p "${DATA_ROOT}"
