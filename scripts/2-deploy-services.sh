@@ -85,6 +85,7 @@ add_redis() {
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    user: "${REDIS_UID:-999}:${REDIS_GID:-1000}"
     networks:
       - default
     command: redis-server --requirepass "${REDIS_PASSWORD}"
@@ -100,6 +101,7 @@ add_qdrant() {
   qdrant:
     image: qdrant/qdrant:latest
     restart: unless-stopped
+    user: "${QDRANT_UID:-1000}:${QDRANT_UID:-1000}"
     networks:
       - default
     volumes:
@@ -114,6 +116,7 @@ add_ollama() {
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
+    user: "${OLLAMA_UID:-1001}:${OLLAMA_UID:-1001}"
     networks:
       - default
     volumes:
@@ -128,6 +131,7 @@ add_openwebui() {
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
     restart: unless-stopped
+    user: "${OPENWEBUI_UID:-1000}:${OPENWEBUI_UID:-1000}"
     networks:
       - default
     environment:
@@ -146,6 +150,7 @@ add_n8n() {
   n8n:
     image: n8nio/n8n:latest
     restart: unless-stopped
+    user: "${N8N_UID:-1000}:${N8N_UID:-1000}"
     networks:
       - default
     environment:
@@ -170,6 +175,7 @@ add_flowise() {
   flowise:
     image: flowiseai/flowise:latest
     restart: unless-stopped
+    user: "${FLOWISE_UID:-1000}:${FLOWISE_UID:-1000}"
     networks:
       - default
     environment:
@@ -192,6 +198,7 @@ add_anythingllm() {
   anythingllm:
     image: mintplexlabs/anythingllm:latest
     restart: unless-stopped
+    user: "${ANYTHINGLLM_UID:-1000}:${ANYTHINGLLM_UID:-1000}"
     networks:
       - default
     environment:
@@ -212,6 +219,7 @@ add_litellm() {
   litellm:
     image: ghcr.io/berriai/litellm:main
     restart: unless-stopped
+    user: "${LITELLM_UID:-1000}:${LITELLM_UID:-1000}"
     networks:
       - default
     environment:
@@ -232,11 +240,12 @@ add_grafana() {
   grafana:
     image: grafana/grafana:latest
     restart: unless-stopped
+    user: "${GRAFANA_UID:-472}:${GRAFANA_UID:-472}"
     networks:
       - default
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER}
-      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
     volumes:
       - ${TENANT_DIR}/grafana:/var/lib/grafana
 EOF
@@ -249,6 +258,7 @@ add_prometheus() {
   prometheus:
     image: prom/prometheus:latest
     restart: unless-stopped
+    user: "${PROMETHEUS_UID:-65534}:${PROMETHEUS_UID:-65534}"
     networks:
       - default
     volumes:
@@ -264,6 +274,7 @@ add_authentik() {
   authentik-server:
     image: ghcr.io/goauthentik/server:latest
     restart: unless-stopped
+    user: "${AUTHENTIK_UID:-1000}:${AUTHENTIK_UID:-1000}"
     networks:
       - default
     environment:
@@ -289,12 +300,13 @@ add_tailscale() {
     image: tailscale/tailscale:latest
     hostname: ${TAILSCALE_HOSTNAME}
     restart: unless-stopped
+    user: "${TAILSCALE_UID:-1001}:${TAILSCALE_UID:-1001}"
     cap_add:
       - NET_ADMIN
       - SYS_MODULE
     volumes:
+      - ${TENANT_DIR}/run/tailscale:/var/run/tailscale
       - ${TENANT_DIR}/lib/tailscale:/var/lib/tailscale
-      - /dev/net/tun:/dev/net/tun
     environment:
       # We ONLY provide the auth key. Configuration happens in script-3.
       - TS_AUTHKEY=${TAILSCALE_AUTH_KEY}
@@ -309,6 +321,7 @@ add_rclone() {
   rclone:
     image: rclone/rclone:latest
     restart: unless-stopped
+    user: "${RCLONE_UID:-1001}:${RCLONE_UID:-1001}"
     networks:
       - default
     volumes:
@@ -325,6 +338,7 @@ add_caddy() {
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    user: "${CADDY_UID:-1001}:${CADDY_UID:-1001}"
     networks:
       - default
     volumes:
@@ -335,6 +349,8 @@ add_caddy() {
       - "443:443"
       - "443:443/udp"
 EOF
+    ok "Added 'caddy' service."
+}
     ok "Added 'caddy' service."
 }
 
