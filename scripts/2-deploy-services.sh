@@ -72,7 +72,7 @@ enable_service_debug_logging() {
             ;;
         "grafana")
             echo "GF_LOG_LEVEL=$log_level" >> "${ENV_FILE}"
-            echo "GF_LOG_MODE=console file" >> "${ENV_FILE}"
+            echo "GF_LOG_MODE=console,file" >> "${ENV_FILE}"
             ;;
         "prometheus")
             echo "PROMETHEUS_LOG_LEVEL=$log_level" >> "${ENV_FILE}"
@@ -297,8 +297,8 @@ add_caddy() {
     networks:
       - default
     environment:
-      CADDY_LOG_LEVEL: "\${CADDY_LOG_LEVEL:-info}"
-      CADDY_LOG_FORMAT: "\${CADDY_LOG_FORMAT:-json}"
+      CADDY_LOG_LEVEL=\${CADDY_LOG_LEVEL:-info}
+      CADDY_LOG_FORMAT=\${CADDY_LOG_FORMAT:-json}
     volumes:
       - \${TENANT_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile
       - \${TENANT_DIR}/caddy/data:/data
