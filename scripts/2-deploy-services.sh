@@ -164,8 +164,12 @@ set +a
 LOG_DIR="${TENANT_DIR}/logs"
 mkdir -p "${LOG_DIR}"
 LOG_FILE="${LOG_DIR}/deploy-$(date +%Y%m%d-%H%M%S).log"
+
+# CRITICAL FIX: Redirect both stdout and stderr to log file for complete debug capture
 exec > >(tee -a "${LOG_FILE}") 2>&1
 log "All output is now logged to: ${LOG_FILE}"
+log "DEBUG_MODE: ${DEBUG_MODE}"
+log "Complete stdout and stderr redirection enabled for comprehensive debugging"
 
 # --- Enable Debug Logging for All Services ---
 log "=== ENABLING COMPREHENSIVE DEBUG LOGGING ==="
@@ -253,8 +257,8 @@ add_grafana() {
     environment:
       - GF_SECURITY_ADMIN_USER=\${GRAFANA_ADMIN_USER}
       - GF_SECURITY_ADMIN_PASSWORD=\${GRAFANA_ADMIN_PASSWORD}
-      - GF_LOG_LEVEL: "\${GF_LOG_LEVEL:-info}"
-      - GF_LOG_MODE: "\${GF_LOG_MODE:-console file}"
+      - GF_LOG_LEVEL=\${GF_LOG_LEVEL:-info}
+      - GF_LOG_MODE=\${GF_LOG_MODE:-console file}
     volumes:
       - \${TENANT_DIR}/grafana:/var/lib/grafana
 EOF
