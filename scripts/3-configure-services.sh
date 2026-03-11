@@ -378,6 +378,81 @@ main() {
                 curl --silent --fail https://${DOMAIN} > /dev/null && ok "Main domain URL is accessible." || warn "Main domain URL is not accessible."
             fi
             
+            # 5. Service Auto-Integration Health Checks
+            log "=== SERVICE AUTO-INTEGRATION HEALTH CHECKS ==="
+
+            # Test if OpenWebUI can reach LiteLLM
+            if docker ps -q --filter "name=openwebui" | grep -q .; then
+                log "INFO" "Verifying OpenWebUI -> LiteLLM connection..."
+                if docker exec "$(docker ps -q --filter "name=openwebui")" curl --fail --silent --connect-timeout 5 http://litellm:4000 > /dev/null; then
+                    ok "Integration Test Passed: OpenWebUI can connect to LiteLLM."
+                else
+                    fail "Integration Test Failed: OpenWebUI CANNOT connect to LiteLLM."
+                fi
+            else
+                log "WARN" "OpenWebUI not deployed, skipping integration test."
+            fi
+
+            # Test if LiteLLM can reach Ollama
+            if docker ps -q --filter "name=litellm" | grep -q .; then
+                log "INFO" "Verifying LiteLLM -> Ollama connection..."
+                if docker exec "$(docker ps -q --filter "name=litellm")" curl --fail --silent --connect-timeout 5 http://ollama:11434 > /dev/null; then
+                    ok "Integration Test Passed: LiteLLM can connect to Ollama."
+                else
+                    fail "Integration Test Failed: LiteLLM CANNOT connect to Ollama."
+                fi
+            else
+                log "WARN" "LiteLLM not deployed, skipping integration test."
+            fi
+
+            # Test if Flowise can reach Postgres
+            if docker ps -q --filter "name=flowise" | grep -q .; then
+                log "INFO" "Verifying Flowise -> Postgres connection..."
+                if docker exec "$(docker ps -q --filter "name=flowise")" nc -z postgres 5432 > /dev/null; then
+                    ok "Integration Test Passed: Flowise can connect to Postgres."
+                else
+                    fail "Integration Test Failed: Flowise CANNOT connect to Postgres."
+                fi
+            else
+                log "WARN" "Flowise not deployed, skipping integration test."
+            fi
+
+            # Test if Flowise can reach Qdrant
+            if docker ps -q --filter "name=flowise" | grep -q .; then
+                log "INFO" "Verifying Flowise -> Qdrant connection..."
+                if docker exec "$(docker ps -q --filter "name=flowise")" curl --fail --silent --connect-timeout 5 http://qdrant:6333 > /dev/null; then
+                    ok "Integration Test Passed: Flowise can connect to Qdrant."
+                else
+                    fail "Integration Test Failed: Flowise CANNOT connect to Qdrant."
+                fi
+            else
+                log "WARN" "Flowise not deployed, skipping integration test."
+            fi
+
+            # Test if AnythingLLM can reach Qdrant
+            if docker ps -q --filter "name=anythingllm" | grep -q .; then
+                log "INFO" "Verifying AnythingLLM -> Qdrant connection..."
+                if docker exec "$(docker ps -q --filter "name=anythingllm")" curl --fail --silent --connect-timeout 5 http://qdrant:6333 > /dev/null; then
+                    ok "Integration Test Passed: AnythingLLM can connect to Qdrant."
+                else
+                    fail "Integration Test Failed: AnythingLLM CANNOT connect to Qdrant."
+                fi
+            else
+                log "WARN" "AnythingLLM not deployed, skipping integration test."
+            fi
+
+            # Test if N8N can reach Postgres
+            if docker ps -q --filter "name=n8n" | grep -q .; then
+                log "INFO" "Verifying N8N -> Postgres connection..."
+                if docker exec "$(docker ps -q --filter "name=n8n")" nc -z postgres 5432 > /dev/null; then
+                    ok "Integration Test Passed: N8N can connect to Postgres."
+                else
+                    fail "Integration Test Failed: N8N CANNOT connect to Postgres."
+                fi
+            else
+                log "WARN" "N8N not deployed, skipping integration test."
+            fi
+            
             # 4. Service Health Summary
             log "=== HEALTH SUMMARY ==="
             local total_containers=$(docker ps --filter "name=${COMPOSE_PROJECT_NAME}" --format "{{.Names}}" | wc -l)

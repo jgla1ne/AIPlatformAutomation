@@ -251,6 +251,148 @@ EOF
     ok "Added 'postgres' service."
 }
 
+add_openwebui() {
+    log "INFO" "Auto-integrating OpenWebUI with LiteLLM..."
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:main
+    restart: unless-stopped
+    user: "\${OPENWEBUI_UID:-1000}:\${TENANT_GID:-1001}"
+    networks:
+      - default
+    environment:
+      - 'OLLAMA_BASE_URL=http://litellm:\${LITELLM_INTERNAL_PORT:-4000}'
+      - 'WEBUI_SECRET_KEY=\${OPENWEBUI_SECRET_KEY}'
+      - 'WEBUI_NAME=AI Platform WebUI'
+      - 'DEFAULT_MODELS=llama3.2'
+    volumes:
+      - \${TENANT_DIR}/openwebui:/app/backend/data
+EOF
+    ok "Added 'openwebui' service, configured for LiteLLM routing."
+}
+
+add_ollama() {
+    log "INFO" "Auto-integrating Ollama with vector database..."
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    user: "\${OLLAMA_UID:-1000}:\${TENANT_GID:-1001}"
+    networks:
+      - default
+    environment:
+      - 'OLLAMA_HOST=0.0.0.0'
+      - 'OLLAMA_PORT=\${OLLAMA_INTERNAL_PORT:-11434}'
+    volumes:
+      - \${TENANT_DIR}/ollama:/root/.ollama
+EOF
+    ok "Added 'ollama' service."
+}
+
+add_n8n() {
+    log "INFO" "Auto-integrating N8N with Postgres..."
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    user: "\${N8N_UID:-1000}:\${TENANT_GID:-1001}"
+    networks:
+      - default
+    environment:
+      - 'DB_TYPE=postgresdb'
+      - 'DB_POSTGRESDB_HOST=postgres'
+      - 'DB_POSTGRESDB_PORT=\${POSTGRES_INTERNAL_PORT:-5432}'
+      - 'DB_POSTGRESDB_DATABASE=\${POSTGRES_DB}'
+      - 'DB_POSTGRESDB_USER=\${POSTGRES_USER}'
+      - 'DB_POSTGRESDB_PASSWORD=\${POSTGRES_PASSWORD}'
+      - 'N8N_ENCRYPTION_KEY=\${N8N_ENCRYPTION_KEY}'
+      - 'N8N_PORT=\${N8N_INTERNAL_PORT:-5678}'
+    volumes:
+      - \${TENANT_DIR}/n8n:/home/node/.n8n
+EOF
+    ok "Added 'n8n' service with full auto-integration."
+}
+
+add_flowise() {
+    log "INFO" "Auto-integrating Flowise with Postgres, Qdrant, and LiteLLM..."
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  flowise:
+    image: flowiseai/flowise:latest
+    restart: unless-stopped
+    user: "\${FLOWISE_UID:-1000}:\${TENANT_GID:-1001}"
+    networks:
+      - default
+    environment:
+      - 'DATABASE_TYPE=postgres'
+      - 'POSTGRES_HOST=postgres'
+      - 'POSTGRES_PORT=\${POSTGRES_INTERNAL_PORT:-5432}'
+      - 'POSTGRES_USER=\${POSTGRES_USER}'
+      - 'POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}'
+      - 'POSTGRES_DATABASE=\${POSTGRES_DB}'
+      - 'QDRANT_URL=http://qdrant:\${QDRANT_INTERNAL_PORT:-6333}'
+      - 'QDRANT_API_KEY=\${QDRANT_API_KEY}'
+      - 'LITELLM_API_BASE=http://litellm:\${LITELLM_INTERNAL_PORT:-4000}'
+      - 'FLOWISE_PORT=\${FLOWISE_INTERNAL_PORT:-3001}'
+    volumes:
+      - \${TENANT_DIR}/flowise:/root/.flowise
+EOF
+    ok "Added 'flowise' service with full auto-integration."
+}
+
+add_litellm() {
+    log "INFO" "Auto-integrating LiteLLM with Ollama and Qdrant..."
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main
+    restart: unless-stopped
+    user: "\${LITELLM_UID:-1000}:\${TENANT_GID:-1001}"
+    networks:
+      - default
+    environment:
+      - 'LITELLM_CONFIG_YAML=/app/config.yaml'
+      - 'QDRANT_API_KEY=\${QDRANT_API_KEY}'
+      - 'LITELLM_MASTER_KEY=\${LITELLM_MASTER_KEY}'
+      - 'LITELLM_PORT=\${LITELLM_INTERNAL_PORT:-4000}'
+    volumes:
+      - \${TENANT_DIR}/litellm-config.yaml:/app/config.yaml
+EOF
+    ok "Added 'litellm' service with full auto-integration."
+}
+
+add_anythingllm() {
+    log "INFO" "Auto-integrating AnythingLLM with Postgres, Qdrant, and LiteLLM..."
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  anythingllm:
+    image: mintplexlabs/anythingllm:latest
+    restart: unless-stopped
+    user: "\${ANYTHINGLLM_UID:-1000}:\${TENANT_GID:-1001}"
+    networks:
+      - default
+    environment:
+      - 'STORAGE_HOST=postgres'
+      - 'STORAGE_PORT=\${POSTGRES_INTERNAL_PORT:-5432}'
+      - 'STORAGE_USER=\${POSTGRES_USER}'
+      - 'STORAGE_PASS=\${POSTGRES_PASSWORD}'
+      - 'STORAGE_DB=\${POSTGRES_DB}'
+      - 'VECTOR_DB=qdrant'
+      - 'QDRANT_ENDPOINT=http://qdrant:\${QDRANT_INTERNAL_PORT:-6333}'
+      - 'QDRANT_API_KEY=\${QDRANT_API_KEY}'
+      - 'LLM_PROVIDER=litellm'
+      - 'LITELLM_BASE_URL=http://litellm:\${LITELLM_INTERNAL_PORT:-4000}'
+      - 'LITELLM_API_KEY=\${LITELLM_MASTER_KEY}'
+    volumes:
+      - \${TENANT_DIR}/anythingllm:/app/server/storage
+      - \${TENANT_DIR}/anythingllm/hotdir:/app/server/hotdir
+EOF
+    ok "Added 'anythingllm' service with full auto-integration."
+}
+
 add_redis() {
     cat >> "${COMPOSE_FILE}" << EOF
 
