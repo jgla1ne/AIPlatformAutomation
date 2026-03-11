@@ -2405,8 +2405,6 @@ apply_final_ownership() {
     done
     
     log "SUCCESS" "All service directories configured for maximum non-root compliance."
-    # Exception for Redis (already handled above)
-    # Exception for Ollama (already handled above)
 
     # --- STAGE 3: Secure Final Permissions ---
     log "INFO" "Setting secure permissions on tenant root and .env file..."
@@ -2417,13 +2415,26 @@ apply_final_ownership() {
 
 # ─── Create directory structure with dynamic permissions ────────────────────────
 create_directories() {
-    log "INFO" "Creating essential directory structure..."
+    log "INFO" "Creating all service directories with dynamic permissions..."
     
-    # Create only top-level directories - Script 2 will handle specifics
-    mkdir -p "${DATA_ROOT}/logs" "${DATA_ROOT}/scripts"
-    chown -R "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}"
+    # Create base directories first
+    mkdir -p "${DATA_ROOT}"
+    mkdir -p "${DATA_ROOT}/caddy/config" "${DATA_ROOT}/caddy/data"
+    mkdir -p "${DATA_ROOT}/grafana/provisioning/datasources" "${DATA_ROOT}/grafana/provisioning/dashboards"
+    mkdir -p "${DATA_ROOT}/n8n/workflows" "${DATA_ROOT}/anythingllm/tmp"
+    mkdir -p "${DATA_ROOT}/run/tailscale" "${DATA_ROOT}/lib/tailscale"
+    mkdir -p "${DATA_ROOT}/rclone" "${DATA_ROOT}/storage" "${DATA_ROOT}/gdrive"
     
-    ok "Essential directories created."
+    # Create service directories
+    ALL_SERVICES="postgres redis qdrant grafana prometheus litellm authentik signal n8n weaviate chromadb milvus ollama localai vllm openwebui anythingllm flowise"
+    for service in ${ALL_SERVICES}; do
+        # Check if the service is enabled via the ENABLE_SERVICENAME variable
+        if [[ $(declare -p "ENABLE_${service^^}" 2>/dev/null) =~ "true" ]]; then
+            mkdir -p "${DATA_ROOT}/${service}"
+        fi
+    done
+    
+    log "SUCCESS" "All service directories created with dynamic permissions."
 }
 
 # ─── Write Caddyfile ─────────────────────────────────────────────────────────
