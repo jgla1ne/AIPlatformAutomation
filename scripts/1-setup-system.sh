@@ -557,6 +557,20 @@ detect_gpu() {
     log "INFO" "No GPU detected — using CPU mode"
 }
 
+load_or_generate_secret() {
+    local var_name="$1"
+    local current_value
+    # Check if the variable already has a value (from a previous run's .env)
+    eval "current_value=\$$var_name"
+    if [[ -z "$current_value" ]]; then
+        # If not, generate a new one
+        eval "$var_name=$(openssl rand -hex 32)"
+        log "INFO" "Generated new secret for ${var_name}."
+    else
+        log "INFO" "Loaded existing secret for ${var_name}."
+    fi
+}
+
 # ─── Utility Functions ─────────────────────────────────────────────────────
 fail() {
     log "ERROR" "$1"
@@ -2806,6 +2820,20 @@ main() {
     collect_network_config   # Step 9 - NEW: Network & security configuration
     collect_ports            # Step 10
     generate_secrets         # Step 11
+    
+    log "INFO" "Verifying and generating all application secrets..."
+    load_or_generate_secret "N8N_ENCRYPTION_KEY"
+    load_or_generate_secret "FLOWISE_SECRET_KEY"
+    load_or_generate_secret "LITELLM_MASTER_KEY"
+    load_or_generate_secret "LITELLM_SALT_KEY"
+    load_or_generate_secret "ANYTHINGLLM_JWT_SECRET"
+    load_or_generate_secret "QDRANT_API_KEY"
+    load_or_generate_secret "GRAFANA_PASSWORD"
+    load_or_generate_secret "AUTHENTIK_SECRET_KEY"
+    load_or_generate_secret "OPENWEBUI_SECRET_KEY"
+    load_or_generate_secret "REDIS_PASSWORD"
+    load_or_generate_secret "POSTGRES_PASSWORD"
+    
     print_summary
     write_env_file
     

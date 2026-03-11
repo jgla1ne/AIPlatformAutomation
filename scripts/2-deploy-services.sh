@@ -238,6 +238,11 @@ add_postgres() {
     user: "\${POSTGRES_UID:-70}:\${TENANT_GID:-1001}"
     networks:
       - default
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER} -d \${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     environment:
       POSTGRES_USER: "\${POSTGRES_USER}"
       POSTGRES_PASSWORD: "\${POSTGRES_PASSWORD}"
@@ -261,6 +266,9 @@ add_openwebui() {
     user: "\${OPENWEBUI_UID:-1000}:\${TENANT_GID:-1001}"
     networks:
       - default
+    depends_on:
+      litellm:
+        condition: service_started
     environment:
       - 'OLLAMA_BASE_URL=http://litellm:\${LITELLM_INTERNAL_PORT:-4000}'
       - 'WEBUI_SECRET_KEY=\${OPENWEBUI_SECRET_KEY}'
@@ -301,6 +309,9 @@ add_n8n() {
     user: "\${N8N_UID:-1000}:\${TENANT_GID:-1001}"
     networks:
       - default
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       - 'DB_TYPE=postgresdb'
       - 'DB_POSTGRESDB_HOST=postgres'
@@ -326,6 +337,13 @@ add_flowise() {
     user: "\${FLOWISE_UID:-1000}:\${TENANT_GID:-1001}"
     networks:
       - default
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      litellm:
+        condition: service_started
     environment:
       - 'DATABASE_TYPE=postgres'
       - 'POSTGRES_HOST=postgres'
@@ -374,6 +392,13 @@ add_anythingllm() {
     user: "\${ANYTHINGLLM_UID:-1000}:\${TENANT_GID:-1001}"
     networks:
       - default
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      litellm:
+        condition: service_started
     environment:
       - 'STORAGE_HOST=postgres'
       - 'STORAGE_PORT=\${POSTGRES_INTERNAL_PORT:-5432}'
@@ -402,6 +427,11 @@ add_redis() {
     user: "\${REDIS_UID:-999}:\${TENANT_GID:-1001}"
     networks:
       - default
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "\${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     command: redis-server --requirepass "\${REDIS_PASSWORD}" --loglevel "\${REDIS_LOGLEVEL:-notice}"
     volumes:
       - \${TENANT_DIR}/redis:/data
