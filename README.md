@@ -1,12 +1,12 @@
 --
 
-# **AI Platform Automation v3.1.0 - PRODUCTION READY RELEASE**
+# **AI Platform Automation v3.2.0 - COMPREHENSIVE LOGGING ENGINE**
 
-A comprehensive, production-ready AI platform deployment system with **true modular architecture**, **Mission Control utility hub**, and **enterprise-grade service management**.
+A comprehensive, production-ready AI platform deployment system with **true modular architecture**, **Mission Control utility hub**, **enterprise-grade service management**, and **comprehensive logging engine**.
 
-This platform deploys an **interconnected AI runtime stack** with intelligent service orchestration, **automated tenant ownership**, and **unified Mission Control management interface**.
+This platform deploys an **interconnected AI runtime stack** with intelligent service orchestration, **automated tenant ownership**, **unified Mission Control management interface**, and **deep visibility logging infrastructure**.
 
-**🎉 PRODUCTION READY: ALL CRITICAL BUGS FIXED - 100% OPERATIONAL CAPABILITY**
+**🎉 COMPREHENSIVE LOGGING ENGINE: Complete deployment visibility, service-specific debugging, and programmatic health monitoring**
 
 ---
 
@@ -20,6 +20,15 @@ This platform uses a fully dockerized, **100% dynamically generated** `docker-co
 - **Zero Code Duplication**: Complete elimination of duplicate functions across scripts
 - **Source-Safe Architecture**: Scripts can safely source utilities without execution conflicts
 - **Production-Ready**: All critical showstopper bugs resolved
+
+### **🚀 NEW: Comprehensive Logging Engine**
+- **Deep Deployment Visibility**: Complete docker-compose.yml content, system info, and startup logs
+- **Service-Specific Debug Logging**: Individual log directories per service with configurable levels
+- **Programmatic Health Monitoring**: Port, URL, and container status checks with detailed reporting
+- **Log Lifecycle Management**: Automatic rotation, cleanup, and retention policies
+- **Real-Time Log Capture**: Docker logs with timestamps and service-specific file output
+- **Debug Mode Flag**: `DEBUG_MODE=true` enables maximum verbosity for troubleshooting
+- **Logging Dashboard**: Visual overview of all service logging configurations and status
 
 ### **🚀 Enhanced CI/CD Pipeline**
 
@@ -45,17 +54,20 @@ Cleanup    Setup    Deploy   Configure
 
 **Script 2: Master Deployment Orchestrator**
 - Complete docker-compose.yml generation with ALL enabled services
+- Comprehensive debug logging engine with service-specific visibility
 - Dependency-aware service startup (databases → AI infrastructure → applications)
 - Health verification in tiers (core dependencies → AI services → external configs)
 - Post-deployment configuration (Tailscale VPN, Rclone integration)
 - Production-ready Caddy configuration with HTTPS
+- Deep Docker log capture and URL health testing
 
 **Script 3: Mission Control Hub**
 - Service health monitoring and diagnostics
-- Log aggregation and analysis
+- Individual service log configuration and management
 - Service lifecycle management (start/stop/restart)
 - Configuration management and validation
 - Performance monitoring and alerting
+- Comprehensive logging dashboard and health checks
 
 ### **📋 Production Deployment Features**
 
@@ -67,7 +79,8 @@ Each tenant deployment generates:
 - A centralized `.env` file (80+ dynamic variables with proper quoting)
 - Intelligent service interconnection via LiteLLM
 - Complete configuration files (prometheus.yml, Caddyfile)
-- Debug logging infrastructure (`/mnt/data/{tenant}/logs/debug/`)
+- **Comprehensive logging infrastructure** (`/mnt/data/{tenant}/logs/` with service-specific subdirectories)
+- **Debug logging engine** with per-service log levels and rotation policies
 
 ### **� Service Stack Capabilities**
 
@@ -243,20 +256,67 @@ sudo bash scripts/0-complete-cleanup.sh
 # 2. Configure tenant (uses Mission Control utilities for validation)
 sudo bash scripts/1-setup-system.sh
 
-# 3. Deploy CORE infrastructure (uses Mission Control for service management)
-sudo bash scripts/2-deploy-services.sh datasquiz
+# 3. Deploy CORE infrastructure with comprehensive logging
+DEBUG_MODE=true sudo bash scripts/2-deploy-services-logging.sh datasquiz
 
-# 4. Manage services with Mission Control
+# 4. Configure individual service logging
+sudo bash scripts/3-configure-services-logging.sh datasquiz configure
+
+# 5. Show logging dashboard
+sudo bash scripts/3-configure-services-logging.sh datasquiz dashboard
+
+# 6. Run comprehensive health checks
+sudo bash scripts/3-configure-services-logging.sh datasquiz health
+
+# 7. Manage services with Mission Control
 sudo bash scripts/3-configure-services.sh datasquiz --status
 sudo bash scripts/3-configure-services.sh datasquiz --start tailscale
-sudo bash scripts/3-configure-services.sh datasquiz --set-debug
+```
 
-# 5. Enable debug logging
-sudo bash scripts/3-configure-services.sh datasquiz --set-debug
+---
 
-# 6. Start application services on-demand
-sudo bash scripts/3-configure-services.sh datasquiz --start openwebui
-sudo bash scripts/3-configure-services.sh datasquiz --start rclone
+## **🔧 Logging Engine Commands**
+
+### **Comprehensive Logging Management**
+```bash
+# Deploy with maximum debug visibility
+DEBUG_MODE=true sudo bash scripts/2-deploy-services-logging.sh datasquiz
+
+# Configure individual service logging
+sudo bash scripts/3-configure-services-logging.sh datasquiz configure
+
+# Show logging dashboard
+sudo bash scripts/3-configure-services-logging.sh datasquiz dashboard
+
+# Run comprehensive health checks
+sudo bash scripts/3-configure-services-logging.sh datasquiz health
+
+# Rotate and clean logs
+sudo bash scripts/3-configure-services-logging.sh datasquiz rotate
+sudo bash scripts/3-configure-services-logging.sh datasquiz cleanup
+
+# Disable logging for all services
+sudo bash scripts/3-configure-services-logging.sh datasquiz disable
+```
+
+### **Log Locations and Structure**
+```
+/mnt/data/datasquiz/
+├── logs/
+│   ├── deploy-20260311-*.log          # Main deployment logs
+│   └── deploy-<service>-*.log         # Service-specific logs
+├── postgres/
+│   └── logs/                        # Postgres log directory
+├── redis/
+│   └── logs/                        # Redis log directory
+├── qdrant/
+│   └── logs/                        # Qdrant log directory
+├── grafana/
+│   └── logs/                        # Grafana log directory
+├── prometheus/
+│   └── logs/                        # Prometheus log directory
+└── caddy/
+    └── logs/                        # Caddy log directory
 ```
 
 ---
@@ -588,7 +648,15 @@ Security & Access:
 
 ## **📋 Current Status**
 
-### **Latest Changes (v3.1.0)**
+### **Latest Changes (v3.2.0)**
+- ✅ **NEW: Comprehensive Logging Engine** - Deep deployment visibility and service-specific debugging
+- ✅ **Script 2 Enhanced** - Added comprehensive debug logging with service-specific visibility
+- ✅ **Script 3 Enhanced** - Added individual service log configuration and management
+- ✅ **Debug Mode Flag** - `DEBUG_MODE=true` enables maximum verbosity for troubleshooting
+- ✅ **Log Lifecycle Management** - Automatic rotation, cleanup, and retention policies
+- ✅ **Programmatic Health Monitoring** - Port, URL, and container status checks
+- ✅ **Logging Dashboard** - Visual overview of all service logging configurations
+- ✅ **Real-Time Log Capture** - Docker logs with timestamps and service-specific output
 - ✅ Fixed Script 0 nuclear cleanup functionality
 - ✅ Restored modular infrastructure from commit 33f0a82
 - ✅ Fixed Script 1 interactive setup with proper .env handling
@@ -634,6 +702,6 @@ Security & Access:
 
 ---
 
-**🚀 AI Platform Automation v3.0.0 - BASELINE RELEASE**
+**🚀 AI Platform Automation v3.2.0 - COMPREHENSIVE LOGGING ENGINE**
 
-*The ultimate modular AI infrastructure platform with Mission Control utility hub and zero code duplication.*
+*The ultimate modular AI infrastructure platform with Mission Control utility hub, zero code duplication, and comprehensive logging engine for complete deployment visibility.*
