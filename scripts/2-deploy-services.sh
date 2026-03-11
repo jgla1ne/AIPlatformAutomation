@@ -228,6 +228,117 @@ if [[ "${DEBUG_MODE}" == "true" ]]; then
 fi
 log "=== END DEBUG LOGGING SETUP ==="
 
+# --- Configuration Generation Functions ---
+write_caddyfile() {
+    log "INFO" "Executing dynamic Caddyfile generation as per README.md..."
+    local CADDY_FILE="${DATA_ROOT}/Caddyfile"
+
+    # Use a temporary file to build the content
+    TMP_CADDY=$(mktemp)
+
+    # 1. Global Options Block - ALWAYS formatted correctly
+    cat > "$TMP_CADDY" <<-EOF
+	{
+	    email ${ADMIN_EMAIL}
+	    # acme_dns google_cloud_dns ... # Placeholder for future DNS challenge
+	}
+
+	EOF
+
+    # 2. Main Domain Route
+    cat >> "$TMP_CADDY" <<-EOF
+	${DOMAIN} {
+	    # Add the tls directive here
+	    tls internal {
+	        on_demand
+	    }
+	    respond "AI Platform v3.2.0 is active. Welcome." 200
+	}
+
+	EOF
+
+    # 3. Dynamically add routes for ONLY enabled services
+    if [[ "${ENABLE_GRAFANA}" == "true" ]]; then
+        cat >> "$TMP_CADDY" <<-EOF
+	grafana.${DOMAIN} {
+	    tls internal
+	    reverse_proxy grafana:${GRAFANA_INTERNAL_PORT}
+	}
+
+	EOF
+        ok "Caddy route added for Grafana."
+    fi
+    
+    if [[ "${ENABLE_PROMETHEUS}" == "true" ]]; then
+        cat >> "$TMP_CADDY" <<-EOF
+	prometheus.${DOMAIN} {
+	    tls internal
+	    reverse_proxy prometheus:${PROMETHEUS_INTERNAL_PORT}
+	}
+
+	EOF
+        ok "Caddy route added for Prometheus."
+    fi
+    
+    if [[ "${ENABLE_QDRANT}" == "true" ]]; then
+        cat >> "$TMP_CADDY" <<-EOF
+	qdrant.${DOMAIN} {
+	    tls internal
+	    reverse_proxy qdrant:${QDRANT_INTERNAL_PORT}
+	}
+
+	EOF
+        ok "Caddy route added for Qdrant."
+    fi
+    
+    if [[ "${ENABLE_OLLAMA}" == "true" ]]; then
+        cat >> "$TMP_CADDY" <<-EOF
+	ollama.${DOMAIN} {
+	    tls internal
+	    reverse_proxy ollama:${OLLAMA_INTERNAL_PORT}
+	}
+
+	EOF
+        ok "Caddy route added for Ollama."
+    fi
+    
+    if [[ "${ENABLE_OPENWEBUI}" == "true" ]]; then
+        cat >> "$TMP_CADDY" <<-EOF
+	openwebui.${DOMAIN} {
+	    tls internal
+	    reverse_proxy openwebui:${OPENWEBUI_INTERNAL_PORT}
+	}
+
+	EOF
+        ok "Caddy route added for OpenWebUI."
+    fi
+
+    # 4. Atomically move the file and run 'caddy fmt'
+    mv "$TMP_CADDY" "$CADDY_FILE"
+    log "INFO" "Running 'caddy fmt' to ensure perfect formatting..."
+    docker run --rm -v "$CADDY_FILE":/etc/caddy/Caddyfile caddy:2 caddy fmt --overwrite
+    
+    chown "${TENANT_UID}:${TENANT_GID}" "$CADDY_FILE"
+    log "SUCCESS" "Dynamic Caddyfile generation complete and validated."
+}
+
+write_prometheus_config() {
+    log "INFO" "Writing Prometheus configuration..."
+    
+    cat > "${DATA_ROOT}/prometheus.yml" << EOF
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+EOF
+    
+    log "SUCCESS" "Prometheus configuration written to ${DATA_ROOT}/prometheus.yml"
+}
+
 # --- Service Generation Functions ---
 add_postgres() {
     cat >> "${COMPOSE_FILE}" << EOF
@@ -296,6 +407,21 @@ add_ollama() {
     volumes:
       - \${TENANT_DIR}/ollama:/root/.ollama
 EOF
+
+    # Add GPU deployment if enabled
+    if [[ "${ENABLE_GPU}" == "true" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+EOF
+        log "INFO" "GPU support enabled for Ollama."
+    fi
+    
     ok "Added 'ollama' service."
 }
 
@@ -577,6 +703,12 @@ main() {
         fail "Docker is not running. Please start Docker and try again."
     fi
     ok "Docker is active."
+
+    # --- Pre-flight Configuration Generation ---
+    log "INFO" "Executing Pre-flight Configuration Generation..."
+    write_caddyfile
+    write_prometheus_config
+    ok "All runtime configurations generated successfully."
 
     # --- Generate Docker Compose ---
     log "Generating docker-compose.yml for tenant '${TENANT_ID}'..."

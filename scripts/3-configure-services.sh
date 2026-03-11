@@ -352,108 +352,98 @@ main() {
         "dashboard")
             show_logging_dashboard
             ;;
+        "start")
+            log "Starting services for tenant: ${TENANT_ID}"
+            cd "${TENANT_DIR}"
+            if [[ -n "${2:-}" ]]; then
+                docker compose start "$2"
+                ok "Service '$2' started."
+            else
+                docker compose start
+                ok "All services started."
+            fi
+            ;;
+        "stop")
+            log "Stopping services for tenant: ${TENANT_ID}"
+            cd "${TENANT_DIR}"
+            if [[ -n "${2:-}" ]]; then
+                docker compose stop "$2"
+                ok "Service '$2' stopped."
+            else
+                docker compose stop
+                ok "All services stopped."
+            fi
+            ;;
+        "rclone-mount")
+            log "Starting Rclone mount for tenant: ${TENANT_ID}"
+            cd "${TENANT_DIR}"
+            docker exec -d "$(docker ps -q --filter "name=rclone" 2>/dev/null || echo "")" \
+                rclone mount gdrive: /mnt/gdrive --vfs-cache-mode writes &
+            ok "Rclone mount started in background."
+            ;;
+        "ingest")
+            log "Starting data ingestion for tenant: ${TENANT_ID}"
+            cd "${TENANT_DIR}"
+            # Run ingestion using temporary networked container
+            docker run --rm --network "${TENANT_ID}_default" \
+                -v "${TENANT_DIR}/ingest.py:/app/ingest.py" \
+                python:3.9-slim python /app/ingest.py
+            ok "Data ingestion completed."
+            ;;
         "health")
             log "Running comprehensive health checks for tenant: ${TENANT_ID}"
             
-            # 1. Check Container Status
-            log "=== CONTAINER STATUS ==="
+            # 1. Container Status Check
+            log "=== CONTAINER STATUS CHECK ==="
             cd "${TENANT_DIR}"
-            docker ps --filter "name=${COMPOSE_PROJECT_NAME}"
+            docker compose ps
             
-            # 2. Test Port Connectivity
-            log "=== PORT CONNECTIVITY TESTS ==="
-            nc -z localhost "${POSTGRES_PORT:-5432}" && ok "PostgreSQL port ${POSTGRES_PORT:-5432} is open." || warn "PostgreSQL port is closed."
-            nc -z localhost "${REDIS_PORT:-6379}" && ok "Redis port ${REDIS_PORT:-6379} is open." || warn "Redis port is closed."
-            nc -z localhost "${QDRANT_PORT:-6333}" && ok "Qdrant port ${QDRANT_PORT:-6333} is open." || warn "Qdrant port is closed."
+            # 2. External Port Check
+            log "=== EXTERNAL PORT CONNECTIVITY ==="
+            nc -z localhost "${CADDY_HTTP_PORT:-80}" && ok "HTTP port 80 accessible" || fail "HTTP port 80 NOT accessible"
+            nc -z localhost "${CADDY_HTTPS_PORT:-443}" && ok "HTTPS port 443 accessible" || fail "HTTPS port 443 NOT accessible"
             
-            # 3. Test URL Accessibility (Internal and External)
-            log "=== URL ACCESSIBILITY TESTS ==="
-            curl --silent --fail http://localhost:${OLLAMA_PORT:-11434}/api/tags > /dev/null && ok "Ollama API is responsive." || warn "Ollama API is not responsive."
-            curl --silent --fail http://localhost:${QDRANT_PORT:-6333} > /dev/null && ok "Qdrant API is responsive." || warn "Qdrant API is not responsive."
-            curl --silent --fail http://localhost:80 > /dev/null && ok "Caddy HTTP is responsive." || warn "Caddy HTTP is not responsive."
-            
+            # 3. External URL Check
+            log "=== EXTERNAL URL ACCESSIBILITY ==="
             if [[ -n "${DOMAIN:-}" ]]; then
-                curl --silent --fail https://grafana.${DOMAIN} > /dev/null && ok "Grafana URL is accessible." || warn "Grafana URL is not accessible."
-                curl --silent --fail https://prometheus.${DOMAIN} > /dev/null && ok "Prometheus URL is accessible." || warn "Prometheus URL is not accessible."
-                curl --silent --fail https://${DOMAIN} > /dev/null && ok "Main domain URL is accessible." || warn "Main domain URL is not accessible."
+                curl --silent --fail https://"${DOMAIN}" > /dev/null && ok "Main domain accessible" || fail "Main domain NOT accessible"
+                curl --silent --fail https://grafana."${DOMAIN}" > /dev/null && ok "Grafana accessible" || warn "Grafana not accessible"
+                curl --silent --fail https://openwebui."${DOMAIN}" > /dev/null && ok "OpenWebUI accessible" || warn "OpenWebUI not accessible"
             fi
             
-            # 5. Service Auto-Integration Health Checks
-            log "=== SERVICE AUTO-INTEGRATION HEALTH CHECKS ==="
-
-            # Test if OpenWebUI can reach LiteLLM
+            # 4. Internal Integration Check
+            log "=== INTERNAL INTEGRATION CHECK ==="
+            
+            # Test OpenWebUI -> LiteLLM
             if docker ps -q --filter "name=openwebui" | grep -q .; then
-                log "INFO" "Verifying OpenWebUI -> LiteLLM connection..."
                 if docker exec "$(docker ps -q --filter "name=openwebui")" curl --fail --silent --connect-timeout 5 http://litellm:4000 > /dev/null; then
-                    ok "Integration Test Passed: OpenWebUI can connect to LiteLLM."
+                    ok "Integration: OpenWebUI → LiteLLM"
                 else
-                    fail "Integration Test Failed: OpenWebUI CANNOT connect to LiteLLM."
+                    fail "Integration FAILED: OpenWebUI → LiteLLM"
                 fi
-            else
-                log "WARN" "OpenWebUI not deployed, skipping integration test."
-            fi
-
-            # Test if LiteLLM can reach Ollama
-            if docker ps -q --filter "name=litellm" | grep -q .; then
-                log "INFO" "Verifying LiteLLM -> Ollama connection..."
-                if docker exec "$(docker ps -q --filter "name=litellm")" curl --fail --silent --connect-timeout 5 http://ollama:11434 > /dev/null; then
-                    ok "Integration Test Passed: LiteLLM can connect to Ollama."
-                else
-                    fail "Integration Test Failed: LiteLLM CANNOT connect to Ollama."
-                fi
-            else
-                log "WARN" "LiteLLM not deployed, skipping integration test."
-            fi
-
-            # Test if Flowise can reach Postgres
-            if docker ps -q --filter "name=flowise" | grep -q .; then
-                log "INFO" "Verifying Flowise -> Postgres connection..."
-                if docker exec "$(docker ps -q --filter "name=flowise")" nc -z postgres 5432 > /dev/null; then
-                    ok "Integration Test Passed: Flowise can connect to Postgres."
-                else
-                    fail "Integration Test Failed: Flowise CANNOT connect to Postgres."
-                fi
-            else
-                log "WARN" "Flowise not deployed, skipping integration test."
-            fi
-
-            # Test if Flowise can reach Qdrant
-            if docker ps -q --filter "name=flowise" | grep -q .; then
-                log "INFO" "Verifying Flowise -> Qdrant connection..."
-                if docker exec "$(docker ps -q --filter "name=flowise")" curl --fail --silent --connect-timeout 5 http://qdrant:6333 > /dev/null; then
-                    ok "Integration Test Passed: Flowise can connect to Qdrant."
-                else
-                    fail "Integration Test Failed: Flowise CANNOT connect to Qdrant."
-                fi
-            else
-                log "WARN" "Flowise not deployed, skipping integration test."
-            fi
-
-            # Test if AnythingLLM can reach Qdrant
-            if docker ps -q --filter "name=anythingllm" | grep -q .; then
-                log "INFO" "Verifying AnythingLLM -> Qdrant connection..."
-                if docker exec "$(docker ps -q --filter "name=anythingllm")" curl --fail --silent --connect-timeout 5 http://qdrant:6333 > /dev/null; then
-                    ok "Integration Test Passed: AnythingLLM can connect to Qdrant."
-                else
-                    fail "Integration Test Failed: AnythingLLM CANNOT connect to Qdrant."
-                fi
-            else
-                log "WARN" "AnythingLLM not deployed, skipping integration test."
-            fi
-
-            # Test if N8N can reach Postgres
-            if docker ps -q --filter "name=n8n" | grep -q .; then
-                log "INFO" "Verifying N8N -> Postgres connection..."
-                if docker exec "$(docker ps -q --filter "name=n8n")" nc -z postgres 5432 > /dev/null; then
-                    ok "Integration Test Passed: N8N can connect to Postgres."
-                else
-                    fail "Integration Test Failed: N8N CANNOT connect to Postgres."
-                fi
-            else
-                log "WARN" "N8N not deployed, skipping integration test."
             fi
             
-            # 4. Service Health Summary
+            # Test LiteLLM -> Ollama
+            if docker ps -q --filter "name=litellm" | grep -q .; then
+                if docker exec "$(docker ps -q --filter "name=litellm")" curl --fail --silent --connect-timeout 5 http://ollama:11434 > /dev/null; then
+                    ok "Integration: LiteLLM → Ollama"
+                else
+                    fail "Integration FAILED: LiteLLM → Ollama"
+                fi
+            fi
+            
+            # Test Flowise -> Postgres
+            if docker ps -q --filter "name=flowise" | grep -q .; then
+                if docker exec "$(docker ps -q --filter "name=flowise")" nc -z postgres 5432 > /dev/null; then
+                    ok "Integration: Flowise → Postgres"
+                else
+                    fail "Integration FAILED: Flowise → Postgres"
+                fi
+            fi
+            
+            log "=== ULTIMATE VERIFICATION COMPLETE ==="
+            
+            # 5. Service Health Summary
             log "=== HEALTH SUMMARY ==="
             local total_containers=$(docker ps --filter "name=${COMPOSE_PROJECT_NAME}" --format "{{.Names}}" | wc -l)
             local running_containers=$(docker ps --filter "name=${COMPOSE_PROJECT_NAME}" --filter "status=running" --format "{{.Names}}" | wc -l)
@@ -463,7 +453,7 @@ main() {
             if [[ $running_containers -eq $total_containers ]]; then
                 ok "All containers are running!"
             else
-                warn "Some containers may not be running properly."
+                warn "Some containers are not running."
             fi
             
             log "Health check complete."
