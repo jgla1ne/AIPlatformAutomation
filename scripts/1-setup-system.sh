@@ -2249,63 +2249,40 @@ apply_final_ownership() {
     # This overrides the default for specific services.
     log "INFO" "Applying ownership exceptions for services with specific UIDs..."
 
-    # Exception for Postgres (requires UID 70)
+    # Exception for Postgres (requires UID 70 - system requirement)
     if [[ -d "${DATA_ROOT}/postgres" ]]; then
         chown -R 70:70 "${DATA_ROOT}/postgres"
-        log "SUCCESS" "Set ownership for 'postgres' directory to 70:70."
+        log "SUCCESS" "Set ownership for 'postgres' directory to 70:70 (system requirement)."
     fi
     
-    # Exception for Grafana (requires UID 472)
+    # Exception for Grafana (requires UID 472 - system requirement)
     if [[ -d "${DATA_ROOT}/grafana" ]]; then
         chown -R 472:472 "${DATA_ROOT}/grafana"
-        log "SUCCESS" "Set ownership for 'grafana' directory to 472:472."
+        log "SUCCESS" "Set ownership for 'grafana' directory to 472:472 (system requirement)."
     fi
     
-    # Exception for Prometheus (runs as nobody 65534:65534)
-    if [[ -d "${DATA_ROOT}/prometheus" ]]; then
-        chown -R 65534:65534 "${DATA_ROOT}/prometheus"
-        log "SUCCESS" "Set ownership for 'prometheus' directory to 65534:65534."
-    fi
+    # ALL OTHER SERVICES: Use tenant user for maximum non-root compliance
+    log "INFO" "Setting ALL other services to tenant user ${TENANT_UID}:${TENANT_GID} for non-root compliance..."
     
-    # Exception for Redis (drops to redis user 999:1000 per Docker docs)
-    if [[ -d "${DATA_ROOT}/redis" ]]; then
-        chown -R 999:1000 "${DATA_ROOT}/redis"
-        log "SUCCESS" "Set ownership for 'redis' directory to 999:1000."
-    fi
+    for service_dir in "${DATA_ROOT}"/*; do
+        if [[ -d "${service_dir}" ]]; then
+            service_name=$(basename "${service_dir}")
+            # Skip system services that already have specific ownership
+            case "${service_name}" in
+                postgres|grafana)
+                    log "INFO" "Skipping ${service_name} - already has system ownership"
+                    continue
+                    ;;
+                *)
+                    # All other services use tenant user for non-root compliance
+                    chown -R "${TENANT_UID}:${TENANT_GID}" "${service_dir}"
+                    log "SUCCESS" "Set ownership for '${service_name}' to tenant user ${TENANT_UID}:${TENANT_GID}"
+                    ;;
+            esac
+        fi
+    done
     
-    # Exception for AnythingLLM (runs as UID 1000 per docs)
-    if [[ -d "${DATA_ROOT}/anythingllm" ]]; then
-        chown -R 1000:1000 "${DATA_ROOT}/anythingllm"
-        log "SUCCESS" "Set ownership for 'anythingllm' directory to 1000:1000."
-    fi
-    
-    # Exception for Qdrant (runAsUser: 1000 per security docs)
-    if [[ -d "${DATA_ROOT}/qdrant" ]]; then
-        chown -R 1000:1000 "${DATA_ROOT}/qdrant"
-        log "SUCCESS" "Set ownership for 'qdrant' directory to 1000:1000."
-    fi
-    
-    # Exception for N8N (runs as node user 1000:1000)
-    if [[ -d "${DATA_ROOT}/n8n" ]]; then
-        chown -R 1000:1000 "${DATA_ROOT}/n8n"
-        log "SUCCESS" "Set ownership for 'n8n' directory to 1000:1000."
-    fi
-
-    # Exception for LiteLLM (requires UID 1000)
-    if [[ -d "${DATA_ROOT}/litellm" ]]; then
-        chown -R 1000:1000 "${DATA_ROOT}/litellm"
-        log "SUCCESS" "Set ownership for 'litellm' directory to 1000:1000."
-    fi
-
-    # Exception for Authentik (requires UID 1000)
-    if [[ -d "${DATA_ROOT}/authentik" ]]; then
-        chown -R 1000:1000 "${DATA_ROOT}/authentik"
-        log "SUCCESS" "Set ownership for 'authentik' directory to 1000:1000."
-    fi
-
-    # Exception for Prometheus (already handled above)
-    # Exception for Grafana (already handled above)
-    # Exception for Postgres (already handled above)
+    log "SUCCESS" "All service directories configured for maximum non-root compliance."
     # Exception for Redis (already handled above)
     # Exception for Ollama (already handled above)
 

@@ -85,7 +85,7 @@ add_redis() {
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    user: "${REDIS_UID:-999}:${REDIS_GID:-1000}"
+    user: "${REDIS_UID:-1001}:${REDIS_UID:-1001}"
     networks:
       - default
     command: redis-server --requirepass "${REDIS_PASSWORD}"
@@ -101,7 +101,7 @@ add_qdrant() {
   qdrant:
     image: qdrant/qdrant:latest
     restart: unless-stopped
-    user: "${QDRANT_UID:-1000}:${QDRANT_UID:-1000}"
+    user: "${QDRANT_UID:-1001}:${QDRANT_UID:-1001}"
     networks:
       - default
     volumes:
@@ -131,7 +131,7 @@ add_openwebui() {
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
     restart: unless-stopped
-    user: "${OPENWEBUI_UID:-1000}:${OPENWEBUI_UID:-1000}"
+    user: "${OPENWEBUI_UID:-1001}:${OPENWEBUI_UID:-1001}"
     networks:
       - default
     environment:
@@ -150,7 +150,7 @@ add_n8n() {
   n8n:
     image: n8nio/n8n:latest
     restart: unless-stopped
-    user: "${N8N_UID:-1000}:${N8N_UID:-1000}"
+    user: "${N8N_UID:-1001}:${N8N_UID:-1001}"
     networks:
       - default
     environment:
@@ -175,7 +175,7 @@ add_flowise() {
   flowise:
     image: flowiseai/flowise:latest
     restart: unless-stopped
-    user: "${FLOWISE_UID:-1000}:${FLOWISE_UID:-1000}"
+    user: "${FLOWISE_UID:-1001}:${FLOWISE_UID:-1001}"
     networks:
       - default
     environment:
@@ -198,7 +198,7 @@ add_anythingllm() {
   anythingllm:
     image: mintplexlabs/anythingllm:latest
     restart: unless-stopped
-    user: "${ANYTHINGLLM_UID:-1000}:${ANYTHINGLLM_UID:-1000}"
+    user: "${ANYTHINGLLM_UID:-1001}:${ANYTHINGLLM_UID:-1001}"
     networks:
       - default
     environment:
@@ -219,7 +219,7 @@ add_litellm() {
   litellm:
     image: ghcr.io/berriai/litellm:main
     restart: unless-stopped
-    user: "${LITELLM_UID:-1000}:${LITELLM_UID:-1000}"
+    user: "${LITELLM_UID:-1001}:${LITELLM_UID:-1001}"
     networks:
       - default
     environment:
@@ -258,7 +258,7 @@ add_prometheus() {
   prometheus:
     image: prom/prometheus:latest
     restart: unless-stopped
-    user: "${PROMETHEUS_UID:-65534}:${PROMETHEUS_UID:-65534}"
+    user: "${PROMETHEUS_UID:-1001}:${PROMETHEUS_UID:-1001}"
     networks:
       - default
     volumes:
@@ -274,7 +274,7 @@ add_authentik() {
   authentik-server:
     image: ghcr.io/goauthentik/server:latest
     restart: unless-stopped
-    user: "${AUTHENTIK_UID:-1000}:${AUTHENTIK_UID:-1000}"
+    user: "${AUTHENTIK_UID:-1001}:${AUTHENTIK_UID:-1001}"
     networks:
       - default
     environment:
