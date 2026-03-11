@@ -376,23 +376,26 @@ test_service_urls() {
 }
 
 prepare_data_directories() {
-    log "=== PREPARING AND SETTING OWNERSHIP FOR DATA DIRECTORIES ==="
-    
-    # Create all potential directories
-    mkdir -p "${TENANT_DIR}/postgres" "${TENANT_DIR}/redis" "${TENANT_DIR}/qdrant" \
-             "${TENANT_DIR}/grafana" "${TENANT_DIR}/prometheus" "${TENANT_DIR}/caddy_data" \
-             "${TENANT_DIR}/caddy_config" "${TENANT_DIR}/caddy" # Caddy needs a config dir too
+    log "INFO" "Enforcing Bulletproof Ownership as per README.md..."
 
-    # Apply specific ownership based on service's container user
-    [[ "${ENABLE_POSTGRES}" == "true" ]] && chown -R "${POSTGRES_UID:-70}:${TENANT_GID:-1001}" "${TENANT_DIR}/postgres" && ok "Postgres permissions set."
-    [[ "${ENABLE_REDIS}" == "true" ]] && chown -R "${REDIS_UID:-999}:${TENANT_GID:-1001}" "${TENANT_DIR}/redis" && ok "Redis permissions set."
-    [[ "${ENABLE_QDRANT}" == "true" ]] && chown -R "${QDRANT_UID:-1000}:${TENANT_GID:-1001}" "${TENANT_DIR}/qdrant" && ok "Qdrant permissions set."
-    [[ "${ENABLE_PROMETHEUS}" == "true" ]] && chown -R "${PROMETHEUS_UID:-65534}:${TENANT_GID:-1001}" "${TENANT_DIR}/prometheus" && ok "Prometheus permissions set."
-    [[ "${ENABLE_GRAFANA}" == "true" ]] && chown -R "${GRAFANA_UID:-472}:${TENANT_GID:-1001}" "${TENANT_DIR}/grafana" && ok "Grafana permissions set."
-    [[ "${ENABLE_CADDY}" == "true" ]] && chown -R "${CADDY_UID:-1001}:${TENANT_GID:-1001}" "${TENANT_DIR}/caddy_data" "${TENANT_DIR}/caddy_config" "${TENANT_DIR}/caddy" && ok "Caddy permissions set."
+    # Ensure base directory and logs are owned by the tenant user first
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}"
     
-    log "All data directory permissions have been configured."
-    log "=== END DATA DIRECTORY PREPARATION ==="
+    # Create all potential stateful directories
+    mkdir -p "${TENANT_DIR}/postgres" "${TENANT_DIR}/redis" "${TENANT_DIR}/qdrant" \
+             "${TENANT_DIR}/grafana" "${TENANT_DIR}/prometheus" \
+             "${TENANT_DIR}/caddy/data" "${TENANT_DIR}/caddy/config"
+
+    # Use the EXACT UIDs from the .env file to set ownership.
+    # This aligns with the "Pragmatic Exception Pattern" from the README.
+    [[ -d "${TENANT_DIR}/postgres" ]]   && chown -R "${POSTGRES_UID}:${TENANT_GID}"   "${TENANT_DIR}/postgres"   && ok "Ownership set for Postgres (${POSTGRES_UID}:${TENANT_GID})"
+    [[ -d "${TENANT_DIR}/redis" ]]      && chown -R "${REDIS_UID}:${TENANT_GID}"      "${TENANT_DIR}/redis"      && ok "Ownership set for Redis (${REDIS_UID}:${TENANT_GID})"
+    [[ -d "${TENANT_DIR}/qdrant" ]]      && chown -R "${QDRANT_UID}:${TENANT_GID}"      "${TENANT_DIR}/qdrant"      && ok "Ownership set for Qdrant (${QDRANT_UID}:${TENANT_GID})"
+    [[ -d "${TENANT_DIR}/grafana" ]]     && chown -R "${GRAFANA_UID}:${TENANT_GID}"     "${TENANT_DIR}/grafana"    && ok "Ownership set for Grafana (${GRAFANA_UID}:${TENANT_GID})"
+    [[ -d "${TENANT_DIR}/prometheus" ]] && chown -R "${PROMETHEUS_UID}:${TENANT_GID}" "${TENANT_DIR}/prometheus" && ok "Ownership set for Prometheus (${PROMETHEUS_UID}:${TENANT_GID})"
+    [[ -d "${TENANT_DIR}/caddy" ]]       && chown -R "${CADDY_UID}:${TENANT_GID}"       "${TENANT_DIR}/caddy"      && ok "Ownership set for Caddy (${CADDY_UID}:${TENANT_GID})"
+
+    log "SUCCESS" "Bulletproof Ownership check complete. All directory permissions are aligned with service UIDs."
 }
 
 # --- Main Function ---

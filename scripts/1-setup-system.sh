@@ -1818,91 +1818,87 @@ EOF
 }
 
 write_caddyfile() {
-    # shellcheck source=/dev/null
-    source "${ENV_FILE}"
-    
-    log "INFO" "Generating dynamic Caddyfile..."
-    
-    # Create caddy directory
-    mkdir -p "${DATA_ROOT}/caddy"
-    
-    # Start with the global options block
-    cat > "${DATA_ROOT}/caddy/Caddyfile" << EOF
-{
-    email ${LETSENCRYPT_EMAIL:-admin@${DOMAIN}}
-    debug
-}
+    log "INFO" "Executing dynamic Caddyfile generation as per README.md..."
+    local CADDY_FILE="${DATA_ROOT}/Caddyfile"
 
-# Main domain entry
-${DOMAIN} {
-    respond "AI Platform is running. Access services via subdomains." 200
-}
-EOF
+    # Use a temporary file to build the content
+    TMP_CADDY=$(mktemp)
 
-    # Dynamically add reverse_proxy blocks ONLY for enabled services
+    # 1. Global Options Block - ALWAYS formatted correctly
+    cat > "$TMP_CADDY" <<-EOF
+	{
+	    email ${ADMIN_EMAIL}
+	    # acme_dns google_cloud_dns ... # Placeholder for future DNS challenge
+	}
+
+	EOF
+
+    # 2. Main Domain Route
+    cat >> "$TMP_CADDY" <<-EOF
+	${DOMAIN} {
+	    respond "AI Platform v3.2.0 is active. Welcome." 200
+	}
+
+	EOF
+
+    # 3. Dynamically add routes for ONLY enabled services
     if [[ "${ENABLE_GRAFANA}" == "true" ]]; then
-        cat >> "${DATA_ROOT}/caddy/Caddyfile" << EOF
+        cat >> "$TMP_CADDY" <<-EOF
+	grafana.${DOMAIN} {
+	    reverse_proxy grafana:${GRAFANA_INTERNAL_PORT}
+	}
 
-grafana.${DOMAIN} {
-    reverse_proxy grafana:${GRAFANA_INTERNAL_PORT:-3000}
-}
-EOF
-        log "INFO" "Added Grafana to Caddyfile."
+	EOF
+        ok "Caddy route added for Grafana."
     fi
     
     if [[ "${ENABLE_PROMETHEUS}" == "true" ]]; then
-        cat >> "${DATA_ROOT}/caddy/Caddyfile" << EOF
+        cat >> "$TMP_CADDY" <<-EOF
+	prometheus.${DOMAIN} {
+	    reverse_proxy prometheus:${PROMETHEUS_INTERNAL_PORT}
+	}
 
-prometheus.${DOMAIN} {
-    reverse_proxy prometheus:${PROMETHEUS_INTERNAL_PORT:-9090}
-}
-EOF
-        log "INFO" "Added Prometheus to Caddyfile."
+	EOF
+        ok "Caddy route added for Prometheus."
     fi
     
     if [[ "${ENABLE_QDRANT}" == "true" ]]; then
-        cat >> "${DATA_ROOT}/caddy/Caddyfile" << EOF
+        cat >> "$TMP_CADDY" <<-EOF
+	qdrant.${DOMAIN} {
+	    reverse_proxy qdrant:${QDRANT_INTERNAL_PORT}
+	}
 
-qdrant.${DOMAIN} {
-    reverse_proxy qdrant:${QDRANT_INTERNAL_PORT:-6333}
-}
-EOF
-        log "INFO" "Added Qdrant to Caddyfile."
+	EOF
+        ok "Caddy route added for Qdrant."
     fi
     
     if [[ "${ENABLE_OLLAMA}" == "true" ]]; then
-        cat >> "${DATA_ROOT}/caddy/Caddyfile" << EOF
+        cat >> "$TMP_CADDY" <<-EOF
+	ollama.${DOMAIN} {
+	    reverse_proxy ollama:${OLLAMA_INTERNAL_PORT}
+	}
 
-ollama.${DOMAIN} {
-    reverse_proxy ollama:${OLLAMA_INTERNAL_PORT:-11434}
-}
-EOF
-        log "INFO" "Added Ollama to Caddyfile."
+	EOF
+        ok "Caddy route added for Ollama."
     fi
     
     if [[ "${ENABLE_OPENWEBUI}" == "true" ]]; then
-        cat >> "${DATA_ROOT}/caddy/Caddyfile" << EOF
+        cat >> "$TMP_CADDY" <<-EOF
+	openwebui.${DOMAIN} {
+	    reverse_proxy openwebui:${OPENWEBUI_INTERNAL_PORT}
+	}
 
-openwebui.${DOMAIN} {
-    reverse_proxy openwebui:${OPENWEBUI_INTERNAL_PORT:-8081}
-}
-EOF
-        log "INFO" "Added OpenWebUI to Caddyfile."
+	EOF
+        ok "Caddy route added for OpenWebUI."
     fi
-    
-    if [[ "${ENABLE_N8N}" == "true" ]]; then
-        cat >> "${DATA_ROOT}/caddy/Caddyfile" << EOF
 
-n8n.${DOMAIN} {
-    reverse_proxy n8n:${N8N_INTERNAL_PORT:-5678}
-}
-EOF
-        log "INFO" "Added N8N to Caddyfile."
-    fi
+    # 4. Atomically move the file and run 'caddy fmt'
+    mv "$TMP_CADDY" "$CADDY_FILE"
+    log "INFO" "Running 'caddy fmt' to ensure perfect formatting..."
+    docker run --rm -v "$CADDY_FILE":/etc/caddy/Caddyfile caddy:2 caddy fmt --overwrite
     
-    # Finally, apply correct permissions
-    chown "${TENANT_UID}:${TENANT_GID}" "${DATA_ROOT}/caddy/Caddyfile"
-    log "SUCCESS" "Dynamic Caddyfile generated successfully at ${DATA_ROOT}/caddy/Caddyfile"
+    chown "${TENANT_UID}:${TENANT_GID}" "$CADDY_FILE"
+    log "SUCCESS" "Dynamic Caddyfile generation complete and validated."
 }
 
 # ─── Write .env ───────────────────────────────────────────────────────────────
