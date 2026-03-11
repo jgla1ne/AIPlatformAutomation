@@ -295,10 +295,10 @@ add_grafana() {
     networks:
       - default
     environment:
-      - GF_SECURITY_ADMIN_USER=\${GRAFANA_ADMIN_USER}
-      - GF_SECURITY_ADMIN_PASSWORD=\${GRAFANA_ADMIN_PASSWORD}
-      - GF_LOG_LEVEL=\${GF_LOG_LEVEL:-info}
-      - GF_LOG_MODE=\${GF_LOG_MODE:-console file}
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+      - GF_LOG_LEVEL=${GF_LOG_LEVEL:-info}
+      - GF_LOG_MODE=${GF_LOG_MODE:-console,file}
     volumes:
       - \${TENANT_DIR}/grafana:/var/lib/grafana
 EOF
@@ -315,8 +315,8 @@ add_prometheus() {
     networks:
       - default
     environment:
-      PROMETHEUS_LOG_LEVEL: "\${PROMETHEUS_LOG_LEVEL:-info}"
-      PROMETHEUS_LOG_FORMAT: "\${PROMETHEUS_LOG_FORMAT:-json}"
+      - PROMETHEUS_LOG_LEVEL=${PROMETHEUS_LOG_LEVEL:-info}
+      - PROMETHEUS_LOG_FORMAT=${PROMETHEUS_LOG_FORMAT:-json}
     volumes:
       - \${TENANT_DIR}/prometheus.yml:/etc/prometheus/prometheus.yml
       - \${TENANT_DIR}/prometheus-data:/prometheus
@@ -334,8 +334,8 @@ add_caddy() {
     networks:
       - default
     environment:
-      CADDY_LOG_LEVEL=\${CADDY_LOG_LEVEL:-info}
-      CADDY_LOG_FORMAT=\${CADDY_LOG_FORMAT:-json}
+      - CADDY_LOG_LEVEL=${CADDY_LOG_LEVEL:-info}
+      - CADDY_LOG_FORMAT=${CADDY_LOG_FORMAT:-json}
     volumes:
       - \${TENANT_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile
       - \${TENANT_DIR}/caddy/data:/data
@@ -373,6 +373,26 @@ test_service_urls() {
     done
     
     log "=== END URL TESTING ==="
+}
+
+prepare_data_directories() {
+    log "=== PREPARING AND SETTING OWNERSHIP FOR DATA DIRECTORIES ==="
+    
+    # Create all potential directories
+    mkdir -p "${TENANT_DIR}/postgres" "${TENANT_DIR}/redis" "${TENANT_DIR}/qdrant" \
+             "${TENANT_DIR}/grafana" "${TENANT_DIR}/prometheus" "${TENANT_DIR}/caddy_data" \
+             "${TENANT_DIR}/caddy_config" "${TENANT_DIR}/caddy" # Caddy needs a config dir too
+
+    # Apply specific ownership based on service's container user
+    [[ "${ENABLE_POSTGRES}" == "true" ]] && chown -R "${POSTGRES_UID:-70}:${TENANT_GID:-1001}" "${TENANT_DIR}/postgres" && ok "Postgres permissions set."
+    [[ "${ENABLE_REDIS}" == "true" ]] && chown -R "${REDIS_UID:-999}:${TENANT_GID:-1001}" "${TENANT_DIR}/redis" && ok "Redis permissions set."
+    [[ "${ENABLE_QDRANT}" == "true" ]] && chown -R "${QDRANT_UID:-1000}:${TENANT_GID:-1001}" "${TENANT_DIR}/qdrant" && ok "Qdrant permissions set."
+    [[ "${ENABLE_PROMETHEUS}" == "true" ]] && chown -R "${PROMETHEUS_UID:-65534}:${TENANT_GID:-1001}" "${TENANT_DIR}/prometheus" && ok "Prometheus permissions set."
+    [[ "${ENABLE_GRAFANA}" == "true" ]] && chown -R "${GRAFANA_UID:-472}:${TENANT_GID:-1001}" "${TENANT_DIR}/grafana" && ok "Grafana permissions set."
+    [[ "${ENABLE_CADDY}" == "true" ]] && chown -R "${CADDY_UID:-1001}:${TENANT_GID:-1001}" "${TENANT_DIR}/caddy_data" "${TENANT_DIR}/caddy_config" "${TENANT_DIR}/caddy" && ok "Caddy permissions set."
+    
+    log "All data directory permissions have been configured."
+    log "=== END DATA DIRECTORY PREPARATION ==="
 }
 
 # --- Main Function ---
@@ -431,6 +451,9 @@ EOF
 
     log "Pulling all required Docker images..."
     docker compose pull --quiet >> "${LOG_FILE}" 2>&1
+
+    # Prepare data directories with correct permissions
+    prepare_data_directories
 
     log "Starting all services in detached mode..."
     log "Executing docker compose up -d... Output logged to ${LOG_FILE}"
