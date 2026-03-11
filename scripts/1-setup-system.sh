@@ -2254,65 +2254,41 @@ apply_final_ownership() {
         chown -R 70:70 "${DATA_ROOT}/postgres"
         log "SUCCESS" "Set ownership for 'postgres' directory to 70:70."
     fi
-
+    
     # Exception for Grafana (requires UID 472)
     if [[ -d "${DATA_ROOT}/grafana" ]]; then
         chown -R 472:472 "${DATA_ROOT}/grafana"
         log "SUCCESS" "Set ownership for 'grafana' directory to 472:472."
     fi
-
-    # Exception for n8n (requires UID 1000)
-    if [[ -d "${DATA_ROOT}/n8n" ]]; then
-        chown -R 1000:1000 "${DATA_ROOT}/n8n"
-        log "SUCCESS" "Set ownership for 'n8n' directory to 1000:1000."
-    fi
-
-    # Exception for Flowise (requires UID 1000)
-    if [[ -d "${DATA_ROOT}/flowise" ]]; then
-        chown -R 1000:1000 "${DATA_ROOT}/flowise"
-        log "SUCCESS" "Set ownership for 'flowise' directory to 1000:1000."
-    fi
     
-    # Exception for Prometheus (requires UID 65534)
-    if [[ -d "${DATA_ROOT}/prometheus-data" ]]; then
-        chown -R 65534:65534 "${DATA_ROOT}/prometheus-data"
+    # Exception for Prometheus (runs as nobody 65534:65534)
+    if [[ -d "${DATA_ROOT}/prometheus" ]]; then
+        chown -R 65534:65534 "${DATA_ROOT}/prometheus"
         log "SUCCESS" "Set ownership for 'prometheus' directory to 65534:65534."
     fi
-
-    # Exception for Redis (requires UID 999)
+    
+    # Exception for Redis (drops to redis user 999:1000 per Docker docs)
     if [[ -d "${DATA_ROOT}/redis" ]]; then
-        chown -R 999:999 "${DATA_ROOT}/redis"
-        log "SUCCESS" "Set ownership for 'redis' directory to 999:999."
+        chown -R 999:1000 "${DATA_ROOT}/redis"
+        log "SUCCESS" "Set ownership for 'redis' directory to 999:1000."
     fi
-
-    # Exception for Ollama (requires UID 1001)
-    if [[ -d "${DATA_ROOT}/ollama" ]]; then
-        chown -R 1001:1001 "${DATA_ROOT}/ollama"
-        log "SUCCESS" "Set ownership for 'ollama' directory to 1001:1001."
+    
+    # Exception for AnythingLLM (runs as UID 1000 per docs)
+    if [[ -d "${DATA_ROOT}/anythingllm" ]]; then
+        chown -R 1000:1000 "${DATA_ROOT}/anythingllm"
+        log "SUCCESS" "Set ownership for 'anythingllm' directory to 1000:1000."
     fi
-
-    # Exception for Qdrant (requires UID 1000)
+    
+    # Exception for Qdrant (runAsUser: 1000 per security docs)
     if [[ -d "${DATA_ROOT}/qdrant" ]]; then
         chown -R 1000:1000 "${DATA_ROOT}/qdrant"
         log "SUCCESS" "Set ownership for 'qdrant' directory to 1000:1000."
     fi
-
-    # Exception for Flowise (requires UID 1000)
-    if [[ -d "${DATA_ROOT}/flowise" ]]; then
-        chown -R 1000:1000 "${DATA_ROOT}/flowise"
-        log "SUCCESS" "Set ownership for 'flowise' directory to 1000:1000."
-    fi
-
-    # Exception for OpenWebUI (requires UID 1000)
-    if [[ -d "${DATA_ROOT}/openwebui" ]]; then
-        chown -R 1000:1000 "${DATA_ROOT}/openwebui"
-        log "SUCCESS" "Set ownership for 'openwebui' directory to 1000:1000."
-    fi
-
-    # Exception for AnythingLLM (requires UID 1000)
-    if [[ -d "${DATA_ROOT}/anythingllm" ]]; then
-        chown -R 1000:1000 "${DATA_ROOT}/anythingllm"
-        log "SUCCESS" "Set ownership for 'anythingllm' directory to 1000:1000."
+    
+    # Exception for N8N (runs as node user 1000:1000)
+    if [[ -d "${DATA_ROOT}/n8n" ]]; then
+        chown -R 1000:1000 "${DATA_ROOT}/n8n"
+        log "SUCCESS" "Set ownership for 'n8n' directory to 1000:1000."
     fi
 
     # Exception for LiteLLM (requires UID 1000)
