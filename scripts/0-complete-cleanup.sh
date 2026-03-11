@@ -10,7 +10,18 @@ set -euo pipefail
 
 # --- SOURCE MISSION CONTROL UTILITIES ---
 # All logging and utility functions are now sourced from the central script.
-source "$(dirname "${BASH_SOURCE[0]}")/3-configure-services.sh"
+# source "$(dirname "${BASH_SOURCE[0]}")/3-configure-services.sh"
+
+# --- Basic Logging Functions ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+log() { echo -e "${CYAN}[INFO]${NC}    $1"; }
+ok() { echo -e "${GREEN}[OK]${NC}      $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
+fail() { echo -e "${RED}[FAIL]${NC}    $*"; exit 1; }
 
 # --- Tenant ID Check ---
 if [[ -z "${1:-}" ]]; then
