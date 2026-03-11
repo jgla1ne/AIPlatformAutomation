@@ -2273,6 +2273,11 @@ apply_final_ownership() {
                     log "INFO" "Skipping ${service_name} - already has system ownership"
                     continue
                     ;;
+                qdrant)
+                    # Qdrant requires UID 1000 per security documentation
+                    chown -R 1000:1000 "${service_dir}"
+                    log "SUCCESS" "Set ownership for '${service_name}' to 1000:1000 (Qdrant requirement)"
+                    ;;
                 *)
                     # All other services use tenant user for non-root compliance
                     chown -R "${TENANT_UID}:${TENANT_GID}" "${service_dir}"

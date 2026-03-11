@@ -1,14 +1,8 @@
 #!/usr/bin/env bash
+# =============================================================================
+# Script 3: Configure Services - INDIVIDUAL LOGGING ENGINE
+# =============================================================================
 set -euo pipefail
-
-# --- Tenant ID Check ---
-if [[ -z "${1:-}" ]] && [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    echo "ERROR: TENANT_ID is required. Usage: sudo bash $0 <tenant_id>" >&2
-    exit 1
-fi
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    TENANT_ID="$1"
-fi
 
 # --- Colors and Logging ---
 RED='\033[0;31m'
@@ -22,6 +16,15 @@ log() { echo -e "${CYAN}[INFO]${NC}    $1"; }
 ok() { echo -e "${GREEN}[OK]${NC}      $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
 fail() { echo -e "${RED}[FAIL]${NC}    $*"; exit 1; }
+
+# --- Tenant ID Check ---
+if [[ -z "${1:-}" ]] && [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    echo "ERROR: TENANT_ID is required. Usage: sudo bash $0 <tenant_id>" >&2
+    exit 1
+fi
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    TENANT_ID="$1"
+fi
 
 # --- Environment Setup ---
 if [[ -n "${TENANT_ID:-}" ]]; then
@@ -37,67 +40,349 @@ if [[ -n "${TENANT_ID:-}" ]]; then
     DATA_ROOT="${TENANT_DIR}"
 fi
 
-# --- Default Values ---
-ENABLE_TAILSCALE=${ENABLE_TAILSCALE:-false}
-ENABLE_RCLONE=${ENABLE_RCLONE:-false}
-ENABLE_OPENCLAW=${ENABLE_OPENCLAW:-false}
-ENABLE_POSTGRES=${ENABLE_POSTGRES:-false}
-ENABLE_REDIS=${ENABLE_REDIS:-false}
-ENABLE_CADDY=${ENABLE_CADDY:-false}
-ENABLE_OLLAMA=${ENABLE_OLLAMA:-false}
-ENABLE_OPENWEBUI=${ENABLE_OPENWEBUI:-false}
-ENABLE_ANYTHINGLLM=${ENABLE_ANYTHINGLLM:-false}
-ENABLE_DIFY=${ENABLE_DIFY:-false}
-ENABLE_N8N=${ENABLE_N8N:-false}
-ENABLE_FLOWISE=${ENABLE_FLOWISE:-false}
-ENABLE_LITELLM=${ENABLE_LITELLM:-false}
-ENABLE_QDRANT=${ENABLE_QDRANT:-false}
-ENABLE_MILVUS=${ENABLE_MILVUS:-false}
-ENABLE_CHROMA=${ENABLE_CHROMA:-false}
-ENABLE_GRAFANA=${ENABLE_GRAFANA:-false}
-ENABLE_PROMETHEUS=${ENABLE_PROMETHEUS:-false}
-ENABLE_AUTHENTIK=${ENABLE_AUTHENTIK:-false}
+# --- Service Log Configuration Functions ---
+configure_service_logging() {
+    local service=$1
+    local enable_logs="${2:-true}"
+    local log_level="${3:-info}"
+    local log_retention="${4:-7}"  # days
+    
+    local service_log_dir="${TENANT_DIR}/${service}/logs"
+    local service_config_file="${TENANT_DIR}/${service}/logging.conf"
+    
+    log "=== CONFIGURING LOGGING FOR $service ==="
+    
+    # Create service log directory
+    mkdir -p "$service_log_dir"
+    chown "${TENANT_UID:-1001}:${TENANT_GID:-1001}" "$service_log_dir"
+    
+    if [[ "$enable_logs" == "true" ]]; then
+        log "Enabling logging for $service with level: $log_level"
+        
+        # Create service-specific logging configuration
+        cat > "$service_config_file" << EOF
+# Service Logging Configuration for $service
+# Generated: $(date)
+ENABLE_LOGGING=true
+LOG_LEVEL=$log_level
+LOG_RETENTION_DAYS=$log_retention
+LOG_DIR=$service_log_dir
+LOG_ROTATION=true
+LOG_MAX_SIZE=100M
+LOG_FORMAT=json
+EOF
+        
+        # Update .env with service-specific logging variables
+        case "$service" in
+            "postgres")
+                echo "POSTGRES_LOGGING_ENABLED=true" >> "${ENV_FILE}"
+                echo "POSTGRES_LOG_DIR=$service_log_dir" >> "${ENV_FILE}"
+                echo "POSTGRES_LOG_LEVEL=$log_level" >> "${ENV_FILE}"
+                echo "POSTGRES_LOG_ROTATION=true" >> "${ENV_FILE}"
+                ;;
+            "redis")
+                echo "REDIS_LOGGING_ENABLED=true" >> "${ENV_FILE}"
+                echo "REDIS_LOG_DIR=$service_log_dir" >> "${ENV_FILE}"
+                echo "REDIS_LOGLEVEL=$log_level" >> "${ENV_FILE}"
+                ;;
+            "qdrant")
+                echo "QDRANT_LOGGING_ENABLED=true" >> "${ENV_FILE}"
+                echo "QDRANT_LOG_DIR=$service_log_dir" >> "${ENV_FILE}"
+                echo "QDRANT__LOG_LEVEL=$log_level" >> "${ENV_FILE}"
+                ;;
+            "grafana")
+                echo "GRAFANA_LOGGING_ENABLED=true" >> "${ENV_FILE}"
+                echo "GRAFANA_LOG_DIR=$service_log_dir" >> "${ENV_FILE}"
+                echo "GF_LOG_LEVEL=$log_level" >> "${ENV_FILE}"
+                echo "GF_LOG_MODE=console file" >> "${ENV_FILE}"
+                echo "GF_PATHS_LOGS=$service_log_dir" >> "${ENV_FILE}"
+                ;;
+            "prometheus")
+                echo "PROMETHEUS_LOGGING_ENABLED=true" >> "${ENV_FILE}"
+                echo "PROMETHEUS_LOG_DIR=$service_log_dir" >> "${ENV_FILE}"
+                echo "PROMETHEUS_LOG_LEVEL=$log_level" >> "${ENV_FILE}"
+                echo "PROMETHEUS_LOG_FORMAT=json" >> "${ENV_FILE}"
+                ;;
+            "caddy")
+                echo "CADDY_LOGGING_ENABLED=true" >> "${ENV_FILE}"
+                echo "CADDY_LOG_DIR=$service_log_dir" >> "${ENV_FILE}"
+                echo "CADDY_LOG_LEVEL=$log_level" >> "${ENV_FILE}"
+                echo "CADDY_LOG_FORMAT=json" >> "${ENV_FILE}"
+                ;;
+        esac
+        
+        ok "Logging enabled for $service -> $service_log_dir"
+    else
+        log "Disabling logging for $service"
+        echo "POSTGRES_LOGGING_ENABLED=false" >> "${ENV_FILE}"
+        echo "REDIS_LOGGING_ENABLED=false" >> "${ENV_FILE}"
+        echo "QDRANT_LOGGING_ENABLED=false" >> "${ENV_FILE}"
+        echo "GRAFANA_LOGGING_ENABLED=false" >> "${ENV_FILE}"
+        echo "PROMETHEUS_LOGGING_ENABLED=false" >> "${ENV_FILE}"
+        echo "CADDY_LOGGING_ENABLED=false" >> "${ENV_FILE}"
+        warn "Logging disabled for $service"
+    fi
+    
+    log "=== END LOGGING CONFIGURATION FOR $service ==="
+}
 
-# --- Permissions Function ---
-permissions_set_ownership() {
-    local service="$1"
-    local uid="${2:-${TENANT_UID:-1001}"
-    local gid="${3:-${TENANT_GID:-1001}"
-    local dir="${DATA_ROOT}/${service}"
-    if [[ -d "${dir}" ]]; then
-        chown -R "${uid}:${gid}" "${dir}"
-        log "Set ownership for '${service}' directory to ${uid}:${gid}."
+# --- Health Check Functions ---
+check_service_health() {
+    local service=$1
+    local health_url=$2
+    local timeout=${3:-10}
+    
+    log "Checking health for $service..."
+    
+    if curl -s -f --max-time "$timeout" "$health_url" >/dev/null 2>&1; then
+        ok "$service is healthy"
+        return 0
+    else
+        warn "$service is unhealthy or not responding"
+        return 1
     fi
 }
 
-# --- Compatibility Aliases ---
-permissions_set_ownership() { permissions_set_ownership "$@"; }
-permissions_set_ownership() { permissions_set_ownership "$@"; }
+check_port_connectivity() {
+    local port=$1
+    local service=$2
+    local timeout=${3:-5}
+    
+    if nc -z -w "$timeout" localhost "$port" 2>/dev/null; then
+        ok "$service (port $port) is accessible"
+        return 0
+    else
+        warn "$service (port $port) is not accessible"
+        return 1
+    fi
+}
+
+# --- URL Testing Functions ---
+test_internal_urls() {
+    log "=== TESTING INTERNAL URLS ==="
+    
+    local internal_tests=(
+        "postgres:5432:nc"
+        "redis:6379:nc"
+        "qdrant:6333/health:http"
+        "grafana:3000/api/health:http"
+        "prometheus:9090/-/healthy:http"
+        "caddy:80:http"
+    )
+    
+    for test in "${internal_tests[@]}"; do
+        IFS=':' read -r service port_or_path method <<< "$test"
+        
+        case "$method" in
+            "nc")
+                check_port_connectivity "$port_or_path" "$service"
+                ;;
+            "http")
+                check_service_health "$service" "http://localhost:$port_or_path"
+                ;;
+        esac
+    done
+    
+    log "=== END INTERNAL URL TESTING ==="
+}
+
+test_external_urls() {
+    log "=== TESTING EXTERNAL URLS ==="
+    
+    if [[ -n "${DOMAIN:-}" ]]; then
+        local external_tests=(
+            "https://${DOMAIN}:main"
+            "https://grafana.${DOMAIN}:grafana"
+            "https://prometheus.${DOMAIN}:prometheus"
+            "https://auth.${DOMAIN}:authentik"
+        )
+        
+        for test in "${external_tests[@]}"; do
+            IFS=':' read -r url service <<< "$test"
+            
+            if curl -s -f --max-time 10 "$url" >/dev/null 2>&1; then
+                ok "$service ($url) is reachable"
+            else
+                warn "$service ($url) is not reachable"
+            fi
+        done
+    else
+        warn "DOMAIN not set, skipping external URL tests"
+    fi
+    
+    log "=== END EXTERNAL URL TESTING ==="
+}
+
+# --- Log Management Functions ---
+rotate_service_logs() {
+    local service=$1
+    local service_log_dir="${TENANT_DIR}/${service}/logs"
+    
+    if [[ -d "$service_log_dir" ]]; then
+        log "Rotating logs for $service..."
+        
+        # Compress logs older than 1 day
+        find "$service_log_dir" -name "*.log" -mtime +1 -exec gzip {} \;
+        
+        # Remove compressed logs older than retention period
+        find "$service_log_dir" -name "*.log.gz" -mtime +7 -delete
+        
+        ok "Log rotation completed for $service"
+    fi
+}
+
+cleanup_old_logs() {
+    log "=== CLEANING UP OLD LOGS ==="
+    
+    # Clean up deployment logs older than 30 days
+    find "${TENANT_DIR}/logs" -name "deploy-*.log" -mtime +30 -delete
+    
+    # Clean up service logs older than retention period
+    for service in postgres redis qdrant grafana prometheus caddy; do
+        rotate_service_logs "$service"
+    done
+    
+    ok "Log cleanup completed"
+    log "=== END LOG CLEANUP ==="
+}
+
+# --- Dashboard Functions ---
+show_logging_dashboard() {
+    log "=== LOGGING DASHBOARD ==="
+    
+    echo ""
+    echo "╔════════════════════════════════════════════════════════════════════════════════╗"
+    echo "║                      🗂 SERVICE LOGGING DASHBOARD                           ║"
+    echo "╚══════════════════════════════════════════════════════════════════════════════╝"
+    echo ""
+    
+    printf "%-15s %-12s %-25s %-15s %-10s\n" "SERVICE" "ENABLED" "LOG_DIR" "LEVEL" "RETENTION"
+    printf "%-15s %-12s %-25s %-15s %-10s\n" "--------" "-------" "--------" "-----" "---------"
+    
+    services=("postgres" "redis" "qdrant" "grafana" "prometheus" "caddy")
+    
+    for service in "${services[@]}"; do
+        local enabled_var="${service^^}_LOGGING_ENABLED"
+        local enabled="${!enabled_var:-false}"
+        local log_dir="${TENANT_DIR}/${service}/logs"
+        local level_var="${service^^}_LOG_LEVEL"
+        local level="${!level_var:-info}"
+        local retention="7 days"
+        
+        if [[ "$enabled" == "true" ]]; then
+            printf "%-15s %-12s %-25s %-15s %-10s\n" "$service" "✅ YES" "$log_dir" "$level" "$retention"
+        else
+            printf "%-15s %-12s %-25s %-15s %-10s\n" "$service" "❌ NO" "N/A" "N/A" "N/A"
+        fi
+    done
+    
+    echo ""
+    echo "📋 LOG LOCATIONS:"
+    echo "   • Main deployment logs: ${TENANT_DIR}/logs/deploy-*.log"
+    echo "   • Service logs: ${TENANT_DIR}/*/logs/"
+    echo ""
+    echo "🔧 LOG MANAGEMENT:"
+    echo "   • Rotate logs: sudo bash $0 ${TENANT_ID} --rotate"
+    echo "   • Clean logs: sudo bash $0 ${TENANT_ID} --cleanup"
+    echo ""
+    echo "╔════════════════════════════════════════════════════════════════════════════════╗"
+    echo "║                      END LOGGING DASHBOARD                                   ║"
+    echo "╚══════════════════════════════════════════════════════════════════════════════╝"
+    echo ""
+    
+    log "=== END LOGGING DASHBOARD ==="
+}
 
 # --- Main Function ---
 main() {
-    log "Starting platform health check..."
-    local all_ok=true
-    if [[ "${ENABLE_GRAFANA}" == "true" ]]; then
-        if curl -s "https://grafana.${DOMAIN}" >/dev/null; then
-            ok "Grafana is responding."
-        else
-            warn "Grafana is not yet responding."
-            all_ok=false
-        fi
+    local tenant_id="${1:-}"
+    local action="${2:-configure}"
+    
+    if [[ -z "$tenant_id" ]]; then
+        echo "Usage: sudo bash $0 <tenant_id> [action]"
+        echo ""
+        echo "Actions:"
+        echo "  configure  - Configure logging for all services (default)"
+        echo "  disable    - Disable logging for all services"
+        echo "  rotate    - Rotate service logs"
+        echo "  cleanup    - Clean up old logs"
+        echo "  dashboard  - Show logging dashboard"
+        echo "  health     - Run comprehensive health checks"
+        exit 1
     fi
-    if [[ "${all_ok}" == "false" ]]; then
-        warn "Services may need time to start."
-    else
-        ok "All enabled web services are responding."
-    fi
-    log "Configuration and verification complete."
-    echo ""
-    echo -e "${GREEN}AI Platform is Operational!${NC}"
-    echo ""
+    
+    # Set global tenant ID for the script
+    TENANT_ID="$tenant_id"
+    
+    case "$action" in
+        "configure")
+            log "Starting service logging configuration..."
+            
+            # Configure logging for all enabled services
+            [[ "${ENABLE_POSTGRES}" == "true" ]] && configure_service_logging "postgres" "true" "info"
+            [[ "${ENABLE_REDIS}" == "true" ]] && configure_service_logging "redis" "true" "notice"
+            [[ "${ENABLE_QDRANT}" == "true" ]] && configure_service_logging "qdrant" "true" "info"
+            [[ "${ENABLE_GRAFANA}" == "true" ]] && configure_service_logging "grafana" "true" "info"
+            [[ "${ENABLE_PROMETHEUS}" == "true" ]] && configure_service_logging "prometheus" "true" "info"
+            [[ "${ENABLE_CADDY}" == "true" ]] && configure_service_logging "caddy" "true" "info"
+            
+            # Show logging dashboard
+            show_logging_dashboard
+            
+            ok "Service logging configuration completed."
+            ;;
+        "disable")
+            log "Disabling logging for all services..."
+            
+            # Disable logging for all services
+            for service in postgres redis qdrant grafana prometheus caddy; do
+                configure_service_logging "$service" "false"
+            done
+            
+            ok "Logging disabled for all services."
+            ;;
+        "rotate")
+            log "Rotating service logs..."
+            cleanup_old_logs
+            ;;
+        "cleanup")
+            log "Cleaning up old logs..."
+            cleanup_old_logs
+            ;;
+        "dashboard")
+            show_logging_dashboard
+            ;;
+        "health")
+            log "Starting comprehensive health checks..."
+            
+            # Test internal URLs
+            test_internal_urls
+            
+            # Test external URLs
+            test_external_urls
+            
+            # Show container status
+            log "=== CONTAINER STATUS ==="
+            cd "${TENANT_DIR}"
+            docker compose ps
+            log "=== END CONTAINER STATUS ==="
+            
+            ok "Health checks completed."
+            ;;
+        *)
+            echo "Usage: sudo bash $0 <tenant_id> [action]"
+            echo ""
+            echo "Actions:"
+            echo "  configure  - Configure logging for all services (default)"
+            echo "  disable    - Disable logging for all services"
+            echo "  rotate    - Rotate service logs"
+            echo "  cleanup    - Clean up old logs"
+            echo "  dashboard  - Show logging dashboard"
+            echo "  health     - Run comprehensive health checks"
+            exit 1
+            ;;
+    esac
 }
 
-# --- Execute only when run directly ---
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && [[ "${1:-}" != "" ]]; then
-    main "$@"
-fi
+# Call main function to execute the script
+main "$@"

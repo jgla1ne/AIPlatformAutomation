@@ -1,27 +1,150 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script 2: Deploy Services - STABLE v3.1
+# Script 2: Deploy Services - COMPREHENSIVE DEBUG LOGGING ENGINE
 # =============================================================================
-# PURPOSE: Reads pre-configured environment and deploys services.
-#          This script's ONLY job is to generate a valid docker-compose.yml
-#          and run `docker compose up -d`. It does not configure or verify.
-# =============================================================================
-
 set -euo pipefail
+
+# --- DEBUG MODE FLAG ---
+DEBUG_MODE="${DEBUG_MODE:-false}"
+if [[ "${DEBUG_MODE}" == "true" ]]; then
+    set -x
+fi
+
+# --- Colors and Logging ---
+RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m' CYAN='\033[0;36m' BLUE='\033[0;34m' NC='\033[0m'
+LOG_FILE=""  # Initialize LOG_FILE early
+
+log() { 
+    if [[ -n "${LOG_FILE}" ]]; then
+        echo -e "${CYAN}[INFO]${NC}    $1" | tee -a "${LOG_FILE}"
+    else
+        echo -e "${CYAN}[INFO]${NC}    $1"
+    fi
+}
+ok() { 
+    if [[ -n "${LOG_FILE}" ]]; then
+        echo -e "${GREEN}[OK]${NC}      $*" | tee -a "${LOG_FILE}"
+    else
+        echo -e "${GREEN}[OK]${NC}      $*"
+    fi
+}
+warn() { 
+    if [[ -n "${LOG_FILE}" ]]; then
+        echo -e "${YELLOW}[WARN]${NC}    $*" | tee -a "${LOG_FILE}"
+    else
+        echo -e "${YELLOW}[WARN]${NC}    $*"
+    fi
+}
+fail() { 
+    if [[ -n "${LOG_FILE}" ]]; then
+        echo -e "${RED}[FAIL]${NC}    $*" | tee -a "${LOG_FILE}"
+    else
+        echo -e "${RED}[FAIL]${NC}    $*"
+    fi
+    exit 1
+}
+
+# --- Deep Logging Functions ---
+enable_service_debug_logging() {
+    local service=$1
+    local log_level="${2:-debug}"
+    
+    log "=== ENABLING DEBUG LOGGING FOR $service ==="
+    
+    # Add debug environment variables to .env
+    case "$service" in
+        "postgres")
+            echo "POSTGRES_LOG_LEVEL=$log_level" >> "${ENV_FILE}"
+            echo "POSTGRES_LOG_MIN_DURATION_STATEMENT=0" >> "${ENV_FILE}"
+            echo "POSTGRES_LOG_MIN_MESSAGES=debug5" >> "${ENV_FILE}"
+            ;;
+        "redis")
+            echo "REDIS_LOGLEVEL=$log_level" >> "${ENV_FILE}"
+            ;;
+        "qdrant")
+            echo "QDRANT__LOG_LEVEL=$log_level" >> "${ENV_FILE}"
+            echo "QDRANT__SERVICE__HTTP__ENABLE_CORS=true" >> "${ENV_FILE}"
+            ;;
+        "grafana")
+            echo "GF_LOG_LEVEL=$log_level" >> "${ENV_FILE}"
+            echo "GF_LOG_MODE=console file" >> "${ENV_FILE}"
+            ;;
+        "prometheus")
+            echo "PROMETHEUS_LOG_LEVEL=$log_level" >> "${ENV_FILE}"
+            echo "PROMETHEUS_LOG_FORMAT=json" >> "${ENV_FILE}"
+            ;;
+        "caddy")
+            echo "CADDY_LOG_LEVEL=$log_level" >> "${ENV_FILE}"
+            echo "CADDY_LOG_FORMAT=json" >> "${ENV_FILE}"
+            ;;
+    esac
+    
+    log "Debug logging enabled for $service with level: $log_level"
+}
+
+capture_docker_logs() {
+    local service=$1
+    local log_file="${TENANT_DIR}/logs/deploy-${service}-$(date +%Y%m%d-%H%M%S).log"
+    
+    log "=== CAPTURING DOCKER LOGS FOR $service ==="
+    
+    # Get container logs with maximum verbosity
+    cd "${TENANT_DIR}"
+    if docker compose logs "$service" --timestamps --follow --tail=100 > "$log_file" 2>&1 & then
+        local log_pid=$!
+        log "Started capturing logs for $service (PID: $log_pid) to $log_file"
+        
+        # Store PID for later reference
+        echo "$log_pid" > "${TENANT_DIR}/logs/${service}-log-pid.txt"
+        
+        # Wait a bit to ensure logging starts
+        sleep 2
+        
+        # Check if log file has content
+        if [[ -s "$log_file" ]]; then
+            log "✅ Successfully capturing logs for $service"
+        else
+            log "❌ Failed to capture logs for $service"
+            kill $log_pid 2>/dev/null || true
+        fi
+    else
+        log "❌ Failed to start log capture for $service"
+    fi
+}
+
+test_service_urls() {
+    log "=== COMPREHENSIVE URL TESTING ==="
+    
+    local test_results=()
+    
+    # Test internal URLs
+    test_results+=("INTERNAL: http://localhost:5432 - $(nc -z localhost 5432 && echo "✅ OPEN" || echo "❌ CLOSED")")
+    test_results+=("INTERNAL: http://localhost:6379 - $(nc -z localhost 6379 && echo "✅ OPEN" || echo "❌ CLOSED")")
+    test_results+=("INTERNAL: http://localhost:6333/health - $(curl -s -f http://localhost:6333/health >/dev/null 2>&1 && echo "✅ HEALTHY" || echo "❌ UNHEALTHY")")
+    test_results+=("INTERNAL: http://localhost:3000/api/health - $(curl -s -f http://localhost:3000/api/health >/dev/null 2>&1 && echo "✅ HEALTHY" || echo "❌ UNHEALTHY")")
+    test_results+=("INTERNAL: http://localhost:9090/-/healthy - $(curl -s -f http://localhost:9090/-/healthy >/dev/null 2>&1 && echo "✅ HEALTHY" || echo "❌ UNHEALTHY")")
+    test_results+=("INTERNAL: http://localhost:80 - $(curl -s -f http://localhost:80 >/dev/null 2>&1 && echo "✅ HEALTHY" || echo "❌ UNHEALTHY")")
+    
+    # Test external URLs if DOMAIN is set
+    if [[ -n "${DOMAIN:-}" ]]; then
+        test_results+=("EXTERNAL: https://${DOMAIN} - $(curl -s -f https://${DOMAIN} >/dev/null 2>&1 && echo "✅ REACHABLE" || echo "❌ NOT REACHABLE")")
+        test_results+=("EXTERNAL: https://grafana.${DOMAIN} - $(curl -s -f https://grafana.${DOMAIN} >/dev/null 2>&1 && echo "✅ REACHABLE" || echo "❌ NOT REACHABLE")")
+        test_results+=("EXTERNAL: https://prometheus.${DOMAIN} - $(curl -s -f https://prometheus.${DOMAIN} >/dev/null 2>&1 && echo "✅ REACHABLE" || echo "❌ NOT REACHABLE")")
+    fi
+    
+    # Log all test results
+    for result in "${test_results[@]}"; do
+        log "URL TEST: $result"
+    done
+    
+    log "=== END URL TESTING ==="
+}
 
 # --- Tenant ID Check ---
 if [[ -z "${1:-}" ]]; then
-    echo "ERROR: TENANT_ID is required. Usage: sudo bash $0 <tenant_id>" >&2
-    exit 1
+    fail "TENANT_ID is required. Usage: sudo bash $0 <tenant_id> [--debug]"
 fi
 TENANT_ID="$1"
-
-# --- Colors and Logging ---
-RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m' CYAN='\033[0;36m' NC='\033[0m'
-log() { echo -e "${CYAN}[INFO]${NC}    $1"; }
-ok() { echo -e "${GREEN}[OK]${NC}      $*"; }
-warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
-fail() { echo -e "${RED}[FAIL]${NC}    $*"; exit 1; }
 
 # --- Environment Setup ---
 TENANT_DIR="/mnt/data/${TENANT_ID}"
@@ -44,8 +167,145 @@ LOG_FILE="${LOG_DIR}/deploy-$(date +%Y%m%d-%H%M%S).log"
 exec > >(tee -a "${LOG_FILE}") 2>&1
 log "All output is now logged to: ${LOG_FILE}"
 
-# --- Docker Check ---
+# --- Enable Debug Logging for All Services ---
+log "=== ENABLING COMPREHENSIVE DEBUG LOGGING ==="
+if [[ "${DEBUG_MODE}" == "true" ]]; then
+    log "Debug mode enabled - enabling verbose logging for all services"
+    
+    # Enable debug for all enabled services
+    [[ "${ENABLE_POSTGRES}" == "true" ]] && enable_service_debug_logging "postgres"
+    [[ "${ENABLE_REDIS}" == "true" ]] && enable_service_debug_logging "redis"
+    [[ "${ENABLE_QDRANT}" == "true" ]] && enable_service_debug_logging "qdrant"
+    [[ "${ENABLE_GRAFANA}" == "true" ]] && enable_service_debug_logging "grafana"
+    [[ "${ENABLE_PROMETHEUS}" == "true" ]] && enable_service_debug_logging "prometheus"
+    [[ "${ENABLE_CADDY}" == "true" ]] && enable_service_debug_logging "caddy"
+    
+    log "Debug logging enabled for all services"
+fi
+log "=== END DEBUG LOGGING SETUP ==="
+
+# --- Service Generation Functions ---
+add_postgres() {
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    user: "\${POSTGRES_UID:-70}:\${POSTGRES_UID:-70}"
+    networks:
+      - default
+    environment:
+      POSTGRES_USER: "\${POSTGRES_USER}"
+      POSTGRES_PASSWORD: "\${POSTGRES_PASSWORD}"
+      POSTGRES_DB: "\${POSTGRES_DB}"
+      POSTGRES_LOG_LEVEL: "\${POSTGRES_LOG_LEVEL:-info}"
+      POSTGRES_LOG_MIN_DURATION_STATEMENT: "\${POSTGRES_LOG_MIN_DURATION_STATEMENT:-1000}"
+      POSTGRES_LOG_MIN_MESSAGES: "\${POSTGRES_LOG_MIN_MESSAGES:-warning}"
+    volumes:
+      - \${TENANT_DIR}/postgres:/var/lib/postgresql/data
+EOF
+    ok "Added 'postgres' service."
+}
+
+add_redis() {
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    user: "\${REDIS_UID:-1001}:\${REDIS_UID:-1001}"
+    networks:
+      - default
+    command: redis-server --requirepass "\${REDIS_PASSWORD}" --loglevel "\${REDIS_LOGLEVEL:-notice}"
+    volumes:
+      - \${TENANT_DIR}/redis:/data
+EOF
+    ok "Added 'redis' service."
+}
+
+add_qdrant() {
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    user: "\${QDRANT_UID:-1000}:\${QDRANT_UID:-1000}"
+    networks:
+      - default
+    environment:
+      QDRANT__LOG_LEVEL: "\${QDRANT__LOG_LEVEL:-info}"
+      QDRANT__SERVICE__HTTP__ENABLE_CORS: "\${QDRANT__SERVICE__HTTP__ENABLE_CORS:-true}"
+    volumes:
+      - \${TENANT_DIR}/qdrant:/qdrant/storage
+EOF
+    ok "Added 'qdrant' service."
+}
+
+add_grafana() {
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    user: "\${GRAFANA_UID:-472}:\${GRAFANA_UID:-472}"
+    networks:
+      - default
+    environment:
+      - GF_SECURITY_ADMIN_USER=\${GRAFANA_ADMIN_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=\${GRAFANA_ADMIN_PASSWORD}
+      - GF_LOG_LEVEL: "\${GF_LOG_LEVEL:-info}"
+      - GF_LOG_MODE: "\${GF_LOG_MODE:-console file}"
+    volumes:
+      - \${TENANT_DIR}/grafana:/var/lib/grafana
+EOF
+    ok "Added 'grafana' service."
+}
+
+add_prometheus() {
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    user: "\${PROMETHEUS_UID:-1001}:\${PROMETHEUS_UID:-1001}"
+    networks:
+      - default
+    environment:
+      PROMETHEUS_LOG_LEVEL: "\${PROMETHEUS_LOG_LEVEL:-info}"
+      PROMETHEUS_LOG_FORMAT: "\${PROMETHEUS_LOG_FORMAT:-json}"
+    volumes:
+      - \${TENANT_DIR}/prometheus.yml:/etc/prometheus/prometheus.yml
+      - \${TENANT_DIR}/prometheus-data:/prometheus
+EOF
+    ok "Added 'prometheus' service."
+}
+
+add_caddy() {
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    user: "\${CADDY_UID:-1001}:\${CADDY_UID:-1001}"
+    networks:
+      - default
+    environment:
+      CADDY_LOG_LEVEL: "\${CADDY_LOG_LEVEL:-info}"
+      CADDY_LOG_FORMAT: "\${CADDY_LOG_FORMAT:-json}"
+    volumes:
+      - \${TENANT_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile
+      - \${TENANT_DIR}/caddy/data:/data
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+EOF
+    ok "Added 'caddy' service."
+}
+
+# --- Main Function ---
 main() {
+    # --- Docker Check ---
     if ! docker info &>/dev/null; then
         fail "Docker is not running. Please start Docker and try again."
     fi
@@ -59,330 +319,15 @@ main() {
 services:
 EOF
 
-# --- Service Generation Functions (Simplified & Hardened) ---
-add_postgres() {
-    cat >> "${COMPOSE_FILE}" << 'EOF'
-
-  postgres:
-    image: postgres:15-alpine
-    restart: unless-stopped
-    user: "${POSTGRES_UID:-${TENANT_UID}}:${POSTGRES_UID:-${TENANT_GID}}"
-    networks:
-      - default
-    environment:
-      POSTGRES_USER: "${POSTGRES_USER}"
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
-      POSTGRES_DB: "${POSTGRES_DB}"
-    volumes:
-      - ${TENANT_DIR}/postgres:/var/lib/postgresql/data
-EOF
-    ok "Added 'postgres' service."
-}
-
-# --- Generate All Services ---
+    # --- Generate All Services ---
     [[ "${ENABLE_POSTGRES}" == "true" ]] && add_postgres
     [[ "${ENABLE_REDIS}" == "true" ]] && add_redis
-    [[ "${ENABLE_OLLAMA}" == "true" ]] && add_ollama
-    [[ "${ENABLE_OPENWEBUI}" == "true" ]] && add_openwebui
-    [[ "${ENABLE_N8N}" == "true" ]] && add_n8n
-    [[ "${ENABLE_FLOWISE}" == "true" ]] && add_flowise
-    [[ "${ENABLE_ANYTHINGLLM}" == "true" ]] && add_anythingllm
-    [[ "${ENABLE_LITELLM}" == "true" ]] && add_litellm
-    [[ "${ENABLE_GRAFANA}" == "true" ]] && add_grafana
     [[ "${ENABLE_QDRANT}" == "true" ]] && add_qdrant
+    [[ "${ENABLE_GRAFANA}" == "true" ]] && add_grafana
     [[ "${ENABLE_PROMETHEUS}" == "true" ]] && add_prometheus
-    [[ "${ENABLE_AUTHENTIK}" == "true" ]] && add_authentik
-    [[ "${ENABLE_TAILSCALE:-false}" == "true" ]] && add_tailscale
-    [[ "${ENABLE_RCLONE:-false}" == "true" ]] && add_rclone
     add_caddy # Caddy is always added
 
-add_redis() {
-    cat >> "${COMPOSE_FILE}" << 'EOF'
-
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    user: "${REDIS_UID:-1001}:${REDIS_UID:-1001}"
-    networks:
-      - default
-    command: redis-server --requirepass "${REDIS_PASSWORD}"
-    volumes:
-      - ${TENANT_DIR}/redis:/data
-EOF
-    ok "Added 'redis' service."
-}
-
-add_qdrant() {
-    cat >> "${COMPOSE_FILE}" << 'EOF'
-
-  qdrant:
-    image: qdrant/qdrant:latest
-    restart: unless-stopped
-    user: "${QDRANT_UID:-1001}:${QDRANT_UID:-1001}"
-    networks:
-      - default
-    volumes:
-      - ${TENANT_DIR}/qdrant:/qdrant/storage
-EOF
-    ok "Added 'qdrant' service."
-}
-
-add_ollama() {
-    cat >> "${COMPOSE_FILE}" << 'EOF'
-
-  ollama:
-    image: ollama/ollama:latest
-    restart: unless-stopped
-    user: "${OLLAMA_UID:-1001}:${OLLAMA_UID:-1001}"
-    networks:
-      - default
-    volumes:
-      - ${TENANT_DIR}/ollama:/root/.ollama
-EOF
-    ok "Added 'ollama' service."
-}
-
-add_openwebui() {
-    cat >> "${COMPOSE_FILE}" << 'EOF'
-
-  openwebui:
-    image: ghcr.io/open-webui/open-webui:main
-    restart: unless-stopped
-    user: "${OPENWEBUI_UID:-1001}:${OPENWEBUI_UID:-1001}"
-    networks:
-      - default
-    environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
-    volumes:
-      - ${TENANT_DIR}/openwebui:/app/backend/data
-    depends_on:
-      - ollama
-EOF
-    ok "Added 'openwebui' service."
-}
-
-add_n8n() {
-    cat >> "${COMPOSE_FILE}" << 'EOF'
-
-  n8n:
-    image: n8nio/n8n:latest
-    restart: unless-stopped
-    user: "${N8N_UID:-1001}:${N8N_UID:-1001}"
-    networks:
-      - default
-    environment:
-      - N8N_BASIC_AUTH_USER=${N8N_USER}
-      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD}
-      - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=postgres
-      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
-      - DB_POSTGRESDB_USER=${POSTGRES_USER}
-      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
-    volumes:
-      - ${TENANT_DIR}/n8n:/home/node/.n8n
-    depends_on:
-      - postgres
-EOF
-    ok "Added 'n8n' service."
-}
-
-add_flowise() {
-    cat >> "${COMPOSE_FILE}" << 'EOF'
-
-  flowise:
-    image: flowiseai/flowise:latest
-    restart: unless-stopped
-    user: "${FLOWISE_UID:-1001}:${FLOWISE_UID:-1001}"
-    networks:
-      - default
-    environment:
-      - DATABASE_TYPE=postgres
-      - DATABASE_HOST=postgres
-      - DATABASE_NAME=${POSTGRES_DB}
-      - DATABASE_USER=${POSTGRES_USER}
-      - DATABASE_PASSWORD=${POSTGRES_PASSWORD}
-    volumes:
-      - ${TENANT_DIR}/flowise:/root/.flowise
-    depends_on:
-      - postgres
-EOF
-    ok "Added 'flowise' service."
-}
-
-add_anythingllm() {
-    cat >> "${COMPOSE_FILE}" << 'EOF'
-
-  anythingllm:
-    image: mintplexlabs/anythingllm:latest
-    restart: unless-stopped
-    user: "${ANYTHINGLLM_UID:-1001}:${ANYTHINGLLM_UID:-1001}"
-    networks:
-      - default
-    environment:
-      - STORAGE_DIR=/app/server/storage
-      - LLM_PROVIDER=ollama
-      - OLLAMA_BASE_PATH=http://ollama:11434
-    volumes:
-      - ${TENANT_DIR}/anythingllm:/app/server/storage
-    depends_on:
-      - ollama
-EOF
-    ok "Added 'anythingllm' service."
-}
-
-add_litellm() {
-    cat >> "${COMPOSE_FILE}" << 'EOF'
-
-  litellm:
-    image: ghcr.io/berriai/litellm:main
-    restart: unless-stopped
-    user: "${LITELLM_UID:-1001}:${LITELLM_UID:-1001}"
-    networks:
-      - default
-    environment:
-      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
-    command: >
-      --model ollama/mistral
-      --api_base http://ollama:11434
-      --host 0.0.0.0
-    depends_on:
-      - ollama
-EOF
-    ok "Added 'litellm' service."
-}
-
-add_grafana() {
-    cat >> "${COMPOSE_FILE}" << 'EOF'
-
-  grafana:
-    image: grafana/grafana:latest
-    restart: unless-stopped
-    user: "${GRAFANA_UID:-472}:${GRAFANA_UID:-472}"
-    networks:
-      - default
-    environment:
-      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
-    volumes:
-      - ${TENANT_DIR}/grafana:/var/lib/grafana
-EOF
-    ok "Added 'grafana' service."
-}
-
-add_prometheus() {
-    cat >> "${COMPOSE_FILE}" << 'EOF'
-
-  prometheus:
-    image: prom/prometheus:latest
-    restart: unless-stopped
-    user: "${PROMETHEUS_UID:-1001}:${PROMETHEUS_UID:-1001}"
-    networks:
-      - default
-    volumes:
-      - ${TENANT_DIR}/prometheus.yml:/etc/prometheus/prometheus.yml
-      - ${TENANT_DIR}/prometheus-data:/prometheus
-EOF
-    ok "Added 'prometheus' service."
-}
-
-add_authentik() {
-    cat >> "${COMPOSE_FILE}" << 'EOF'
-
-  authentik-server:
-    image: ghcr.io/goauthentik/server:latest
-    restart: unless-stopped
-    user: "${AUTHENTIK_UID:-1001}:${AUTHENTIK_UID:-1001}"
-    networks:
-      - default
-    environment:
-      - AUTHENTIK_SECRET_KEY=${AUTHENTIK_SECRET_KEY}
-      - AUTHENTIK_POSTGRESQL__HOST=postgres
-      - AUTHENTIK_POSTGRESQL__NAME=${POSTGRES_DB}
-      - AUTHENTIK_POSTGRESQL__USER=${POSTGRES_USER}
-      - AUTHENTIK_POSTGRESQL__PASSWORD=${POSTGRES_PASSWORD}
-    volumes:
-      - ${TENANT_DIR}/authentik/media:/media
-      - ${TENANT_DIR}/authentik/custom-templates:/templates
-    depends_on:
-      - postgres
-EOF
-    ok "Added 'authentik-server' service."
-}
-
-# --- THE STABLE TAILSCALE FIX ---
-add_tailscale() {
-    cat >> "${COMPOSE_FILE}" << 'EOF'
-
-  tailscale:
-    image: tailscale/tailscale:latest
-    hostname: ${TAILSCALE_HOSTNAME}
-    restart: unless-stopped
-    user: "${TAILSCALE_UID:-1001}:${TAILSCALE_UID:-1001}"
-    cap_add:
-      - NET_ADMIN
-      - SYS_MODULE
-    volumes:
-      - ${TENANT_DIR}/run/tailscale:/var/run/tailscale
-      - ${TENANT_DIR}/lib/tailscale:/var/lib/tailscale
-    environment:
-      # We ONLY provide the auth key. Configuration happens in script-3.
-      - TS_AUTHKEY=${TAILSCALE_AUTH_KEY}
-      - TS_STATE_DIR=/var/lib/tailscale
-EOF
-    ok "Added STABLE 'tailscale' service. Configuration will be applied by script-3."
-}
-
-add_rclone() {
-    cat >> "${COMPOSE_FILE}" << 'EOF'
-
-  rclone:
-    image: rclone/rclone:latest
-    restart: unless-stopped
-    user: "${RCLONE_UID:-1001}:${RCLONE_UID:-1001}"
-    networks:
-      - default
-    volumes:
-      - ${TENANT_DIR}/rclone:/config
-      - ${TENANT_DIR}/storage:/data
-    command: rcd --rc-no-auth --rc-addr :5572 --config=/config/rclone.conf
-EOF
-    ok "Added 'rclone' service."
-}
-
-add_caddy() {
-    cat >> "${COMPOSE_FILE}" << 'EOF'
-
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    user: "${CADDY_UID:-1001}:${CADDY_UID:-1001}"
-    networks:
-      - default
-    volumes:
-      - ${TENANT_DIR}/Caddyfile:/etc/caddy/Caddyfile
-      - ${TENANT_DIR}/caddy_data:/data
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-EOF
-    ok "Added 'caddy' service."
-}
-    ok "Added 'caddy' service."
-}
-
-# --- Generate All Services ---
-[[ "${ENABLE_POSTGRES}" == "true" ]] && add_postgres
-[[ "${ENABLE_REDIS}" == "true" ]] && add_redis
-[[ "${ENABLE_OLLAMA}" == "true" ]] && add_ollama
-[[ "${ENABLE_OPENWEBUI}" == "true" ]] && add_openwebui
-[[ "${ENABLE_N8N}" == "true" ]] && add_n8n
-[[ "${ENABLE_FLOWISE}" == "true" ]] && add_flowise
-[[ "${ENABLE_ANYTHINGLLM}" == "true" ]] && add_anythingllm
-[[ "${ENABLE_LITELLM}" == "true" ]] && add_litellm
-[[ "${ENABLE_GRAFANA}" == "true" ]] && add_grafana
-[[ "${ENABLE_QDRANT}" == "true" ]] && add_qdrant
-# --- Add Network Configuration ---
+    # --- Add Network Configuration ---
     cat >> "${COMPOSE_FILE}" << 'EOF'
 
 networks:
@@ -395,18 +340,64 @@ EOF
     log "Starting deployment with docker compose..."
     cd "${TENANT_DIR}"
 
+    log "=== DOCKER COMPOSE DEBUG INFO ==="
+    log "Current directory: $(pwd)"
+    log "Docker compose file: ${COMPOSE_FILE}"
+    log "Docker compose file exists: $([ -f "${COMPOSE_FILE}" ] && echo "YES" || echo "NO")"
+    
+    if [[ -f "${COMPOSE_FILE}" ]]; then
+        log "Docker compose file size: $(wc -l < "${COMPOSE_FILE}") lines"
+        log "Docker compose file permissions: $(ls -la "${COMPOSE_FILE}")"
+        log "=== DOCKER COMPOSE FILE CONTENT ==="
+        cat "${COMPOSE_FILE}" >> "${LOG_FILE}" 2>&1
+        log "=== END DOCKER COMPOSE FILE ==="
+    fi
+
+    log "=== DOCKER SYSTEM INFO ==="
+    docker system info >> "${LOG_FILE}" 2>&1
+    log "=== END DOCKER SYSTEM INFO ==="
+
     log "Pulling all required Docker images..."
-    docker compose pull --quiet
+    docker compose pull --quiet >> "${LOG_FILE}" 2>&1
 
     log "Starting all services in detached mode..."
-    if ! docker compose up -d; then
+    if ! docker compose up -d >> "${LOG_FILE}" 2>&1; then
+        log "=== DEPLOYMENT FAILURE DEBUG ==="
+        log "Docker compose logs:"
+        docker compose logs --tail=50 >> "${LOG_FILE}" 2>&1
+        log "=== END DEPLOYMENT FAILURE DEBUG ==="
         fail "Docker Compose failed to start. Please check the logs above."
     fi
 
-    ok "All containers have been started."
-    log "Next Step: Run 'sudo bash scripts/3-configure-services.sh ${TENANT_ID}'"
+    # Wait for services to start
+    log "Waiting for services to initialize..."
+    sleep 15
 
-} # End of main function
+    # Start deep log capture for all services
+    if [[ "${DEBUG_MODE}" == "true" ]]; then
+        log "=== STARTING DEEP LOG CAPTURE ==="
+        [[ "${ENABLE_POSTGRES}" == "true" ]] && capture_docker_logs "postgres"
+        [[ "${ENABLE_REDIS}" == "true" ]] && capture_docker_logs "redis"
+        [[ "${ENABLE_QDRANT}" == "true" ]] && capture_docker_logs "qdrant"
+        [[ "${ENABLE_GRAFANA}" == "true" ]] && capture_docker_logs "grafana"
+        [[ "${ENABLE_PROMETHEUS}" == "true" ]] && capture_docker_logs "prometheus"
+        [[ "${ENABLE_CADDY}" == "true" ]] && capture_docker_logs "caddy"
+        log "=== DEEP LOG CAPTURE STARTED ==="
+    fi
+
+    # Comprehensive URL testing
+    test_service_urls
+
+    # Final status
+    log "=== FINAL DEPLOYMENT STATUS ==="
+    docker compose ps >> "${LOG_FILE}" 2>&1
+    log "=== END FINAL DEPLOYMENT STATUS ==="
+
+    ok "Deployment completed with comprehensive logging engine."
+    log "Debug logs available in: ${LOG_DIR}/deploy-*.log"
+    log "Service-specific logs available in: ${LOG_DIR}/deploy-<service>-*.log"
+    log "Next Step: Run 'sudo bash scripts/3-configure-services.sh ${TENANT_ID}'"
+}
 
 # Call main function to execute the script
 main
