@@ -1232,12 +1232,17 @@ add_caddy() {
       - CADDY_LOG_LEVEL=${CADDY_LOG_LEVEL:-info}
       - CADDY_LOG_FORMAT=${CADDY_LOG_FORMAT:-json}
     volumes:
-      - \${TENANT_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile
+      - \${TENANT_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - \${TENANT_DIR}/caddy/data:/data
     ports:
       - "${CADDY_HTTP_PORT:-80}:80"
       - "${CADDY_HTTPS_PORT:-443}:443"
       - "${CADDY_HTTPS_PORT:-443}:443/udp"
+    command: >
+      sh -c "
+        mkdir -p /data/caddy && 
+        caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+      "
 EOF
     ok "Added 'caddy' service."
 }
