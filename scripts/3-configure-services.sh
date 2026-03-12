@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
 # =============================================================================
 # Script 3: Configure Services - INDIVIDUAL LOGGING ENGINE
 # =============================================================================
-set -euo pipefail
-
-# --- Colors and Logging ---
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
+# PURPOSE: Configure logging for individual services
+# USAGE:   sudo bash 3-configure-services.sh <tenant_id> [action]
+# =============================================================================
 DIM='\033[2m'
 NC='\033[0m'
 log() { echo -e "${CYAN}[INFO]${NC}    $1"; }
@@ -296,7 +293,7 @@ show_logging_dashboard() {
 # --- Main Function ---
 main() {
     local tenant_id="${1:-}"
-    local action="${2:-configure}"
+    local action="${2:---health}" # Default to --health if no action provided
     
     if [[ -z "$tenant_id" ]]; then
         echo "Usage: sudo bash $0 <tenant_id> [action]"
@@ -307,6 +304,10 @@ main() {
         echo "  rotate    - Rotate service logs"
         echo "  cleanup    - Clean up old logs"
         echo "  dashboard  - Show logging dashboard"
+        echo "  start      - Start specific service (or all)"
+        echo "  stop       - Stop specific service (or all)"
+        echo "  rclone-mount - Execute docker exec to start Rclone mount"
+        echo "  ingest     - Execute tenant's ingest.py script"
         echo "  health     - Run comprehensive health checks"
         exit 1
     fi
@@ -331,19 +332,8 @@ main() {
             
             ok "Service logging configuration completed."
             ;;
-        "disable")
-            log "Disabling logging for all services..."
-            
-            # Disable logging for all services
-            for service in postgres redis qdrant grafana prometheus caddy; do
-                configure_service_logging "$service" "false"
-            done
-            
-            ok "Logging disabled for all services."
-            ;;
-        "rotate")
-            log "Rotating service logs..."
-            cleanup_old_logs
+        "--health")
+            log "Running comprehensive health checks for tenant: ${TENANT_ID}"
             ;;
         "cleanup")
             log "Cleaning up old logs..."

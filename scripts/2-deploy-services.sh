@@ -340,6 +340,39 @@ EOF
     log "SUCCESS" "Prometheus configuration written to ${DATA_ROOT}/prometheus.yml"
 }
 
+# --- Volume Mount Audit ---
+audit_volume_mounts() {
+    log "INFO" "Auditing all docker-compose volume mounts before deployment..."
+    local all_volumes_exist=true
+    
+    # Extract all volume source paths from docker-compose.yml
+    local volume_sources
+    volume_sources=$(grep -E "^\s*-\s*.*:.*:" "${COMPOSE_FILE}" | sed 's/^[[:space:]]*-//' | cut -d':' -f1)
+    
+    for volume_source in $volume_sources; do
+        # Resolve relative paths to full paths
+        local host_path
+        if [[ "$volume_source" == /* ]]; then
+            host_path="$volume_source"
+        else
+            host_path="${TENANT_DIR}/${volume_source}"
+        fi
+        
+        if [[ ! -d "$host_path" ]]; then
+            fail "CRITICAL AUDIT FAILURE: Directory '${host_path}' for volume mount does not exist. The docker-compose.yml is trying to mount a directory that was not created by Script 1. Please re-run Script 1 or correct the volume path in the 'add_*' function in Script 2."
+            all_volumes_exist=false
+        else
+            log "INFO" "Volume source directory exists: $host_path"
+        fi
+    done
+
+    if [[ "$all_volumes_exist" == "true" ]]; then
+        ok "Volume mount audit passed. All source directories exist."
+    else
+        exit 1 # Halt deployment
+    fi
+}
+
 # --- Service Generation Functions ---
 add_postgres() {
     cat >> "${COMPOSE_FILE}" << EOF
@@ -674,28 +707,6 @@ test_service_urls() {
     log "=== END URL TESTING ==="
 }
 
-prepare_data_directories() {
-    log "INFO" "Enforcing Bulletproof Ownership as per README.md..."
-
-    # Ensure base directory and logs are owned by the tenant user first
-    chown -R "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}"
-    
-    # Create all potential stateful directories
-    mkdir -p "${TENANT_DIR}/postgres" "${TENANT_DIR}/redis" "${TENANT_DIR}/qdrant" \
-             "${TENANT_DIR}/grafana" "${TENANT_DIR}/prometheus" \
-             "${TENANT_DIR}/caddy/data" "${TENANT_DIR}/caddy/config"
-
-    # Use the EXACT UIDs from the .env file to set ownership.
-    # This aligns with the "Pragmatic Exception Pattern" from the README.
-    [[ -d "${TENANT_DIR}/postgres" ]]   && chown -R "${POSTGRES_UID}:${TENANT_GID}"   "${TENANT_DIR}/postgres"   && ok "Ownership set for Postgres (${POSTGRES_UID}:${TENANT_GID})"
-    [[ -d "${TENANT_DIR}/redis" ]]      && chown -R "${REDIS_UID}:${TENANT_GID}"      "${TENANT_DIR}/redis"      && ok "Ownership set for Redis (${REDIS_UID}:${TENANT_GID})"
-    [[ -d "${TENANT_DIR}/qdrant" ]]      && chown -R "${QDRANT_UID}:${TENANT_GID}"      "${TENANT_DIR}/qdrant"      && ok "Ownership set for Qdrant (${QDRANT_UID}:${TENANT_GID})"
-    [[ -d "${TENANT_DIR}/grafana" ]]     && chown -R "${GRAFANA_UID}:${TENANT_GID}"     "${TENANT_DIR}/grafana"    && ok "Ownership set for Grafana (${GRAFANA_UID}:${TENANT_GID})"
-    [[ -d "${TENANT_DIR}/prometheus" ]] && chown -R "${PROMETHEUS_UID}:${TENANT_GID}" "${TENANT_DIR}/prometheus" && ok "Ownership set for Prometheus (${PROMETHEUS_UID}:${TENANT_GID})"
-    [[ -d "${TENANT_DIR}/caddy" ]]       && chown -R "${CADDY_UID}:${TENANT_GID}"       "${TENANT_DIR}/caddy"      && ok "Ownership set for Caddy (${CADDY_UID}:${TENANT_GID})"
-
-    log "SUCCESS" "Bulletproof Ownership check complete. All directory permissions are aligned with service UIDs."
-}
 
 # --- Main Function ---
 main() {
@@ -736,10 +747,13 @@ networks:
     driver: bridge
 EOF
 
-    # --- Deploy Services ---
+    # --- Start Services ---
     log "Starting deployment with docker compose..."
     cd "${TENANT_DIR}"
-
+    
+    # CRITICAL: Audit all volume mounts before deployment
+    audit_volume_mounts
+    
     log "=== DOCKER COMPOSE DEBUG INFO ==="
     log "Current directory: $(pwd)"
     log "Docker compose file: ${COMPOSE_FILE}"
