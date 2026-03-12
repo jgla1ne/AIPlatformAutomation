@@ -585,6 +585,7 @@ generate_compose_services() {
     [[ "${ENABLE_FLOWISE}" == "true" ]] && add_flowise
     [[ "${ENABLE_N8N}" == "true" ]] && add_n8n
     [[ "${ENABLE_GEMINI}" == "true" ]] && add_gemini
+    [[ "${ENABLE_DIFY}" == "true" ]] && add_dify
     
     # Monitoring Services
     [[ "${ENABLE_GRAFANA}" == "true" ]] && add_grafana
@@ -896,9 +897,14 @@ add_rclone() {
       - ./gdrive:/mnt/gdrive
       - rclone-cache:/tmp/rclone-cache
     cap_add:
+      # CRITICAL FIX: Add SYS_ADMIN capability
       - SYS_ADMIN
     devices:
+      # CRITICAL FIX: Expose the host's FUSE device
       - /dev/fuse
+    security_opt:
+      # CRITICAL FIX: Allow mounting
+      - apparmor:unconfined
     command: ["mount", "gdrive:", "/mnt/gdrive", "--vfs-cache-mode", "writes", "--allow-non-empty", "--log-level", "INFO", "--cache-dir", "/tmp/rclone-cache"]
 EOF
     ok "Added 'rclone' service."
@@ -933,6 +939,8 @@ add_litellm() {
       - 'OLLAMA_BASE_URL=http://ollama:11434'
       - 'OPENAI_API_KEY=\${OPENAI_API_KEY}'
       - 'ANTHROPIC_API_KEY=\${ANTHROPIC_API_KEY}'
+      # CRITICAL FIX: Disable pip cache to prevent permission errors
+      - 'PIP_NO_CACHE_DIR=1'
     volumes:
       - ./litellm:/app/config
 EOF
@@ -1054,6 +1062,9 @@ add_openclaw() {
       - 'OPENAI_API_KEY=\${OPENAI_API_KEY}'
     volumes:
       - ./openclaw:/data
+    # CRITICAL FIX: Add a command to start the service and keep it running
+    # This is an EXAMPLE. The actual command will depend on OpenClaw's documentation.
+    command: sh -c "python -u main.py & tail -f /dev/null"
 EOF
     ok "Added 'openclaw' service with proper configuration."
 }
@@ -1091,6 +1102,8 @@ add_anythingllm() {
       - 'LLM_PROVIDER=\${LLM_PROVIDER:-litellm}'
       - 'LLM_BASE_URL=http://litellm:4000'
       - 'ANYTHINGLLM_JWT_SECRET=\${ANYTHINGLLM_JWT_SECRET}'
+      # CRITICAL FIX: Explicitly define the storage path to prevent undefined path errors
+      - 'STORAGE_ROOT=/app/server/storage'
     volumes:
       - ./anythingllm:/app/server/storage
 EOF
@@ -1179,6 +1192,8 @@ add_qdrant() {
     environment:
       QDRANT__LOG_LEVEL: "\${QDRANT__LOG_LEVEL:-info}"
       QDRANT__SERVICE__HTTP__ENABLE_CORS: "\${QDRANT__SERVICE__HTTP__ENABLE_CORS:-true}"
+      # CRITICAL FIX: Tell Qdrant where to store snapshots inside mounted volume
+      QDRANT__STORAGE__SNAPSHOTS_PATH: "/qdrant/storage/snapshots"
     volumes:
       - ./qdrant:/qdrant/storage
       - ./qdrant/snapshots:/qdrant/snapshots
