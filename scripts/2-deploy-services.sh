@@ -946,8 +946,12 @@ add_litellm() {
       - 'PIP_NO_CACHE_DIR=1'
       # CRITICAL FIX: Define a writable home directory for user
       - 'HOME=/tmp'
+      # This variable is not used by the command, but can be kept for reference
+      - 'LITELLM_CONFIG_YAML=/app/config.yaml' 
     volumes:
       - ./litellm:/app/config
+    # CRITICAL FIX: Add a command to force loading of config file
+    command: ["--config", "/app/config.yaml", "--port", "\${LITELLM_INTERNAL_PORT:-4000}"]
 EOF
     ok "Added 'litellm' service with auto-integration."
 }
@@ -1000,7 +1004,7 @@ add_authentik() {
     environment:
       - 'AUTHENTIK_SECRET_KEY=\${AUTHENTIK_SECRET_KEY}'
       # TRIPLE-CHECK this entire block for typos and variable names.
-      - 'AUTHENTIK_POSTGRESQL__URL=postgres://\${POSTGRES_USER:-postgres}:\${POSTGRES_PASSWORD}@postgres:5432/\${POSTGRES_DB:-ai_platform}'
+      - 'AUTHENTIK_POSTGRESQL__URL=postgres://\${POSTGRES_USER:-postgres}:\${POSTGRES_PASSWORD}@postgres:5432/\${POSTGRES_DB:-ai_platform}?sslmode=disable'
       - 'AUTHENTIK_REDIS__URL=redis://redis:6379/0'
       # Add any other required Authentik variables here
     volumes:
@@ -1047,34 +1051,36 @@ EOF
 }
 
 add_openclaw() {
-    if [[ "${ENABLE_OPENCLAW}" != "true" ]]; then return; fi
+    log "INFO" "Configuring 'openclaw' service..."
     
-    log "INFO" "Adding 'openclaw' service with proper configuration..."
+    # Ensure the code directory exists and has correct permissions
+    # This assumes that openclaw code is located in a subdirectory of the tenant dir
     mkdir -p "${TENANT_DIR}/openclaw"
-    chown "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}/openclaw"
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}/openclaw"
 
     cat >> "${COMPOSE_FILE}" << EOF
 
   openclaw:
-    image: moltenbot/openclaw:latest
+    # CRITICAL FIX: Use a standard, official Python image
+    image: python:3.11-slim
     restart: unless-stopped
-    user: "\${OPENCLAW_UID:-1000}:\${TENANT_GID:-1001}"
+    working_dir: /app
+    user: "\${TENANT_UID}:\${TENANT_GID}"
     networks:
       - default
-    ports:
-      - "3000:3000"
     depends_on:
       signal:
         condition: service_healthy
-    environment:
-      - 'OPENAI_API_KEY=\${OPENAI_API_KEY}'
+      tailscale:
+        condition: service_started
     volumes:
-      - ./openclaw:/data
-    # CRITICAL FIX: Add a command to start the service and keep it running
-    # This is an EXAMPLE. The actual command will depend on OpenClaw's documentation.
-    command: sh -c "python3 -u main.py & tail -f /dev/null"
+      # Mount the application code into the container
+      - ./openclaw:/app
+    # CRITICAL FIX: Install dependencies and run the application
+    command: >
+      sh -c "pip install -r requirements.txt && python -u main.py"
 EOF
-    ok "Added 'openclaw' service with proper configuration."
+    ok "Added 'openclaw' service with a standardized Python runtime."
 }
 
 add_anythingllm() {
@@ -1110,8 +1116,8 @@ add_anythingllm() {
       - 'LLM_PROVIDER=\${LLM_PROVIDER:-litellm}'
       - 'LLM_BASE_URL=http://litellm:4000'
       - 'ANYTHINGLLM_JWT_SECRET=\${ANYTHINGLLM_JWT_SECRET}'
-      # CRITICAL FIX: Explicitly define the storage path to prevent undefined path errors
-      - 'STORAGE_ROOT=/app/server/storage'
+      # CRITICAL FIX: Use exact variable name 'STORAGE_DIR'
+      - 'STORAGE_DIR=/app/server/storage'
       # CRITICAL FIX: Explicitly define the model directory path
       - 'MODEL_DIR=/app/server/models/ollama'
     volumes:
