@@ -2574,7 +2574,25 @@ EOF
             fail "ERROR" "Caddyfile validation failed: ${validation_error}"
         fi
     else
-        warn "Caddy CLI not available - skipping validation"
+        # Basic validation without Caddy CLI
+        log "INFO" "Performing basic Caddyfile syntax validation..."
+        if [[ ! -f "${CADDYFILE_PATH}" ]]; then
+            fail "ERROR" "Caddyfile not found at ${CADDYFILE_PATH}"
+        fi
+        
+        # Check for basic syntax errors
+        if grep -q "^[[:space:]]*{" "${CADDYFILE_PATH}" && grep -q "^}" "${CADDYFILE_PATH}"; then
+            log "INFO" "Basic Caddyfile structure validation passed."
+        else
+            warn "Caddyfile may have syntax issues (missing braces or structure)."
+        fi
+        
+        # Check for common configuration errors
+        if grep -q "tls.*{" "${CADDYFILE_PATH}" && grep -q "reverse_proxy" "${CADDYFILE_PATH}"; then
+            log "INFO" "Caddyfile contains TLS and proxy configurations."
+        else
+            warn "Caddyfile may be missing TLS or proxy configurations."
+        fi
     fi
 
     chmod 644 "${CADDY_DIR}/Caddyfile"

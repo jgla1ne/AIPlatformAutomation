@@ -404,9 +404,9 @@ audit_volume_mounts() {
     log "INFO" "Auditing all docker-compose volume mounts before deployment..."
     local all_volumes_exist=true
     
-    # Extract all volume source paths from docker-compose.yml
+    # Extract all volume source paths from docker-compose.yml using proper parsing
     local volume_sources
-    volume_sources=$(grep -E "^\s*-\s*.*:.*:" "${COMPOSE_FILE}" | sed 's/^[[:space:]]*-//' | cut -d':' -f1)
+    volume_sources=$(grep -E "^\s*-\s*[^:]+:[^:]+:" "${COMPOSE_FILE}" | sed 's/^[[:space:]]*-//' | cut -d':' -f1)
     
     for volume_source in $volume_sources; do
         # Resolve relative paths to full paths
@@ -823,6 +823,196 @@ add_openwebui() {
       - ./openwebui:/app/backend/data
 EOF
     ok "Added 'openwebui' service, configured for LiteLLM routing."
+}
+
+add_authentik() {
+    if [[ "${ENABLE_AUTHENTIK}" != "true" ]]; then return; fi
+    
+    log "INFO" "Adding 'authentik' service..."
+    mkdir -p "${TENANT_DIR}/authentik"
+    chown "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}/authentik"
+
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  authentik:
+    image: ghcr.io/goauthentik/server:latest
+    restart: unless-stopped
+    user: "\${AUTHENTIK_UID:-1000}:\${TENANT_GID:-1001}"
+    networks:
+      - default
+    environment:
+      - 'AUTHENTIK_SECRET_KEY=\${AUTHENTIK_SECRET_KEY}'
+      - 'AUTHENTIK_POSTGRES_NAME=authentik'
+      - 'AUTHENTIK_POSTGRES_USER=authentik'
+      - 'AUTHENTIK_POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}'
+      - 'AUTHENTIK_POSTGRES_HOST=postgres'
+      - 'AUTHENTIK_POSTGRES_PORT=5432'
+    volumes:
+      - ./authentik:/media
+      - ./authentik:/templates
+    depends_on:
+      postgres:
+        condition: service_healthy
+EOF
+    ok "Added 'authentik' service."
+}
+
+add_signal() {
+    if [[ "${ENABLE_SIGNAL}" != "true" ]]; then return; fi
+    
+    log "INFO" "Adding 'signal' service..."
+    mkdir -p "${TENANT_DIR}/signal"
+    chown "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}/signal"
+
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  signal:
+    image: ghcr.io/xeonpro/signal:latest
+    restart: unless-stopped
+    user: "\${SIGNAL_UID:-1000}:\${TENANT_GID:-1001}"
+    networks:
+      - default
+    environment:
+      - 'SIGNAL_PHONE_NUMBER=\${SIGNAL_PHONE_NUMBER}'
+      - 'SIGNAL_VERIFICATION_CODE=\${SIGNAL_VERIFICATION_CODE}'
+    volumes:
+      - ./signal:/app/data
+EOF
+    ok "Added 'signal' service."
+}
+
+add_openclaw() {
+    if [[ "${ENABLE_OPENCLAW}" != "true" ]]; then return; fi
+    
+    log "INFO" "Adding 'openclaw' service..."
+    mkdir -p "${TENANT_DIR}/openclaw"
+    chown "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}/openclaw"
+
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  openclaw:
+    image: nginx:alpine
+    restart: unless-stopped
+    user: "\${OPENCLAW_UID:-1000}:\${TENANT_GID:-1001}"
+    networks:
+      - default
+    ports:
+      - "\${OPENCLAW_PORT:-18789}:8082"
+    volumes:
+      - ./openclaw:/usr/share/nginx/html
+    environment:
+      - 'OPENCLAW_ADMIN_PASSWORD=\${OPENCLAW_ADMIN_PASSWORD}'
+EOF
+    ok "Added 'openclaw' service."
+}
+
+add_anythingllm() {
+    if [[ "${ENABLE_ANYTHINGLLM}" != "true" ]]; then return; fi
+    
+    log "INFO" "Adding 'anythingllm' service with auto-integration..."
+    mkdir -p "${TENANT_DIR}/anythingllm"
+    chown "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}/anythingllm"
+
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  anythingllm:
+    image: mintplexlabs/anythingllm:latest
+    restart: unless-stopped
+    user: "\${ANYTHINGLLM_UID:-1000}:\${TENANT_GID:-1001}"
+    networks:
+      - default
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    environment:
+      - 'STORAGE_LOCATOR=\${STORAGE_LOCATOR:-local}'
+      - 'DATABASE_TYPE=\${DATABASE_TYPE:-postgres}'
+      - 'DATABASE_HOST=postgres'
+      - 'DATABASE_PORT=5432'
+      - 'DATABASE_NAME=\${POSTGRES_DB:-ai_platform}'
+      - 'DATABASE_USER=\${POSTGRES_USER:-postgres}'
+      - 'DATABASE_PASSWORD=\${POSTGRES_PASSWORD}'
+      - 'QDRANT_ENDPOINT=http://qdrant:6333'
+      - 'QDRANT_API_KEY=\${QDRANT_API_KEY}'
+      - 'LLM_PROVIDER=\${LLM_PROVIDER:-litellm}'
+      - 'LLM_BASE_URL=http://litellm:4000'
+      - 'ANYTHINGLLM_JWT_SECRET=\${ANYTHINGLLM_JWT_SECRET}'
+    volumes:
+      - ./anythingllm:/app/server/storage
+EOF
+    ok "Added 'anythingllm' service with auto-integration."
+}
+
+add_flowise() {
+    if [[ "${ENABLE_FLOWISE}" != "true" ]]; then return; fi
+    
+    log "INFO" "Adding 'flowise' service with auto-integration..."
+    mkdir -p "${TENANT_DIR}/flowise"
+    chown "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}/flowise"
+
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  flowise:
+    image: flowiseai/flowise:latest
+    restart: unless-stopped
+    user: "\${FLOWISE_UID:-1000}:\${TENANT_GID:-1001}"
+    networks:
+      - default
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    environment:
+      - 'DATABASE_TYPE=postgres'
+      - 'DATABASE_HOST=postgres'
+      - 'DATABASE_PORT=5432'
+      - 'DATABASE_NAME=\${POSTGRES_DB:-ai_platform}'
+      - 'DATABASE_USER=\${POSTGRES_USER:-postgres}'
+      - 'DATABASE_PASSWORD=\${POSTGRES_PASSWORD}'
+      - 'QDRANT_URL=http://qdrant:6333'
+      - 'QDRANT_API_KEY=\${QDRANT_API_KEY}'
+      - 'FLOWISE_SECRET_KEY=\${FLOWISE_SECRET_KEY}'
+      - 'APIKEY_RESOLVER_ENDPOINT=http://litellm:4000'
+    volumes:
+      - ./flowise:/root/.flowise
+EOF
+    ok "Added 'flowise' service with auto-integration."
+}
+
+add_n8n() {
+    if [[ "${ENABLE_N8N}" != "true" ]]; then return; fi
+    
+    log "INFO" "Adding 'n8n' service with auto-integration..."
+    mkdir -p "${TENANT_DIR}/n8n"
+    chown "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}/n8n"
+
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    user: "\${N8N_UID:-1000}:\${TENANT_GID:-1001}"
+    networks:
+      - default
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - 'N8N_ENCRYPTION_KEY=\${N8N_ENCRYPTION_KEY}'
+      - 'DATABASE_TYPE=postgres'
+      - 'DATABASE_HOST=postgres'
+      - 'DATABASE_PORT=5432'
+      - 'DATABASE_NAME=\${POSTGRES_DB:-ai_platform}'
+      - 'DATABASE_USER=\${POSTGRES_USER:-postgres}'
+      - 'DATABASE_PASSWORD=\${POSTGRES_PASSWORD}'
+      - 'WEBHOOK_URL=http://localhost:${N8N_PORT:-5678}/'
+    volumes:
+      - ./n8n:/home/node/.n8n
+EOF
+    ok "Added 'n8n' service with auto-integration."
 }
 
 add_qdrant() {
