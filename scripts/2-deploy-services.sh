@@ -1173,7 +1173,6 @@ add_qdrant() {
     image: qdrant/qdrant:latest
     restart: unless-stopped
     user: "${QDRANT_UID:-1000}:${TENANT_GID:-1001}"
-    working_dir: /qdrant/storage
     networks:
       - default
     environment:
@@ -1181,6 +1180,7 @@ add_qdrant() {
       QDRANT__SERVICE__HTTP__ENABLE_CORS: "\${QDRANT__SERVICE__HTTP__ENABLE_CORS:-true}"
     volumes:
       - ./qdrant:/qdrant/storage
+      - ./qdrant/snapshots:/qdrant/snapshots
 EOF
     ok "Added 'qdrant' service."
 }
