@@ -292,7 +292,7 @@ check_root() {
 }
 
 check_prerequisites() {
-    print_step "1" "9" "System Prerequisites"
+    print_step "1" "14" "System Prerequisites"
 
     # Check if running interactively (safety check)
     if [[ ! -t 0 ]]; then
@@ -325,7 +325,7 @@ check_prerequisites() {
 
 # ─── EBS Volume Detection and Mounting ────────────────────────────────────────
 detect_and_mount_ebs() {
-    print_step "3" "11" "EBS Volume Detection and Mounting"
+    print_step "3" "14" "EBS Volume Detection and Mounting"
 
     echo -e "  ${BOLD}💾  EBS Volume Detection${NC}"
     echo -e "  ${DIM}Scanning for available EBS volumes to mount${NC}"
@@ -1190,7 +1190,110 @@ collect_litellm_routing() {
 }
 
 # ─── Network & Security Configuration ───────────────────────────────────────────
-collect_network_config() {
+validate_domain_configuration() {
+    log "INFO" "Validating domain configuration and TLS strategy..."
+    
+    # Check if domain has public IP (basic validation)
+    if command -v dig &> /dev/null; then
+        local public_ip=$(dig +short "$DOMAIN" 2>/dev/null)
+        if [[ -n "$public_ip" ]]; then
+            log "SUCCESS" "Domain $DOMAIN resolves to public IP: $public_ip"
+            log "INFO" "TLS Strategy: Using Let's Encrypt certificates"
+            export TLS_STRATEGY="letsencrypt"
+        else
+            log "WARN" "Domain $DOMAIN does not resolve to public IP"
+            log "INFO" "TLS Strategy: Using internal certificates"
+            export TLS_STRATEGY="internal"
+        fi
+    else
+        log "INFO" "dig not available, skipping domain validation"
+        export TLS_STRATEGY="internal"
+    fi
+    
+    # Store TLS strategy for Script 2
+    echo "TLS_STRATEGY=$TLS_STRATEGY" >> "${DATA_ROOT}/.env"
+}
+
+validate_rclone_credentials() {
+    log "INFO" "Validating Rclone credentials..."
+    
+    if [[ "${ENABLE_RCLONE}" == "true" ]]; then
+        # Create temporary container for validation
+        local temp_container="rclone-validate-${TENANT_ID}"
+        
+        docker run --rm --name "$temp_container" \
+            -v "${DATA_ROOT}/rclone:/config/rclone" \
+            -v "${DATA_ROOT}/gdrive:/mnt/gdrive" \
+            rclone/rclone:latest \
+            lsf gdrive: --max-depth 1 > /dev/null 2>&1
+        
+        local validation_result=$?
+        
+        if [[ $validation_result -eq 0 ]]; then
+            ok "Rclone credentials validated successfully"
+            return 0
+        else
+            fail "Rclone credential validation failed. Please check Service Account JSON and Folder ID."
+        fi
+    fi
+}
+
+get_signal_qr_code_uri() {
+    log "INFO" "Generating Signal QR code for device pairing..."
+    
+    # Create temporary container for QR generation
+    local temp_container="signal-qrcode-${TENANT_ID}"
+    
+    docker run --rm --name "$temp_container" \
+        -p 8081:8080 \
+        -v "${DATA_ROOT}/signal-data:/home/.local/share/signal-cli" \
+        -e 'SIGNAL_PHONE_NUMBER=${SIGNAL_PHONE_NUMBER}' \
+        -e 'SIGNAL_VERIFICATION_CODE=${SIGNAL_VERIFICATION_CODE}' \
+        bbernhard/signal-cli-rest-api:latest &
+    
+    # Wait for container to start
+    sleep 5
+    
+    # Get QR code URI
+    local qr_uri=$(curl -s "http://localhost:8081/v1/qrcodelink?device_name=${TENANT_ID}-ai-platform" 2>/dev/null)
+    
+    # Stop temporary container
+    docker stop "$temp_container" 2>/dev/null
+    
+    if [[ -n "$qr_uri" ]]; then
+        # Extract tsdevice URI
+        local tsdevice_uri=$(echo "$qr_uri" | grep -o 'tsdevice:/[^"]*')
+        
+        if [[ -n "$tsdevice_uri" ]]; then
+            echo "$tsdevice_uri"
+            return 0
+        fi
+    fi
+    
+    return 1
+}
+
+get_tailscale_ip() {
+    log "INFO" "Retrieving Tailscale IP address..."
+    
+    # Wait for Tailscale to be ready
+    local max_wait=60
+    local wait_time=0
+    
+    while [[ $wait_time -lt $max_wait ]]; do
+        if docker ps --filter "name=${COMPOSE_PROJECT_NAME}-tailscale-1" --filter "status=running" | grep -q "${COMPOSE_PROJECT_NAME}-tailscale-1"; then
+            local ts_ip=$(docker exec "${COMPOSE_PROJECT_NAME}-tailscale-1" tailscale ip -4 2>/dev/null)
+            if [[ -n "$ts_ip" ]]; then
+                echo "$ts_ip"
+                return 0
+            fi
+        fi
+        sleep 2
+        wait_time=$((wait_time + 2))
+    done
+    
+    return 1
+}
     print_step "9" "11" "Network & Security Configuration"
 
     echo -e "  ${BOLD}🔐  Network & Security Settings${NC}"
@@ -2854,7 +2957,109 @@ main() {
     collect_database         # Step 7.5 - Database configuration
     collect_llm_config       # Step 8
     collect_litellm_routing  # Step 8.5 - LiteLLM routing strategy
-    collect_network_config   # Step 9 - NEW: Network & security configuration
+    collect_network_config() {
+    print_step "10" "Network & Security Configuration"
+    
+    # Tailscale Configuration
+    echo -e "  ${BOLD}🌐  Tailscale VPN${NC}"
+    echo -e "  ${DIM}Zero-trust networking for secure access${NC}"
+    echo ""
+    
+    while true; do
+        echo -e "  ➤  Enable Tailscale VPN? [Y/n]: "
+        read -r ENABLE_TAILSCALE
+        case "${ENABLE_TAILSCALE}" in
+            [Yy]* ) ENABLE_TAILSCALE="true"; break ;;
+            [Nn]* ) ENABLE_TAILSCALE="false"; break ;;
+            * ) echo -e "${YELLOW}Please enter Y or N${NC}"; continue ;;
+        esac
+    done
+    
+    # Tailscale Auth Key
+    if [[ "${ENABLE_TAILSCALE}" == "true" ]]; then
+        while true; do
+            echo -e "  ➤  Tailscale Auth Key: "
+            read -s TS_AUTHKEY
+            if [[ -n "$TS_AUTHKEY" ]]; then break; fi
+            echo -e "${YELLOW}Auth key is required${NC}"
+        done
+        
+        # Validate Tailscale auth key format
+        if [[ ! "$TS_AUTHKEY" =~ ^tskey-auth-[a-f0-9]+-[a-f0-9]+$ ]]; then
+            echo -e "${YELLOW}⚠️  Invalid Tailscale auth key format${NC}"
+            echo -e "${DIM}Expected: tskey-auth-xxxxxx-xxxxxx-xxxxxx${NC}"
+            continue
+        fi
+    fi
+    
+    # Rclone Configuration
+    echo ""
+    echo -e "  ${BOLD}📂  Google Drive Integration${NC}"
+    echo -e "  ${DIM}Configure Rclone for cloud storage sync${NC}"
+    echo ""
+    
+    while true; do
+        echo -e "  ➤  Enable Rclone Google Drive sync? [Y/n]: "
+        read -r ENABLE_RCLONE
+        case "${ENABLE_RCLONE}" in
+            [Yy]* ) ENABLE_RCLONE="true"; break ;;
+            [Nn]* ) ENABLE_RCLONE="false"; break ;;
+            * ) echo -e "${YELLOW}Please enter Y or N${NC}"; continue ;;
+        esac
+    done
+    
+    if [[ "${ENABLE_RCLONE}" == "true" ]]; then
+        # Google Service Account JSON
+        while true; do
+            echo -e "  ➤  Path to Google Service Account JSON: "
+            read -r GOOGLE_SA_JSON_PATH
+            if [[ -f "$GOOGLE_SA_JSON_PATH" ]]; then break; fi
+            echo -e "${YELLOW}File must exist and be readable${NC}"
+        done
+        
+        # Validate and copy Service Account
+        if [[ -f "$GOOGLE_SA_JSON_PATH" ]]; then
+            cp "$GOOGLE_SA_JSON_PATH" "${DATA_ROOT}/rclone/google_sa.json"
+            echo -e "${GREEN}✅ Service Account file copied${NC}"
+        else
+            echo -e "${RED}❌ Service Account file not found${NC}"
+            exit 1
+        fi
+        
+        # Google Drive Folder ID
+        while true; do
+            echo -e "  ➤  Google Drive Folder ID (optional): "
+            read -r GDRIVE_FOLDER_ID
+            if [[ -n "$GDRIVE_FOLDER_ID" ]]; then break; fi
+            echo -e "${DIM}Press Enter to use root folder${NC}"
+        done
+        
+        # Validate Rclone credentials
+        validate_rclone_credentials
+    fi
+    
+    # Signal Configuration
+    echo ""
+    echo -e "  ${BOLD}📱  Signal API Configuration${NC}"
+    echo -e "  ${DIM}Configure Signal messaging integration${NC}"
+    echo ""
+    
+    while true; do
+        echo -e "  ➤  Enable Signal API? [Y/n]: "
+        read -r ENABLE_SIGNAL
+        case "${ENABLE_SIGNAL}" in
+            [Yy]* ) ENABLE_SIGNAL="true"; break ;;
+            [Nn]* ) ENABLE_SIGNAL="false"; break ;;
+            * ) echo -e "${YELLOW}Please enter Y or N${NC}"; continue ;;
+        esac
+    done
+    
+    if [[ "${ENABLE_SIGNAL}" == "true" ]]; then
+        # Signal Phone Number
+        while true; do
+            echo -e "  ➤  Signal Phone Number (with country code): "
+            read -r SIGNAL_PHONE_NUMBER
+            if [[ -n "$SIGNAL_PHONE_NUMBER" ]]; then break; fi
     collect_ports            # Step 10
     generate_secrets         # Step 11
     
