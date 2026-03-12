@@ -2280,9 +2280,10 @@ OPENCLAW_PORT=${OPENCLAW_PORT}
 TAILSCALE_PORT=${TAILSCALE_PORT}
 RCLONE_PORT=${RCLONE_PORT}
 
-# ─── Additional Variables for Script 2 ───────────────────────────────────────────
+# ─── Additional Variables for Script 2 ───────────────────────────────────
 SSL_EMAIL=${ADMIN_EMAIL}
 GPU_DEVICE=${GPU_TYPE}
+ENABLE_GPU=${ENABLE_GPU:-false}
 TENANT_DIR=${DATA_ROOT}
 TAILSCALE_EXTRA_ARGS="${TAILSCALE_AUTH_KEY:+--authkey ${TAILSCALE_AUTH_KEY}}"
 MINIO_CONSOLE_PORT=9001
