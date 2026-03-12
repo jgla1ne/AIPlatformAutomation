@@ -2128,23 +2128,23 @@ POSTGRES_INTERNAL_PORT=${POSTGRES_INTERNAL_PORT}
 REDIS_INTERNAL_PORT=${REDIS_INTERNAL_PORT}
 
 # ─── Database ─────────────────────────────────────────────────────────────────
-POSTGRES_USER="${POSTGRES_USER}"
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD}"
-POSTGRES_DB="${POSTGRES_DB}"
+POSTGRES_USER=${POSTGRES_USER}
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+POSTGRES_DB=${POSTGRES_DB}
 
 # ─── Per-Service Database Credentials (Dynamic Generation) ───────────────────
-# These will be used by Script 2 to create per-service databases and users
-AUTHENTIK_DB_USER="${AUTHENTIK_DB_USER:-authentik}"
-AUTHENTIK_DB_PASS="${AUTHENTIK_DB_PASS:-$(openssl rand -hex 16)}"
-AUTHENTIK_DB_NAME="${AUTHENTIK_DB_NAME:-authentik}"
+# These will be used by Script 3 to create per-service databases and users
+AUTHENTIK_DB_USER=${AUTHENTIK_DB_USER}
+AUTHENTIK_DB_PASS=${AUTHENTIK_DB_PASS}
+AUTHENTIK_DB_NAME=${AUTHENTIK_DB_NAME}
 
-FLOWISE_DB_USER="${FLOWISE_DB_USER:-flowise}"
-FLOWISE_DB_PASS="${FLOWISE_DB_PASS:-$(openssl rand -hex 16)}"
-FLOWISE_DB_NAME="${FLOWISE_DB_NAME:-flowise}"
+FLOWISE_DB_USER=${FLOWISE_DB_USER}
+FLOWISE_DB_PASS=${FLOWISE_DB_PASS}
+FLOWISE_DB_NAME=${FLOWISE_DB_NAME}
 
-N8N_DB_USER="${N8N_DB_USER:-n8n}"
-N8N_DB_PASS="${N8N_DB_PASS:-$(openssl rand -hex 16)}"
-N8N_DB_NAME="${N8N_DB_NAME:-n8n}"
+N8N_DB_USER=${N8N_DB_USER}
+N8N_DB_PASS=${N8N_DB_PASS}
+N8N_DB_NAME=${N8N_DB_NAME}
 
 # ─── Database Compatibility (for script 3) ───────────────────────────────
 DB_USER="${POSTGRES_USER}"
