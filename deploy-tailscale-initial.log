@@ -1,0 +1,50 @@
+2026/03/12 01:02:53 Backend: logs: be:65cef99bfae024aa4f56d4d3c80bdf73fb8513f129da0d7e63e9592fa09ef527 fe:
+2026/03/12 01:02:53 Switching ipn state NoState -> NeedsLogin (WantRunning=true, nm=false)
+2026/03/12 01:02:53 blockEngineUpdates(true)
+2026/03/12 01:02:53 control: client.Shutdown ...
+2026/03/12 01:02:53 control: mapRoutine: exiting
+2026/03/12 01:02:53 health(warnable=warming-up): error: Tailscale is starting. Please wait.
+2026/03/12 01:02:53 health(warnable=wantrunning-false): ok
+2026/03/12 01:02:53 control: authRoutine: exiting
+2026/03/12 01:02:53 control: updateRoutine: exiting
+2026/03/12 01:02:53 control: Client.Shutdown done.
+2026/03/12 01:02:53 localapi: [POST] /localapi/v0/login-interactive
+2026/03/12 01:02:53 StartLoginInteractiveAs("root"): url=false
+2026/03/12 01:02:53 control: client.Login(2)
+2026/03/12 01:02:53 control: LoginInteractive -> regen=true
+2026/03/12 01:02:53 control: doLogin(regen=true, hasUrl=false)
+2026/03/12 01:02:54 control: control server key from https://controlplane.tailscale.com: ts2021=[fSeS+], legacy=[nlFWp]
+2026/03/12 01:02:54 control: Generating a new nodekey.
+2026/03/12 01:02:55 control: RegisterReq: onode= node=[3HJze] fup=false nks=false
+2026/03/12 01:02:55 control: RegisterReq: got response; nodeKeyExpired=false, machineAuthorized=true; authURL=false
+2026/03/12 01:02:55 blockEngineUpdates(false)
+2026/03/12 01:02:56 health(warnable=not-in-map-poll): ok
+2026/03/12 01:02:56 control: netmap: got new dial plan from control
+2026/03/12 01:02:56 active login: jeangabriel.laine@gmail.com
+2026/03/12 01:02:56 monitor: gateway and self IP changed: gw=172.18.0.1 self=172.18.0.8
+2026/03/12 01:02:56 Switching ipn state NeedsLogin -> Starting (WantRunning=true, nm=true)
+2026/03/12 01:02:56 magicsock: SetPrivateKey called (init)
+2026/03/12 01:02:56 wgengine: Reconfig: configuring userspace WireGuard config (with 0/4 peers)
+2026/03/12 01:02:56 wgengine: Reconfig: configuring router
+2026/03/12 01:02:56 wgengine: Reconfig: user dialer
+2026/03/12 01:02:56 tsdial: bart table size: 7
+2026/03/12 01:02:56 wgengine: Reconfig: configuring DNS
+2026/03/12 01:02:56 dns: Set: {DefaultResolvers:[] Routes:{tail2450c7.ts.net.:[] ts.net.:[199.247.155.53 2620:111:8007::53]}+65arpa SearchDomains:[tail2450c7.ts.net.] Hosts:5}
+2026/03/12 01:02:56 health(warnable=dns-read-os-config-failed): error: Tailscale failed to fetch the DNS configuration of your device: getting OS base config is not supported
+2026/03/12 01:02:56 peerapi: serving on http://100.65.32.58:50165
+2026/03/12 01:02:56 peerapi: serving on http://[fd7a:115c:a1e0::be35:203b]:50165
+2026/03/12 01:02:56 health(warnable=dns): error: getting OS base config is not supported
+2026/03/12 01:02:56 netcheck: DetectCaptivePortal(found=false)
+2026/03/12 01:02:56 magicsock: home DERP changing from derp-0 [0ms] to derp-5 [21ms]
+2026/03/12 01:02:56 magicsock: home is now derp-5 (syd)
+2026/03/12 01:02:56 magicsock: adding connection to derp-5 for home-keep-alive
+2026/03/12 01:02:56 magicsock: 1 active derp conns: derp-5=cr0s,wr0s
+2026/03/12 01:02:56 Switching ipn state Starting -> Running (WantRunning=true, nm=true)
+2026/03/12 01:02:56 control: NetInfo: NetInfo{varies=false ipv6=false ipv6os=true udp=true icmpv4=false derp=#5 portmap= link="" firewallmode=""}
+2026/03/12 01:02:56 derphttp.Client.Connect: connecting to derp-5 (syd)
+2026/03/12 01:02:56 health(warnable=warming-up): ok
+2026/03/12 01:02:56 health(warnable=no-derp-connection): ok
+2026/03/12 01:02:56 magicsock: derp-5 connected; connGen=1
+2026/03/12 01:02:56 health(warnable=no-derp-connection): ok
+2026/03/12 01:02:56 [RATELIMIT] format("health(warnable=%s): ok")
+2026/03/12 01:02:56 magicsock: endpoints changed: 54.252.80.129:55860 (stun), 172.18.0.8:55860 (local)

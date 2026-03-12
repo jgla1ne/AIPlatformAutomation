@@ -1,0 +1,50 @@
+time=2026-03-12T01:14:57.187Z level=ERROR source=query_logger.go:113 msg="Error opening query log file" component=activeQueryTracker file=/prometheus/queries.active err="open /prometheus/queries.active: permission denied"
+panic: Unable to create mmap-ed active query log
+
+goroutine 1 [running]:
+github.com/prometheus/prometheus/promql.NewActiveQueryTracker({0x7ffe5774ef43, 0xb}, 0x14, 0x113a9803cac0)
+	/app/promql/query_logger.go:145 +0x308
+main.main()
+	/app/cmd/prometheus/main.go:913 +0x8946
+time=2026-03-12T01:15:58.677Z level=INFO source=main.go:1611 msg="updated GOGC" old=100 new=75
+time=2026-03-12T01:15:58.679Z level=INFO source=main.go:723 msg="Leaving GOMAXPROCS=2: CPU quota undefined" component=automaxprocs
+time=2026-03-12T01:15:58.683Z level=INFO source=memlimit.go:198 msg="GOMEMLIMIT is updated" component=automemlimit package=github.com/KimMachineGun/automemlimit/memlimit GOMEMLIMIT=7378182144 previous=9223372036854775807
+time=2026-03-12T01:15:58.684Z level=INFO source=main.go:771 msg="No time or size retention was set so using the default time retention" duration=15d
+time=2026-03-12T01:15:58.684Z level=INFO source=main.go:822 msg="Starting Prometheus Server" mode=server version="(version=3.10.0, branch=HEAD, revision=54e010926b0a270cadb22be1113ad45fe9bcb90a)"
+time=2026-03-12T01:15:58.684Z level=INFO source=main.go:827 msg="operational information" build_context="(go=go1.26.0, platform=linux/amd64, user=root@2ee2be8e6652, date=20260225-21:12:02, tags=netgo,builtinassets)" host_details="(Linux 6.17.0-1007-aws #7~24.04.1-Ubuntu SMP Thu Jan 22 21:04:49 UTC 2026 x86_64 91118e971586 (none))" fd_limits="(soft=524287, hard=524288)" vm_limits="(soft=unlimited, hard=unlimited)"
+time=2026-03-12T01:15:58.697Z level=ERROR source=query_logger.go:113 msg="Error opening query log file" component=activeQueryTracker file=/prometheus/queries.active err="open /prometheus/queries.active: permission denied"
+panic: Unable to create mmap-ed active query log
+
+goroutine 1 [running]:
+github.com/prometheus/prometheus/promql.NewActiveQueryTracker({0x7ffe11546f43, 0xb}, 0x14, 0x129fdab933b0)
+	/app/promql/query_logger.go:145 +0x308
+main.main()
+	/app/cmd/prometheus/main.go:913 +0x8946
+time=2026-03-12T01:16:59.924Z level=INFO source=main.go:1611 msg="updated GOGC" old=100 new=75
+time=2026-03-12T01:16:59.926Z level=INFO source=main.go:723 msg="Leaving GOMAXPROCS=2: CPU quota undefined" component=automaxprocs
+time=2026-03-12T01:16:59.929Z level=INFO source=memlimit.go:198 msg="GOMEMLIMIT is updated" component=automemlimit package=github.com/KimMachineGun/automemlimit/memlimit GOMEMLIMIT=7378182144 previous=9223372036854775807
+time=2026-03-12T01:16:59.930Z level=INFO source=main.go:771 msg="No time or size retention was set so using the default time retention" duration=15d
+time=2026-03-12T01:16:59.930Z level=INFO source=main.go:822 msg="Starting Prometheus Server" mode=server version="(version=3.10.0, branch=HEAD, revision=54e010926b0a270cadb22be1113ad45fe9bcb90a)"
+time=2026-03-12T01:16:59.930Z level=INFO source=main.go:827 msg="operational information" build_context="(go=go1.26.0, platform=linux/amd64, user=root@2ee2be8e6652, date=20260225-21:12:02, tags=netgo,builtinassets)" host_details="(Linux 6.17.0-1007-aws #7~24.04.1-Ubuntu SMP Thu Jan 22 21:04:49 UTC 2026 x86_64 91118e971586 (none))" fd_limits="(soft=524287, hard=524288)" vm_limits="(soft=unlimited, hard=unlimited)"
+time=2026-03-12T01:16:59.950Z level=ERROR source=query_logger.go:113 msg="Error opening query log file" component=activeQueryTracker file=/prometheus/queries.active err="open /prometheus/queries.active: permission denied"
+panic: Unable to create mmap-ed active query log
+
+goroutine 1 [running]:
+github.com/prometheus/prometheus/promql.NewActiveQueryTracker({0x7ffffe914f43, 0xb}, 0x14, 0x2c2153e609f0)
+	/app/promql/query_logger.go:145 +0x308
+main.main()
+	/app/cmd/prometheus/main.go:913 +0x8946
+time=2026-03-12T01:18:01.327Z level=INFO source=main.go:1611 msg="updated GOGC" old=100 new=75
+time=2026-03-12T01:18:01.331Z level=INFO source=main.go:723 msg="Leaving GOMAXPROCS=2: CPU quota undefined" component=automaxprocs
+time=2026-03-12T01:18:01.333Z level=INFO source=memlimit.go:198 msg="GOMEMLIMIT is updated" component=automemlimit package=github.com/KimMachineGun/automemlimit/memlimit GOMEMLIMIT=7378182144 previous=9223372036854775807
+time=2026-03-12T01:18:01.333Z level=INFO source=main.go:771 msg="No time or size retention was set so using the default time retention" duration=15d
+time=2026-03-12T01:18:01.334Z level=INFO source=main.go:822 msg="Starting Prometheus Server" mode=server version="(version=3.10.0, branch=HEAD, revision=54e010926b0a270cadb22be1113ad45fe9bcb90a)"
+time=2026-03-12T01:18:01.334Z level=INFO source=main.go:827 msg="operational information" build_context="(go=go1.26.0, platform=linux/amd64, user=root@2ee2be8e6652, date=20260225-21:12:02, tags=netgo,builtinassets)" host_details="(Linux 6.17.0-1007-aws #7~24.04.1-Ubuntu SMP Thu Jan 22 21:04:49 UTC 2026 x86_64 91118e971586 (none))" fd_limits="(soft=524287, hard=524288)" vm_limits="(soft=unlimited, hard=unlimited)"
+time=2026-03-12T01:18:01.345Z level=ERROR source=query_logger.go:113 msg="Error opening query log file" component=activeQueryTracker file=/prometheus/queries.active err="open /prometheus/queries.active: permission denied"
+panic: Unable to create mmap-ed active query log
+
+goroutine 1 [running]:
+github.com/prometheus/prometheus/promql.NewActiveQueryTracker({0x7ffcdc1d6f43, 0xb}, 0x14, 0x21c6542a5690)
+	/app/promql/query_logger.go:145 +0x308
+main.main()
+	/app/cmd/prometheus/main.go:913 +0x8946

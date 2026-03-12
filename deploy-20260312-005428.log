@@ -1,0 +1,468 @@
++ log 'All output is now logged to: /mnt/data/datasquiz/logs/deploy-20260312-005428.log'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    All output is now logged to: /mnt/data/datasquiz/logs/deploy-20260312-005428.log'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    All output is now logged to: /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    All output is now logged to: /mnt/data/datasquiz/logs/deploy-20260312-005428.log
++ log 'DEBUG_MODE: true'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    DEBUG_MODE: true'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    DEBUG_MODE: true
+[0;36m[INFO][0m    DEBUG_MODE: true
++ log 'Complete stdout and stderr redirection enabled for comprehensive debugging'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
++ echo -e '\033[0;36m[INFO]\033[0m    Complete stdout and stderr redirection enabled for comprehensive debugging'
+[0;36m[INFO][0m    Complete stdout and stderr redirection enabled for comprehensive debugging
+[0;36m[INFO][0m    Complete stdout and stderr redirection enabled for comprehensive debugging
++ log '=== ENABLING COMPREHENSIVE DEBUG LOGGING ==='
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    === ENABLING COMPREHENSIVE DEBUG LOGGING ==='
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    === ENABLING COMPREHENSIVE DEBUG LOGGING ===
+[0;36m[INFO][0m    === ENABLING COMPREHENSIVE DEBUG LOGGING ===
++ [[ true == \t\r\u\e ]]
++ log 'Debug mode enabled - enabling verbose logging for all services'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    Debug mode enabled - enabling verbose logging for all services'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    Debug mode enabled - enabling verbose logging for all services
+[0;36m[INFO][0m    Debug mode enabled - enabling verbose logging for all services
++ [[ true == \t\r\u\e ]]
++ enable_service_debug_logging postgres
++ local service=postgres
++ local log_level=debug
++ log '=== ENABLING DEBUG LOGGING FOR postgres ==='
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    === ENABLING DEBUG LOGGING FOR postgres ==='
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    === ENABLING DEBUG LOGGING FOR postgres ===
+[0;36m[INFO][0m    === ENABLING DEBUG LOGGING FOR postgres ===
++ case "$service" in
++ echo POSTGRES_LOG_LEVEL=debug
++ echo POSTGRES_LOG_MIN_DURATION_STATEMENT=0
++ echo POSTGRES_LOG_MIN_MESSAGES=debug5
++ log 'Debug logging enabled for postgres with level: debug'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
++ echo -e '\033[0;36m[INFO]\033[0m    Debug logging enabled for postgres with level: debug'
+[0;36m[INFO][0m    Debug logging enabled for postgres with level: debug
+[0;36m[INFO][0m    Debug logging enabled for postgres with level: debug
++ [[ true == \t\r\u\e ]]
++ enable_service_debug_logging redis
++ local service=redis
++ local log_level=debug
++ log '=== ENABLING DEBUG LOGGING FOR redis ==='
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    === ENABLING DEBUG LOGGING FOR redis ==='
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    === ENABLING DEBUG LOGGING FOR redis ===
+[0;36m[INFO][0m    === ENABLING DEBUG LOGGING FOR redis ===
++ case "$service" in
++ echo REDIS_LOGLEVEL=debug
++ log 'Debug logging enabled for redis with level: debug'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    Debug logging enabled for redis with level: debug'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    Debug logging enabled for redis with level: debug
+[0;36m[INFO][0m    Debug logging enabled for redis with level: debug
++ [[ true == \t\r\u\e ]]
++ enable_service_debug_logging qdrant
++ local service=qdrant
++ local log_level=debug
++ log '=== ENABLING DEBUG LOGGING FOR qdrant ==='
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    === ENABLING DEBUG LOGGING FOR qdrant ==='
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    === ENABLING DEBUG LOGGING FOR qdrant ===
+[0;36m[INFO][0m    === ENABLING DEBUG LOGGING FOR qdrant ===
++ case "$service" in
++ echo QDRANT__LOG_LEVEL=debug
++ echo QDRANT__SERVICE__HTTP__ENABLE_CORS=true
++ log 'Debug logging enabled for qdrant with level: debug'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    Debug logging enabled for qdrant with level: debug'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    Debug logging enabled for qdrant with level: debug
+[0;36m[INFO][0m    Debug logging enabled for qdrant with level: debug
++ [[ true == \t\r\u\e ]]
++ enable_service_debug_logging grafana
++ local service=grafana
++ local log_level=debug
++ log '=== ENABLING DEBUG LOGGING FOR grafana ==='
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    === ENABLING DEBUG LOGGING FOR grafana ==='
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    === ENABLING DEBUG LOGGING FOR grafana ===
+[0;36m[INFO][0m    === ENABLING DEBUG LOGGING FOR grafana ===
++ case "$service" in
++ echo GF_LOG_LEVEL=debug
++ echo GF_LOG_MODE=console,file
++ log 'Debug logging enabled for grafana with level: debug'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    Debug logging enabled for grafana with level: debug'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    Debug logging enabled for grafana with level: debug
+[0;36m[INFO][0m    Debug logging enabled for grafana with level: debug
++ [[ true == \t\r\u\e ]]
++ enable_service_debug_logging prometheus
++ local service=prometheus
++ local log_level=debug
++ log '=== ENABLING DEBUG LOGGING FOR prometheus ==='
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
++ echo -e '\033[0;36m[INFO]\033[0m    === ENABLING DEBUG LOGGING FOR prometheus ==='
+[0;36m[INFO][0m    === ENABLING DEBUG LOGGING FOR prometheus ===
+[0;36m[INFO][0m    === ENABLING DEBUG LOGGING FOR prometheus ===
++ case "$service" in
++ echo PROMETHEUS_LOG_LEVEL=debug
++ echo PROMETHEUS_LOG_FORMAT=json
++ log 'Debug logging enabled for prometheus with level: debug'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    Debug logging enabled for prometheus with level: debug'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    Debug logging enabled for prometheus with level: debug
+[0;36m[INFO][0m    Debug logging enabled for prometheus with level: debug
++ [[ true == \t\r\u\e ]]
++ enable_service_debug_logging caddy
++ local service=caddy
++ local log_level=debug
++ log '=== ENABLING DEBUG LOGGING FOR caddy ==='
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    === ENABLING DEBUG LOGGING FOR caddy ==='
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    === ENABLING DEBUG LOGGING FOR caddy ===
+[0;36m[INFO][0m    === ENABLING DEBUG LOGGING FOR caddy ===
++ case "$service" in
++ echo CADDY_LOG_LEVEL=debug
++ echo CADDY_LOG_FORMAT=json
++ log 'Debug logging enabled for caddy with level: debug'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
++ echo -e '\033[0;36m[INFO]\033[0m    Debug logging enabled for caddy with level: debug'
+[0;36m[INFO][0m    Debug logging enabled for caddy with level: debug
+[0;36m[INFO][0m    Debug logging enabled for caddy with level: debug
++ log 'Debug logging enabled for all services'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
++ echo -e '\033[0;36m[INFO]\033[0m    Debug logging enabled for all services'
+[0;36m[INFO][0m    Debug logging enabled for all services
+[0;36m[INFO][0m    Debug logging enabled for all services
++ log '=== END DEBUG LOGGING SETUP ==='
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    === END DEBUG LOGGING SETUP ==='
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    === END DEBUG LOGGING SETUP ===
+[0;36m[INFO][0m    === END DEBUG LOGGING SETUP ===
++ main
++ docker info
++ ok 'Docker is active.'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
++ echo -e '\033[0;32m[OK]\033[0m      Docker is active.'
+[0;32m[OK][0m      Docker is active.
+[0;32m[OK][0m      Docker is active.
++ log INFO 'Executing Pre-flight Configuration Generation...'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
++ echo -e '\033[0;36m[INFO]\033[0m    INFO'
+[0;36m[INFO][0m    INFO
+[0;36m[INFO][0m    INFO
++ write_caddyfile
++ log INFO 'Executing dynamic Caddyfile generation as per README.md...'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    INFO'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    INFO
+[0;36m[INFO][0m    INFO
++ local CADDY_FILE=/mnt/data/datasquiz/Caddyfile
+++ mktemp
++ TMP_CADDY=/tmp/tmp.fvtNO8In3s
++ cat
++ cat
++ [[ true == \t\r\u\e ]]
++ cat
++ ok 'Caddy route added for Grafana.'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
++ echo -e '\033[0;32m[OK]\033[0m      Caddy route added for Grafana.'
+[0;32m[OK][0m      Caddy route added for Grafana.
+[0;32m[OK][0m      Caddy route added for Grafana.
++ [[ true == \t\r\u\e ]]
++ cat
++ ok 'Caddy route added for Prometheus.'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
++ echo -e '\033[0;32m[OK]\033[0m      Caddy route added for Prometheus.'
+[0;32m[OK][0m      Caddy route added for Prometheus.
+[0;32m[OK][0m      Caddy route added for Prometheus.
++ [[ true == \t\r\u\e ]]
++ cat
++ ok 'Caddy route added for Qdrant.'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
++ echo -e '\033[0;32m[OK]\033[0m      Caddy route added for Qdrant.'
+[0;32m[OK][0m      Caddy route added for Qdrant.
+[0;32m[OK][0m      Caddy route added for Qdrant.
++ [[ false == \t\r\u\e ]]
++ [[ false == \t\r\u\e ]]
++ mv /tmp/tmp.fvtNO8In3s /mnt/data/datasquiz/Caddyfile
++ log INFO 'Caddyfile generated successfully.'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    INFO'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    INFO
+[0;36m[INFO][0m    INFO
++ chown 1001:1001 /mnt/data/datasquiz/Caddyfile
++ log SUCCESS 'Dynamic Caddyfile generation complete.'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    SUCCESS'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    SUCCESS
+[0;36m[INFO][0m    SUCCESS
++ write_prometheus_config
++ log INFO 'Writing Prometheus configuration...'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
++ echo -e '\033[0;36m[INFO]\033[0m    INFO'
+[0;36m[INFO][0m    INFO
+[0;36m[INFO][0m    INFO
++ cat
++ log SUCCESS 'Prometheus configuration written to /mnt/data/datasquiz/prometheus.yml'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    SUCCESS'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    SUCCESS
+[0;36m[INFO][0m    SUCCESS
++ write_rclone_config
++ [[ true != \t\r\u\e ]]
++ log INFO 'Generating dynamic rclone.conf...'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    INFO'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    INFO
+[0;36m[INFO][0m    INFO
++ local rclone_config_dir=/mnt/data/datasquiz/rclone
++ local rclone_config_file=/mnt/data/datasquiz/rclone/rclone.conf
++ mkdir -p /mnt/data/datasquiz/rclone
++ cat
++ chown -R 1001:1001 /mnt/data/datasquiz/rclone
++ ok 'Rclone configuration generated successfully.'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
++ echo -e '\033[0;32m[OK]\033[0m      Rclone configuration generated successfully.'
+[0;32m[OK][0m      Rclone configuration generated successfully.
+[0;32m[OK][0m      Rclone configuration generated successfully.
++ ok 'All runtime configurations generated successfully.'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;32m[OK]\033[0m      All runtime configurations generated successfully.'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;32m[OK][0m      All runtime configurations generated successfully.
+[0;32m[OK][0m      All runtime configurations generated successfully.
++ log 'Generating docker-compose.yml for tenant '\''datasquiz'\''...'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    Generating docker-compose.yml for tenant '\''datasquiz'\''...'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    Generating docker-compose.yml for tenant 'datasquiz'...
+[0;36m[INFO][0m    Generating docker-compose.yml for tenant 'datasquiz'...
++ cat
++ generate_compose_services
++ log INFO 'Executing Master Service Loop - Deploying ALL enabled services...'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    INFO'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    INFO
+[0;36m[INFO][0m    INFO
++ [[ true == \t\r\u\e ]]
++ add_postgres
++ cat
++ ok 'Added '\''postgres'\'' service.'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;32m[OK]\033[0m      Added '\''postgres'\'' service.'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;32m[OK][0m      Added 'postgres' service.
+[0;32m[OK][0m      Added 'postgres' service.
++ [[ true == \t\r\u\e ]]
++ add_redis
++ cat
++ ok 'Added '\''redis'\'' service.'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;32m[OK]\033[0m      Added '\''redis'\'' service.'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;32m[OK][0m      Added 'redis' service.
+[0;32m[OK][0m      Added 'redis' service.
++ [[ true == \t\r\u\e ]]
++ add_qdrant
++ cat
++ ok 'Added '\''qdrant'\'' service.'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
++ echo -e '\033[0;32m[OK]\033[0m      Added '\''qdrant'\'' service.'
+[0;32m[OK][0m      Added 'qdrant' service.
+[0;32m[OK][0m      Added 'qdrant' service.
++ [[ false == \t\r\u\e ]]
++ [[ false == \t\r\u\e ]]
++ [[ false == \t\r\u\e ]]
++ [[ false == \t\r\u\e ]]
++ [[ false == \t\r\u\e ]]
++ [[ false == \t\r\u\e ]]
++ [[ true == \t\r\u\e ]]
++ add_grafana
++ cat
++ ok 'Added '\''grafana'\'' service.'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
++ echo -e '\033[0;32m[OK]\033[0m      Added '\''grafana'\'' service.'
+[0;32m[OK][0m      Added 'grafana' service.
+[0;32m[OK][0m      Added 'grafana' service.
++ [[ true == \t\r\u\e ]]
++ add_prometheus
++ cat
++ ok 'Added '\''prometheus'\'' service.'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
++ echo -e '\033[0;32m[OK]\033[0m      Added '\''prometheus'\'' service.'
+[0;32m[OK][0m      Added 'prometheus' service.
+[0;32m[OK][0m      Added 'prometheus' service.
++ [[ true == \t\r\u\e ]]
++ add_authentik
++ [[ true != \t\r\u\e ]]
++ log INFO 'Adding '\''authentik'\'' service...'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    INFO'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    INFO
+[0;36m[INFO][0m    INFO
++ mkdir -p /mnt/data/datasquiz/authentik
++ chown 1001:1001 /mnt/data/datasquiz/authentik
++ cat
++ ok 'Added '\''authentik'\'' service.'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;32m[OK]\033[0m      Added '\''authentik'\'' service.'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;32m[OK][0m      Added 'authentik' service.
+[0;32m[OK][0m      Added 'authentik' service.
++ [[ true == \t\r\u\e ]]
++ add_tailscale
++ [[ true != \t\r\u\e ]]
++ log INFO 'Adding '\''tailscale'\'' service with Zero-Touch Activation...'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    INFO'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    INFO
+[0;36m[INFO][0m    INFO
++ mkdir -p /mnt/data/datasquiz/tailscale
++ chown 1001:1001 /mnt/data/datasquiz/tailscale
++ local 'tailscale_up_flags=--hostname=ai-datasquiz --authkey=tskey-auth-kmrpeLFThF11CNTRL-KFzGnfMPQVJeKqirm3nWVJeV2jq78FbrM'
++ [[ https == \t\r\u\e ]]
++ cat
++ ok 'Added '\''tailscale'\'' service with activation command.'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
++ echo -e '\033[0;32m[OK]\033[0m      Added '\''tailscale'\'' service with activation command.'
+[0;32m[OK][0m      Added 'tailscale' service with activation command.
+[0;32m[OK][0m      Added 'tailscale' service with activation command.
++ [[ true == \t\r\u\e ]]
++ add_rclone
++ [[ true != \t\r\u\e ]]
++ log INFO 'Adding '\''rclone'\'' service...'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
++ echo -e '\033[0;36m[INFO]\033[0m    INFO'
+[0;36m[INFO][0m    INFO
+[0;36m[INFO][0m    INFO
++ mkdir -p /mnt/data/datasquiz/rclone
++ mkdir -p /mnt/data/datasquiz/gdrive
++ chown 1001:1001 /mnt/data/datasquiz/rclone
++ chown 1001:1001 /mnt/data/datasquiz/gdrive
++ cat
++ ok 'Added '\''rclone'\'' service.'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;32m[OK]\033[0m      Added '\''rclone'\'' service.'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;32m[OK][0m      Added 'rclone' service.
+[0;32m[OK][0m      Added 'rclone' service.
++ [[ true == \t\r\u\e ]]
++ add_signal
++ [[ true != \t\r\u\e ]]
++ log INFO 'Adding '\''signal'\'' service...'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    INFO'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    INFO
+[0;36m[INFO][0m    INFO
++ mkdir -p /mnt/data/datasquiz/signal
++ chown 1001:1001 /mnt/data/datasquiz/signal
++ cat
++ ok 'Added '\''signal'\'' service.'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
++ echo -e '\033[0;32m[OK]\033[0m      Added '\''signal'\'' service.'
+[0;32m[OK][0m      Added 'signal' service.
+[0;32m[OK][0m      Added 'signal' service.
++ [[ true == \t\r\u\e ]]
++ add_openclaw
++ [[ true != \t\r\u\e ]]
++ log INFO 'Adding '\''openclaw'\'' service...'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    INFO'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    INFO
+[0;36m[INFO][0m    INFO
++ mkdir -p /mnt/data/datasquiz/openclaw
++ chown 1001:1001 /mnt/data/datasquiz/openclaw
++ cat
++ ok 'Added '\''openclaw'\'' service.'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
++ echo -e '\033[0;32m[OK]\033[0m      Added '\''openclaw'\'' service.'
+[0;32m[OK][0m      Added 'openclaw' service.
+[0;32m[OK][0m      Added 'openclaw' service.
++ add_caddy
++ cat
++ ok 'Added '\''caddy'\'' service.'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
++ echo -e '\033[0;32m[OK]\033[0m      Added '\''caddy'\'' service.'
+[0;32m[OK][0m      Added 'caddy' service.
+[0;32m[OK][0m      Added 'caddy' service.
++ ok 'Master Service Loop completed - All enabled services added to compose file.'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;32m[OK]\033[0m      Master Service Loop completed - All enabled services added to compose file.'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;32m[OK][0m      Master Service Loop completed - All enabled services added to compose file.
+[0;32m[OK][0m      Master Service Loop completed - All enabled services added to compose file.
++ cat
++ log 'Starting deployment with docker compose...'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
++ echo -e '\033[0;36m[INFO]\033[0m    Starting deployment with docker compose...'
+[0;36m[INFO][0m    Starting deployment with docker compose...
+[0;36m[INFO][0m    Starting deployment with docker compose...
++ cd /mnt/data/datasquiz
++ audit_volume_mounts
++ log INFO 'Auditing all docker-compose volume mounts before deployment...'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;36m[INFO]\033[0m    INFO'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;36m[INFO][0m    INFO
+[0;36m[INFO][0m    INFO
++ local all_volumes_exist=true
++ local volume_sources
+++ grep -E '^\s*-\s*[^:]+:[^:]+:' /mnt/data/datasquiz/docker-compose.yml
+++ sed 's/^[[:space:]]*-//'
+++ cut -d: -f1
++ volume_sources=' "${OPENCLAW_PORT'
++ for volume_source in $volume_sources
++ local host_path
++ [[ "${OPENCLAW_PORT == /* ]]
++ host_path='/mnt/data/datasquiz/"${OPENCLAW_PORT'
++ [[ ! -d /mnt/data/datasquiz/"${OPENCLAW_PORT ]]
++ fail 'CRITICAL AUDIT FAILURE: Directory '\''/mnt/data/datasquiz/"${OPENCLAW_PORT'\'' for volume mount does not exist. The docker-compose.yml is trying to mount a directory that was not created by Script 1. Please re-run Script 1 or correct the volume path in the '\''add_*'\'' function in Script 2.'
++ [[ -n /mnt/data/datasquiz/logs/deploy-20260312-005428.log ]]
++ echo -e '\033[0;31m[FAIL]\033[0m    CRITICAL AUDIT FAILURE: Directory '\''/mnt/data/datasquiz/"${OPENCLAW_PORT'\'' for volume mount does not exist. The docker-compose.yml is trying to mount a directory that was not created by Script 1. Please re-run Script 1 or correct the volume path in the '\''add_*'\'' function in Script 2.'
++ tee -a /mnt/data/datasquiz/logs/deploy-20260312-005428.log
+[0;31m[FAIL][0m    CRITICAL AUDIT FAILURE: Directory '/mnt/data/datasquiz/"${OPENCLAW_PORT' for volume mount does not exist. The docker-compose.yml is trying to mount a directory that was not created by Script 1. Please re-run Script 1 or correct the volume path in the 'add_*' function in Script 2.
+[0;31m[FAIL][0m    CRITICAL AUDIT FAILURE: Directory '/mnt/data/datasquiz/"${OPENCLAW_PORT' for volume mount does not exist. The docker-compose.yml is trying to mount a directory that was not created by Script 1. Please re-run Script 1 or correct the volume path in the 'add_*' function in Script 2.
++ exit 1

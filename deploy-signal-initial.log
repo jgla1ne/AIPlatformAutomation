@@ -1,0 +1,50 @@
+groupmod: cannot lock /etc/group; try again later.
++ set -e
++ [ -z /home/.local/share/signal-cli ]
++ usermod -u 1000 signal-api
++ groupmod -o -g 1000 signal-api
+usermod: no changes
+groupmod: Permission denied.
+groupmod: cannot lock /etc/group; try again later.
++ set -e
++ [ -z /home/.local/share/signal-cli ]
++ usermod -u 1000 signal-api
+usermod: no changes
++ groupmod -o -g 1000 signal-api
+groupmod: Permission denied.
+groupmod: cannot lock /etc/group; try again later.
++ set -e
++ [ -z /home/.local/share/signal-cli ]
++ usermod -u 1000 signal-api
+usermod: no changes
++ groupmod -o -g 1000 signal-api
+groupmod: Permission denied.
+groupmod: cannot lock /etc/group; try again later.
++ set -e
++ [ -z /home/.local/share/signal-cli ]
++ usermod -u 1000 signal-api
+usermod: no changes
++ groupmod -o -g 1000 signal-api
+groupmod: Permission denied.
+groupmod: cannot lock /etc/group; try again later.
++ set -e
++ [ -z /home/.local/share/signal-cli ]
++ usermod -u 1000 signal-api
+usermod: no changes
++ groupmod -o -g 1000 signal-api
+groupmod: Permission denied.
+groupmod: cannot lock /etc/group; try again later.
++ set -e
++ [ -z /home/.local/share/signal-cli ]
++ usermod -u 1000 signal-api
+usermod: no changes
++ groupmod -o -g 1000 signal-api
+groupmod: Permission denied.
+groupmod: cannot lock /etc/group; try again later.
++ set -e
++ [ -z /home/.local/share/signal-cli ]
++ usermod -u 1000 signal-api
+usermod: no changes
++ groupmod -o -g 1000 signal-api
+groupmod: Permission denied.
+groupmod: cannot lock /etc/group; try again later.

@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# =============================================================================
+# Script 3: Configure Services - Mission Control
+# =============================================================================
+set -eo pipefail
 
-# =============================================================================
-# Script 3: Configure Services - INDIVIDUAL LOGGING ENGINE
-# =============================================================================
-# PURPOSE: Configure logging for individual services
-# USAGE:   sudo bash 3-configure-services.sh <tenant_id> [action]
-# =============================================================================
-DIM='\033[2m'
-NC='\033[0m'
+# --- Color Definitions ---
+DIM="${DIM:-\033[2m}"
+NC="${NC:-\033[0m}"
+RED="${RED:-\033[0;31m}"
+GREEN="${GREEN:-\033[0;32m}"
+YELLOW="${YELLOW:-\033[1;33m}"
+CYAN="${CYAN:-\033[0;36m}"
+BLUE="${BLUE:-\033[0;34m}"
 log() { echo -e "${CYAN}[INFO]${NC}    $1"; }
 ok() { echo -e "${GREEN}[OK]${NC}      $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }

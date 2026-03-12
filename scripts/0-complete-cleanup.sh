@@ -76,3 +76,6 @@ main() {
     
     ok "TRUE NUCLEAR cleanup for tenant '${TENANT_ID}' is complete."
 }
+
+# Call main function
+main "$@"
