@@ -1,12 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Import utility functions from Mission Control (modular architecture)
-# Script-3 is now source-safe and will only define functions when sourced
-source "$(dirname "$0")/3-configure-services.sh" 2>/dev/null || true
-
 # =============================================================================
-# Script 1: Tenant Setup - Complete System Configurationzard
+# Script 1: Tenant Setup - Complete System Configuration Wizard
 # =============================================================================
 # PURPOSE: Interactive setup wizard for AI Platform
 # USAGE:   sudo bash scripts/1-setup-system.sh
@@ -24,6 +20,24 @@ CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
 BLUE='\033[0;34m'
 NC='\033[0m'
+
+# ─── Utility Functions ────────────────────────────────────────────────────────
+fail() {
+    log "ERROR" "$1"
+    exit 1
+}
+
+ok() {
+    log "SUCCESS" "$1"
+}
+
+log() {
+    local level="$1"
+    shift
+    local message="$*"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo -e "${timestamp} [${level}] ${message}"
+}
 
 # ─── Runtime vars (set after volume selection) ────────────────────────────────
 DATA_ROOT=""
@@ -145,23 +159,19 @@ VECTOR_DB_PORT="6333"
 VECTOR_DB_URL=""
 
 # Service defaults
-N8N_ENCRYPTION_KEY=""
-N8N_API_KEY=""
-N8N_PASSWORD=""
-FLOWISE_SECRET_KEY=""
-FLOWISE_PASSWORD=""
-LITELLM_MASTER_KEY=""
-LITELLM_SALT_KEY=""
-ANYTHINGLLM_API_KEY=""
-ANYTHINGLLM_JWT_SECRET=""
-ANYTHINGLLM_AUTH_TOKEN=""
-ANYTHINGLLM_PORT=""
-QDRANT_API_KEY=""
-GRAFANA_PASSWORD=""
-AUTHENTIK_SECRET_KEY=""
-AUTHENTIK_BOOTSTRAP_PASSWORD=""
-DIFY_SECRET_KEY=""
-DIFY_INNER_API_KEY=""
+N8N_ENCRYPTION_KEY="${N8N_ENCRYPTION_KEY:-}"
+FLOWISE_SECRET_KEY="${FLOWISE_SECRET_KEY:-}"
+LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-}"
+LITELLM_SALT_KEY="${LITELLM_SALT_KEY:-}"
+ANYTHINGLLM_JWT_SECRET="${ANYTHINGLLM_JWT_SECRET:-}"
+QDRANT_API_KEY="${QDRANT_API_KEY:-}"
+GRAFANA_PASSWORD="${GRAFANA_PASSWORD:-}"
+AUTHENTIK_SECRET_KEY="${AUTHENTIK_SECRET_KEY:-}"
+OPENWEBUI_SECRET_KEY="${OPENWEBUI_SECRET_KEY:-}"
+DIFY_SECRET_KEY="${DIFY_SECRET_KEY:-}"
+DIFY_INNER_API_KEY="${DIFY_INNER_API_KEY:-}"
+REDIS_PASSWORD="${REDIS_PASSWORD:-}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
 
 # Network defaults
 TAILSCALE_AUTH_KEY=""

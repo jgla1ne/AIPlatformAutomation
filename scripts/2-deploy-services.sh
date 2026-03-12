@@ -237,89 +237,90 @@ write_caddyfile() {
     TMP_CADDY=$(mktemp)
 
     # 1. Global Options Block - ALWAYS formatted correctly
-    cat > "$TMP_CADDY" <<-EOF
-	{
-	    email ${ADMIN_EMAIL}
-	    # acme_dns google_cloud_dns ... # Placeholder for future DNS challenge
-	}
+    cat > "$TMP_CADDY" <<EOF
+{
+    email ${ADMIN_EMAIL}
+    # acme_dns google_cloud_dns ... # Placeholder for future DNS challenge
+}
 
-	EOF
+EOF
 
     # 2. Main Domain Route
-    cat >> "$TMP_CADDY" <<-EOF
-	${DOMAIN} {
-	    # Add the tls directive here
-	    tls internal {
-	        on_demand
-	    }
-	    respond "AI Platform v3.2.0 is active. Welcome." 200
-	}
+    cat >> "$TMP_CADDY" <<EOF
+${DOMAIN} {
+    # Add the tls directive here
+    tls internal {
+        on_demand
+    }
+    respond "AI Platform v3.2.0 is active. Welcome." 200
+}
 
-	EOF
+EOF
 
     # 3. Dynamically add routes for ONLY enabled services
     if [[ "${ENABLE_GRAFANA}" == "true" ]]; then
-        cat >> "$TMP_CADDY" <<-EOF
-	grafana.${DOMAIN} {
-	    tls internal
-	    reverse_proxy grafana:${GRAFANA_INTERNAL_PORT}
-	}
+        cat >> "$TMP_CADDY" <<EOF
+grafana.${DOMAIN} {
+    tls internal
+    reverse_proxy grafana:${GRAFANA_INTERNAL_PORT}
+}
 
-	EOF
+EOF
         ok "Caddy route added for Grafana."
     fi
     
     if [[ "${ENABLE_PROMETHEUS}" == "true" ]]; then
-        cat >> "$TMP_CADDY" <<-EOF
-	prometheus.${DOMAIN} {
-	    tls internal
-	    reverse_proxy prometheus:${PROMETHEUS_INTERNAL_PORT}
-	}
+        cat >> "$TMP_CADDY" <<EOF
+prometheus.${DOMAIN} {
+    tls internal
+    reverse_proxy prometheus:${PROMETHEUS_INTERNAL_PORT}
+}
 
-	EOF
+EOF
         ok "Caddy route added for Prometheus."
     fi
     
     if [[ "${ENABLE_QDRANT}" == "true" ]]; then
-        cat >> "$TMP_CADDY" <<-EOF
-	qdrant.${DOMAIN} {
-	    tls internal
-	    reverse_proxy qdrant:${QDRANT_INTERNAL_PORT}
-	}
+        cat >> "$TMP_CADDY" <<EOF
+qdrant.${DOMAIN} {
+    tls internal
+    reverse_proxy qdrant:${QDRANT_INTERNAL_PORT}
+}
 
-	EOF
+EOF
         ok "Caddy route added for Qdrant."
     fi
     
     if [[ "${ENABLE_OLLAMA}" == "true" ]]; then
-        cat >> "$TMP_CADDY" <<-EOF
-	ollama.${DOMAIN} {
-	    tls internal
-	    reverse_proxy ollama:${OLLAMA_INTERNAL_PORT}
-	}
+        cat >> "$TMP_CADDY" <<EOF
+ollama.${DOMAIN} {
+    tls internal
+    reverse_proxy ollama:${OLLAMA_INTERNAL_PORT}
+}
 
-	EOF
+EOF
         ok "Caddy route added for Ollama."
     fi
     
     if [[ "${ENABLE_OPENWEBUI}" == "true" ]]; then
-        cat >> "$TMP_CADDY" <<-EOF
-	openwebui.${DOMAIN} {
-	    tls internal
-	    reverse_proxy openwebui:${OPENWEBUI_INTERNAL_PORT}
-	}
+        cat >> "$TMP_CADDY" <<EOF
+openwebui.${DOMAIN} {
+    tls internal
+    reverse_proxy openwebui:${OPENWEBUI_INTERNAL_PORT}
+}
 
-	EOF
+EOF
         ok "Caddy route added for OpenWebUI."
     fi
 
-    # 4. Atomically move the file and run 'caddy fmt'
+    # 4. Atomically move the file and set ownership
     mv "$TMP_CADDY" "$CADDY_FILE"
-    log "INFO" "Running 'caddy fmt' to ensure perfect formatting..."
-    docker run --rm -v "$CADDY_FILE":/etc/caddy/Caddyfile caddy:2 caddy fmt --overwrite
+    log "INFO" "Caddyfile generated successfully."
+    # TODO: Fix Docker volume mount issue for caddy fmt
+    # docker run --rm -v "${CADDY_FILE}:/etc/caddy/Caddyfile" caddy:2 caddy fmt --overwrite
     
     chown "${TENANT_UID}:${TENANT_GID}" "$CADDY_FILE"
-    log "SUCCESS" "Dynamic Caddyfile generation complete and validated."
+    log "SUCCESS" "Dynamic Caddyfile generation complete."
 }
 
 write_prometheus_config() {
