@@ -23,47 +23,56 @@ ok() { echo -e "${GREEN}[OK]${NC}      $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
 fail() { echo -e "${RED}[FAIL]${NC}    $*"; exit 1; }
 
-# --- Tenant ID Check ---
-if [[ -z "${1:-}" ]]; then
-    fail "TENANT_ID is required. Usage: sudo bash $0 <tenant_id>"
-fi
-TENANT_ID="$1"
-DATA_ROOT="/mnt/data/${TENANT_ID}"
-
-log "Starting complete cleanup for tenant '${TENANT_ID}'..."
-
-# --- 1. Stop and Remove All Containers ---
-log "Stopping all running containers for tenant '${TENANT_ID}'..."
-if [[ -f "${DATA_ROOT}/docker-compose.yml" ]]; then
-    cd "${DATA_ROOT}"
-    if docker compose ps -q | grep -q .; then
-        docker compose down --remove-orphans -v
-        ok "All containers for tenant stopped and removed."
-    else
-        ok "No containers were running for this tenant."
+main() {
+    # --- Tenant ID Validation ---
+    if [[ -z "${1:-}" ]]; then
+        echo "ERROR: TENANT_ID is required. Usage: sudo bash $0 <tenant_id>" >&2
+        exit 1
     fi
-else
-    warn "No docker-compose.yml found for tenant. Skipping container cleanup."
-fi
+    
+    TENANT_ID="$1"
+    COMPOSE_PROJECT_NAME="ai-${TENANT_ID}" # Use the official Docker Compose project name
+    DATA_ROOT="/mnt/data/${TENANT_ID}"
+    
+    log "Starting TRUE NUCLEAR cleanup for tenant '${TENANT_ID}'..."
 
-# --- 2. Clean Up Docker Resources ---
-# This is a global cleanup, use with caution if other Docker apps are running.
-log "Performing global Docker system prune..."
-docker system prune -af
-ok "Docker system resources cleaned up."
+    # --- 1. Brute Force Stop & Remove All Tenant Containers ---
+    log "Finding and stopping all containers for project '${COMPOSE_PROJECT_NAME}'..."
+    # Find all containers (running or stopped) for this project
+    container_ids=$(docker ps -a --filter "name=${COMPOSE_PROJECT_NAME}" -q)
+    if [[ -n "$container_ids" ]]; then
+        docker stop $container_ids
+        docker rm $container_ids
+        ok "All containers for project '${COMPOSE_PROJECT_NAME}' stopped and removed."
+    else
+        ok "No containers found for project '${COMPOSE_PROJECT_NAME}'."
+    fi
 
-# --- 3. Nuclear Cleanup - Remove ALL Data ---
-log "Performing nuclear cleanup of ALL tenant data..."
-if [ -d "/mnt/data" ]; then
-    rm -rf /mnt/data/*
-    ok "All tenant data in /mnt/data has been nuclear wiped."
-else
-    ok "No /mnt/data directory found. Creating clean environment."
-fi
+    # --- 2. Brute Force Destroy All Tenant Volumes (This will get the Ollama models) ---
+    log "Finding and destroying all volumes for project '${COMPOSE_PROJECT_NAME}'..."
+    # The 'label' filter is the key to finding volumes created by docker-compose
+    docker volume prune -af --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}"
+    ok "All Docker volumes for project '${COMPOSE_PROJECT_NAME}' have been destroyed."
 
-# --- 4. Create Fresh Environment ---
-log "Creating fresh environment for tenant '${TENANT_ID}'..."
-mkdir -p "/mnt/data/${TENANT_ID}"
-ok "Fresh tenant directory created."
+    # --- 3. Nuclear Wipe of Bind-Mounted Data ---
+    log "Performing nuclear wipe of ALL tenant data in ${DATA_ROOT}..."
+    if [[ -d "${DATA_ROOT}" ]]; then
+        rm -rf "${DATA_ROOT}"
+        ok "All tenant data in ${DATA_ROOT} has been nuclear wiped."
+    else
+        ok "Tenant data directory did not exist."
+    fi
 
-ok "Cleanup for tenant '${TENANT_ID}' is complete."
+    # --- 4. Global Docker System Prune (for dangling images) ---
+    log "Performing global Docker system prune..."
+    docker system prune -af
+    ok "Docker system resources cleaned up."
+    
+    # --- 5. Create Fresh Environment ---
+    log "Creating fresh environment for tenant '${TENANT_ID}'..."
+    mkdir -p "${DATA_ROOT}"
+    chown "${SUDO_USER}:${SUDO_USER}" "${DATA_ROOT}"
+    ok "Fresh tenant directory created."
+    
+    ok "TRUE NUCLEAR cleanup for tenant '${TENANT_ID}' is complete."
+}

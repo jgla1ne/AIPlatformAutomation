@@ -427,6 +427,10 @@ EOF
 
 add_ollama() {
     log "INFO" "Auto-integrating Ollama with vector database..."
+    # This ensures the directory exists before the container starts
+    mkdir -p "${TENANT_DIR}/ollama"
+    # The permission logic in Script 1 will have already set ownership on the parent
+    
     cat >> "${COMPOSE_FILE}" << EOF
 
   ollama:
@@ -439,7 +443,7 @@ add_ollama() {
       - 'OLLAMA_HOST=0.0.0.0'
       - 'OLLAMA_PORT=\${OLLAMA_INTERNAL_PORT:-11434}'
     volumes:
-      - \${TENANT_DIR}/ollama:/root/.ollama
+      - ./ollama:/root/.ollama  # CRITICAL: Mounts to a subdir INSIDE the tenant's data root
 EOF
 
     # Add GPU deployment if enabled
