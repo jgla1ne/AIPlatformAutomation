@@ -747,7 +747,7 @@ add_rclone() {
     volumes:
       - ./rclone:/config/rclone
       - ./gdrive:/mnt/gdrive
-    command: ["rclone", "mount", "gdrive:", "/mnt/gdrive", "--vfs-cache-mode", "writes", "--allow-non-empty", "--log-level", "INFO"]
+    command: ["mount", "gdrive:", "/mnt/gdrive", "--vfs-cache-mode", "writes", "--allow-non-empty", "--log-level", "INFO"]
 EOF
     ok "Added 'rclone' service."
 }
@@ -861,7 +861,8 @@ add_signal() {
   signal:
     image: bbernhard/signal-cli-rest-api:latest
     restart: unless-stopped
-    user: "\${SIGNAL_UID:-1000}:\${TENANT_GID:-1001}"
+    # Note: This service runs as root because the image requires it
+    # to perform a 'groupmod' on startup
     networks:
       - default
     ports:
@@ -1024,7 +1025,7 @@ add_qdrant() {
       QDRANT__LOG_LEVEL: "\${QDRANT__LOG_LEVEL:-info}"
       QDRANT__SERVICE__HTTP__ENABLE_CORS: "\${QDRANT__SERVICE__HTTP__ENABLE_CORS:-true}"
     volumes:
-      - \${TENANT_DIR}/qdrant:/qdrant/storage
+      - ./qdrant:/qdrant/storage
 EOF
     ok "Added 'qdrant' service."
 }
@@ -1063,7 +1064,7 @@ add_prometheus() {
       - PROMETHEUS_LOG_FORMAT=${PROMETHEUS_LOG_FORMAT:-json}
     volumes:
       - \${TENANT_DIR}/prometheus.yml:/etc/prometheus/prometheus.yml
-      - \${TENANT_DIR}/prometheus-data:/prometheus
+      - ./prometheus:/prometheus
 EOF
     ok "Added 'prometheus' service."
 }
