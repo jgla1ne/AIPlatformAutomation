@@ -672,7 +672,8 @@ add_ollama() {
       - 'OLLAMA_HOST=0.0.0.0'
       - 'OLLAMA_PORT=${OLLAMA_INTERNAL_PORT:-11434}'
     volumes:
-      - ./ollama:/root/.ollama  # CRITICAL: Mounts to a subdir INSIDE the tenant's data root
+      - ./ollama:/root/.ollama
+    working_dir: /root
 EOF
 
     # Add GPU deployment if enabled
@@ -879,7 +880,7 @@ add_rclone() {
   rclone:
     image: rclone/rclone:latest
     restart: unless-stopped
-    user: "\${RCLONE_UID:-1000}:\${TENANT_GID:-1001}"
+    # Note: rclone needs root for FUSE operations
     networks:
       - default
     environment:
@@ -887,10 +888,16 @@ add_rclone() {
       - 'RCLONE_CONFIG_GDRIVE_SCOPE=drive'
       - 'RCLONE_CONFIG_GDRIVE_USE_JSON_AUTH=true'
       - 'RCLONE_CONFIG_GDRIVE_SERVICE_ACCOUNT_FILE=/config/rclone/google_sa.json'
+      - 'RCLONE_CACHE_DIR=/tmp/rclone-cache'
     volumes:
       - ./rclone:/config/rclone
       - ./gdrive:/mnt/gdrive
-    command: ["mount", "gdrive:", "/mnt/gdrive", "--vfs-cache-mode", "writes", "--allow-non-empty", "--log-level", "INFO"]
+      - rclone-cache:/tmp/rclone-cache
+    cap_add:
+      - SYS_ADMIN
+    devices:
+      - /dev/fuse
+    command: ["mount", "gdrive:", "/mnt/gdrive", "--vfs-cache-mode", "writes", "--allow-non-empty", "--log-level", "INFO", "--cache-dir", "/tmp/rclone-cache"]
 EOF
     ok "Added 'rclone' service."
 }
@@ -1300,6 +1307,10 @@ networks:
   default:
     name: ${DOCKER_NETWORK}
     driver: bridge
+
+volumes:
+  rclone-cache:
+    driver: local
 EOF
 
     # --- Start Services ---
