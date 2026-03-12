@@ -944,6 +944,8 @@ add_litellm() {
       - 'GEMINI_API_KEY=\${GEMINI_API_KEY}'
       # CRITICAL FIX: Disable pip cache to prevent permission errors
       - 'PIP_NO_CACHE_DIR=1'
+      # CRITICAL FIX: Define a writable home directory for user
+      - 'HOME=/tmp'
     volumes:
       - ./litellm:/app/config
 EOF
@@ -997,7 +999,10 @@ add_authentik() {
       - default
     environment:
       - 'AUTHENTIK_SECRET_KEY=\${AUTHENTIK_SECRET_KEY}'
-      - 'AUTHENTIK_POSTGRESQL__URL=postgres://authentik:\${POSTGRES_PASSWORD}@postgres:5432/authentik'
+      # TRIPLE-CHECK this entire block for typos and variable names.
+      - 'AUTHENTIK_POSTGRESQL__URL=postgres://\${POSTGRES_USER:-postgres}:\${POSTGRES_PASSWORD}@postgres:5432/\${POSTGRES_DB:-ai_platform}'
+      - 'AUTHENTIK_REDIS__URL=redis://redis:6379/0'
+      # Add any other required Authentik variables here
     volumes:
       - ./authentik:/media
       - ./authentik:/templates
@@ -1067,7 +1072,7 @@ add_openclaw() {
       - ./openclaw:/data
     # CRITICAL FIX: Add a command to start the service and keep it running
     # This is an EXAMPLE. The actual command will depend on OpenClaw's documentation.
-    command: sh -c "python -u main.py & tail -f /dev/null"
+    command: sh -c "python3 -u main.py & tail -f /dev/null"
 EOF
     ok "Added 'openclaw' service with proper configuration."
 }
@@ -1107,6 +1112,8 @@ add_anythingllm() {
       - 'ANYTHINGLLM_JWT_SECRET=\${ANYTHINGLLM_JWT_SECRET}'
       # CRITICAL FIX: Explicitly define the storage path to prevent undefined path errors
       - 'STORAGE_ROOT=/app/server/storage'
+      # CRITICAL FIX: Explicitly define the model directory path
+      - 'MODEL_DIR=/app/server/models/ollama'
     volumes:
       - ./anythingllm:/app/server/storage
 EOF
