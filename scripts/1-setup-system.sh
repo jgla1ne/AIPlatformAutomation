@@ -2132,6 +2132,20 @@ POSTGRES_USER="${POSTGRES_USER}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD}"
 POSTGRES_DB="${POSTGRES_DB}"
 
+# ─── Per-Service Database Credentials (Dynamic Generation) ───────────────────
+# These will be used by Script 2 to create per-service databases and users
+AUTHENTIK_DB_USER="${AUTHENTIK_DB_USER:-authentik}"
+AUTHENTIK_DB_PASS="${AUTHENTIK_DB_PASS:-$(openssl rand -hex 16)}"
+AUTHENTIK_DB_NAME="${AUTHENTIK_DB_NAME:-authentik}"
+
+FLOWISE_DB_USER="${FLOWISE_DB_USER:-flowise}"
+FLOWISE_DB_PASS="${FLOWISE_DB_PASS:-$(openssl rand -hex 16)}"
+FLOWISE_DB_NAME="${FLOWISE_DB_NAME:-flowise}"
+
+N8N_DB_USER="${N8N_DB_USER:-n8n}"
+N8N_DB_PASS="${N8N_DB_PASS:-$(openssl rand -hex 16)}"
+N8N_DB_NAME="${N8N_DB_NAME:-n8n}"
+
 # ─── Database Compatibility (for script 3) ───────────────────────────────
 DB_USER="${POSTGRES_USER}"
 DB_PASSWORD="${POSTGRES_PASSWORD}"
@@ -2153,23 +2167,27 @@ FLOWISE_SECRET_KEY="${FLOWISE_SECRET_KEY}"
 FLOWISE_USERNAME=admin
 FLOWISE_PASSWORD="${FLOWISE_PASSWORD}"
 
-# LiteLLM configuration for central AI gateway
-LITELLM_CONFIG_YAML='
-model_list:
-  - model_name: ${OLLAMA_DEFAULT_MODEL}
-    litellm_params:
-      model: ${OLLAMA_DEFAULT_MODEL}
-      api_base: http://${OLLAMA_INTERNAL_URL}
-      rpm_limit: 6
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: gpt-3.5-turbo
-      rpm_limit: 100
-'
-
 # ─── LiteLLM ──────────────────────────────────────────────────────────────────
 LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}"
 LITELLM_SALT_KEY="${LITELLM_SALT_KEY}"
+
+# High-level AI model configuration flags (for Script 2 dynamic generation)
+# This will be built from enabled LLM providers
+LITELLM_ENABLED_MODELS=""
+if [[ "${ENABLE_OLLAMA}" == "true" ]]; then
+    LITELLM_ENABLED_MODELS="${LITELLM_ENABLED_MODELS}ollama,"
+fi
+if [[ "${ENABLE_GEMINI}" == "true" && -n "${GEMINI_API_KEY}" ]]; then
+    LITELLM_ENABLED_MODELS="${LITELLM_ENABLED_MODELS}gemini,"
+fi
+if [[ "${ENABLE_GROQ}" == "true" && -n "${GROQ_API_KEY}" ]]; then
+    LITELLM_ENABLED_MODELS="${LITELLM_ENABLED_MODELS}groq,"
+fi
+if [[ "${ENABLE_OPENROUTER}" == "true" && -n "${OPENROUTER_API_KEY}" ]]; then
+    LITELLM_ENABLED_MODELS="${LITELLM_ENABLED_MODELS}openrouter,"
+fi
+# Remove trailing comma
+LITELLM_ENABLED_MODELS="${LITELLM_ENABLED_MODELS%,}"
 
 # ─── AnythingLLM ────────────────────────────────────────────────────────────────
 ANYTHINGLLM_API_KEY="${ANYTHINGLLM_API_KEY}"

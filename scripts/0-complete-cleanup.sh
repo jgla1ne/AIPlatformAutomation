@@ -68,6 +68,30 @@ main() {
     docker system prune -af
     ok "Docker system resources cleaned up."
     
+    # --- 4.1. CRITICAL ENHANCEMENT: Prune system-level caches ---
+    log "Pruning system-level package manager caches to prevent build failures..."
+    
+    # Clean pip cache (common cause of permission errors)
+    if [[ -d "/root/.cache/pip" ]]; then
+        rm -rf /root/.cache/pip
+        ok "Pip cache pruned."
+    fi
+    
+    # Clean npm cache (for Node.js services)
+    if [[ -d "/root/.npm" ]]; then
+        rm -rf /root/.npm
+        ok "NPM cache pruned."
+    fi
+    
+    # Clean user-level caches that might interfere
+    if [[ -n "${SUDO_USER:-}" && -d "/home/${SUDO_USER}/.cache" ]]; then
+        rm -rf "/home/${SUDO_USER}/.cache/pip" 2>/dev/null || true
+        rm -rf "/home/${SUDO_USER}/.cache/npm" 2>/dev/null || true
+        ok "User package caches pruned."
+    fi
+    
+    ok "System-level package manager caches cleaned."
+    
     # --- 5. Create Fresh Environment ---
     log "Creating fresh environment for tenant '${TENANT_ID}'..."
     mkdir -p "${DATA_ROOT}"
