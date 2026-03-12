@@ -2408,9 +2408,14 @@ apply_final_ownership() {
                     continue
                     ;;
                 qdrant)
-                    # Qdrant requires UID 1000 per security documentation
-                    chown -R 1000:1000 "${service_dir}"
-                    log "SUCCESS" "Set ownership for '${service_name}' to 1000:1000 (Qdrant requirement)"
+                    # Qdrant requires UID 1000 per security documentation, runs as 1000:1001 in container
+                    chown -R 1000:1001 "${service_dir}"
+                    log "SUCCESS" "Set ownership for '${service_name}' to 1000:1001 (Qdrant container user)"
+                    ;;
+                prometheus)
+                    # Prometheus requires UID 65534 (nobody) per README.md
+                    chown -R 65534:1001 "${service_dir}"
+                    log "SUCCESS" "Set ownership for '${service_name}' to 65534:1001 (Prometheus requirement)"
                     ;;
                 *)
                     # All other services use tenant user for non-root compliance

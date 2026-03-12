@@ -1173,6 +1173,7 @@ add_qdrant() {
     image: qdrant/qdrant:latest
     restart: unless-stopped
     user: "${QDRANT_UID:-1000}:${TENANT_GID:-1001}"
+    working_dir: /qdrant/storage
     networks:
       - default
     environment:
