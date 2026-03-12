@@ -432,6 +432,40 @@ audit_volume_mounts() {
     fi
 }
 
+# --- Master Service Loop (Zero Gap Implementation) ---
+generate_compose_services() {
+    log "INFO" "Executing Master Service Loop - Deploying ALL enabled services..."
+    
+    # Core Infrastructure Services
+    [[ "${ENABLE_POSTGRES}" == "true" ]] && add_postgres
+    [[ "${ENABLE_REDIS}" == "true" ]] && add_redis
+    [[ "${ENABLE_QDRANT}" == "true" ]] && add_qdrant
+    
+    # AI/LLM Stack Services
+    [[ "${ENABLE_OLLAMA}" == "true" ]] && add_ollama
+    [[ "${ENABLE_LITELLM}" == "true" ]] && add_litellm
+    [[ "${ENABLE_OPENWEBUI}" == "true" ]] && add_openwebui
+    [[ "${ENABLE_ANYTHINGLLM}" == "true" ]] && add_anythingllm
+    [[ "${ENABLE_FLOWISE}" == "true" ]] && add_flowise
+    [[ "${ENABLE_N8N}" == "true" ]] && add_n8n
+    
+    # Monitoring Services
+    [[ "${ENABLE_GRAFANA}" == "true" ]] && add_grafana
+    [[ "${ENABLE_PROMETHEUS}" == "true" ]] && add_prometheus
+    
+    # Security & Networking Services
+    [[ "${ENABLE_AUTHENTIK}" == "true" ]] && add_authentik
+    [[ "${ENABLE_TAILSCALE}" == "true" ]] && add_tailscale
+    [[ "${ENABLE_RCLONE}" == "true" ]] && add_rclone
+    [[ "${ENABLE_SIGNAL}" == "true" ]] && add_signal
+    [[ "${ENABLE_OPENCLAW}" == "true" ]] && add_openclaw
+    
+    # Caddy is always required for reverse proxy
+    add_caddy
+    
+    ok "Master Service Loop completed - All enabled services added to compose file."
+}
+
 # --- Service Generation Functions ---
 add_postgres() {
     cat >> "${COMPOSE_FILE}" << EOF
@@ -726,6 +760,71 @@ EOF
     ok "Added 'rclone' service."
 }
 
+add_litellm() {
+    if [[ "${ENABLE_LITELLM}" != "true" ]]; then return; fi
+    
+    log "INFO" "Adding 'litellm' service with auto-integration..."
+    mkdir -p "${TENANT_DIR}/litellm"
+    chown "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}/litellm"
+
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main
+    restart: unless-stopped
+    user: "\${LITELLM_UID:-1000}:\${TENANT_GID:-1001}"
+    networks:
+      - default
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    environment:
+      - 'LITELLM_MASTER_KEY=\${LITELLM_MASTER_KEY}'
+      - 'LITELLM_SALT_KEY=\${LITELLM_SALT_KEY}'
+      - 'DATABASE_URL=postgresql://\${POSTGRES_USER:-postgres}:\${POSTGRES_PASSWORD}@postgres:5432/\${POSTGRES_DB:-ai_platform}'
+      - 'QDRANT_URL=http://qdrant:6333'
+      - 'QDRANT_API_KEY=\${QDRANT_API_KEY}'
+      - 'OLLAMA_BASE_URL=http://ollama:11434'
+      - 'OPENAI_API_KEY=\${OPENAI_API_KEY}'
+      - 'ANTHROPIC_API_KEY=\${ANTHROPIC_API_KEY}'
+    volumes:
+      - ./litellm:/app/config
+EOF
+    ok "Added 'litellm' service with auto-integration."
+}
+
+add_openwebui() {
+    if [[ "${ENABLE_OPENWEBUI}" != "true" ]]; then return; fi
+    
+    log "INFO" "Adding 'openwebui' service with auto-integration..."
+    mkdir -p "${TENANT_DIR}/openwebui"
+    chown "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}/openwebui"
+
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:main
+    restart: unless-stopped
+    user: "\${OPENWEBUI_UID:-1000}:\${TENANT_GID:-1001}"
+    networks:
+      - default
+    depends_on:
+      litellm:
+        condition: service_started
+    environment:
+      - 'OLLAMA_BASE_URL=http://litellm:4000'
+      - 'OPENAI_API_KEY=\${OPENAI_API_KEY}'
+      - 'WEBUI_SECRET_KEY=\${OPENWEBUI_SECRET_KEY}'
+      - 'WEBUI_NAME=AI Platform WebUI'
+      - 'DEFAULT_MODELS=llama3.2'
+    volumes:
+      - ./openwebui:/app/backend/data
+EOF
+    ok "Added 'openwebui' service, configured for LiteLLM routing."
+}
+
 add_qdrant() {
     cat >> "${COMPOSE_FILE}" << EOF
 
@@ -858,15 +957,8 @@ main() {
 services:
 EOF
 
-    # --- Generate All Services ---
-    [[ "${ENABLE_POSTGRES}" == "true" ]] && add_postgres
-    [[ "${ENABLE_REDIS}" == "true" ]] && add_redis
-    [[ "${ENABLE_QDRANT}" == "true" ]] && add_qdrant
-    [[ "${ENABLE_GRAFANA}" == "true" ]] && add_grafana
-    [[ "${ENABLE_PROMETHEUS}" == "true" ]] && add_prometheus
-    [[ "${ENABLE_TAILSCALE}" == "true" ]] && add_tailscale
-    [[ "${ENABLE_RCLONE}" == "true" ]] && add_rclone
-    add_caddy # Caddy is always added
+    # --- Generate All Services (Master Service Loop) ---
+    generate_compose_services
 
     # --- Add Network Configuration ---
     cat >> "${COMPOSE_FILE}" << 'EOF'
@@ -966,6 +1058,11 @@ EOF
     # CRITICAL: Execute post-deployment configuration hooks
     run_post_deployment_hooks >> "${LOG_FILE}" 2>&1
     log "=== END FINAL DEPLOYMENT STATUS ==="
+
+    # --- Final Health Check ---
+    log "=== FINAL HEALTH CHECK ==="
+    log "Running comprehensive health check to verify complete deployment..."
+    bash "${SCRIPTS_DIR}/3-configure-services.sh" "${TENANT_ID}" --health
 
     ok "Deployment completed with comprehensive logging engine."
     log "Debug logs available in: ${LOG_DIR}/deploy-*.log"
