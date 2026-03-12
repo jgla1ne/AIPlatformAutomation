@@ -14,12 +14,13 @@ This platform deploys an **interconnected AI runtime stack** with intelligent se
 
 This platform uses a fully dockerized, **100% dynamically generated** `docker-compose` architecture with **bulletproof ownership management** and **true modular design**.
 
-### **🔥 BREAKTHROUGH: Mission Control Utility Hub**
-- **Single Source of Truth**: All verification, auth, and service management functions centralized
-- **Cross-Script Reusability**: Any script can leverage Mission Control utilities
-- **Zero Code Duplication**: Complete elimination of duplicate functions across scripts
-- **Source-Safe Architecture**: Scripts can safely source utilities without execution conflicts
-- **Production-Ready**: All critical showstopper bugs resolved
+### **🔥 BREAKTHROUGH: True Modular Architecture with Mission Control**
+- **Script 1: Input Gathering Only** - User interaction and simple .env generation
+- **Script 2: Dynamic Generation Only** - Runtime configuration from .env variables  
+- **Script 3: Mission Control Hub** - All configuration management, health monitoring, and service control
+- **Zero Hardcoded Values** - All configuration via environment variables
+- **Dynamic Config Generation** - Postgres init scripts, LiteLLM configs generated at runtime
+- **Perfect Separation of Concerns** - Each script has a single, clear responsibility
 
 ### **🚀 NEW: Comprehensive Logging Engine**
 - **Deep Deployment Visibility**: Complete docker-compose.yml content, system info, and startup logs
@@ -40,34 +41,32 @@ Cleanup    Setup    Deploy   Configure
 ```
 
 **Script 0: Complete Cleanup**
-- System-wide Docker prune
-- All containers stopped and removed
-- Dynamic permissions reset with service-aware UIDs
+- System-wide Docker prune with cache cleanup
+- All containers stopped and removed  
+- System-level package cache pruning (pip, npm)
 - Clean slate for fresh deployment
 
-**Script 1: Interactive Setup**
+**Script 1: Interactive Setup (Input Only)**
 - Tenant identity collection and validation
-- Dynamic directory creation with service-aware permissions
-- Environment file generation with proper escaping
-- Caddyfile generation with correct internal ports
-- Service-specific configuration (Tailscale, Rclone, LiteLLM)
+- Service stack selection and configuration
+- Per-service database credentials generation
+- Simple .env file generation (key-value pairs only)
+- High-level configuration flags (no complex structures)
 
-**Script 2: Master Deployment Orchestrator**
-- Complete docker-compose.yml generation with ALL enabled services
-- Comprehensive debug logging engine with service-specific visibility
-- Dependency-aware service startup (databases → AI infrastructure → applications)
-- Health verification in tiers (core dependencies → AI services → external configs)
-- Post-deployment configuration (Tailscale VPN, Rclone integration)
-- Production-ready Caddy configuration with HTTPS
-- Deep Docker log capture and URL health testing
+**Script 2: Master Deployment (Generation Only)**
+- Complete docker-compose.yml generation from .env
+- Dynamic service configuration generation
+- Dependency-aware service startup
+- Health verification and deployment completion
+- Clean exit with deployment status
 
-**Script 3: Mission Control Hub**
+**Script 3: Mission Control Hub (Configuration & Management)**
+- Dynamic Postgres initializer generation
+- Dynamic LiteLLM config generation  
 - Service health monitoring and diagnostics
-- Individual service log configuration and management
-- Service lifecycle management (start/stop/restart)
 - Configuration management and validation
+- Service lifecycle management (start/stop/restart)
 - Performance monitoring and alerting
-- Comprehensive logging dashboard and health checks
 
 ### **📋 Production Deployment Features**
 
