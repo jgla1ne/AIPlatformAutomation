@@ -1283,7 +1283,7 @@ main() {
 
     # --- Pre-flight Configuration Generation ---
     log "INFO" "Executing Pre-flight Configuration Generation..."
-    write_caddyfile
+    # Caddyfile already generated in Script 1
     write_prometheus_config
     write_rclone_config
     ok "All runtime configurations generated successfully."
