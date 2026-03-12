@@ -665,14 +665,15 @@ add_ollama() {
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
-    user: "\${OLLAMA_UID:-1000}:\${TENANT_GID:-1001}"
+    # Note: ollama needs root for directory access
+    user: "root"
     networks:
       - default
     environment:
       - 'OLLAMA_HOST=0.0.0.0'
       - 'OLLAMA_PORT=${OLLAMA_INTERNAL_PORT:-11434}'
     volumes:
-      - ./ollama:/root/.ollama
+      - ./ollama:/root/.ollama  # CRITICAL: Mounts to a subdir INSIDE the tenant's data root
     working_dir: /root
 EOF
 
