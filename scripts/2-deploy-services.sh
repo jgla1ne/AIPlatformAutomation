@@ -340,6 +340,27 @@ EOF
     log "SUCCESS" "Prometheus configuration written to ${DATA_ROOT}/prometheus.yml"
 }
 
+write_rclone_config() {
+    if [[ "${ENABLE_RCLONE}" != "true" ]]; then return; fi
+
+    log "INFO" "Generating dynamic rclone.conf..."
+    local rclone_config_dir="${TENANT_DIR}/rclone"
+    local rclone_config_file="${rclone_config_dir}/rclone.conf"
+    mkdir -p "${rclone_config_dir}"
+
+    # Dynamically build the config file from .env variables
+    cat > "${rclone_config_file}" << EOF
+[gdrive]
+type = drive
+scope = drive
+use_json_credentials = true
+service_account_file = /config/google_sa.json
+EOF
+    
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${rclone_config_dir}"
+    ok "Rclone configuration generated successfully."
+}
+
 # --- Post-Deployment Configuration Hooks ---
 run_post_deployment_hooks() {
     log "INFO" "Executing post-deployment configuration hooks..."
@@ -421,20 +442,21 @@ add_postgres() {
     user: "\${POSTGRES_UID:-70}:\${TENANT_GID:-1001}"
     networks:
       - default
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER} -d \${POSTGRES_DB}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
     environment:
-      POSTGRES_USER: "\${POSTGRES_USER}"
-      POSTGRES_PASSWORD: "\${POSTGRES_PASSWORD}"
-      POSTGRES_DB: "\${POSTGRES_DB}"
-      POSTGRES_LOG_LEVEL: "\${POSTGRES_LOG_LEVEL:-info}"
-      POSTGRES_LOG_MIN_DURATION_STATEMENT: "\${POSTGRES_LOG_MIN_DURATION_STATEMENT:-1000}"
-      POSTGRES_LOG_MIN_MESSAGES: "\${POSTGRES_LOG_MIN_MESSAGES:-warning}"
+      - 'POSTGRES_DB=\${POSTGRES_DB:-ai_platform}'
+      - 'POSTGRES_USER=\${POSTGRES_USER:-postgres}'
+      - 'POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}'
+      - 'POSTGRES_LOG_LEVEL=\${POSTGRES_LOG_LEVEL:-info}'
+      - 'POSTGRES_LOG_MIN_DURATION_STATEMENT=\${POSTGRES_LOG_MIN_DURATION_STATEMENT:-0}'
+      - 'POSTGRES_LOG_MIN_MESSAGES=\${POSTGRES_LOG_MIN_MESSAGES:-info}'
     volumes:
-      - \${TENANT_DIR}/postgres:/var/lib/postgresql/data
+      - ./postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER:-postgres}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 EOF
     ok "Added 'postgres' service."
 }
@@ -641,6 +663,69 @@ EOF
     ok "Added 'redis' service."
 }
 
+add_tailscale() {
+    if [[ "${ENABLE_TAILSCALE}" != "true" ]]; then return; fi
+    
+    log "INFO" "Adding 'tailscale' service with Zero-Touch Activation..."
+    mkdir -p "${TENANT_DIR}/tailscale"
+    chown "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}/tailscale"
+
+    # Build the dynamic flags for the 'tailscale up' command
+    local tailscale_up_flags="--hostname=${TAILSCALE_HOSTNAME:-${TENANT_ID}-ai-platform} --authkey=${TAILSCALE_AUTH_KEY}"
+    if [[ "${TAILSCALE_FUNNEL}" == "true" ]]; then
+        tailscale_up_flags+=" --funnel=443"
+    fi
+
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-tailscale-1
+    hostname: ${TAILSCALE_HOSTNAME:-${TENANT_ID}-ai-platform}
+    volumes:
+      - ./tailscale:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - net_admin
+      - sys_module
+    devices:
+      - /dev/net/tun
+    restart: unless-stopped
+    command: sh -c "tailscaled --tun=userspace-networking --socks5-server=localhost:1055 --outbound-http-proxy-listen=localhost:1055 & tailscale up ${tailscale_up_flags} && wait"
+EOF
+    ok "Added 'tailscale' service with activation command."
+}
+
+add_rclone() {
+    if [[ "${ENABLE_RCLONE}" != "true" ]]; then return; fi
+    
+    log "INFO" "Adding 'rclone' service..."
+    mkdir -p "${TENANT_DIR}/rclone"
+    mkdir -p "${TENANT_DIR}/gdrive"
+    chown "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}/rclone"
+    chown "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}/gdrive"
+
+    cat >> "${COMPOSE_FILE}" << EOF
+
+  rclone:
+    image: rclone/rclone:latest
+    restart: unless-stopped
+    user: "\${RCLONE_UID:-1000}:\${TENANT_GID:-1001}"
+    networks:
+      - default
+    environment:
+      - 'RCLONE_CONFIG_GDRIVE_TYPE=drive'
+      - 'RCLONE_CONFIG_GDRIVE_SCOPE=drive'
+      - 'RCLONE_CONFIG_GDRIVE_USE_JSON_AUTH=true'
+      - 'RCLONE_CONFIG_GDRIVE_SERVICE_ACCOUNT_FILE=/config/google_sa.json'
+    volumes:
+      - ./rclone:/config/rclone
+      - ./gdrive:/mnt/gdrive
+    command: rclone mount gdrive: /mnt/gdrive --vfs-cache-mode writes --allow-non-empty --log-level INFO
+EOF
+    ok "Added 'rclone' service."
+}
+
 add_qdrant() {
     cat >> "${COMPOSE_FILE}" << EOF
 
@@ -762,6 +847,7 @@ main() {
     log "INFO" "Executing Pre-flight Configuration Generation..."
     write_caddyfile
     write_prometheus_config
+    write_rclone_config
     ok "All runtime configurations generated successfully."
 
     # --- Generate Docker Compose ---
@@ -778,6 +864,8 @@ EOF
     [[ "${ENABLE_QDRANT}" == "true" ]] && add_qdrant
     [[ "${ENABLE_GRAFANA}" == "true" ]] && add_grafana
     [[ "${ENABLE_PROMETHEUS}" == "true" ]] && add_prometheus
+    [[ "${ENABLE_TAILSCALE}" == "true" ]] && add_tailscale
+    [[ "${ENABLE_RCLONE}" == "true" ]] && add_rclone
     add_caddy # Caddy is always added
 
     # --- Add Network Configuration ---
