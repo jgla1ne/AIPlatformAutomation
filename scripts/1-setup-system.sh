@@ -2555,78 +2555,116 @@ create_directories() {
 
 # ─── Write Caddyfile ─────────────────────────────────────────────────────────
 write_caddyfile() {
-    # shellcheck source=/dev/null
-    source "${ENV_FILE}"
+    log "INFO" "Executing dynamic Caddyfile generation as per README.md..."
+    local CADDY_FILE="${DATA_ROOT}/caddy/Caddyfile"
 
-    local CADDYFILE_PATH="${CADDY_DIR}/Caddyfile"
-    
-    # Start with global config based on SSL method
-    if [[ "${SSL_TYPE}" == "selfsigned" ]]; then
-        cat > "${CADDYFILE_PATH}" << EOF
-# AI Platform Caddyfile
-# Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-# Using self-signed certificates for immediate access
+    # Use a temporary file to build the content
+    TMP_CADDY=$(mktemp)
 
+    # 1. Global Options Block - ALWAYS formatted correctly
+    cat > "$TMP_CADDY" <<EOF
 {
     email ${ADMIN_EMAIL}
-    # Disable HTTPS for self-signed testing
-    auto_https off
+    # acme_dns google_cloud_dns ... # Placeholder for future DNS challenge
+}
+
+EOF
+
+    # 2. Main Domain Route - Intelligent TLS Strategy
+    if [[ "${SSL_TYPE}" == "selfsigned" ]]; then
+        log "INFO" "Using internal certificates for self-signed SSL"
+        cat >> "$TMP_CADDY" <<EOF
+${DOMAIN} {
+    tls internal {
+        on_demand
+    }
+    respond "AI Platform v3.2.0 is active. Welcome." 200
 }
 
 EOF
     else
-        cat > "${CADDYFILE_PATH}" << EOF
-# AI Platform Caddyfile
-# Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-{
-    email ${ADMIN_EMAIL}
-    acme_ca https://acme-v02.api.letsencrypt.org/directory
-    acme_ca_root /etc/ssl/certs/ca-certificates.crt
+        log "INFO" "Using Let's Encrypt certificates for public domain: ${DOMAIN}"
+        cat >> "$TMP_CADDY" <<EOF
+${DOMAIN} {
+    respond "AI Platform v3.2.0 is active. Welcome." 200
 }
 
 EOF
     fi
 
-    # Add service blocks - SIMPLE FORMAT (consistent with script-2)
-    if [[ "${ENABLE_N8N}" = "true" ]]; then
-        cat >> "${CADDYFILE_PATH}" << EOF
-n8n.${DOMAIN} {
-    reverse_proxy n8n:5678
+    # 3. Dynamically add routes for ONLY enabled services
+    if [[ "${ENABLE_GRAFANA}" == "true" ]]; then
+        cat >> "$TMP_CADDY" <<EOF
+grafana.${DOMAIN} {
+    reverse_proxy grafana:3000
 }
 
 EOF
+        ok "Caddy route added for Grafana."
     fi
-
-    if [[ "${ENABLE_FLOWISE}" = "true" ]]; then
-        cat >> "${CADDYFILE_PATH}" << EOF
-flowise.${DOMAIN} {
-    reverse_proxy flowise:3000
+    
+    if [[ "${ENABLE_PROMETHEUS}" == "true" ]]; then
+        cat >> "$TMP_CADDY" <<EOF
+prometheus.${DOMAIN} {
+    reverse_proxy prometheus:9090
 }
 
 EOF
+        ok "Caddy route added for Prometheus."
     fi
+    
+    if [[ "${ENABLE_AUTHENTIK}" == "true" ]]; then
+        cat >> "$TMP_CADDY" <<EOF
+auth.${DOMAIN} {
+    reverse_proxy authentik:9000
+}
 
-    if [[ "${ENABLE_OPENWEBUI}" = "true" ]]; then
-        cat >> "${CADDYFILE_PATH}" << EOF
+EOF
+        ok "Caddy route added for Authentik."
+    fi
+    
+    if [[ "${ENABLE_OPENWEBUI}" == "true" ]]; then
+        cat >> "$TMP_CADDY" <<EOF
 openwebui.${DOMAIN} {
     reverse_proxy openwebui:8080
 }
 
 EOF
+        ok "Caddy route added for OpenWebUI."
     fi
+    
+    if [[ "${ENABLE_N8N}" == "true" ]]; then
+        cat >> "$TMP_CADDY" <<EOF
+n8n.${DOMAIN} {
+    reverse_proxy n8n:5678
+}
 
-    if [[ "${ENABLE_ANYTHINGLLM}" = "true" ]]; then
-        cat >> "${CADDYFILE_PATH}" << EOF
+EOF
+        ok "Caddy route added for n8n."
+    fi
+    
+    if [[ "${ENABLE_FLOWISE}" == "true" ]]; then
+        cat >> "$TMP_CADDY" <<EOF
+flowise.${DOMAIN} {
+    reverse_proxy flowise:3000
+}
+
+EOF
+        ok "Caddy route added for Flowise."
+    fi
+    
+    if [[ "${ENABLE_ANYTHINGLLM}" == "true" ]]; then
+        cat >> "$TMP_CADDY" <<EOF
 anythingllm.${DOMAIN} {
     reverse_proxy anythingllm:3001
 }
 
 EOF
+        ok "Caddy route added for AnythingLLM."
     fi
-
-    if [[ "${ENABLE_LITELLM}" = "true" ]]; then
-        cat >> "${CADDYFILE_PATH}" << EOF
+    
+    if [[ "${ENABLE_LITELLM}" == "true" ]]; then
+        cat >> "$TMP_CADDY" <<EOF
 litellm.${DOMAIN} {
     reverse_proxy litellm:4000
 }
