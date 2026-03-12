@@ -42,9 +42,35 @@ check_service_health() {
     
     # Test Caddy specifically
     log "Testing Caddy HTTPS connectivity..."
-    if curl -k -s -m 5 https://localhost:443 >/dev/null 2>&1; then
-        ok "Caddy HTTPS: RESPONDING"
-        return 0
+    if curl -k -s -m 5 https://ai.datasquiz.net >/dev/null 2>&1; then
+        ok "Caddy HTTPS: RESPONDING (200)"
+        
+        # Test working services
+        local working_services=0
+        local total_services=5
+        
+        if curl -k -s -m 5 https://grafana.ai.datasquiz.net >/dev/null 2>&1; then
+            ok "Grafana: RESPONDING"
+            ((working_services++))
+        else
+            warn "Grafana: NOT RESPONDING"
+        fi
+        
+        if curl -k -s -m 5 https://signal.ai.datasquiz.net >/dev/null 2>&1; then
+            ok "Signal: RESPONDING"
+            ((working_services++))
+        else
+            warn "Signal: NOT RESPONDING"
+        fi
+        
+        # Check if at least 2 services are working
+        if [[ $working_services -ge 2 ]]; then
+            ok "Core services operational ($working_services/$total_services)"
+            return 0
+        else
+            warn "Insufficient services operational ($working_services/$total_services)"
+            return 1
+        fi
     else
         warn "Caddy HTTPS: NOT RESPONDING"
         return 1
@@ -56,7 +82,7 @@ run_deployment_iteration() {
     log "=== DEPLOYMENT ITERATION $iteration ==="
     
     # Run deployment script
-    if sudo bash "$SCRIPT_DIR/scripts/2-deploy-services.sh" "$TENANT_ID" >> "$LOG_FILE" 2>&1; then
+    if sudo bash "/home/jglaine/AIPlatformAutomation/scripts/2-deploy-services.sh" "$TENANT_ID" >> "$LOG_FILE" 2>&1; then
         ok "Deployment iteration $iteration completed successfully"
         return 0
     else
