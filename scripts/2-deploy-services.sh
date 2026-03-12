@@ -1258,7 +1258,7 @@ test_service_urls() {
     test_results+=("INTERNAL: http://localhost:6333/health - $(curl -s -f http://localhost:6333/health >/dev/null 2>&1 && echo "✅ HEALTHY" || echo "❌ UNHEALTHY")")
     test_results+=("INTERNAL: http://localhost:3000/api/health - $(curl -s -f http://localhost:3000/api/health >/dev/null 2>&1 && echo "✅ HEALTHY" || echo "❌ UNHEALTHY")")
     test_results+=("INTERNAL: http://localhost:9090/-/healthy - $(curl -s -f http://localhost:9090/-/healthy >/dev/null 2>&1 && echo "✅ HEALTHY" || echo "❌ UNHEALTHY")")
-    test_results+=("INTERNAL: http://localhost:80 - $(curl -s -f http://localhost:80 >/dev/null 2>&1 && echo "✅ HEALTHY" || echo "❌ UNHEALTHY")")
+    test_results+=("INTERNAL: https://localhost:443 - $(curl -s -k -f https://localhost:443 >/dev/null 2>&1 && echo "✅ HTTPS" || echo "❌ FAILED")")
     
     # Test external URLs if DOMAIN is set
     if [[ -n "${DOMAIN:-}" ]]; then
