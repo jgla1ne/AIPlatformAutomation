@@ -292,7 +292,7 @@ check_root() {
 }
 
 check_prerequisites() {
-    print_step "1" "9" "System Prerequisites"
+    print_step "1" "14" "System Prerequisites"
 
     # Check if running interactively (safety check)
     if [[ ! -t 0 ]]; then
@@ -325,7 +325,7 @@ check_prerequisites() {
 
 # ─── EBS Volume Detection and Mounting ────────────────────────────────────────
 detect_and_mount_ebs() {
-    print_step "3" "11" "EBS Volume Detection and Mounting"
+    print_step "3" "14" "EBS Volume Detection and Mounting"
 
     echo -e "  ${BOLD}💾  EBS Volume Detection${NC}"
     echo -e "  ${DIM}Scanning for available EBS volumes to mount${NC}"
@@ -3060,23 +3060,6 @@ main() {
             echo -e "  ➤  Signal Phone Number (with country code): "
             read -r SIGNAL_PHONE_NUMBER
             if [[ -n "$SIGNAL_PHONE_NUMBER" ]]; then break; fi
-            echo -e "${YELLOW}Phone number is required${NC}"
-        done
-        
-        # Generate QR code for pairing
-        log "INFO" "Generating QR code for Signal device pairing..."
-        if get_signal_qr_code_uri; then
-            echo -e "${GREEN}✅ Signal QR code generated successfully!${NC}"
-            echo -e "${DIM}Please scan the QR code with your Signal app${NC}"
-            echo ""
-            
-            # Store pairing URI in environment
-            SIGNAL_LINKING_URI=$(get_signal_qr_code_uri)
-            export SIGNAL_LINKING_URI="$SIGNAL_LINKING_URI"
-            
-            echo -e "${CYAN}📱 Pairing URI saved for deployment${NC}"
-        else
-            echo -e "${RED}❌ Failed to generate Signal QR code${NC}"
     collect_ports            # Step 10
     generate_secrets         # Step 11
     
