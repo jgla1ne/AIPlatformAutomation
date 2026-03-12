@@ -1294,6 +1294,8 @@ get_tailscale_ip() {
     
     return 1
 }
+
+collect_network_config() {
     print_step "9" "11" "Network & Security Configuration"
 
     echo -e "  ${BOLD}🔐  Network & Security Settings${NC}"
