@@ -1352,27 +1352,29 @@ EOF
     sleep 10
 
     # Verify core services health
-    verify_core_services
-
+    verify_core_services() {
     log "INFO" "Performing Caddy Post-Deployment Health Check..."
     # Wait up to 30 seconds for Caddy ports to be bound to the host
     for i in {1..6}; do
-        if nc -z localhost "${CADDY_HTTP_PORT:-80}"; then
+        if nc -z localhost "${CADDY_HTTPS_PORT:-443}"; then
             break
         fi
-        log "INFO" "Waiting for Caddy HTTP port to become available..."
+        log "INFO" "Waiting for Caddy HTTPS port to become available..."
         sleep 5
     done
 
-    if nc -z localhost "${CADDY_HTTP_PORT:-80}"; then
-        ok "Caddy HTTP Port ${CADDY_HTTP_PORT:-80} is open and accessible from the host."
+    if nc -z localhost "${CADDY_HTTPS_PORT:-443}"; then
+        ok "Caddy HTTPS Port ${CADDY_HTTPS_PORT:-443} is open and accessible from the host."
     else
-        fail "CRITICAL FAILURE: Caddy HTTP Port is NOT accessible. Port mapping has failed."
+        fail "CRITICAL FAILURE: Caddy HTTPS Port is NOT accessible. Port mapping has failed."
         exit 1
     fi
 
     # Capture initial service logs
     capture_initial_logs
+    }
+
+    verify_core_services
 
     # Start deep log capture for all services if in debug mode
     if [[ "${DEBUG_MODE}" == "true" ]]; then
@@ -1408,7 +1410,7 @@ EOF
     
     log "=== FINAL HEALTH CHECK ==="
     log "Running comprehensive health check to verify complete deployment..."
-    bash "/home/jglaine/AIPlatformAutomation/scripts/3-configure-services.sh" "${TENANT_ID}" --health
+    bash "/home/jglaine/AIPlatformAutomation/scripts/3-configure-services.sh" "${TENANT_ID}" --health --port 443
     
     ok "Deployment completed with comprehensive logging engine."
     log "Debug logs available in: ${DATA_ROOT}/logs/deploy-*.log"
