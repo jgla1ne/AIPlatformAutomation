@@ -1338,6 +1338,12 @@ EOF
     log "Pulling all required Docker images..."
     docker compose pull --quiet >> "${LOG_FILE}" 2>&1
     
+    # Ensure proper permissions for data directory
+    log "INFO" "Ensuring proper permissions for data directory..."
+    mkdir -p /mnt/data/datasquiz/data/caddy 2>/dev/null || true
+    chown -R 1001:1001 /mnt/data/datasquiz/data 2>/dev/null || true
+    chmod -R 755 /mnt/data/datasquiz/data 2>/dev/null || true
+    
     log "Starting all services in detached mode..."
     log "Executing docker compose up -d... Output logged to ${LOG_FILE}"
     if ! docker compose up -d >> "${LOG_FILE}" 2>&1; then
