@@ -245,32 +245,22 @@ Each tenant deployment generates:
 This is not a container launcher.  
 It is an **enterprise-grade AI infrastructure orchestration system with true modular architecture**.
 
----
-
 ## **🚀 Quick Start**
 
 ```bash
-# 1. Cleanup
+# 1. Cleanup (TRUE NUCLEAR)
 sudo bash scripts/0-complete-cleanup.sh
 
-# 2. Configure tenant (uses Mission Control utilities for validation)
+# 2. Interactive Setup with Validation & Pairing
 sudo bash scripts/1-setup-system.sh
 
-# 3. Deploy CORE infrastructure with comprehensive logging
-DEBUG_MODE=true sudo bash scripts/2-deploy-services-logging.sh datasquiz
+# 3. Deploy with Intelligent Verification & Dashboard
+sudo bash scripts/2-deploy-services.sh
 
-# 4. Configure individual service logging
-sudo bash scripts/3-configure-services-logging.sh datasquiz configure
-
-# 5. Show logging dashboard
-sudo bash scripts/3-configure-services-logging.sh datasquiz dashboard
-
-# 6. Run comprehensive health checks
-sudo bash scripts/3-configure-services-logging.sh datasquiz health
-
-# 7. Manage services with Mission Control
+# 4. Mission Control Management
 sudo bash scripts/3-configure-services.sh datasquiz --status
-sudo bash scripts/3-configure-services.sh datasquiz --start tailscale
+sudo bash scripts/3-configure-services.sh datasquiz --start <service>
+sudo bash scripts/3-configure-services.sh datasquiz --pair-signal
 ```
 
 ---

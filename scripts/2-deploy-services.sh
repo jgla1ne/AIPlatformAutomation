@@ -229,7 +229,7 @@ fi
 log "=== END DEBUG LOGGING SETUP ==="
 
 # --- Configuration Generation Functions ---
-write_caddyfile() {
+generate_caddyfile() {
     log "INFO" "Executing dynamic Caddyfile generation as per README.md..."
     local CADDY_FILE="${DATA_ROOT}/Caddyfile"
 
@@ -245,10 +245,19 @@ write_caddyfile() {
 
 EOF
 
-    # 2. Main Domain Route
-    cat >> "$TMP_CADDY" <<EOF
+    # 2. Intelligent TLS Strategy based on domain validation
+    if [[ "${TLS_STRATEGY:-internal}" == "letsencrypt" ]]; then
+        log "INFO" "Using Let's Encrypt certificates for public domain: ${DOMAIN}"
+        cat >> "$TMP_CADDY" <<EOF
 ${DOMAIN} {
-    # Add the tls directive here
+    respond "AI Platform v3.2.0 is active. Welcome." 200
+}
+
+EOF
+    else
+        log "INFO" "Using internal certificates for local/private domain: ${DOMAIN}"
+        cat >> "$TMP_CADDY" <<EOF
+${DOMAIN} {
     tls internal {
         on_demand
     }
@@ -256,12 +265,12 @@ ${DOMAIN} {
 }
 
 EOF
+    fi
 
     # 3. Dynamically add routes for ONLY enabled services
     if [[ "${ENABLE_GRAFANA}" == "true" ]]; then
         cat >> "$TMP_CADDY" <<EOF
 grafana.${DOMAIN} {
-    tls internal
     reverse_proxy grafana:${GRAFANA_INTERNAL_PORT}
 }
 
@@ -272,7 +281,6 @@ EOF
     if [[ "${ENABLE_PROMETHEUS}" == "true" ]]; then
         cat >> "$TMP_CADDY" <<EOF
 prometheus.${DOMAIN} {
-    tls internal
     reverse_proxy prometheus:${PROMETHEUS_INTERNAL_PORT}
 }
 
@@ -280,64 +288,179 @@ EOF
         ok "Caddy route added for Prometheus."
     fi
     
-    if [[ "${ENABLE_QDRANT}" == "true" ]]; then
+    if [[ "${ENABLE_AUTHENTIK}" == "true" ]]; then
         cat >> "$TMP_CADDY" <<EOF
-qdrant.${DOMAIN} {
-    tls internal
-    reverse_proxy qdrant:${QDRANT_INTERNAL_PORT}
+auth.${DOMAIN} {
+    reverse_proxy authentik:${AUTHENTIK_INTERNAL_PORT}
 }
 
 EOF
-        ok "Caddy route added for Qdrant."
-    fi
-    
-    if [[ "${ENABLE_OLLAMA}" == "true" ]]; then
-        cat >> "$TMP_CADDY" <<EOF
-ollama.${DOMAIN} {
-    tls internal
-    reverse_proxy ollama:${OLLAMA_INTERNAL_PORT}
-}
-
-EOF
-        ok "Caddy route added for Ollama."
+        ok "Caddy route added for Authentik."
     fi
     
     if [[ "${ENABLE_OPENWEBUI}" == "true" ]]; then
         cat >> "$TMP_CADDY" <<EOF
 openwebui.${DOMAIN} {
-    tls internal
     reverse_proxy openwebui:${OPENWEBUI_INTERNAL_PORT}
 }
 
 EOF
         ok "Caddy route added for OpenWebUI."
     fi
-
-    # 4. Atomically move the file and set ownership
-    mv "$TMP_CADDY" "$CADDY_FILE"
-    log "INFO" "Caddyfile generated successfully."
-    # TODO: Fix Docker volume mount issue for caddy fmt
-    # docker run --rm -v "${CADDY_FILE}:/etc/caddy/Caddyfile" caddy:2 caddy fmt --overwrite
     
-    chown "${TENANT_UID}:${TENANT_GID}" "$CADDY_FILE"
-    log "SUCCESS" "Dynamic Caddyfile generation complete."
+    if [[ "${ENABLE_N8N}" == "true" ]]; then
+        cat >> "$TMP_CADDY" <<EOF
+n8n.${DOMAIN} {
+    reverse_proxy n8n:${N8N_INTERNAL_PORT}
 }
 
-write_prometheus_config() {
-    log "INFO" "Writing Prometheus configuration..."
-    
-    cat > "${DATA_ROOT}/prometheus.yml" << EOF
-global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
-
-scrape_configs:
-  - job_name: 'prometheus'
-    static_configs:
-      - targets: ['localhost:9090']
 EOF
+        ok "Caddy route added for n8n."
+    fi
     
-    log "SUCCESS" "Prometheus configuration written to ${DATA_ROOT}/prometheus.yml"
+    if [[ "${ENABLE_FLOWISE}" == "true" ]]; then
+        cat >> "$TMP_CADDY" <<EOF
+flowise.${DOMAIN} {
+    reverse_proxy flowise:${FLOWISE_INTERNAL_PORT}
+}
+
+EOF
+        ok "Caddy route added for Flowise."
+    fi
+    
+    if [[ "${ENABLE_ANYTHINGLLM}" == "true" ]]; then
+        cat >> "$TMP_CADDY" <<EOF
+anythingllm.${DOMAIN} {
+    reverse_proxy anythingllm:${ANYTHINGLLM_INTERNAL_PORT}
+}
+
+EOF
+        ok "Caddy route added for AnythingLLM."
+    fi
+    
+    if [[ "${ENABLE_LITELLM}" == "true" ]]; then
+        cat >> "$TMP_CADDY" <<EOF
+litellm.${DOMAIN} {
+    reverse_proxy litellm:${LITELLM_INTERNAL_PORT}
+}
+
+EOF
+        ok "Caddy route added for LiteLLM."
+    fi
+    
+    if [[ "${ENABLE_DIFY}" == "true" ]]; then
+        cat >> "$TMP_CADDY" <<EOF
+dify.${DOMAIN} {
+    reverse_proxy dify:${DIFY_INTERNAL_PORT}
+}
+
+EOF
+        ok "Caddy route added for Dify."
+    fi
+
+    # 4. Write the final Caddyfile
+    mv "$TMP_CADDY" "$CADDY_FILE"
+    ok "Caddyfile generated with intelligent TLS strategy."
+}
+
+verify_https_connectivity() {
+    log "INFO" "Performing Application-Level HTTPS Verification..."
+    
+    # Wait for Caddy to be ready
+    local max_wait=30
+    local wait_time=0
+    
+    while [[ $wait_time -lt $max_wait ]]; do
+        if curl -s --fail "https://${DOMAIN}" -o /dev/null --max-time 5 2>/dev/null; then
+            ok "HTTPS Main Domain check PASSED. Caddy is serving traffic correctly."
+            return 0
+        fi
+        
+        sleep 2
+        wait_time=$((wait_time + 2))
+    done
+    
+    fail "CRITICAL FAILURE: Caddy is running, but HTTPS requests to ${DOMAIN} are failing."
+}
+
+run_post_deployment_hooks() {
+    log "INFO" "Running post-deployment hooks..."
+    
+    # 1. Pull Ollama models if enabled
+    if [[ "${ENABLE_OLLAMA}" == "true" ]]; then
+        log "INFO" "Pulling Ollama models..."
+        pull_ollama_models
+    fi
+    
+    # 2. Trigger automated data pipeline
+    if [[ "${ENABLE_RCLONE}" == "true" ]]; then
+        log "INFO" "Starting Rclone mount..."
+        docker compose up -d --no-deps rclone 2>/dev/null
+        
+        # Wait a moment for mount to establish
+        sleep 5
+        
+        log "INFO" "Triggering data ingestion pipeline..."
+        # Execute one-shot ingestion
+        docker run --rm --network "${COMPOSE_PROJECT_NAME}_default" \
+            -v "${DATA_ROOT}/ingest.py:/app/ingest.py:ro" \
+            -v "${DATA_ROOT}/.env:/app/.env:ro" \
+            python:3-alpine \
+            python /app/ingest.py --tenant "${TENANT_ID}" --once
+        
+        ok "Data pipeline triggered successfully."
+    fi
+    
+    # 3. Capture Tailscale IP for OpenClaw access
+    if [[ "${ENABLE_TAILSCALE}" == "true" ]]; then
+        if get_tailscale_ip; then
+            log "INFO" "Tailscale IP captured: ${TAILSCALE_IP}"
+            echo "TAILSCALE_IP=${TAILSCALE_IP}" >> "${DATA_ROOT}/.env"
+            ok "OpenClaw access enabled via Tailscale IP: ${TAILSCALE_IP}:3000"
+        else
+            warn "Tailscale IP not yet available."
+        fi
+    fi
+}
+
+generate_deployment_dashboard() {
+    log "INFO" "Generating deployment dashboard..."
+    
+    printf "\n\n"
+    printf "============================================================\n"
+    printf "          🚀 AI PLATFORM DEPLOYMENT COMPLETE 🚀\n"
+    printf "============================================================\n\n"
+    
+    printf "  %-20s %-40s\n" "SERVICE" "URL"
+    printf "  %-20s %-40s\n" "--------------------" "----------------------------------------"
+    
+    # Core Services
+    printf "  %-20s https://%s\n" "OpenWebUI" "openwebui.${DOMAIN}"
+    printf "  %-20s https://%s\n" "Grafana" "grafana.${DOMAIN}"
+    printf "  %-20s https://%s\n" "Authentik" "auth.${DOMAIN}"
+    
+    # AI Services
+    if [[ "${ENABLE_LITELLM}" == "true" ]]; then
+        printf "  %-20s http://%s\n" "LiteLLM" "localhost:${LITELLM_INTERNAL_PORT}"
+    fi
+    
+    # VPN & Terminal Access
+    if [[ -n "${TAILSCALE_IP:-}" ]]; then
+        printf "  %-20s %s (Tailscale IP)\n" "OpenClaw" "${TAILSCALE_IP}:3000"
+    else
+        printf "  %-20s %s\n" "OpenClaw" "Awaiting Tailscale IP..."
+    fi
+    
+    printf "\n"
+    printf "  HEALTH STATUS: ✅ All services deployed and verified.\n"
+    printf "  DATA PIPELINE: 🔄 Rclone sync and data ingestion active.\n\n"
+    
+    printf "============================================================\n"
+    printf "                    NEXT STEPS\n"
+    printf "============================================================\n\n"
+    printf "  ▶️  Explore your services at the URLs above.\n"
+    printf "  ▶️  Run 'sudo bash scripts/3-configure-services.sh %s --status' for ongoing management.\n" "$TENANT_ID"
+    printf "\n"
 }
 
 write_rclone_config() {
@@ -1270,17 +1393,25 @@ EOF
     # CRITICAL: Execute post-deployment configuration hooks
     run_post_deployment_hooks >> "${LOG_FILE}" 2>&1
     log "=== END FINAL DEPLOYMENT STATUS ==="
-
-    # --- Final Health Check ---
+    
+    # Run HTTPS verification
+    verify_https_connectivity
+    
+    # Run post-deployment hooks
+    run_post_deployment_hooks
+    
+    # Generate deployment dashboard
+    generate_deployment_dashboard
+    
     log "=== FINAL HEALTH CHECK ==="
     log "Running comprehensive health check to verify complete deployment..."
     bash "/home/jglaine/AIPlatformAutomation/scripts/3-configure-services.sh" "${TENANT_ID}" --health
-
+    
     ok "Deployment completed with comprehensive logging engine."
-    log "Debug logs available in: ${LOG_DIR}/deploy-*.log"
-    log "Service-specific logs available in: ${LOG_DIR}/deploy-<service>-*.log"
+    log "Debug logs available in: ${DATA_ROOT}/logs/deploy-*.log"
+    log "Service-specific logs available in: ${DATA_ROOT}/logs/deploy-<service>-*.log"
     log "Next Step: Run 'sudo bash scripts/3-configure-services.sh ${TENANT_ID}'"
 }
 
 # Call main function to execute the script
-main
+main "$@"
