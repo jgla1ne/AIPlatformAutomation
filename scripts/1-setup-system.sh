@@ -2457,6 +2457,12 @@ create_directories() {
         fi
     done
     
+    # Fix Prometheus ownership (UID 65534 for Prometheus user)
+    if [[ "${ENABLE_PROMETHEUS}" == "true" ]]; then
+        log "INFO" "Setting ownership for Prometheus (UID: 65534)"
+        chown -R 65534:"${TENANT_GID}" "${DATA_ROOT}/prometheus"
+    fi
+    
     log "SUCCESS" "All service directories created with dynamic permissions."
 }
 

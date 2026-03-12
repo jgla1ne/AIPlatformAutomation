@@ -977,11 +977,7 @@ add_authentik() {
       - default
     environment:
       - 'AUTHENTIK_SECRET_KEY=\${AUTHENTIK_SECRET_KEY}'
-      - 'AUTHENTIK_POSTGRES_NAME=authentik'
-      - 'AUTHENTIK_POSTGRES_USER=authentik'
-      - 'AUTHENTIK_POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}'
-      - 'AUTHENTIK_POSTGRES_HOST=postgres'
-      - 'AUTHENTIK_POSTGRES_PORT=5432'
+      - 'AUTHENTIK_POSTGRESQL__URL=postgres://authentik:\${POSTGRES_PASSWORD}@postgres:5432/authentik'
     volumes:
       - ./authentik:/media
       - ./authentik:/templates
@@ -1016,7 +1012,7 @@ add_signal() {
       - 'SIGNAL_PHONE_NUMBER=\${SIGNAL_PHONE_NUMBER}'
       - 'SIGNAL_VERIFICATION_CODE=\${SIGNAL_VERIFICATION_CODE}'
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/about"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/health"]
       interval: 30s
       timeout: 10s
       retries: 3
