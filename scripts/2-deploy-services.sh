@@ -893,6 +893,12 @@ add_signal() {
     environment:
       - 'SIGNAL_PHONE_NUMBER=\${SIGNAL_PHONE_NUMBER}'
       - 'SIGNAL_VERIFICATION_CODE=\${SIGNAL_VERIFICATION_CODE}'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/about"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 EOF
     ok "Added 'signal' service with recommended configuration."
 }
@@ -915,7 +921,8 @@ add_openclaw() {
     ports:
       - "3000:3000"
     depends_on:
-      - signal
+      signal:
+        condition: service_healthy
     environment:
       - 'OPENAI_API_KEY=\${OPENAI_API_KEY}'
     volumes:
@@ -1046,7 +1053,7 @@ add_qdrant() {
       QDRANT__LOG_LEVEL: "\${QDRANT__LOG_LEVEL:-info}"
       QDRANT__SERVICE__HTTP__ENABLE_CORS: "\${QDRANT__SERVICE__HTTP__ENABLE_CORS:-true}"
     volumes:
-      - ./qdrant:/qdrant
+      - ./qdrant:/qdrant/storage
 EOF
     ok "Added 'qdrant' service."
 }

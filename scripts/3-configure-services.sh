@@ -311,6 +311,7 @@ main() {
         echo "  stop       - Stop specific service (or all)"
         echo "  rclone-mount - Execute docker exec to start Rclone mount"
         echo "  ingest     - Execute tenant's ingest.py script"
+        echo "  pair-signal - Generate QR code for Signal device pairing"
         echo "  health     - Run comprehensive health checks"
         exit 1
     fi
@@ -341,6 +342,10 @@ main() {
         "cleanup")
             log "Cleaning up old logs..."
             cleanup_old_logs
+            ;;
+        "pair-signal")
+            log "Generating QR code for Signal device pairing..."
+            pair_signal_device
             ;;
         "dashboard")
             show_logging_dashboard
@@ -462,8 +467,86 @@ main() {
             echo "  dashboard  - Show logging dashboard"
             echo "  health     - Run comprehensive health checks"
             exit 1
-            ;;
     esac
+}
+
+# --- Signal Device Pairing Function ---
+pair_signal_device() {
+    log "Generating QR code for Signal device pairing..."
+    
+    # Check if signal container is running
+    local signal_container="${COMPOSE_PROJECT_NAME}-signal-1"
+    if ! docker ps --filter "name=${signal_container}" --filter "status=running" | grep -q "${signal_container}"; then
+        fail "Signal container is not running. Please start Signal service first."
+    fi
+    
+    # Generate device name
+    local device_name="${TENANT_ID}-ai-platform"
+    
+    log "Generating pairing link for device: ${device_name}"
+    
+    # Get QR code link from Signal API
+    local pairing_response=$(curl -s "http://localhost:8080/v1/qrcodelink?device_name=${device_name}")
+    
+    if [[ -z "$pairing_response" ]]; then
+        fail "Failed to get pairing link from Signal API"
+    fi
+    
+    # Extract the URI from response
+    local tsdevice_uri=$(echo "$pairing_response" | grep -o 'tsdevice:/[^"]*')
+    
+    if [[ -z "$tsdevice_uri" ]]; then
+        fail "Failed to extract pairing URI from response"
+    fi
+    
+    log "Pairing URI generated: ${tsdevice_uri}"
+    
+    # Check if qrencode is available
+    if ! command -v qrencode &> /dev/null; then
+        warn "qrencode not found. Installing..."
+        apt-get update && apt-get install -y qrencode || {
+            fail "Failed to install qrencode. Please install it manually."
+        }
+    fi
+    
+    # Generate QR code
+    log "Generating QR code for scanning..."
+    echo ""
+    echo "=================================================================="
+    echo "📱 SCAN THIS QR CODE WITH YOUR SIGNAL APP 📱"
+    echo "=================================================================="
+    echo ""
+    qrencode -t ANSI "${tsdevice_uri}"
+    echo ""
+    echo "=================================================================="
+    echo "📱 Open Signal App → Settings → Linked Devices → '+' → Scan QR Code"
+    echo "=================================================================="
+    echo ""
+    
+    # Store pairing confirmation
+    local paired_file="${TENANT_DIR}/signal-data/.paired"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Device ${device_name} paired with URI: ${tsdevice_uri}" > "$paired_file"
+    chown "${TENANT_UID}:${TENANT_GID}" "$paired_file"
+    
+    ok "QR code generated successfully!"
+    ok "Pairing URI saved to: ${paired_file}"
+    ok "After scanning, Signal service will be fully operational."
+    
+    # Wait a moment for user to scan
+    log "Waiting for device pairing to complete..."
+    sleep 10
+    
+    # Verify pairing was successful
+    log "Verifying Signal service health..."
+    local health_check=$(curl -s "http://localhost:8080/v1/about" | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
+    
+    if [[ "$health_check" == "ok" ]]; then
+        ok "✅ Signal service is healthy and ready!"
+        ok "✅ OpenClaw can now be started successfully."
+    else
+        warn "⚠️  Signal service may still be initializing..."
+        warn "⚠️  Check service logs with: docker compose logs signal"
+    fi
 }
 
 # Call main function to execute the script
