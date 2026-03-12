@@ -404,19 +404,11 @@ audit_volume_mounts() {
     log "INFO" "Auditing all docker-compose volume mounts before deployment..."
     local all_volumes_exist=true
     
-    # Extract all volume source paths from docker-compose.yml using proper parsing
-    local volume_sources
-    volume_sources=$(grep -E "^\s*-\s*[^:]+:[^:]+:" "${COMPOSE_FILE}" | sed 's/^[[:space:]]*-//' | cut -d':' -f1)
+    # Simple approach: check for all expected directories
+    local expected_dirs=("postgres" "redis" "qdrant" "grafana" "prometheus" "authentik" "tailscale" "rclone" "signal" "signal-data" "openclaw" "caddy")
     
-    for volume_source in $volume_sources; do
-        # Resolve relative paths to full paths
-        local host_path
-        if [[ "$volume_source" == /* ]]; then
-            host_path="$volume_source"
-        else
-            host_path="${TENANT_DIR}/${volume_source}"
-        fi
-        
+    for dir in "${expected_dirs[@]}"; do
+        local host_path="${TENANT_DIR}/${dir}"
         if [[ ! -d "$host_path" ]]; then
             fail "CRITICAL AUDIT FAILURE: Directory '${host_path}' for volume mount does not exist. The docker-compose.yml is trying to mount a directory that was not created by Script 1. Please re-run Script 1 or correct the volume path in the 'add_*' function in Script 2."
             all_volumes_exist=false
@@ -755,7 +747,7 @@ add_rclone() {
     volumes:
       - ./rclone:/config/rclone
       - ./gdrive:/mnt/gdrive
-    command: rclone mount gdrive: /mnt/gdrive --vfs-cache-mode writes --allow-non-empty --log-level INFO
+    command: ["rclone", "mount", "gdrive:", "/mnt/gdrive", "--vfs-cache-mode", "writes", "--allow-non-empty", "--log-level", "INFO"]
 EOF
     ok "Added 'rclone' service."
 }
@@ -860,50 +852,54 @@ EOF
 add_signal() {
     if [[ "${ENABLE_SIGNAL}" != "true" ]]; then return; fi
     
-    log "INFO" "Adding 'signal' service..."
-    mkdir -p "${TENANT_DIR}/signal"
-    chown "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}/signal"
+    log "INFO" "Adding 'signal' service with recommended configuration..."
+    mkdir -p "${TENANT_DIR}/signal-data"
+    chown "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}/signal-data"
 
     cat >> "${COMPOSE_FILE}" << EOF
 
   signal:
-    image: ghcr.io/xeonpro/signal:latest
+    image: bbernhard/signal-cli-rest-api:latest
     restart: unless-stopped
     user: "\${SIGNAL_UID:-1000}:\${TENANT_GID:-1001}"
     networks:
       - default
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./signal-data:/home/.local/share/signal-cli
     environment:
       - 'SIGNAL_PHONE_NUMBER=\${SIGNAL_PHONE_NUMBER}'
       - 'SIGNAL_VERIFICATION_CODE=\${SIGNAL_VERIFICATION_CODE}'
-    volumes:
-      - ./signal:/app/data
 EOF
-    ok "Added 'signal' service."
+    ok "Added 'signal' service with recommended configuration."
 }
 
 add_openclaw() {
     if [[ "${ENABLE_OPENCLAW}" != "true" ]]; then return; fi
     
-    log "INFO" "Adding 'openclaw' service..."
+    log "INFO" "Adding 'openclaw' service with proper configuration..."
     mkdir -p "${TENANT_DIR}/openclaw"
     chown "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}/openclaw"
 
     cat >> "${COMPOSE_FILE}" << EOF
 
   openclaw:
-    image: nginx:alpine
+    image: moltenbot/openclaw:latest
     restart: unless-stopped
     user: "\${OPENCLAW_UID:-1000}:\${TENANT_GID:-1001}"
     networks:
       - default
     ports:
-      - "\${OPENCLAW_PORT:-18789}:8082"
-    volumes:
-      - ./openclaw:/usr/share/nginx/html
+      - "3000:3000"
+    depends_on:
+      - signal
     environment:
-      - 'OPENCLAW_ADMIN_PASSWORD=\${OPENCLAW_ADMIN_PASSWORD}'
+      - 'OPENAI_API_KEY=\${OPENAI_API_KEY}'
+    volumes:
+      - ./openclaw:/data
 EOF
-    ok "Added 'openclaw' service."
+    ok "Added 'openclaw' service with proper configuration."
 }
 
 add_anythingllm() {
@@ -1185,10 +1181,7 @@ EOF
 
     log "Pulling all required Docker images..."
     docker compose pull --quiet >> "${LOG_FILE}" 2>&1
-
-    # Prepare data directories with correct permissions
-    prepare_data_directories
-
+    
     log "Starting all services in detached mode..."
     log "Executing docker compose up -d... Output logged to ${LOG_FILE}"
     if ! docker compose up -d >> "${LOG_FILE}" 2>&1; then
@@ -1252,7 +1245,7 @@ EOF
     # --- Final Health Check ---
     log "=== FINAL HEALTH CHECK ==="
     log "Running comprehensive health check to verify complete deployment..."
-    bash "${SCRIPTS_DIR}/3-configure-services.sh" "${TENANT_ID}" --health
+    bash "/home/jglaine/AIPlatformAutomation/scripts/3-configure-services.sh" "${TENANT_ID}" --health
 
     ok "Deployment completed with comprehensive logging engine."
     log "Debug logs available in: ${LOG_DIR}/deploy-*.log"

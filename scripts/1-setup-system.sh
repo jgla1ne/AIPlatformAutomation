@@ -2434,6 +2434,7 @@ create_directories() {
     mkdir -p "${DATA_ROOT}/n8n/workflows" "${DATA_ROOT}/anythingllm/tmp"
     mkdir -p "${DATA_ROOT}/run/tailscale" "${DATA_ROOT}/lib/tailscale"
     mkdir -p "${DATA_ROOT}/rclone" "${DATA_ROOT}/storage" "${DATA_ROOT}/gdrive"
+    mkdir -p "${DATA_ROOT}/signal-data"
     
     # Create service directories
     ALL_SERVICES="postgres redis qdrant grafana prometheus litellm authentik signal n8n weaviate chromadb milvus ollama localai vllm openwebui anythingllm flowise"
@@ -2589,7 +2590,7 @@ EOF
         
         # Check for common configuration errors
         if grep -q "tls.*{" "${CADDYFILE_PATH}" && grep -q "reverse_proxy" "${CADDYFILE_PATH}"; then
-            log "INFO" "Caddyfile contains TLS and proxy configurations."
+            log "SUCCESS" "Caddyfile contains TLS and proxy configurations."
         else
             warn "Caddyfile may be missing TLS or proxy configurations."
         fi
