@@ -1241,6 +1241,7 @@ add_caddy() {
     command: >
       sh -c "
         mkdir -p /data/caddy && 
+        chown 1001:1001 /data/caddy && 
         caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
       "
 EOF
