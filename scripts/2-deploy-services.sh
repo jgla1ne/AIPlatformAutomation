@@ -417,10 +417,31 @@ audit_volume_mounts() {
         fi
     done
 
+    # Validate critical configuration files exist
+    local critical_files=("prometheus.yml" "Caddyfile")
+    for file in "${critical_files[@]}"; do
+        local file_path="${DATA_ROOT}/${file}"
+        if [[ ! -f "$file_path" ]]; then
+            fail "CRITICAL AUDIT FAILURE: Configuration file '${file_path}' does not exist. This file is required for deployment."
+            all_volumes_exist=false
+        else
+            log "INFO" "Configuration file exists: $file_path"
+        fi
+    done
+
+    # Validate rclone configuration
+    local rclone_config="${TENANT_DIR}/rclone/google_sa.json"
+    if [[ "${ENABLE_RCLONE}" == "true" && ! -f "$rclone_config" ]]; then
+        fail "CRITICAL AUDIT FAILURE: Rclone Service Account file '${rclone_config}' does not exist. Rclone is enabled but the configuration is missing."
+        all_volumes_exist=false
+    else
+        log "INFO" "Rclone configuration exists: $rclone_config"
+    fi
+
     if [[ "$all_volumes_exist" == "true" ]]; then
         ok "Volume mount audit passed. All source directories exist."
     else
-        exit 1 # Halt deployment
+        fail "Volume mount audit failed. Missing directories or files will cause deployment failures."
     fi
 }
 
@@ -743,7 +764,7 @@ add_rclone() {
       - 'RCLONE_CONFIG_GDRIVE_TYPE=drive'
       - 'RCLONE_CONFIG_GDRIVE_SCOPE=drive'
       - 'RCLONE_CONFIG_GDRIVE_USE_JSON_AUTH=true'
-      - 'RCLONE_CONFIG_GDRIVE_SERVICE_ACCOUNT_FILE=/config/google_sa.json'
+      - 'RCLONE_CONFIG_GDRIVE_SERVICE_ACCOUNT_FILE=/config/rclone/google_sa.json'
     volumes:
       - ./rclone:/config/rclone
       - ./gdrive:/mnt/gdrive
@@ -1025,7 +1046,7 @@ add_qdrant() {
       QDRANT__LOG_LEVEL: "\${QDRANT__LOG_LEVEL:-info}"
       QDRANT__SERVICE__HTTP__ENABLE_CORS: "\${QDRANT__SERVICE__HTTP__ENABLE_CORS:-true}"
     volumes:
-      - ./qdrant:/qdrant/storage
+      - ./qdrant:/qdrant
 EOF
     ok "Added 'qdrant' service."
 }
@@ -1063,7 +1084,7 @@ add_prometheus() {
       - PROMETHEUS_LOG_LEVEL=${PROMETHEUS_LOG_LEVEL:-info}
       - PROMETHEUS_LOG_FORMAT=${PROMETHEUS_LOG_FORMAT:-json}
     volumes:
-      - \${TENANT_DIR}/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
       - ./prometheus:/prometheus
 EOF
     ok "Added 'prometheus' service."
