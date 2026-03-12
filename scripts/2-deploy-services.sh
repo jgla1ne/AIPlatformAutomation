@@ -340,6 +340,44 @@ EOF
     log "SUCCESS" "Prometheus configuration written to ${DATA_ROOT}/prometheus.yml"
 }
 
+# --- Post-Deployment Configuration Hooks ---
+run_post_deployment_hooks() {
+    log "INFO" "Executing post-deployment configuration hooks..."
+    pull_ollama_models
+    # Future hooks like database migrations could be called here
+}
+
+pull_ollama_models() {
+    if [[ "${ENABLE_OLLAMA}" != "true" ]]; then return; fi
+    
+    log "INFO" "Starting post-deployment model pull for Ollama. This may take a very long time."
+    
+    if [[ -z "${OLLAMA_MODELS}" ]]; then
+        log "WARN" "OLLAMA_MODELS variable is not set. Skipping model pull."
+        return
+    fi
+
+    # Find the running Ollama container
+    local ollama_container
+    ollama_container=$(docker compose ps -q ollama)
+
+    if [[ -z "$ollama_container" ]]; then
+        fail "Ollama container not found. Cannot pull models."
+        return
+    fi
+
+    # Loop through the comma-separated list of models and pull each one
+    for model in $(echo "${OLLAMA_MODELS}" | sed "s/,/ /g"); do
+        log "INFO" "Pulling Ollama model: ${model}..."
+        if docker exec "${ollama_container}" ollama pull "${model}"; then
+            ok "Successfully pulled model: ${model}"
+        else
+            fail "Failed to pull model: ${model}. Please check the model name and logs."
+        fi
+    done
+    ok "Ollama model pull process completed."
+}
+
 # --- Volume Mount Audit ---
 audit_volume_mounts() {
     log "INFO" "Auditing all docker-compose volume mounts before deployment..."
@@ -833,9 +871,12 @@ EOF
     # Comprehensive URL testing
     test_service_urls
 
-    # Final status
-    log "=== FINAL DEPLOYMENT STATUS ==="
-    docker compose ps >> "${LOG_FILE}" 2>&1
+    # --- Post-Deployment Verification ---
+    log "=== POST-DEPLOYMENT VERIFICATION ==="
+    verify_core_services
+    
+    # CRITICAL: Execute post-deployment configuration hooks
+    run_post_deployment_hooks >> "${LOG_FILE}" 2>&1
     log "=== END FINAL DEPLOYMENT STATUS ==="
 
     ok "Deployment completed with comprehensive logging engine."
