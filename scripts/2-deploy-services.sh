@@ -1225,7 +1225,7 @@ add_caddy() {
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
-    user: "${CADDY_UID:-1001}:${TENANT_GID:-1001}"
+    user: "0:0"  # Run as root to avoid permission issues
     networks:
       - default
     environment:
@@ -1238,12 +1238,7 @@ add_caddy() {
       - "${CADDY_HTTP_PORT:-80}:80"
       - "${CADDY_HTTPS_PORT:-443}:443"
       - "${CADDY_HTTPS_PORT:-443}:443/udp"
-    command: >
-      sh -c "
-        mkdir -p /data/caddy && 
-        chown 1001:1001 /data/caddy && 
-        caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
-      "
+    command: caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
 EOF
     ok "Added 'caddy' service."
 }
@@ -1377,8 +1372,38 @@ EOF
         exit 1
     fi
 
-    # Capture initial service logs
-    capture_initial_logs
+    # Capture detailed Caddy logs for debugging
+    log "=== CAPTURING DETAILED CADDY LOGS ==="
+    if docker ps --filter name=ai-datasquiz-caddy-1 --format "{{.Names}}" | grep -q "ai-datasquiz-caddy-1"; then
+        log "CADDY CONTAINER STATUS: $(docker ps --filter name=ai-datasquiz-caddy-1 --format "{{.Status}}")"
+        log "CADDY CONTAINER LOGS (last 50 lines):"
+        docker logs ai-datasquiz-caddy-1 --tail 50 >> "${LOG_FILE}" 2>&1
+        log "=== END CADDY LOGS ==="
+    else
+        log "CADDY CONTAINER: NOT RUNNING"
+    fi
+    
+    # Test each service URL individually with Caddy response verification
+    log "=== INDIVIDUAL SERVICE URL TESTING ==="
+    
+    # Test main domain
+    if curl -k -s -m 10 https://localhost:443 >/dev/null 2>&1; then
+        ok "MAIN DOMAIN: https://localhost:443 - RESPONDING"
+    else
+        warn "MAIN DOMAIN: https://localhost:443 - NOT RESPONDING"
+    fi
+    
+    # Test each service subdomain
+    local services=("grafana" "prometheus" "auth" "signal" "openclaw")
+    for service in "${services[@]}"; do
+        if curl -k -s -m 10 "https://${service}.ai.datasquiz.net" >/dev/null 2>&1; then
+            ok "SERVICE: https://${service}.ai.datasquiz.net - RESPONDING"
+        else
+            warn "SERVICE: https://${service}.ai.datasquiz.net - NOT RESPONDING"
+        fi
+    done
+    
+    log "=== END SERVICE URL TESTING ==="
     }
 
     verify_core_services
