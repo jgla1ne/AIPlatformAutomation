@@ -1931,6 +1931,36 @@ generate_secrets() {
     N8N_PASSWORD=$(load_existing_secret     "N8N_PASSWORD"              "$(openssl rand -hex 12)")
     FLOWISE_PASSWORD=$(load_existing_secret "FLOWISE_PASSWORD"          "$(openssl rand -hex 12)")
     AUTHENTIK_BOOTSTRAP_PASSWORD=$(load_existing_secret "AUTHENTIK_BOOTSTRAP_PASSWORD" "$(openssl rand -hex 12)")
+    
+    # Per-Service Database Credentials Generation
+    AUTHENTIK_DB_USER=$(load_existing_secret "AUTHENTIK_DB_USER" "authentik")
+    AUTHENTIK_DB_PASS=$(load_existing_secret "AUTHENTIK_DB_PASS" "$(openssl rand -hex 16)")
+    AUTHENTIK_DB_NAME=$(load_existing_secret "AUTHENTIK_DB_NAME" "authentik")
+    
+    FLOWISE_DB_USER=$(load_existing_secret "FLOWISE_DB_USER" "flowise")
+    FLOWISE_DB_PASS=$(load_existing_secret "FLOWISE_DB_PASS" "$(openssl rand -hex 16)")
+    FLOWISE_DB_NAME=$(load_existing_secret "FLOWISE_DB_NAME" "flowise")
+    
+    N8N_DB_USER=$(load_existing_secret "N8N_DB_USER" "n8n")
+    N8N_DB_PASS=$(load_existing_secret "N8N_DB_PASS" "$(openssl rand -hex 16)")
+    N8N_DB_NAME=$(load_existing_secret "N8N_DB_NAME" "n8n")
+    
+    # Generate LITELLM_ENABLED_MODELS from enabled providers
+    LITELLM_ENABLED_MODELS=""
+    if [[ "${ENABLE_OLLAMA}" == "true" ]]; then
+        LITELLM_ENABLED_MODELS="${LITELLM_ENABLED_MODELS}ollama,"
+    fi
+    if [[ "${ENABLE_GEMINI}" == "true" && -n "${GEMINI_API_KEY}" ]]; then
+        LITELLM_ENABLED_MODELS="${LITELLM_ENABLED_MODELS}gemini,"
+    fi
+    if [[ "${ENABLE_GROQ}" == "true" && -n "${GROQ_API_KEY}" ]]; then
+        LITELLM_ENABLED_MODELS="${LITELLM_ENABLED_MODELS}groq,"
+    fi
+    if [[ "${ENABLE_OPENROUTER}" == "true" && -n "${OPENROUTER_API_KEY}" ]]; then
+        LITELLM_ENABLED_MODELS="${LITELLM_ENABLED_MODELS}openrouter,"
+    fi
+    # Remove trailing comma
+    LITELLM_ENABLED_MODELS="${LITELLM_ENABLED_MODELS%,}"
 
     log "SUCCESS" "Secrets ready (preserved from prior run where available)"
 }
