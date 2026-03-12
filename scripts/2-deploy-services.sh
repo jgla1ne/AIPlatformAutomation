@@ -670,13 +670,13 @@ add_ollama() {
       - default
     environment:
       - 'OLLAMA_HOST=0.0.0.0'
-      - 'OLLAMA_PORT=\${OLLAMA_INTERNAL_PORT:-11434}'
+      - 'OLLAMA_PORT=${OLLAMA_INTERNAL_PORT:-11434}'
     volumes:
       - ./ollama:/root/.ollama  # CRITICAL: Mounts to a subdir INSIDE the tenant's data root
 EOF
 
     # Add GPU deployment if enabled
-    if [[ "${ENABLE_GPU}" == "true" ]]; then
+    if [[ "${ENABLE_GPU:-false}" == "true" ]]; then
         cat >> "${COMPOSE_FILE}" << EOF
     deploy:
       resources:
