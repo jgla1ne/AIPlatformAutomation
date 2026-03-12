@@ -584,6 +584,7 @@ generate_compose_services() {
     [[ "${ENABLE_ANYTHINGLLM}" == "true" ]] && add_anythingllm
     [[ "${ENABLE_FLOWISE}" == "true" ]] && add_flowise
     [[ "${ENABLE_N8N}" == "true" ]] && add_n8n
+    [[ "${ENABLE_GEMINI}" == "true" ]] && add_gemini
     
     # Monitoring Services
     [[ "${ENABLE_GRAFANA}" == "true" ]] && add_grafana
