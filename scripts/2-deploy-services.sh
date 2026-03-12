@@ -541,15 +541,13 @@ audit_volume_mounts() {
     done
 
     # Validate critical configuration files exist
-    local critical_files=("prometheus.yml" "Caddyfile")
+    local critical_files=("prometheus.yml" "caddy/Caddyfile")
     for file in "${critical_files[@]}"; do
         local file_path="${DATA_ROOT}/${file}"
         if [[ ! -f "$file_path" ]]; then
             fail "CRITICAL AUDIT FAILURE: Configuration file '${file_path}' does not exist. This file is required for deployment."
-            all_volumes_exist=false
-        else
-            log "INFO" "Configuration file exists: $file_path"
         fi
+        log "INFO" "Configuration file exists: ${file_path}"
     done
 
     # Validate rclone configuration
