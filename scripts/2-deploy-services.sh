@@ -584,8 +584,8 @@ generate_compose_services() {
     [[ "${ENABLE_ANYTHINGLLM}" == "true" ]] && add_anythingllm
     [[ "${ENABLE_FLOWISE}" == "true" ]] && add_flowise
     [[ "${ENABLE_N8N}" == "true" ]] && add_n8n
-    [[ "${ENABLE_GEMINI}" == "true" ]] && add_gemini
-    [[ "${ENABLE_DIFY}" == "true" ]] && add_dify
+    # [[ "${ENABLE_GEMINI}" == "true" ]] && add_gemini # TODO: Add add_gemini function
+    # [[ "${ENABLE_DIFY}" == "true" ]] && add_dify # TODO: Add add_dify function
     
     # Monitoring Services
     [[ "${ENABLE_GRAFANA}" == "true" ]] && add_grafana
@@ -939,6 +939,9 @@ add_litellm() {
       - 'OLLAMA_BASE_URL=http://ollama:11434'
       - 'OPENAI_API_KEY=\${OPENAI_API_KEY}'
       - 'ANTHROPIC_API_KEY=\${ANTHROPIC_API_KEY}'
+      - 'GROQ_API_KEY=\${GROQ_API_KEY}'
+      - 'OPENROUTER_API_KEY=\${OPENROUTER_API_KEY}'
+      - 'GEMINI_API_KEY=\${GEMINI_API_KEY}'
       # CRITICAL FIX: Disable pip cache to prevent permission errors
       - 'PIP_NO_CACHE_DIR=1'
     volumes:
