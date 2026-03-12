@@ -450,9 +450,11 @@ generate_compose_services() {
     log "INFO" "Executing Master Service Loop - Deploying ALL enabled services..."
     
     # Core Infrastructure Services
+    # These are the foundation.
     [[ "${ENABLE_POSTGRES}" == "true" ]] && add_postgres
     [[ "${ENABLE_REDIS}" == "true" ]] && add_redis
     [[ "${ENABLE_QDRANT}" == "true" ]] && add_qdrant
+    [[ "${ENABLE_CADDY}" == "true" ]] && add_caddy # CRITICAL: Ensure Caddy is deployed.
     
     # AI/LLM Stack Services
     [[ "${ENABLE_OLLAMA}" == "true" ]] && add_ollama
@@ -468,15 +470,14 @@ generate_compose_services() {
     
     # Security & Networking Services
     [[ "${ENABLE_AUTHENTIK}" == "true" ]] && add_authentik
-    [[ "${ENABLE_TAILSCALE}" == "true" ]] && add_tailscale
-    [[ "${ENABLE_RCLONE}" == "true" ]] && add_rclone
-    [[ "${ENABLE_SIGNAL}" == "true" ]] && add_signal
+    [[ "${ENABLE_TAILSCALE}" == "true" ]] && add_tailscale # CRITICAL: Ensure Tailscale is deployed.
+    [[ "${ENABLE_RCLONE}" == "true" ]] && add_rclone       # CRITICAL: Ensure Rclone is deployed.
+    [[ "${ENABLE_SIGNAL}" == "true" ]] && add_signal       # CRITICAL: Ensure Signal is deployed.
+
+    # Tenant-Specific Applications
     [[ "${ENABLE_OPENCLAW}" == "true" ]] && add_openclaw
     
-    # Caddy is always required for reverse proxy
-    add_caddy
-    
-    ok "Master Service Loop completed - All enabled services added to compose file."
+    log "SUCCESS" "Master Service Loop completed - All enabled services added to compose file."
 }
 
 # --- Service Generation Functions ---
