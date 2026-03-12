@@ -766,19 +766,19 @@ select_stack() {
     echo -e "  ${CYAN}  2)${NC}  🔵  ${BOLD}Standard${NC}      — Minimal + n8n + Flowise + Qdrant + LiteLLM"
     echo -e "             ${DIM}Full AI automation stack, recommended starting point${NC}"
     echo ""
-    echo -e "  ${CYAN}  3)${NC}  🟣  ${BOLD}Full${NC}          — Standard + AnythingLLM + Grafana + Prometheus + Authentik"
-    echo -e "             ${DIM}Production-grade with observability and SSO${NC}"
+    echo -e "  ${CYAN}  3)${NC}  🟣  ${BOLD}Full${NC}          — All services including AI, automation, monitoring, and security"
+    echo -e "             ${DIM}Production-grade with complete feature set${NC}"
     echo ""
     echo -e "  ${CYAN}  4)${NC}  ⚙️   ${BOLD}Custom${NC}        — Pick services individually"
     echo -e "             ${DIM}Full control over what gets deployed${NC}"
     echo ""
 
     while true; do
-        read -p "  ➤ Select stack [1-5]: " stack_choice
+        read -p "  ➤ Select stack [1-4]: " stack_choice
         stack_choice="${stack_choice:-2}"
         case "${stack_choice}" in
-            1|2|3|4|5) break ;;
-            *) echo "  ❌ Enter 1, 2, 3, 4 or 5" ;;
+            1|2|3|4) break ;;
+            *) echo "  ❌ Enter 1, 2, 3 or 4" ;;
         esac
     done
 
@@ -805,14 +805,7 @@ select_stack() {
             ENABLE_QDRANT=true;
             STACK_NAME="local-llm-dev"
             ;;
-        3) # Monitoring & Security Stack
-            log "INFO" "Applying 'Monitoring & Security' preset: Core DBs, Monitoring, Security"
-            ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_QDRANT=true;
-            ENABLE_GRAFANA=true; ENABLE_PROMETHEUS=true; ENABLE_AUTHENTIK=true;
-            ENABLE_TAILSCALE=true;
-            STACK_NAME="monitoring-security"
-            ;;
-        4) # Full Stack (All Services)
+        3) # Full Stack (All Services)
             log "WARN" "Applying 'Full Stack' preset. This requires significant system resources."
             ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_OLLAMA=true;
             ENABLE_OPENWEBUI=true; ENABLE_ANYTHINGLLM=true; ENABLE_DIFY=true;
@@ -820,9 +813,10 @@ select_stack() {
             ENABLE_QDRANT=true; ENABLE_GRAFANA=true; ENABLE_PROMETHEUS=true;
             ENABLE_AUTHENTIK=true; ENABLE_SIGNAL=true; ENABLE_OPENCLAW=true;
             ENABLE_TAILSCALE=true; ENABLE_RCLONE=true;
+            ENABLE_CADDY=true; # Always include Caddy
             STACK_NAME="full"
             ;;
-        5) # Custom — all off, user picks in next step
+        4) # Custom — all off, user picks in next step
             STACK_NAME="custom"
             log "INFO" "Stack: Custom — configure individually below"
             ;;
@@ -831,7 +825,7 @@ select_stack() {
     print_divider
 
     # ── Always offer fine-grained override ────────────────────────────────────
-    if [ "${stack_choice}" != "5" ]; then
+    if [ "${stack_choice}" != "4" ]; then
         echo -e "  ${DIM}Stack applied. Would you like to customise individual services?${NC}"
         echo ""
         read -p "  ➤ Customise service selection? [y/N]: " customise
