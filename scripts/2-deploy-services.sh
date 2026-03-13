@@ -1005,7 +1005,9 @@ add_authentik() {
       - 'AUTHENTIK_POSTGRESQL__NAME=\${AUTHENTIK_DB_NAME}'
       - 'AUTHENTIK_POSTGRESQL__USER=\${AUTHENTIK_DB_USER}'
       - 'AUTHENTIK_POSTGRESQL__PASSWORD=\${AUTHENTIK_DB_PASS}'
-      - 'AUTHENTIK_REDIS__URL=redis://redis:6379/0'
+      - 'AUTHENTIK_REDIS__HOST=redis'
+      - 'AUTHENTIK_REDIS__PORT=6379'
+      - 'AUTHENTIK_REDIS__DB=0'
       # Add any other required Authentik variables here
     volumes:
       - ./authentik:/media
