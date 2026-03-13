@@ -628,8 +628,8 @@ add_postgres() {
       - 'POSTGRES_LOG_MIN_DURATION_STATEMENT=\${POSTGRES_LOG_MIN_DURATION_STATEMENT:-0}'
       - 'POSTGRES_LOG_MIN_MESSAGES=\${POSTGRES_LOG_MIN_MESSAGES:-info}'
     volumes:
-      - ./postgres:/var/lib/postgresql/data
-      # Note: Init script will be mounted by Script 3 (Mission Control)
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init-user-db.sh:/docker-entrypoint-initdb.d/init-user-db.sh
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER:-postgres}"]
       interval: 30s
@@ -1095,12 +1095,13 @@ add_anythingllm() {
         condition: service_started
     environment:
       - 'STORAGE_LOCATOR=\${STORAGE_LOCATOR:-local}'
-      - 'DATABASE_TYPE=\${DATABASE_TYPE:-postgres}'
-      - 'DATABASE_HOST=postgres'
-      - 'DATABASE_PORT=5432'
-      - 'DATABASE_NAME=\${POSTGRES_DB:-ai_platform}'
-      - 'DATABASE_USER=\${POSTGRES_USER:-postgres}'
-      - 'DATABASE_PASSWORD=\${POSTGRES_PASSWORD}'
+      - 'DB_TYPE=postgres'
+      - 'POSTGRES_HOST=postgres'
+      - 'POSTGRES_PORT=5432'
+      - 'POSTGRES_DB=\${POSTGRES_DB:-ai_platform}'
+      - 'POSTGRES_USER=\${POSTGRES_USER:-postgres}'
+      - 'POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}'
+      - 'DATABASE_URL=postgresql://\${POSTGRES_USER:-postgres}:\${POSTGRES_PASSWORD}@postgres:5432/\${POSTGRES_DB:-ai_platform}'
       - 'QDRANT_ENDPOINT=http://qdrant:6333'
       - 'QDRANT_API_KEY=\${QDRANT_API_KEY}'
       - 'LLM_PROVIDER=\${LLM_PROVIDER:-litellm}'
@@ -1112,6 +1113,7 @@ add_anythingllm() {
       - 'MODEL_DIR=/app/server/models/ollama'
     volumes:
       - ./anythingllm:/app/server/storage
+      - ./anythingllm/schema.prisma:/app/server/prisma/schema.prisma:ro
 EOF
     ok "Added 'anythingllm' service with auto-integration."
 }
@@ -1341,6 +1343,8 @@ networks:
 
 volumes:
   rclone-cache:
+    driver: local
+  postgres_data:
     driver: local
 EOF
 
