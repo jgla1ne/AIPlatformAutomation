@@ -2468,6 +2468,13 @@ apply_final_ownership() {
     chmod 750 "${DATA_ROOT}"
     chmod 640 "${ENV_FILE}"
     log "SUCCESS" "Secure permissions set. Ownership structure is now correct."
+
+    # --- FINAL OWNERSHIP GUARANTEE ---
+    log "INFO" "Enforcing automated tenant ownership for the entire tenant space..."
+    # This single command ensures all directories and subdirectories are owned by the tenant,
+    # preventing any permission errors for files created later by other scripts.
+    sudo chown -R "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}"
+    ok "Bulletproof ownership management established."
 }
 
 # ─── Create directory structure with dynamic permissions ────────────────────────

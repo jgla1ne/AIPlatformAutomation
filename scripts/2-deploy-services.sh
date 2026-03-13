@@ -629,7 +629,7 @@ add_postgres() {
       - 'POSTGRES_LOG_MIN_MESSAGES=\${POSTGRES_LOG_MIN_MESSAGES:-info}'
     volumes:
       - ./postgres:/var/lib/postgresql/data
-      - ./postgres/init-user-db.sh:/docker-entrypoint-initdb.d/init-user-db.sh
+      # Note: Init script will be mounted by Script 3 (Mission Control)
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER:-postgres}"]
       interval: 30s
@@ -723,9 +723,9 @@ add_n8n() {
       - 'DB_TYPE=postgresdb'
       - 'DB_POSTGRESDB_HOST=postgres'
       - 'DB_POSTGRESDB_PORT=\${POSTGRES_INTERNAL_PORT:-5432}'
-      - 'DB_POSTGRESDB_DATABASE=\${N8N_DB_NAME}'
-      - 'DB_POSTGRESDB_USER=\${N8N_DB_USER}'
-      - 'DB_POSTGRESDB_PASSWORD=\${N8N_DB_PASS}'
+      - 'DB_POSTGRESDB_DATABASE=\${POSTGRES_DB}'
+      - 'DB_POSTGRESDB_USER=\${POSTGRES_USER}'
+      - 'DB_POSTGRESDB_PASSWORD=\${POSTGRES_PASSWORD}'
       - 'N8N_ENCRYPTION_KEY=\${N8N_ENCRYPTION_KEY}'
       - 'N8N_PORT=\${N8N_INTERNAL_PORT:-5678}'
     volumes:
@@ -755,9 +755,9 @@ add_flowise() {
       - 'DATABASE_TYPE=postgres'
       - 'POSTGRES_HOST=postgres'
       - 'POSTGRES_PORT=\${POSTGRES_INTERNAL_PORT:-5432}'
-      - 'POSTGRES_USER=\${FLOWISE_DB_USER}'
-      - 'POSTGRES_PASSWORD=\${FLOWISE_DB_PASS}'
-      - 'POSTGRES_DATABASE=\${FLOWISE_DB_NAME}'
+      - 'POSTGRES_USER=\${POSTGRES_USER}'
+      - 'POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}'
+      - 'POSTGRES_DATABASE=\${POSTGRES_DB}'
       - 'QDRANT_URL=http://qdrant:\${QDRANT_INTERNAL_PORT:-6333}'
       - 'QDRANT_API_KEY=\${QDRANT_API_KEY}'
       - 'LITELLM_API_BASE=http://litellm:\${LITELLM_INTERNAL_PORT:-4000}'
@@ -1313,10 +1313,7 @@ main() {
     log "INFO" "Requesting dynamic configurations from Mission Control (Script 3)..."
     
     # Call Mission Control generators for all complex configurations
-    generate_postgres_init_script
-    generate_litellm_config
     generate_caddyfile
-    generate_prometheus_config
     
     # Generate rclone config (still handled locally)
     write_rclone_config
@@ -1474,9 +1471,6 @@ EOF
     
     # Run HTTPS verification
     verify_https_connectivity
-    
-    # Run post-deployment hooks
-    run_post_deployment_hooks
     
     # Generate deployment dashboard
     generate_deployment_dashboard
