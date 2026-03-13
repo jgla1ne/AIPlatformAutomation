@@ -2201,6 +2201,13 @@ FLOWISE_PASSWORD="${FLOWISE_PASSWORD}"
 LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}"
 LITELLM_SALT_KEY="${LITELLM_SALT_KEY}"
 
+# ─── OpenWebUI ────────────────────────────────────────────────────────────────
+OPENWEBUI_SECRET_KEY="${OPENWEBUI_SECRET_KEY}"
+
+# ─── Signal API ────────────────────────────────────────────────────────────────
+SIGNAL_PHONE_NUMBER="${SIGNAL_PHONE_NUMBER}"
+SIGNAL_VERIFICATION_CODE="${SIGNAL_VERIFICATION_CODE}"
+
 # High-level AI model configuration flags (for Script 2 dynamic generation)
 # This will be built from enabled LLM providers
 LITELLM_ENABLED_MODELS=""

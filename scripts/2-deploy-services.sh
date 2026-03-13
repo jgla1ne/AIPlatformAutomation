@@ -17,7 +17,9 @@ fi
 
 # --- Colors and Logging ---
 RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m' CYAN='\033[0;36m' BLUE='\033[0;34m' NC='\033[0m'
-LOG_FILE=""  # Initialize LOG_FILE early
+
+# Initialize LOG_FILE early to ensure logging works from the start
+LOG_FILE=""
 
 log() { 
     if [[ -n "${LOG_FILE}" ]]; then
@@ -678,6 +680,8 @@ add_ollama() {
     volumes:
       - ./ollama:/root/.ollama  # CRITICAL: Mounts to a subdir INSIDE the tenant's data root
     working_dir: /root
+    ports:
+      - "${OLLAMA_PORT:-11434}:${OLLAMA_INTERNAL_PORT:-11434}"
 EOF
 
     # Add GPU deployment if enabled
@@ -1194,6 +1198,8 @@ add_qdrant() {
     volumes:
       - ./qdrant:/qdrant/storage
       - ./qdrant/snapshots:/qdrant/snapshots
+    ports:
+      - "${QDRANT_PORT:-6333}:${QDRANT_INTERNAL_PORT:-6333}"
 EOF
     ok "Added 'qdrant' service."
 }
