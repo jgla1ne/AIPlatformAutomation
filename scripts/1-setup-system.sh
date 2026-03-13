@@ -1965,26 +1965,6 @@ generate_secrets() {
     log "SUCCESS" "Secrets ready (preserved from prior run where available)"
 }
 
-# ─── Write Prometheus Configuration ─────────────────────────────────────────────
-write_prometheus_config() {
-    # shellcheck source=/dev/null
-    source "${ENV_FILE}"
-    
-    log "INFO" "Generating prometheus.yml..."
-    
-    cat > "${DATA_ROOT}/prometheus.yml" << 'EOF'
-global:
-  scrape_interval: 15s
-
-scrape_configs:
-  - job_name: 'prometheus'
-    static_configs:
-      - targets: ['localhost:9090']
-EOF
-    
-    log "SUCCESS" "Prometheus configuration written to ${DATA_ROOT}/prometheus.yml"
-}
-
 # ─── Write .env ───────────────────────────────────────────────────────────────
 write_env_file() {
     mkdir -p "${DATA_ROOT}"
@@ -2517,166 +2497,6 @@ create_directories() {
     log "SUCCESS" "All service directories created with dynamic permissions."
 }
 
-# ─── Write Caddyfile ─────────────────────────────────────────────────────────
-write_caddyfile() {
-    log "INFO" "Executing dynamic Caddyfile generation as per README.md..."
-    local CADDY_FILE="${DATA_ROOT}/caddy/Caddyfile"
-
-    # Use a temporary file to build the content
-    TMP_CADDY=$(mktemp)
-
-    # 1. Global Options Block - ALWAYS formatted correctly
-    cat > "$TMP_CADDY" <<EOF
-{
-    email ${ADMIN_EMAIL}
-    # acme_dns google_cloud_dns ... # Placeholder for future DNS challenge
-}
-
-EOF
-
-    # 2. Main Domain Route - Intelligent TLS Strategy
-    if [[ "${SSL_TYPE}" == "selfsigned" ]]; then
-        log "INFO" "Using internal certificates for self-signed SSL"
-        cat >> "$TMP_CADDY" <<EOF
-${DOMAIN} {
-    tls internal {
-        on_demand
-    }
-    respond "AI Platform v3.2.0 is active. Welcome." 200
-}
-
-EOF
-    else
-        log "INFO" "Using Let's Encrypt certificates for public domain: ${DOMAIN}"
-        cat >> "$TMP_CADDY" <<EOF
-${DOMAIN} {
-    respond "AI Platform v3.2.0 is active. Welcome." 200
-}
-
-EOF
-    fi
-
-    # 3. Dynamically add routes for ONLY enabled services
-    if [[ "${ENABLE_GRAFANA}" == "true" ]]; then
-        cat >> "$TMP_CADDY" <<EOF
-grafana.${DOMAIN} {
-    reverse_proxy grafana:3000
-}
-
-EOF
-        ok "Caddy route added for Grafana."
-    fi
-    
-    if [[ "${ENABLE_PROMETHEUS}" == "true" ]]; then
-        cat >> "$TMP_CADDY" <<EOF
-prometheus.${DOMAIN} {
-    reverse_proxy prometheus:9090
-}
-
-EOF
-        ok "Caddy route added for Prometheus."
-    fi
-    
-    if [[ "${ENABLE_AUTHENTIK}" == "true" ]]; then
-        cat >> "$TMP_CADDY" <<EOF
-auth.${DOMAIN} {
-    reverse_proxy authentik:9000
-}
-
-EOF
-        ok "Caddy route added for Authentik."
-    fi
-    
-    if [[ "${ENABLE_OPENWEBUI}" == "true" ]]; then
-        cat >> "$TMP_CADDY" <<EOF
-openwebui.${DOMAIN} {
-    reverse_proxy openwebui:8080
-}
-
-EOF
-        ok "Caddy route added for OpenWebUI."
-    fi
-    
-    if [[ "${ENABLE_N8N}" == "true" ]]; then
-        cat >> "$TMP_CADDY" <<EOF
-n8n.${DOMAIN} {
-    reverse_proxy n8n:5678
-}
-
-EOF
-        ok "Caddy route added for n8n."
-    fi
-    
-    if [[ "${ENABLE_FLOWISE}" == "true" ]]; then
-        cat >> "$TMP_CADDY" <<EOF
-flowise.${DOMAIN} {
-    reverse_proxy flowise:3000
-}
-
-EOF
-        ok "Caddy route added for Flowise."
-    fi
-    
-    if [[ "${ENABLE_ANYTHINGLLM}" == "true" ]]; then
-        cat >> "$TMP_CADDY" <<EOF
-anythingllm.${DOMAIN} {
-    reverse_proxy anythingllm:3001
-}
-
-EOF
-        ok "Caddy route added for AnythingLLM."
-    fi
-    
-    if [[ "${ENABLE_LITELLM}" == "true" ]]; then
-        cat >> "$TMP_CADDY" <<EOF
-litellm.${DOMAIN} {
-    reverse_proxy litellm:4000
-}
-
-EOF
-        ok "Caddy route added for LiteLLM."
-    fi
-    
-    if [[ "${ENABLE_DIFY}" == "true" ]]; then
-        cat >> "$TMP_CADDY" <<EOF
-dify.${DOMAIN} {
-    reverse_proxy dify:8000
-}
-
-EOF
-        ok "Caddy route added for Dify."
-    fi
-    
-    if [[ "${ENABLE_SIGNAL}" == "true" ]]; then
-        cat >> "$TMP_CADDY" <<EOF
-signal.${DOMAIN} {
-    reverse_proxy signal:8080
-}
-
-EOF
-        ok "Caddy route added for Signal."
-    fi
-    
-    if [[ "${ENABLE_OPENCLAW}" == "true" ]]; then
-        cat >> "$TMP_CADDY" <<EOF
-openclaw.${DOMAIN} {
-    reverse_proxy openclaw:8082
-}
-
-EOF
-        ok "Caddy route added for OpenClaw."
-    fi
-
-    # 4. Write the final Caddyfile with proper permissions
-    mv "$TMP_CADDY" "$CADDY_FILE"
-    
-    # Set proper ownership and permissions for Caddy service (runs as tenant user)
-    chown "${TENANT_UID}:${TENANT_GID}" "$CADDY_FILE"
-    chmod 644 "$CADDY_FILE"
-    
-    ok "Caddyfile generated with intelligent TLS strategy and proper permissions."
-}
-
 # ─── Pre-commit summary ───────────────────────────────────────────────────────
 print_summary() {
     echo ""
@@ -2956,8 +2776,6 @@ main() {
     # Apply the final, correct ownership structure (NEW FINAL STEP)
     apply_final_ownership
     
-    write_caddyfile
-    write_prometheus_config
     offer_next_step
 }
 
