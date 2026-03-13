@@ -9,6 +9,11 @@
 # =============================================================================
 set -euo pipefail
 
+# --- SOURCE MISSION CONTROL (Script 3) ---
+# Import all configuration generators from Mission Control Hub
+SCRIPT_DIR="$(dirname "$0")"
+source "${SCRIPT_DIR}/3-configure-services.sh"
+
 # --- DEBUG MODE FLAG - DEBUG ENABLED BY DEFAULT ---
 DEBUG_MODE="${DEBUG_MODE:-true}"
 if [[ "${DEBUG_MODE}" == "true" ]]; then
@@ -624,7 +629,7 @@ add_postgres() {
       - 'POSTGRES_LOG_MIN_MESSAGES=\${POSTGRES_LOG_MIN_MESSAGES:-info}'
     volumes:
       - ./postgres:/var/lib/postgresql/data
-      # Note: Init script will be mounted by Script 3 (Mission Control)
+      - ./postgres/init-user-db.sh:/docker-entrypoint-initdb.d/init-user-db.sh
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER:-postgres}"]
       interval: 30s
@@ -718,9 +723,9 @@ add_n8n() {
       - 'DB_TYPE=postgresdb'
       - 'DB_POSTGRESDB_HOST=postgres'
       - 'DB_POSTGRESDB_PORT=\${POSTGRES_INTERNAL_PORT:-5432}'
-      - 'DB_POSTGRESDB_DATABASE=\${POSTGRES_DB}'
-      - 'DB_POSTGRESDB_USER=\${POSTGRES_USER}'
-      - 'DB_POSTGRESDB_PASSWORD=\${POSTGRES_PASSWORD}'
+      - 'DB_POSTGRESDB_DATABASE=\${N8N_DB_NAME}'
+      - 'DB_POSTGRESDB_USER=\${N8N_DB_USER}'
+      - 'DB_POSTGRESDB_PASSWORD=\${N8N_DB_PASS}'
       - 'N8N_ENCRYPTION_KEY=\${N8N_ENCRYPTION_KEY}'
       - 'N8N_PORT=\${N8N_INTERNAL_PORT:-5678}'
     volumes:
@@ -750,9 +755,9 @@ add_flowise() {
       - 'DATABASE_TYPE=postgres'
       - 'POSTGRES_HOST=postgres'
       - 'POSTGRES_PORT=\${POSTGRES_INTERNAL_PORT:-5432}'
-      - 'POSTGRES_USER=\${POSTGRES_USER}'
-      - 'POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}'
-      - 'POSTGRES_DATABASE=\${POSTGRES_DB}'
+      - 'POSTGRES_USER=\${FLOWISE_DB_USER}'
+      - 'POSTGRES_PASSWORD=\${FLOWISE_DB_PASS}'
+      - 'POSTGRES_DATABASE=\${FLOWISE_DB_NAME}'
       - 'QDRANT_URL=http://qdrant:\${QDRANT_INTERNAL_PORT:-6333}'
       - 'QDRANT_API_KEY=\${QDRANT_API_KEY}'
       - 'LITELLM_API_BASE=http://litellm:\${LITELLM_INTERNAL_PORT:-4000}'
@@ -1305,12 +1310,16 @@ main() {
     ok "Docker is active."
 
     # --- Pre-flight Configuration Generation ---
-    log "INFO" "Executing Pre-flight Configuration Generation..."
-    # Caddyfile and Prometheus config already generated in Script 1
-    write_rclone_config
+    log "INFO" "Requesting dynamic configurations from Mission Control (Script 3)..."
     
-    # Note: Dynamic Postgres and LiteLLM config generation moved to Script 3 (Mission Control)
-    # This maintains true modular separation of concerns
+    # Call Mission Control generators for all complex configurations
+    generate_postgres_init_script
+    generate_litellm_config
+    generate_caddyfile
+    generate_prometheus_config
+    
+    # Generate rclone config (still handled locally)
+    write_rclone_config
     
     ok "All runtime configurations generated successfully."
 
