@@ -991,10 +991,12 @@ add_authentik() {
 
     cat >> "${COMPOSE_FILE}" << EOF
 
-  authentik:
+  authentik-server:
     image: ghcr.io/goauthentik/server:latest
     restart: unless-stopped
     user: "\${AUTHENTIK_UID:-1000}:\${TENANT_GID:-1001}"
+    container_name: \${TENANT}-authentik-server-1
+    hostname: authentik-server
     networks:
       - default
     environment:
@@ -1013,10 +1015,45 @@ add_authentik() {
     volumes:
       - ./authentik:/media
       - ./authentik:/templates
-    command: ["server"]
+    command: server
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:latest
+    restart: unless-stopped
+    user: "\${AUTHENTIK_UID:-1000}:\${TENANT_GID:-1001}"
+    container_name: \${TENANT}-authentik-worker-1
+    hostname: authentik-worker
+    networks:
+      - default
+    environment:
+      - 'AUTHENTIK_SECRET_KEY=\${AUTHENTIK_SECRET_KEY}'
+      # TRIPLE-CHECK this entire block for typos and variable names.
+      - 'AUTHENTIK_POSTGRESQL__HOST=postgres'
+      - 'AUTHENTIK_POSTGRESQL__PORT=5432'
+      - 'AUTHENTIK_POSTGRESQL__NAME=\${AUTHENTIK_DB_NAME}'
+      - 'AUTHENTIK_POSTGRESQL__USER=\${AUTHENTIK_DB_USER}'
+      - 'AUTHENTIK_POSTGRESQL__PASSWORD=\${AUTHENTIK_DB_PASS}'
+      - 'AUTHENTIK_REDIS__HOST=redis'
+      - 'AUTHENTIK_REDIS__PORT=6379'
+      - 'AUTHENTIK_REDIS__DB=0'
+      - 'AUTHENTIK_REDIS__PASSWORD=${REDIS_PASSWORD}'
+      # Add any other required Authentik variables here
+    volumes:
+      - ./authentik:/media
+      - ./authentik:/templates
+    command: worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      authentik-server:
+        condition: service_started
 EOF
     ok "Added 'authentik' service."
 }
@@ -1174,7 +1211,8 @@ add_n8n() {
     
     log "INFO" "Adding 'n8n' service with auto-integration..."
     mkdir -p "${TENANT_DIR}/n8n"
-    chown "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}/n8n"
+    chown "1000:1001" "${TENANT_DIR}/n8n"
+    chmod 755 "${TENANT_DIR}/n8n"
 
     cat >> "${COMPOSE_FILE}" << EOF
 
