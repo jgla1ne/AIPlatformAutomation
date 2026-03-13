@@ -844,6 +844,12 @@ add_tailscale() {
     image: tailscale/tailscale:latest
     container_name: ${COMPOSE_PROJECT_NAME}-tailscale-1
     hostname: ${TAILSCALE_HOSTNAME:-${TENANT_ID}-ai-platform}
+    environment:
+      - TS_AUTHKEY=${TAILSCALE_AUTH_KEY}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=true
+      - TS_ACCEPT_DNS=false
+      - TS_ACCEPT_ROUTES=true
     volumes:
       - ./tailscale:/var/lib/tailscale
       - /dev/net/tun:/dev/net/tun
@@ -1098,10 +1104,10 @@ add_anythingllm() {
       - 'DB_TYPE=postgres'
       - 'POSTGRES_HOST=postgres'
       - 'POSTGRES_PORT=5432'
-      - 'POSTGRES_DB=\${POSTGRES_DB:-ai_platform}'
-      - 'POSTGRES_USER=\${POSTGRES_USER:-postgres}'
-      - 'POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}'
-      - 'DATABASE_URL=postgresql://\${POSTGRES_USER:-postgres}:\${POSTGRES_PASSWORD}@postgres:5432/\${POSTGRES_DB:-ai_platform}'
+      - 'POSTGRES_DB=anythingllm'
+      - 'POSTGRES_USER=anythingllm_user'
+      - 'POSTGRES_PASSWORD=anythingllm_password'
+      - 'DATABASE_URL=postgresql://anythingllm_user:anythingllm_password@postgres:5432/anythingllm'
       - 'QDRANT_ENDPOINT=http://qdrant:6333'
       - 'QDRANT_API_KEY=\${QDRANT_API_KEY}'
       - 'LLM_PROVIDER=\${LLM_PROVIDER:-litellm}'
