@@ -2210,21 +2210,7 @@ SIGNAL_VERIFICATION_CODE="${SIGNAL_VERIFICATION_CODE}"
 
 # High-level AI model configuration flags (for Script 2 dynamic generation)
 # This will be built from enabled LLM providers
-LITELLM_ENABLED_MODELS=""
-if [[ "${ENABLE_OLLAMA}" == "true" ]]; then
-    LITELLM_ENABLED_MODELS="${LITELLM_ENABLED_MODELS}ollama,"
-fi
-if [[ "${ENABLE_GEMINI}" == "true" && -n "${GEMINI_API_KEY}" ]]; then
-    LITELLM_ENABLED_MODELS="${LITELLM_ENABLED_MODELS}gemini,"
-fi
-if [[ "${ENABLE_GROQ}" == "true" && -n "${GROQ_API_KEY}" ]]; then
-    LITELLM_ENABLED_MODELS="${LITELLM_ENABLED_MODELS}groq,"
-fi
-if [[ "${ENABLE_OPENROUTER}" == "true" && -n "${OPENROUTER_API_KEY}" ]]; then
-    LITELLM_ENABLED_MODELS="${LITELLM_ENABLED_MODELS}openrouter,"
-fi
-# Remove trailing comma
-LITELLM_ENABLED_MODELS="${LITELLM_ENABLED_MODELS%,}"
+LITELLM_ENABLED_MODELS="${LITELLM_ENABLED_MODELS}"
 
 # ─── AnythingLLM ────────────────────────────────────────────────────────────────
 ANYTHINGLLM_API_KEY="${ANYTHINGLLM_API_KEY}"
