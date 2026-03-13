@@ -1000,7 +1000,11 @@ add_authentik() {
     environment:
       - 'AUTHENTIK_SECRET_KEY=\${AUTHENTIK_SECRET_KEY}'
       # TRIPLE-CHECK this entire block for typos and variable names.
-      - 'AUTHENTIK_POSTGRESQL__URL=postgres://\${AUTHENTIK_DB_USER}:\${AUTHENTIK_DB_PASS}@postgres:5432/\${AUTHENTIK_DB_NAME}?sslmode=disable'
+      - 'AUTHENTIK_POSTGRESQL__HOST=postgres'
+      - 'AUTHENTIK_POSTGRESQL__PORT=5432'
+      - 'AUTHENTIK_POSTGRESQL__NAME=\${AUTHENTIK_DB_NAME}'
+      - 'AUTHENTIK_POSTGRESQL__USER=\${AUTHENTIK_DB_USER}'
+      - 'AUTHENTIK_POSTGRESQL__PASSWORD=\${AUTHENTIK_DB_PASS}'
       - 'AUTHENTIK_REDIS__URL=redis://redis:6379/0'
       # Add any other required Authentik variables here
     volumes:
