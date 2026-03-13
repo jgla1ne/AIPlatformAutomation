@@ -1008,10 +1008,12 @@ add_authentik() {
       - 'AUTHENTIK_REDIS__HOST=redis'
       - 'AUTHENTIK_REDIS__PORT=6379'
       - 'AUTHENTIK_REDIS__DB=0'
+      - 'AUTHENTIK_REDIS__PASSWORD=${REDIS_PASSWORD}'
       # Add any other required Authentik variables here
     volumes:
       - ./authentik:/media
       - ./authentik:/templates
+    command: ["server"]
     depends_on:
       postgres:
         condition: service_healthy
