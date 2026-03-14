@@ -56,6 +56,270 @@ fail() {
     exit 1
 }
 
+# --- Phase 2: Ordered Service Startup ───────────────────────────────────────
+deploy_services_ordered() {
+    log "INFO" "Starting Phase 2: Ordered Service Deployment"
+    
+    # Define service startup order with dependencies
+    local startup_order=(
+        "postgres:database:5432"
+        "redis:cache:6379"
+        "qdrant:vector-db:6333"
+        "prometheus:monitoring:9090"
+        "grafana:dashboard:3000"
+        "litellm:llm-gateway:4000"
+        "ollama:llm-engine:11434"
+        "openwebui:chat-interface:8080"
+        "n8n:workflow:5678"
+        "caddy:reverse-proxy:80"
+    )
+    
+    cd "${TENANT_DIR}"
+    
+    for service_def in "${startup_order[@]}"; do
+        IFS=':' read -r service_name service_type internal_port <<< "$service_def"
+        
+        # Check if service is enabled
+        if [[ $(declare -p "ENABLE_${service_name^^}" 2>/dev/null 2>&1) =~ "true" ]] || [[ "${service_name}" == "caddy" ]]; then
+            log "INFO" "Deploying ${service_name} (${service_type})..."
+            
+            # Start individual service
+            if ! docker compose up -d "${service_name}" >> "${LOG_FILE}" 2>&1; then
+                log "ERROR" "Failed to start ${service_name}"
+                docker compose logs --tail=20 "${service_name}" >> "${LOG_FILE}" 2>&1
+                continue
+            fi
+            
+            # Wait for service to be ready
+            wait_for_service_ready "${service_name}" "${internal_port}" "${service_type}"
+            
+            ok "${service_name} deployed and ready"
+        else
+            log "INFO" "Skipping ${service_name} (disabled)"
+        fi
+    done
+}
+
+# --- Service Readiness Checker ─────────────────────────────────────────────────
+wait_for_service_ready() {
+    local service_name="$1"
+    local internal_port="$2"
+    local service_type="$3"
+    local max_wait=60
+    local wait_interval=5
+    local wait_time=0
+    
+    log "INFO" "Waiting for ${service_name} to be ready (port ${internal_port})..."
+    
+    while [[ $wait_time -lt $max_wait ]]; do
+        case "${service_type}" in
+            "database")
+                # Database-specific health check
+                if docker exec "ai-${TENANT_ID}-${service_name}-1" pg_isready -U postgres -p "${internal_port}" &>/dev/null; then
+                    log "INFO" "${service_name} database is accepting connections"
+                    return 0
+                fi
+                ;;
+            "cache")
+                # Redis-specific health check
+                if docker exec "ai-${TENANT_ID}-${service_name}-1" redis-cli -p "${internal_port}" ping &>/dev/null; then
+                    log "INFO" "${service_name} cache is responding"
+                    return 0
+                fi
+                ;;
+            "vector-db")
+                # Qdrant-specific health check
+                if curl -s -f "http://localhost:${internal_port}/health" &>/dev/null; then
+                    log "INFO" "${service_name} vector database is healthy"
+                    return 0
+                fi
+                ;;
+            "monitoring"|"dashboard")
+                # HTTP health check
+                if curl -s -f "http://localhost:${internal_port}/health" &>/dev/null || \
+                   curl -s -f "http://localhost:${internal_port}/api/health" &>/dev/null; then
+                    log "INFO" "${service_name} web interface is responding"
+                    return 0
+                fi
+                ;;
+            *)
+                # Generic TCP port check
+                if nc -z localhost "${internal_port}" &>/dev/null; then
+                    log "INFO" "${service_name} is listening on port ${internal_port}"
+                    return 0
+                fi
+                ;;
+        esac
+        
+        # Check if container is still running
+        if ! docker ps --filter "name=ai-${TENANT_ID}-${service_name}-1" --format "{{.Status}}" | grep -q "Up"; then
+            log "ERROR" "${service_name} container is not running"
+            docker compose logs --tail=10 "${service_name}" >> "${LOG_FILE}" 2>&1
+            return 1
+        fi
+        
+        sleep $wait_interval
+        wait_time=$((wait_time + wait_interval))
+        log "INFO" "Still waiting for ${service_name}... (${wait_time}/${max_wait}s)"
+    done
+    
+    log "ERROR" "${service_name} failed to become ready within ${max_wait} seconds"
+    docker compose logs --tail=20 "${service_name}" >> "${LOG_FILE}" 2>&1
+    return 1
+}
+
+# --- Layered Health Checks ───────────────────────────────────────────────────
+perform_layered_health_checks() {
+    log "INFO" "Performing layered health checks..."
+    
+    # Layer 1: Infrastructure services
+    check_infrastructure_layer
+    
+    # Layer 2: Data services
+    check_data_layer
+    
+    # Layer 3: Application services
+    check_application_layer
+    
+    # Layer 4: Gateway services
+    check_gateway_layer
+    
+    # Layer 5: End-to-end tests
+    check_end_to_end_connectivity
+}
+
+check_infrastructure_layer() {
+    log "INFO" "Checking infrastructure layer..."
+    
+    # Check Docker network
+    if docker network ls --filter name="${DOCKER_NETWORK}" --format "{{.Name}}" | grep -q "${DOCKER_NETWORK}"; then
+        ok "Docker network ${DOCKER_NETWORK} exists"
+    else
+        fail "Docker network ${DOCKER_NETWORK} not found"
+    fi
+    
+    # Check volume mounts
+    local volumes=("postgres_data" "rclone-cache")
+    for volume in "${volumes[@]}"; do
+        if docker volume ls --filter name="${volume}" --format "{{.Name}}" | grep -q "${volume}"; then
+            ok "Docker volume ${volume} exists"
+        else
+            warn "Docker volume ${volume} not found"
+        fi
+    done
+}
+
+check_data_layer() {
+    log "INFO" "Checking data layer..."
+    
+    # Check PostgreSQL
+    if [[ "${ENABLE_POSTGRES}" == "true" ]]; then
+        if docker exec "ai-${TENANT_ID}-postgres-1" pg_isready -U postgres &>/dev/null; then
+            ok "PostgreSQL is ready"
+        else
+            fail "PostgreSQL is not ready"
+        fi
+    fi
+    
+    # Check Redis
+    if [[ "${ENABLE_REDIS}" == "true" ]]; then
+        if docker exec "ai-${TENANT_ID}-redis-1" redis-cli ping &>/dev/null; then
+            ok "Redis is ready"
+        else
+            fail "Redis is not ready"
+        fi
+    fi
+    
+    # Check Qdrant
+    if [[ "${ENABLE_QDRANT}" == "true" ]]; then
+        if curl -s -f "http://localhost:6333/health" &>/dev/null; then
+            ok "Qdrant is ready"
+        else
+            fail "Qdrant is not ready"
+        fi
+    fi
+}
+
+check_application_layer() {
+    log "INFO" "Checking application layer..."
+    
+    # Check Grafana
+    if [[ "${ENABLE_GRAFANA}" == "true" ]]; then
+        if curl -s -f "http://localhost:3000/api/health" &>/dev/null; then
+            ok "Grafana is ready"
+        else
+            warn "Grafana is not ready"
+        fi
+    fi
+    
+    # Check Prometheus
+    if [[ "${ENABLE_PROMETHEUS}" == "true" ]]; then
+        if curl -s -f "http://localhost:9090/-/healthy" &>/dev/null; then
+            ok "Prometheus is ready"
+        else
+            warn "Prometheus is not ready"
+        fi
+    fi
+    
+    # Check LiteLLM
+    if [[ "${ENABLE_LITELLM}" == "true" ]]; then
+        if curl -s -f "http://localhost:4000/health" &>/dev/null; then
+            ok "LiteLLM is ready"
+        else
+            warn "LiteLLM is not ready"
+        fi
+    fi
+    
+    # Check OpenWebUI
+    if [[ "${ENABLE_OPENWEBUI}" == "true" ]]; then
+        if curl -s -f "http://localhost:8080" &>/dev/null; then
+            ok "OpenWebUI is ready"
+        else
+            warn "OpenWebUI is not ready"
+        fi
+    fi
+}
+
+check_gateway_layer() {
+    log "INFO" "Checking gateway layer..."
+    
+    # Check Caddy reverse proxy
+    if nc -z localhost "${CADDY_HTTPS_PORT:-443}"; then
+        ok "Caddy HTTPS proxy is ready"
+    else
+        fail "Caddy HTTPS proxy is not ready"
+    fi
+    
+    # Test main domain through Caddy
+    if curl -k -s -f "https://localhost:${CADDY_HTTPS_PORT:-443}" &>/dev/null; then
+        ok "Main domain is accessible through Caddy"
+    else
+        warn "Main domain is not accessible through Caddy"
+    fi
+}
+
+check_end_to_end_connectivity() {
+    log "INFO" "Checking end-to-end connectivity..."
+    
+    # Test service-to-service communication
+    if [[ "${ENABLE_OPENWEBUI}" == "true" && "${ENABLE_OLLAMA}" == "true" ]]; then
+        if curl -s -f "http://localhost:8080" &>/dev/null; then
+            ok "OpenWebUI can reach frontend"
+        else
+            warn "OpenWebUI frontend connectivity issue"
+        fi
+    fi
+    
+    # Test monitoring stack connectivity
+    if [[ "${ENABLE_GRAFANA}" == "true" && "${ENABLE_PROMETHEUS}" == "true" ]]; then
+        if curl -s -f "http://localhost:3000/api/health" &>/dev/null; then
+            ok "Grafana can reach Prometheus"
+        else
+            warn "Grafana-Prometheus connectivity issue"
+        fi
+    fi
+}
+
 # --- Deep Logging Functions ---
 enable_service_debug_logging() {
     local service=$1
@@ -1483,19 +1747,13 @@ EOF
     chown -R 1001:1001 /mnt/data/datasquiz/data 2>/dev/null || true
     chmod -R 755 /mnt/data/datasquiz/data 2>/dev/null || true
     
-    log "Starting all services in detached mode..."
-    log "Executing docker compose up -d... Output logged to ${LOG_FILE}"
-    if ! docker compose up -d >> "${LOG_FILE}" 2>&1; then
-        log "=== DEPLOYMENT FAILURE DEBUG ==="
-        log "Docker compose logs:"
-        docker compose logs --tail=50 >> "${LOG_FILE}" 2>&1
-        log "=== END DEPLOYMENT FAILURE DEBUG ==="
-        fail "Docker Compose failed to start. Please check the logs above."
-    fi
-
-    # Wait for services to initialize
-    log "Waiting for services to initialize..."
-    sleep 10
+    # Phase 2: Ordered Service Deployment
+    log "Starting Phase 2: Ordered Service Deployment..."
+    deploy_services_ordered
+    
+    # Phase 2: Layered Health Checks
+    log "Starting Phase 2: Layered Health Checks..."
+    perform_layered_health_checks
 
     # Verify core services health
     verify_core_services() {
