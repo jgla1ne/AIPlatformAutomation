@@ -39,6 +39,55 @@ log() {
     echo -e "${timestamp} [${level}] ${message}"
 }
 
+# ─── Phase 0: System Resource Validation ────────────────────────────────────────
+validate_system_resources() {
+    print_step "0" "14" "System Resource Validation"
+    
+    log "INFO" "Validating system resources for AI platform deployment..."
+    
+    # Check available RAM
+    local available_ram_gb
+    available_ram_gb=$(awk '/MemAvailable/ {printf "%.0f", $2/1024/1024}' /proc/meminfo)
+    log "INFO" "Available RAM: ${available_ram_gb}GB"
+    
+    # Check available disk space
+    local available_disk_gb
+    available_disk_gb=$(df -BG "${DATA_ROOT:-/mnt}" 2>/dev/null | awk 'NR==2 {gsub("G",""); print $4}' || echo "0")
+    log "INFO" "Available disk space: ${available_disk_gb}GB"
+    
+    # Validate minimum requirements
+    local min_ram_gb=4
+    local min_disk_gb=20
+    
+    if [[ $available_ram_gb -lt $min_ram_gb ]]; then
+        log "WARN" "Low RAM detected: ${available_ram_gb}GB < ${min_ram_gb}GB minimum"
+        log "WARN" "AI services may be unstable. Consider adding more RAM."
+    fi
+    
+    if [[ $available_disk_gb -lt $min_disk_gb ]]; then
+        log "ERROR" "Insufficient disk space: ${available_disk_gb}GB < ${min_disk_gb}GB minimum"
+        fail "Deployment requires at least ${min_disk_gb}GB of available disk space"
+    fi
+    
+    # Check Docker daemon
+    if ! docker info &> /dev/null; then
+        fail "Docker daemon is not running. Start Docker service first."
+    fi
+    
+    # Check Docker Compose
+    if ! docker compose version &> /dev/null; then
+        fail "Docker Compose is not available. Install Docker Compose first."
+    fi
+    
+    # Check network connectivity
+    if ! ping -c 1 8.8.8.8 > /dev/null 2>&1; then
+        log "WARN" "Network connectivity issues detected"
+        log "WARN" "DNS resolution may fail during deployment"
+    fi
+    
+    ok "System resources validated successfully"
+}
+
 # ─── Runtime vars (set after volume selection) ────────────────────────────────
 DATA_ROOT=""
 ENV_FILE=""
@@ -2477,6 +2526,79 @@ apply_final_ownership() {
     ok "Bulletproof ownership management established."
 }
 
+# ─── Phase 1: UID-Aware Directory Creation ─────────────────────────────────────
+create_service_directories_uid_aware() {
+    local tenant_id="${1:-${TENANT_ID}}"
+    local data_root="${DATA_ROOT}"
+    
+    log "INFO" "Creating service directories with UID-aware ownership..."
+    
+    # Service-specific UID mapping based on container requirements
+    declare -A SERVICE_UIDS=(
+        ["postgres"]="70:70"
+        ["redis"]="999:999"
+        ["grafana"]="472:472"
+        ["prometheus"]="65534:65534"
+        ["qdrant"]="1000:1001"
+        ["openwebui"]="1000:1001"
+        ["litellm"]="1000:1001"
+        ["ollama"]="1001:1001"
+        ["anythingllm"]="1000:1001"
+        ["flowise"]="1000:1001"
+        ["n8n"]="1000:1001"
+        ["authentik"]="1000:1001"
+        ["signal"]="1000:1001"
+        ["caddy"]="0:0"
+        ["loki"]="10001:10001"
+    )
+    
+    # Create all service directories with correct ownership
+    for service in "${!SERVICE_UIDS[@]}"; do
+        local service_path="${data_root}/${service}"
+        
+        # Check if service is enabled
+        if [[ $(declare -p "ENABLE_${service^^}" 2>/dev/null 2>&1) =~ "true" ]] || [[ "${service}" == "caddy" ]]; then
+            mkdir -p "${service_path}"
+            
+            # Special handling for services with subdirectories
+            case "${service}" in
+                "postgres")
+                    mkdir -p "${service_path}/data" "${service_path}/init"
+                    ;;
+                "qdrant")
+                    mkdir -p "${service_path}/storage" "${service_path}/storage/snapshots"
+                    # Qdrant snapshots need write permissions
+                    chmod 775 "${service_path}/storage/snapshots"
+                    ;;
+                "grafana")
+                    mkdir -p "${service_path}/provisioning/datasources" "${service_path}/provisioning/dashboards"
+                    ;;
+                "caddy")
+                    mkdir -p "${service_path}/config" "${service_path}/data"
+                    ;;
+                "n8n")
+                    mkdir -p "${service_path}/workflows"
+                    ;;
+                "anythingllm")
+                    mkdir -p "${service_path}/tmp"
+                    ;;
+            esac
+            
+            # Apply service-specific ownership
+            chown -R "${SERVICE_UIDS[$service]}" "${service_path}"
+            chmod -R 755 "${service_path}"
+            
+            log "INFO" "Created ${service} directory with ownership ${SERVICE_UIDS[$service]}"
+        fi
+    done
+    
+    # Create base directories with tenant ownership
+    mkdir -p "${data_root}/logs" "${data_root}/run" "${data_root}/lib"
+    chown "${TENANT_UID}:${TENANT_GID}" "${data_root}/logs" "${data_root}/run" "${data_root}/lib"
+    
+    ok "Service directories created with correct UID-aware ownership"
+}
+
 # ─── Create directory structure with dynamic permissions ────────────────────────
 create_directories() {
     log "INFO" "Creating all service directories with dynamic permissions..."
@@ -2809,6 +2931,10 @@ offer_next_step() {
 main() {
     print_header
     check_root
+    
+    # Phase 0: System Validation
+    validate_system_resources
+    
     check_prerequisites      # Step 1
     collect_identity         # Step 2
     detect_and_mount_ebs     # Step 3 - NEW: EBS detection and mounting
@@ -2840,6 +2966,10 @@ main() {
     print_summary
     write_env_file
     
+    # Phase 1: Foundation Setup - UID-aware directory creation
+    create_service_directories_uid_aware
+    
+    # Keep existing directory creation for backward compatibility
     create_directories
     
     # Apply the final, correct ownership structure (NEW FINAL STEP)
