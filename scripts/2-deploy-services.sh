@@ -986,7 +986,7 @@ add_openwebui() {
     volumes:
       - ./openwebui:/app/backend/data
     healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "--fail", "http://localhost:8080"]
       interval: 30s
       timeout: 10s
       retries: 5

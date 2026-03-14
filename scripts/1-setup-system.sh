@@ -2516,11 +2516,54 @@ create_directories() {
     ok "Bulletproof ownership management established for tenant ${TENANT_ID}."
 
     # --- SPECIFIC SERVICE OWNERSHIP FIXES ---
-    # Fix known permission issues from log analysis
+    # Fix known permission issues from log analysis and audit findings
     sudo mkdir -p "${TENANT_DIR}/flowise/logs"
     sudo chown -R 1000:1001 "${TENANT_DIR}/flowise/logs"
     sudo mkdir -p "${TENANT_DIR}/loki/data" "${TENANT_DIR}/loki/wal"
     sudo chown -R 10001:10001 "${TENANT_DIR}/loki"
+    
+    # --- CRITICAL PERMISSION FIXES FOR FAILING SERVICES ---
+    # Based on comprehensive audit findings
+    log "INFO" "Applying critical permission fixes for failing services..."
+    
+    # Grafana: Fix readonly database error (UID: 472:472)
+    if [[ "${ENABLE_GRAFANA}" == "true" ]]; then
+        sudo mkdir -p "${TENANT_DIR}/grafana"
+        sudo chown -R 472:472 "${TENANT_DIR}/grafana"
+        ok "Fixed Grafana permissions (472:472)"
+    fi
+    
+    # Qdrant: Fix permission denied on snapshots (UID: 1000:1001)
+    if [[ "${ENABLE_QDRANT}" == "true" ]]; then
+        sudo mkdir -p "${TENANT_DIR}/qdrant"
+        sudo mkdir -p "${TENANT_DIR}/qdrant/storage"
+        sudo mkdir -p "${TENANT_DIR}/qdrant/storage/snapshots"
+        sudo chown -R 1000:1001 "${TENANT_DIR}/qdrant"
+        ok "Fixed Qdrant permissions (1000:1001)"
+    fi
+    
+    # OpenWebUI: Fix database file access error (UID: 1000:1001)
+    if [[ "${ENABLE_OPENWEBUI}" == "true" ]]; then
+        sudo mkdir -p "${TENANT_DIR}/openwebui"
+        sudo chown -R 1000:1001 "${TENANT_DIR}/openwebui"
+        ok "Fixed OpenWebUI permissions (1000:1001)"
+    fi
+    
+    # Prometheus: Fix potential permission issues (UID: 65534:65534)
+    if [[ "${ENABLE_PROMETHEUS}" == "true" ]]; then
+        sudo mkdir -p "${TENANT_DIR}/prometheus"
+        sudo chown -R 65534:65534 "${TENANT_DIR}/prometheus"
+        ok "Fixed Prometheus permissions (65534:65534)"
+    fi
+    
+    # LiteLLM: Ensure proper permissions (UID: 1000:1001)
+    if [[ "${ENABLE_LITELLM}" == "true" ]]; then
+        sudo mkdir -p "${TENANT_DIR}/litellm"
+        sudo chown -R 1000:1001 "${TENANT_DIR}/litellm"
+        ok "Fixed LiteLLM permissions (1000:1001)"
+    fi
+    
+    log "SUCCESS" "All critical permission fixes applied."
 }
 
 # ─── Pre-commit summary ───────────────────────────────────────────────────────
