@@ -948,8 +948,14 @@ add_litellm() {
       - ./litellm-config.yaml:/app/config.yaml
     # CRITICAL FIX: Add a command to force loading of config file
     command: ["--config", "/app/config.yaml", "--port", "\${LITELLM_INTERNAL_PORT:-4000}"]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 EOF
-    ok "Added 'litellm' service with auto-integration."
+    ok "Added 'litellm' service with healthcheck and auto-integration."
 }
 
 add_openwebui() {
@@ -976,10 +982,17 @@ add_openwebui() {
       - 'WEBUI_SECRET_KEY=\${OPENWEBUI_SECRET_KEY}'
       - 'WEBUI_NAME=AI Platform WebUI'
       - 'DEFAULT_MODELS=llama3.2'
+      - DATABASE_URL=postgresql://openwebui:\${OPENWEBUI_DB_PASSWORD}@postgres:5432/openwebui
     volumes:
       - ./openwebui:/app/backend/data
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 EOF
-    ok "Added 'openwebui' service, configured for LiteLLM routing."
+    ok "Added 'openwebui' service with healthcheck and DATABASE_URL."
 }
 
 add_authentik() {
@@ -1259,8 +1272,14 @@ add_qdrant() {
       - ./qdrant/snapshots:/qdrant/snapshots
     ports:
       - "${QDRANT_PORT:-6333}:${QDRANT_INTERNAL_PORT:-6333}"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:6333/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 EOF
-    ok "Added 'qdrant' service."
+    ok "Added 'qdrant' service with healthcheck."
 }
 
 add_grafana() {
@@ -1279,8 +1298,14 @@ add_grafana() {
       - GF_LOG_MODE=${GF_LOG_MODE:-console,file}
     volumes:
       - \${TENANT_DIR}/grafana:/var/lib/grafana
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 EOF
-    ok "Added 'grafana' service."
+    ok "Added 'grafana' service with healthcheck."
 }
 
 add_prometheus() {
@@ -1298,8 +1323,14 @@ add_prometheus() {
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
       - ./prometheus:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 EOF
-    ok "Added 'prometheus' service."
+    ok "Added 'prometheus' service with healthcheck."
 }
 
 add_caddy() {
@@ -1311,6 +1342,19 @@ add_caddy() {
     user: "0:0"  # Run as root to avoid permission issues
     networks:
       - default
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      grafana:
+        condition: service_healthy
+      prometheus:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      openwebui:
+        condition: service_healthy
     environment:
       - CADDY_LOG_LEVEL=${CADDY_LOG_LEVEL:-info}
       - CADDY_LOG_FORMAT=${CADDY_LOG_FORMAT:-json}
@@ -1322,8 +1366,14 @@ add_caddy() {
       - "${CADDY_HTTPS_PORT:-443}:443"
       - "${CADDY_HTTPS_PORT:-443}:443/udp"
     command: caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 EOF
-    ok "Added 'caddy' service."
+    ok "Added 'caddy' service with healthcheck dependencies."
 }
 
 test_service_urls() {

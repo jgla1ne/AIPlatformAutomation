@@ -584,37 +584,49 @@ EOF
 
 EOF
 
-    # 3. Add service routes dynamically
+    # 3. Add service routes dynamically with health-aware routing
     if [[ "${ENABLE_PROMETHEUS}" == "true" ]]; then
         cat >> "$TMP_CADDY" << EOF
-${DOMAIN}/prometheus {
-    reverse_proxy prometheus:9090
+prometheus.${DOMAIN} {
+    reverse_proxy prometheus:9090 {
+        health_uri /-/healthy
+        health_interval 10s
+        health_timeout 5s
+    }
 }
 EOF
-        ok "Caddy route added for Prometheus."
+        ok "Caddy route added for Prometheus with health checks."
     fi
 
     if [[ "${ENABLE_AUTHENTIK}" == "true" ]]; then
         cat >> "$TMP_CADDY" << EOF
-${DOMAIN}/auth {
-    reverse_proxy authentik:9000
+auth.${DOMAIN} {
+    reverse_proxy authentik-server:9000 {
+        health_uri /-/health/live/
+        health_interval 10s
+        health_timeout 5s
+    }
 }
 EOF
-        ok "Caddy route added for Authentik."
+        ok "Caddy route added for Authentik with health checks."
     fi
 
     if [[ "${ENABLE_OPENWEBUI}" == "true" ]]; then
         cat >> "$TMP_CADDY" << EOF
-${DOMAIN}/openwebui {
-    reverse_proxy openwebui:8080
+openwebui.${DOMAIN} {
+    reverse_proxy openwebui:8080 {
+        health_uri /health
+        health_interval 10s
+        health_timeout 5s
+    }
 }
 EOF
-        ok "Caddy route added for OpenWebUI."
+        ok "Caddy route added for OpenWebUI with health checks."
     fi
 
     if [[ "${ENABLE_N8N}" == "true" ]]; then
         cat >> "$TMP_CADDY" << EOF
-${DOMAIN}/n8n {
+n8n.${DOMAIN} {
     reverse_proxy n8n:5678
 }
 EOF
@@ -623,7 +635,7 @@ EOF
 
     if [[ "${ENABLE_FLOWISE}" == "true" ]]; then
         cat >> "$TMP_CADDY" << EOF
-${DOMAIN}/flowise {
+flowise.${DOMAIN} {
     reverse_proxy flowise:3000
 }
 EOF
@@ -632,7 +644,7 @@ EOF
 
     if [[ "${ENABLE_ANYTHINGLLM}" == "true" ]]; then
         cat >> "$TMP_CADDY" << EOF
-${DOMAIN}/anythingllm {
+anythingllm.${DOMAIN} {
     reverse_proxy anythingllm:3001
 }
 EOF
@@ -641,7 +653,7 @@ EOF
 
     if [[ "${ENABLE_LITELLM}" == "true" ]]; then
         cat >> "$TMP_CADDY" << EOF
-${DOMAIN}/litellm {
+litellm.${DOMAIN} {
     reverse_proxy litellm:4000
 }
 EOF
