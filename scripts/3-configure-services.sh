@@ -303,6 +303,7 @@ main() {
         echo ""
         echo "Actions:"
         echo "  configure  - Configure logging for all services (default)"
+        echo "  provision  - Phase 3: Database provisioning and verification"
         echo "  disable    - Disable logging for all services"
         echo "  rotate    - Rotate service logs"
         echo "  cleanup    - Clean up old logs"
@@ -335,6 +336,17 @@ main() {
             show_logging_dashboard
             
             ok "Service logging configuration completed."
+            ;;
+        "provision")
+            log "Starting Phase 3: Database provisioning and verification..."
+            
+            # Phase 3: Database provisioning
+            provision_databases
+            
+            # Phase 3: Configuration verification
+            verify_service_configurations
+            
+            ok "Phase 3: Database provisioning and configuration verification completed."
             ;;
         "--health")
             log "Running comprehensive health checks for tenant: ${TENANT_ID}"
@@ -549,7 +561,303 @@ pair_signal_device() {
     fi
 }
 
-# ─── MISSION CONTROL: Configuration Generators ────────────────────────────────
+# ─── Phase 3: Database Provisioning and Verification ───────────────────────────
+provision_databases() {
+    log "INFO" "Starting Phase 3: Database Provisioning and Verification"
+    
+    # PostgreSQL provisioning
+    if [[ "${ENABLE_POSTGRES}" == "true" ]]; then
+        provision_postgresql_database
+    fi
+    
+    # Redis provisioning
+    if [[ "${ENABLE_REDIS}" == "true" ]]; then
+        provision_redis_cache
+    fi
+    
+    # Vector database provisioning
+    if [[ "${ENABLE_QDRANT}" == "true" ]]; then
+        provision_qdrant_vector_db
+    fi
+    
+    ok "Database provisioning completed"
+}
+
+provision_postgresql_database() {
+    log "INFO" "Provisioning PostgreSQL database..."
+    
+    # Wait for PostgreSQL to be ready
+    local max_wait=30
+    local wait_time=0
+    
+    while [[ $wait_time -lt $max_wait ]]; do
+        if docker exec "ai-${TENANT_ID}-postgres-1" pg_isready -U postgres &>/dev/null; then
+            break
+        fi
+        sleep 2
+        wait_time=$((wait_time + 2))
+    done
+    
+    if [[ $wait_time -ge $max_wait ]]; then
+        fail "PostgreSQL did not become ready within ${max_wait} seconds"
+    fi
+    
+    # Create application databases
+    local databases=("n8n" "grafana" "openwebui" "anythingllm")
+    
+    for db in "${databases[@]}"; do
+        # Check if service is enabled
+        if [[ $(declare -p "ENABLE_${db^^}" 2>/dev/null 2>&1) =~ "true" ]]; then
+            log "INFO" "Creating database: ${db}"
+            
+            # Create database if it doesn't exist
+            docker exec "ai-${TENANT_ID}-postgres-1" psql -U postgres -tc \
+                "SELECT 1 FROM pg_database WHERE datname = '${db}'" | grep -q 1 || \
+            docker exec "ai-${TENANT_ID}-postgres-1" psql -U postgres -c \
+                "CREATE DATABASE ${db};" &>/dev/null
+            
+            # Create user and grant permissions
+            docker exec "ai-${TENANT_ID}-postgres-1" psql -U postgres -tc \
+                "SELECT 1 FROM pg_roles WHERE rolname = '${db}_user'" | grep -q 1 || \
+            docker exec "ai-${TENANT_ID}-postgres-1" psql -U postgres -c \
+                "CREATE USER ${db}_user WITH PASSWORD '${POSTGRES_PASSWORD}';" &>/dev/null
+            
+            docker exec "ai-${TENANT_ID}-postgres-1" psql -U postgres -c \
+                "GRANT ALL PRIVILEGES ON DATABASE ${db} TO ${db}_user;" &>/dev/null
+            
+            ok "Database ${db} created and configured"
+        fi
+    done
+    
+    # Verify database connectivity
+    verify_postgresql_connectivity
+}
+
+provision_redis_cache() {
+    log "INFO" "Provisioning Redis cache..."
+    
+    # Wait for Redis to be ready
+    local max_wait=30
+    local wait_time=0
+    
+    while [[ $wait_time -lt $max_wait ]]; do
+        if docker exec "ai-${TENANT_ID}-redis-1" redis-cli ping &>/dev/null; then
+            break
+        fi
+        sleep 2
+        wait_time=$((wait_time + 2))
+    done
+    
+    if [[ $wait_time -ge $max_wait ]]; then
+        fail "Redis did not become ready within ${max_wait} seconds"
+    fi
+    
+    # Configure Redis settings
+    docker exec "ai-${TENANT_ID}-redis-1" redis-cli CONFIG SET maxmemory 256mb &>/dev/null
+    docker exec "ai-${TENANT_ID}-redis-1" redis-cli CONFIG SET maxmemory-policy allkeys-lru &>/dev/null
+    
+    # Test Redis functionality
+    docker exec "ai-${TENANT_ID}-redis-1" redis-cli SET test_key "test_value" &>/dev/null
+    local test_value=$(docker exec "ai-${TENANT_ID}-redis-1" redis-cli GET test_key 2>/dev/null)
+    
+    if [[ "$test_value" == "test_value" ]]; then
+        docker exec "ai-${TENANT_ID}-redis-1" redis-cli DEL test_key &>/dev/null
+        ok "Redis cache provisioned and verified"
+    else
+        fail "Redis functionality test failed"
+    fi
+}
+
+provision_qdrant_vector_db() {
+    log "INFO" "Provisioning Qdrant vector database..."
+    
+    # Wait for Qdrant to be ready
+    local max_wait=30
+    local wait_time=0
+    
+    while [[ $wait_time -lt $max_wait ]]; do
+        if curl -s -f "http://localhost:6333/health" &>/dev/null; then
+            break
+        fi
+        sleep 2
+        wait_time=$((wait_time + 2))
+    done
+    
+    if [[ $wait_time -ge $max_wait ]]; then
+        fail "Qdrant did not become ready within ${max_wait} seconds"
+    fi
+    
+    # Create collections for AI services
+    local collections=("openwebui_embeddings" "n8n_embeddings" "documents")
+    
+    for collection in "${collections[@]}"; do
+        log "INFO" "Creating collection: ${collection}"
+        
+        # Check if collection exists
+        if ! curl -s -f "http://localhost:6333/collections/${collection}" &>/dev/null; then
+            # Create collection with default configuration
+            curl -s -X PUT "http://localhost:6333/collections/${collection}" \
+                -H "Content-Type: application/json" \
+                -d '{
+                    "vectors": {
+                        "size": 1536,
+                        "distance": "Cosine"
+                    }
+                }' &>/dev/null
+            
+            ok "Collection ${collection} created"
+        else
+            log "INFO" "Collection ${collection} already exists"
+        fi
+    done
+    
+    # Verify Qdrant functionality
+    verify_qdrant_functionality
+}
+
+verify_postgresql_connectivity() {
+    log "INFO" "Verifying PostgreSQL connectivity..."
+    
+    local databases=("n8n" "grafana" "openwebui" "anythingllm")
+    
+    for db in "${databases[@]}"; do
+        if [[ $(declare -p "ENABLE_${db^^}" 2>/dev/null 2>&1) =~ "true" ]]; then
+            # Test database connection
+            if docker exec "ai-${TENANT_ID}-postgres-1" psql -U "${db}_user" -d "${db}" -c "SELECT 1;" &>/dev/null; then
+                ok "PostgreSQL ${db} database connectivity verified"
+            else
+                fail "PostgreSQL ${db} database connectivity failed"
+            fi
+        fi
+    done
+}
+
+verify_qdrant_functionality() {
+    log "INFO" "Verifying Qdrant functionality..."
+    
+    # Test collection creation and vector operations
+    local test_collection="test_collection"
+    
+    # Create test collection
+    curl -s -X PUT "http://localhost:6333/collections/${test_collection}" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "vectors": {
+                "size": 1536,
+                "distance": "Cosine"
+            }
+        }' &>/dev/null
+    
+    # Add test vector
+    curl -s -X PUT "http://localhost:6333/collections/${test_collection}/points" \
+        -H "Content-Type: application/json" \
+        -H "api-key: ${QDRANT_API_KEY}" \
+        -d '{
+            "points": [
+                {
+                    "id": 1,
+                    "vector": [0.1, 0.2, 0.3],
+                    "payload": {"test": "data"}
+                }
+            ]
+        }' &>/dev/null
+    
+    # Search test vector
+    local search_result=$(curl -s -X POST "http://localhost:6333/collections/${test_collection}/search" \
+        -H "Content-Type: application/json" \
+        -H "api-key: ${QDRANT_API_KEY}" \
+        -d '{
+            "vector": [0.1, 0.2, 0.3],
+            "limit": 1
+        }' | jq -r '.result | length' 2>/dev/null)
+    
+    if [[ "$search_result" == "1" ]]; then
+        # Cleanup test collection
+        curl -s -X DELETE "http://localhost:6333/collections/${test_collection}" &>/dev/null
+        ok "Qdrant functionality verified"
+    else
+        fail "Qdrant functionality test failed"
+    fi
+}
+
+# ─── Configuration Verification ─────────────────────────────────────────────
+verify_service_configurations() {
+    log "INFO" "Verifying service configurations..."
+    
+    # Verify environment variables
+    verify_environment_variables
+    
+    # Verify service connections
+    verify_service_connections
+    
+    # Verify data persistence
+    verify_data_persistence
+    
+    ok "Service configuration verification completed"
+}
+
+verify_environment_variables() {
+    log "INFO" "Verifying critical environment variables..."
+    
+    local critical_vars=(
+        "POSTGRES_PASSWORD"
+        "REDIS_PASSWORD"
+        "QDRANT_API_KEY"
+        "TENANT_UID"
+        "TENANT_GID"
+        "DOCKER_NETWORK"
+    )
+    
+    for var in "${critical_vars[@]}"; do
+        if [[ -n "${!var:-}" ]]; then
+            ok "Environment variable ${var} is set"
+        else
+            warn "Environment variable ${var} is not set"
+        fi
+    done
+}
+
+verify_service_connections() {
+    log "INFO" "Verifying service-to-service connections..."
+    
+    # Test Grafana to Prometheus connection
+    if [[ "${ENABLE_GRAFANA}" == "true" && "${ENABLE_PROMETHEUS}" == "true" ]]; then
+        if curl -s -f "http://localhost:3000/api/health" &>/dev/null; then
+            ok "Grafana service is accessible"
+        else
+            warn "Grafana service is not accessible"
+        fi
+    fi
+    
+    # Test OpenWebUI to Ollama connection
+    if [[ "${ENABLE_OPENWEBUI}" == "true" && "${ENABLE_OLLAMA}" == "true" ]]; then
+        if curl -s -f "http://localhost:8080" &>/dev/null; then
+            ok "OpenWebUI service is accessible"
+        else
+            warn "OpenWebUI service is not accessible"
+        fi
+    fi
+}
+
+verify_data_persistence() {
+    log "INFO" "Verifying data persistence..."
+    
+    # Check if data directories exist and have correct permissions
+    local data_dirs=("postgres" "redis" "qdrant" "grafana" "prometheus")
+    
+    for dir in "${data_dirs[@]}"; do
+        if [[ $(declare -p "ENABLE_${dir^^}" 2>/dev/null 2>&1) =~ "true" ]]; then
+            local service_path="${TENANT_DIR}/${dir}"
+            if [[ -d "$service_path" ]]; then
+                ok "Data directory ${dir} exists"
+            else
+                warn "Data directory ${dir} does not exist"
+            fi
+        fi
+    done
+}
+
+# ─── Service Log Configuration Functions ─────────────────────────────────────
 # These functions are the central engine for all complex configuration generation
 # They are exported to be used by other scripts in the deployment pipeline
 
