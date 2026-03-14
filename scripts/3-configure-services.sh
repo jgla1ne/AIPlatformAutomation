@@ -676,7 +676,7 @@ provision_qdrant_vector_db() {
     local wait_time=0
     
     while [[ $wait_time -lt $max_wait ]]; do
-        if curl -s -f "http://localhost:6333/health" &>/dev/null; then
+        if curl -s -f "http://localhost:6333/collections" &>/dev/null; then
             break
         fi
         sleep 2

@@ -129,16 +129,15 @@ wait_for_service_ready() {
                 ;;
             "vector-db")
                 # Qdrant-specific health check
-                if curl -s -f "http://localhost:${internal_port}/health" &>/dev/null; then
+                if curl -s -f "http://localhost:${internal_port}/collections" &>/dev/null; then
                     log "INFO" "${service_name} vector database is healthy"
                     return 0
                 fi
                 ;;
             "monitoring"|"dashboard")
-                # HTTP health check
-                if curl -s -f "http://localhost:${internal_port}/health" &>/dev/null || \
-                   curl -s -f "http://localhost:${internal_port}/api/health" &>/dev/null; then
-                    log "INFO" "${service_name} web interface is responding"
+                # HTTP health check - try within container network first
+                if docker exec "ai-${TENANT_ID}-${service_name}-1" wget --quiet --spider "http://localhost:${internal_port}/" &>/dev/null; then
+                    log "INFO" "${service_name} is responding within container"
                     return 0
                 fi
                 ;;
@@ -232,7 +231,7 @@ check_data_layer() {
     
     # Check Qdrant
     if [[ "${ENABLE_QDRANT}" == "true" ]]; then
-        if curl -s -f "http://localhost:6333/health" &>/dev/null; then
+        if curl -s -f "http://localhost:6333/collections" &>/dev/null; then
             ok "Qdrant is ready"
         else
             fail "Qdrant is not ready"
