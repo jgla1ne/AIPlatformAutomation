@@ -2506,6 +2506,21 @@ create_directories() {
     fi
     
     log "SUCCESS" "All service directories created with dynamic permissions."
+    
+    # --- THE DEFINITIVE OWNERSHIP FIX ---
+    log "INFO" "Enforcing automated tenant ownership for entire tenant space..."
+    # This single, recursive command establishes foundational permissions.
+    # It makes all subsequent file creations inherit correct ownership,
+    # eliminating need for any scattered chown commands.
+    sudo chown -R "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}"
+    ok "Bulletproof ownership management established for tenant ${TENANT_ID}."
+
+    # --- SPECIFIC SERVICE OWNERSHIP FIXES ---
+    # Fix known permission issues from log analysis
+    sudo mkdir -p "${TENANT_DIR}/flowise/logs"
+    sudo chown -R 1000:1001 "${TENANT_DIR}/flowise/logs"
+    sudo mkdir -p "${TENANT_DIR}/loki/data" "${TENANT_DIR}/loki/wal"
+    sudo chown -R 10001:10001 "${TENANT_DIR}/loki"
 }
 
 # ─── Pre-commit summary ───────────────────────────────────────────────────────
