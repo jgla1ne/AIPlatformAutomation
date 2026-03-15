@@ -2195,6 +2195,47 @@ POSTGRES_USER=${POSTGRES_USER}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 POSTGRES_DB=${POSTGRES_DB}
 
+# ─── Derived Connection Strings (computed once from primitives above) ──────────
+# Used by LiteLLM, Authentik, Metabase, etc.
+DATABASE_URL=postgresql://\${POSTGRES_USER}:\${POSTGRES_PASSWORD}@\${POSTGRES_HOST:-postgres}:\${POSTGRES_PORT:-5432}/\${POSTGRES_DB}
+LITELLM_DATABASE_URL=postgresql://\${POSTGRES_USER}:\${POSTGRES_PASSWORD}@\${POSTGRES_HOST:-postgres}:\${POSTGRES_PORT:-5432}/litellm
+OPENWEBUI_DATABASE_URL=postgresql://\${POSTGRES_USER}:\${POSTGRES_PASSWORD}@\${POSTGRES_HOST:-postgres}:\${POSTGRES_PORT:-5432}/openwebui
+
+# TENANT = BASE_DOMAIN — used by Caddy for routing
+TENANT=\${DOMAIN}
+
+# OpenWebUI re-uses the same Postgres credential
+OPENWEBUI_DB_PASSWORD=\${POSTGRES_PASSWORD}
+
+# Redis full URL
+REDIS_URL=redis://:\${REDIS_PASSWORD}@redis:6379
+
+# N8N Postgres config (n8n uses individual vars, not DATABASE_URL)
+N8N_DB_TYPE=postgresdb
+N8N_DB_POSTGRESDB_HOST=\${POSTGRES_HOST:-postgres}
+N8N_DB_POSTGRESDB_PORT=\${POSTGRES_PORT:-5432}
+N8N_DB_POSTGRESDB_DATABASE=n8n
+N8N_DB_POSTGRESDB_USER=\${POSTGRES_USER}
+N8N_DB_POSTGRESDB_PASSWORD=\${POSTGRES_PASSWORD}
+
+# Grafana admin (uses ADMIN_PASSWORD generated above)
+GRAFANA_ADMIN_USER=admin
+GRAFANA_ADMIN_PASSWORD=\${GRAFANA_PASSWORD}
+
+# ─── Service Ports (for health dashboard and caddy config) ───────────────────────
+PORT_LITELLM=4000
+PORT_OPENWEBUI=3000
+PORT_N8N=5678
+PORT_FLOWISE=3001
+PORT_GRAFANA=3002
+PORT_PROMETHEUS=9090
+PORT_ANYTHINGLLM=3003
+PORT_QDRANT=6333
+PORT_OPENCLAW=8080
+PORT_CADDY_HTTP=80
+PORT_CADDY_HTTPS=443
+PORT_CADDY_ADMIN=2019
+
 # ─── Per-Service Database Credentials (Dynamic Generation) ───────────────────
 # These will be used by Script 3 to create per-service databases and users
 AUTHENTIK_DB_USER=${AUTHENTIK_DB_USER}
@@ -2524,6 +2565,127 @@ apply_final_ownership() {
     # preventing any permission errors for files created later by other scripts.
     sudo chown -R "${TENANT_UID}:${TENANT_GID}" "${TENANT_DIR}"
     ok "Bulletproof ownership management established."
+}
+
+# ─── PostgreSQL Database Initialization Script Generation ───────────────────────
+generate_postgres_init() {
+    local config_dir="${DATA_ROOT}/configs"
+    mkdir -p "${config_dir}/postgres"
+    
+    # Create init-user-db.sh script that Postgres executes on first boot
+    cat > "${config_dir}/postgres/init-user-db.sh" <<'INITEOF'
+#!/bin/bash
+set -e
+# Called by the postgres container as the postgres superuser on first boot.
+# All variables are injected by Docker from the service environment.
+
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+  -- Ensure the platform user exists (idempotent)
+  DO $$
+  BEGIN
+    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '$POSTGRES_USER') THEN
+      CREATE ROLE "$POSTGRES_USER" WITH LOGIN PASSWORD '$POSTGRES_PASSWORD';
+    END IF;
+  END $$;
+
+  -- Create all service databases
+  SELECT 'CREATE DATABASE litellm   OWNER "$POSTGRES_USER"' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'litellm')   \gexec
+  SELECT 'CREATE DATABASE openwebui OWNER "$POSTGRES_USER"' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'openwebui') \gexec
+  SELECT 'CREATE DATABASE n8n       OWNER "$POSTGRES_USER"' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'n8n')       \gexec
+  SELECT 'CREATE DATABASE flowise   OWNER "$POSTGRES_USER"' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'flowise')   \gexec
+  SELECT 'CREATE DATABASE authentik OWNER "$POSTGRES_USER"' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'authentik') \gexec
+
+  -- Grant permissions
+  GRANT ALL PRIVILEGES ON DATABASE litellm   TO "$POSTGRES_USER";
+  GRANT ALL PRIVILEGES ON DATABASE openwebui TO "$POSTGRES_USER";
+  GRANT ALL PRIVILEGES ON DATABASE n8n       TO "$POSTGRES_USER";
+  GRANT ALL PRIVILEGES ON DATABASE flowise   TO "$POSTGRES_USER";
+  GRANT ALL PRIVILEGES ON DATABASE authentik TO "$POSTGRES_USER";
+EOSQL
+INITEOF
+    
+    chmod +x "${config_dir}/postgres/init-user-db.sh"
+    log "SUCCESS" "PostgreSQL initialization script generated"
+}
+
+# ─── LiteLLM Configuration Generation ───────────────────────────────────────────
+generate_litellm_config() {
+    local config_dir="${DATA_ROOT}"
+    mkdir -p "${config_dir}"
+    
+    # Generate LiteLLM config with os.environ syntax for runtime secrets
+    cat > "${config_dir}/litellm-config.yaml" <<'EOF'
+model_list:
+  # OpenAI Models (if API key provided)
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Anthropic Models (if API key provided)
+  - model_name: claude-3-sonnet
+    litellm_params:
+      model: anthropic/claude-3-sonnet-20240229
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # Google Models (if API key provided)
+  - model_name: gemini-pro
+    litellm_params:
+      model: gemini/gemini-pro
+      api_key: os.environ/GEMINI_API_KEY
+
+  # Groq Models (if API key provided)
+  - model_name: llama3-70b-8192
+    litellm_params:
+      model: groq/llama3-70b-8192
+      api_key: os.environ/GROQ_API_KEY
+
+  # Local Ollama Model (no API key needed)
+  - model_name: ollama-llama3
+    litellm_params:
+      model: ollama/llama3
+      api_base: http://ollama:11434
+
+  # OpenRouter Models (if API key provided)
+  - model_name: openrouter-mistral-7b
+    litellm_params:
+      model: openrouter/mistral-7b
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  success_callback: []
+  failure_callback: []
+  cache: true
+  cache_params:
+    type: redis
+    host: redis
+    port: 6379
+    password: os.environ/REDIS_PASSWORD
+
+router_settings:
+  routing_strategy: least-busy
+  fallbacks:
+    - gpt-4o: ["gpt-4o-mini", "claude-3-sonnet"]
+    - claude-3-sonnet: ["gemini-pro", "llama3-70b-8192"]
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/LITELLM_DATABASE_URL
+  store_model_in_db: true
+  disable_spend_logs: false
+  proxy_budget_rescheduler_min_time: 60
+  proxy_budget_rescheduler_max_time: 120
+EOF
+    
+    log "SUCCESS" "LiteLLM configuration generated with runtime environment variables"
 }
 
 # ─── Phase 1: UID-Aware Directory Creation ─────────────────────────────────────
@@ -2965,6 +3127,12 @@ main() {
     
     print_summary
     write_env_file
+    
+    # Generate PostgreSQL initialization script
+    generate_postgres_init
+    
+    # Generate LiteLLM configuration
+    generate_litellm_config
     
     # Phase 1: Foundation Setup - UID-aware directory creation
     create_service_directories_uid_aware
