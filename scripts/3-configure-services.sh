@@ -744,6 +744,75 @@ provision_databases() {
     log_success "Postgres ready — databases provisioned via init script"
 }
 
+# ── Log Management Functions ───────────────────────────────────────────────────
+log_enable() {
+    local svc="$1"
+    log_info "Enabling log streaming for ${svc}..."
+    local logfile="${LOGS_DIR}/${svc}-$(date +%Y%m%d).log"
+    
+    # Kill any existing log stream for this service
+    pkill -f "docker compose.*logs.*${svc}" 2>/dev/null || true
+    
+    # Start new log stream in background
+    docker compose -f "$COMPOSE_FILE" logs -f "$svc" \
+        >> "$logfile" 2>&1 &
+    
+    local pid=$!
+    echo "$pid" > "${LOGS_DIR}/.${svc}.pid"
+    
+    log_success "Log streaming enabled for ${svc} → ${logfile}"
+}
+
+log_disable() {
+    local svc="$1"
+    log_info "Disabling log streaming for ${svc}..."
+    
+    # Kill by PID file if exists
+    local pidfile="${LOGS_DIR}/.${svc}.pid"
+    if [[ -f "$pidfile" ]]; then
+        local pid=$(cat "$pidfile")
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+            log_success "Log stream stopped for ${svc} (PID $pid)"
+        fi
+        rm -f "$pidfile"
+    fi
+    
+    # Fallback: kill by process name
+    pkill -f "docker compose.*logs.*${svc}" 2>/dev/null || true
+    
+    log_success "Log streaming disabled for ${svc}"
+}
+
+log_rotate() {
+    local svc="${1:-}"
+    local keep_days="${2:-7}"
+    
+    if [[ -n "$svc" ]]; then
+        log_info "Rotating logs for ${svc} (keep ${keep_days} days)..."
+        find "$LOGS_DIR" -name "${svc}-*.log" -mtime +${keep_days} -delete
+    else
+        log_info "Rotating all service logs (keep ${keep_days} days)..."
+        find "$LOGS_DIR" -name "*-*.log" -mtime +${keep_days} -delete
+    fi
+    
+    log_success "Log rotation completed"
+}
+
+log_cleanup() {
+    local keep_days="${1:-30}"
+    log_info "Cleaning up old logs (keep ${keep_days} days)..."
+    
+    # Clean old log files
+    find "$LOGS_DIR" -name "*.log" -mtime +${keep_days} -delete
+    find "$LOGS_DIR" -name "*.log.*" -mtime +${keep_days} -delete
+    
+    # Clean old PID files
+    find "$LOGS_DIR" -name ".*.pid" -mtime +1 -delete
+    
+    log_success "Log cleanup completed"
+}
+
 # ── Health Dashboard Functions ───────────────────────────────────────────────
 _check_http() {
     local name="$1" url="$2"
@@ -823,6 +892,111 @@ health_dashboard() {
     log_write INFO "Health dashboard printed at ${ts}"
 }
 
+# ── External Integration Functions ───────────────────────────────────────────
+configure_tailscale() {
+    [[ -n "${TAILSCALE_AUTH_KEY:-}" ]] || { 
+        log_info "TAILSCALE_AUTH_KEY not set — skipping"; 
+        return 0; 
+    }
+    
+    # Check if tailscale service exists in compose
+    if ! docker compose -f "$COMPOSE_FILE" config | grep -q "tailscale:"; then
+        log_warning "Tailscale service not found in compose configuration"
+        return 1
+    fi
+    
+    log_info "Configuring Tailscale..."
+    
+    # Deploy tailscale if not running
+    if ! docker ps --format '{{.Names}}' | grep -q tailscale; then
+        deploy_service tailscale
+        sleep 10  # Give tailscale time to start
+    fi
+    
+    # Authenticate
+    docker compose -f "$COMPOSE_FILE" exec -T tailscale \
+        tailscale up --authkey="${TAILSCALE_AUTH_KEY}" --hostname="${TENANT:-platform}" || {
+        log_error "Tailscale authentication failed"
+        return 1
+    }
+    
+    sleep 5
+    local ip
+    ip=$(docker compose -f "$COMPOSE_FILE" exec -T tailscale tailscale ip -4 2>/dev/null | tr -d ' \n' || true)
+    
+    if [[ -n "$ip" ]]; then
+        # Update .env with Tailscale IP
+        grep -q "^TAILSCALE_IP=" "$ENV_FILE" \
+            && sed -i "s|^TAILSCALE_IP=.*|TAILSCALE_IP=${ip}|" "$ENV_FILE" \
+            || echo "TAILSCALE_IP=${ip}" >> "$ENV_FILE"
+        log_success "Tailscale configured with IP: ${ip}"
+    else
+        log_warning "Could not get Tailscale IP"
+    fi
+}
+
+setup_gdrive_rclone() {
+    [[ -n "${GDRIVE_CLIENT_ID:-}" ]] || { 
+        log_info "GDrive not configured — skipping"; 
+        return 0; 
+    }
+    
+    log_info "Configuring rclone GDrive remote..."
+    
+    # Check if rclone is installed
+    if ! command -v rclone &> /dev/null; then
+        log_info "Installing rclone..."
+        curl -fsSL https://rclone.org/install.sh | bash
+    fi
+    
+    # Configure GDrive remote
+    rclone config create gdrive drive \
+        client_id="${GDRIVE_CLIENT_ID}" \
+        client_secret="${GDRIVE_CLIENT_SECRET}" \
+        token="{\"access_token\":\"\",\"token_type\":\"Bearer\",\"refresh_token\":\"${GDRIVE_REFRESH_TOKEN}\",\"expiry\":\"\"}" || {
+        log_error "Failed to configure rclone GDrive remote"
+        return 1
+    }
+    
+    log_success "rclone GDrive configured"
+}
+
+create_ingestion_systemd() {
+    [[ -n "${GDRIVE_CLIENT_ID:-}" ]] || return 0
+    
+    log_info "Installing gdrive-sync systemd timer..."
+    
+    # Create systemd service
+    cat > /etc/systemd/system/gdrive-sync.service <<EOF
+[Unit]
+Description=AI Platform GDrive sync
+After=docker.service network.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'rclone sync gdrive: /mnt/data/gdrive/ && docker compose -f ${COMPOSE_FILE} exec anythingllm /app/ingest.sh'
+User=root
+EOF
+
+    # Create systemd timer
+    cat > /etc/systemd/system/gdrive-sync.timer <<EOF
+[Unit]
+Description=GDrive Sync Timer
+
+[Timer]
+OnCalendar=*:0/4
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable --now gdrive-sync.timer
+    
+    log_success "gdrive-sync timer installed"
+}
+
 # ── CLI Dispatcher (Only runs when script executed directly) ──────────────────
 (return 0 2>/dev/null) && return   # sourced - export functions and stop here
 
@@ -853,6 +1027,8 @@ main() {
         # ── External Wiring ──────────────────────────────────────────
         tailscale)      configure_tailscale ;;
         gdrive)         setup_gdrive_rclone && create_ingestion_systemd ;;
+        logs-rotate)    log_rotate "${1:-}" "${2:-7}" ;;
+        logs-cleanup)   log_cleanup "${1:-30}" ;;
 
         # ── Service Reconfiguration ──────────────────────────────────
         reconfigure)    reconfigure_service "${1:?usage: reconfigure <service>}" ;;
@@ -867,6 +1043,7 @@ main() {
             echo "  Deployment:    deploy <svc>  stop <svc>  restart <svc>  deploy-all  stop-all"
             echo "  Configuration: generate  compose  dirs"
             echo "  Health:        health  status  logs [svc]  logs-on <svc>  logs-off <svc>"
+            echo "  Logging:       logs-rotate [svc] [days]  logs-cleanup [days]"
             echo "  Wiring:        tailscale  gdrive"
             echo "  Lifecycle:     enable <svc>  disable <svc>  reconfigure <svc>"
             echo ""
