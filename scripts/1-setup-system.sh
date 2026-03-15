@@ -775,7 +775,7 @@ select_stack() {
 
     while true; do
         read -p "  ➤ Select stack [1-5]: " stack_choice
-        stack_choice="${stack_choice:-2}"
+        stack_choice="${stack_choice:-1}"
         case "${stack_choice}" in
             1|2|3|4|5) break ;;
             *) echo "  ❌ Enter 1, 2, 3, 4 or 5" ;;
