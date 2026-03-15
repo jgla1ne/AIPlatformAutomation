@@ -191,6 +191,15 @@ collect_identity() {
 
     check_dns "${DOMAIN}"
 
+    # Set SSL configuration based on DNS check
+    if [[ $? -eq 0 ]]; then
+        USE_LETSENCRYPT=true
+        log "INFO" "Using Let's Encrypt certificates"
+    else
+        USE_LETSENCRYPT=false
+        log "INFO" "Using self-signed certificates"
+    fi
+
     print_divider
 
     echo -e "  ${BOLD}🏷️   Tenant Identifier${NC}"
