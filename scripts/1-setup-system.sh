@@ -22,6 +22,7 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
 BLUE='\033[0;34m'
+GRAY='\033[0;37m'
 NC='\033[0m'
 
 # ─── Utility Functions ────────────────────────────────────────────────────────
@@ -2908,9 +2909,9 @@ main() {
     
     # Generate docker-compose.yml with all enabled services
     log "INFO" "Generating docker-compose.yml..."
+    # Export TENANT before sourcing script 3
+    export TENANT="${TENANT_ID}"
     source "${SCRIPTS_DIR}/3-configure-services.sh"
-    # Export TENANT_DIR for script 3
-    export TENANT_DIR="${DATA_ROOT}"
     generate_compose
     
     create_directories
