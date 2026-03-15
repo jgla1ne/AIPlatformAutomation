@@ -50,6 +50,10 @@ print_step() {
     echo ""
 }
 
+print_divider() {
+    echo -e "${CYAN}────────────────────────────────────────────────────────────────${NC}"
+}
+
 # ─── Phase 0: System Resource Validation ────────────────────────────────────────
 validate_system_resources() {
     print_step "0" "14" "System Resource Validation"
@@ -105,6 +109,10 @@ ENV_FILE=""
 COMPOSE_DIR=""
 CADDY_DIR=""
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Dynamic service URLs (will be set after tenant selection)
+VECTOR_DB_URL=""
+OLLAMA_INTERNAL_URL=""
+LITELLM_INTERNAL_URL=""
 
 # ─── DNS resolution check (used inside collect_identity) ─────────────────────
 check_dns() {
@@ -139,58 +147,199 @@ collect_identity() {
     echo -e "  ${DIM}DNS must already point to this server for automatic TLS to work${NC}"
     echo ""
 
-    # Get tenant name
-    local default_tenant="datasquiz"
-    echo -ne "  📝 Tenant name [${default_tenant}]: "
-    read -r TENANT_NAME
-    TENANT_NAME="${TENANT_NAME:-$default_tenant}"
-    log "INFO" "Tenant name: ${TENANT_NAME}"
+    while true; do
+        read -p "  ➤ Domain name (e.g. ai.example.com): " DOMAIN
+        DOMAIN="${DOMAIN,,}"
+        if [[ "${DOMAIN}" =~ ^[a-z0-9][a-z0-9.\-]{2,253}[a-z0-9]$ ]]; then
+            break
+        fi
+        echo "  ❌ Invalid domain format — try again"
+    done
 
-    # Get domain
-    local default_domain="ai.${TENANT_NAME}.local"
-    echo -ne "  🌐 Base domain [${default_domain}]: "
-    read -r BASE_DOMAIN
-    BASE_DOMAIN="${BASE_DOMAIN:-$default_domain}"
-    log "INFO" "Base domain: ${BASE_DOMAIN}"
+    check_dns "${DOMAIN}"
 
-    # Get admin email
-    local default_email="admin@${BASE_DOMAIN}"
-    echo -ne "  📧 Admin email [${default_email}]: "
-    read -r ADMIN_EMAIL
-    ADMIN_EMAIL="${ADMIN_EMAIL:-$default_email}"
-    log "INFO" "Admin email: ${ADMIN_EMAIL}"
+    print_divider
 
-    # SSL configuration
+    echo -e "  ${BOLD}🏷️   Tenant Identifier${NC}"
+    echo -e "  ${DIM}Short ID used for naming, namespacing and branding${NC}"
     echo ""
-    echo -e "  🔒 SSL Configuration:"
-    echo -e "     1) Let's Encrypt (requires public domain & DNS)"
-    echo -e "     2) Self-signed (for local development)"
-    echo -ne "  Choose [2]: "
-    read -r ssl_choice
-    case "${ssl_choice:-2}" in
-        1) 
-            USE_LETSENCRYPT=true
-            # Check DNS resolution
-            if ! check_dns "${BASE_DOMAIN}"; then
-                echo ""
-                echo -e "  ${YELLOW}⚠️  DNS WARNING${NC}"
-                echo -e "  ${DIM}Let's Encrypt will fail without proper DNS.${NC}"
-                echo -e "  ${DIM}Consider using self-signed for testing.${NC}"
-                echo -ne "  Continue with Let's Encrypt anyway? [y/N]: "
-                read -r continue_choice
-                if [[ "${continue_choice,,}" != "y" ]]; then
-                    USE_LETSENCRYPT=false
-                    log "INFO" "Switched to self-signed certificates"
-                fi
-            fi
+
+    while true; do
+        read -p "  ➤ Tenant ID (e.g. mycompany): " TENANT_ID
+        TENANT_ID="${TENANT_ID,,}"
+        if [[ "${TENANT_ID}" =~ ^[a-z][a-z0-9\-]{2,29}$ ]]; then
+            # Define TENANT_DIR right after TENANT_ID is set
+            TENANT_DIR="/mnt/data/${TENANT_ID}"
+            # Define TENANT_DIR right after TENANT_ID is set
+            TENANT_DIR="/mnt/data/${TENANT_ID}"
+            break
+        fi
+        echo "  ❌ Must start with a letter, 3–30 chars, lowercase/numbers/hyphens only"
+    done
+
+    print_divider
+
+    echo -e "  ${BOLD}🔧  Project Prefix${NC}"
+    echo -e "  ${DIM}Prefix for Docker resources (compose project, containers, volumes)${NC}"
+    echo ""
+
+    while true; do
+        read -p "  ➤ Project prefix [aip-]: " PROJECT_PREFIX
+        PROJECT_PREFIX="${PROJECT_PREFIX:-aip-}"
+        PROJECT_PREFIX="${PROJECT_PREFIX,,}"
+        if [[ "${PROJECT_PREFIX}" =~ ^[a-z][a-z0-9\-]*-$ ]]; then
+            break
+        fi
+        echo "  ❌ Must end with hyphen, lowercase/numbers/hyphens only"
+    done
+
+    print_divider
+
+    echo -e "  ${BOLD}🔧 Hardware Acceleration${NC}"
+    echo ""
+    read -p "  ➤ Enable NVIDIA GPU support? (Requires nvidia-container-toolkit) [y/N]: " answer
+    if [[ "${answer,,}" == "y" ]]; then
+        declare -g ENABLE_GPU="true"
+    else
+        declare -g ENABLE_GPU="false"
+    fi
+    echo ""
+
+    echo -e "  ${BOLD}📧 Admin Email${NC}"
+    echo ""
+
+    while true; do
+        read -p "  ➤ Admin email address: " ADMIN_EMAIL
+        if [[ "${ADMIN_EMAIL}" =~ ^[^@]+@[^@]+\.[^@]+$ ]]; then
+            break
+        fi
+        echo "  ❌ Invalid email format — try again"
+    done
+
+    ok "Identity configuration completed"
+}
+
+# ─── Service Stack Selection ────────────────────────────────────────────
+select_stack() {
+    print_step "6" "11" "Service Stack Selection"
+
+    echo -e "  ${BOLD}📦  Choose a service stack${NC}"
+    echo -e "  ${DIM}Stacks are pre-configured bundles — you can customise in the next step${NC}"
+    echo ""
+    echo -e "  ${CYAN}  1)${NC}  🟢  ${BOLD}Minimal${NC}       — Ollama + Open WebUI only"
+    echo -e "             ${DIM}Ideal for local LLM inference, low resource usage${NC}"
+    echo ""
+    echo -e "  ${CYAN}  2)${NC}  🔵  ${BOLD}Standard${NC}      — Minimal + n8n + Flowise + Qdrant + LiteLLM"
+    echo -e "             ${DIM}Full AI automation stack, recommended starting point${NC}"
+    echo ""
+    echo -e "  ${CYAN}  3)${NC}  🟣  ${BOLD}Full${NC}          — All services including AI, automation, monitoring, and security"
+    echo -e "             ${DIM}Production-grade with complete feature set${NC}"
+    echo ""
+    echo -e "  ${CYAN}  4)${NC}  ⚙️   ${BOLD}Custom${NC}        — Pick services individually"
+    echo -e "             ${DIM}Full control over what gets deployed${NC}"
+    echo ""
+
+    while true; do
+        read -p "  ➤ Select stack [1-4]: " stack_choice
+        stack_choice="${stack_choice:-2}"
+        case "${stack_choice}" in
+            1|2|3|4) break ;;
+            *) echo "  ❌ Enter 1, 2, 3 or 4" ;;
+        esac
+    done
+
+    # ── Apply stack presets ───────────────────────────────────────────────────
+    # First, zero everything out
+    ENABLE_POSTGRES=false; ENABLE_REDIS=false; ENABLE_OLLAMA=false; ENABLE_OPENWEBUI=false;
+    ENABLE_ANYTHINGLLM=false; ENABLE_DIFY=false; ENABLE_N8N=false; ENABLE_FLOWISE=false;
+    ENABLE_LITELLM=false; ENABLE_QDRANT=false; ENABLE_GRAFANA=false; ENABLE_PROMETHEUS=false;
+    ENABLE_AUTHENTIK=false; ENABLE_SIGNAL=false; ENABLE_OPENCLAW=false; ENABLE_TAILSCALE=false;
+    ENABLE_RCLONE=false; ENABLE_CADDY=true # Caddy is always on
+
+    case "${stack_choice}" in
+        1) # Lite Stack
+            log "INFO" "Applying 'Lite' preset: OpenWebUI, Ollama, Qdrant, LiteLLM"
+            ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_OLLAMA=true;
+            ENABLE_OPENWEBUI=true; ENABLE_QDRANT=true; ENABLE_LITELLM=true;
+            STACK_NAME="lite"
             ;;
-        *) 
-            USE_LETSENCRYPT=false 
-            log "INFO" "Using self-signed certificates"
+        2) # Local LLM Developer Stack
+            log "INFO" "Applying 'Local LLM Developer' preset: All local AI tools"
+            ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_OLLAMA=true;
+            ENABLE_OPENWEBUI=true; ENABLE_ANYTHINGLLM=true; ENABLE_DIFY=true;
+            ENABLE_N8N=true; ENABLE_FLOWISE=true; ENABLE_LITELLM=true;
+            ENABLE_QDRANT=true;
+            STACK_NAME="local-llm-dev"
+            ;;
+        3) # Full Stack (All Services)
+            log "WARN" "Applying 'Full Stack' preset. This requires significant system resources."
+            ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_OLLAMA=true;
+            ENABLE_OPENWEBUI=true; ENABLE_ANYTHINGLLM=true; ENABLE_DIFY=true;
+            ENABLE_N8N=true; ENABLE_FLOWISE=true; ENABLE_LITELLM=true;
+            ENABLE_QDRANT=true; ENABLE_GRAFANA=true; ENABLE_PROMETHEUS=true;
+            ENABLE_AUTHENTIK=true; ENABLE_SIGNAL=true; ENABLE_OPENCLAW=true;
+            ENABLE_TAILSCALE=true; ENABLE_RCLONE=true;
+            ENABLE_CADDY=true; # Always include Caddy
+            STACK_NAME="full"
+            ;;
+        4) # Custom — all off, user picks in next step
+            STACK_NAME="custom"
+            log "INFO" "Stack: Custom — configure individually below"
             ;;
     esac
 
-    ok "Identity configuration completed"
+    print_divider
+
+    # ── Always offer fine-grained override ────────────────────────────────────
+    if [[ "${stack_choice}" != "4" ]]; then
+        echo -e "  ${DIM}Stack applied. Would you like to customise individual services?${NC}"
+        echo ""
+
+        read -p "  ➤ Customise service selection? [y/N]: " customise
+        customise="${customise:-n}"
+        [[ "${customise,,}" =~ ^y ]] && stack_choice=4
+    fi
+
+    if [[ "${stack_choice}" = "4" ]]; then
+        echo ""
+        echo -e "  ${BOLD}─── 🤖  AI / LLM ────────────────────────────────────────${NC}"
+        ask_service "🦙" "Ollama"        "Local LLM engine"           "ENABLE_OLLAMA"        "$( [[ "${ENABLE_OLLAMA}" == "true" ]]        && echo y || echo n )"
+        ask_service "🌐" "Open WebUI"    "Chat UI for Ollama"         "ENABLE_OPENWEBUI"     "$( [[ "${ENABLE_OPENWEBUI}" == "true" ]]     && echo y || echo n )"
+        ask_service "🤖" "AnythingLLM"   "AI assistant & RAG"         "ENABLE_ANYTHINGLLM"   "$( [[ "${ENABLE_ANYTHINGLLM}" == "true" ]]   && echo y || echo n )"
+        ask_service "🏗️" "Dify"          "LLM app builder"            "ENABLE_DIFY"          "$( [[ "${ENABLE_DIFY}" == "true" ]]          && echo y || echo n )"
+        ask_service "🔀" "LiteLLM"       "LLM proxy gateway"          "ENABLE_LITELLM"       "$( [[ "${ENABLE_LITELLM}" == "true" ]]       && echo y || echo n )"
+
+        echo ""
+        echo -e "  ${BOLD}─── ⚡  Automation ──────────────────────────────────────${NC}"
+        ask_service "🔄" "n8n"           "Workflow automation"         "ENABLE_N8N"           "$( [[ "${ENABLE_N8N}" == "true" ]]           && echo y || echo n )"
+        ask_service "🌊" "Flowise"       "AI flow builder"             "ENABLE_FLOWISE"       "$( [[ "${ENABLE_FLOWISE}" == "true" ]]       && echo y || echo n )"
+
+        echo ""
+        echo -e "  ${BOLD}─── 📊  Observability ───────────────────────────────────${NC}"
+        ask_service "📈" "Grafana"       "Metrics dashboard"           "ENABLE_GRAFANA"       "$( [[ "${ENABLE_GRAFANA}" == "true" ]]       && echo y || echo n )"
+        ask_service "🔭" "Prometheus"    "Metrics collection"          "ENABLE_PROMETHEUS"    "$( [[ "${ENABLE_PROMETHEUS}" == "true" ]]    && echo y || echo n )"
+
+        echo ""
+        echo -e "  ${BOLD}─── 🔐  Security ────────────────────────────────────────${NC}"
+        # Continue with security options if needed...
+    fi
+
+    ok "Service stack selection completed"
+}
+
+# ─── Helper function for asking about services ───────────────────────────────────
+ask_service() {
+    local icon="$1" name="$2" description="$3" var_name="$4" current_value="$5"
+    
+    echo -ne "  ${icon}  ${BOLD}${name}${NC} ${DIM}(${description})${NC} "
+    read -p "[${current_value}]: " choice
+    choice="${choice:-${current_value}}"
+    
+    if [[ "${choice,,}" =~ ^y ]]; then
+        declare -g "${var_name}=true"
+    else
+        declare -g "${var_name}=false"
+    fi
 }
 
 # ─── Data Volume Selection ───────────────────────────────────────────────────
@@ -203,7 +352,7 @@ select_data_volume() {
 
     # Use /mnt/data as the standard location
     DATA_ROOT="/mnt/data"
-    ENV_FILE="${DATA_ROOT}/${TENANT_NAME}/.env"
+    ENV_FILE="${DATA_ROOT}/${TENANT_ID}/.env"
     
     if [[ ! -d "/mnt" ]]; then
         log "ERROR" "/mnt directory not found. This is required for data storage."
@@ -222,217 +371,6 @@ select_data_volume() {
     log "INFO" "Environment file will be: ${ENV_FILE}"
     
     ok "Data volume configured"
-}
-
-# ─── Service Stack Selection ────────────────────────────────────────────────────
-select_stack() {
-    print_step "6" "11" "Service Stack Selection"
-
-    echo -e "  ${BOLD}📦  Choose a service stack${NC}"
-    echo -e "  ${DIM}Stacks are pre-configured bundles — you can customise in the next step${NC}"
-    echo ""
-
-    # Core AI services
-    echo -e "  ${BOLD}🤖  Core AI Services${NC}"
-    echo -ne "  Enable LiteLLM (AI model router) [Y/n]: "
-    read -r choice
-    ENABLE_LITELLM=true
-    [[ "${choice,,}" == "n" ]] && ENABLE_LITELLM=false
-
-    echo -ne "  Enable Ollama (local LLM runtime) [Y/n]: "
-    read -r choice
-    ENABLE_OLLAMA=true
-    [[ "${choice,,}" == "n" ]] && ENABLE_OLLAMA=false
-
-    echo -ne "  Enable Qdrant (vector database) [Y/n]: "
-    read -r choice
-    ENABLE_QDRANT=true
-    [[ "${choice,,}" == "n" ]] && ENABLE_QDRANT=false
-
-    # Web applications
-    echo ""
-    echo -e "  ${BOLD}🌐  Web Applications${NC}"
-    echo -ne "  Enable OpenWebUI (chat interface) [Y/n]: "
-    read -r choice
-    ENABLE_OPENWEBUI=true
-    [[ "${choice,,}" == "n" ]] && ENABLE_OPENWEBUI=false
-
-    echo -ne "  Enable n8n (workflow automation) [y/N]: "
-    read -r choice
-    ENABLE_N8N=false
-    [[ "${choice,,}" == "y" ]] && ENABLE_N8N=true
-
-    echo -ne "  Enable Flowise (AI workflow builder) [y/N]: "
-    read -r choice
-    ENABLE_FLOWISE=false
-    [[ "${choice,,}" == "y" ]] && ENABLE_FLOWISE=true
-
-    echo -ne "  Enable AnythingLLM (document chat) [y/N]: "
-    read -r choice
-    ENABLE_ANYTHINGLLM=false
-    [[ "${choice,,}" == "y" ]] && ENABLE_ANYTHINGLLM=true
-
-    # Infrastructure
-    echo ""
-    echo -e "  ${BOLD}🔧  Infrastructure${NC}"
-    echo -ne "  Enable Monitoring (Prometheus + Grafana) [Y/n]: "
-    read -r choice
-    ENABLE_MONITORING=true
-    [[ "${choice,,}" == "n" ]] && ENABLE_MONITORING=false
-
-    echo -ne "  Enable Tailscale VPN [y/N]: "
-    read -r choice
-    ENABLE_TAILSCALE=false
-    [[ "${choice,,}" == "y" ]] && ENABLE_TAILSCALE=true
-
-    # Log selections
-    log "INFO" "LiteLLM: ${ENABLE_LITELLM}"
-    log "INFO" "Ollama: ${ENABLE_OLLAMA}"
-    log "INFO" "Qdrant: ${ENABLE_QDRANT}"
-    log "INFO" "OpenWebUI: ${ENABLE_OPENWEBUI}"
-    log "INFO" "n8n: ${ENABLE_N8N}"
-    log "INFO" "Flowise: ${ENABLE_FLOWISE}"
-    log "INFO" "AnythingLLM: ${ENABLE_ANYTHINGLLM}"
-    log "INFO" "Monitoring: ${ENABLE_MONITORING}"
-    log "INFO" "Tailscale: ${ENABLE_TAILSCALE}"
-    
-    ok "Service stack selection completed"
-}
-
-# ─── LLM Configuration ───────────────────────────────────────────────────────
-collect_llm_config() {
-    print_step "8" "11" "LLM Provider Configuration"
-
-    echo -e "  ${BOLD}🔑  LLM Provider API Keys${NC}"
-    echo -e "  ${DIM}Enter API keys for providers you want to use (leave blank to skip)${NC}"
-    echo ""
-
-    # OpenAI
-    echo -ne "  🤖 OpenAI API Key: "
-    read -s OPENAI_API_KEY
-    echo ""
-
-    # Anthropic
-    echo -ne "  🧠 Anthropic API Key: "
-    read -s ANTHROPIC_API_KEY
-    echo ""
-
-    # Gemini
-    echo -ne "  🌟 Gemini API Key: "
-    read -s GEMINI_API_KEY
-    echo ""
-
-    # Groq
-    echo -ne "  ⚡ Groq API Key: "
-    read -s GROQ_API_KEY
-    echo ""
-
-    # OpenRouter
-    echo -ne "  🔗 OpenRouter API Key: "
-    read -s OPENROUTER_API_KEY
-    echo ""
-
-    # Ollama models (if enabled)
-    if [[ "$ENABLE_OLLAMA" == "true" ]]; then
-        echo ""
-        echo -ne "  🦙 Ollama models (comma-separated) [llama3.1]: "
-        read -r OLLAMA_MODELS
-        OLLAMA_MODELS="${OLLAMA_MODELS:-llama3.1}"
-        log "INFO" "Ollama models: ${OLLAMA_MODELS}"
-    fi
-
-    # Tailscale (if enabled)
-    if [[ "$ENABLE_TAILSCALE" == "true" ]]; then
-        echo ""
-        echo -ne "  🔐 Tailscale Auth Key: "
-        read -s TAILSCALE_AUTH_KEY
-        echo ""
-    fi
-
-    # Google Drive (optional)
-    echo ""
-    echo -e "  ${BOLD}☁️  Google Drive Integration (Optional)${NC}"
-    echo -ne "  GDrive Client ID: "
-    read -r GDRIVE_CLIENT_ID
-    echo -ne "  GDrive Client Secret: "
-    read -s GDRIVE_CLIENT_SECRET
-    echo ""
-    echo -ne "  GDrive Refresh Token: "
-    read -s GDRIVE_REFRESH_TOKEN
-    echo ""
-
-    ok "LLM configuration completed"
-}
-
-# ─── LiteLLM Routing Strategy Configuration ───────────────────────────────
-collect_litellm_routing() {
-    print_step "8.5" "11" "LiteLLM Routing Strategy"
-    
-    echo -e "  ${BOLD}🧠  LiteLLM Routing Strategy${NC}"
-    echo -e "  ${DIM}Configure intelligent model routing for cost/latency optimization${NC}"
-    echo ""
-
-    echo -e "  🚦 Available routing strategies:"
-    echo -e "     1) least-busy     (default — spread load across models)"
-    echo -e "     2) latency-based (fastest model wins)"
-    echo -e "     3) cost-based     (cheapest model wins)"
-    echo -ne "  Choose [1]: "
-    read -r route_choice
-    
-    case "${route_choice:-1}" in
-        2) 
-            LITELLM_ROUTING_STRATEGY="latency-based-routing"
-            log "INFO" "Routing strategy: latency-based"
-            ;;
-        3) 
-            LITELLM_ROUTING_STRATEGY="cost-based-routing"
-            log "INFO" "Routing strategy: cost-based"
-            ;;
-        *) 
-            LITELLM_ROUTING_STRATEGY="least-busy"
-            log "INFO" "Routing strategy: least-busy"
-            ;;
-    esac
-
-    echo ""
-    echo -e "  🎯 Model fallbacks will be configured automatically"
-    echo -e "  ${DIM}Example: gpt-4o → gpt-4o-mini → claude-3-5-sonnet${NC}"
-
-    ok "LiteLLM routing strategy configured"
-}
-
-# ─── Vector DB Selection ───────────────────────────────────────────────────────
-select_vector_db() {
-    print_step "7" "11" "Vector Database Selection"
-
-    echo -e "  ${BOLD}🗄️  Choose Vector Database${NC}"
-    echo ""
-
-    echo -e "  🎯 Available vector databases:"
-    echo -e "     1) Qdrant     (default — lightweight, fast)"
-    echo -e "     2) Weaviate   (GraphQL API, hybrid search)"
-    echo -ne "  Choose [1]: "
-    read -r vdb_choice
-    
-    case "${vdb_choice:-1}" in
-        2) 
-            VECTOR_DB_TYPE="weaviate"
-            ENABLE_WEAVIATE=true
-            ENABLE_QDRANT=false
-            log "INFO" "Vector database: Weaviate"
-            ;;
-        *) 
-            VECTOR_DB_TYPE="qdrant"
-            ENABLE_QDRANT=true
-            log "INFO" "Vector database: Qdrant"
-            ;;
-    esac
-
-    echo ""
-    echo -e "  📊 Vector database: ${VECTOR_DB_TYPE}"
-    echo -e "  ${DIM}This will be used by all AI services for embeddings${NC}"
-
-    ok "Vector database selection completed"
 }
 
 # ─── Generate secrets (preserve on re-run) ───────────────────────────────────
@@ -474,7 +412,7 @@ main() {
     echo "=========================="
     echo ""
     echo "This wizard will guide you through configuring your AI platform deployment."
-    echo "All data will be stored in ${DATA_ROOT:-/mnt/data}/${TENANT_NAME:-datasquiz}"
+    echo "All data will be stored in ${DATA_ROOT:-/mnt/data}/${TENANT_ID:-datasquiz}"
     echo ""
     
     # Check if running as root
@@ -488,20 +426,31 @@ main() {
     collect_identity
     select_data_volume
     select_stack
-    select_vector_db
-    collect_llm_config
-    collect_litellm_routing
     generate_secrets
 
-    # Export all variables for script 3 functions
-    export TENANT_NAME BASE_DOMAIN ADMIN_EMAIL USE_LETSENCRYPT
-    export ENABLE_LITELLM ENABLE_OLLAMA ENABLE_OPENWEBUI ENABLE_N8N ENABLE_FLOWISE ENABLE_ANYTHINGLLM
-    export ENABLE_QDRANT ENABLE_MONITORING ENABLE_TAILSCALE
-    export OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY GROQ_API_KEY OPENROUTER_API_KEY
-    export OLLAMA_MODELS TAILSCALE_AUTH_KEY GDRIVE_CLIENT_ID GDRIVE_CLIENT_SECRET GDRIVE_REFRESH_TOKEN
-    export LITELLM_ROUTING_STRATEGY VECTOR_DB_TYPE
-    export DB_PASSWORD ADMIN_PASSWORD JWT_SECRET ENCRYPTION_KEY REDIS_PASSWORD
-    export REAL_UID REAL_GID
+    # Export variables for script 3 functions - map old names to new
+    export TENANT_NAME="${TENANT_ID}"
+    export BASE_DOMAIN="${DOMAIN}"
+    export ADMIN_EMAIL="${ADMIN_EMAIL}"
+    export USE_LETSENCRYPT="${USE_LETSENCRYPT:-false}"
+    export ENABLE_LITELLM="${ENABLE_LITELLM:-false}"
+    export ENABLE_OLLAMA="${ENABLE_OLLAMA:-false}"
+    export ENABLE_OPENWEBUI="${ENABLE_OPENWEBUI:-false}"
+    export ENABLE_N8N="${ENABLE_N8N:-false}"
+    export ENABLE_FLOWISE="${ENABLE_FLOWISE:-false}"
+    export ENABLE_ANYTHINGLLM="${ENABLE_ANYTHINGLLM:-false}"
+    export ENABLE_QDRANT="${ENABLE_QDRANT:-false}"
+    export ENABLE_MONITORING="${ENABLE_GRAFANA:-false}"
+    export ENABLE_TAILSCALE="${ENABLE_TAILSCALE:-false}"
+    export LITELLM_ROUTING_STRATEGY="${LITELLM_ROUTING_STRATEGY:-least-busy}"
+    export VECTOR_DB_TYPE="${VECTOR_DB_TYPE:-qdrant}"
+    export DB_PASSWORD="${DB_PASSWORD}"
+    export ADMIN_PASSWORD="${ADMIN_PASSWORD}"
+    export JWT_SECRET="${JWT_SECRET}"
+    export ENCRYPTION_KEY="${ENCRYPTION_KEY}"
+    export REDIS_PASSWORD="${REDIS_PASSWORD}"
+    export REAL_UID="${REAL_UID}"
+    export REAL_GID="${REAL_GID}"
 
     # All generation delegated to script 3 functions
     generate_env              # writes .env via script 3
@@ -515,7 +464,7 @@ main() {
     echo "   1. Deploy services: sudo bash scripts/2-deploy-services.sh"
     echo "   2. Monitor health: sudo bash scripts/3-configure-services.sh health"
     echo ""
-    echo "📁 Configuration files created in: ${DATA_ROOT}/${TENANT_NAME}/configs"
+    echo "📁 Configuration files created in: ${DATA_ROOT}/${TENANT_ID}/configs"
     echo "🔧 Environment file: ${ENV_FILE}"
     echo ""
     echo -e "${YELLOW}⚠️  Do not re-run script 1 unless rebuilding from scratch.${NC}"
