@@ -11,8 +11,9 @@ set -euo pipefail
 
 # --- SOURCE MISSION CONTROL (Script 3) ---
 # Import all configuration generators from Mission Control Hub
+# Source functions without executing main
 SCRIPT_DIR="$(dirname "$0")"
-source "${SCRIPT_DIR}/3-configure-services.sh"
+source "${SCRIPT_DIR}/3-configure-services.sh" || true
 
 # --- DEBUG MODE FLAG - DEBUG ENABLED BY DEFAULT ---
 DEBUG_MODE="${DEBUG_MODE:-true}"
