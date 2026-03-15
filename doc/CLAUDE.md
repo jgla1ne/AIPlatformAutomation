@@ -1,190 +1,91 @@
-Now I have a clear architectural mandate. Let me write a precise, complete plan grounded in what the code actually is and what it needs to become.---
-
-# Architectural Refactor Plan for Windsurf
-
-## The single rule that governs every edit
-
-> Script 3 is a **sourced function library**. Scripts 0, 1, and 2 each begin with `source "$(dirname "$0")/3-configure-services.sh"` and call named functions. Script 3 also has its own `main()` which is the CLI dispatcher when run directly by the operator. No function definition lives in scripts 0, 1, or 2 — only orchestration calls.
+# WINDSURF.md — Final Implementation Plan
+# Author: Claude (Architect Review of WINDSURF-IMPLEMENTATION.md)
+# Status: APPROVED WITH MANDATORY CHANGES — do not implement without reading every pushback
 
 ---
 
-## Part 1 — Rewrite Script 3 as the library + CLI dispatcher
+## Executive Review of Windsurf's Plan
 
-Script 3 becomes two logical sections: a **function library** (no auto-execution) and a **`main()` dispatcher** that only runs when the script is invoked directly, not when sourced. The guard at the top makes this safe:
+The WINDSURF-IMPLEMENTATION.md framework is **architecturally correct** on:
+- Script 3 as sourced library with `(return 0 2>/dev/null) && return` guard
+- UID-aware ownership in `prepare_directories()`
+- Variable ordering in `.env` (primitives before derived)
+- `generate_configs()` as the single entry point for all config generation
+- Idempotent `generate_compose()` called by script 2
 
+**7 mandatory changes before implementation.** Each one prevents a deployment failure
+or violates a core principle. They are not style preferences — they are blocking issues.
+
+---
+
+## PUSHBACK 1 — `/opt/ai-platform` must go. Everything moves to `/mnt`.
+
+### What Windsurf proposed
 ```bash
-#!/usr/bin/env bash
-# =============================================================================
-# Script 3: Mission Control — function library + CLI dispatcher
-# Sourced by: 0-cleanup.sh, 1-setup-system.sh, 2-deploy-services.sh
-# Run directly for: service lifecycle, health, config, logs
-# =============================================================================
-set -euo pipefail
-
-# ── Paths (single source of truth) ───────────────────────────────────────────
 BASE_DIR="/opt/ai-platform"
-TENANT_DIR="/mnt/data/${TENANT:-default}"
-CONFIG_DIR="${TENANT_DIR}/config"
+ENV_FILE="${BASE_DIR}/.env"
+```
+
+### Why it must change
+`/opt` is outside `/mnt`. The principle is **nothing outside `/mnt` as much as possible**.
+The only justified exception is system packages installed by the OS package manager.
+A `.env` file with secrets living in `/opt` is both a violation of the principle and
+a security risk (world-readable by default on many systems).
+
+### The fix — single source of truth, everything under `/mnt`
+```bash
+# In script 3, top of file — the ONLY place these are defined
+MNT_ROOT="/mnt/data"
+TENANT="${TENANT:-default}"
+TENANT_DIR="${MNT_ROOT}/${TENANT}"
+CONFIG_DIR="${TENANT_DIR}/configs"
 DATA_DIR="${TENANT_DIR}/data"
 LOGS_DIR="${TENANT_DIR}/logs"
 COMPOSE_FILE="${TENANT_DIR}/docker-compose.yml"
-ENV_FILE="${BASE_DIR}/.env"
+ENV_FILE="${TENANT_DIR}/.env"          # ← under /mnt, not /opt
 
-# ── Load .env if it exists ────────────────────────────────────────────────────
-[[ -f "$ENV_FILE" ]] && set -a && source "$ENV_FILE" && set +a
-
-# ── Colors ────────────────────────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'; BOLD='\033[1m'
+# Script 1 writes .env here during setup.
+# All other scripts source it from here.
+# No /opt path exists anywhere in the codebase.
 ```
+
+The only reference to `/opt` that is acceptable is Docker's own installation path
+(`/opt/containerd` etc.) which is managed by the OS, not by our scripts.
 
 ---
 
-### Function group 1: Logging (the single log writer — script 2 borrows this)
+## PUSHBACK 2 — The postgres init script has a shell quoting bug that will silently fail.
 
+### What Windsurf proposed
 ```bash
-# All scripts write logs through this one function.
-# Usage: log_write INFO "message"  |  log_write ERROR "message"
-log_write() {
-    local level="$1" msg="$2"
-    local ts; ts="$(date '+%Y-%m-%d %H:%M:%S')"
-    local logfile="${LOGS_DIR}/platform-$(date +%Y%m%d).log"
-    mkdir -p "$LOGS_DIR"
-    echo -e "[${ts}] [${level}] ${msg}" | tee -a "$logfile"
-}
-
-log_info()    { echo -e "${BLUE}ℹ${NC} $1";  log_write INFO    "$1"; }
-log_success() { echo -e "${GREEN}✓${NC} $1"; log_write SUCCESS "$1"; }
-log_warning() { echo -e "${YELLOW}⚠${NC} $1"; log_write WARNING "$1"; }
-log_error()   { echo -e "${RED}✗${NC} $1";  log_write ERROR   "$1"; }
+cat > "$out" <<'INITEOF'   # ← single-quoted heredoc = NO variable expansion
+...
+      CREATE ROLE aiplatform WITH LOGIN PASSWORD '${POSTGRES_PASSWORD}';
+...
+INITEOF
 ```
 
----
+### Why it fails
+The single-quoted `<<'INITEOF'` means `${POSTGRES_PASSWORD}` is written **literally**
+into the script file — the postgres container will try to set the password to the
+string `${POSTGRES_PASSWORD}` not the actual password. This will silently create a
+role with a wrong password and every service connection will fail with auth errors.
 
-### Function group 2: Directory + permission preparation
-
+### The fix — double-quoted heredoc with escaped inner dollars
 ```bash
-prepare_directories() {
-    log_info "Preparing tenant directories under ${TENANT_DIR}..."
-    mkdir -p \
-        "${DATA_DIR}/postgres" \
-        "${DATA_DIR}/redis" \
-        "${DATA_DIR}/qdrant/snapshots" \
-        "${DATA_DIR}/ollama" \
-        "${DATA_DIR}/openwebui" \
-        "${DATA_DIR}/n8n" \
-        "${DATA_DIR}/flowise" \
-        "${DATA_DIR}/litellm" \
-        "${DATA_DIR}/grafana/data" \
-        "${DATA_DIR}/grafana/logs" \
-        "${DATA_DIR}/prometheus" \
-        "${CONFIG_DIR}/litellm" \
-        "${CONFIG_DIR}/postgres" \
-        "${CONFIG_DIR}/caddy/data" \
-        "${CONFIG_DIR}/caddy/config" \
-        "${LOGS_DIR}"
-
-    # Per-container ownership — matches user: directives in compose
-    chown -R 70:"${TENANT_GID:-1001}"      "${DATA_DIR}/postgres"
-    chown -R 999:"${TENANT_GID:-1001}"     "${DATA_DIR}/redis"
-    chown -R 1000:"${TENANT_GID:-1001}"    "${DATA_DIR}/qdrant"
-    chown -R 472:472                        "${DATA_DIR}/grafana"
-    chown -R 65534:65534                    "${DATA_DIR}/prometheus"
-    chown -R 1000:"${TENANT_GID:-1001}"    \
-        "${DATA_DIR}/litellm" \
-        "${DATA_DIR}/n8n" \
-        "${DATA_DIR}/flowise" \
-        "${DATA_DIR}/openwebui"
-    log_success "Directories ready"
-}
-```
-
----
-
-### Function group 3: Config file generators
-
-```bash
-generate_env() {
-    # Called by script 1 after collecting all user input.
-    # All variables are passed in as environment from the caller.
-    log_info "Writing .env to ${ENV_FILE}..."
-    mkdir -p "$(dirname "$ENV_FILE")"
-    cat > "$ENV_FILE" <<EOF
-# Generated by 1-setup-system.sh — do not edit manually
-BASE_DIR=${BASE_DIR}
-TENANT=${TENANT_NAME}
-TENANT_DIR=/mnt/data/${TENANT_NAME}
-TENANT_GID=${REAL_GID}
-CONFIG_DIR=/mnt/data/${TENANT_NAME}/config
-DATA_DIR=/mnt/data/${TENANT_NAME}/data
-LOGS_DIR=/mnt/data/${TENANT_NAME}/logs
-COMPOSE_FILE=/mnt/data/${TENANT_NAME}/docker-compose.yml
-DOMAIN=${BASE_DOMAIN}
-USE_LETSENCRYPT=${USE_LETSENCRYPT}
-LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL:-}
-POSTGRES_DB=aiplatform
-POSTGRES_USER=aiplatform
-POSTGRES_PASSWORD=${DB_PASSWORD}
-POSTGRES_HOST=postgres
-POSTGRES_PORT=5432
-POSTGRES_UID=70
-REDIS_PASSWORD=${REDIS_PASSWORD}
-REDIS_UID=999
-DB_PASSWORD=${DB_PASSWORD}
-ADMIN_PASSWORD=${ADMIN_PASSWORD}
-JWT_SECRET=${JWT_SECRET}
-ENCRYPTION_KEY=${ENCRYPTION_KEY}
-LITELLM_MASTER_KEY=${JWT_SECRET}
-LITELLM_SALT_KEY=${ENCRYPTION_KEY}
-LITELLM_DATABASE_URL=postgresql://aiplatform:${DB_PASSWORD}@postgres:5432/litellm
-OPENWEBUI_DATABASE_URL=postgresql://aiplatform:${DB_PASSWORD}@postgres:5432/openwebui
-DATABASE_URL=postgresql://aiplatform:${DB_PASSWORD}@postgres:5432/aiplatform
-REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
-OPENWEBUI_DB_PASSWORD=${DB_PASSWORD}
-GRAFANA_ADMIN_USER=admin
-GRAFANA_ADMIN_PASSWORD=${ADMIN_PASSWORD}
-OPENAI_API_KEY=${OPENAI_API_KEY:-}
-ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-GEMINI_API_KEY=${GEMINI_API_KEY:-}
-GROQ_API_KEY=${GROQ_API_KEY:-}
-MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
-OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
-ENABLE_LITELLM=${ENABLE_LITELLM}
-ENABLE_OLLAMA=${ENABLE_OLLAMA}
-ENABLE_OPENWEBUI=${ENABLE_OPENWEBUI}
-ENABLE_N8N=${ENABLE_N8N}
-ENABLE_FLOWISE=${ENABLE_FLOWISE}
-ENABLE_ANYTHINGLLM=${ENABLE_ANYTHINGLLM}
-ENABLE_QDRANT=${ENABLE_QDRANT}
-ENABLE_MONITORING=${ENABLE_MONITORING}
-ENABLE_TAILSCALE=${ENABLE_TAILSCALE}
-TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY:-}
-GDRIVE_CLIENT_ID=${GDRIVE_CLIENT_ID:-}
-GDRIVE_CLIENT_SECRET=${GDRIVE_CLIENT_SECRET:-}
-GDRIVE_REFRESH_TOKEN=${GDRIVE_REFRESH_TOKEN:-}
-OLLAMA_MODELS=${OLLAMA_MODELS:-llama3.1}
-PORT_LITELLM=4000
-PORT_OPENWEBUI=3000
-PORT_N8N=5678
-PORT_FLOWISE=3001
-PORT_GRAFANA=3002
-PORT_PROMETHEUS=9090
-PORT_QDRANT=6333
-EOF
-    chmod 600 "$ENV_FILE"
-    log_success ".env written"
-}
-
 generate_postgres_init() {
     local out="${CONFIG_DIR}/postgres/init-user-db.sh"
     mkdir -p "$(dirname "$out")"
-    cat > "$out" <<'INITEOF'
+    # Double-quoted: POSTGRES_PASSWORD expands NOW at generation time.
+    # Inner \$\$ escapes are for the psql DO block's dollar-quoting.
+    cat > "$out" <<EOF
 #!/bin/bash
 set -e
-psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<EOSQL
-  DO \$\$ BEGIN
+psql -v ON_ERROR_STOP=1 --username "\$POSTGRES_USER" --dbname "\$POSTGRES_DB" <<EOSQL
+  DO \$\$
+  BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'aiplatform') THEN
-      CREATE ROLE aiplatform WITH LOGIN PASSWORD '${POSTGRES_PASSWORD}';
+      CREATE ROLE aiplatform WITH LOGIN PASSWORD '${DB_PASSWORD}';
     END IF;
   END \$\$;
   SELECT 'CREATE DATABASE litellm   OWNER aiplatform'
@@ -197,509 +98,333 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<EO
   GRANT ALL PRIVILEGES ON DATABASE openwebui TO aiplatform;
   GRANT ALL PRIVILEGES ON DATABASE n8n       TO aiplatform;
 EOSQL
-INITEOF
+EOF
     chmod +x "$out"
+    # postgres container runs as UID 70 — must be able to read this file
+    chown 70:"${TENANT_GID:-1001}" "$out"
     log_success "Postgres init script written to ${out}"
 }
+```
 
-generate_litellm_config() {
-    local out="${CONFIG_DIR}/litellm/config.yaml"
-    mkdir -p "$(dirname "$out")"
-    # Build model list only from keys that are actually set
-    cat > "$out" <<EOF
-model_list:
-EOF
-    [[ -n "${OLLAMA_MODELS:-}" ]] && for m in ${OLLAMA_MODELS//,/ }; do
-        cat >> "$out" <<EOF
-  - model_name: ${m}
-    litellm_params:
-      model: ollama/${m}
-      api_base: http://ollama:11434
-EOF
-    done
-    [[ -n "${OPENAI_API_KEY:-}" ]] && cat >> "$out" <<EOF
-  - model_name: gpt-4o
-    litellm_params:
-      model: openai/gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
-  - model_name: gpt-4o-mini
-    litellm_params:
-      model: openai/gpt-4o-mini
-      api_key: os.environ/OPENAI_API_KEY
-EOF
-    [[ -n "${ANTHROPIC_API_KEY:-}" ]] && cat >> "$out" <<EOF
-  - model_name: claude-3-5-sonnet
-    litellm_params:
-      model: anthropic/claude-3-5-sonnet-20241022
-      api_key: os.environ/ANTHROPIC_API_KEY
-EOF
-    [[ -n "${GROQ_API_KEY:-}" ]] && cat >> "$out" <<EOF
-  - model_name: llama3-groq
-    litellm_params:
-      model: groq/llama3-70b-8192
-      api_key: os.environ/GROQ_API_KEY
-EOF
-    cat >> "$out" <<EOF
-litellm_settings:
-  drop_params: true
-  set_verbose: false
-  cache: true
-  cache_params:
-    type: redis
-    host: redis
-    port: 6379
-    password: os.environ/REDIS_PASSWORD
+---
+
+## PUSHBACK 3 — LiteLLM is wired as a sidecar. It must be the **central AI bus** for ALL web services.
+
+### What the README requires (core objective)
+> "Centralized LiteLLM routing" — "Multiple AI applications consuming the same embeddings"
+
+### What Windsurf's plan does
+LiteLLM is deployed as just another service. OpenWebUI, AnythingLLM, n8n, Flowise
+are deployed with no explicit wiring to LiteLLM. Each will default to its own
+built-in model configuration and bypass the router entirely.
+
+### The fix — every web service must point to LiteLLM via environment config
+
+Add this to `generate_compose()` for every web service block. These are not optional:
+
+**OpenWebUI** — must use LiteLLM as its OpenAI-compatible endpoint:
+```yaml
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    restart: unless-stopped
+    user: "1000:${TENANT_GID:-1001}"
+    depends_on:
+      litellm:
+        condition: service_healthy
+    environment:
+      OPENAI_API_BASE_URL: "http://litellm:4000/v1"
+      OPENAI_API_KEY: "${LITELLM_MASTER_KEY}"
+      WEBUI_SECRET_KEY: "${JWT_SECRET}"
+      DATABASE_URL: "${OPENWEBUI_DATABASE_URL}"
+      # Vector DB wiring — routes through the selected vector backend
+      VECTOR_DB: "${VECTOR_DB_TYPE:-qdrant}"
+      QDRANT_URI: "http://qdrant:6333"
+    volumes:
+      - ${DATA_DIR}/openwebui:/app/backend/data
+    ports:
+      - "${PORT_OPENWEBUI:-3000}:8080"
+```
+
+**AnythingLLM** — must use LiteLLM as its LLM provider:
+```yaml
+  anythingllm:
+    image: mintplexlabs/anythingllm:latest
+    restart: unless-stopped
+    user: "1000:${TENANT_GID:-1001}"
+    depends_on:
+      litellm:
+        condition: service_healthy
+    environment:
+      LLM_PROVIDER: "openai"
+      OPEN_AI_KEY: "${LITELLM_MASTER_KEY}"
+      OPEN_AI_BASE_PATH: "http://litellm:4000/v1"
+      EMBEDDING_ENGINE: "openai"
+      EMBEDDING_BASE_PATH: "http://litellm:4000/v1"
+      VECTOR_DB: "${VECTOR_DB_TYPE:-qdrant}"
+      QDRANT_ENDPOINT: "http://qdrant:6333"
+      STORAGE_DIR: "/app/server/storage"
+    volumes:
+      - ${DATA_DIR}/anythingllm:/app/server/storage
+    ports:
+      - "${PORT_ANYTHINGLLM:-3001}:3001"
+```
+
+**n8n** — must use LiteLLM for all AI nodes:
+```yaml
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    user: "1000:${TENANT_GID:-1001}"
+    depends_on:
+      litellm:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      N8N_AI_OPENAI_API_KEY: "${LITELLM_MASTER_KEY}"
+      N8N_AI_OPENAI_BASE_URL: "http://litellm:4000/v1"
+      DB_TYPE: "postgresdb"
+      DB_POSTGRESDB_HOST: "postgres"
+      DB_POSTGRESDB_PORT: "5432"
+      DB_POSTGRESDB_DATABASE: "n8n"
+      DB_POSTGRESDB_USER: "${POSTGRES_USER}"
+      DB_POSTGRESDB_PASSWORD: "${POSTGRES_PASSWORD}"
+      N8N_ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
+      WEBHOOK_URL: "https://n8n.${DOMAIN}"
+    volumes:
+      - ${DATA_DIR}/n8n:/home/node/.n8n
+    ports:
+      - "${PORT_N8N:-5678}:5678"
+```
+
+**Flowise** — must use LiteLLM:
+```yaml
+  flowise:
+    image: flowiseai/flowise:latest
+    restart: unless-stopped
+    user: "1000:${TENANT_GID:-1001}"
+    depends_on:
+      litellm:
+        condition: service_healthy
+    environment:
+      OPENAI_API_KEY: "${LITELLM_MASTER_KEY}"
+      OPENAI_API_BASE: "http://litellm:4000/v1"
+      DATABASE_PATH: "/root/.flowise"
+      FLOWISE_USERNAME: "admin"
+      FLOWISE_PASSWORD: "${ADMIN_PASSWORD}"
+      SECRETKEY_PATH: "/root/.flowise"
+    volumes:
+      - ${DATA_DIR}/flowise:/root/.flowise
+    ports:
+      - "${PORT_FLOWISE:-3001}:3000"
+```
+
+### Add to `.env` generation in `generate_env()`
+```bash
+# ─── LiteLLM Routing Strategy (collected in script 1) ─────────────────────
+LITELLM_ROUTING_STRATEGY=${LITELLM_ROUTING_STRATEGY:-least-busy}
+# Options: least-busy | latency-based-routing | cost-based-routing | simple-shuffle
+
+# ─── Vector DB Selection (collected in script 1) ──────────────────────────
+VECTOR_DB_TYPE=${VECTOR_DB_TYPE:-qdrant}
+# Options: qdrant | weaviate | milvus
+```
+
+### Add to `collect_domain_config()` in script 1 — two new questions
+```bash
+echo ""
+echo "🔀 LiteLLM Routing Strategy:"
+echo "  1) least-busy     (default — spread load)"
+echo "  2) latency-based  (fastest model wins)"
+echo "  3) cost-based     (cheapest model wins)"
+read -p "  Choose [1]: " route_choice
+case "${route_choice:-1}" in
+    2) LITELLM_ROUTING_STRATEGY="latency-based-routing" ;;
+    3) LITELLM_ROUTING_STRATEGY="cost-based-routing" ;;
+    *) LITELLM_ROUTING_STRATEGY="least-busy" ;;
+esac
+
+echo ""
+echo "🗃️  Vector Database:"
+echo "  1) Qdrant     (default — lightweight, fast)"
+echo "  2) Weaviate   (GraphQL API, hybrid search)"
+read -p "  Choose [1]: " vdb_choice
+case "${vdb_choice:-1}" in
+    2) VECTOR_DB_TYPE="weaviate" ; ENABLE_WEAVIATE=true ; ENABLE_QDRANT=false ;;
+    *) VECTOR_DB_TYPE="qdrant"   ; ENABLE_QDRANT=true ;;
+esac
+```
+
+### Update `generate_litellm_config()` — use routing strategy from `.env`
+```bash
+cat >> "$out" <<EOF
 router_settings:
-  routing_strategy: least-busy
-general_settings:
-  master_key: os.environ/LITELLM_MASTER_KEY
-  database_url: os.environ/LITELLM_DATABASE_URL
+  routing_strategy: ${LITELLM_ROUTING_STRATEGY:-least-busy}
+  fallbacks:
+    - gpt-4o: ["gpt-4o-mini", "claude-3-5-sonnet", "llama3-groq"]
+    - claude-3-5-sonnet: ["gpt-4o", "gpt-4o-mini"]
+  model_group_alias:
+    default: "${OLLAMA_MODELS%,*}"
 EOF
-    log_success "LiteLLM config written to ${out}"
-}
-
-generate_caddyfile() {
-    local out="${CONFIG_DIR}/caddy/Caddyfile"
-    mkdir -p "$(dirname "$out")"
-    local tls_line
-    [[ "${USE_LETSENCRYPT:-false}" == "true" ]] \
-        && tls_line="tls ${LETSENCRYPT_EMAIL}" \
-        || tls_line="tls internal"
-    cat > "$out" <<EOF
-{
-    admin 0.0.0.0:2019
-    email ${LETSENCRYPT_EMAIL:-admin@${DOMAIN}}
-}
-grafana.${DOMAIN}    { ${tls_line}; reverse_proxy grafana:3000 }
-prometheus.${DOMAIN} { ${tls_line}; reverse_proxy prometheus:9090 }
-EOF
-    [[ "${ENABLE_LITELLM:-false}"     == "true" ]] && echo "litellm.${DOMAIN}     { ${tls_line}; reverse_proxy litellm:4000 }"    >> "$out"
-    [[ "${ENABLE_OPENWEBUI:-false}"   == "true" ]] && echo "chat.${DOMAIN}        { ${tls_line}; reverse_proxy open-webui:3000 }" >> "$out"
-    [[ "${ENABLE_N8N:-false}"         == "true" ]] && echo "n8n.${DOMAIN}         { ${tls_line}; reverse_proxy n8n:5678 }"        >> "$out"
-    [[ "${ENABLE_FLOWISE:-false}"     == "true" ]] && echo "flowise.${DOMAIN}     { ${tls_line}; reverse_proxy flowise:3001 }"    >> "$out"
-    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && echo "anythingllm.${DOMAIN} { ${tls_line}; reverse_proxy anythingllm:3001 }" >> "$out"
-    log_success "Caddyfile written to ${out}"
-}
-
-generate_prometheus_config() {
-    [[ "${ENABLE_MONITORING:-false}" == "true" ]] || return 0
-    local out="${CONFIG_DIR}/prometheus/prometheus.yml"
-    mkdir -p "$(dirname "$out")"
-    cat > "$out" <<EOF
-global:
-  scrape_interval: 15s
-scrape_configs:
-  - job_name: prometheus
-    static_configs:
-      - targets: ['localhost:9090']
-  - job_name: caddy
-    static_configs:
-      - targets: ['caddy:2019']
-EOF
-    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && cat >> "$out" <<EOF
-  - job_name: litellm
-    static_configs:
-      - targets: ['litellm:4000']
-    metrics_path: /metrics
-EOF
-    log_success "Prometheus config written to ${out}"
-}
-
-generate_configs() {
-    # Single entry point — script 1 and script 2 both call this
-    generate_postgres_init
-    generate_litellm_config
-    generate_caddyfile
-    generate_prometheus_config
-}
 ```
 
 ---
 
-### Function group 4: Docker Compose generator
+## PUSHBACK 4 — The `_check()` function in `health_dashboard()` is broken for Postgres/Redis.
 
+### What Windsurf proposed
 ```bash
-generate_compose() {
-    # Called by script 2 before deployment.
-    # Builds docker-compose.yml dynamically from .env flags.
-    # Every service references .env vars — zero hardcoded values.
-    log_info "Generating docker-compose.yml at ${COMPOSE_FILE}..."
-
-    cat > "$COMPOSE_FILE" <<'EOF'
-networks:
-  default:
-    name: ai-${TENANT}-net
-    driver: bridge
-
-volumes:
-  postgres_data:
-  prometheus_data:
-  grafana_data:
-  litellm_data:
-
-services:
-
-  postgres:
-    image: postgres:15-alpine
-    restart: unless-stopped
-    user: "${POSTGRES_UID:-70}:${TENANT_GID:-1001}"
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ${CONFIG_DIR}/postgres/init-user-db.sh:/docker-entrypoint-initdb.d/init-user-db.sh:ro
-    healthcheck:
-      test: ["CMD-SHELL","pg_isready -U ${POSTGRES_USER}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    user: "${REDIS_UID:-999}:${TENANT_GID:-1001}"
-    command: redis-server --requirepass "${REDIS_PASSWORD}"
-    volumes:
-      - ${DATA_DIR}/redis:/data
-    healthcheck:
-      test: ["CMD","redis-cli","-a","${REDIS_PASSWORD}","ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-EOF
-
-    # Qdrant
-    [[ "${ENABLE_QDRANT:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
-  qdrant:
-    image: qdrant/qdrant:latest
-    restart: unless-stopped
-    user: "1000:${TENANT_GID:-1001}"
-    volumes:
-      - ${DATA_DIR}/qdrant:/qdrant/storage
-      - ${DATA_DIR}/qdrant/snapshots:/qdrant/snapshots
-    ports:
-      - "6333:6333"
-    healthcheck:
-      test: ["CMD-SHELL","curl -sf http://localhost:6333/collections || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-
-EOF
-
-    # Monitoring
-    [[ "${ENABLE_MONITORING:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
-  prometheus:
-    image: prom/prometheus:latest
-    restart: unless-stopped
-    user: "65534:65534"
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--storage.tsdb.retention.time=30d'
-    volumes:
-      - ${CONFIG_DIR}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    healthcheck:
-      test: ["CMD-SHELL","wget -qO- http://localhost:9090/-/healthy"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-  grafana:
-    image: grafana/grafana:latest
-    restart: unless-stopped
-    user: "472:472"
-    environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
-      GF_SERVER_ROOT_URL: "https://grafana.${DOMAIN}"
-      GF_ANALYTICS_REPORTING_ENABLED: "false"
-    volumes:
-      - ${DATA_DIR}/grafana/data:/var/lib/grafana
-      - ${DATA_DIR}/grafana/logs:/var/log/grafana
-    healthcheck:
-      test: ["CMD-SHELL","curl -sf http://localhost:3000/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 45s
-
-EOF
-
-    # LiteLLM
-    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
-  litellm:
-    image: ghcr.io/berriai/litellm:main
-    restart: unless-stopped
-    user: "1000:${TENANT_GID:-1001}"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment:
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
-      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
-      DATABASE_URL: ${LITELLM_DATABASE_URL}
-      REDIS_URL: ${REDIS_URL}
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      GROQ_API_KEY: ${GROQ_API_KEY:-}
-      STORE_MODEL_IN_DB: "True"
-      LITELLM_TELEMETRY: "False"
-    volumes:
-      - ${CONFIG_DIR}/litellm/config.yaml:/app/config.yaml:ro
-    healthcheck:
-      test: ["CMD-SHELL","curl -sf http://localhost:4000/health/liveliness || exit 1"]
-      interval: 30s
-      timeout: 15s
-      retries: 5
-      start_period: 90s
-
-EOF
-
-    # Caddy — depends only on infra, never on application services
-    cat >> "$COMPOSE_FILE" <<'EOF'
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    ports:
-      - "80:80"
-      - "443:443"
-      - "2019:2019"
-    volumes:
-      - ${CONFIG_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ${CONFIG_DIR}/caddy/data:/data
-      - ${CONFIG_DIR}/caddy/config:/config
-    healthcheck:
-      test: ["CMD-SHELL","wget -qO- http://localhost:2019/metrics > /dev/null"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-EOF
-
-    # Add remaining enabled services (n8n, flowise, openwebui, anythingllm, ollama)
-    # following the same pattern: flags from .env, vars never hardcoded
-
-    log_success "docker-compose.yml generated at ${COMPOSE_FILE}"
-}
+_check "Postgres" "$(docker compose -f "$COMPOSE_FILE" exec -T postgres pg_isready ... && echo ok || echo fail)"
 ```
 
----
+### Why it fails
+`_check` calls `curl -sf` on its second argument. Passing `ok` or `fail` as a URL
+to curl will throw an error. The function logic is inconsistent — some services
+use HTTP URLs, others use shell commands.
 
-### Function group 5: Service lifecycle
-
+### The fix — separate the two check types cleanly
 ```bash
-deploy_service() {
-    local svc="$1"
-    log_info "Deploying ${svc}..."
-    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d "$svc" \
-        >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 \
-        && log_success "${svc} deployed" \
-        || log_error "${svc} failed — see ${LOGS_DIR}/deploy-$(date +%Y%m%d).log"
+_check_http() {
+    local name="$1" url="$2"
+    if curl -sf --max-time 5 "$url" > /dev/null 2>&1; then
+        printf "  ${GREEN}🟢 %-22s${NC} %s\n" "$name" "$url"
+    else
+        printf "  ${RED}🔴 %-22s${NC} %s\n" "$name" "$url"
+    fi
 }
 
-stop_service() {
-    local svc="$1"
-    log_info "Stopping ${svc}..."
-    docker compose -f "$COMPOSE_FILE" stop "$svc" && log_success "${svc} stopped"
+_check_cmd() {
+    local name="$1"; shift
+    if "$@" > /dev/null 2>&1; then
+        printf "  ${GREEN}🟢 %-22s${NC} %s\n" "$name" "$(docker compose -f "$COMPOSE_FILE" ps --format "{{.Status}}" "$name" 2>/dev/null | head -1)"
+    else
+        printf "  ${RED}🔴 %-22s${NC} %s\n" "$name" "not responding"
+    fi
 }
 
-reconfigure_service() {
-    local svc="$1"
-    log_info "Reconfiguring ${svc}..."
-    generate_configs       # regenerate affected config files
-    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --force-recreate "$svc"
-    log_success "${svc} reconfigured and restarted"
-}
-
-provision_databases() {
-    log_info "Waiting for postgres to be ready..."
-    local elapsed=0
-    until docker compose -f "$COMPOSE_FILE" exec -T postgres \
-            pg_isready -U "${POSTGRES_USER}" -q 2>/dev/null; do
-        sleep 5; elapsed=$((elapsed+5))
-        [[ $elapsed -ge 60 ]] && log_error "Postgres not ready after 60s" && return 1
-    done
-    log_success "Postgres ready — databases provisioned via init script"
-}
-```
-
----
-
-### Function group 6: Log management
-
-```bash
-log_enable() {
-    local svc="$1"
-    log_info "Enabling logging for ${svc}..."
-    docker compose -f "$COMPOSE_FILE" logs -f "$svc" \
-        >> "${LOGS_DIR}/${svc}-$(date +%Y%m%d).log" 2>&1 &
-    log_success "Log streaming enabled for ${svc} → ${LOGS_DIR}/${svc}-$(date +%Y%m%d).log"
-}
-
-log_disable() {
-    local svc="$1"
-    log_info "Killing log stream for ${svc}..."
-    pkill -f "docker compose.*logs.*${svc}" 2>/dev/null || true
-    log_success "Log stream stopped for ${svc}"
-}
-```
-
----
-
-### Function group 7: Health dashboard
-
-```bash
 health_dashboard() {
-    # Reads live container state — no assumptions.
-    # Script 2 calls this as its final step before exiting.
     set -a; source "$ENV_FILE"; set +a
-
     local ts ip=""
     ts=$(date '+%Y-%m-%d %H:%M:%S')
 
-    # Get Tailscale IP if available
+    # Tailscale IP
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q tailscale; then
-        ip=$(docker exec tailscale tailscale ip -4 2>/dev/null | tr -d ' \n' || true)
+        ip=$(docker compose -f "$COMPOSE_FILE" exec -T tailscale \
+             tailscale ip -4 2>/dev/null | tr -d ' \n' || true)
     fi
 
     echo ""
-    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║  PLATFORM HEALTH DASHBOARD — ${ts}  ║${NC}"
-    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║  AI PLATFORM HEALTH DASHBOARD — ${ts}    ║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "  Domain       : https://${DOMAIN}"
-    echo -e "  Tailscale IP : ${ip:-NOT CONNECTED}"
+    printf "  %-14s %s\n" "Domain:"       "https://${DOMAIN}"
+    printf "  %-14s %s\n" "Tailscale IP:" "${ip:-NOT CONNECTED}"
+    printf "  %-14s %s\n" "Tenant:"       "${TENANT}"
+    printf "  %-14s %s\n" "Data:"         "${TENANT_DIR}"
     echo ""
-
-    _check() {
-        local name="$1" url="$2"
-        if curl -sf --max-time 5 "$url" > /dev/null 2>&1; then
-            printf "  ${GREEN}🟢 %-20s${NC} %s\n" "$name" "$url"
-        else
-            printf "  ${RED}🔴 %-20s${NC} %s\n" "$name" "$url"
-        fi
+    echo -e "  ${BOLD}Infrastructure${NC}"
+    _check_cmd  "postgres"   docker compose -f "$COMPOSE_FILE" exec -T postgres \
+                             pg_isready -U "${POSTGRES_USER}" -q
+    _check_cmd  "redis"      docker compose -f "$COMPOSE_FILE" exec -T redis \
+                             redis-cli -a "${REDIS_PASSWORD}" ping
+    [[ "${ENABLE_QDRANT:-false}"    == "true" ]] && \
+        _check_http "qdrant"     "http://localhost:${PORT_QDRANT:-6333}/collections"
+    echo ""
+    echo -e "  ${BOLD}Monitoring${NC}"
+    [[ "${ENABLE_MONITORING:-false}" == "true" ]] && {
+        _check_http "prometheus" "http://localhost:${PORT_PROMETHEUS:-9090}/-/healthy"
+        _check_http "grafana"    "http://localhost:${PORT_GRAFANA:-3002}/api/health"
     }
-
-    _check "Postgres"   "$(docker compose -f "$COMPOSE_FILE" exec -T postgres pg_isready -U "${POSTGRES_USER}" -q 2>/dev/null && echo ok || echo fail)"
-    _check "Redis"      "$(docker compose -f "$COMPOSE_FILE" exec -T redis redis-cli -a "${REDIS_PASSWORD}" ping 2>/dev/null | grep -q PONG && echo ok || echo fail)"
-    _check "Grafana"    "http://localhost:${PORT_GRAFANA:-3002}/api/health"
-    _check "Prometheus" "http://localhost:${PORT_PROMETHEUS:-9090}/-/healthy"
-    _check "Caddy"      "http://localhost:2019/metrics"
-    [[ "${ENABLE_LITELLM:-false}"   == "true" ]] && _check "LiteLLM"    "http://localhost:${PORT_LITELLM:-4000}/health/liveliness"
-    [[ "${ENABLE_QDRANT:-false}"    == "true" ]] && _check "Qdrant"     "http://localhost:${PORT_QDRANT:-6333}/collections"
-    [[ "${ENABLE_N8N:-false}"       == "true" ]] && _check "n8n"        "http://localhost:${PORT_N8N:-5678}/healthz"
-    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && _check "OpenWebUI"  "http://localhost:${PORT_OPENWEBUI:-3000}/"
-    [[ "${ENABLE_FLOWISE:-false}"   == "true" ]] && _check "Flowise"    "http://localhost:${PORT_FLOWISE:-3001}/"
-
+    _check_http "caddy"      "http://localhost:2019/metrics"
     echo ""
-    echo -e "  LiteLLM test:"
+    echo -e "  ${BOLD}AI Services${NC}"
+    [[ "${ENABLE_LITELLM:-false}"    == "true" ]] && \
+        _check_http "litellm"    "http://localhost:${PORT_LITELLM:-4000}/health/liveliness"
+    [[ "${ENABLE_OLLAMA:-false}"     == "true" ]] && \
+        _check_http "ollama"     "http://localhost:11434/"
+    echo ""
+    echo -e "  ${BOLD}Web Services (all routed via LiteLLM)${NC}"
+    [[ "${ENABLE_OPENWEBUI:-false}"  == "true" ]] && \
+        _check_http "open-webui"     "http://localhost:${PORT_OPENWEBUI:-3000}/"
+    [[ "${ENABLE_N8N:-false}"        == "true" ]] && \
+        _check_http "n8n"            "http://localhost:${PORT_N8N:-5678}/healthz"
+    [[ "${ENABLE_FLOWISE:-false}"    == "true" ]] && \
+        _check_http "flowise"        "http://localhost:${PORT_FLOWISE:-3001}/"
+    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && \
+        _check_http "anythingllm"    "http://localhost:${PORT_ANYTHINGLLM:-3003}/"
+    echo ""
+    echo -e "  ${BOLD}Quick Tests${NC}"
+    echo -e "  LiteLLM models:"
     echo -e "    curl -s http://localhost:${PORT_LITELLM:-4000}/v1/models \\"
-    echo -e "      -H 'Authorization: Bearer \${LITELLM_MASTER_KEY}'"
+    echo -e "      -H 'Authorization: Bearer \${LITELLM_MASTER_KEY}' | jq '.data[].id'"
     echo ""
-    log_write INFO "Health dashboard printed"
+    log_write INFO "Health dashboard printed at ${ts}"
 }
 ```
 
 ---
 
-### Function group 8: Tailscale and GDrive (fixed)
+## PUSHBACK 5 — The CLI dispatcher is too thin. Script 3 must cover the full service lifecycle.
 
+### What Windsurf proposed
 ```bash
-configure_tailscale() {
-    [[ -n "${TAILSCALE_AUTH_KEY:-}" ]] || { log_info "TAILSCALE_AUTH_KEY not set — skipping"; return 0; }
-    # Operates on the compose-managed tailscale service — never docker run
-    log_info "Authenticating Tailscale..."
-    docker compose -f "$COMPOSE_FILE" exec -T tailscale \
-        tailscale up --authkey="${TAILSCALE_AUTH_KEY}" --hostname="${TENANT:-platform}"
-    sleep 5
-    local ip
-    ip=$(docker compose -f "$COMPOSE_FILE" exec -T tailscale tailscale ip -4 2>/dev/null | tr -d ' \n' || true)
-    if [[ -n "$ip" ]]; then
-        grep -q "^TAILSCALE_IP=" "$ENV_FILE" \
-            && sed -i "s|^TAILSCALE_IP=.*|TAILSCALE_IP=${ip}|" "$ENV_FILE" \
-            || echo "TAILSCALE_IP=${ip}" >> "$ENV_FILE"
-        log_success "Tailscale IP: ${ip}"
-    else
-        log_warning "Could not get Tailscale IP"
-    fi
-}
-
-setup_gdrive_rclone() {
-    [[ -n "${GDRIVE_CLIENT_ID:-}" ]] || { log_info "GDrive not configured — skipping"; return 0; }
-    log_info "Configuring rclone GDrive remote..."
-    rclone config create gdrive drive \
-        client_id="${GDRIVE_CLIENT_ID}" \
-        client_secret="${GDRIVE_CLIENT_SECRET}" \
-        token="{\"access_token\":\"\",\"token_type\":\"Bearer\",\"refresh_token\":\"${GDRIVE_REFRESH_TOKEN}\",\"expiry\":\"\"}"
-    log_success "rclone GDrive configured"
-}
-
-create_ingestion_systemd() {
-    [[ -n "${GDRIVE_CLIENT_ID:-}" ]] || return 0
-    log_info "Installing gdrive-sync systemd timer..."
-    cat > /etc/systemd/system/gdrive-sync.service <<EOF
-[Unit]
-Description=AI Platform GDrive sync
-After=docker.service network.target
-[Service]
-ExecStart=/bin/bash -c 'rclone sync gdrive: /mnt/data/gdrive/ && docker compose -f ${COMPOSE_FILE} exec anythingllm /app/ingest.sh'
-User=root
-EOF
-    cat > /etc/systemd/system/gdrive-sync.timer <<EOF
-[Unit]
-Description=GDrive Sync Timer
-[Timer]
-OnCalendar=*:0/4
-Persistent=true
-[Install]
-WantedBy=timers.target
-EOF
-    systemctl daemon-reload
-    systemctl enable --now gdrive-sync.timer
-    log_success "gdrive-sync timer installed"
-}
+case "$cmd" in
+    deploy|health|generate|compose|dirs|env) ... ;;
 ```
 
----
+### What the README requires
+> "Modular service lifecycle management" — "Support incremental extensibility
+> without full redeployment"
 
-### The CLI dispatcher — only runs when script 3 is invoked directly
-
+### The fix — complete CLI dispatcher
 ```bash
-# ── Guard: only run main() when executed directly, not when sourced ───────────
-(return 0 2>/dev/null) && return   # sourced — export functions and stop here
+(return 0 2>/dev/null) && return   # sourced — stop here, export functions
 
 main() {
     local cmd="${1:-help}"
+    shift || true
     case "$cmd" in
-        deploy)       deploy_service "${2:?usage: deploy <service>}" ;;
-        stop)         stop_service   "${2:?usage: stop <service>}" ;;
-        restart)      reconfigure_service "${2:?usage: restart <service>}" ;;
-        health)       health_dashboard ;;
-        logs-on)      log_enable  "${2:?usage: logs-on <service>}" ;;
-        logs-off)     log_disable "${2:?usage: logs-off <service>}" ;;
-        tailscale)    configure_tailscale ;;
-        gdrive)       setup_gdrive_rclone && create_ingestion_systemd ;;
-        generate)     generate_configs ;;
-        compose)      generate_compose ;;
-        *)
-            echo "Usage: $0 {deploy|stop|restart|health|logs-on|logs-off|tailscale|gdrive|generate|compose} [service]"
+        # ── Deployment ──────────────────────────────────────────────
+        deploy)         deploy_service "${1:?usage: deploy <service>}" ;;
+        deploy-all)     bash "$(dirname "$0")/2-deploy-services.sh" ;;
+        stop)           stop_service   "${1:?usage: stop <service>}" ;;
+        stop-all)       docker compose -f "$COMPOSE_FILE" down ;;
+        restart)        reconfigure_service "${1:?usage: restart <service>}" ;;
+
+        # ── Configuration ────────────────────────────────────────────
+        generate)       generate_configs ;;
+        compose)        generate_compose ;;
+        dirs)           prepare_directories ;;
+        env)            echo "Re-run script 1 to regenerate .env safely" ;;
+
+        # ── Health & Monitoring ──────────────────────────────────────
+        health)         health_dashboard ;;
+        status)         docker compose -f "$COMPOSE_FILE" ps ;;
+        logs)           docker compose -f "$COMPOSE_FILE" logs --tail=50 "${1:-}" ;;
+        logs-on)        log_enable  "${1:?usage: logs-on <service>}" ;;
+        logs-off)       log_disable "${1:?usage: logs-off <service>}" ;;
+
+        # ── External Wiring ──────────────────────────────────────────
+        tailscale)      configure_tailscale ;;
+        gdrive)         setup_gdrive_rclone && create_ingestion_systemd ;;
+
+        # ── Service Reconfiguration ──────────────────────────────────
+        reconfigure)    reconfigure_service "${1:?usage: reconfigure <service>}" ;;
+        enable)         enable_service  "${1:?usage: enable <service>}" ;;
+        disable)        disable_service "${1:?usage: disable <service>}" ;;
+
+        # ── Help ─────────────────────────────────────────────────────
+        help|*)
+            echo ""
+            echo "Usage: $0 <command> [service]"
+            echo ""
+            echo "  Deployment:    deploy <svc>  stop <svc>  restart <svc>  deploy-all  stop-all"
+            echo "  Configuration: generate  compose  dirs"
+            echo "  Health:        health  status  logs [svc]  logs-on <svc>  logs-off <svc>"
+            echo "  Wiring:        tailscale  gdrive"
+            echo "  Lifecycle:     enable <svc>  disable <svc>  reconfigure <svc>"
+            echo ""
             ;;
     esac
 }
@@ -707,140 +432,259 @@ main() {
 main "$@"
 ```
 
----
-
-## Part 2 — Rewrite Script 1 (run-once collector)
-
-Script 1 becomes a thin orchestrator. Every function it needs is sourced from script 3. After it completes, **it must never need to be run again**.
-
+### Add `enable_service()` and `disable_service()` to the function library
 ```bash
-#!/usr/bin/env bash
-# Script 1: Run-once system setup and configuration collector
-# After this runs, use script 2 to deploy and script 3 to manage.
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/3-configure-services.sh"   # ← sources the library
-
-# ... (keep existing: detect_os, detect_hardware, preflight_checks,
-#      install_system_packages, install_docker, create_docker_networks,
-#      configure_security — these belong in script 1 as they run once)
-
-# collect_* functions stay in script 1 — they are interactive, run-once
-# collect_domain_config, select_services, collect_api_keys stay here
-
-main() {
-    print_banner
-    preflight_checks
-    port_health_check
-    install_system_packages
-    install_docker
-    configure_security
-
-    collect_domain_config     # asks: domain, SSL, tenant name
-    select_services           # asks: which services to enable
-    collect_api_keys          # asks: API keys
-
-    # All generation delegated to script 3 functions
-    generate_secrets          # generates DB_PASSWORD, JWT_SECRET etc (keep in script 1)
-    generate_env              # writes /opt/ai-platform/.env via script 3
-    prepare_directories       # creates /mnt/data/TENANT/... with correct ownership
-    generate_configs          # Caddyfile, prometheus.yml, litellm config, postgres init
-
-    log_success "Setup complete. Run script 2 to deploy: sudo bash scripts/2-deploy-services.sh"
-    log_warning "Do not re-run script 1 unless rebuilding from scratch."
+enable_service() {
+    local svc="$1"
+    local flag="ENABLE_$(echo "$svc" | tr '[:lower:]' '[:upper:]' | tr '-' '_')"
+    log_info "Enabling ${svc} (sets ${flag}=true in .env)..."
+    grep -q "^${flag}=" "$ENV_FILE" \
+        && sed -i "s|^${flag}=.*|${flag}=true|" "$ENV_FILE" \
+        || echo "${flag}=true" >> "$ENV_FILE"
+    generate_configs
+    generate_compose
+    deploy_service "$svc"
+    log_success "${svc} enabled and deployed"
 }
-main "$@"
+
+disable_service() {
+    local svc="$1"
+    local flag="ENABLE_$(echo "$svc" | tr '[:lower:]' '[:upper:]' | tr '-' '_')"
+    log_info "Disabling ${svc}..."
+    stop_service "$svc"
+    grep -q "^${flag}=" "$ENV_FILE" \
+        && sed -i "s|^${flag}=.*|${flag}=false|" "$ENV_FILE" \
+        || echo "${flag}=false" >> "$ENV_FILE"
+    log_success "${svc} stopped and disabled"
+}
+
+stop_service() {
+    local svc="$1"
+    docker compose -f "$COMPOSE_FILE" stop "$svc" \
+        && log_success "${svc} stopped" \
+        || log_warning "${svc} was not running"
+}
+
+reconfigure_service() {
+    local svc="$1"
+    log_info "Reconfiguring ${svc}..."
+    generate_configs
+    generate_compose
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" \
+        up -d --force-recreate "$svc" \
+        >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1
+    log_success "${svc} reconfigured"
+}
 ```
 
 ---
 
-## Part 3 — Rewrite Script 2 (idempotent deployer)
+## PUSHBACK 6 — The Caddy TLS block is missing. Windsurf removed it silently.
 
-Script 2 sources script 3, calls `generate_compose`, deploys all enabled services in order, then calls `health_dashboard` and **stops**. It can be re-run safely at any time.
+### What Windsurf proposed
+```
+grafana.${DOMAIN}    { reverse_proxy grafana:3000 }
+```
+No TLS directive. Caddy will attempt HTTPS by default (ACME) for any non-localhost
+domain, which is correct — **but only if the email is configured in the global block**.
+For local/self-signed (`USE_LETSENCRYPT=false`) this will hang waiting for ACME
+challenges that will never come.
 
+### The fix — explicit TLS handling in `generate_caddyfile()`
 ```bash
-#!/usr/bin/env bash
-# Script 2: Idempotent service deployer
-# Can be re-run at any time. Sources all logic from script 3.
-set -euo pipefail
+generate_caddyfile() {
+    local out="${CONFIG_DIR}/caddy/Caddyfile"
+    mkdir -p "$(dirname "$out")"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/3-configure-services.sh"   # ← sources the library
+    # Choose TLS directive once based on USE_LETSENCRYPT
+    local tls_line
+    if [[ "${USE_LETSENCRYPT:-false}" == "true" ]]; then
+        tls_line="tls ${ADMIN_EMAIL}"       # ACME with Let's Encrypt
+    else
+        tls_line="tls internal"             # Caddy self-signed — no ACME hang
+    fi
 
+    cat > "$out" <<EOF
+{
+    admin 0.0.0.0:2019
+    email ${ADMIN_EMAIL:-admin@${DOMAIN}}
+}
+
+grafana.${DOMAIN} {
+    ${tls_line}
+    reverse_proxy grafana:3000
+}
+prometheus.${DOMAIN} {
+    ${tls_line}
+    reverse_proxy prometheus:9090
+}
+EOF
+    # Append enabled services
+    [[ "${ENABLE_LITELLM:-false}"     == "true" ]] && cat >> "$out" <<EOF
+litellm.${DOMAIN} {
+    ${tls_line}
+    reverse_proxy litellm:4000
+}
+EOF
+    [[ "${ENABLE_OPENWEBUI:-false}"   == "true" ]] && cat >> "$out" <<EOF
+chat.${DOMAIN} {
+    ${tls_line}
+    reverse_proxy open-webui:8080
+}
+EOF
+    [[ "${ENABLE_N8N:-false}"         == "true" ]] && cat >> "$out" <<EOF
+n8n.${DOMAIN} {
+    ${tls_line}
+    reverse_proxy n8n:5678
+}
+EOF
+    [[ "${ENABLE_FLOWISE:-false}"     == "true" ]] && cat >> "$out" <<EOF
+flowise.${DOMAIN} {
+    ${tls_line}
+    reverse_proxy flowise:3000
+}
+EOF
+    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && cat >> "$out" <<EOF
+anythingllm.${DOMAIN} {
+    ${tls_line}
+    reverse_proxy anythingllm:3001
+}
+EOF
+    log_success "Caddyfile written to ${out}"
+}
+```
+
+---
+
+## PUSHBACK 7 — Script 2 deployment order is missing Ollama before LiteLLM.
+
+### What Windsurf proposed
+```bash
+[[ "${ENABLE_LITELLM:-false}" == "true" ]] && deploy_service litellm
+deploy_service caddy
+[[ "${ENABLE_OLLAMA:-false}"  == "true" ]] && deploy_service ollama
+```
+
+### Why it matters
+LiteLLM's config.yaml lists `api_base: http://ollama:11434`. If Ollama is not running
+when LiteLLM starts, LiteLLM will fail health checks on model load. For `start_period: 90s`
+this may recover — but it generates avoidable restart loops and log noise. Ollama must
+start before LiteLLM, and LiteLLM must be healthy before any web service starts.
+
+### The correct deployment order in script 2 `main()`
+```bash
 main() {
     log_info "=== DEPLOY START ==="
 
-    # 1. Verify .env exists (script 1 must have run)
     [[ -f "$ENV_FILE" ]] || { log_error ".env not found at ${ENV_FILE}. Run script 1 first."; exit 1; }
 
-    # 2. Regenerate all config files (idempotent — safe to repeat)
+    # 1. Regenerate all config files and compose (idempotent)
+    prepare_directories
     generate_configs
-
-    # 3. Generate docker-compose.yml from current .env flags
     generate_compose
 
-    # 4. Prepare directories and permissions
-    prepare_directories
-
-    # 5. Deploy infra first, wait for healthy
+    # 2. Infra layer — must be healthy before anything else
     deploy_service postgres
     deploy_service redis
-    provision_databases          # waits for postgres then verifies DBs exist
+    provision_databases          # waits until postgres ready, verifies DBs
 
-    [[ "${ENABLE_QDRANT:-false}"    == "true" ]] && deploy_service qdrant
+    # 3. Vector DB
+    [[ "${ENABLE_QDRANT:-false}"     == "true" ]] && deploy_service qdrant
 
-    # 6. Deploy monitoring
+    # 4. Local LLM runtime — BEFORE LiteLLM
+    [[ "${ENABLE_OLLAMA:-false}"     == "true" ]] && deploy_service ollama
+
+    # 5. AI gateway — depends on postgres, redis; optionally ollama
+    [[ "${ENABLE_LITELLM:-false}"    == "true" ]] && deploy_service litellm
+
+    # 6. Monitoring — independent of AI services
     [[ "${ENABLE_MONITORING:-false}" == "true" ]] && {
         deploy_service prometheus
         deploy_service grafana
     }
 
-    # 7. Deploy LiteLLM (depends on postgres + redis healthy)
-    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && deploy_service litellm
-
-    # 8. Deploy proxy (depends only on infra)
+    # 7. Reverse proxy — depends only on infra (postgres, redis healthy)
     deploy_service caddy
 
-    # 9. Deploy application layer
-    [[ "${ENABLE_OLLAMA:-false}"     == "true" ]] && deploy_service ollama
-    [[ "${ENABLE_OPENWEBUI:-false}"  == "true" ]] && deploy_service open-webui
-    [[ "${ENABLE_N8N:-false}"        == "true" ]] && deploy_service n8n
-    [[ "${ENABLE_FLOWISE:-false}"    == "true" ]] && deploy_service flowise
+    # 8. Web services — AFTER litellm is healthy
+    [[ "${ENABLE_OPENWEBUI:-false}"   == "true" ]] && deploy_service open-webui
+    [[ "${ENABLE_N8N:-false}"         == "true" ]] && deploy_service n8n
+    [[ "${ENABLE_FLOWISE:-false}"     == "true" ]] && deploy_service flowise
     [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && deploy_service anythingllm
 
-    # 10. Wire external integrations
+    # 9. External wiring (non-blocking — skip gracefully if not configured)
     configure_tailscale
     [[ -n "${GDRIVE_CLIENT_ID:-}" ]] && setup_gdrive_rclone && create_ingestion_systemd
 
-    # 11. Print health dashboard — script 2 stops here
+    # 10. Health dashboard — script 2 STOPS after this
     health_dashboard
 
     log_info "=== DEPLOY COMPLETE ==="
 }
-main "$@"
 ```
 
 ---
 
-## Execution checklist for Windsurf
+## Summary: What Windsurf Keeps vs What Changes
 
-**Order of edits:**
+### KEEP from WINDSURF-IMPLEMENTATION.md (correct as-is)
+- `(return 0 2>/dev/null) && return` guard on script 3 `main()` ✅
+- `generate_configs()` as single entry point ✅
+- `generate_compose()` building YAML dynamically from flags ✅
+- UID-aware `prepare_directories()` structure ✅
+- Variable ordering in `.env` (primitives first, derived after) ✅
+- `log_write()` as the single log writer used by all scripts ✅
+- Script 1 stripped to interactive collector + `source` of script 3 ✅
+- Script 2 as idempotent deployer calling `health_dashboard` then stopping ✅
+- `provision_databases()` waiting loop ✅
 
-1. Rewrite `3-configure-services.sh` with all function groups above — the guard `(return 0 2>/dev/null) && return` at the top of `main()` is mandatory
-2. Strip all function definitions out of `1-setup-system.sh`; add `source "${SCRIPT_DIR}/3-configure-services.sh"` as the second line after the shebang; keep only the interactive collection functions and call `generate_env`, `prepare_directories`, `generate_configs` from script 3
-3. Replace `2-deploy-services.sh` with the idempotent deployer above; `BASE_DIR` must be `/opt/ai-platform` matching script 1; remove the `POSSIBLE_ENV_PATHS` search loop
-4. Verify the compose `TENANT_DIR` and `CONFIG_DIR` variables resolve to `/mnt/data/${TENANT}/...` everywhere — no fallback to `/home/$USER`
-5. Do not run anything — only edit files
+### MANDATORY CHANGES (implement all 7 before merging)
+1. Move `ENV_FILE` from `/opt/ai-platform/.env` to `/mnt/data/${TENANT}/.env` — **nothing outside /mnt**
+2. Fix postgres init heredoc quoting — `<<'INITEOF'` → `<<EOF` with correct escaping
+3. Wire ALL web services to LiteLLM via env config — OpenWebUI, AnythingLLM, n8n, Flowise
+4. Fix `health_dashboard()` — separate `_check_http()` and `_check_cmd()` functions
+5. Expand CLI dispatcher with full lifecycle: `enable`, `disable`, `reconfigure`, `stop-all`, `logs`
+6. Add explicit `tls internal` / `tls ${ADMIN_EMAIL}` to every Caddyfile block
+7. Fix deployment order: Ollama → LiteLLM → web services (never reverse)
 
-**Verify before committing:**
+---
 
-| Check | Expected |
-|---|---|
-| `grep "source.*3-configure" scripts/1-setup-system.sh` | one match, line 2 |
-| `grep "source.*3-configure" scripts/2-deploy-services.sh` | one match, line 2 |
-| `grep "BASE_DIR" scripts/2-deploy-services.sh` | `/opt/ai-platform` only |
-| `grep "TENANT_DIR" scripts/2-deploy-services.sh` | zero matches (it's in script 3) |
-| `grep "docker run" scripts/3-configure-services.sh` | zero matches |
-| `grep "configure_litellm_routing\|OLLAMA_MODEL[^S]" scripts/3-configure-services.sh` | zero matches |
-| `grep "TENANT_DIR\|CONFIG_DIR\|DATA_DIR" doc/docker-compose.yml` | resolves to `/mnt/data/...` |
+## Implementation Checklist for Windsurf
+
+```
+[ ] 3-configure-services.sh
+    [ ] ENV_FILE="${TENANT_DIR}/.env" (not /opt)
+    [ ] No /opt paths anywhere
+    [ ] postgres init uses <<EOF not <<'INITEOF'
+    [ ] generate_caddyfile() has tls_line in every server block
+    [ ] generate_litellm_config() uses LITELLM_ROUTING_STRATEGY from .env
+    [ ] All web service compose blocks have LiteLLM env wiring
+    [ ] health_dashboard() uses _check_http() and _check_cmd() separately
+    [ ] CLI dispatcher has full command set including enable/disable/reconfigure
+    [ ] enable_service() and disable_service() functions present
+    [ ] (return 0 2>/dev/null) && return guard present
+
+[ ] 1-setup-system.sh
+    [ ] source "${SCRIPT_DIR}/3-configure-services.sh" as second line
+    [ ] Routing strategy question added to collect_domain_config()
+    [ ] Vector DB selection question added to collect_domain_config()
+    [ ] TENANT_NAME question added
+    [ ] ADMIN_EMAIL question added (used by Caddy + Let's Encrypt)
+    [ ] generate_env / prepare_directories / generate_configs called from main()
+    [ ] No function definitions that duplicate script 3
+
+[ ] 2-deploy-services.sh
+    [ ] source "${SCRIPT_DIR}/3-configure-services.sh" as second line
+    [ ] ENV_FILE check uses /mnt/data path
+    [ ] Deployment order: postgres → redis → qdrant → ollama → litellm → monitoring → caddy → web
+    [ ] health_dashboard() called as final step
+    [ ] Script stops after health_dashboard (no interactive prompts)
+
+[ ] Verification (run after edits, before committing)
+    [ ] grep -r "/opt/ai-platform" scripts/  → zero matches
+    [ ] grep "docker run" scripts/3-configure-services.sh → zero matches
+    [ ] grep "OPENAI_API_BASE\|LLM_PROVIDER\|OPEN_AI_BASE" generated compose → present for web svcs
+    [ ] bash -n scripts/3-configure-services.sh → no syntax errors
+    [ ] bash -n scripts/1-setup-system.sh → no syntax errors
+    [ ] bash -n scripts/2-deploy-services.sh → no syntax errors
+```
