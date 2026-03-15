@@ -681,7 +681,7 @@ EOF
       TS_AUTHKEY: ${TAILSCALE_AUTH_KEY}
       TS_EXTRA_ARGS: "--hostname=${TENANT:-platform}"
     healthcheck:
-      test: ["CMD-SHELL","tailscale status | grep -q 'Logged in as'"]
+      test: ["CMD-SHELL","tailscale --socket=\"/tmp/tailscaled.sock\" status | grep -q '@'"]
       interval: 30s
       timeout: 10s
       retries: 3
