@@ -960,76 +960,99 @@ verify_data_persistence() {
 
 # Dynamic Caddyfile Generator
 generate_caddyfile() {
-    # --- PATH CORRECTION ---
-    # Define the correct, final path including the 'caddy' subdirectory.
     local CADDY_FILE_PATH="${TENANT_DIR}/caddy/Caddyfile"
     log "INFO" "Generating Caddyfile at: ${CADDY_FILE_PATH}"
     
-    # Ensure caddy directory exists
     mkdir -p "$(dirname "${CADDY_FILE_PATH}")"
     
-    # Generate Caddyfile with all service routes
     cat > "${CADDY_FILE_PATH}" << 'EOF'
 {
     email {$ADMIN_EMAIL}
     auto_https {
         on
     }
-    fi
-
-    if [[ "${ENABLE_ANYTHINGLLM}" == "true" ]]; then
-        cat >> "$TMP_CADDY" << EOF
-anythingllm.${DOMAIN} {
-    reverse_proxy anythingllm:3001
-}
-EOF
-        ok "Caddy route added for AnythingLLM."
-    fi
-
-    if [[ "${ENABLE_LITELLM}" == "true" ]]; then
-        cat >> "$TMP_CADDY" << EOF
-litellm.${DOMAIN} {
-    reverse_proxy litellm:4000
-}
-EOF
-        ok "Caddy route added for LiteLLM."
-    fi
-
-    if [[ "${ENABLE_DIFY}" == "true" ]]; then
-        cat >> "$TMP_CADDY" << EOF
-${DOMAIN}/dify {
-    reverse_proxy dify:3001
-}
-EOF
-        ok "Caddy route added for Dify."
-    fi
-
-    if [[ "${ENABLE_SIGNAL}" == "true" ]]; then
-        cat >> "$TMP_CADDY" << EOF
-${DOMAIN}/signal {
-    reverse_proxy signal:8080
-}
-EOF
-        ok "Caddy route added for Signal."
-    fi
-
-    if [[ "${ENABLE_OPENCLAW}" == "true" ]]; then
-        cat >> "$TMP_CADDY" << EOF
-${DOMAIN}/openclaw {
-    reverse_proxy openclaw:8082
-}
-EOF
-        ok "Caddy route added for OpenClaw."
-    fi
-
-    # 4. Write the final Caddyfile with proper permissions
-    mkdir -p "$(dirname "$CADDY_FILE_PATH")"
-    mv "$TMP_CADDY" "$CADDY_FILE_PATH"
     
-    # --- OWNERSHIP CORRECTION ---
-    # The function now takes responsibility for the file it creates.
-    # The 'sudo' is safe if the user running the script has sudo rights.
-    # The fix in Script 1 makes this step even more robust.
+    {$DOMAIN}:80 {
+        redir https://{host}{uri}
+    }
+    
+    {$DOMAIN}:443 {
+        encode zstd gzip
+        
+        # Grafana
+        handle /grafana* {
+            reverse_proxy grafana:3000 {
+                health_uri /api/health
+                health_interval 10s
+            }
+        }
+        
+        # Prometheus
+        handle /prometheus* {
+            reverse_proxy prometheus:9090 {
+                health_uri /-/healthy
+                health_interval 10s
+            }
+        }
+        
+        # LiteLLM
+        handle /litellm* {
+            reverse_proxy litellm:4000 {
+                health_uri /health/liveliness
+                health_interval 10s
+            }
+        }
+        
+        # OpenWebUI
+        handle /openwebui* {
+            reverse_proxy openwebui:8080 {
+                health_uri /health
+                health_interval 10s
+            }
+        }
+        
+        # n8n
+        handle /n8n* {
+            reverse_proxy n8n:5678
+        }
+        
+        # Flowise
+        handle /flowise* {
+            reverse_proxy flowise:3000
+        }
+        
+        # AnythingLLM
+        handle /anythingllm* {
+            reverse_proxy anythingllm:3001
+        }
+        
+        # Authentik
+        handle /auth* {
+            reverse_proxy authentik-server:9000 {
+                health_uri /-/health/live/
+                health_interval 10s
+            }
+        }
+        
+        # Signal API
+        handle /signal* {
+            reverse_proxy signal:8080
+        }
+        
+        # OpenClaw
+        handle /openclaw* {
+            reverse_proxy openclaw:8082
+        }
+        
+        # Default route to OpenWebUI
+        reverse_proxy openwebui:8080 {
+            health_uri /health
+            health_interval 10s
+        }
+    }
+}
+EOF
+    
     chown "${TENANT_UID}:${TENANT_GID}" "$CADDY_FILE_PATH"
     ok "Caddyfile generated and ownership secured."
 }
