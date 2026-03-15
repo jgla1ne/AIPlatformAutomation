@@ -193,7 +193,7 @@ psql -v ON_ERROR_STOP=1 --username "\$POSTGRES_USER" --dbname "\$POSTGRES_DB" <<
   DO \$\$
   BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'aiplatform') THEN
-      CREATE ROLE aiplatform WITH LOGIN PASSWORD '${DB_PASSWORD}';
+      CREATE ROLE aiplatform WITH LOGIN PASSWORD \$POSTGRES_PASSWORD;
     END IF;
   END \$\$;
   SELECT 'CREATE DATABASE litellm   OWNER aiplatform'
@@ -553,6 +553,10 @@ EOF
       DATABASE_URL: "${OPENWEBUI_DATABASE_URL}"
       VECTOR_DB: "${VECTOR_DB_TYPE:-qdrant}"
       QDRANT_URI: "http://qdrant:6333"
+      LITELLM_SALT_KEY: "${LITELLM_SALT_KEY}"
+      LITELLM_DATABASE_URL: "${LITELLM_DATABASE_URL}"
+      REDIS_URL: "${REDIS_URL}"
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
     volumes:
       - ${DATA_DIR}/openwebui:/app/backend/data
     ports:
@@ -1064,6 +1068,8 @@ main() {
         reconfigure)    reconfigure_service "${1:?usage: reconfigure <service>}" ;;
         enable)         enable_service  "${1:?usage: enable <service>}" ;;
         disable)        disable_service "${1:?usage: disable <service>}" ;;
+        update)         update_service  "${1:?usage: update <service>}" ;;
+        upgrade)        upgrade_service "${1:?usage: upgrade <service>}" ;;
 
         # ── Help ─────────────────────────────────────────────────────
         help|*)
