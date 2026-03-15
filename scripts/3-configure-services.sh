@@ -303,7 +303,7 @@ main() {
         echo ""
         echo "Actions:"
         echo "  configure  - Configure logging for all services (default)"
-        echo "  provision  - Phase 3: Database provisioning and verification"
+        echo "  provision  - Phase 3: Database provisioning, configuration verification, and health dashboard"
         echo "  disable    - Disable logging for all services"
         echo "  rotate    - Rotate service logs"
         echo "  cleanup    - Clean up old logs"
@@ -313,7 +313,9 @@ main() {
         echo "  rclone-mount - Execute docker exec to start Rclone mount"
         echo "  ingest     - Execute tenant's ingest.py script"
         echo "  pair-signal - Generate QR code for Signal device pairing"
+        echo "  tailscale   - Configure Tailscale VPN and display IP"
         echo "  health     - Run comprehensive health checks"
+        echo "  dashboard  - Show comprehensive health dashboard"
         exit 1
     fi
     
@@ -346,7 +348,10 @@ main() {
             # Phase 3: Configuration verification
             verify_service_configurations
             
-            ok "Phase 3: Database provisioning and configuration verification completed."
+            # Phase 3: Health dashboard
+            print_health_dashboard
+            
+            ok "Phase 3: Database provisioning, configuration verification, and health dashboard completed."
             ;;
         "--health")
             log "Running comprehensive health checks for tenant: ${TENANT_ID}"
@@ -361,6 +366,12 @@ main() {
             ;;
         "dashboard")
             show_logging_dashboard
+            ;;
+        "tailscale")
+            configure_tailscale
+            ;;
+        "dashboard")
+            print_health_dashboard
             ;;
         "start")
             log "Starting services for tenant: ${TENANT_ID}"
@@ -480,6 +491,92 @@ main() {
             echo "  health     - Run comprehensive health checks"
             exit 1
     esac
+}
+
+# --- Tailscale VPN Configuration Function ---
+configure_tailscale() {
+    [[ -n "${TAILSCALE_AUTH_KEY:-}" ]] || { log "INFO" "TAILSCALE_AUTHKEY not set — skipping"; return 0; }
+    
+    log "INFO" "Authenticating Tailscale (compose service)..."
+    
+    cd "${TENANT_DIR}"
+    
+    # Check if Tailscale service is running
+    if ! docker compose ps --filter "name=tailscale" --filter "status=running" | grep -q "tailscale"; then
+        log "WARN" "Tailscale service not running, starting it first..."
+        docker compose up -d tailscale
+        sleep 10
+    fi
+    
+    # Authenticate with Tailscale
+    docker compose exec -T tailscale tailscale up \
+        --authkey="${TAILSCALE_AUTH_KEY}" \
+        --hostname="${TENANT:-ai-platform}" \
+        --accept-routes
+    
+    sleep 5
+    
+    # Capture Tailscale IP for dashboard
+    TAILSCALE_IP=$(docker compose exec -T tailscale tailscale ip -4 2>/dev/null | tr -d ' \n' || echo "")
+    if [[ -n "$TAILSCALE_IP" ]]; then
+        log "OK" "Tailscale IP: ${TAILSCALE_IP}"
+        # Persist for dashboard and future use
+        grep -q "^TAILSCALE_IP=" "${ENV_FILE}" && \
+            sed -i "s|^TAILSCALE_IP=.*|TAILSCALE_IP=${TAILSCALE_IP}|" "${ENV_FILE}" || \
+            echo "TAILSCALE_IP=${TAILSCALE_IP}" >> "${ENV_FILE}"
+    else
+        log "WARN" "Could not determine Tailscale IP — check: docker compose logs tailscale"
+    fi
+}
+
+# --- Health Dashboard Function ---
+print_health_dashboard() {
+    # Reload env to pick up TAILSCALE_IP written during this session
+    set -a; source "${ENV_FILE}"; set +a
+
+    echo ""
+    echo "╔════════════════════════════════════════════════════════╗"
+    echo "║           PLATFORM HEALTH DASHBOARD                 ║"
+    echo "╚══════════════════════════════════════════════════════╝"
+    echo ""
+    echo "  Tailscale IP : ${TAILSCALE_IP:-NOT CONNECTED}"
+    echo "  Domain       : https://${DOMAIN}"
+    echo ""
+
+    check_svc() {
+        local name="$1" url="$2"
+        if curl -sf --max-time 5 "$url" > /dev/null 2>&1; then
+            printf "  %-20s %s\n" "$name" "🟢 OK  $url"
+        else
+            printf "  %-20s %s\n" "$name" "🔴 FAIL  $url"
+        fi
+    }
+
+    echo "Core Infrastructure:"
+    check_svc "PostgreSQL" "$(docker compose exec -T postgres pg_isready -U "${POSTGRES_USER:-postgres}" -q 2>/dev/null && echo OK)"
+    check_svc "Redis" "$(docker compose exec -T redis redis-cli ping 2>/dev/null && echo OK)"
+    check_svc "LiteLLM" "http://localhost:${PORT_LITELLM:-4000}/health/liveliness"
+    check_svc "Grafana" "http://localhost:${PORT_GRAFANA:-3002}/api/health"
+    check_svc "n8n" "http://localhost:${PORT_N8N:-5678}/healthz"
+    check_svc "Qdrant" "http://localhost:${PORT_QDRANT:-6333}/collections"
+    check_svc "OpenWebUI" "http://localhost:${PORT_OPENWEBUI:-3000}/"
+    check_svc "Prometheus" "http://localhost:${PORT_PROMETHEUS:-9090}/-/healthy"
+
+    echo ""
+    echo "Service Access URLs:"
+    if [[ -n "${DOMAIN:-}" ]]; then
+        check_svc "Main Domain" "https://${DOMAIN}"
+        check_svc "Grafana" "https://grafana.${DOMAIN}"
+        check_svc "n8n" "https://n8n.${DOMAIN}"
+        check_svc "OpenWebUI" "https://openwebui.${DOMAIN}"
+    fi
+
+    echo ""
+    echo "Service Tests:"
+    echo "  LiteLLM test: curl -s http://localhost:${PORT_LITELLM:-4000}/v1/models \\"
+    echo "              -H 'Authorization: Bearer \${LITELLM_MASTER_KEY}'"
+    echo "  OpenClaw test: curl -s http://localhost:${PORT_OPENCLAW:-8080}/signal"
+    echo ""
 }
 
 # --- Signal Device Pairing Function ---
