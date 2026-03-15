@@ -444,6 +444,8 @@ main() {
     export ENABLE_TAILSCALE="${ENABLE_TAILSCALE:-false}"
     export LITELLM_ROUTING_STRATEGY="${LITELLM_ROUTING_STRATEGY:-least-busy}"
     export VECTOR_DB_TYPE="${VECTOR_DB_TYPE:-qdrant}"
+    export OLLAMA_MODELS="${OLLAMA_MODELS:-llama3.1}"
+    export LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-12345}"
     export DB_PASSWORD="${DB_PASSWORD}"
     export ADMIN_PASSWORD="${ADMIN_PASSWORD}"
     export JWT_SECRET="${JWT_SECRET}"
