@@ -697,6 +697,9 @@ EOF
       - ${CONFIG_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ${CONFIG_DIR}/caddy/data:/data
       - ${CONFIG_DIR}/caddy/config:/config
+    environment:
+      - CONFIG_DIR=${CONFIG_DIR}
+      - DATA_DIR=${DATA_DIR}
     healthcheck:
       test: ["CMD-SHELL","wget -qO- http://localhost:2019/metrics > /dev/null"]
       interval: 30s

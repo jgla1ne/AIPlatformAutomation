@@ -5,14 +5,15 @@
 # =============================================================================
 set -euo pipefail
 
-# Load environment first to get TENANT_NAME for paths
-ENV_FILE="/mnt/data/datasquiz/.env"  # Default location from script 1
-[[ -f "$ENV_FILE" ]] && set -a && source "$ENV_FILE" && set +a
+# Define SCRIPT_DIR before using it
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Update ENV_FILE based on loaded TENANT_NAME if available
-if [[ -n "${TENANT_NAME:-}" ]]; then
-    ENV_FILE="/mnt/data/${TENANT_NAME}/.env"
-fi
+# Set TENANT for script 3 before sourcing
+export TENANT="${1:-datasquiz}"
+
+# Load environment first to get TENANT_NAME for paths
+ENV_FILE="/mnt/data/${TENANT}/.env"
+[[ -f "$ENV_FILE" ]] && set -a && source "$ENV_FILE" && set +a
 
 source "${SCRIPT_DIR}/3-configure-services.sh"   # ← SOURCES LIBRARY
 
