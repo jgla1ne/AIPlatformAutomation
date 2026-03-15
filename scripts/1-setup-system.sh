@@ -10,6 +10,9 @@ set -euo pipefail
 
 set -euo pipefail
 
+# Clear any inherited environment variables to ensure clean state
+unset TENANT_ID
+
 # ─── Colours ─────────────────────────────────────────────────────────────────
 BOLD='\033[1m'
 DIM='\033[2m'
@@ -706,6 +709,12 @@ collect_identity() {
         log "INFO" "Tenant ID already provided: ${TENANT_ID}"
         # Define TENANT_DIR right after TENANT_ID is set
         TENANT_DIR="/mnt/data/${TENANT_ID}"
+        # Set default PROJECT_PREFIX since we're skipping interactive collection
+        PROJECT_PREFIX="${PROJECT_PREFIX:-ai-}"
+        # Set default ADMIN_EMAIL when skipping interactive collection
+        ADMIN_EMAIL="${ADMIN_EMAIL:-admin@${TENANT_ID}.local}"
+        # Set default DOMAIN when skipping interactive collection
+        DOMAIN="${DOMAIN:-ai.${TENANT_ID}.local}"
         print_divider
         return
     fi
@@ -730,8 +739,8 @@ collect_identity() {
     echo ""
 
     while true; do
-        read -p "  ➤ Project prefix [aip-]: " PROJECT_PREFIX
-        PROJECT_PREFIX="${PROJECT_PREFIX:-aip-}"
+        read -p "  ➤ Project prefix [ai-]: " PROJECT_PREFIX
+        PROJECT_PREFIX="${PROJECT_PREFIX:-ai-}"
         PROJECT_PREFIX="${PROJECT_PREFIX,,}"
         if [[ "${PROJECT_PREFIX}" =~ ^[a-z][a-z0-9\-]*-$ ]]; then
             break
@@ -2900,6 +2909,8 @@ main() {
     # Generate docker-compose.yml with all enabled services
     log "INFO" "Generating docker-compose.yml..."
     source "${SCRIPTS_DIR}/3-configure-services.sh"
+    # Export TENANT_DIR for script 3
+    export TENANT_DIR="${DATA_ROOT}"
     generate_compose
     
     create_directories
