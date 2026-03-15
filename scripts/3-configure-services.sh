@@ -299,18 +299,23 @@ generate_caddyfile() {
     email ${ADMIN_EMAIL:-admin@${DOMAIN}}
 }
 
+# Only add service blocks if services are enabled
+[[ "${ENABLE_GRAFANA:-false}" == "true" ]] && cat >> "$out" <<EOF
 grafana.${DOMAIN} {
     ${tls_line}
     reverse_proxy grafana:3000
 }
+EOF
+
+[[ "${ENABLE_PROMETHEUS:-false}" == "true" ]] && cat >> "$out" <<EOF
 prometheus.${DOMAIN} {
     ${tls_line}
     reverse_proxy prometheus:9090
 }
 EOF
-    
-    # Append enabled services with proper TLS
-    [[ "${ENABLE_LITELLM:-false}"     == "true" ]] && cat >> "$out" <<EOF
+
+# Append enabled services with proper TLS
+[[ "${ENABLE_LITELLM:-false}"     == "true" ]] && cat >> "$out" <<EOF
 litellm.${DOMAIN} {
     ${tls_line}
     reverse_proxy litellm:4000
