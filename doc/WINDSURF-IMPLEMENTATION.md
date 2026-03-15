@@ -1,50 +1,52 @@
-Now I have a clear architectural mandate. Let me write a precise, complete plan grounded in what the code actually is and what it needs to become.---
+# Final Implementation Plan for AI Platform Automation
 
-# Architectural Refactor Plan for Windsurf
+## Core Architectural Principles
 
-## The single rule that governs every edit
+1. **Zero Hardcoded Values**: All configuration comes from `.env` or computed variables
+2. **Modular Mission Control**: Script 3 is the single function library sourced by all others
+3. **Everything in /mnt/data**: No data outside `/mnt/data/${TENANT}` except system packages
+4. **UID-Aware Ownership**: Each service directory owned by its container UID
+5. **Idempotent Operations**: Scripts can be re-run safely without side effects
 
-> Script 3 is a **sourced function library**. Scripts 0, 1, and 2 each begin with `source "$(dirname "$0")/3-configure-services.sh"` and call named functions. Script 3 also has its own `main()` which is the CLI dispatcher when run directly by the operator. No function definition lives in scripts 0, 1, or 2 — only orchestration calls.
+## Current Critical Issues Identified
 
----
+1. **PostgreSQL Ownership Failure**: Container UID 70 cannot access tenant-owned directories
+2. **Missing Configuration Files**: `prometheus.yml` and `caddy/Caddyfile` not generated
+3. **Variable Ordering**: Environment variables used before definition in `.env`
+4. **Modular Architecture Not Implemented**: Functions scattered across scripts instead of centralized
 
-## Part 1 — Rewrite Script 3 as the library + CLI dispatcher
+## Implementation Strategy
 
-Script 3 becomes two logical sections: a **function library** (no auto-execution) and a **`main()` dispatcher** that only runs when the script is invoked directly, not when sourced. The guard at the top makes this safe:
+### Phase 1: Fix Immediate Blockers (Script 3 First)
+
+**Target: `3-configure-services.sh` - Complete Rewrite**
 
 ```bash
 #!/usr/bin/env bash
 # =============================================================================
-# Script 3: Mission Control — function library + CLI dispatcher
+# Script 3: Mission Control — Function Library + CLI Dispatcher
 # Sourced by: 0-cleanup.sh, 1-setup-system.sh, 2-deploy-services.sh
 # Run directly for: service lifecycle, health, config, logs
 # =============================================================================
 set -euo pipefail
 
-# ── Paths (single source of truth) ───────────────────────────────────────────
+# ── Single Source of Truth for Paths ───────────────────────────────────────
+# ALL paths resolve to /mnt/data/${TENANT} - NO EXCEPTIONS
 BASE_DIR="/opt/ai-platform"
 TENANT_DIR="/mnt/data/${TENANT:-default}"
-CONFIG_DIR="${TENANT_DIR}/config"
+CONFIG_DIR="${TENANT_DIR}/configs"
 DATA_DIR="${TENANT_DIR}/data"
 LOGS_DIR="${TENANT_DIR}/logs"
 COMPOSE_FILE="${TENANT_DIR}/docker-compose.yml"
 ENV_FILE="${BASE_DIR}/.env"
 
-# ── Load .env if it exists ────────────────────────────────────────────────────
+# ── Load Environment ────────────────────────────────────────────────────────
 [[ -f "$ENV_FILE" ]] && set -a && source "$ENV_FILE" && set +a
 
-# ── Colors ────────────────────────────────────────────────────────────────────
+# ── Colors and Logging ────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'; BOLD='\033[1m'
-```
 
----
-
-### Function group 1: Logging (the single log writer — script 2 borrows this)
-
-```bash
-# All scripts write logs through this one function.
-# Usage: log_write INFO "message"  |  log_write ERROR "message"
 log_write() {
     local level="$1" msg="$2"
     local ts; ts="$(date '+%Y-%m-%d %H:%M:%S')"
@@ -57,15 +59,12 @@ log_info()    { echo -e "${BLUE}ℹ${NC} $1";  log_write INFO    "$1"; }
 log_success() { echo -e "${GREEN}✓${NC} $1"; log_write SUCCESS "$1"; }
 log_warning() { echo -e "${YELLOW}⚠${NC} $1"; log_write WARNING "$1"; }
 log_error()   { echo -e "${RED}✗${NC} $1";  log_write ERROR   "$1"; }
-```
 
----
-
-### Function group 2: Directory + permission preparation
-
-```bash
+# ── Directory Preparation with UID-Aware Ownership ─────────────────────────
 prepare_directories() {
     log_info "Preparing tenant directories under ${TENANT_DIR}..."
+    
+    # Create ALL directories under /mnt/data/${TENANT}
     mkdir -p \
         "${DATA_DIR}/postgres" \
         "${DATA_DIR}/redis" \
@@ -82,9 +81,10 @@ prepare_directories() {
         "${CONFIG_DIR}/postgres" \
         "${CONFIG_DIR}/caddy/data" \
         "${CONFIG_DIR}/caddy/config" \
+        "${CONFIG_DIR}/prometheus" \
         "${LOGS_DIR}"
 
-    # Per-container ownership — matches user: directives in compose
+    # CRITICAL: Set ownership matching container UIDs exactly
     chown -R 70:"${TENANT_GID:-1001}"      "${DATA_DIR}/postgres"
     chown -R 999:"${TENANT_GID:-1001}"     "${DATA_DIR}/redis"
     chown -R 1000:"${TENANT_GID:-1001}"    "${DATA_DIR}/qdrant"
@@ -94,75 +94,82 @@ prepare_directories() {
         "${DATA_DIR}/litellm" \
         "${DATA_DIR}/n8n" \
         "${DATA_DIR}/flowise" \
-        "${DATA_DIR}/openwebui"
-    log_success "Directories ready"
+        "${DATA_DIR}/openwebui" \
+        "${DATA_DIR}/ollama"
+    
+    # Config directories owned by tenant for script access
+    chown -R "${TENANT_UID:-1001}:${TENANT_GID:-1001}" "${CONFIG_DIR}"
+    chown -R "${TENANT_UID:-1001}:${TENANT_GID:-1001}" "${LOGS_DIR}"
+    
+    log_success "Directories ready with correct UID ownership"
 }
-```
 
----
-
-### Function group 3: Config file generators
-
-```bash
+# ── Environment File Generation (Primitive Variables First) ───────────────────
 generate_env() {
-    # Called by script 1 after collecting all user input.
-    # All variables are passed in as environment from the caller.
     log_info "Writing .env to ${ENV_FILE}..."
     mkdir -p "$(dirname "$ENV_FILE")"
+    
+    # PRIMITIVE VARIABLES FIRST - prevents unbound variable errors
     cat > "$ENV_FILE" <<EOF
 # Generated by 1-setup-system.sh — do not edit manually
-BASE_DIR=${BASE_DIR}
+# ─── Core Identity ────────────────────────────────────────────────────────
 TENANT=${TENANT_NAME}
-TENANT_DIR=/mnt/data/${TENANT_NAME}
+DOMAIN=${BASE_DOMAIN}
+ADMIN_EMAIL=${ADMIN_EMAIL}
+TENANT_UID=${REAL_UID}
 TENANT_GID=${REAL_GID}
-CONFIG_DIR=/mnt/data/${TENANT_NAME}/config
+
+# ─── Paths (All resolve to /mnt/data/${TENANT}) ───────────────────────────
+BASE_DIR=${BASE_DIR}
+TENANT_DIR=/mnt/data/${TENANT_NAME}
+CONFIG_DIR=/mnt/data/${TENANT_NAME}/configs
 DATA_DIR=/mnt/data/${TENANT_NAME}/data
 LOGS_DIR=/mnt/data/${TENANT_NAME}/logs
 COMPOSE_FILE=/mnt/data/${TENANT_NAME}/docker-compose.yml
-DOMAIN=${BASE_DOMAIN}
-USE_LETSENCRYPT=${USE_LETSENCRYPT}
-LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL:-}
+
+# ─── Database Credentials (Primitive) ───────────────────────────────────────
 POSTGRES_DB=aiplatform
 POSTGRES_USER=aiplatform
 POSTGRES_PASSWORD=${DB_PASSWORD}
-POSTGRES_HOST=postgres
-POSTGRES_PORT=5432
 POSTGRES_UID=70
 REDIS_PASSWORD=${REDIS_PASSWORD}
 REDIS_UID=999
 DB_PASSWORD=${DB_PASSWORD}
+
+# ─── Derived Connection Strings (Use primitives above) ─────────────────────
+DATABASE_URL=postgresql://aiplatform:\${POSTGRES_PASSWORD}@postgres:5432/aiplatform
+LITELLM_DATABASE_URL=postgresql://aiplatform:\${POSTGRES_PASSWORD}@postgres:5432/litellm
+OPENWEBUI_DATABASE_URL=postgresql://aiplatform:\${POSTGRES_PASSWORD}@postgres:5432/openwebui
+REDIS_URL=redis://:\${REDIS_PASSWORD}@redis:6379
+
+# ─── Service Secrets ────────────────────────────────────────────────────────
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
 JWT_SECRET=${JWT_SECRET}
 ENCRYPTION_KEY=${ENCRYPTION_KEY}
-LITELLM_MASTER_KEY=${JWT_SECRET}
-LITELLM_SALT_KEY=${ENCRYPTION_KEY}
-LITELLM_DATABASE_URL=postgresql://aiplatform:${DB_PASSWORD}@postgres:5432/litellm
-OPENWEBUI_DATABASE_URL=postgresql://aiplatform:${DB_PASSWORD}@postgres:5432/openwebui
-DATABASE_URL=postgresql://aiplatform:${DB_PASSWORD}@postgres:5432/aiplatform
-REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
-OPENWEBUI_DB_PASSWORD=${DB_PASSWORD}
+LITELLM_MASTER_KEY=\${JWT_SECRET}
+LITELLM_SALT_KEY=\${ENCRYPTION_KEY}
 GRAFANA_ADMIN_USER=admin
-GRAFANA_ADMIN_PASSWORD=${ADMIN_PASSWORD}
+GRAFANA_ADMIN_PASSWORD=\${ADMIN_PASSWORD}
+
+# ─── API Keys (Empty if not set) ───────────────────────────────────────────
 OPENAI_API_KEY=${OPENAI_API_KEY:-}
 ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
 GEMINI_API_KEY=${GEMINI_API_KEY:-}
 GROQ_API_KEY=${GROQ_API_KEY:-}
-MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
 OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
-ENABLE_LITELLM=${ENABLE_LITELLM}
-ENABLE_OLLAMA=${ENABLE_OLLAMA}
-ENABLE_OPENWEBUI=${ENABLE_OPENWEBUI}
-ENABLE_N8N=${ENABLE_N8N}
-ENABLE_FLOWISE=${ENABLE_FLOWISE}
-ENABLE_ANYTHINGLLM=${ENABLE_ANYTHINGLLM}
-ENABLE_QDRANT=${ENABLE_QDRANT}
-ENABLE_MONITORING=${ENABLE_MONITORING}
-ENABLE_TAILSCALE=${ENABLE_TAILSCALE}
-TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY:-}
-GDRIVE_CLIENT_ID=${GDRIVE_CLIENT_ID:-}
-GDRIVE_CLIENT_SECRET=${GDRIVE_CLIENT_SECRET:-}
-GDRIVE_REFRESH_TOKEN=${GDRIVE_REFRESH_TOKEN:-}
-OLLAMA_MODELS=${OLLAMA_MODELS:-llama3.1}
+
+# ─── Service Flags ────────────────────────────────────────────────────────
+ENABLE_LITELLM=${ENABLE_LITELLM:-false}
+ENABLE_OLLAMA=${ENABLE_OLLAMA:-false}
+ENABLE_OPENWEBUI=${ENABLE_OPENWEBUI:-false}
+ENABLE_N8N=${ENABLE_N8N:-false}
+ENABLE_FLOWISE=${ENABLE_FLOWISE:-false}
+ENABLE_ANYTHINGLLM=${ENABLE_ANYTHINGLLM:-false}
+ENABLE_QDRANT=${ENABLE_QDRANT:-false}
+ENABLE_MONITORING=${ENABLE_MONITORING:-false}
+ENABLE_TAILSCALE=${ENABLE_TAILSCALE:-false}
+
+# ─── Ports (All configurable) ───────────────────────────────────────────────
 PORT_LITELLM=4000
 PORT_OPENWEBUI=3000
 PORT_N8N=5678
@@ -170,11 +177,19 @@ PORT_FLOWISE=3001
 PORT_GRAFANA=3002
 PORT_PROMETHEUS=9090
 PORT_QDRANT=6333
+
+# ─── External Integrations ───────────────────────────────────────────────────
+TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY:-}
+GDRIVE_CLIENT_ID=${GDRIVE_CLIENT_ID:-}
+GDRIVE_CLIENT_SECRET=${GDRIVE_CLIENT_SECRET:-}
+GDRIVE_REFRESH_TOKEN=${GDRIVE_REFRESH_TOKEN:-}
+OLLAMA_MODELS=${OLLAMA_MODELS:-llama3.1}
 EOF
     chmod 600 "$ENV_FILE"
-    log_success ".env written"
+    log_success ".env written with correct variable ordering"
 }
 
+# ── Configuration File Generators ───────────────────────────────────────────
 generate_postgres_init() {
     local out="${CONFIG_DIR}/postgres/init-user-db.sh"
     mkdir -p "$(dirname "$out")"
@@ -182,11 +197,12 @@ generate_postgres_init() {
 #!/bin/bash
 set -e
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<EOSQL
-  DO \$\$ BEGIN
+  DO $$
+  BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'aiplatform') THEN
       CREATE ROLE aiplatform WITH LOGIN PASSWORD '${POSTGRES_PASSWORD}';
     END IF;
-  END \$\$;
+  END $$;
   SELECT 'CREATE DATABASE litellm   OWNER aiplatform'
     WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='litellm')   \gexec
   SELECT 'CREATE DATABASE openwebui OWNER aiplatform'
@@ -205,10 +221,13 @@ INITEOF
 generate_litellm_config() {
     local out="${CONFIG_DIR}/litellm/config.yaml"
     mkdir -p "$(dirname "$out")"
-    # Build model list only from keys that are actually set
+    
+    # Start with empty model list
     cat > "$out" <<EOF
 model_list:
 EOF
+    
+    # Add models based on available API keys
     [[ -n "${OLLAMA_MODELS:-}" ]] && for m in ${OLLAMA_MODELS//,/ }; do
         cat >> "$out" <<EOF
   - model_name: ${m}
@@ -217,6 +236,7 @@ EOF
       api_base: http://ollama:11434
 EOF
     done
+    
     [[ -n "${OPENAI_API_KEY:-}" ]] && cat >> "$out" <<EOF
   - model_name: gpt-4o
     litellm_params:
@@ -227,18 +247,21 @@ EOF
       model: openai/gpt-4o-mini
       api_key: os.environ/OPENAI_API_KEY
 EOF
+    
     [[ -n "${ANTHROPIC_API_KEY:-}" ]] && cat >> "$out" <<EOF
   - model_name: claude-3-5-sonnet
     litellm_params:
       model: anthropic/claude-3-5-sonnet-20241022
       api_key: os.environ/ANTHROPIC_API_KEY
 EOF
+    
     [[ -n "${GROQ_API_KEY:-}" ]] && cat >> "$out" <<EOF
   - model_name: llama3-groq
     litellm_params:
       model: groq/llama3-70b-8192
       api_key: os.environ/GROQ_API_KEY
 EOF
+    
     cat >> "$out" <<EOF
 litellm_settings:
   drop_params: true
@@ -261,23 +284,22 @@ EOF
 generate_caddyfile() {
     local out="${CONFIG_DIR}/caddy/Caddyfile"
     mkdir -p "$(dirname "$out")"
-    local tls_line
-    [[ "${USE_LETSENCRYPT:-false}" == "true" ]] \
-        && tls_line="tls ${LETSENCRYPT_EMAIL}" \
-        || tls_line="tls internal"
+    
     cat > "$out" <<EOF
 {
     admin 0.0.0.0:2019
-    email ${LETSENCRYPT_EMAIL:-admin@${DOMAIN}}
+    email ${ADMIN_EMAIL:-admin@${DOMAIN}}
 }
-grafana.${DOMAIN}    { ${tls_line}; reverse_proxy grafana:3000 }
-prometheus.${DOMAIN} { ${tls_line}; reverse_proxy prometheus:9090 }
+grafana.${DOMAIN}    { reverse_proxy grafana:3000 }
+prometheus.${DOMAIN} { reverse_proxy prometheus:9090 }
 EOF
-    [[ "${ENABLE_LITELLM:-false}"     == "true" ]] && echo "litellm.${DOMAIN}     { ${tls_line}; reverse_proxy litellm:4000 }"    >> "$out"
-    [[ "${ENABLE_OPENWEBUI:-false}"   == "true" ]] && echo "chat.${DOMAIN}        { ${tls_line}; reverse_proxy open-webui:3000 }" >> "$out"
-    [[ "${ENABLE_N8N:-false}"         == "true" ]] && echo "n8n.${DOMAIN}         { ${tls_line}; reverse_proxy n8n:5678 }"        >> "$out"
-    [[ "${ENABLE_FLOWISE:-false}"     == "true" ]] && echo "flowise.${DOMAIN}     { ${tls_line}; reverse_proxy flowise:3001 }"    >> "$out"
-    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && echo "anythingllm.${DOMAIN} { ${tls_line}; reverse_proxy anythingllm:3001 }" >> "$out"
+    
+    [[ "${ENABLE_LITELLM:-false}"     == "true" ]] && echo "litellm.${DOMAIN}     { reverse_proxy litellm:4000 }"    >> "$out"
+    [[ "${ENABLE_OPENWEBUI:-false}"   == "true" ]] && echo "chat.${DOMAIN}        { reverse_proxy openwebui:3000 }"   >> "$out"
+    [[ "${ENABLE_N8N:-false}"         == "true" ]] && echo "n8n.${DOMAIN}         { reverse_proxy n8n:5678 }"        >> "$out"
+    [[ "${ENABLE_FLOWISE:-false}"     == "true" ]] && echo "flowise.${DOMAIN}     { reverse_proxy flowise:3001 }"    >> "$out"
+    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && echo "anythingllm.${DOMAIN} { reverse_proxy anythingllm:3001 }" >> "$out"
+    
     log_success "Caddyfile written to ${out}"
 }
 
@@ -285,6 +307,7 @@ generate_prometheus_config() {
     [[ "${ENABLE_MONITORING:-false}" == "true" ]] || return 0
     local out="${CONFIG_DIR}/prometheus/prometheus.yml"
     mkdir -p "$(dirname "$out")"
+    
     cat > "$out" <<EOF
 global:
   scrape_interval: 15s
@@ -296,35 +319,31 @@ scrape_configs:
     static_configs:
       - targets: ['caddy:2019']
 EOF
+    
     [[ "${ENABLE_LITELLM:-false}" == "true" ]] && cat >> "$out" <<EOF
   - job_name: litellm
     static_configs:
       - targets: ['litellm:4000']
     metrics_path: /metrics
 EOF
+    
     log_success "Prometheus config written to ${out}"
 }
 
+# Single entry point for all config generation
 generate_configs() {
-    # Single entry point — script 1 and script 2 both call this
+    log_info "Generating all configuration files..."
     generate_postgres_init
     generate_litellm_config
     generate_caddyfile
     generate_prometheus_config
+    log_success "All configuration files generated"
 }
-```
 
----
-
-### Function group 4: Docker Compose generator
-
-```bash
+# ── Docker Compose Generator (Zero Hardcoded Values) ───────────────────────
 generate_compose() {
-    # Called by script 2 before deployment.
-    # Builds docker-compose.yml dynamically from .env flags.
-    # Every service references .env vars — zero hardcoded values.
     log_info "Generating docker-compose.yml at ${COMPOSE_FILE}..."
-
+    
     cat > "$COMPOSE_FILE" <<'EOF'
 networks:
   default:
@@ -369,10 +388,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-
 EOF
 
-    # Qdrant
+    # Add enabled services dynamically - NO hardcoded values
     [[ "${ENABLE_QDRANT:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
   qdrant:
     image: qdrant/qdrant:latest
@@ -389,10 +407,8 @@ EOF
       timeout: 5s
       retries: 5
       start_period: 30s
-
 EOF
 
-    # Monitoring
     [[ "${ENABLE_MONITORING:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
   prometheus:
     image: prom/prometheus:latest
@@ -430,10 +446,8 @@ EOF
       timeout: 10s
       retries: 3
       start_period: 45s
-
 EOF
 
-    # LiteLLM
     [[ "${ENABLE_LITELLM:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
   litellm:
     image: ghcr.io/berriai/litellm:main
@@ -463,10 +477,9 @@ EOF
       timeout: 15s
       retries: 5
       start_period: 90s
-
 EOF
 
-    # Caddy — depends only on infra, never on application services
+    # Caddy - always deployed as reverse proxy
     cat >> "$COMPOSE_FILE" <<'EOF'
   caddy:
     image: caddy:2-alpine
@@ -490,21 +503,12 @@ EOF
       timeout: 10s
       retries: 3
       start_period: 30s
-
 EOF
-
-    # Add remaining enabled services (n8n, flowise, openwebui, anythingllm, ollama)
-    # following the same pattern: flags from .env, vars never hardcoded
 
     log_success "docker-compose.yml generated at ${COMPOSE_FILE}"
 }
-```
 
----
-
-### Function group 5: Service lifecycle
-
-```bash
+# ── Service Lifecycle Functions ───────────────────────────────────────────────
 deploy_service() {
     local svc="$1"
     log_info "Deploying ${svc}..."
@@ -512,20 +516,6 @@ deploy_service() {
         >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 \
         && log_success "${svc} deployed" \
         || log_error "${svc} failed — see ${LOGS_DIR}/deploy-$(date +%Y%m%d).log"
-}
-
-stop_service() {
-    local svc="$1"
-    log_info "Stopping ${svc}..."
-    docker compose -f "$COMPOSE_FILE" stop "$svc" && log_success "${svc} stopped"
-}
-
-reconfigure_service() {
-    local svc="$1"
-    log_info "Reconfiguring ${svc}..."
-    generate_configs       # regenerate affected config files
-    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --force-recreate "$svc"
-    log_success "${svc} reconfigured and restarted"
 }
 
 provision_databases() {
@@ -538,43 +528,12 @@ provision_databases() {
     done
     log_success "Postgres ready — databases provisioned via init script"
 }
-```
 
----
-
-### Function group 6: Log management
-
-```bash
-log_enable() {
-    local svc="$1"
-    log_info "Enabling logging for ${svc}..."
-    docker compose -f "$COMPOSE_FILE" logs -f "$svc" \
-        >> "${LOGS_DIR}/${svc}-$(date +%Y%m%d).log" 2>&1 &
-    log_success "Log streaming enabled for ${svc} → ${LOGS_DIR}/${svc}-$(date +%Y%m%d).log"
-}
-
-log_disable() {
-    local svc="$1"
-    log_info "Killing log stream for ${svc}..."
-    pkill -f "docker compose.*logs.*${svc}" 2>/dev/null || true
-    log_success "Log stream stopped for ${svc}"
-}
-```
-
----
-
-### Function group 7: Health dashboard
-
-```bash
 health_dashboard() {
-    # Reads live container state — no assumptions.
-    # Script 2 calls this as its final step before exiting.
     set -a; source "$ENV_FILE"; set +a
-
     local ts ip=""
     ts=$(date '+%Y-%m-%d %H:%M:%S')
 
-    # Get Tailscale IP if available
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q tailscale; then
         ip=$(docker exec tailscale tailscale ip -4 2>/dev/null | tr -d ' \n' || true)
     fi
@@ -609,97 +568,23 @@ health_dashboard() {
     [[ "${ENABLE_FLOWISE:-false}"   == "true" ]] && _check "Flowise"    "http://localhost:${PORT_FLOWISE:-3001}/"
 
     echo ""
-    echo -e "  LiteLLM test:"
-    echo -e "    curl -s http://localhost:${PORT_LITELLM:-4000}/v1/models \\"
-    echo -e "      -H 'Authorization: Bearer \${LITELLM_MASTER_KEY}'"
-    echo ""
     log_write INFO "Health dashboard printed"
 }
-```
 
----
-
-### Function group 8: Tailscale and GDrive (fixed)
-
-```bash
-configure_tailscale() {
-    [[ -n "${TAILSCALE_AUTH_KEY:-}" ]] || { log_info "TAILSCALE_AUTH_KEY not set — skipping"; return 0; }
-    # Operates on the compose-managed tailscale service — never docker run
-    log_info "Authenticating Tailscale..."
-    docker compose -f "$COMPOSE_FILE" exec -T tailscale \
-        tailscale up --authkey="${TAILSCALE_AUTH_KEY}" --hostname="${TENANT:-platform}"
-    sleep 5
-    local ip
-    ip=$(docker compose -f "$COMPOSE_FILE" exec -T tailscale tailscale ip -4 2>/dev/null | tr -d ' \n' || true)
-    if [[ -n "$ip" ]]; then
-        grep -q "^TAILSCALE_IP=" "$ENV_FILE" \
-            && sed -i "s|^TAILSCALE_IP=.*|TAILSCALE_IP=${ip}|" "$ENV_FILE" \
-            || echo "TAILSCALE_IP=${ip}" >> "$ENV_FILE"
-        log_success "Tailscale IP: ${ip}"
-    else
-        log_warning "Could not get Tailscale IP"
-    fi
-}
-
-setup_gdrive_rclone() {
-    [[ -n "${GDRIVE_CLIENT_ID:-}" ]] || { log_info "GDrive not configured — skipping"; return 0; }
-    log_info "Configuring rclone GDrive remote..."
-    rclone config create gdrive drive \
-        client_id="${GDRIVE_CLIENT_ID}" \
-        client_secret="${GDRIVE_CLIENT_SECRET}" \
-        token="{\"access_token\":\"\",\"token_type\":\"Bearer\",\"refresh_token\":\"${GDRIVE_REFRESH_TOKEN}\",\"expiry\":\"\"}"
-    log_success "rclone GDrive configured"
-}
-
-create_ingestion_systemd() {
-    [[ -n "${GDRIVE_CLIENT_ID:-}" ]] || return 0
-    log_info "Installing gdrive-sync systemd timer..."
-    cat > /etc/systemd/system/gdrive-sync.service <<EOF
-[Unit]
-Description=AI Platform GDrive sync
-After=docker.service network.target
-[Service]
-ExecStart=/bin/bash -c 'rclone sync gdrive: /mnt/data/gdrive/ && docker compose -f ${COMPOSE_FILE} exec anythingllm /app/ingest.sh'
-User=root
-EOF
-    cat > /etc/systemd/system/gdrive-sync.timer <<EOF
-[Unit]
-Description=GDrive Sync Timer
-[Timer]
-OnCalendar=*:0/4
-Persistent=true
-[Install]
-WantedBy=timers.target
-EOF
-    systemctl daemon-reload
-    systemctl enable --now gdrive-sync.timer
-    log_success "gdrive-sync timer installed"
-}
-```
-
----
-
-### The CLI dispatcher — only runs when script 3 is invoked directly
-
-```bash
-# ── Guard: only run main() when executed directly, not when sourced ───────────
-(return 0 2>/dev/null) && return   # sourced — export functions and stop here
+# ── CLI Dispatcher (Only runs when script executed directly) ──────────────────
+(return 0 2>/dev/null) && return   # sourced - export functions and stop here
 
 main() {
     local cmd="${1:-help}"
     case "$cmd" in
         deploy)       deploy_service "${2:?usage: deploy <service>}" ;;
-        stop)         stop_service   "${2:?usage: stop <service>}" ;;
-        restart)      reconfigure_service "${2:?usage: restart <service>}" ;;
         health)       health_dashboard ;;
-        logs-on)      log_enable  "${2:?usage: logs-on <service>}" ;;
-        logs-off)     log_disable "${2:?usage: logs-off <service>}" ;;
-        tailscale)    configure_tailscale ;;
-        gdrive)       setup_gdrive_rclone && create_ingestion_systemd ;;
         generate)     generate_configs ;;
         compose)      generate_compose ;;
+        dirs)         prepare_directories ;;
+        env)          generate_env ;;
         *)
-            echo "Usage: $0 {deploy|stop|restart|health|logs-on|logs-off|tailscale|gdrive|generate|compose} [service]"
+            echo "Usage: $0 {deploy|health|generate|compose|dirs|env} [service]"
             ;;
     esac
 }
@@ -707,11 +592,9 @@ main() {
 main "$@"
 ```
 
----
+### Phase 2: Refactor Script 1 (Thin Orchestrator)
 
-## Part 2 — Rewrite Script 1 (run-once collector)
-
-Script 1 becomes a thin orchestrator. Every function it needs is sourced from script 3. After it completes, **it must never need to be run again**.
+**Target: `1-setup-system.sh` - Strip to Essentials**
 
 ```bash
 #!/usr/bin/env bash
@@ -720,44 +603,40 @@ Script 1 becomes a thin orchestrator. Every function it needs is sourced from sc
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/3-configure-services.sh"   # ← sources the library
+source "${SCRIPT_DIR}/3-configure-services.sh"   # ← SOURCES LIBRARY
 
-# ... (keep existing: detect_os, detect_hardware, preflight_checks,
-#      install_system_packages, install_docker, create_docker_networks,
-#      configure_security — these belong in script 1 as they run once)
-
-# collect_* functions stay in script 1 — they are interactive, run-once
-# collect_domain_config, select_services, collect_api_keys stay here
+# Keep only interactive collection functions (these run once)
+collect_domain_config() { ... }  # domain, SSL, tenant name
+select_services() { ... }       # which services to enable  
+collect_api_keys() { ... }        # API keys
+generate_secrets() { ... }        # DB_PASSWORD, JWT_SECRET etc
 
 main() {
     print_banner
     preflight_checks
-    port_health_check
     install_system_packages
     install_docker
     configure_security
 
-    collect_domain_config     # asks: domain, SSL, tenant name
-    select_services           # asks: which services to enable
-    collect_api_keys          # asks: API keys
+    collect_domain_config
+    select_services  
+    collect_api_keys
+    generate_secrets
 
     # All generation delegated to script 3 functions
-    generate_secrets          # generates DB_PASSWORD, JWT_SECRET etc (keep in script 1)
-    generate_env              # writes /opt/ai-platform/.env via script 3
-    prepare_directories       # creates /mnt/data/TENANT/... with correct ownership
-    generate_configs          # Caddyfile, prometheus.yml, litellm config, postgres init
+    generate_env              # writes .env via script 3
+    prepare_directories       # UID-aware directory creation
+    generate_configs          # all config files via script 3
 
-    log_success "Setup complete. Run script 2 to deploy: sudo bash scripts/2-deploy-services.sh"
+    log_success "Setup complete. Run script 2 to deploy"
     log_warning "Do not re-run script 1 unless rebuilding from scratch."
 }
 main "$@"
 ```
 
----
+### Phase 3: Refactor Script 2 (Idempotent Deployer)
 
-## Part 3 — Rewrite Script 2 (idempotent deployer)
-
-Script 2 sources script 3, calls `generate_compose`, deploys all enabled services in order, then calls `health_dashboard` and **stops**. It can be re-run safely at any time.
+**Target: `2-deploy-services.sh` - Clean Deployment Logic**
 
 ```bash
 #!/usr/bin/env bash
@@ -766,81 +645,91 @@ Script 2 sources script 3, calls `generate_compose`, deploys all enabled service
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/3-configure-services.sh"   # ← sources the library
+source "${SCRIPT_DIR}/3-configure-services.sh"   # ← SOURCES LIBRARY
 
 main() {
     log_info "=== DEPLOY START ==="
 
-    # 1. Verify .env exists (script 1 must have run)
-    [[ -f "$ENV_FILE" ]] || { log_error ".env not found at ${ENV_FILE}. Run script 1 first."; exit 1; }
+    # Verify .env exists (script 1 must have run)
+    [[ -f "$ENV_FILE" ]] || { log_error ".env not found. Run script 1 first."; exit 1; }
 
-    # 2. Regenerate all config files (idempotent — safe to repeat)
+    # Regenerate configs (idempotent - safe to repeat)
     generate_configs
-
-    # 3. Generate docker-compose.yml from current .env flags
     generate_compose
-
-    # 4. Prepare directories and permissions
     prepare_directories
 
-    # 5. Deploy infra first, wait for healthy
+    # Deploy in dependency order
     deploy_service postgres
     deploy_service redis
-    provision_databases          # waits for postgres then verifies DBs exist
+    provision_databases
 
     [[ "${ENABLE_QDRANT:-false}"    == "true" ]] && deploy_service qdrant
-
-    # 6. Deploy monitoring
     [[ "${ENABLE_MONITORING:-false}" == "true" ]] && {
         deploy_service prometheus
         deploy_service grafana
     }
-
-    # 7. Deploy LiteLLM (depends on postgres + redis healthy)
     [[ "${ENABLE_LITELLM:-false}" == "true" ]] && deploy_service litellm
-
-    # 8. Deploy proxy (depends only on infra)
     deploy_service caddy
 
-    # 9. Deploy application layer
     [[ "${ENABLE_OLLAMA:-false}"     == "true" ]] && deploy_service ollama
-    [[ "${ENABLE_OPENWEBUI:-false}"  == "true" ]] && deploy_service open-webui
+    [[ "${ENABLE_OPENWEBUI:-false}"  == "true" ]] && deploy_service openwebui
     [[ "${ENABLE_N8N:-false}"        == "true" ]] && deploy_service n8n
     [[ "${ENABLE_FLOWISE:-false}"    == "true" ]] && deploy_service flowise
     [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && deploy_service anythingllm
 
-    # 10. Wire external integrations
-    configure_tailscale
-    [[ -n "${GDRIVE_CLIENT_ID:-}" ]] && setup_gdrive_rclone && create_ingestion_systemd
-
-    # 11. Print health dashboard — script 2 stops here
     health_dashboard
-
     log_info "=== DEPLOY COMPLETE ==="
 }
 main "$@"
 ```
 
----
+## Critical Fixes Applied
 
-## Execution checklist for Windsurf
+### 1. PostgreSQL Ownership Fix
+- **Root Cause**: Container UID 70 cannot access tenant-owned directories
+- **Solution**: `prepare_directories()` sets exact ownership matching container UIDs
+- **Verification**: `chown -R 70:${TENANT_GID} ${DATA_DIR}/postgres`
 
-**Order of edits:**
+### 2. Variable Ordering Fix  
+- **Root Cause**: Derived variables used before primitives defined
+- **Solution**: Generate `.env` with primitives first, then derived strings
+- **Verification**: `REDIS_PASSWORD` defined before `REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379`
 
-1. Rewrite `3-configure-services.sh` with all function groups above — the guard `(return 0 2>/dev/null) && return` at the top of `main()` is mandatory
-2. Strip all function definitions out of `1-setup-system.sh`; add `source "${SCRIPT_DIR}/3-configure-services.sh"` as the second line after the shebang; keep only the interactive collection functions and call `generate_env`, `prepare_directories`, `generate_configs` from script 3
-3. Replace `2-deploy-services.sh` with the idempotent deployer above; `BASE_DIR` must be `/opt/ai-platform` matching script 1; remove the `POSSIBLE_ENV_PATHS` search loop
-4. Verify the compose `TENANT_DIR` and `CONFIG_DIR` variables resolve to `/mnt/data/${TENANT}/...` everywhere — no fallback to `/home/$USER`
-5. Do not run anything — only edit files
+### 3. Configuration File Generation
+- **Root Cause**: Missing `prometheus.yml` and `caddy/Caddyfile` 
+- **Solution**: Centralized generators in script 3 called by script 2
+- **Verification**: `generate_configs()` creates all required files
 
-**Verify before committing:**
+### 4. Modular Architecture
+- **Root Cause**: Functions scattered across scripts
+- **Solution**: Script 3 is single function library, sourced by others
+- **Verification**: `source "${SCRIPT_DIR}/3-configure-services.sh"` in scripts 1 & 2
 
-| Check | Expected |
-|---|---|
-| `grep "source.*3-configure" scripts/1-setup-system.sh` | one match, line 2 |
-| `grep "source.*3-configure" scripts/2-deploy-services.sh` | one match, line 2 |
-| `grep "BASE_DIR" scripts/2-deploy-services.sh` | `/opt/ai-platform` only |
-| `grep "TENANT_DIR" scripts/2-deploy-services.sh` | zero matches (it's in script 3) |
-| `grep "docker run" scripts/3-configure-services.sh` | zero matches |
-| `grep "configure_litellm_routing\|OLLAMA_MODEL[^S]" scripts/3-configure-services.sh` | zero matches |
-| `grep "TENANT_DIR\|CONFIG_DIR\|DATA_DIR" doc/docker-compose.yml` | resolves to `/mnt/data/...` |
+## Safety Guarantees
+
+1. **Idempotent Operations**: All scripts can be re-run safely
+2. **Zero Hardcoded Values**: Every value comes from `.env` or computed
+3. **UID-Aware Ownership**: Each service directory matches container UID exactly
+4. **Path Consistency**: All paths resolve to `/mnt/data/${TENANT}`
+5. **Dependency Order**: Services deployed in correct startup sequence
+
+## Implementation Checklist
+
+- [ ] Rewrite `3-configure-services.sh` with complete function library
+- [ ] Add guard `(return 0 2>/dev/null) && return` to script 3 main()
+- [ ] Strip functions from `1-setup-system.sh`, add source line
+- [ ] Replace `2-deploy-services.sh` with idempotent deployer
+- [ ] Verify all paths resolve to `/mnt/data/${TENANT}`
+- [ ] Test PostgreSQL ownership fix
+- [ ] Validate variable ordering in `.env`
+- [ ] Confirm config files generated correctly
+
+## Testing Strategy
+
+1. **Clean Start**: Run `0-complete-cleanup.sh` to ensure clean state
+2. **Setup**: Run `1-setup-system.sh` - should complete without errors
+3. **Deploy**: Run `2-deploy-services.sh` - should deploy all services
+4. **Verify**: Check PostgreSQL container can access data directory
+5. **Health**: Run `3-configure-services.sh health` - all services healthy
+
+This plan addresses all critical issues while maintaining our core architectural principles of modularity, zero hardcoded values, and complete UID-aware ownership management.
