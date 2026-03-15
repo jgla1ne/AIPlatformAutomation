@@ -54,6 +54,39 @@ print_divider() {
     echo -e "${CYAN}────────────────────────────────────────────────────────────────${NC}"
 }
 
+# ─── Phase 1: System Prerequisites ────────────────────────────────────────────────
+check_prerequisites() {
+    print_step "1" "14" "System Prerequisites"
+
+    # Check if running interactively (safety check)
+    if [[ ! -t 0 ]]; then
+        log "ERROR" "Script 1 must be run interactively (TTY required)"
+        log "ERROR" "This script collects user input and cannot run non-interactively"
+        log "ERROR" "Run: sudo bash scripts/1-setup-system.sh"
+        exit 1
+    fi
+
+    # Check Docker
+    if ! command -v docker &> /dev/null; then
+        log "ERROR" "Docker not installed. Install Docker first."
+        exit 1
+    fi
+
+    # Check Docker Compose
+    if ! docker compose version &> /dev/null; then
+        log "ERROR" "Docker Compose not available. Install Docker Compose first."
+        exit 1
+    fi
+
+    # Check if Docker daemon is running
+    if ! docker info &> /dev/null; then
+        log "ERROR" "Docker daemon is not running. Start Docker service first."
+        exit 1
+    fi
+
+    log "SUCCESS" "Docker and Docker Compose are available"
+}
+
 # ─── Phase 0: System Resource Validation ────────────────────────────────────────
 validate_system_resources() {
     print_step "0" "14" "System Resource Validation"
@@ -219,6 +252,88 @@ collect_identity() {
     ok "Identity configuration completed"
 }
 
+# ─── EBS Volume Detection and Mounting ────────────────────────────────────────
+detect_and_mount_ebs() {
+    print_step "3" "14" "EBS Volume Detection and Mounting"
+
+    echo -e "  ${BOLD}💾  EBS Volume Detection${NC}"
+    echo -e "  ${DIM}Scanning for available EBS volumes to mount${NC}"
+    echo ""
+
+    # List available block devices
+    echo -e "  ${BOLD}Available Block Devices:${NC}"
+    lsblk -d -o NAME,SIZE,TYPE,MOUNTPOINT | grep -E "^nvme|^xvd|^sd" | while read -r line; do
+        echo -e "  ${CYAN}    ${line}${NC}"
+    done
+    echo ""
+
+    # Find unmounted EBS volumes
+    local unmounted_volumes=()
+    while IFS= read -r device; do
+        if ! lsblk -n -o MOUNTPOINT "/dev/${device}" | grep -q "."; then
+            unmounted_volumes+=("${device}")
+        fi
+    done < <(lsblk -d -n -o NAME | grep -E "^nvme|^xvd|^sd")
+
+    if [ ${#unmounted_volumes[@]} -eq 0 ]; then
+        log "INFO" "No unmounted EBS volumes found"
+        return
+    fi
+
+    echo -e "  ${BOLD}Unmounted EBS Volumes:${NC}"
+    local idx=0
+    for volume in "${unmounted_volumes[@]}"; do
+        size=$(lsblk -d -n -o SIZE "/dev/${volume}")
+        echo -e "  ${CYAN}  $((++idx))${NC}  /dev/${volume}  ${DIM}(${size})${NC}"
+    done
+    echo ""
+
+    # Ask user to select volume to mount
+    while true; do
+        read -p "  ➤ Select EBS volume to mount [1-${idx}] (or skip): " choice
+        if [[ -z "${choice}" ]]; then
+            log "INFO" "Skipping EBS mount"
+            break
+        fi
+        if [[ "${choice}" =~ ^[0-9]+$ ]] && [ "${choice}" -ge 1 ] && [ "${choice}" -le "${idx}" ]; then
+            local selected_volume="${unmounted_volumes[$((choice-1))]}"
+            local mount_point="/mnt/data"
+            
+            log "INFO" "Mounting /dev/${selected_volume} to ${mount_point}"
+            
+            # Create mount point if it doesn't exist
+            sudo mkdir -p "${mount_point}"
+            # CRITICAL: Ensure mount point is owned by tenant, not root
+            sudo chown "${REAL_UID}:${REAL_GID}" "${mount_point}"
+            
+            # Check if already mounted
+            if mountpoint -q "${mount_point}" 2>/dev/null; then
+                log "WARN" "${mount_point} is already mounted"
+                break
+            fi
+            
+            # Mount the volume
+            if sudo mount "/dev/${selected_volume}" "${mount_point}" 2>/dev/null; then
+                log "SUCCESS" "EBS volume mounted: /dev/${selected_volume} → ${mount_point}"
+                
+                # Add to /etc/fstab for persistence
+                if ! grep -q "/dev/${selected_volume}" /etc/fstab; then
+                    echo "/dev/${selected_volume}  ${mount_point}  ext4  defaults  0  2" | sudo tee -a /etc/fstab
+                    log "INFO" "Added to /etc/fstab for persistence"
+                fi
+                break
+            else
+                log "ERROR" "Failed to mount /dev/${selected_volume}"
+                echo -e "  ${DIM}You may need to format the volume first:${NC}"
+                echo -e "  ${DIM}  sudo mkfs.ext4 /dev/${selected_volume}${NC}"
+            fi
+            break
+        else
+            echo "  ❌ Enter a number between 1 and ${idx}, or leave empty to skip"
+        fi
+    done
+}
+
 # ─── Service Stack Selection ────────────────────────────────────────────
 select_stack() {
     print_step "6" "11" "Service Stack Selection"
@@ -327,6 +442,282 @@ select_stack() {
     ok "Service stack selection completed"
 }
 
+# ─── GPU Detection ──────────────────────────────────────────────────────
+detect_gpu() {
+    print_step "5" "11" "Hardware Detection"
+
+    # Initialize GPU_TYPE to prevent unbound variable error
+    GPU_TYPE="none"
+    
+    echo -e "  ${BOLD}🔧  Hardware Detection${NC}"
+    echo -e "  ${DIM}Detecting available hardware acceleration${NC}"
+    echo ""
+    
+    # Check for NVIDIA GPU
+    if command -v nvidia-smi &> /dev/null && nvidia-smi &> /dev/null; then
+        GPU_TYPE="nvidia"
+        local gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader,nounits | head -1)
+        local gpu_memory=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1)
+        log "INFO" "NVIDIA GPU detected: ${gpu_name} (${gpu_memory}MB)"
+        echo -e "  ${GREEN}✓${NC} NVIDIA GPU: ${gpu_name} (${gpu_memory}MB)"
+    else
+        log "INFO" "No NVIDIA GPU detected"
+        echo -e "  ${YELLOW}⚠${NC} No NVIDIA GPU detected - CPU only mode"
+    fi
+    
+    # Check for CUDA toolkit
+    if [[ "${GPU_TYPE}" == "nvidia" ]]; then
+        if command -v nvcc &> /dev/null; then
+            local cuda_version=$(nvcc --version | grep "release" | awk '{print $6}' | cut -c2-)
+            log "INFO" "CUDA toolkit version: ${cuda_version}"
+            echo -e "  ${GREEN}✓${NC} CUDA toolkit: ${cuda_version}"
+        else
+            log "WARN" "CUDA toolkit not found"
+            echo -e "  ${YELLOW}⚠${NC} CUDA toolkit not found - GPU may not be available in containers"
+        fi
+    fi
+    
+    ok "Hardware detection completed"
+}
+
+# ─── Vector DB Selection ───────────────────────────────────────────────────
+select_vector_db() {
+    print_step "7" "11" "Vector Database Selection"
+
+    echo -e "  ${BOLD}🗄️  Choose Vector Database${NC}"
+    echo ""
+    echo -e "  ${CYAN}  1)${NC}  Qdrant     ${DIM}(recommended, high-performance)${NC}"
+    echo -e "  ${CYAN}  2)${NC}  Weaviate   ${DIM}(GraphQL API, advanced)${NC}"
+    echo -e "  ${CYAN}  3)${NC}  ChromaDB   ${DIM}(lightweight, embedded)${NC}"
+    echo -e "  ${CYAN}  4)${NC}  Milvus     ${DIM}(enterprise-scale)${NC}"
+    echo -e "  ${CYAN}  5)${NC}  Pinecone   ${DIM}(managed service)${NC}"
+    echo -e "  ${CYAN}  6)${NC}  None       ${DIM}(use external vector DB)${NC}"
+    echo ""
+
+    while true; do
+        read -p "  ➤ Select vector database [1-6]: " choice
+        choice="${choice:-1}"
+        case "${choice}" in
+            1|2|3|4|5|6) break ;;
+            *) echo "  ❌ Enter 1, 2, 3, 4, 5 or 6" ;;
+        esac
+    done
+
+    # First, disable all vector databases
+    ENABLE_QDRANT=false
+    ENABLE_WEAVIATE=false
+    ENABLE_CHROMADB=false
+    ENABLE_MILVUS=false
+    ENABLE_PINECONE=false
+
+    # Then enable the selected one
+    case "${choice}" in
+        1) 
+            VECTOR_DB_TYPE="qdrant"
+            ENABLE_QDRANT=true
+            ;;
+        2) 
+            VECTOR_DB_TYPE="weaviate"
+            ENABLE_WEAVIATE=true
+            ;;
+        3) 
+            VECTOR_DB_TYPE="chromadb"
+            ENABLE_CHROMADB=true
+            ;;
+        4) 
+            VECTOR_DB_TYPE="milvus"
+            ENABLE_MILVUS=true
+            ;;
+        5) 
+            VECTOR_DB_TYPE="pinecone"
+            ENABLE_PINECONE=true
+            ;;
+        6) 
+            VECTOR_DB_TYPE="none"
+            ;;
+    esac
+
+    log "INFO" "Vector database selected: ${VECTOR_DB_TYPE}"
+    ok "Vector database selection completed"
+}
+
+# ─── Database Configuration ─────────────────────────────────────────────────────
+collect_database() {
+    print_step "7.5" "11" "Database Configuration"
+
+    echo -e "  ${BOLD}🗄️  Database Configuration${NC}"
+    echo -e "  ${DIM}Configure PostgreSQL and Redis settings${NC}"
+    echo ""
+
+    # PostgreSQL settings
+    echo -e "  ${BOLD}PostgreSQL Settings:${NC}"
+    read -p "  ➤ PostgreSQL port [5432]: " POSTGRES_PORT
+    POSTGRES_PORT="${POSTGRES_PORT:-5432}"
+    read -p "  ➤ PostgreSQL database name [aiplatform]: " POSTGRES_DB
+    POSTGRES_DB="${POSTGRES_DB:-aiplatform}"
+    read -p "  ➤ PostgreSQL username [postgres]: " POSTGRES_USER
+    POSTGRES_USER="${POSTGRES_USER:-postgres}"
+
+    # Redis settings
+    echo ""
+    echo -e "  ${BOLD}Redis Settings:${NC}"
+    read -p "  ➤ Redis port [6379]: " REDIS_PORT
+    REDIS_PORT="${REDIS_PORT:-6379}"
+
+    log "INFO" "PostgreSQL: ${POSTGRES_USER}@localhost:${POSTGRES_PORT}/${POSTGRES_DB}"
+    log "INFO" "Redis: localhost:${REDIS_PORT}"
+    ok "Database configuration completed"
+}
+
+# ─── LLM Configuration ─────────────────────────────────────────────────────
+collect_llm_config() {
+    print_step "8" "11" "LLM Provider Configuration"
+
+    echo -e "  ${BOLD}🔑  LLM Provider API Keys${NC}"
+    echo -e "  ${DIM}Configure external LLM providers (optional)${NC}"
+    echo ""
+
+    # OpenAI
+    echo -e "  ${BOLD}OpenAI:${NC}"
+    read -p "  ➤ OpenAI API key (leave empty to skip): " OPENAI_API_KEY
+    if [[ -n "${OPENAI_API_KEY}" ]]; then
+        log "INFO" "OpenAI API key configured"
+    fi
+
+    # Anthropic Claude
+    echo ""
+    echo -e "  ${BOLD}Anthropic Claude:${NC}"
+    read -p "  ➤ Anthropic API key (leave empty to skip): " ANTHROPIC_API_KEY
+    if [[ -n "${ANTHROPIC_API_KEY}" ]]; then
+        log "INFO" "Anthropic API key configured"
+    fi
+
+    # Google AI
+    echo ""
+    echo -e "  ${BOLD}Google AI:${NC}"
+    read -p "  ➤ Google AI API key (leave empty to skip): " GOOGLE_API_KEY
+    if [[ -n "${GOOGLE_API_KEY}" ]]; then
+        log "INFO" "Google AI API key configured"
+    fi
+
+    # Groq
+    echo ""
+    echo -e "  ${BOLD}Groq:${NC}"
+    read -p "  ➤ Groq API key (leave empty to skip): " GROQ_API_KEY
+    if [[ -n "${GROQ_API_KEY}" ]]; then
+        log "INFO" "Groq API key configured"
+    fi
+
+    ok "LLM provider configuration completed"
+}
+
+# ─── LiteLLM Routing Strategy Configuration ───────────────────────────────
+collect_litellm_routing() {
+    print_step "8.5" "11" "LiteLLM Routing Strategy"
+    
+    echo -e "  ${BOLD}🧠  LiteLLM Routing Strategy${NC}"
+    echo -e "  ${DIM}Choose how LiteLLM distributes requests${NC}"
+    echo ""
+    echo -e "  ${CYAN}  1)${NC}  ${BOLD}least-busy${NC}     ${DIM}(send to least busy provider)${NC}"
+    echo -e "  ${CYAN}  2)${NC}  ${BOLD}weighted${NC}         ${DIM}(distribute by configured weights)${NC}"
+    echo -e "  ${CYAN}  3)${NC}  ${BOLD}random${NC}           ${DIM}(random selection)${NC}"
+    echo -e "  ${CYAN}  4)${NC}  ${BOLD}round-robin${NC}      ${DIM}(rotate through providers)${NC}"
+    echo ""
+
+    while true; do
+        read -p "  ➤ Select routing strategy [1-4]: " choice
+        choice="${choice:-1}"
+        case "${choice}" in
+            1|2|3|4) break ;;
+            *) echo "  ❌ Enter 1, 2, 3 or 4" ;;
+        esac
+    done
+
+    case "${choice}" in
+        1) LITELLM_ROUTING_STRATEGY="least-busy" ;;
+        2) LITELLM_ROUTING_STRATEGY="weighted" ;;
+        3) LITELLM_ROUTING_STRATEGY="random" ;;
+        4) LITELLM_ROUTING_STRATEGY="round-robin" ;;
+    esac
+
+    log "INFO" "LiteLLM routing strategy: ${LITELLM_ROUTING_STRATEGY}"
+    ok "LiteLLM routing strategy configured"
+}
+
+# ─── Network & Security Configuration ───────────────────────────────────────
+collect_network_config() {
+    print_step "9" "11" "Network & Security Configuration"
+
+    echo -e "  ${BOLD}🔐  Network & Security Settings${NC}"
+    echo -e "  ${DIM}Configure VPN and external integrations${NC}"
+    echo ""
+
+    # Tailscale
+    echo -e "  ${BOLD}Tailscale VPN:${NC}"
+    read -p "  ➤ Enable Tailscale VPN? [y/N]: " choice
+    if [[ "${choice,,}" == "y" ]]; then
+        ENABLE_TAILSCALE=true
+        read -p "  ➤ Tailscale auth key (leave empty for manual auth): " TAILSCALE_AUTH_KEY
+        log "INFO" "Tailscale VPN enabled"
+    else
+        ENABLE_TAILSCALE=false
+        log "INFO" "Tailscale VPN disabled"
+    fi
+
+    # SSL/TLS
+    echo ""
+    echo -e "  ${BOLD}SSL/TLS Configuration:${NC}"
+    if [[ "${USE_LETSENCRYPT}" == "true" ]]; then
+        echo -e "  ${GREEN}✓${NC} Let's Encrypt enabled (automatic certificates)"
+    else
+        echo -e "  ${YELLOW}⚠${NC} Self-signed certificates (for development)"
+    fi
+
+    ok "Network & security configuration completed"
+}
+
+# ─── Port Configuration ────────────────────────────────────────────────────
+collect_ports() {
+    print_step "10" "11" "Port Configuration"
+
+    echo -e "  ${BOLD}🔌  Service Ports${NC}"
+    echo -e "  ${DIM}Configure custom ports (leave empty for defaults)${NC}"
+    echo ""
+
+    # Main services
+    echo -e "  ${BOLD}Core Services:${NC}"
+    read -p "  ➤ LiteLLM port [4000]: " LITELLM_PORT
+    LITELLM_PORT="${LITELLM_PORT:-4000}"
+    read -p "  ➤ Ollama port [11434]: " OLLAMA_PORT
+    OLLAMA_PORT="${OLLAMA_PORT:-11434}"
+    read -p "  ➤ OpenWebUI port [3000]: " OPENWEBUI_PORT
+    OPENWEBUI_PORT="${OPENWEBUI_PORT:-3000}"
+
+    # Automation
+    echo ""
+    echo -e "  ${BOLD}Automation:${NC}"
+    read -p "  ➤ n8n port [5678]: " N8N_PORT
+    N8N_PORT="${N8N_PORT:-5678}"
+    read -p "  ➤ Flowise port [3001]: " FLOWISE_PORT
+    FLOWISE_PORT="${FLOWISE_PORT:-3001}"
+
+    # Monitoring
+    echo ""
+    echo -e "  ${BOLD}Monitoring:${NC}"
+    read -p "  ➤ Grafana port [3002]: " GRAFANA_PORT
+    GRAFANA_PORT="${GRAFANA_PORT:-3002}"
+    read -p "  ➤ Prometheus port [9090]: " PROMETHEUS_PORT
+    PROMETHEUS_PORT="${PROMETHEUS_PORT:-9090}"
+
+    # Vector DB
+    echo ""
+    echo -e "  ${BOLD}Vector Database:${NC}"
+    read -p "  ➤ Qdrant port [6333]: " QDRANT_PORT
+    QDRANT_PORT="${QDRANT_PORT:-6333}"
+
+    ok "Port configuration completed"
+}
+
 # ─── Helper function for asking about services ───────────────────────────────────
 ask_service() {
     local icon="$1" name="$2" description="$3" var_name="$4" current_value="$5"
@@ -423,10 +814,19 @@ main() {
 
     # Execute all setup phases
     validate_system_resources
-    collect_identity
-    select_data_volume
-    select_stack
-    generate_secrets
+    check_prerequisites      # Step 1
+    collect_identity         # Step 2
+    detect_and_mount_ebs     # Step 3 - NEW: EBS detection and mounting
+    select_data_volume       # Step 4
+    detect_gpu               # Step 5
+    select_stack             # Step 6
+    select_vector_db         # Step 7
+    collect_database         # Step 7.5 - Database configuration
+    collect_llm_config       # Step 8
+    collect_litellm_routing  # Step 8.5 - LiteLLM routing strategy
+    collect_network_config   # Step 9 - NEW: Network & security configuration
+    collect_ports            # Step 10
+    generate_secrets         # Step 11
 
     # Export variables for script 3 functions - map old names to new
     export TENANT_NAME="${TENANT_ID}"
@@ -446,6 +846,33 @@ main() {
     export VECTOR_DB_TYPE="${VECTOR_DB_TYPE:-qdrant}"
     export OLLAMA_MODELS="${OLLAMA_MODELS:-llama3.1}"
     export LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-12345}"
+    
+    # Database variables
+    export POSTGRES_PORT="${POSTGRES_PORT:-5432}"
+    export POSTGRES_DB="${POSTGRES_DB:-aiplatform}"
+    export POSTGRES_USER="${POSTGRES_USER:-postgres}"
+    export REDIS_PORT="${REDIS_PORT:-6379}"
+    
+    # LLM Provider API keys
+    export OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+    export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+    export GOOGLE_API_KEY="${GOOGLE_API_KEY:-}"
+    export GROQ_API_KEY="${GROQ_API_KEY:-}"
+    
+    # Port variables
+    export LITELLM_PORT="${LITELLM_PORT:-4000}"
+    export OLLAMA_PORT="${OLLAMA_PORT:-11434}"
+    export OPENWEBUI_PORT="${OPENWEBUI_PORT:-3000}"
+    export N8N_PORT="${N8N_PORT:-5678}"
+    export FLOWISE_PORT="${FLOWISE_PORT:-3001}"
+    export GRAFANA_PORT="${GRAFANA_PORT:-3002}"
+    export PROMETHEUS_PORT="${PROMETHEUS_PORT:-9090}"
+    export QDRANT_PORT="${QDRANT_PORT:-6333}"
+    
+    # Network/Security
+    export TAILSCALE_AUTH_KEY="${TAILSCALE_AUTH_KEY:-}"
+    
+    # Secrets
     export DB_PASSWORD="${DB_PASSWORD}"
     export ADMIN_PASSWORD="${ADMIN_PASSWORD}"
     export JWT_SECRET="${JWT_SECRET}"
