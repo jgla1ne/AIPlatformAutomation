@@ -55,6 +55,7 @@ prepare_directories() {
         "${DATA_DIR}/grafana/logs" \
         "${DATA_DIR}/prometheus" \
         "${DATA_DIR}/anythingllm" \
+        "${DATA_DIR}/tailscale" \
         "${CONFIG_DIR}/litellm" \
         "${CONFIG_DIR}/postgres" \
         "${CONFIG_DIR}/caddy/data" \
@@ -74,7 +75,8 @@ prepare_directories() {
         "${DATA_DIR}/flowise" \
         "${DATA_DIR}/openwebui" \
         "${DATA_DIR}/ollama" \
-        "${DATA_DIR}/anythingllm"
+        "${DATA_DIR}/anythingllm" \
+        "${DATA_DIR}/tailscale"
     
     # Config directories owned by tenant for script access
     chown -R "${TENANT_UID:-1001}:${TENANT_GID:-1001}" "${CONFIG_DIR}"
@@ -650,6 +652,31 @@ EOF
       timeout: 10s
       retries: 3
       start_period: 60s
+EOF
+
+    # Tailscale VPN
+    [[ "${ENABLE_TAILSCALE:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+  tailscale:
+    image: tailscale/tailscale:latest
+    restart: unless-stopped
+    user: "1000:${TENANT_GID:-1001}"
+    volumes:
+      - ${DATA_DIR}/tailscale:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      TS_AUTHKEY: ${TAILSCALE_AUTH_KEY}
+      TS_EXTRA_ARGS: "--hostname=${TENANT:-platform}"
+    healthcheck:
+      test: ["CMD-SHELL","tailscale status --json | jq -e '.Online'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 EOF
 
     # Caddy - always deployed as reverse proxy
