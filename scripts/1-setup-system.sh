@@ -2035,7 +2035,6 @@ write_env_file() {
 
 # ─── Platform Identity ────────────────────────────────────────────────────────
 TENANT_ID=${TENANT_ID}
-DOMAIN=${DOMAIN}
 ADMIN_EMAIL=${ADMIN_EMAIL}
 DATA_ROOT=${DATA_ROOT}
 SSL_TYPE=${SSL_TYPE}
@@ -2190,10 +2189,19 @@ TAILSCALE_INTERNAL_PORT=${TAILSCALE_INTERNAL_PORT}
 POSTGRES_INTERNAL_PORT=${POSTGRES_INTERNAL_PORT}
 REDIS_INTERNAL_PORT=${REDIS_INTERNAL_PORT}
 
+# ─── Core Domain Configuration (needed before derived connection strings) ───────────
+DOMAIN=${DOMAIN}
+
 # ─── Database ─────────────────────────────────────────────────────────────────
 POSTGRES_USER=${POSTGRES_USER}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 POSTGRES_DB=${POSTGRES_DB}
+
+# ─── Redis Password (needed before derived connection strings) ───────────────────
+REDIS_PASSWORD=${REDIS_PASSWORD}
+
+# ─── Grafana Admin Password (needed before derived connection strings) ───────────────
+GRAFANA_PASSWORD=${GRAFANA_PASSWORD}
 
 # ─── Derived Connection Strings (computed once from primitives above) ──────────
 # Used by LiteLLM, Authentik, Metabase, etc.
@@ -2257,9 +2265,6 @@ DB_PASSWORD="${POSTGRES_PASSWORD}"
 # ─── Network Configuration (for dynamic references) ───────────────────
 LOCALHOST=localhost
 
-# ─── Redis ────────────────────────────────────────────────────────────────────
-REDIS_PASSWORD="${REDIS_PASSWORD}"
-
 # ─── n8n ──────────────────────────────────────────────────────────────────────
 N8N_ENCRYPTION_KEY="${N8N_ENCRYPTION_KEY}"
 N8N_API_KEY="${N8N_API_KEY}"
@@ -2298,7 +2303,6 @@ QDRANT_VECTOR_SIZE="768"
 
 # ─── Grafana ──────────────────────────────────────────────────────────────────
 GRAFANA_ADMIN_USER="admin"
-GRAFANA_PASSWORD="${GRAFANA_PASSWORD}"
 GF_SECURITY_ADMIN_PASSWORD="${GRAFANA_PASSWORD}"
 
 # ─── Authentik ────────────────────────────────────────────────────────────────
