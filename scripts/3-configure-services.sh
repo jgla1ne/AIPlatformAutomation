@@ -947,16 +947,20 @@ configure_tailscale() {
         sleep 10  # Give tailscale time to start
     fi
     
-    # Authenticate
-    docker compose -f "$COMPOSE_FILE" exec -T tailscale \
-        tailscale up --authkey="${TAILSCALE_AUTH_KEY}" --hostname="${TENANT:-platform}" || {
-        log_error "Tailscale authentication failed"
-        return 1
-    }
+    # Authenticate (only if not already authenticated)
+    if ! docker compose -f "$COMPOSE_FILE" exec -T tailscale \
+        tailscale --socket="/tmp/tailscaled.sock" status | grep -q "Logged in as"; then
+        docker compose -f "$COMPOSE_FILE" exec -T tailscale \
+            tailscale --socket="/tmp/tailscaled.sock" up --authkey="${TAILSCALE_AUTH_KEY}" --hostname="${TENANT:-platform}" || {
+            log_error "Tailscale authentication failed"
+            return 1
+        }
+    fi
     
     sleep 5
     local ip
-    ip=$(docker compose -f "$COMPOSE_FILE" exec -T tailscale tailscale ip -4 2>/dev/null | tr -d ' \n' || true)
+    ip=$(docker compose -f "$COMPOSE_FILE" exec -T tailscale \
+        tailscale --socket="/tmp/tailscaled.sock" ip -4 2>/dev/null | tr -d ' \n' || true)
     
     if [[ -n "$ip" ]]; then
         # Update .env with Tailscale IP
