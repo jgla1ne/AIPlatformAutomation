@@ -951,7 +951,7 @@ configure_tailscale() {
     if ! docker compose -f "$COMPOSE_FILE" exec -T tailscale \
         tailscale --socket="/tmp/tailscaled.sock" status | grep -q "Logged in as"; then
         docker compose -f "$COMPOSE_FILE" exec -T tailscale \
-            tailscale --socket="/tmp/tailscaled.sock" up --authkey="${TAILSCALE_AUTH_KEY}" --hostname="${TENANT:-platform}" || {
+            tailscale --socket="/tmp/tailscaled.sock" up --authkey="${TAILSCALE_AUTH_KEY}" --hostname="${TENANT:-platform}" --accept-dns=false || {
             log_error "Tailscale authentication failed"
             return 1
         }
