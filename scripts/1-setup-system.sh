@@ -701,17 +701,26 @@ collect_identity() {
     echo -e "  ${DIM}Short ID used for naming, namespacing and branding${NC}"
     echo ""
 
+    # Skip tenant collection if already provided via command line
+    if [ "${SKIP_TENANT_COLLECTION:-false}" = "true" ]; then
+        log "INFO" "Tenant ID already provided: ${TENANT_ID}"
+        # Define TENANT_DIR right after TENANT_ID is set
+        TENANT_DIR="/mnt/data/${TENANT_ID}"
+        print_divider
+        return
+    fi
+
     while true; do
         read -p "  ➤ Tenant ID (e.g. mycompany): " TENANT_ID
-        TENANT_ID="${TENANT_ID,,}"
-        if [[ "${TENANT_ID}" =~ ^[a-z][a-z0-9\-]{2,29}$ ]]; then
-            # Define TENANT_DIR right after TENANT_ID is set
-            TENANT_DIR="/mnt/data/${TENANT_ID}"
-            # Define TENANT_DIR right after TENANT_ID is set
-            TENANT_DIR="/mnt/data/${TENANT_ID}"
-            break
-        fi
-        echo "  ❌ Must start with a letter, 3–30 chars, lowercase/numbers/hyphens only"
+            TENANT_ID="${TENANT_ID,,}"
+            if [[ "${TENANT_ID}" =~ ^[a-z][a-z0-9\-]{2,29}$ ]]; then
+                # Define TENANT_DIR right after TENANT_ID is set
+                TENANT_DIR="/mnt/data/${TENANT_ID}"
+                # Define TENANT_DIR right after TENANT_ID is set
+                TENANT_DIR="/mnt/data/${TENANT_ID}"
+                break
+            fi
+            echo "  ❌ Must start with a letter, 3–30 chars, lowercase/numbers/hyphens only"
     done
 
     print_divider
@@ -783,12 +792,18 @@ select_stack() {
     done
 
     # ── Apply stack presets ───────────────────────────────────────────────────
-    # First, zero everything out
-    ENABLE_POSTGRES=false; ENABLE_REDIS=false; ENABLE_OLLAMA=false; ENABLE_OPENWEBUI=false;
+    # First, set core triad defaults to true
+    ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_OLLAMA=true; ENABLE_OPENWEBUI=true;
+    ENABLE_LITELLM=true; ENABLE_QDRANT=true; ENABLE_CADDY=true # Always on infrastructure
+    
+    # Zero out optional services
     ENABLE_ANYTHINGLLM=false; ENABLE_DIFY=false; ENABLE_N8N=false; ENABLE_FLOWISE=false;
-    ENABLE_LITELLM=false; ENABLE_QDRANT=false; ENABLE_GRAFANA=false; ENABLE_PROMETHEUS=false;
+    ENABLE_GRAFANA=false; ENABLE_PROMETHEUS=false;
     ENABLE_AUTHENTIK=false; ENABLE_SIGNAL=false; ENABLE_OPENCLAW=false; ENABLE_TAILSCALE=false;
-    ENABLE_RCLONE=false; ENABLE_CADDY=true # Caddy is always on
+    ENABLE_RCLONE=false; ENABLE_OPENAI=false; ENABLE_ANTHROPIC=false;
+    ENABLE_LOCALAI=false; ENABLE_VLLM=false;
+    ENABLE_WEAVIATE=false; ENABLE_CHROMADB=false; ENABLE_MILVUS=false; ENABLE_PINECONE=false;
+    ENABLE_MINIO=false
 
     case "${stack_choice}" in
         1) # Lite Stack
@@ -2841,6 +2856,14 @@ offer_next_step() {
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 main() {
+    # Accept TENANT_ID as optional command line argument
+    if [ -n "${1:-}" ]; then
+        TENANT_ID="${1,,}"
+        log "INFO" "Using tenant ID from command line: ${TENANT_ID}"
+        # Skip interactive tenant collection if provided
+        SKIP_TENANT_COLLECTION=true
+    fi
+    
     print_header
     check_root
     check_prerequisites      # Step 1
@@ -2873,6 +2896,11 @@ main() {
     
     print_summary
     write_env_file
+    
+    # Generate docker-compose.yml with all enabled services
+    log "INFO" "Generating docker-compose.yml..."
+    source "${SCRIPTS_DIR}/3-configure-services.sh"
+    generate_compose
     
     create_directories
     
