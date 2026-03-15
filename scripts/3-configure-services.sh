@@ -684,7 +684,7 @@ EOF
 EOF
 
     # Caddy - always deployed as reverse proxy
-    cat >> "$COMPOSE_FILE" <<'EOF'
+    cat >> "$COMPOSE_FILE" <<EOF
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
