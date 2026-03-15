@@ -1,1149 +1,877 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script 3: Configure Services - Mission Control
+# Script 3: Mission Control — Function Library + CLI Dispatcher
+# Sourced by: 0-cleanup.sh, 1-setup-system.sh, 2-deploy-services.sh
+# Run directly for: service lifecycle, health, config, logs
 # =============================================================================
-set -eo pipefail
+set -euo pipefail
 
-# --- Color Definitions ---
-DIM="${DIM:-\033[2m}"
-NC="${NC:-\033[0m}"
-RED="${RED:-\033[0;31m}"
-GREEN="${GREEN:-\033[0;32m}"
-YELLOW="${YELLOW:-\033[1;33m}"
-CYAN="${CYAN:-\033[0;36m}"
-BLUE="${BLUE:-\033[0;34m}"
-log() { echo -e "${CYAN}[INFO]${NC}    $1"; }
-ok() { echo -e "${GREEN}[OK]${NC}      $*"; }
-warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
-fail() { echo -e "${RED}[FAIL]${NC}    $*"; exit 1; }
+# ── Single Source of Truth for Paths ───────────────────────────────────────
+# ALL paths resolve to /mnt/data/${TENANT} - NO EXCEPTIONS
+MNT_ROOT="/mnt/data"
+TENANT="${TENANT:-default}"
+TENANT_DIR="${MNT_ROOT}/${TENANT}"
+CONFIG_DIR="${TENANT_DIR}/configs"
+DATA_DIR="${TENANT_DIR}/data"
+LOGS_DIR="${TENANT_DIR}/logs"
+COMPOSE_FILE="${TENANT_DIR}/docker-compose.yml"
+ENV_FILE="${TENANT_DIR}/.env"
 
-# --- Tenant ID Check ---
-if [[ -z "${1:-}" ]] && [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    echo "ERROR: TENANT_ID is required. Usage: sudo bash $0 <tenant_id>" >&2
-    exit 1
-fi
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    TENANT_ID="$1"
-fi
+# ── Load Environment ────────────────────────────────────────────────────────
+[[ -f "$ENV_FILE" ]] && set -a && source "$ENV_FILE" && set +a
 
-# --- Environment Setup ---
-if [[ -n "${TENANT_ID:-}" ]]; then
-    TENANT_DIR="/mnt/data/${TENANT_ID}"
-    ENV_FILE="${TENANT_DIR}/.env"
-    if [[ ! -f "${ENV_FILE}" ]]; then
-        fail "Environment file not found for tenant '${TENANT_ID}' at ${ENV_FILE}"
-    fi
-    log "Loading environment from: ${ENV_FILE}"
-    set -a
-    source "${ENV_FILE}" 2>/dev/null || true
-    set +a
-    DATA_ROOT="${TENANT_DIR}"
-fi
+# ── Colors and Logging ────────────────────────────────────────────────────
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'; BOLD='\033[1m'
 
-# --- Service Log Configuration Functions ---
-configure_service_logging() {
-    local service=$1
-    local enable_logs="${2:-true}"
-    local log_level="${3:-info}"
-    local log_retention="${4:-7}"  # days
+log_write() {
+    local level="$1" msg="$2"
+    local ts; ts="$(date '+%Y-%m-%d %H:%M:%S')"
+    local logfile="${LOGS_DIR}/platform-$(date +%Y%m%d).log"
+    mkdir -p "$LOGS_DIR"
+    echo -e "[${ts}] [${level}] ${msg}" | tee -a "$logfile"
+}
+
+log_info()    { echo -e "${BLUE}ℹ${NC} $1";  log_write INFO    "$1"; }
+log_success() { echo -e "${GREEN}✓${NC} $1"; log_write SUCCESS "$1"; }
+log_warning() { echo -e "${YELLOW}⚠${NC} $1"; log_write WARNING "$1"; }
+log_error()   { echo -e "${RED}✗${NC} $1";  log_write ERROR   "$1"; }
+
+# ── Directory Preparation with UID-Aware Ownership ─────────────────────────
+prepare_directories() {
+    log_info "Preparing tenant directories under ${TENANT_DIR}..."
     
-    local service_log_dir="${TENANT_DIR}/${service}/logs"
-    local service_config_file="${TENANT_DIR}/${service}/logging.conf"
+    # Create ALL directories under /mnt/data/${TENANT}
+    mkdir -p \
+        "${DATA_DIR}/postgres" \
+        "${DATA_DIR}/redis" \
+        "${DATA_DIR}/qdrant/snapshots" \
+        "${DATA_DIR}/ollama" \
+        "${DATA_DIR}/openwebui" \
+        "${DATA_DIR}/n8n" \
+        "${DATA_DIR}/flowise" \
+        "${DATA_DIR}/litellm" \
+        "${DATA_DIR}/grafana/data" \
+        "${DATA_DIR}/grafana/logs" \
+        "${DATA_DIR}/prometheus" \
+        "${DATA_DIR}/anythingllm" \
+        "${CONFIG_DIR}/litellm" \
+        "${CONFIG_DIR}/postgres" \
+        "${CONFIG_DIR}/caddy/data" \
+        "${CONFIG_DIR}/caddy/config" \
+        "${CONFIG_DIR}/prometheus" \
+        "${LOGS_DIR}"
+
+    # CRITICAL: Set ownership matching container UIDs exactly
+    chown -R 70:"${TENANT_GID:-1001}"      "${DATA_DIR}/postgres"
+    chown -R 999:"${TENANT_GID:-1001}"     "${DATA_DIR}/redis"
+    chown -R 1000:"${TENANT_GID:-1001}"    "${DATA_DIR}/qdrant"
+    chown -R 472:472                        "${DATA_DIR}/grafana"
+    chown -R 65534:65534                    "${DATA_DIR}/prometheus"
+    chown -R 1000:"${TENANT_GID:-1001}"    \
+        "${DATA_DIR}/litellm" \
+        "${DATA_DIR}/n8n" \
+        "${DATA_DIR}/flowise" \
+        "${DATA_DIR}/openwebui" \
+        "${DATA_DIR}/ollama" \
+        "${DATA_DIR}/anythingllm"
     
-    log "=== CONFIGURING LOGGING FOR $service ==="
+    # Config directories owned by tenant for script access
+    chown -R "${TENANT_UID:-1001}:${TENANT_GID:-1001}" "${CONFIG_DIR}"
+    chown -R "${TENANT_UID:-1001}:${TENANT_GID:-1001}" "${LOGS_DIR}"
     
-    # Create service log directory
-    mkdir -p "$service_log_dir"
-    chown "${TENANT_UID:-1001}:${TENANT_GID:-1001}" "$service_log_dir"
+    log_success "Directories ready with correct UID ownership"
+}
+
+# ── Environment File Generation (Primitive Variables First) ───────────────────
+generate_env() {
+    log_info "Writing .env to ${ENV_FILE}..."
+    mkdir -p "$(dirname "$ENV_FILE")"
     
-    if [[ "$enable_logs" == "true" ]]; then
-        log "Enabling logging for $service with level: $log_level"
-        
-        # Create service-specific logging configuration
-        cat > "$service_config_file" << EOF
-# Service Logging Configuration for $service
-# Generated: $(date)
-ENABLE_LOGGING=true
-LOG_LEVEL=$log_level
-LOG_RETENTION_DAYS=$log_retention
-LOG_DIR=$service_log_dir
-LOG_ROTATION=true
-LOG_MAX_SIZE=100M
-LOG_FORMAT=json
+    # PRIMITIVE VARIABLES FIRST - prevents unbound variable errors
+    cat > "$ENV_FILE" <<EOF
+# Generated by 1-setup-system.sh — do not edit manually
+# ─── Core Identity ────────────────────────────────────────────────────────
+TENANT=${TENANT_NAME}
+DOMAIN=${BASE_DOMAIN}
+ADMIN_EMAIL=${ADMIN_EMAIL}
+TENANT_UID=${REAL_UID}
+TENANT_GID=${REAL_GID}
+
+# ─── Paths (All resolve to /mnt/data/${TENANT}) ───────────────────────────
+MNT_ROOT=${MNT_ROOT}
+TENANT_DIR=/mnt/data/${TENANT_NAME}
+CONFIG_DIR=/mnt/data/${TENANT_NAME}/configs
+DATA_DIR=/mnt/data/${TENANT_NAME}/data
+LOGS_DIR=/mnt/data/${TENANT_NAME}/logs
+COMPOSE_FILE=/mnt/data/${TENANT_NAME}/docker-compose.yml
+
+# ─── Database Credentials (Primitive) ───────────────────────────────────────
+POSTGRES_DB=aiplatform
+POSTGRES_USER=aiplatform
+POSTGRES_PASSWORD=${DB_PASSWORD}
+POSTGRES_UID=70
+REDIS_PASSWORD=${REDIS_PASSWORD}
+REDIS_UID=999
+DB_PASSWORD=${DB_PASSWORD}
+
+# ─── Derived Connection Strings (Use primitives above) ─────────────────────
+DATABASE_URL=postgresql://aiplatform:\${POSTGRES_PASSWORD}@postgres:5432/aiplatform
+LITELLM_DATABASE_URL=postgresql://aiplatform:\${POSTGRES_PASSWORD}@postgres:5432/litellm
+OPENWEBUI_DATABASE_URL=postgresql://aiplatform:\${POSTGRES_PASSWORD}@postgres:5432/openwebui
+REDIS_URL=redis://:\${REDIS_PASSWORD}@redis:6379
+
+# ─── Service Secrets ────────────────────────────────────────────────────────
+ADMIN_PASSWORD=${ADMIN_PASSWORD}
+JWT_SECRET=${JWT_SECRET}
+ENCRYPTION_KEY=${ENCRYPTION_KEY}
+LITELLM_MASTER_KEY=\${JWT_SECRET}
+LITELLM_SALT_KEY=\${ENCRYPTION_KEY}
+GRAFANA_ADMIN_USER=admin
+GRAFANA_ADMIN_PASSWORD=\${ADMIN_PASSWORD}
+
+# ─── API Keys (Empty if not set) ───────────────────────────────────────────
+OPENAI_API_KEY=${OPENAI_API_KEY:-}
+ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+GEMINI_API_KEY=${GEMINI_API_KEY:-}
+GROQ_API_KEY=${GROQ_API_KEY:-}
+OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+
+# ─── Service Flags ────────────────────────────────────────────────────────
+ENABLE_LITELLM=${ENABLE_LITELLM:-false}
+ENABLE_OLLAMA=${ENABLE_OLLAMA:-false}
+ENABLE_OPENWEBUI=${ENABLE_OPENWEBUI:-false}
+ENABLE_N8N=${ENABLE_N8N:-false}
+ENABLE_FLOWISE=${ENABLE_FLOWISE:-false}
+ENABLE_ANYTHINGLLM=${ENABLE_ANYTHINGLLM:-false}
+ENABLE_QDRANT=${ENABLE_QDRANT:-false}
+ENABLE_MONITORING=${ENABLE_MONITORING:-false}
+ENABLE_TAILSCALE=${ENABLE_TAILSCALE:-false}
+
+# ─── Ports (All configurable) ───────────────────────────────────────────────
+PORT_LITELLM=4000
+PORT_OPENWEBUI=3000
+PORT_N8N=5678
+PORT_FLOWISE=3001
+PORT_GRAFANA=3002
+PORT_PROMETHEUS=9090
+PORT_QDRANT=6333
+PORT_ANYTHINGLLM=3003
+
+# ─── External Integrations ───────────────────────────────────────────────────
+TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY:-}
+GDRIVE_CLIENT_ID=${GDRIVE_CLIENT_ID:-}
+GDRIVE_CLIENT_SECRET=${GDRIVE_CLIENT_SECRET:-}
+GDRIVE_REFRESH_TOKEN=${GDRIVE_REFRESH_TOKEN:-}
+OLLAMA_MODELS=${OLLAMA_MODELS:-llama3.1}
+
+# ─── LiteLLM Routing Strategy ───────────────────────────────────────────────
+LITELLM_ROUTING_STRATEGY=${LITELLM_ROUTING_STRATEGY:-least-busy}
+
+# ─── Vector DB Selection ───────────────────────────────────────────────────
+VECTOR_DB_TYPE=${VECTOR_DB_TYPE:-qdrant}
+
+# ─── SSL Configuration ───────────────────────────────────────────────────────
+USE_LETSENCRYPT=${USE_LETSENCRYPT:-false}
 EOF
-        
-        # Update .env with service-specific logging variables
-        case "$service" in
-            "postgres")
-                echo "POSTGRES_LOGGING_ENABLED=true" >> "${ENV_FILE}"
-                echo "POSTGRES_LOG_DIR=$service_log_dir" >> "${ENV_FILE}"
-                echo "POSTGRES_LOG_LEVEL=$log_level" >> "${ENV_FILE}"
-                echo "POSTGRES_LOG_ROTATION=true" >> "${ENV_FILE}"
-                ;;
-            "redis")
-                echo "REDIS_LOGGING_ENABLED=true" >> "${ENV_FILE}"
-                echo "REDIS_LOG_DIR=$service_log_dir" >> "${ENV_FILE}"
-                echo "REDIS_LOGLEVEL=$log_level" >> "${ENV_FILE}"
-                ;;
-            "qdrant")
-                echo "QDRANT_LOGGING_ENABLED=true" >> "${ENV_FILE}"
-                echo "QDRANT_LOG_DIR=$service_log_dir" >> "${ENV_FILE}"
-                echo "QDRANT__LOG_LEVEL=$log_level" >> "${ENV_FILE}"
-                ;;
-            "grafana")
-                echo "GRAFANA_LOGGING_ENABLED=true" >> "${ENV_FILE}"
-                echo "GRAFANA_LOG_DIR=$service_log_dir" >> "${ENV_FILE}"
-                echo "GF_LOG_LEVEL=$log_level" >> "${ENV_FILE}"
-                echo "GF_LOG_MODE=console file" >> "${ENV_FILE}"
-                echo "GF_PATHS_LOGS=$service_log_dir" >> "${ENV_FILE}"
-                ;;
-            "prometheus")
-                echo "PROMETHEUS_LOGGING_ENABLED=true" >> "${ENV_FILE}"
-                echo "PROMETHEUS_LOG_DIR=$service_log_dir" >> "${ENV_FILE}"
-                echo "PROMETHEUS_LOG_LEVEL=$log_level" >> "${ENV_FILE}"
-                echo "PROMETHEUS_LOG_FORMAT=json" >> "${ENV_FILE}"
-                ;;
-            "caddy")
-                echo "CADDY_LOGGING_ENABLED=true" >> "${ENV_FILE}"
-                echo "CADDY_LOG_DIR=$service_log_dir" >> "${ENV_FILE}"
-                echo "CADDY_LOG_LEVEL=$log_level" >> "${ENV_FILE}"
-                echo "CADDY_LOG_FORMAT=json" >> "${ENV_FILE}"
-                ;;
-        esac
-        
-        ok "Logging enabled for $service -> $service_log_dir"
-    else
-        log "Disabling logging for $service"
-        echo "POSTGRES_LOGGING_ENABLED=false" >> "${ENV_FILE}"
-        echo "REDIS_LOGGING_ENABLED=false" >> "${ENV_FILE}"
-        echo "QDRANT_LOGGING_ENABLED=false" >> "${ENV_FILE}"
-        echo "GRAFANA_LOGGING_ENABLED=false" >> "${ENV_FILE}"
-        echo "PROMETHEUS_LOGGING_ENABLED=false" >> "${ENV_FILE}"
-        echo "CADDY_LOGGING_ENABLED=false" >> "${ENV_FILE}"
-        warn "Logging disabled for $service"
-    fi
-    
-    log "=== END LOGGING CONFIGURATION FOR $service ==="
+    chmod 600 "$ENV_FILE"
+    log_success ".env written with correct variable ordering"
 }
 
-# --- Health Check Functions ---
-check_service_health() {
-    local service=$1
-    local health_url=$2
-    local timeout=${3:-10}
-    
-    log "Checking health for $service..."
-    
-    if curl -s -f --max-time "$timeout" "$health_url" >/dev/null 2>&1; then
-        ok "$service is healthy"
-        return 0
-    else
-        warn "$service is unhealthy or not responding"
-        return 1
-    fi
+# ── Configuration File Generators ───────────────────────────────────────────
+generate_postgres_init() {
+    local out="${CONFIG_DIR}/postgres/init-user-db.sh"
+    mkdir -p "$(dirname "$out")"
+    # Double-quoted: POSTGRES_PASSWORD expands NOW at generation time.
+    # Inner \$\$ escapes are for the psql DO block's dollar-quoting.
+    cat > "$out" <<EOF
+#!/bin/bash
+set -e
+psql -v ON_ERROR_STOP=1 --username "\$POSTGRES_USER" --dbname "\$POSTGRES_DB" <<EOSQL
+  DO \$\$
+  BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'aiplatform') THEN
+      CREATE ROLE aiplatform WITH LOGIN PASSWORD '${DB_PASSWORD}';
+    END IF;
+  END \$\$;
+  SELECT 'CREATE DATABASE litellm   OWNER aiplatform'
+    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='litellm')   \gexec
+  SELECT 'CREATE DATABASE openwebui OWNER aiplatform'
+    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='openwebui') \gexec
+  SELECT 'CREATE DATABASE n8n       OWNER aiplatform'
+    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='n8n')       \gexec
+  GRANT ALL PRIVILEGES ON DATABASE litellm   TO aiplatform;
+  GRANT ALL PRIVILEGES ON DATABASE openwebui TO aiplatform;
+  GRANT ALL PRIVILEGES ON DATABASE n8n       TO aiplatform;
+EOSQL
+EOF
+    chmod +x "$out"
+    # postgres container runs as UID 70 — must be able to read this file
+    chown 70:"${TENANT_GID:-1001}" "$out"
+    log_success "Postgres init script written to ${out}"
 }
 
-check_port_connectivity() {
-    local port=$1
-    local service=$2
-    local timeout=${3:-5}
+generate_litellm_config() {
+    local out="${CONFIG_DIR}/litellm/config.yaml"
+    mkdir -p "$(dirname "$out")"
     
-    if nc -z -w "$timeout" localhost "$port" 2>/dev/null; then
-        ok "$service (port $port) is accessible"
-        return 0
-    else
-        warn "$service (port $port) is not accessible"
-        return 1
-    fi
-}
-
-# --- URL Testing Functions ---
-test_internal_urls() {
-    log "=== TESTING INTERNAL URLS ==="
+    # Start with empty model list
+    cat > "$out" <<EOF
+model_list:
+EOF
     
-    local internal_tests=(
-        "postgres:5432:nc"
-        "redis:6379:nc"
-        "qdrant:6333/health:http"
-        "grafana:3000/api/health:http"
-        "prometheus:9090/-/healthy:http"
-        "caddy:80:http"
-    )
-    
-    for test in "${internal_tests[@]}"; do
-        IFS=':' read -r service port_or_path method <<< "$test"
-        
-        case "$method" in
-            "nc")
-                check_port_connectivity "$port_or_path" "$service"
-                ;;
-            "http")
-                check_service_health "$service" "http://localhost:$port_or_path"
-                ;;
-        esac
+    # Add models based on available API keys
+    [[ -n "${OLLAMA_MODELS:-}" ]] && for m in ${OLLAMA_MODELS//,/ }; do
+        cat >> "$out" <<EOF
+  - model_name: ${m}
+    litellm_params:
+      model: ollama/${m}
+      api_base: http://ollama:11434
+EOF
     done
     
-    log "=== END INTERNAL URL TESTING ==="
+    [[ -n "${OPENAI_API_KEY:-}" ]] && cat >> "$out" <<EOF
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+EOF
+    
+    [[ -n "${ANTHROPIC_API_KEY:-}" ]] && cat >> "$out" <<EOF
+  - model_name: claude-3-5-sonnet
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-20241022
+      api_key: os.environ/ANTHROPIC_API_KEY
+EOF
+    
+    [[ -n "${GROQ_API_KEY:-}" ]] && cat >> "$out" <<EOF
+  - model_name: llama3-groq
+    litellm_params:
+      model: groq/llama3-70b-8192
+      api_key: os.environ/GROQ_API_KEY
+EOF
+    
+    cat >> "$out" <<EOF
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  cache: true
+  cache_params:
+    type: redis
+    host: redis
+    port: 6379
+    password: os.environ/REDIS_PASSWORD
+router_settings:
+  routing_strategy: ${LITELLM_ROUTING_STRATEGY:-least-busy}
+  fallbacks:
+    - gpt-4o: ["gpt-4o-mini", "claude-3-5-sonnet", "llama3-groq"]
+    - claude-3-5-sonnet: ["gpt-4o", "gpt-4o-mini"]
+  model_group_alias:
+    default: "${OLLAMA_MODELS%,*}"
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/LITELLM_DATABASE_URL
+EOF
+    log_success "LiteLLM config written to ${out}"
 }
 
-test_external_urls() {
-    log "=== TESTING EXTERNAL URLS ==="
-    
-    if [[ -n "${DOMAIN:-}" ]]; then
-        local external_tests=(
-            "https://${DOMAIN}:main"
-            "https://grafana.${DOMAIN}:grafana"
-            "https://prometheus.${DOMAIN}:prometheus"
-            "https://auth.${DOMAIN}:authentik"
-        )
-        
-        for test in "${external_tests[@]}"; do
-            IFS=':' read -r url service <<< "$test"
-            
-            if curl -s -f --max-time 10 "$url" >/dev/null 2>&1; then
-                ok "$service ($url) is reachable"
-            else
-                warn "$service ($url) is not reachable"
-            fi
-        done
-    else
-        warn "DOMAIN not set, skipping external URL tests"
-    fi
-    
-    log "=== END EXTERNAL URL TESTING ==="
-}
-
-# --- Log Management Functions ---
-rotate_service_logs() {
-    local service=$1
-    local service_log_dir="${TENANT_DIR}/${service}/logs"
-    
-    if [[ -d "$service_log_dir" ]]; then
-        log "Rotating logs for $service..."
-        
-        # Compress logs older than 1 day
-        find "$service_log_dir" -name "*.log" -mtime +1 -exec gzip {} \;
-        
-        # Remove compressed logs older than retention period
-        find "$service_log_dir" -name "*.log.gz" -mtime +7 -delete
-        
-        ok "Log rotation completed for $service"
-    fi
-}
-
-cleanup_old_logs() {
-    log "=== CLEANING UP OLD LOGS ==="
-    
-    # Clean up deployment logs older than 30 days
-    find "${TENANT_DIR}/logs" -name "deploy-*.log" -mtime +30 -delete
-    
-    # Clean up service logs older than retention period
-    for service in postgres redis qdrant grafana prometheus caddy; do
-        rotate_service_logs "$service"
-    done
-    
-    ok "Log cleanup completed"
-    log "=== END LOG CLEANUP ==="
-}
-
-# --- Dashboard Functions ---
-show_logging_dashboard() {
-    log "=== LOGGING DASHBOARD ==="
-    
-    echo ""
-    echo "╔════════════════════════════════════════════════════════════════════════════════╗"
-    echo "║                      🗂 SERVICE LOGGING DASHBOARD                           ║"
-    echo "╚══════════════════════════════════════════════════════════════════════════════╝"
-    echo ""
-    
-    printf "%-15s %-12s %-25s %-15s %-10s\n" "SERVICE" "ENABLED" "LOG_DIR" "LEVEL" "RETENTION"
-    printf "%-15s %-12s %-25s %-15s %-10s\n" "--------" "-------" "--------" "-----" "---------"
-    
-    services=("postgres" "redis" "qdrant" "grafana" "prometheus" "caddy")
-    
-    for service in "${services[@]}"; do
-        local enabled_var="${service^^}_LOGGING_ENABLED"
-        local enabled="${!enabled_var:-false}"
-        local log_dir="${TENANT_DIR}/${service}/logs"
-        local level_var="${service^^}_LOG_LEVEL"
-        local level="${!level_var:-info}"
-        local retention="7 days"
-        
-        if [[ "$enabled" == "true" ]]; then
-            printf "%-15s %-12s %-25s %-15s %-10s\n" "$service" "✅ YES" "$log_dir" "$level" "$retention"
-        else
-            printf "%-15s %-12s %-25s %-15s %-10s\n" "$service" "❌ NO" "N/A" "N/A" "N/A"
-        fi
-    done
-    
-    echo ""
-    echo "📋 LOG LOCATIONS:"
-    echo "   • Main deployment logs: ${TENANT_DIR}/logs/deploy-*.log"
-    echo "   • Service logs: ${TENANT_DIR}/*/logs/"
-    echo ""
-    echo "🔧 LOG MANAGEMENT:"
-    echo "   • Rotate logs: sudo bash $0 ${TENANT_ID} --rotate"
-    echo "   • Clean logs: sudo bash $0 ${TENANT_ID} --cleanup"
-    echo ""
-    echo "╔════════════════════════════════════════════════════════════════════════════════╗"
-    echo "║                      END LOGGING DASHBOARD                                   ║"
-    echo "╚══════════════════════════════════════════════════════════════════════════════╝"
-    echo ""
-    
-    log "=== END LOGGING DASHBOARD ==="
-}
-
-# --- Main Function ---
-main() {
-    local tenant_id="${1:-}"
-    local action="${2:---health}" # Default to --health if no action provided
-    
-    if [[ -z "$tenant_id" ]]; then
-        echo "Usage: sudo bash $0 <tenant_id> [action]"
-        echo ""
-        echo "Actions:"
-        echo "  configure  - Configure logging for all services (default)"
-        echo "  provision  - Phase 3: Database provisioning, configuration verification, and health dashboard"
-        echo "  disable    - Disable logging for all services"
-        echo "  rotate    - Rotate service logs"
-        echo "  cleanup    - Clean up old logs"
-        echo "  dashboard  - Show logging dashboard"
-        echo "  start      - Start specific service (or all)"
-        echo "  stop       - Stop specific service (or all)"
-        echo "  rclone-mount - Execute docker exec to start Rclone mount"
-        echo "  ingest     - Execute tenant's ingest.py script"
-        echo "  pair-signal - Generate QR code for Signal device pairing"
-        echo "  tailscale   - Configure Tailscale VPN and display IP"
-        echo "  health     - Run comprehensive health checks"
-        echo "  dashboard  - Show comprehensive health dashboard"
-        exit 1
-    fi
-    
-    # Set global tenant ID for the script
-    TENANT_ID="$tenant_id"
-    
-    case "$action" in
-        "configure")
-            log "Starting service logging configuration..."
-            
-            # Configure logging for all enabled services
-            [[ "${ENABLE_POSTGRES}" == "true" ]] && configure_service_logging "postgres" "true" "info"
-            [[ "${ENABLE_REDIS}" == "true" ]] && configure_service_logging "redis" "true" "notice"
-            [[ "${ENABLE_QDRANT}" == "true" ]] && configure_service_logging "qdrant" "true" "info"
-            [[ "${ENABLE_GRAFANA}" == "true" ]] && configure_service_logging "grafana" "true" "info"
-            [[ "${ENABLE_PROMETHEUS}" == "true" ]] && configure_service_logging "prometheus" "true" "info"
-            [[ "${ENABLE_CADDY}" == "true" ]] && configure_service_logging "caddy" "true" "info"
-            
-            # Show logging dashboard
-            show_logging_dashboard
-            
-            ok "Service logging configuration completed."
-            ;;
-        "provision")
-            log "Starting Phase 3: Database provisioning and verification..."
-            
-            # Phase 3: Database provisioning
-            provision_databases
-            
-            # Phase 3: Configuration verification
-            verify_service_configurations
-            
-            # Phase 3: Health dashboard
-            print_health_dashboard
-            
-            ok "Phase 3: Database provisioning, configuration verification, and health dashboard completed."
-            ;;
-        "--health")
-            log "Running comprehensive health checks for tenant: ${TENANT_ID}"
-            ;;
-        "cleanup")
-            log "Cleaning up old logs..."
-            cleanup_old_logs
-            ;;
-        "pair-signal")
-            log "Generating QR code for Signal device pairing..."
-            pair_signal_device
-            ;;
-        "dashboard")
-            show_logging_dashboard
-            ;;
-        "tailscale")
-            configure_tailscale
-            ;;
-        "dashboard")
-            print_health_dashboard
-            ;;
-        "start")
-            log "Starting services for tenant: ${TENANT_ID}"
-            cd "${TENANT_DIR}"
-            if [[ -n "${2:-}" ]]; then
-                docker compose start "$2"
-                ok "Service '$2' started."
-            else
-                docker compose start
-                ok "All services started."
-            fi
-            ;;
-        "stop")
-            log "Stopping services for tenant: ${TENANT_ID}"
-            cd "${TENANT_DIR}"
-            if [[ -n "${2:-}" ]]; then
-                docker compose stop "$2"
-                ok "Service '$2' stopped."
-            else
-                docker compose stop
-                ok "All services stopped."
-            fi
-            ;;
-        "rclone-mount")
-            log "Starting Rclone mount for tenant: ${TENANT_ID}"
-            cd "${TENANT_DIR}"
-            docker exec -d "$(docker ps -q --filter "name=rclone" 2>/dev/null || echo "")" \
-                rclone mount gdrive: /mnt/gdrive --vfs-cache-mode writes &
-            ok "Rclone mount started in background."
-            ;;
-        "ingest")
-            log "Starting data ingestion for tenant: ${TENANT_ID}"
-            cd "${TENANT_DIR}"
-            # Run ingestion using temporary networked container
-            docker run --rm --network "${TENANT_ID}_default" \
-                -v "${TENANT_DIR}/ingest.py:/app/ingest.py" \
-                python:3.9-slim python /app/ingest.py
-            ok "Data ingestion completed."
-            ;;
-        "health")
-            log "Running comprehensive health checks for tenant: ${TENANT_ID}"
-            
-            # 1. Container Status Check
-            log "=== CONTAINER STATUS CHECK ==="
-            cd "${TENANT_DIR}"
-            docker compose ps
-            
-            # 2. External Port Check
-            log "=== EXTERNAL PORT CONNECTIVITY ==="
-            nc -z localhost "${CADDY_HTTP_PORT:-80}" && ok "HTTP port 80 accessible" || fail "HTTP port 80 NOT accessible"
-            nc -z localhost "${CADDY_HTTPS_PORT:-443}" && ok "HTTPS port 443 accessible" || fail "HTTPS port 443 NOT accessible"
-            
-            # 3. External URL Check
-            log "=== EXTERNAL URL ACCESSIBILITY ==="
-            if [[ -n "${DOMAIN:-}" ]]; then
-                curl --silent --fail https://"${DOMAIN}" > /dev/null && ok "Main domain accessible" || fail "Main domain NOT accessible"
-                curl --silent --fail https://grafana."${DOMAIN}" > /dev/null && ok "Grafana accessible" || warn "Grafana not accessible"
-                curl --silent --fail https://openwebui."${DOMAIN}" > /dev/null && ok "OpenWebUI accessible" || warn "OpenWebUI not accessible"
-            fi
-            
-            # 4. Internal Integration Check
-            log "=== INTERNAL INTEGRATION CHECK ==="
-            
-            # Test OpenWebUI -> LiteLLM
-            if docker ps -q --filter "name=openwebui" | grep -q .; then
-                if docker exec "$(docker ps -q --filter "name=openwebui")" curl --fail --silent --connect-timeout 5 http://litellm:4000 > /dev/null; then
-                    ok "Integration: OpenWebUI → LiteLLM"
-                else
-                    fail "Integration FAILED: OpenWebUI → LiteLLM"
-                fi
-            fi
-            
-            # Test LiteLLM -> Ollama
-            if docker ps -q --filter "name=litellm" | grep -q .; then
-                if docker exec "$(docker ps -q --filter "name=litellm")" curl --fail --silent --connect-timeout 5 http://ollama:11434 > /dev/null; then
-                    ok "Integration: LiteLLM → Ollama"
-                else
-                    fail "Integration FAILED: LiteLLM → Ollama"
-                fi
-            fi
-            
-            # Test Flowise -> Postgres
-            if docker ps -q --filter "name=flowise" | grep -q .; then
-                if docker exec "$(docker ps -q --filter "name=flowise")" nc -z postgres 5432 > /dev/null; then
-                    ok "Integration: Flowise → Postgres"
-                else
-                    fail "Integration FAILED: Flowise → Postgres"
-                fi
-            fi
-            
-            log "=== ULTIMATE VERIFICATION COMPLETE ==="
-            
-            # 5. Service Health Summary
-            log "=== HEALTH SUMMARY ==="
-            local total_containers=$(docker ps --filter "name=${COMPOSE_PROJECT_NAME}" --format "{{.Names}}" | wc -l)
-            local running_containers=$(docker ps --filter "name=${COMPOSE_PROJECT_NAME}" --filter "status=running" --format "{{.Names}}" | wc -l)
-            log "Total containers: ${total_containers}"
-            log "Running containers: ${running_containers}"
-            
-            if [[ $running_containers -eq $total_containers ]]; then
-                ok "All containers are running!"
-            else
-                warn "Some containers are not running."
-            fi
-            
-            log "Health check complete."
-            ;;
-        *)
-            echo "Usage: sudo bash $0 <tenant_id> [action]"
-            echo ""
-            echo "Actions:"
-            echo "  configure  - Configure logging for all services (default)"
-            echo "  disable    - Disable logging for all services"
-            echo "  rotate    - Rotate service logs"
-            echo "  cleanup    - Clean up old logs"
-            echo "  dashboard  - Show logging dashboard"
-            echo "  health     - Run comprehensive health checks"
-            exit 1
-    esac
-}
-
-# --- Tailscale VPN Configuration Function ---
-configure_tailscale() {
-    [[ -n "${TAILSCALE_AUTH_KEY:-}" ]] || { log "INFO" "TAILSCALE_AUTHKEY not set — skipping"; return 0; }
-    
-    log "INFO" "Authenticating Tailscale (compose service)..."
-    
-    cd "${TENANT_DIR}"
-    
-    # Check if Tailscale service is running
-    if ! docker compose ps --filter "name=tailscale" --filter "status=running" | grep -q "tailscale"; then
-        log "WARN" "Tailscale service not running, starting it first..."
-        docker compose up -d tailscale
-        sleep 10
-    fi
-    
-    # Authenticate with Tailscale
-    docker compose exec -T tailscale tailscale up \
-        --authkey="${TAILSCALE_AUTH_KEY}" \
-        --hostname="${TENANT:-ai-platform}" \
-        --accept-routes
-    
-    sleep 5
-    
-    # Capture Tailscale IP for dashboard
-    TAILSCALE_IP=$(docker compose exec -T tailscale tailscale ip -4 2>/dev/null | tr -d ' \n' || echo "")
-    if [[ -n "$TAILSCALE_IP" ]]; then
-        log "OK" "Tailscale IP: ${TAILSCALE_IP}"
-        # Persist for dashboard and future use
-        grep -q "^TAILSCALE_IP=" "${ENV_FILE}" && \
-            sed -i "s|^TAILSCALE_IP=.*|TAILSCALE_IP=${TAILSCALE_IP}|" "${ENV_FILE}" || \
-            echo "TAILSCALE_IP=${TAILSCALE_IP}" >> "${ENV_FILE}"
-    else
-        log "WARN" "Could not determine Tailscale IP — check: docker compose logs tailscale"
-    fi
-}
-
-# --- Health Dashboard Function ---
-print_health_dashboard() {
-    # Reload env to pick up TAILSCALE_IP written during this session
-    set -a; source "${ENV_FILE}"; set +a
-
-    echo ""
-    echo "╔════════════════════════════════════════════════════════╗"
-    echo "║           PLATFORM HEALTH DASHBOARD                 ║"
-    echo "╚══════════════════════════════════════════════════════╝"
-    echo ""
-    echo "  Tailscale IP : ${TAILSCALE_IP:-NOT CONNECTED}"
-    echo "  Domain       : https://${DOMAIN}"
-    echo ""
-
-    check_svc() {
-        local name="$1" url="$2"
-        if curl -sf --max-time 5 "$url" > /dev/null 2>&1; then
-            printf "  %-20s %s\n" "$name" "🟢 OK  $url"
-        else
-            printf "  %-20s %s\n" "$name" "🔴 FAIL  $url"
-        fi
-    }
-
-    echo "Core Infrastructure:"
-    check_svc "PostgreSQL" "$(docker compose exec -T postgres pg_isready -U "${POSTGRES_USER:-postgres}" -q 2>/dev/null && echo OK)"
-    check_svc "Redis" "$(docker compose exec -T redis redis-cli ping 2>/dev/null && echo OK)"
-    check_svc "LiteLLM" "http://localhost:${PORT_LITELLM:-4000}/health/liveliness"
-    check_svc "Grafana" "http://localhost:${PORT_GRAFANA:-3002}/api/health"
-    check_svc "n8n" "http://localhost:${PORT_N8N:-5678}/healthz"
-    check_svc "Qdrant" "http://localhost:${PORT_QDRANT:-6333}/collections"
-    check_svc "OpenWebUI" "http://localhost:${PORT_OPENWEBUI:-3000}/"
-    check_svc "Prometheus" "http://localhost:${PORT_PROMETHEUS:-9090}/-/healthy"
-
-    echo ""
-    echo "Service Access URLs:"
-    if [[ -n "${DOMAIN:-}" ]]; then
-        check_svc "Main Domain" "https://${DOMAIN}"
-        check_svc "Grafana" "https://grafana.${DOMAIN}"
-        check_svc "n8n" "https://n8n.${DOMAIN}"
-        check_svc "OpenWebUI" "https://openwebui.${DOMAIN}"
-    fi
-
-    echo ""
-    echo "Service Tests:"
-    echo "  LiteLLM test: curl -s http://localhost:${PORT_LITELLM:-4000}/v1/models \\"
-    echo "              -H 'Authorization: Bearer \${LITELLM_MASTER_KEY}'"
-    echo "  OpenClaw test: curl -s http://localhost:${PORT_OPENCLAW:-8080}/signal"
-    echo ""
-}
-
-# --- Signal Device Pairing Function ---
-pair_signal_device() {
-    log "Generating QR code for Signal device pairing..."
-    
-    # Check if signal container is running
-    local signal_container="${COMPOSE_PROJECT_NAME}-signal-1"
-    if ! docker ps --filter "name=${signal_container}" --filter "status=running" | grep -q "${signal_container}"; then
-        fail "Signal container is not running. Please start Signal service first."
-    fi
-    
-    # Generate device name
-    local device_name="${TENANT_ID}-ai-platform"
-    
-    log "Generating pairing link for device: ${device_name}"
-    
-    # Get QR code link from Signal API
-    local pairing_response=$(curl -s "http://localhost:8080/v1/qrcodelink?device_name=${device_name}")
-    
-    if [[ -z "$pairing_response" ]]; then
-        fail "Failed to get pairing link from Signal API"
-    fi
-    
-    # Extract the URI from response
-    local tsdevice_uri=$(echo "$pairing_response" | grep -o 'tsdevice:/[^"]*')
-    
-    if [[ -z "$tsdevice_uri" ]]; then
-        fail "Failed to extract pairing URI from response"
-    fi
-    
-    log "Pairing URI generated: ${tsdevice_uri}"
-    
-    # Check if qrencode is available
-    if ! command -v qrencode &> /dev/null; then
-        warn "qrencode not found. Installing..."
-        apt-get update && apt-get install -y qrencode || {
-            fail "Failed to install qrencode. Please install it manually."
-        }
-    fi
-    
-    # Generate QR code
-    log "Generating QR code for scanning..."
-    echo ""
-    echo "=================================================================="
-    echo "📱 SCAN THIS QR CODE WITH YOUR SIGNAL APP 📱"
-    echo "=================================================================="
-    echo ""
-    qrencode -t ANSI "${tsdevice_uri}"
-    echo ""
-    echo "=================================================================="
-    echo "📱 Open Signal App → Settings → Linked Devices → '+' → Scan QR Code"
-    echo "=================================================================="
-    echo ""
-    
-    # Store pairing confirmation
-    local paired_file="${TENANT_DIR}/signal-data/.paired"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Device ${device_name} paired with URI: ${tsdevice_uri}" > "$paired_file"
-    chown "${TENANT_UID}:${TENANT_GID}" "$paired_file"
-    
-    ok "QR code generated successfully!"
-    ok "Pairing URI saved to: ${paired_file}"
-    ok "After scanning, Signal service will be fully operational."
-    
-    # Wait a moment for user to scan
-    log "Waiting for device pairing to complete..."
-    sleep 10
-    
-    # Verify pairing was successful
-    log "Verifying Signal service health..."
-    local health_check=$(curl -s "http://localhost:8080/v1/about" | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
-    
-    if [[ "$health_check" == "ok" ]]; then
-        ok "✅ Signal service is healthy and ready!"
-        ok "✅ OpenClaw can now be started successfully."
-    else
-        warn "⚠️  Signal service may still be initializing..."
-        warn "⚠️  Check service logs with: docker compose logs signal"
-    fi
-}
-
-# ─── Phase 3: Database Provisioning and Verification ───────────────────────────
-provision_databases() {
-    log "INFO" "Starting Phase 3: Database Provisioning and Verification"
-    
-    # PostgreSQL provisioning
-    if [[ "${ENABLE_POSTGRES}" == "true" ]]; then
-        provision_postgresql_database
-    fi
-    
-    # Redis provisioning
-    if [[ "${ENABLE_REDIS}" == "true" ]]; then
-        provision_redis_cache
-    fi
-    
-    # Vector database provisioning
-    if [[ "${ENABLE_QDRANT}" == "true" ]]; then
-        provision_qdrant_vector_db
-    fi
-    
-    ok "Database provisioning completed"
-}
-
-provision_postgresql_database() {
-    log "INFO" "Provisioning PostgreSQL database..."
-    
-    # Wait for PostgreSQL to be ready
-    local max_wait=30
-    local wait_time=0
-    
-    while [[ $wait_time -lt $max_wait ]]; do
-        if docker exec "ai-${TENANT_ID}-postgres-1" pg_isready -U postgres &>/dev/null; then
-            break
-        fi
-        sleep 2
-        wait_time=$((wait_time + 2))
-    done
-    
-    if [[ $wait_time -ge $max_wait ]]; then
-        fail "PostgreSQL did not become ready within ${max_wait} seconds"
-    fi
-    
-    # Create application databases
-    local databases=("n8n" "grafana" "openwebui" "anythingllm")
-    
-    for db in "${databases[@]}"; do
-        # Check if service is enabled
-        if [[ $(declare -p "ENABLE_${db^^}" 2>/dev/null 2>&1) =~ "true" ]]; then
-            log "INFO" "Creating database: ${db}"
-            
-            # Create database if it doesn't exist
-            docker exec "ai-${TENANT_ID}-postgres-1" psql -U postgres -tc \
-                "SELECT 1 FROM pg_database WHERE datname = '${db}'" | grep -q 1 || \
-            docker exec "ai-${TENANT_ID}-postgres-1" psql -U postgres -c \
-                "CREATE DATABASE ${db};" &>/dev/null
-            
-            # Create user and grant permissions
-            docker exec "ai-${TENANT_ID}-postgres-1" psql -U postgres -tc \
-                "SELECT 1 FROM pg_roles WHERE rolname = '${db}_user'" | grep -q 1 || \
-            docker exec "ai-${TENANT_ID}-postgres-1" psql -U postgres -c \
-                "CREATE USER ${db}_user WITH PASSWORD '${POSTGRES_PASSWORD}';" &>/dev/null
-            
-            docker exec "ai-${TENANT_ID}-postgres-1" psql -U postgres -c \
-                "GRANT ALL PRIVILEGES ON DATABASE ${db} TO ${db}_user;" &>/dev/null
-            
-            ok "Database ${db} created and configured"
-        fi
-    done
-    
-    # Verify database connectivity
-    verify_postgresql_connectivity
-}
-
-provision_redis_cache() {
-    log "INFO" "Provisioning Redis cache..."
-    
-    # Wait for Redis to be ready
-    local max_wait=30
-    local wait_time=0
-    
-    while [[ $wait_time -lt $max_wait ]]; do
-        if docker exec "ai-${TENANT_ID}-redis-1" redis-cli ping &>/dev/null; then
-            break
-        fi
-        sleep 2
-        wait_time=$((wait_time + 2))
-    done
-    
-    if [[ $wait_time -ge $max_wait ]]; then
-        fail "Redis did not become ready within ${max_wait} seconds"
-    fi
-    
-    # Configure Redis settings
-    docker exec "ai-${TENANT_ID}-redis-1" redis-cli CONFIG SET maxmemory 256mb &>/dev/null
-    docker exec "ai-${TENANT_ID}-redis-1" redis-cli CONFIG SET maxmemory-policy allkeys-lru &>/dev/null
-    
-    # Test Redis functionality
-    docker exec "ai-${TENANT_ID}-redis-1" redis-cli SET test_key "test_value" &>/dev/null
-    local test_value=$(docker exec "ai-${TENANT_ID}-redis-1" redis-cli GET test_key 2>/dev/null)
-    
-    if [[ "$test_value" == "test_value" ]]; then
-        docker exec "ai-${TENANT_ID}-redis-1" redis-cli DEL test_key &>/dev/null
-        ok "Redis cache provisioned and verified"
-    else
-        fail "Redis functionality test failed"
-    fi
-}
-
-provision_qdrant_vector_db() {
-    log "INFO" "Provisioning Qdrant vector database..."
-    
-    # Wait for Qdrant to be ready
-    local max_wait=30
-    local wait_time=0
-    
-    while [[ $wait_time -lt $max_wait ]]; do
-        if curl -s -f "http://localhost:6333/collections" &>/dev/null; then
-            break
-        fi
-        sleep 2
-        wait_time=$((wait_time + 2))
-    done
-    
-    if [[ $wait_time -ge $max_wait ]]; then
-        fail "Qdrant did not become ready within ${max_wait} seconds"
-    fi
-    
-    # Create collections for AI services
-    local collections=("openwebui_embeddings" "n8n_embeddings" "documents")
-    
-    for collection in "${collections[@]}"; do
-        log "INFO" "Creating collection: ${collection}"
-        
-        # Check if collection exists
-        if ! curl -s -f "http://localhost:6333/collections/${collection}" &>/dev/null; then
-            # Create collection with default configuration
-            curl -s -X PUT "http://localhost:6333/collections/${collection}" \
-                -H "Content-Type: application/json" \
-                -d '{
-                    "vectors": {
-                        "size": 1536,
-                        "distance": "Cosine"
-                    }
-                }' &>/dev/null
-            
-            ok "Collection ${collection} created"
-        else
-            log "INFO" "Collection ${collection} already exists"
-        fi
-    done
-    
-    # Verify Qdrant functionality
-    verify_qdrant_functionality
-}
-
-verify_postgresql_connectivity() {
-    log "INFO" "Verifying PostgreSQL connectivity..."
-    
-    local databases=("n8n" "grafana" "openwebui" "anythingllm")
-    
-    for db in "${databases[@]}"; do
-        if [[ $(declare -p "ENABLE_${db^^}" 2>/dev/null 2>&1) =~ "true" ]]; then
-            # Test database connection
-            if docker exec "ai-${TENANT_ID}-postgres-1" psql -U "${db}_user" -d "${db}" -c "SELECT 1;" &>/dev/null; then
-                ok "PostgreSQL ${db} database connectivity verified"
-            else
-                fail "PostgreSQL ${db} database connectivity failed"
-            fi
-        fi
-    done
-}
-
-verify_qdrant_functionality() {
-    log "INFO" "Verifying Qdrant functionality..."
-    
-    # Test collection creation and vector operations
-    local test_collection="test_collection"
-    
-    # Create test collection
-    curl -s -X PUT "http://localhost:6333/collections/${test_collection}" \
-        -H "Content-Type: application/json" \
-        -d '{
-            "vectors": {
-                "size": 1536,
-                "distance": "Cosine"
-            }
-        }' &>/dev/null
-    
-    # Add test vector
-    curl -s -X PUT "http://localhost:6333/collections/${test_collection}/points" \
-        -H "Content-Type: application/json" \
-        -H "api-key: ${QDRANT_API_KEY}" \
-        -d '{
-            "points": [
-                {
-                    "id": 1,
-                    "vector": [0.1, 0.2, 0.3],
-                    "payload": {"test": "data"}
-                }
-            ]
-        }' &>/dev/null
-    
-    # Search test vector
-    local search_result=$(curl -s -X POST "http://localhost:6333/collections/${test_collection}/search" \
-        -H "Content-Type: application/json" \
-        -H "api-key: ${QDRANT_API_KEY}" \
-        -d '{
-            "vector": [0.1, 0.2, 0.3],
-            "limit": 1
-        }' | jq -r '.result | length' 2>/dev/null)
-    
-    if [[ "$search_result" == "1" ]]; then
-        # Cleanup test collection
-        curl -s -X DELETE "http://localhost:6333/collections/${test_collection}" &>/dev/null
-        ok "Qdrant functionality verified"
-    else
-        fail "Qdrant functionality test failed"
-    fi
-}
-
-# ─── Configuration Verification ─────────────────────────────────────────────
-verify_service_configurations() {
-    log "INFO" "Verifying service configurations..."
-    
-    # Verify environment variables
-    verify_environment_variables
-    
-    # Verify service connections
-    verify_service_connections
-    
-    # Verify data persistence
-    verify_data_persistence
-    
-    ok "Service configuration verification completed"
-}
-
-verify_environment_variables() {
-    log "INFO" "Verifying critical environment variables..."
-    
-    local critical_vars=(
-        "POSTGRES_PASSWORD"
-        "REDIS_PASSWORD"
-        "QDRANT_API_KEY"
-        "TENANT_UID"
-        "TENANT_GID"
-        "DOCKER_NETWORK"
-    )
-    
-    for var in "${critical_vars[@]}"; do
-        if [[ -n "${!var:-}" ]]; then
-            ok "Environment variable ${var} is set"
-        else
-            warn "Environment variable ${var} is not set"
-        fi
-    done
-}
-
-verify_service_connections() {
-    log "INFO" "Verifying service-to-service connections..."
-    
-    # Test Grafana to Prometheus connection
-    if [[ "${ENABLE_GRAFANA}" == "true" && "${ENABLE_PROMETHEUS}" == "true" ]]; then
-        if curl -s -f "http://localhost:3000/api/health" &>/dev/null; then
-            ok "Grafana service is accessible"
-        else
-            warn "Grafana service is not accessible"
-        fi
-    fi
-    
-    # Test OpenWebUI to Ollama connection
-    if [[ "${ENABLE_OPENWEBUI}" == "true" && "${ENABLE_OLLAMA}" == "true" ]]; then
-        if curl -s -f "http://localhost:8080" &>/dev/null; then
-            ok "OpenWebUI service is accessible"
-        else
-            warn "OpenWebUI service is not accessible"
-        fi
-    fi
-}
-
-verify_data_persistence() {
-    log "INFO" "Verifying data persistence..."
-    
-    # Check if data directories exist and have correct permissions
-    local data_dirs=("postgres" "redis" "qdrant" "grafana" "prometheus")
-    
-    for dir in "${data_dirs[@]}"; do
-        if [[ $(declare -p "ENABLE_${dir^^}" 2>/dev/null 2>&1) =~ "true" ]]; then
-            local service_path="${TENANT_DIR}/${dir}"
-            if [[ -d "$service_path" ]]; then
-                ok "Data directory ${dir} exists"
-            else
-                warn "Data directory ${dir} does not exist"
-            fi
-        fi
-    done
-}
-
-# ─── Service Log Configuration Functions ─────────────────────────────────────
-# These functions are the central engine for all complex configuration generation
-# They are exported to be used by other scripts in the deployment pipeline
-
-# Dynamic Caddyfile Generator
 generate_caddyfile() {
-    local CADDY_FILE_PATH="${TENANT_DIR}/caddy/Caddyfile"
-    log "INFO" "Generating Caddyfile at: ${CADDY_FILE_PATH}"
+    local out="${CONFIG_DIR}/caddy/Caddyfile"
+    mkdir -p "$(dirname "$out")"
     
-    mkdir -p "$(dirname "${CADDY_FILE_PATH}")"
+    # Choose TLS directive once based on USE_LETSENCRYPT
+    local tls_line
+    if [[ "${USE_LETSENCRYPT:-false}" == "true" ]]; then
+        tls_line="tls ${ADMIN_EMAIL}"       # ACME with Let's Encrypt
+    else
+        tls_line="tls internal"             # Caddy self-signed — no ACME hang
+    fi
     
-    cat > "${CADDY_FILE_PATH}" << 'EOF'
+    cat > "$out" <<EOF
 {
-    email {$ADMIN_EMAIL}
-    auto_https {
-        on
-    }
-    
-    {$DOMAIN}:80 {
-        redir https://{host}{uri}
-    }
-    
-    {$DOMAIN}:443 {
-        encode zstd gzip
-        
-        # Grafana
-        handle /grafana* {
-            reverse_proxy grafana:3000 {
-                health_uri /api/health
-                health_interval 10s
-            }
-        }
-        
-        # Prometheus
-        handle /prometheus* {
-            reverse_proxy prometheus:9090 {
-                health_uri /-/healthy
-                health_interval 10s
-            }
-        }
-        
-        # LiteLLM
-        handle /litellm* {
-            reverse_proxy litellm:4000 {
-                health_uri /health/liveliness
-                health_interval 10s
-            }
-        }
-        
-        # OpenWebUI
-        handle /openwebui* {
-            reverse_proxy openwebui:8080 {
-                health_uri /health
-                health_interval 10s
-            }
-        }
-        
-        # n8n
-        handle /n8n* {
-            reverse_proxy n8n:5678
-        }
-        
-        # Flowise
-        handle /flowise* {
-            reverse_proxy flowise:3000
-        }
-        
-        # AnythingLLM
-        handle /anythingllm* {
-            reverse_proxy anythingllm:3001
-        }
-        
-        # Authentik
-        handle /auth* {
-            reverse_proxy authentik-server:9000 {
-                health_uri /-/health/live/
-                health_interval 10s
-            }
-        }
-        
-        # Signal API
-        handle /signal* {
-            reverse_proxy signal:8080
-        }
-        
-        # OpenClaw
-        handle /openclaw* {
-            reverse_proxy openclaw:8082
-        }
-        
-        # Default route to OpenWebUI
-        reverse_proxy openwebui:8080 {
-            health_uri /health
-            health_interval 10s
-        }
-    }
+    admin 0.0.0.0:2019
+    email ${ADMIN_EMAIL:-admin@${DOMAIN}}
+}
+
+grafana.${DOMAIN} {
+    ${tls_line}
+    reverse_proxy grafana:3000
+}
+prometheus.${DOMAIN} {
+    ${tls_line}
+    reverse_proxy prometheus:9090
 }
 EOF
     
-    chown "${TENANT_UID}:${TENANT_GID}" "$CADDY_FILE_PATH"
-    ok "Caddyfile generated and ownership secured."
+    # Append enabled services with proper TLS
+    [[ "${ENABLE_LITELLM:-false}"     == "true" ]] && cat >> "$out" <<EOF
+litellm.${DOMAIN} {
+    ${tls_line}
+    reverse_proxy litellm:4000
+}
+EOF
+    [[ "${ENABLE_OPENWEBUI:-false}"   == "true" ]] && cat >> "$out" <<EOF
+chat.${DOMAIN} {
+    ${tls_line}
+    reverse_proxy open-webui:8080
+}
+EOF
+    [[ "${ENABLE_N8N:-false}"         == "true" ]] && cat >> "$out" <<EOF
+n8n.${DOMAIN} {
+    ${tls_line}
+    reverse_proxy n8n:5678
+}
+EOF
+    [[ "${ENABLE_FLOWISE:-false}"     == "true" ]] && cat >> "$out" <<EOF
+flowise.${DOMAIN} {
+    ${tls_line}
+    reverse_proxy flowise:3000
+}
+EOF
+    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && cat >> "$out" <<EOF
+anythingllm.${DOMAIN} {
+    ${tls_line}
+    reverse_proxy anythingllm:3001
+}
+EOF
+    
+    log_success "Caddyfile written to ${out}"
 }
 
-# Dynamic Prometheus Configuration Generator
 generate_prometheus_config() {
-    local PROMETHEUS_CONFIG_PATH="${TENANT_DIR}/prometheus.yml"
-    log "INFO" "Generating Prometheus configuration at: ${PROMETHEUS_CONFIG_PATH}"
+    [[ "${ENABLE_MONITORING:-false}" == "true" ]] || return 0
+    local out="${CONFIG_DIR}/prometheus/prometheus.yml"
+    mkdir -p "$(dirname "$out")"
     
-    cat > "${PROMETHEUS_CONFIG_PATH}" << 'EOF'
+    cat > "$out" <<EOF
 global:
   scrape_interval: 15s
-  evaluation_interval: 15s
-
 scrape_configs:
-  - job_name: 'prometheus'
+  - job_name: prometheus
     static_configs:
       - targets: ['localhost:9090']
-
-  - job_name: 'grafana'
-    static_configs:
-      - targets: ['grafana:3000']
-    metrics_path: /api/metrics
-
-  - job_name: 'caddy'
+  - job_name: caddy
     static_configs:
       - targets: ['caddy:2019']
-    metrics_path: /metrics
-
-  - job_name: 'postgres'
-    static_configs:
-      - targets: ['postgres:5432']
-    metrics_path: /metrics
-
-  - job_name: 'redis'
-    static_configs:
-      - targets: ['redis:6379']
-    metrics_path: /metrics
-
-  - job_name: 'qdrant'
-    static_configs:
-      - targets: ['qdrant:6333']
-    metrics_path: /metrics
-
-  - job_name: 'litellm'
+EOF
+    
+    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && cat >> "$out" <<EOF
+  - job_name: litellm
     static_configs:
       - targets: ['litellm:4000']
     metrics_path: /metrics
-
-  - job_name: 'openwebui'
-    static_configs:
-      - targets: ['openwebui:8080']
-    metrics_path: /metrics
-
-  - job_name: 'n8n'
-    static_configs:
-      - targets: ['n8n:5678']
-    metrics_path: /metrics
-
-  - job_name: 'flowise'
-    static_configs:
-      - targets: ['flowise:3000']
-    metrics_path: /metrics
-
-  - job_name: 'anythingllm'
-    static_configs:
-      - targets: ['anythingllm:3001']
-    metrics_path: /metrics
-
-  - job_name: 'authentik'
-    static_configs:
-      - targets: ['authentik-server:9000']
-    metrics_path: /metrics
-
-  - job_name: 'signal'
-    static_configs:
-      - targets: ['signal:8080']
-    metrics_path: /metrics
-
-  - job_name: 'openclaw'
-    static_configs:
-      - targets: ['openclaw:8082']
-    metrics_path: /metrics
 EOF
     
-    ok "Prometheus configuration generated with all service targets."
+    log_success "Prometheus config written to ${out}"
 }
 
-# Export all generator functions for use by other scripts
-export -f generate_caddyfile
-export -f generate_prometheus_config
+# Single entry point for all config generation
+generate_configs() {
+    log_info "Generating all configuration files..."
+    generate_postgres_init
+    generate_litellm_config
+    generate_caddyfile
+    generate_prometheus_config
+    log_success "All configuration files generated"
+}
 
-# Call main function to execute the script
+# ── Docker Compose Generator (Zero Hardcoded Values) ───────────────────────
+generate_compose() {
+    log_info "Generating docker-compose.yml at ${COMPOSE_FILE}..."
+    
+    cat > "$COMPOSE_FILE" <<'EOF'
+networks:
+  default:
+    name: ai-${TENANT}-net
+    driver: bridge
+
+volumes:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
+  litellm_data:
+
+services:
+
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    user: "${POSTGRES_UID:-70}:${TENANT_GID:-1001}"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ${CONFIG_DIR}/postgres/init-user-db.sh:/docker-entrypoint-initdb.d/init-user-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    user: "${REDIS_UID:-999}:${TENANT_GID:-1001}"
+    command: redis-server --requirepass "${REDIS_PASSWORD}"
+    volumes:
+      - ${DATA_DIR}/redis:/data
+    healthcheck:
+      test: ["CMD","redis-cli","-a","${REDIS_PASSWORD}","ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+EOF
+
+    # Add enabled services dynamically - NO hardcoded values
+    [[ "${ENABLE_QDRANT:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    user: "1000:${TENANT_GID:-1001}"
+    volumes:
+      - ${DATA_DIR}/qdrant:/qdrant/storage
+      - ${DATA_DIR}/qdrant/snapshots:/qdrant/snapshots
+    ports:
+      - "6333:6333"
+    healthcheck:
+      test: ["CMD-SHELL","curl -sf http://localhost:6333/collections || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+EOF
+
+    [[ "${ENABLE_MONITORING:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    user: "65534:65534"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+    volumes:
+      - ${CONFIG_DIR}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    healthcheck:
+      test: ["CMD-SHELL","wget -qO- http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    user: "472:472"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_SERVER_ROOT_URL: "https://grafana.${DOMAIN}"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - ${DATA_DIR}/grafana/data:/var/lib/grafana
+      - ${DATA_DIR}/grafana/logs:/var/log/grafana
+    healthcheck:
+      test: ["CMD-SHELL","curl -sf http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+EOF
+
+    [[ "${ENABLE_OLLAMA:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    user: "1000:${TENANT_GID:-1001}"
+    volumes:
+      - ${DATA_DIR}/ollama:/root/.ollama
+    ports:
+      - "11434:11434"
+    healthcheck:
+      test: ["CMD-SHELL","curl -sf http://localhost:11434/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+EOF
+
+    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+  litellm:
+    image: ghcr.io/berriai/litellm:main
+    restart: unless-stopped
+    user: "1000:${TENANT_GID:-1001}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
+      DATABASE_URL: ${LITELLM_DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      STORE_MODEL_IN_DB: "True"
+      LITELLM_TELEMETRY: "False"
+    volumes:
+      - ${CONFIG_DIR}/litellm/config.yaml:/app/config.yaml:ro
+    healthcheck:
+      test: ["CMD-SHELL","curl -sf http://localhost:4000/health/liveliness || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 90s
+EOF
+
+    # Web services wired to LiteLLM
+    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    restart: unless-stopped
+    user: "1000:${TENANT_GID:-1001}"
+    depends_on:
+      litellm:
+        condition: service_healthy
+    environment:
+      OPENAI_API_BASE_URL: "http://litellm:4000/v1"
+      OPENAI_API_KEY: "${LITELLM_MASTER_KEY}"
+      WEBUI_SECRET_KEY: "${JWT_SECRET}"
+      DATABASE_URL: "${OPENWEBUI_DATABASE_URL}"
+      VECTOR_DB: "${VECTOR_DB_TYPE:-qdrant}"
+      QDRANT_URI: "http://qdrant:6333"
+    volumes:
+      - ${DATA_DIR}/openwebui:/app/backend/data
+    ports:
+      - "${PORT_OPENWEBUI:-3000}:8080"
+    healthcheck:
+      test: ["CMD-SHELL","curl -sf http://localhost:8080/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+EOF
+
+    [[ "${ENABLE_N8N:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    user: "1000:${TENANT_GID:-1001}"
+    depends_on:
+      litellm:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      N8N_AI_OPENAI_API_KEY: "${LITELLM_MASTER_KEY}"
+      N8N_AI_OPENAI_BASE_URL: "http://litellm:4000/v1"
+      DB_TYPE: "postgresdb"
+      DB_POSTGRESDB_HOST: "postgres"
+      DB_POSTGRESDB_PORT: "5432"
+      DB_POSTGRESDB_DATABASE: "n8n"
+      DB_POSTGRESDB_USER: "${POSTGRES_USER}"
+      DB_POSTGRESDB_PASSWORD: "${POSTGRES_PASSWORD}"
+      N8N_ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
+      WEBHOOK_URL: "https://n8n.${DOMAIN}"
+    volumes:
+      - ${DATA_DIR}/n8n:/home/node/.n8n
+    ports:
+      - "${PORT_N8N:-5678}:5678"
+    healthcheck:
+      test: ["CMD-SHELL","curl -sf http://localhost:5678/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+EOF
+
+    [[ "${ENABLE_FLOWISE:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+  flowise:
+    image: flowiseai/flowise:latest
+    restart: unless-stopped
+    user: "1000:${TENANT_GID:-1001}"
+    depends_on:
+      litellm:
+        condition: service_healthy
+    environment:
+      OPENAI_API_KEY: "${LITELLM_MASTER_KEY}"
+      OPENAI_API_BASE: "http://litellm:4000/v1"
+      DATABASE_PATH: "/root/.flowise"
+      FLOWISE_USERNAME: "admin"
+      FLOWISE_PASSWORD: "${ADMIN_PASSWORD}"
+      SECRETKEY_PATH: "/root/.flowise"
+    volumes:
+      - ${DATA_DIR}/flowise:/root/.flowise
+    ports:
+      - "${PORT_FLOWISE:-3001}:3000"
+    healthcheck:
+      test: ["CMD-SHELL","curl -sf http://localhost:3000/api/v1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+EOF
+
+    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+  anythingllm:
+    image: mintplexlabs/anythingllm:latest
+    restart: unless-stopped
+    user: "1000:${TENANT_GID:-1001}"
+    depends_on:
+      litellm:
+        condition: service_healthy
+    environment:
+      LLM_PROVIDER: "openai"
+      OPEN_AI_KEY: "${LITELLM_MASTER_KEY}"
+      OPEN_AI_BASE_PATH: "http://litellm:4000/v1"
+      EMBEDDING_ENGINE: "openai"
+      EMBEDDING_BASE_PATH: "http://litellm:4000/v1"
+      VECTOR_DB: "${VECTOR_DB_TYPE:-qdrant}"
+      QDRANT_ENDPOINT: "http://qdrant:6333"
+      STORAGE_DIR: "/app/server/storage"
+    volumes:
+      - ${DATA_DIR}/anythingllm:/app/server/storage
+    ports:
+      - "${PORT_ANYTHINGLLM:-3003}:3001"
+    healthcheck:
+      test: ["CMD-SHELL","curl -sf http://localhost:3001/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+EOF
+
+    # Caddy - always deployed as reverse proxy
+    cat >> "$COMPOSE_FILE" <<'EOF'
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "2019:2019"
+    volumes:
+      - ${CONFIG_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${CONFIG_DIR}/caddy/data:/data
+      - ${CONFIG_DIR}/caddy/config:/config
+    healthcheck:
+      test: ["CMD-SHELL","wget -qO- http://localhost:2019/metrics > /dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+EOF
+
+    log_success "docker-compose.yml generated at ${COMPOSE_FILE}"
+}
+
+# ── Service Lifecycle Functions ───────────────────────────────────────────────
+deploy_service() {
+    local svc="$1"
+    log_info "Deploying ${svc}..."
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d "$svc" \
+        >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 \
+        && log_success "${svc} deployed" \
+        || log_error "${svc} failed — see ${LOGS_DIR}/deploy-$(date +%Y%m%d).log"
+}
+
+stop_service() {
+    local svc="$1"
+    docker compose -f "$COMPOSE_FILE" stop "$svc" \
+        && log_success "${svc} stopped" \
+        || log_warning "${svc} was not running"
+}
+
+reconfigure_service() {
+    local svc="$1"
+    log_info "Reconfiguring ${svc}..."
+    generate_configs
+    generate_compose
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" \
+        up -d --force-recreate "$svc" \
+        >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1
+    log_success "${svc} reconfigured"
+}
+
+enable_service() {
+    local svc="$1"
+    local flag="ENABLE_$(echo "$svc" | tr '[:lower:]' '[:upper:]' | tr '-' '_')"
+    log_info "Enabling ${svc} (sets ${flag}=true in .env)..."
+    grep -q "^${flag}=" "$ENV_FILE" \
+        && sed -i "s|^${flag}=.*|${flag}=true|" "$ENV_FILE" \
+        || echo "${flag}=true" >> "$ENV_FILE"
+    generate_configs
+    generate_compose
+    deploy_service "$svc"
+    log_success "${svc} enabled and deployed"
+}
+
+disable_service() {
+    local svc="$1"
+    local flag="ENABLE_$(echo "$svc" | tr '[:lower:]' '[:upper:]' | tr '-' '_')"
+    log_info "Disabling ${svc}..."
+    stop_service "$svc"
+    grep -q "^${flag}=" "$ENV_FILE" \
+        && sed -i "s|^${flag}=.*|${flag}=false|" "$ENV_FILE" \
+        || echo "${flag}=false" >> "$ENV_FILE"
+    log_success "${svc} stopped and disabled"
+}
+
+provision_databases() {
+    log_info "Waiting for postgres to be ready..."
+    local elapsed=0
+    until docker compose -f "$COMPOSE_FILE" exec -T postgres \
+            pg_isready -U "${POSTGRES_USER}" -q 2>/dev/null; do
+        sleep 5; elapsed=$((elapsed+5))
+        [[ $elapsed -ge 60 ]] && log_error "Postgres not ready after 60s" && return 1
+    done
+    log_success "Postgres ready — databases provisioned via init script"
+}
+
+# ── Health Dashboard Functions ───────────────────────────────────────────────
+_check_http() {
+    local name="$1" url="$2"
+    if curl -sf --max-time 5 "$url" > /dev/null 2>&1; then
+        printf "  ${GREEN}🟢 %-22s${NC} %s\n" "$name" "$url"
+    else
+        printf "  ${RED}🔴 %-22s${NC} %s\n" "$name" "$url"
+    fi
+}
+
+_check_cmd() {
+    local name="$1"; shift
+    if "$@" > /dev/null 2>&1; then
+        printf "  ${GREEN}🟢 %-22s${NC} %s\n" "$name" "$(docker compose -f "$COMPOSE_FILE" ps --format "{{.Status}}" "$name" 2>/dev/null | head -1)"
+    else
+        printf "  ${RED}🔴 %-22s${NC} %s\n" "$name" "not responding"
+    fi
+}
+
+health_dashboard() {
+    set -a; source "$ENV_FILE"; set +a
+    local ts ip=""
+    ts=$(date '+%Y-%m-%d %H:%M:%S')
+
+    # Tailscale IP
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q tailscale; then
+        ip=$(docker compose -f "$COMPOSE_FILE" exec -T tailscale \
+             tailscale ip -4 2>/dev/null | tr -d ' \n' || true)
+    fi
+
+    echo ""
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║  AI PLATFORM HEALTH DASHBOARD — ${ts}    ║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    printf "  %-14s %s\n" "Domain:"       "https://${DOMAIN}"
+    printf "  %-14s %s\n" "Tailscale IP:" "${ip:-NOT CONNECTED}"
+    printf "  %-14s %s\n" "Tenant:"       "${TENANT}"
+    printf "  %-14s %s\n" "Data:"         "${TENANT_DIR}"
+    echo ""
+    echo -e "  ${BOLD}Infrastructure${NC}"
+    _check_cmd  "postgres"   docker compose -f "$COMPOSE_FILE" exec -T postgres \
+                             pg_isready -U "${POSTGRES_USER}" -q
+    _check_cmd  "redis"      docker compose -f "$COMPOSE_FILE" exec -T redis \
+                             redis-cli -a "${REDIS_PASSWORD}" ping
+    [[ "${ENABLE_QDRANT:-false}"    == "true" ]] && \
+        _check_http "qdrant"     "http://localhost:${PORT_QDRANT:-6333}/collections"
+    echo ""
+    echo -e "  ${BOLD}Monitoring${NC}"
+    [[ "${ENABLE_MONITORING:-false}" == "true" ]] && {
+        _check_http "prometheus" "http://localhost:${PORT_PROMETHEUS:-9090}/-/healthy"
+        _check_http "grafana"    "http://localhost:${PORT_GRAFANA:-3002}/api/health"
+    }
+    _check_http "caddy"      "http://localhost:2019/metrics"
+    echo ""
+    echo -e "  ${BOLD}AI Services${NC}"
+    [[ "${ENABLE_LITELLM:-false}"    == "true" ]] && \
+        _check_http "litellm"    "http://localhost:${PORT_LITELLM:-4000}/health/liveliness"
+    [[ "${ENABLE_OLLAMA:-false}"     == "true" ]] && \
+        _check_http "ollama"     "http://localhost:11434/"
+    echo ""
+    echo -e "  ${BOLD}Web Services (all routed via LiteLLM)${NC}"
+    [[ "${ENABLE_OPENWEBUI:-false}"  == "true" ]] && \
+        _check_http "open-webui"     "http://localhost:${PORT_OPENWEBUI:-3000}/"
+    [[ "${ENABLE_N8N:-false}"        == "true" ]] && \
+        _check_http "n8n"            "http://localhost:${PORT_N8N:-5678}/healthz"
+    [[ "${ENABLE_FLOWISE:-false}"    == "true" ]] && \
+        _check_http "flowise"        "http://localhost:${PORT_FLOWISE:-3001}/"
+    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && \
+        _check_http "anythingllm"    "http://localhost:${PORT_ANYTHINGLLM:-3003}/"
+    echo ""
+    echo -e "  ${BOLD}Quick Tests${NC}"
+    echo -e "  LiteLLM models:"
+    echo -e "    curl -s http://localhost:${PORT_LITELLM:-4000}/v1/models \\"
+    echo -e "      -H 'Authorization: Bearer \${LITELLM_MASTER_KEY}' | jq '.data[].id'"
+    echo ""
+    log_write INFO "Health dashboard printed at ${ts}"
+}
+
+# ── CLI Dispatcher (Only runs when script executed directly) ──────────────────
+(return 0 2>/dev/null) && return   # sourced - export functions and stop here
+
+main() {
+    local cmd="${1:-help}"
+    shift || true
+    case "$cmd" in
+        # ── Deployment ──────────────────────────────────────────────
+        deploy)         deploy_service "${1:?usage: deploy <service>}" ;;
+        deploy-all)     bash "$(dirname "$0")/2-deploy-services.sh" ;;
+        stop)           stop_service   "${1:?usage: stop <service>}" ;;
+        stop-all)       docker compose -f "$COMPOSE_FILE" down ;;
+        restart)        reconfigure_service "${1:?usage: restart <service>}" ;;
+
+        # ── Configuration ────────────────────────────────────────────
+        generate)       generate_configs ;;
+        compose)        generate_compose ;;
+        dirs)           prepare_directories ;;
+        env)            echo "Re-run script 1 to regenerate .env safely" ;;
+
+        # ── Health & Monitoring ──────────────────────────────────────
+        health)         health_dashboard ;;
+        status)         docker compose -f "$COMPOSE_FILE" ps ;;
+        logs)           docker compose -f "$COMPOSE_FILE" logs --tail=50 "${1:-}" ;;
+        logs-on)        log_enable  "${1:?usage: logs-on <service>}" ;;
+        logs-off)       log_disable "${1:?usage: logs-off <service>}" ;;
+
+        # ── External Wiring ──────────────────────────────────────────
+        tailscale)      configure_tailscale ;;
+        gdrive)         setup_gdrive_rclone && create_ingestion_systemd ;;
+
+        # ── Service Reconfiguration ──────────────────────────────────
+        reconfigure)    reconfigure_service "${1:?usage: reconfigure <service>}" ;;
+        enable)         enable_service  "${1:?usage: enable <service>}" ;;
+        disable)        disable_service "${1:?usage: disable <service>}" ;;
+
+        # ── Help ─────────────────────────────────────────────────────
+        help|*)
+            echo ""
+            echo "Usage: $0 <command> [service]"
+            echo ""
+            echo "  Deployment:    deploy <svc>  stop <svc>  restart <svc>  deploy-all  stop-all"
+            echo "  Configuration: generate  compose  dirs"
+            echo "  Health:        health  status  logs [svc]  logs-on <svc>  logs-off <svc>"
+            echo "  Wiring:        tailscale  gdrive"
+            echo "  Lifecycle:     enable <svc>  disable <svc>  reconfigure <svc>"
+            echo ""
+            ;;
+    esac
+}
+
 main "$@"
