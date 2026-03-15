@@ -42,7 +42,12 @@ main() {
     provision_databases          # waits until postgres ready, verifies DBs
 
     # 3. Vector DB
-    [[ "${ENABLE_QDRANT:-false}"     == "true" ]] && deploy_service qdrant
+    [[ "${ENABLE_QDRANT:-false}"     == "true" ]] && {
+        # Fix Qdrant permissions - create snapshots directory and set ownership
+        mkdir -p "${DATA_DIR}/qdrant/snapshots/tmp"
+        chown -R "${QDRANT_UID:-1000}:${QDRANT_UID:-1000}" "${DATA_DIR}/qdrant"
+        deploy_service qdrant
+    }
 
     # 4. Local LLM runtime — BEFORE LiteLLM
     [[ "${ENABLE_OLLAMA:-false}"     == "true" ]] && deploy_service ollama
