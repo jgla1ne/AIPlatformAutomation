@@ -1672,6 +1672,7 @@ main() {
     
     # Call Mission Control generators for all complex configurations
     generate_caddyfile
+    generate_prometheus_config
     
     # Generate rclone config (still handled locally)
     write_rclone_config

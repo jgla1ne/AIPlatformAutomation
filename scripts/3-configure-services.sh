@@ -963,88 +963,18 @@ generate_caddyfile() {
     # --- PATH CORRECTION ---
     # Define the correct, final path including the 'caddy' subdirectory.
     local CADDY_FILE_PATH="${TENANT_DIR}/caddy/Caddyfile"
+    log "INFO" "Generating Caddyfile at: ${CADDY_FILE_PATH}"
     
-    log "INFO" "Mission Control: Generating Caddyfile at '$CADDY_FILE_PATH'..."
+    # Ensure caddy directory exists
+    mkdir -p "$(dirname "${CADDY_FILE_PATH}")"
     
-    # Use a temporary file to build the content
-    TMP_CADDY=$(mktemp)
-    
-    # 1. Global configuration block
-    cat > "$TMP_CADDY" << EOF
+    # Generate Caddyfile with all service routes
+    cat > "${CADDY_FILE_PATH}" << 'EOF'
 {
-    email ${ADMIN_EMAIL}
-    auto_https ${SSL_MODE}
-EOF
-
-    # 2. Add TLS configuration based on mode
-    if [[ "${SSL_MODE}" == "selfsigned" ]]; then
-        cat >> "$TMP_CADDY" << EOF
-    internal_certs
-EOF
-    fi
-
-    cat >> "$TMP_CADDY" << EOF
-
-}
-
-EOF
-
-    # 3. Add service routes dynamically with health-aware routing
-    if [[ "${ENABLE_PROMETHEUS}" == "true" ]]; then
-        cat >> "$TMP_CADDY" << EOF
-prometheus.${DOMAIN} {
-    reverse_proxy prometheus:9090 {
-        health_uri /-/healthy
-        health_interval 10s
-        health_timeout 5s
+    email {$ADMIN_EMAIL}
+    auto_https {
+        on
     }
-}
-EOF
-        ok "Caddy route added for Prometheus with health checks."
-    fi
-
-    if [[ "${ENABLE_AUTHENTIK}" == "true" ]]; then
-        cat >> "$TMP_CADDY" << EOF
-auth.${DOMAIN} {
-    reverse_proxy authentik-server:9000 {
-        health_uri /-/health/live/
-        health_interval 10s
-        health_timeout 5s
-    }
-}
-EOF
-        ok "Caddy route added for Authentik with health checks."
-    fi
-
-    if [[ "${ENABLE_OPENWEBUI}" == "true" ]]; then
-        cat >> "$TMP_CADDY" << EOF
-openwebui.${DOMAIN} {
-    reverse_proxy openwebui:8080 {
-        health_uri /health
-        health_interval 10s
-        health_timeout 5s
-    }
-}
-EOF
-        ok "Caddy route added for OpenWebUI with health checks."
-    fi
-
-    if [[ "${ENABLE_N8N}" == "true" ]]; then
-        cat >> "$TMP_CADDY" << EOF
-n8n.${DOMAIN} {
-    reverse_proxy n8n:5678
-}
-EOF
-        ok "Caddy route added for n8n."
-    fi
-
-    if [[ "${ENABLE_FLOWISE}" == "true" ]]; then
-        cat >> "$TMP_CADDY" << EOF
-flowise.${DOMAIN} {
-    reverse_proxy flowise:3000
-}
-EOF
-        ok "Caddy route added for Flowise."
     fi
 
     if [[ "${ENABLE_ANYTHINGLLM}" == "true" ]]; then
@@ -1104,8 +1034,93 @@ EOF
     ok "Caddyfile generated and ownership secured."
 }
 
+# Dynamic Prometheus Configuration Generator
+generate_prometheus_config() {
+    local PROMETHEUS_CONFIG_PATH="${TENANT_DIR}/prometheus.yml"
+    log "INFO" "Generating Prometheus configuration at: ${PROMETHEUS_CONFIG_PATH}"
+    
+    cat > "${PROMETHEUS_CONFIG_PATH}" << 'EOF'
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'grafana'
+    static_configs:
+      - targets: ['grafana:3000']
+    metrics_path: /api/metrics
+
+  - job_name: 'caddy'
+    static_configs:
+      - targets: ['caddy:2019']
+    metrics_path: /metrics
+
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres:5432']
+    metrics_path: /metrics
+
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+    metrics_path: /metrics
+
+  - job_name: 'qdrant'
+    static_configs:
+      - targets: ['qdrant:6333']
+    metrics_path: /metrics
+
+  - job_name: 'litellm'
+    static_configs:
+      - targets: ['litellm:4000']
+    metrics_path: /metrics
+
+  - job_name: 'openwebui'
+    static_configs:
+      - targets: ['openwebui:8080']
+    metrics_path: /metrics
+
+  - job_name: 'n8n'
+    static_configs:
+      - targets: ['n8n:5678']
+    metrics_path: /metrics
+
+  - job_name: 'flowise'
+    static_configs:
+      - targets: ['flowise:3000']
+    metrics_path: /metrics
+
+  - job_name: 'anythingllm'
+    static_configs:
+      - targets: ['anythingllm:3001']
+    metrics_path: /metrics
+
+  - job_name: 'authentik'
+    static_configs:
+      - targets: ['authentik-server:9000']
+    metrics_path: /metrics
+
+  - job_name: 'signal'
+    static_configs:
+      - targets: ['signal:8080']
+    metrics_path: /metrics
+
+  - job_name: 'openclaw'
+    static_configs:
+      - targets: ['openclaw:8082']
+    metrics_path: /metrics
+EOF
+    
+    ok "Prometheus configuration generated with all service targets."
+}
+
 # Export all generator functions for use by other scripts
 export -f generate_caddyfile
+export -f generate_prometheus_config
 
 # Call main function to execute the script
 main "$@"
