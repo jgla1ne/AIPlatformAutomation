@@ -5,8 +5,15 @@
 # =============================================================================
 set -euo pipefail
 
-# Source mission control library
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Load environment first to get TENANT_NAME for paths
+ENV_FILE="/mnt/data/datasquiz/.env"  # Default location from script 1
+[[ -f "$ENV_FILE" ]] && set -a && source "$ENV_FILE" && set +a
+
+# Update ENV_FILE based on loaded TENANT_NAME if available
+if [[ -n "${TENANT_NAME:-}" ]]; then
+    ENV_FILE="/mnt/data/${TENANT_NAME}/.env"
+fi
+
 source "${SCRIPT_DIR}/3-configure-services.sh"   # ← SOURCES LIBRARY
 
 # ── Main Deployment Function ────────────────────────────────────────────────
