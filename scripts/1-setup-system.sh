@@ -617,6 +617,14 @@ collect_llm_config() {
         log "INFO" "Groq API key configured"
     fi
 
+    # OpenRouter
+    echo ""
+    echo -e "  ${BOLD}OpenRouter:${NC}"
+    read -p "  ➤ OpenRouter API key (leave empty to skip): " OPENROUTER_API_KEY
+    if [[ -n "${OPENROUTER_API_KEY}" ]]; then
+        log "INFO" "OpenRouter API key configured"
+    fi
+
     ok "LLM provider configuration completed"
 }
 
@@ -625,32 +633,50 @@ collect_litellm_routing() {
     print_step "8.5" "11" "LiteLLM Routing Strategy"
     
     echo -e "  ${BOLD}🧠  LiteLLM Routing Strategy${NC}"
-    echo -e "  ${DIM}Choose how LiteLLM distributes requests${NC}"
+    echo -e "  ${DIM}Configure intelligent model routing for cost/latency optimization${NC}"
     echo ""
-    echo -e "  ${CYAN}  1)${NC}  ${BOLD}least-busy${NC}     ${DIM}(send to least busy provider)${NC}"
-    echo -e "  ${CYAN}  2)${NC}  ${BOLD}weighted${NC}         ${DIM}(distribute by configured weights)${NC}"
-    echo -e "  ${CYAN}  3)${NC}  ${BOLD}random${NC}           ${DIM}(random selection)${NC}"
-    echo -e "  ${CYAN}  4)${NC}  ${BOLD}round-robin${NC}      ${DIM}(rotate through providers)${NC}"
+    
+    echo -e "  ${BOLD}Available Routing Strategies:${NC}"
     echo ""
-
-    while true; do
-        read -p "  ➤ Select routing strategy [1-4]: " choice
-        choice="${choice:-1}"
-        case "${choice}" in
-            1|2|3|4) break ;;
-            *) echo "  ❌ Enter 1, 2, 3 or 4" ;;
-        esac
-    done
-
-    case "${choice}" in
-        1) LITELLM_ROUTING_STRATEGY="least-busy" ;;
-        2) LITELLM_ROUTING_STRATEGY="weighted" ;;
-        3) LITELLM_ROUTING_STRATEGY="random" ;;
-        4) LITELLM_ROUTING_STRATEGY="round-robin" ;;
+    echo -e "  ${CYAN}  1)${NC} Cost-Optimized (recommended)"
+    echo -e "     ${DIM}Prioritize free/local models, then cheapest paid models${NC}"
+    echo ""
+    echo -e "  ${CYAN}  2)${NC} Speed-Optimized"
+    echo -e "     ${DIM}Prioritize fastest response times (Groq > Gemini > Local)${NC}"
+    echo ""
+    echo -e "  ${CYAN}  3)${NC} Balanced"
+    echo -e "     ${DIM}Balance cost, speed, and capability${NC}"
+    echo ""
+    echo -e "  ${CYAN}  4)${NC} Capability-Optimized"
+    echo -e "     ${DIM}Prioritize most capable models (GPT-4o > Claude-3 > Gemini)${NC}"
+    echo ""
+    
+    read -p "  ➤ Select LiteLLM routing strategy [1-4]: " litellm_routing_choice
+    
+    case "${litellm_routing_choice}" in
+        1) 
+            LITELLM_ROUTING_STRATEGY="cost-optimized"
+            echo -e "  ${GREEN}✅${NC} Cost-optimized routing selected"
+            ;;
+        2) 
+            LITELLM_ROUTING_STRATEGY="speed-optimized"
+            echo -e "  ${GREEN}✅${NC} Speed-optimized routing selected"
+            ;;
+        3) 
+            LITELLM_ROUTING_STRATEGY="balanced"
+            echo -e "  ${GREEN}✅${NC} Balanced routing selected"
+            ;;
+        4) 
+            LITELLM_ROUTING_STRATEGY="capability-optimized"
+            echo -e "  ${GREEN}✅${NC} Capability-optimized routing selected"
+            ;;
+        *) 
+            LITELLM_ROUTING_STRATEGY="cost-optimized"
+            echo -e "  ${YELLOW}⚠️${NC} Defaulting to cost-optimized routing"
+            ;;
     esac
-
-    log "INFO" "LiteLLM routing strategy: ${LITELLM_ROUTING_STRATEGY}"
-    ok "LiteLLM routing strategy configured"
+    
+    log "SUCCESS" "LiteLLM routing strategy: ${LITELLM_ROUTING_STRATEGY}"
 }
 
 # ─── Network & Security Configuration ───────────────────────────────────────
@@ -867,6 +893,7 @@ main() {
     export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
     export GOOGLE_API_KEY="${GOOGLE_API_KEY:-}"
     export GROQ_API_KEY="${GROQ_API_KEY:-}"
+    export OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}"
     
     # Port variables
     export LITELLM_PORT="${LITELLM_PORT:-4000}"
