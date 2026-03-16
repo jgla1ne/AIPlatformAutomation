@@ -36,29 +36,61 @@ main() {
     
     log "Starting TRUE NUCLEAR cleanup for tenant '${TENANT_ID}'..."
 
-    # --- 1. Brute Force Stop & Remove All Tenant Containers ---
+    # --- 1. Brute Force Stop & Remove ALL AI Platform Containers ---
+    log "Finding and stopping ALL AI platform containers..."
+    # Find all containers with ai- prefix (any tenant)
+    container_ids=$(docker ps -a --filter "name=ai-" -q)
+    if [[ -n "$container_ids" ]]; then
+        log "Found containers: $container_ids"
+        docker stop $container_ids || true
+        docker rm $container_ids || true
+        ok "All AI platform containers stopped and removed."
+    else
+        ok "No AI platform containers found."
+    fi
+    
+    # Also check for the specific tenant
     log "Finding and stopping all containers for project '${COMPOSE_PROJECT_NAME}'..."
-    # Find all containers (running or stopped) for this project
     container_ids=$(docker ps -a --filter "name=${COMPOSE_PROJECT_NAME}" -q)
     if [[ -n "$container_ids" ]]; then
-        docker stop $container_ids
-        docker rm $container_ids
+        docker stop $container_ids || true
+        docker rm $container_ids || true
         ok "All containers for project '${COMPOSE_PROJECT_NAME}' stopped and removed."
     else
         ok "No containers found for project '${COMPOSE_PROJECT_NAME}'."
     fi
 
-    # --- 2. Brute Force Destroy All Tenant Volumes (This will get the Ollama models) ---
-    log "Finding and destroying all volumes for project '${COMPOSE_PROJECT_NAME}'..."
-    # The 'label' filter is the key to finding volumes created by docker-compose
-    docker volume prune -af --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}"
+    # --- 2. Brute Force Destroy ALL AI Platform Volumes ---
+    log "Finding and destroying ALL AI platform volumes..."
+    # Remove all volumes with ai- prefix
+    volume_names=$(docker volume ls --filter "name=ai-" -q)
+    if [[ -n "$volume_names" ]]; then
+        log "Found volumes: $volume_names"
+        docker volume rm $volume_names || true
+        ok "All AI platform volumes removed."
+    else
+        ok "No AI platform volumes found."
+    fi
+    
+    # Also prune by project label
+    docker volume prune -af --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}" || true
     ok "All Docker volumes for project '${COMPOSE_PROJECT_NAME}' have been destroyed."
 
-    # --- 3. Nuclear Wipe of Bind-Mounted Data ---
-    log "Performing nuclear wipe of ALL tenant data in ${DATA_ROOT}..."
+    # --- 3. Nuclear Wipe of ALL Tenant Data ---
+    log "Performing nuclear wipe of ALL tenant data in /mnt/data..."
+    # Remove ALL directories in /mnt/data (except system directories)
+    for dir in /mnt/data/*/; do
+        if [[ -d "$dir" && "$(basename "$dir")" != "lost+found" ]]; then
+            log "Removing: $dir"
+            rm -rf "$dir" || true
+        fi
+    done
+    ok "All tenant data in /mnt/data has been nuclear wiped."
+    
+    # Also ensure the specific tenant directory is gone
     if [[ -d "${DATA_ROOT}" ]]; then
         rm -rf "${DATA_ROOT}"
-        ok "All tenant data in ${DATA_ROOT} has been nuclear wiped."
+        ok "Specific tenant directory ${DATA_ROOT} removed."
     else
         ok "Tenant data directory did not exist."
     fi
