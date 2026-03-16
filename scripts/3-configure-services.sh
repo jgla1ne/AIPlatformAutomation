@@ -574,69 +574,6 @@ EOF
       start_period: 45s
 EOF
 
-    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
-  litellm:
-    image: ghcr.io/berriai/litellm:main
-    restart: unless-stopped
-    user: "1000:${TENANT_GID:-1001}"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment:
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
-      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
-      DATABASE_URL: ${LITELLM_DATABASE_URL}
-      REDIS_URL: ${REDIS_URL}
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      GROQ_API_KEY: ${GROQ_API_KEY:-}
-      STORE_MODEL_IN_DB: "True"
-      LITELLM_TELEMETRY: "False"
-    volumes:
-      - ${CONFIG_DIR}/litellm/config.yaml:/app/config.yaml:ro
-    healthcheck:
-      test: ["CMD-SHELL","curl -sf http://localhost:4000/health/liveliness || exit 1"]
-      interval: 30s
-      timeout: 15s
-      retries: 5
-      start_period: 90s
-EOF
-
-    # Web services wired to LiteLLM
-    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
-  open-webui:
-    image: ghcr.io/open-webui/open-webui:main
-    restart: unless-stopped
-    user: "1000:${TENANT_GID:-1001}"
-    depends_on:
-      litellm:
-        condition: service_healthy
-    environment:
-      OPENAI_API_BASE_URL: "http://litellm:4000/v1"
-      OPENAI_API_KEY: "${LITELLM_MASTER_KEY}"
-      WEBUI_SECRET_KEY: "${JWT_SECRET}"
-      DATABASE_URL: "${OPENWEBUI_DATABASE_URL}"
-      VECTOR_DB: "${VECTOR_DB_TYPE:-qdrant}"
-      QDRANT_URI: "http://qdrant:6333"
-      LITELLM_SALT_KEY: "${LITELLM_SALT_KEY}"
-      LITELLM_DATABASE_URL: "${LITELLM_DATABASE_URL}"
-      REDIS_URL: "${REDIS_URL}"
-      REDIS_PASSWORD: "${REDIS_PASSWORD}"
-    volumes:
-      - ${DATA_DIR}/openwebui:/app/backend/data
-    ports:
-      - "${PORT_OPENWEBUI:-3000}:8080"
-    healthcheck:
-      test: ["CMD-SHELL","curl -sf http://localhost:8080/api/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-EOF
-
     [[ "${ENABLE_N8N:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
   n8n:
     image: n8nio/n8n:latest
