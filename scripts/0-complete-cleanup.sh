@@ -85,6 +85,16 @@ main() {
     # Also prune by project label
     docker volume prune -af --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}" || true
     ok "All Docker volumes for project '${COMPOSE_PROJECT_NAME}' have been destroyed."
+    
+    # Explicitly remove named compose volumes by computed name
+    # These follow the pattern: {COMPOSE_PROJECT_NAME}_{volume_name}
+    log "Explicitly removing named compose volumes..."
+    for vol in postgres_data prometheus_data grafana_data litellm_data; do
+        local vol_name="${COMPOSE_PROJECT_NAME}_${vol}"
+        if docker volume inspect "$vol_name" &>/dev/null; then
+            docker volume rm "$vol_name" && ok "Removed volume: ${vol_name}" || warn "Could not remove ${vol_name} (may be in use)"
+        fi
+    done
 
     # --- 3. Nuclear Wipe of ALL Tenant Data ---
     log "Performing nuclear wipe of ALL tenant data in /mnt/data..."

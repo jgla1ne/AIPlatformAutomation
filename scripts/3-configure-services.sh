@@ -314,16 +314,13 @@ router_settings:
 EOF
     
     # Only add fallbacks for models that are actually configured
-    if [[ -n "${OPENAI_API_KEY:-}" || -n "${ANTHROPIC_API_KEY:-}" || -n "${GROQ_API_KEY:-}" ]]; then
+    if [[ -n "${OPENAI_API_KEY:-}" && "${OPENAI_API_KEY}" != "" ]] || [[ -n "${GROQ_API_KEY:-}" && "${GROQ_API_KEY}" != "" ]]; then
         cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
   fallbacks:
 EOF
         # Add fallbacks only for configured external models
-        [[ -n "${OPENAI_API_KEY:-}" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
-    - gpt-4o: ["gpt-4o-mini"]
-EOF
-        [[ -n "${GROQ_API_KEY:-}" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
-    - llama3-groq: ["gpt-4o"]
+        [[ -n "${GROQ_API_KEY:-}" && "${GROQ_API_KEY}" != "" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
+    - llama3-groq: []
 EOF
     fi
     
@@ -512,7 +509,6 @@ EOF
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
-      STORE_MODEL_IN_DB: "True"
       LITELLM_TELEMETRY: "False"
       PRISMA_DISABLE_WARNINGS: "true"
     volumes:
@@ -1031,9 +1027,13 @@ health_dashboard() {
     local ts ip=""
     ts=$(date '+%Y-%m-%d %H:%M:%S')
 
-    # Tailscale IP - extract from container logs
+    # Tailscale IP - use reliable tailscale ip -4 method
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "tailscale"; then
-        ip=$(sudo docker logs ${COMPOSE_PROJECT_NAME}-tailscale-1 2>/dev/null | grep "self=" | tail -1 | sed 's/.*self=\([0-9.]*\).*/\1/' || echo "NOT CONNECTED")
+        ip=$(docker compose -f "$COMPOSE_FILE" exec -T tailscale \
+            tailscale --socket="/tmp/tailscaled.sock" ip -4 2>/dev/null \
+            | tr -d ' \n' || true)
+        # Fallback: read from .env if already stored
+        [[ -z "$ip" ]] && ip=$(grep "^TAILSCALE_IP=" "$ENV_FILE" 2>/dev/null | cut -d= -f2 || true)
     else
         ip="NOT CONNECTED"
     fi
