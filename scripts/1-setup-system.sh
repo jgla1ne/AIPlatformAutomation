@@ -2251,7 +2251,7 @@ LITELLM_SALT_KEY="${LITELLM_SALT_KEY}"
 # ─── Service Secrets (CRITICAL for OpenWebUI) ───────────────────────────────────
 JWT_SECRET="${JWT_SECRET}"
 ENCRYPTION_KEY="${ENCRYPTION_KEY}"
-ADMIN_PASSWORD="${ADMIN_PASSWORD}"
+# ADMIN_PASSWORD will be set below after AUTHENTIK_BOOTSTRAP_PASSWORD is generated
 
 # ─── AnythingLLM ────────────────────────────────────────────────────────────────
 ANYTHINGLLM_API_KEY="${ANYTHINGLLM_API_KEY}"
