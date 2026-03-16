@@ -217,25 +217,34 @@ EOF
 }
 
 generate_litellm_config() {
-    local out="${CONFIG_DIR}/litellm/config.yaml"
-    mkdir -p "$(dirname "$out")"
+    log_info "Generating LiteLLM configuration..."
     
-    # Start with empty model list
-    cat > "$out" <<EOF
+    # Validate Azure configuration to prevent restart loops
+    local az_config_valid=true
+    if [[ -n "${LITELM_AZURE_API_BASE:-}" ]] && [[ -z "${LITELM_AZURE_API_KEY:-}" ]]; then
+        log_warning "Azure API base configured but missing API key - using local models only"
+        az_config_valid=false
+    fi
+    
+    cat > "${CONFIG_DIR}/litellm/config.yaml" << EOF
+# LiteLLM Configuration - Generated $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# This file routes LLM requests to appropriate models based on cost/latency
+
 model_list:
-EOF
-    
-    # Add models based on available API keys
-    [[ -n "${OLLAMA_MODELS:-}" ]] && for m in ${OLLAMA_MODELS//,/ }; do
-        cat >> "$out" <<EOF
-  - model_name: ${m}
+  # Local Ollama models (cost-optimized)
+  - model_name: "ollama/llama3.2:1b"
     litellm_params:
-      model: ollama/${m}
-      api_base: http://ollama:11434
+      model: "ollama/llama3.2:1b"
+      api_base: "http://ollama:11434"
+      rpm: 100
+  - model_name: "ollama/llama3.2:3b"
+    litellm_params:
+      model: "ollama/llama3.2:3b"
+      api_base: "http://ollama:11434"
+      rpm: 50
 EOF
-    done
     
-    [[ -n "${OPENAI_API_KEY:-}" ]] && cat >> "$out" <<EOF
+    [[ -n "${OPENAI_API_KEY:-}" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
   - model_name: gpt-4o
     litellm_params:
       model: openai/gpt-4o
@@ -245,6 +254,24 @@ EOF
       model: openai/gpt-4o-mini
       api_key: os.environ/OPENAI_API_KEY
 EOF
+    
+    # Add Azure models only if configuration is valid
+    if [[ "$az_config_valid" == "true" ]] && [[ -n "${LITELM_AZURE_API_BASE:-}" ]] && [[ -n "${LITELM_AZURE_API_KEY:-}" ]]; then
+        cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
+  - model_name: azure/gpt-4
+    litellm_params:
+      model: azure/gpt-4
+      api_base: "${LITELM_AZURE_API_BASE}"
+      api_key: os.environ/LITELM_AZURE_API_KEY
+      rpm: 10
+  - model_name: azure/gpt-4o
+    litellm_params:
+      model: azure/gpt-4o
+      api_base: "${LITELM_AZURE_API_BASE}"
+      api_key: os.environ/LITELM_AZURE_API_KEY
+      rpm: 20
+EOF
+    fi
     
     [[ -n "${ANTHROPIC_API_KEY:-}" ]] && cat >> "$out" <<EOF
   - model_name: claude-3-5-sonnet
@@ -515,7 +542,7 @@ EOF
     ports:
       - "${PORT_OLLAMA:-11434}:11434"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:11434/ || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -1127,6 +1154,27 @@ EOF
     log_success "gdrive-sync-${TENANT} timer installed — syncing to ${DATA_DIR}/gdrive/"
 }
 
+# ── Service Recovery ─────────────────────────────────────────────────────
+recover_services() {
+    log_info "Recovering failed services..."
+    
+    # Restart LiteLLM with configuration validation
+    if [[ "${ENABLE_LITELLM:-false}" == "true" ]]; then
+        log_info "Restarting LiteLLM with configuration validation..."
+        docker compose -f "$COMPOSE_FILE" restart litellm
+        sleep 10
+    fi
+    
+    # Restart OpenWebUI with environment validation
+    if [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]]; then
+        log_info "Restarting OpenWebUI with environment validation..."
+        docker compose -f "$COMPOSE_FILE" restart open-webui
+        sleep 15
+    fi
+    
+    log_success "Service recovery completed"
+}
+
 # ── GDrive → Qdrant Ingestion ─────────────────────────────────────────────────
 ingest_gdrive_to_qdrant() {
     [[ -n "${GDRIVE_CLIENT_ID:-}" ]] || {
@@ -1181,8 +1229,46 @@ ingest_gdrive_to_qdrant() {
 (return 0 2>/dev/null) && return   # sourced - export functions and stop here
 
 main() {
-    local cmd="${1:-help}"
-    shift || true
+    local tenant="${1:-help}"
+    [[ "$tenant" == "help" ]] && {
+        echo "Usage: $0 <tenant> <command> [service]"
+        echo ""
+        echo "Tenants:"
+        ls -1 /mnt/data/ 2>/dev/null | sed 's/^/  /' || echo "  (none found)"
+        echo ""
+        echo "Commands:"
+        echo "  Deployment:    deploy <svc>  stop <svc>  restart <svc>  deploy-all  stop-all"
+        echo "  Configuration: generate  compose  dirs"
+        echo "  Health:        health  status  logs [svc]  logs-on <svc>  logs-off <svc>"
+        echo "  Logging:       logs-rotate [svc] [days]  logs-cleanup [days]"
+        echo "  Recovery:      recover"
+        echo "  Wiring:        tailscale  gdrive  gdrive-ingest"
+        echo "  Lifecycle:     enable <svc>  disable <svc>  reconfigure <svc>"
+        echo ""
+        return 1
+    }
+    
+    # Set TENANT and load environment
+    export TENANT="$tenant"
+    TENANT_DIR="/mnt/data/${TENANT}"
+    CONFIG_DIR="${TENANT_DIR}/configs"
+    DATA_DIR="${TENANT_DIR}/data"
+    LOGS_DIR="${TENANT_DIR}/logs"
+    COMPOSE_FILE="${TENANT_DIR}/docker-compose.yml"
+    ENV_FILE="${TENANT_DIR}/.env"
+    
+    # Load environment variables
+    [[ -f "$ENV_FILE" ]] || {
+        echo "ERROR: Environment file not found: $ENV_FILE"
+        echo "Run script 1 first to create it"
+        return 1
+    }
+    set -a
+    source "$ENV_FILE"
+    set +a
+    
+    local cmd="${2:-help}"
+    shift 2 || true
     case "$cmd" in
         # ── Deployment ──────────────────────────────────────────────
         deploy)         deploy_service "${1:?usage: deploy <service>}" ;;
@@ -1210,6 +1296,9 @@ main() {
         gdrive-ingest)  ingest_gdrive_to_qdrant ;;
         logs-rotate)    log_rotate "${1:-}" "${2:-7}" ;;
         logs-cleanup)   log_cleanup "${1:-30}" ;;
+
+        # ── Service Recovery ───────────────────────────────────────
+        recover)        recover_services ;;
 
         # ── Service Reconfiguration ──────────────────────────────────
         reconfigure)    reconfigure_service "${1:?usage: reconfigure <service>}" ;;
