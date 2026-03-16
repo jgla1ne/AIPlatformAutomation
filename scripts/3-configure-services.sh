@@ -15,7 +15,7 @@ CONFIG_DIR="${TENANT_DIR}/configs"
 DATA_DIR="${TENANT_DIR}/data"
 LOGS_DIR="${TENANT_DIR}/logs"
 COMPOSE_FILE="${TENANT_DIR}/docker-compose.yml"
-ENV_FILE="${TENANT_DIR}/.env"
+ENV_FILE="/opt/ai-platform/.env"  # SINGLE SOURCE OF TRUTH
 
 # ── Load Environment ────────────────────────────────────────────────────────
 [[ -f "$ENV_FILE" ]] && set -a && source "$ENV_FILE" && set +a
