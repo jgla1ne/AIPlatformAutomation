@@ -574,23 +574,6 @@ EOF
       start_period: 45s
 EOF
 
-    [[ "${ENABLE_OLLAMA:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
-  ollama:
-    image: ollama/ollama:latest
-    restart: unless-stopped
-    user: "1000:${TENANT_GID:-1001}"
-    volumes:
-      - ${DATA_DIR}/ollama:/root/.ollama
-    ports:
-      - "11434:11434"
-    healthcheck:
-      test: ["CMD-SHELL","curl -sf http://localhost:11434/ || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-EOF
-
     [[ "${ENABLE_LITELLM:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
   litellm:
     image: ghcr.io/berriai/litellm:main
