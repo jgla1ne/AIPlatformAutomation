@@ -195,19 +195,22 @@ set -e
 psql -v ON_ERROR_STOP=1 --username "\$POSTGRES_USER" --dbname "\$POSTGRES_DB" <<EOSQL
   DO \$\$
   BEGIN
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'aiplatform') THEN
-      CREATE ROLE aiplatform WITH LOGIN PASSWORD '${POSTGRES_PASSWORD}';
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${POSTGRES_USER}') THEN
+      CREATE ROLE ${POSTGRES_USER} WITH LOGIN PASSWORD '${POSTGRES_PASSWORD}';
     END IF;
   END \$\$;
-  SELECT 'CREATE DATABASE litellm   OWNER aiplatform'
+  SELECT 'CREATE DATABASE litellm   OWNER ${POSTGRES_USER}'
     WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='litellm')   \gexec
-  SELECT 'CREATE DATABASE openwebui OWNER aiplatform'
+  SELECT 'CREATE DATABASE openwebui OWNER ${POSTGRES_USER}'
     WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='openwebui') \gexec
-  SELECT 'CREATE DATABASE n8n       OWNER aiplatform'
+  SELECT 'CREATE DATABASE n8n       OWNER ${POSTGRES_USER}'
     WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='n8n')       \gexec
-  GRANT ALL PRIVILEGES ON DATABASE litellm   TO aiplatform;
-  GRANT ALL PRIVILEGES ON DATABASE openwebui TO aiplatform;
-  GRANT ALL PRIVILEGES ON DATABASE n8n       TO aiplatform;
+  SELECT 'CREATE DATABASE flowise   OWNER ${POSTGRES_USER}'
+    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='flowise')   \gexec
+  GRANT ALL PRIVILEGES ON DATABASE litellm   TO ${POSTGRES_USER};
+  GRANT ALL PRIVILEGES ON DATABASE openwebui TO ${POSTGRES_USER};
+  GRANT ALL PRIVILEGES ON DATABASE n8n       TO ${POSTGRES_USER};
+  GRANT ALL PRIVILEGES ON DATABASE flowise   TO ${POSTGRES_USER};
 EOSQL
 EOF
     chmod +x "$out"
@@ -237,17 +240,18 @@ generate_litellm_config() {
 
 model_list:
   # Local Ollama models (cost-optimized)
-  - model_name: "ollama/llama3.2:1b"
+EOF
+    
+    # Add Ollama models dynamically from OLLAMA_MODELS
+    [[ -n "${OLLAMA_MODELS:-}" ]] && for m in ${OLLAMA_MODELS//,/ }; do
+        cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
+  - model_name: ${m}
     litellm_params:
-      model: "ollama/llama3.2:1b"
+      model: ollama/${m}
       api_base: "http://ollama:11434"
       rpm: 100
-  - model_name: "ollama/llama3.2:3b"
-    litellm_params:
-      model: "ollama/llama3.2:3b"
-      api_base: "http://ollama:11434"
-      rpm: 50
 EOF
+    done
     
     [[ -n "${OPENAI_API_KEY:-}" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
   - model_name: gpt-4o
