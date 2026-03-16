@@ -2963,6 +2963,12 @@ main() {
         SKIP_TENANT_COLLECTION=true
     fi
     
+    # Reconcile — TENANT_ID is canonical variable used throughout Script 1
+    # TENANT_NAME comes from interactive input; TENANT_ID from CLI arg
+    # After this line both are always set and equal
+    TENANT_ID="${TENANT_ID:-${TENANT_NAME}}"
+    TENANT_NAME="${TENANT_ID}"
+    
     print_header
     check_root
     check_prerequisites      # Step 1
@@ -2998,20 +3004,19 @@ main() {
     print_summary
     write_env_file
     
-    # Generate PostgreSQL init script with per-service databases
-    generate_postgres_init
-    # Export TENANT before sourcing script 3
+    # Source Script 3 AFTER .env is written so functions can load it
     export TENANT="${TENANT_ID}"
     source "${SCRIPTS_DIR}/3-configure-services.sh"
-    # Note: generate_compose is called by Script 2, not Script 1
     
+    # Directories and ownership — Script 1's responsibility
     create_directories
     
     # Apply the final, correct ownership structure (NEW FINAL STEP)
     apply_final_ownership
     
-    write_caddyfile
-    write_prometheus_config
+    # Config generation is Script 2's responsibility (via generate_configs)
+    # DO NOT call generate_postgres_init, write_caddyfile, write_prometheus_config here
+    
     offer_next_step
 }
 

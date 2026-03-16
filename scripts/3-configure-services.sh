@@ -193,7 +193,7 @@ psql -v ON_ERROR_STOP=1 --username "\$POSTGRES_USER" --dbname "\$POSTGRES_DB" <<
   DO \$\$
   BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'aiplatform') THEN
-      CREATE ROLE aiplatform WITH LOGIN PASSWORD \$POSTGRES_PASSWORD;
+      CREATE ROLE aiplatform WITH LOGIN PASSWORD '${POSTGRES_PASSWORD}';
     END IF;
   END \$\$;
   SELECT 'CREATE DATABASE litellm   OWNER aiplatform'
@@ -284,68 +284,70 @@ EOF
 generate_caddyfile() {
     local out="${CONFIG_DIR}/caddy/Caddyfile"
     mkdir -p "$(dirname "$out")"
-    
+
     # Choose TLS directive once based on USE_LETSENCRYPT
     local tls_line
     if [[ "${USE_LETSENCRYPT:-false}" == "true" ]]; then
-        tls_line="tls ${ADMIN_EMAIL}"       # ACME with Let's Encrypt
+        tls_line="tls ${ADMIN_EMAIL}"
     else
-        tls_line="tls internal"             # Caddy self-signed — no ACME hang
+        tls_line="tls internal"
     fi
-    
+
+    # Write global block — heredoc closed BEFORE conditional appends
     cat > "$out" <<EOF
 {
     admin 0.0.0.0:2019
-    email ${ADMIN_EMAIL:-admin@${DOMAIN}}
+    email ${ADMIN_EMAIL:-admin@${DOMAIN:-localhost}}
 }
+EOF
 
-# Only add service blocks if services are enabled
-[[ "${ENABLE_GRAFANA:-false}" == "true" ]] && cat >> "$out" <<EOF
+    # Append one block per enabled service — each is a separate cat call
+    [[ "${ENABLE_MONITORING:-false}" == "true" ]] && cat >> "$out" <<EOF
 grafana.${DOMAIN} {
     ${tls_line}
     reverse_proxy grafana:3000
 }
-EOF
-
-[[ "${ENABLE_PROMETHEUS:-false}" == "true" ]] && cat >> "$out" <<EOF
 prometheus.${DOMAIN} {
     ${tls_line}
     reverse_proxy prometheus:9090
 }
 EOF
 
-# Append enabled services with proper TLS
-[[ "${ENABLE_LITELLM:-false}"     == "true" ]] && cat >> "$out" <<EOF
+    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && cat >> "$out" <<EOF
 litellm.${DOMAIN} {
     ${tls_line}
     reverse_proxy litellm:4000
 }
 EOF
-    [[ "${ENABLE_OPENWEBUI:-false}"   == "true" ]] && cat >> "$out" <<EOF
+
+    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && cat >> "$out" <<EOF
 chat.${DOMAIN} {
     ${tls_line}
     reverse_proxy open-webui:8080
 }
 EOF
-    [[ "${ENABLE_N8N:-false}"         == "true" ]] && cat >> "$out" <<EOF
+
+    [[ "${ENABLE_N8N:-false}" == "true" ]] && cat >> "$out" <<EOF
 n8n.${DOMAIN} {
     ${tls_line}
     reverse_proxy n8n:5678
 }
 EOF
-    [[ "${ENABLE_FLOWISE:-false}"     == "true" ]] && cat >> "$out" <<EOF
+
+    [[ "${ENABLE_FLOWISE:-false}" == "true" ]] && cat >> "$out" <<EOF
 flowise.${DOMAIN} {
     ${tls_line}
     reverse_proxy flowise:3000
 }
 EOF
+
     [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && cat >> "$out" <<EOF
 anythingllm.${DOMAIN} {
     ${tls_line}
     reverse_proxy anythingllm:3001
 }
 EOF
-    
+
     log_success "Caddyfile written to ${out}"
 }
 
@@ -689,7 +691,7 @@ EOF
 EOF
 
     # Caddy - always deployed as reverse proxy
-    cat >> "$COMPOSE_FILE" <<EOF
+    cat >> "$COMPOSE_FILE" <<'EOF'
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -706,9 +708,6 @@ EOF
       - ${CONFIG_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ${CONFIG_DIR}/caddy/data:/data
       - ${CONFIG_DIR}/caddy/config:/config
-    environment:
-      - CONFIG_DIR=${CONFIG_DIR}
-      - DATA_DIR=${DATA_DIR}
     healthcheck:
       test: ["CMD-SHELL","wget -qO- http://localhost:2019/metrics > /dev/null"]
       interval: 30s
