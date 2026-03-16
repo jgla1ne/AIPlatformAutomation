@@ -57,8 +57,18 @@ main() {
         docker rm $container_ids || true
         ok "All containers for project '${COMPOSE_PROJECT_NAME}' stopped and removed."
     else
-        ok "No containers found for project '${COMPOSE_PROJECT_NAME}'."
+        ok "No containers for project '${COMPOSE_PROJECT_NAME}' found."
     fi
+    
+    # Kill ALL lingering Docker processes related to AI platform
+    log "Killing ALL lingering Docker processes..."
+    pkill -f "docker compose.*exec.*redis" || true
+    pkill -f "docker compose.*down" || true
+    pkill -f "docker.*compose.*${COMPOSE_PROJECT_NAME}" || true
+    pkill -f "ai-${COMPOSE_PROJECT_NAME}" || true
+    pkill -f "${COMPOSE_PROJECT_NAME}.*postgres" || true
+    pkill -f "${COMPOSE_PROJECT_NAME}.*redis" || true
+    ok "All lingering processes killed."
 
     # --- 2. Brute Force Destroy ALL AI Platform Volumes ---
     log "Finding and destroying ALL AI platform volumes..."
@@ -94,6 +104,15 @@ main() {
     else
         ok "Tenant data directory did not exist."
     fi
+    
+    # Thorough cleanup: Remove ANY remaining postgres/redis data
+    log "Performing thorough cleanup of ALL database remnants..."
+    find /mnt -name "*postgres*" -type d -exec rm -rf {} + 2>/dev/null || true
+    find /mnt -name "*redis*" -type d -exec rm -rf {} + 2>/dev/null || true
+    find /mnt -name "*qdrant*" -type d -exec rm -rf {} + 2>/dev/null || true
+    find /var/lib -name "*postgres*" -type d -exec rm -rf {} + 2>/dev/null || true
+    find /var/lib -name "*redis*" -type d -exec rm -rf {} + 2>/dev/null || true
+    ok "All database remnants removed."
     
     # COMPLETE WIPE: If requested, remove entire /mnt folder
     if [[ "${COMPLETE_WIPE:-false}" == "true" ]]; then
