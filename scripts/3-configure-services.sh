@@ -219,11 +219,16 @@ EOF
 generate_litellm_config() {
     log_info "Generating LiteLLM configuration..."
     
-    # Validate Azure configuration to prevent restart loops
+    # Enhanced Azure validation to prevent restart loops
     local az_config_valid=true
-    if [[ -n "${LITELM_AZURE_API_BASE:-}" ]] && [[ -z "${LITELM_AZURE_API_KEY:-}" ]]; then
-        log_warning "Azure API base configured but missing API key - using local models only"
-        az_config_valid=false
+    if [[ -n "${LITELM_AZURE_API_BASE:-}" ]]; then
+        if [[ -z "${LITELM_AZURE_API_KEY:-}" ]]; then
+            log_warning "Azure API base configured but missing API key - using local models only"
+            az_config_valid=false
+        elif [[ "${LITELM_AZURE_API_BASE}" == *"test"* ]]; then
+            log_warning "Test Azure endpoints detected - disabling Azure models to prevent failures"
+            az_config_valid=false
+        fi
     fi
     
     cat > "${CONFIG_DIR}/litellm/config.yaml" << EOF
@@ -980,10 +985,11 @@ health_dashboard() {
     local ts ip=""
     ts=$(date '+%Y-%m-%d %H:%M:%S')
 
-    # Tailscale IP
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q tailscale; then
-        ip=$(docker compose -f "$COMPOSE_FILE" exec -T tailscale \
-             tailscale ip -4 2>/dev/null | tr -d ' \n' || true)
+    # Tailscale IP - extract from container logs
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "tailscale"; then
+        ip=$(sudo docker logs ai-${COMPOSE_PROJECT_NAME}-tailscale-1 2>/dev/null | grep "self=" | tail -1 | sed 's/.*self=\([0-9.]*\).*/\1/' || echo "NOT CONNECTED")
+    else
+        ip="NOT CONNECTED"
     fi
 
     echo ""
