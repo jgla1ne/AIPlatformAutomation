@@ -2024,7 +2024,7 @@ EOSQL
 INITEOF
 
     chmod +x "${CONFIG_DIR}/postgres/init-all-databases.sh"
-    chown "${REAL_UID}:${REAL_GID}" "${CONFIG_DIR}/postgres/init-all-databases.sh"
+    chown "${TENANT_UID}:${TENANT_GID}" "${CONFIG_DIR}/postgres/init-all-databases.sh"
     log "SUCCESS" "Postgres init script written — creates all service databases"
 }
 
