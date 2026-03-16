@@ -17,6 +17,24 @@ ENV_FILE="/mnt/data/${TENANT}/.env"
 
 source "${SCRIPT_DIR}/3-configure-services.sh"   # ← SOURCES LIBRARY
 
+# ── Helper Functions ────────────────────────────────────────────────
+wait_for_healthy() {
+    local svc="$1"
+    local max_wait="${2:-120}"
+    local elapsed=0
+    log_info "Waiting for ${svc} to be healthy (max ${max_wait}s)..."
+    until [[ "$(docker compose -f "/mnt/data/${TENANT}/docker-compose.yml" ps --format "{{.Health}}" "$svc" 2>/dev/null)" == "healthy" ]]; do
+        elapsed=$((elapsed + 5))
+        if [[ $elapsed -ge $max_wait ]]; then
+            log_warning "${svc} not healthy after ${max_wait}s — proceeding anyway"
+            return 0
+        fi
+        log_info "  ${svc} starting... (${elapsed}s/${max_wait}s)"
+        sleep 5
+    done
+    log_success "${svc} is healthy"
+}
+
 # ── Main Deployment Function ────────────────────────────────────────────────
 main() {
     log_info "=== DEPLOY START ==="
@@ -53,7 +71,10 @@ main() {
     [[ "${ENABLE_OLLAMA:-false}"     == "true" ]] && deploy_service ollama
 
     # 5. AI gateway — depends on postgres, redis; optionally ollama
-    [[ "${ENABLE_LITELLM:-false}"    == "true" ]] && deploy_service litellm
+    [[ "${ENABLE_LITELLM:-false}"    == "true" ]] && {
+        deploy_service litellm
+        wait_for_healthy litellm 120   # Prisma migration takes 45-90s
+    }
 
     # 6. Monitoring — independent of AI services
     [[ "${ENABLE_MONITORING:-false}" == "true" ]] && {

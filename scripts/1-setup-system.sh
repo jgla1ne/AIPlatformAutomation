@@ -2272,10 +2272,11 @@ ANYTHINGLLM_PORT="${ANYTHINGLLM_PORT}"
 QDRANT_API_KEY="${QDRANT_API_KEY}"
 QDRANT_VECTOR_SIZE="768"
 
-# ─── Grafana ──────────────────────────────────────────────────────────────────
+# ─── Grafana ──────────────────────────────────────────────────────────
 GRAFANA_ADMIN_USER="admin"
 GRAFANA_PASSWORD="${GRAFANA_PASSWORD}"
 GF_SECURITY_ADMIN_PASSWORD="${GRAFANA_PASSWORD}"
+GRAFANA_ADMIN_PASSWORD="${GRAFANA_PASSWORD}"
 ADMIN_PASSWORD="${GRAFANA_PASSWORD}"
 
 # ─── Authentik ────────────────────────────────────────────────────────────────

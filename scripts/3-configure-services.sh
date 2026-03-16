@@ -253,8 +253,8 @@ EOF
 EOF
     done
     
-    # Only add OpenAI models if API key is provided
-    [[ -n "${OPENAI_API_KEY:-}" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
+    # Only add OpenAI models if API key is provided and not empty
+    [[ -n "${OPENAI_API_KEY:-}" && "${OPENAI_API_KEY}" != "" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
   - model_name: gpt-4o
     litellm_params:
       model: openai/gpt-4o
@@ -265,8 +265,8 @@ EOF
       api_key: os.environ/OPENAI_API_KEY
 EOF
     
-    # Only add Azure models if configuration is valid
-    if [[ "$az_config_valid" == "true" ]] && [[ -n "${LITELM_AZURE_API_BASE:-}" ]] && [[ -n "${LITELM_AZURE_API_KEY:-}" ]]; then
+    # Only add Azure models if configuration is valid and not empty
+    if [[ "$az_config_valid" == "true" ]] && [[ -n "${LITELM_AZURE_API_BASE:-}" && "${LITELM_AZURE_API_BASE}" != "" ]] && [[ -n "${LITELM_AZURE_API_KEY:-}" && "${LITELM_AZURE_API_KEY}" != "" ]]; then
         cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
   - model_name: azure/gpt-4
     litellm_params:
@@ -283,16 +283,16 @@ EOF
 EOF
     fi
     
-    # Only add Groq models if API key is provided
-    [[ -n "${GROQ_API_KEY:-}" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
+    # Only add Groq models if API key is provided and not empty
+    [[ -n "${GROQ_API_KEY:-}" && "${GROQ_API_KEY}" != "" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
   - model_name: llama3-groq
     litellm_params:
       model: groq/llama3-70b-8192
       api_key: os.environ/GROQ_API_KEY
 EOF
     
-    # Only add Anthropic models if API key is provided
-    [[ -n "${ANTHROPIC_API_KEY:-}" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
+    # Only add Anthropic models if API key is provided and not empty
+    [[ -n "${ANTHROPIC_API_KEY:-}" && "${ANTHROPIC_API_KEY}" != "" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
   - model_name: claude-3-5-sonnet
     litellm_params:
       model: anthropic/claude-3-5-sonnet-20241022
@@ -604,7 +604,7 @@ EOF
       - ${CONFIG_DIR}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     healthcheck:
-      test: ["CMD-SHELL","wget -qO- http://localhost:9090/-/healthy"]
+      test: ["CMD-SHELL","wget -qO- http://localhost:9090/-/healthy || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -764,7 +764,7 @@ EOF
     ports:
       - "${PORT_OPENCLAW:-18789}:8443"
     healthcheck:
-      test: ["CMD-SHELL","curl -sf http://localhost:8443/ || exit 1"]
+      test: ["CMD-SHELL","curl -sfk https://localhost:8443/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -815,6 +815,23 @@ stop_service() {
     docker compose -f "$COMPOSE_FILE" stop "$svc" \
         && log_success "${svc} stopped" \
         || log_warning "${svc} was not running"
+}
+
+wait_for_healthy() {
+    local svc="$1"
+    local max_wait="${2:-120}"
+    local elapsed=0
+    log_info "Waiting for ${svc} to be healthy (max ${max_wait}s)..."
+    until [[ "$(docker compose -f "$COMPOSE_FILE" ps --format "{{.Health}}" "$svc" 2>/dev/null)" == "healthy" ]]; do
+        elapsed=$((elapsed + 5))
+        if [[ $elapsed -ge $max_wait ]]; then
+            log_warning "${svc} not healthy after ${max_wait}s — proceeding anyway"
+            return 0
+        fi
+        log_info "  ${svc} starting... (${elapsed}s/${max_wait}s)"
+        sleep 5
+    done
+    log_success "${svc} is healthy"
 }
 
 reconfigure_service() {
@@ -991,6 +1008,15 @@ _check_http() {
     fi
 }
 
+_check_https() {
+    local name="$1" url="$2"
+    if curl -sfk --max-time 5 "$url" > /dev/null 2>&1; then
+        printf "  ${GREEN}🟢 %-22s${NC} %s\n" "$name" "$url"
+    else
+        printf "  ${RED}🔴 %-22s${NC} %s\n" "$name" "$url"
+    fi
+}
+
 _check_cmd() {
     local name="$1"; shift
     if "$@" > /dev/null 2>&1; then
@@ -1007,7 +1033,7 @@ health_dashboard() {
 
     # Tailscale IP - extract from container logs
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "tailscale"; then
-        ip=$(sudo docker logs ai-${COMPOSE_PROJECT_NAME}-tailscale-1 2>/dev/null | grep "self=" | tail -1 | sed 's/.*self=\([0-9.]*\).*/\1/' || echo "NOT CONNECTED")
+        ip=$(sudo docker logs ${COMPOSE_PROJECT_NAME}-tailscale-1 2>/dev/null | grep "self=" | tail -1 | sed 's/.*self=\([0-9.]*\).*/\1/' || echo "NOT CONNECTED")
     else
         ip="NOT CONNECTED"
     fi
@@ -1056,7 +1082,7 @@ health_dashboard() {
     [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && \
         _check_http "anythingllm"    "http://localhost:${PORT_ANYTHINGLLM:-3003}/"
     [[ "${ENABLE_OPENCLAW:-false}"  == "true" ]] && \
-        _check_http "openclaw"      "http://localhost:${PORT_OPENCLAW:-18789}/"
+        _check_https "openclaw"      "https://localhost:${PORT_OPENCLAW:-18789}/"
     echo ""
     echo -e "  ${BOLD}Quick Tests${NC}"
     echo -e "  LiteLLM models:"
