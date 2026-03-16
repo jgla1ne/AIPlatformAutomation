@@ -3000,13 +3000,10 @@ main() {
     
     # Generate PostgreSQL init script with per-service databases
     generate_postgres_init
-    
-    # Generate docker-compose.yml with all enabled services
-    log "INFO" "Generating docker-compose.yml..."
     # Export TENANT before sourcing script 3
     export TENANT="${TENANT_ID}"
     source "${SCRIPTS_DIR}/3-configure-services.sh"
-    generate_compose
+    # Note: generate_compose is called by Script 2, not Script 1
     
     create_directories
     
