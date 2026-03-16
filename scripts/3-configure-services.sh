@@ -56,6 +56,7 @@ prepare_directories() {
         "${DATA_DIR}/prometheus" \
         "${DATA_DIR}/anythingllm" \
         "${DATA_DIR}/tailscale" \
+        "${DATA_DIR}/openclaw" \
         "${CONFIG_DIR}/litellm" \
         "${CONFIG_DIR}/postgres" \
         "${CONFIG_DIR}/caddy/data" \
@@ -76,7 +77,8 @@ prepare_directories() {
         "${DATA_DIR}/openwebui" \
         "${DATA_DIR}/ollama" \
         "${DATA_DIR}/anythingllm" \
-        "${DATA_DIR}/tailscale"
+        "${DATA_DIR}/tailscale" \
+        "${DATA_DIR}/openclaw"
     
     # Config directories owned by tenant for script access
     chown -R "${TENANT_UID:-1001}:${TENANT_GID:-1001}" "${CONFIG_DIR}"
@@ -159,6 +161,7 @@ PORT_GRAFANA=3002
 PORT_PROMETHEUS=9090
 PORT_QDRANT=6333
 PORT_ANYTHINGLLM=3003
+PORT_OPENCLAW=18789
 
 # ─── External Integrations ───────────────────────────────────────────────────
 TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY:-}
@@ -182,7 +185,7 @@ EOF
 
 # ── Configuration File Generators ───────────────────────────────────────────
 generate_postgres_init() {
-    local out="${CONFIG_DIR}/postgres/init-user-db.sh"
+    local out="${CONFIG_DIR}/postgres/init-all-databases.sh"
     mkdir -p "$(dirname "$out")"
     # Double-quoted: POSTGRES_PASSWORD expands NOW at generation time.
     # Inner \$\$ escapes are for the psql DO block's dollar-quoting.
@@ -418,7 +421,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ${CONFIG_DIR}/postgres/init-all-databases.sh:/docker-entrypoint-initdb.d/init-all-databases.sh:ro
     healthcheck:
-      test: ["CMD-SHELL","pg_isready -U ${POSTGRES_USER}"]
+      test: ["CMD-SHELL","pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -690,6 +693,31 @@ EOF
       start_period: 30s
 EOF
 
+    # OpenClaw web terminal — Tailscale-gated access
+    [[ "${ENABLE_OPENCLAW:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+  openclaw:
+    image: lscr.io/linuxserver/code-server:latest
+    restart: unless-stopped
+    user: "1000:${TENANT_GID:-1001}"
+    environment:
+      PUID: "1000"
+      PGID: "${TENANT_GID:-1001}"
+      PASSWORD: "${ADMIN_PASSWORD}"
+      SUDO_PASSWORD: "${ADMIN_PASSWORD}"
+      DEFAULT_WORKSPACE: "/mnt/data"
+    volumes:
+      - ${DATA_DIR}/openclaw:/config
+      - /mnt/data:/mnt/data:ro
+    ports:
+      - "${PORT_OPENCLAW:-18789}:8443"
+    healthcheck:
+      test: ["CMD-SHELL","curl -sf http://localhost:8443/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+EOF
+
     # Caddy - always deployed as reverse proxy
     cat >> "$COMPOSE_FILE" <<'EOF'
   caddy:
@@ -781,6 +809,7 @@ service_is_enabled() {
         qdrant)    [[ "${ENABLE_QDRANT:-false}"    == "true" ]] ;;
         n8n)       [[ "${ENABLE_N8N:-false}"       == "true" ]] ;;
         flowise)   [[ "${ENABLE_FLOWISE:-false}"   == "true" ]] ;;
+        openclaw)  [[ "${ENABLE_OPENCLAW:-false}"  == "true" ]] ;;
         prometheus|grafana) [[ "${ENABLE_MONITORING:-false}" == "true" ]] ;;
         *) return 1 ;;
     esac
@@ -936,6 +965,9 @@ health_dashboard() {
     echo ""
     printf "  %-14s %s\n" "Domain:"       "https://${DOMAIN}"
     printf "  %-14s %s\n" "Tailscale IP:" "${ip:-NOT CONNECTED}"
+    if [[ "${ENABLE_OPENCLAW:-false}" == "true" && -n "$ip" ]]; then
+        printf "  %-14s %s\n" "OpenClaw:" "https://${ip}:${PORT_OPENCLAW:-18789} (Tailscale only)"
+    fi
     printf "  %-14s %s\n" "Tenant:"       "${TENANT}"
     printf "  %-14s %s\n" "Data:"         "${TENANT_DIR}"
     echo ""
@@ -969,6 +1001,8 @@ health_dashboard() {
         _check_http "flowise"        "http://localhost:${PORT_FLOWISE:-3001}/"
     [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && \
         _check_http "anythingllm"    "http://localhost:${PORT_ANYTHINGLLM:-3003}/"
+    [[ "${ENABLE_OPENCLAW:-false}"  == "true" ]] && \
+        _check_http "openclaw"      "http://localhost:${PORT_OPENCLAW:-18789}/"
     echo ""
     echo -e "  ${BOLD}Quick Tests${NC}"
     echo -e "  LiteLLM models:"
@@ -1053,25 +1087,29 @@ setup_gdrive_rclone() {
 
 create_ingestion_systemd() {
     [[ -n "${GDRIVE_CLIENT_ID:-}" ]] || return 0
-    
+
     log_info "Installing gdrive-sync systemd timer..."
-    
-    # Create systemd service
-    cat > /etc/systemd/system/gdrive-sync.service <<EOF
+
+    local gdrive_dir="${DATA_DIR}/gdrive"
+    mkdir -p "$gdrive_dir"
+    chown "${TENANT_UID:-1001}:${TENANT_GID:-1001}" "$gdrive_dir"
+
+    # Create systemd service — syncs then optionally triggers ingestion
+    cat > /etc/systemd/system/gdrive-sync-${TENANT}.service <<EOF
 [Unit]
-Description=AI Platform GDrive sync
+Description=AI Platform GDrive sync for ${TENANT}
 After=docker.service network.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -c 'rclone sync gdrive: /mnt/data/gdrive/ && docker compose -f ${COMPOSE_FILE} exec anythingllm /app/ingest.sh'
+ExecStart=/bin/bash -c 'rclone sync gdrive: ${DATA_DIR}/gdrive/ --log-file ${LOGS_DIR}/rclone-sync.log'
 User=root
 EOF
 
-    # Create systemd timer
-    cat > /etc/systemd/system/gdrive-sync.timer <<EOF
+    # Create systemd timer — runs every 4 minutes
+    cat > /etc/systemd/system/gdrive-sync-${TENANT}.timer <<EOF
 [Unit]
-Description=GDrive Sync Timer
+Description=GDrive Sync Timer for ${TENANT}
 
 [Timer]
 OnCalendar=*:0/4
@@ -1082,9 +1120,59 @@ WantedBy=timers.target
 EOF
 
     systemctl daemon-reload
-    systemctl enable --now gdrive-sync.timer
-    
-    log_success "gdrive-sync timer installed"
+    systemctl enable --now gdrive-sync-${TENANT}.timer
+
+    log_success "gdrive-sync-${TENANT} timer installed — syncing to ${DATA_DIR}/gdrive/"
+}
+
+# ── GDrive → Qdrant Ingestion ─────────────────────────────────────────────────
+ingest_gdrive_to_qdrant() {
+    [[ -n "${GDRIVE_CLIENT_ID:-}" ]] || {
+        log_warning "GDrive not configured — run: $0 gdrive first"
+        return 1
+    }
+    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] || {
+        log_warning "AnythingLLM not enabled — enable it first: $0 enable anythingllm"
+        return 1
+    }
+
+    log_info "Starting GDrive → Qdrant ingestion via AnythingLLM..."
+
+    # 1. Sync gdrive to local
+    log_info "Syncing GDrive to ${DATA_DIR}/gdrive/ ..."
+    mkdir -p "${DATA_DIR}/gdrive"
+    rclone sync gdrive: "${DATA_DIR}/gdrive/" \
+        --log-file "${LOGS_DIR}/rclone-sync.log" \
+        && log_success "GDrive sync complete" \
+        || { log_error "GDrive sync failed — check ${LOGS_DIR}/rclone-sync.log"; return 1; }
+
+    # 2. Get AnythingLLM API key from .env
+    local atllm_key="${ANYTHINGLLM_API_KEY:-${LITELLM_MASTER_KEY}}"
+    local atllm_url="http://localhost:${PORT_ANYTHINGLLM:-3003}"
+
+    # 3. Upload each file to AnythingLLM via its upload API
+    log_info "Uploading documents to AnythingLLM for embedding into Qdrant..."
+    local count=0 failed=0
+    while IFS= read -r -d '' file; do
+        local filename
+        filename="$(basename "$file")"
+        # AnythingLLM accepts file upload via /api/v1/document/upload
+        if curl -sf -X POST \
+            "${atllm_url}/api/v1/document/upload" \
+            -H "Authorization: Bearer ${atllm_key}" \
+            -F "file=@${file}" \
+            > /dev/null 2>&1; then
+            count=$((count + 1))
+        else
+            log_warning "Failed to upload: ${filename}"
+            failed=$((failed + 1))
+        fi
+    done < <(find "${DATA_DIR}/gdrive" -type f \( \
+        -name "*.pdf" -o -name "*.txt" -o -name "*.md" \
+        -o -name "*.docx" -o -name "*.csv" \) -print0)
+
+    log_success "GDrive ingestion complete — ${count} files embedded, ${failed} failed"
+    log_info "Verify collections: curl -s http://localhost:${PORT_QDRANT:-6333}/collections | jq"
 }
 
 # ── CLI Dispatcher (Only runs when script executed directly) ──────────────────
@@ -1117,6 +1205,7 @@ main() {
         # ── External Wiring ──────────────────────────────────────────
         tailscale)      configure_tailscale ;;
         gdrive)         setup_gdrive_rclone && create_ingestion_systemd ;;
+        gdrive-ingest)  ingest_gdrive_to_qdrant ;;
         logs-rotate)    log_rotate "${1:-}" "${2:-7}" ;;
         logs-cleanup)   log_cleanup "${1:-30}" ;;
 
@@ -1136,7 +1225,7 @@ main() {
             echo "  Configuration: generate  compose  dirs"
             echo "  Health:        health  status  logs [svc]  logs-on <svc>  logs-off <svc>"
             echo "  Logging:       logs-rotate [svc] [days]  logs-cleanup [days]"
-            echo "  Wiring:        tailscale  gdrive"
+            echo "  Wiring:        tailscale  gdrive  gdrive-ingest"
             echo "  Lifecycle:     enable <svc>  disable <svc>  reconfigure <svc>"
             echo ""
             ;;

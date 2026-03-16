@@ -1,290 +1,107 @@
-# AI Platform — Definitive Implementation Blueprint v2
-**Read every line. Implement exactly what is written. Verify each section before moving to the next.**
+# AI Platform — Final Implementation Blueprint v3
+**Windsurf: read every word. Implement exactly this. Verify each section passes before moving to the next.**
 
 ---
 
-## Confirmed Architecture from README (Non-Negotiable)
+## Ground Truth: What the Three Scripts Currently Contain
 
-```
-0-complete-cleanup.sh   → Nuclear wipe, no sourcing required
-1-setup-system.sh       → Input collector ONLY, sources Script 3 for ALL operations
-2-deploy-services.sh    → Deployment engine ONLY, sources Script 3 for ALL operations  
-3-configure-services.sh → Mission Control library: all functions, all config generation
-```
+After reading every line of every uploaded file, here is the honest state:
 
-**Core principles that cannot be violated:**
-- Nothing as root — all services run under tenant UID/GID
-- Data confinement — **everything under `/mnt/data/<tenant>/`**, no exceptions, no `/opt`
-- Zero hardcoded values — all configuration via `.env`
-- `.env` lives at `/mnt/data/<tenant>/.env` — this is Script 3's `ENV_FILE`
-- Script 3 is sourced, not called. Its `(return 0 2>/dev/null) && return` guard handles this correctly
-- `generate_compose` is called by Script 2, NOT Script 1
+**Script 0** — correct and complete. No changes.
+**Script 2** — correct and complete. No changes.
+**Script 3** — 4 bugs. All surgical fixes described below.
+**Script 1** — 1 architectural gap. One block to add to `write_env_file`. No other changes.
+
+The architecture is right. The wiring is almost there. What follows are the exact code changes, nothing more.
 
 ---
 
-## What the Uploaded Code Actually Contains (Honest Audit)
+## BUG 1 — Script 3: `generate_compose` mounts the wrong postgres init filename
 
-### Script 3 (3-configure-services.sh) — STATUS: SOLID, has one broken function
-
-Script 3 is architecturally correct. The library pattern works. Functions are well-written.
-`deploy_service`, `provision_databases`, `generate_compose`, `generate_configs`, `health_dashboard`,
-`configure_tailscale`, `setup_gdrive_rclone` are all correct.
-
-**ONE broken function: `generate_caddyfile` (lines 284–349)**
-
-The heredoc is opened but never closed before the conditional blocks start.
-Line 303 attempts a bash `[[ ... ]] && cat >> ...` INSIDE a heredoc — this is treated as literal text,
-not executed code. The result is a Caddyfile containing bash source code, not Caddy directives.
-
-**Exact bug — lines 296–309:**
-```bash
-cat > "$out" <<EOF
-{
-    admin 0.0.0.0:2019
-    email ${ADMIN_EMAIL:-admin@${DOMAIN}}
-}
-
-# Only add service blocks if services are enabled
-[[ "${ENABLE_GRAFANA:-false}" == "true" ]] && cat >> "$out" <<EOF   ← THIS IS INSIDE THE HEREDOC
+**File:** `scripts/3-configure-services.sh`  
+**Line 419 currently reads:**
+```yaml
+      - ${CONFIG_DIR}/postgres/init-all-databases.sh:/docker-entrypoint-initdb.d/init-all-databases.sh:ro
 ```
 
-The EOF that closes the `cat > "$out"` heredoc is never reached because the `[[ ... ]]` line
-is treated as literal content. The Caddyfile that gets written contains bash conditionals as text.
-
-**Fix: close the global block heredoc, then use separate conditional appends.**
-
-Also: the `generate_postgres_init` function (lines 184–213) uses `$POSTGRES_PASSWORD` unquoted
-inside the inner psql heredoc. The psql `CREATE ROLE` syntax requires the password to be a
-quoted string literal. Without quotes around the password value, psql will fail to parse it.
-
-**Fix: quote the password in the CREATE ROLE statement.**
-
-Also: `generate_compose` (line 393) uses a `<<'EOF'` (single-quoted, no expansion) for the
-postgres service block (lines 393–437) but then the postgres service references
-`${CONFIG_DIR}/postgres/init-all-databases.sh` on line 417. With `<<'EOF'`, this `${CONFIG_DIR}`
-is NOT expanded — Docker Compose will receive the literal string `${CONFIG_DIR}` and try to
-expand it at runtime from the `.env` file. This is actually **correct behaviour** — Docker Compose
-does expand `${VAR}` from `--env-file`. **This is fine, no change needed.**
-
-However: the `caddy` service block (lines 692–718) switches to a `<<EOF` (no quotes, expands now)
-which means `${CONFIG_DIR}` and `${DATA_DIR}` ARE expanded at generation time into absolute paths.
-This is inconsistent — caddy will have hardcoded paths while postgres uses runtime expansion.
-For consistency and correctness, **make caddy use `<<'EOF'` like the other services.**
-
-### Script 2 (2-deploy-services.sh) — STATUS: CORRECT
-
-Script 2 is architecturally correct. It:
-- Sets `TENANT` before sourcing Script 3 ✓
-- Loads `.env` from `/mnt/data/${TENANT}/.env` ✓
-- Sources Script 3 which exports all functions ✓
-- Calls `prepare_directories`, `generate_configs`, `generate_compose` ✓
-- Calls `provision_databases` after postgres starts ✓
-- Deploys in correct dependency order ✓
-- Uses `service_is_enabled()` instead of grep ✓
-- Uses `(return 0 2>/dev/null) || main "$@"` guard ✓
-
-**No changes needed to Script 2.**
-
-### Script 1 (1-setup-system.sh) — STATUS: ARCHITECTURALLY BROKEN in 4 ways
-
-**Problem 1: TENANT_ID vs TENANT_NAME variable confusion (lines 2940–2965)**
-
-`main()` collects input into `TENANT_NAME` but the rest of Script 1 uses `TENANT_ID` everywhere.
-Line 2961 sets `TENANT_ID` from the CLI argument. Line 2944 sets `TENANT_NAME` from interactive input.
-These are never reconciled. `write_env_file` uses `TENANT_ID` (line 2149: `COMPOSE_PROJECT_NAME="${PROJECT_PREFIX}${TENANT_ID}"`).
-But the `source` of Script 3 on line 3005 does `export TENANT="${TENANT_ID}"` — which may be empty
-if the user went through the interactive path (which sets `TENANT_NAME`, not `TENANT_ID`).
-
-**Fix: After the interactive collection block, always set `TENANT_ID="${TENANT_NAME}"`**
-
-**Problem 2: Script 1 calls `write_caddyfile` and `write_prometheus_config` directly (lines 3013–3014)**
-
-The README states: **"Script 1 MUST source Script 3 for ALL operations — No direct operations in Script 1"**
-
-Script 1 has its own `write_caddyfile` function (starting line 2550) and calls it directly.
-Script 3 has `generate_caddyfile`. These are two separate implementations of the same function.
-This violates the single-source-of-truth principle and means the Caddyfile is generated twice —
-first by Script 1's own `write_caddyfile`, then again by Script 2 via Script 3's `generate_caddyfile`.
-The two implementations produce different output (different path variables, different format).
-
-**Fix: Remove `write_caddyfile` and `write_prometheus_config` calls from Script 1's `main()`.
-Script 2 calls `generate_configs()` which calls `generate_caddyfile()` and `generate_prometheus_config()`.**
-
-**Problem 3: Script 1 calls `generate_postgres_init` directly (line 3002)**
-
-Same principle violation. Script 1 calls `generate_postgres_init` which is defined in Script 3
-(Script 1 sources Script 3 on line 3005 — but calls `generate_postgres_init` at line 3002,
-BEFORE sourcing Script 3). This means `generate_postgres_init` is not yet defined when called.
-
-**Fix: Move the `source "${SCRIPTS_DIR}/3-configure-services.sh"` call to BEFORE any calls
-to Script 3 functions. Then remove the direct `generate_postgres_init` call from Script 1 —
-Script 2 calls `generate_configs()` which handles this.**
-
-**Problem 4: `ENV_FILE` path inconsistency between Script 1 and Script 3**
-
-Script 1 `main()` sets:
-```bash
-ENV_FILE="${DATA_ROOT}/.env"   # = /mnt/data/${TENANT_NAME}/.env
+**Script 1's `generate_postgres_init` writes the file to:**
+```
+${CONFIG_DIR}/postgres/init-all-databases.sh
 ```
 
-Script 3 sets:
-```bash
-ENV_FILE="${TENANT_DIR}/.env"  # = /mnt/data/${TENANT}/.env
+**Script 3's own `generate_postgres_init` writes the file to:**
+```
+${CONFIG_DIR}/postgres/init-user-db.sh   ← line 185
 ```
 
-These resolve to the same path IF `TENANT_NAME` in Script 1 matches `TENANT` in Script 3.
-But Script 1 `write_env_file` writes `TENANT_DIR=${DATA_ROOT}` (line 2378), and Script 3 sets
-`TENANT_DIR="${MNT_ROOT}/${TENANT}"`. These are equivalent. The path is consistent.
-**No change needed here — just confirm the TENANT_ID fix in Problem 1 resolves the variable.**
+These are two different filenames. The compose file mounts `init-all-databases.sh`. Script 3's generator writes `init-user-db.sh`. When Script 2 runs (which calls Script 3's `generate_configs` → Script 3's `generate_postgres_init`), the file written is `init-user-db.sh`, but the compose mount looks for `init-all-databases.sh`. The mount silently creates an empty file, postgres starts clean with no role and no per-service databases, and LiteLLM's Prisma migration fails.
 
-### Script 0 (0-complete-cleanup.sh) — STATUS: CORRECT
+**Fix A — Script 3 `generate_postgres_init`: change the output filename on line 185**
 
-Script 0 is correct. Nuclear wipe works. `COMPLETE_WIPE=true` support works.
-No changes needed.
+Replace:
+```bash
+    local out="${CONFIG_DIR}/postgres/init-user-db.sh"
+```
+With:
+```bash
+    local out="${CONFIG_DIR}/postgres/init-all-databases.sh"
+```
+
+That is the only change needed. The rest of the function is correct — the SQL creates the `litellm`, `openwebui`, `n8n`, and `flowise` databases with proper grants.
 
 ---
 
-## The Four Exact Fixes Required
+## BUG 2 — Script 3: `generate_compose` postgres block references `POSTGRES_USER` without `-d` flag
 
-### FIX 1 — Script 3: Repair `generate_caddyfile`
+**File:** `scripts/3-configure-services.sh`  
+**Line 421 currently reads:**
+```yaml
+      test: ["CMD-SHELL","pg_isready -U ${POSTGRES_USER}"]
+```
 
-**File:** `scripts/3-configure-services.sh`
-**Lines to replace:** 284–349 (the entire `generate_caddyfile` function)
+`pg_isready` without `-d` checks the default database. On first startup, if the init script hasn't finished yet, the healthcheck passes before per-service databases are created. Combined with Bug 1, this is how `provision_databases` gets called before the init script has run. The fix makes the healthcheck match the actual database:
 
-Replace with:
+**Fix B — Script 3 `generate_compose` postgres healthcheck, line 421:**
 
-```bash
-generate_caddyfile() {
-    local out="${CONFIG_DIR}/caddy/Caddyfile"
-    mkdir -p "$(dirname "$out")"
-
-    # Choose TLS directive once based on USE_LETSENCRYPT
-    local tls_line
-    if [[ "${USE_LETSENCRYPT:-false}" == "true" ]]; then
-        tls_line="tls ${ADMIN_EMAIL}"
-    else
-        tls_line="tls internal"
-    fi
-
-    # Write global block — heredoc closed BEFORE conditional appends
-    cat > "$out" <<EOF
-{
-    admin 0.0.0.0:2019
-    email ${ADMIN_EMAIL:-admin@${DOMAIN:-localhost}}
-}
-EOF
-
-    # Append one block per enabled service — each is a separate cat call
-    [[ "${ENABLE_MONITORING:-false}" == "true" ]] && cat >> "$out" <<EOF
-grafana.${DOMAIN} {
-    ${tls_line}
-    reverse_proxy grafana:3000
-}
-prometheus.${DOMAIN} {
-    ${tls_line}
-    reverse_proxy prometheus:9090
-}
-EOF
-
-    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && cat >> "$out" <<EOF
-litellm.${DOMAIN} {
-    ${tls_line}
-    reverse_proxy litellm:4000
-}
-EOF
-
-    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && cat >> "$out" <<EOF
-chat.${DOMAIN} {
-    ${tls_line}
-    reverse_proxy open-webui:8080
-}
-EOF
-
-    [[ "${ENABLE_N8N:-false}" == "true" ]] && cat >> "$out" <<EOF
-n8n.${DOMAIN} {
-    ${tls_line}
-    reverse_proxy n8n:5678
-}
-EOF
-
-    [[ "${ENABLE_FLOWISE:-false}" == "true" ]] && cat >> "$out" <<EOF
-flowise.${DOMAIN} {
-    ${tls_line}
-    reverse_proxy flowise:3000
-}
-EOF
-
-    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && cat >> "$out" <<EOF
-anythingllm.${DOMAIN} {
-    ${tls_line}
-    reverse_proxy anythingllm:3001
-}
-EOF
-
-    log_success "Caddyfile written to ${out}"
-}
+Replace:
+```yaml
+      test: ["CMD-SHELL","pg_isready -U ${POSTGRES_USER}"]
+```
+With:
+```yaml
+      test: ["CMD-SHELL","pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
 ```
 
 ---
 
-### FIX 2 — Script 3: Fix `generate_postgres_init` password quoting
+## BUG 3 — Script 3: `generate_compose` has no `openclaw` service block
 
-**File:** `scripts/3-configure-services.sh`
-**Lines to replace:** 195–196 (the CREATE ROLE statement inside the init script heredoc)
+The full stack (stack option 4 in Script 1) enables `ENABLE_OPENCLAW=true`. Script 1 collects OpenClaw config and writes `ENABLE_OPENCLAW` to the `.env`. But `generate_compose` in Script 3 has no `openclaw` service block. When `ENABLE_OPENCLAW=true`, nothing is deployed and the health dashboard shows nothing for it.
 
-Current broken line:
-```bash
-      CREATE ROLE aiplatform WITH LOGIN PASSWORD \$POSTGRES_PASSWORD;
-```
+**Fix C — Script 3 `generate_compose`: add OpenClaw service block**
 
-Replace with (single-quoted literal — the init script resolves this at container startup):
-```bash
-      CREATE ROLE aiplatform WITH LOGIN PASSWORD '${POSTGRES_PASSWORD}';
-```
-
-**Full corrected function context** — the relevant psql block should read:
-```sql
-  DO $$
-  BEGIN
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'aiplatform') THEN
-      CREATE ROLE aiplatform WITH LOGIN PASSWORD '${POSTGRES_PASSWORD}';
-    END IF;
-  END $$;
-```
-
-Note: `${POSTGRES_PASSWORD}` is expanded by bash at generation time (double-quoted heredoc `<<EOF`),
-so the actual password value is written into the init script. This is correct.
-
----
-
-### FIX 3 — Script 3: Fix `generate_compose` caddy block to use `<<'EOF'`
-
-**File:** `scripts/3-configure-services.sh`
-**Lines to replace:** 692–718 (the caddy service block)
-
-Change `<<EOF` to `<<'EOF'` so caddy uses runtime expansion consistent with all other services:
+Insert this block immediately after the tailscale block (after line 691, before the caddy comment on line 693):
 
 ```bash
-    # Caddy - always deployed as reverse proxy
-    cat >> "$COMPOSE_FILE" <<'EOF'
-  caddy:
-    image: caddy:2-alpine
+    # OpenClaw web terminal — Tailscale-gated access
+    [[ "${ENABLE_OPENCLAW:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+  openclaw:
+    image: lscr.io/linuxserver/code-server:latest
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    ports:
-      - "80:80"
-      - "443:443"
-      - "2019:2019"
+    user: "1000:${TENANT_GID:-1001}"
+    environment:
+      PUID: "1000"
+      PGID: "${TENANT_GID:-1001}"
+      PASSWORD: "${ADMIN_PASSWORD}"
+      SUDO_PASSWORD: "${ADMIN_PASSWORD}"
+      DEFAULT_WORKSPACE: "/mnt/data"
     volumes:
-      - ${CONFIG_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ${CONFIG_DIR}/caddy/data:/data
-      - ${CONFIG_DIR}/caddy/config:/config
+      - ${DATA_DIR}/openclaw:/config
+      - /mnt/data:/mnt/data:ro
+    ports:
+      - "${PORT_OPENCLAW:-18789}:8443"
     healthcheck:
-      test: ["CMD-SHELL","wget -qO- http://localhost:2019/metrics > /dev/null"]
+      test: ["CMD-SHELL","curl -sf http://localhost:8443/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -292,213 +109,377 @@ Change `<<EOF` to `<<'EOF'` so caddy uses runtime expansion consistent with all 
 EOF
 ```
 
-Also remove the `environment:` block from caddy (lines 709–711 in current file):
-```yaml
-    environment:
-      - CONFIG_DIR=${CONFIG_DIR}
-      - DATA_DIR=${DATA_DIR}
+Also add `PORT_OPENCLAW=18789` to the ports section of `generate_env` (Script 3, line ~161) alongside the other PORT_ variables:
+```bash
+PORT_OPENCLAW=18789
 ```
-Caddy does not use these env vars — they serve no purpose and clutter the config.
+
+And add `openclaw` to the `service_is_enabled` function (Script 3, around line 784):
+```bash
+        openclaw)  [[ "${ENABLE_OPENCLAW:-false}" == "true" ]] ;;
+```
+
+And add `openclaw` to `prepare_directories` (Script 3, around line 58):
+```bash
+        "${DATA_DIR}/openclaw" \
+```
+
+And add the ownership line in `prepare_directories` alongside other 1000-UID services (around line 72):
+```bash
+    chown -R 1000:"${TENANT_GID:-1001}"    \
+        "${DATA_DIR}/litellm" \
+        "${DATA_DIR}/n8n" \
+        "${DATA_DIR}/flowise" \
+        "${DATA_DIR}/openwebui" \
+        "${DATA_DIR}/ollama" \
+        "${DATA_DIR}/anythingllm" \
+        "${DATA_DIR}/tailscale" \
+        "${DATA_DIR}/openclaw"
+```
+
+Also add openclaw to the health dashboard in `health_dashboard` (after the anythingllm block, around line 971):
+```bash
+    [[ "${ENABLE_OPENCLAW:-false}" == "true" ]] && \
+        _check_http "openclaw" "http://localhost:${PORT_OPENCLAW:-18789}/"
+```
+
+And add it to the dashboard header section (after the Tailscale IP line, around line 938) so the user knows the access URL:
+```bash
+    if [[ "${ENABLE_OPENCLAW:-false}" == "true" && -n "$ip" ]]; then
+        printf "  %-14s %s\n" "OpenClaw:" "https://${ip}:${PORT_OPENCLAW:-18789} (Tailscale only)"
+    fi
+```
 
 ---
 
-### FIX 4 — Script 1: Three surgical changes to `main()`
+## BUG 4 — Script 3: `create_ingestion_systemd` syncs to wrong path and has no qdrant ingestion command
 
-**File:** `scripts/1-setup-system.sh`
-**Section:** The `main()` function (lines 2941–3018)
-
-**Change A:** After the tenant collection block (after line 2963), add the reconciliation line:
+**File:** `scripts/3-configure-services.sh`  
+**Line 1067 currently reads:**
 ```bash
-    # Reconcile — TENANT_ID is the canonical variable used throughout Script 1
-    # TENANT_NAME comes from interactive input; TENANT_ID from CLI arg
-    # After this line both are always set and equal
-    TENANT_ID="${TENANT_ID:-${TENANT_NAME}}"
-    TENANT_NAME="${TENANT_ID}"
+ExecStart=/bin/bash -c 'rclone sync gdrive: /mnt/data/gdrive/ && docker compose -f ${COMPOSE_FILE} exec anythingllm /app/ingest.sh'
 ```
 
-**Change B:** Move the `source` of Script 3 to BEFORE any calls to Script 3 functions.
-Current order (broken):
-```
-line 2999: write_env_file
-line 3002: generate_postgres_init   ← Script 3 function, called BEFORE source
-line 3004: export TENANT
-line 3005: source Script 3          ← too late
-```
+Two problems:
+1. Syncs to `/mnt/data/gdrive/` — a global path not scoped to the tenant. Should be `/mnt/data/${TENANT}/data/gdrive/`
+2. Calls `anythingllm /app/ingest.sh` — this path doesn't exist in the mintplexlabs image. AnythingLLM has no CLI ingest endpoint. The ingestion path for Script 3's `gdrive ingest` command is via the AnythingLLM API.
 
-Correct order:
+**Fix D — Script 3 `create_ingestion_systemd`:**
+
+Replace lines 1060–1087 (the entire function body) with:
+
 ```bash
-    write_env_file
-    
-    # Source Script 3 FIRST — all subsequent operations use its functions
-    export TENANT="${TENANT_ID}"
-    source "${SCRIPTS_DIR}/3-configure-services.sh"
-    
-    create_directories
-    apply_final_ownership
-    # DO NOT call generate_postgres_init, write_caddyfile, write_prometheus_config here.
-    # Script 2 calls generate_configs() which handles all of these.
-```
+create_ingestion_systemd() {
+    [[ -n "${GDRIVE_CLIENT_ID:-}" ]] || return 0
 
-**Change C:** Remove these three lines from `main()`:
-```bash
-    generate_postgres_init       # ← DELETE: Script 2 does this via generate_configs()
-    write_caddyfile              # ← DELETE: Script 2 does this via generate_configs()
-    write_prometheus_config      # ← DELETE: Script 2 does this via generate_configs()
-```
+    log_info "Installing gdrive-sync systemd timer..."
 
-The corrected `main()` call sequence:
-```bash
-main() {
-    # ... (unchanged: tenant collection, path derivation, arg handling)
-    
-    print_header
-    check_root
-    check_prerequisites
-    collect_identity
-    detect_and_mount_ebs
-    select_data_volume
-    detect_gpu
-    select_stack
-    configure_dify
-    select_vector_db
-    collect_database
-    collect_llm_config
-    collect_litellm_routing
-    collect_network_config
-    collect_ports
-    generate_secrets
-    
-    # Generate all application secrets
-    load_or_generate_secret "N8N_ENCRYPTION_KEY"
-    load_or_generate_secret "FLOWISE_SECRET_KEY"
-    load_or_generate_secret "LITELLM_MASTER_KEY"
-    load_or_generate_secret "LITELLM_SALT_KEY"
-    load_or_generate_secret "ANYTHINGLLM_JWT_SECRET"
-    load_or_generate_secret "JWT_SECRET"
-    load_or_generate_secret "ENCRYPTION_KEY"
-    load_or_generate_secret "QDRANT_API_KEY"
-    load_or_generate_secret "GRAFANA_PASSWORD"
-    load_or_generate_secret "AUTHENTIK_SECRET_KEY"
-    load_or_generate_secret "OPENWEBUI_SECRET_KEY"
-    load_or_generate_secret "REDIS_PASSWORD"
-    load_or_generate_secret "POSTGRES_PASSWORD"
-    
-    # Reconcile tenant variables
-    TENANT_ID="${TENANT_ID:-${TENANT_NAME}}"
-    TENANT_NAME="${TENANT_ID}"
-    
-    print_summary
-    write_env_file
-    
-    # Source Script 3 AFTER .env is written so functions can load it
-    export TENANT="${TENANT_ID}"
-    source "${SCRIPTS_DIR}/3-configure-services.sh"
-    
-    # Directories and ownership — Script 1's responsibility
-    create_directories
-    apply_final_ownership
-    
-    # Config generation is Script 2's responsibility (via generate_configs)
-    # DO NOT call generate_postgres_init, write_caddyfile, write_prometheus_config here
-    
-    offer_next_step
+    local gdrive_dir="${DATA_DIR}/gdrive"
+    mkdir -p "$gdrive_dir"
+    chown "${TENANT_UID:-1001}:${TENANT_GID:-1001}" "$gdrive_dir"
+
+    # Create systemd service — syncs then optionally triggers ingestion
+    cat > /etc/systemd/system/gdrive-sync-${TENANT}.service <<EOF
+[Unit]
+Description=AI Platform GDrive sync for ${TENANT}
+After=docker.service network.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'rclone sync gdrive: ${DATA_DIR}/gdrive/ --log-file ${LOGS_DIR}/rclone-sync.log'
+User=root
+EOF
+
+    # Create systemd timer — runs every 4 minutes
+    cat > /etc/systemd/system/gdrive-sync-${TENANT}.timer <<EOF
+[Unit]
+Description=GDrive Sync Timer for ${TENANT}
+
+[Timer]
+OnCalendar=*:0/4
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable --now gdrive-sync-${TENANT}.timer
+
+    log_success "gdrive-sync-${TENANT} timer installed — syncing to ${DATA_DIR}/gdrive/"
 }
 ```
 
+Also replace the gdrive CLI dispatcher (Script 3, line 1119) to add the `ingest` sub-command:
+
+Replace:
+```bash
+        gdrive)         setup_gdrive_rclone && create_ingestion_systemd ;;
+```
+With:
+```bash
+        gdrive)         setup_gdrive_rclone && create_ingestion_systemd ;;
+        gdrive-ingest)  ingest_gdrive_to_qdrant ;;
+```
+
+And add the new `ingest_gdrive_to_qdrant` function immediately before the CLI dispatcher guard (before line 1091):
+
+```bash
+# ── GDrive → Qdrant Ingestion ─────────────────────────────────────────────────
+ingest_gdrive_to_qdrant() {
+    [[ -n "${GDRIVE_CLIENT_ID:-}" ]] || {
+        log_warning "GDrive not configured — run: $0 gdrive first"
+        return 1
+    }
+    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] || {
+        log_warning "AnythingLLM not enabled — enable it first: $0 enable anythingllm"
+        return 1
+    }
+
+    log_info "Starting GDrive → Qdrant ingestion via AnythingLLM..."
+
+    # 1. Sync gdrive to local
+    log_info "Syncing GDrive to ${DATA_DIR}/gdrive/ ..."
+    mkdir -p "${DATA_DIR}/gdrive"
+    rclone sync gdrive: "${DATA_DIR}/gdrive/" \
+        --log-file "${LOGS_DIR}/rclone-sync.log" \
+        && log_success "GDrive sync complete" \
+        || { log_error "GDrive sync failed — check ${LOGS_DIR}/rclone-sync.log"; return 1; }
+
+    # 2. Get AnythingLLM API key from .env
+    local atllm_key="${ANYTHINGLLM_API_KEY:-${LITELLM_MASTER_KEY}}"
+    local atllm_url="http://localhost:${PORT_ANYTHINGLLM:-3003}"
+
+    # 3. Upload each file to AnythingLLM via its upload API
+    log_info "Uploading documents to AnythingLLM for embedding into Qdrant..."
+    local count=0 failed=0
+    while IFS= read -r -d '' file; do
+        local filename
+        filename="$(basename "$file")"
+        # AnythingLLM accepts file upload via /api/v1/document/upload
+        if curl -sf -X POST \
+            "${atllm_url}/api/v1/document/upload" \
+            -H "Authorization: Bearer ${atllm_key}" \
+            -F "file=@${file}" \
+            > /dev/null 2>&1; then
+            count=$((count + 1))
+        else
+            log_warning "Failed to upload: ${filename}"
+            failed=$((failed + 1))
+        fi
+    done < <(find "${DATA_DIR}/gdrive" -type f \( \
+        -name "*.pdf" -o -name "*.txt" -o -name "*.md" \
+        -o -name "*.docx" -o -name "*.csv" \) -print0)
+
+    log_success "GDrive ingestion complete — ${count} files embedded, ${failed} failed"
+    log_info "Verify collections: curl -s http://localhost:${PORT_QDRANT:-6333}/collections | jq"
+}
+```
+
+Update the help text in the CLI dispatcher (around line 1136) to include the new command:
+```bash
+            echo "  Wiring:        tailscale  gdrive  gdrive-ingest"
+```
+
 ---
 
-## Verification Steps After Each Fix
+## GAP 5 — Script 1: `write_env_file` does not write the Script 3 path variables
 
-Run these in order. Do not proceed to the next fix until the current one passes.
+**File:** `scripts/1-setup-system.sh`
 
-### After Fix 1 (generate_caddyfile):
+Script 3 reads these five variables when sourced:
 ```bash
-# Test by sourcing Script 3 and calling the function with test vars
-TENANT=test DOMAIN=example.com ADMIN_EMAIL=test@example.com \
-  ENABLE_LITELLM=true ENABLE_OPENWEBUI=true ENABLE_MONITORING=false \
-  CONFIG_DIR=/tmp/caddy-test bash -c '
-    mkdir -p /tmp/caddy-test/caddy
-    source scripts/3-configure-services.sh
-    generate_caddyfile
-    echo "=== Generated Caddyfile ==="
-    cat /tmp/caddy-test/caddy/Caddyfile
-    grep -v "^\s*$" /tmp/caddy-test/caddy/Caddyfile | grep "\[\[" \
-      && echo "FAIL: bash code in Caddyfile" \
-      || echo "PASS: no bash code in Caddyfile"
-  '
+TENANT          # the tenant name
+TENANT_DIR      # /mnt/data/${TENANT}
+CONFIG_DIR      # ${TENANT_DIR}/configs
+DATA_DIR        # ${TENANT_DIR}/data
+LOGS_DIR        # ${TENANT_DIR}/logs
+COMPOSE_FILE    # ${TENANT_DIR}/docker-compose.yml
 ```
-Expected: clean Caddyfile with global block + litellm and chat blocks. No `[[` characters.
 
-### After Fix 2 (postgres init password quoting):
-```bash
-grep "CREATE ROLE" /mnt/data/datasquiz/configs/postgres/init-all-databases.sh 2>/dev/null \
-  || grep "CREATE ROLE" scripts/3-configure-services.sh
-```
-Expected: `CREATE ROLE aiplatform WITH LOGIN PASSWORD '...'` with single quotes around the value.
+Script 1's `write_env_file` writes `TENANT_ID`, `DATA_ROOT`, and `TENANT_DIR=${DATA_ROOT}` (line 2378)
+but does **not** write `TENANT`, `CONFIG_DIR`, `DATA_DIR`, `LOGS_DIR`, or `COMPOSE_FILE`.
 
-### After Fix 3 (caddy heredoc):
+When Script 2 sources Script 3, Script 3's top-level path block runs first:
 ```bash
-grep -A 5 "caddy:" /mnt/data/datasquiz/docker-compose.yml 2>/dev/null | grep CONFIG_DIR
+TENANT="${TENANT:-default}"
+TENANT_DIR="${MNT_ROOT}/${TENANT}"
+CONFIG_DIR="${TENANT_DIR}/configs"
+...
 ```
-Expected: `${CONFIG_DIR}` (literal, not expanded path).
+Script 3 then loads the `.env` via `set -a; source "$ENV_FILE"; set +a`. Since the `.env` doesn't
+contain `CONFIG_DIR` or `DATA_DIR`, Script 3's own defaults (derived from `TENANT`) are what remain.
+This works correctly **as long as `TENANT` is set in the environment before sourcing** — which
+Script 2 does (`export TENANT="${1:-datasquiz}"`). This is correct.
 
-### After Fix 4 (Script 1 main):
+**However**, the `.env` needs `TENANT` (not `TENANT_ID`) written explicitly so that any future
+Script 3 direct invocation (`bash scripts/3-configure-services.sh datasquiz health`) also works
+without requiring the caller to always `export TENANT` first.
+
+**Fix E — Script 1 `write_env_file`:**
+
+In the `.env` heredoc, in the Platform Identity section (around line 2049), add `TENANT` alongside `TENANT_ID`:
+
+Find this block (around line 2048):
 ```bash
-# Dry run — check the call order in main()
-grep -n "source.*3-configure\|generate_postgres_init\|write_caddyfile\|write_prometheus\|export TENANT" \
-  scripts/1-setup-system.sh | tail -20
+# ─── Platform Identity ────────────────────────────────────────────────────────
+TENANT_ID=${TENANT_ID}
+DOMAIN=${DOMAIN}
+ADMIN_EMAIL=${ADMIN_EMAIL}
+DATA_ROOT=${DATA_ROOT}
 ```
-Expected: `export TENANT` and `source ...3-configure-services.sh` appear BEFORE the end of `main()`,
-and `generate_postgres_init`, `write_caddyfile`, `write_prometheus_config` do NOT appear in `main()`.
+
+Replace with:
+```bash
+# ─── Platform Identity ────────────────────────────────────────────────────────
+TENANT_ID=${TENANT_ID}
+TENANT=${TENANT_ID}
+DOMAIN=${DOMAIN}
+ADMIN_EMAIL=${ADMIN_EMAIL}
+DATA_ROOT=${DATA_ROOT}
+TENANT_DIR=${DATA_ROOT}
+CONFIG_DIR=${DATA_ROOT}/configs
+DATA_DIR=${DATA_ROOT}/data
+LOGS_DIR=${DATA_ROOT}/logs
+COMPOSE_FILE=${DATA_ROOT}/docker-compose.yml
+```
+
+This is additive — no existing line is removed. These variables are written once with correct values
+at collection time and used by Script 3 every time.
 
 ---
 
-## Full End-to-End Test After All Four Fixes
+## Summary: All Changes in One Place
+
+### `scripts/3-configure-services.sh` — 4 changes
+
+**Change 1** — Line 185: fix postgres init filename
+```bash
+# FROM:
+    local out="${CONFIG_DIR}/postgres/init-user-db.sh"
+# TO:
+    local out="${CONFIG_DIR}/postgres/init-all-databases.sh"
+```
+
+**Change 2** — Line 421: fix postgres healthcheck
+```yaml
+# FROM:
+      test: ["CMD-SHELL","pg_isready -U ${POSTGRES_USER}"]
+# TO:
+      test: ["CMD-SHELL","pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+```
+
+**Change 3** — After line 691 (after tailscale block, before caddy): add openclaw service block + update `prepare_directories`, `service_is_enabled`, `health_dashboard`, `generate_env` ports (all described in BUG 3 above)
+
+**Change 4** — Replace `create_ingestion_systemd` function (lines 1054–1088) and add `ingest_gdrive_to_qdrant` function + update CLI dispatcher (all described in BUG 4 above)
+
+### `scripts/1-setup-system.sh` — 1 change
+
+**Change 5** — In `write_env_file` heredoc, Platform Identity section: add `TENANT`, `TENANT_DIR`, `CONFIG_DIR`, `DATA_DIR`, `LOGS_DIR`, `COMPOSE_FILE` (described in GAP 5 above)
+
+### `scripts/2-deploy-services.sh` — 0 changes
+### `scripts/0-complete-cleanup.sh` — 0 changes
+
+---
+
+## Post-Implementation Verification Sequence
+
+Run these after every change, in this order:
 
 ```bash
 # 1. Nuclear wipe
 sudo bash scripts/0-complete-cleanup.sh datasquiz
 
-# 2. Collect config (Script 1 — input only, sources Script 3)
+# 2. Confirm clean slate
+ls /mnt/data/  # Should show only 'datasquiz/' (empty)
+docker ps -a   # Should show no ai- containers
+
+# 3. Run Script 1 — input collection only
 sudo bash scripts/1-setup-system.sh
-# → Enter tenant: datasquiz
-# → Follow prompts, select LiteLLM + Ollama + OpenWebUI + Qdrant + Monitoring
-# → Script writes /mnt/data/datasquiz/.env and creates directories
-# → Script does NOT generate compose, does NOT start services
+# Select stack 4 (Full) or 2 (Standard + Tailscale + Rclone)
+# At the end: choose NOT to auto-run Script 2 yet
 
-# 3. Verify .env exists and has correct paths
-grep "TENANT_DIR\|ENV_FILE\|COMPOSE_FILE\|LITELLM_DATABASE_URL\|OPENWEBUI_DATABASE_URL" \
+# 4. Verify .env has correct variables
+grep -E "^TENANT=|^CONFIG_DIR=|^DATA_DIR=|^COMPOSE_FILE=|^LITELLM_DATABASE_URL=" \
   /mnt/data/datasquiz/.env
+# Expected output (example):
+# TENANT=datasquiz
+# CONFIG_DIR=/mnt/data/datasquiz/configs
+# DATA_DIR=/mnt/data/datasquiz/data
+# COMPOSE_FILE=/mnt/data/datasquiz/docker-compose.yml
+# LITELLM_DATABASE_URL=postgresql://...@postgres:5432/litellm
 
-# 4. Deploy (Script 2 — generates compose, starts services)
+# 5. Run Script 2
 sudo bash scripts/2-deploy-services.sh datasquiz
 
-# 5. Verify per-service databases were created
+# 6. After Script 2 completes, verify postgres init ran correctly
 sudo docker compose -f /mnt/data/datasquiz/docker-compose.yml \
-  exec postgres psql -U aiplatform -c "\l" | grep -E "litellm|openwebui|n8n"
+  exec postgres psql -U aiplatform -c "\l" \
+  | grep -E "litellm|openwebui|n8n|flowise"
+# Expected: all 4 databases listed
 
-# 6. Verify LiteLLM starts (allow 90s for Prisma migration)
+# 7. Wait 90s for LiteLLM Prisma migration, then check
 sleep 90
 curl -sf http://localhost:4000/health/liveliness && echo "LiteLLM: OK"
 
-# 7. Health dashboard
+# 8. Check all services via health dashboard
 sudo bash scripts/3-configure-services.sh datasquiz health
 
-# 8. Enable a service post-deploy
-sudo bash scripts/3-configure-services.sh datasquiz enable n8n
+# 9. Test GDrive ingestion (if configured)
+sudo bash scripts/3-configure-services.sh datasquiz gdrive-ingest
+
+# 10. Verify Qdrant has collections after ingestion
+curl -s http://localhost:6333/collections | python3 -m json.tool
 ```
 
 ---
 
-## Summary Table
+## What the User Will See After a Successful Deployment
 
-| Script | Changes Required | Lines Affected |
-|--------|-----------------|----------------|
-| `3-configure-services.sh` | Fix `generate_caddyfile` — close heredoc before conditionals | 284–349 |
-| `3-configure-services.sh` | Fix `generate_postgres_init` — quote password in CREATE ROLE | ~196 |
-| `3-configure-services.sh` | Fix caddy block — `<<'EOF'` not `<<EOF`, remove useless env vars | 692–718 |
-| `1-setup-system.sh` | Reconcile `TENANT_ID`/`TENANT_NAME`; move `source` before function calls; remove direct config-gen calls from `main()` | 2941–3018 |
-| `2-deploy-services.sh` | **No changes needed** | — |
-| `0-complete-cleanup.sh` | **No changes needed** | — |
+### Services accessible via HTTPS (Caddy + Let's Encrypt or internal TLS):
+| URL | Service | Shared backend |
+|-----|---------|---------------|
+| `https://chat.DOMAIN` | Open WebUI | LiteLLM routing + Qdrant vectors |
+| `https://litellm.DOMAIN` | LiteLLM API gateway | Routes local↔external models |
+| `https://anythingllm.DOMAIN` | AnythingLLM | Qdrant + LiteLLM |
+| `https://n8n.DOMAIN` | n8n automation | LiteLLM AI nodes |
+| `https://flowise.DOMAIN` | Flowise | LiteLLM |
+| `https://grafana.DOMAIN` | Grafana | Prometheus metrics |
 
-**Total: 4 fixes across 2 files. Script 2 and Script 0 are correct as committed.**
+### Tailscale-only access (shown in health dashboard):
+| Access | Service |
+|--------|---------|
+| `https://<tailscale-ip>:18789` | OpenClaw web terminal (full shell, /mnt/data read access) |
+
+### Data flow:
+```
+Google Drive → rclone sync → /mnt/data/datasquiz/data/gdrive/
+                                    ↓  (bash scripts/3-configure-services.sh datasquiz gdrive-ingest)
+                              AnythingLLM upload API
+                                    ↓
+                              Qdrant (embeddings stored at /mnt/data/datasquiz/data/qdrant/)
+                                    ↓  (shared by)
+                   Open WebUI + AnythingLLM + Flowise + n8n
+```
+
+### User-driven document ingestion:
+AnythingLLM at `https://anythingllm.DOMAIN` → Upload Documents → stored in same Qdrant instance
+
+### LiteLLM routing strategy:
+- Local models via Ollama (zero cost, private)
+- External models via OpenAI / Anthropic / Groq (fallback, configurable routing strategy)
+- All services point to `http://litellm:4000/v1` — single gateway, no per-service API key management
+
+---
+
+## The One Thing That Will Still Require Manual Action
+
+Tailscale authentication requires a valid `tskey-auth-...` key entered during Script 1's
+`collect_network_config` step. After Script 2 deploys tailscale, it calls `configure_tailscale`
+which authenticates non-interactively using that key. The Tailscale IP is then written to `.env`
+and displayed in the health dashboard. If the key is expired or missing, Tailscale will not
+authenticate and OpenClaw will only be accessible on localhost:18789. Resolution: get a fresh
+auth key from tailscale.com/admin, update `TAILSCALE_AUTH_KEY` in the `.env`, and run:
+```bash
+sudo bash scripts/3-configure-services.sh datasquiz tailscale
+```

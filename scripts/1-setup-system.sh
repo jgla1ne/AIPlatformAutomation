@@ -2047,9 +2047,15 @@ write_env_file() {
 
 # ─── Platform Identity ────────────────────────────────────────────────────────
 TENANT_ID=${TENANT_ID}
+TENANT=${TENANT_ID}
 DOMAIN=${DOMAIN}
 ADMIN_EMAIL=${ADMIN_EMAIL}
 DATA_ROOT=${DATA_ROOT}
+TENANT_DIR=${DATA_ROOT}
+CONFIG_DIR=${DATA_ROOT}/configs
+DATA_DIR=${DATA_ROOT}/data
+LOGS_DIR=${DATA_ROOT}/logs
+COMPOSE_FILE=${DATA_ROOT}/docker-compose.yml
 SSL_TYPE=${SSL_TYPE}
 PROJECT_PREFIX=${PROJECT_PREFIX}
 
