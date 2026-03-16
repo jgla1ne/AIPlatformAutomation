@@ -563,6 +563,8 @@ EOF
     image: grafana/grafana:latest
     restart: unless-stopped
     user: "472:472"
+    ports:
+      - "${PORT_GRAFANA:-3002}:3000"
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}

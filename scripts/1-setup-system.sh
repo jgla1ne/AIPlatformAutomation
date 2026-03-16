@@ -839,6 +839,7 @@ select_stack() {
             ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_QDRANT=true;
             ENABLE_GRAFANA=true; ENABLE_PROMETHEUS=true; ENABLE_AUTHENTIK=true;
             ENABLE_TAILSCALE=true;
+            ENABLE_MONITORING=true
             STACK_NAME="monitoring-security"
             ;;
         4) # Full Stack (All Services)
@@ -849,6 +850,7 @@ select_stack() {
             ENABLE_QDRANT=true; ENABLE_GRAFANA=true; ENABLE_PROMETHEUS=true;
             ENABLE_AUTHENTIK=true; ENABLE_SIGNAL=true; ENABLE_OPENCLAW=true;
             ENABLE_TAILSCALE=true; ENABLE_RCLONE=true;
+            ENABLE_MONITORING=true
             STACK_NAME="full"
             ;;
         5) # Custom — all off, user picks in next step
@@ -2105,6 +2107,7 @@ ENABLE_CHROMADB=${ENABLE_CHROMADB}
 ENABLE_MILVUS=${ENABLE_MILVUS}
 ENABLE_GRAFANA=${ENABLE_GRAFANA}
 ENABLE_PROMETHEUS=${ENABLE_PROMETHEUS}
+ENABLE_MONITORING=${ENABLE_MONITORING:-${ENABLE_GRAFANA:-false}}
 ENABLE_AUTHENTIK=${ENABLE_AUTHENTIK}
 ENABLE_SIGNAL=${ENABLE_SIGNAL}
 ENABLE_TAILSCALE=${ENABLE_TAILSCALE}

@@ -72,6 +72,7 @@ main() {
 
     # 9. External wiring (non-blocking — skip gracefully if not configured)
     [[ "${ENABLE_TAILSCALE:-false}"  == "true" ]] && configure_tailscale
+    [[ "${ENABLE_OPENCLAW:-false}"  == "true" ]] && deploy_service openclaw
     [[ -n "${GDRIVE_CLIENT_ID:-}" ]] && setup_gdrive_rclone && create_ingestion_systemd
 
     # 10. Health dashboard — script 2 STOPS after this
