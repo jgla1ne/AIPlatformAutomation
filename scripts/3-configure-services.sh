@@ -253,6 +253,7 @@ EOF
 EOF
     done
     
+    # Only add OpenAI models if API key is provided
     [[ -n "${OPENAI_API_KEY:-}" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
   - model_name: gpt-4o
     litellm_params:
@@ -264,7 +265,7 @@ EOF
       api_key: os.environ/OPENAI_API_KEY
 EOF
     
-    # Add Azure models only if configuration is valid
+    # Only add Azure models if configuration is valid
     if [[ "$az_config_valid" == "true" ]] && [[ -n "${LITELM_AZURE_API_BASE:-}" ]] && [[ -n "${LITELM_AZURE_API_KEY:-}" ]]; then
         cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
   - model_name: azure/gpt-4
@@ -282,18 +283,20 @@ EOF
 EOF
     fi
     
-    [[ -n "${ANTHROPIC_API_KEY:-}" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
-  - model_name: claude-3-5-sonnet
-    litellm_params:
-      model: anthropic/claude-3-5-sonnet-20241022
-      api_key: os.environ/ANTHROPIC_API_KEY
-EOF
-    
+    # Only add Groq models if API key is provided
     [[ -n "${GROQ_API_KEY:-}" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
   - model_name: llama3-groq
     litellm_params:
       model: groq/llama3-70b-8192
       api_key: os.environ/GROQ_API_KEY
+EOF
+    
+    # Only add Anthropic models if API key is provided
+    [[ -n "${ANTHROPIC_API_KEY:-}" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
+  - model_name: claude-3-5-sonnet
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-20241022
+      api_key: os.environ/ANTHROPIC_API_KEY
 EOF
     
     cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
@@ -308,10 +311,23 @@ litellm_settings:
     password: os.environ/REDIS_PASSWORD
 router_settings:
   routing_strategy: ${LITELLM_ROUTING_STRATEGY:-least-busy}
+EOF
+    
+    # Only add fallbacks for models that are actually configured
+    if [[ -n "${OPENAI_API_KEY:-}" || -n "${ANTHROPIC_API_KEY:-}" || -n "${GROQ_API_KEY:-}" ]]; then
+        cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
   fallbacks:
-    - gpt-4o: ["gpt-4o-mini", "claude-3-5-sonnet", "llama3-groq"]
-    - claude-3-5-sonnet: ["gpt-4o", "gpt-4o-mini"]
-    - llama3-groq: ["gpt-4o", "claude-3-5-sonnet"]
+EOF
+        # Add fallbacks only for configured external models
+        [[ -n "${OPENAI_API_KEY:-}" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
+    - gpt-4o: ["gpt-4o-mini"]
+EOF
+        [[ -n "${GROQ_API_KEY:-}" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
+    - llama3-groq: ["gpt-4o"]
+EOF
+    fi
+    
+    cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/LITELLM_DATABASE_URL
