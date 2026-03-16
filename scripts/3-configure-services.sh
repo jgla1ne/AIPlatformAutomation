@@ -414,7 +414,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ${CONFIG_DIR}/postgres/init-user-db.sh:/docker-entrypoint-initdb.d/init-user-db.sh:ro
+      - ${CONFIG_DIR}/postgres/init-all-databases.sh:/docker-entrypoint-initdb.d/init-all-databases.sh:ro
     healthcheck:
       test: ["CMD-SHELL","pg_isready -U ${POSTGRES_USER}"]
       interval: 10s
@@ -437,6 +437,86 @@ services:
 EOF
 
     # Add enabled services dynamically - NO hardcoded values
+    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+  litellm:
+    image: ghcr.io/berriai/litellm:main
+    restart: unless-stopped
+    user: "root"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
+      DATABASE_URL: ${LITELLM_DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      STORE_MODEL_IN_DB: "True"
+      LITELLM_TELEMETRY: "False"
+      PRISMA_DISABLE_WARNINGS: "true"
+    volumes:
+      - ${CONFIG_DIR}/litellm/config.yaml:/app/config.yaml:ro
+      - ${DATA_DIR}/litellm:/root/.cache
+    ports:
+      - "${PORT_LITELLM:-4000}:4000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4000/health/liveliness || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 90s
+EOF
+
+    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      OPENAI_API_BASE_URL: "http://litellm:4000/v1"
+      OPENAI_API_KEY: "${LITELLM_MASTER_KEY}"
+      WEBUI_SECRET_KEY: "${JWT_SECRET}"
+      DATABASE_URL: "${OPENWEBUI_DATABASE_URL}"
+      VECTOR_DB: "qdrant"
+      QDRANT_URI: "http://qdrant:6333"
+    volumes:
+      - ${DATA_DIR}/openwebui:/app/backend/data
+    ports:
+      - "${PORT_OPENWEBUI:-3000}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+EOF
+
+    [[ "${ENABLE_OLLAMA:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    environment:
+      OLLAMA_HOST: 0.0.0.0
+      OLLAMA_MODELS: ${DATA_DIR}/ollama
+    volumes:
+      - ${DATA_DIR}/ollama:/root/.ollama
+    ports:
+      - "${PORT_OLLAMA:-11434}:11434"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+EOF
+
     [[ "${ENABLE_QDRANT:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
   qdrant:
     image: qdrant/qdrant:latest
