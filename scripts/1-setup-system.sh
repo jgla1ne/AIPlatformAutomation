@@ -168,6 +168,8 @@ FLOWISE_SECRET_KEY="${FLOWISE_SECRET_KEY:-}"
 LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-}"
 LITELLM_SALT_KEY="${LITELLM_SALT_KEY:-}"
 ANYTHINGLLM_JWT_SECRET="${ANYTHINGLLM_JWT_SECRET:-}"
+JWT_SECRET="${JWT_SECRET:-}"
+ENCRYPTION_KEY="${ENCRYPTION_KEY:-}"
 QDRANT_API_KEY="${QDRANT_API_KEY:-}"
 GRAFANA_PASSWORD="${GRAFANA_PASSWORD:-}"
 AUTHENTIK_SECRET_KEY="${AUTHENTIK_SECRET_KEY:-}"
@@ -1844,6 +1846,8 @@ generate_secrets() {
     LITELLM_MASTER_KEY=$(load_existing_secret "LITELLM_MASTER_KEY"     "sk-$(openssl rand -hex 32)")
     LITELLM_SALT_KEY=$(load_existing_secret "LITELLM_SALT_KEY"     "$(openssl rand -hex 32)")
     ANYTHINGLLM_JWT_SECRET=$(load_existing_secret "ANYTHINGLLM_JWT_SECRET" "$(openssl rand -hex 32)")
+    JWT_SECRET=$(load_existing_secret "JWT_SECRET"                   "$(openssl rand -hex 32)")
+    ENCRYPTION_KEY=$(load_existing_secret "ENCRYPTION_KEY"           "$(openssl rand -hex 32)")
     ANYTHINGLLM_AUTH_TOKEN=$(load_existing_secret "ANYTHINGLLM_AUTH_TOKEN" "$(openssl rand -hex 16)")
     ANYTHINGLLM_API_KEY=$(load_existing_secret "ANYTHINGLLM_API_KEY" "$(openssl rand -hex 32)")
     GRAFANA_PASSWORD=$(load_existing_secret "GRAFANA_PASSWORD"          "$(openssl rand -hex 16)")
@@ -2983,6 +2987,8 @@ main() {
     load_or_generate_secret "LITELLM_MASTER_KEY"
     load_or_generate_secret "LITELLM_SALT_KEY"
     load_or_generate_secret "ANYTHINGLLM_JWT_SECRET"
+    load_or_generate_secret "JWT_SECRET"
+    load_or_generate_secret "ENCRYPTION_KEY"
     load_or_generate_secret "QDRANT_API_KEY"
     load_or_generate_secret "GRAFANA_PASSWORD"
     load_or_generate_secret "AUTHENTIK_SECRET_KEY"
