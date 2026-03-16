@@ -273,21 +273,21 @@ EOF
 EOF
     fi
     
-    [[ -n "${ANTHROPIC_API_KEY:-}" ]] && cat >> "$out" <<EOF
+    [[ -n "${ANTHROPIC_API_KEY:-}" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
   - model_name: claude-3-5-sonnet
     litellm_params:
       model: anthropic/claude-3-5-sonnet-20241022
       api_key: os.environ/ANTHROPIC_API_KEY
 EOF
     
-    [[ -n "${GROQ_API_KEY:-}" ]] && cat >> "$out" <<EOF
+    [[ -n "${GROQ_API_KEY:-}" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
   - model_name: llama3-groq
     litellm_params:
       model: groq/llama3-70b-8192
       api_key: os.environ/GROQ_API_KEY
 EOF
     
-    cat >> "$out" <<EOF
+    cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
 litellm_settings:
   drop_params: true
   set_verbose: false
@@ -302,13 +302,12 @@ router_settings:
   fallbacks:
     - gpt-4o: ["gpt-4o-mini", "claude-3-5-sonnet", "llama3-groq"]
     - claude-3-5-sonnet: ["gpt-4o", "gpt-4o-mini"]
-  model_group_alias:
-    default: "${OLLAMA_MODELS%,*}"
+    - llama3-groq: ["gpt-4o", "claude-3-5-sonnet"]
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/LITELLM_DATABASE_URL
 EOF
-    log_success "LiteLLM config written to ${out}"
+    log_success "LiteLLM config written to ${CONFIG_DIR}/litellm/config.yaml"
 }
 
 generate_caddyfile() {
