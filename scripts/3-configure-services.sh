@@ -852,15 +852,63 @@ disable_service() {
     log_success "${svc} stopped and disabled"
 }
 
+# ── Service Detection ─────────────────────────────────────────────────────────────
+service_is_enabled() {
+    local svc="$1"
+    case "$svc" in
+        litellm)   [[ "${ENABLE_LITELLM:-false}"   == "true" ]] ;;
+        ollama)    [[ "${ENABLE_OLLAMA:-false}"    == "true" ]] ;;
+        open-webui)[[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] ;;
+        qdrant)    [[ "${ENABLE_QDRANT:-false}"    == "true" ]] ;;
+        n8n)       [[ "${ENABLE_N8N:-false}"       == "true" ]] ;;
+        flowise)   [[ "${ENABLE_FLOWISE:-false}"   == "true" ]] ;;
+        prometheus|grafana) [[ "${ENABLE_MONITORING:-false}" == "true" ]] ;;
+        *) return 1 ;;
+    esac
+}
+
 provision_databases() {
-    log_info "Waiting for postgres to be ready..."
+    log_info "Provisioning per-service databases..."
+    
+    local max_wait=60
     local elapsed=0
+    
+    # Wait for postgres to accept connections
     until docker compose -f "$COMPOSE_FILE" exec -T postgres \
-            pg_isready -U "${POSTGRES_USER}" -q 2>/dev/null; do
-        sleep 5; elapsed=$((elapsed+5))
-        [[ $elapsed -ge 60 ]] && log_error "Postgres not ready after 60s" && return 1
+        pg_isready -U "${POSTGRES_USER}" -q 2>/dev/null; do
+        elapsed=$((elapsed + 5))
+        if [[ $elapsed -ge $max_wait ]]; then
+            log_error "PostgreSQL not ready after ${max_wait}s"
+            return 1
+        fi
+        log_info "Waiting for postgres... (${elapsed}s)"
+        sleep 5
     done
-    log_success "Postgres ready — databases provisioned via init script"
+    
+    log_success "PostgreSQL is ready"
+    
+    # Create per-service databases (idempotent — safe to re-run)
+    local databases=("litellm" "openwebui" "n8n" "flowise")
+    for db in "${databases[@]}"; do
+        local exists
+        exists=$(docker compose -f "$COMPOSE_FILE" exec -T postgres \
+            psql -U "${POSTGRES_USER}" -tAc \
+            "SELECT 1 FROM pg_database WHERE datname='${db}'" 2>/dev/null || echo "")
+        
+        if [[ "$exists" == "1" ]]; then
+            log_info "Database '${db}' already exists — skipping"
+        else
+            log_info "Creating database '${db}'..."
+            docker compose -f "$COMPOSE_FILE" exec -T postgres \
+                psql -U "${POSTGRES_USER}" \
+                -c "CREATE DATABASE \"${db}\" OWNER \"${POSTGRES_USER}\";" \
+                >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 \
+                && log_success "Database '${db}' created" \
+                || log_warning "Could not create '${db}' — may already exist"
+        fi
+    done
+    
+    log_success "Database provisioning complete"
 }
 
 # ── Log Management Functions ───────────────────────────────────────────────────
