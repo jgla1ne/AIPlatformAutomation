@@ -2949,12 +2949,11 @@ main() {
 
     # ALL paths derive from this single variable - no exceptions
     DATA_ROOT="/mnt/data/${TENANT_NAME}"
-    BASE_DIR="/opt/ai-platform"
     CONFIG_DIR="${DATA_ROOT}/configs"
     DATA_DIR="${DATA_ROOT}/data"
     LOGS_DIR="${DATA_ROOT}/logs"
     COMPOSE_FILE="${DATA_ROOT}/docker-compose.yml"
-    ENV_FILE="${BASE_DIR}/.env"
+    ENV_FILE="${DATA_ROOT}/.env"  # Data confinement - everything under /mnt/data/tenant/
 
     # Accept TENANT_ID as optional command line argument (legacy support)
     if [ -n "${1:-}" ]; then

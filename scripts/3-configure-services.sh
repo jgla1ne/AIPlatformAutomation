@@ -15,7 +15,7 @@ CONFIG_DIR="${TENANT_DIR}/configs"
 DATA_DIR="${TENANT_DIR}/data"
 LOGS_DIR="${TENANT_DIR}/logs"
 COMPOSE_FILE="${TENANT_DIR}/docker-compose.yml"
-ENV_FILE="/opt/ai-platform/.env"  # SINGLE SOURCE OF TRUTH
+ENV_FILE="${TENANT_DIR}/.env"  # Data confinement - everything under /mnt/data/tenant/
 
 # ── Load Environment ────────────────────────────────────────────────────────
 [[ -f "$ENV_FILE" ]] && set -a && source "$ENV_FILE" && set +a

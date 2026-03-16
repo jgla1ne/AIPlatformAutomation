@@ -11,8 +11,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Set TENANT for script 3 before sourcing
 export TENANT="${1:-datasquiz}"
 
-# Load environment from SINGLE SOURCE OF TRUTH
-ENV_FILE="/opt/ai-platform/.env"
+# Load environment from tenant directory (data confinement)
+ENV_FILE="/mnt/data/${TENANT}/.env"
 [[ -f "$ENV_FILE" ]] && set -a && source "$ENV_FILE" && set +a
 
 source "${SCRIPT_DIR}/3-configure-services.sh"   # ← SOURCES LIBRARY
