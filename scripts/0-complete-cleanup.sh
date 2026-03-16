@@ -94,6 +94,16 @@ main() {
     else
         ok "Tenant data directory did not exist."
     fi
+    
+    # COMPLETE WIPE: If requested, remove entire /mnt folder
+    if [[ "${COMPLETE_WIPE:-false}" == "true" ]]; then
+        log "PERFORMING COMPLETE WIPE OF /mnt FOLDER..."
+        if [[ -d "/mnt" ]]; then
+            # Backup /mnt/data structure for recreation
+            rm -rf /mnt/* || true
+            ok "Complete /mnt folder wiped."
+        fi
+    fi
 
     # --- 4. Global Docker System Prune (for dangling images) ---
     log "Performing global Docker system prune..."

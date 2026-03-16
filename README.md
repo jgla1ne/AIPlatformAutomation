@@ -15,12 +15,14 @@ This platform deploys an **interconnected AI runtime stack** with intelligent se
 This platform uses a fully dockerized, **100% dynamically generated** `docker-compose` architecture with **bulletproof ownership management** and **true modular design**.
 
 ### **🔥 BREAKTHROUGH: True Modular Architecture with Mission Control**
-- **Script 1: Input Gathering Only** - User interaction and simple .env generation
-- **Script 2: Dynamic Generation Only** - Runtime configuration from .env variables  
+- **Script 0: Nuclear Cleanup** - Complete system wipe and resource cleanup
+- **Script 1: Input Collector Only** - User interaction and simple .env generation (NO operations)
+- **Script 2: Deployment Engine Only** - Runtime configuration generation and service deployment from .env
 - **Script 3: Mission Control Hub** - All configuration management, health monitoring, and service control
 - **Zero Hardcoded Values** - All configuration via environment variables
 - **Dynamic Config Generation** - Postgres init scripts, LiteLLM configs generated at runtime
 - **Perfect Separation of Concerns** - Each script has a single, clear responsibility
+- **Script 1 MUST source Script 3 for ALL operations** - No direct operations in Script 1
 
 ### **🚀 Production-Ready Features**
 - **Deep Deployment Visibility**: Complete docker-compose.yml content, system info, and startup logs
@@ -36,28 +38,33 @@ This platform uses a fully dockerized, **100% dynamically generated** `docker-co
 ```
 Script 0 → Script 1 → Script 2 → Script 3
    ↓         ↓         ↓         ↓
-Cleanup    Setup    Deploy   Configure
+Cleanup  Collector  Deployer  Mission Control
 ```
 
-**Script 0: Complete Cleanup**
+**Script 0: Nuclear Cleanup**
 - System-wide Docker prune with cache cleanup
 - All containers stopped and removed  
+- All AI platform volumes destroyed
+- Complete /mnt/data wipe (optional COMPLETE_WIPE=true)
 - System-level package cache pruning (pip, npm)
 - Clean slate for fresh deployment
 
-**Script 1: Interactive Setup (Input Only)**
+**Script 1: Interactive Setup (Input Collector Only)**
 - Tenant identity collection and validation
 - Service stack selection and configuration
 - Per-service database credentials generation
 - Simple .env file generation (key-value pairs only)
 - High-level configuration flags (no complex structures)
+- **CRITICAL: Sources Script 3 for ALL operations** - generate_postgres_init, generate_caddyfile, etc.
+- **NO direct operations** - All operations delegated to Script 3
 
-**Script 2: Master Deployment (Generation Only)**
+**Script 2: Deployment Engine (Generation & Deploy Only)**
 - Complete docker-compose.yml generation from .env
-- Dynamic service configuration generation
+- Dynamic service configuration generation (via Script 3)
 - Dependency-aware service startup
 - Health verification and deployment completion
 - Clean exit with deployment status
+- Sources Script 3 for all configuration generation
 
 **Script 3: Mission Control Hub (Configuration & Management)**
 - Dynamic Postgres initializer generation
@@ -66,6 +73,7 @@ Cleanup    Setup    Deploy   Configure
 - Configuration management and validation
 - Service lifecycle management (start/stop/restart)
 - Performance monitoring and alerting
+- All configuration file operations
 
 ### **📋 Production Deployment Features**
 
