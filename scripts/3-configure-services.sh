@@ -852,6 +852,7 @@ EOF
       - ${DATA_DIR}/codeserver:/config
       - /mnt/data:/mnt/data:ro
       - ${DATA_DIR}/git:/mnt/data/git:rw
+      - ${TENANT_DIR}/${GITHUB_PROJECT:-github}:/home/coder/project
     ports:
       - "${PORT_CODESERVER:-8443}:8443"
     healthcheck:
