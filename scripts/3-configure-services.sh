@@ -439,11 +439,19 @@ codeserver.${DOMAIN} {
 }
 EOF
 
-    # OpenClaw - routes to Code Server for terminal access
+    # OpenCode - Primary IDE access
+    [[ "${ENABLE_CODESERVER:-false}" == "true" ]] && cat >> "$out" <<EOF
+opencode.${DOMAIN} {
+    ${tls_line}
+    reverse_proxy codeserver:8443
+}
+EOF
+
+    # OpenClaw - routes to Tailscale IP for secure access
     [[ "${ENABLE_OPENCLAW:-false}" == "true" ]] && cat >> "$out" <<EOF
 openclaw.${DOMAIN} {
     ${tls_line}
-    reverse_proxy codeserver:8443
+    reverse_proxy 100.81.139.112:8443
 }
 EOF
 
@@ -838,9 +846,12 @@ EOF
       # Continue.dev extension configuration
       EXTENSIONS_GALLERY: "https://open-vsx.org/vsx-extension-gallery"
       EXTENSIONS: "continuedev.continue"
+      # Git repository access
+      GIT_REPO: "${GIT_REPO:-/mnt/data/git}"
     volumes:
       - ${DATA_DIR}/codeserver:/config
       - /mnt/data:/mnt/data:ro
+      - ${DATA_DIR}/git:/mnt/data/git:rw
     ports:
       - "${PORT_CODESERVER:-8443}:8443"
     healthcheck:
@@ -1173,7 +1184,7 @@ health_dashboard() {
     [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && \
         _check_http "anythingllm"    "http://localhost:${PORT_ANYTHINGLLM:-3003}/"
     [[ "${ENABLE_OPENCLAW:-false}"  == "true" ]] && \
-        _check_https "openclaw"      "https://localhost:${PORT_OPENCLAW:-18789}/"
+        _check_https "openclaw"      "https://openclaw.${DOMAIN}/"
     echo ""
     echo -e "  ${BOLD}Quick Tests${NC}"
     echo -e "  LiteLLM models:"

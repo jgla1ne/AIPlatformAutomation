@@ -2363,6 +2363,7 @@ HTTP_TO_HTTPS_REDIRECT=${HTTP_TO_HTTPS_REDIRECT:-false}
 CODESERVER_PASSWORD=${CODESERVER_PASSWORD:-Th301nd13}
 CODESERVER_PORT=${CODESERVER_PORT:-8443}
 CODESERVER_IMAGE=lscr.io/linuxserver/code-server:latest
+GIT_REPO=${GIT_REPO:-/mnt/data/git}
 
 # ─── Continue.dev ─────────────────────────────────────────────────────────────────
 CONTINUE_PORT=${CONTINUE_PORT:-3000}
