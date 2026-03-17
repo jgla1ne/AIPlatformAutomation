@@ -19,10 +19,16 @@ This platform uses a fully dockerized, **100% dynamically generated** `docker-co
 - **Script 1: Input Collector Only** - User interaction and simple .env generation (NO operations)
 - **Script 2: Deployment Engine Only** - Runtime configuration generation and service deployment from .env
 - **Script 3: Mission Control Hub** - All configuration management, health monitoring, and service control
+
+### **🎯 CORE ARCHITECTURAL PRINCIPLES (NON-NEGOTIABLE)**
 - **Zero Hardcoded Values** - All configuration via environment variables
 - **Dynamic Config Generation** - Postgres init scripts, LiteLLM configs generated at runtime
 - **Perfect Separation of Concerns** - Each script has a single, clear responsibility
 - **Script 1 MUST source Script 3 for ALL operations** - No direct operations in Script 1
+- **Mission Control Pattern** - Script 3 is the single source of truth for all operations
+- **Input Collector Pattern** - Script 1 only collects user input and writes .env (key-value pairs)
+- **No Band-Aid Fixes** - Always address root cause in proper architectural layer
+- **Environment-Driven Logic** - All conditional logic based on environment variables, not code complexity
 
 ### **🚀 Production-Ready Features**
 - **Deep Deployment Visibility**: Complete docker-compose.yml content, system info, and startup logs
@@ -50,13 +56,15 @@ Cleanup  Collector  Deployer  Mission Control
 - Clean slate for fresh deployment
 
 **Script 1: Interactive Setup (Input Collector Only)**
+- **PATTERN: Input Collector Only** - NO operations, NO complex logic, NO conditional execution
 - Tenant identity collection and validation
 - Service stack selection and configuration
-- Per-service database credentials generation
 - Simple .env file generation (key-value pairs only)
+- **ALL API keys written to .env** (even empty ones) - Script 3 handles conditional logic
 - High-level configuration flags (no complex structures)
 - **CRITICAL: Sources Script 3 for ALL operations** - generate_postgres_init, generate_caddyfile, etc.
 - **NO direct operations** - All operations delegated to Script 3
+- **NO environment variable validation** - Script 3 validates and processes
 
 **Script 2: Deployment Engine (Generation & Deploy Only)**
 - Complete docker-compose.yml generation from .env
@@ -67,13 +75,16 @@ Cleanup  Collector  Deployer  Mission Control
 - Sources Script 3 for all configuration generation
 
 **Script 3: Mission Control Hub (Configuration & Management)**
+- **PATTERN: Single Source of Truth** - ALL configuration logic and operations
 - Dynamic Postgres initializer generation
-- Dynamic LiteLLM config generation  
+- Dynamic LiteLLM config generation with conditional API key logic
+- **Environment Variable Processing** - Validates empty vs set variables
 - Service health monitoring and diagnostics
 - Configuration management and validation
 - Service lifecycle management (start/stop/restart)
 - Performance monitoring and alerting
 - All configuration file operations
+- **Root Cause Resolution** - Fixes applied at proper architectural layer
 
 ### **📋 Production Deployment Features**
 

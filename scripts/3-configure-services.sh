@@ -299,6 +299,22 @@ EOF
       api_key: os.environ/ANTHROPIC_API_KEY
 EOF
     
+    # Only add Gemini models if API key is provided and not empty
+    [[ -n "${GOOGLE_API_KEY:-}" && "${GOOGLE_API_KEY}" != "" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
+  - model_name: gemini-pro
+    litellm_params:
+      model: google/gemini-pro
+      api_key: os.environ/GOOGLE_API_KEY
+EOF
+    
+    # Only add OpenRouter models if API key is provided and not empty
+    [[ -n "${OPENROUTER_API_KEY:-}" && "${OPENROUTER_API_KEY}" != "" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
+  - model_name: openrouter-mixtral
+    litellm_params:
+      model: openrouter/mistralai/mixtral-8x7b
+      api_key: os.environ/OPENROUTER_API_KEY
+EOF
+    
     cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
 litellm_settings:
   drop_params: true
@@ -314,13 +330,19 @@ router_settings:
 EOF
     
     # Only add fallbacks for models that are actually configured
-    if [[ -n "${OPENAI_API_KEY:-}" && "${OPENAI_API_KEY}" != "" ]] || [[ -n "${GROQ_API_KEY:-}" && "${GROQ_API_KEY}" != "" ]]; then
+    if [[ -n "${OPENAI_API_KEY:-}" && "${OPENAI_API_KEY}" != "" ]] || [[ -n "${GROQ_API_KEY:-}" && "${GROQ_API_KEY}" != "" ]] || [[ -n "${GOOGLE_API_KEY:-}" && "${GOOGLE_API_KEY}" != "" ]] || [[ -n "${OPENROUTER_API_KEY:-}" && "${OPENROUTER_API_KEY}" != "" ]]; then
         cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
   fallbacks:
 EOF
         # Add fallbacks only for configured external models
         [[ -n "${GROQ_API_KEY:-}" && "${GROQ_API_KEY}" != "" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
-    - llama3-groq: []
+    - llama3-groq: ["gemini-pro", "openrouter-mixtral"]
+EOF
+        [[ -n "${GOOGLE_API_KEY:-}" && "${GOOGLE_API_KEY}" != "" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
+    - gemini-pro: ["llama3-groq", "openrouter-mixtral"]
+EOF
+        [[ -n "${OPENROUTER_API_KEY:-}" && "${OPENROUTER_API_KEY}" != "" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
+    - openrouter-mixtral: ["llama3-groq", "gemini-pro"]
 EOF
     fi
     
@@ -509,6 +531,8 @@ EOF
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       LITELLM_TELEMETRY: "False"
       PRISMA_DISABLE_WARNINGS: "true"
     volumes:
@@ -516,6 +540,7 @@ EOF
       - ${DATA_DIR}/litellm:/root/.cache
     ports:
       - "${PORT_LITELLM:-4000}:4000"
+    command: ["litellm", "--config", "/app/config.yaml", "--port", "4000"]
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:4000/health/liveliness || exit 1"]
       interval: 30s
