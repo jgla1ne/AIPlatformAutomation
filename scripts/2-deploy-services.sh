@@ -93,6 +93,7 @@ main() {
 
     # 9. External wiring (non-blocking — skip gracefully if not configured)
     [[ "${ENABLE_TAILSCALE:-false}"  == "true" ]] && configure_tailscale
+    [[ "${ENABLE_CODESERVER:-false}" == "true" ]] && deploy_service codeserver
     [[ "${ENABLE_OPENCLAW:-false}"  == "true" ]] && deploy_service openclaw
     [[ -n "${GDRIVE_CLIENT_ID:-}" ]] && setup_gdrive_rclone && create_ingestion_systemd
 

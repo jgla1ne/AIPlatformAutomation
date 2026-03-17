@@ -2157,6 +2157,8 @@ ENABLE_TAILSCALE=${ENABLE_TAILSCALE}
 ENABLE_OPENCLAW=${ENABLE_OPENCLAW:-false}
 ENABLE_RCLONE=${ENABLE_RCLONE}
 ENABLE_MINIO=${ENABLE_MINIO}
+ENABLE_CODESERVER=${ENABLE_CODESERVER:-false}
+ENABLE_CONTINUE=${ENABLE_CONTINUE:-false}
 
 # ─── Service Ownership UIDs (The "Pragmatic Exception Pattern") ───────────────────────
 # Per README.md (Line 484), some services ignore the 'user:' directive and require

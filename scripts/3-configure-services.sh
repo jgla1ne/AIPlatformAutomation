@@ -447,11 +447,11 @@ opencode.${DOMAIN} {
 }
 EOF
 
-    # OpenClaw - routes to Tailscale IP for secure access
+    # OpenClaw - routes to Docker service for secure access
     [[ "${ENABLE_OPENCLAW:-false}" == "true" ]] && cat >> "$out" <<EOF
 openclaw.${DOMAIN} {
     ${tls_line}
-    reverse_proxy 100.81.139.112:8443
+    reverse_proxy openclaw:8443
 }
 EOF
 
@@ -485,6 +485,46 @@ EOF
     log_success "Prometheus config written to ${out}"
 }
 
+generate_codeserver_config() {
+    [[ "${ENABLE_CODESERVER:-false}" == "true" ]] || return 0
+    local config_dir="${DATA_DIR}/codeserver/.continue"
+    mkdir -p "$config_dir"
+    chown -R 1000:"${TENANT_GID:-1001}" "$(dirname "$config_dir")"
+
+    cat > "${config_dir}/config.json" <<EOF
+{
+  "models": [
+    {
+      "title": "Local (Ollama via LiteLLM)",
+      "provider": "openai",
+      "model": "${OLLAMA_DEFAULT_MODEL:-llama3.2:1b}",
+      "apiBase": "http://litellm:4000/v1",
+      "apiKey": "${LITELLM_MASTER_KEY}"
+    }
+$(
+  [[ -n "${OPENAI_API_KEY:-}" ]] && echo "    ,{\"title\":\"GPT-4o (via LiteLLM)\",\"provider\":\"openai\",\"model\":\"gpt-4o\",\"apiBase\":\"http://litellm:4000/v1\",\"apiKey\":\"${LITELLM_MASTER_KEY}\"}"
+  [[ -n "${GOOGLE_API_KEY:-}" ]] && echo "    ,{\"title\":\"Gemini Pro (via LiteLLM)\",\"provider\":\"openai\",\"model\":\"gemini-pro\",\"apiBase\":\"http://litellm:4000/v1\",\"apiKey\":\"${LITELLM_MASTER_KEY}\"}"
+  [[ -n "${GROQ_API_KEY:-}" ]]  && echo "    ,{\"title\":\"Llama3 Groq (via LiteLLM)\",\"provider\":\"openai\",\"model\":\"llama3-groq\",\"apiBase\":\"http://litellm:4000/v1\",\"apiKey\":\"${LITELLM_MASTER_KEY}\"}"
+)
+  ],
+  "tabAutocompleteModel": {
+    "title": "Autocomplete",
+    "provider": "openai",
+    "model": "${OLLAMA_DEFAULT_MODEL:-llama3.2:1b}",
+    "apiBase": "http://litellm:4000/v1",
+    "apiKey": "${LITELLM_MASTER_KEY}"
+  },
+  "embeddingsProvider": {
+    "provider": "openai",
+    "model": "${OLLAMA_DEFAULT_MODEL:-llama3.2:1b}",
+    "apiBase": "http://litellm:4000/v1",
+    "apiKey": "${LITELLM_MASTER_KEY}"
+  }
+}
+EOF
+    log_success "Continue.dev config written to ${config_dir}/config.json"
+}
+
 # Single entry point for all config generation
 generate_configs() {
     log_info "Generating all configuration files..."
@@ -492,6 +532,7 @@ generate_configs() {
     generate_litellm_config
     generate_caddyfile
     generate_prometheus_config
+    generate_codeserver_config
     log_success "All configuration files generated"
 }
 
@@ -850,7 +891,8 @@ EOF
       GIT_REPO: "${GIT_REPO:-/mnt/data/git}"
     volumes:
       - ${DATA_DIR}/codeserver:/config
-      - /mnt/data:/mnt/data:ro
+      - ${DATA_DIR}/codeserver/.continue:/home/abc/.continue:rw
+      - /mnt/data:/mnt/data:rw
       - ${DATA_DIR}/git:/mnt/data/git:rw
       - ${TENANT_DIR}/${GITHUB_PROJECT:-github}:/home/coder/project
     ports:
@@ -974,6 +1016,8 @@ service_is_enabled() {
         qdrant)    [[ "${ENABLE_QDRANT:-false}"    == "true" ]] ;;
         n8n)       [[ "${ENABLE_N8N:-false}"       == "true" ]] ;;
         flowise)   [[ "${ENABLE_FLOWISE:-false}"   == "true" ]] ;;
+        anythingllm)[[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] ;;
+        codeserver) [[ "${ENABLE_CODESERVER:-false}" == "true" ]] ;;
         openclaw)  [[ "${ENABLE_OPENCLAW:-false}"  == "true" ]] ;;
         prometheus|grafana) [[ "${ENABLE_MONITORING:-false}" == "true" ]] ;;
         *) return 1 ;;
