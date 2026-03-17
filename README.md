@@ -107,14 +107,14 @@ Each tenant deployment generates:
 - Caddy (reverse proxy with automatic HTTPS)
 
 **AI Runtime Services:**
-- Ollama (local LLM inference)
-- LiteLLM (unified LLM proxy gateway)
+- Ollama (local LLM inference with llama3.2:1b, llama3.2:3b models)
+- LiteLLM (unified LLM proxy gateway - Ollama-first + External providers)
 - Qdrant (vector database with UID 1000)
 - OpenWebUI (AI chat interface)
 
 **Development Environment:**
-- Code Server (VS Code in browser with LiteLLM integration)
-- Continue.dev (AI-powered development assistant)
+- Code Server (VS Code in browser with Continue.dev extension integrated)
+- Continue.dev (AI-powered development assistant - INTERNAL to Code Server)
 - OpenClaw (Tailscale-based development terminal)
 
 **Enterprise Services:**
@@ -127,6 +127,35 @@ Each tenant deployment generates:
 - Tailscale (VPN with proxy configuration for isolated services)
 - Rclone (Google Drive integration with Service Account)
 - Authentik (identity management)
+
+### **⚠️ CURRENT DEPLOYMENT STATUS**
+
+**✅ WORKING COMPONENTS:**
+- Core Infrastructure (PostgreSQL, Redis, Caddy)
+- AI Runtime (Ollama, Qdrant)
+- Development Stack (Code Server, OpenClaw)
+- HTTPS Routing & SSL Termination
+- Docker Networking & Service Discovery
+
+**🔧 KNOWN ISSUES:**
+- LiteLLM Database Initialization: Prisma client generation failing
+- LiteLLM Pydantic Warnings: Protected namespace conflicts
+- Service Dependencies: Some services blocked by LiteLLM health
+- Redis Port Configuration: Cache pointing to wrong port (6373 vs 6379)
+
+**🎯 TARGET ARCHITECTURE:**
+```
+EC2 Development Environment
+├── Code Server (Primary IDE) → https://opencode.ai.datasquiz.net
+│   ├── Continue.dev Extension (integrated) → AI Assistant
+│   ├── Git Repository (/mnt/data/git) → Full source control
+│   ├── GitHub Project (/home/coder/project) → README, scripts, docs
+│   └── → LiteLLM API → Your Models (local + cloud)
+├── OpenClaw → https://openclaw.ai.datasquiz.net → Tailscale IP:18789
+├── LiteLLM → https://litellm.ai.datasquiz.net → Ollama-first + External
+├── OpenWebUI → https://chat.ai.datasquiz.net → AI Chat Interface
+└── Your 4 bash scripts (edited and run directly on server)
+```
 
 ### **🌐 Network Architecture**
 
