@@ -1770,8 +1770,13 @@ EOF
             ENABLE_OPENCLAW="false"
         fi
     else
-        # Set default password if OpenClaw was enabled by stack selection
-        OPENCLAW_PASSWORD="${OPENCLAW_PASSWORD:-SecureAdmin123}"
+        # OpenClaw was enabled by stack selection, collect password
+        echo ""
+        echo -e "  ${BOLD}🦅  OpenClaw Configuration${NC}"
+        echo -e "  ${DIM}OpenClaw was enabled by stack selection${NC}"
+        read -p "  ➤ OpenClaw admin password: " -s OPENCLAW_PASSWORD
+        echo ""
+        read -p "  ➤ OpenClaw port [18789]: " OPENCLAW_PORT
         OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
     fi
 
