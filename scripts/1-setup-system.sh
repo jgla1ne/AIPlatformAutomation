@@ -862,14 +862,46 @@ select_stack() {
 
     print_divider
 
-    # ── Always offer fine-grained override ────────────────────────────────────
-    if [ "${stack_choice}" != "5" ]; then
-        echo -e "  ${DIM}Stack applied. Would you like to customise individual services?${NC}"
+        # ── LLM Provider Configuration ───────────────────────────────────────────
+    select_llm_providers() {
+        print_step "4" "8" "LLM Provider Selection"
+
+        echo -e "  ${BOLD}🤖  Choose LLM Providers${NC}"
         echo ""
-        read -p "  ➤ Customise service selection? [y/N]: " customise
-        customise="${customise:-n}"
-        [[ "${customise,,}" =~ ^y ]] && stack_choice=4
-    fi
+        echo -e "  ${CYAN}  1)${NC}  Local Only      ${DIM}(Ollama)${NC}"
+        echo -e "  ${CYAN}  2)${NC}  External Only  ${DIM}(OpenAI, Anthropic, Gemini, Groq, OpenRouter)${NC}"
+        echo -e "  ${CYAN}  3)${NC}  Hybrid         ${DIM}(Local + External)${NC}"
+        echo ""
+        while true; do
+            read -p "  ➤ Select LLM providers [1-3]: " llm_choice
+            llm_choice="${llm_choice:-1}"
+            case "${llm_choice}" in
+                1|2|3) break ;;
+                *) echo "  ❌ Enter 1, 2 or 3" ;;
+            esac
+        done
+
+        case "${llm_choice}" in
+            1) # Local Only
+                ENABLE_OPENAI=false; ENABLE_ANTHROPIC=false; ENABLE_GROQ=false; ENABLE_OPENROUTER=false;
+                ENABLE_GOOGLE=false; ENABLE_LOCALAI=false; ENABLE_VLLM=false
+                LLM_PROVIDERS="local"
+                log "INFO" "LLM Providers: Local only (Ollama)"
+                ;;
+            2) # External Only
+                ENABLE_OPENAI=true; ENABLE_ANTHROPIC=true; ENABLE_GROQ=true; ENABLE_OPENROUTER=true;
+                ENABLE_GOOGLE=true; ENABLE_LOCALAI=false; ENABLE_VLLM=false;
+                LLM_PROVIDERS="external"
+                log "INFO" "LLM Providers: External only (OpenAI, Anthropic, Gemini, Groq, OpenRouter)"
+                ;;
+            3) # Hybrid
+                ENABLE_OPENAI=true; ENABLE_ANTHROPIC=true; ENABLE_GROQ=true; ENABLE_OPENROUTER=true;
+                ENABLE_GOOGLE=true; ENABLE_LOCALAI=false; ENABLE_VLLM=false;
+                LLM_PROVIDERS="hybrid"
+                log "INFO" "LLM Providers: Hybrid (Local + External)"
+                ;;
+        esac
+    }
 
     if [ "${stack_choice}" = "4" ]; then
         echo ""
@@ -1718,15 +1750,18 @@ EOF
     # OpenClaw Configuration
     echo -e "  ${BOLD}🦅  OpenClaw Private Gateway${NC}"
     echo -e "  ${DIM}Secure private access gateway${NC}"
-    echo ""
-    read -p "  ➤ Enable OpenClaw? [y/N]: " enable_openclaw
-    if [[ "${enable_openclaw,,}" == "y" ]]; then
-        read -p "  ➤ OpenClaw admin password: " OPENCLAW_PASSWORD
-        read -p "  ➤ OpenClaw port [18789]: " OPENCLAW_PORT
-        OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
-        ENABLE_OPENCLAW="true"
-    else
-        ENABLE_OPENCLAW="false"
+    # Only ask for OpenClaw if not already set by stack
+    if [[ "${ENABLE_OPENCLAW}" != "true" ]]; then
+        echo ""
+        read -p "  ➤ Enable OpenClaw? [y/N]: " enable_openclaw
+        if [[ "${enable_openclaw,,}" =~ ^y ]]; then
+            read -p "  ➤ OpenClaw admin password: " OPENCLAW_PASSWORD
+            read -p "  ➤ OpenClaw port [18789]: " OPENCLAW_PORT
+            OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
+            ENABLE_OPENCLAW="true"
+        else
+            ENABLE_OPENCLAW="false"
+        fi
     fi
 
     log "SUCCESS" "Network & security configuration completed"
@@ -2841,8 +2876,10 @@ print_summary() {
         [ "${ENABLE_LITELLM}" = "true" ] && echo -e "    ${CYAN}•${NC} LiteLLM:      https://litellm.${DOMAIN}"
         [ "${ENABLE_GRAFANA}" = "true" ] && echo -e "    ${CYAN}•${NC} Grafana:      https://grafana.${DOMAIN}"
         [ "${ENABLE_AUTHENTIK}" = "true" ] && echo -e "    ${CYAN}•${NC} Authentik:    https://auth.${DOMAIN}"
-        [ "${ENABLE_DIFY}" = "true" ] && echo -e "    ${CYAN}•${NC} Dify:         https://dify.${DOMAIN}"
+        [ "${ENABLE_RCLONE}" = "true" ] && echo -e "    ${CYAN}•${NC} Rclone:        https://rclone.${DOMAIN}"
+        [ "${ENABLE_MONITORING}" = "true" ] && echo -e "    ${CYAN}•${NC} Prometheus:   https://prometheus.${DOMAIN}"
         [ "${ENABLE_OPENCLAW}" = "true" ] && echo -e "    ${CYAN}•${NC} OpenClaw:     https://openclaw.${DOMAIN}"
+        [ "${ENABLE_CODESERVER}" = "true" ] && echo -e "    ${CYAN}•${NC} OpenCode:     https://opencode.${DOMAIN}"
         [ "${ENABLE_SIGNAL}" = "true" ] && echo -e "    ${CYAN}•${NC} Signal API:   https://signal.${DOMAIN}"
         echo ""
         
@@ -3038,6 +3075,64 @@ main() {
     
     # Config generation is Script 2's responsibility (via generate_configs)
     # DO NOT call generate_postgres_init, write_caddyfile, write_prometheus_config here
+    
+    # ── Final Service Configuration Summary ─────────────────────────────────────────
+    final_service_summary() {
+        if [ -n "${DOMAIN}" ] && [ "${DOMAIN}" != "localhost" ]; then
+            echo ""
+            echo -e "  ${BOLD}🎯 Final Service Configuration Summary${NC}"
+            echo ""
+            echo -e "  ${DIM}All enabled services with their configurations:${NC}"
+            echo ""
+            
+            # Core Infrastructure
+            echo -e "  ${CYAN}📊 Infrastructure:${NC}"
+            [ "${ENABLE_POSTGRES}" = "true" ] && echo -e "    ${GREEN}✓${NC} PostgreSQL: port 5432, system UID 70"
+            [ "${ENABLE_REDIS}" = "true" ] && echo -e "    ${GREEN}✓${NC} Redis: port 6379, authenticated"
+            [ "${ENABLE_CADDY}" = "true" ] && echo -e "    ${GREEN}✓${NC} Caddy: ports 80/443, automatic HTTPS"
+            [ "${ENABLE_QDRANT}" = "true" ] && echo -e "    ${GREEN}✓${NC} Qdrant: port 6333, UID 1000"
+            echo ""
+            
+            # AI Runtime
+            echo -e "  ${CYAN}🤖 AI Runtime:${NC}"
+            [ "${ENABLE_OLLAMA}" = "true" ] && echo -e "    ${GREEN}✓${NC} Ollama: port 11434, local LLM"
+            [ "${ENABLE_LITELLM}" = "true" ] && echo -e "    ${GREEN}✓${NC} LiteLLM: port 4000, LLM proxy"
+            [ "${ENABLE_OPENWEBUI}" = "true" ] && echo -e "    ${GREEN}✓${NC} OpenWebUI: https://openwebui.${DOMAIN}"
+            echo ""
+            
+            # Development Environment
+            echo -e "  ${CYAN}🔧 Development:${NC}"
+            [ "${ENABLE_CODESERVER}" = "true" ] && echo -e "    ${GREEN}✓${NC} Code Server: https://opencode.${DOMAIN} (VS Code + Continue.dev)"
+            [ "${ENABLE_OPENCLAW}" = "true" ] && echo -e "    ${GREEN}✓${NC} OpenClaw: https://openclaw.${DOMAIN} + Tailscale VPN"
+            echo ""
+            
+            # Enterprise Services
+            echo -e "  ${CYAN}🏢 Enterprise:${NC}"
+            [ "${ENABLE_N8N}" = "true" ] && echo -e "    ${GREEN}✓${NC} n8n: https://n8n.${DOMAIN}"
+            [ "${ENABLE_FLOWISE}" = "true" ] && echo -e "    ${GREEN}✓${NC} Flowise: https://flowise.${DOMAIN}"
+            [ "${ENABLE_ANYTHINGLLM}" = "true" ] && echo -e "    ${GREEN}✓${NC} AnythingLLM: https://anythingllm.${DOMAIN}"
+            [ "${ENABLE_DIFY}" = "true" ] && echo -e "    ${GREEN}✓${NC} Dify: https://dify.${DOMAIN}"
+            [ "${ENABLE_GRAFANA}" = "true" ] && echo -e "    ${GREEN}✓${NC} Grafana: https://grafana.${DOMAIN}"
+            [ "${ENABLE_AUTHENTIK}" = "true" ] && echo -e "    ${GREEN}✓${NC} Authentik: https://auth.${DOMAIN}"
+            [ "${ENABLE_SIGNAL}" = "true" ] && echo -e "    ${GREEN}✓${NC} Signal API: https://signal.${DOMAIN}"
+            [ "${ENABLE_RCLONE}" = "true" ] && echo -e "    ${GREEN}✓${NC} Rclone: https://rclone.${DOMAIN}"
+            [ "${ENABLE_MONITORING}" = "true" ] && echo -e "    ${GREEN}✓${NC} Prometheus: https://prometheus.${DOMAIN}"
+            echo ""
+            
+            # LLM Providers
+            echo -e "  ${CYAN}🧠 LLM Providers:${NC}"
+            [ "${LLM_PROVIDERS}" = "local" ] && echo -e "    ${GREEN}✓${NC} Local only (Ollama)"
+            [ "${LLM_PROVIDERS}" = "external" ] && echo -e "    ${GREEN}✓${NC} External only (OpenAI, Anthropic, Gemini, Groq, OpenRouter)"
+            [ "${LLM_PROVIDERS}" = "hybrid" ] && echo -e "    ${GREEN}✓${NC} Hybrid (Local + External)"
+            echo ""
+            
+            echo -e "  ${BOLD}Stack Type: ${STACK_NAME^^}${NC}"
+            echo ""
+        fi
+    }
+    
+    # Show final summary
+    final_service_summary
     
     offer_next_step
 }
