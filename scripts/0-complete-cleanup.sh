@@ -24,6 +24,14 @@ warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
 fail() { echo -e "${RED}[FAIL]${NC}    $*"; exit 1; }
 
 main() {
+    # Kill any running AI platform scripts to prevent race conditions
+    log "Terminating any running platform scripts..."
+    pkill -f "1-setup-system.sh" || true
+    pkill -f "2-deploy-services.sh" || true
+    pkill -f "3-configure-services.sh" || true
+    sleep 2  # Let them terminate cleanly
+    ok "Platform scripts terminated."
+    
     # --- Tenant ID Validation ---
     if [[ -z "${1:-}" ]]; then
         echo "ERROR: TENANT_ID is required. Usage: sudo bash $0 <tenant_id>" >&2

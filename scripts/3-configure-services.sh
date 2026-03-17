@@ -137,7 +137,7 @@ GRAFANA_ADMIN_PASSWORD=\${ADMIN_PASSWORD}
 # ─── API Keys (Empty if not set) ───────────────────────────────────────────
 OPENAI_API_KEY=${OPENAI_API_KEY:-}
 ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-GEMINI_API_KEY=${GEMINI_API_KEY:-}
+GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
 GROQ_API_KEY=${GROQ_API_KEY:-}
 OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
 
@@ -331,19 +331,30 @@ EOF
     
     # Only add fallbacks for models that are actually configured
     if [[ -n "${OPENAI_API_KEY:-}" && "${OPENAI_API_KEY}" != "" ]] || [[ -n "${GROQ_API_KEY:-}" && "${GROQ_API_KEY}" != "" ]] || [[ -n "${GOOGLE_API_KEY:-}" && "${GOOGLE_API_KEY}" != "" ]] || [[ -n "${OPENROUTER_API_KEY:-}" && "${OPENROUTER_API_KEY}" != "" ]]; then
-        cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
+        # Build fallback list from only configured models
+        local external_models=()
+        [[ -n "${OPENAI_API_KEY:-}" && "${OPENAI_API_KEY}" != "" ]] && external_models+=("gpt-4o")
+        [[ -n "${GROQ_API_KEY:-}" && "${GROQ_API_KEY}" != "" ]] && external_models+=("llama3-groq")
+        [[ -n "${GOOGLE_API_KEY:-}" && "${GOOGLE_API_KEY}" != "" ]] && external_models+=("gemini-pro")
+        [[ -n "${OPENROUTER_API_KEY:-}" && "${OPENROUTER_API_KEY}" != "" ]] && external_models+=("openrouter-mixtral")
+
+        if [[ ${#external_models[@]} -gt 1 ]]; then
+            cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
   fallbacks:
 EOF
-        # Add fallbacks only for configured external models
-        [[ -n "${GROQ_API_KEY:-}" && "${GROQ_API_KEY}" != "" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
-    - llama3-groq: ["gemini-pro", "openrouter-mixtral"]
+            for model in "${external_models[@]}"; do
+                # Build fallback list = all other external models
+                local others=()
+                for other in "${external_models[@]}"; do
+                    [[ "$other" != "$model" ]] && others+=("\"$other\"")
+                done
+                local others_str
+                others_str=$(IFS=,; echo "${others[*]}")
+                cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
+    - ${model}: [${others_str}]
 EOF
-        [[ -n "${GOOGLE_API_KEY:-}" && "${GOOGLE_API_KEY}" != "" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
-    - gemini-pro: ["llama3-groq", "openrouter-mixtral"]
-EOF
-        [[ -n "${OPENROUTER_API_KEY:-}" && "${OPENROUTER_API_KEY}" != "" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
-    - openrouter-mixtral: ["llama3-groq", "gemini-pro"]
-EOF
+            done
+        fi
     fi
     
     cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
