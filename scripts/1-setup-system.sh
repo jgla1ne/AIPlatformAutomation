@@ -1769,6 +1769,10 @@ EOF
         else
             ENABLE_OPENCLAW="false"
         fi
+    else
+        # Set default password if OpenClaw was enabled by stack selection
+        OPENCLAW_PASSWORD="${OPENCLAW_PASSWORD:-SecureAdmin123}"
+        OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
     fi
 
     log "SUCCESS" "Network & security configuration completed"
