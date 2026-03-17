@@ -11,6 +11,7 @@ EC2 Instance:
 ├── Code Server (Primary IDE) → https://opencode.ai.datasquiz.net
 │   ├── Continue.dev Extension (integrated) → AI Assistant
 │   ├── Git Repository (/mnt/data/git) → Full source control
+│   ├── GitHub Project (/home/coder/project) → README, scripts, docs
 │   └── → LiteLLM API → Your Models (local + cloud)
 ├── OpenClaw → https://openclaw.ai.datasquiz.net → Tailscale IP:18789
 └── Your 4x Scripts → Run directly on EC2 server
