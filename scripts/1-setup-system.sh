@@ -911,8 +911,15 @@ select_stack() {
         ask_service "🤖" "AnythingLLM"   "AI assistant & RAG"         "ENABLE_ANYTHINGLLM"   "$( [[ "${ENABLE_ANYTHINGLLM}" == "true" ]]   && echo y || echo n )"
         ask_service "🏗️ " "Dify"          "LLM app builder"            "ENABLE_DIFY"          "$( [[ "${ENABLE_DIFY}" == "true" ]]          && echo y || echo n )"
         ask_service "🔀" "LiteLLM"       "LLM proxy gateway"          "ENABLE_LITELLM"       "$( [[ "${ENABLE_LITELLM}" == "true" ]]       && echo y || echo n )"
-
         echo ""
+        
+        # Development Environment (only for Development and Full stacks)
+        if [[ "${stack_choice}" == "2" ]] || [[ "${stack_choice}" == "4" ]]; then
+            echo -e "  ${BOLD}─── 🔧 Development ───────────────────────────────────${NC}"
+            ask_service "💻" "Code Server"   "VS Code in browser + Continue.dev"    "ENABLE_CODESERVER"   "$( [[ "${ENABLE_CODESERVER}" == "true" ]]   && echo y || echo n )"
+            ask_service "🤖" "Continue.dev"  "AI assistant for Code Server"           "ENABLE_CONTINUE"     "$( [[ "${ENABLE_CONTINUE}" == "true" ]]     && echo y || echo n )"
+            ask_service "🦅" "OpenClaw"      "Tailscale-based development terminal"         "ENABLE_OPENCLAW"     "$( [[ "${ENABLE_OPENCLAW}" == "true" ]]     && echo y || echo n )"
+        fi
         echo -e "  ${BOLD}─── ⚡  Automation ──────────────────────────────────────${NC}"
         ask_service "🔄" "n8n"           "Workflow automation"         "ENABLE_N8N"           "$( [[ "${ENABLE_N8N}" == "true" ]]           && echo y || echo n )"
         ask_service "🌊" "Flowise"       "AI flow builder"             "ENABLE_FLOWISE"       "$( [[ "${ENABLE_FLOWISE}" == "true" ]]       && echo y || echo n )"
