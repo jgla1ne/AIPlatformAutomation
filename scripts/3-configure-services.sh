@@ -439,18 +439,11 @@ codeserver.${DOMAIN} {
 }
 EOF
 
-    [[ "${ENABLE_CONTINUE:-false}" == "true" ]] && cat >> "$out" <<EOF
-continue.${DOMAIN} {
-    ${tls_line}
-    reverse_proxy continue:3000
-}
-EOF
-
-    # OpenClaw with dynamic Tailscale IP routing
+    # OpenClaw - routes to Code Server for terminal access
     [[ "${ENABLE_OPENCLAW:-false}" == "true" ]] && cat >> "$out" <<EOF
 openclaw.${DOMAIN} {
     ${tls_line}
-    reverse_proxy 172.18.0.11:8443
+    reverse_proxy codeserver:8443
 }
 EOF
 
@@ -825,7 +818,7 @@ EOF
       start_period: 30s
 EOF
 
-    # Code Server - VS Code in browser with LiteLLM integration
+    # Code Server - VS Code in browser with Continue.dev extension
     [[ "${ENABLE_CODESERVER:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
   codeserver:
     image: lscr.io/linuxserver/code-server:latest
@@ -842,6 +835,9 @@ EOF
       DEFAULT_WORKSPACE: "/mnt/data"
       LITELLM_API_KEY: "${LITELLM_MASTER_KEY}"
       LITELLM_BASE_URL: "http://litellm:4000/v1"
+      # Continue.dev extension configuration
+      EXTENSIONS_GALLERY: "https://open-vsx.org/vsx-extension-gallery"
+      EXTENSIONS: "continuedev.continue"
     volumes:
       - ${DATA_DIR}/codeserver:/config
       - /mnt/data:/mnt/data:ro
@@ -855,32 +851,8 @@ EOF
       start_period: 30s
 EOF
 
-    # Continue.dev - AI-powered development assistant
-    [[ "${ENABLE_CONTINUE:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
-  continue:
-    image: continuedev/continue:latest
-    restart: unless-stopped
-    user: "1000:${TENANT_GID:-1001}"
-    depends_on:
-      litellm:
-        condition: service_healthy
-    environment:
-      OPENAI_API_KEY: "${LITELLM_MASTER_KEY}"
-      OPENAI_BASE_URL: "http://litellm:4000/v1"
-      CONTINUE_PORT: "${CONTINUE_PORT}"
-      WORKSPACE_DIR: "/mnt/data"
-    volumes:
-      - ${DATA_DIR}/continue:/root/.continue
-      - /mnt/data:/mnt/data:ro
-    ports:
-      - "${PORT_CONTINUE:-3000}:3000"
-    healthcheck:
-      test: ["CMD-SHELL","curl -sf http://localhost:3000 || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-EOF
+    # Continue.dev - AI-powered development assistant (runs inside Code Server)
+    # Note: This is configured as an extension, not a separate service
 
     # Caddy - always deployed as reverse proxy
     cat >> "$COMPOSE_FILE" <<'EOF'
@@ -1190,8 +1162,6 @@ health_dashboard() {
     echo -e "  ${BOLD}Development Environment${NC}"
     [[ "${ENABLE_CODESERVER:-false}" == "true" ]] && \
         _check_http "codeserver"     "http://localhost:${PORT_CODESERVER:-8443}/"
-    [[ "${ENABLE_CONTINUE:-false}"   == "true" ]] && \
-        _check_http "continue"       "http://localhost:${PORT_CONTINUE:-3000}/"
     echo ""
     echo -e "  ${BOLD}Web Services (all routed via LiteLLM)${NC}"
     [[ "${ENABLE_OPENWEBUI:-false}"  == "true" ]] && \
