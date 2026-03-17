@@ -1,12 +1,12 @@
 --
 
-# **AI Platform Automation v3.2.0 - Production-Ready Deployment System**
+# **AI Platform Automation v3.3.0 - Development-Ready AI Platform**
 
-A comprehensive, production-ready AI platform deployment system with **true modular architecture**, **Mission Control utility hub**, and **enterprise-grade service management**.
+A comprehensive, production-ready AI platform deployment system with **true modular architecture**, **Mission Control utility hub**, **enterprise-grade service management**, and **integrated development environment**.
 
-This platform deploys an **interconnected AI runtime stack** with intelligent service orchestration, **automated tenant ownership**, **unified Mission Control management interface**, and **robust error handling**.
+This platform deploys an **interconnected AI runtime stack** with intelligent service orchestration, **automated tenant ownership**, **unified Mission Control management interface**, **robust error handling**, and **local development capabilities**.
 
-**🎉 PRODUCTION VALIDATED: Complete deployment visibility, service-specific debugging, and systematic issue resolution**
+**🎉 PRODUCTION VALIDATED: Complete deployment visibility, service-specific debugging, systematic issue resolution, and integrated development environment**
 
 ---
 
@@ -112,6 +112,11 @@ Each tenant deployment generates:
 - Qdrant (vector database with UID 1000)
 - OpenWebUI (AI chat interface)
 
+**Development Environment:**
+- Code Server (VS Code in browser with LiteLLM integration)
+- Continue.dev (AI-powered development assistant)
+- OpenClaw (Tailscale-based development terminal)
+
 **Enterprise Services:**
 - Grafana (monitoring dashboard with UID 472)
 - n8n (workflow automation)
@@ -122,20 +127,19 @@ Each tenant deployment generates:
 - Tailscale (VPN with proxy configuration for isolated services)
 - Rclone (Google Drive integration with Service Account)
 - Authentik (identity management)
-- OpenClaw (custom application service)
 
 ### **🌐 Network Architecture**
 
 **Docker Network Design:**
 - All services communicate via internal Docker network
-- Caddy acts as reverse proxy for external access
+- Caddy acts as reverse proxy for external access with IP-based routing
 - Tailscale provides VPN access to isolated services
-- Service discovery via Docker DNS (service names)
+- Service discovery via Docker DNS (service names) with fallback to container IPs
 - Application services managed via Mission Control (script-3)
 - Zero-touch Tailscale VPN activation
 - Non-interactive Rclone authentication
-- **✅ FIXED: Rclone OAuth token properly passed to service**
-- Real-time Caddy logging
+- **✅ FIXED: Caddy DNS resolution with IP-based routing**
+- **✅ FIXED: Subdomain routing for all services working**
 - **✅ PRODUCTION VALIDATED: Systematic issue resolution and architectural fixes**
 
 **Script 3: Mission Control (Service Management & Utility Hub)**
@@ -169,7 +173,9 @@ Each tenant deployment generates:
 ✅ **Service auto-integration** - All AI stack services automatically share salt keys & Qdrant database  
 ✅ **LiteLLM proxy routing** - Intelligent routing between local models and frontier models with multiple strategies  
 ✅ **Tailscale VPN integration** - Zero-trust networking with auth key validation  
-✅ **OpenClaw shell access** - Web-based terminal under dedicated user ID
+✅ **OpenClaw shell access** - Web-based terminal under dedicated user ID  
+✅ **Caddy IP-based routing** - Fixed DNS resolution with direct container IP mapping  
+✅ **Development environment** - Code Server and Continue.dev with LiteLLM integration
 
 ### **📊 Operational Principles**
 
@@ -683,6 +689,11 @@ AI Infrastructure:
 ├── LiteLLM (LLM Router)
 └── Vector Integration
 
+Development Layer:
+├── Code Server (VS Code + LiteLLM)
+├── Continue.dev (AI Assistant)
+└── OpenClaw (Tailscale Terminal)
+
 Application Layer:
 ├── OpenWebUI (Chat Interface)
 ├── Flowise (Workflow Builder)
@@ -709,14 +720,15 @@ Security & Access:
 
 ## **📋 Current Status**
 
-### **🎉 MAJOR SUCCESS: LiteLLM Fully Operational (v3.2.1)**
-- ✅ **CRITICAL: LiteLLM deployment fully working** - All 5 models serving on port 4000
-- ✅ **Fixed entrypoint/command conflict** - Resolved Docker argument duplication per doc/CLAUDE.md
-- ✅ **Fixed config.yaml mounting** - Correctly mounted to /app/proxy_server_config.yaml
-- ✅ **Eliminated Azure model references** - Clean configuration with only enabled providers
-- ✅ **Dynamic fallbacks working** - Groq, Gemini, OpenRouter with proper failover
-- ✅ **Complete deployment sequence validated** - Script 0→1→2 working perfectly
-- ✅ **All core architectural principles maintained** - No band-aid fixes applied
+### **🎉 MAJOR SUCCESS: Complete Platform Operational (v3.3.0)**
+- ✅ **CRITICAL: All core services fully operational** - LiteLLM, Ollama, Grafana, Prometheus working
+- ✅ **FIXED: Caddy DNS resolution** - IP-based routing for all subdomains working
+- ✅ **FIXED: OpenClaw authentication** - Proper environment variable mapping
+- ✅ **ADDED: Development environment** - Code Server with LiteLLM integration
+- ✅ **ADDED: Tailscale subdomain routing** - Dynamic IP-based routing for VPN services
+- ✅ **Complete subdomain access** - All services accessible via HTTPS
+- ✅ **Vector DB integration** - Complete RAG pipeline operational
+- ✅ **All core architectural principles maintained** - Zero hardcoded values, dynamic config
 
 ### **Root Cause Resolution**
 The persistent LiteLLM issue was caused by:
@@ -778,6 +790,6 @@ The persistent LiteLLM issue was caused by:
 
 ---
 
-**🚀 AI Platform Automation v3.2.0 - COMPREHENSIVE LOGGING ENGINE**
+**🚀 AI Platform Automation v3.3.0 - DEVELOPMENT-READY AI PLATFORM**
 
-*The ultimate modular AI infrastructure platform with Mission Control utility hub, zero code duplication, and comprehensive logging engine for complete deployment visibility.*
+*The ultimate modular AI infrastructure platform with Mission Control utility hub, zero code duplication, comprehensive logging engine, integrated development environment, and complete deployment visibility.*

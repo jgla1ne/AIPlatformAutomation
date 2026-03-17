@@ -786,13 +786,16 @@ select_stack() {
     echo -e "  ${CYAN}  1)${NC}  🟢  ${BOLD}Minimal${NC}       — Ollama + Open WebUI only"
     echo -e "             ${DIM}Ideal for local LLM inference, low resource usage${NC}"
     echo ""
-    echo -e "  ${CYAN}  2)${NC}  🔵  ${BOLD}Standard${NC}      — Minimal + n8n + Flowise + Qdrant + LiteLLM"
+    echo -e "  ${CYAN}  2)${NC}  🟢  ${BOLD}Development${NC}   - routed litellm<>ollama<>llm models with code server, continue.dev, ollama, litellm. Openclaw with tailscale for local dev."
+    echo -e "             ${DIM}Full development environment with AI integration${NC}"
+    echo ""
+    echo -e "  ${CYAN}  3)${NC}  🔵  ${BOLD}Standard${NC}      — Minimal + n8n + Flowise + Qdrant + LiteLLM"
     echo -e "             ${DIM}Full AI automation stack, recommended starting point${NC}"
     echo ""
-    echo -e "  ${CYAN}  3)${NC}  🟣  ${BOLD}Full${NC}          — Standard + AnythingLLM + Grafana + Prometheus + Authentik"
+    echo -e "  ${CYAN}  4)${NC}  🟣  ${BOLD}Full${NC}          — Standard + AnythingLLM + Grafana + Prometheus + Authentik + Dev tools"
     echo -e "             ${DIM}Production-grade with observability and SSO${NC}"
     echo ""
-    echo -e "  ${CYAN}  4)${NC}  ⚙️   ${BOLD}Custom${NC}        — Pick services individually"
+    echo -e "  ${CYAN}  5)${NC}  ⚙️   ${BOLD}Custom${NC}        — Pick services individually"
     echo -e "             ${DIM}Full control over what gets deployed${NC}"
     echo ""
 
@@ -817,30 +820,28 @@ select_stack() {
     ENABLE_RCLONE=false; ENABLE_OPENAI=false; ENABLE_ANTHROPIC=false;
     ENABLE_LOCALAI=false; ENABLE_VLLM=false;
     ENABLE_WEAVIATE=false; ENABLE_CHROMADB=false; ENABLE_MILVUS=false; ENABLE_PINECONE=false;
-    ENABLE_MINIO=false
+    ENABLE_MINIO=false; ENABLE_CODESERVER=false; ENABLE_CONTINUE=false
 
     case "${stack_choice}" in
-        1) # Lite Stack
-            log "INFO" "Applying 'Lite' preset: OpenWebUI, Ollama, Qdrant, LiteLLM"
+        1) # Minimal Stack
+            log "INFO" "Applying 'Minimal' preset: OpenWebUI, Ollama, Qdrant, LiteLLM"
             ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_OLLAMA=true;
             ENABLE_OPENWEBUI=true; ENABLE_QDRANT=true; ENABLE_LITELLM=true;
-            STACK_NAME="lite"
+            STACK_NAME="minimal"
             ;;
-        2) # Local LLM Developer Stack
-            log "INFO" "Applying 'Local LLM Developer' preset: All local AI tools"
+        2) # Development Stack
+            log "INFO" "Applying 'Development' preset: Code Server, Continue.dev, Ollama, LiteLLM, OpenClaw, Tailscale"
             ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_OLLAMA=true;
-            ENABLE_OPENWEBUI=true; ENABLE_ANYTHINGLLM=true; ENABLE_DIFY=true;
-            ENABLE_N8N=true; ENABLE_FLOWISE=true; ENABLE_LITELLM=true;
-            ENABLE_QDRANT=true;
-            STACK_NAME="local-llm-dev"
+            ENABLE_LITELLM=true; ENABLE_QDRANT=true; ENABLE_OPENWEBUI=true;
+            ENABLE_CODESERVER=true; ENABLE_CONTINUE=true; ENABLE_OPENCLAW=true; ENABLE_TAILSCALE=true;
+            STACK_NAME="development"
             ;;
-        3) # Monitoring & Security Stack
-            log "INFO" "Applying 'Monitoring & Security' preset: Core DBs, Monitoring, Security"
-            ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_QDRANT=true;
-            ENABLE_GRAFANA=true; ENABLE_PROMETHEUS=true; ENABLE_AUTHENTIK=true;
-            ENABLE_TAILSCALE=true;
-            ENABLE_MONITORING=true
-            STACK_NAME="monitoring-security"
+        3) # Standard Stack
+            log "INFO" "Applying 'Standard' preset: Minimal + n8n + Flowise + Qdrant + LiteLLM"
+            ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_OLLAMA=true;
+            ENABLE_OPENWEBUI=true; ENABLE_QDRANT=true; ENABLE_LITELLM=true;
+            ENABLE_N8N=true; ENABLE_FLOWISE=true;
+            STACK_NAME="standard"
             ;;
         4) # Full Stack (All Services)
             log "WARN" "Applying 'Full Stack' preset. This requires significant system resources."
@@ -849,8 +850,8 @@ select_stack() {
             ENABLE_N8N=true; ENABLE_FLOWISE=true; ENABLE_LITELLM=true;
             ENABLE_QDRANT=true; ENABLE_GRAFANA=true; ENABLE_PROMETHEUS=true;
             ENABLE_AUTHENTIK=true; ENABLE_SIGNAL=true; ENABLE_OPENCLAW=true;
-            ENABLE_TAILSCALE=true; ENABLE_RCLONE=true;
-            ENABLE_MONITORING=true
+            ENABLE_TAILSCALE=true; ENABLE_RCLONE=true; ENABLE_MONITORING=true;
+            ENABLE_CODESERVER=true; ENABLE_CONTINUE=true
             STACK_NAME="full"
             ;;
         5) # Custom — all off, user picks in next step
@@ -2357,6 +2358,15 @@ HTTP_PROXY=${HTTP_PROXY}
 HTTPS_PROXY=${HTTPS_PROXY}
 NO_PROXY=${NO_PROXY}
 HTTP_TO_HTTPS_REDIRECT=${HTTP_TO_HTTPS_REDIRECT:-false}
+
+# ─── Code Server ─────────────────────────────────────────────────────────────────
+CODESERVER_PASSWORD=${CODESERVER_PASSWORD:-Th301nd13}
+CODESERVER_PORT=${CODESERVER_PORT:-8443}
+CODESERVER_IMAGE=lscr.io/linuxserver/code-server:latest
+
+# ─── Continue.dev ─────────────────────────────────────────────────────────────────
+CONTINUE_PORT=${CONTINUE_PORT:-3000}
+CONTINUE_IMAGE=continuedev/continue:latest
 
 # ─── OpenClaw ────────────────────────────────────────────────────────────────
 OPENCLAW_PASSWORD=${OPENCLAW_PASSWORD:-default_password}

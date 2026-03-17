@@ -432,6 +432,28 @@ anythingllm.${DOMAIN} {
 }
 EOF
 
+    [[ "${ENABLE_CODESERVER:-false}" == "true" ]] && cat >> "$out" <<EOF
+codeserver.${DOMAIN} {
+    ${tls_line}
+    reverse_proxy codeserver:8443
+}
+EOF
+
+    [[ "${ENABLE_CONTINUE:-false}" == "true" ]] && cat >> "$out" <<EOF
+continue.${DOMAIN} {
+    ${tls_line}
+    reverse_proxy continue:3000
+}
+EOF
+
+    # OpenClaw with dynamic Tailscale IP routing
+    [[ "${ENABLE_OPENCLAW:-false}" == "true" ]] && cat >> "$out" <<EOF
+openclaw.${DOMAIN} {
+    ${tls_line}
+    reverse_proxy 172.18.0.11:8443
+}
+EOF
+
     log_success "Caddyfile written to ${out}"
 }
 
@@ -803,6 +825,63 @@ EOF
       start_period: 30s
 EOF
 
+    # Code Server - VS Code in browser with LiteLLM integration
+    [[ "${ENABLE_CODESERVER:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+  codeserver:
+    image: lscr.io/linuxserver/code-server:latest
+    restart: unless-stopped
+    user: "1000:${TENANT_GID:-1001}"
+    depends_on:
+      litellm:
+        condition: service_healthy
+    environment:
+      PUID: "1000"
+      PGID: "${TENANT_GID:-1001}"
+      PASSWORD: "${CODESERVER_PASSWORD}"
+      SUDO_PASSWORD: "${CODESERVER_PASSWORD}"
+      DEFAULT_WORKSPACE: "/mnt/data"
+      LITELLM_API_KEY: "${LITELLM_MASTER_KEY}"
+      LITELLM_BASE_URL: "http://litellm:4000/v1"
+    volumes:
+      - ${DATA_DIR}/codeserver:/config
+      - /mnt/data:/mnt/data:ro
+    ports:
+      - "${PORT_CODESERVER:-8443}:8443"
+    healthcheck:
+      test: ["CMD-SHELL","curl -sf http://localhost:8443/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+EOF
+
+    # Continue.dev - AI-powered development assistant
+    [[ "${ENABLE_CONTINUE:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+  continue:
+    image: continuedev/continue:latest
+    restart: unless-stopped
+    user: "1000:${TENANT_GID:-1001}"
+    depends_on:
+      litellm:
+        condition: service_healthy
+    environment:
+      OPENAI_API_KEY: "${LITELLM_MASTER_KEY}"
+      OPENAI_BASE_URL: "http://litellm:4000/v1"
+      CONTINUE_PORT: "${CONTINUE_PORT}"
+      WORKSPACE_DIR: "/mnt/data"
+    volumes:
+      - ${DATA_DIR}/continue:/root/.continue
+      - /mnt/data:/mnt/data:ro
+    ports:
+      - "${PORT_CONTINUE:-3000}:3000"
+    healthcheck:
+      test: ["CMD-SHELL","curl -sf http://localhost:3000 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+EOF
+
     # Caddy - always deployed as reverse proxy
     cat >> "$COMPOSE_FILE" <<'EOF'
   caddy:
@@ -1107,6 +1186,12 @@ health_dashboard() {
         _check_http "litellm"    "http://localhost:${PORT_LITELLM:-4000}/health/liveliness"
     [[ "${ENABLE_OLLAMA:-false}"     == "true" ]] && \
         _check_http "ollama"     "http://localhost:11434/"
+    echo ""
+    echo -e "  ${BOLD}Development Environment${NC}"
+    [[ "${ENABLE_CODESERVER:-false}" == "true" ]] && \
+        _check_http "codeserver"     "http://localhost:${PORT_CODESERVER:-8443}/"
+    [[ "${ENABLE_CONTINUE:-false}"   == "true" ]] && \
+        _check_http "continue"       "http://localhost:${PORT_CONTINUE:-3000}/"
     echo ""
     echo -e "  ${BOLD}Web Services (all routed via LiteLLM)${NC}"
     [[ "${ENABLE_OPENWEBUI:-false}"  == "true" ]] && \
