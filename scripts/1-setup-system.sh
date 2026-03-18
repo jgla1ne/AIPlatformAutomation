@@ -1927,6 +1927,7 @@ generate_secrets() {
     ANYTHINGLLM_AUTH_TOKEN=$(load_existing_secret "ANYTHINGLLM_AUTH_TOKEN" "$(openssl rand -hex 16)")
     ANYTHINGLLM_API_KEY=$(load_existing_secret "ANYTHINGLLM_API_KEY" "$(openssl rand -hex 32)")
     GRAFANA_PASSWORD=$(load_existing_secret "GRAFANA_PASSWORD"          "$(openssl rand -hex 16)")
+    CODESERVER_PASSWORD=$(load_existing_secret "CODESERVER_PASSWORD" "$(openssl rand -hex 12)")
     AUTHENTIK_SECRET_KEY=$(load_existing_secret "AUTHENTIK_SECRET_KEY" "$(openssl rand -hex 32)")
     MINIO_ROOT_PASSWORD=$(load_existing_secret "MINIO_ROOT_PASSWORD" "$(openssl rand -hex 16)")
     QDRANT_API_KEY=$(load_existing_secret   "QDRANT_API_KEY"            "$(openssl rand -hex 32)")
@@ -2440,7 +2441,6 @@ NO_PROXY=${NO_PROXY}
 HTTP_TO_HTTPS_REDIRECT=${HTTP_TO_HTTPS_REDIRECT:-false}
 
 # ─── Code Server ─────────────────────────────────────────────────────────────────
-CODESERVER_PASSWORD=${CODESERVER_PASSWORD:-Th301nd13}
 CODESERVER_PORT=${CODESERVER_PORT:-8443}
 CODESERVER_IMAGE=lscr.io/linuxserver/code-server:latest
 GIT_REPO=${GIT_REPO:-/mnt/data/git}

@@ -657,7 +657,7 @@ EOF
     restart: unless-stopped
     environment:
       OLLAMA_HOST: 0.0.0.0
-      OLLAMA_MODELS: ${DATA_DIR}/ollama
+      # OLLAMA_MODELS removed - volume mount at /root/.ollama controls model storage
     volumes:
       - ${DATA_DIR}/ollama:/root/.ollama
     ports:
@@ -823,7 +823,7 @@ EOF
   tailscale:
     image: tailscale/tailscale:latest
     restart: unless-stopped
-    user: "1000:${TENANT_GID:-1001}"
+    # Removed user: directive - Tailscale needs root for /dev/net/tun access
     volumes:
       - ${DATA_DIR}/tailscale:/var/lib/tailscale
       - /dev/net/tun:/dev/net/tun
@@ -941,11 +941,17 @@ EOF
 # ── Service Lifecycle Functions ───────────────────────────────────────────────
 deploy_service() {
     local svc="$1"
+    local logfile="${LOGS_DIR}/deploy-$(date +%Y%m%d).log"
     log_info "Deploying ${svc}..."
-    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d "$svc" \
-        >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 \
-        && log_success "${svc} deployed" \
-        || log_error "${svc} failed — see ${LOGS_DIR}/deploy-$(date +%Y%m%d).log"
+    
+    if docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d "$svc" \
+            >> "$logfile" 2>&1; then
+        log_success "${svc} deployed"
+    else
+        log_error "${svc} failed — last 20 lines from ${logfile}:"
+        tail -20 "$logfile" | sed 's/^/  │ /' || true
+        return 0   # non-fatal: log and continue
+    fi
 }
 
 stop_service() {

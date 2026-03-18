@@ -35,6 +35,40 @@ wait_for_healthy() {
     log_success "${svc} is healthy"
 }
 
+pull_ollama_models() {
+    [[ "${ENABLE_OLLAMA:-false}" == "true" ]] || return 0
+    [[ -n "${OLLAMA_MODELS:-}" ]] || { log_info "No OLLAMA_MODELS configured — skipping pull"; return 0; }
+
+    log_info "Pulling Ollama models: ${OLLAMA_MODELS}"
+    log_info "  (This runs in background — models are available as each pull completes)"
+
+    # Wait for ollama HTTP server to be up
+    local elapsed=0
+    until docker compose -f "/mnt/data/${TENANT}/docker-compose.yml" exec -T ollama \
+        curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; do
+        elapsed=$((elapsed + 5))
+        if [[ $elapsed -ge 60 ]]; then
+            log_warning "Ollama HTTP not ready after 60s — skipping model pull"
+            return 0
+        fi
+        log_info "  Waiting for ollama HTTP... (${elapsed}s)"
+        sleep 5
+    done
+
+    for model in ${OLLAMA_MODELS//,/ }; do
+        [[ -z "$model" ]] && continue
+        log_info "  Pulling ${model}..."
+        # Background pull — don't block deployment
+        docker compose -f "/mnt/data/${TENANT}/docker-compose.yml" exec -T ollama \
+            ollama pull "$model" \
+            >> "/mnt/data/${TENANT}/logs/ollama-pull-$(date +%Y%m%d).log" 2>&1 &
+        log_info "  ↳ Pull started in background (PID: $!)"
+    done
+
+    log_success "Ollama model pulls initiated — check /mnt/data/${TENANT}/logs/ollama-pull-$(date +%Y%m%d).log"
+    log_info "  LiteLLM requests to ollama models will succeed once pulls complete"
+}
+
 # ── Main Deployment Function ────────────────────────────────────────────────
 main() {
     log_info "=== DEPLOY START ==="
@@ -68,7 +102,10 @@ main() {
     }
 
     # 4. Local LLM runtime — BEFORE LiteLLM
-    [[ "${ENABLE_OLLAMA:-false}"     == "true" ]] && deploy_service ollama
+    [[ "${ENABLE_OLLAMA:-false}"     == "true" ]] && {
+        deploy_service ollama
+        pull_ollama_models
+    }
 
     # 5. AI gateway — force-recreate to pick up freshly generated config
     [[ "${ENABLE_LITELLM:-false}"    == "true" ]] && {
