@@ -2256,7 +2256,7 @@ OPENROUTER_API_KEY="${OPENROUTER_API_KEY}"
 
 # ─── LiteLLM Routing Strategy ───────────────────────────────────────────────
 LITELLM_ROUTING_STRATEGY="${LITELLM_ROUTING_STRATEGY}"
-LITELLM_INTERNAL_PORT="${LITELLM_INTERNAL_PORT}"
+LITELLM_INTERNAL_PORT="${LITELLM_INTERNAL_PORT:-4000}"
 
 # ─── Internal Service Ports ───────────────────────────────────────────────
 CADDY_INTERNAL_HTTP_PORT=${CADDY_INTERNAL_HTTP_PORT}
