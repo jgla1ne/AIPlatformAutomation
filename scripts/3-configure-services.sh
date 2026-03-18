@@ -504,9 +504,9 @@ generate_codeserver_config() {
       "apiKey": "${LITELLM_MASTER_KEY}"
     }
 $(
-  [[ -n "${OPENAI_API_KEY:-}" ]] && echo "    ,{\"title\":\"GPT-4o (via LiteLLM)\",\"provider\":\"openai\",\"model\":\"gpt-4o\",\"apiBase\":\"http://litellm:4000/v1\",\"apiKey\":\"${LITELLM_MASTER_KEY}\"}"
-  [[ -n "${GOOGLE_API_KEY:-}" ]] && echo "    ,{\"title\":\"Gemini Pro (via LiteLLM)\",\"provider\":\"openai\",\"model\":\"gemini-pro\",\"apiBase\":\"http://litellm:4000/v1\",\"apiKey\":\"${LITELLM_MASTER_KEY}\"}"
-  [[ -n "${GROQ_API_KEY:-}" ]]  && echo "    ,{\"title\":\"Llama3 Groq (via LiteLLM)\",\"provider\":\"openai\",\"model\":\"llama3-groq\",\"apiBase\":\"http://litellm:4000/v1\",\"apiKey\":\"${LITELLM_MASTER_KEY}\"}"
+  [[ -n "${OPENAI_API_KEY:-}" ]] && echo "    ,{\"title\":\"GPT-4o (via LiteLLM)\",\"provider\":\"openai\",\"model\":\"gpt-4o\",\"apiBase\":\"http://litellm:4000/v1\",\"apiKey\":\"${LITELLM_MASTER_KEY}\"}" || true
+  [[ -n "${GOOGLE_API_KEY:-}" ]] && echo "    ,{\"title\":\"Gemini Pro (via LiteLLM)\",\"provider\":\"openai\",\"model\":\"gemini-pro\",\"apiBase\":\"http://litellm:4000/v1\",\"apiKey\":\"${LITELLM_MASTER_KEY}\"}" || true
+  [[ -n "${GROQ_API_KEY:-}" ]]  && echo "    ,{\"title\":\"Llama3 Groq (via LiteLLM)\",\"provider\":\"openai\",\"model\":\"llama3-groq\",\"apiBase\":\"http://litellm:4000/v1\",\"apiKey\":\"${LITELLM_MASTER_KEY}\"}" || true
 )
   ],
   "tabAutocompleteModel": {
@@ -862,7 +862,7 @@ EOF
     ports:
       - "${PORT_OPENCLAW:-18789}:8443"
     healthcheck:
-      test: ["CMD-SHELL","curl -sfk https://localhost:8443/ || exit 1"]
+      test: ["CMD-SHELL","curl -sf http://localhost:8443/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
