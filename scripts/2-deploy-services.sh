@@ -81,6 +81,10 @@ main() {
         deploy_service prometheus
         deploy_service grafana
     }
+    
+    # 6.5. Additional services from infrastructure
+    [[ "${ENABLE_GRAFANA:-false}"    == "true" ]] && deploy_service grafana
+    [[ "${ENABLE_PROMETHEUS:-false}" == "true" ]] && deploy_service prometheus
 
     # 7. Reverse proxy — depends only on infra (postgres, redis healthy)
     deploy_service caddy
@@ -90,11 +94,16 @@ main() {
     [[ "${ENABLE_N8N:-false}"         == "true" ]] && deploy_service n8n
     [[ "${ENABLE_FLOWISE:-false}"     == "true" ]] && deploy_service flowise
     [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && deploy_service anythingllm
+    [[ "${ENABLE_DIFY:-false}"       == "true" ]] && deploy_service dify
+    [[ "${ENABLE_AUTHENTIK:-false}"   == "true" ]] && deploy_service authentik
+    [[ "${ENABLE_SIGNAL:-false}"      == "true" ]] && deploy_service signal
 
     # 9. External wiring (non-blocking — skip gracefully if not configured)
     [[ "${ENABLE_TAILSCALE:-false}"  == "true" ]] && configure_tailscale
     [[ "${ENABLE_CODESERVER:-false}" == "true" ]] && deploy_service codeserver
     [[ "${ENABLE_OPENCLAW:-false}"  == "true" ]] && deploy_service openclaw
+    [[ "${ENABLE_RCLONE:-false}"    == "true" ]] && deploy_service rclone
+    [[ "${ENABLE_CONTINUE:-false}"   == "true" ]] && deploy_service continue
     [[ -n "${GDRIVE_CLIENT_ID:-}" ]] && setup_gdrive_rclone && create_ingestion_systemd
 
     # 10. Health dashboard — script 2 STOPS after this
