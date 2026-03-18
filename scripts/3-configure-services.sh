@@ -637,9 +637,8 @@ EOF
       OPENAI_API_BASE_URL: "http://litellm:4000/v1"
       OPENAI_API_KEY: "${LITELLM_MASTER_KEY}"
       WEBUI_SECRET_KEY: "${JWT_SECRET}"
-      DATABASE_URL: "${OPENWEBUI_DATABASE_URL}"
-      VECTOR_DB: "qdrant"
-      QDRANT_URI: "http://qdrant:6333"
+      # DATABASE_URL removed — open-webui uses SQLite (postgres triggers peewee bug)
+      # VECTOR_DB removed — uses built-in Chroma until qdrant is stable
     volumes:
       - ${DATA_DIR}/openwebui:/app/backend/data
     ports:
@@ -668,7 +667,7 @@ EOF
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 120s  # was 60s — model pull takes time on 2-core
 EOF
 
     [[ "${ENABLE_QDRANT:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
@@ -686,7 +685,7 @@ EOF
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 60s   # was 30s — needs longer on fresh volume
 EOF
 
     [[ "${ENABLE_MONITORING:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'

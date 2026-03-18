@@ -70,10 +70,12 @@ main() {
     # 4. Local LLM runtime — BEFORE LiteLLM
     [[ "${ENABLE_OLLAMA:-false}"     == "true" ]] && deploy_service ollama
 
-    # 5. AI gateway — depends on postgres, redis; optionally ollama
+    # 5. AI gateway — force-recreate to pick up freshly generated config
     [[ "${ENABLE_LITELLM:-false}"    == "true" ]] && {
+        docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" \
+            rm -sf litellm >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 || true
         deploy_service litellm
-        wait_for_healthy litellm 120   # Prisma migration takes 45-90s
+        wait_for_healthy litellm 180   # Prisma migration takes 45-90s
     }
 
     # 6. Monitoring — independent of AI services
@@ -85,14 +87,12 @@ main() {
     # 7. Reverse proxy — depends only on infra (postgres, redis healthy)
     deploy_service caddy
 
-    # 8. Web services — AFTER litellm is healthy
+    # 8. Web services — only deploy services with compose blocks
     [[ "${ENABLE_OPENWEBUI:-false}"   == "true" ]] && deploy_service open-webui
     [[ "${ENABLE_N8N:-false}"         == "true" ]] && deploy_service n8n
     [[ "${ENABLE_FLOWISE:-false}"     == "true" ]] && deploy_service flowise
     [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && deploy_service anythingllm
-    [[ "${ENABLE_DIFY:-false}"       == "true" ]] && deploy_service dify
-    [[ "${ENABLE_AUTHENTIK:-false}"   == "true" ]] && deploy_service authentik
-    [[ "${ENABLE_SIGNAL:-false}"      == "true" ]] && deploy_service signal
+    # dify/authentik/signal: compose blocks not yet implemented — skip
 
     # 9. External wiring (non-blocking — skip gracefully if not configured)
     [[ "${ENABLE_TAILSCALE:-false}"  == "true" ]] && configure_tailscale || true
