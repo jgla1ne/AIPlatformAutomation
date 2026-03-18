@@ -714,7 +714,7 @@ collect_identity() {
     echo ""
 
     # Skip tenant collection if already provided via command line or collected in main()
-    if [ "${SKIP_TENANT_COLLECTION:-false}" = "true" ] || [ -n "${TENANT_NAME:-}" ]; then
+    if [ "${SKIP_TENANT_COLLECTION:-false}" = "true" ]; then
         # Use the tenant name collected in main()
         TENANT_ID="${TENANT_NAME}"
         log "INFO" "Tenant ID already set: ${TENANT_ID}"
