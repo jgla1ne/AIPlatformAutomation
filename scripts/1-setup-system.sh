@@ -1838,9 +1838,35 @@ collect_ports() {
     echo -e "  ${DIM}Configure ports for each enabled service${NC}"
     echo ""
     
-    # Use Script 3's port validation function (Mission Control pattern)
-    # Source Script 3 to access port validation utilities
-    source "${SCRIPTS_DIR}/3-configure-services.sh"
+    # Track used ports to prevent conflicts
+    local used_ports=""
+    
+    # Port validation function
+    read_port() {
+        local service="${1}" default="${2}" varname="${3}"
+        while true; do
+            read -p "  ➤ ${service} port [${default}]: " input
+            if [ -z "${input}" ]; then
+                input="${default}"
+            fi
+            
+            # Check if port is already in use on system
+            if ss -tuln 2>/dev/null | grep -q ":${input} "; then
+                log "WARN" "Port ${input} is already in use on system - choose another"
+                continue
+            fi
+            
+            # Check if port is already assigned to another service
+            if [[ " ${used_ports} " =~ " ${input} " ]]; then
+                log "WARN" "Port ${input} is already assigned to another service - choose another"
+                continue
+            fi
+            
+            eval "${varname}=${input}"
+            used_ports="${used_ports} ${input}"
+            break
+        done
+    }
     
     # Dynamic port collection based on enabled services
     local ports_to_configure=()
@@ -1863,7 +1889,7 @@ collect_ports() {
     [[ "${ENABLE_RCLONE}" = "true" ]]      && ports_to_configure+=("Rclone:5572:RCLONE_PORT")
     [[ "${ENABLE_CODESERVER}" = "true" ]]  && ports_to_configure+=("Code Server:8444:CODESERVER_PORT")
 
-    # Configure each port using Mission Control pattern
+    # Configure each port
     for port_config in "${ports_to_configure[@]}"; do
         IFS=':' read -r service default_port var_name <<< "$port_config"
         read_port "$service" "$default_port" "$var_name"
