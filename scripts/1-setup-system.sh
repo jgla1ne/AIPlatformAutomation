@@ -903,6 +903,23 @@ select_stack() {
         esac
     }
 
+    # ── Always offer fine-grained override ────────────────────────────────────
+    if [ "${stack_choice}" != "5" ]; then
+        echo ""
+        echo -e "  ${DIM}Stack applied. Would you like to customise individual services?${NC}"
+        echo ""
+        read -p "  ➤ Customise service selection? [y/N]: " customise
+        customise="${customise:-n}"
+        if [[ "${customise,,}" =~ ^y ]]; then
+            # Convert to Full Stack for customization
+            stack_choice=4
+        else
+            # Skip service prompts and proceed to next step
+            echo ""
+            return
+        fi
+    fi
+
     if [ "${stack_choice}" = "4" ]; then
         echo ""
         echo -e "  ${BOLD}─── 🤖  AI / LLM ────────────────────────────────────────${NC}"
@@ -922,14 +939,6 @@ select_stack() {
         fi
         echo ""
         
-        # ── Always offer fine-grained override ────────────────────────────────────
-    if [ "${stack_choice}" != "5" ]; then
-        echo -e "  ${DIM}Stack applied. Would you like to customise individual services?${NC}"
-        echo ""
-        read -p "  ➤ Customise service selection? [y/N]: " customise
-        customise="${customise:-n}"
-        [[ "${customise,,}" =~ ^y ]] && stack_choice=4
-    fi
         echo -e "  ${BOLD}─── ⚡  Automation ──────────────────────────────────────${NC}"
         ask_service "🔄" "n8n"           "Workflow automation"         "ENABLE_N8N"           "$( [[ "${ENABLE_N8N}" == "true" ]]           && echo y || echo n )"
         ask_service "🌊" "Flowise"       "AI flow builder"             "ENABLE_FLOWISE"       "$( [[ "${ENABLE_FLOWISE}" == "true" ]]       && echo y || echo n )"
