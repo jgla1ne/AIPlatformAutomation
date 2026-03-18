@@ -194,6 +194,9 @@ GDRIVE_FOLDER_NAME=""
 GDRIVE_FOLDER_ID=""
 GDRIVE_AUTH_METHOD=""
 
+# Admin defaults
+ADMIN_EMAIL=""
+
 # Search defaults
 SEARCH_PROVIDER="none"
 BRAVE_API_KEY=""
@@ -2652,7 +2655,7 @@ create_directories() {
     mkdir -p "${DATA_ROOT}/signal-data"
     
     # Create service directories
-    ALL_SERVICES="postgres redis qdrant grafana prometheus litellm authentik signal n8n weaviate chromadb milvus ollama localai vllm openwebui anythingllm flowise"
+    ALL_SERVICES="postgres redis qdrant grafana prometheus litellm authentik signal n8n weaviate chromadb milvus ollama localai vllm openwebui anythingllm flowise dify codeserver"
     for service in ${ALL_SERVICES}; do
         # Check if the service is enabled via the ENABLE_SERVICENAME variable
         if [[ $(declare -p "ENABLE_${service^^}" 2>/dev/null) =~ "true" ]]; then
