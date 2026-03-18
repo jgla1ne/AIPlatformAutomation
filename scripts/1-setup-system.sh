@@ -2423,7 +2423,7 @@ OLLAMA_PORT=${OLLAMA_PORT}
 LITELLM_SERVICE_NAME=${LITELLM_SERVICE_NAME}
 LITELLM_PORT=${LITELLM_PORT}
 VLLM_SERVICE_NAME=${VLLM_SERVICE_NAME}
-VLLM_PORT=${VLLM_PORT}
+VLLM_PORT=${VLLM_PORT:-8000}
 
 # ─── Proxy Configuration ───────────────────────────────────────────────────────
 PROXY_TYPE=${PROXY_TYPE}
@@ -2824,6 +2824,16 @@ print_summary() {
     printf "  ${BOLD}%-22s${NC} %s\n" "GPU:"          "${GPU_TYPE} (layers: ${GPU_LAYERS:-auto})"
     printf "  ${BOLD}%-22s${NC} %s\n" "Vector DB:"    "${VECTOR_DB:-none}"
     printf "  ${BOLD}%-22s${NC} %s\n" "LLM providers:" "${LLM_PROVIDERS:-local}"
+    # Show specific enabled providers
+    local provider_list=""
+    [[ "${ENABLE_OLLAMA}" = "true" ]] && provider_list="${provider_list}Ollama "
+    [[ "${ENABLE_OPENAI}" = "true" ]] && provider_list="${provider_list}OpenAI "
+    [[ "${ENABLE_ANTHROPIC}" = "true" ]] && provider_list="${provider_list}Anthropic "
+    [[ "${ENABLE_GOOGLE}" = "true" ]] && provider_list="${provider_list}Gemini "
+    [[ "${ENABLE_GROQ}" = "true" ]] && provider_list="${provider_list}Groq "
+    [[ "${ENABLE_OPENROUTER}" = "true" ]] && provider_list="${provider_list}OpenRouter "
+    [[ "${ENABLE_VLLM}" = "true" ]] && provider_list="${provider_list}VLLM "
+    [[ -n "${provider_list}" ]] && printf "  ${BOLD}%-22s${NC} %s\n" "Enabled:" "${provider_list% }"
     echo ""
     echo -e "  ${BOLD}Enabled services:${NC}"
     [ "${ENABLE_OLLAMA}" = "true" ]      && echo -e "    ${GREEN}✓${NC}  Ollama       (models: ${OLLAMA_MODELS:-auto})"
@@ -2927,6 +2937,7 @@ print_summary() {
         [ "${ENABLE_FLOWISE}" = "true" ] && echo -e "    ${CYAN}•${NC} Flowise:      https://flowise.${DOMAIN}"
         [ "${ENABLE_OPENWEBUI}" = "true" ] && echo -e "    ${CYAN}•${NC} Open WebUI:   https://openwebui.${DOMAIN}"
         [ "${ENABLE_ANYTHINGLLM}" = "true" ] && echo -e "    ${CYAN}•${NC} AnythingLLM:  https://anythingllm.${DOMAIN}"
+        [ "${ENABLE_DIFY}" = "true" ] && echo -e "    ${CYAN}•${NC} Dify:         https://dify.${DOMAIN}"
         [ "${ENABLE_LITELLM}" = "true" ] && echo -e "    ${CYAN}•${NC} LiteLLM:      https://litellm.${DOMAIN}"
         [ "${ENABLE_GRAFANA}" = "true" ] && echo -e "    ${CYAN}•${NC} Grafana:      https://grafana.${DOMAIN}"
         [ "${ENABLE_AUTHENTIK}" = "true" ] && echo -e "    ${CYAN}•${NC} Authentik:    https://auth.${DOMAIN}"
