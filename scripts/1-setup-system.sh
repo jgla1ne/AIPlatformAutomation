@@ -11,7 +11,7 @@ set -euo pipefail
 set -euo pipefail
 
 # Clear any inherited environment variables to ensure clean state
-unset TENANT_ID
+unset TENANT_ID ADMIN_EMAIL DOMAIN
 
 # ─── Colours ─────────────────────────────────────────────────────────────────
 BOLD='\033[1m'
@@ -66,6 +66,9 @@ ENABLE_CADDY="false"
 ENABLE_OLLAMA="false"
 ENABLE_OPENAI="false"
 ENABLE_ANTHROPIC="false"
+ENABLE_GOOGLE="false"
+ENABLE_GROQ="false"
+ENABLE_OPENROUTER="false"
 ENABLE_LOCALAI="false"
 ENABLE_VLLM="false"
 ENABLE_OPENWEBUI="false"
@@ -2164,6 +2167,9 @@ ENABLE_CADDY=${ENABLE_CADDY}
 ENABLE_OLLAMA=${ENABLE_OLLAMA}
 ENABLE_OPENAI=${ENABLE_OPENAI}
 ENABLE_ANTHROPIC=${ENABLE_ANTHROPIC}
+ENABLE_GOOGLE=${ENABLE_GOOGLE}
+ENABLE_GROQ=${ENABLE_GROQ}
+ENABLE_OPENROUTER=${ENABLE_OPENROUTER}
 ENABLE_LOCALAI=${ENABLE_LOCALAI}
 ENABLE_VLLM=${ENABLE_VLLM}
 ENABLE_OPENWEBUI=${ENABLE_OPENWEBUI}
