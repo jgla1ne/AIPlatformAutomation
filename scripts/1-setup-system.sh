@@ -1840,7 +1840,7 @@ collect_ports() {
     
     # Use Script 3's port validation function (Mission Control pattern)
     # Source Script 3 to access port validation utilities
-    source "${SCRIPT_DIR}/3-configure-services.sh"
+    source "${SCRIPTS_DIR}/3-configure-services.sh"
     
     # Dynamic port collection based on enabled services
     local ports_to_configure=()
