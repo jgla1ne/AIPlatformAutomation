@@ -1778,13 +1778,9 @@ EOF
             echo -e "  ${DIM}Let's Encrypt requires:${NC}"
             echo -e "  • Domain A record pointing to this server"
             echo -e "  • Ports 80 and 443 open in firewall"
-            echo -e "  • Valid admin email for cert alerts"
+            echo -e "  • Valid admin email for cert alerts (already collected)"
             echo ""
-            read -p "  ➤ Admin email (for SSL cert alerts): " ADMIN_EMAIL
-            while [[ ! "${ADMIN_EMAIL}" =~ ^[^@]+@[^@]+\.[^@]+$ ]]; do
-                echo "  ❌ Invalid email"
-                read -p "  ➤ Admin email: " ADMIN_EMAIL
-            done
+            echo -e "  ${GREEN}✅ Admin email already set: ${ADMIN_EMAIL}${NC}"
         fi
     fi
 
@@ -2509,12 +2505,7 @@ EOF
 
     # Use robust file write pattern for critical service variables
     VARS_TO_ADD=$(cat <<EOF
-# Redis configuration for Authentik
-AUTHENTIK_REDIS__HOST=redis
-
-# Dify storage configuration
-DIFY_STORAGE_TYPE=local
-DIFY_STORAGE_LOCAL_ROOT=/data
+# Additional variables already written in main section - no duplicates needed
 EOF
 )
 
