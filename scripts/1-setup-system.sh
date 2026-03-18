@@ -920,6 +920,16 @@ select_stack() {
             ask_service "🤖" "Continue.dev"  "AI assistant for Code Server"           "ENABLE_CONTINUE"     "$( [[ "${ENABLE_CONTINUE}" == "true" ]]     && echo y || echo n )"
             ask_service "🦅" "OpenClaw"      "Tailscale-based development terminal"         "ENABLE_OPENCLAW"     "$( [[ "${ENABLE_OPENCLAW}" == "true" ]]     && echo y || echo n )"
         fi
+        echo ""
+        
+        # ── Always offer fine-grained override ────────────────────────────────────
+    if [ "${stack_choice}" != "5" ]; then
+        echo -e "  ${DIM}Stack applied. Would you like to customise individual services?${NC}"
+        echo ""
+        read -p "  ➤ Customise service selection? [y/N]: " customise
+        customise="${customise:-n}"
+        [[ "${customise,,}" =~ ^y ]] && stack_choice=4
+    fi
         echo -e "  ${BOLD}─── ⚡  Automation ──────────────────────────────────────${NC}"
         ask_service "🔄" "n8n"           "Workflow automation"         "ENABLE_N8N"           "$( [[ "${ENABLE_N8N}" == "true" ]]           && echo y || echo n )"
         ask_service "🌊" "Flowise"       "AI flow builder"             "ENABLE_FLOWISE"       "$( [[ "${ENABLE_FLOWISE}" == "true" ]]       && echo y || echo n )"
@@ -977,6 +987,34 @@ configure_dify() {
     fi
     
     log "SUCCESS" "Dify configuration completed"
+}
+
+# ─── Database Configuration ───────────────────────────────────────────────────────
+configure_databases() {
+    print_step "5" "9" "Database Configuration"
+    
+    echo -e "  ${BOLD}🗄️  Database Configuration${NC}"
+    echo -e "  ${DIM}Configure database settings for multi-tenant deployment${NC}"
+    echo ""
+    
+    # PostgreSQL Configuration
+    echo -e "  ${CYAN}PostgreSQL Configuration:${NC}"
+    read -p "  ➤ PostgreSQL user [${POSTGRES_USER:-datasquiz}]: " POSTGRES_USER
+    POSTGRES_USER="${POSTGRES_USER:-datasquiz}"
+    
+    read -p "  ➤ PostgreSQL database name [${POSTGRES_DB:-datasquiz_db}]: " POSTGRES_DB
+    POSTGRES_DB="${POSTGRES_DB:-datasquiz_db}"
+    
+    echo ""
+    echo -e "  ${CYAN}Redis Configuration:${NC}"
+    echo -e "  ${DIM}Redis will be configured with secure authentication${NC}"
+    echo ""
+    
+    # Redis Configuration
+    read -p "  ➤ Redis database number [0]: " REDIS_DB
+    REDIS_DB="${REDIS_DB:-0}"
+    
+    print_divider
 }
 
 # ─── Vector DB Selection ───────────────────────────────────────────────────
@@ -2273,7 +2311,7 @@ LITELLM_DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgre
 OPENWEBUI_DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/openwebui"
 N8N_DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/n8n"
 FLOWISE_DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/flowise"
-REDIS_URL="redis://:${REDIS_PASSWORD}@redis:6379"
+REDIS_URL="redis://:${REDIS_PASSWORD}@redis:6379/${REDIS_DB:-0}"
 DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm"
 
 # ─── Network Configuration (for dynamic references) ───────────────────
@@ -2281,6 +2319,7 @@ LOCALHOST=localhost
 
 # ─── Redis ────────────────────────────────────────────────────────────────────
 REDIS_PASSWORD="${REDIS_PASSWORD}"
+REDIS_DB="${REDIS_DB:-0}"
 
 # ─── n8n ──────────────────────────────────────────────────────────────────────
 N8N_ENCRYPTION_KEY="${N8N_ENCRYPTION_KEY}"
@@ -3056,7 +3095,7 @@ main() {
     select_stack             # Step 6
     configure_dify           # Step 6.5 - Dify configuration (if enabled)
     select_vector_db         # Step 7
-    collect_database         # Step 7.5 - Database configuration
+    configure_databases      # Step 7.5 - Database configuration
     collect_llm_config       # Step 8
     collect_litellm_routing  # Step 8.5 - LiteLLM routing strategy
     collect_network_config   # Step 9 - NEW: Network & security configuration
