@@ -57,6 +57,7 @@ prepare_directories() {
         "${DATA_DIR}/anythingllm" \
         "${DATA_DIR}/tailscale" \
         "${DATA_DIR}/openclaw" \
+        "${DATA_DIR}/codeserver" \
         "${CONFIG_DIR}/litellm" \
         "${CONFIG_DIR}/postgres" \
         "${CONFIG_DIR}/caddy/data" \
@@ -78,7 +79,8 @@ prepare_directories() {
         "${DATA_DIR}/ollama" \
         "${DATA_DIR}/anythingllm" \
         "${DATA_DIR}/tailscale" \
-        "${DATA_DIR}/openclaw"
+        "${DATA_DIR}/openclaw" \
+        "${DATA_DIR}/codeserver"
     
     # Config directories owned by tenant for script access
     chown -R "${TENANT_UID:-1001}:${TENANT_GID:-1001}" "${CONFIG_DIR}"
@@ -894,7 +896,7 @@ EOF
       - ${DATA_DIR}/codeserver/.continue:/home/abc/.continue:rw
       - /mnt/data:/mnt/data:rw
       - ${DATA_DIR}/git:/mnt/data/git:rw
-      - ${TENANT_DIR}/${GITHUB_PROJECT:-github}:/home/coder/project
+      - ${TENANT_DIR}/${GITHUB_PROJECT:-github}:/config/workspace
     ports:
       - "${PORT_CODESERVER:-8443}:8443"
     healthcheck:
@@ -1234,6 +1236,24 @@ health_dashboard() {
     echo -e "  ${BOLD}Quick Tests${NC}"
     echo -e "  LiteLLM models:"
     echo -e "    curl -s http://localhost:${PORT_LITELLM:-4000}/v1/models \\"
+    echo -e "      -H 'Authorization: Bearer \${LITELLM_MASTER_KEY}' | jq '.data[].id'"
+    echo ""
+    echo -e "  ${BOLD}🌐 Access URLs${NC}"
+    printf "  %-26s %s\n" "Chat (OpenWebUI):"     "https://chat.${DOMAIN}"
+    [[ "${ENABLE_LITELLM:-false}"    == "true" ]] && printf "  %-26s %s\n" "LiteLLM API:"        "https://litellm.${DOMAIN}"
+    [[ "${ENABLE_N8N:-false}"        == "true" ]] && printf "  %-26s %s\n" "n8n Automation:"     "https://n8n.${DOMAIN}"
+    [[ "${ENABLE_FLOWISE:-false}"    == "true" ]] && printf "  %-26s %s\n" "Flowise:"            "https://flowise.${DOMAIN}"
+    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && printf "  %-26s %s\n" "AnythingLLM:"       "https://anythingllm.${DOMAIN}"
+    [[ "${ENABLE_CODESERVER:-false}" == "true" ]] && printf "  %-26s %s\n" "OpenCode IDE:"       "https://opencode.${DOMAIN}"
+    [[ "${ENABLE_MONITORING:-false}" == "true" ]] && {
+        printf "  %-26s %s\n" "Grafana:"           "https://grafana.${DOMAIN}"
+        printf "  %-26s %s\n" "Prometheus:"        "https://prometheus.${DOMAIN}"
+    }
+    [[ "${ENABLE_OPENCLAW:-false}"  == "true" ]] && \
+        printf "  %-26s %s\n" "OpenClaw (Tailscale):" "https://${ip:-<tailscale-ip>}:${PORT_OPENCLAW:-18789}"
+    echo ""
+    echo -e "  ${BOLD}⚡ LiteLLM Quick Test${NC}"
+    echo -e "    curl -s https://litellm.${DOMAIN}/v1/models \\"
     echo -e "      -H 'Authorization: Bearer \${LITELLM_MASTER_KEY}' | jq '.data[].id'"
     echo ""
     log_write INFO "Health dashboard printed at ${ts}"
