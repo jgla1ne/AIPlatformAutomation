@@ -1862,7 +1862,7 @@ collect_ports() {
                 continue
             fi
             
-            eval "${varname}=${input}"
+            eval "${varname}=\"${input}\""
             used_ports="${used_ports} ${input}"
             break
         done
