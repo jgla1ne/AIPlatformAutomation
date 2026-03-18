@@ -1837,90 +1837,37 @@ collect_ports() {
     echo -e "  ${BOLD}🔌  Service Ports${NC}"
     echo -e "  ${DIM}Configure ports for each enabled service${NC}"
     echo ""
+    
+    # Use Script 3's port validation function (Mission Control pattern)
+    # Source Script 3 to access port validation utilities
+    source "${SCRIPT_DIR}/3-configure-services.sh"
+    
+    # Dynamic port collection based on enabled services
+    local ports_to_configure=()
+    
+    # Build list of ports to configure based on enabled services
+    [[ "${ENABLE_N8N}" = "true" ]]         && ports_to_configure+=("n8n:5678:N8N_PORT")
+    [[ "${ENABLE_FLOWISE}" = "true" ]]     && ports_to_configure+=("Flowise:3000:FLOWISE_PORT")
+    [[ "${ENABLE_OPENWEBUI}" = "true" ]]   && ports_to_configure+=("Open WebUI:8081:OPENWEBUI_PORT")
+    [[ "${ENABLE_ANYTHINGLLM}" = "true" ]] && ports_to_configure+=("AnythingLLM:3001:ANYTHINGLLM_PORT")
+    [[ "${ENABLE_LITELLM}" = "true" ]]     && ports_to_configure+=("LiteLLM:4000:LITELLM_PORT")
+    [[ "${ENABLE_VLLM}" = "true" ]]         && ports_to_configure+=("VLLM:8000:VLLM_PORT")
+    [[ "${ENABLE_GRAFANA}" = "true" ]]     && ports_to_configure+=("Grafana:3002:GRAFANA_PORT")
+    [[ "${ENABLE_PROMETHEUS}" = "true" ]]  && ports_to_configure+=("Prometheus:9090:PROMETHEUS_PORT")
+    [[ "${ENABLE_OLLAMA}" = "true" ]]      && ports_to_configure+=("Ollama:11434:OLLAMA_PORT")
+    [[ "${ENABLE_QDRANT}" = "true" ]]      && ports_to_configure+=("Qdrant:6333:QDRANT_PORT")
+    [[ "${ENABLE_AUTHENTIK}" = "true" ]]    && ports_to_configure+=("Authentik:9000:AUTHENTIK_PORT")
+    [[ "${ENABLE_SIGNAL}" = "true" ]]      && ports_to_configure+=("Signal API:8080:SIGNAL_PORT")
+    [[ "${ENABLE_OPENCLAW}" = "true" ]]    && ports_to_configure+=("OpenClaw:18789:OPENCLAW_PORT")
+    [[ "${ENABLE_TAILSCALE}" = "true" ]]   && ports_to_configure+=("Tailscale:8443:TAILSCALE_PORT")
+    [[ "${ENABLE_RCLONE}" = "true" ]]      && ports_to_configure+=("Rclone:5572:RCLONE_PORT")
+    [[ "${ENABLE_CODESERVER}" = "true" ]]  && ports_to_configure+=("Code Server:8444:CODESERVER_PORT")
 
-    # Default ports (based on actual Docker internal ports)
-    local d_n8n="5678"
-    local d_flowise="3000"
-    local d_openwebui="8081"
-    local d_anythingllm="3001"
-    local d_litellm="4000"
-    local d_vllm="8000"
-    local d_grafana="3002"          # Host port, internal is 3000
-    local d_prometheus="9090"
-    local d_ollama="11434"
-    local d_qdrant="6333"
-    local d_authentik="9000"         # Host port, internal is 9000
-    local d_signal="8080"           # Host port, internal is 8080
-    local d_openclaw="18789"        # Host port, internal is 8082
-    local d_tailscale="8443"        # Host port, internal is 443 (for OpenClaw)
-    local d_rclone="5572"           # Host port, internal is 5572
-
-    # Track used ports to prevent conflicts
-    local used_ports=""
-
-    read_port() {
-        local service="${1}" default="${2}" varname="${3}"
-        while true; do
-            read -p "  ➤ ${service} port [${default}]: " input
-            if [ -z "${input}" ]; then
-                input="${default}"
-            fi
-            
-            if [[ "${input}" =~ ^[0-9]+$ ]] && [ "${input}" -ge 1024 ] && [ "${input}" -le 65535 ]; then
-                # Check if port is already in use on system
-                if ss -tuln 2>/dev/null | grep -q ":${input} "; then
-                    log "WARN" "Port ${input} is already in use on system — choose another"
-                    continue
-                fi
-                
-                # Check if port is already assigned to another service
-                if [[ " ${used_ports} " =~ " ${input} " ]]; then
-                    log "WARN" "Port ${input} is already assigned to another service — choose another"
-                    continue
-                fi
-                
-                eval "${varname}=${input}"
-                used_ports="${used_ports} ${input}"
-                break
-            else
-                echo "  ❌ Enter a valid port (1024–65535)"
-            fi
-        done
-    }
-
-    [ "${ENABLE_N8N}" = "true" ]         && read_port "n8n"         "${d_n8n}"         "N8N_PORT"
-    [ "${ENABLE_FLOWISE}" = "true" ]     && read_port "Flowise"     "${d_flowise}"     "FLOWISE_PORT"
-    [ "${ENABLE_OPENWEBUI}" = "true" ]   && read_port "Open WebUI"  "${d_openwebui}"   "OPENWEBUI_PORT"
-    [ "${ENABLE_ANYTHINGLLM}" = "true" ] && read_port "AnythingLLM" "${d_anythingllm}" "ANYTHINGLLM_PORT"
-    [ "${ENABLE_LITELLM}" = "true" ]     && read_port "LiteLLM"     "${d_litellm}"     "LITELLM_PORT"
-    [ "${ENABLE_VLLM}" = "true" ]         && read_port "VLLM"        "${d_vllm}"        "VLLM_PORT"
-    [ "${ENABLE_GRAFANA}" = "true" ]     && read_port "Grafana"     "${d_grafana}"     "GRAFANA_PORT"
-    [ "${ENABLE_PROMETHEUS}" = "true" ]  && read_port "Prometheus"  "${d_prometheus}"  "PROMETHEUS_PORT"
-    [ "${ENABLE_OLLAMA}" = "true" ]      && read_port "Ollama"      "${d_ollama}"      "OLLAMA_PORT"
-    [ "${ENABLE_QDRANT}" = "true" ]      && read_port "Qdrant"      "${d_qdrant}"      "QDRANT_PORT"
-    [ "${ENABLE_AUTHENTIK}" = "true" ]    && read_port "Authentik"   "${d_authentik}"   "AUTHENTIK_PORT"
-    [ "${ENABLE_SIGNAL}" = "true" ]      && read_port "Signal API"  "${d_signal}"      "SIGNAL_PORT"
-    [ "${ENABLE_OPENCLAW}" = "true" ]    && read_port "OpenClaw"    "${d_openclaw}"    "OPENCLAW_PORT"
-    [ "${ENABLE_TAILSCALE}" = "true" ]   && read_port "Tailscale"   "${d_tailscale}"   "TAILSCALE_PORT"
-    [ "${ENABLE_RCLONE}" = "true" ]      && read_port "Rclone"      "${d_rclone}"      "RCLONE_PORT"
-
-    # Set safe defaults for disabled services
-    N8N_PORT="${N8N_PORT:-${d_n8n}}"
-    FLOWISE_PORT="${FLOWISE_PORT:-${d_flowise}}"
-    OPENWEBUI_PORT="${OPENWEBUI_PORT:-${d_openwebui}}"
-    ANYTHINGLLM_PORT="${ANYTHINGLLM_PORT:-${d_anythingllm}}"
-    LITELLM_PORT="${LITELLM_PORT:-${d_litellm}}"
-    VLLM_PORT="${VLLM_PORT:-${d_vllm}}"
-    LITELLM_INTERNAL_PORT="4000"
-    GRAFANA_PORT="${GRAFANA_PORT:-${d_grafana}}"
-    PROMETHEUS_PORT="${PROMETHEUS_PORT:-${d_prometheus}}"
-    OLLAMA_PORT="${OLLAMA_PORT:-${d_ollama}}"
-    QDRANT_PORT="${QDRANT_PORT:-${d_qdrant}}"
-    AUTHENTIK_PORT="${AUTHENTIK_PORT:-${d_authentik}}"
-    SIGNAL_PORT="${SIGNAL_PORT:-${d_signal}}"
-    OPENCLAW_PORT="${OPENCLAW_PORT:-${d_openclaw}}"
-    TAILSCALE_PORT="${TAILSCALE_PORT:-${d_tailscale}}"
-    RCLONE_PORT="${RCLONE_PORT:-${d_rclone}}"
+    # Configure each port using Mission Control pattern
+    for port_config in "${ports_to_configure[@]}"; do
+        IFS=':' read -r service default_port var_name <<< "$port_config"
+        read_port "$service" "$default_port" "$var_name"
+    done
 
     log "SUCCESS" "Ports configured"
 }
