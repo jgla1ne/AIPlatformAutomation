@@ -615,7 +615,7 @@ EOF
     ports:
       - "\${PORT_LITELLM:-4000}:4000"
     entrypoint: ["/bin/sh", "-c"]
-    command: ["prisma generate --schema /app/litellm/proxy/schema.prisma && litellm --config /litellm-config.yaml --port 4000"]
+    command: ["cd /app/litellm/proxy && prisma generate && cd /app && litellm --config /litellm-config.yaml --port 4000"]
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:4000/health/liveliness || exit 1"]
       interval: 30s
