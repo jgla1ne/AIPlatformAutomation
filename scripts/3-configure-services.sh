@@ -588,14 +588,15 @@ EOF
     # Add enabled services dynamically - NO hardcoded values
     [[ "${ENABLE_LITELLM:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
   litellm:
-    image: ghcr.io/berriai/litellm:main
+    image: ghcr.io/berriai/litellm:main-latest
     restart: unless-stopped
-    user: "root"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      litellm-prisma-migrate:
+        condition: service_completed_successfully
     environment:
       LITELLM_MASTER_KEY: \${LITELLM_MASTER_KEY}
       LITELLM_SALT_KEY: \${LITELLM_SALT_KEY}
@@ -609,19 +610,44 @@ EOF
       OPENROUTER_API_KEY: \${OPENROUTER_API_KEY:-}
       LITELLM_TELEMETRY: "False"
       PRISMA_DISABLE_WARNINGS: "true"
+      STORE_MODEL_IN_DB: "True"
     volumes:
       - ${CONFIG_DIR}/litellm/config.yaml:/litellm-config.yaml:ro
       - ${DATA_DIR}/litellm:/root/.cache
+      - ${LOGS_DIR}/litellm:/app/logs
     ports:
       - "\${PORT_LITELLM:-4000}:4000"
     entrypoint: ["litellm"]
-    command: ["--config", "/litellm-config.yaml", "--port", "4000"]
+    command: ["--config", "/litellm-config.yaml", "--port", "4000", "--detailed_debug"]
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/').read()\" || exit 1"]
       interval: 30s
       timeout: 15s
       retries: 5
       start_period: 90s
+EOF
+
+  litellm-prisma-migrate:
+    image: ghcr.io/berriai/litellm:main-latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c "
+        cd /app &&
+        python -c 'from litellm.proxy.proxy_server import *; import prisma; prisma.Client().connect()' ||
+        litellm --config /app/config.yaml &
+        sleep 10 &&
+        cd /usr/local/lib/python3.11/dist-packages/litellm/proxy &&
+        prisma db push --schema ./schema.prisma --accept-data-loss &&
+        kill %1
+      "
+    environment:
+      DATABASE_URL: \${LITELLM_DATABASE_URL}
+      LITELLM_MASTER_KEY: \${LITELLM_MASTER_KEY}
+      LITELLM_TELEMETRY: "False"
+      PRISMA_DISABLE_WARNINGS: "true"
+    restart: "no"
 EOF
 
     [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
@@ -940,15 +966,53 @@ EOF
 deploy_service() {
     local svc="$1"
     local logfile="${LOGS_DIR}/deploy-$(date +%Y%m%d).log"
+    local timeout="${SERVICE_STARTUP_TIMEOUTS[$svc]:-120}"
+    
     log_info "Deploying ${svc}..."
+    
+    # Check dependencies before deployment
+    case "$svc" in
+        "litellm")
+            # Core AI Gateway - depends on infrastructure
+            wait_for_healthy postgres 60 || { log_error "Postgres not ready - cannot deploy ${svc}"; return 1; }
+            wait_for_healthy redis 30 || { log_error "Redis not ready - cannot deploy ${svc}"; return 1; }
+            ;;
+        "open-webui"|"anythingllm"|"flowise"|"n8n")
+            # AI Applications - depend on LiteLLM + Qdrant
+            wait_for_healthy litellm 60 || { log_error "LiteLLM not ready - cannot deploy ${svc}"; return 1; }
+            if [[ "${ENABLE_QDRANT:-false}" == "true" ]]; then
+                wait_for_healthy qdrant 30 || { log_error "Qdrant not ready - cannot deploy ${svc}"; return 1; }
+            fi
+            ;;
+        "caddy"|"nginx")
+            # Proxy - depends on all application services being ready
+            for app_service in "litellm open-webui anythingllm flowise n8n ollama qdrant"; do
+                if [[ "${ENABLE_${app_service^^}:-false}" == "true" ]]; then
+                    wait_for_healthy "$app_service" 30 || { 
+                        log_error "${app_service} not ready - cannot deploy ${svc}"; 
+                        return 1; 
+                    }
+                fi
+            done
+            ;;
+    esac
     
     if docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d "$svc" \
             >> "$logfile" 2>&1; then
         log_success "${svc} deployed"
+        
+        # Post-deployment health verification
+        if [[ "${ENABLE_HEALTH_CHECKS:-true}" == "true" ]]; then
+            source "${SCRIPT_DIR}/2-deploy-services.sh"
+            wait_for_healthy "$svc" "$timeout" || {
+                log_warning "${svc} deployment completed but health check failed"
+                return 1
+            }
+        fi
     else
         log_error "${svc} failed — last 20 lines from ${logfile}:"
         tail -20 "$logfile" | sed 's/^/  │ /' || true
-        return 0   # non-fatal: log and continue
+        return 1   # fatal: dependency failed
     fi
 }
 
@@ -1129,28 +1193,49 @@ initialize_litellm_database() {
     done
     log_success "  PostgreSQL is ready"
     
-    # Run Prisma database push using compose with available schema
+    # Find actual schema path in LiteLLM image
+    log_info "  Finding Prisma schema path in LiteLLM image..."
+    local schema_path=$(docker run --rm --entrypoint find \
+        ghcr.io/berriai/litellm:main-latest \
+        / -name "schema.prisma" -path "*/litellm/*" 2>/dev/null | head -1)
+    
+    if [[ -z "$schema_path" ]]; then
+        log_error "  Could not find schema.prisma in LiteLLM image"
+        return 1
+    fi
+    
+    log_info "  Using schema path: ${schema_path}"
+    
+    # Run Prisma migration with proper error handling
     log_info "  Running Prisma database migration..."
-    if docker compose -f "$COMPOSE_FILE" run --rm --entrypoint /bin/sh litellm \
-        -c "cd /app/litellm/proxy && prisma db push --accept-data-loss" \
+    if docker run --rm \
+        --network ai-${tenant}_default \
+        -e DATABASE_URL="postgresql://litellm:${POSTGRES_PASSWORD}@postgres:5432/litellm" \
+        -v "${LOGS_DIR}/litellm:/app/logs" \
+        ghcr.io/berriai/litellm:main-latest \
+        sh -c "cd /app && prisma db push --schema ${schema_path} --accept-data-loss && \
+                 prisma generate --schema ${schema_path}" \
         >> "$logfile" 2>&1; then
         
-        log_success "  Prisma migration completed"
+        log_success "  Prisma migration completed successfully"
     else
         log_error "  Prisma migration failed - check ${logfile}"
         return 1
     fi
     
-    # Verify tables were created
+    # Verify tables were created with proper error handling
     log_info "  Verifying database schema..."
-    local table_count=$(docker exec ai-${tenant}-postgres-1 psql -U ds-admin -d litellm -t -c \
+    local table_count
+    table_count=$(docker exec ai-${tenant}-postgres-1 \
+        psql -U ds-admin -d litellm -t -c \
         "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';" \
-        2>/dev/null | tr -d ' ')
+        2>/dev/null | tr -d ' ' || echo "0")
     
-    if [[ "$table_count" -ge "1" ]]; then
-        log_success "  Database schema verified (${table_count} tables)"
+    if [[ -n "$table_count" ]] && [[ "$table_count" -ge 1 ]]; then
+        log_success "  LiteLLM database initialized with ${table_count} tables"
+        return 0
     else
-        log_error "  Schema verification failed - no tables found"
+        log_error "  LiteLLM database initialization failed - ${table_count:-0} tables found"
         return 1
     fi
     

@@ -24,21 +24,82 @@ ENV_FILE="/mnt/data/${TENANT}/.env"
 source "${SCRIPT_DIR}/3-configure-services.sh"   # ← SOURCES LIBRARY
 
 # ── Helper Functions ────────────────────────────────────────────────
+# Service port mapping for health checks
+declare -A SERVICE_PORTS=(
+    ["postgres"]="5432"
+    ["redis"]="6379"
+    ["qdrant"]="6333"
+    ["litellm"]="4000"
+    ["ollama"]="11434"
+    ["open-webui"]="8081"
+    ["anythingllm"]="3001"
+    ["flowise"]="3000"
+    ["n8n"]="5678"
+    ["codeserver"]="8444"
+    ["openclaw"]="18789"
+)
+
+# Service startup timeouts
+declare -A SERVICE_STARTUP_TIMEOUTS=(
+    ["postgres"]="60"
+    ["redis"]="30"
+    ["qdrant"]="60"
+    ["litellm"]="180"
+    ["ollama"]="120"
+    ["open-webui"]="60"
+    ["anythingllm"]="90"
+    ["flowise"]="60"
+    ["n8n"]="60"
+    ["codeserver"]="30"
+    ["openclaw"]="30"
+)
+
 wait_for_healthy() {
-    local svc="$1"
+    local service="$1"
     local max_wait="${2:-120}"
+    local check_interval="${3:-5}"
     local elapsed=0
-    log_info "Waiting for ${svc} to be healthy (max ${max_wait}s)..."
-    until [[ "$(docker compose -f "/mnt/data/${TENANT}/docker-compose.yml" ps --format "{{.Health}}" "$svc" 2>/dev/null)" == "healthy" ]]; do
-        elapsed=$((elapsed + 5))
-        if [[ $elapsed -ge $max_wait ]]; then
-            log_warning "${svc} not healthy after ${max_wait}s — proceeding anyway"
-            return 0
+    
+    log_info "Waiting for ${service} to be healthy (max ${max_wait}s)..."
+    
+    while [[ $elapsed -lt $max_wait ]]; do
+        # Check Docker health status first
+        local docker_health
+        docker_health="$(docker compose -f "/mnt/data/${TENANT}/docker-compose.yml" ps --format "{{.Health}}" "$service" 2>/dev/null || echo "none")"
+        
+        if [[ "$docker_health" == "healthy" ]]; then
+            # Additional HTTP health check for web services
+            local port="${SERVICE_PORTS[$service]:-}"
+            if [[ -n "$port" ]]; then
+                if docker exec "ai-${TENANT}-${service}-1" \
+                    curl -sf "http://localhost:${port}/health" >/dev/null 2>&1 2>/dev/null || \
+                   docker exec "ai-${TENANT}-${service}-1" \
+                    curl -sf "http://localhost:${port}/" >/dev/null 2>&1 2>/dev/null; then
+                    log_success "${service} is healthy with HTTP check"
+                    return 0
+                fi
+            else
+                # For services without HTTP endpoints, trust Docker health
+                log_success "${service} is healthy"
+                return 0
+            fi
+        elif [[ "$docker_health" == "unhealthy" ]]; then
+            log_error "${service} is unhealthy - checking logs"
+            docker logs "ai-${TENANT}-${service}-1" --tail 20
+            return 1
         fi
-        log_info "  ${svc} starting... (${elapsed}s/${max_wait}s)"
-        sleep 5
+        
+        elapsed=$((elapsed + check_interval))
+        
+        if [[ $((elapsed % 15)) -eq 0 ]]; then
+            log_info "${service} still starting... (${elapsed}s/${max_wait}s)"
+        fi
+        
+        sleep $check_interval
     done
-    log_success "${svc} is healthy"
+    
+    log_error "${service} failed to become healthy within ${max_wait}s"
+    return 1
 }
 
 pull_ollama_models() {
