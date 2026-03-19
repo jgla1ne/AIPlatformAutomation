@@ -462,94 +462,100 @@ EOF
 generate_caddyfile() {
     local out="${CONFIG_DIR}/caddy/Caddyfile"
     mkdir -p "$(dirname "$out")"
-
+    
+    local base_domain="${DOMAIN:-datasquiz.net}"
+    local admin_email="${ADMIN_EMAIL:-admin@${base_domain}}"
+    
     # Choose TLS directive once based on USE_LETSENCRYPT
     local tls_line
     if [[ "${USE_LETSENCRYPT:-false}" == "true" ]]; then
-        tls_line="tls ${ADMIN_EMAIL}"
+        tls_line="tls ${admin_email}"
     else
         tls_line="tls internal"
     fi
-
-    # Write global block — heredoc closed BEFORE conditional appends
+    
+    # Write global block with enhanced configuration
     cat > "$out" <<EOF
 {
     admin 0.0.0.0:2019
-    email ${ADMIN_EMAIL:-admin@${DOMAIN:-localhost}}
+    email ${admin_email}
+    auto_https {
+        ignore_loaded_certs
+    }
+    
+    # Global TLS settings
+    servers {
+        protocol {
+            strict_sni_host
+            max_header_size 5kb
+        }
+    }
+    
+    # Global error pages
+    handle_errors {
+        respond "{http.error.status_code} {http.error.status_text}"
+    }
 }
 EOF
 
-    # Append one block per enabled service — each is a separate cat call
-    [[ "${ENABLE_MONITORING:-false}" == "true" ]] && cat >> "$out" <<EOF
-grafana.${DOMAIN} {
+    # Helper function to add service block with proper headers
+    add_service_block() {
+        local subdomain="$1"
+        local service="$2" 
+        local port="$3"
+        local extra_headers="$4"
+        
+        cat >> "$out" <<EOF
+https://${subdomain}.${base_domain} {
     ${tls_line}
-    reverse_proxy grafana:3000
+    reverse_proxy ${service}:${port} {
+        header_up Host {http.reverse_proxy.upstream.hostport}
+        header_up X-Real-IP {http.request.remote_host}
+        header_up X-Forwarded-For {http.request.remote_addr}
+        header_up X-Forwarded-Proto https
+        ${extra_headers}
+    }
 }
-prometheus.${DOMAIN} {
-    ${tls_line}
-    reverse_proxy prometheus:9090
-}
-EOF
 
-    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && cat >> "$out" <<EOF
-litellm.${DOMAIN} {
-    ${tls_line}
-    reverse_proxy litellm:4000
-}
 EOF
+    }
 
-    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && cat >> "$out" <<EOF
-chat.${DOMAIN} {
-    ${tls_line}
-    reverse_proxy open-webui:8080
-}
-EOF
-
-    [[ "${ENABLE_N8N:-false}" == "true" ]] && cat >> "$out" <<EOF
-n8n.${DOMAIN} {
-    ${tls_line}
-    reverse_proxy n8n:5678
-}
-EOF
-
-    [[ "${ENABLE_FLOWISE:-false}" == "true" ]] && cat >> "$out" <<EOF
-flowise.${DOMAIN} {
-    ${tls_line}
-    reverse_proxy flowise:3000
-}
-EOF
-
-    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && cat >> "$out" <<EOF
-anythingllm.${DOMAIN} {
-    ${tls_line}
-    reverse_proxy anythingllm:3001
-}
-EOF
-
-    [[ "${ENABLE_CODESERVER:-false}" == "true" ]] && cat >> "$out" <<EOF
-codeserver.${DOMAIN} {
-    ${tls_line}
-    reverse_proxy codeserver:8443
-}
-EOF
-
-    # OpenCode - Primary IDE access
-    [[ "${ENABLE_CODESERVER:-false}" == "true" ]] && cat >> "$out" <<EOF
-opencode.${DOMAIN} {
-    ${tls_line}
-    reverse_proxy codeserver:8443
-}
-EOF
-
-    # OpenClaw - routes to Docker service for secure access
-    [[ "${ENABLE_OPENCLAW:-false}" == "true" ]] && cat >> "$out" <<EOF
-openclaw.${DOMAIN} {
-    ${tls_line}
-    reverse_proxy openclaw:8443
-}
-EOF
-
-    log_success "Caddyfile written to ${out}"
+    # Add service blocks with proper configuration
+    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && \
+        add_service_block "litellm" "litellm" "4000" ""
+    
+    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && \
+        add_service_block "chat" "open-webui" "8080" \
+        "header_up Upgrade {http.request.header.Upgrade}
+        header_up Connection {http.request.header.Connection}
+        header_read_timeout 86400"
+    
+    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && \
+        add_service_block "anythingllm" "anythingllm" "3001" ""
+    
+    [[ "${ENABLE_N8N:-false}" == "true" ]] && \
+        add_service_block "n8n" "n8n" "5678" ""
+    
+    [[ "${ENABLE_FLOWISE:-false}" == "true" ]] && \
+        add_service_block "flowise" "flowise" "3000" ""
+    
+    [[ "${ENABLE_CODESERVER:-false}" == "true" ]] && {
+        # Primary IDE access
+        add_service_block "opencode" "codeserver" "8444" ""
+        # Legacy codeserver subdomain
+        add_service_block "codeserver" "codeserver" "8444" ""
+    }
+    
+    [[ "${ENABLE_OPENCLAW:-false}" == "true" ]] && \
+        add_service_block "openclaw" "openclaw" "18789" ""
+    
+    # Monitoring services
+    [[ "${ENABLE_MONITORING:-false}" == "true" ]] && {
+        add_service_block "grafana" "grafana" "3000" ""
+        add_service_block "prometheus" "prometheus" "9090" ""
+    }
+    
+    log_success "Caddyfile written to ${out} with separate server blocks"
 }
 
 generate_prometheus_config() {
