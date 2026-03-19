@@ -1129,11 +1129,9 @@ initialize_litellm_database() {
     done
     log_success "  PostgreSQL is ready"
     
-    # Run Prisma database push from LiteLLM container
+    # Run Prisma database push using compose (ensures correct network)
     log_info "  Running Prisma database migration..."
-    if docker run --rm --network ai-${tenant}_default \
-        -e DATABASE_URL="postgresql://ds-admin:${POSTGRES_PASSWORD}@postgres:5432/litellm" \
-        ghcr.io/berriai/litellm:main-latest \
+    if docker compose -f "$COMPOSE_FILE" run --rm litellm \
         sh -c "cd /app/litellm/proxy && prisma db push --accept-data-loss" \
         >> "$logfile" 2>&1; then
         
