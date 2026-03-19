@@ -1129,10 +1129,10 @@ initialize_litellm_database() {
     done
     log_success "  PostgreSQL is ready"
     
-    # Run Prisma database push using compose (ensures correct network)
+    # Run Prisma database push using compose with entrypoint override
     log_info "  Running Prisma database migration..."
-    if docker compose -f "$COMPOSE_FILE" run --rm litellm \
-        sh -c "cd /app/litellm/proxy && prisma db push --accept-data-loss" \
+    if docker compose -f "$COMPOSE_FILE" run --rm --entrypoint /bin/sh litellm \
+        -c "cd /app/litellm/proxy && prisma db push --accept-data-loss" \
         >> "$logfile" 2>&1; then
         
         log_success "  Prisma migration completed"
