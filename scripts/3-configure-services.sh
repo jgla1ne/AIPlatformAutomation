@@ -1098,8 +1098,8 @@ drop_service_databases() {
 
     # Also flush all LiteLLM Redis keys to remove cached router state
     log_info "  Flushing LiteLLM Redis cache keys..."
-    docker compose -f "$COMPOSE_FILE" exec -T redis \
-        redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning FLUSHDB \
+    docker compose -f "$COMPOSE_FILE" exec redis \
+        redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning FLUSHALL \
         >> "$logfile" 2>&1 \
         && log_success "  Redis cache flushed" \
         || log_warning "  Could not flush Redis — may not be running"
