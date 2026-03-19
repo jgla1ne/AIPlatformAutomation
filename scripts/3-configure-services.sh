@@ -744,16 +744,7 @@ EOF
     depends_on:
       postgres:
         condition: service_healthy
-    command: >
-      sh -c "
-        cd /app &&
-        python -c 'from litellm.proxy.proxy_server import *; import prisma; prisma.Client().connect()' ||
-        litellm --config /app/config.yaml &
-        sleep 10 &&
-        cd /usr/local/lib/python3.11/dist-packages/litellm/proxy &&
-        prisma db push --schema ./schema.prisma --accept-data-loss &&
-        kill %1
-      "
+    command: ["sh", "-c", "cd /app && python -c 'from litellm.proxy.proxy_server import *; import prisma; prisma.Client().connect()' || litellm --config /app/config.yaml & sleep 10 && cd /usr/local/lib/python3.11/dist-packages/litellm/proxy && prisma db push --schema ./schema.prisma --accept-data-loss && kill %1"]
     environment:
       DATABASE_URL: \${LITELLM_DATABASE_URL}
       LITELLM_MASTER_KEY: \${LITELLM_MASTER_KEY}
