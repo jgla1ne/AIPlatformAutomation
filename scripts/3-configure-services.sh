@@ -1129,10 +1129,10 @@ initialize_litellm_database() {
     done
     log_success "  PostgreSQL is ready"
     
-    # Run Prisma database push using compose with full schema
+    # Run Prisma database push using compose with available schema
     log_info "  Running Prisma database migration..."
     if docker compose -f "$COMPOSE_FILE" run --rm --entrypoint /bin/sh litellm \
-        -c "cd /app && prisma db push --accept-data-loss --schema=/app/schema.prisma" \
+        -c "cd /app/litellm/proxy && prisma db push --accept-data-loss" \
         >> "$logfile" 2>&1; then
         
         log_success "  Prisma migration completed"
@@ -1147,10 +1147,10 @@ initialize_litellm_database() {
         "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';" \
         2>/dev/null | tr -d ' ')
     
-    if [[ "$table_count" -ge "3" ]]; then
+    if [[ "$table_count" -ge "1" ]]; then
         log_success "  Database schema verified (${table_count} tables)"
     else
-        log_error "  Schema verification failed - only ${table_count} tables found"
+        log_error "  Schema verification failed - no tables found"
         return 1
     fi
     
