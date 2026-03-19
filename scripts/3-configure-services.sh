@@ -609,6 +609,7 @@ EOF
       PRISMA_DISABLE_WARNINGS: "true"
     volumes:
       - ${CONFIG_DIR}/litellm/config.yaml:/app/config.yaml:ro
+      - ${CONFIG_DIR}/litellm/config.yaml:/app/proxy_server_config.yaml:ro
       - ${DATA_DIR}/litellm:/root/.cache
     ports:
       - "\${PORT_LITELLM:-4000}:4000"
