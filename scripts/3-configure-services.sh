@@ -321,7 +321,9 @@ EOF
 litellm_settings:
   drop_params: true
   set_verbose: false
-  cache: false
+  cache:
+    type: "simple"
+    disabled: true
   store_model_in_db: false
 router_settings:
   routing_strategy: ${LITELLM_ROUTING_STRATEGY:-least-busy}
@@ -613,7 +615,7 @@ EOF
     ports:
       - "\${PORT_LITELLM:-4000}:4000"
     entrypoint: ["/bin/sh", "-c"]
-    command: ["prisma generate && litellm --config /litellm-config.yaml --port 4000"]
+    command: ["prisma generate --schema /app/schema.prisma && litellm --config /litellm-config.yaml --port 4000"]
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:4000/health/liveliness || exit 1"]
       interval: 30s
