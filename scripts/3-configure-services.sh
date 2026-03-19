@@ -739,6 +739,7 @@ EOF
       start_period: 90s
 EOF
 
+    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
   litellm-prisma-migrate:
     image: ghcr.io/berriai/litellm:main-latest
     depends_on:
