@@ -612,6 +612,7 @@ EOF
     volumes:
       - ${CONFIG_DIR}/litellm/config.yaml:/litellm-config.yaml:ro
       - ${DATA_DIR}/litellm:/root/.cache
+      - ${CONFIG_DIR}/litellm/schema.prisma:/app/schema.prisma:ro
     ports:
       - "\${PORT_LITELLM:-4000}:4000"
     entrypoint: ["litellm"]
@@ -661,7 +662,7 @@ EOF
     ports:
       - "\${PORT_OLLAMA:-11434}:11434"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/version || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
