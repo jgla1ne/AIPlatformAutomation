@@ -128,14 +128,14 @@ main() {
         docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" \
             rm -sf litellm >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 || true
 
-        # Always wipe the Prisma file cache (small, fast, prevents schema mismatch)
-        log_info "Clearing LiteLLM Prisma file cache..."
-        rm -rf "${DATA_DIR}/litellm"
-        mkdir -p "${DATA_DIR}/litellm"
-        chown -R 1000:"${TENANT_GID:-1001}" "${DATA_DIR}/litellm"
-
-        # --force: also drop/recreate the litellm Postgres database
+        # --force only: wipe Prisma cache and reset litellm database (clean slate)
         if [[ "$FORCE_REDEPLOY" == "true" ]]; then
+            log_info "  --force: clearing LiteLLM Prisma file cache..."
+            rm -rf "${DATA_DIR}/litellm"
+            mkdir -p "${DATA_DIR}/litellm"
+            chown -R 1000:"${TENANT_GID:-1001}" "${DATA_DIR}/litellm"
+            log_success "  Prisma cache cleared"
+
             log_info "  --force: dropping and recreating litellm database..."
             docker compose -f "$COMPOSE_FILE" exec -T postgres \
                 psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \

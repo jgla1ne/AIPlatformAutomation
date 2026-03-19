@@ -609,11 +609,10 @@ EOF
       PRISMA_DISABLE_WARNINGS: "true"
     volumes:
       - ${CONFIG_DIR}/litellm/config.yaml:/app/config.yaml:ro
-      - ${CONFIG_DIR}/litellm/config.yaml:/app/proxy_server_config.yaml:ro
       - ${DATA_DIR}/litellm:/root/.cache
     ports:
       - "\${PORT_LITELLM:-4000}:4000"
-    command: ["--config", "/app/config.yaml", "--port", "4000", "--detailed_debug"]
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:4000/health/liveliness || exit 1"]
       interval: 30s
@@ -1098,7 +1097,7 @@ drop_service_databases() {
 
     # Also flush all LiteLLM Redis keys to remove cached router state
     log_info "  Flushing LiteLLM Redis cache keys..."
-    docker compose -f "$COMPOSE_FILE" exec redis \
+    docker compose -f "$COMPOSE_FILE" exec -T redis \
         redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning FLUSHALL \
         >> "$logfile" 2>&1 \
         && log_success "  Redis cache flushed" \
