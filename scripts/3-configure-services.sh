@@ -327,6 +327,7 @@ litellm_settings:
     host: redis
     port: 6379
     password: os.environ/REDIS_PASSWORD
+  store_model_in_db: false
 router_settings:
   routing_strategy: ${LITELLM_ROUTING_STRATEGY:-least-busy}
 EOF
@@ -1038,8 +1039,8 @@ provision_databases() {
     local elapsed=0
     
     # Wait for postgres to accept connections
-    until docker compose -f "$COMPOSE_FILE" exec -T postgres \
-        pg_isready -U "${POSTGRES_USER}" -q 2>/dev/null; do
+    until docker compose -f "$COMPOSE_FILE" exec postgres \
+        pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -q 2>/dev/null; do
         elapsed=$((elapsed + 5))
         if [[ $elapsed -ge $max_wait ]]; then
             log_error "PostgreSQL not ready after ${max_wait}s"
@@ -1055,16 +1056,16 @@ provision_databases() {
     local databases=("litellm" "openwebui" "n8n" "flowise")
     for db in "${databases[@]}"; do
         local exists
-        exists=$(docker compose -f "$COMPOSE_FILE" exec -T postgres \
-            psql -U "${POSTGRES_USER}" -tAc \
+        exists=$(docker compose -f "$COMPOSE_FILE" exec postgres \
+            psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -tAc \
             "SELECT 1 FROM pg_database WHERE datname='${db}'" 2>/dev/null || echo "")
         
         if [[ "$exists" == "1" ]]; then
             log_info "Database '${db}' already exists — skipping"
         else
             log_info "Creating database '${db}'..."
-            docker compose -f "$COMPOSE_FILE" exec -T postgres \
-                psql -U "${POSTGRES_USER}" \
+            docker compose -f "$COMPOSE_FILE" exec postgres \
+                psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
                 -c "CREATE DATABASE \"${db}\" OWNER \"${POSTGRES_USER}\";" \
                 >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 \
                 && log_success "Database '${db}' created" \

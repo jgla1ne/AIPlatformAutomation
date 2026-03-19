@@ -107,12 +107,42 @@ main() {
         pull_ollama_models
     }
 
-    # 5. AI gateway — force-recreate to pick up freshly generated config
+    # 5. AI gateway — clean state before deploy to prevent stale DB config
     [[ "${ENABLE_LITELLM:-false}"    == "true" ]] && {
+
+        log_info "Resetting LiteLLM state (removing stale DB config and Prisma cache)..."
+
+        # Stop and remove container first
         docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" \
             rm -sf litellm >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 || true
+
+        # Drop and recreate litellm database to remove persisted Azure/stale models
+        # Postgres must be healthy at this point (provision_databases already ran)
+        log_info "  Dropping litellm database (removes persisted model config)..."
+        docker compose -f "$COMPOSE_FILE" exec postgres \
+            psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+            -c "DROP DATABASE IF EXISTS litellm;" \
+            >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 \
+            && log_info "  litellm database dropped" \
+            || log_warning "  Could not drop litellm database — may not exist yet"
+
+        log_info "  Recreating litellm database (clean slate for Prisma migration)..."
+        docker compose -f "$COMPOSE_FILE" exec postgres \
+            psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+            -c "CREATE DATABASE litellm OWNER \"${POSTGRES_USER}\";" \
+            >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 \
+            && log_success "  litellm database recreated" \
+            || log_warning "  Could not recreate litellm database"
+
+        # Wipe Prisma client cache — forces fresh schema generation
+        log_info "  Clearing Prisma cache at ${DATA_DIR}/litellm..."
+        rm -rf "${DATA_DIR}/litellm"
+        mkdir -p "${DATA_DIR}/litellm"
+        chown -R 1000:"${TENANT_GID:-1001}" "${DATA_DIR}/litellm"
+        log_success "  LiteLLM state reset complete"
+
         deploy_service litellm
-        wait_for_healthy litellm 180   # Prisma migration takes 45-90s
+        wait_for_healthy litellm 180   # Prisma migration takes 45-90s on fresh DB
     }
 
     # 6. Monitoring — independent of AI services
