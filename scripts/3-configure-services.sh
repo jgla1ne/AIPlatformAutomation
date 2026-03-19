@@ -608,11 +608,11 @@ EOF
       LITELLM_TELEMETRY: "False"
       PRISMA_DISABLE_WARNINGS: "true"
     volumes:
-      - ${CONFIG_DIR}/litellm/config.yaml:/app/config.yaml:ro
+      - ${CONFIG_DIR}/litellm/config.yaml:/litellm-config.yaml:ro
       - ${DATA_DIR}/litellm:/root/.cache
     ports:
       - "\${PORT_LITELLM:-4000}:4000"
-    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    command: ["--config", "/litellm-config.yaml", "--port", "4000"]
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:4000/health/liveliness || exit 1"]
       interval: 30s
