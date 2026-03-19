@@ -149,15 +149,6 @@ main() {
                 || log_warning "  Could not reset litellm database"
         fi
 
-        # Initialize LiteLLM database (Mission Control)
-        log_info "Initializing LiteLLM database..."
-        if initialize_litellm_database "$TENANT"; then
-            log_success "LiteLLM database initialized successfully"
-        else
-            log_error "LiteLLM database initialization failed"
-            return 1
-        fi
-
         deploy_service litellm
         wait_for_healthy litellm 180
     }
