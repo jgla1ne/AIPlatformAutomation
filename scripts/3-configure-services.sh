@@ -58,6 +58,8 @@ prepare_directories() {
         "${DATA_DIR}/tailscale" \
         "${DATA_DIR}/openclaw" \
         "${DATA_DIR}/codeserver" \
+        "${DATA_DIR}/gdrive" \
+        "${CONFIG_DIR}/rclone" \
         "${CONFIG_DIR}/litellm" \
         "${CONFIG_DIR}/postgres" \
         "${CONFIG_DIR}/caddy/data" \
@@ -80,7 +82,8 @@ prepare_directories() {
         "${DATA_DIR}/anythingllm" \
         "${DATA_DIR}/tailscale" \
         "${DATA_DIR}/openclaw" \
-        "${DATA_DIR}/codeserver"
+        "${DATA_DIR}/codeserver" \
+        "${DATA_DIR}/gdrive"
     
     # Config directories owned by tenant for script access
     chown -R "${TENANT_UID:-1001}:${TENANT_GID:-1001}" "${CONFIG_DIR}"
@@ -245,6 +248,7 @@ ENABLE_N8N=${ENABLE_N8N:-false}
 ENABLE_FLOWISE=${ENABLE_FLOWISE:-false}
 ENABLE_ANYTHINGLLM=${ENABLE_ANYTHINGLLM:-false}
 ENABLE_QDRANT=${ENABLE_QDRANT:-false}
+ENABLE_RCLONE=${ENABLE_RCLONE:-false}
 ENABLE_MONITORING=${ENABLE_MONITORING:-false}
 ENABLE_TAILSCALE=${ENABLE_TAILSCALE:-false}
 
@@ -657,6 +661,7 @@ volumes:
   postgres_data:
   prometheus_data:
   grafana_data:
+  gdrive_cache:
 
 services:
 
@@ -817,6 +822,47 @@ EOF
       timeout: 5s
       retries: 5
       start_period: 60s   # was 30s — needs longer on fresh volume
+EOF
+
+    [[ "${ENABLE_RCLONE:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
+  rclone:
+    image: rclone/rclone:latest
+    container_name: ai-${TENANT}-rclone-1
+    restart: unless-stopped
+    cap_add:
+      - SYS_ADMIN
+    devices:
+      - /dev/fuse
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - ${DATA_DIR}/gdrive:/gdrive:shared
+      - ${CONFIG_DIR}/rclone:/config/rclone:ro
+      - gdrive_cache:/cache
+    environment:
+      RCLONE_CONFIG: /config/rclone/rclone.conf
+      RCLONE_CACHE_DIR: /cache
+    command: >
+      sh -c "
+        echo 'Starting RClone sync daemon...' &&
+        while true; do
+          rclone sync gdrive:/ /gdrive \\
+            --progress \\
+            --transfers=4 \\
+            --checkers=8 \\
+            --vfs-cache-mode writes \\
+            --poll-interval 5m \\
+            --log-file /dev/stdout \\
+            --log-level INFO
+          sleep 300
+        done
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f rclone || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 EOF
 
     [[ "${ENABLE_MONITORING:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
