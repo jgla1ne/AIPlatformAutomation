@@ -614,8 +614,8 @@ EOF
       - ${DATA_DIR}/litellm:/root/.cache
     ports:
       - "\${PORT_LITELLM:-4000}:4000"
-    entrypoint: ["/bin/sh", "-c"]
-    command: ["cd /app/litellm/proxy && prisma generate && cd /app && litellm --config /litellm-config.yaml --port 4000"]
+    entrypoint: ["litellm"]
+    command: ["--config", "/litellm-config.yaml", "--port", "4000"]
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:4000/health/liveliness || exit 1"]
       interval: 30s
@@ -1107,6 +1107,56 @@ drop_service_databases() {
         || log_warning "  Could not flush Redis — may not be running"
 
     log_success "Service databases dropped and Redis flushed"
+}
+
+# ─── LiteLLM Database Initialization (Mission Control) ──────────────────────
+initialize_litellm_database() {
+    local tenant="${1:-datasquiz}"
+    local logfile="${LOGS_DIR}/litellm-init-$(date +%Y%m%d-%H%M%S).log"
+    
+    log_info "Initializing LiteLLM database for tenant: ${tenant}"
+    
+    # Wait for PostgreSQL to be healthy
+    log_info "  Waiting for PostgreSQL to be ready..."
+    local attempts=0
+    while ! docker exec ai-${tenant}-postgres-1 pg_isready -U ds-admin -d litellm >/dev/null 2>&1; do
+        attempts=$((attempts + 1))
+        if [[ $attempts -gt 30 ]]; then
+            log_error "  PostgreSQL not ready after 60 seconds"
+            return 1
+        fi
+        sleep 2
+    done
+    log_success "  PostgreSQL is ready"
+    
+    # Run Prisma database push from LiteLLM container
+    log_info "  Running Prisma database migration..."
+    if docker run --rm --network ai-${tenant}_default \
+        -e DATABASE_URL="postgresql://ds-admin:${POSTGRES_PASSWORD}@postgres:5432/litellm" \
+        ghcr.io/berriai/litellm:main-latest \
+        sh -c "cd /app/litellm/proxy && prisma db push --accept-data-loss" \
+        >> "$logfile" 2>&1; then
+        
+        log_success "  Prisma migration completed"
+    else
+        log_error "  Prisma migration failed - check ${logfile}"
+        return 1
+    fi
+    
+    # Verify tables were created
+    log_info "  Verifying database schema..."
+    local table_count=$(docker exec ai-${tenant}-postgres-1 psql -U ds-admin -d litellm -t -c \
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';" \
+        2>/dev/null | tr -d ' ')
+    
+    if [[ "$table_count" -ge "3" ]]; then
+        log_success "  Database schema verified (${table_count} tables)"
+    else
+        log_error "  Schema verification failed - only ${table_count} tables found"
+        return 1
+    fi
+    
+    log_success "LiteLLM database initialization complete"
 }
 
 # ─── Log Management ────────────────────────────────────────────────────
