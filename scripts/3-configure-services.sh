@@ -617,7 +617,7 @@ EOF
     entrypoint: ["litellm"]
     command: ["--config", "/litellm-config.yaml", "--port", "4000"]
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:4000/ || exit 1"]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/').read()\" || exit 1"]
       interval: 30s
       timeout: 15s
       retries: 5
@@ -661,7 +661,7 @@ EOF
     ports:
       - "\${PORT_OLLAMA:-11434}:11434"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:11434/api/version > /dev/null || exit 1"]
+      test: ["CMD-SHELL", "timeout 5 bash -c 'echo > /dev/tcp/localhost/11434' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -679,7 +679,7 @@ EOF
     ports:
       - "6333:6333"
     healthcheck:
-      test: ["CMD-SHELL","wget -qO- http://localhost:6333/collections > /dev/null || exit 1"]
+      test: ["CMD-SHELL","timeout 5 bash -c 'echo > /dev/tcp/localhost/6333' || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
