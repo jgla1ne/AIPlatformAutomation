@@ -89,6 +89,100 @@ prepare_directories() {
     log_success "Directories ready with correct UID ownership"
 }
 
+# ── Environment Validation ──────────────────────────────────────────────────────
+validate_environment() {
+    local errors=0
+    local warnings=0
+    
+    log_info "Validating environment configuration..."
+    
+    # Critical database consistency checks
+    if [[ -z "${POSTGRES_PASSWORD:-}" ]]; then
+        log_error "POSTGRES_PASSWORD is required"
+        ((errors++))
+    fi
+    
+    if [[ -z "${LITELLM_MASTER_KEY:-}" ]]; then
+        log_error "LITELLM_MASTER_KEY is required"
+        ((errors++))
+    fi
+    
+    # Service URL consistency
+    local base_domain="${BASE_DOMAIN:-datasquiz.net}"
+    
+    # Generate consistent service URLs
+    export LITELM_URL="https://litellm.${base_domain}"
+    export OPENWEBUI_URL="https://chat.${base_domain}"
+    export ANYTHINGLLM_URL="https://anythingllm.${base_domain}"
+    export CODESERVER_URL="https://opencode.${base_domain}"
+    export N8N_URL="https://n8n.${base_domain}"
+    export FLOWISE_URL="https://flowise.${base_domain}"
+    export OPENCLAW_URL="https://openclaw.${base_domain}"
+    
+    # API key consistency for downstream services
+    export OPENWEBUI_OPENAI_API_KEY="${LITELLM_MASTER_KEY}"
+    export ANYTHINGLLM_LITELLM_KEY="${LITELLM_MASTER_KEY}"
+    export FLOWISE_LITELLM_KEY="${LITELLM_MASTER_KEY}"
+    export N8N_LITELLM_KEY="${LITELLM_MASTER_KEY}"
+    
+    # Database URL validation
+    if [[ -z "${LITELLM_DATABASE_URL:-}" ]]; then
+        log_error "LITELLM_DATABASE_URL is required"
+        ((errors++))
+    else
+        # Validate URL format
+        if [[ ! "${LITELLM_DATABASE_URL}" =~ ^postgresql:// ]]; then
+            log_error "LITELLM_DATABASE_URL must start with postgresql://"
+            ((errors++))
+        fi
+    fi
+    
+    # Redis configuration validation
+    if [[ -z "${REDIS_PASSWORD:-}" ]]; then
+        log_warning "REDIS_PASSWORD not set - Redis will be open"
+        ((warnings++))
+    fi
+    
+    # API key validation (optional but recommended)
+    local api_keys=("OPENAI_API_KEY" "ANTHROPIC_API_KEY" "GROQ_API_KEY" "GOOGLE_API_KEY" "OPENROUTER_API_KEY")
+    local available_models=0
+    
+    for key in "${api_keys[@]}"; do
+        if [[ -n "${!key:-}" && "${!key}" != "" ]]; then
+            ((available_models++))
+        fi
+    done
+    
+    if [[ $available_models -eq 0 ]]; then
+        log_warning "No external API keys configured - only local models will be available"
+        ((warnings++))
+    fi
+    
+    # Port validation
+    local ports=("PORT_LITELLM" "PORT_OPENWEBUI" "PORT_ANYTHINGLLM" "PORT_N8N" "PORT_FLOWISE" "PORT_CODESERVER")
+    for port_var in "${ports[@]}"; do
+        local port_value="${!port_var:-}"
+        if [[ -n "$port_value" ]]; then
+            if [[ ! "$port_value" =~ ^[0-9]+$ ]] || [[ "$port_value" -lt 1024 ]] || [[ "$port_value" -gt 65535 ]]; then
+                log_error "Invalid port for ${port_var}: ${port_value}"
+                ((errors++))
+            fi
+        fi
+    done
+    
+    # Report validation results
+    if [[ $errors -gt 0 ]]; then
+        log_error "Environment validation failed with $errors errors and $warnings warnings"
+        return 1
+    elif [[ $warnings -gt 0 ]]; then
+        log_warning "Environment validation passed with $warnings warnings"
+        return 0
+    else
+        log_success "Environment validation passed - ${available_models} external models available"
+        return 0
+    fi
+}
+
 # ── Environment File Generation (Primitive Variables First) ───────────────────
 generate_env() {
     log_info "Writing .env to ${ENV_FILE}..."
@@ -528,6 +622,13 @@ EOF
 # Single entry point for all config generation
 generate_configs() {
     log_info "Generating all configuration files..."
+    
+    # Validate environment before generating configs
+    validate_environment || {
+        log_error "Environment validation failed - cannot proceed with config generation"
+        return 1
+    }
+    
     generate_postgres_init
     generate_litellm_config
     generate_caddyfile
