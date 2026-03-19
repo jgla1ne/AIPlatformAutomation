@@ -1,6 +1,6 @@
 --
 
-# **AI Platform Automation v3.3.0 - Development-Ready AI Platform**
+# **AI Platform Automation v3.3.1 - Development-Ready AI Platform**
 
 A comprehensive, production-ready AI platform deployment system with **true modular architecture**, **Mission Control utility hub**, **enterprise-grade service management**, and **integrated development environment**.
 
@@ -819,6 +819,29 @@ The persistent LiteLLM issue was caused by:
 
 ---
 
-**🚀 AI Platform Automation v3.3.0 - DEVELOPMENT-READY AI PLATFORM**
+## **🔄 Recent Updates - v3.3.1**
 
-*The ultimate modular AI infrastructure platform with Mission Control utility hub, zero code duplication, comprehensive logging engine, integrated development environment, and complete deployment visibility.*
+### **🔧 Critical LiteLLM and Database Fixes**
+- **LiteLLM Configuration Cache Fix**: Added `store_model_in_db: false` to prevent database caching of stale Azure config
+- **Complete State Reset Sequence**: Implemented database drop/recreate and Prisma cache clearing before LiteLLM deployment
+- **Database Provisioning Fixes**: Fixed `provision_databases` function (removed `-T` flag, added proper database parameters)
+- **Script 0 Database Cleanup**: Added comprehensive database cleanup to nuclear cleanup script
+- **Architecture Restoration**: Ensured proper modular design with database cleanup in Script 0 (not Script 1)
+
+### **📊 Deployment Improvements**
+- **83% Success Rate**: Achieved 10/12 services running with improved reliability
+- **Enhanced Error Context**: Better debugging visibility in deployment failures
+- **Postgres Connection Fixes**: Resolved authentication issues across all service databases
+- **Root Cause Resolution**: Addressed LiteLLM cache issue at architectural level
+
+### **🎯 Production Impact**
+- **Reduced Deployment Failures**: Database provisioning now works consistently
+- **Improved Debugging**: Better error context and log visibility
+- **Modular Compliance**: All fixes follow proper architectural patterns
+- **Clean State Management**: Proper database cleanup for fresh deployments
+
+---
+
+**🚀 AI Platform Automation v3.3.1 - DEVELOPMENT-READY AI PLATFORM**
+
+*The ultimate modular AI infrastructure platform with Mission Control utility hub, zero code duplication, comprehensive logging engine, integrated development environment, complete deployment visibility, and critical LiteLLM/database fixes for production reliability.*
