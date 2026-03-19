@@ -358,6 +358,7 @@ EOF
     cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: "sqlite:///tmp/litellm.db"
 EOF
     log_success "LiteLLM config written to ${CONFIG_DIR}/litellm/config.yaml"
 }
