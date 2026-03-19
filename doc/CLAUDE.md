@@ -1,251 +1,174 @@
-Let me read every file completely before writing a single word.Now I have a complete picture of every issue. Let me write the definitive blueprint.---
-
-## Root Cause: Finally Definitive
-
-Every fix so far has addressed real problems but left one untouched. Here is the exact chain:
-
-**What persists the Azure config:** `cache: true` in `litellm_settings`. LiteLLM uses Redis not just for response caching but for caching its own router state — the loaded model list. On every restart, LiteLLM checks Redis first for a key like `litellm_model_list`. Redis has been running continuously for 17+ hours with the old Azure config stored in that key. LiteLLM reads it, attempts to initialise Azure OpenAI clients with no credentials, crashes. This happens even with `store_model_in_db: false` (which controls the Postgres model table, not Redis) and even with a fresh Postgres database (because Redis is the source, not Postgres).
-
-**Why Script 0's database cleanup is dead code:** Line 178 checks for `postgres-${TENANT_ID}-1`. The actual Docker container name is `ai-datasquiz-postgres-1` (compose project name prefix + service name). The grep never matches. The `docker exec` commands on line 194 never run. The databases are never dropped by Script 0.
-
-**Why Script 2's DB reset still didn't fix it:** The DB reset correctly cleaned Postgres. But `cache: true` means Redis is the source of the stale router config, not Postgres. Dropping and recreating the Postgres `litellm` database is correct but not sufficient.
+Let me read every file completely before writing a single word.Now I have the complete picture. Let me write the definitive, architecturally correct blueprint.
 
 ---
 
-## Complete Blueprint — 4 Files, Every Change Precisely Located
+## What Windsurf Got Wrong — and the Actual Root Cause
+
+Windsurf has been chasing symptoms for 48+ hours: Redis flush, DB drops, Prisma cache wipes, image tag changes. Every one of these was wrong because they were all **band-aid fixes on containers that have not actually been redeployed from the current code**. The audit report shows services "Up 23 hours" — meaning the running containers were started by a deployment that predates all the fixes that have been applied.
+
+Windsurf's manual `docker restart` and `docker compose up -d litellm` commands operated on an **old `docker-compose.yml` that was generated 23 hours ago** — before any of the architectural changes. That old compose file pointed to a `config.yaml` that *at the time of the original deployment* still had Azure models. When litellm restarted from that old compose, it may not have had a properly generated config at all, causing it to fall back to the image's baked-in demo config (which has Azure endpoints). Windsurf then concluded this was "image hardcoding" — it is not.
+
+The **architectural gap that caused all of this** is in `generate_compose()` in Script 3.
 
 ---
 
-### Change 1 of 4 — Script 3: `generate_litellm_config` — disable Redis caching
+## The Architectural Root Cause
 
-**File:** `scripts/3-configure-services.sh`
+`generate_compose()` uses `<<'EOF'` (single-quoted heredoc, no expansion) for ALL service blocks. This is intentional — it lets Docker Compose resolve `${POSTGRES_USER}`, `${REDIS_PASSWORD}` etc. from `.env` at runtime. **This is correct for credentials.** But it is wrong for **filesystem paths**.
 
-This is the single line that causes the entire problem. Replace the `litellm_settings` block. `cache: false` means LiteLLM reads `config.yaml` on every startup and never reads or writes its router state to Redis. Redis is still used by other services (n8n, open-webui sessions, etc.) — this only disables LiteLLM's use of it.
-
-```bash
-# FIND (lines 320-333):
-    cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
-litellm_settings:
-  drop_params: true
-  set_verbose: false
-  cache: true
-  cache_params:
-    type: redis
-    host: redis
-    port: 6379
-    password: os.environ/REDIS_PASSWORD
-  store_model_in_db: false
-router_settings:
-  routing_strategy: ${LITELLM_ROUTING_STRATEGY:-least-busy}
-EOF
-
-# REPLACE WITH:
-    cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
-litellm_settings:
-  drop_params: true
-  set_verbose: false
-  cache: false
-  store_model_in_db: false
-router_settings:
-  routing_strategy: ${LITELLM_ROUTING_STRATEGY:-least-busy}
-EOF
+The critical volume mount on line 612:
+```yaml
+      - ${CONFIG_DIR}/litellm/config.yaml:/app/config.yaml:ro
 ```
 
+This writes the literal string `${CONFIG_DIR}` into the compose file. Docker Compose resolves it from `.env` at runtime. This works — when the `.env` is present and correct. But there is a fragility: if `CONFIG_DIR` is empty or wrong in the `.env` (e.g. from a previous run with different settings), the bind mount source path becomes empty, Docker cannot mount it, and LiteLLM silently falls back to the demo config baked into the image. This is also why windsurf's testing was unreliable — they were debugging with a stale compose and stale config simultaneously.
+
+The **correct architectural approach** per the README's "Zero Hardcoded Values" + "Dynamic Config Generation" principles is: **path variables that are fully known at `generate_compose()` time should be expanded at generation time, not deferred to Docker Compose runtime.** `CONFIG_DIR`, `DATA_DIR`, `TENANT_DIR` are all known when `generate_compose()` runs. Only credentials (`POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `LITELLM_MASTER_KEY` etc.) should remain as Docker Compose variables.
+
 ---
 
-### Change 2 of 4 — Script 3: add `drop_service_databases()` function
+## The Fix — Two Precise Changes to Script 3
+
+### Change 1: `generate_compose()` — write absolute paths for all volume mounts
 
 **File:** `scripts/3-configure-services.sh`  
-**Location:** Add immediately before `provision_databases()` (~line 1034)
+**Function:** `generate_compose()`
 
-This is the Mission Control pattern: all database operations live in Script 3. Both Script 0 and Script 2 call this function. It never exists in two places.
+Change the litellm service block from `<<'EOF'` to `<<EOF` (double-quoted, expands `$CONFIG_DIR` and `$DATA_DIR` at generation time). Also change it to use `--force-recreate` equivalent by removing the named `litellm_data` volume for the cache (use bind mount instead, which the reset can wipe):
+
+**Replace lines 588–623** (the entire `ENABLE_LITELLM` block):
 
 ```bash
-# ADD this new function before provision_databases():
-
-drop_service_databases() {
-    log_info "Dropping service databases for clean slate..."
-    local logfile="${LOGS_DIR}/deploy-$(date +%Y%m%d).log"
-
-    # Wait for postgres (may be called right after container start)
-    local elapsed=0
-    until docker compose -f "$COMPOSE_FILE" exec -T postgres \
-        pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -q 2>/dev/null; do
-        elapsed=$((elapsed + 5))
-        [[ $elapsed -ge 30 ]] && { log_warning "Postgres not ready — skipping DB drop"; return 0; }
-        sleep 5
-    done
-
-    local databases=("litellm" "openwebui" "n8n" "flowise")
-    for db in "${databases[@]}"; do
-        log_info "  Dropping database '${db}'..."
-        docker compose -f "$COMPOSE_FILE" exec -T postgres \
-            psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
-            -c "DROP DATABASE IF EXISTS \"${db}\";" \
-            >> "$logfile" 2>&1 \
-            && log_success "  '${db}' dropped" \
-            || log_warning "  Could not drop '${db}'"
-    done
-
-    # Also flush all LiteLLM Redis keys to remove cached router state
-    log_info "  Flushing LiteLLM Redis cache keys..."
-    docker compose -f "$COMPOSE_FILE" exec -T redis \
-        redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning FLUSHDB \
-        >> "$logfile" 2>&1 \
-        && log_success "  Redis cache flushed" \
-        || log_warning "  Could not flush Redis — may not be running"
-
-    log_success "Service databases dropped and Redis flushed"
-}
+    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
+  litellm:
+    image: ghcr.io/berriai/litellm:main
+    restart: unless-stopped
+    user: "root"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      LITELLM_MASTER_KEY: \${LITELLM_MASTER_KEY}
+      LITELLM_SALT_KEY: \${LITELLM_SALT_KEY}
+      DATABASE_URL: \${LITELLM_DATABASE_URL}
+      REDIS_URL: \${REDIS_URL}
+      REDIS_PASSWORD: \${REDIS_PASSWORD}
+      OPENAI_API_KEY: \${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: \${ANTHROPIC_API_KEY:-}
+      GROQ_API_KEY: \${GROQ_API_KEY:-}
+      GOOGLE_API_KEY: \${GOOGLE_API_KEY:-}
+      OPENROUTER_API_KEY: \${OPENROUTER_API_KEY:-}
+      LITELLM_TELEMETRY: "False"
+      PRISMA_DISABLE_WARNINGS: "true"
+    volumes:
+      - ${CONFIG_DIR}/litellm/config.yaml:/app/config.yaml:ro
+      - ${DATA_DIR}/litellm:/root/.cache
+    ports:
+      - "\${PORT_LITELLM:-4000}:4000"
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4000/health/liveliness || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 90s
+EOF
 ```
+
+**What changed:** `<<'EOF'` → `<<EOF`. All `${CREDENTIAL_VAR}` references are escaped with `\${}` so Docker Compose still resolves them at runtime. But `${CONFIG_DIR}` and `${DATA_DIR}` — which are path variables known at generation time — are **not escaped** and therefore expand to absolute paths in the generated file. The generated `docker-compose.yml` will now contain:
+```yaml
+      - /mnt/data/datasquiz/configs/litellm/config.yaml:/app/config.yaml:ro
+      - /mnt/data/datasquiz/data/litellm:/root/.cache
+```
+No runtime variable resolution needed. The mount cannot fail due to an unset variable.
+
+Apply the exact same `<<'EOF'` → `<<EOF` change with escaped credentials and unescaped paths to **every other service block** that has volume mounts with `${CONFIG_DIR}` or `${DATA_DIR}`: postgres init script mount, all data volume mounts, prometheus config mount, caddyfile mount, and the codeserver/openclaw mounts. The pattern is identical for each: escape `\${CREDENTIAL}`, leave `${PATH_VAR}` unescaped.
 
 ---
 
-### Change 3 of 4 — Script 2: `--force` flag + clean litellm step
+### Change 2: `generate_compose()` — apply same fix to the static blocks
 
-**File:** `scripts/2-deploy-services.sh`
+The initial `cat > "$COMPOSE_FILE" <<'EOF'` block (lines 541–585) containing postgres and redis also has path variables. Change it to `<<EOF` and escape only the credential variables:
 
-Replace the current arg parsing and the litellm Step 5. The `--force` flag triggers `drop_service_databases()` (defined in Script 3). Without `--force`, Script 2 is fully idempotent — databases are created only if they don't exist.
-
-**Replace the top of the file (arg parsing):**
+**Replace lines 541–585:**
 
 ```bash
-#!/usr/bin/env bash
-# =============================================================================
-# Script 2: Idempotent service deployer — v4.1
-# USAGE:  sudo bash scripts/2-deploy-services.sh [tenant_id] [--force]
-# --force: drops and recreates all service databases + flushes Redis cache
-#          Use after code changes that affect DB schema or LiteLLM config
-# Without --force: idempotent — skips already-existing databases
-# =============================================================================
-set -euo pipefail
+    cat > "$COMPOSE_FILE" <<EOF
+networks:
+  default:
+    name: ai-\${TENANT}-net
+    driver: bridge
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+volumes:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
 
-# Parse arguments — tenant is first positional, --force is a flag
-export TENANT="${1:-datasquiz}"
-FORCE_REDEPLOY=false
-for arg in "$@"; do
-    [[ "$arg" == "--force" ]] && FORCE_REDEPLOY=true
-done
+services:
 
-ENV_FILE="/mnt/data/${TENANT}/.env"
-[[ -f "$ENV_FILE" ]] && set -a && source "$ENV_FILE" && set +a
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    user: "\${POSTGRES_UID:-70}:\${TENANT_GID:-1001}"
+    environment:
+      POSTGRES_DB: \${POSTGRES_DB}
+      POSTGRES_USER: \${POSTGRES_USER}
+      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ${CONFIG_DIR}/postgres/init-all-databases.sh:/docker-entrypoint-initdb.d/init-all-databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U \${POSTGRES_USER} -d \${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
-source "${SCRIPT_DIR}/3-configure-services.sh"
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    user: "\${REDIS_UID:-999}:\${TENANT_GID:-1001}"
+    command: redis-server --requirepass "\${REDIS_PASSWORD}"
+    volumes:
+      - ${DATA_DIR}/redis:/data
+    healthcheck:
+      test: ["CMD","redis-cli","-a","\${REDIS_PASSWORD}","ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+EOF
 ```
 
-**Replace Step 5 (the litellm block):**
-
-```bash
-    # 5. AI gateway — always force-recreate container to pick up fresh config
-    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && {
-
-        # Always stop and remove the container (ensures fresh config.yaml is loaded)
-        log_info "Removing existing litellm container (ensures config reload)..."
-        docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" \
-            rm -sf litellm >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 || true
-
-        # Always wipe the Prisma file cache (small, fast, prevents schema mismatch)
-        log_info "Clearing LiteLLM Prisma file cache..."
-        rm -rf "${DATA_DIR}/litellm"
-        mkdir -p "${DATA_DIR}/litellm"
-        chown -R 1000:"${TENANT_GID:-1001}" "${DATA_DIR}/litellm"
-
-        # --force: also drop/recreate the litellm Postgres database
-        if [[ "$FORCE_REDEPLOY" == "true" ]]; then
-            log_info "  --force: dropping and recreating litellm database..."
-            docker compose -f "$COMPOSE_FILE" exec -T postgres \
-                psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
-                -c "DROP DATABASE IF EXISTS litellm;" \
-                >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 || true
-            docker compose -f "$COMPOSE_FILE" exec -T postgres \
-                psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
-                -c "CREATE DATABASE litellm OWNER \"${POSTGRES_USER}\";" \
-                >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 \
-                && log_success "  litellm database reset" \
-                || log_warning "  Could not reset litellm database"
-        fi
-
-        deploy_service litellm
-        wait_for_healthy litellm 180
-    }
-```
-
-**Also update Step 2b** — call `drop_service_databases()` when `--force`:
-
-```bash
-    # 2. Infra layer — must be healthy before anything else
-    log_info "Deploying infrastructure services..."
-    deploy_service postgres
-    deploy_service redis
-
-    # With --force: drop all service databases before provisioning
-    if [[ "$FORCE_REDEPLOY" == "true" ]]; then
-        log_info "--force: dropping all service databases for clean slate..."
-        drop_service_databases
-    fi
-
-    provision_databases    # creates databases that don't exist yet
-```
+**Rule for every heredoc block in `generate_compose()`:**
+- `\${POSTGRES_USER}`, `\${REDIS_PASSWORD}`, `\${LITELLM_MASTER_KEY}`, `\${TENANT_GID}`, `\${PORT_*}`, `\${DOMAIN}` — **escape these** (Docker Compose resolves from `.env` at runtime) ✓
+- `${CONFIG_DIR}`, `${DATA_DIR}`, `${TENANT_DIR}`, `${COMPOSE_FILE}` — **do NOT escape** (expand to absolute paths at generation time) ✓
 
 ---
 
-### Change 4 of 4 — Script 0: fix the dead database cleanup code
+## What Windsurf Must Do — Exact Sequence
 
-**File:** `scripts/0-complete-cleanup.sh`
+**Step 1:** Apply the changes to `scripts/3-configure-services.sh` as above — convert every `<<'EOF'` in `generate_compose()` to `<<EOF`, escape credential variables with `\${}`, leave path variables unescaped.
 
-Replace the entire broken `4.2. Database Cleanup` section. The problem is that Script 0 wipes `/mnt/data` and all named Docker volumes (including `postgres_data`) — so after Script 0 runs, there is no Postgres running and no data to drop. The dead code was trying to drop databases from a running container that Script 0 had already stopped. The correct approach: Script 0 doesn't need to drop individual databases at all — wiping the `postgres_data` named Docker volume already destroys the entire Postgres cluster, which is a superset of dropping individual databases.
-
+**Step 2:** Run the full clean deployment:
 ```bash
-# FIND and REMOVE the entire "4.2. Database Cleanup" section (lines 174-203):
-    # --- 4.2. Database Cleanup (NEW) ---
-    log "Cleaning service databases for fresh deployment..."
-    
-    # Check if postgres container exists and clean databases
-    if docker ps --format "table {{.Names}}" | grep -q "postgres-${TENANT_ID}-1"; then
-        ...
-    fi
-
-# REPLACE WITH nothing — it is not needed.
-# Script 0 already removes:
-# - All containers (step 1) — including postgres
-# - All named volumes (step 2) — including ai-datasquiz_postgres_data
-# - All /mnt/data content (step 3) — including bind-mounted data
-# Dropping individual databases from a stopped container is impossible and unnecessary.
-# A fresh postgres container on a wiped volume starts completely empty.
-```
-
-Additionally, verify the named volume loop in Script 0 uses the correct prefixed names. The current loop:
-
-```bash
-for vol in postgres_data prometheus_data grafana_data litellm_data; do
-    local vol_name="${COMPOSE_PROJECT_NAME}_${vol}"
-```
-
-This is correct — `COMPOSE_PROJECT_NAME=ai-datasquiz`, so `vol_name=ai-datasquiz_postgres_data` ✓. Combined with the `docker volume prune -af` call earlier, both paths cover the named volumes. No change needed here.
-
----
-
-## Summary Table
-
-| File | Change | Why |
-|------|--------|-----|
-| `3-configure-services.sh` | `cache: true` → `cache: false`, remove `cache_params` block | **Root cause of Azure config persistence** — Redis cached the old router state |
-| `3-configure-services.sh` | Add `drop_service_databases()` function before `provision_databases()` | Mission Control pattern: all DB ops in Script 3, called by Scripts 0 and 2 |
-| `2-deploy-services.sh` | Parse `--force` flag at top | Enables clean-slate redeploy without full Script 0 wipe |
-| `2-deploy-services.sh` | Step 2b: call `drop_service_databases()` when `--force` | Purges all service DBs + Redis before provisioning |
-| `2-deploy-services.sh` | Step 5: always wipe Prisma cache; DB drop only on `--force` | Idempotent by default, destructive only when explicitly requested |
-| `0-complete-cleanup.sh` | Remove entire `4.2. Database Cleanup` section | Dead code — wrong container name, impossible after containers are stopped, volumes already nuked |
-
-**Usage after this fix:**
-
-```bash
-# Fresh start (after code changes, first deployment, or broken state):
 sudo bash scripts/0-complete-cleanup.sh datasquiz
 sudo bash scripts/1-setup-system.sh datasquiz
 sudo bash scripts/2-deploy-services.sh datasquiz --force
-
-# Iterative redeploy (config tweaks, no DB schema changes):
-sudo bash scripts/2-deploy-services.sh datasquiz
 ```
+
+This is not optional. The 23-hour-old containers must be fully replaced. Script 0 wipes everything. Script 1 regenerates `.env`. Script 2 `--force` generates a fresh compose with absolute paths, drops and recreates service databases, wipes the litellm Prisma cache, and deploys all services.
+
+**After this, to verify the fix worked:**
+```bash
+# Confirm the generated compose has absolute paths (not variables):
+grep "config.yaml" /mnt/data/datasquiz/docker-compose.yml
+# Expected: - /mnt/data/datasquiz/configs/litellm/config.yaml:/app/config.yaml:ro
+
+# Confirm litellm loaded the correct config:
+docker logs ai-datasquiz-litellm-1 2>&1 | grep -E "model_name|azure|ollama"
+# Expected: only "ollama" references, no "azure"
+```
+
+This is the **one architectural change** that resolves the problem permanently. No image tag changes. No Redis flushes. No manual database drops needed on every re-run. The generated compose file becomes self-contained with absolute paths, immune to any `.env` loading order, and correct on every subsequent `docker compose` invocation regardless of how it is called.

@@ -538,33 +538,32 @@ generate_configs() {
 generate_compose() {
     log_info "Generating docker-compose.yml at ${COMPOSE_FILE}..."
     
-    cat > "$COMPOSE_FILE" <<'EOF'
+    cat > "$COMPOSE_FILE" <<EOF
 networks:
   default:
-    name: ai-${TENANT}-net
+    name: ai-\${TENANT}-net
     driver: bridge
 
 volumes:
   postgres_data:
   prometheus_data:
   grafana_data:
-  litellm_data:
 
 services:
 
   postgres:
     image: postgres:15-alpine
     restart: unless-stopped
-    user: "${POSTGRES_UID:-70}:${TENANT_GID:-1001}"
+    user: "\${POSTGRES_UID:-70}:\${TENANT_GID:-1001}"
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: \${POSTGRES_DB}
+      POSTGRES_USER: \${POSTGRES_USER}
+      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ${CONFIG_DIR}/postgres/init-all-databases.sh:/docker-entrypoint-initdb.d/init-all-databases.sh:ro
     healthcheck:
-      test: ["CMD-SHELL","pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL","pg_isready -U \${POSTGRES_USER} -d \${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -573,19 +572,19 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    user: "${REDIS_UID:-999}:${TENANT_GID:-1001}"
-    command: redis-server --requirepass "${REDIS_PASSWORD}"
+    user: "\${REDIS_UID:-999}:\${TENANT_GID:-1001}"
+    command: redis-server --requirepass "\${REDIS_PASSWORD}"
     volumes:
       - ${DATA_DIR}/redis:/data
     healthcheck:
-      test: ["CMD","redis-cli","-a","${REDIS_PASSWORD}","ping"]
+      test: ["CMD","redis-cli","-a","\${REDIS_PASSWORD}","ping"]
       interval: 5s
       timeout: 5s
       retries: 5
 EOF
 
     # Add enabled services dynamically - NO hardcoded values
-    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
   litellm:
     image: ghcr.io/berriai/litellm:main
     restart: unless-stopped
@@ -596,23 +595,23 @@ EOF
       redis:
         condition: service_healthy
     environment:
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
-      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
-      DATABASE_URL: ${LITELLM_DATABASE_URL}
-      REDIS_URL: ${REDIS_URL}
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      GROQ_API_KEY: ${GROQ_API_KEY:-}
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      LITELLM_MASTER_KEY: \${LITELLM_MASTER_KEY}
+      LITELLM_SALT_KEY: \${LITELLM_SALT_KEY}
+      DATABASE_URL: \${LITELLM_DATABASE_URL}
+      REDIS_URL: \${REDIS_URL}
+      REDIS_PASSWORD: \${REDIS_PASSWORD}
+      OPENAI_API_KEY: \${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: \${ANTHROPIC_API_KEY:-}
+      GROQ_API_KEY: \${GROQ_API_KEY:-}
+      GOOGLE_API_KEY: \${GOOGLE_API_KEY:-}
+      OPENROUTER_API_KEY: \${OPENROUTER_API_KEY:-}
       LITELLM_TELEMETRY: "False"
       PRISMA_DISABLE_WARNINGS: "true"
     volumes:
       - ${CONFIG_DIR}/litellm/config.yaml:/app/config.yaml:ro
       - ${DATA_DIR}/litellm:/root/.cache
     ports:
-      - "${PORT_LITELLM:-4000}:4000"
+      - "\${PORT_LITELLM:-4000}:4000"
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:4000/health/liveliness || exit 1"]
@@ -622,7 +621,7 @@ EOF
       start_period: 90s
 EOF
 
-    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     restart: unless-stopped
@@ -631,14 +630,14 @@ EOF
         condition: service_healthy
     environment:
       OPENAI_API_BASE_URL: "http://litellm:4000/v1"
-      OPENAI_API_KEY: "${LITELLM_MASTER_KEY}"
-      WEBUI_SECRET_KEY: "${JWT_SECRET}"
+      OPENAI_API_KEY: "\${LITELLM_MASTER_KEY}"
+      WEBUI_SECRET_KEY: "\${JWT_SECRET}"
       # DATABASE_URL removed — open-webui uses SQLite (postgres triggers peewee bug)
       # VECTOR_DB removed — uses built-in Chroma until qdrant is stable
     volumes:
       - ${DATA_DIR}/openwebui:/app/backend/data
     ports:
-      - "${PORT_OPENWEBUI:-3000}:8080"
+      - "\${PORT_OPENWEBUI:-3000}:8080"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/api/health || exit 1"]
       interval: 30s
@@ -647,7 +646,7 @@ EOF
       start_period: 60s
 EOF
 
-    [[ "${ENABLE_OLLAMA:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+    [[ "${ENABLE_OLLAMA:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
@@ -657,7 +656,7 @@ EOF
     volumes:
       - ${DATA_DIR}/ollama:/root/.ollama
     ports:
-      - "${PORT_OLLAMA:-11434}:11434"
+      - "\${PORT_OLLAMA:-11434}:11434"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
       interval: 30s
@@ -666,11 +665,11 @@ EOF
       start_period: 120s  # was 60s — model pull takes time on 2-core
 EOF
 
-    [[ "${ENABLE_QDRANT:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+    [[ "${ENABLE_QDRANT:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
   qdrant:
     image: qdrant/qdrant:latest
     restart: unless-stopped
-    user: "1000:${TENANT_GID:-1001}"
+    user: "1000:\${TENANT_GID:-1001}"
     volumes:
       - ${DATA_DIR}/qdrant:/qdrant/storage
       - ${DATA_DIR}/qdrant/snapshots:/qdrant/snapshots
@@ -684,7 +683,7 @@ EOF
       start_period: 60s   # was 30s — needs longer on fresh volume
 EOF
 
-    [[ "${ENABLE_MONITORING:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+    [[ "${ENABLE_MONITORING:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
   prometheus:
     image: prom/prometheus:latest
     restart: unless-stopped
@@ -708,11 +707,11 @@ EOF
     restart: unless-stopped
     user: "472:472"
     ports:
-      - "${PORT_GRAFANA:-3002}:3000"
+      - "\${PORT_GRAFANA:-3002}:3000"
     environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
-      GF_SERVER_ROOT_URL: "https://grafana.${DOMAIN}"
+      GF_SECURITY_ADMIN_USER: \${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: \${GRAFANA_ADMIN_PASSWORD}
+      GF_SERVER_ROOT_URL: "https://grafana.\${DOMAIN}"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
     volumes:
       - ${DATA_DIR}/grafana/data:/var/lib/grafana
@@ -725,31 +724,31 @@ EOF
       start_period: 45s
 EOF
 
-    [[ "${ENABLE_N8N:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+    [[ "${ENABLE_N8N:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
   n8n:
     image: n8nio/n8n:latest
     restart: unless-stopped
-    user: "1000:${TENANT_GID:-1001}"
+    user: "1000:\${TENANT_GID:-1001}"
     depends_on:
       litellm:
         condition: service_healthy
       postgres:
         condition: service_healthy
     environment:
-      N8N_AI_OPENAI_API_KEY: "${LITELLM_MASTER_KEY}"
+      N8N_AI_OPENAI_API_KEY: "\${LITELLM_MASTER_KEY}"
       N8N_AI_OPENAI_BASE_URL: "http://litellm:4000/v1"
       DB_TYPE: "postgresdb"
       DB_POSTGRESDB_HOST: "postgres"
       DB_POSTGRESDB_PORT: "5432"
       DB_POSTGRESDB_DATABASE: "n8n"
-      DB_POSTGRESDB_USER: "${POSTGRES_USER}"
-      DB_POSTGRESDB_PASSWORD: "${POSTGRES_PASSWORD}"
-      N8N_ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
-      WEBHOOK_URL: "https://n8n.${DOMAIN}"
+      DB_POSTGRESDB_USER: "\${POSTGRES_USER}"
+      DB_POSTGRESDB_PASSWORD: "\${POSTGRES_PASSWORD}"
+      N8N_ENCRYPTION_KEY: "\${ENCRYPTION_KEY}"
+      WEBHOOK_URL: "https://n8n.\${DOMAIN}"
     volumes:
       - ${DATA_DIR}/n8n:/home/node/.n8n
     ports:
-      - "${PORT_N8N:-5678}:5678"
+      - "\${PORT_N8N:-5678}:5678"
     healthcheck:
       test: ["CMD-SHELL","curl -sf http://localhost:5678/healthz || exit 1"]
       interval: 30s
@@ -758,25 +757,25 @@ EOF
       start_period: 60s
 EOF
 
-    [[ "${ENABLE_FLOWISE:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+    [[ "${ENABLE_FLOWISE:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
   flowise:
     image: flowiseai/flowise:latest
     restart: unless-stopped
-    user: "1000:${TENANT_GID:-1001}"
+    user: "1000:\${TENANT_GID:-1001}"
     depends_on:
       litellm:
         condition: service_healthy
     environment:
-      OPENAI_API_KEY: "${LITELLM_MASTER_KEY}"
+      OPENAI_API_KEY: "\${LITELLM_MASTER_KEY}"
       OPENAI_API_BASE: "http://litellm:4000/v1"
       DATABASE_PATH: "/root/.flowise"
       FLOWISE_USERNAME: "admin"
-      FLOWISE_PASSWORD: "${ADMIN_PASSWORD}"
+      FLOWISE_PASSWORD: "\${ADMIN_PASSWORD}"
       SECRETKEY_PATH: "/root/.flowise"
     volumes:
       - ${DATA_DIR}/flowise:/root/.flowise
     ports:
-      - "${PORT_FLOWISE:-3001}:3000"
+      - "\${PORT_FLOWISE:-3001}:3000"
     healthcheck:
       test: ["CMD-SHELL","curl -sf http://localhost:3000/api/v1 || exit 1"]
       interval: 30s
@@ -785,27 +784,27 @@ EOF
       start_period: 60s
 EOF
 
-    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
   anythingllm:
     image: mintplexlabs/anythingllm:latest
     restart: unless-stopped
-    user: "1000:${TENANT_GID:-1001}"
+    user: "1000:\${TENANT_GID:-1001}"
     depends_on:
       litellm:
         condition: service_healthy
     environment:
       LLM_PROVIDER: "openai"
-      OPEN_AI_KEY: "${LITELLM_MASTER_KEY}"
+      OPEN_AI_KEY: "\${LITELLM_MASTER_KEY}"
       OPEN_AI_BASE_PATH: "http://litellm:4000/v1"
       EMBEDDING_ENGINE: "openai"
       EMBEDDING_BASE_PATH: "http://litellm:4000/v1"
-      VECTOR_DB: "${VECTOR_DB_TYPE:-qdrant}"
+      VECTOR_DB: "\${VECTOR_DB_TYPE:-qdrant}"
       QDRANT_ENDPOINT: "http://qdrant:6333"
       STORAGE_DIR: "/app/server/storage"
     volumes:
       - ${DATA_DIR}/anythingllm:/app/server/storage
     ports:
-      - "${PORT_ANYTHINGLLM:-3003}:3001"
+      - "\${PORT_ANYTHINGLLM:-3003}:3001"
     healthcheck:
       test: ["CMD-SHELL","curl -sf http://localhost:3001/api/health || exit 1"]
       interval: 30s
@@ -815,7 +814,7 @@ EOF
 EOF
 
     # Tailscale VPN
-    [[ "${ENABLE_TAILSCALE:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+    [[ "${ENABLE_TAILSCALE:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
   tailscale:
     image: tailscale/tailscale:latest
     restart: unless-stopped
@@ -829,8 +828,8 @@ EOF
     devices:
       - /dev/net/tun:/dev/net/tun
     environment:
-      TS_AUTHKEY: ${TAILSCALE_AUTH_KEY}
-      TS_EXTRA_ARGS: "--hostname=${TENANT:-platform}"
+      TS_AUTHKEY: \${TAILSCALE_AUTH_KEY}
+      TS_EXTRA_ARGS: "--hostname=\${TENANT:-platform}"
     healthcheck:
       test: ["CMD-SHELL","tailscale --socket=\"/tmp/tailscaled.sock\" status | grep -q '@'"]
       interval: 30s
@@ -840,22 +839,22 @@ EOF
 EOF
 
     # OpenClaw web terminal — Tailscale-gated access
-    [[ "${ENABLE_OPENCLAW:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+    [[ "${ENABLE_OPENCLAW:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
   openclaw:
     image: lscr.io/linuxserver/code-server:latest
     restart: unless-stopped
-    user: "1000:${TENANT_GID:-1001}"
+    user: "1000:\${TENANT_GID:-1001}"
     environment:
       PUID: "1000"
-      PGID: "${TENANT_GID:-1001}"
-      PASSWORD: "${ADMIN_PASSWORD}"
-      SUDO_PASSWORD: "${ADMIN_PASSWORD}"
+      PGID: "\${TENANT_GID:-1001}"
+      PASSWORD: "\${ADMIN_PASSWORD}"
+      SUDO_PASSWORD: "\${ADMIN_PASSWORD}"
       DEFAULT_WORKSPACE: "/mnt/data"
     volumes:
       - ${DATA_DIR}/openclaw:/config
       - /mnt/data:/mnt/data:ro
     ports:
-      - "${PORT_OPENCLAW:-18789}:8443"
+      - "\${PORT_OPENCLAW:-18789}:8443"
     healthcheck:
       test: ["CMD-SHELL","curl -sf http://localhost:8443/ || exit 1"]
       interval: 30s
@@ -865,35 +864,35 @@ EOF
 EOF
 
     # Code Server - VS Code in browser with Continue.dev extension
-    [[ "${ENABLE_CODESERVER:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<'EOF'
+    [[ "${ENABLE_CODESERVER:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
   codeserver:
     image: lscr.io/linuxserver/code-server:latest
     restart: unless-stopped
-    user: "1000:${TENANT_GID:-1001}"
+    user: "1000:\${TENANT_GID:-1001}"
     depends_on:
       litellm:
         condition: service_healthy
     environment:
       PUID: "1000"
-      PGID: "${TENANT_GID:-1001}"
-      PASSWORD: "${CODESERVER_PASSWORD}"
-      SUDO_PASSWORD: "${CODESERVER_PASSWORD}"
+      PGID: "\${TENANT_GID:-1001}"
+      PASSWORD: "\${CODESERVER_PASSWORD}"
+      SUDO_PASSWORD: "\${CODESERVER_PASSWORD}"
       DEFAULT_WORKSPACE: "/mnt/data"
-      LITELLM_API_KEY: "${LITELLM_MASTER_KEY}"
+      LITELLM_API_KEY: "\${LITELLM_MASTER_KEY}"
       LITELLM_BASE_URL: "http://litellm:4000/v1"
       # Continue.dev extension configuration
       EXTENSIONS_GALLERY: "https://open-vsx.org/vsx-extension-gallery"
       EXTENSIONS: "continuedev.continue"
       # Git repository access
-      GIT_REPO: "${GIT_REPO:-/mnt/data/git}"
+      GIT_REPO: "\${GIT_REPO:-/mnt/data/git}"
     volumes:
       - ${DATA_DIR}/codeserver:/config
       - ${DATA_DIR}/codeserver/.continue:/home/abc/.continue:rw
       - /mnt/data:/mnt/data:rw
       - ${DATA_DIR}/git:/mnt/data/git:rw
-      - ${TENANT_DIR}/${GITHUB_PROJECT:-github}:/config/workspace
+      - ${TENANT_DIR}/\${GITHUB_PROJECT:-github}:/config/workspace
     ports:
-      - "${PORT_CODESERVER:-8443}:8443"
+      - "\${PORT_CODESERVER:-8443}:8443"
     healthcheck:
       test: ["CMD-SHELL","curl -sf http://localhost:8443/ || exit 1"]
       interval: 30s
@@ -906,7 +905,7 @@ EOF
     # Note: This is configured as an extension, not a separate service
 
     # Caddy - always deployed as reverse proxy
-    cat >> "$COMPOSE_FILE" <<'EOF'
+    cat >> "$COMPOSE_FILE" <<EOF
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
