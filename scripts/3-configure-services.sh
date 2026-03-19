@@ -321,12 +321,7 @@ EOF
 litellm_settings:
   drop_params: true
   set_verbose: false
-  cache: true
-  cache_params:
-    type: redis
-    host: redis
-    port: 6379
-    password: os.environ/REDIS_PASSWORD
+  cache: false
   store_model_in_db: false
 router_settings:
   routing_strategy: ${LITELLM_ROUTING_STRATEGY:-least-busy}
@@ -1076,28 +1071,44 @@ provision_databases() {
     log_success "Database provisioning complete"
 }
 
-# ── Log Management Functions ───────────────────────────────────────────────────
-log_enable() {
-    local svc="$1"
-    log_info "Enabling log streaming for ${svc}..."
-    local logfile="${LOGS_DIR}/${svc}-$(date +%Y%m%d).log"
-    
-    # Kill any existing log stream for this service
-    pkill -f "docker compose.*logs.*${svc}" 2>/dev/null || true
-    
-    # Start new log stream in background
-    docker compose -f "$COMPOSE_FILE" logs -f "$svc" \
-        >> "$logfile" 2>&1 &
-    
-    local pid=$!
-    echo "$pid" > "${LOGS_DIR}/.${svc}.pid"
-    
-    log_success "Log streaming enabled for ${svc} → ${logfile}"
+# ─── Database Cleanup (Mission Control Pattern) ────────────────────────
+drop_service_databases() {
+    log_info "Dropping service databases for clean slate..."
+    local logfile="${LOGS_DIR}/deploy-$(date +%Y%m%d).log"
+
+    # Wait for postgres (may be called right after container start)
+    local elapsed=0
+    until docker compose -f "$COMPOSE_FILE" exec -T postgres \
+        pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -q 2>/dev/null; do
+        elapsed=$((elapsed + 5))
+        [[ $elapsed -ge 30 ]] && { log_warning "Postgres not ready — skipping DB drop"; return 0; }
+        sleep 5
+    done
+
+    local databases=("litellm" "openwebui" "n8n" "flowise")
+    for db in "${databases[@]}"; do
+        log_info "  Dropping database '${db}'..."
+        docker compose -f "$COMPOSE_FILE" exec -T postgres \
+            psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+            -c "DROP DATABASE IF EXISTS \"${db}\";" \
+            >> "$logfile" 2>&1 \
+            && log_success "  '${db}' dropped" \
+            || log_warning "  Could not drop '${db}'"
+    done
+
+    # Also flush all LiteLLM Redis keys to remove cached router state
+    log_info "  Flushing LiteLLM Redis cache keys..."
+    docker compose -f "$COMPOSE_FILE" exec -T redis \
+        redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning FLUSHDB \
+        >> "$logfile" 2>&1 \
+        && log_success "  Redis cache flushed" \
+        || log_warning "  Could not flush Redis — may not be running"
+
+    log_success "Service databases dropped and Redis flushed"
 }
 
-log_disable() {
-    local svc="$1"
-    log_info "Disabling log streaming for ${svc}..."
+# ─── Log Management ────────────────────────────────────────────────────
+log_enable() {
     
     # Kill by PID file if exists
     local pidfile="${LOGS_DIR}/.${svc}.pid"

@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script 2: Idempotent service deployer
-# Can be re-run at any time. Sources all logic from script 3.
+# Script 2: Idempotent service deployer — v4.1
+# USAGE:  sudo bash scripts/2-deploy-services.sh [tenant_id] [--force]
+# --force: drops and recreates all service databases + flushes Redis cache
+#          Use after code changes that affect DB schema or LiteLLM config
+# Without --force: idempotent — skips already-existing databases
 # =============================================================================
 set -euo pipefail
 
-# Define SCRIPT_DIR before using it
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Set TENANT for script 3 before sourcing
+# Parse arguments — tenant is first positional, --force is a flag
 export TENANT="${1:-datasquiz}"
+FORCE_REDEPLOY=false
+for arg in "$@"; do
+    [[ "$arg" == "--force" ]] && FORCE_REDEPLOY=true
+done
 
 # Load environment from tenant directory (data confinement)
 ENV_FILE="/mnt/data/${TENANT}/.env"
@@ -91,6 +97,13 @@ main() {
     log_info "Deploying infrastructure services..."
     deploy_service postgres
     deploy_service redis
+
+    # With --force: drop all service databases before provisioning
+    if [[ "$FORCE_REDEPLOY" == "true" ]]; then
+        log_info "--force: dropping all service databases for clean slate..."
+        drop_service_databases
+    fi
+
     provision_databases          # waits until postgres ready, verifies DBs
 
     # 3. Vector DB
@@ -107,42 +120,37 @@ main() {
         pull_ollama_models
     }
 
-    # 5. AI gateway — clean state before deploy to prevent stale DB config
-    [[ "${ENABLE_LITELLM:-false}"    == "true" ]] && {
+    # 5. AI gateway — always force-recreate container to pick up fresh config
+    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && {
 
-        log_info "Resetting LiteLLM state (removing stale DB config and Prisma cache)..."
-
-        # Stop and remove container first
+        # Always stop and remove the container (ensures fresh config.yaml is loaded)
+        log_info "Removing existing litellm container (ensures config reload)..."
         docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" \
             rm -sf litellm >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 || true
 
-        # Drop and recreate litellm database to remove persisted Azure/stale models
-        # Postgres must be healthy at this point (provision_databases already ran)
-        log_info "  Dropping litellm database (removes persisted model config)..."
-        docker compose -f "$COMPOSE_FILE" exec postgres \
-            psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
-            -c "DROP DATABASE IF EXISTS litellm;" \
-            >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 \
-            && log_info "  litellm database dropped" \
-            || log_warning "  Could not drop litellm database — may not exist yet"
-
-        log_info "  Recreating litellm database (clean slate for Prisma migration)..."
-        docker compose -f "$COMPOSE_FILE" exec postgres \
-            psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
-            -c "CREATE DATABASE litellm OWNER \"${POSTGRES_USER}\";" \
-            >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 \
-            && log_success "  litellm database recreated" \
-            || log_warning "  Could not recreate litellm database"
-
-        # Wipe Prisma client cache — forces fresh schema generation
-        log_info "  Clearing Prisma cache at ${DATA_DIR}/litellm..."
+        # Always wipe the Prisma file cache (small, fast, prevents schema mismatch)
+        log_info "Clearing LiteLLM Prisma file cache..."
         rm -rf "${DATA_DIR}/litellm"
         mkdir -p "${DATA_DIR}/litellm"
         chown -R 1000:"${TENANT_GID:-1001}" "${DATA_DIR}/litellm"
-        log_success "  LiteLLM state reset complete"
+
+        # --force: also drop/recreate the litellm Postgres database
+        if [[ "$FORCE_REDEPLOY" == "true" ]]; then
+            log_info "  --force: dropping and recreating litellm database..."
+            docker compose -f "$COMPOSE_FILE" exec -T postgres \
+                psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+                -c "DROP DATABASE IF EXISTS litellm;" \
+                >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 || true
+            docker compose -f "$COMPOSE_FILE" exec -T postgres \
+                psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+                -c "CREATE DATABASE litellm OWNER \"${POSTGRES_USER}\";" \
+                >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 \
+                && log_success "  litellm database reset" \
+                || log_warning "  Could not reset litellm database"
+        fi
 
         deploy_service litellm
-        wait_for_healthy litellm 180   # Prisma migration takes 45-90s on fresh DB
+        wait_for_healthy litellm 180
     }
 
     # 6. Monitoring — independent of AI services

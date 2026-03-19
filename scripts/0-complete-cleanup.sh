@@ -171,37 +171,6 @@ main() {
     
     ok "System-level package manager caches cleaned."
     
-    # --- 4.2. Database Cleanup (NEW) ---
-    log "Cleaning service databases for fresh deployment..."
-    
-    # Check if postgres container exists and clean databases
-    if docker ps --format "table {{.Names}}" | grep -q "postgres-${TENANT_ID}-1"; then
-        log "Found postgres container - cleaning service databases..."
-        
-        # Load postgres credentials from .env if exists
-        local env_file="${DATA_ROOT}/.env"
-        local postgres_user="ds-admin"
-        local postgres_db="datasquiz_ai"
-        
-        if [[ -f "$env_file" ]]; then
-            postgres_user=$(grep "^POSTGRES_USER=" "$env_file" 2>/dev/null | cut -d= -f2- || echo "ds-admin")
-            postgres_db=$(grep "^POSTGRES_DB=" "$env_file" 2>/dev/null | cut -d= -f2- || echo "datasquiz_ai")
-        fi
-        
-        # Drop all service databases for clean slate
-        local databases=("litellm" "openwebui" "n8n" "flowise")
-        for db in "${databases[@]}"; do
-            docker exec postgres-${TENANT_ID}-1 \
-                psql -U "${postgres_user}" -d "${postgres_db}" \
-                    -c "DROP DATABASE IF EXISTS \"${db}\";" 2>/dev/null || true
-            log "  Dropped database '${db}' (if existed)"
-        done
-        
-        ok "All service databases cleaned - ready for fresh deployment"
-    else
-        warn "No postgres container found - skipping database cleanup"
-    fi
-    
     # --- 5. Create Fresh Environment ---
     log "Creating fresh environment for tenant '${TENANT_ID}'..."
     mkdir -p "${DATA_ROOT}"
