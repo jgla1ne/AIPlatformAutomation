@@ -617,7 +617,7 @@ EOF
     entrypoint: ["litellm"]
     command: ["--config", "/litellm-config.yaml", "--port", "4000"]
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:4000/v1/models || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:4000/ || exit 1"]
       interval: 30s
       timeout: 15s
       retries: 5
