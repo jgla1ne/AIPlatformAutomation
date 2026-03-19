@@ -612,6 +612,7 @@ EOF
       - ${DATA_DIR}/litellm:/root/.cache
     ports:
       - "\${PORT_LITELLM:-4000}:4000"
+    entrypoint: ["litellm"]
     command: ["--config", "/litellm-config.yaml", "--port", "4000"]
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:4000/health/liveliness || exit 1"]
