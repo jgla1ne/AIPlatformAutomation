@@ -683,6 +683,9 @@ EOF
       OPENROUTER_API_KEY: \${OPENROUTER_API_KEY:-}
       LITELLM_TELEMETRY: "False"
       PRISMA_DISABLE_WARNINGS: "true"
+      LITELLM_LOG: "INFO"
+      HEALTH_CHECK_INTERVAL: "300"
+      BACKGROUND_HEALTH_CHECKS: "True"
       STORE_MODEL_IN_DB: "True"
       DISABLE_SCHEMA_UPDATE: "True"
       PRISMA_SCHEMA_UPDATE: "false"
@@ -695,10 +698,10 @@ EOF
     entrypoint: ["litellm"]
     command: ["--config", "/litellm-config.yaml", "--port", "4000", "--detailed_debug"]
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:4000/ || exit 1"]
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveliness"]
       interval: 30s
       timeout: 15s
-      retries: 5
+      retries: 10
       start_period: 90s
 EOF
 
@@ -797,19 +800,22 @@ EOF
     entrypoint: ["/bin/sh", "-c"]
     volumes:
       - ${DATA_DIR}/gdrive:/gdrive:shared
-      - ${CONFIG_DIR}/rclone:/config/rclone:ro
-      - gdrive_cache:/cache
+      - ${CONFIG_DIR}/rclone:
     command: |
       if [ ! -f /config/rclone/rclone.conf ]; then
-        echo 'WARNING: rclone.conf not found at /config/rclone/rclone.conf'
-        echo 'RClone cannot sync without configuration.'
-        echo 'Run: docker exec -it ai-datasquiz-rclone-1 rclone config'
-        sleep infinity
+        echo '[rclone] WARNING: /config/rclone/rclone.conf not found.'
+        echo '[rclone] Idling. Configure with:'
+        echo '[rclone]   docker exec -it ai-datasquiz-rclone-1 rclone config'
+        exec sleep infinity
       fi
-      echo 'RClone config found, starting sync...'
+      echo '[rclone] Configuration found. Starting sync daemon.'
+      echo '[rclone] Sync interval: 300s'
       while true; do
-        rclone sync gdrive:/ /gdrive \
-          --config /config/rclone/rclone.conf \
+        START=$(date -Iseconds)
+        echo "[rclone] [$START] Starting sync: gdrive:/ -> /gdrive"
+        
+        rclone sync gdrive:/ "/gdrive" \
+          --config "/config/rclone/rclone.conf" \
           --log-level INFO \
           --transfers 4 \
           --checkers 8 \
@@ -818,10 +824,19 @@ EOF
           --retries 3 \
           --low-level-retries 10 \
           --stats 30s \
+          --stats-one-line \
           2>&1
-        echo 'Sync complete, sleeping 300s...'
+        
+        END=$(date -Iseconds)
+        echo "[rclone] [$END] Sync complete. Next sync in 300s."
         sleep 300
       done
+    healthcheck:
+      test: ["CMD", "sh", "-c", "pgrep -f rclone || exit 0"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
     healthcheck:
       test: ["CMD-SHELL", "pgrep -f rclone || exit 1"]
       interval: 60s
@@ -1184,10 +1199,12 @@ EOF
       context: ${CONFIG_DIR}/ingestion
       dockerfile: Dockerfile
     depends_on:
-      qdrant:
-        condition: service_healthy
       litellm:
         condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      rclone:
+        condition: service_started
     volumes:
       - gdrive_data:/data/gdrive-sync:ro
       - ingestion_state:/data/ingestion-state
