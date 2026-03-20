@@ -1811,12 +1811,16 @@ EOF
         echo ""
         read -p "  ➤ Enable OpenClaw? [y/N]: " enable_openclaw
         if [[ "${enable_openclaw,,}" =~ ^y ]]; then
-            read -p "  ➤ OpenClaw admin password: " OPENCLAW_PASSWORD
+            echo ""
+            read -p "  ➤ OpenClaw admin password: " -s OPENCLAW_PASSWORD
+            echo ""
             read -p "  ➤ OpenClaw port [18789]: " OPENCLAW_PORT
             OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
-            ENABLE_OPENCLAW="true"
-        else
-            ENABLE_OPENCLAW="false"
+            OPENCLAW_PASSWORD="${OPENCLAW_PASSWORD:-$CODEBASE_PASSWORD}"
+            OPENCLAW_ADMIN_USER=admin
+            OPENCLAW_SECRET="${OPENCLAW_PASSWORD:-$CODEBASE_PASSWORD}"
+            OPENCLAW_PORT=${OPENCLAW_PORT}
+            OPENCLAW_IMAGE=openclaw:latest
         fi
     else
         # OpenClaw was enabled by stack selection, collect password
@@ -1928,6 +1932,7 @@ generate_secrets() {
     ANYTHINGLLM_API_KEY=$(load_existing_secret "ANYTHINGLLM_API_KEY" "$(openssl rand -hex 32)")
     GRAFANA_PASSWORD=$(load_existing_secret "GRAFANA_PASSWORD"          "$(openssl rand -hex 16)")
     CODESERVER_PASSWORD=$(load_existing_secret "CODESERVER_PASSWORD" "$(openssl rand -hex 12)")
+    CODEBASE_PASSWORD=$(load_existing_secret "CODEBASE_PASSWORD" "$(openssl rand -hex 12)")
     AUTHENTIK_SECRET_KEY=$(load_existing_secret "AUTHENTIK_SECRET_KEY" "$(openssl rand -hex 32)")
     MINIO_ROOT_PASSWORD=$(load_existing_secret "MINIO_ROOT_PASSWORD" "$(openssl rand -hex 16)")
     QDRANT_API_KEY=$(load_existing_secret   "QDRANT_API_KEY"            "$(openssl rand -hex 32)")

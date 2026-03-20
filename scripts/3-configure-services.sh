@@ -483,16 +483,13 @@ generate_caddyfile() {
 {
     admin 0.0.0.0:2019
     email ${admin_email}
-    auto_https {
-        ignore_loaded_certs
-    }
+    
+    # auto_https is a simple directive, not a block
+    auto_https off
     
     # Global TLS settings
     servers {
-        protocol {
-            strict_sni_host
-            max_header_size 5kb
-        }
+        trusted_proxies static private_ranges
     }
     
     # Global error pages
@@ -723,6 +720,8 @@ EOF
       LITELLM_TELEMETRY: "False"
       PRISMA_DISABLE_WARNINGS: "true"
       STORE_MODEL_IN_DB: "True"
+      DISABLE_SCHEMA_UPDATE: "True"
+      PRISMA_SCHEMA_UPDATE: "false"
     volumes:
       - ${CONFIG_DIR}/litellm/config.yaml:/litellm-config.yaml:ro
       - ${DATA_DIR}/litellm:/root/.cache
@@ -746,7 +745,7 @@ EOF
       postgres:
         condition: service_healthy
     entrypoint: ["/bin/sh", "-c"]
-    command: ["cd /app && prisma db push --schema ./schema.prisma --accept-data-loss && prisma generate --schema ./schema.prisma"]
+    command: ["cd /app && SCHEMA_PATH=\$(find /usr/local/lib -name 'schema.prisma' -path '*/litellm/*' 2>/dev/null | head -1) && echo 'Found schema at: '\$SCHEMA_PATH' && prisma db push --schema=\$SCHEMA_PATH --accept-data-loss --skip-generate && echo 'Schema push complete'"]
     environment:
       DATABASE_URL: \${LITELLM_DATABASE_URL}
       LITELLM_MASTER_KEY: \${LITELLM_MASTER_KEY}
@@ -817,6 +816,11 @@ EOF
       start_period: 60s   # was 30s — needs longer on fresh volume
 EOF
 
+    [[ "${ENABLE_SIGNAL:-false}" == "true" ]] && \
+        add_service_block "signal" "signal-api" "8080" \
+            "header_up Upgrade {http.request.header.Upgrade}
+            header_up Connection {http.request.header.Connection}"
+    
     [[ "${ENABLE_RCLONE:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
   rclone:
     image: rclone/rclone:latest
@@ -856,6 +860,32 @@ EOF
       timeout: 10s
       retries: 3
       start_period: 30s
+EOF
+
+    [[ "${ENABLE_RCLONE:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
+  gdrive-ingestion:
+    build:
+      context: ./ingestion
+      dockerfile: Dockerfile
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    volumes:
+      - gdrive_data:/data/gdrive-sync:ro
+      - ingestion_state:/data/ingestion-state
+    environment:
+      QDRANT_URL: "http://qdrant:6333"
+      LITELLM_URL: "http://litellm:4000"
+      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY}"
+      EMBEDDING_MODEL: "text-embedding-3-small"
+      COLLECTION_NAME: "gdrive_documents"
+      SYNC_DIR: "/data/gdrive-sync"
+      WATCH_INTERVAL: "300"
+    restart: unless-stopped
+    profiles:
+      - ingestion
 EOF
 
     [[ "${ENABLE_MONITORING:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
