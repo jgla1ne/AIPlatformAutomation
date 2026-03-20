@@ -501,12 +501,15 @@ EOF
 
     # Helper function to add service block with proper headers
     add_service_block() {
-        local subdomain="$1"
-        local service="$2" 
-        local port="$3"
-        local extra_headers="$4"
+        local output_file="$1"
+        local subdomain="$2"
+        local service="$3" 
+        local port="$4"
+        local extra_headers="${5:-}"  # Default to empty string if not provided
+        local tls_line="$6"
+        local base_domain="$7"
         
-        cat >> "$out" <<EOF
+        cat >> "$output_file" <<EOF
 https://${subdomain}.${base_domain} {
     ${tls_line}
     reverse_proxy ${service}:${port} {
@@ -517,43 +520,50 @@ https://${subdomain}.${base_domain} {
         ${extra_headers}
     }
 }
-
 EOF
     }
 
     # Add service blocks with proper configuration
     [[ "${ENABLE_LITELLM:-false}" == "true" ]] && \
-        add_service_block "litellm" "litellm" "4000" ""
+        add_service_block "$out" "litellm" "litellm" "4000" "" "$tls_line" "$base_domain"
     
-    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && \
-        add_service_block "chat" "open-webui" "8080" \
-        "header_up Upgrade {http.request.header.Upgrade}
+    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && {
+        local webui_headers="header_up Upgrade {http.request.header.Upgrade}
         header_up Connection {http.request.header.Connection}
         header_read_timeout 86400"
+        add_service_block "$out" "chat" "open-webui" "8080" "$webui_headers" "$tls_line" "$base_domain"
+    }
     
     [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && \
-        add_service_block "anythingllm" "anythingllm" "3001" ""
+        add_service_block "$out" "anythingllm" "anythingllm" "3001" "" "$tls_line" "$base_domain"
     
     [[ "${ENABLE_N8N:-false}" == "true" ]] && \
-        add_service_block "n8n" "n8n" "5678" ""
+        add_service_block "$out" "n8n" "n8n" "5678" "" "$tls_line" "$base_domain"
     
     [[ "${ENABLE_FLOWISE:-false}" == "true" ]] && \
-        add_service_block "flowise" "flowise" "3000" ""
+        add_service_block "$out" "flowise" "flowise" "3000" "" "$tls_line" "$base_domain"
     
     [[ "${ENABLE_CODESERVER:-false}" == "true" ]] && {
         # Primary IDE access
-        add_service_block "opencode" "codeserver" "8444" ""
+        add_service_block "$out" "opencode" "codeserver" "8444" "" "$tls_line" "$base_domain"
         # Legacy codeserver subdomain
-        add_service_block "codeserver" "codeserver" "8444" ""
+        add_service_block "$out" "codeserver" "codeserver" "8444" "" "$tls_line" "$base_domain"
     }
     
     [[ "${ENABLE_OPENCLAW:-false}" == "true" ]] && \
-        add_service_block "openclaw" "openclaw" "18789" ""
+        add_service_block "$out" "openclaw" "openclaw" "18789" "" "$tls_line" "$base_domain"
     
     # Monitoring services
     [[ "${ENABLE_MONITORING:-false}" == "true" ]] && {
-        add_service_block "grafana" "grafana" "3000" ""
-        add_service_block "prometheus" "prometheus" "9090" ""
+        add_service_block "$out" "grafana" "grafana" "3000" "" "$tls_line" "$base_domain"
+        add_service_block "$out" "prometheus" "prometheus" "9090" "" "$tls_line" "$base_domain"
+    }
+    
+    # Signal API
+    [[ "${ENABLE_SIGNAL:-false}" == "true" ]] && {
+        local signal_headers="header_up Upgrade {http.request.header.Upgrade}
+            header_up Connection {http.request.header.Connection}"
+        add_service_block "$out" "signal" "signal-api" "8080" "$signal_headers" "$tls_line" "$base_domain"
     }
     
     log_success "Caddyfile written to ${out} with separate server blocks"
@@ -745,7 +755,7 @@ EOF
       postgres:
         condition: service_healthy
     entrypoint: ["/bin/sh", "-c"]
-    command: ["cd /app && SCHEMA_PATH=\$(find /usr/local/lib -name 'schema.prisma' -path '*/litellm/*' 2>/dev/null | head -1) && echo 'Found schema at: '\$SCHEMA_PATH' && prisma db push --schema=\$SCHEMA_PATH --accept-data-loss --skip-generate && echo 'Schema push complete'"]
+    command: ["cd /app && SCHEMA_PATH=\$(find /usr/local/lib -name schema.prisma -path '*/litellm/*' 2>/dev/null | head -1) && echo Found schema at: \$SCHEMA_PATH && prisma db push --schema=\$SCHEMA_PATH --accept-data-loss --skip-generate && echo Schema push complete"]
     environment:
       DATABASE_URL: \${LITELLM_DATABASE_URL}
       LITELLM_MASTER_KEY: \${LITELLM_MASTER_KEY}
@@ -816,11 +826,6 @@ EOF
       start_period: 60s   # was 30s — needs longer on fresh volume
 EOF
 
-    [[ "${ENABLE_SIGNAL:-false}" == "true" ]] && \
-        add_service_block "signal" "signal-api" "8080" \
-            "header_up Upgrade {http.request.header.Upgrade}
-            header_up Connection {http.request.header.Connection}"
-    
     [[ "${ENABLE_RCLONE:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
   rclone:
     image: rclone/rclone:latest
@@ -862,10 +867,358 @@ EOF
       start_period: 30s
 EOF
 
-    [[ "${ENABLE_RCLONE:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
+    [[ "${ENABLE_RCLONE:-false}" == "true" ]] && {
+        # Create ingestion pipeline files inline
+        local ingestion_dir="${CONFIG_DIR}/ingestion"
+        mkdir -p "$ingestion_dir"
+        
+        # Create Dockerfile inline
+        cat > "$ingestion_dir/Dockerfile" <<'EOF'
+# GDrive → Qdrant Ingestion Pipeline
+# Reads from: /data/gdrive-sync (shared volume with rclone)
+# Writes to: Qdrant collection 'gdrive_documents'
+# Embeds via: LiteLLM /v1/embeddings endpoint
+# State tracking: /data/ingestion-state/processed_files.json (hash-based dedup)
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    qdrant-client>=1.7.0 \
+    pypdf>=3.17.0 \
+    python-docx>=1.1.0 \
+    tiktoken>=0.5.0 \
+    requests>=2.31.0 \
+    watchdog>=3.0.0
+
+# Create ingestion state directory
+RUN mkdir -p /data/ingestion-state
+
+# Create ingestion script inline
+RUN cat > /app/ingest.py <<'INGEST_EOF'
+#!/usr/bin/env python3
+"""
+GDrive → Qdrant ingestion pipeline
+Reads from: /data/gdrive-sync (shared volume with rclone)
+Writes to: Qdrant collection 'gdrive_documents'
+Embeds via: LiteLLM /v1/embeddings endpoint
+State tracking: /data/ingestion-state/processed_files.json (hash-based dedup)
+"""
+
+import os
+import hashlib
+import json
+import time
+import logging
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import requests
+from qdrant_client import QdrantClient
+from qdrant_client.models import PointStruct, VectorParams, Distance
+import tiktoken
+import watchdog.observers
+from watchdog.events import FileSystemEventHandler
+
+# Configuration
+SUPPORTED_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.csv']
+CHUNK_SIZE = 512          # tokens
+CHUNK_OVERLAP = 50        # tokens  
+VECTOR_DIMENSIONS = 1536  # match text-embedding-3-small
+COLLECTION_NAME = "gdrive_documents"
+BATCH_SIZE = 100          # upsert batch size to Qdrant
+STATE_FILE = "/data/ingestion-state/processed_files.json"
+
+# Environment variables
+QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333")
+LITELLM_URL = os.getenv("LITELLM_URL", "http://litellm:4000")
+LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+SYNC_DIR = os.getenv("SYNC_DIR", "/data/gdrive-sync")
+WATCH_INTERVAL = int(os.getenv("WATCH_INTERVAL", "300"))  # 5 minutes
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+class IngestionHandler(FileSystemEventHandler):
+    """Handle file system events for new/modified files"""
+    
+    def __init__(self, ingestor):
+        self.ingestor = ingestor
+        
+    def on_modified(self, event):
+        if not event.is_directory:
+            self.ingestor.process_file(event.src_path)
+
+class GDriveIngestor:
+    """Main ingestion pipeline orchestrator"""
+    
+    def __init__(self):
+        self.qdrant = QdrantClient(url=QDRANT_URL)
+        self.encoding = tiktoken.get_encoding("cl100k_base")
+        self.processed_files = self.load_state()
+        self._ensure_collection()
+        
+    def _ensure_collection(self):
+        """Ensure Qdrant collection exists"""
+        try:
+            collections = self.qdrant.get_collections().collections
+            collection_names = [c.name for c in collections]
+            
+            if COLLECTION_NAME not in collection_names:
+                self.qdrant.create_collection(
+                    collection_name=COLLECTION_NAME,
+                    vectors_config=VectorParams(
+                        size=VECTOR_DIMENSIONS,
+                        distance=Distance.COSINE
+                    )
+                )
+                logger.info(f"Created collection: {COLLECTION_NAME}")
+        except Exception as e:
+            logger.error(f"Failed to ensure collection: {e}")
+            
+    def load_state(self) -> Dict[str, str]:
+        """Load processed files state"""
+        try:
+            if os.path.exists(STATE_FILE):
+                with open(STATE_FILE, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            logger.warning(f"Failed to load state: {e}")
+        return {}
+        
+    def save_state(self):
+        """Save processed files state"""
+        try:
+            os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+            with open(STATE_FILE, 'w') as f:
+                json.dump(self.processed_files, f, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to save state: {e}")
+            
+    def get_file_hash(self, filepath: str) -> str:
+        """Calculate SHA256 hash of file"""
+        try:
+            with open(filepath, 'rb') as f:
+                return hashlib.sha256(f.read()).hexdigest()
+        except Exception:
+            return ""
+            
+    def extract_text(self, filepath: str) -> str:
+        """Extract text from supported file types"""
+        ext = Path(filepath).suffix.lower()
+        
+        try:
+            if ext == '.pdf':
+                import pypdf
+                reader = pypdf.PdfReader(filepath)
+                text = ""
+                for page in reader.pages:
+                    text += page.extract_text() + "\n"
+                return text
+                
+            elif ext == '.docx':
+                import docx
+                doc = docx.Document(filepath)
+                return "\n".join([para.text for para in doc.paragraphs])
+                
+            elif ext in ['.txt', '.md', '.csv']:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    return f.read()
+                    
+        except Exception as e:
+            logger.error(f"Failed to extract text from {filepath}: {e}")
+            return ""
+            
+        return ""
+        
+    def chunk_text(self, text: str) -> List[str]:
+        """Chunk text into semantic pieces"""
+        if not text.strip():
+            return []
+            
+        tokens = self.encoding.encode(text)
+        chunks = []
+        
+        start = 0
+        while start < len(tokens):
+            end = min(start + CHUNK_SIZE, len(tokens))
+            chunk_tokens = tokens[start:end]
+            chunk_text = self.encoding.decode(chunk_tokens)
+            chunks.append(chunk_text.strip())
+            
+            if end >= len(tokens):
+                break
+                
+            start = end - CHUNK_OVERLAP
+            
+        return [c for c in chunks if len(c.split()) > 10]  # Filter very short chunks
+        
+    def get_embedding(self, text: str) -> List[float]:
+        """Get embedding from LiteLLM"""
+        try:
+            response = requests.post(
+                f"{LITELLM_URL}/v1/embeddings",
+                headers={
+                    "Authorization": f"Bearer {LITELLM_MASTER_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": EMBEDDING_MODEL,
+                    "input": text
+                },
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                return response.json()["data"][0]["embedding"]
+            else:
+                logger.error(f"Embedding API error: {response.status_code} - {response.text}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"Failed to get embedding: {e}")
+            return []
+            
+    def process_file(self, filepath: str):
+        """Process a single file"""
+        if not Path(filepath).exists():
+            return
+            
+        ext = Path(filepath).suffix.lower()
+        if ext not in SUPPORTED_EXTENSIONS:
+            return
+            
+        file_hash = self.get_file_hash(filepath)
+        if filepath in self.processed_files and self.processed_files[filepath] == file_hash:
+            return  # Already processed
+            
+        logger.info(f"Processing file: {filepath}")
+        
+        # Extract text
+        text = self.extract_text(filepath)
+        if not text.strip():
+            logger.warning(f"No text extracted from {filepath}")
+            return
+            
+        # Chunk text
+        chunks = self.chunk_text(text)
+        if not chunks:
+            logger.warning(f"No chunks created from {filepath}")
+            return
+            
+        logger.info(f"Created {len(chunks)} chunks from {filepath}")
+        
+        # Create points for Qdrant
+        points = []
+        for i, chunk in enumerate(chunks):
+            embedding = self.get_embedding(chunk)
+            if not embedding:
+                continue
+                
+            point = PointStruct(
+                id=f"{filepath}_{i}_{int(time.time())}",
+                vector=embedding,
+                payload={
+                    "text": chunk,
+                    "source_file": filepath,
+                    "chunk_index": i,
+                    "file_hash": file_hash,
+                    "processed_at": time.time()
+                }
+            )
+            points.append(point)
+            
+        # Batch upsert to Qdrant
+        if points:
+            try:
+                self.qdrant.upsert(
+                    collection_name=COLLECTION_NAME,
+                    points=points,
+                    batch_size=BATCH_SIZE
+                )
+                logger.info(f"Upserted {len(points)} points to Qdrant")
+                
+                # Update state
+                self.processed_files[filepath] = file_hash
+                self.save_state()
+                
+            except Exception as e:
+                logger.error(f"Failed to upsert points: {e}")
+                
+    def scan_existing_files(self):
+        """Scan existing files in sync directory"""
+        if not os.path.exists(SYNC_DIR):
+            logger.warning(f"Sync directory not found: {SYNC_DIR}")
+            return
+            
+        logger.info(f"Scanning existing files in {SYNC_DIR}")
+        
+        for root, dirs, files in os.walk(SYNC_DIR):
+            for file in files:
+                filepath = os.path.join(root, file)
+                self.process_file(filepath)
+                
+    def start_watching(self):
+        """Start file system watcher"""
+        if not os.path.exists(SYNC_DIR):
+            logger.warning(f"Sync directory not found: {SYNC_DIR}")
+            return
+            
+        event_handler = IngestionHandler(self)
+        observer = watchdog.observers.Observer()
+        observer.schedule(event_handler, SYNC_DIR, recursive=True)
+        observer.start()
+        
+        logger.info(f"Started watching {SYNC_DIR} for changes")
+        
+        try:
+            while True:
+                time.sleep(WATCH_INTERVAL)
+        except KeyboardInterrupt:
+            observer.stop()
+        observer.join()
+
+def main():
+    """Main entry point"""
+    logger.info("Starting GDrive → Qdrant ingestion pipeline")
+    
+    ingestor = GDriveIngestor()
+    
+    # Process existing files first
+    ingestor.scan_existing_files()
+    
+    # Start watching for changes
+    ingestor.start_watching()
+
+if __name__ == "__main__":
+    main()
+INGEST_EOF
+
+# Set permissions
+RUN chmod +x /app/ingest.py
+
+# Environment variables will be passed from docker-compose.yml
+CMD ["python", "ingest.py"]
+EOF
+        
+        # Add ingestion service to docker-compose.yml
+        cat >> "$COMPOSE_FILE" <<EOF
   gdrive-ingestion:
     build:
-      context: ./ingestion
+      context: ${CONFIG_DIR}/ingestion
       dockerfile: Dockerfile
     depends_on:
       qdrant:
@@ -887,6 +1240,7 @@ EOF
     profiles:
       - ingestion
 EOF
+    }
 
     [[ "${ENABLE_MONITORING:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
   prometheus:
