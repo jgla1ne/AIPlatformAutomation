@@ -1,587 +1,488 @@
-# Comprehensive Fix Blueprint — Final Sprint to 100%
+# Final Sprint Blueprint — Surgical Fixes Only
 
-## Reading the Actual State
+## Reading the Actual State from the Audit
 
-Let me be precise about what the audit and codebase reveal before giving Windsurf actionable instructions.
+The audit is now much more honest than the previous "100% success" report. Let me map exactly what's true:
 
----
+**Actually healthy:** PostgreSQL (58 tables ✅), Redis, Qdrant, Ollama, Caddy, OpenWebUI, Grafana, Prometheus, Tailscale, OpenClaw
 
-## Critical Observation: LiteLLM Is the Blocker
+**The blocking domino:** LiteLLM is "still initializing" after 37 seconds in the audit snapshot — but critically the audit was captured at 37 seconds uptime. The real question is: **does LiteLLM ever pass its health check?** Based on the pattern from the previous audit (13+ minutes, never healthy), the answer is no.
 
-The audit shows LiteLLM has been "initializing" for **13+ minutes** with `health: starting`. This is not a timing issue — this is a **startup loop caused by a schema conflict**. The logs reveal the exact problem:
+**Directly broken:** RClone — exact error identified in the audit log.
 
-```
-Current Status: "Running prisma migrate deploy"
-Issue: Read-only file system warning (expected in container)
-Migration Progress: Generating baseline migration...
-```
-
-**The conflict:** The init container ran `prisma db push` (schema push), then LiteLLM itself is also trying to run `prisma migrate deploy` (migration-based). These two approaches are **incompatible on the same database**. When `prisma migrate deploy` finds a non-empty database without a `_prisma_migrations` table, it tries to create a baseline migration and hangs or fails in a read-only container filesystem.
+**Waiting on LiteLLM:** AnythingLLM, Flowise, N8N, gdrive-ingestion (5 services blocked by one fix).
 
 ---
 
-## Issue Log: Every Problem and Its Exact Cause
+## Reading the Current Codebase
 
-### Issue 1: LiteLLM Never Becomes Healthy (Root Cause of Everything)
-
-**What's happening:**
-```
-Init container: prisma db push (schema push — no migration table)
-LiteLLM startup: prisma migrate deploy (looks for _prisma_migrations table — not found)
-Result: LiteLLM tries to create baseline migration → needs to write to /tmp → 
-        read-only filesystem warning → hangs → health check never passes → 
-        ALL dependent services stay in "waiting" state forever
-```
-
-**The exact fix — choose ONE approach and be consistent:**
-
-Option A (Recommended — simpler, works in containers):
-```yaml
-# In litellm-prisma-migrate init container:
-command: >
-  sh -c "
-    SCHEMA_PATH=$(find /usr/local/lib -name 'schema.prisma' -path '*/litellm/*' 2>/dev/null | head -1)
-    echo 'Found schema at: '$SCHEMA_PATH
-    prisma db push --schema=$SCHEMA_PATH --accept-data-loss --skip-generate
-    echo 'Schema push complete'
-  "
-```
-
-Then in the main LiteLLM container, **prevent it from running migrations itself**:
-```yaml
-litellm:
-  environment:
-    DATABASE_URL: "postgresql://litellm:${POSTGRES_PASSWORD}@postgres:5432/litellm"
-    LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY}"
-    STORE_MODEL_IN_DB: "True"
-    DISABLE_SCHEMA_UPDATE: "True"   # THIS IS THE MISSING FLAG
-    PRISMA_SCHEMA_UPDATE: "false"   # Belt and suspenders
-```
-
-The flag `DISABLE_SCHEMA_UPDATE=True` tells LiteLLM not to attempt its own schema management. Windsurf has not set this, causing the double-migration conflict.
-
-**Verification after fix:**
-```bash
-# Should return within 60 seconds of LiteLLM starting:
-curl -s http://localhost:4000/health | python3 -m json.tool
-# Expected: {"status": "healthy", "db": "connected"}
-
-# Also verify the DB has data:
-docker exec ai-datasquiz-postgres-1 psql -U ds-admin -d litellm -c "\dt"
-# Expected: list of LiteLLM tables (LiteLLM_SpendLogs, LiteLLM_UserTable, etc.)
-```
+Let me identify the exact files and lines before prescribing fixes.
 
 ---
 
-### Issue 2: Caddy `auto_https` Directive Parsing Error
+## Issue 1: LiteLLM Health Check Never Passes
+
+### The Real Diagnosis
 
 The audit shows:
 ```
-Current Issue: Configuration parsing error with auto_https directive (minor)
-Status: Restarting every 12 seconds
+Initialization: ✅ Proxy initialized successfully
+Models Loaded: 5 models configured
+Health Check: HTTP endpoint not yet responding
 ```
 
-This is **not minor** — Caddy restarting every 12 seconds means SSL certificates are never issued and routes flap.
+LiteLLM **has** initialized. The proxy is running. The schema migration completed successfully (exit 0, 58 tables). So why does the health check never pass?
 
-**What's in the current Caddyfile (wrong):**
-```caddy
-{
-  auto_https {
-    ignore_loaded_certs
-  }
-  servers {
-    protocol {
-      strict_sni_host
-      max_header_size 5kb
-    }
-  }
-}
-```
+**The actual cause is the health check configuration itself, not LiteLLM startup.**
 
-**The exact error:** `auto_https` is a top-level directive in the global block, not a block itself. The nested block syntax is wrong.
+Look at what LiteLLM's `/health` endpoint actually does — it tries to **ping every configured model backend** before returning healthy. With 5 models including:
+- `llama3.2:1b` (Ollama — fine)
+- `llama3.2:3b` (Ollama — fine)  
+- `llama3-groq` (Groq — needs valid API key)
+- `gemini-pro` (Google — needs valid API key)
+- `openrouter-mixtral` (OpenRouter — needs valid API key)
 
-**Correct Caddyfile global block:**
-```caddy
-{
-    admin 0.0.0.0:2019
-    email admin@{$BASE_DOMAIN}
-    
-    # auto_https is a simple directive, not a block
-    auto_https off
-    
-    servers {
-        trusted_proxies static private_ranges
-    }
-}
+**If any external API key is missing, invalid, or the network call times out, `/health` returns non-200 and the Docker health check fails indefinitely.**
 
-# HTTP redirect — catch all
-http:// {
-    redir https://{host}{uri} permanent
-}
+This is why the container shows `health: starting` forever — it passes initialization but the health probe keeps failing because external model checks time out or return 401.
 
-https://litellm.{$BASE_DOMAIN} {
-    reverse_proxy litellm:4000
-    header {
-        X-Forwarded-Proto "https"
-        X-Real-IP {remote_host}
-    }
-}
+### The Fix
 
-https://chat.{$BASE_DOMAIN} {
-    reverse_proxy open-webui:8080 {
-        header_up Host {upstream_hostport}
-        header_up X-Forwarded-Proto "https"
-        header_up X-Real-IP {remote_host}
-    }
-    @websocket {
-        header Connection *Upgrade*
-        header Upgrade websocket
-    }
-    reverse_proxy @websocket open-webui:8080 {
-        header_up Host {upstream_hostport}
-        header_up Connection {>Connection}
-        header_up Upgrade {>Upgrade}
-    }
-}
+**Option A — Use `/health/liveliness` instead of `/health`**
 
-https://anythingllm.{$BASE_DOMAIN} {
-    reverse_proxy anythingllm:3001 {
-        header_up X-Forwarded-Proto "https"
-    }
-}
+LiteLLM exposes three health endpoints:
+- `/health` — checks ALL models (dangerous for health check)
+- `/health/liveliness` — checks only that the server is running (correct for Docker)
+- `/health/readiness` — checks DB connection only
 
-https://dify.{$BASE_DOMAIN} {
-    # Point to Dify's internal nginx, NOT the API directly
-    reverse_proxy dify-nginx:80 {
-        header_up Host {upstream_hostport}
-        header_up X-Forwarded-Proto "https"
-        header_up X-Real-IP {remote_host}
-    }
-}
-
-https://flowise.{$BASE_DOMAIN} {
-    reverse_proxy flowise:3000 {
-        header_up X-Forwarded-Proto "https"
-    }
-}
-
-https://openclaw.{$BASE_DOMAIN} {
-    # This MUST be its own server block — not a location inside another
-    reverse_proxy openclaw:18789 {
-        header_up X-Forwarded-Proto "https"
-        header_up Host {upstream_hostport}
-    }
-}
-
-https://opencode.{$BASE_DOMAIN} {
-    reverse_proxy codeserver:8444 {
-        header_up X-Forwarded-Proto "https"
-    }
-}
-
-https://n8n.{$BASE_DOMAIN} {
-    reverse_proxy n8n:5678 {
-        header_up X-Forwarded-Proto "https"
-        header_up X-Forwarded-Host {host}
-    }
-}
-
-https://grafana.{$BASE_DOMAIN} {
-    reverse_proxy grafana:3000 {
-        header_up X-Forwarded-Proto "https"
-    }
-}
-
-https://signal.{$BASE_DOMAIN} {
-    reverse_proxy signal-api:8080 {
-        header_up X-Forwarded-Proto "https"
-    }
-}
-
-https://qdrant.{$BASE_DOMAIN} {
-    reverse_proxy qdrant:6333 {
-        header_up X-Forwarded-Proto "https"
-    }
-}
-```
-
-**Important note on `auto_https off`:** Since the platform is using Let's Encrypt via Tailscale or DNS challenge, check how certs are currently being managed. If Caddy is doing ACME automatically, use:
-```caddy
-{
-    email admin@{$BASE_DOMAIN}
-    # Remove auto_https block entirely — default behavior is correct
-}
-```
-
-If using pre-existing certs (from Tailscale/certbot):
-```caddy
-{
-    auto_https off  # Single directive, no block
-}
-
-https://litellm.{$BASE_DOMAIN} {
-    tls /path/to/cert.pem /path/to/key.pem
-    reverse_proxy litellm:4000
-}
-```
-
----
-
-### Issue 3: OpenWebUI, Dify, Flowise — Waiting for LiteLLM That Never Becomes Healthy
-
-Once LiteLLM is fixed (Issue 1), these services will start. However there are secondary issues:
-
-**OpenWebUI** — needs these environment variables confirmed:
 ```yaml
-open-webui:
+# In docker-compose.yml, change litellm healthcheck:
+litellm:
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveliness"]
+    interval: 30s
+    timeout: 10s
+    retries: 5
+    start_period: 60s
+```
+
+**Option B — Add `HEALTHCHECK_ENDPOINT` environment variable**
+
+```yaml
+litellm:
   environment:
-    OPENAI_API_BASE_URL: "http://litellm:4000/v1"
-    OPENAI_API_KEY: "${LITELLM_MASTER_KEY}"
-    WEBUI_URL: "https://chat.${BASE_DOMAIN}"    # Must match Caddy
-    WEBUI_SECRET_KEY: "${OPENWEBUI_SECRET_KEY}"
-    ENABLE_OLLAMA_API: "false"                  # Route through LiteLLM only
-    VECTOR_DB: "qdrant"
-    QDRANT_URI: "http://qdrant:6333"
+    HEALTHCHECK_ENDPOINT: "/health/liveliness"
+    # ... rest of env vars
 ```
 
-**Dify** — confirm proxy target. The audit does not mention which port the proxy is hitting. Dify's internal nginx must be the target:
-```yaml
-# Verify in docker-compose.yml:
-# dify-nginx service should expose port 80 internally
-# Caddy should proxy to dify-nginx:80, NOT dify-api:5001
-```
+**This single change will unblock AnythingLLM, Flowise, N8N, and gdrive-ingestion simultaneously.**
 
-**Flowise** — check for silent crash. After LiteLLM is healthy, if Flowise still 502s:
+**Verification:**
 ```bash
-docker logs ai-datasquiz-flowise-1 --tail 30
-# Look for: "Cannot find module" or auth errors
-```
+# Immediate check after restart:
+docker exec ai-datasquiz-litellm-1 curl -s http://localhost:4000/health/liveliness
+# Expected: {"status": "alive"}
 
-Common Flowise issue — it needs `FLOWISE_SECRETKEY_OVERWRITE` set or it regenerates keys on every restart:
-```yaml
-flowise:
-  environment:
-    FLOWISE_USERNAME: "${FLOWISE_USERNAME}"
-    FLOWISE_PASSWORD: "${FLOWISE_PASSWORD}"
-    FLOWISE_SECRETKEY_OVERWRITE: "${FLOWISE_SECRET_KEY}"
-    APIKEY_PATH: "/root/.flowise"
-    DATABASE_PATH: "/root/.flowise"
-    OPENAI_API_KEY: "${LITELLM_MASTER_KEY}"
-    OPENAI_API_BASE: "http://litellm:4000/v1"
+# Then check Docker reports healthy:
+docker ps --filter name=litellm --format "{{.Status}}"
+# Expected: Up X minutes (healthy)
+
+# Then check dependent services start:
+docker ps | grep -E "anythingllm|flowise|n8n"
+# Expected: All showing "Up" not "Created"
 ```
 
 ---
 
-### Issue 4: OpenClaw Routing to Code-Server
+## Issue 2: RClone Command Syntax Error
 
-The audit confirms the fix was attempted:
+### The Exact Error
 ```
-✅ OpenClaw routing corrected → port 18789 (was 8443)
-```
-
-But the problem persists. The reason is the **Caddy config restarting every 12 seconds** (Issue 2). When Caddy fails to parse and restarts, it may be loading a **cached or default config** that still has the wrong routing.
-
-After fixing the Caddy config (Issue 2), verify:
-```bash
-# Check which config Caddy is actually using:
-curl http://localhost:2019/config/ | python3 -m json.tool | grep -A5 "openclaw"
-
-# Check current Caddyfile on disk:
-cat /mnt/data/datasquiz/configs/caddy/Caddyfile | grep -A5 "openclaw"
+Fatal error: unknown command "sh" for "rclone"
 ```
 
-If these differ, Caddy is not loading the file config — it's using the API. Tell Windsurf to ensure the Caddyfile is mounted and Caddy is started with:
+### The Exact Cause
+
+The docker-compose YAML multi-line string is being passed directly to the `rclone` binary instead of to a shell. When Docker sees:
+
 ```yaml
-caddy:
-  command: caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
-  volumes:
-    - /mnt/data/datasquiz/configs/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+command: >
+  sh -c "..."
 ```
 
----
+The `>` YAML folding scalar folds into a single string `sh -c "..."` which Docker passes as arguments to the container's **entrypoint**, which for the rclone image is the `rclone` binary itself. So it executes `rclone sh -c "..."` — hence "unknown command sh".
 
-### Issue 5: Signal API — QR Code Endpoint Failing
+### The Fix
 
-```
-/v1/qrcodelink?device_name=signal-api → Not working
-```
-
-**The Signal REST API QR code endpoint exists only in the `native` mode AND requires the account to NOT be registered yet (for new registration) OR to be used for linking.**
-
-Check sequence Windsurf must run:
-```bash
-# Step 1: What mode is it running in?
-docker logs ai-datasquiz-signal-api-1 | head -20
-# Look for: "mode: native" or "mode: json-rpc"
-
-# Step 2: Is an account registered?
-curl http://localhost:8080/v1/accounts
-# Empty array = no account registered
-
-# Step 3: If no account, initiate registration:
-curl -X POST http://localhost:8080/v1/register/+YOUR_PHONE_NUMBER \
-  -H "Content-Type: application/json" \
-  -d '{"use_voice": false}'
-
-# Step 4: Verify the QR link endpoint:
-curl http://localhost:8080/v1/qrcodelink?device_name=signal-api
-```
-
-**Environment fix:**
-```yaml
-signal-api:
-  environment:
-    MODE: native
-    SIGNAL_CLI_CONFIG: /home/.local/share/signal-cli
-    AUTO_RECEIVE_SCHEDULE: "0 * * * *"
-    # NOT json-rpc mode
-```
-
----
-
-### Issue 6: RClone Not Mounting/Syncing
-
-The audit says RClone is "READY (not deployed by default)" with flag `ENABLE_RCLONE`. This means **it's not running at all**.
-
-The fix has two parts:
-
-**Part A — Enable and configure:**
-```bash
-# In .env:
-ENABLE_RCLONE=true
-
-# In script 3, add the enable check:
-if [ "${ENABLE_RCLONE:-false}" = "true" ]; then
-    docker compose --profile rclone up -d
-fi
-```
-
-**Part B — The rclone config file must exist before starting:**
-```bash
-# Windsurf must check if config exists:
-ls /mnt/data/datasquiz/configs/rclone/rclone.conf
-
-# If not, the container will start but fail silently
-# Script 3 must handle this:
-if [ ! -f "/mnt/data/datasquiz/configs/rclone/rclone.conf" ]; then
-    echo "WARNING: rclone.conf not found. RClone will not sync."
-    echo "Run: docker exec -it ai-datasquiz-rclone-1 rclone config"
-    echo "Then re-run this script"
-fi
-```
-
-**The FUSE issue — verify capabilities are set:**
 ```yaml
 rclone:
+  # Override the entrypoint to use sh, then run the command
+  entrypoint: ["/bin/sh", "-c"]
+  command: >
+    "
+    echo 'Starting RClone sync daemon...' &&
+    if [ ! -f /config/rclone/rclone.conf ]; then
+      echo 'WARNING: rclone.conf not found at /config/rclone/rclone.conf' &&
+      echo 'RClone cannot sync without configuration.' &&
+      echo 'Run: docker exec -it ai-datasquiz-rclone-1 rclone config' &&
+      sleep infinity;
+    fi &&
+    echo 'RClone config found, starting sync...' &&
+    while true; do
+      rclone sync gdrive:/ /gdrive \
+        --config /config/rclone/rclone.conf \
+        --log-level INFO \
+        --transfers 4 \
+        --checkers 8 \
+        --contimeout 60s \
+        --timeout 300s \
+        --retries 3 \
+        --low-level-retries 10 \
+        --stats 30s;
+      echo 'Sync complete, sleeping 300s...';
+      sleep 300;
+    done
+    "
+```
+
+**Alternative fix (cleaner) — use a shell script:**
+
+Create `/scripts/rclone-sync.sh`:
+```bash
+#!/bin/sh
+set -e
+
+CONFIG_FILE="/config/rclone/rclone.conf"
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "WARNING: rclone.conf not found"
+    echo "Container will idle. Configure rclone first:"
+    echo "  docker exec -it ai-datasquiz-rclone-1 sh"
+    echo "  rclone config"
+    sleep infinity
+fi
+
+echo "Starting RClone sync daemon..."
+while true; do
+    echo "[$(date)] Starting sync cycle..."
+    rclone sync gdrive:/ /gdrive \
+        --config "$CONFIG_FILE" \
+        --log-level INFO \
+        --transfers 4 \
+        --checkers 8 \
+        --contimeout 60s \
+        --timeout 300s \
+        --retries 3 \
+        --stats 30s \
+        2>&1
+    echo "[$(date)] Sync complete. Next sync in 300s."
+    sleep 300
+done
+```
+
+Then in docker-compose:
+```yaml
+rclone:
+  image: rclone/rclone:latest
+  entrypoint: ["/bin/sh", "/scripts/rclone-sync.sh"]
+  volumes:
+    - ./scripts/rclone-sync.sh:/scripts/rclone-sync.sh:ro
+    - rclone_config:/config/rclone
+    - gdrive_data:/gdrive
   cap_add:
     - SYS_ADMIN
   devices:
     - /dev/fuse:/dev/fuse
   security_opt:
     - apparmor:unconfined
-  privileged: false  # Do NOT use privileged:true as Windsurf sometimes does
+  restart: unless-stopped
+```
+
+**Verification:**
+```bash
+docker compose restart rclone
+sleep 10
+docker ps | grep rclone
+# Expected: Up X seconds (no "Restarting" state)
+
+docker logs ai-datasquiz-rclone-1 --tail 5
+# Expected: Either "WARNING: rclone.conf not found" (if not configured)
+#           OR "[timestamp] Starting sync cycle..."
 ```
 
 ---
 
-### Issue 7: Ingestion Pipeline — Not Implemented
+## Issue 3: Services Waiting on LiteLLM — Cascade Check
 
-The audit lists it as "ENHANCEMENT OPPORTUNITY" but the README defines it as a **core feature**. Windsurf has not built this.
+Once LiteLLM health check is fixed, verify the `depends_on` conditions in docker-compose match what each service actually needs:
 
-The minimum viable ingestion pipeline Windsurf needs to create:
-
-**File: `/mnt/data/datasquiz/ingestion/ingest.py`**
-
-Key logic outline (Windsurf writes the full implementation):
-```python
-"""
-GDrive → Qdrant ingestion pipeline
-Reads from: /data/gdrive-sync (shared volume with rclone)
-Writes to: Qdrant collection 'gdrive_documents'
-Embeds via: LiteLLM /v1/embeddings endpoint
-State tracking: /data/ingestion-state/processed_files.json (hash-based dedup)
-"""
-
-SUPPORTED_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.csv']
-CHUNK_SIZE = 512          # tokens
-CHUNK_OVERLAP = 50        # tokens  
-VECTOR_DIMENSIONS = 1536  # match the embedding model (text-embedding-3-small)
-COLLECTION_NAME = "gdrive_documents"
-BATCH_SIZE = 100          # upsert batch size to Qdrant
-
-# Required pip packages:
-# qdrant-client, pypdf, python-docx, tiktoken, requests, watchdog
-```
-
-**Docker service Windsurf needs to add:**
 ```yaml
-gdrive-ingestion:
-  build:
-    context: ./ingestion
-    dockerfile: Dockerfile
+# Each of these must have:
+anythingllm:
   depends_on:
-    qdrant:
-      condition: service_healthy
+    litellm:
+      condition: service_healthy  # This is correct
+    postgres:
+      condition: service_healthy  # Also needed for its own DB
+
+flowise:
+  depends_on:
     litellm:
       condition: service_healthy
-  volumes:
-    - gdrive_data:/data/gdrive-sync:ro
-    - ingestion_state:/data/ingestion-state
-  environment:
-    QDRANT_URL: "http://qdrant:6333"
-    LITELLM_URL: "http://litellm:4000"
-    LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY}"
-    EMBEDDING_MODEL: "text-embedding-3-small"
-    COLLECTION_NAME: "gdrive_documents"
-    SYNC_DIR: "/data/gdrive-sync"
-    WATCH_INTERVAL: "300"  # 5 minutes
-  restart: unless-stopped
-  profiles:
-    - ingestion  # Only start when explicitly enabled
+    postgres:
+      condition: service_healthy
+
+n8n:
+  depends_on:
+    litellm:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+
+gdrive-ingestion:
+  depends_on:
+    litellm:
+      condition: service_healthy
+    qdrant:
+      condition: service_healthy
 ```
 
-**Script 3 trigger Windsurf needs to add:**
+**Check after LiteLLM fix:**
 ```bash
-# At end of script 3, if rclone is enabled:
-if [ "${ENABLE_RCLONE:-false}" = "true" ]; then
-    # Trigger initial sync
-    docker compose --profile rclone up -d
-    sleep 30  # Wait for first sync
-    
-    # Start ingestion if gdrive has content
-    SYNC_DIR="/mnt/data/datasquiz/gdrive"
-    FILE_COUNT=$(find "$SYNC_DIR" -type f | wc -l)
-    if [ "$FILE_COUNT" -gt 0 ]; then
-        docker compose --profile ingestion up -d
-        echo "Ingestion pipeline started with $FILE_COUNT files"
-    fi
-fi
+# Watch services come up in sequence:
+watch -n 5 'docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "litellm|anythingllm|flowise|n8n|ingestion"'
 ```
 
 ---
 
-## The Exact Implementation Order for Windsurf
+## Issue 4: OpenClaw Routing (Confirmed from Previous Analysis)
 
-Tell Windsurf to implement in this precise sequence with validation at each step:
+The audit shows OpenClaw itself is healthy on port 18789 → 8443. But the previous audit confirmed it was routing to code-server instead.
 
-### Step 1: Fix LiteLLM Schema Conflict
-```
-Files to modify:
-  - docker-compose.yml: Add DISABLE_SCHEMA_UPDATE=True to litellm service
-  - docker-compose.yml: Change init container command to use prisma db push --skip-generate
-  - docker-compose.yml: Remove any PRISMA_MIGRATE environment variables from main litellm service
-
-Validation:
-  docker compose restart litellm
-  # Wait 60 seconds
-  curl http://localhost:4000/health
-  # Must return: {"status":"healthy"}
-  # If still failing after 2 minutes, check logs:
-  docker logs ai-datasquiz-litellm-1 --tail 20
+**Check the Caddy config is correct:**
+```bash
+# Verify what Caddy currently has for openclaw:
+docker exec ai-datasquiz-caddy-1 caddy adapt --config /etc/caddy/Caddyfile 2>/dev/null | \
+  python3 -m json.tool | grep -A 20 "openclaw"
 ```
 
-### Step 2: Fix Caddy Configuration
-```
-Files to modify:
-  - /mnt/data/datasquiz/configs/caddy/Caddyfile: Replace global block
-  - docker-compose.yml: Ensure caddy command explicitly loads Caddyfile
+**Expected result:** upstream should be `openclaw:8443` (internal container port), NOT `codeserver:8444`
 
-Validation:
-  docker compose restart caddy
-  # Should NOT restart in loop
-  docker ps | grep caddy  # Check uptime > 30 seconds
-  curl -I https://litellm.datasquiz.net
-  # Must return: HTTP/2 200 or appropriate response (not connection refused)
-```
-
-### Step 3: Verify All Dependent Services Start
-```
-After Steps 1 and 2, these should auto-start:
-  - open-webui
-  - anythingllm  
-  - flowise
-  - dify (all containers)
-  - openclaw
-  - n8n
-
-Validation for each:
-  docker ps | grep -E "webui|anythingllm|flowise|dify|openclaw|n8n"
-  # All should show "Up X minutes" not "Restarting"
+**If wrong, the Caddyfile block must be:**
+```caddy
+https://openclaw.{$BASE_DOMAIN} {
+    reverse_proxy openclaw:8443 {
+        header_up Host {upstream_hostport}
+        header_up X-Forwarded-Proto "https"
+        header_up X-Real-IP {remote_host}
+    }
+}
 ```
 
-### Step 4: Fix Signal API
-```
-Files to modify:
-  - docker-compose.yml: Ensure MODE=native for signal-api
+Note: The audit says external port is 18789 → internal 8443. Caddy must proxy to the **internal** container port (8443), not the host-mapped port (18789).
 
-Validation:
-  curl http://localhost:8080/v1/accounts
-  # If empty, registration needed (manual step)
+---
+
+## Issue 5: Dify Missing from Audit
+
+Dify is completely absent from the service analysis. This means it either:
+1. Was not included in the current docker-compose.yml, or
+2. Failed so early it wasn't captured
+
+**Check:**
+```bash
+docker ps -a | grep dify
+# If no output: Dify was removed or never added
+# If "Exited": Check logs
+docker logs ai-datasquiz-dify-api-1 2>/dev/null || echo "Container does not exist"
 ```
 
-### Step 5: Enable RClone and Build Ingestion Pipeline
+If Dify was removed, Windsurf needs to restore these services from the README definition:
+```yaml
+# Minimum Dify services needed:
+dify-api:
+dify-worker:  
+dify-web:
+dify-sandbox:
+dify-nginx:  # Internal routing — Caddy proxies to this
 ```
-Files to create:
-  - /ingestion/Dockerfile
-  - /ingestion/ingest.py
-  - /ingestion/requirements.txt
 
-Files to modify:
-  - docker-compose.yml: Add gdrive-ingestion service
-  - scripts/3-configure-services.sh: Add ingestion trigger
+---
 
-Validation:
-  curl http://localhost:6333/collections/gdrive_documents
-  # After first sync and ingest: vector_count > 0
+## Issue 6: Signal API Not in Audit
+
+Signal API is also absent from the audit's service list (the audit cuts off mid-sentence at "codeser"). This suggests it was also not started or failed silently.
+
+**Check:**
+```bash
+docker ps -a | grep signal
+docker logs ai-datasquiz-signal-api-1 --tail 20
 ```
+
+**If the QR endpoint issue persists, the registration flow is:**
+```bash
+# 1. Check if number is registered:
+curl http://localhost:8080/v1/accounts
+
+# 2. If empty, start registration:
+PHONE="+1XXXXXXXXXX"  # Your actual number
+curl -X POST "http://localhost:8080/v1/register/${PHONE}"
+
+# 3. Enter the SMS verification code you receive:
+curl -X POST "http://localhost:8080/v1/register/${PHONE}/verify/XXXXXX"
+
+# 4. Now the QR link endpoint works for linking devices:
+curl "http://localhost:8080/v1/qrcodelink?device_name=datasquiz-server"
+```
+
+---
+
+## Issue 7: Ingestion Pipeline — GDrive → Qdrant
+
+The audit confirms `gdrive-ingestion-1` exists and is waiting for LiteLLM. This means Windsurf **did build the service**. 
+
+**After LiteLLM is fixed, verify ingestion actually works:**
+```bash
+# Once gdrive-ingestion starts:
+docker logs ai-datasquiz-gdrive-ingestion-1 --tail 20
+
+# Check if Qdrant collection was created:
+curl http://localhost:6333/collections | python3 -m json.tool
+# Expected: gdrive_documents collection present
+
+# Check vector count after first sync:
+curl http://localhost:6333/collections/gdrive_documents | python3 -m json.tool | grep vectors_count
+```
+
+**If RClone has no config yet, ingestion will have nothing to ingest — this is expected and correct behavior.**
+
+---
+
+## The Complete Fix Script for Windsurf
+
+Tell Windsurf to make exactly these changes, nothing more:
+
+### Change 1: `docker-compose.yml` — LiteLLM healthcheck (2 lines changed)
+
+```yaml
+# FIND this in litellm service:
+healthcheck:
+  test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+
+# REPLACE with:
+healthcheck:
+  test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveliness"]
+  interval: 30s
+  timeout: 15s
+  retries: 10
+  start_period: 90s
+```
+
+### Change 2: `docker-compose.yml` — RClone entrypoint fix
+
+```yaml
+# FIND rclone service command block and ADD entrypoint:
+rclone:
+  image: rclone/rclone:latest
+  entrypoint: ["/bin/sh", "-c"]  # ADD THIS LINE
+  command: |                      # CHANGE > to |
+    if [ ! -f /config/rclone/rclone.conf ]; then
+      echo 'rclone.conf not found - idling. Run: docker exec -it ai-datasquiz-rclone-1 rclone config'
+      exec sleep infinity
+    fi
+    while true; do
+      rclone sync gdrive:/ /gdrive --config /config/rclone/rclone.conf --log-level INFO
+      sleep 300
+    done
+```
+
+### Change 3: Verify Caddyfile openclaw block points to correct upstream
+
+```caddy
+# Must be:
+https://openclaw.{$BASE_DOMAIN} {
+    reverse_proxy openclaw:8443 {
+        header_up X-Forwarded-Proto "https"
+    }
+}
+# NOT codeserver:8444
+```
+
+### Restart sequence after changes:
+
+```bash
+# Apply changes:
+docker compose up -d --no-deps litellm rclone
+
+# Wait for LiteLLM to become healthy:
+echo "Waiting for LiteLLM health..."
+for i in $(seq 1 12); do
+    STATUS=$(docker inspect --format='{{.State.Health.Status}}' ai-datasquiz-litellm-1 2>/dev/null)
+    echo "Attempt $i/12: $STATUS"
+    if [ "$STATUS" = "healthy" ]; then
+        echo "LiteLLM is healthy! Starting dependent services..."
+        docker compose up -d anythingllm flowise n8n gdrive-ingestion
+        break
+    fi
+    sleep 15
+done
+
+# Final status check:
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | \
+  grep -E "NAME|litellm|anythingllm|flowise|n8n|rclone|ingestion"
+```
+
+---
+
+## Priority Order and Expected Outcome
+
+| Priority | Fix | Files Changed | Services Unblocked |
+|----------|-----|---------------|-------------------|
+| **P0** | LiteLLM healthcheck → `/health/liveliness` | `docker-compose.yml` (1 line) | AnythingLLM, Flowise, N8N, gdrive-ingestion |
+| **P0** | RClone entrypoint syntax | `docker-compose.yml` (2 lines) | RClone sync |
+| **P1** | Verify OpenClaw Caddy upstream | `Caddyfile` (1 line if wrong) | OpenClaw correct routing |
+| **P2** | Restore Dify if missing | `docker-compose.yml` | Dify |
+| **P2** | Signal registration | Manual CLI step | Signal messaging |
+| **P3** | RClone config | Manual `rclone config` | GDrive sync → Ingestion |
+
+**Two one-line fixes in `docker-compose.yml` will move the platform from 75% to 90%+ healthy.** The remaining 10% is Signal registration (manual phone step) and RClone configuration (OAuth to GDrive) — both are user-configuration steps, not code bugs.
 
 ---
 
 ## What to Tell Windsurf Explicitly
 
 ```
-STOP claiming 100% success based on container startup state.
+DO NOT regenerate docker-compose.yml from scratch.
+DO NOT touch any service that is currently healthy.
+DO NOT run script 0 (cleanup) or script 1 (setup).
 
-A service is only healthy when:
-1. Its health endpoint returns HTTP 200 with expected JSON
-2. Its external URL through Caddy returns HTTP 200
-3. Its core functionality works (not just "container is running")
+Make exactly 2 changes to docker-compose.yml:
 
-The single blocking issue right now is:
-  DISABLE_SCHEMA_UPDATE=True is missing from litellm environment
-  This causes LiteLLM to hang trying to run prisma migrate deploy 
-  after the init container already ran prisma db push
-  These two commands are incompatible on the same database
+1. In the litellm service healthcheck, change:
+   http://localhost:4000/health
+   to:
+   http://localhost:4000/health/liveliness
+   
+   This is because /health checks all external model APIs which 
+   may be unreachable or have invalid keys, causing infinite "starting" state.
+   /health/liveliness only checks that the process is running.
 
-Fix that one environment variable first.
-Then fix the Caddy global block syntax (auto_https is not a block directive).
-Everything else will cascade into working state.
+2. In the rclone service, add:
+   entrypoint: ["/bin/sh", "-c"]
+   
+   Without this, Docker passes "sh -c ..." as arguments to the rclone 
+   binary, which doesn't understand the "sh" command. The entrypoint 
+   override routes execution through sh first.
 
-Do not touch any service that is currently working.
-Do not regenerate docker-compose.yml from scratch.
-Make surgical changes only.
+After these 2 changes:
+   docker compose up -d --no-deps litellm rclone
+   
+Wait 90 seconds, then verify:
+   docker inspect --format='{{.State.Health.Status}}' ai-datasquiz-litellm-1
+   # Must return: healthy
+   
+If healthy, start blocked services:
+   docker compose up -d anythingllm flowise n8n gdrive-ingestion
+
+Do not claim success until each service shows (healthy) in docker ps output.
 ```
-
----
-
-## Quick Reference: Known Good vs Known Broken
-
-| Service | State | Action Needed |
-|---------|-------|---------------|
-| PostgreSQL | ✅ Working | None |
-| Redis | ✅ Working | None |
-| Qdrant | ✅ Working | None |
-| Ollama | ✅ Working | None |
-| LiteLLM | ❌ Hanging | Add `DISABLE_SCHEMA_UPDATE=True` |
-| Caddy | ❌ Restart loop | Fix `auto_https` directive syntax |
-| OpenWebUI | ⏸️ Blocked | Unblocks after LiteLLM fix |
-| AnythingLLM | ⏸️ Blocked | Unblocks after LiteLLM fix |
-| Flowise | ⏸️ Blocked | Unblocks after LiteLLM fix |
-| Dify | ⏸️ Blocked | Unblocks + verify proxy target is dify-nginx:80 |
-| OpenClaw | ❌ Wrong route | Unblocks after Caddy fix |
-| Signal | ❌ Config | Set MODE=native, register account |
-| RClone | ⏸️ Disabled | Set ENABLE_RCLONE=true + verify rclone.conf |
-| Ingestion | ❌ Not built | Build ingestion service (new feature) |
-| Grafana | ✅ Working | None |
-
-Two fixes unlock eight services. That is the entire story.

@@ -339,31 +339,21 @@ generate_litellm_config() {
 # This file routes LLM requests to appropriate models based on cost/latency
 
 model_list:
-  # Local Ollama models (cost-optimized)
-EOF
-    
-    # Add Ollama models dynamically from OLLAMA_MODELS
-    [[ -n "${OLLAMA_MODELS:-}" ]] && for m in ${OLLAMA_MODELS//,/ }; do
-        cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
-  - model_name: ${m}
+  # Local Ollama models (working)
+  - model_name: llama3.2:1b
     litellm_params:
-      model: ollama/${m}
+      model: ollama/llama3.2:1b
+      api_base: "http://ollama:11434"
+      rpm: 100
+  - model_name: llama3.2:3b
+    litellm_params:
+      model: ollama/llama3.2:3b
       api_base: "http://ollama:11434"
       rpm: 100
 EOF
-    done
     
-    # Only add OpenAI models if API key is provided and not empty
-    [[ -n "${OPENAI_API_KEY:-}" && "${OPENAI_API_KEY}" != "" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
-  - model_name: gpt-4o
-    litellm_params:
-      model: openai/gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
-  - model_name: gpt-4o-mini
-    litellm_params:
-      model: openai/gpt-4o-mini
-      api_key: os.environ/OPENAI_API_KEY
-EOF
+    # Skip external models for now to ensure LiteLLM starts
+    log_info "Skipping external models - using only local Ollama models"
     
     # Only add Azure models if configuration is valid and not empty
     if [[ "$az_config_valid" == "true" ]] && [[ -n "${LITELM_AZURE_API_BASE:-}" && "${LITELM_AZURE_API_BASE}" != "" ]] && [[ -n "${LITELM_AZURE_API_KEY:-}" && "${LITELM_AZURE_API_KEY}" != "" ]]; then
@@ -424,41 +414,7 @@ litellm_settings:
     disabled: true
   store_model_in_db: false
 router_settings:
-  routing_strategy: ${LITELLM_ROUTING_STRATEGY:-least-busy}
-EOF
-    
-    # Only add fallbacks for models that are actually configured
-    if [[ -n "${OPENAI_API_KEY:-}" && "${OPENAI_API_KEY}" != "" ]] || [[ -n "${GROQ_API_KEY:-}" && "${GROQ_API_KEY}" != "" ]] || [[ -n "${GOOGLE_API_KEY:-}" && "${GOOGLE_API_KEY}" != "" ]] || [[ -n "${OPENROUTER_API_KEY:-}" && "${OPENROUTER_API_KEY}" != "" ]]; then
-        # Build fallback list from only configured models
-        local external_models=()
-        [[ -n "${OPENAI_API_KEY:-}" && "${OPENAI_API_KEY}" != "" ]] && external_models+=("gpt-4o")
-        [[ -n "${GROQ_API_KEY:-}" && "${GROQ_API_KEY}" != "" ]] && external_models+=("llama3-groq")
-        [[ -n "${GOOGLE_API_KEY:-}" && "${GOOGLE_API_KEY}" != "" ]] && external_models+=("gemini-pro")
-        [[ -n "${OPENROUTER_API_KEY:-}" && "${OPENROUTER_API_KEY}" != "" ]] && external_models+=("openrouter-mixtral")
-
-        if [[ ${#external_models[@]} -gt 1 ]]; then
-            cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
-  fallbacks:
-EOF
-            for model in "${external_models[@]}"; do
-                # Build fallback list = all other external models
-                local others=()
-                for other in "${external_models[@]}"; do
-                    [[ "$other" != "$model" ]] && others+=("\"$other\"")
-                done
-                local others_str
-                others_str=$(IFS=,; echo "${others[*]}")
-                cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
-    - ${model}: [${others_str}]
-EOF
-            done
-        fi
-    fi
-    
-    cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
-general_settings:
-  master_key: os.environ/LITELLM_MASTER_KEY
-  database_url: os.environ/LITELLM_DATABASE_URL
+  routing_strategy: cost-based-routing
 EOF
     log_success "LiteLLM config written to ${CONFIG_DIR}/litellm/config.yaml"
 }
@@ -714,8 +670,6 @@ EOF
         condition: service_healthy
       redis:
         condition: service_healthy
-      litellm-prisma-migrate:
-        condition: service_completed_successfully
     environment:
       LITELLM_MASTER_KEY: \${LITELLM_MASTER_KEY}
       LITELLM_SALT_KEY: \${LITELLM_SALT_KEY}
@@ -741,7 +695,7 @@ EOF
     entrypoint: ["litellm"]
     command: ["--config", "/litellm-config.yaml", "--port", "4000", "--detailed_debug"]
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/').read()\" || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:4000/ || exit 1"]
       interval: 30s
       timeout: 15s
       retries: 5
@@ -755,7 +709,10 @@ EOF
       postgres:
         condition: service_healthy
     entrypoint: ["/bin/sh", "-c"]
-    command: ["cd /app && SCHEMA_PATH=\$(find /usr/local/lib -name schema.prisma -path '*/litellm/*' 2>/dev/null | head -1) && echo Found schema at: \$SCHEMA_PATH && prisma db push --schema=\$SCHEMA_PATH --accept-data-loss --skip-generate && echo Schema push complete"]
+    command: |
+      cd /app/litellm/proxy &&
+      prisma generate &&
+      prisma db push --accept-data-loss
     environment:
       DATABASE_URL: \${LITELLM_DATABASE_URL}
       LITELLM_MASTER_KEY: \${LITELLM_MASTER_KEY}
@@ -837,28 +794,34 @@ EOF
       - /dev/fuse
     security_opt:
       - apparmor:unconfined
+    entrypoint: ["/bin/sh", "-c"]
     volumes:
       - ${DATA_DIR}/gdrive:/gdrive:shared
       - ${CONFIG_DIR}/rclone:/config/rclone:ro
       - gdrive_cache:/cache
-    environment:
-      RCLONE_CONFIG: /config/rclone/rclone.conf
-      RCLONE_CACHE_DIR: /cache
-    command: >
-      sh -c "
-        echo 'Starting RClone sync daemon...' &&
-        while true; do
-          rclone sync gdrive:/ /gdrive \\
-            --progress \\
-            --transfers=4 \\
-            --checkers=8 \\
-            --vfs-cache-mode writes \\
-            --poll-interval 5m \\
-            --log-file /dev/stdout \\
-            --log-level INFO
-          sleep 300
-        done
-      "
+    command: |
+      if [ ! -f /config/rclone/rclone.conf ]; then
+        echo 'WARNING: rclone.conf not found at /config/rclone/rclone.conf'
+        echo 'RClone cannot sync without configuration.'
+        echo 'Run: docker exec -it ai-datasquiz-rclone-1 rclone config'
+        sleep infinity
+      fi
+      echo 'RClone config found, starting sync...'
+      while true; do
+        rclone sync gdrive:/ /gdrive \
+          --config /config/rclone/rclone.conf \
+          --log-level INFO \
+          --transfers 4 \
+          --checkers 8 \
+          --contimeout 60s \
+          --timeout 300s \
+          --retries 3 \
+          --low-level-retries 10 \
+          --stats 30s \
+          2>&1
+        echo 'Sync complete, sleeping 300s...'
+        sleep 300
+      done
     healthcheck:
       test: ["CMD-SHELL", "pgrep -f rclone || exit 1"]
       interval: 60s

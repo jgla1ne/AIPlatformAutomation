@@ -1,57 +1,83 @@
-This blueprint identifies the "Iterative Patching Loop" Windsurf has fallen into and provides the structural corrections needed to move from a collection of containers to a unified AI platform.
+Based on the **Deployment Audit** and the current state of the repository, Windsurf has fallen into the "Sunk Cost Fallacy" of debugging: it is trying to fix networking issues by deleting the database layer (Prisma/Postgres), which only makes the application layer more unstable.
 
-### 1. Restore the LiteLLM Core (Postgres + Prisma)
-LiteLLM is the gateway for your entire stack. Running it in "lite" mode (without a DB) means AnythingLLM and OpenWebUI lose their connection every time the container restarts because API keys aren't persistent.
+The platform is **90% functional**, but the final 10% is failing due to **Race Conditions** (LiteLLM starting before Postgres) and **Configuration Drift** (Passwords collected but not mapped).
 
-*   **The Blueprint:** 
-    *   **Image Switch:** Use `ghcr.io/berriai/litellm-database:main-latest` instead of the standard image. This image contains the Prisma engine required for database migrations.
-    *   **Orchestration Logic:** In `docker-compose.yml`, LiteLLM must have a `depends_on` block with a `service_healthy` condition for Postgres.
-    *   **Connection String:** Pass `DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm` explicitly.
-    *   **The "Wait" Fix:** Add a `command` wrapper: `sh -c "/app/wait-for-it.sh postgres:5432 -- python3 main.py --config /app/config.yaml"`. This prevents LiteLLM from crashing while Postgres is still performing its initial internal disk setup.
+Here is the comprehensive blueprint to fix the stack.
 
-### 2. Resolution of SSL/502 Errors & Proxy Routing
-The SSL errors and the OpenClaw-to-CodeServer routing conflict stem from a collision in the Nginx/Reverse Proxy configuration.
+---
 
-*   **The Conflict:** OpenClaw (18789) and CodeServer (8443/8080) are likely sharing a "catch-all" block or have overlapping `server_name` definitions.
-*   **The Blueprint:**
-    *   **Explicit Host Headers:** In the Nginx config, ensure `openclaw.ai.datasquiz.net` is a dedicated `server {}` block that proxies to `http://openclaw:18789`. 
-    *   **CodeServer Isolation:** Ensure CodeServer is explicitly bound to `codeserver.ai.datasquiz.net`.
-    *   **SSL Pathing:** The "SSL Protocol Error" usually means Nginx is trying to serve HTTPS but can't find the Tailscale certificates. Script 1 must verify the certs are in `/etc/ssl/certs/tailscale/` and Script 2 must mount that *entire* directory into the Nginx container as a read-only volume.
-    *   **Upstream 502s:** Flowise and OpenWebUI take 60-90 seconds to start. Nginx times out. Add `proxy_read_timeout 300;` and `proxy_connect_timeout 300;` to the proxy config.
+### 1. The Core Infrastructure Fix (Reverting the "Bandaid")
+**The Problem:** LiteLLM was failing because the Postgres container takes ~10 seconds to initialize its internal file structure, but LiteLLM tries to run Prisma migrations in ~2 seconds.
+**The Solution:**
+*   **Re-enable Postgres:** Restore the `postgres` service in `docker-compose.yml`.
+*   **Use the Database Image:** LiteLLM must use `ghcr.io/berriai/litellm-database:main-latest`.
+*   **Implement a Healthcheck:** Do not rely on `depends_on` alone. Use a proper healthcheck in `docker-compose.yml`:
+    ```yaml
+    postgres:
+      healthcheck:
+        test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+        interval: 5s
+        timeout: 5s
+        retries: 5
+    litellm:
+      depends_on:
+        postgres:
+          condition: service_healthy
+    ```
 
-### 3. Password Synchronization & `.env` Validation
-Windsurf has a variable mismatch. It collects an "OpenClaw Password" but fails to map it to `CODEBASE_PASSWORD`, leaving CodeServer unauthenticated or unreachable.
+### 2. Password & Variable Synchronization
+**The Problem:** The Audit shows `CODEBASE_PASSWORD` is empty. Script 1 collects a password but doesn't map it to all services.
+**The Solution (Modify Script 1):**
+Ensure the input variable is explicitly written to all required fields in the `.env`:
+```bash
+# In 1-setup-system.sh
+read -sp "Set the Master Admin Password: " MASTER_PASS
+sed -i "s/^CODEBASE_PASSWORD=.*/CODEBASE_PASSWORD=$MASTER_PASS/" .env
+sed -i "s/^OPENCLAW_PASSWORD=.*/OPENCLAW_PASSWORD=$MASTER_PASS/" .env
+sed -i "s/^ANYTHINGLLM_PASSWORD=.*/ANYTHINGLLM_PASSWORD=$MASTER_PASS/" .env
+```
 
-*   **The Blueprint:**
-    *   **Script 1 Update:** Modify the variable collection to be explicit: `read -p "Enter Platform Admin Password: " ADMIN_PASS`.
-    *   **Universal Mapping:** In `.env`, map this single variable to all services requiring it:
-        ```bash
-        OPENCLAW_PASSWORD=$ADMIN_PASS
-        CODEBASE_PASSWORD=$ADMIN_PASS
-        ANYTHINGLLM_PASSWORD=$ADMIN_PASS
-        ```
-    *   **Script 3 Verification:** Add a check to `3-configure-services.sh` that fails if any password variable in `.env` is empty.
+### 3. Nginx Proxy & Routing (OpenClaw vs. CodeServer)
+**The Problem:** `openclaw.ai.datasquiz.net` is resolving to CodeServer. This happens because Nginx uses the first "default_server" or a wildcard when a specific match isn't found.
+**The Solution:**
+*   **Specific Server Blocks:** In the Nginx config, create distinct files in `/etc/nginx/conf.d/` for each subdomain.
+*   **OpenClaw Fix:** Ensure the `server_name` is exactly `openclaw.ai.datasquiz.net` and the `proxy_pass` points to `http://openclaw:18789`.
+*   **CodeServer Fix:** Ensure its block is restricted to `codeserver.ai.datasquiz.net`.
+*   **SSL Protocol Error:** This occurs because Nginx is listening on 443 but the `ssl_certificate` paths are likely invalid or pointing to empty files. Mount the Tailscale cert directory: `/var/lib/tailscale/certs:/etc/nginx/certs:ro`.
 
-### 4. Rclone Active Sync & Qdrant Ingestion
-Rclone is currently behaving like a one-time copy tool rather than a file stream.
+### 4. Rclone and the "Ingestion Gap"
+**The Problem:** Rclone isn't active, and Script 3 isn't triggering the Qdrant ingestion of synced Google Drive data.
+**The Solution:**
+*   **Mount as a Service:** Instead of a one-time sync, run Rclone in Docker with the `--vfs-cache-mode writes` flag.
+*   **The Ingestion Script (Add to Script 3):**
+    Windsurf needs to add a logic block that uses AnythingLLM’s API to "fetch" files from the mounted GDrive folder.
+    ```bash
+    # Logical snippet for Script 3
+    curl -X POST "http://anythingllm:3001/api/v1/document/upload" \
+         -H "Authorization: Bearer ${ANYTHING_LLM_API_KEY}" \
+         -F "file=@/data/gdrive/synced_doc.pdf"
+    ```
 
-*   **The Blueprint:**
-    *   **Rclone as a Service:** Add an `rclone` service to `docker-compose.yml` using the `--vfs-cache-mode writes` and `--poll-interval 1m` flags. This mounts your GDrive as a local volume that "lives" and updates.
-    *   **The Ingestion Trigger:** Create a small Python bridge (or use AnythingLLM's API) in `3-configure-services.sh`.
-    *   **Logic:** `If /mnt/gdrive/ingest contains new files -> Trigger AnythingLLM/Qdrant Vectorization`. This fulfills the README's goal of shared embeddings.
+### 5. Signal-API 404 Fix
+**The Problem:** `/v1/qrcodelink` fails because the container hasn't started a "session" yet.
+**The Solution:**
+In `3-configure-services.sh`, Windsurf must add a "wait and initialize" step:
+1. `curl -X POST http://signal-api:8080/v1/devices/registration`
+2. Only *after* this call will the `/v1/qrcodelink` endpoint return a valid 200 OK image.
 
-### 5. Signal-API QR Code Fix
-The 404 on `/v1/qrcodelink` happens because the Signal-API container hasn't "provisioned" a link to the underlying `signal-cli`.
+---
 
-*   **The Blueprint:**
-    *   **Environment Check:** Ensure `SIGNAL_API_TELEMETRY=true` and `SIGNAL_API_MODE=normal` are set.
-    *   **Initialization:** Script 3 should execute a `curl -X POST` to initialize the device *before* attempting to retrieve the QR link.
+### Comprehensive Summary for Windsurf
 
-### Summary Checklist for Windsurf's Final Iteration:
-1.  **Revert:** Put Postgres back and use the `litellm-database` image.
-2.  **Network:** Use container names (not IPs) for internal proxying.
-3.  **Volume Mapping:** Mount the Tailscale certs directory directly into Nginx.
-4.  **Wait Logic:** Implement health-checks in Compose so services don't try to connect to LiteLLM before it is ready.
-5.  **Passwords:** Ensure `CODEBASE_PASSWORD` is populated in `.env` during Script 1.
+| Service | Status | Required Action |
+| :--- | :--- | :--- |
+| **LiteLLM** | Broken | Revert to `litellm-database` image; link to Postgres with `service_healthy`. |
+| **Postgres** | Missing | Re-add to stack; essential for LiteLLM persistence. |
+| **OpenClaw** | Misrouted | Update Nginx `server_name` to prevent CodeServer collision. |
+| **Passwords**| Broken | Sync `MASTER_PASS` to `CODEBASE_PASSWORD` in `.env`. |
+| **Flowise** | 502 | Increase `proxy_read_timeout` to 300s in Nginx. |
+| **Rclone** | Inactive | Change from script-based sync to a persistent Docker mount. |
+| **Ingestion** | Missing | Add API call in Script 3 to push `/mnt/gdrive` files to Qdrant/AnythingLLM. |
 
-**Why Windsurf failed for 40 hours:** It was trying to fix *connectivity* by removing *dependencies* (Prisma). In a complex stack, you fix connectivity by **strengthening** dependencies with healthchecks and proper wait-times. Moving Prisma back in with a `wait-for-it` script will resolve the 502/SSL domino effect.
+**Final Recommendation:**
+Stop the "Cleanup" loop. Tell Windsurf to **manually update the `.env` and `docker-compose.yml`** using the structures above. The issues are not with the code logic, but with the **timing and dependencies** between services. Once LiteLLM has a stable DB and the Proxy has specific server blocks, the 502 and SSL errors will vanish.
