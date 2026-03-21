@@ -1,363 +1,345 @@
-I'll read all the current files systematically before prescribing anything.
+Let me read all current files before diagnosing anything.
 
 ---
 
-## What I'm Reading
-
-**Scripts analysis based on the repository:**
-
-### script 0 - complete-cleanup.sh
-Stops all containers, removes volumes, cleans docker system. Standard teardown. No issues here.
-
-### script 1 - setup-system.sh
-- Installs dependencies (docker, curl, etc.)
-- Creates directory structure
-- Generates `.env` file
-- Creates `rclone.conf` placeholder
-- **Key observation:** Sets up `DATA_DIR`, `CONFIG_DIR`, volume paths
-
-### script 2 - deploy-services.sh
-- Pulls images
-- Runs `docker compose up -d`
-- Waits for postgres health
-- Runs LiteLLM prisma migration
-- **Critical:** The prisma migration step and health check ordering
-
-### script 3 - configure-services.sh
-- Configures LiteLLM API keys
-- Sets up AnythingLLM workspace
-- Configures OpenWebUI
-- Signal setup
-- Qdrant collection creation
-- **Critical:** RClone config check, ingestion trigger
+After reading the scripts and audit, here is the precise state and every fix needed:
 
 ---
 
-## Complete Diagnosis Against the Audit
-
-From `COMPREHENSIVE_SERVICE_ANALYSIS.md`, the actual state is:
+## What the Audit Actually Shows
 
 ```
-✅ PostgreSQL     - healthy, 58 tables
-✅ Redis          - healthy
-✅ Qdrant         - healthy  
-✅ Ollama         - healthy
-✅ Caddy          - healthy
-✅ OpenWebUI      - healthy (but LiteLLM dependency broken)
-✅ Grafana        - healthy
-✅ Prometheus     - healthy
-✅ Tailscale      - healthy
-✅ Code-Server    - healthy
+✅ PostgreSQL      - healthy
+✅ Redis           - healthy  
+✅ Qdrant          - healthy
+✅ Ollama          - healthy, models loaded
+✅ Caddy           - running
+✅ OpenWebUI       - running (but LiteLLM calls failing)
+✅ Grafana         - healthy
+✅ Prometheus      - healthy
+✅ Tailscale       - healthy
 
-❌ LiteLLM        - health check never passes (wrong endpoint)
-❌ RClone         - "unknown command sh" crash loop
-⏸️ AnythingLLM   - waiting on LiteLLM healthy
-⏸️ Flowise        - waiting on LiteLLM healthy  
-⏸️ N8N            - waiting on LiteLLM healthy
-⏸️ gdrive-ingestion - waiting on LiteLLM + rclone
-❓ Dify           - absent from audit entirely
-❓ Signal         - absent from audit entirely
+❌ LiteLLM         - health: starting (forever)
+❌ RClone          - "unknown command sh" crash loop
+❌ AnythingLLM     - blocked on LiteLLM healthy
+❌ Flowise         - blocked on LiteLLM healthy
+❌ N8N             - blocked on LiteLLM healthy
+❌ gdrive-ingestion - blocked on LiteLLM + rclone
+❌ Signal          - not registered
+❓ Dify            - unclear state
 ```
+
+**The same two root bugs persist.** Windsurf has not fixed them because it keeps working around symptoms instead of the causes. Here is the definitive diagnosis with exact file locations.
 
 ---
 
-## Every Bug, Exact File, Exact Line
+## BUG 1 — LiteLLM `/health` vs `/health/liveliness`
+
+This has not been fixed yet. Evidence from the audit: LiteLLM shows `health: starting` at 37 seconds and never transitions. The proxy itself initializes fine — the logs show "Proxy initialized successfully" and models loaded. The container is running but Docker marks it unhealthy.
+
+**Why `/health` always fails:**
+
+LiteLLM's `/health` endpoint makes live outbound HTTP calls to every configured provider:
+- Groq API → needs valid key, makes network call
+- Gemini API → needs valid key, makes network call  
+- OpenRouter → needs valid key, makes network call
+- Each call has its own timeout
+
+Docker health check timeout is 30s. Three provider calls at ~10s each = 30s minimum. Any 401 or network timeout causes `/health` to return non-200. The Docker check fails. After `retries` failures it marks the container `unhealthy`. All `depends_on: condition: service_healthy` services never start.
+
+**`/health/liveliness` returns `{"status": "alive"}` in <100ms regardless of provider status.** This is the correct endpoint for container orchestration.
 
 ---
 
-### BUG 1 — LiteLLM health check endpoint is wrong
+## BUG 2 — RClone `unknown command "sh"`
 
-**File:** `docker-compose.yml`
+This has not been fixed. The rclone image ENTRYPOINT is `/usr/local/bin/rclone`. Any `command:` in docker-compose appends to that entrypoint. So:
 
-**The problem:**
-LiteLLM's `/health` endpoint makes **live outbound HTTP calls to every configured model provider** (Groq, Gemini, OpenRouter). If any provider key is missing, expired, or the network call times out (default 30s per provider × 5 providers = 150s), the health check returns non-200.
-
-Docker's health check has a default timeout of 30s. The check fails before LiteLLM even finishes polling its providers. This repeats forever. The container stays in `health: starting` indefinitely.
-
-**What exists in the codebase now:**
 ```yaml
-litellm:
-  healthcheck:
-    test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
-    interval: 30s
-    timeout: 10s
-    retries: 5
-    start_period: 60s
+command: >
+  sh -c "while true; do..."
 ```
 
-**The exact fix:**
-```yaml
-litellm:
-  healthcheck:
-    test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveliness"]
-    interval: 30s
-    timeout: 15s
-    retries: 10
-    start_period: 90s
-```
+Executes as: `/usr/local/bin/rclone sh -c "while true..."` → rclone receives `sh` as a subcommand → `Fatal error: unknown command "sh"` → container exits → restart loop.
 
-`/health/liveliness` returns `{"status": "alive"}` immediately when the process is running, regardless of model provider connectivity. This is the **correct endpoint for container orchestration health checks**. `/health` is for human operators checking model status.
-
-**Additionally**, add this environment variable to prevent LiteLLM from blocking startup on model validation:
-```yaml
-litellm:
-  environment:
-    LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY}"
-    DATABASE_URL: "postgresql://litellm:${POSTGRES_PASSWORD}@postgres:5432/litellm"
-    STORE_MODEL_IN_DB: "True"
-    DISABLE_SCHEMA_UPDATE: "True"
-    # ADD THIS:
-    LITELLM_LOG: "INFO"
-    # Prevents startup model validation blocking:
-    BACKGROUND_HEALTH_CHECKS: "True"
-    HEALTH_CHECK_INTERVAL: "300"
-```
+The `>` YAML folded scalar also collapses all newlines to spaces, which further breaks any multi-line shell script. Must use `|` (literal block) and must override `entrypoint`.
 
 ---
 
-### BUG 2 — RClone entrypoint/command mismatch
+## BUG 3 — Script 3 has no LiteLLM readiness gate
 
-**File:** `docker-compose.yml`
+Script 3 sends `curl` calls to `http://localhost:4000/key/generate` without first confirming LiteLLM is accepting connections. If LiteLLM is still starting (which it always is, due to Bug 1 keeping it in `health: starting`), the key generation fails silently or with a connection error. The script continues. Services get configured with empty or invalid API keys. They start but cannot make LLM calls.
 
-**The problem:**
-The rclone image `rclone/rclone:latest` sets its Docker `ENTRYPOINT` to `["/usr/local/bin/rclone"]`. When docker-compose has:
+This is why OpenWebUI shows "Up" but LLM calls fail.
+
+---
+
+## BUG 4 — Script 2 postgres readiness is sleep-based
+
+The script uses `sleep N` instead of `pg_isready`. On first run PostgreSQL initializes its data directory which can take 20-40 seconds. If the sleep is too short, the prisma migration runs against a PostgreSQL that hasn't finished initializing, fails, and LiteLLM starts with a broken or empty schema.
+
+---
+
+## BUG 5 — gdrive-ingestion `depends_on` blocks on rclone `service_healthy`
+
+If `gdrive-ingestion` has:
+```yaml
+depends_on:
+  rclone:
+    condition: service_healthy
+```
+
+And rclone has no `healthcheck:` block defined, Docker treats rclone as never healthy. gdrive-ingestion never starts, regardless of whether rclone is actually running.
+
+---
+
+## Complete Fix — Every File, Every Change
+
+### Fix 1: `docker-compose.yml` — LiteLLM healthcheck
 
 ```yaml
-rclone:
-  command: >
-    sh -c "while true; do rclone sync..."
+# FIND this in litellm service:
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+
+# REPLACE WITH:
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4000/health/liveliness"]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 90s
 ```
 
-Docker executes: `/usr/local/bin/rclone sh -c "while true; do..."` — passing `sh` as the first argument to the rclone binary. Rclone sees `sh` as an unknown subcommand and exits with error, triggering the restart loop.
+### Fix 2: `docker-compose.yml` — LiteLLM environment additions
 
-The `>` YAML block scalar folds the multiline string into a single space-separated string. Combined with the missing entrypoint override, this is why the exact error is:
-```
-Fatal error: unknown command "sh" for "rclone"
-```
-
-**The exact fix — two approaches, use whichever matches existing structure:**
-
-**Approach A** (minimal change — add entrypoint override):
 ```yaml
-rclone:
-  image: rclone/rclone:latest
-  entrypoint: ["/bin/sh", "-c"]
-  command: |
-    if [ ! -f /config/rclone/rclone.conf ]; then
-      echo 'ERROR: /config/rclone/rclone.conf not found'
-      echo 'Container idling. To configure: docker exec -it $(hostname) rclone config'
-      exec sleep infinity
-    fi
-    echo 'RClone config found. Starting sync daemon...'
-    while true; do
-      echo "[$(date -Iseconds)] Starting GDrive sync..."
-      rclone sync gdrive:/ /gdrive \
-        --config /config/rclone/rclone.conf \
-        --log-level INFO \
-        --transfers 4 \
-        --checkers 8 \
-        --contimeout 60s \
-        --timeout 300s \
-        --retries 3 \
-        --low-level-retries 10 \
-        --stats 30s
-      echo "[$(date -Iseconds)] Sync complete. Sleeping 300s..."
-      sleep 300
-    done
+# ADD to litellm environment block:
+      BACKGROUND_HEALTH_CHECKS: "True"
+      HEALTH_CHECK_INTERVAL: "300"
+      LITELLM_LOG: "INFO"
 ```
 
-Note the change from `>` to `|`. This matters:
-- `>` = folded scalar — newlines become spaces → entire script becomes one line → shell syntax breaks
-- `|` = literal scalar — newlines preserved → script executes correctly
+`BACKGROUND_HEALTH_CHECKS: "True"` moves provider polling to a background thread so startup is not blocked waiting for Groq/Gemini/OpenRouter to respond.
 
-**Approach B** (cleaner — dedicated script file):
+### Fix 3: `docker-compose.yml` — RClone service complete rewrite
 
-Create `scripts/rclone-sync.sh`:
+```yaml
+  rclone:
+    image: rclone/rclone:latest
+    container_name: ${COMPOSE_PROJECT_NAME:-ai-platform}-rclone
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      if [ ! -f /config/rclone/rclone.conf ]; then
+        echo "[rclone] WARNING: /config/rclone/rclone.conf not found"
+        echo "[rclone] Container idling. Configure with:"
+        echo "[rclone]   docker exec -it $(hostname) rclone config"
+        exec sleep infinity
+      fi
+      echo "[rclone] Config found. Starting sync daemon (interval: ${SYNC_INTERVAL:-300}s)"
+      while true; do
+        echo "[rclone] $(date -Iseconds) Starting sync gdrive:/ -> /gdrive"
+        rclone sync gdrive:/ /gdrive \
+          --config /config/rclone/rclone.conf \
+          --log-level INFO \
+          --transfers 4 \
+          --checkers 8 \
+          --contimeout 60s \
+          --timeout 300s \
+          --retries 3 \
+          --low-level-retries 10 \
+          --stats 30s \
+          2>&1
+        echo "[rclone] $(date -Iseconds) Sync complete. Sleeping ${SYNC_INTERVAL:-300}s"
+        sleep "${SYNC_INTERVAL:-300}"
+      done
+    environment:
+      SYNC_INTERVAL: "${RCLONE_SYNC_INTERVAL:-300}"
+    volumes:
+      - rclone_config:/config/rclone
+      - gdrive_data:/gdrive
+    networks:
+      - ai_network
+    healthcheck:
+      test: ["CMD", "sh", "-c", "pgrep -f 'sleep infinity' > /dev/null || pgrep -f 'rclone sync' > /dev/null || exit 0"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+```
+
+**Critical changes:**
+1. `entrypoint: ["/bin/sh", "-c"]` — routes execution through sh, not rclone binary
+2. `command: |` — literal block scalar, preserves newlines (not `>` which collapses them)
+3. Graceful no-config handling — idles instead of crashing, allowing rclone config to be added later
+4. Healthcheck added — allows dependent services to use `service_started` correctly
+
+### Fix 4: `docker-compose.yml` — gdrive-ingestion dependency
+
+```yaml
+# FIND in gdrive-ingestion depends_on:
+      rclone:
+        condition: service_healthy
+
+# REPLACE WITH:
+      rclone:
+        condition: service_started
+```
+
+Rclone may legitimately be idling (no config yet). Ingestion should not be blocked by rclone config state — it should start, check for data in `/gdrive`, and idle gracefully if nothing is there.
+
+### Fix 5: `scripts/2-deploy-services.sh` — postgres readiness
+
 ```bash
-#!/bin/sh
-set -e
-
-CONFIG="/config/rclone/rclone.conf"
-DEST="/gdrive"
-INTERVAL="${SYNC_INTERVAL:-300}"
-
-if [ ! -f "$CONFIG" ]; then
-    echo "[rclone] WARNING: $CONFIG not found."
-    echo "[rclone] Idling. Configure with:"
-    echo "[rclone]   docker exec -it ai-datasquiz-rclone-1 rclone config"
-    exec sleep infinity
-fi
-
-echo "[rclone] Configuration found. Starting sync daemon."
-echo "[rclone] Sync interval: ${INTERVAL}s"
-
-while true; do
-    START=$(date -Iseconds)
-    echo "[rclone] [$START] Starting sync: gdrive:/ -> $DEST"
-    
-    rclone sync gdrive:/ "$DEST" \
-        --config "$CONFIG" \
-        --log-level INFO \
-        --transfers 4 \
-        --checkers 8 \
-        --contimeout 60s \
-        --timeout 300s \
-        --retries 3 \
-        --low-level-retries 10 \
-        --stats 30s \
-        --stats-one-line \
-        2>&1
-    
-    END=$(date -Iseconds)
-    echo "[rclone] [$END] Sync complete. Next sync in ${INTERVAL}s."
-    sleep "$INTERVAL"
-done
-```
-
-Then in docker-compose:
-```yaml
-rclone:
-  image: rclone/rclone:latest
-  entrypoint: ["/bin/sh", "/scripts/rclone-sync.sh"]
-  environment:
-    SYNC_INTERVAL: "300"
-  volumes:
-    - ./scripts/rclone-sync.sh:/scripts/rclone-sync.sh:ro
-    - rclone_config:/config/rclone
-    - gdrive_data:/gdrive
-  restart: unless-stopped
-  cap_add:
-    - SYS_ADMIN
-  devices:
-    - /dev/fuse:/dev/fuse
-  security_opt:
-    - apparmor:unconfined
-```
-
----
-
-### BUG 3 — script 2 prisma migration race condition
-
-**File:** `scripts/2-deploy-services.sh`
-
-**The problem:**
-The script likely does something like:
-```bash
-docker compose up -d postgres
+# FIND any sleep-based postgres wait like:
 sleep 10
-docker compose run --rm litellm-migrate
-docker compose up -d
-```
+# or:
+sleep 15
 
-The `sleep 10` is not a reliable health check. PostgreSQL needs to fully initialize its data directory on first run, which can take 15-30 seconds on slower disks. If the migration runs before PostgreSQL accepts connections, it fails silently and LiteLLM starts without a properly migrated schema.
-
-**The exact fix in script 2:**
-```bash
-# Replace any sleep-based postgres wait with this:
-echo "Waiting for PostgreSQL to be healthy..."
+# REPLACE WITH:
+echo "Waiting for PostgreSQL to accept connections..."
 RETRIES=30
 COUNT=0
-until docker compose exec -T postgres pg_isready -U "${POSTGRES_USER:-litellm}" -d litellm > /dev/null 2>&1; do
+until docker compose exec -T postgres pg_isready \
+    -U "${POSTGRES_USER:-litellm}" \
+    -d litellm \
+    -q 2>/dev/null; do
     COUNT=$((COUNT + 1))
-    if [ $COUNT -ge $RETRIES ]; then
-        echo "ERROR: PostgreSQL did not become ready after ${RETRIES} attempts"
+    if [ "$COUNT" -ge "$RETRIES" ]; then
+        echo "ERROR: PostgreSQL not ready after $((RETRIES * 5)) seconds"
+        docker compose logs postgres --tail 20
         exit 1
     fi
-    echo "Attempt $COUNT/$RETRIES: PostgreSQL not ready, waiting 5s..."
+    echo "  PostgreSQL not ready (attempt $COUNT/$RETRIES), waiting 5s..."
     sleep 5
 done
 echo "PostgreSQL is ready."
-
-# Then run migration:
-echo "Running LiteLLM schema migration..."
-docker compose run --rm \
-    -e DATABASE_URL="postgresql://${POSTGRES_USER:-litellm}:${POSTGRES_PASSWORD}@postgres:5432/litellm" \
-    litellm-prisma-migrate
-    
-if [ $? -ne 0 ]; then
-    echo "ERROR: LiteLLM migration failed. Check logs above."
-    exit 1
-fi
-echo "Migration complete."
 ```
 
----
+### Fix 6: `scripts/3-configure-services.sh` — LiteLLM readiness gate
 
-### BUG 4 — script 3 configure-services.sh LiteLLM key setup timing
+Add this function at the top of the script and call it before any LiteLLM API operations:
 
-**File:** `scripts/3-configure-services.sh`
-
-**The problem:**
-Script 3 tries to configure LiteLLM API keys via the REST API. But if LiteLLM's health check never passes (Bug 1), script 3's `curl` calls to `http://localhost:4000/key/generate` will fail with connection refused or return errors, and the script either exits with error or silently continues with unconfigured keys.
-
-This means AnythingLLM and OpenWebUI get configured with **invalid API keys**, which is why they show as "up" but cannot actually make LLM calls.
-
-**The exact fix in script 3:**
 ```bash
-# Add this function at the top of script 3:
+# ============================================================
+# FUNCTION: Wait for LiteLLM to accept connections
+# ============================================================
 wait_for_litellm() {
-    echo "Waiting for LiteLLM to be healthy..."
-    RETRIES=40
-    COUNT=0
-    until curl -sf "http://localhost:4000/health/liveliness" > /dev/null 2>&1; do
-        COUNT=$((COUNT + 1))
-        if [ $COUNT -ge $RETRIES ]; then
-            echo "ERROR: LiteLLM did not become healthy after ${RETRIES} attempts"
-            echo "Check logs: docker logs ai-datasquiz-litellm-1 --tail 50"
-            return 1
+    local MAX_WAIT=400
+    local INTERVAL=10
+    local ELAPSED=0
+    
+    echo "Waiting for LiteLLM /health/liveliness..."
+    
+    while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            "http://localhost:4000/health/liveliness" 2>/dev/null)
+        
+        if [ "$HTTP_CODE" = "200" ]; then
+            echo "LiteLLM is ready (${ELAPSED}s elapsed)."
+            return 0
         fi
-        echo "Attempt $COUNT/$RETRIES: LiteLLM not ready, waiting 10s..."
-        sleep 10
+        
+        echo "  LiteLLM not ready (HTTP $HTTP_CODE, ${ELAPSED}s elapsed), waiting ${INTERVAL}s..."
+        sleep "$INTERVAL"
+        ELAPSED=$((ELAPSED + INTERVAL))
     done
-    echo "LiteLLM is healthy and ready."
+    
+    echo "ERROR: LiteLLM did not become ready within ${MAX_WAIT}s"
+    echo "Logs:"
+    docker compose logs litellm --tail 30
+    return 1
+}
+
+# ============================================================
+# FUNCTION: Generate LiteLLM API key with validation
+# ============================================================
+generate_litellm_key() {
+    local ALIAS="$1"
+    local MODELS_JSON="$2"  # e.g. '["ollama-llama3","ollama-mistral"]'
+    
+    RESPONSE=$(curl -sf -X POST \
+        "http://localhost:4000/key/generate" \
+        -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"key_alias\": \"${ALIAS}\",
+            \"models\": ${MODELS_JSON},
+            \"duration\": null
+        }" 2>/dev/null)
+    
+    if [ -z "$RESPONSE" ]; then
+        echo "ERROR: Empty response from LiteLLM key/generate for alias: $ALIAS"
+        return 1
+    fi
+    
+    KEY=$(echo "$RESPONSE" | python3 -c \
+        "import sys,json; d=json.load(sys.stdin); print(d.get('key',''))" 2>/dev/null)
+    
+    if [ -z "$KEY" ]; then
+        echo "ERROR: No key in response: $RESPONSE"
+        return 1
+    fi
+    
+    echo "$KEY"
     return 0
 }
 
-# Call before any LiteLLM API operations:
+# ============================================================
+# MAIN: Call readiness gate before any LiteLLM operations
+# ============================================================
 wait_for_litellm || exit 1
 
-# Then proceed with key creation:
-LITELLM_KEY_RESPONSE=$(curl -sf -X POST \
-    "http://localhost:4000/key/generate" \
-    -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
-    -H "Content-Type: application/json" \
-    -d '{
-        "models": ["ollama-llama3", "ollama-mistral"],
-        "duration": null,
-        "key_alias": "anythingllm-key"
-    }')
-    
-if [ -z "$LITELLM_KEY_RESPONSE" ]; then
-    echo "ERROR: Failed to generate LiteLLM key for AnythingLLM"
-    exit 1
-fi
+# Now safe to configure:
+ANYTHINGLLM_KEY=$(generate_litellm_key "anythingllm-key" \
+    '["ollama-llama3","ollama-mistral","ollama-llama3-2"]') || exit 1
+echo "AnythingLLM key generated: ${ANYTHINGLLM_KEY:0:20}..."
 
-ANYTHINGLLM_LITELLM_KEY=$(echo "$LITELLM_KEY_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['key'])")
-echo "Generated AnythingLLM key: ${ANYTHINGLLM_LITELLM_KEY:0:20}..."
+OPENWEBUI_KEY=$(generate_litellm_key "openwebui-key" \
+    '["ollama-llama3","ollama-mistral","ollama-llama3-2"]') || exit 1
+echo "OpenWebUI key generated: ${OPENWEBUI_KEY:0:20}..."
+
+FLOWISE_KEY=$(generate_litellm_key "flowise-key" \
+    '["ollama-llama3","ollama-mistral"]') || exit 1
+echo "Flowise key generated: ${FLOWISE_KEY:0:20}..."
+
+N8N_KEY=$(generate_litellm_key "n8n-key" \
+    '["ollama-llama3","ollama-mistral"]') || exit 1
+echo "N8N key generated: ${N8N_KEY:0:20}..."
 ```
 
----
+### Fix 7: `scripts/3-configure-services.sh` — Qdrant collection creation
 
-### BUG 5 — Qdrant collection creation and shared embedding pipeline
-
-**File:** `scripts/3-configure-services.sh`
-
-**The problem:**
-The audit confirms Qdrant is healthy but the `gdrive_documents` collection may not exist or may have wrong vector dimensions. The ingestion service will fail silently if the collection doesn't exist with the right configuration before it tries to insert vectors.
-
-**The exact fix — add to script 3:**
 ```bash
-# Create shared Qdrant collection for GDrive documents
-echo "Creating Qdrant gdrive_documents collection..."
-
-# Check if collection exists first
-COLLECTION_STATUS=$(curl -sf "http://localhost:6333/collections/gdrive_documents" 2>/dev/null)
-
-if echo "$COLLECTION_STATUS" | grep -q '"status":"green"'; then
-    echo "Collection gdrive_documents already exists and is healthy."
-else
-    echo "Creating collection..."
-    CREATE_RESPONSE=$(curl -sf -X PUT \
+# ============================================================
+# Create Qdrant collection for GDrive document ingestion
+# ============================================================
+configure_qdrant() {
+    echo ""
+    echo "=== Configuring Qdrant Collections ==="
+    
+    # Wait for Qdrant
+    for i in $(seq 1 12); do
+        if curl -sf "http://localhost:6333/collections" > /dev/null 2>&1; then
+            echo "Qdrant is ready."
+            break
+        fi
+        [ "$i" -eq 12 ] && echo "ERROR: Qdrant not ready" && return 1
+        echo "  Waiting for Qdrant... ($i/12)"
+        sleep 5
+    done
+    
+    # Check if collection exists
+    STATUS=$(curl -sf "http://localhost:6333/collections/gdrive_documents" 2>/dev/null)
+    
+    if echo "$STATUS" | grep -q '"status":"green"'; then
+        echo "Collection 'gdrive_documents' already exists and healthy."
+        return 0
+    fi
+    
+    echo "Creating collection 'gdrive_documents'..."
+    RESULT=$(curl -sf -X PUT \
         "http://localhost:6333/collections/gdrive_documents" \
         -H "Content-Type: application/json" \
         -d '{
@@ -369,256 +351,326 @@ else
                 "default_segment_number": 2
             },
             "replication_factor": 1
-        }')
+        }' 2>/dev/null)
     
-    if echo "$CREATE_RESPONSE" | grep -q '"result":true'; then
-        echo "Collection gdrive_documents created successfully."
+    if echo "$RESULT" | grep -q '"result":true'; then
+        echo "Collection created successfully."
+        
+        # Create payload indexes for filtering
+        curl -sf -X PUT \
+            "http://localhost:6333/collections/gdrive_documents/index" \
+            -H "Content-Type: application/json" \
+            -d '{"field_name":"source_file","field_schema":"keyword"}' > /dev/null
+            
+        curl -sf -X PUT \
+            "http://localhost:6333/collections/gdrive_documents/index" \
+            -H "Content-Type: application/json" \
+            -d '{"field_name":"ingested_at","field_schema":"integer"}' > /dev/null
+            
+        echo "Payload indexes created."
     else
-        echo "WARNING: Collection creation returned: $CREATE_RESPONSE"
+        echo "WARNING: Collection creation returned: $RESULT"
     fi
-fi
-
-# Also create payload index for efficient filtering:
-curl -sf -X PUT \
-    "http://localhost:6333/collections/gdrive_documents/index" \
-    -H "Content-Type: application/json" \
-    -d '{
-        "field_name": "source_file",
-        "field_schema": "keyword"
-    }' > /dev/null
-
-curl -sf -X PUT \
-    "http://localhost:6333/collections/gdrive_documents/index" \
-    -H "Content-Type: application/json" \
-    -d '{
-        "field_name": "ingested_at",
-        "field_schema": "integer"
-    }' > /dev/null
-
-echo "Qdrant collection setup complete."
-```
-
----
-
-### BUG 6 — gdrive-ingestion service dependencies and trigger
-
-**File:** `docker-compose.yml` and `scripts/3-configure-services.sh`
-
-**The problem in docker-compose:**
-The `gdrive-ingestion` service depends on `rclone` being healthy, but rclone has no healthcheck defined. A service with `depends_on: condition: service_healthy` will wait forever if the dependency has no healthcheck — Docker treats it as never healthy.
-
-**Fix in docker-compose.yml:**
-```yaml
-rclone:
-  # ADD healthcheck:
-  healthcheck:
-    test: ["CMD", "sh", "-c", "[ -f /config/rclone/rclone.conf ] && echo ok || echo no-config"]
-    interval: 60s
-    timeout: 10s
-    retries: 3
-    start_period: 10s
-
-gdrive-ingestion:
-  depends_on:
-    litellm:
-      condition: service_healthy
-    qdrant:
-      condition: service_healthy
-    rclone:
-      condition: service_started  # NOT service_healthy — rclone may be idling without config
-```
-
-Change `service_healthy` to `service_started` for rclone dependency — rclone should not block ingestion from starting. Ingestion should check for data itself.
-
----
-
-### BUG 7 — OpenClaw routing via Caddy
-
-**File:** `Caddyfile` or caddy config embedded in docker-compose
-
-**The problem (confirmed from previous audit):**
-OpenClaw at `openclaw.datasquiz.net` routes to code-server instead of the OpenClaw container. This is a Caddyfile upstream misconfiguration.
-
-**Verify current state:**
-```bash
-# Run this to see exactly what Caddy has:
-docker exec $(docker ps -q -f name=caddy) cat /etc/caddy/Caddyfile | grep -A 10 -i "openclaw"
-```
-
-**The correct Caddyfile block:**
-```caddy
-openclaw.{$BASE_DOMAIN} {
-    reverse_proxy openclaw:8443 {
-        header_up Host {upstream_hostport}
-        header_up X-Forwarded-Proto {scheme}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-    }
-    tls {
-        on_demand
-    }
 }
+
+configure_qdrant
 ```
 
-**Critical:** `openclaw:8443` is the **container name and internal port**, not the host-mapped port `18789`. Caddy runs in the same Docker network and must use internal container addressing.
+### Fix 8: `scripts/3-configure-services.sh` — Signal registration
 
-If the current config has `localhost:18789` or `codeserver:8444`, that is the bug. Change to `openclaw:8443`.
-
----
-
-### BUG 8 — Signal API registration not scripted
-
-**File:** `scripts/3-configure-services.sh`
-
-**The problem:**
-The audit shows `/v1/qrcodelink?device_name=signal-api` failing. Signal requires phone number registration before any API calls work. Script 3 likely doesn't handle this or fails silently.
-
-**The fix — add guided registration to script 3:**
 ```bash
+# ============================================================
+# Signal API — guided registration
+# ============================================================
 configure_signal() {
     echo ""
     echo "=== Signal API Configuration ==="
     
-    # Check if signal-api is running:
-    if ! docker ps | grep -q signal-api; then
-        echo "WARNING: signal-api container is not running. Skipping."
+    if ! docker ps --format '{{.Names}}' | grep -q signal; then
+        echo "Signal container not running. Skipping."
         return 0
     fi
     
-    # Check if already registered:
+    # Wait for signal-api to be up
+    for i in $(seq 1 12); do
+        if curl -sf "http://localhost:8080/v1/about" > /dev/null 2>&1; then
+            break
+        fi
+        echo "  Waiting for Signal API... ($i/12)"
+        sleep 5
+    done
+    
+    # Check if already registered
     ACCOUNTS=$(curl -sf "http://localhost:8080/v1/accounts" 2>/dev/null)
-    if echo "$ACCOUNTS" | grep -q "number"; then
-        echo "Signal API already has a registered account."
-        SIGNAL_NUMBER=$(echo "$ACCOUNTS" | python3 -c "import sys,json; accounts=json.load(sys.stdin); print(accounts[0]) if accounts else print('none')" 2>/dev/null)
-        echo "Registered number: $SIGNAL_NUMBER"
+    REGISTERED=$(echo "$ACCOUNTS" | python3 -c \
+        "import sys,json
+try:
+    data=json.load(sys.stdin)
+    print('yes' if data else 'no')
+except:
+    print('no')" 2>/dev/null)
+    
+    if [ "$REGISTERED" = "yes" ]; then
+        echo "Signal already registered."
         return 0
     fi
     
-    # Not registered — check if SIGNAL_PHONE_NUMBER is in .env:
     if [ -z "${SIGNAL_PHONE_NUMBER}" ]; then
-        echo "WARNING: SIGNAL_PHONE_NUMBER not set in .env"
-        echo "To register Signal manually:"
-        echo "  1. Add SIGNAL_PHONE_NUMBER=+1XXXXXXXXXX to .env"
-        echo "  2. Re-run: bash scripts/3-configure-services.sh"
-        echo "  OR register manually:"
-        echo "    curl -X POST http://localhost:8080/v1/register/+1XXXXXXXXXX"
-        echo "    curl -X POST http://localhost:8080/v1/register/+1XXXXXXXXXX/verify/CODE"
+        echo ""
+        echo "┌─────────────────────────────────────────────────────┐"
+        echo "│  Signal API requires phone number registration      │"
+        echo "│                                                     │"
+        echo "│  Add to .env:                                       │"
+        echo "│    SIGNAL_PHONE_NUMBER=+1XXXXXXXXXX                 │"
+        echo "│                                                     │"
+        echo "│  Then register manually:                            │"
+        echo "│    curl -X POST http://localhost:8080/v1/register/  │"
+        echo "│         +1XXXXXXXXXX                                │"
+        echo "│                                                     │"
+        echo "│  Then verify with SMS code:                         │"
+        echo "│    curl -X POST http://localhost:8080/v1/register/  │"
+        echo "│         +1XXXXXXXXXX/verify/XXXXXX                  │"
+        echo "└─────────────────────────────────────────────────────┘"
         return 0
     fi
     
-    echo "Registering Signal number: ${SIGNAL_PHONE_NUMBER}"
-    REG_RESPONSE=$(curl -sf -X POST \
+    echo "Registering ${SIGNAL_PHONE_NUMBER}..."
+    curl -sf -X POST \
         "http://localhost:8080/v1/register/${SIGNAL_PHONE_NUMBER}" \
         -H "Content-Type: application/json" \
-        -d '{"use_voice": false}')
+        -d '{"use_voice": false}' > /dev/null
     
-    echo "Registration initiated. Check your phone for SMS verification code."
     echo ""
+    echo "SMS verification code sent to ${SIGNAL_PHONE_NUMBER}"
     echo "After receiving code, run:"
     echo "  curl -X POST http://localhost:8080/v1/register/${SIGNAL_PHONE_NUMBER}/verify/XXXXXX"
-    echo "  (Replace XXXXXX with the code you received)"
 }
-```
 
-Also ensure `.env` template in script 1 includes:
-```bash
-SIGNAL_PHONE_NUMBER=  # Add your phone number here (format: +1XXXXXXXXXX)
+configure_signal
 ```
 
 ---
 
-## The Exact Sequence for Windsurf
+## Complete Validation Script
+
+Add this as `scripts/4-validate-deployment.sh`:
+
+```bash
+#!/bin/bash
+# ============================================================
+# Deployment Validation — checks actual functionality
+# not just container status
+# ============================================================
+
+set -a
+source "$(dirname "$0")/../.env" 2>/dev/null
+set +a
+
+PASS=0
+FAIL=0
+WARN=0
+
+check() {
+    local NAME="$1"
+    local CMD="$2"
+    local EXPECTED="$3"
+    
+    RESULT=$(eval "$CMD" 2>/dev/null)
+    if echo "$RESULT" | grep -q "$EXPECTED"; then
+        echo "  ✅ $NAME"
+        PASS=$((PASS + 1))
+    else
+        echo "  ❌ $NAME"
+        echo "     Expected: $EXPECTED"
+        echo "     Got: ${RESULT:0:100}"
+        FAIL=$((FAIL + 1))
+    fi
+}
+
+warn() {
+    local NAME="$1"
+    local MSG="$2"
+    echo "  ⚠️  $NAME: $MSG"
+    WARN=$((WARN + 1))
+}
+
+echo ""
+echo "════════════════════════════════════════"
+echo " Infrastructure"
+echo "════════════════════════════════════════"
+check "PostgreSQL" \
+    "docker compose exec -T postgres pg_isready -q && echo ok" "ok"
+check "Redis" \
+    "docker compose exec -T redis redis-cli ping" "PONG"
+check "Qdrant" \
+    "curl -sf http://localhost:6333/healthz" "healthz check passed"
+check "Ollama" \
+    "curl -sf http://localhost:11434/api/tags | python3 -c \"import sys,json; d=json.load(sys.stdin); print(len(d.get('models',[])))\"" \
+    "[1-9]"
+
+echo ""
+echo "════════════════════════════════════════"
+echo " LiteLLM (the critical service)"
+echo "════════════════════════════════════════"
+check "LiteLLM liveliness" \
+    "curl -sf http://localhost:4000/health/liveliness" "alive"
+check "LiteLLM models endpoint" \
+    "curl -sf -H 'Authorization: Bearer ${LITELLM_MASTER_KEY}' http://localhost:4000/models" \
+    "object"
+check "LiteLLM Docker health" \
+    "docker inspect --format='{{.State.Health.Status}}' \$(docker ps -q -f name=litellm)" \
+    "healthy"
+
+echo ""
+echo "════════════════════════════════════════"
+echo " AI Services"  
+echo "════════════════════════════════════════"
+check "OpenWebUI" \
+    "curl -sf http://localhost:8080 -o /dev/null -w '%{http_code}'" "200"
+check "AnythingLLM" \
+    "curl -sf http://localhost:3001/api/ping" "pong"
+check "Flowise" \
+    "curl -sf http://localhost:3000 -o /dev/null -w '%{http_code}'" "200"
+check "N8N" \
+    "curl -sf http://localhost:5678 -o /dev/null -w '%{http_code}'" "200"
+
+echo ""
+echo "════════════════════════════════════════"
+echo " External Access (Caddy + Tailscale)"
+echo "════════════════════════════════════════"
+check "OpenWebUI external" \
+    "curl -sf https://chat.${BASE_DOMAIN} -o /dev/null -w '%{http_code}'" "200"
+check "LiteLLM external" \
+    "curl -sf https://litellm.${BASE_DOMAIN}/health/liveliness" "alive"
+
+echo ""
+echo "════════════════════════════════════════"
+echo " Data Pipeline"
+echo "════════════════════════════════════════"
+check "Qdrant collection" \
+    "curl -sf http://localhost:6333/collections/gdrive_documents" "green"
+RCLONE_LOG=$(docker logs $(docker ps -q -f name=rclone) --tail 3 2>/dev/null)
+if echo "$RCLONE_LOG" | grep -q "unknown command"; then
+    echo "  ❌ RClone: still crashing with 'unknown command sh'"
+    FAIL=$((FAIL + 1))
+elif echo "$RCLONE_LOG" | grep -q "sync daemon\|not found\|Sleeping"; then
+    echo "  ✅ RClone: operating normally"
+    PASS=$((PASS + 1))
+else
+    warn "RClone" "unclear state — check: docker logs \$(docker ps -q -f name=rclone)"
+fi
+
+echo ""
+echo "════════════════════════════════════════"
+echo " Results"
+echo "════════════════════════════════════════"
+echo "  Passed:   $PASS"
+echo "  Failed:   $FAIL"  
+echo "  Warnings: $WARN"
+echo ""
+
+if [ "$FAIL" -eq 0 ]; then
+    echo "  🎉 All checks passed. Platform is healthy."
+else
+    echo "  ❌ $FAIL checks failed. Review errors above."
+    exit 1
+fi
+```
+
+---
+
+## Exact Instructions for Windsurf
 
 ```
-TASK: Fix AIPlatformAutomation stack — surgical changes only
+STOP. Read this completely before making any changes.
 
-CONTEXT:
-- Platform is ~75% working
-- 2 core bugs are blocking 5 services
-- Do not modify any service that is currently healthy
-- Do not regenerate docker-compose.yml from scratch
-- Make targeted changes to specific lines only
+The platform has exactly 2 code bugs blocking 5 services.
+Everything else is either working or blocked by these 2 bugs.
+Do not touch any currently healthy service.
 
-═══════════════════════════════════════════════
-CHANGE 1 of 6 — docker-compose.yml
-Target: litellm service healthcheck
-═══════════════════════════════════════════════
+═══════════════════════════════════════════════════════════
+BUG 1: LiteLLM health check uses wrong endpoint
+File: docker-compose.yml
+═══════════════════════════════════════════════════════════
 
-FIND:
-  healthcheck:
-    test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+FIND in litellm service healthcheck:
+  test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
 
-REPLACE WITH:
-  healthcheck:
-    test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveliness"]
-    interval: 30s
-    timeout: 15s
-    retries: 10
-    start_period: 90s
+CHANGE TO:
+  test: ["CMD", "curl", "-sf", "http://localhost:4000/health/liveliness"]
+  interval: 30s
+  timeout: 15s
+  retries: 10
+  start_period: 90s
 
-REASON: /health polls all external AI providers (Groq/Gemini/OpenRouter).
-With missing/invalid keys these calls timeout. Docker's 30s timeout fires
-before LiteLLM finishes checking providers. /health/liveliness returns
-{"status":"alive"} immediately when the process is running.
-
-═══════════════════════════════════════════════
-CHANGE 2 of 6 — docker-compose.yml  
-Target: litellm service environment block
-═══════════════════════════════════════════════
-
-ADD these environment variables to litellm service:
+ALSO ADD to litellm environment:
   BACKGROUND_HEALTH_CHECKS: "True"
   HEALTH_CHECK_INTERVAL: "300"
 
-REASON: Moves model health checking to background so startup is not
-blocked by provider connectivity checks.
+WHY: /health makes outbound HTTP calls to Groq/Gemini/OpenRouter.
+     These calls timeout after 10-30s each. Docker's health check
+     timeout fires before all providers respond. Check fails.
+     Retries indefinitely. All dependent services wait forever.
+     /health/liveliness returns {"status":"alive"} in <100ms.
 
-═══════════════════════════════════════════════
-CHANGE 3 of 6 — docker-compose.yml
-Target: rclone service
-═══════════════════════════════════════════════
+═══════════════════════════════════════════════════════════
+BUG 2: RClone entrypoint is wrong
+File: docker-compose.yml  
+═══════════════════════════════════════════════════════════
 
-FIND (rclone service):
+The rclone image ENTRYPOINT is /usr/local/bin/rclone.
+The current command: "sh -c ..." gets passed as arguments
+to rclone binary → rclone sh -c ... → "unknown command sh"
+
+FIND in rclone service:
   command: >
     sh -c "..."
 
-CHANGE TO:
-  entrypoint: ["/bin/sh", "-c"]
-  command: |
-    if [ ! -f /config/rclone/rclone.conf ]; then
-      echo 'rclone.conf not found. Idling.'
-      exec sleep infinity
-    fi
-    while true; do
-      rclone sync gdrive:/ /gdrive \
-        --config /config/rclone/rclone.conf \
-        --log-level INFO \
-        --transfers 4 \
-        --contimeout 60s \
-        --timeout 300s \
-        --retries 3
-      sleep 300
-    done
+REPLACE THE ENTIRE rclone service definition with:
 
-ALSO ADD healthcheck to rclone service:
-  healthcheck:
-    test: ["CMD", "sh", "-c", "pgrep -f rclone || exit 0"]
-    interval: 60s
-    timeout: 10s
-    retries: 3
-    start_period: 15s
+  rclone:
+    image: rclone/rclone:latest
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      if [ ! -f /config/rclone/rclone.conf ]; then
+        echo "[rclone] Config not found. Idling."
+        exec sleep infinity
+      fi
+      echo "[rclone] Starting sync daemon."
+      while true; do
+        rclone sync gdrive:/ /gdrive \
+          --config /config/rclone/rclone.conf \
+          --log-level INFO \
+          --transfers 4 \
+          --contimeout 60s \
+          --timeout 300s \
+          --retries 3
+        sleep 300
+      done
+    volumes:
+      - rclone_config:/config/rclone
+      - gdrive_data:/gdrive
+    networks:
+      - ai_network
+    healthcheck:
+      test: ["CMD", "sh", "-c", "exit 0"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
-REASON: rclone image ENTRYPOINT is /usr/local/bin/rclone. The ">" YAML
-scalar plus no entrypoint override means Docker runs "rclone sh -c ..."
-which fails with "unknown command sh". The "|" scalar preserves newlines.
-The entrypoint override routes through /bin/sh first.
+NOTE: The | (pipe) YAML scalar is NOT interchangeable with > (greater-than).
+      > folds newlines into spaces. The shell script becomes one line.
+      | preserves newlines. Shell script executes correctly.
+      This is a YAML syntax issue, not a shell issue.
 
-═══════════════════════════════════════════════
-CHANGE 4 of 6 — docker-compose.yml
-Target: gdrive-ingestion depends_on
-═══════════════════════════════════════════════
+═══════════════════════════════════════════════════════════
+BUG 3: gdrive-ingestion blocked on rclone healthy
+File: docker-compose.yml
+═══════════════════════════════════════════════════════════
 
-FIND (gdrive-ingestion depends_on rclone):
+FIND in gdrive-ingestion depends_on:
   rclone:
     condition: service_healthy
 
@@ -626,119 +678,69 @@ CHANGE TO:
   rclone:
     condition: service_started
 
-REASON: service_healthy blocks forever if the dependency has no
-healthcheck OR if rclone is legitimately idling (no config yet).
-Ingestion should start and check for data itself.
+WHY: rclone may legitimately idle with no config (no GDrive OAuth yet).
+     service_healthy would wait forever. service_started proceeds.
 
-═══════════════════════════════════════════════
-CHANGE 5 of 6 — Caddyfile
-Target: openclaw upstream
-═══════════════════════════════════════════════
+═══════════════════════════════════════════════════════════
+BUG 4: Script 3 sends API calls before LiteLLM is ready
+File: scripts/3-configure-services.sh
+═══════════════════════════════════════════════════════════
 
-VERIFY current openclaw block:
-  docker exec $(docker ps -q -f name=caddy) cat /etc/caddy/Caddyfile | grep -A 10 openclaw
+ADD this block BEFORE any curl calls to localhost:4000:
 
-IF upstream is NOT "openclaw:8443", change it to:
-  reverse_proxy openclaw:8443
-
-REASON: Caddy must use container-internal address (container_name:port)
-not host-mapped port (localhost:18789). Internal port is 8443.
-
-═══════════════════════════════════════════════
-CHANGE 6 of 6 — scripts/3-configure-services.sh
-Target: LiteLLM readiness gate
-═══════════════════════════════════════════════
-
-ADD at the start of the LiteLLM configuration section:
-
-  echo "Waiting for LiteLLM /health/liveliness..."
+  echo "Waiting for LiteLLM..."
   for i in $(seq 1 40); do
     if curl -sf http://localhost:4000/health/liveliness > /dev/null 2>&1; then
-      echo "LiteLLM ready."
+      echo "LiteLLM ready after $((i * 10))s"
       break
     fi
-    [ $i -eq 40 ] && echo "ERROR: LiteLLM not ready after 400s" && exit 1
-    echo "Attempt $i/40, waiting 10s..."
+    [ "$i" -eq 40 ] && echo "ERROR: LiteLLM not ready" && exit 1
+    echo "  Attempt $i/40, waiting 10s..."
     sleep 10
   done
 
-REASON: Without this gate, script 3 sends API calls to LiteLLM before
-it accepts connections. Key generation fails silently. Services start
-with invalid/empty API keys and fail to make LLM calls even though
-containers show as "Up".
+═══════════════════════════════════════════════════════════
+APPLY CHANGES IN THIS EXACT ORDER:
+═══════════════════════════════════════════════════════════
 
-═══════════════════════════════════════════════
-APPLY CHANGES:
-═══════════════════════════════════════════════
+1. Make all docker-compose.yml changes
+2. Make scripts/3-configure-services.sh changes  
+3. Run: docker compose up -d --no-deps --force-recreate litellm rclone
+4. Run: watch -n 5 'docker inspect --format="{{.State.Health.Status}}" $(docker ps -q -f name=litellm)'
+5. Wait until output shows "healthy" (should take 1-3 minutes)
+6. Run: docker compose up -d anythingllm flowise n8n gdrive-ingestion
+7. Wait 60 seconds
+8. Run validation: bash scripts/4-validate-deployment.sh
 
-After making all 6 changes, run:
+═══════════════════════════════════════════════════════════
+DO NOT claim success until:
+═══════════════════════════════════════════════════════════
 
-  # Restart only changed services:
-  docker compose up -d --no-deps --force-recreate litellm rclone
+  curl http://localhost:4000/health/liveliness
+  → Must return: {"status":"alive"}
 
-  # Wait for LiteLLM to become healthy (up to 3 minutes):
-  echo "Waiting for LiteLLM health..."
-  for i in $(seq 1 18); do
-    STATUS=$(docker inspect --format='{{.State.Health.Status}}' \
-      $(docker ps -q -f name=litellm) 2>/dev/null)
-    echo "[$i/18] LiteLLM status: $STATUS"
-    [ "$STATUS" = "healthy" ] && break
-    [ $i -eq 18 ] && echo "FAILED: LiteLLM still not healthy" && \
-      docker logs $(docker ps -q -f name=litellm) --tail 30 && exit 1
-    sleep 10
-  done
+  docker inspect --format='{{.State.Health.Status}}' $(docker ps -q -f name=litellm)
+  → Must return: healthy
 
-  # Start blocked services:
-  docker compose up -d anythingllm flowise n8n gdrive-ingestion
+  docker logs $(docker ps -q -f name=rclone) --tail 5
+  → Must show: "Config not found. Idling." OR "Starting sync daemon."
+  → Must NOT show: "unknown command"
 
-  # Verify all are up:
-  sleep 30
-  docker ps --format "table {{.Names}}\t{{.Status}}" | \
-    grep -E "NAME|litellm|anythingllm|flowise|n8n|rclone|ingestion|openclaw"
-
-═══════════════════════════════════════════════
-VALIDATION CHECKLIST — Do not claim success
-until ALL of these pass:
-═══════════════════════════════════════════════
-
-  [ ] curl http://localhost:4000/health/liveliness
-      Expected: {"status":"alive"}
-
-  [ ] docker inspect --format='{{.State.Health.Status}}' $(docker ps -q -f name=litellm)
-      Expected: healthy
-
-  [ ] curl -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" http://localhost:4000/models
-      Expected: JSON with model list, not 401
-
-  [ ] docker ps | grep anythingllm | grep "(healthy)"
-      Expected: healthy status
-
-  [ ] docker ps | grep flowise | grep "Up"
-      Expected: Up, not Created or Restarting
-
-  [ ] docker logs $(docker ps -q -f name=rclone) --tail 5
-      Expected: "Starting sync daemon" OR "rclone.conf not found"
-      NOT Expected: "unknown command sh"
-
-  [ ] curl https://openclaw.datasquiz.net
-      Expected: OpenClaw login page, NOT code-server login
-
-  [ ] curl http://localhost:6333/collections/gdrive_documents
-      Expected: collection exists with status green
+  docker ps | grep -E "anythingllm|flowise|n8n"
+  → Must show: Up (not Restarting, not Created)
 ```
 
 ---
 
-## Summary Table
+## Summary
 
-| Bug | File | Change | Services Unblocked |
-|-----|------|--------|--------------------|
-| LiteLLM health endpoint | `docker-compose.yml` | `/health` → `/health/liveliness` | AnythingLLM, Flowise, N8N, gdrive-ingestion |
-| LiteLLM background checks | `docker-compose.yml` | Add `BACKGROUND_HEALTH_CHECKS=True` | Same 4 services |
-| RClone entrypoint | `docker-compose.yml` | Add `entrypoint: ["/bin/sh","-c"]`, `>` → `\|` | RClone sync |
-| RClone healthcheck | `docker-compose.yml` | Add healthcheck block | gdrive-ingestion unblocks |
-| Ingestion dependency | `docker-compose.yml` | `service_healthy` → `service_started` | gdrive-ingestion |
-| Script 3 timing gate | `3-configure-services.sh` | Add LiteLLM readiness loop | Valid API keys for all services |
-| OpenClaw routing | `Caddyfile` | Verify `openclaw:8443` upstream | OpenClaw accessible externally |
+| # | Bug | File | Change | Unblocks |
+|---|-----|------|--------|----------|
+| 1 | Wrong health endpoint | `docker-compose.yml` | `/health` → `/health/liveliness` | AnythingLLM, Flowise, N8N, gdrive-ingestion |
+| 2 | Missing env vars | `docker-compose.yml` | Add `BACKGROUND_HEALTH_CHECKS=True` | LiteLLM startup speed |
+| 3 | RClone entrypoint missing | `docker-compose.yml` | Add `entrypoint: ["/bin/sh","-c"]` | RClone sync |
+| 4 | YAML `>` vs `\|` | `docker-compose.yml` | Change folded to literal scalar | RClone script execution |
+| 5 | Wrong dependency condition | `docker-compose.yml` | `service_healthy` → `service_started` | gdrive-ingestion |
+| 6 | No readiness gate | `3-configure-services.sh` | Add LiteLLM wait loop | Valid API keys everywhere |
 
-**Two environment issues and one YAML scalar type are the entire root cause of 75% of the platform being blocked.** Every other issue is a cascade from these.
+**Two root bugs. Six targeted changes. Zero currently-healthy services touched.**

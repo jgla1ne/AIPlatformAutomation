@@ -1816,9 +1816,9 @@ EOF
             echo ""
             read -p "  ➤ OpenClaw port [18789]: " OPENCLAW_PORT
             OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
-            OPENCLAW_PASSWORD="${OPENCLAW_PASSWORD:-$CODEBASE_PASSWORD}"
+            OPENCLAW_PASSWORD="${OPENCLAW_PASSWORD:-$CODESERVER_PASSWORD}"
             OPENCLAW_ADMIN_USER=admin
-            OPENCLAW_SECRET="${OPENCLAW_PASSWORD:-$CODEBASE_PASSWORD}"
+            OPENCLAW_SECRET="${OPENCLAW_PASSWORD:-$CODESERVER_PASSWORD}"
             OPENCLAW_PORT=${OPENCLAW_PORT}
             OPENCLAW_IMAGE=openclaw:latest
         fi
@@ -1932,7 +1932,6 @@ generate_secrets() {
     ANYTHINGLLM_API_KEY=$(load_existing_secret "ANYTHINGLLM_API_KEY" "$(openssl rand -hex 32)")
     GRAFANA_PASSWORD=$(load_existing_secret "GRAFANA_PASSWORD"          "$(openssl rand -hex 16)")
     CODESERVER_PASSWORD=$(load_existing_secret "CODESERVER_PASSWORD" "$(openssl rand -hex 12)")
-    CODEBASE_PASSWORD=$(load_existing_secret "CODEBASE_PASSWORD" "$(openssl rand -hex 12)")
     AUTHENTIK_SECRET_KEY=$(load_existing_secret "AUTHENTIK_SECRET_KEY" "$(openssl rand -hex 32)")
     MINIO_ROOT_PASSWORD=$(load_existing_secret "MINIO_ROOT_PASSWORD" "$(openssl rand -hex 16)")
     QDRANT_API_KEY=$(load_existing_secret   "QDRANT_API_KEY"            "$(openssl rand -hex 32)")
@@ -2367,6 +2366,10 @@ GF_SECURITY_ADMIN_PASSWORD="${GRAFANA_PASSWORD}"
 GRAFANA_ADMIN_PASSWORD="${GRAFANA_PASSWORD}"
 ADMIN_PASSWORD="${GRAFANA_PASSWORD}"
 
+# ─── Code Server & OpenClaw ──────────────────────────────────────────────────
+CODESERVER_PASSWORD="${CODESERVER_PASSWORD}"
+OPENCLAW_PASSWORD="${OPENCLAW_PASSWORD}"
+
 # ─── Authentik ────────────────────────────────────────────────────────────────
 AUTHENTIK_SECRET_KEY="${AUTHENTIK_SECRET_KEY}"
 AUTHENTIK_BOOTSTRAP_EMAIL="${ADMIN_EMAIL}"
@@ -2456,7 +2459,7 @@ CONTINUE_PORT=${CONTINUE_PORT:-3000}
 CONTINUE_IMAGE=continuedev/continue:latest
 
 # ─── OpenClaw ────────────────────────────────────────────────────────────────
-OPENCLAW_PASSWORD=${OPENCLAW_PASSWORD:-default_password}
+OPENCLAW_PASSWORD=${OPENCLAW_PASSWORD:-$CODESERVER_PASSWORD}
 OPENCLAW_ADMIN_USER=admin
 OPENCLAW_SECRET=${OPENCLAW_PASSWORD}
 OPENCLAW_PORT=${OPENCLAW_PORT}

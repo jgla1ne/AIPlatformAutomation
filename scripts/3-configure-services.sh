@@ -37,6 +37,64 @@ log_success() { echo -e "${GREEN}✓${NC} $1"; log_write SUCCESS "$1"; }
 log_warning() { echo -e "${YELLOW}⚠${NC} $1"; log_write WARNING "$1"; }
 log_error()   { echo -e "${RED}✗${NC} $1";  log_write ERROR   "$1"; }
 
+# ── Service Readiness Gates ───────────────────────────────────────────────────
+wait_for_litellm() {
+    local MAX_WAIT=400
+    local INTERVAL=10
+    local ELAPSED=0
+    
+    log_info "Waiting for LiteLLM /health/liveliness..."
+    
+    while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            "http://localhost:4000/health/liveliness" 2>/dev/null)
+        
+        if [ "$HTTP_CODE" = "200" ]; then
+            log_success "LiteLLM is ready (${ELAPSED}s elapsed)."
+            return 0
+        fi
+        
+        log_info "  LiteLLM not ready (HTTP $HTTP_CODE, ${ELAPSED}s elapsed), waiting ${INTERVAL}s..."
+        sleep "$INTERVAL"
+        ELAPSED=$((ELAPSED + INTERVAL))
+    done
+    
+    log_error "LiteLLM did not become ready within ${MAX_WAIT}s"
+    log_error "Logs:"
+    docker compose logs litellm --tail 30
+    return 1
+}
+
+generate_litellm_key() {
+    local ALIAS="$1"
+    local MODELS_JSON="$2"
+    
+    RESPONSE=$(curl -sf -X POST \
+        "http://localhost:4000/key/generate" \
+        -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"key_alias\": \"${ALIAS}\",
+            \"models\": ${MODELS_JSON},
+            \"duration\": null
+        }" 2>/dev/null)
+    
+    if [ -z "$RESPONSE" ]; then
+        log_error "Empty response from LiteLLM key/generate for alias: $ALIAS"
+        return 1
+    fi
+    
+    KEY=$(echo "$RESPONSE" | python3 -c \
+        "import sys,json; d=json.load(sys.stdin); print(d.get('key',''))" 2>/dev/null)
+    
+    if [ -z "$KEY" ]; then
+        log_error "No key in response: $RESPONSE"
+        return 1
+    fi
+    
+    echo "$KEY"
+}
+
 # ── Directory Preparation with UID-Aware Ownership ─────────────────────────
 prepare_directories() {
     log_info "Preparing tenant directories under ${TENANT_DIR}..."
@@ -425,11 +483,6 @@ generate_caddyfile() {
     servers {
         trusted_proxies static private_ranges
     }
-    
-    # Global error pages
-    handle_errors {
-        respond "{http.error.status_code} {http.error.status_text}"
-    }
 }
 EOF
 
@@ -575,10 +628,7 @@ generate_configs() {
     log_info "Generating all configuration files..."
     
     # Validate environment before generating configs
-    validate_environment || {
-        log_error "Environment validation failed - cannot proceed with config generation"
-        return 1
-    }
+    validate_env || return 1
     
     generate_postgres_init
     generate_litellm_config
@@ -586,6 +636,60 @@ generate_configs() {
     generate_prometheus_config
     generate_codeserver_config
     log_success "All configuration files generated"
+}
+
+# Configure LiteLLM with readiness gate
+configure_litellm_services() {
+    [[ "${ENABLE_LITELLM:-false}" == "true" ]] || return 0
+    
+    log_info "Configuring LiteLLM services..."
+    
+    # Wait for LiteLLM to be ready before configuring API keys
+    wait_for_litellm || {
+        log_error "LiteLLM failed to become ready. Skipping service configuration."
+        return 1
+    }
+    
+    # Generate API keys for dependent services
+    local openwebui_key anythingllm_key flowise_key n8n_key
+    
+    log_info "Generating API keys for services..."
+    
+    # OpenWebUI key
+    openwebui_key=$(generate_litellm_key "openwebui-key" '["ollama/llama3.2:1b","ollama/llama3.2:3b"]') || {
+        log_error "Failed to generate OpenWebUI key"
+        return 1
+    }
+    log_success "OpenWebUI key generated: ${openwebui_key:0:20}..."
+    
+    # AnythingLLM key
+    anythingllm_key=$(generate_litellm_key "anythingllm-key" '["ollama/llama3.2:1b","ollama/llama3.2:3b"]') || {
+        log_error "Failed to generate AnythingLLM key"
+        return 1
+    }
+    log_success "AnythingLLM key generated: ${anythingllm_key:0:20}..."
+    
+    # Flowise key  
+    flowise_key=$(generate_litellm_key "flowise-key" '["ollama/llama3.2:1b","ollama/llama3.2:3b"]') || {
+        log_error "Failed to generate Flowise key"
+        return 1
+    }
+    log_success "Flowise key generated: ${flowise_key:0:20}..."
+    
+    # N8N key
+    n8n_key=$(generate_litellm_key "n8n-key" '["ollama/llama3.2:1b","ollama/llama3.2:3b"]') || {
+        log_error "Failed to generate N8N key"
+        return 1
+    }
+    log_success "N8N key generated: ${n8n_key:0:20}..."
+    
+    # Update environment with generated keys
+    export OPENWEBUI_LITELLM_KEY="$openwebui_key"
+    export ANYTHINGLLM_LITELLM_KEY="$anythingllm_key" 
+    export FLOWISE_LITELLM_KEY="$flowise_key"
+    export N8N_LITELLM_KEY="$n8n_key"
+    
+    log_success "LiteLLM services configuration complete"
 }
 
 # ── Docker Compose Generator (Zero Hardcoded Values) ───────────────────────
