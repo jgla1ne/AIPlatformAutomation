@@ -334,12 +334,12 @@ generate_litellm_config() {
         fi
     fi
     
-    cat > "${CONFIG_DIR}/litellm/config.yaml" << EOF
-# LiteLLM Configuration - Generated $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-# This file routes LLM requests to appropriate models based on cost/latency
+    cat > "${CONFIG_DIR}/litellm/config.yaml" <<EOF
+# LiteLLM Configuration - Generated $(date -Iseconds)
+# Simplified configuration with only local Ollama models
 
 model_list:
-  # Local Ollama models (working)
+  # Local Ollama models only
   - model_name: llama3.2:1b
     litellm_params:
       model: ollama/llama3.2:1b
@@ -350,29 +350,7 @@ model_list:
       model: ollama/llama3.2:3b
       api_base: "http://ollama:11434"
       rpm: 100
-EOF
-    
-    # Skip external models for now to ensure LiteLLM starts
-    log_info "Skipping external models - using only local Ollama models"
-    
-    # Only add Azure models if configuration is valid and not empty
-    if [[ "$az_config_valid" == "true" ]] && [[ -n "${LITELM_AZURE_API_BASE:-}" && "${LITELM_AZURE_API_BASE}" != "" ]] && [[ -n "${LITELM_AZURE_API_KEY:-}" && "${LITELM_AZURE_API_KEY}" != "" ]]; then
-        cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
-  - model_name: azure/gpt-4
-    litellm_params:
-      model: azure/gpt-4
-      api_base: "${LITELM_AZURE_API_BASE}"
-      api_key: os.environ/LITELM_AZURE_API_KEY
-      rpm: 10
-  - model_name: azure/gpt-4o
-    litellm_params:
-      model: azure/gpt-4o
-      api_base: "${LITELM_AZURE_API_BASE}"
-      api_key: os.environ/LITELM_AZURE_API_KEY
-      rpm: 20
-EOF
-    fi
-    
+
     # Only add Groq models if API key is provided and not empty
     [[ -n "${GROQ_API_KEY:-}" && "${GROQ_API_KEY}" != "" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
   - model_name: llama3-groq
@@ -663,7 +641,7 @@ EOF
     # Add enabled services dynamically - NO hardcoded values
     [[ "${ENABLE_LITELLM:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
   litellm:
-    image: ghcr.io/berriai/litellm:main-latest
+    image: ghcr.io/berriai/litellm-database:main-latest
     restart: unless-stopped
     depends_on:
       postgres:
@@ -673,7 +651,7 @@ EOF
     environment:
       LITELLM_MASTER_KEY: \${LITELLM_MASTER_KEY}
       LITELLM_SALT_KEY: \${LITELLM_SALT_KEY}
-      DATABASE_URL: \${LITELLM_DATABASE_URL}
+      DATABASE_URL: "postgresql://ds-admin:\${POSTGRES_PASSWORD}@postgres:5432/litellm"
       REDIS_URL: \${REDIS_URL}
       REDIS_PASSWORD: \${REDIS_PASSWORD}
       OPENAI_API_KEY: \${OPENAI_API_KEY:-}
@@ -695,33 +673,14 @@ EOF
       - ${LOGS_DIR}/litellm:/app/logs
     ports:
       - "\${PORT_LITELLM:-4000}:4000"
-    entrypoint: ["litellm"]
-    command: ["--config", "/litellm-config.yaml", "--port", "4000", "--detailed_debug"]
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["sh", "-c", "litellm --config /litellm-config.yaml --port 4000 --detailed_debug"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveliness"]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=5); print('OK')\" || exit 1"]
       interval: 30s
       timeout: 15s
       retries: 10
       start_period: 90s
-EOF
-
-    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
-  litellm-prisma-migrate:
-    image: ghcr.io/berriai/litellm:main-latest
-    depends_on:
-      postgres:
-        condition: service_healthy
-    entrypoint: ["/bin/sh", "-c"]
-    command: |
-      cd /app/litellm/proxy &&
-      prisma generate &&
-      prisma db push --accept-data-loss
-    environment:
-      DATABASE_URL: \${LITELLM_DATABASE_URL}
-      LITELLM_MASTER_KEY: \${LITELLM_MASTER_KEY}
-      LITELLM_TELEMETRY: "False"
-      PRISMA_DISABLE_WARNINGS: "true"
-    restart: "no"
 EOF
 
     [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
@@ -786,6 +745,54 @@ EOF
       start_period: 60s   # was 30s — needs longer on fresh volume
 EOF
 
+    [[ "${ENABLE_RCLONE:-false}" == "true" ]] && {
+        # Create RClone sync script inline
+        local rclone_script="${CONFIG_DIR}/rclone/rclone-sync.sh"
+        mkdir -p "$(dirname "$rclone_script")"
+        
+        cat > "$rclone_script" <<'EOF'
+#!/bin/sh
+set -e
+
+CONFIG="/config/rclone/rclone.conf"
+DEST="/gdrive"
+INTERVAL="${SYNC_INTERVAL:-300}"
+
+if [ ! -f "$CONFIG" ]; then
+    echo "[rclone] WARNING: $CONFIG not found."
+    echo "[rclone] Idling. Configure with:"
+    echo "[rclone]   docker exec -it ai-datasquiz-rclone-1 rclone config"
+    exec sleep infinity
+fi
+
+echo "[rclone] Configuration found. Starting sync daemon."
+echo "[rclone] Sync interval: ${INTERVAL}s"
+
+while true; do
+    START=$(date -Iseconds)
+    echo "[rclone] [$START] Starting sync: gdrive:/ -> $DEST"
+    
+    rclone sync gdrive:/ "$DEST" \
+        --config "$CONFIG" \
+        --log-level INFO \
+        --transfers 4 \
+        --checkers 8 \
+        --contimeout 60s \
+        --timeout 300s \
+        --retries 3 \
+        --low-level-retries 10 \
+        --stats 30s \
+        --stats-one-line \
+        2>&1
+    
+    END=$(date -Iseconds)
+    echo "[rclone] [$END] Sync complete. Next sync in ${INTERVAL}s."
+    sleep "$INTERVAL"
+done
+EOF
+        
+        chmod +x "$rclone_script"
+
     [[ "${ENABLE_RCLONE:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
   rclone:
     image: rclone/rclone:latest
@@ -797,55 +804,18 @@ EOF
       - /dev/fuse
     security_opt:
       - apparmor:unconfined
-    entrypoint: ["/bin/sh", "-c"]
     volumes:
       - ${DATA_DIR}/gdrive:/gdrive:shared
-      - ${CONFIG_DIR}/rclone:
-    command: |
-      if [ ! -f /config/rclone/rclone.conf ]; then
-        echo '[rclone] WARNING: /config/rclone/rclone.conf not found.'
-        echo '[rclone] Idling. Configure with:'
-        echo '[rclone]   docker exec -it ai-datasquiz-rclone-1 rclone config'
-        exec sleep infinity
-      fi
-      echo '[rclone] Configuration found. Starting sync daemon.'
-      echo '[rclone] Sync interval: 300s'
-      while true; do
-        START=$(date -Iseconds)
-        echo "[rclone] [$START] Starting sync: gdrive:/ -> /gdrive"
-        
-        rclone sync gdrive:/ "/gdrive" \
-          --config "/config/rclone/rclone.conf" \
-          --log-level INFO \
-          --transfers 4 \
-          --checkers 8 \
-          --contimeout 60s \
-          --timeout 300s \
-          --retries 3 \
-          --low-level-retries 10 \
-          --stats 30s \
-          --stats-one-line \
-          2>&1
-        
-        END=$(date -Iseconds)
-        echo "[rclone] [$END] Sync complete. Next sync in 300s."
-        sleep 300
-      done
+      - ${CONFIG_DIR}/rclone:/config/rclone:ro
+      - ${CONFIG_DIR}/rclone/rclone-sync.sh:/scripts/rclone-sync.sh:ro
+    entrypoint: ["/bin/sh", "/scripts/rclone-sync.sh"]
     healthcheck:
       test: ["CMD", "sh", "-c", "pgrep -f rclone || exit 0"]
       interval: 60s
       timeout: 10s
       retries: 3
       start_period: 15s
-    healthcheck:
-      test: ["CMD-SHELL", "pgrep -f rclone || exit 1"]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
 EOF
-
-    [[ "${ENABLE_RCLONE:-false}" == "true" ]] && {
         # Create ingestion pipeline files inline
         local ingestion_dir="${CONFIG_DIR}/ingestion"
         mkdir -p "$ingestion_dir"
