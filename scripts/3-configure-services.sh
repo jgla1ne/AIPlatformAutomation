@@ -392,8 +392,12 @@ generate_litellm_config() {
         fi
     fi
     
-    cat > "${CONFIG_DIR}/litellm/config.yaml" <<EOF
-# LiteLLM Configuration - Generated $(date -Iseconds)
+    generate_litellm_config() {
+        log_info "Generating LiteLLM configuration..."
+        
+        # Enhanced Azure validation to prevent restart loops
+        cat > "${CONFIG_DIR}/litellm/config.yaml" <<EOF
+# LiteLLM Configuration - Generated $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # Simplified configuration with only local Ollama models
 
 model_list:
@@ -409,39 +413,6 @@ model_list:
       api_base: "http://ollama:11434"
       rpm: 100
 
-    # Only add Groq models if API key is provided and not empty
-    [[ -n "${GROQ_API_KEY:-}" && "${GROQ_API_KEY}" != "" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
-  - model_name: llama3-groq
-    litellm_params:
-      model: groq/llama3-70b-8192
-      api_key: os.environ/GROQ_API_KEY
-EOF
-    
-    # Only add Anthropic models if API key is provided and not empty
-    [[ -n "${ANTHROPIC_API_KEY:-}" && "${ANTHROPIC_API_KEY}" != "" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
-  - model_name: claude-3-5-sonnet
-    litellm_params:
-      model: anthropic/claude-3-5-sonnet-20241022
-      api_key: os.environ/ANTHROPIC_API_KEY
-EOF
-    
-    # Only add Gemini models if API key is provided and not empty
-    [[ -n "${GOOGLE_API_KEY:-}" && "${GOOGLE_API_KEY}" != "" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
-  - model_name: gemini-pro
-    litellm_params:
-      model: google/gemini-pro
-      api_key: os.environ/GOOGLE_API_KEY
-EOF
-    
-    # Only add OpenRouter models if API key is provided and not empty
-    [[ -n "${OPENROUTER_API_KEY:-}" && "${OPENROUTER_API_KEY}" != "" ]] && cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
-  - model_name: openrouter-mixtral
-    litellm_params:
-      model: openrouter/mistralai/mixtral-8x7b
-      api_key: os.environ/OPENROUTER_API_KEY
-EOF
-    
-    cat >> "${CONFIG_DIR}/litellm/config.yaml" <<EOF
 litellm_settings:
   drop_params: true
   set_verbose: false
@@ -452,8 +423,8 @@ litellm_settings:
 router_settings:
   routing_strategy: cost-based-routing
 EOF
-    log_success "LiteLLM config written to ${CONFIG_DIR}/litellm/config.yaml"
-}
+        log_success "LiteLLM config written to ${CONFIG_DIR}/litellm/config.yaml"
+    }
 
 generate_caddyfile() {
     local out="${CONFIG_DIR}/caddy/Caddyfile"
@@ -621,6 +592,57 @@ $(
 }
 EOF
     log_success "Continue.dev config written to ${config_dir}/config.json"
+}
+
+# Validate environment variables
+validate_env() {
+    local errors=0
+    
+    log_info "Validating environment variables..."
+    
+    # Check critical variables
+    if [[ -z "${TENANT:-}" ]]; then
+        log_error "TENANT is required"
+        ((errors++))
+    fi
+    
+    if [[ -z "${DOMAIN:-}" ]]; then
+        log_error "DOMAIN is required"
+        ((errors++))
+    fi
+    
+    if [[ -z "${POSTGRES_USER:-}" ]]; then
+        log_error "POSTGRES_USER is required"
+        ((errors++))
+    fi
+    
+    if [[ -z "${POSTGRES_PASSWORD:-}" ]]; then
+        log_error "POSTGRES_PASSWORD is required"
+        ((errors++))
+    fi
+    
+    if [[ -z "${POSTGRES_DB:-}" ]]; then
+        log_error "POSTGRES_DB is required"
+        ((errors++))
+    fi
+    
+    if [[ -z "${REDIS_PASSWORD:-}" ]]; then
+        log_error "REDIS_PASSWORD is required"
+        ((errors++))
+    fi
+    
+    if [[ -z "${LITELLM_MASTER_KEY:-}" ]]; then
+        log_error "LITELLM_MASTER_KEY is required"
+        ((errors++))
+    fi
+    
+    if [[ $errors -gt 0 ]]; then
+        log_error "Environment validation failed with $errors errors"
+        return 1
+    fi
+    
+    log_success "Environment validation passed"
+    return 0
 }
 
 # Single entry point for all config generation
