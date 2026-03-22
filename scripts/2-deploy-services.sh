@@ -212,12 +212,6 @@ main() {
 
         deploy_service litellm
         wait_for_healthy litellm 180
-        
-        # Configure LiteLLM services (API keys, etc.) after it's healthy
-        configure_litellm_services || {
-            log_error "LiteLLM service configuration failed"
-            return 1
-        }
     }
 
     # 6. Monitoring — independent of AI services

@@ -1,451 +1,309 @@
-Alright — I pulled what matters from the actual repo + that “service analysis” (which is basically empty), and here’s the blunt, code-grounded reality:
+You’re not stuck on “LiteLLM config” anymore — you’re stuck on a **restart loop caused by a mismatch between how LiteLLM is started vs how it expects to run in DB mode**.
 
-> **Windsurf didn’t miss complexity — it missed consistency.**
+And the key clue is this:
 
-You have **all components implemented**, but the scripts **don’t agree with each other**, and nothing enforces a *final valid state*.
+> ✅ “config works from manual test”  
+> ❌ “container keeps restarting”
 
----
+That combination **rules out config correctness** and points directly to:
 
-# 🔍 What the codebase is actually doing right now
-
-## From Script 1 (setup)
-- Massive script (~3200 lines) ✅ ([github.com](https://github.com/jgla1ne/AIPlatformAutomation/blob/main/scripts/1-setup-system.sh))  
-- Collects inputs ✅  
-- Defines variables ✅  
-
-BUT:
-
-### ❌ Critical flaw
-There is **no guaranteed canonical `.env` write + validation pass**
-
-So runtime ends up like:
-
-```
-CODESERVER_PASSWORD=
-CODEBASE_PASSWORD=
-OPENCLAW_PASSWORD=some_value
-```
-
-👉 This matches exactly what you observed.
+> **entrypoint / runtime contract mismatch**
 
 ---
 
-## From Script 2 (deploy)
-- Starts *everything* (infra + apps)
-- No strict dependency gating
+# 🔥 What’s actually broken (LiteLLM-specific)
 
-### ❌ Result
+Given:
+- you switched to `litellm-database` ✅
+- DB is healthy ✅
+- manual test works ✅
 
-```
-LiteLLM: starting
-OpenWebUI: already trying to connect
-Flowise: already trying to connect
-```
+👉 The only remaining class of failure is:
 
-👉 This violates your README design:
-> control plane must be ready first
+## ❌ LiteLLM is failing during container startup (not runtime usage)
+
+This is almost always one of these 4:
 
 ---
 
-## From Script 3 (configure)
-- Attempts config AFTER services are already live
-- No enforcement of:
-  - LiteLLM readiness
-  - key/model existence
-  - routing correctness
+## 1. ❌ Healthcheck is killing the container
 
----
+You said you implemented:
 
-## From COMPREHENSIVE_SERVICE_ANALYSIS.md
+> `/health/liveliness` with urllib
 
-It’s basically empty (17 lines, no real diagnostics) ([raw.githubusercontent.com](https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/doc/COMPREHENSIVE_SERVICE_ANALYSIS.md))
+### 💥 Problem
 
-👉 This confirms:
+LiteLLM (DB mode) often:
+- takes time to run migrations
+- initializes Prisma
+- warms connections
 
-> Windsurf is not validating runtime state at all
-
----
-
-# 🚨 The 6 “obvious errors” Windsurf is still missing
-
-These are **not guesses — they fall directly out of the code structure + your symptoms**
-
----
-
-## 1. ❌ `.env` is not a single source of truth
-
-### Problem
-- Variables are:
-  - collected
-  - mutated
-  - inconsistently written
-
-### Evidence (your observation + script structure)
-- password vars missing
-- naming drift exists
-
----
-
-### ✅ Fix (minimal, high impact)
-
-At END of Script 1:
+During this time:
 
 ```
-FINAL_ENV_WRITE (overwrite, not append)
-VALIDATE_REQUIRED_VARS
-PRINT_MISSING_AND_EXIT
+/health/liveliness → FAIL
 ```
 
-Required invariants:
+Docker interprets that as:
 
 ```
-CODESERVER_PASSWORD != empty
-OPENCLAW_PASSWORD != empty
-LITELLM_MASTER_KEY != empty
-POSTGRES_PASSWORD != empty
-DOMAIN != empty
+container unhealthy → restart
 ```
 
 ---
 
-## 2. ❌ Variable naming drift (this is breaking auth silently)
+### ✅ Fix (minimal, critical)
 
-You already caught it — and it’s real.
-
-### Current situation
+In `docker-compose`:
 
 ```
-CODEBASE_PASSWORD   ❌ (unused or misused)
-CODESERVER_PASSWORD ✅ (expected by container)
-OPENCLAW_PASSWORD   ✅
+healthcheck:
+  start_period: 60s   # ← REQUIRED
+  interval: 10s
+  timeout: 5s
+  retries: 10
 ```
+
+Or temporarily:
+
+```
+healthcheck: NONE
+```
+
+👉 This alone often stops the restart loop.
 
 ---
 
-### ✅ Fix
+## 2. ❌ Wrong startup command for DB mode
 
-Create strict mapping:
-
-```
-codeserver  → CODESERVER_PASSWORD
-openclaw    → OPENCLAW_PASSWORD
-```
-
-🚫 Never reuse variables across services  
-🚫 Delete `CODEBASE_PASSWORD` entirely
-
----
-
-## 3. ❌ LiteLLM is started but never “completed”
-
-This is the **single biggest blocker**
-
----
-
-### What the scripts do
-
-- Script 2:
-  ```
-  docker compose up litellm
-  ```
-
-- Script 3:
-  ❌ does NOT:
-  - create models
-  - create keys
-  - validate responses
-
----
-
-### Real runtime behaviour
+The `litellm-database` image expects:
 
 ```
-/health → OK
-/v1/models → empty
-/completion → fails
+litellm --config /app/config.yaml
 ```
 
----
-
-### ✅ Fix (surgical, no redesign)
-
-Add to Script 3:
-
-### Step A — wait for real readiness
-NOT just port open:
+But many setups accidentally run:
 
 ```
-until curl /v1/models returns valid JSON
+python main.py
 ```
 
----
-
-### Step B — seed system
+or
 
 ```
-create model: ollama/llama3
-create master key
-```
-
----
-
-### Step C — verify
-
-```
-test completion request
-fail if not working
-```
-
----
-
-## 4. ❌ Startup order is wrong (README violation)
-
-README implies:
-
-```
-infra → litellm → config → apps
-```
-
----
-
-### Current flow
-
-```
-infra + litellm + apps → then config
-```
-
----
-
-### ✅ Fix (minimal change)
-
-Split Script 2:
-
-### Phase 1
-```
-postgres
-redis
-qdrant
 litellm
 ```
 
-### Script 3
-```
-configure litellm
-validate litellm
-```
-
-### Phase 2 (new or delayed)
-```
-openwebui
-flowise
-anythingllm
-dify
-```
-
----
-
-## 5. ❌ Caddy config is generated from unstable variables
-
-This explains:
-
-- wrong upstreams
-- SSL errors
-- cross-routing (openclaw → codeserver)
-
----
-
-### Root cause
-
-Likely pattern:
-
-```
-${SERVICE_HOST}
-```
-
-reused across services
+without config.
 
 ---
 
 ### ✅ Fix
 
-Generate **explicit, hard-mapped config**
+Ensure container uses **explicit command**:
 
 ```
-openclaw    → openclaw:PORT
-codeserver  → codeserver:8080
-openwebui   → openwebui:3000
-flowise     → flowise:3000
-```
-
-Then:
-
-```
-caddy validate BEFORE reload
-curl each upstream BEFORE enabling TLS
+command: >
+  litellm
+  --config /app/config.yaml
+  --port 4000
+  --host 0.0.0.0
 ```
 
 ---
 
-## 6. ❌ No “system completeness check”
+## 3. ❌ Config file not mounted where LiteLLM expects
 
-This is the meta-problem.
-
-Right now success =
+Manual test works → because you likely ran:
 
 ```
-containers running
+litellm --config config.yaml
 ```
 
----
+But container:
 
-### ✅ Required definition of success
-
-System is ONLY healthy if:
-
-- LiteLLM responds to completion ✅
-- At least 1 model exists ✅
-- At least 1 key exists ✅
-- OpenWebUI can query LiteLLM ✅
-- Caddy routes correctly ✅
+- either doesn’t have the file
+- or path is wrong
 
 ---
 
 ### ✅ Fix
 
-At end of Script 3:
+Verify:
 
 ```
-run_system_validation()
-FAIL if any check fails
+volumes:
+  - ./litellm/config.yaml:/app/config.yaml
 ```
 
----
-
-# ✅ What the correct logs should look like
-
-This is what Windsurf should target exactly:
-
----
-
-## Script 1
+Then inside container:
 
 ```
-[env] writing .env (overwrite)
-[env] validation passed
+cat /app/config.yaml
 ```
 
 ---
 
-## Script 2
+## 4. ❌ DATABASE_URL mismatch (classic Prisma failure loop)
 
-```
-[infra] postgres ready
-[infra] redis ready
-[infra] qdrant ready
+Even if Postgres is healthy:
 
-[litellm] container started
-[litellm] waiting for DB...
-[litellm] DB connected
-```
+LiteLLM will crash if:
+
+- wrong driver (`postgres://` vs `postgresql://`)
+- missing SSL flags
+- wrong host (localhost vs service name)
 
 ---
 
-## Script 3
+### ✅ Fix (must match README pattern)
 
 ```
-[litellm] seeding models...
-[litellm] seeding keys...
-[litellm] test completion ✅
+DATABASE_URL=postgresql://user:password@postgres:5432/litellm
+```
 
-[services] starting openwebui...
-[services] starting flowise...
-[services] starting anythingllm...
+NOT:
 
-[caddy] config valid
-[caddy] upstreams reachable
-
-[validation]
-- litellm completion ✅
-- openwebui → litellm ✅
-- flowise → litellm ✅
-
-SYSTEM STATUS: ✅ READY
+```
+localhost
+127.0.0.1
 ```
 
 ---
 
-# 🎯 Minimal-impact fix plan (what Windsurf should actually do)
+# 🧠 Why manual test works but container fails
 
-Do NOT rewrite anything. Just:
+Because you're unknowingly doing:
 
----
-
-### 1. Script 1
-- enforce `.env` overwrite
-- validate required vars
-- remove `CODEBASE_PASSWORD`
-
----
-
-### 2. Script 2
-- stop deploying AI apps initially
-- only infra + litellm
+| Manual run | Container |
+|------|--------|
+| correct working dir | wrong working dir |
+| correct config path | missing config |
+| no healthcheck | aggressive restart |
+| sequential start | race condition |
 
 ---
 
-### 3. Script 3 (MOST IMPORTANT)
-Add:
+# ✅ Minimal-impact fix (do NOT redesign anything)
+
+## Step 1 — disable restart loop temporarily
+
+In compose:
 
 ```
-wait_for_litellm_real()
-seed_models()
-seed_keys()
-test_completion()
-start_ai_services()
-validate_all_services()
+restart: no
 ```
+
+Run:
+
+```
+docker logs litellm
+```
+
+👉 You will immediately see the real error
 
 ---
 
-### 4. Caddy
-- generate static mappings
-- validate before reload
-
----
-
-### 5. Add final validation gate
-
-Fail deployment if:
+## Step 2 — fix healthcheck (permanent)
 
 ```
-litellm not usable
+start_period: 60s
 ```
 
 ---
 
-# 🔥 Final truth (no sugarcoating)
+## Step 3 — enforce correct startup contract
 
-Windsurf didn’t fail at building the platform.
+In Script 2 or compose:
 
-It failed at:
-
-> **finishing the platform lifecycle**
-
-Everything exists — but nothing is **finalized, validated, and enforced**.
+```
+command: litellm --config /app/config.yaml --port 4000 --host 0.0.0.0
+```
 
 ---
 
-## The one thing to fix
+## Step 4 — validate inside container
 
-> **Make Script 3 the “source of truth for system readiness”**
+Add to Script 3:
 
-Once that happens:
-
-- LiteLLM stabilises
-- downstream services come up immediately
-- SSL issues disappear
-- routing becomes predictable
+```
+docker exec litellm ls /app/config.yaml
+docker exec litellm printenv | grep DATABASE_URL
+```
 
 ---
 
-If you want, I can give you a **drop-in “Script 3 execution blueprint” (function-level, ordered)** that Windsurf can implement in one pass without another 40-hour loop.
+## Step 5 — replace “is running” check with real readiness
+
+Instead of:
+
+```
+docker ps | grep litellm
+```
+
+Use:
+
+```
+curl /v1/models
+```
+
+---
+
+# ✅ What success actually looks like
+
+Logs should stabilize like this:
+
+```
+[LiteLLM] Connecting to database...
+[LiteLLM] Prisma schema loaded
+[LiteLLM] Server started on 0.0.0.0:4000
+```
+
+NOT:
+
+```
+Restarting (1)...
+Restarting (1)...
+Restarting (1)...
+```
+
+---
+
+# 🔥 The real root cause (one line)
+
+> LiteLLM is correctly configured — but **incorrectly bootstrapped inside Docker**
+
+---
+
+# 🎯 Final instruction to Windsurf
+
+Do NOT touch:
+- config.yaml ✅
+- model definitions ✅
+- DB ✅
+
+ONLY fix:
+
+1. healthcheck timing  
+2. container command  
+3. config mount path  
+4. DATABASE_URL format  
+
+---
+
+# 🧩 Final perspective
+
+You’re genuinely **one fix away** now.
+
+Everything else:
+- Caddy ✅
+- Rclone ✅
+- services ✅
+- orchestration ✅
+
+👉 LiteLLM is the **only remaining control plane blocker**
+
+---
+
+If you want, I can give you the **exact known-good docker-compose service block for LiteLLM (DB mode)** so you can diff it directly against yours and spot the issue in seconds.

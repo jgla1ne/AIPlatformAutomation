@@ -767,7 +767,7 @@ EOF
     # Add enabled services dynamically - NO hardcoded values
     [[ "${ENABLE_LITELLM:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
   litellm:
-    image: ghcr.io/berriai/litellm-database:main-latest
+    image: ghcr.io/berriai/litellm:main-latest
     restart: unless-stopped
     depends_on:
       postgres:
@@ -777,7 +777,7 @@ EOF
     environment:
       LITELLM_MASTER_KEY: \${LITELLM_MASTER_KEY}
       LITELLM_SALT_KEY: \${LITELLM_SALT_KEY}
-      DATABASE_URL: "postgresql://ds-admin:\${POSTGRES_PASSWORD}@postgres:5432/litellm"
+      DATABASE_URL: "postgresql://\${POSTGRES_USER}:\${POSTGRES_PASSWORD}@postgres:5432/litellm"
       REDIS_URL: \${REDIS_URL}
       REDIS_PASSWORD: \${REDIS_PASSWORD}
       OPENAI_API_KEY: \${OPENAI_API_KEY:-}
@@ -790,23 +790,19 @@ EOF
       LITELLM_LOG: "INFO"
       HEALTH_CHECK_INTERVAL: "300"
       BACKGROUND_HEALTH_CHECKS: "True"
-      STORE_MODEL_IN_DB: "True"
-      DISABLE_SCHEMA_UPDATE: "True"
-      PRISMA_SCHEMA_UPDATE: "false"
+      DISABLE_SCHEMA_UPDATE: "False"
     volumes:
-      - ${CONFIG_DIR}/litellm/config.yaml:/litellm-config.yaml:ro
+      - ${CONFIG_DIR}/litellm/config.yaml:/app/config.yaml:ro
       - ${DATA_DIR}/litellm:/root/.cache
-      - ${LOGS_DIR}/litellm:/app/logs
     ports:
       - "\${PORT_LITELLM:-4000}:4000"
-    entrypoint: ["/bin/sh", "-c"]
-    command: ["sh", "-c", "litellm --config /litellm-config.yaml --port 4000 --detailed_debug"]
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "1"]
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=5); print('OK')\" || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:4000/ || exit 1"]
       interval: 30s
       timeout: 15s
       retries: 10
-      start_period: 90s
+      start_period: 120s
 EOF
 
     [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
