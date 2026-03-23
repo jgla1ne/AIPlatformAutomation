@@ -437,9 +437,6 @@ generate_caddyfile() {
     admin 0.0.0.0:2019
     email ${admin_email}
     
-    # auto_https is a simple directive, not a block
-    auto_https off
-    
     # Global TLS settings
     servers {
         trusted_proxies static private_ranges
@@ -478,7 +475,10 @@ EOF
     [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && {
         local webui_headers="header_up Upgrade {http.request.header.Upgrade}
         header_up Connection {http.request.header.Connection}
-        header_read_timeout 86400"
+        transport http {
+            read_timeout 86400s
+            write_timeout 86400s
+        }"
         add_service_block "$out" "chat" "open-webui" "8080" "$webui_headers" "$tls_line" "$base_domain"
     }
     
@@ -719,6 +719,7 @@ volumes:
   prometheus_data:
   grafana_data:
   gdrive_cache:
+  caddy_data:
 
 services:
 
@@ -791,6 +792,37 @@ EOF
       timeout: 15s
       retries: 10
       start_period: 120s
+EOF
+
+    # Add Caddy service for HTTPS proxy
+    cat >> "$COMPOSE_FILE" <<EOF
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "2019:2019"
+    volumes:
+      - ${CONFIG_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - DOMAIN=${DOMAIN}
+      - ADMIN_EMAIL=${ADMIN_EMAIL}
+      - TZ=UTC
+    networks:
+      - default
+    depends_on:
+      - litellm
+      - open-webui
+      - grafana
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:2019/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 EOF
 
     [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
