@@ -142,6 +142,19 @@ main() {
     generate_configs
     generate_compose
 
+    # Validate Caddyfile before proceeding with deployment
+    log_info "Validating Caddyfile configuration..."
+    if docker run --rm \
+        -v "${CONFIG_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+        caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile \
+        >> "${LOGS_DIR}/caddy-validate-$(date +%Y%m%d).log" 2>&1; then
+        log_success "Caddyfile validation passed"
+    else
+        log_error "Caddyfile validation failed - aborting deployment"
+        log_error "Check validation log: ${LOGS_DIR}/caddy-validate-$(date +%Y%m%d).log"
+        exit 1
+    fi
+
     # 2. Infra layer — must be healthy before anything else
     log_info "Deploying infrastructure services..."
     deploy_service postgres
@@ -166,7 +179,36 @@ main() {
     # 4. Local LLM runtime — BEFORE LiteLLM
     [[ "${ENABLE_OLLAMA:-false}"     == "true" ]] && {
         deploy_service ollama
-        pull_ollama_models
+        
+        # Wait for Ollama HTTP server to be ready BEFORE pulling models
+        log_info "Waiting for Ollama HTTP server to be ready..."
+        local elapsed=0
+        until docker compose -f "/mnt/data/${TENANT}/docker-compose.yml" exec -T ollama \
+            curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; do
+            elapsed=$((elapsed + 5))
+            if [[ $elapsed -ge 60 ]]; then
+                log_error "Ollama HTTP not ready after 60s — cannot proceed"
+                exit 1
+            fi
+            log_info "  Waiting for ollama HTTP... (${elapsed}s)"
+            sleep 5
+        done
+        log_success "Ollama HTTP server is ready"
+
+        # Pull models SYNCHRONOUSLY before starting LiteLLM
+        log_info "Pulling required Ollama models before starting LiteLLM..."
+        local required_models="llama3.2 nomic-embed-text"
+        for model in ${required_models}; do
+            log_info "  Pulling ${model}..."
+            docker compose -f "/mnt/data/${TENANT}/docker-compose.yml" exec -T ollama \
+                ollama pull "$model" \
+                >> "/mnt/data/${TENANT}/logs/ollama-pull-$(date +%Y%m%d).log" 2>&1
+            [[ $? -eq 0 ]] && log_success "  ✓ ${model} pulled successfully" || {
+                log_error "  ✗ Failed to pull ${model}"
+                exit 1
+            }
+        done
+        log_success "All required Ollama models are ready"
     }
 
     # 5. AI gateway — always force-recreate container to pick up fresh config
@@ -232,6 +274,26 @@ main() {
 
         deploy_service litellm
         wait_for_healthy litellm 180
+        
+        # Verify LiteLLM is actually responding to HTTP requests
+        log_info "Verifying LiteLLM HTTP connectivity..."
+        local max_attempts=12
+        local attempt=0
+        while [[ $attempt -lt $max_attempts ]]; do
+            if curl -sf http://localhost:4000/health/liveliness >/dev/null 2>&1; then
+                log_success "LiteLLM is responding to HTTP requests"
+                break
+            else
+                attempt=$((attempt + 1))
+                if [[ $attempt -eq $max_attempts ]]; then
+                    log_error "LiteLLM not responding after ${max_attempts} attempts"
+                    docker compose logs litellm --tail 30
+                    exit 1
+                fi
+                log_info "  Waiting for LiteLLM HTTP response... (${attempt}/${max_attempts})"
+                sleep 10
+            fi
+        done
     }
 
     # 6. Monitoring — independent of AI services
