@@ -720,6 +720,7 @@ volumes:
   grafana_data:
   gdrive_cache:
   caddy_data:
+  caddy_config:
 
 services:
 
@@ -785,9 +786,9 @@ EOF
       - ${DATA_DIR}/litellm:/root/.cache
     ports:
       - ${PORT_LITELLM:-4000}:4000
-    command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "1"]
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0", "--num_workers", "1"]
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/', timeout=5)"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=5)"]
       interval: 30s
       timeout: 15s
       retries: 10
@@ -1554,32 +1555,6 @@ EOF
 
     # Continue.dev - AI-powered development assistant (runs inside Code Server)
     # Note: This is configured as an extension, not a separate service
-
-    # Caddy - always deployed as reverse proxy
-    cat >> "$COMPOSE_FILE" <<EOF
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    ports:
-      - "80:80"
-      - "443:443"
-      - "2019:2019"
-    volumes:
-      - ${CONFIG_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ${CONFIG_DIR}/caddy/data:/data
-      - ${CONFIG_DIR}/caddy/config:/config
-    healthcheck:
-      test: ["CMD-SHELL","wget -qO- http://localhost:2019/metrics > /dev/null"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-EOF
 
     log_success "docker-compose.yml generated at ${COMPOSE_FILE}"
 }
