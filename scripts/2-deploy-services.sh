@@ -50,8 +50,8 @@ declare -A SERVICE_STARTUP_TIMEOUTS=(
     ["anythingllm"]="90"
     ["flowise"]="60"
     ["n8n"]="60"
-    ["codeserver"]="30"
-    ["openclaw"]="30"
+    ["codeserver"]="60"
+    ["openclaw"]="60"
 )
 
 wait_for_healthy() {
