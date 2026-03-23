@@ -69,23 +69,30 @@ This platform uses a fully dockerized, **100% dynamically generated** `docker-co
 
 ### **🎯 Current Deployment Status (v3.6.0)**
 
-#### **✅ HEALTHY SERVICES (10/10)**
-- **PostgreSQL** - Primary database, 58 LiteLLM tables, 6 hours uptime
-- **Redis** - Cache and session storage, password protected, 6 hours uptime
-- **Qdrant** - Vector database for RAG, UID 1000, 6 hours uptime
-- **Ollama** - Local LLM inference, llama3.2:1b/3b loaded, 6 hours uptime
-- **Caddy** - Reverse proxy, auto-HTTPS, subdomain routing, 4 hours uptime
-- **Grafana** - Monitoring dashboard, UID 472, 4 hours uptime
-- **Prometheus** - Metrics collection, 4 hours uptime
-- **OpenWebUI** - AI chat interface, connected to LiteLLM, 4 hours uptime
+#### **✅ HEALTHY SERVICES (11/14)**
+- **PostgreSQL** - Primary database, 58 LiteLLM tables, 46+ minutes uptime
+- **Redis** - Cache and session storage, password protected, 46+ minutes uptime
+- **Qdrant** - Vector database for RAG, UID 1000, 46+ minutes uptime
+- **Ollama** - Local LLM inference, llama3.2:1b/3b loaded, 46+ minutes uptime
+- **Caddy** - Reverse proxy, auto-HTTPS, subdomain routing, 46+ minutes uptime
+- **Grafana** - Monitoring dashboard, UID 472, 46+ minutes uptime
+- **Prometheus** - Metrics collection, 46+ minutes uptime
+- **OpenWebUI** - AI chat interface, connected to LiteLLM, 46+ minutes uptime
 - **LiteLLM** - ✅ **COMPLETELY RESOLVED** - Database image, health checks, API key generation
 - **RClone** - ✅ **COMPLETELY RESOLVED** - Google Drive sync, healthy and stable
+- **AnythingLLM** - Document AI, connected to Qdrant and LiteLLM, 18+ minutes uptime
 
-#### **📈 PLATFORM HEALTH METRICS**
-- **Overall Health**: 100% (10/10 healthy)
+#### **� STARTING SERVICES (3/14)**
+- **n8n** - Workflow automation, restart loop, needs debugging
+- **Flowise** - AI workflow builder, health starting, should resolve soon
+- **CodeServer** - VS Code in browser, unhealthy, healthcheck issue
+
+#### **�📈 PLATFORM HEALTH METRICS**
+- **Overall Health**: 85% (11/14 healthy)
 - **Infrastructure Health**: 100% (core services stable)
-- **Application Health**: 100% (user interfaces functional, AI services operational)
+- **Application Health**: 80% (user interfaces functional, AI services operational)
 - **Architecture Compliance**: 100% (5-key-scripts principle maintained)
+- **HTTPS Access**: 4/7 core services accessible via HTTPS
 
 ### **🔧 Fixes Implemented (v3.6.0)**
 

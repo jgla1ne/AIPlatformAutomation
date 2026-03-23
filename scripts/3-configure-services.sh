@@ -777,9 +777,6 @@ EOF
     environment:
       LITELLM_MASTER_KEY: \${LITELLM_MASTER_KEY}
       LITELLM_SALT_KEY: \${LITELLM_SALT_KEY}
-      DATABASE_URL: "postgresql://\${POSTGRES_USER}:\${POSTGRES_PASSWORD}@postgres:5432/litellm"
-      REDIS_URL: \${REDIS_URL}
-      REDIS_PASSWORD: \${REDIS_PASSWORD}
       OPENAI_API_KEY: \${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: \${ANTHROPIC_API_KEY:-}
       GROQ_API_KEY: \${GROQ_API_KEY:-}
@@ -788,9 +785,6 @@ EOF
       LITELLM_TELEMETRY: "False"
       PRISMA_DISABLE_WARNINGS: "true"
       LITELLM_LOG: "INFO"
-      HEALTH_CHECK_INTERVAL: "300"
-      BACKGROUND_HEALTH_CHECKS: "True"
-      DISABLE_SCHEMA_UPDATE: "False"
     volumes:
       - ${CONFIG_DIR}/litellm/config.yaml:/app/config.yaml:ro
       - ${DATA_DIR}/litellm:/root/.cache
@@ -798,7 +792,7 @@ EOF
       - "\${PORT_LITELLM:-4000}:4000"
     command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "1"]
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:4000/ || exit 1"]
+test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/', timeout=5)"]
       interval: 30s
       timeout: 15s
       retries: 10
