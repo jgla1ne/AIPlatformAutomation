@@ -240,7 +240,7 @@ main() {
                 || log_warning "  Could not reset litellm database"
         fi
 
-        log_info "Running Prisma migration before LiteLLM starts..."
+        log_info "Running LiteLLM database migration..."
         # Run migration as isolated one-shot container BEFORE LiteLLM service starts
         docker compose -f "$COMPOSE_FILE" run \
             --rm \
@@ -273,27 +273,51 @@ main() {
             || log_warning "  Prisma migration failed - will retry"
 
         deploy_service litellm
-        wait_for_healthy litellm 180
         
-        # Verify LiteLLM is actually responding to HTTP requests
-        log_info "Verifying LiteLLM HTTP connectivity..."
-        local max_attempts=12
-        local attempt=0
-        while [[ $attempt -lt $max_attempts ]]; do
-            if curl -sf http://localhost:4000/health/liveliness >/dev/null 2>&1; then
-                log_success "LiteLLM is responding to HTTP requests"
-                break
-            else
-                attempt=$((attempt + 1))
-                if [[ $attempt -eq $max_attempts ]]; then
-                    log_error "LiteLLM not responding after ${max_attempts} attempts"
-                    docker compose logs litellm --tail 30
-                    exit 1
-                fi
-                log_info "  Waiting for LiteLLM HTTP response... (${attempt}/${max_attempts})"
-                sleep 10
+        # Wait with real log monitoring — fail fast if crash detected
+        LITELLM_READY=false
+        for i in $(seq 1 40); do
+            sleep 5
+            
+            # Check if container exited (crash)
+            STATUS=$(docker compose ps litellm --format json 2>/dev/null | python3 -c "
+import sys,json
+data=sys.stdin.read().strip()
+if not data: print('unknown'); exit()
+# Handle both array and single object
+import re
+lines=[l for l in data.split('\n') if l.strip()]
+for line in lines:
+    try:
+        obj=json.loads(line)
+        print(obj.get('State','unknown'))
+        exit()
+    except: pass
+print('unknown')
+" 2>/dev/null || docker inspect ai-datasquiz-litellm --format='{{.State.Status}}' 2>/dev/null || echo "unknown")
+            
+            if [[ "$STATUS" == "exited" ]]; then
+                log_error "LiteLLM container exited. Logs:"
+                docker compose logs litellm --tail 50
+                log_error "FATAL: LiteLLM crashed. Check config above."
+                exit 1
             fi
+            
+            # Check health endpoint
+            if curl -sf "http://localhost:4000/health/liveliness" >/dev/null 2>&1; then
+                LITELLM_READY=true
+                log_success "LiteLLM healthy after $((i*5)) seconds."
+                break
+            fi
+            
+            log_info "Waiting for LiteLLM... ($((i*5))s)"
         done
+
+        if [[ "$LITELLM_READY" != "true" ]]; then
+            log_error "LiteLLM did not become healthy. Final logs:"
+            docker compose logs litellm --tail 50
+            exit 1
+        fi
     }
 
     # 6. Monitoring — independent of AI services

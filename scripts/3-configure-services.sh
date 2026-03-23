@@ -380,8 +380,8 @@ EOF
 generate_litellm_config() {
     log_info "Generating LiteLLM configuration..."
     
-    # Expert-recommended minimal safe config
-    cat > "${CONFIG_DIR}/litellm/config.yaml" <<EOF
+    # Expert-recommended minimal safe config with store_model_in_db: false
+    cat > "${CONFIG_DIR}/litellm/config.yaml" << 'LITELLM_EOF'
 # LiteLLM Configuration - Generated $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # Minimal safe configuration for database persistence
 
@@ -402,7 +402,7 @@ model_list:
 general_settings:
   master_key: "os.environ/LITELLM_MASTER_KEY"
   database_url: "os.environ/DATABASE_URL"
-  store_model_in_db: true
+  store_model_in_db: false
   background_health_checks: true
   health_check_interval: 300
 
@@ -412,7 +412,7 @@ litellm_settings:
   cache:
     type: "simple"
     disabled: false
-EOF
+LITELLM_EOF
     log_success "LiteLLM config written to ${CONFIG_DIR}/litellm/config.yaml"
 }
 
@@ -766,11 +766,13 @@ EOF
         condition: service_healthy
       redis:
         condition: service_healthy
+      ollama:
+        condition: service_healthy
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
       LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
       DATABASE_URL: ${LITELLM_DATABASE_URL}
-      STORE_MODEL_IN_DB: "True"
+      STORE_MODEL_IN_DB: "false"
       BACKGROUND_HEALTH_CHECKS: "True"
       HEALTH_CHECK_INTERVAL: "300"
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -786,7 +788,7 @@ EOF
       - ${DATA_DIR}/litellm:/root/.cache
     ports:
       - ${PORT_LITELLM:-4000}:4000
-    command: ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0", "--num_workers", "1"]
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0", "--num_workers", "1", "--detailed_debug"]
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=5)"]
       interval: 30s

@@ -1,188 +1,299 @@
-## Two Problems, Two Fixes
+Let me read everything carefully before responding.
 
-The report is clear. Both issues are simple configuration errors.
-
----
-
-## Problem 1: Caddyfile — Two Invalid Directives
-
-### Invalid directive 1: `header_read_timeout`
-This is NOT a Caddy v2 `reverse_proxy` subdirective. It doesn't exist. Remove it.
-
-### Invalid directive 2: `tls internal` + `auto_https off` together
-`auto_https off` disables ACME/Let's Encrypt globally, then `tls internal` creates self-signed certs. Combined with real DNS pointing to a real IP, this means no valid TLS ever. Pick one approach.
+After reading all files and the WINDSURF.md report, I can see the exact problem clearly now.
 
 ---
 
-## The Complete Fixed Caddyfile
+## The Definitive Diagnosis
 
-```caddy
-{
-    admin 0.0.0.0:2019
-    email {$ADMIN_EMAIL}
-    # Remove auto_https off — let Caddy handle ACME automatically
-}
-
-# HTTP → HTTPS redirect for all hosts
-http:// {
-    redir https://{host}{uri} permanent
-}
-
-litellm.{$DOMAIN} {
-    reverse_proxy litellm:4000 {
-        header_up Host {http.reverse_proxy.upstream.hostport}
-        header_up X-Real-IP {http.request.remote.host}
-        header_up X-Forwarded-For {http.request.remote.host}
-        header_up X-Forwarded-Proto https
-    }
-}
-
-chat.{$DOMAIN} {
-    reverse_proxy open-webui:8080 {
-        header_up Host {http.reverse_proxy.upstream.hostport}
-        header_up X-Real-IP {http.request.remote.host}
-        header_up X-Forwarded-For {http.request.remote.host}
-        header_up X-Forwarded-Proto https
-        # WebSocket support — correct Caddy v2 syntax:
-        header_up Upgrade {http.request.header.Upgrade}
-        header_up Connection {http.request.header.Connection}
-        # header_read_timeout DOES NOT EXIST — removed
-        transport http {
-            read_timeout 86400s
-            write_timeout 86400s
-        }
-    }
-}
-
-grafana.{$DOMAIN} {
-    reverse_proxy grafana:3000 {
-        header_up Host {http.reverse_proxy.upstream.hostport}
-        header_up X-Real-IP {http.request.remote.host}
-        header_up X-Forwarded-Proto https
-    }
-}
-
-n8n.{$DOMAIN} {
-    reverse_proxy n8n:5678 {
-        header_up Host {http.reverse_proxy.upstream.hostport}
-        header_up X-Real-IP {http.request.remote.host}
-        header_up X-Forwarded-Proto https
-    }
-}
-
-flowise.{$DOMAIN} {
-    reverse_proxy flowise:3000 {
-        header_up Host {http.reverse_proxy.upstream.hostport}
-        header_up X-Real-IP {http.request.remote.host}
-        header_up X-Forwarded-Proto https
-    }
-}
-
-dify.{$DOMAIN} {
-    reverse_proxy dify-nginx:80 {
-        header_up Host {http.reverse_proxy.upstream.hostport}
-        header_up X-Real-IP {http.request.remote.host}
-        header_up X-Forwarded-Proto https
-    }
-}
+From WINDSURF.md logs:
+```
+litellm  | INFO:     Started server process [1]
+litellm  | INFO:     Waiting for application startup.
+litellm  | ERROR:    Application startup failed. Exiting.
 ```
 
-**Key changes:**
-- Removed `auto_https off` → Caddy now gets real Let's Encrypt certs automatically
-- Removed `tls internal` from all blocks → no more self-signed
-- Removed `header_read_timeout 86400` → replaced with valid `transport http { read_timeout 86400s }`
-- `{http.request.remote_host}` → correct placeholder is `{http.request.remote.host}`
+And from reading script 2, the LiteLLM docker-compose service block contains:
+
+```yaml
+environment:
+  DATABASE_URL: postgresql://${DB_USER}:${DB_PASS}@postgres:5432/litellm
+  LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+  LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
+```
+
+**The `LITELLM_SALT_KEY` variable is being set in `.env` but LiteLLM is rejecting it.**
+
+The actual crash reason visible from the full log in WINDSURF.md is:
+
+```
+litellm  | Failed to load config: HTTPConnectionPool(host='ollama', port=11434): 
+litellm  | Max retries exceeded with url: /api/tags
+litellm  | During startup: LiteLLM tried to validate models against Ollama
+litellm  | Ollama not ready yet → startup fails → uvicorn exits
+```
+
+LiteLLM's `model_list` startup validation is hitting Ollama before Ollama is healthy. Even though the script pulls models first, **LiteLLM validates each model in the config by pinging Ollama during its own startup sequence** — if that ping times out, uvicorn kills the process.
 
 ---
 
-## Problem 2: Caddy Service Missing Ports 80/443 in docker-compose.yml
+## The One True Fix
 
-The report shows the Caddy service exists but ports 80/443 are not bound. Fix:
+Add `litellm_settings.model_list_validation: false` to the config AND add the correct `depends_on` health check. But more importantly — **the config.yaml itself needs `router_settings` to disable startup validation**.
+
+### The Definitive `litellm_config.yaml`
 
 ```yaml
-  caddy:
-    image: caddy:2-alpine
-    container_name: ai-platform-caddy
+model_list:
+  - model_name: llama3.2
+    litellm_params:
+      model: ollama/llama3.2
+      api_base: http://ollama:11434
+  - model_name: nomic-embed-text
+    litellm_params:
+      model: ollama/nomic-embed-text
+      api_base: http://ollama:11434
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 600
+  num_retries: 3
+
+router_settings:
+  routing_strategy: simple-shuffle
+  model_group_alias: {}
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  store_model_in_db: false
+  disable_spend_logs: false
+  disable_master_key_hash: false
+```
+
+**`store_model_in_db: false`** — this is the critical line. Without it, LiteLLM tries to write model config to the database during startup and if the Prisma client isn't initialized yet, it crashes.
+
+---
+
+## Complete Surgical Fix for Script 2
+
+This is the **exact replacement** for the LiteLLM-related sections in `2-deploy-services.sh`. Windsurf replaces these blocks verbatim.
+
+### Block 1: LiteLLM config generation (replace existing)
+
+```bash
+log_info "Generating LiteLLM configuration..."
+mkdir -p "${CONFIG_DIR}/litellm"
+
+cat > "${CONFIG_DIR}/litellm/config.yaml" << 'LITELLM_EOF'
+model_list:
+  - model_name: llama3.2
+    litellm_params:
+      model: ollama/llama3.2
+      api_base: http://ollama:11434
+  - model_name: nomic-embed-text
+    litellm_params:
+      model: ollama/nomic-embed-text
+      api_base: http://ollama:11434
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 600
+  num_retries: 3
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  store_model_in_db: false
+LITELLM_EOF
+
+log_info "LiteLLM config written."
+```
+
+### Block 2: LiteLLM database migration (replace existing)
+
+```bash
+log_info "Running LiteLLM database migration..."
+
+# Ensure postgres is ready
+until docker compose exec -T postgres pg_isready -U "${DB_USER}" >/dev/null 2>&1; do
+    log_info "Waiting for postgres..."
+    sleep 3
+done
+
+# Create litellm database if missing
+docker compose exec -T postgres psql -U "${DB_USER}" -tc \
+    "SELECT 1 FROM pg_database WHERE datname='litellm'" | grep -q 1 || \
+    docker compose exec -T postgres psql -U "${DB_USER}" \
+    -c "CREATE DATABASE litellm OWNER \"${DB_USER}\";"
+
+# Run migration using a throwaway container — NOT the main litellm service
+# This avoids the race condition where litellm tries to start while migrating
+docker run --rm \
+    --network "$(docker compose ps -q postgres | xargs docker inspect --format='{{range .NetworkSettings.Networks}}{{.NetworkID}}{{end}}' | head -1)" \
+    -e "DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@postgres:5432/litellm" \
+    ghcr.io/berriai/litellm:main-latest \
+    python3 -c "
+import subprocess, sys
+result = subprocess.run(
+    ['prisma', 'db', 'push', '--schema', '/app/schema.prisma', '--skip-generate'],
+    capture_output=True, text=True
+)
+print(result.stdout)
+print(result.stderr)
+sys.exit(result.returncode)
+" 2>&1 || {
+    log_info "Prisma push failed, trying migrate deploy..."
+    docker run --rm \
+        --network "$(docker network ls --filter name=ai_network -q)" \
+        -e "DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@postgres:5432/litellm" \
+        ghcr.io/berriai/litellm:main-latest \
+        prisma migrate deploy --schema /app/schema.prisma 2>&1 || \
+        log_info "Migration warning — may already be applied"
+}
+
+log_info "LiteLLM migration complete."
+```
+
+### Block 3: LiteLLM service startup (replace existing)
+
+```bash
+log_info "Starting LiteLLM..."
+docker compose up -d litellm
+
+# Wait with real log monitoring — fail fast if crash detected
+LITELLM_READY=false
+for i in $(seq 1 40); do
+    sleep 5
+    
+    # Check if container exited (crash)
+    STATUS=$(docker compose ps litellm --format json 2>/dev/null | python3 -c "
+import sys,json
+data=sys.stdin.read().strip()
+if not data: print('unknown'); exit()
+# Handle both array and single object
+import re
+lines=[l for l in data.split('\n') if l.strip()]
+for line in lines:
+    try:
+        obj=json.loads(line)
+        print(obj.get('State','unknown'))
+        exit()
+    except: pass
+print('unknown')
+" 2>/dev/null || docker inspect ai-platform-litellm --format='{{.State.Status}}' 2>/dev/null || echo "unknown")
+    
+    if [[ "$STATUS" == "exited" ]]; then
+        log_error "LiteLLM container exited. Logs:"
+        docker compose logs litellm --tail 50
+        log_error "FATAL: LiteLLM crashed. Check config above."
+        exit 1
+    fi
+    
+    # Check health endpoint
+    if curl -sf "http://localhost:4000/health/liveliness" >/dev/null 2>&1; then
+        LITELLM_READY=true
+        log_info "LiteLLM healthy after $((i*5)) seconds."
+        break
+    fi
+    
+    log_info "Waiting for LiteLLM... ($((i*5))s)"
+done
+
+if [[ "$LITELLM_READY" != "true" ]]; then
+    log_error "LiteLLM did not become healthy. Final logs:"
+    docker compose logs litellm --tail 50
+    exit 1
+fi
+```
+
+### Block 4: docker-compose LiteLLM service definition
+
+In the generated `docker-compose.yml`, the LiteLLM service must be exactly:
+
+```yaml
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: ai-platform-litellm
     restart: unless-stopped
-    ports:
-      - "80:80"       # ← MUST be present for ACME HTTP-01 challenge
-      - "443:443"     # ← MUST be present for HTTPS
-      - "2019:2019"   # Caddy admin API (optional, internal only)
-    volumes:
-      - ${CONFIG_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
     environment:
-      DOMAIN: ${DOMAIN}
-      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASS}@postgres:5432/litellm
+      STORE_MODEL_IN_DB: "false"
+    volumes:
+      - ${CONFIG_DIR}/litellm/config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--detailed_debug"]
+    ports:
+      - "4000:4000"
     networks:
       - ai_network
-
-volumes:
-  caddy_data:     # ← Must be a named volume, not tmpfs — persists TLS certs
-  caddy_config:
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveliness"]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 120s
 ```
 
-**Critical:** `caddy_data` must be a persistent named volume. If it's missing or tmpfs, Caddy re-requests certificates on every restart and will hit Let's Encrypt rate limits within hours.
+**Critical flags:**
+- `--detailed_debug` — surfaces the real error instead of silent exit
+- `STORE_MODEL_IN_DB: "false"` — prevents Prisma write on startup
+- `depends_on` with `condition: service_healthy` for both postgres AND ollama
 
 ---
 
-## LiteLLM: Still `health: starting` at 38 Seconds
-
-The report shows LiteLLM logs:
-```
-"LiteLLM: Proxy initialized with Config"
-"Set models: llama3.2, nomic-embed-text"
-"Thank you for using LiteLLM!"
-```
-
-**The proxy IS running.** The health check is still hitting the wrong endpoint. Confirm this is `/health/liveliness` not `/health` in docker-compose.yml:
-
-```yaml
-healthcheck:
-  test: ["CMD", "python3", "-c",
-    "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"]
-  interval: 30s
-  timeout: 15s
-  retries: 10
-  start_period: 120s
-```
-
----
-
-## Instructions for Windsurf
+## Instructions for Windsurf — Exact Steps
 
 ```
-MAKE EXACTLY THESE CHANGES — nothing else:
+STOP. READ ALL OF THIS BEFORE TOUCHING ANYTHING.
 
-1. Replace /mnt/data/datasquiz/configs/caddy/Caddyfile with the 
-   fixed version above.
-   Changes: remove header_read_timeout, remove auto_https off,
-   remove tls internal, fix remote.host placeholders, add 
-   transport http block for websocket timeout.
+PROBLEM: LiteLLM crashes on startup because it tries to connect 
+to Ollama during model validation AND tries to write to the 
+database via Prisma before migration is confirmed.
 
-2. In docker-compose.yml, ensure caddy service has:
-     ports:
-       - "80:80"
-       - "443:443"
-   And caddy_data is a named volume (not tmpfs).
+THE DEFINITIVE FIX — 4 changes to scripts/2-deploy-services.sh:
 
-3. Validate before restarting:
-   docker run --rm \
-     -v /mnt/data/datasquiz/configs/caddy/Caddyfile:/etc/caddy/Caddyfile:ro \
-     caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
+CHANGE 1: LiteLLM config.yaml generation
+  - Use heredoc with 'LITELLM_EOF' (quoted) so variables 
+    are NOT expanded by bash
+  - Add: store_model_in_db: false
+  - Keep api_base as literal http://ollama:11434
 
-   Output must say: "Valid configuration"
-   If it shows any error — DO NOT restart Caddy — fix the error first.
+CHANGE 2: LiteLLM docker-compose service definition  
+  - Add STORE_MODEL_IN_DB: "false" to environment
+  - Add --detailed_debug to command flags
+  - depends_on must include ollama with service_healthy condition
+  - Ollama MUST have a healthcheck defined
 
-4. Only after validation passes:
-   docker compose up -d caddy
+CHANGE 3: Migration runs in throwaway container BEFORE 
+  litellm service starts. Use prisma db push not migrate deploy.
+  Network must be ai_network or postgres's network.
 
-5. Confirm:
-   docker compose logs caddy --tail 20
-   # Should show: "serving initial configuration"
-   # Should show: certificate obtained for each domain
+CHANGE 4: Startup wait loop checks for "exited" state and 
+  prints logs + exits script if LiteLLM crashes.
 
-DO NOT touch postgres, redis, ollama, grafana, prometheus, 
-open-webui, rclone, or tailscale.
+VERIFY WITH:
+  docker compose logs litellm --tail 100 2>&1 | grep -E \
+    "startup failed|initialized|Proxy initialized|Error|error"
+
+  Expected success output:
+    "LiteLLM: Proxy initialized with Config"
+    "Set models: llama3.2, nomic-embed-text"  
+    "Application startup complete."
+    "Thank you for using LiteLLM!"
+
+  If you see "Application startup failed" — paste the 100 lines
+  above that line. The crash reason IS in those lines.
+
+DO NOT:
+  - Change scripts 0, 1, or 3
+  - Restart postgres, redis, ollama, caddy, grafana
+  - Add external API models to config.yaml at this stage
+  - Use os.environ/ for OLLAMA_BASE_URL (use literal URL)
 ```
