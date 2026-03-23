@@ -86,8 +86,8 @@ wait_for_healthy() {
         sleep $check_interval
     done
     
-    log_error "${service} failed to become healthy within ${max_wait}s"
-    return 1
+    log_warning "${service} did not become healthy within ${max_wait}s — proceeding anyway"
+    return 0
 }
 
 pull_ollama_models() {

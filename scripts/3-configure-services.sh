@@ -277,10 +277,10 @@ REDIS_UID=999
 DB_PASSWORD=${DB_PASSWORD}
 
 # ─── Derived Connection Strings (Use primitives above) ─────────────────────
-DATABASE_URL=postgresql://aiplatform:\${POSTGRES_PASSWORD}@postgres:5432/aiplatform
-LITELLM_DATABASE_URL=postgresql://aiplatform:\${POSTGRES_PASSWORD}@postgres:5432/litellm
-OPENWEBUI_DATABASE_URL=postgresql://aiplatform:\${POSTGRES_PASSWORD}@postgres:5432/openwebui
-REDIS_URL=redis://:\${REDIS_PASSWORD}@redis:6379
+DATABASE_URL=postgresql://aiplatform:${DB_PASSWORD}@postgres:5432/aiplatform
+LITELLM_DATABASE_URL=postgresql://aiplatform:${DB_PASSWORD}@postgres:5432/litellm
+OPENWEBUI_DATABASE_URL=postgresql://aiplatform:${DB_PASSWORD}@postgres:5432/openwebui
+REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
 
 # ─── Service Secrets ────────────────────────────────────────────────────────
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
@@ -381,22 +381,7 @@ generate_litellm_config() {
     log_info "Generating LiteLLM configuration..."
     
     # Enhanced Azure validation to prevent restart loops
-    local az_config_valid=true
-    if [[ -n "${LITELM_AZURE_API_BASE:-}" ]]; then
-        if [[ -z "${LITELM_AZURE_API_KEY:-}" ]]; then
-            log_warning "Azure API base configured but missing API key - using local models only"
-            az_config_valid=false
-        elif [[ "${LITELM_AZURE_API_BASE}" == *"test"* ]]; then
-            log_warning "Test Azure endpoints detected - disabling Azure models to prevent failures"
-            az_config_valid=false
-        fi
-    fi
-    
-    generate_litellm_config() {
-        log_info "Generating LiteLLM configuration..."
-        
-        # Enhanced Azure validation to prevent restart loops
-        cat > "${CONFIG_DIR}/litellm/config.yaml" <<EOF
+    cat > "${CONFIG_DIR}/litellm/config.yaml" <<EOF
 # LiteLLM Configuration - Generated $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # Simplified configuration with only local Ollama models
 
@@ -418,13 +403,13 @@ litellm_settings:
   set_verbose: false
   cache:
     type: "simple"
-    disabled: true
-  store_model_in_db: false
+    disabled: false
+  store_model_in_db: true
 router_settings:
   routing_strategy: cost-based-routing
 EOF
-        log_success "LiteLLM config written to ${CONFIG_DIR}/litellm/config.yaml"
-    }
+    log_success "LiteLLM config written to ${CONFIG_DIR}/litellm/config.yaml"
+}
 
 generate_caddyfile() {
     local out="${CONFIG_DIR}/caddy/Caddyfile"
@@ -777,6 +762,8 @@ EOF
     environment:
       LITELLM_MASTER_KEY: \${LITELLM_MASTER_KEY}
       LITELLM_SALT_KEY: \${LITELLM_SALT_KEY}
+      DATABASE_URL: \${LITELLM_DATABASE_URL}
+      STORE_MODEL_IN_DB: "True"
       OPENAI_API_KEY: \${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: \${ANTHROPIC_API_KEY:-}
       GROQ_API_KEY: \${GROQ_API_KEY:-}
@@ -792,7 +779,7 @@ EOF
       - "\${PORT_LITELLM:-4000}:4000"
     command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "1"]
     healthcheck:
-test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/', timeout=5)"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/', timeout=5)"]
       interval: 30s
       timeout: 15s
       retries: 10
