@@ -1,33 +1,30 @@
-The "90% Success" report confirms that the infrastructure and networking (Caddy/Tailscale/Postgres) are finally stable. However, the **LiteLLM Restart Loop** is the last remaining hurdle.
+The "Application startup failed, exiting" error in LiteLLM, despite the rest of the stack being healthy, is the "final boss" of this deployment. Based on the logs in `WINDSURF.md.backup` and the current scripts, Windsurf is missing **three specific technical requirements** that Prisma (LiteLLM's database layer) demands.
 
-Windsurf is likely missing a subtle but critical requirement: **LiteLLM in "Database Mode" requires an explicit Master Key and a specific Database URL format to run Prisma migrations successfully.** If these are missing or mismatched, the container crashes instantly on startup.
+Here is the comprehensive, minimal-impact solution to fix `2-deploy-services.sh` and `1-setup-system.sh`.
 
-Here is the final, comprehensive fix to stabilize LiteLLM and complete the 100% deployment.
+---
 
-### 1. The "Master Key" & Variable Sync (Fixing Script 1)
-LiteLLM (and OpenClaw) are failing because `CODEBASE_PASSWORD` is empty. LiteLLM needs a `LITELLM_MASTER_KEY` to initialize its database tables.
+### 1. The "Protocol & Key" Fix (Script 1)
+LiteLLM's database driver (Prisma) **refuses** to connect if the protocol is `postgres://` (it must be `postgresql://`) or if the `LITELLM_MASTER_KEY` is not explicitly set for the database-backed version.
 
-**Action for Windsurf in `1-setup-system.sh`:**
-Update the password collection block to ensure the variables are mirrored across the stack.
+**Action for Windsurf in `scripts/1-setup-system.sh`:**
+Ensure these lines are present to transform the variables correctly:
 ```bash
-# Ensure the collected password is used everywhere
-read -sp "Set Master Admin Password: " MASTER_PASS
+# Fix the Postgres URL for Prisma compatibility
+DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm"
+echo "DATABASE_URL=\"$DATABASE_URL\"" >> .env
 
-# Apply to .env
-sed -i "s/^CODEBASE_PASSWORD=.*/CODEBASE_PASSWORD=\"$MASTER_PASS\"/" .env
-sed -i "s/^LITELLM_MASTER_KEY=.*/LITELLM_MASTER_KEY=\"$MASTER_PASS\"/" .env
-sed -i "s/^OPENCLAW_PASSWORD=.*/OPENCLAW_PASSWORD=\"$MASTER_PASS\"/" .env
-
-# Critical: Ensure DATABASE_URL uses 'postgresql' not 'postgres'
-# Prisma (used by LiteLLM) is strict about the protocol name
-sed -i "s/postgres:\/\//postgresql:\/\//g" .env
+# Mirror the Master Password to LiteLLM's specific key
+echo "LITELLM_MASTER_KEY=\"$CODEBASE_PASSWORD\"" >> .env
 ```
 
-### 2. The LiteLLM "Migration Waiter" (Fixing Script 2)
-Even with a Postgres healthcheck, the LiteLLM container often starts migrations while Postgres is still "initializing" its internal file system. This causes a Prisma crash.
+---
 
-**Action for Windsurf in `2-deploy-services.sh` (Docker Compose Section):**
-Modify the LiteLLM service to include a robust entrypoint that waits for the database to be *actually* ready for queries.
+### 2. The "LiteLLM Survival Block" (Script 2)
+The reason LiteLLM fails with "Application startup failed" is a **race condition**. It tries to run database migrations while Postgres is "ready" but not yet "accepting queries." 
+
+**Action for Windsurf in `scripts/2-deploy-services.sh`:**
+Replace the current LiteLLM service definition with this **hardened** version. This uses the `ghcr.io/berriai/litellm-database` image and a "wait-for-it" logic that is much more reliable than Docker's default `depends_on`.
 
 ```yaml
   litellm:
@@ -36,73 +33,75 @@ Modify the LiteLLM service to include a robust entrypoint that waits for the dat
     depends_on:
       postgres:
         condition: service_healthy
-    # The 'nc' check ensures the port is open, and 'sleep 5' ensures Postgres is ready for queries
+    # CRITICAL: We must wait for the DB to be fully operational before starting the python app
     entrypoint: >
       /bin/sh -c "
       echo 'Waiting for Postgres...';
-      while ! nc -z postgres 5432; do sleep 1; done;
-      echo 'Postgres is up. Waiting 5s for stability...';
+      until nc -z postgres 5432; do sleep 1; done;
+      echo 'Postgres is up. Performing 5s stability delay...';
       sleep 5;
       python3 main.py --config /app/config.yaml --port 4000 --host 0.0.0.0
       "
     environment:
-      - DATABASE_URL=${DATABASE_URL}
-      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
-      - UI_PASSWORD=${CODEBASE_PASSWORD}
-```
-
-### 3. Caddy SSL Path Correction (Fixing Script 2)
-The Audit showed SSL issues. Caddy is healthy but might not be picking up the Tailscale certs if the path is generic.
-
-**Action for Windsurf in `2-deploy-services.sh` (Caddy Config Section):**
-Ensure Caddy looks exactly where Tailscale stores the certs:
-```caddy
-{
-    email {$ADMIN_EMAIL}
-}
-
-ai.datasquiz.net, *.ai.datasquiz.net {
-    tls /etc/caddy/certs/ai.datasquiz.net.crt /etc/caddy/certs/ai.datasquiz.net.key
-    
-    handle_path /litellm/* {
-        reverse_proxy litellm:4000
-    }
-    # ... other routes
-}
-```
-
-### 4. Signal-API Initialization (Fixing Script 3)
-The 404 error on the QR code link is because the container is running but no session exists.
-
-**Action for Windsurf in `3-configure-services.sh`:**
-Add this logic to the end of the script to "kickstart" the Signal link:
-```bash
-echo "Initializing Signal-API Session..."
-# Create the initial device link request
-curl -X POST "http://localhost:8080/v1/devices/registration" \
-     -H "Content-Type: application/json" \
-     -d '{"use_untrusted_pin": true}'
-
-echo "Signal-API is ready. You can now fetch the QR code at: https://signal.ai.datasquiz.net/v1/qrcodelink"
-```
-
-### 5. Automatic Data Ingestion (Final Step)
-To fulfill the "Data Squeeze" promise in the README, Script 3 should tell AnythingLLM to monitor the Rclone mount.
-
-**Action for Windsurf in `3-configure-services.sh`:**
-```bash
-echo "Triggering Rclone Data Ingestion into Vector DB..."
-curl -X POST "http://localhost:3001/api/v1/system/provide-document-location" \
-     -H "Authorization: Bearer ${ANYTHING_LLM_API_KEY}" \
-     -d '{"path": "/data/gdrive"}'
+      DATABASE_URL: ${DATABASE_URL}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+    volumes:
+      - ./config/litellm/config.yaml:/app/config.yaml:ro
+    ports:
+      - "4000:4000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:4000/health/liveliness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 ```
 
 ---
 
-### Why this fixes the "40-hour loop":
-1.  **Protocol Strictness:** Changing `postgres://` to `postgresql://` fixes the Prisma migration driver.
-2.  **Master Key:** Setting `LITELLM_MASTER_KEY` prevents the app from crashing due to an uninitialized security layer.
-3.  **Timing:** The `entrypoint` wait script prevents the container from trying to write to a "half-booted" Postgres database.
-4.  **Variable Mirroring:** It ensures that the password you enter in Script 1 actually makes it into the containers for OpenClaw and LiteLLM.
+### 3. The Config Schema Fix (Script 2)
+If `config.yaml` is empty or lacks the `general_settings` block when LiteLLM starts in database mode, it will crash.
 
-**Recommendation:** Run `0-complete-cleanup.sh` one last time, then run Scripts 1, 2, and 3 in sequence. This configuration will bridge the final 10% gap.
+**Action for Windsurf in `scripts/2-deploy-services.sh` (Config generation section):**
+Ensure the `config.yaml` includes the `store_model_in_db` flag. This is what allows the UI to work.
+
+```bash
+cat <<EOF > ./config/litellm/config.yaml
+model_list: []
+litellm_settings:
+  drop_params: True
+  set_verbose: True
+general_settings:
+  master_key: "${LITELLM_MASTER_KEY}"
+  database_url: "${DATABASE_URL}"
+  store_model_in_db: True  # This is the key for the Database Image
+EOF
+```
+
+---
+
+### 4. Correcting the Caddy Route (Script 2)
+The `WINDSURF.md.backup` shows the UI was 404ing. This is because LiteLLM serves its UI at `/ui`, but your Caddy config might be stripping the path incorrectly.
+
+**Action for Windsurf in `scripts/2-deploy-services.sh` (Caddy Block):**
+```caddy
+# Use a clear handle for the proxy to avoid path-stripping issues
+ai.datasquiz.net {
+    handle /litellm/* {
+        reverse_proxy litellm:4000
+    }
+    # Direct UI access
+    handle /ui* {
+        reverse_proxy litellm:4000
+    }
+    # ... other services
+}
+```
+
+---
+
+### Summary of what Windsurf must do to finish:
+1.  **Script 1:** Add the `postgresql://` string fix and set `LITELLM_MASTER_KEY`.
+2.  **Script 2:** Update the `litellm` service with the `entrypoint` wait-loop and the `store_model_in_db: True` flag in the config.
+3.  **Script 3:** Ensure the health check for LiteLLM looks for `http://localhost:4000/health/liveliness`.
+
+**Why this will work:** It addresses the specific failure modes of the BerriAI/LiteLLM database container: (1) Protocol name strictness, (2) Migration timing/race conditions, and (3) Missing DB-persistence flags in the YAML. This will move you from 90% to 100% stable.

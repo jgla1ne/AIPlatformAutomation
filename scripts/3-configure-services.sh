@@ -286,10 +286,10 @@ REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
 JWT_SECRET=${JWT_SECRET}
 ENCRYPTION_KEY=${ENCRYPTION_KEY}
-LITELLM_MASTER_KEY=\${JWT_SECRET}
-LITELLM_SALT_KEY=\${ENCRYPTION_KEY}
+LITELLM_MASTER_KEY=${JWT_SECRET}
+LITELLM_SALT_KEY=${ENCRYPTION_KEY}
 GRAFANA_ADMIN_USER=admin
-GRAFANA_ADMIN_PASSWORD=\${ADMIN_PASSWORD}
+GRAFANA_ADMIN_PASSWORD=${ADMIN_PASSWORD}
 
 # ─── API Keys (Empty if not set) ───────────────────────────────────────────
 OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -380,33 +380,38 @@ EOF
 generate_litellm_config() {
     log_info "Generating LiteLLM configuration..."
     
-    # Enhanced Azure validation to prevent restart loops
+    # Expert-recommended minimal safe config
     cat > "${CONFIG_DIR}/litellm/config.yaml" <<EOF
 # LiteLLM Configuration - Generated $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-# Simplified configuration with only local Ollama models
+# Minimal safe configuration for database persistence
 
 model_list:
-  # Local Ollama models only
-  - model_name: llama3.2:1b
+  # Local Ollama models only - always works, no API key needed
+  - model_name: llama3.2
     litellm_params:
-      model: ollama/llama3.2:1b
-      api_base: "http://ollama:11434"
-      rpm: 100
-  - model_name: llama3.2:3b
+      model: ollama/llama3.2
+      api_base: http://ollama:11434
+      api_key: "none"
+
+  - model_name: nomic-embed-text
     litellm_params:
-      model: ollama/llama3.2:3b
-      api_base: "http://ollama:11434"
-      rpm: 100
+      model: ollama/nomic-embed-text
+      api_base: http://ollama:11434
+      api_key: "none"
+
+general_settings:
+  master_key: "os.environ/LITELLM_MASTER_KEY"
+  database_url: "os.environ/DATABASE_URL"
+  store_model_in_db: true
+  background_health_checks: true
+  health_check_interval: 300
 
 litellm_settings:
   drop_params: true
-  set_verbose: false
+  request_timeout: 600
   cache:
     type: "simple"
     disabled: false
-  store_model_in_db: true
-router_settings:
-  routing_strategy: cost-based-routing
 EOF
     log_success "LiteLLM config written to ${CONFIG_DIR}/litellm/config.yaml"
 }
@@ -760,15 +765,17 @@ EOF
       redis:
         condition: service_healthy
     environment:
-      LITELLM_MASTER_KEY: \${LITELLM_MASTER_KEY}
-      LITELLM_SALT_KEY: \${LITELLM_SALT_KEY}
-      DATABASE_URL: \${LITELLM_DATABASE_URL}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
+      DATABASE_URL: ${LITELLM_DATABASE_URL}
       STORE_MODEL_IN_DB: "True"
-      OPENAI_API_KEY: \${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: \${ANTHROPIC_API_KEY:-}
-      GROQ_API_KEY: \${GROQ_API_KEY:-}
-      GOOGLE_API_KEY: \${GOOGLE_API_KEY:-}
-      OPENROUTER_API_KEY: \${OPENROUTER_API_KEY:-}
+      BACKGROUND_HEALTH_CHECKS: "True"
+      HEALTH_CHECK_INTERVAL: "300"
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       LITELLM_TELEMETRY: "False"
       PRISMA_DISABLE_WARNINGS: "true"
       LITELLM_LOG: "INFO"
@@ -776,7 +783,7 @@ EOF
       - ${CONFIG_DIR}/litellm/config.yaml:/app/config.yaml:ro
       - ${DATA_DIR}/litellm:/root/.cache
     ports:
-      - "\${PORT_LITELLM:-4000}:4000"
+      - ${PORT_LITELLM:-4000}:4000
     command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "1"]
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/', timeout=5)"]
@@ -795,14 +802,14 @@ EOF
         condition: service_healthy
     environment:
       OPENAI_API_BASE_URL: "http://litellm:4000/v1"
-      OPENAI_API_KEY: "\${LITELLM_MASTER_KEY}"
-      WEBUI_SECRET_KEY: "\${JWT_SECRET}"
+      OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      WEBUI_SECRET_KEY: ${JWT_SECRET}
       # DATABASE_URL removed — open-webui uses SQLite (postgres triggers peewee bug)
       # VECTOR_DB removed — uses built-in Chroma until qdrant is stable
     volumes:
       - ${DATA_DIR}/openwebui:/app/backend/data
     ports:
-      - "\${PORT_OPENWEBUI:-3000}:8080"
+      - ${PORT_OPENWEBUI:-3000}:8080
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/api/health || exit 1"]
       interval: 30s

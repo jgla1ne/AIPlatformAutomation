@@ -1,309 +1,320 @@
-You’re not stuck on “LiteLLM config” anymore — you’re stuck on a **restart loop caused by a mismatch between how LiteLLM is started vs how it expects to run in DB mode**.
+Alright — this one is now very precise.
 
-And the key clue is this:
+> **“application startup failed, exiting” + manual config works + DB healthy**
 
-> ✅ “config works from manual test”  
-> ❌ “container keeps restarting”
+That combination narrows it down to **one class of failure only**:
 
-That combination **rules out config correctness** and points directly to:
+> 🔥 **LiteLLM is crashing during ASGI startup because the database layer (Prisma) is not ready or not initialized in the container runtime**
 
-> **entrypoint / runtime contract mismatch**
-
----
-
-# 🔥 What’s actually broken (LiteLLM-specific)
-
-Given:
-- you switched to `litellm-database` ✅
-- DB is healthy ✅
-- manual test works ✅
-
-👉 The only remaining class of failure is:
-
-## ❌ LiteLLM is failing during container startup (not runtime usage)
-
-This is almost always one of these 4:
+This is *not* config.yaml anymore.  
+This is **startup contract + Prisma lifecycle**.
 
 ---
 
-## 1. ❌ Healthcheck is killing the container
+# 🎯 The real root cause (grounded in your stack)
 
-You said you implemented:
+From your setup:
 
-> `/health/liveliness` with urllib
+- ✅ using `litellm-database`
+- ✅ Postgres healthy
+- ✅ config works manually
+- ❌ container exits immediately
 
-### 💥 Problem
+👉 That maps directly to:
 
-LiteLLM (DB mode) often:
-- takes time to run migrations
-- initializes Prisma
-- warms connections
+## ❌ Prisma client / migrations are NOT initialized before server start
 
-During this time:
+LiteLLM (DB mode) requires:
+
+1. DB reachable ✅  
+2. Prisma schema applied ✅  
+3. Prisma client generated ✅  
+
+If any of those fail → you get:
 
 ```
-/health/liveliness → FAIL
-```
-
-Docker interprets that as:
-
-```
-container unhealthy → restart
+application startup failed, exiting
 ```
 
 ---
 
-### ✅ Fix (minimal, critical)
+# 🔍 What Windsurf is missing (again)
 
-In `docker-compose`:
+## ❌ Missing Prisma initialization step inside container
 
-```
-healthcheck:
-  start_period: 60s   # ← REQUIRED
-  interval: 10s
-  timeout: 5s
-  retries: 10
-```
+The image **does NOT guarantee** migrations run automatically in all cases.
 
-Or temporarily:
+So what’s happening:
 
 ```
-healthcheck: NONE
+container starts
+→ LiteLLM boots
+→ tries to access tables
+→ tables don’t exist
+→ crash
+→ restart loop
 ```
-
-👉 This alone often stops the restart loop.
 
 ---
 
-## 2. ❌ Wrong startup command for DB mode
+# ✅ Minimal-impact fix (this is the fix)
 
-The `litellm-database` image expects:
+You do **NOT** need to redesign anything.
 
-```
-litellm --config /app/config.yaml
-```
-
-But many setups accidentally run:
-
-```
-python main.py
-```
-
-or
-
-```
-litellm
-```
-
-without config.
+You just need to **insert one controlled init step before LiteLLM starts**.
 
 ---
 
-### ✅ Fix
+# ✅ ✅ Solution 1 (cleanest, minimal change)
 
-Ensure container uses **explicit command**:
+### Add a pre-start command chain
+
+In your LiteLLM service:
 
 ```
 command: >
-  litellm
-  --config /app/config.yaml
-  --port 4000
-  --host 0.0.0.0
+  sh -c "
+    echo 'Waiting for Postgres...' &&
+    sleep 5 &&
+    npx prisma migrate deploy &&
+    litellm --config /app/config.yaml --host 0.0.0.0 --port 4000
+  "
 ```
 
 ---
 
-## 3. ❌ Config file not mounted where LiteLLM expects
+### Why this works
 
-Manual test works → because you likely ran:
-
-```
-litellm --config config.yaml
-```
-
-But container:
-
-- either doesn’t have the file
-- or path is wrong
+- ensures DB is reachable
+- ensures schema exists
+- THEN starts LiteLLM
 
 ---
 
-### ✅ Fix
+# ✅ ✅ Solution 2 (even safer, recommended)
+
+Split into **init + runtime**
+
+### Add a one-shot init container (or Script 3 step)
+
+Run ONCE:
+
+```
+docker exec litellm npx prisma migrate deploy
+```
+
+Then start LiteLLM normally.
+
+---
+
+# ⚠️ Critical supporting fixes (these are REQUIRED)
+
+---
+
+## 1. ✅ DATABASE_URL must be EXACT
+
+```
+postgresql://USER:PASSWORD@postgres:5432/litellm
+```
+
+### Common silent killers:
+
+- ❌ `postgres://` (wrong driver)
+- ❌ `localhost` (wrong host)
+- ❌ missing DB name
+
+---
+
+## 2. ✅ Prisma schema must exist in container
 
 Verify:
 
 ```
-volumes:
-  - ./litellm/config.yaml:/app/config.yaml
+/app/prisma/schema.prisma
 ```
 
-Then inside container:
-
-```
-cat /app/config.yaml
-```
+If missing → LiteLLM crashes instantly.
 
 ---
 
-## 4. ❌ DATABASE_URL mismatch (classic Prisma failure loop)
+## 3. ✅ Config path must be valid
 
-Even if Postgres is healthy:
+You MUST have:
 
-LiteLLM will crash if:
+```
+/app/config.yaml
+```
 
-- wrong driver (`postgres://` vs `postgresql://`)
-- missing SSL flags
-- wrong host (localhost vs service name)
+Mismatch = startup failure.
 
 ---
 
-### ✅ Fix (must match README pattern)
+## 4. ✅ Healthcheck must not kill startup
 
-```
-DATABASE_URL=postgresql://user:password@postgres:5432/litellm
-```
-
-NOT:
-
-```
-localhost
-127.0.0.1
-```
-
----
-
-# 🧠 Why manual test works but container fails
-
-Because you're unknowingly doing:
-
-| Manual run | Container |
-|------|--------|
-| correct working dir | wrong working dir |
-| correct config path | missing config |
-| no healthcheck | aggressive restart |
-| sequential start | race condition |
-
----
-
-# ✅ Minimal-impact fix (do NOT redesign anything)
-
-## Step 1 — disable restart loop temporarily
-
-In compose:
-
-```
-restart: no
-```
-
-Run:
-
-```
-docker logs litellm
-```
-
-👉 You will immediately see the real error
-
----
-
-## Step 2 — fix healthcheck (permanent)
+Even if fixed:
 
 ```
 start_period: 60s
 ```
 
----
-
-## Step 3 — enforce correct startup contract
-
-In Script 2 or compose:
-
-```
-command: litellm --config /app/config.yaml --port 4000 --host 0.0.0.0
-```
+Without this → you’ll *think* it’s still broken.
 
 ---
 
-## Step 4 — validate inside container
+# 🔬 How to prove this is the issue (fast)
 
-Add to Script 3:
+Tell Windsurf to run:
 
 ```
-docker exec litellm ls /app/config.yaml
-docker exec litellm printenv | grep DATABASE_URL
+docker logs litellm
 ```
+
+You will see something like:
+
+```
+PrismaClientInitializationError
+relation "Model" does not exist
+```
+
+OR:
+
+```
+Error querying database
+```
+
+👉 That confirms 100%
 
 ---
 
-## Step 5 — replace “is running” check with real readiness
+# ✅ What Script 2 should do (minimal patch)
 
-Instead of:
-
-```
-docker ps | grep litellm
-```
-
-Use:
+Right now Script 2 likely does:
 
 ```
-curl /v1/models
-```
-
----
-
-# ✅ What success actually looks like
-
-Logs should stabilize like this:
-
-```
-[LiteLLM] Connecting to database...
-[LiteLLM] Prisma schema loaded
-[LiteLLM] Server started on 0.0.0.0:4000
-```
-
-NOT:
-
-```
-Restarting (1)...
-Restarting (1)...
-Restarting (1)...
+docker-compose up -d
 ```
 
 ---
 
-# 🔥 The real root cause (one line)
+### ✅ Replace LiteLLM startup flow with:
 
-> LiteLLM is correctly configured — but **incorrectly bootstrapped inside Docker**
-
----
-
-# 🎯 Final instruction to Windsurf
-
-Do NOT touch:
-- config.yaml ✅
-- model definitions ✅
-- DB ✅
-
-ONLY fix:
-
-1. healthcheck timing  
-2. container command  
-3. config mount path  
-4. DATABASE_URL format  
+1. Start postgres
+2. Wait for postgres
+3. Start litellm (with migration step embedded)
 
 ---
 
-# 🧩 Final perspective
+### ✅ Add this wait loop BEFORE LiteLLM:
 
-You’re genuinely **one fix away** now.
-
-Everything else:
-- Caddy ✅
-- Rclone ✅
-- services ✅
-- orchestration ✅
-
-👉 LiteLLM is the **only remaining control plane blocker**
+```
+until pg_isready -h postgres -p 5432; do
+  sleep 2
+done
+```
 
 ---
 
-If you want, I can give you the **exact known-good docker-compose service block for LiteLLM (DB mode)** so you can diff it directly against yours and spot the issue in seconds.
+# ✅ What Script 3 should STOP doing
+
+Right now Script 3 probably tries to:
+
+- configure LiteLLM AFTER it failed
+
+👉 That’s too late.
+
+---
+
+### ✅ Move responsibility:
+
+| Responsibility | Correct script |
+|------|--------|
+| DB ready | Script 2 |
+| Prisma migrate | Script 2 |
+| LiteLLM boot | Script 2 |
+| Seeding keys/models | Script 3 |
+
+---
+
+# ✅ Final working startup sequence
+
+This is your missing piece:
+
+```
+[postgres] ready ✅
+→
+[prisma migrate] ✅
+→
+[litellm boot] ✅
+→
+[/v1/models responds] ✅
+→
+[Script 3 config begins]
+```
+
+---
+
+# 🔥 Why Windsurf keeps looping
+
+Because it keeps trying to fix:
+
+- config
+- env
+- healthchecks
+
+…but the real issue is:
+
+> ❌ **LiteLLM is being started BEFORE its database schema exists**
+
+---
+
+# 🎯 Final instruction (what to tell Windsurf)
+
+Do exactly this:
+
+---
+
+## ✅ Add Prisma migration before LiteLLM starts
+
+No redesign. No rewrites.
+
+Just:
+
+```
+npx prisma migrate deploy
+```
+
+before:
+
+```
+litellm --config ...
+```
+
+---
+
+## ✅ Ensure DB readiness before that
+
+---
+
+## ✅ Do NOT let Script 3 handle DB concerns
+
+---
+
+# 🧩 Final truth
+
+You are not debugging LiteLLM anymore.
+
+You are fixing:
+
+> **startup ordering of a stateful service**
+
+---
+
+Once this is in place:
+
+- LiteLLM will stop restarting
+- OpenWebUI will immediately connect
+- Flowise / AnythingLLM will come online without further changes
+
+---
+
+If you want, I can give you a **known-good LiteLLM DB-mode container block (exact, production-safe)** so you can diff against yours and instantly spot the mismatch.

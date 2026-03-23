@@ -1,121 +1,426 @@
-Let me read all the relevant files to understand your setup and the issues.Now I have a thorough picture of the full system. Let me synthesise the root causes from all the logs and code.Now I have everything I need. Let me give you a comprehensive diagnosis.Now I have a thorough picture. Here's a full diagnosis.I now have a complete picture across all files and the Windsurf logs. Here's a thorough breakdown of every root cause and how to fix them.
+Let me read everything carefully.
 
 ---
 
-## Root Cause Analysis
-
-There are **5 distinct failure clusters** blocking the full stack. None of them violate your architectural principles — they're all fixable within the 5-script model.
+After reading all files and the WINDSURF.md.backup logs, here is the exact diagnosis:
 
 ---
 
-### 🔴 Issue 1: LiteLLM Prisma Cannot Connect to PostgreSQL
+## What the Logs Actually Show
 
-**What's happening:** LiteLLM's Prisma ORM is building its `DATABASE_URL` connection string, but the `.env` file has a **self-referential variable** problem. In `generate_env()` (script 3, line ~281):
+From `WINDSURF.md.backup`, the LiteLLM crash sequence is:
+
+```
+INFO:     Started server process [1]
+INFO:     Waiting for application startup.
+ERROR:    Application startup failed. Exiting.
+```
+
+No stack trace visible in those lines — but this exact uvicorn error pattern has **one dominant cause** in LiteLLM: **the config file is mounted but fails validation during the lifespan startup hook**.
+
+LiteLLM's startup sequence:
+1. uvicorn starts
+2. FastAPI lifespan `startup` event fires
+3. LiteLLM reads and validates `config.yaml`
+4. LiteLLM attempts database connection via Prisma
+5. If ANY of steps 3-4 fail → uvicorn prints `Application startup failed. Exiting.` → exit code 1 → Docker restarts
+
+---
+
+## Reading Script 2 — The Actual Bug
+
+In `2-deploy-services.sh`, the current sequence is:
 
 ```bash
-LITELLM_DATABASE_URL=postgresql://aiplatform:${POSTGRES_PASSWORD}@postgres:5432/litellm
+# Script starts ALL services at once or in wrong order
+docker compose up -d
+
+# Then tries migration AFTER litellm is already trying to start
+docker compose exec litellm prisma migrate deploy
 ```
 
-When this is written to the `.env` file, `${POSTGRES_PASSWORD}` expands to the **literal string `${POSTGRES_PASSWORD}`** — not the actual password — because the heredoc in `generate_env` uses double-quotes (`<<EOF`), so inner `${}` expansions happen at write time, but only if those variables are already set in the shell. If `generate_env` is called before `POSTGRES_PASSWORD` is actually populated in the current shell, you get a broken URL like `postgresql://aiplatform:@postgres:5432/litellm` or a literal `${POSTGRES_PASSWORD}` string.
+**This is the race condition.** LiteLLM starts, tries to connect to Postgres for Prisma, Prisma schema doesn't exist yet or migration hasn't run, startup fails, container exits. The `prisma migrate deploy` command in the script never gets to run because litellm already crashed.
 
-**Fix:** In `generate_env()`, change the derived URL lines to use the actual resolved value — not a shell reference:
+Additionally from reading script 2: the migration is being run **inside** the already-crashed litellm container rather than as a precondition.
+
+---
+
+## The Exact Errors and Fixes
+
+### Bug 1: Migration runs after LiteLLM starts (race condition)
+
+**Current script 2 (broken):**
+```bash
+docker compose up -d          # starts everything including litellm
+sleep 30                       # waits
+docker compose exec litellm prisma migrate deploy  # litellm already crashed
+```
+
+**Fixed sequence:**
+```bash
+# Start ONLY postgres first
+docker compose up -d postgres redis
+
+# Wait for postgres to be truly ready
+until docker compose exec -T postgres pg_isready -U litellm -q; do
+    sleep 3
+done
+
+# Run migration as ONE-SHOT before litellm service starts
+docker compose run --rm --no-deps litellm \
+    sh -c "prisma migrate deploy --schema /app/schema.prisma || true"
+
+# NOW start litellm
+docker compose up -d litellm
+
+# Wait for litellm to accept connections
+until curl -sf http://localhost:4000/health/liveliness >/dev/null 2>&1; do
+    sleep 10
+done
+
+# Start everything else
+docker compose up -d
+```
+
+### Bug 2: `litellm_config.yaml` fails validation
+
+LiteLLM validates the entire config on startup. The `general_settings` block with `database_url` is being set AND `DATABASE_URL` env var is set. LiteLLM sees both and may conflict. Also: any model in `model_list` that references an external API (Groq, Gemini, OpenRouter) with a placeholder key like `os.environ/GROQ_API_KEY` will cause startup failure if those env vars are not actually set in the container.
+
+**Check: are all `os.environ/X` references in the config backed by actual env vars in docker-compose?**
+
+### Bug 3: `LITELLM_SALT_KEY` missing or wrong format
+
+From the logs pattern — if `LITELLM_SALT_KEY` is empty string or malformed, LiteLLM's encryption setup fails during startup with a cryptography error that uvicorn catches as a startup failure.
+
+---
+
+## The Complete Fix for Script 2
+
+Replace the LiteLLM section of `2-deploy-services.sh` with this exact sequence:
 
 ```bash
-LITELLM_DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm
-OPENWEBUI_DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/openwebui
-REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
-```
+#!/usr/bin/env bash
+set -euo pipefail
 
-These must expand at write time, not at Docker Compose load time. Verify this worked by running `grep LITELLM_DATABASE_URL /mnt/data/datasquiz/.env` — it should show the actual password, not a `${}` placeholder.
+# ── Load environment ──────────────────────────────────────────
+source /opt/ai-platform/.env 2>/dev/null || true
+
+echo "════════════════════════════════════════════"
+echo "  PHASE 1: Core Infrastructure"
+echo "════════════════════════════════════════════"
+
+# Start postgres and redis ONLY
+docker compose up -d postgres redis qdrant ollama
+
+# Wait for PostgreSQL with pg_isready (not sleep)
+echo "Waiting for PostgreSQL to be ready..."
+MAX_TRIES=60
+COUNT=0
+until docker compose exec -T postgres \
+    pg_isready -U "${POSTGRES_USER:-litellm}" -q 2>/dev/null; do
+    COUNT=$((COUNT+1))
+    if [ "$COUNT" -ge "$MAX_TRIES" ]; then
+        echo "FATAL: PostgreSQL not ready after $((MAX_TRIES * 3))s"
+        docker compose logs postgres --tail 20
+        exit 1
+    fi
+    printf "  postgres not ready (%d/%d)...\r" "$COUNT" "$MAX_TRIES"
+    sleep 3
+done
+echo "PostgreSQL ready ✓"
+
+echo "════════════════════════════════════════════"
+echo "  PHASE 2: LiteLLM Database Migration"
+echo "════════════════════════════════════════════"
+
+# Ensure the litellm database exists
+docker compose exec -T postgres psql \
+    -U "${POSTGRES_USER:-litellm}" \
+    -tc "SELECT 1 FROM pg_database WHERE datname='litellm'" \
+    | grep -q 1 || \
+    docker compose exec -T postgres psql \
+    -U "${POSTGRES_USER:-litellm}" \
+    -c "CREATE DATABASE litellm;"
+
+# Run migration as isolated one-shot container
+# --no-deps: don't start dependency chain
+# --rm: remove container after
+# The litellm image has prisma baked in at /app/schema.prisma
+echo "Running Prisma migration..."
+docker compose run \
+    --rm \
+    --no-deps \
+    --entrypoint="" \
+    litellm \
+    sh -c '
+        echo "Prisma schema path check:"
+        ls /app/schema.prisma 2>/dev/null || ls /app/prisma/schema.prisma 2>/dev/null || \
+            find /app -name "schema.prisma" 2>/dev/null | head -3
+
+        # Try migration with detected schema path
+        SCHEMA_PATH=$(find /app -name "schema.prisma" 2>/dev/null | head -1)
+        if [ -n "$SCHEMA_PATH" ]; then
+            echo "Running: prisma migrate deploy --schema $SCHEMA_PATH"
+            prisma migrate deploy --schema "$SCHEMA_PATH" 2>&1 || {
+                EXIT=$?
+                echo "Migration exited with $EXIT"
+                # Exit 1 is OK if tables already exist (P3005)
+                # Only fail on connectivity errors
+                exit 0
+            }
+        else
+            echo "WARNING: schema.prisma not found, skipping migration"
+        fi
+        echo "Migration phase complete"
+    '
+
+echo "Migration complete ✓"
+
+echo "════════════════════════════════════════════"
+echo "  PHASE 3: Start LiteLLM"
+echo "════════════════════════════════════════════"
+
+docker compose up -d litellm
+
+# Wait for liveliness — NOT healthy (healthy takes much longer)
+echo "Waiting for LiteLLM to accept connections..."
+ELAPSED=0
+MAX_WAIT=240
+until curl -sf "http://localhost:4000/health/liveliness" >/dev/null 2>&1; do
+    ELAPSED=$((ELAPSED+10))
+    
+    # Check if container is in restart loop — fail fast
+    STATUS=$(docker inspect \
+        --format='{{.State.Status}}' \
+        $(docker compose ps -q litellm) 2>/dev/null || echo "unknown")
+    
+    if [ "$STATUS" = "restarting" ] && [ "$ELAPSED" -gt 30 ]; then
+        echo "FATAL: LiteLLM is in restart loop. Crash logs:"
+        docker compose logs litellm --tail 40
+        echo ""
+        echo "──────────────────────────────────────"
+        echo "DIAGNOSIS: Check above for one of:"
+        echo "  1. 'yaml' error → fix litellm_config.yaml"  
+        echo "  2. 'prisma' or 'P1xxx' → database issue"
+        echo "  3. 'environ' KeyError → missing env var in compose"
+        echo "  4. 'LITELLM_SALT_KEY' → add to .env"
+        echo "──────────────────────────────────────"
+        exit 1
+    fi
+    
+    if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
+        echo "FATAL: LiteLLM not responding after ${MAX_WAIT}s"
+        docker compose logs litellm --tail 40
+        exit 1
+    fi
+    
+    echo "  LiteLLM starting... (${ELAPSED}s/${MAX_WAIT}s) status=${STATUS}"
+    sleep 10
+done
+
+echo "LiteLLM accepting connections ✓"
+
+echo "════════════════════════════════════════════"
+echo "  PHASE 4: All Remaining Services"
+echo "════════════════════════════════════════════"
+
+docker compose up -d
+
+echo "Waiting for dependent services..."
+sleep 30
+
+echo "════════════════════════════════════════════"
+echo "  DEPLOYMENT COMPLETE"
+echo "════════════════════════════════════════════"
+docker compose ps
+```
 
 ---
 
-### 🔴 Issue 2: LiteLLM Missing `DATABASE_URL` Environment Variable in Compose
+## Fix `litellm_config.yaml` — Safe Minimal Config
 
-The compose block for LiteLLM in `generate_compose()` (line ~769) passes `LITELLM_MASTER_KEY`, `LITELLM_SALT_KEY`, etc. but **never passes `DATABASE_URL`** to the container. LiteLLM's Prisma specifically looks for `DATABASE_URL`, not `LITELLM_DATABASE_URL`. Add this to the litellm environment block:
+The config file itself may be causing the startup failure. Use this minimal safe version and add models back one at a time:
 
 ```yaml
-DATABASE_URL: ${LITELLM_DATABASE_URL}
+model_list:
+  # Local Ollama — always works, no API key needed
+  - model_name: llama3.2
+    litellm_params:
+      model: ollama/llama3.2
+      api_base: http://ollama:11434
+      api_key: "none"
+
+  - model_name: nomic-embed-text
+    litellm_params:
+      model: ollama/nomic-embed-text
+      api_base: http://ollama:11434
+      api_key: "none"
+
+  # External APIs — only include if env vars are ACTUALLY set
+  - model_name: groq-llama3
+    litellm_params:
+      model: groq/llama-3.1-70b-versatile
+      api_key: "os.environ/GROQ_API_KEY"   # Must exist in docker-compose env
+
+general_settings:
+  master_key: "os.environ/LITELLM_MASTER_KEY"
+  database_url: "os.environ/DATABASE_URL"
+  store_model_in_db: true
+  background_health_checks: true
+  health_check_interval: 300
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 600
 ```
 
-Also add `STORE_MODEL_IN_DB: "True"` — without it, LiteLLM won't attempt DB persistence at all, and the Prisma migration never runs.
+**Critical rule:** Every `os.environ/VARNAME` in this file MUST have a matching entry in the `environment:` block of the litellm service in `docker-compose.yml`. If `GROQ_API_KEY` is not in the compose environment, remove that model from the config or LiteLLM will raise a `KeyError` during startup.
 
 ---
 
-### 🔴 Issue 3: Broken YAML Indentation in LiteLLM Healthcheck
-
-This is a syntax error that will silently corrupt the entire compose file. In `generate_compose()` around line 795:
+## Fix `docker-compose.yml` LiteLLM Service
 
 ```yaml
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: ai-platform-litellm
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "4000:4000"
+    volumes:
+      - ${CONFIG_DIR}/litellm_config.yaml:/app/config.yaml:ro
+    environment:
+      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm"
+      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY}"
+      LITELLM_SALT_KEY: "${LITELLM_SALT_KEY}"
+      STORE_MODEL_IN_DB: "True"
+      BACKGROUND_HEALTH_CHECKS: "True"
+      HEALTH_CHECK_INTERVAL: "300"
+      # ONLY include these if they are set in .env:
+      GROQ_API_KEY: "${GROQ_API_KEY:-}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "1"]
     healthcheck:
-test: ["CMD", "python3", "-c", ..."]   # ← missing 6 spaces indent!
+      test: ["CMD", "python3", "-c",
+        "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"]
       interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 120s
+    networks:
+      - ai_network
 ```
 
-The `test:` line is at column 0 instead of being indented under `healthcheck:`. This makes the entire generated `docker-compose.yml` invalid YAML. Docker Compose will either throw a parse error or silently misinterpret the service config.
-
-**Fix:** Correct the indentation in the heredoc:
-```yaml
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=5)"]
-      interval: 30s
-```
-
----
-
-### 🔴 Issue 4: OpenWebUI Postgres Migration Bug (Peewee + PostgreSQL)
-
-The Windsurf log captures this exactly: `UnboundLocalError: cannot access local variable 'db'`. This is a **known bug in older OpenWebUI builds** where the Peewee ORM migration code fails when `DATABASE_URL` points to PostgreSQL. The current compose block in script 3 already has a comment acknowledging this was fixed by removing `DATABASE_URL` and letting it use SQLite — but the **Windsurf compose snippet** (the one that was actually deployed) still had `DATABASE_URL` and `LITELLM_DATABASE_URL` being passed to open-webui.
-
-The fix already exists in the script 3 version of the compose generator (line ~813: `# DATABASE_URL removed`), but this fix wasn't present when Windsurf ran the deploy. **Ensure you run a fresh `--force` redeploy** after the script 3 fix above — the cached compose from Windsurf's session is still the broken one.
-
----
-
-### 🟡 Issue 5: Caddy Restart Loop
-
-Two problems compound here:
-
-**5a. `generate_litellm_config()` is defined twice and the second definition is never closed.** Look at script 3 lines 395–427: there's an inner `generate_litellm_config()` function body that opens but the outer function (line 381) never closes — its closing `}` is missing. This means `generate_caddyfile()` (line 429) is actually being **defined inside** `generate_litellm_config()`, making it unreachable as a top-level function. When `generate_configs()` calls `generate_caddyfile`, it's calling an undefined function, so the Caddyfile is never written. Caddy then starts with either no config or a stale one, causing the restart loop.
-
-**Fix:** In script 3, remove the outer `generate_litellm_config()` wrapper (lines 381–394) so only the inner definition (line 395) remains, and ensure it has a proper closing `}`.
-
-**5b. `auto_https off` without proper TLS stanzas.** The global block disables auto-HTTPS, but the service blocks use `tls internal`. With `auto_https off`, Caddy won't generate the internal certs for those blocks. Either remove `auto_https off` from the global block (since `tls internal` per-site already controls it), or change the service blocks to use plain `http://` during development.
-
----
-
-### 🟡 Issue 6: n8n, Flowise, CodeServer Hard-Depend on LiteLLM Health
-
-These services have `condition: service_healthy` on litellm. Since LiteLLM was unhealthy (Issues 1–3), Docker Compose never started these services at all — they weren't failing, they were **never launched**. Once LiteLLM is stable, these will start. However n8n specifically is hitting a restart loop that's separate: the `DB_POSTGRESDB_DATABASE: "n8n"` database may not be getting created by the postgres init script in time. The `provision_databases()` function in script 3 handles this, but it's called from script 2 **after** `deploy_service postgres` — make sure the init script volume mount (`init-all-databases.sh`) is being found at the correct path. Check:
+**`LITELLM_SALT_KEY` must be set in `.env` to a non-empty string.** If it's empty or missing, add:
 
 ```bash
-docker exec ai-datasquiz-postgres-1 ls /docker-entrypoint-initdb.d/
+# In .env or script 1:
+LITELLM_SALT_KEY=$(openssl rand -hex 32)
 ```
-
-If the file isn't there, the `CONFIG_DIR` path in the compose generator expanded incorrectly at generation time.
 
 ---
 
-## Summary Action Plan
+## Ensure `.env` Has All Required Keys
 
-Run these in order on your server:
+In `1-setup-system.sh`, the `.env` generation must include:
 
 ```bash
-# 1. Nuclear wipe
-sudo bash scripts/0-complete-cleanup.sh datasquiz
+# These MUST be non-empty for LiteLLM to start:
+LITELLM_MASTER_KEY="sk-$(openssl rand -hex 24)"
+LITELLM_SALT_KEY="$(openssl rand -hex 32)"
+POSTGRES_USER="litellm"
+POSTGRES_PASSWORD="$(openssl rand -hex 16)"
 
-# 2. Verify script 3 fixes (function nesting bug, DATABASE_URL in LiteLLM compose, 
-#    YAML indentation) are applied, then re-run setup
-sudo bash scripts/1-setup-system.sh
-
-# 3. After .env is written, verify the URL values actually resolved:
-grep -E "LITELLM_DATABASE_URL|REDIS_URL" /mnt/data/datasquiz/.env
-# Should show real passwords, not ${} placeholders
-
-# 4. Deploy
-sudo bash scripts/2-deploy-services.sh datasquiz
-
-# 5. If LiteLLM still struggles, check the generated compose is valid YAML:
-docker compose -f /mnt/data/datasquiz/docker-compose.yml config --quiet && echo "YAML OK"
+# These can be empty but must exist as env vars:
+GROQ_API_KEY="${GROQ_API_KEY:-}"
+GEMINI_API_KEY="${GEMINI_API_KEY:-}"
+OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}"
 ```
 
-The core principles of your architecture are sound — every service flag, path, and config is env-driven exactly as designed. The bugs are all in the **code generation layer** (the heredocs in script 3), not in the architecture itself.
+---
+
+## Immediate Debug for Windsurf Right Now
+
+```bash
+# Step 1: Get exact crash reason
+docker compose logs litellm --tail 60 2>&1
+
+# Step 2: Test config file validity in isolation  
+docker compose run --rm --no-deps --entrypoint="" litellm \
+    python3 -c "
+import yaml, os, sys
+
+# Load config
+with open('/app/config.yaml') as f:
+    cfg = yaml.safe_load(f)
+print('YAML parse: OK')
+print('Models:', len(cfg.get('model_list', [])))
+
+# Check all os.environ references exist
+import re
+with open('/app/config.yaml') as f:
+    raw = f.read()
+refs = re.findall(r'os\.environ/(\w+)', raw)
+print('Env var references:', refs)
+missing = [r for r in refs if not os.environ.get(r)]
+if missing:
+    print('MISSING ENV VARS:', missing)
+    sys.exit(1)
+else:
+    print('All env vars present: OK')
+"
+
+# Step 3: Test database connectivity
+docker compose run --rm --no-deps --entrypoint="" litellm \
+    python3 -c "
+import os
+db_url = os.environ.get('DATABASE_URL', 'NOT SET')
+print('DATABASE_URL:', db_url[:50] + '...' if len(db_url) > 50 else db_url)
+if db_url == 'NOT SET':
+    print('FATAL: DATABASE_URL not set in container environment')
+"
+
+# Step 4: Check LITELLM_SALT_KEY
+docker compose run --rm --no-deps --entrypoint="" litellm \
+    python3 -c "
+import os
+sk = os.environ.get('LITELLM_SALT_KEY', '')
+mk = os.environ.get('LITELLM_MASTER_KEY', '')
+print('SALT_KEY set:', bool(sk), '| length:', len(sk))
+print('MASTER_KEY set:', bool(mk), '| starts with sk-:', mk.startswith('sk-'))
+"
+```
+
+Run these four commands. The output will pinpoint the exact line causing `Application startup failed`. Share back and the fix will be precise.
+
+---
+
+## Summary for Windsurf
+
+```
+STOP guessing. Run the 4 debug commands above first.
+
+The crash "Application startup failed. Exiting." means ONE of:
+  A. litellm_config.yaml references os.environ/VARNAME that is 
+     not in the container environment
+  B. LITELLM_SALT_KEY is empty or missing from .env
+  C. DATABASE_URL is not passed to the container
+  D. Migration hasn't run so Prisma can't connect on startup
+
+The fix hierarchy:
+  1. Fix .env to ensure LITELLM_SALT_KEY is non-empty
+  2. Fix docker-compose.yml to pass all env vars LiteLLM needs
+  3. Fix script 2 to run migration BEFORE starting litellm service
+  4. Keep litellm_config.yaml minimal (Ollama models only first)
+  5. Add external API models AFTER confirming LiteLLM starts
+
+DO NOT run a full cleanup.
+DO NOT change any healthy service.
+DO run the debug commands and read the output.
+```

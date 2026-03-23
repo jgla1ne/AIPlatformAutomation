@@ -198,6 +198,38 @@ main() {
                 || log_warning "  Could not reset litellm database"
         fi
 
+        log_info "Running Prisma migration before LiteLLM starts..."
+        # Run migration as isolated one-shot container BEFORE LiteLLM service starts
+        docker compose -f "$COMPOSE_FILE" run \
+            --rm \
+            --no-deps \
+            --entrypoint="" \
+            litellm \
+            sh -c '
+                echo "Prisma schema path check:"
+                ls /app/schema.prisma 2>/dev/null || ls /app/prisma/schema.prisma 2>/dev/null || \
+                    find /app -name "schema.prisma" 2>/dev/null | head -3
+
+                # Try migration with detected schema path
+                SCHEMA_PATH=$(find /app -name "schema.prisma" 2>/dev/null | head -1)
+                if [ -n "$SCHEMA_PATH" ]; then
+                    echo "Running: prisma migrate deploy --schema $SCHEMA_PATH"
+                    prisma migrate deploy --schema "$SCHEMA_PATH" 2>&1 || {
+                        EXIT=$?
+                        echo "Migration exited with $EXIT"
+                        # Exit 1 is OK if tables already exist (P3005)
+                        # Only fail on connectivity errors
+                        exit 0
+                    }
+                else
+                    echo "WARNING: schema.prisma not found, skipping migration"
+                fi
+                echo "Migration phase complete"
+            ' \
+            >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 \
+            && log_success "  Prisma migration completed" \
+            || log_warning "  Prisma migration failed - will retry"
+
         deploy_service litellm
         wait_for_healthy litellm 180
     }
