@@ -400,10 +400,10 @@ model_list:
       api_key: "none"
 
 general_settings:
-  master_key: "os.environ/LITELLM_MASTER_KEY"
-  database_url: "os.environ/DATABASE_URL"
+  master_key: "${LITELLM_MASTER_KEY}"
+  database_url: "${LITELLM_DATABASE_URL}"
   store_model_in_db: false
-  background_health_checks: true
+  background_health_checks: false
   health_check_interval: 300
 
 litellm_settings:
