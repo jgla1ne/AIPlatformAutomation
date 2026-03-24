@@ -817,7 +817,10 @@ select_stack() {
     # ── Apply stack presets ───────────────────────────────────────────────────
     # First, set core triad defaults to true
     ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_OLLAMA=true; ENABLE_OPENWEBUI=true;
-    ENABLE_LITELLM=true; ENABLE_QDRANT=true; ENABLE_CADDY=true # Always on infrastructure
+    ENABLE_QDRANT=true; ENABLE_CADDY=true # Always on infrastructure
+    
+    # Set LLM router based on LLM_ROUTER choice (will be set later)
+    # Router flags will be set in select_llm_router function
     
     # Zero out optional services
     ENABLE_ANYTHINGLLM=false; ENABLE_DIFY=false; ENABLE_N8N=false; ENABLE_FLOWISE=false;
@@ -830,30 +833,30 @@ select_stack() {
 
     case "${stack_choice}" in
         1) # Minimal Stack
-            log "INFO" "Applying 'Minimal' preset: OpenWebUI, Ollama, Qdrant, LiteLLM"
+            log "INFO" "Applying 'Minimal' preset: OpenWebUI, Ollama, Qdrant"
             ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_OLLAMA=true;
-            ENABLE_OPENWEBUI=true; ENABLE_QDRANT=true; ENABLE_LITELLM=true;
+            ENABLE_OPENWEBUI=true; ENABLE_QDRANT=true;
             STACK_NAME="minimal"
             ;;
         2) # Development Stack
-            log "INFO" "Applying 'Development' preset: Code Server, Continue.dev, Ollama, LiteLLM, OpenClaw, Tailscale"
+            log "INFO" "Applying 'Development' preset: Code Server, Continue.dev, Ollama, OpenClaw, Tailscale"
             ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_OLLAMA=true;
-            ENABLE_LITELLM=true; ENABLE_QDRANT=true; ENABLE_OPENWEBUI=true;
+            ENABLE_QDRANT=true; ENABLE_OPENWEBUI=true;
             ENABLE_CODESERVER=true; ENABLE_CONTINUE=true; ENABLE_OPENCLAW=true; ENABLE_TAILSCALE=true;
             STACK_NAME="development"
             ;;
         3) # Standard Stack
-            log "INFO" "Applying 'Standard' preset: Minimal + n8n + Flowise + Qdrant + LiteLLM"
+            log "INFO" "Applying 'Standard' preset: Minimal + n8n + Flowise + Qdrant"
             ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_OLLAMA=true;
-            ENABLE_OPENWEBUI=true; ENABLE_QDRANT=true; ENABLE_LITELLM=true;
+            ENABLE_OPENWEBUI=true; ENABLE_QDRANT=true;
             ENABLE_N8N=true; ENABLE_FLOWISE=true;
             STACK_NAME="standard"
             ;;
-        4) # Full Stack (All Services)
+        4) # Full Stack
             log "WARN" "Applying 'Full Stack' preset. This requires significant system resources."
             ENABLE_POSTGRES=true; ENABLE_REDIS=true; ENABLE_OLLAMA=true;
             ENABLE_OPENWEBUI=true; ENABLE_ANYTHINGLLM=true; ENABLE_DIFY=true;
-            ENABLE_N8N=true; ENABLE_FLOWISE=true; ENABLE_LITELLM=true;
+            ENABLE_N8N=true; ENABLE_FLOWISE=true;
             ENABLE_QDRANT=true; ENABLE_GRAFANA=true; ENABLE_PROMETHEUS=true;
             ENABLE_AUTHENTIK=true; ENABLE_SIGNAL=true; ENABLE_OPENCLAW=true;
             ENABLE_TAILSCALE=true; ENABLE_RCLONE=true; ENABLE_MONITORING=true;
@@ -1262,55 +1265,158 @@ collect_llm_config() {
     log "SUCCESS" "Default model: ${OLLAMA_DEFAULT_MODEL}"
 }
 
-# ─── LiteLLM Routing Strategy Configuration ───────────────────────────────
-collect_litellm_routing() {
-    print_step "8.5" "11" "LiteLLM Routing Strategy"
+# ─── LLM Router Selection ───────────────────────────────────────
+select_llm_router() {
+    print_step "8.2" "11" "LLM Router Configuration"
     
-    echo -e "  ${BOLD}🧠  LiteLLM Routing Strategy${NC}"
-    echo -e "  ${DIM}Configure intelligent model routing for cost/latency optimization${NC}"
+    echo -e "  ${BOLD}🚀 LLM Router Selection${NC}"
+    echo -e "  ${DIM}Choose your LLM routing mechanism${NC}"
     echo ""
-    
-    echo -e "  ${BOLD}Available Routing Strategies:${NC}"
+    echo -e "  ${BOLD}Available LLM Routers:${NC}"
     echo ""
-    echo -e "  ${CYAN}  1)${NC} Cost-Optimized (recommended)"
-    echo -e "     ${DIM}Prioritize free/local models, then cheapest paid models${NC}"
+    echo -e "  ${CYAN}  1)${NC} LiteLLM  - Feature-rich, Python-based, requires PostgreSQL"
+    echo -e "     ${DIM}• Cost/speed/capability routing strategies${NC}"
+    echo -e "     ${DIM}• Multiple provider support with advanced features${NC}"
+    echo -e "     ${DIM}• Requires database and has cold start delays${NC}"
     echo ""
-    echo -e "  ${CYAN}  2)${NC} Speed-Optimized"
-    echo -e "     ${DIM}Prioritize fastest response times (Groq > Gemini > Local)${NC}"
-    echo ""
-    echo -e "  ${CYAN}  3)${NC} Balanced"
-    echo -e "     ${DIM}Balance cost, speed, and capability${NC}"
-    echo ""
-    echo -e "  ${CYAN}  4)${NC} Capability-Optimized"
-    echo -e "     ${DIM}Prioritize most capable models (GPT-4o > Claude-3 > Gemini)${NC}"
+    echo -e "  ${CYAN}  2)${NC} Bifrost  - Lightweight Go binary, no database, fast startup"
+    echo -e "     ${DIM}• Instant startup, no cold delays${NC}"
+    echo -e "     ${DIM}• Stateless architecture, zero database dependency${NC}"
+    echo -e "     ${DIM}• Consistent performance under load${NC}"
+    echo -e "     ${DIM}• Production-ready reliability${NC}"
     echo ""
     
-    read -p "  ➤ Select LiteLLM routing strategy [1-4]: " litellm_routing_choice
+    while true; do
+        read -p "  ➤ Select LLM router [1-2] (default: 2): " router_choice
+        router_choice="${router_choice:-2}"
+        case "$router_choice" in
+            1) 
+                LLM_ROUTER="litellm"
+                echo -e "  ${GREEN}✅${NC} LiteLLM selected - Feature-rich routing with database"
+                ;;
+            2) 
+                LLM_ROUTER="bifrost"
+                echo -e "  ${GREEN}✅${NC} Bifrost selected - Lightweight production router"
+                ;;
+            *) 
+                echo -e "  ${YELLOW}⚠️ Invalid choice. Enter 1 or 2.${NC}"
+                continue
+                ;;
+        esac
+        break
+    done
     
-    case "${litellm_routing_choice}" in
-        1) 
-            LITELLM_ROUTING_STRATEGY="cost-optimized"
-            echo -e "  ${GREEN}✅${NC} Cost-optimized routing selected"
-            ;;
-        2) 
-            LITELLM_ROUTING_STRATEGY="speed-optimized"
-            echo -e "  ${GREEN}✅${NC} Speed-optimized routing selected"
-            ;;
-        3) 
-            LITELLM_ROUTING_STRATEGY="balanced"
-            echo -e "  ${GREEN}✅${NC} Balanced routing selected"
-            ;;
-        4) 
-            LITELLM_ROUTING_STRATEGY="capability-optimized"
-            echo -e "  ${GREEN}✅${NC} Capability-optimized routing selected"
-            ;;
-        *) 
-            LITELLM_ROUTING_STRATEGY="cost-optimized"
-            echo -e "  ${YELLOW}⚠️${NC} Defaulting to cost-optimized routing"
-            ;;
-    esac
+    # Set router-specific configuration
+    if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
+        # Bifrost uses port 4000 by default, no database needed
+        BIFROST_PORT="${BIFROST_PORT:-4000}"
+        echo -e "  ${DIM}✅ Bifrost configured for port ${BIFROST_PORT}${NC}"
+        
+        # Bifrost routing configuration (optional)
+        echo ""
+        echo -e "  ${BOLD}⚙️  Bifrost Routing Configuration${NC}"
+        echo -e "  ${DIM}Configure Bifrost routing behavior${NC}"
+        echo ""
+        echo -e "  ${BOLD}Available Routing Modes:${NC}"
+        echo ""
+        echo -e "  ${CYAN}  1)${NC} Direct (recommended)"
+        echo -e "     ${DIM}• Pass-through routing to Ollama${NC}"
+        echo -e "     ${DIM}• No additional latency, maximum performance${NC}"
+        echo ""
+        echo -e "  ${CYAN}  2)${NC} Failover"
+        echo -e "     ${DIM}• Automatic failover to external providers${NC}"
+        echo -e "     ${DIM}• Fallback when Ollama is unavailable${NC}"
+        echo ""
+        echo -e "  ${CYAN}  3)${NC} Load Balanced"
+        echo -e "     ${DIM}• Distribute load across multiple providers${NC}"
+        echo -e "     ${DIM}• Optimize for throughput and reliability${NC}"
+        echo ""
+        
+        read -p "  ➤ Select Bifrost routing mode [1-3] (default: 1): " bifrost_routing_choice
+        bifrost_routing_choice="${bifrost_routing_choice:-1}"
+        
+        case "${bifrost_routing_choice}" in
+            1) 
+                BIFROST_ROUTING_MODE="direct"
+                echo -e "  ${GREEN}✅${NC} Direct routing selected - Maximum performance"
+                ;;
+            2) 
+                BIFROST_ROUTING_MODE="failover"
+                echo -e "  ${GREEN}✅${NC} Failover routing selected - High availability"
+                ;;
+            3) 
+                BIFROST_ROUTING_MODE="load-balanced"
+                echo -e "  ${GREEN}✅${NC} Load-balanced routing selected - Optimal throughput"
+                ;;
+            *) 
+                BIFROST_ROUTING_MODE="direct"
+                echo -e "  ${YELLOW}⚠️${NC} Defaulting to direct routing"
+                ;;
+        esac
+        echo -e "  ${DIM}✅ Bifrost routing mode: ${BIFROST_ROUTING_MODE}${NC}"
+        
+    else
+        # LiteLLM needs routing strategy configuration
+        echo ""
+        echo -e "  ${BOLD}🧠  LiteLLM Routing Strategy${NC}"
+        echo -e "  ${DIM}Configure intelligent model routing for cost/latency optimization${NC}"
+        echo ""
+        
+        echo -e "  ${BOLD}Available Routing Strategies:${NC}"
+        echo ""
+        echo -e "  ${CYAN}  1)${NC} Cost-Optimized (recommended)"
+        echo -e "     ${DIM}Prioritize free/local models, then cheapest paid models${NC}"
+        echo ""
+        echo -e "  ${CYAN}  2)${NC} Speed-Optimized"
+        echo -e "     ${DIM}Prioritize fastest response times (Groq > Gemini > Local)${NC}"
+        echo ""
+        echo -e "  ${CYAN}  3)${NC} Balanced"
+        echo -e "     ${DIM}Balance cost, speed, and capability${NC}"
+        echo ""
+        echo -e "  ${CYAN}  4)${NC} Capability-Optimized"
+        echo -e "     ${DIM}Prioritize most capable models (GPT-4o > Claude-3 > Gemini)${NC}"
+        echo ""
+        
+        read -p "  ➤ Select LiteLLM routing strategy [1-4]: " litellm_routing_choice
+        
+        case "${litellm_routing_choice}" in
+            1) 
+                LITELLM_ROUTING_STRATEGY="cost-optimized"
+                echo -e "  ${GREEN}✅${NC} Cost-optimized routing selected"
+                ;;
+            2) 
+                LITELLM_ROUTING_STRATEGY="speed-optimized"
+                echo -e "  ${GREEN}✅${NC} Speed-optimized routing selected"
+                ;;
+            3) 
+                LITELLM_ROUTING_STRATEGY="balanced"
+                echo -e "  ${GREEN}✅${NC} Balanced routing selected"
+                ;;
+            4) 
+                LITELLM_ROUTING_STRATEGY="capability-optimized"
+                echo -e "  ${GREEN}✅${NC} Capability-optimized routing selected"
+                ;;
+            *) 
+                LITELLM_ROUTING_STRATEGY="cost-optimized"
+                echo -e "  ${YELLOW}⚠️${NC} Defaulting to cost-optimized routing"
+                ;;
+        esac
+        echo -e "  ${DIM}✅ LiteLLM routing strategy: ${LITELLM_ROUTING_STRATEGY}${NC}"
+    fi
     
-    log "SUCCESS" "LiteLLM routing strategy: ${LITELLM_ROUTING_STRATEGY}"
+    log "SUCCESS" "LLM Router: ${LLM_ROUTER}"
+    echo "LLM_ROUTER=${LLM_ROUTER}" >> "${ENV_FILE}"
+    
+    # Set service flags based on router selection
+    if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
+        echo "ENABLE_BIFROST=true" >> "${ENV_FILE}"
+        echo "ENABLE_LITELLM=false" >> "${ENV_FILE}"
+        echo -e "  ${DIM}✅ Bifrost enabled, LiteLLM disabled${NC}"
+    else
+        echo "ENABLE_LITELLM=true" >> "${ENV_FILE}"
+        echo "ENABLE_BIFROST=false" >> "${ENV_FILE}"
+        echo -e "  ${DIM}✅ LiteLLM enabled, Bifrost disabled${NC}"
+    fi
 }
 
 # ─── Network & Security Configuration ───────────────────────────────────────────
@@ -1923,8 +2029,12 @@ generate_secrets() {
     POSTGRES_PASSWORD="${DB_PASSWORD}"
     N8N_ENCRYPTION_KEY=$(load_existing_secret "N8N_ENCRYPTION_KEY"     "$(openssl rand -hex 32)")
     FLOWISE_SECRET_KEY=$(load_existing_secret "FLOWISE_SECRET_KEY"     "$(openssl rand -hex 32)")
+    
+    # Router-specific API keys
+    BIFROST_API_KEY=$(load_existing_secret "BIFROST_API_KEY"         "bf-$(openssl rand -hex 32)")
     LITELLM_MASTER_KEY=$(load_existing_secret "LITELLM_MASTER_KEY"     "sk-$(openssl rand -hex 32)")
     LITELLM_SALT_KEY=$(load_existing_secret "LITELLM_SALT_KEY"     "$(openssl rand -hex 32)")
+    
     ANYTHINGLLM_JWT_SECRET=$(load_existing_secret "ANYTHINGLLM_JWT_SECRET" "$(openssl rand -hex 32)")
     JWT_SECRET=$(load_existing_secret "JWT_SECRET"                   "$(openssl rand -hex 32)")
     ENCRYPTION_KEY=$(load_existing_secret "ENCRYPTION_KEY"           "$(openssl rand -hex 32)")
@@ -2264,13 +2374,14 @@ GOOGLE_API_KEY="${GOOGLE_API_KEY}"
 GROQ_API_KEY="${GROQ_API_KEY}"
 OPENROUTER_API_KEY="${OPENROUTER_API_KEY}"
 
-# ─── Bifrost Configuration ───────────────────────────────────────────────────────
+# ─── Bifrost Configuration ───────────────────────────────────────────────
 BIFROST_API_KEY="${BIFROST_API_KEY}"
 BIFROST_PORT="${BIFROST_PORT:-4000}"
 BIFROST_OLLAMA_BASE_URL="http://ollama:11434"
+BIFROST_ROUTING_MODE="${BIFROST_ROUTING_MODE:-direct}"
 
-# ─── LiteLLM Routing Strategy ───────────────────────────────────────────────
-LITELLM_ROUTING_STRATEGY="${LITELLM_ROUTING_STRATEGY}"
+# ─── LiteLLM Routing Strategy ───────────────────────────────────────
+LITELLM_ROUTING_STRATEGY="${LITELLM_ROUTING_STRATEGY:-cost-optimized}"
 LITELLM_INTERNAL_PORT="${LITELLM_INTERNAL_PORT:-4000}"
 
 # ─── Internal Service Ports ───────────────────────────────────────────────
@@ -2848,12 +2959,13 @@ print_summary() {
     [ "${ENABLE_FLOWISE}" = "true" ]     && echo -e "    ${GREEN}✓${NC}  Flowise      :${FLOWISE_PORT}"
     [ "${ENABLE_LITELLM}" = "true" ]     && echo -e "    ${GREEN}✓${NC}  LiteLLM      :${LITELLM_PORT}"
     if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
-    echo "  LLM Router:    Bifrost (port ${BIFROST_PORT:-4000})"
-    echo "  Bifrost Key:   ${BIFROST_API_KEY:0:20}..."
-else
-    echo "  LLM Router:    LiteLLM (port 4000)"
-    echo "  LiteLLM Key:   ${LITELLM_MASTER_KEY:0:20}..."
-fi   [ "${ENABLE_QDRANT}" = "true" ]      && echo -e "    ${GREEN}✓${NC}  Qdrant       :${QDRANT_PORT}"
+        echo "  LLM Router:    Bifrost (port ${BIFROST_PORT:-4000})"
+        echo "  Bifrost Key:   ${BIFROST_API_KEY:0:20}..."
+    else
+        echo "  LLM Router:    LiteLLM (port 4000)"
+        echo "  LiteLLM Key:   ${LITELLM_MASTER_KEY:0:20}..."
+    fi
+    [ "${ENABLE_QDRANT}" = "true" ]      && echo -e "    ${GREEN}✓${NC}  Qdrant       :${QDRANT_PORT}"
     [ "${ENABLE_GRAFANA}" = "true" ]     && echo -e "    ${GREEN}✓${NC}  Grafana      :${GRAFANA_PORT}"
     [ "${ENABLE_PROMETHEUS}" = "true" ]  && echo -e "    ${GREEN}✓${NC}  Prometheus   :${PROMETHEUS_PORT}"
     [ "${ENABLE_AUTHENTIK}" = "true" ]   && echo -e "    ${GREEN}✓${NC}  Authentik    :${AUTHENTIK_PORT}"
@@ -3115,7 +3227,7 @@ main() {
     select_vector_db         # Step 7
     configure_databases      # Step 7.5 - Database configuration
     collect_llm_config       # Step 8
-    collect_litellm_routing  # Step 8.5 - LiteLLM routing strategy
+    select_llm_router        # Step 8.2 - LLM router selection (NEW)
     collect_network_config   # Step 9 - NEW: Network & security configuration
     collect_ports            # Step 10
     generate_secrets         # Step 11
@@ -3123,8 +3235,15 @@ main() {
     log "INFO" "Verifying and generating all application secrets..."
     load_or_generate_secret "N8N_ENCRYPTION_KEY"
     load_or_generate_secret "FLOWISE_SECRET_KEY"
-    load_or_generate_secret "LITELLM_MASTER_KEY"
-    load_or_generate_secret "LITELLM_SALT_KEY"
+    
+    # Generate router-specific secrets
+    if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
+        load_or_generate_secret "BIFROST_API_KEY"
+    else
+        load_or_generate_secret "LITELLM_MASTER_KEY"
+        load_or_generate_secret "LITELLM_SALT_KEY"
+    fi
+    
     load_or_generate_secret "ANYTHINGLLM_JWT_SECRET"
     load_or_generate_secret "JWT_SECRET"
     load_or_generate_secret "ENCRYPTION_KEY"

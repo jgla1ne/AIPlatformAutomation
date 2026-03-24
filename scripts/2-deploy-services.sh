@@ -22,10 +22,11 @@ ENV_FILE="/mnt/data/${TENANT}/.env"
 [[ -f "$ENV_FILE" ]] && set -a && source "$ENV_FILE" && set +a
 
 # Load router choice from environment
-LLM_ROUTER=$(get_env_value "LLM_ROUTER" || echo "bifrost")
-log_info "LLM Router selected: ${LLM_ROUTER}"
+LLM_ROUTER=$(grep "^LLM_ROUTER=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "bifrost")
+echo "ℹ LLM Router selected: ${LLM_ROUTER}"
 
-source "${SCRIPT_DIR}/3-configure-services.sh"   # ← SOURCES LIBRARY
+# Source script 3 for helper functions
+source "${SCRIPT_DIR}/3-configure-services.sh"
 
 # ── Helper Functions ────────────────────────────────────────────────
 # Service port mapping for health checks
@@ -243,51 +244,18 @@ main() {
                 psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
                 -c "DROP DATABASE IF EXISTS litellm;" \
                 >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 || true
+        fi
     }
-  ]
-}
-EOF
-    
-    # Add Bifrost service to docker-compose.yml
-    cat >> "${COMPOSE_FILE}" << 'EOF'
 
-  bifrost:
-    image: ghcr.io/ruqqq/bifrost:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-bifrost
-    restart: unless-stopped
-    depends_on:
-      ollama:
-        condition: service_healthy
-    environment:
-      PORT: "4000"
-      AUTH_TOKEN: ${BIFROST_API_KEY}
-      OLLAMA_BASE_URL: http://ollama:11434
-    volumes:
-      - ${CONFIG_DIR}/bifrost/config.json:/app/config.json:ro
-    ports:
-      - "4000:4000"
-    networks:
-      - default
-      - ${COMPOSE_PROJECT_NAME}
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:4000/healthz"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
-EOF
-    
-    # Deploy Bifrost
+    # Deploy Bifrost (service already in docker-compose.yml from generate_compose)
     docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d bifrost
     
     # Wait for Bifrost to be healthy
     wait_for_service_health "bifrost" "4000" "/healthz"
     
     log_success "Bifrost deployed and healthy"
-}
 
-    # 6. Monitoring — independent of AI services
+# 6. Monitoring — independent of AI services
     [[ "${ENABLE_MONITORING:-false}" == "true" ]] && {
         deploy_service prometheus
         deploy_service grafana
