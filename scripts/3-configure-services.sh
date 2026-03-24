@@ -788,7 +788,7 @@ EOF
       - ${DATA_DIR}/litellm:/root/.cache
     ports:
       - ${PORT_LITELLM:-4000}:4000
-    command: ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0", "--num_workers", "1", "--detailed_debug"]
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0", "--num_workers", "1", "--detailed_debug", "--force_prisma_migration_check"]
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=5)"]
       interval: 30s
