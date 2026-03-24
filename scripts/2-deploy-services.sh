@@ -21,6 +21,10 @@ done
 ENV_FILE="/mnt/data/${TENANT}/.env"
 [[ -f "$ENV_FILE" ]] && set -a && source "$ENV_FILE" && set +a
 
+# Load router choice from environment
+LLM_ROUTER=$(get_env_value "LLM_ROUTER" || echo "bifrost")
+log_info "LLM Router selected: ${LLM_ROUTER}"
+
 source "${SCRIPT_DIR}/3-configure-services.sh"   # ← SOURCES LIBRARY
 
 # ── Helper Functions ────────────────────────────────────────────────
@@ -211,8 +215,15 @@ main() {
         log_success "All required Ollama models are ready"
     }
 
-    # 5. AI gateway — always force-recreate container to pick up fresh config
-    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && {
+    # 5. AI gateway — conditional deployment based on router choice
+    if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
+        deploy_bifrost
+    elif [[ "${LLM_ROUTER}" == "litellm" ]]; then
+        deploy_litellm
+    else
+        log_error "Unknown LLM router: ${LLM_ROUTER}"
+        exit 1
+    fi
 
         # Always stop and remove the container (ensures fresh config.yaml is loaded)
         log_info "Removing existing litellm container (ensures config reload)..."
@@ -232,93 +243,49 @@ main() {
                 psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
                 -c "DROP DATABASE IF EXISTS litellm;" \
                 >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 || true
-            docker compose -f "$COMPOSE_FILE" exec -T postgres \
-                psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
-                -c "CREATE DATABASE litellm OWNER \"${POSTGRES_USER}\";" \
-                >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 \
-                && log_success "  litellm database reset" \
-                || log_warning "  Could not reset litellm database"
-        fi
-
-        log_info "Running LiteLLM database migration..."
-        # Run migration as isolated one-shot container BEFORE LiteLLM service starts
-        docker compose -f "$COMPOSE_FILE" run \
-            --rm \
-            --no-deps \
-            --entrypoint="" \
-            litellm \
-            sh -c '
-                echo "Prisma schema path check:"
-                ls /app/schema.prisma 2>/dev/null || ls /app/prisma/schema.prisma 2>/dev/null || \
-                    find /app -name "schema.prisma" 2>/dev/null | head -3
-
-                # Try migration with detected schema path
-                SCHEMA_PATH=$(find /app -name "schema.prisma" 2>/dev/null | head -1)
-                if [ -n "$SCHEMA_PATH" ]; then
-                    echo "Running: prisma migrate deploy --schema $SCHEMA_PATH"
-                    prisma migrate deploy --schema "$SCHEMA_PATH" 2>&1 || {
-                        EXIT=$?
-                        echo "Migration exited with $EXIT"
-                        # Exit 1 is OK if tables already exist (P3005)
-                        # Only fail on connectivity errors
-                        exit 0
-                    }
-                else
-                    echo "WARNING: schema.prisma not found, skipping migration"
-                fi
-                echo "Migration phase complete"
-            ' \
-            >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 \
-            && log_success "  Prisma migration completed" \
-            || log_warning "  Prisma migration failed - will retry"
-
-        deploy_service litellm
-        
-        # Wait with real log monitoring — fail fast if crash detected
-        LITELLM_READY=false
-        for i in $(seq 1 40); do
-            sleep 5
-            
-            # Check if container exited (crash)
-            STATUS=$(docker compose ps litellm --format json 2>/dev/null | python3 -c "
-import sys,json
-data=sys.stdin.read().strip()
-if not data: print('unknown'); exit()
-# Handle both array and single object
-import re
-lines=[l for l in data.split('\n') if l.strip()]
-for line in lines:
-    try:
-        obj=json.loads(line)
-        print(obj.get('State','unknown'))
-        exit()
-    except: pass
-print('unknown')
-" 2>/dev/null || docker inspect ai-datasquiz-litellm --format='{{.State.Status}}' 2>/dev/null || echo "unknown")
-            
-            if [[ "$STATUS" == "exited" ]]; then
-                log_error "LiteLLM container exited. Logs:"
-                docker compose logs litellm --tail 50
-                log_error "FATAL: LiteLLM crashed. Check config above."
-                exit 1
-            fi
-            
-            # Check health endpoint
-            if curl -sf "http://localhost:4000/health/liveliness" >/dev/null 2>&1; then
-                LITELLM_READY=true
-                log_success "LiteLLM healthy after $((i*5)) seconds."
-                break
-            fi
-            
-            log_info "Waiting for LiteLLM... ($((i*5))s)"
-        done
-
-        if [[ "$LITELLM_READY" != "true" ]]; then
-            log_error "LiteLLM did not become healthy. Final logs:"
-            docker compose logs litellm --tail 50
-            exit 1
-        fi
     }
+  ]
+}
+EOF
+    
+    # Add Bifrost service to docker-compose.yml
+    cat >> "${COMPOSE_FILE}" << 'EOF'
+
+  bifrost:
+    image: ghcr.io/ruqqq/bifrost:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-bifrost
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      PORT: "4000"
+      AUTH_TOKEN: ${BIFROST_API_KEY}
+      OLLAMA_BASE_URL: http://ollama:11434
+    volumes:
+      - ${CONFIG_DIR}/bifrost/config.json:/app/config.json:ro
+    ports:
+      - "4000:4000"
+    networks:
+      - default
+      - ${COMPOSE_PROJECT_NAME}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+EOF
+    
+    # Deploy Bifrost
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d bifrost
+    
+    # Wait for Bifrost to be healthy
+    wait_for_service_health "bifrost" "4000" "/healthz"
+    
+    log_success "Bifrost deployed and healthy"
+}
 
     # 6. Monitoring — independent of AI services
     [[ "${ENABLE_MONITORING:-false}" == "true" ]] && {

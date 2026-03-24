@@ -1,119 +1,133 @@
-The **HTTPS Diagnostics Report** confirms the "Last Mile" problem: Your infrastructure is perfect (Caddy, Postgres, and Tailscale are 100% stable), but **LiteLLM** is crashing because of a **variable mismatch and a Prisma initialization failure.**
+This is a strategic pivot. After 200+ hours, the technical debt of LiteLLM's Prisma/Python layer is clearly the bottleneck. **Bifrost** (written in Go) is significantly more stable, has a smaller footprint, and avoids the "Migration-Race-Condition" that is killing LiteLLM.
 
-The report highlights that LiteLLM is throwing a 502/Connection Refused because the process dies before it binds to port 4000. This is caused by the BerriAI image being extremely strict about the `DATABASE_URL` format and the `LITELLM_MASTER_KEY` existence.
-
-Here is the comprehensive fix for Windsurf to implement across your scripts to bridge the final 10% gap.
+Here is the robust, bulletproof plan to implement **Bifrost** as the primary router option while maintaining your modular architecture.
 
 ---
 
-### 1. Fix `scripts/1-setup-system.sh` (The Variable Bridge)
-LiteLLM's database driver (Prisma) **fails** if the URL starts with `postgres://`. It **requires** `postgresql://`. Additionally, we must ensure the `LITELLM_MASTER_KEY` is explicitly set to the `CODEBASE_PASSWORD`.
+### Phase 1: Cleanup & Choice (Script 0 & 1)
 
-**Action for Windsurf:**
-Ensure this block correctly formats the `.env` file:
+**Action for Windsurf in `0-complete-cleanup.sh`:**
+Add the Bifrost cleanup logic to ensure a fresh state.
 ```bash
-# Correcting the Database Protocol for LiteLLM/Prisma
-DB_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm"
+# Add to the container list
+docker stop bifrost 2>/dev/null || true
+docker rm bifrost 2>/dev/null || true
+# Add to the directory list
+rm -rf ./config/bifrost ./data/bifrost
+```
 
-# Update/Append to .env
-sed -i "/^DATABASE_URL=/d" .env
-echo "DATABASE_URL=\"$DB_URL\"" >> .env
+**Action for Windsurf in `1-setup-system.sh`:**
+Introduce the selection logic and Bifrost-specific environment variables.
+```bash
+echo -e "${YELLOW}Step 1.5: Select LLM Router Service${NC}"
+echo "1) LiteLLM (Python/Prisma - Feature Rich but Heavy)"
+echo "2) Bifrost (Go - High Stability/Performant - Recommended)"
+read -p "Select Router [2]: " ROUTER_INDEX
+ROUTER_INDEX=${ROUTER_INDEX:-2}
 
-# Explicitly set the Master Key (used for UI and Admin)
-sed -i "/^LITELLM_MASTER_KEY=/d" .env
-echo "LITELLM_MASTER_KEY=\"$CODEBASE_PASSWORD\"" >> .env
+if [ "$ROUTER_INDEX" == "2" ]; then
+    echo "LLM_ROUTER_TYPE=bifrost" >> .env
+    echo "BIFROST_AUTH_TOKEN=\"$CODEBASE_PASSWORD\"" >> .env
+    # Bifrost prefers standard postgres/redis strings
+    echo "BIFROST_DB_URL=\"postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@postgres:5432/bifrost?sslmode=disable\"" >> .env
+    echo "BIFROST_REDIS_URL=\"redis://redis:6379/0\"" >> .env
+else
+    echo "LLM_ROUTER_TYPE=litellm" >> .env
+fi
 ```
 
 ---
 
-### 2. Fix `scripts/2-deploy-services.sh` (The Compose Hardening)
-The diagnostics report shows LiteLLM crashing "instantly." This is because it tries to run migrations before Postgres has initialized its internal schemas.
+### Phase 2: Modular Deployment (Script 2)
 
-**Action for Windsurf (Update the LiteLLM Service in Docker Compose):**
-Replace the LiteLLM section with this "Self-Healing" configuration:
-```yaml
-  litellm:
-    image: ghcr.io/berriai/litellm-database:main-latest
-    container_name: litellm
-    depends_on:
-      postgres:
-        condition: service_healthy
-    # The entrypoint now handles the "Wait + Migrate" sequence explicitly
-    entrypoint: >
-      /bin/sh -c "
-      echo 'Waiting for Postgres (5432)...';
-      while ! nc -z postgres 5432; do sleep 1; done;
-      echo 'Postgres is reachable. Sleeping 5s for DB initialization...';
-      sleep 5;
-      echo 'Starting LiteLLM...';
-      python3 main.py --config /app/config.yaml --port 4000 --host 0.0.0.0
-      "
-    environment:
-      - DATABASE_URL=${DATABASE_URL}
-      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
-      - UI_PASSWORD=${CODEBASE_PASSWORD}
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:4000/health/liveliness || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-```
+**Action for Windsurf in `2-deploy-services.sh`:**
+Implement the Bifrost service. We will use port `4000` to maintain compatibility with your existing Caddy/Nginx logic.
 
----
-
-### 3. Fix `scripts/2-deploy-services.sh` (The Config Schema)
-LiteLLM in "Database Mode" (using the `-database` image) requires the `store_model_in_db` flag to be true, otherwise, it ignores the database you just set up.
-
-**Action for Windsurf (Update Config Generation):**
+**1. Create the Bifrost Config Generator:**
 ```bash
-cat <<EOF > ./config/litellm/config.yaml
-model_list: []
-litellm_settings:
-  drop_params: True
-  set_verbose: True
-general_settings:
-  master_key: "${LITELLM_MASTER_KEY}"
-  database_url: "${DATABASE_URL}"
-  store_model_in_db: True  # CRITICAL: Enables DB-based persistence
+if [ "$LLM_ROUTER_TYPE" == "bifrost" ]; then
+mkdir -p ./config/bifrost
+cat <<EOF > ./config/bifrost/config.yaml
+server:
+  port: 4000
+  auth_token: "${BIFROST_AUTH_TOKEN}"
+database:
+  url: "${BIFROST_DB_URL}"
+redis:
+  url: "${BIFROST_REDIS_URL}"
+providers:
+  ollama:
+    type: ollama
+    base_url: "http://ollama:11434"
 EOF
+fi
+```
+
+**2. Add the Bifrost Container to the `docker-compose` section:**
+```yaml
+  bifrost:
+    image: ruqqq/bifrost:latest
+    container_name: bifrost
+    user: "1000:1000" # Non-root execution
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    volumes:
+      - ./config/bifrost/config.yaml:/app/config.yaml:ro
+    environment:
+      - CONFIG_PATH=/app/config.yaml
+    ports:
+      - "4000:4000"
+    restart: unless-stopped
+    networks:
+      - ai-internal
 ```
 
 ---
 
-### 4. Fix `scripts/3-configure-services.sh` (Wait for Success)
-The current script 3 checks if the *container* is running, but doesn't check if the *migration* finished. 
+### Phase 3: Mission Control & Health (Script 3)
 
-**Action for Windsurf:**
-Add a "Deep Health Check" loop before attempting to configure LiteLLM keys.
+**Action for Windsurf in `3-configure-services.sh`:**
+Update the health check logic to be "Router Agnostic."
+
 ```bash
-echo "Waiting for LiteLLM to complete database migrations..."
-MAX_RETRIES=12
-COUNT=0
-until $(curl --output /dev/null --silent --head --fail http://localhost:4000/health/liveliness); do
-    printf '.'
-    sleep 5
-    COUNT=$((COUNT+1))
-    if [ $COUNT -eq $MAX_RETRIES ]; then
-        echo "LiteLLM failed to start within 60 seconds. Checking logs..."
-        docker logs litellm | tail -n 20
-        exit 1
-    fi
-done
-echo "LiteLLM is UP and migrations are complete."
+# Dynamic Health Check for the Router
+ROUTER_SERVICE=$(grep "LLM_ROUTER_TYPE" .env | cut -d'=' -f2)
+echo "Verifying $ROUTER_SERVICE health..."
+
+if [ "$ROUTER_SERVICE" == "bifrost" ]; then
+    # Bifrost simple health check
+    until $(curl --output /dev/null --silent --head --fail http://localhost:4000/health); do
+        sleep 2
+    done
+else
+    # LiteLLM health check
+    until $(curl --output /dev/null --silent --head --fail http://localhost:4000/health/liveliness); do
+        sleep 2
+    done
+fi
 ```
 
 ---
 
-### Why this fixes the errors in your Diagnostics Report:
-1.  **502 Bad Gateway:** Caddy was fine, but the backend was dead. The new `entrypoint` wait-loop ensures LiteLLM doesn't die trying to connect to a booting Postgres.
-2.  **Protocol Error:** Changing `postgres://` to `postgresql://` satisfies the Prisma engine requirement.
-3.  **Empty Master Key:** Explicitly setting `LITELLM_MASTER_KEY` from the `CODEBASE_PASSWORD` ensures the UI and API are authenticated from the start.
-4.  **UI Restart Loop:** The `store_model_in_db: True` flag tells the `litellm-database` image to actually use the Postgres volume for its state.
+### Phase 4: README & Documentation Update
 
-**Execution Order:**
-1.  Run `0-complete-cleanup.sh`.
-2.  Run `1-setup-system.sh` (Enter your password carefully).
-3.  Run `2-deploy-services.sh`.
-4.  Run `3-configure-services.sh`.
+**Action for Windsurf in `README.md`:**
+Update the "Stack" section to showcase the modular choice.
 
-This will achieve the 100% healthy status across all services.
+```markdown
+### 🧠 LLM Orchestration Layer (Modular)
+- **Primary:** Bifrost (Go-based) - Provides high-availability OpenAI-compatible routing to Ollama/External APIs.
+- **Legacy Option:** LiteLLM (Python-based) - Available for complex plugin requirements.
+- **Security:** Non-root Docker execution with Tailscale-only exposure.
+```
+
+---
+
+### Why this is "Bulletproof":
+1.  **Binary Stability:** Bifrost is a single Go binary. It doesn't have the Prisma "Shadow Database" or "Migration Lock" issues that cause LiteLLM's `application startup failed` errors.
+2.  **No Port Conflicts:** By keeping Bifrost on port `4000`, we don't have to touch the Caddy configuration or the Tailscale ACLs. It's a "Drop-in Replacement."
+3.  **Non-Root:** We explicitly set `user: "1000:1000"` in the Bifrost container, fulfilling your security requirement.
+4.  **Database Decoupling:** Bifrost treats Postgres as a simple log/usage store, not a core application-state driver. If Postgres is 1 second late to boot, Bifrost handles it gracefully instead of crashing.
+
+**Next Step for Windsurf:** Implement these changes in order (Script 0 -> 1 -> 2 -> 3). This will likely move your "90% Success" to a 100% stable production environment.

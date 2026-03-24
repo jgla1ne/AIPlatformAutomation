@@ -38,28 +38,61 @@ log_warning() { echo -e "${YELLOW}⚠${NC} $1"; log_write WARNING "$1"; }
 log_error()   { echo -e "${RED}✗${NC} $1";  log_write ERROR   "$1"; }
 
 # ── Service Readiness Gates ───────────────────────────────────────────────────
-wait_for_litellm() {
-    local MAX_WAIT=400
-    local INTERVAL=10
-    local ELAPSED=0
+wait_for_bifrost() {
+    local MAX_WAIT=60
+    local INTERVAL=5
     
-    log_info "Waiting for LiteLLM /health/liveliness..."
+    log_info "Waiting for Bifrost /healthz..."
     
-    while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
+    for i in $(seq 1 12); do
         HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            "http://localhost:4000/health/liveliness" 2>/dev/null)
+            "http://localhost:4000/healthz" 2>/dev/null)
         
-        if [ "$HTTP_CODE" = "200" ]; then
-            log_success "LiteLLM is ready (${ELAPSED}s elapsed)."
+        if [[ "$HTTP_CODE" == "200" ]]; then
+            log_success "Bifrost healthy after $((i*5)) seconds."
             return 0
         fi
         
-        log_info "  LiteLLM not ready (HTTP $HTTP_CODE, ${ELAPSED}s elapsed), waiting ${INTERVAL}s..."
-        sleep "$INTERVAL"
-        ELAPSED=$((ELAPSED + INTERVAL))
+        sleep 5
     done
     
-    log_error "LiteLLM did not become ready within ${MAX_WAIT}s"
+    log_error "Bifrost did not become healthy after $((MAX_WAIT*INTERVAL)) seconds."
+    exit 1
+}
+
+wait_for_litellm() {
+    local MAX_WAIT=400
+    local INTERVAL=5
+    
+    log_info "Waiting for LiteLLM /health/liveliness..."
+    
+    for i in $(seq 1 80); do
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            "http://localhost:4000/health/liveliness" 2>/dev/null)
+        
+        if [[ "$HTTP_CODE" == "200" ]]; then
+            log_success "LiteLLM healthy after $((i*5)) seconds."
+            return 0
+        fi
+        
+        sleep 5
+    done
+    
+    log_error "LiteLLM did not become healthy after $((MAX_WAIT*INTERVAL)) seconds."
+    exit 1
+}
+
+wait_for_llm_router() {
+    local router="${LLM_ROUTER:-bifrost}"
+    local port=4000
+    local health_path="/healthz"
+    
+    if [[ "$router" == "litellm" ]]; then
+        health_path="/health/liveliness"
+    fi
+    
+    log_info "Waiting for ${router} on port ${port}..."
+    wait_for_${router}
     log_error "Logs:"
     docker compose logs litellm --tail 30
     return 1
@@ -2254,7 +2287,15 @@ main() {
 
         # ── Health & Monitoring ──────────────────────────────────────
         health)         health_dashboard ;;
-        status)         docker compose -f "$COMPOSE_FILE" ps ;;
+        status)         
+            if [[ "${LLM_ROUTER:-bifrost}" == "bifrost" ]]; then
+                echo "LLM Router: Bifrost (port ${BIFROST_PORT:-4000})"
+                curl -s "http://localhost:${BIFROST_PORT:-4000}/healthz" | jq .
+            else
+                echo "LLM Router: LiteLLM (port 4000)"
+                curl -s "http://localhost:4000/health/liveliness" | jq .
+            fi
+            docker compose -f "$COMPOSE_FILE" ps ;;
         logs)           docker compose -f "$COMPOSE_FILE" logs --tail=50 "${1:-}" ;;
         logs-on)        log_enable  "${1:?usage: logs-on <service>}" ;;
         logs-off)       log_disable "${1:?usage: logs-off <service>}" ;;

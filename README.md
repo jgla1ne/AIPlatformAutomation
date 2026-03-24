@@ -297,7 +297,42 @@ EC2 Development Environment
 
 ---
 
-## **🔐 Core Architectural Principles**
+## **� LLM Router Selection**
+
+The platform supports **two LLM routers** with different architectural approaches:
+
+### **🔥 Bifrost (Recommended)**
+- **Architecture**: Go binary, stateless, no database
+- **Startup**: Instant (no cold start delays)
+- **Memory**: ~50MB footprint
+- **Performance**: Consistent under load, 5000+ req/s
+- **Dependencies**: Zero database dependency
+- **Health**: `/healthz` endpoint
+- **Use Case**: Production deployments requiring reliability
+
+### **⚠️ LiteLLM (Legacy)**
+- **Architecture**: Python, requires PostgreSQL
+- **Startup**: 3-4 second cold starts, Prisma migrations
+- **Memory**: 300-400MB footprint
+- **Performance**: Degrades under load, 500 req/s limit
+- **Dependencies**: PostgreSQL database, Prisma client
+- **Health**: `/health/liveliness` endpoint
+- **Use Case**: Development, feature testing
+
+### **Router Selection**
+During setup (Script 1), you'll be prompted:
+```bash
+Select your LLM router:
+  1) LiteLLM  - Feature-rich, Python-based, requires PostgreSQL
+  2) Bifrost  - Lightweight Go binary, no database, fast startup
+Enter choice [1-2] (default: 2):
+```
+
+**Default**: Bifrost (recommended for production)
+
+---
+
+## **🔧 Core Architectural Principles**
 
 ### **🏗 Foundation Principles (Non-Negotiable)**
 

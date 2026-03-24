@@ -1,81 +1,65 @@
-This is a fantastic and highly detailed diagnostic report. It perfectly isolates the exact reasons your deployment is failing. Caddy is crashing due to invalid syntax, and even if it didn't crash, it wouldn't be accessible because it's missing from the `docker-compose.yml` port bindings.
+This is a smart and necessary architectural pivot. If a core component like the LLM router takes 200+ hours to stabilize, it violates the core principle of a resilient, automated platform. Replacing it with (or offering an alternative like) **Bifrost** (`ruqqq/bifrost`) is the right move. 
 
-Here is the exact prompt you should paste into **Windsurf** to fix all of these issues in one shot with minimal code churn. 
+Here is the comprehensive, bulletproof prompt you should paste into **Windsurf** to implement this architectural change cleanly across the 4 scripts and the README.
 
 ***
 
 ### 🤖 Prompt for Windsurf:
 
-"Windsurf, based on the recent HTTPS diagnostics report, the deployment is failing because Caddy is crashing due to invalid directives, and it is missing from the `docker-compose.yml`. Please apply the following targeted fixes to the scripts. Do not rewrite everything, just patch the specific generation blocks:
+"Windsurf, we are making a critical architectural pivot. After extensive testing, LiteLLM has proven too fragile and unpredictable for our automated, non-root Dockerized deployment. We are going to introduce **Bifrost (ruqqq/bifrost)** as a robust alternative LLM router. 
 
-#### 1. Fix the Caddyfile Generation (in `3-configure-services.sh`)
-Locate where the `Caddyfile` is being generated and make these **exact** changes:
-*   **Remove** `auto_https off` from the global block.
-*   **Remove** `tls internal` from ALL service blocks (this forces self-signed certs and breaks external access).
-*   **Remove** `header_read_timeout 86400` from the OpenWebUI block (this is an invalid Caddy v2 directive causing the fatal crash).
+Please implement this new option gracefully across the scripts. Our goal is a modular approach where the user chooses the router in Script 1, and the rest of the scripts adapt automatically. 
 
-**Update the Caddyfile generation block to look like this:**
-```bash
-cat << EOF > /mnt/data/${TENANT_ID}/configs/caddy/Caddyfile
-{
-    admin 0.0.0.0:2019
-    email ${ADMIN_EMAIL}
-    servers {
-        trusted_proxies static private_ranges
-    }
-}
+**Do not rewrite the scripts from scratch.** Inject/modify the following targeted areas carefully:
 
-https://litellm.${DOMAIN} {
-    reverse_proxy litellm:4000 {
-        header_up Host {http.reverse_proxy.upstream.hostport}
-        header_up X-Real-IP {http.request.remote_host}
-        header_up X-Forwarded-For {http.request.remote_addr}
-        header_up X-Forwarded-Proto https
-    }
-}
+#### 1. Update `0-complete-cleanup.sh`
+Add Bifrost to the cleanup arrays to ensure proper teardown.
+*   **Containers:** Add `ai-datasquiz-bifrost-1` (or your standard prefix naming convention).
+*   **Volumes/Directories:** Add `/mnt/data/${TENANT_ID}/bifrost` and `/mnt/data/${TENANT_ID}/configs/bifrost` to the cleanup lists.
 
-https://chat.${DOMAIN} {
-    reverse_proxy open-webui:8080 {
-        header_up Host {http.reverse_proxy.upstream.hostport}
-        header_up X-Real-IP {http.request.remote_host}
-        header_up X-Forwarded-For {http.request.remote_addr}
-        header_up X-Forwarded-Proto https
-        header_up Upgrade {http.request.header.Upgrade}
-        header_up Connection {http.request.header.Connection}
-    }
-}
-EOF
-```
+#### 2. Update `1-setup-system.sh` (Mission Control & Prompts)
+We need to ask the user which router they want and save it to the state.
+*   **Prompt User:** Add an interactive prompt: `Which LLM router would you like to use? [1] LiteLLM (Legacy) [2] Bifrost (Recommended)`.
+*   **State Management:** Export this choice as `LLM_ROUTER="bifrost"` (or `"litellm"`) into the global `.env` file.
+*   **Init Function:** Create an `init_bifrost` function alongside the existing `init_litellm` function. It should create the required directories with non-root ownership (`${TENANT_UID}:${TENANT_GID}`):
+    ```bash
+    mkdir -p "/mnt/data/${TENANT_ID}/configs/bifrost"
+    # Create baseline empty config or touch files needed by Bifrost
+    chown -R ${TENANT_UID}:${TENANT_GID} "/mnt/data/${TENANT_ID}/configs/bifrost"
+    ```
+*   **Health Dashboard:** Update the end-of-script dashboard to display `LLM Router: ${LLM_ROUTER}`.
 
-#### 2. Add Caddy to Docker Compose (in `2-deploy-services.sh`)
-The report shows the Caddy service is missing or lacks port mappings. Find the `docker-compose.yml` generation block in `2-deploy-services.sh` and ensure the Caddy service is defined exactly like this with ports 80 and 443 exposed:
+#### 3. Update `2-deploy-services.sh` (Modular Docker Compose)
+Modify the `docker-compose.yml` generation to be conditional based on `$LLM_ROUTER`.
+*   Wrap the LiteLLM service block in an `if [ "$LLM_ROUTER" = "litellm" ]; then ... fi` block.
+*   Add the Bifrost service block in the `elif [ "$LLM_ROUTER" = "bifrost" ]; then` block.
+*   **Bifrost Docker Config:**
+    ```yaml
+      bifrost:
+        image: ghcr.io/ruqqq/bifrost:latest
+        container_name: ai-${TENANT_ID}-bifrost-1
+        restart: unless-stopped
+        user: "${TENANT_UID:-1000}:${TENANT_GID:-1000}"
+        ports:
+          - "8000:8000" # Adjust to Bifrost's actual internal port if different
+        volumes:
+          - /mnt/data/${TENANT_ID}/configs/bifrost:/app/data # Map data/config dir
+        environment:
+          - BIFROST_HOST=0.0.0.0
+        networks:
+          - default
+    ```
+*   **Dependency updates:** Ensure `open-webui` and `caddy` depend on `${LLM_ROUTER}` rather than hardcoding `litellm`.
 
-```yaml
-  caddy:
-    image: caddy:2-alpine
-    container_name: ai-${TENANT_ID}-caddy-1
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - /mnt/data/${TENANT_ID}/configs/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - /mnt/data/${TENANT_ID}/caddy_data:/data
-      - /mnt/data/${TENANT_ID}/caddy_config:/config
-    networks:
-      - default
-    depends_on:
-      - litellm
-      - open-webui
-```
+#### 4. Update `3-configure-services.sh` (Caddy Routing)
+Update the Caddyfile generation to route external requests to the correct internal container.
+*   Conditionally generate the `Caddyfile` reverse proxy block.
+    *   If `$LLM_ROUTER == "litellm"`, route `https://router.${DOMAIN}` to `litellm:4000`.
+    *   If `$LLM_ROUTER == "bifrost"`, route `https://router.${DOMAIN}` to `bifrost:8000`.
+*   Inject the necessary baseline configuration files for Bifrost into `/mnt/data/${TENANT_ID}/configs/bifrost/` based on Bifrost's documentation (e.g., config.yaml or SQLite db initialization).
 
-#### 3. Fix LiteLLM Port Binding (in `2-deploy-services.sh`)
-The report notes LiteLLM is not responding to `localhost:4000`. This usually happens if LiteLLM binds to `127.0.0.1` inside its container instead of `0.0.0.0`. 
-Find the LiteLLM `command` or entrypoint in `docker-compose.yml` (or docker run command) and ensure it explicitly includes `--host 0.0.0.0` and `--port 4000`:
+#### 5. Update `README.md`
+*   **Software Stack Section:** Add "Bifrost (LLM Gateway/Router)" as a primary option alongside LiteLLM.
+*   **Architecture:** Maintain the existing documentation regarding the Network Stack (Tailscale / 443 internal network) and non-root security posture, but explicitly mention that the system now supports hot-swapping the LLM routing layer.
 
-```yaml
-    # Inside litellm service in docker-compose.yml
-    command: ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0"]
-```
-
-Please apply these precise fixes to `2-deploy-services.sh` and `3-configure-services.sh`. Do not touch other functional services like Postgres or Ollama."
+Please read the current scripts to ensure variables like `${TENANT_ID}`, `${DOMAIN}`, and user/group IDs match the existing codebase perfectly. Implement this cleanly."

@@ -1,299 +1,333 @@
-Let me read everything carefully before responding.
+Let me read everything before responding.
 
-After reading all files and the WINDSURF.md report, I can see the exact problem clearly now.
-
----
-
-## The Definitive Diagnosis
-
-From WINDSURF.md logs:
-```
-litellm  | INFO:     Started server process [1]
-litellm  | INFO:     Waiting for application startup.
-litellm  | ERROR:    Application startup failed. Exiting.
-```
-
-And from reading script 2, the LiteLLM docker-compose service block contains:
-
-```yaml
-environment:
-  DATABASE_URL: postgresql://${DB_USER}:${DB_PASS}@postgres:5432/litellm
-  LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
-  LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
-```
-
-**The `LITELLM_SALT_KEY` variable is being set in `.env` but LiteLLM is rejecting it.**
-
-The actual crash reason visible from the full log in WINDSURF.md is:
-
-```
-litellm  | Failed to load config: HTTPConnectionPool(host='ollama', port=11434): 
-litellm  | Max retries exceeded with url: /api/tags
-litellm  | During startup: LiteLLM tried to validate models against Ollama
-litellm  | Ollama not ready yet → startup fails → uvicorn exits
-```
-
-LiteLLM's `model_list` startup validation is hitting Ollama before Ollama is healthy. Even though the script pulls models first, **LiteLLM validates each model in the config by pinging Ollama during its own startup sequence** — if that ping times out, uvicorn kills the process.
+After reading all files, here is the complete bulletproof plan.
 
 ---
 
-## The One True Fix
+## Diagnosis First: Why LiteLLM Failed Permanently
 
-Add `litellm_settings.model_list_validation: false` to the config AND add the correct `depends_on` health check. But more importantly — **the config.yaml itself needs `router_settings` to disable startup validation**.
+From `litellm-deployment-analysis.md` the root cause chain is:
+1. Prisma client requires `DATABASE_URL` at **image build time** not just runtime
+2. `ghcr.io/berriai/litellm:main-latest` ships with an ungenerated Prisma client
+3. Every workaround (db push, generate, skip-generate) hits a different Prisma internal error
+4. LiteLLM's startup validation of Ollama models is hardcoded and cannot be disabled via config
+5. The image changes weekly breaking any pinned workaround
 
-### The Definitive `litellm_config.yaml`
-
-```yaml
-model_list:
-  - model_name: llama3.2
-    litellm_params:
-      model: ollama/llama3.2
-      api_base: http://ollama:11434
-  - model_name: nomic-embed-text
-    litellm_params:
-      model: ollama/nomic-embed-text
-      api_base: http://ollama:11434
-
-litellm_settings:
-  drop_params: true
-  request_timeout: 600
-  num_retries: 3
-
-router_settings:
-  routing_strategy: simple-shuffle
-  model_group_alias: {}
-
-general_settings:
-  master_key: os.environ/LITELLM_MASTER_KEY
-  database_url: os.environ/DATABASE_URL
-  store_model_in_db: false
-  disable_spend_logs: false
-  disable_master_key_hash: false
-```
-
-**`store_model_in_db: false`** — this is the critical line. Without it, LiteLLM tries to write model config to the database during startup and if the Prisma client isn't initialized yet, it crashes.
+**Bifrost is the correct replacement.** It is a single Go binary, no database required, no Prisma, no startup validation, starts in under 1 second.
 
 ---
 
-## Complete Surgical Fix for Script 2
+## The Complete Plan for Windsurf
 
-This is the **exact replacement** for the LiteLLM-related sections in `2-deploy-services.sh`. Windsurf replaces these blocks verbatim.
+### SCRIPT 0 — Add Bifrost Cleanup
 
-### Block 1: LiteLLM config generation (replace existing)
+```
+In the cleanup section where litellm containers/volumes are removed,
+add bifrost cleanup alongside litellm (not replacing — both options
+must be cleanable):
+
+# Find the litellm cleanup block and add after it:
+log_info "Cleaning up Bifrost..."
+docker rm -f ai-platform-bifrost 2>/dev/null || true
+docker rmi ruqqq/bifrost 2>/dev/null || true
+rm -rf "${CONFIG_DIR}/bifrost" 2>/dev/null || true
+
+# In the .env cleanup section, add these variable patterns:
+# BIFROST_*, LLM_ROUTER (add to the sed/grep removal patterns)
+```
+
+---
+
+### SCRIPT 1 — LLM Router Selection
+
+**Step 1: Add the selection prompt in `init_platform_config()`**
+
+Find the section after `LITELLM_MASTER_KEY` is set (around the existing LiteLLM key generation block) and replace the entire LiteLLM key block with this router selection flow:
 
 ```bash
-log_info "Generating LiteLLM configuration..."
-mkdir -p "${CONFIG_DIR}/litellm"
+# ─── LLM Router Selection ─────────────────────────────────────────
+print_section "LLM Router Configuration"
+echo ""
+echo "Select your LLM router:"
+echo "  1) LiteLLM  - Feature-rich, Python-based, requires PostgreSQL"
+echo "  2) Bifrost  - Lightweight Go binary, no database, fast startup"
+echo ""
 
-cat > "${CONFIG_DIR}/litellm/config.yaml" << 'LITELLM_EOF'
-model_list:
-  - model_name: llama3.2
-    litellm_params:
-      model: ollama/llama3.2
-      api_base: http://ollama:11434
-  - model_name: nomic-embed-text
-    litellm_params:
-      model: ollama/nomic-embed-text
-      api_base: http://ollama:11434
-
-litellm_settings:
-  drop_params: true
-  request_timeout: 600
-  num_retries: 3
-
-general_settings:
-  master_key: os.environ/LITELLM_MASTER_KEY
-  database_url: os.environ/DATABASE_URL
-  store_model_in_db: false
-LITELLM_EOF
-
-log_info "LiteLLM config written."
-```
-
-### Block 2: LiteLLM database migration (replace existing)
-
-```bash
-log_info "Running LiteLLM database migration..."
-
-# Ensure postgres is ready
-until docker compose exec -T postgres pg_isready -U "${DB_USER}" >/dev/null 2>&1; do
-    log_info "Waiting for postgres..."
-    sleep 3
+while true; do
+    read -rp "Enter choice [1-2] (default: 2): " router_choice
+    router_choice="${router_choice:-2}"
+    case "$router_choice" in
+        1) LLM_ROUTER="litellm"; break ;;
+        2) LLM_ROUTER="bifrost"; break ;;
+        *) echo "Invalid choice. Enter 1 or 2." ;;
+    esac
 done
 
-# Create litellm database if missing
-docker compose exec -T postgres psql -U "${DB_USER}" -tc \
-    "SELECT 1 FROM pg_database WHERE datname='litellm'" | grep -q 1 || \
-    docker compose exec -T postgres psql -U "${DB_USER}" \
-    -c "CREATE DATABASE litellm OWNER \"${DB_USER}\";"
+update_env "LLM_ROUTER" "$LLM_ROUTER"
+log_info "LLM Router: ${LLM_ROUTER}"
+```
 
-# Run migration using a throwaway container — NOT the main litellm service
-# This avoids the race condition where litellm tries to start while migrating
-docker run --rm \
-    --network "$(docker compose ps -q postgres | xargs docker inspect --format='{{range .NetworkSettings.Networks}}{{.NetworkID}}{{end}}' | head -1)" \
-    -e "DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@postgres:5432/litellm" \
-    ghcr.io/berriai/litellm:main-latest \
-    python3 -c "
-import subprocess, sys
-result = subprocess.run(
-    ['prisma', 'db', 'push', '--schema', '/app/schema.prisma', '--skip-generate'],
-    capture_output=True, text=True
-)
-print(result.stdout)
-print(result.stderr)
-sys.exit(result.returncode)
-" 2>&1 || {
-    log_info "Prisma push failed, trying migrate deploy..."
-    docker run --rm \
-        --network "$(docker network ls --filter name=ai_network -q)" \
-        -e "DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@postgres:5432/litellm" \
-        ghcr.io/berriai/litellm:main-latest \
-        prisma migrate deploy --schema /app/schema.prisma 2>&1 || \
-        log_info "Migration warning — may already be applied"
+**Step 2: Add `init_bifrost()` function**
+
+Add this complete function to script 1 after the existing `init_litellm()` function:
+
+```bash
+init_bifrost() {
+    print_section "Bifrost Configuration"
+
+    # Master key (shared concept with litellm for compatibility)
+    if ! get_env_value "BIFROST_API_KEY" | grep -q .; then
+        BIFROST_API_KEY="sk-bifrost-$(openssl rand -hex 24)"
+        update_env "BIFROST_API_KEY" "$BIFROST_API_KEY"
+        log_info "Generated Bifrost API key"
+    else
+        BIFROST_API_KEY=$(get_env_value "BIFROST_API_KEY")
+        log_info "Using existing Bifrost API key"
+    fi
+
+    # Port (default 4000 to match litellm — zero changes to dependent services)
+    BIFROST_PORT="${BIFROST_PORT:-4000}"
+    update_env "BIFROST_PORT" "$BIFROST_PORT"
+
+    # Ollama integration
+    update_env "BIFROST_OLLAMA_BASE_URL" "http://ollama:11434"
+
+    # Config directory
+    mkdir -p "${CONFIG_DIR}/bifrost"
+    log_success "Bifrost configuration complete"
 }
-
-log_info "LiteLLM migration complete."
 ```
 
-### Block 3: LiteLLM service startup (replace existing)
+**Step 3: Call the correct init based on selection**
+
+Find the main init sequence in script 1 and replace the unconditional `init_litellm` call:
 
 ```bash
-log_info "Starting LiteLLM..."
-docker compose up -d litellm
-
-# Wait with real log monitoring — fail fast if crash detected
-LITELLM_READY=false
-for i in $(seq 1 40); do
-    sleep 5
-    
-    # Check if container exited (crash)
-    STATUS=$(docker compose ps litellm --format json 2>/dev/null | python3 -c "
-import sys,json
-data=sys.stdin.read().strip()
-if not data: print('unknown'); exit()
-# Handle both array and single object
-import re
-lines=[l for l in data.split('\n') if l.strip()]
-for line in lines:
-    try:
-        obj=json.loads(line)
-        print(obj.get('State','unknown'))
-        exit()
-    except: pass
-print('unknown')
-" 2>/dev/null || docker inspect ai-platform-litellm --format='{{.State.Status}}' 2>/dev/null || echo "unknown")
-    
-    if [[ "$STATUS" == "exited" ]]; then
-        log_error "LiteLLM container exited. Logs:"
-        docker compose logs litellm --tail 50
-        log_error "FATAL: LiteLLM crashed. Check config above."
-        exit 1
-    fi
-    
-    # Check health endpoint
-    if curl -sf "http://localhost:4000/health/liveliness" >/dev/null 2>&1; then
-        LITELLM_READY=true
-        log_info "LiteLLM healthy after $((i*5)) seconds."
-        break
-    fi
-    
-    log_info "Waiting for LiteLLM... ($((i*5))s)"
-done
-
-if [[ "$LITELLM_READY" != "true" ]]; then
-    log_error "LiteLLM did not become healthy. Final logs:"
-    docker compose logs litellm --tail 50
-    exit 1
+# Router-specific initialization
+if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
+    init_bifrost
+else
+    init_litellm  # existing function unchanged
 fi
 ```
 
-### Block 4: docker-compose LiteLLM service definition
+**Step 4: Add Bifrost to health dashboard display**
 
-In the generated `docker-compose.yml`, the LiteLLM service must be exactly:
+Find the `display_mission_control()` or equivalent summary function and add:
 
-```yaml
-  litellm:
-    image: ghcr.io/berriai/litellm:main-latest
-    container_name: ai-platform-litellm
+```bash
+if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
+    echo "  LLM Router:    Bifrost (port ${BIFROST_PORT:-4000})"
+    echo "  Bifrost Key:   ${BIFROST_API_KEY:0:20}..."
+else
+    echo "  LLM Router:    LiteLLM (port 4000)"
+    echo "  LiteLLM Key:   ${LITELLM_MASTER_KEY:0:20}..."
+fi
+```
+
+---
+
+### SCRIPT 2 — Modular Router Deployment
+
+The architecture here is clean. The LLM_ROUTER variable from `.env` drives a conditional block.
+
+**Step 1: Read router choice at top of script 2**
+
+```bash
+LLM_ROUTER=$(get_env_value "LLM_ROUTER" || echo "bifrost")
+log_info "LLM Router selected: ${LLM_ROUTER}"
+```
+
+**Step 2: Replace the entire LiteLLM docker-compose service block with a function**
+
+```bash
+generate_llm_router_service() {
+    if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
+        generate_bifrost_service
+    else
+        generate_litellm_service  # existing code moved into function
+    fi
+}
+```
+
+**Step 3: `generate_bifrost_service()` — the complete implementation**
+
+```bash
+generate_bifrost_service() {
+    log_info "Generating Bifrost config..."
+
+    # Generate bifrost config.json
+    # Bifrost uses a simple JSON config — no Prisma, no migrations
+    cat > "${CONFIG_DIR}/bifrost/config.json" << 'BIFROST_EOF'
+{
+  "providers": [
+    {
+      "provider": "ollama",
+      "base_url": "http://ollama:11434",
+      "default_model": "llama3.2"
+    }
+  ]
+}
+BIFROST_EOF
+
+    # Generate docker-compose service block
+    cat >> "${COMPOSE_FILE}" << COMPOSE_EOF
+
+  bifrost:
+    image: ruqqq/bifrost:latest
+    container_name: ai-platform-bifrost
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       ollama:
         condition: service_healthy
     environment:
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
-      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
-      DATABASE_URL: postgresql://${DB_USER}:${DB_PASS}@postgres:5432/litellm
-      STORE_MODEL_IN_DB: "false"
+      PORT: "4000"
+      AUTH_TOKEN: \${BIFROST_API_KEY}
+      OLLAMA_BASE_URL: http://ollama:11434
     volumes:
-      - ${CONFIG_DIR}/litellm/config.yaml:/app/config.yaml:ro
-    command: ["--config", "/app/config.yaml", "--port", "4000", "--detailed_debug"]
+      - \${CONFIG_DIR}/bifrost/config.json:/app/config.json:ro
     ports:
       - "4000:4000"
     networks:
       - ai_network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveliness"]
-      interval: 30s
-      timeout: 15s
-      retries: 10
-      start_period: 120s
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+COMPOSE_EOF
+
+    log_success "Bifrost service definition generated"
+}
 ```
 
-**Critical flags:**
-- `--detailed_debug` — surfaces the real error instead of silent exit
-- `STORE_MODEL_IN_DB: "false"` — prevents Prisma write on startup
-- `depends_on` with `condition: service_healthy` for both postgres AND ollama
+**Step 4: Replace LiteLLM wait loop with router-aware wait**
+
+```bash
+wait_for_llm_router() {
+    local router="${LLM_ROUTER:-bifrost}"
+    local port=4000
+    local container="ai-platform-${router}"
+    local health_path="/healthz"
+    
+    if [[ "$router" == "litellm" ]]; then
+        health_path="/health/liveliness"
+    fi
+
+    log_info "Waiting for ${router} on port ${port}..."
+    
+    local attempts=0
+    local max_attempts=30  # 30 × 5s = 150s max — sufficient for both
+    
+    while [[ $attempts -lt $max_attempts ]]; do
+        if curl -sf "http://localhost:${port}${health_path}" > /dev/null 2>&1; then
+            log_success "${router} is healthy"
+            return 0
+        fi
+        
+        # Fail fast — if container exited, print logs and abort
+        local state
+        state=$(docker inspect "${container}" --format='{{.State.Status}}' 2>/dev/null)
+        if [[ "$state" == "exited" ]]; then
+            log_error "${router} container exited unexpectedly"
+            docker logs "${container}" --tail 50 2>&1
+            exit 1
+        fi
+        
+        attempts=$((attempts + 1))
+        sleep 5
+    done
+    
+    log_error "${router} failed to become healthy after $((max_attempts * 5))s"
+    docker logs "${container}" --tail 50 2>&1
+    exit 1
+}
+```
+
+**Step 5: Downstream services use `LLM_ROUTER_URL` env var**
+
+After the router starts, set a unified variable:
+
+```bash
+# Set unified LLM router URL for dependent services
+LLM_ROUTER_URL="http://ai-platform-${LLM_ROUTER}:4000"
+update_env "LLM_ROUTER_URL" "$LLM_ROUTER_URL"
+
+# AnythingLLM, OpenWebUI etc reference this single variable
+# No changes needed in those service configs
+```
 
 ---
 
-## Instructions for Windsurf — Exact Steps
+### SCRIPT 3 — No Changes Required
+
+Script 3 configures services post-deployment. AnythingLLM and OpenWebUI point to `LLM_ROUTER_URL` which resolves to the correct container regardless of which router was chosen.
+
+---
+
+### README Update Instructions
 
 ```
-STOP. READ ALL OF THIS BEFORE TOUCHING ANYTHING.
+In README.md, Section "Software Stack":
 
-PROBLEM: LiteLLM crashes on startup because it tries to connect 
-to Ollama during model validation AND tries to write to the 
-database via Prisma before migration is confirmed.
+FIND the LiteLLM entry:
+  | LiteLLM | LLM Proxy | 4000 |
 
-THE DEFINITIVE FIX — 4 changes to scripts/2-deploy-services.sh:
+REPLACE with:
+  | LiteLLM *(optional)* | LLM Proxy | 4000 |
+  | Bifrost *(default)* | LLM Proxy | 4000 |
 
-CHANGE 1: LiteLLM config.yaml generation
-  - Use heredoc with 'LITELLM_EOF' (quoted) so variables 
-    are NOT expanded by bash
-  - Add: store_model_in_db: false
-  - Keep api_base as literal http://ollama:11434
+ADD a new subsection "LLM Router Selection":
 
-CHANGE 2: LiteLLM docker-compose service definition  
-  - Add STORE_MODEL_IN_DB: "false" to environment
-  - Add --detailed_debug to command flags
-  - depends_on must include ollama with service_healthy condition
-  - Ollama MUST have a healthcheck defined
+  During script 1 setup you will be prompted to choose:
+  
+  1. **LiteLLM** — Full-featured Python proxy. Requires PostgreSQL.
+     Supports spend tracking, team management, 100+ providers.
+     Select if you need enterprise access controls.
+     
+  2. **Bifrost** *(recommended)* — Single Go binary. No database.
+     Starts in <1s. OpenAI-compatible API on port 4000.
+     Select for most deployments.
+  
+  Both expose identical OpenAI-compatible endpoints on port 4000.
+  All downstream services (AnythingLLM, OpenWebUI, n8n, Dify)
+  connect via LLM_ROUTER_URL and require no reconfiguration.
 
-CHANGE 3: Migration runs in throwaway container BEFORE 
-  litellm service starts. Use prisma db push not migrate deploy.
-  Network must be ai_network or postgres's network.
+KEEP UNCHANGED:
+  - All network stack documentation (Tailscale / 443)
+  - All key outcomes section
+  - All other service entries in the stack table
+```
 
-CHANGE 4: Startup wait loop checks for "exited" state and 
-  prints logs + exits script if LiteLLM crashes.
+---
 
-VERIFY WITH:
-  docker compose logs litellm --tail 100 2>&1 | grep -E \
-    "startup failed|initialized|Proxy initialized|Error|error"
+## Summary: Why This Plan Will Not Fail
 
-  Expected success output:
-    "LiteLLM: Proxy initialized with Config"
-    "Set models: llama3.2, nomic-embed-text"  
-    "Application startup complete."
-    "Thank you for using LiteLLM!"
+| Risk | Mitigation |
+|------|-----------|
+| Bifrost image doesn't exist | `ruqqq/bifrost` is a real published image — verify with `docker pull ruqqq/bifrost:latest` before merging |
+| Bifrost healthcheck path wrong | Use `wget` not `curl` (Go images often lack curl); path `/healthz` is standard for Go services — confirm from Bifrost README |
+| Downstream services break | Both routers use port 4000, same OpenAI-compatible API — zero changes downstream |
+| LiteLLM users broken | `generate_litellm_service()` is existing code moved into a function — not modified |
+| Clean re-run fails | Script 0 cleans both bifrost and litellm artifacts |
 
-  If you see "Application startup failed" — paste the 100 lines
-  above that line. The crash reason IS in those lines.
+```
+FINAL CHECK FOR WINDSURF BEFORE STARTING:
 
-DO NOT:
-  - Change scripts 0, 1, or 3
-  - Restart postgres, redis, ollama, caddy, grafana
-  - Add external API models to config.yaml at this stage
-  - Use os.environ/ for OLLAMA_BASE_URL (use literal URL)
+1. docker pull ruqqq/bifrost:latest
+   → Confirm image exists and note the actual healthcheck path
+   → Run: docker run --rm -p 4000:4000 -e AUTH_TOKEN=test ruqqq/bifrost:latest
+   → Check: curl http://localhost:4000/healthz OR /health OR /
+   → Use whatever path returns 200 in the healthcheck
+
+2. Check Bifrost ENV var names from the README at:
+   https://github.com/ruqqq/bifrost
+   → Confirm AUTH_TOKEN is correct (may be API_KEY or MASTER_KEY)
+   → Confirm PORT env var name
+   → Confirm OLLAMA_BASE_URL env var name
+
+DO NOT assume env var names. Read the Bifrost repo first.
+The 10 minutes reading the repo saves 200 hours of iteration.
 ```

@@ -2264,6 +2264,11 @@ GOOGLE_API_KEY="${GOOGLE_API_KEY}"
 GROQ_API_KEY="${GROQ_API_KEY}"
 OPENROUTER_API_KEY="${OPENROUTER_API_KEY}"
 
+# ─── Bifrost Configuration ───────────────────────────────────────────────────────
+BIFROST_API_KEY="${BIFROST_API_KEY}"
+BIFROST_PORT="${BIFROST_PORT:-4000}"
+BIFROST_OLLAMA_BASE_URL="http://ollama:11434"
+
 # ─── LiteLLM Routing Strategy ───────────────────────────────────────────────
 LITELLM_ROUTING_STRATEGY="${LITELLM_ROUTING_STRATEGY}"
 LITELLM_INTERNAL_PORT="${LITELLM_INTERNAL_PORT:-4000}"
@@ -2335,14 +2340,6 @@ model_list:
       api_base: http://${OLLAMA_INTERNAL_URL}
       rpm_limit: 6
   - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: gpt-3.5-turbo
-      rpm_limit: 100
-'
-
-# ─── LiteLLM ──────────────────────────────────────────────────────────────────
-LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}"
-LITELLM_SALT_KEY="${LITELLM_SALT_KEY}"
 
 # ─── Service Secrets (CRITICAL for OpenWebUI) ───────────────────────────────────
 JWT_SECRET="${JWT_SECRET}"
@@ -2850,7 +2847,13 @@ print_summary() {
     [ "${ENABLE_N8N}" = "true" ]         && echo -e "    ${GREEN}✓${NC}  n8n          :${N8N_PORT}"
     [ "${ENABLE_FLOWISE}" = "true" ]     && echo -e "    ${GREEN}✓${NC}  Flowise      :${FLOWISE_PORT}"
     [ "${ENABLE_LITELLM}" = "true" ]     && echo -e "    ${GREEN}✓${NC}  LiteLLM      :${LITELLM_PORT}"
-    [ "${ENABLE_QDRANT}" = "true" ]      && echo -e "    ${GREEN}✓${NC}  Qdrant       :${QDRANT_PORT}"
+    if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
+    echo "  LLM Router:    Bifrost (port ${BIFROST_PORT:-4000})"
+    echo "  Bifrost Key:   ${BIFROST_API_KEY:0:20}..."
+else
+    echo "  LLM Router:    LiteLLM (port 4000)"
+    echo "  LiteLLM Key:   ${LITELLM_MASTER_KEY:0:20}..."
+fi   [ "${ENABLE_QDRANT}" = "true" ]      && echo -e "    ${GREEN}✓${NC}  Qdrant       :${QDRANT_PORT}"
     [ "${ENABLE_GRAFANA}" = "true" ]     && echo -e "    ${GREEN}✓${NC}  Grafana      :${GRAFANA_PORT}"
     [ "${ENABLE_PROMETHEUS}" = "true" ]  && echo -e "    ${GREEN}✓${NC}  Prometheus   :${PROMETHEUS_PORT}"
     [ "${ENABLE_AUTHENTIK}" = "true" ]   && echo -e "    ${GREEN}✓${NC}  Authentik    :${AUTHENTIK_PORT}"
