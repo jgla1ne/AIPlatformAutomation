@@ -123,6 +123,14 @@ main() {
         ok "Tenant data directory did not exist."
     fi
     
+    # Clean Bifrost environment variables from .env if it exists
+    if [[ -f "${DATA_ROOT}/.env" ]]; then
+        log "Cleaning Bifrost variables from .env file..."
+        sed -i '/^BIFROST_/d' "${DATA_ROOT}/.env" 2>/dev/null || true
+        sed -i '/^LLM_ROUTER/d' "${DATA_ROOT}/.env" 2>/dev/null || true
+        ok "Bifrost variables cleaned from .env."
+    fi
+    
     # Thorough cleanup: Remove ANY remaining postgres/redis data
     log "Performing thorough cleanup of ALL database remnants..."
     find /mnt -name "*postgres*" -type d -exec rm -rf {} + 2>/dev/null || true

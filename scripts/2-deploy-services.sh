@@ -247,13 +247,155 @@ main() {
         fi
     }
 
-    # Deploy Bifrost (service already in docker-compose.yml from generate_compose)
+    # Helper functions
+update_env() {
+    local key="$1"
+    local value="$2"
+    local env_file="${ENV_FILE}"
+    
+    # Remove existing key if present
+    if grep -q "^${key}=" "${env_file}" 2>/dev/null; then
+        sed -i "/^${key}=/d" "${env_file}"
+    fi
+    
+    # Add new key-value pair
+    echo "${key}=${value}" >> "${env_file}"
+}
+
+verify_bifrost_image() {
+    log_info "Verifying Bifrost image availability..."
+    
+    if ! docker pull ruqqq/bifrost:latest 2>&1; then
+        log_error "Cannot pull ruqqq/bifrost:latest"
+        log_error "Check: https://github.com/ruqqq/bifrost for correct image name"
+        exit 1
+    fi
+    
+    # Verify the actual health endpoint by running a test container
+    log_info "Verifying Bifrost health endpoint..."
+    local test_output
+    test_output=$(docker run --rm -d \
+        --name bifrost-probe \
+        -p 4001:4000 \
+        -e BIFROST_PORT=4000 \
+        -e BIFROST_AUTH_TOKEN=test-probe \
+        ruqqq/bifrost:latest 2>&1)
+    
+    sleep 5
+    
+    # Try both common health paths
+    local health_path=""
+    for path in /health /healthz /; do
+        if curl -sf "http://localhost:4001${path}" > /dev/null 2>&1; then
+            health_path="$path"
+            log_success "Bifrost health endpoint confirmed: ${path}"
+            break
+        fi
+    done
+    
+    docker rm -f bifrost-probe 2>/dev/null || true
+    
+    if [[ -z "$health_path" ]]; then
+        log_warning "Could not confirm health endpoint. Defaulting to /health"
+        health_path="/health"
+    fi
+    
+    # Write confirmed health path to env for use in compose healthcheck
+    update_env "BIFROST_HEALTH_PATH" "$health_path"
+    
+    log_success "Bifrost image verified"
+}
+
+deploy_bifrost() {
+    log_info "Deploying Bifrost LLM Router..."
+    
+    # Verify image first
+    verify_bifrost_image
+    
+    # Generate Bifrost service in compose file
+    generate_bifrost_service
+    
+    # Deploy Bifrost service
     docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d bifrost
     
     # Wait for Bifrost to be healthy
-    wait_for_service_health "bifrost" "4000" "/healthz"
+    wait_for_llm_router
     
     log_success "Bifrost deployed and healthy"
+}
+
+generate_bifrost_service() {
+    log_info "Generating Bifrost docker-compose service..."
+
+    # NO config file. NO volume mount. NO CLI flags.
+    # Bifrost is 100% environment variable configured.
+    cat >> "${COMPOSE_FILE}" << 'BIFROST_COMPOSE_EOF'
+
+  bifrost:
+    image: ruqqq/bifrost:latest
+    container_name: ai-platform-bifrost
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      BIFROST_PORT: "4000"
+      BIFROST_AUTH_TOKEN: ${BIFROST_AUTH_TOKEN}
+      BIFROST_PROVIDERS: ${BIFROST_PROVIDERS}
+    ports:
+      - "4000:4000"
+    networks:
+      - ai_network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+BIFROST_COMPOSE_EOF
+
+    log_success "Bifrost service definition generated"
+}
+
+wait_for_llm_router() {
+    local router="${LLM_ROUTER:-bifrost}"
+    local container="ai-platform-${router}"
+    local max_wait=90
+    local elapsed=0
+
+    log_info "Waiting for ${router} to become healthy (max ${max_wait}s)..."
+
+    while [[ $elapsed -lt $max_wait ]]; do
+        # Fail fast — detect crash immediately
+        local status
+        status=$(docker inspect "${container}" --format='{{.State.Status}}' 2>/dev/null || echo "missing")
+        
+        if [[ "$status" == "exited" ]]; then
+            log_error "${router} container exited. Full logs:"
+            echo "════════════════════════════════════════"
+            docker logs "${container}" 2>&1 | tail -30
+            echo "════════════════════════════════════════"
+            log_error "Exit code: $(docker inspect ${container} --format='{{.State.ExitCode}}' 2>/dev/null)"
+            exit 1
+        fi
+
+        # Health check
+        if curl -sf "http://localhost:4000/health" > /dev/null 2>&1; then
+            log_success "${router} is healthy and accepting requests"
+            return 0
+        fi
+
+        sleep 3
+        elapsed=$((elapsed + 3))
+        echo -n "."
+    done
+
+    echo ""
+    log_error "${router} did not become healthy after ${max_wait}s"
+    docker logs "${container}" --tail 30 2>&1
+    exit 1
+}
 
 # 6. Monitoring — independent of AI services
     [[ "${ENABLE_MONITORING:-false}" == "true" ]] && {

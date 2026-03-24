@@ -1265,6 +1265,32 @@ collect_llm_config() {
     log "SUCCESS" "Default model: ${OLLAMA_DEFAULT_MODEL}"
 }
 
+# ─── Bifrost Configuration ─────────────────────────────────────────────────────
+init_bifrost() {
+    print_step "8.3" "11" "Bifrost Configuration"
+
+    echo -e "  ${BOLD}⚙️  Bifrost Environment Configuration${NC}"
+    echo -e "  ${DIM}Configuring Bifrost with environment variables${NC}"
+    
+    # API Key - simplified approach
+    echo "DEBUG: Setting BIFROST_AUTH_TOKEN..." >&2
+    BIFROST_AUTH_TOKEN="sk-bifrost-$(openssl rand -hex 24)"
+    echo "BIFROST_AUTH_TOKEN=${BIFROST_AUTH_TOKEN}" >> "${ENV_FILE}"
+    echo "DEBUG: Token written successfully" >&2
+
+    # Port — fixed at 4000 to match litellm interface
+    echo "DEBUG: Setting BIFROST_PORT..." >&2
+    echo "BIFROST_PORT=4000" >> "${ENV_FILE}"
+
+    # Providers JSON — this is how Bifrost actually receives provider config
+    echo "DEBUG: Setting BIFROST_PROVIDERS..." >&2
+    BIFROST_PROVIDERS='[{"provider":"ollama","base_url":"http://ollama:11434"}]'
+    echo "BIFROST_PROVIDERS='[{"provider":"ollama","base_url":"http://ollama:11434"}]'" >> "${ENV_FILE}"
+
+    # No config directory needed — bifrost is env-var only
+    log "SUCCESS" "Bifrost configuration complete (env-var based, no config file)"
+}
+
 # ─── LLM Router Selection ───────────────────────────────────────
 select_llm_router() {
     print_step "8.2" "11" "LLM Router Configuration"
@@ -2031,7 +2057,7 @@ generate_secrets() {
     FLOWISE_SECRET_KEY=$(load_existing_secret "FLOWISE_SECRET_KEY"     "$(openssl rand -hex 32)")
     
     # Router-specific API keys
-    BIFROST_API_KEY=$(load_existing_secret "BIFROST_API_KEY"         "bf-$(openssl rand -hex 32)")
+    BIFROST_AUTH_TOKEN=$(load_existing_secret "BIFROST_AUTH_TOKEN"       "sk-bifrost-$(openssl rand -hex 24)")
     LITELLM_MASTER_KEY=$(load_existing_secret "LITELLM_MASTER_KEY"     "sk-$(openssl rand -hex 32)")
     LITELLM_SALT_KEY=$(load_existing_secret "LITELLM_SALT_KEY"     "$(openssl rand -hex 32)")
     
@@ -2375,10 +2401,9 @@ GROQ_API_KEY="${GROQ_API_KEY}"
 OPENROUTER_API_KEY="${OPENROUTER_API_KEY}"
 
 # ─── Bifrost Configuration ───────────────────────────────────────────────
-BIFROST_API_KEY="${BIFROST_API_KEY}"
+BIFROST_AUTH_TOKEN="${BIFROST_AUTH_TOKEN}"
 BIFROST_PORT="${BIFROST_PORT:-4000}"
-BIFROST_OLLAMA_BASE_URL="http://ollama:11434"
-BIFROST_ROUTING_MODE="${BIFROST_ROUTING_MODE:-direct}"
+BIFROST_PROVIDERS="${BIFROST_PROVIDERS}"
 
 # ─── LiteLLM Routing Strategy ───────────────────────────────────────
 LITELLM_ROUTING_STRATEGY="${LITELLM_ROUTING_STRATEGY:-cost-optimized}"
@@ -2960,7 +2985,7 @@ print_summary() {
     [ "${ENABLE_LITELLM}" = "true" ]     && echo -e "    ${GREEN}✓${NC}  LiteLLM      :${LITELLM_PORT}"
     if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
         echo "  LLM Router:    Bifrost (port ${BIFROST_PORT:-4000})"
-        echo "  Bifrost Key:   ${BIFROST_API_KEY:0:20}..."
+        echo "  Bifrost Key:   ${BIFROST_AUTH_TOKEN:0:20}..."
     else
         echo "  LLM Router:    LiteLLM (port 4000)"
         echo "  LiteLLM Key:   ${LITELLM_MASTER_KEY:0:20}..."
@@ -3228,6 +3253,10 @@ main() {
     configure_databases      # Step 7.5 - Database configuration
     collect_llm_config       # Step 8
     select_llm_router        # Step 8.2 - LLM router selection (NEW)
+    # Initialize router-specific configuration
+    if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
+        init_bifrost
+    fi
     collect_network_config   # Step 9 - NEW: Network & security configuration
     collect_ports            # Step 10
     generate_secrets         # Step 11
@@ -3238,7 +3267,9 @@ main() {
     
     # Generate router-specific secrets
     if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
-        load_or_generate_secret "BIFROST_API_KEY"
+        # Bifrost auth token already generated in init_bifrost()
+        # Just ensure it's loaded for consistency
+        load_or_generate_secret "BIFROST_AUTH_TOKEN"
     else
         load_or_generate_secret "LITELLM_MASTER_KEY"
         load_or_generate_secret "LITELLM_SALT_KEY"
