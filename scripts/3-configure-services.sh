@@ -771,10 +771,10 @@ EOF
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
       LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
-      DATABASE_URL: ${LITELLM_DATABASE_URL}
+      # DATABASE_URL: postgresql://${DB_USER}:${DB_PASS}@postgres:5432/litellm
       STORE_MODEL_IN_DB: "false"
-      BACKGROUND_HEALTH_CHECKS: "True"
-      HEALTH_CHECK_INTERVAL: "300"
+      REDIS_URL: redis://redis:6379
+      DISABLE_SPEND_LOGS: "true"
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
@@ -788,7 +788,7 @@ EOF
       - ${DATA_DIR}/litellm:/root/.cache
     ports:
       - ${PORT_LITELLM:-4000}:4000
-    command: ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0", "--num_workers", "1", "--detailed_debug", "--force_prisma_migration_check"]
+    command: ["--port", "4000", "--host", "0.0.0.0", "--num_workers", "1", "--detailed_debug"]
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=5)"]
       interval: 30s
