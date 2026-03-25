@@ -3,7 +3,7 @@
 # Script 2: Idempotent service deployer — v4.1
 # USAGE:  sudo bash scripts/2-deploy-services.sh [tenant_id] [--force]
 # --force: drops and recreates all service databases + flushes Redis cache
-#          Use after code changes that affect DB schema or LiteLLM config
+#          Use after code changes that affect DB schema or router config
 # Without --force: idempotent — skips already-existing databases
 # =============================================================================
 set -euo pipefail
@@ -36,7 +36,7 @@ declare -A SERVICE_PORTS=(
     ["postgres"]="5432"
     ["redis"]="6379"
     ["qdrant"]="6333"
-    ["litellm"]="4000"
+    ["bifrost"]="4000"
     ["ollama"]="11434"
     ["open-webui"]="8081"
     ["anythingllm"]="3001"
@@ -51,7 +51,7 @@ declare -A SERVICE_STARTUP_TIMEOUTS=(
     ["postgres"]="60"
     ["redis"]="30"
     ["qdrant"]="60"
-    ["litellm"]="180"
+    ["bifrost"]="60"
     ["ollama"]="120"
     ["open-webui"]="60"
     ["anythingllm"]="90"
@@ -128,7 +128,7 @@ pull_ollama_models() {
     done
 
     log_success "Ollama model pulls initiated — check /mnt/data/${TENANT}/logs/ollama-pull-$(date +%Y%m%d).log"
-    log_info "  LiteLLM requests to ollama models will succeed once pulls complete"
+    log_info "  Bifrost requests to ollama models will succeed once pulls complete"
 }
 
 # ── Main Deployment Function ────────────────────────────────────────────────
@@ -183,7 +183,7 @@ main() {
         deploy_service qdrant
     }
 
-    # 4. Local LLM runtime — BEFORE LiteLLM
+    # 4. Local LLM runtime — BEFORE Bifrost
     [[ "${ENABLE_OLLAMA:-false}"     == "true" ]] && {
         deploy_service ollama
         
@@ -202,8 +202,8 @@ main() {
         done
         log_success "Ollama HTTP server is ready"
 
-        # Pull models SYNCHRONOUSLY before starting LiteLLM
-        log_info "Pulling required Ollama models before starting LiteLLM..."
+        # Pull models SYNCHRONOUSLY before starting Bifrost
+        log_info "Pulling required Ollama models before starting Bifrost..."
         local required_models="llama3.2 nomic-embed-text"
         for model in ${required_models}; do
             log_info "  Pulling ${model}..."
@@ -218,36 +218,13 @@ main() {
         log_success "All required Ollama models are ready"
     }
 
-    # 5. AI gateway — conditional deployment based on router choice
+    # 5. AI gateway — Bifrost only deployment
     if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
         deploy_bifrost
-    elif [[ "${LLM_ROUTER}" == "litellm" ]]; then
-        deploy_litellm
     else
-        log_error "Unknown LLM router: ${LLM_ROUTER}"
+        log_error "Unknown LLM router: ${LLM_ROUTER}. Only Bifrost is supported."
         exit 1
     fi
-
-        # Always stop and remove the container (ensures fresh config.yaml is loaded)
-        log_info "Removing existing litellm container (ensures config reload)..."
-        docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" \
-            rm -sf litellm >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 || true
-
-        # --force only: wipe Prisma cache and reset litellm database (clean slate)
-        if [[ "$FORCE_REDEPLOY" == "true" ]]; then
-            log_info "  --force: clearing LiteLLM Prisma file cache..."
-            rm -rf "${DATA_DIR}/litellm"
-            mkdir -p "${DATA_DIR}/litellm"
-            chown -R 1000:"${TENANT_GID:-1001}" "${DATA_DIR}/litellm"
-            log_success "  Prisma cache cleared"
-
-            log_info "  --force: dropping and recreating litellm database..."
-            docker compose -f "$COMPOSE_FILE" exec -T postgres \
-                psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
-                -c "DROP DATABASE IF EXISTS litellm;" \
-                >> "${LOGS_DIR}/deploy-$(date +%Y%m%d).log" 2>&1 || true
-        fi
-    }
 
     # Helper functions
 update_env() {
@@ -335,7 +312,7 @@ generate_bifrost_service() {
 
   bifrost:
     image: ruqqq/bifrost:latest
-    container_name: ai-platform-bifrost
+    container_name: ${COMPOSE_PROJECT_NAME}_bifrost
     restart: unless-stopped
     depends_on:
       ollama:
@@ -344,10 +321,8 @@ generate_bifrost_service() {
       BIFROST_PORT: "4000"
       BIFROST_AUTH_TOKEN: ${BIFROST_AUTH_TOKEN}
       BIFROST_PROVIDERS: ${BIFROST_PROVIDERS}
-    ports:
-      - "4000:4000"
     networks:
-      - ai_network
+      - ${DOCKER_NETWORK}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:4000/health || exit 1"]
       interval: 15s
@@ -362,7 +337,7 @@ BIFROST_COMPOSE_EOF
 
 wait_for_llm_router() {
     local router="${LLM_ROUTER:-bifrost}"
-    local container="ai-platform-${router}"
+    local container="${COMPOSE_PROJECT_NAME}_${router}"
     local max_wait=90
     local elapsed=0
 

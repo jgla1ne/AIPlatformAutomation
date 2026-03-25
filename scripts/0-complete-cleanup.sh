@@ -44,29 +44,60 @@ main() {
     
     log "Starting TRUE NUCLEAR cleanup for tenant '${TENANT_ID}'..."
 
-    # --- 1. Brute Force Stop & Remove ALL AI Platform Containers ---
-    log "Finding and stopping ALL AI platform containers..."
-    # Find all containers with ai- prefix (any tenant)
-    container_ids=$(docker ps -a --filter "name=ai-" -q)
-    if [[ -n "$container_ids" ]]; then
-        log "Found containers: $container_ids"
-        docker stop $container_ids || true
-        docker rm $container_ids || true
-        ok "All AI platform containers stopped and removed."
-    else
-        ok "No AI platform containers found."
-    fi
+    # --- Load Environment for Dynamic Cleanup ---
+    load_env_or_default() {
+        local env_file="${DATA_ROOT}/.env"
+        if [[ -f "${env_file}" ]]; then
+            log "Loading environment from ${env_file}..."
+            source "${env_file}"
+        fi
+        
+        # Set defaults if not in .env
+        TENANT="${TENANT:-${TENANT_ID}}"
+        CONTAINER_PREFIX="${CONTAINER_PREFIX:-ai-${TENANT}}"
+        DATA_ROOT="${DATA_ROOT:-/mnt/data/${TENANT}}"
+        COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-ai-${TENANT}}"
+        
+        log "Using CONTAINER_PREFIX: ${CONTAINER_PREFIX}"
+        log "Using DATA_ROOT: ${DATA_ROOT}"
+    }
     
-    # Also check for the specific tenant
-    log "Finding and stopping all containers for project '${COMPOSE_PROJECT_NAME}'..."
-    container_ids=$(docker ps -a --filter "name=${COMPOSE_PROJECT_NAME}" -q)
-    if [[ -n "$container_ids" ]]; then
-        docker stop $container_ids || true
-        docker rm $container_ids || true
-        ok "All containers for project '${COMPOSE_PROJECT_NAME}' stopped and removed."
-    else
-        ok "No containers for project '${COMPOSE_PROJECT_NAME}' found."
-    fi
+    # Load environment before cleanup
+    load_env_or_default
+
+    # --- 1. Dynamic Container Cleanup ---
+    cleanup_containers() {
+        log "Finding and stopping ALL AI platform containers..."
+        
+        # Find all containers with our prefix
+        local containers
+        containers=$(docker ps -aq --filter "name=${CONTAINER_PREFIX}")
+        
+        if [[ -n "${containers}" ]]; then
+            log "Found containers: ${containers}"
+            docker stop ${containers} 2>/dev/null || true
+            docker rm ${containers} 2>/dev/null || true
+            ok "All AI platform containers stopped and removed."
+        else
+            ok "No AI platform containers found."
+        fi
+        
+        # Also check for the specific project
+        log "Finding containers for project '${COMPOSE_PROJECT_NAME}'..."
+        container_ids=$(docker ps -a --filter "name=${COMPOSE_PROJECT_NAME}" -q)
+        if [[ -n "$container_ids" ]]; then
+            docker stop $container_ids 2>/dev/null || true
+            docker rm $container_ids 2>/dev/null || true
+            ok "All containers for project '${COMPOSE_PROJECT_NAME}' stopped and removed."
+        else
+            ok "No containers for project '${COMPOSE_PROJECT_NAME}' found."
+        fi
+        
+        # Legacy cleanup for any remaining hardcoded names
+        docker rm -f litellm bifrost caddy 2>/dev/null || true
+    }
+    
+    cleanup_containers
     
     # Kill ALL lingering Docker processes related to AI platform
     log "Killing ALL lingering Docker processes..."
@@ -78,31 +109,36 @@ main() {
     pkill -f "${COMPOSE_PROJECT_NAME}.*redis" || true
     ok "All lingering processes killed."
 
-    # --- 2. Brute Force Destroy ALL AI Platform Volumes ---
-    log "Finding and destroying ALL AI platform volumes..."
-    # Remove all volumes with ai- prefix
-    volume_names=$(docker volume ls --filter "name=ai-" -q)
-    if [[ -n "$volume_names" ]]; then
-        log "Found volumes: $volume_names"
-        docker volume rm $volume_names || true
-        ok "All AI platform volumes removed."
-    else
-        ok "No AI platform volumes found."
-    fi
-    
-    # Also prune by project label
-    docker volume prune -af --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}" || true
-    ok "All Docker volumes for project '${COMPOSE_PROJECT_NAME}' have been destroyed."
-    
-    # Explicitly remove named compose volumes
-    # These follow the pattern: {COMPOSE_PROJECT_NAME}_{volume_name}
-    log "Explicitly removing named compose volumes..."
-    for vol in postgres_data prometheus_data grafana_data litellm_data bifrost_data bifrost_config; do
-        local vol_name="${COMPOSE_PROJECT_NAME}_${vol}"
-        if docker volume inspect "$vol_name" &>/dev/null; then
-            docker volume rm "$vol_name" && ok "Removed volume: ${vol_name}" || warn "Could not remove ${vol_name} (may be in use)"
+    # --- 2. Dynamic Volume Cleanup ---
+    cleanup_volumes() {
+        log "Finding and destroying ALL AI platform volumes..."
+        
+        # Remove all volumes with our prefix
+        local volume_names
+        volume_names=$(docker volume ls --filter "name=${CONTAINER_PREFIX}" -q)
+        if [[ -n "$volume_names" ]]; then
+            log "Found volumes: $volume_names"
+            docker volume rm $volume_names 2>/dev/null || true
+            ok "All AI platform volumes removed."
+        else
+            ok "No AI platform volumes found."
         fi
-    done
+        
+        # Also prune by project label
+        docker volume prune -af --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}" 2>/dev/null || true
+        ok "All Docker volumes for project '${COMPOSE_PROJECT_NAME}' have been destroyed."
+        
+        # Dynamic named compose volumes based on environment
+        log "Explicitly removing named compose volumes..."
+        for vol in postgres_data prometheus_data grafana_data bifrost_data bifrost_config qdrant_data ollama_data openwebui_data; do
+            local vol_name="${COMPOSE_PROJECT_NAME}_${vol}"
+            if docker volume inspect "$vol_name" &>/dev/null; then
+                docker volume rm "$vol_name" 2>/dev/null && ok "Removed volume: ${vol_name}" || warn "Could not remove ${vol_name} (may be in use)"
+            fi
+        done
+    }
+    
+    cleanup_volumes
 
     # --- 3. Nuclear Wipe of ALL Tenant Data ---
     log "Performing nuclear wipe of ALL tenant data in /mnt/data..."
@@ -123,12 +159,14 @@ main() {
         ok "Tenant data directory did not exist."
     fi
     
-    # Clean Bifrost environment variables from .env if it exists
+    # Clean router environment variables from .env if it exists
     if [[ -f "${DATA_ROOT}/.env" ]]; then
-        log "Cleaning Bifrost variables from .env file..."
+        log "Cleaning router variables from .env file..."
         sed -i '/^BIFROST_/d' "${DATA_ROOT}/.env" 2>/dev/null || true
         sed -i '/^LLM_ROUTER/d' "${DATA_ROOT}/.env" 2>/dev/null || true
-        ok "Bifrost variables cleaned from .env."
+        sed -i '/^LITELLM_/d' "${DATA_ROOT}/.env" 2>/dev/null || true
+        sed -i '/^ENABLE_LITELLM/d' "${DATA_ROOT}/.env" 2>/dev/null || true
+        ok "Router variables cleaned from .env."
     fi
     
     # Thorough cleanup: Remove ANY remaining postgres/redis data

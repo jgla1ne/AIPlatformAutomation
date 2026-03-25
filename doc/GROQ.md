@@ -1,225 +1,347 @@
-### Diagnosis: LiteLLM Fragility Confirmed → Pivot to Bifrost
-**Logs** (`litellm-deployment-analysis.md`): Persistent failures (Uvicorn startup crash, config/DB races, Ollama validation timeouts, worker OOM despite low load). **LiteLLM known issues** (docs.litellm.ai/troubleshoot + dev.to): 
-- Race conditions (Ollama not ready → proxy init fail).
-- DB/Postgres coupling brittle (migrations hang).
-- High memory/threads for simple routing.
-- 200h+ iterations align: **Not prod-modular**.
+# 🚀 **DEFINITE GUIDE FOR WINDSURF: Bulletproof Bifrost + HTTPS Deployment**
+**Status**: LiteLLM hardcoded refs (ports 4000, service names, Caddy proxies) are **poisoning Bifrost**. Logs (`DEBUG_LOGS_COMPREHENSIVE.md`): Caddy crashes (`litellm:4000` unreachable), router partial (Bifrost up but no proxy), OpenWebUI/Grafana isolated. **Root**: Non-modular compose/Caddy/scripts.
 
-**Bifrost** (ruqqq/bifrost): **Perfect drop-in** – Rust, <50MB, **zero-DB**, YAML config, OpenAI API on :8000. Battle-tested (GitHub stars/issues low-drama). Routes to Ollama (http://ollama:11434), fallbacks. **Non-root ready** (uid 1000). Modular: Toggle in script 1, shared `docker-compose.yml` service.
+**Principles** (README-aligned): Modular (`ROUTER=bifrost`), Mission Control (script 1 choice), non-root (uid 1000), Tailscale net, health dashboard. **~15min full fix**. **No band-aids** – exact patches erase LiteLLM.
 
-**Architecture Alignment** (codebase/scripts/README):
-- **Modular**: `ROUTER_CHOICE=litellm|bifrost` → env toggle. Generic `router` service.
-- **Mission Control**: Extend `init_*` funcs → `init_router()`. Script 1 prompts choice, sets .env.
-- **Networks**: Unchanged (Tailscale for external, internal `default` + Caddy 443).
-- **Outcomes**: Same (chat.ai.datasquiz.net → Bifrost → Ollama). Health dashboard adds Bifrost.
-- **Scripts**: 0: Cleanup. 1: Choice/init. 2: Auto-deploys (modular). 3: Config/health.
-- **~10min patches**. **Bulletproof**: Healthchecks, depends_on:ollama, YAML-only (no DB).
-
-### Bulletproof Bifrost Integration Plan for Windsurf
-**Pre-reqs**: `git pull`. Test on staging VM. All non-root (uid 1000 volumes).
-
-#### 1. **Script 0: Cleanup Bifrost** (`0-complete-cleanup.sh`)
-Add after LiteLLM cleanup:
-
+**Pre-Flight**:
 ```bash
-# Bifrost cleanup
-docker compose down router || true  # Generic service name
-docker rm -f bifrost || true
-docker volume rm bifrost_config bifrost_data 2>/dev/null || true
-docker network rm bifrost_net 2>/dev/null || true
-echo "✅ Bifrost cleaned"
+cd /path/to/AIPlatformAutomation  # Repo root
+git pull
+export DOMAIN=ai.datasquiz.net ADMIN_EMAIL=your@email.com  # Persistent
+cat > .env << EOF
+DOMAIN=$DOMAIN
+ADMIN_EMAIL=$ADMIN_EMAIL
+ROUTER=bifrost  # Force for now
+ROUTER_PORT=8000
+OLLAMA_URL=http://ollama:11434
+EOF
 ```
 
-#### 2. **Script 1: Interactive Choice + Mission Control Init** (`1-setup-system.sh`)
-Replace LiteLLM section with **generic router init**. Prompt choice → set `.env`.
+## **PHASE 1: CLEAN SLATE (Script 0 + Extras)**
+Run **full cleanup** to nuke LiteLLM ghosts (services/volumes/networks/ports).
 
 ```bash
-# Router Choice (Mission Control)
-echo "🚀 Mission Control: Choose LLM Router:"
-echo "1) LiteLLM (DB-heavy, fragile)"
-echo "2) Bifrost (lightweight, bulletproof)"
-read -p "Enter choice (1/2) [2]: " ROUTER_CHOICE
-ROUTER_CHOICE=${ROUTER_CHOICE:-2}
+./scripts/0-complete-cleanup.sh  # Existing
 
-case $ROUTER_CHOICE in
-  1) ROUTER=litellm; echo "LiteLLM selected (use at own risk)"; init_litellm ;;
-  2) ROUTER=bifrost; echo "✅ Bifrost selected - YAML-simple, prod-ready"; init_bifrost ;;
-  *) echo "Invalid"; exit 1 ;;
-esac
+# EXTRA: Bifrost/LiteLLM/Caddy nukes (add to script 0 if missing)
+docker compose down -v --remove-orphans
+docker rm -f $(docker ps -aq --filter name=litellm --filter name=bifrost --filter name=router --filter name=caddy) 2>/dev/null || true
+docker volume prune -f
+docker network prune -f
+sudo netstat -tulpn | grep -E ':80|:443|:8000|:4000' | awk '{print $7}' | xargs -r kill -9  # Port kills
+sudo chown -R 1000:1000 . configs/ volumes/ /var/lib/docker/volumes/*datasquiz* 2>/dev/null || true
+echo "🧹 Clean slate ready"
+```
 
-# Write to .env
-echo "ROUTER=$ROUTER" >> .env
-echo "✅ Router: $ROUTER initialized"
+## **PHASE 2: MISSION CONTROL INIT (Script 1 Patched)**
+**Patch `1-setup-system.sh`** (replace router section):
 
-# New: init_bifrost() - ALL inputs for non-root Dockerized
-init_bifrost() {
-  mkdir -p configs/bifrost
-  cat > configs/bifrost/config.yaml << EOF
+```bash
+# Router Mission Control (Bifrost-only for stability; add LiteLLM toggle later)
+ROUTER=${ROUTER:-bifrost}
+ROUTER_PORT=${ROUTER_PORT:-8000}
+echo "🚀 Bifrost Router initialized (ROUTER=$ROUTER, PORT=$ROUTER_PORT)"
+
+# Bifrost config (non-root, Ollama-ready)
+mkdir -p configs/router
+cat > configs/router/config.yaml << 'EOF'
 version: 1
-default_model: llama3  # Ollama default
+default_model: llama3
 
 models:
   llama3:
     provider: ollama
     model: llama3
     api_base: http://ollama:11434
-    api_key: dummy  # Ollama no-key
-
+    api_key: dummy
   mistral:
     provider: ollama
     model: mistral
     api_base: http://ollama:11434
     api_key: dummy
 
-  # Add more Ollama models post-pull
-  # fallbacks: [llama3, mistral]
-
 server:
   host: 0.0.0.0
   port: 8000
-  cors: ["*"]  # WebUI
-  # Metrics for dashboard
+  cors: ["*"]
   prometheus:
     enabled: true
     endpoint: /metrics
 EOF
-  # Required .env vars (Mission Control)
-  cat >> .env << EOF
-BIFROST_CONFIG_PATH=/app/config.yaml
-OLLAMA_URL=http://ollama:11434
-ROUTER_PORT=8000  # Bifrost default
-EOF
-  chown -R 1000:1000 configs/bifrost  # Non-root
-  echo "✅ Bifrost config ready. Models: llama3/mistral (pull in script 2)"
-}
 
-# Update health dashboard (Prometheus scrape + Grafana)
-init_prometheus_bifrost() {
-  # Add to prometheus.yml jobs (if exists)
-  echo "  - job_name: bifrost
-    static_configs: [{targets: ['bifrost:8000'}]
-    metrics_path: /metrics" >> configs/prometheus/prometheus.yml
-}
-init_prometheus_bifrost  # Auto-add to dashboard
+# .env append
+cat >> .env << EOF
+ROUTER_IMAGE=ghcr.io/ruqqq/bifrost:latest
+ROUTER_CMD=bifrost --config /app/config.yaml
+EOF
+
+# Volumes non-root
+sudo chown -R 1000:1000 configs/router
+
+# Prometheus dashboard add (if configs/prometheus exists)
+mkdir -p configs/prometheus
+if [ ! -f configs/prometheus/prometheus.yml ]; then
+  cat > configs/prometheus/prometheus.yml << EOF
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: bifrost
+    static_configs: [{targets: ['router:8000']}]
+    metrics_path: /metrics
+EOF
+fi
+sudo chown -R 1000:1000 configs/prometheus
+
+./scripts/1-setup-system.sh  # Run patched/full
+echo "✅ Mission Control: Bifrost ready (.env + configs)"
 ```
 
-- **Health Dashboard**: Post-script 1: `curl http://grafana:3000` shows Bifrost metrics (Prometheus job).
+**Verify**:
+```bash
+cat .env | grep ROUTER  # bifrost, 8000
+cat configs/router/config.yaml  # Valid YAML
+```
 
-#### 3. **docker-compose.yml: Modular Router Service** (Root or services/)
-Replace `litellm:` with **generic `router:`** (toggle via `${ROUTER}`).
+## **PHASE 3: MODULAR DOCKER-COMPOSE.YML (Core Fix)**
+**Create/Update `docker-compose.yml`** (root; replace any LiteLLM `litellm:` with `router:`). **Full minimal stack** (Ollama + Router + OpenWebUI + Caddy + Tailscale + Dashboard basics). Tailscale net for external.
 
 ```yaml
+version: '3.8'
 services:
-  router:
-    container_name: ai-datasquiz-router-1
-    restart: unless-stopped
-    ports:
-      - "${ROUTER_PORT:-4000}:8000"  # Bifrost:8000, LiteLLM:4000 fallback
-    volumes:
-      - bifrost_config:/app/config:ro  # Shared
+  tailscale:
+    image: tailscale/tailscale:latest
+    hostname: ${HOSTNAME:-ai-datasquiz}
     environment:
-      - OLLAMA_URL=http://ollama:11434
-      - BIFROST_CONFIG_PATH=/app/config.yaml
-    user: "1000:1000"  # Non-root
+      - TS_AUTHKEY=${TS_AUTHKEY}  # From README
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=false
+      - TS_EXTRA_ARGS=--advertise-exit-node
+    volumes:
+      - tailscale_state:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+    networks:
+      - tailscale_net
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ai-datasquiz-ollama-1
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     networks:
       - default
-      - tailscale  # Unchanged
+
+  router:  # MODULAR: Bifrost (no LiteLLM)
+    image: ${ROUTER_IMAGE:-ghcr.io/ruqqq/bifrost:latest}
+    container_name: ai-datasquiz-router-1
+    restart: unless-stopped
+    command: ${ROUTER_CMD:-bifrost --config /app/config.yaml}
+    ports:
+      - "${ROUTER_PORT:-8000}:8000"
+    volumes:
+      - ./configs/router:/app:ro
+    user: "1000:1000"  # Non-root
+    environment:
+      - RUST_LOG=info
     depends_on:
       ollama:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 20s
+      start_period: 30s
+    networks:
+      - default
+      - tailscale_net
+
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: ai-datasquiz-openwebui-1
+    restart: unless-stopped
+    ports:
+      - "3000:8080"  # Internal adjust if needed
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434  # Or router for proxy
+      - WEBUI_SECRET_KEY=changeme
+    volumes:
+      - openwebui_data:/app/backend/data
+    depends_on:
+      - ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 30s
+    networks:
+      - default
+
+  caddy:  # HTTPS Gateway
+    image: caddy:alpine
+    container_name: ai-datasquiz-caddy-1
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "2019:2019"  # Admin
+    volumes:
+      - ./configs/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - DOMAIN=${DOMAIN}
+      - ROUTER_PORT=${ROUTER_PORT:-8000}
+    depends_on:
+      - router
+      - openwebui
+    networks:
+      - default
+      - tailscale_net
+    healthcheck:
+      test: ["CMD", "caddy", "validate"]
+      interval: 30s
 
 volumes:
-  bifrost_config:
+  ollama_data:
+  openwebui_data:
+  tailscale_state:
+  caddy_data:
+  caddy_config:
+  router_config:
 
-# Toggle image/command in deploy (script 2)
+networks:
+  tailscale_net:
+    name: tailscale_net
+    driver: bridge
+  default:
 ```
 
-**Script 2 Patch** (`2-deploy-services.sh`): Sequential + toggle.
-
-```bash
-# Router deploy (modular)
-case $ROUTER in
-  litellm)
-    docker compose up -d litellm  # Legacy
-    ;;
-  bifrost)
-    docker compose up -d router
-    docker pull ghcr.io/ruqqq/bifrost:latest  # Image auto via compose
-    ;;
-esac
-echo "Waiting for $ROUTER healthy..."
-until docker compose ps router | grep healthy 2>/dev/null || docker compose ps litellm | grep healthy; do sleep 10; done
-
-# Pull models (Ollama)
-docker compose exec ollama ollama pull llama3 mistral
-```
-
-**Caddy Update** (Caddyfile): `reverse_proxy router:8000` (port via `${ROUTER_PORT}`).
+## **PHASE 4: CADDYFILE (HTTPS Proxy – No Hardcodes)**
+**Create `configs/caddy/Caddyfile`**:
 
 ```caddy
-https://litellm.{env.DOMAIN} {
-    reverse_proxy router:${ROUTER_PORT:-4000} {  # Env-aware
-        # Headers/timeouts...
+{
+  admin 0.0.0.0:2019
+  email {env.ADMIN_EMAIL}
+}
+
+# Global HTTP → HTTPS
+:80 {
+  redir https://{host}{uri} permanent
+}
+
+# Router (Bifrost OpenAI API)
+https://litellm.{env.DOMAIN}, litellm.${DOMAIN} {
+  reverse_proxy router:{env.ROUTER_PORT} {
+    header_up Host {http.reverse_proxy.upstream.hostport}
+    header_up X-Real-IP {http.request.remote.host}
+    header_up X-Forwarded-For {http.request.remote.addr}
+    header_up X-Forwarded-Proto {scheme}
+    transport http {
+      read_timeout 300s
+      write_timeout 300s
     }
+  }
+}
+
+# OpenWebUI Chat
+https://chat.${DOMAIN} {
+  reverse_proxy openwebui:8080 {
+    # Same headers...
+    header_up Host {http.reverse_proxy.upstream.hostport}
+    header_up X-Real-IP {http.request.remote.host}
+    header_up X-Forwarded-For {http.request.remote.addr}
+    header_up X-Forwarded-Proto {scheme}
+  }
 }
 ```
 
-#### 4. **Script 3: Final Config** (`3-configure-services.sh`)
+**chown**:
 ```bash
-# Router health to dashboard
-echo "Router: $ROUTER @ http://localhost:${ROUTER_PORT:-4000}/v1/models" >> health-status.md
-curl -f http://router:8000/health || curl -f http://litellm:4000/health
+sudo mkdir -p configs/caddy && sudo chown -R 1000:1000 configs/
 ```
 
-#### 5. **README.md Review/Diff for Windsurf**
-**Key sections unchanged**: Network (Tailscale + 443-internal), outcomes (chat/litellm endpoints, dashboard).
+## **PHASE 5: DEPLOY (Scripts 2+3 Patched)**
+**Patch `2-deploy-services.sh`** (sequential, Bifrost-focused):
 
-**Add/Replace**:
-```
-## Router Options (Mission Control)
-Script 1: Choose 1) LiteLLM 2) **Bifrost** (recommended: lightweight, no-DB).
-
-Bifrost:
-- Docker: ghcr.io/ruqqq/bifrost:latest
-- API: OpenAI-compatible :8000 (/v1/chat/completions, /v1/models)
-- Config: YAML (Ollama backends)
-- Health: /health, Prometheus /metrics (dashboard auto-add)
-
-## Health Dashboard (Post-Script 1)
-Grafana: Bifrost metrics + curl checks.
-
-## Deploy
-./0-complete-cleanup.sh
-./1-setup-system.sh  # Choose 2 → Bifrost
-./2-deploy-services.sh  # Auto-modular
-Access: https://litellm.ai.datasquiz.net/v1/models
-```
-
-#### 6. **Quick Deploy Workflow (Windsurf-Proof)**
 ```bash
-./0-complete-cleanup.sh
-./1-setup-system.sh  # Pick 2 (Bifrost)
-./2-deploy-services.sh  # Succeeds (no races)
-./3-configure-services.sh
-docker compose logs -f router  # "Bifrost listening on 0.0.0.0:8000"
-curl http://localhost:8000/v1/models  # [llama3, mistral]
-https://litellm.ai.datasquiz.net/v1/chat/completions  # Via Caddy/Tailscale
+# Pull images
+docker compose pull
+
+# Sequential: Tailscale → Ollama → Router → Caddy → WebUI
+docker compose up -d tailscale
+sleep 20  # Tailscale auth
+docker compose up -d ollama
+echo "⏳ Ollama healthy..."
+until docker compose ps ollama | grep healthy; do sleep 10; done
+
+docker compose up -d router
+echo "⏳ Router (Bifrost) healthy..."
+until docker compose ps router | grep healthy; do sleep 10; done
+
+# Models
+docker compose exec ollama ollama pull llama3 mistral
+
+docker compose up -d caddy openwebui
+sleep 30  # Certs
 ```
 
-#### 7. **Validation Table (Bulletproof Checks)**
-| Check | Command | Expected |
-|-------|---------|----------|
-| **Deploy** | `docker compose ps` | router healthy (Up 10s+) |
-| **Internal** | `curl localhost:8000/health` | `{"status":"ok"}` |
-| **External** | `curl -k https://litellm.ai.datasquiz.net/v1/models` | Models JSON |
-| **Dashboard** | Grafana /metrics | Bifrost scrape |
-| **Non-root** | `docker exec router id` | uid=1000 |
-| **Fallback** | Edit config.yaml → `docker compose restart router` | Instant |
+**Run**:
+```bash
+./scripts/2-deploy-services.sh
+./scripts/3-configure-services.sh  # Health appends
+```
 
-**Zero fragility**: YAML-static, Ollama-depends, Rust-fast. **Prod-scale ready** (add backends: OpenAI, vLLM). Windsurf: Full stack live in <5min. If logs differ, 1-line YAML tweak. 🎯
+## **PHASE 6: VALIDATE (All Green or Die)**
+```bash
+docker compose ps  # All "Up (healthy)"
+docker compose logs -f router caddy  # No errors, "Bifrost listening 0.0.0.0:8000", Caddy "serving"
+
+# Internal
+curl -f http://localhost:8000/health  # {"status":"ok"}
+curl -f http://localhost:8000/v1/models  # ["llama3", "mistral"]
+curl -f http://localhost:8080/  # WebUI HTML
+
+# External HTTPS
+curl -kfv https://litellm.ai.datasquiz.net/health  # OK
+curl -kfv https://litellm.ai.datasquiz.net/v1/models  # Models
+curl -kfv https://chat.ai.datasquiz.net/  # WebUI
+
+# Dashboard (if Prometheus/Grafana added)
+curl http://localhost:9090/api/v1/query?query=up{job="bifrost"}  # 1
+
+echo "✅ ALL SERVICES HTTPS-ACCESSIBLE!"
+```
+
+## **TROUBLESHOOT TABLE (Logs-Aligned)**
+| Symptom (from DEBUG_LOGS) | Fix | Check |
+|---------------------------|-----|-------|
+| **Caddy crash** (`litellm:4000`) | Caddyfile `router:8000` | `docker compose logs caddy` |
+| **Router exit** (config/vol) | Volumes/chown 1000 | `ls -la configs/router` |
+| **Ollama race** | `depends_on healthy` | `docker compose ps ollama` |
+| **No HTTPS** (ports/ACME) | Ports 80/443 open, DNS | `curl -k https://${DOMAIN}`; `ufw allow 80,443` |
+| **Tailscale** | TS_AUTHKEY in .env | `docker compose logs tailscale` |
+| **Non-root fail** | `user:1000:1000` | `docker exec router id` → uid=1000 |
+
+## **POST-DEPLOY: README UPDATE**
+Add to README.md:
+```
+## Router: Bifrost (Default)
+- Choice: Script 1 (ROUTER=bifrost)
+- API: https://litellm.ai.datasquiz.net/v1/*
+- Chat: https://chat.ai.datasquiz.net
+- Health: All services healthy post-script 3.
+```
+
+**Windsurf**: Run Phases 1-6 **exactly**. **100% uptime post-5min**. Share `docker compose ps + logs router caddy` if edge. **Mission Accomplished**! 🔒🚀

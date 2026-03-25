@@ -52,7 +52,6 @@ SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Dynamic service URLs (will be set after tenant selection)
 VECTOR_DB_URL=""
 OLLAMA_INTERNAL_URL=""
-LITELLM_INTERNAL_URL=""
 QDRANT_INTERNAL_URL=""
 REDIS_INTERNAL_URL=""
 POSTGRES_INTERNAL_URL=""
@@ -76,7 +75,6 @@ ENABLE_ANYTHINGLLM="false"
 ENABLE_DIFY="false"
 ENABLE_N8N="false"
 ENABLE_FLOWISE="false"
-ENABLE_LITELLM="false"
 ENABLE_QDRANT="false"
 ENABLE_WEAVIATE="false"
 ENABLE_PINECONE="false"
@@ -167,8 +165,6 @@ VECTOR_DB_URL=""
 # Service defaults
 N8N_ENCRYPTION_KEY="${N8N_ENCRYPTION_KEY:-}"
 FLOWISE_SECRET_KEY="${FLOWISE_SECRET_KEY:-}"
-LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-}"
-LITELLM_SALT_KEY="${LITELLM_SALT_KEY:-}"
 ANYTHINGLLM_JWT_SECRET="${ANYTHINGLLM_JWT_SECRET:-}"
 JWT_SECRET="${JWT_SECRET:-}"
 ENCRYPTION_KEY="${ENCRYPTION_KEY:-}"
@@ -226,7 +222,6 @@ N8N_SERVICE_NAME="n8n"
 N8N_PORT="5678"
 OLLAMA_SERVICE_NAME="ollama"
 OLLAMA_PORT="11434"
-LITELLM_SERVICE_NAME="litellm"
 VLLM_SERVICE_NAME="vllm"
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
@@ -818,7 +813,7 @@ select_stack() {
     ENABLE_QDRANT=true; ENABLE_CADDY=true # Always on infrastructure
     
     # Set LLM router based on LLM_ROUTER choice (will be set later)
-    # Router flags will be set in select_llm_router function
+    # Router flags will be set in configure_llm_router function
     
     # Zero out optional services
     ENABLE_ANYTHINGLLM=false; ENABLE_DIFY=false; ENABLE_N8N=false; ENABLE_FLOWISE=false;
@@ -1275,7 +1270,7 @@ init_bifrost() {
     echo "BIFROST_AUTH_TOKEN=${BIFROST_AUTH_TOKEN}" >> "${ENV_FILE}"
     echo "DEBUG: Token written successfully" >&2
 
-    # Port — fixed at 4000 to match litellm interface
+    # Port — fixed at 4000 for Bifrost
     echo "DEBUG: Setting BIFROST_PORT..." >&2
     echo "BIFROST_PORT=4000" >> "${ENV_FILE}"
 
@@ -1290,113 +1285,39 @@ init_bifrost() {
     log "SUCCESS" "Bifrost configuration complete (env-var based, no config file)"
 }
 
-# ─── LLM Router Selection ───────────────────────────────────────
-select_llm_router() {
+# ─── LLM Router Configuration (Bifrost Only) ───────────────────────────────
+configure_llm_router() {
     print_step "8.2" "11" "LLM Router Configuration"
     
-    echo -e "  ${BOLD}🚀 LLM Router Selection${NC}"
-    echo -e "  ${DIM}Choose your LLM routing mechanism${NC}"
+    echo -e "  ${BOLD}🚀 LLM Router Configuration${NC}"
+    echo -e "  ${DIM}Configuring Bifrost as the LLM router${NC}"
     echo ""
-    echo -e "  ${BOLD}Available LLM Routers:${NC}"
-    echo ""
-    echo -e "  ${CYAN}  1)${NC} Bifrost  - Lightweight Rust-based router"
+    echo -e "  ${CYAN}✅${NC} Bifrost - Lightweight Go-based router"
     echo -e "     ${DIM}• Environment variable configuration only${NC}"
     echo -e "     ${DIM}• Fast startup, minimal dependencies${NC}"
     echo -e "     ${DIM}• Direct Ollama integration${NC}"
-    echo ""
-    echo -e "  ${CYAN}  2)${NC} Bifrost  - Lightweight Go binary, no database, fast startup"
-    echo -e "     ${DIM}• Instant startup, no cold delays${NC}"
-    echo -e "     ${DIM}• Stateless architecture, zero database dependency${NC}"
-    echo -e "     ${DIM}• Consistent performance under load${NC}"
     echo -e "     ${DIM}• Production-ready reliability${NC}"
     echo ""
     
-    while true; do
-        read -p "  ➤ Select LLM router [1-2] (default: 2): " router_choice
-        router_choice="${router_choice:-2}"
-        case "$router_choice" in
-            1|2) 
-                LLM_ROUTER="bifrost"
-                echo -e "  ${GREEN}✅${NC} Bifrost selected - Lightweight, fast routing"
-                break
-                ;;
-            *) 
-                echo -e "  ${YELLOW}⚠️${NC} Invalid choice. Please select 1 or 2."
-                continue
-                ;;
-        esac
-    done
+    # Bifrost is the only supported router
+    LLM_ROUTER="bifrost"
+    BIFROST_PORT="${BIFROST_PORT:-4000}"
+    BIFROST_ROUTING_MODE="${BIFROST_ROUTING_MODE:-direct}"
     
-    # Set router-specific configuration
-    if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
-        # Bifrost uses port 4000 by default, no database needed
-        BIFROST_PORT="${BIFROST_PORT:-4000}"
-        echo -e "  ${DIM}✅ Bifrost configured for port ${BIFROST_PORT}${NC}"
-        
-        # Bifrost routing configuration (optional)
-        echo ""
-        echo -e "  ${BOLD}⚙️  Bifrost Routing Configuration${NC}"
-        echo -e "  ${DIM}Configure Bifrost routing behavior${NC}"
-        echo ""
-        echo -e "  ${BOLD}Available Routing Modes:${NC}"
-        echo ""
-        echo -e "  ${CYAN}  1)${NC} Direct (recommended)"
-        echo -e "     ${DIM}• Pass-through routing to Ollama${NC}"
-        echo -e "     ${DIM}• No additional latency, maximum performance${NC}"
-        echo ""
-        echo -e "  ${CYAN}  2)${NC} Failover"
-        echo -e "     ${DIM}• Automatic failover to external providers${NC}"
-        echo -e "     ${DIM}• Fallback when Ollama is unavailable${NC}"
-        echo ""
-        echo -e "  ${CYAN}  3)${NC} Load Balanced"
-        echo -e "     ${DIM}• Distribute load across multiple providers${NC}"
-        echo -e "     ${DIM}• Optimize for throughput and reliability${NC}"
-        echo ""
-        
-        read -p "  ➤ Select Bifrost routing mode [1-3] (default: 1): " bifrost_routing_choice
-        bifrost_routing_choice="${bifrost_routing_choice:-1}"
-        
-        case "${bifrost_routing_choice}" in
-            1) 
-                BIFROST_ROUTING_MODE="direct"
-                echo -e "  ${GREEN}✅${NC} Direct routing selected - Maximum performance"
-                ;;
-            2) 
-                BIFROST_ROUTING_MODE="failover"
-                echo -e "  ${GREEN}✅${NC} Failover routing selected - High availability"
-                ;;
-            3) 
-                BIFROST_ROUTING_MODE="load-balanced"
-                echo -e "  ${GREEN}✅${NC} Load-balanced routing selected - Optimal throughput"
-                ;;
-            *) 
-                BIFROST_ROUTING_MODE="direct"
-                echo -e "  ${YELLOW}⚠️${NC} Defaulting to direct routing"
-                ;;
-        esac
-        echo -e "  ${DIM}✅ Bifrost routing mode: ${BIFROST_ROUTING_MODE}${NC}"
-        
-    fi
+    echo -e "  ${GREEN}✅${NC} Bifrost selected - Lightweight, fast routing"
+    echo -e "  ${DIM}✅ Bifrost configured for port ${BIFROST_PORT}${NC}"
+    echo -e "  ${DIM}✅ Bifrost routing mode: ${BIFROST_ROUTING_MODE}${NC}"
     
     log "SUCCESS" "LLM Router: ${LLM_ROUTER}"
     
-    # These MUST all be present:
+    # Write router configuration to .env
     [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_ROUTER=/d' "${ENV_FILE}" 2>/dev/null || true
     echo "LLM_ROUTER=${LLM_ROUTER}" >> "${ENV_FILE}"
     
     [[ -f "${ENV_FILE}" ]] && sed -i '/^ENABLE_BIFROST=/d' "${ENV_FILE}" 2>/dev/null || true
-    [[ -f "${ENV_FILE}" ]] && sed -i '/^ENABLE_LITELLM=/d' "${ENV_FILE}" 2>/dev/null || true
+    echo "ENABLE_BIFROST=true" >> "${ENV_FILE}"
     
-    # Set service flags based on router selection
-    if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
-        echo "ENABLE_BIFROST=true" >> "${ENV_FILE}"
-        echo "ENABLE_LITELLM=false" >> "${ENV_FILE}"
-        echo -e "  ${DIM}✅ Bifrost enabled, LiteLLM disabled${NC}"
-    else
-        echo "ENABLE_LITELLM=true" >> "${ENV_FILE}"
-        echo "ENABLE_BIFROST=false" >> "${ENV_FILE}"
-        echo -e "  ${DIM}✅ LiteLLM enabled, Bifrost disabled${NC}"
-    fi
+    echo -e "  ${DIM}✅ Bifrost enabled${NC}"
 }
 
 # ─── Network & Security Configuration ───────────────────────────────────────────
@@ -2011,8 +1932,6 @@ generate_secrets() {
     
     # Router-specific API keys
     BIFROST_AUTH_TOKEN=$(load_existing_secret "BIFROST_AUTH_TOKEN"       "sk-bifrost-$(openssl rand -hex 24)")
-    LITELLM_MASTER_KEY=$(load_existing_secret "LITELLM_MASTER_KEY"     "sk-$(openssl rand -hex 32)")
-    LITELLM_SALT_KEY=$(load_existing_secret "LITELLM_SALT_KEY"     "$(openssl rand -hex 32)")
     
     ANYTHINGLLM_JWT_SECRET=$(load_existing_secret "ANYTHINGLLM_JWT_SECRET" "$(openssl rand -hex 32)")
     JWT_SECRET=$(load_existing_secret "JWT_SECRET"                   "$(openssl rand -hex 32)")
@@ -2171,9 +2090,6 @@ psql -v ON_ERROR_STOP=1 --username "\$PG_USER" --dbname "postgres" <<EOSQL
   END \$\$;
 
   -- Create per-service databases (idempotent)
-  SELECT 'CREATE DATABASE litellm   OWNER ${POSTGRES_USER}'
-    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='litellm')   \gexec
-
   SELECT 'CREATE DATABASE openwebui OWNER ${POSTGRES_USER}'
     WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='openwebui') \gexec
 
@@ -2185,7 +2101,6 @@ psql -v ON_ERROR_STOP=1 --username "\$PG_USER" --dbname "postgres" <<EOSQL
 
   -- Grant all privileges
   GRANT ALL PRIVILEGES ON DATABASE ${POSTGRES_DB}  TO ${POSTGRES_USER};
-  GRANT ALL PRIVILEGES ON DATABASE litellm          TO ${POSTGRES_USER};
   GRANT ALL PRIVILEGES ON DATABASE openwebui        TO ${POSTGRES_USER};
   GRANT ALL PRIVILEGES ON DATABASE n8n              TO ${POSTGRES_USER};
   GRANT ALL PRIVILEGES ON DATABASE flowise          TO ${POSTGRES_USER};
@@ -2248,7 +2163,6 @@ OPENWEBUI_UID=${OPENWEBUI_UID:-1000}
 ANYTHINGLLM_UID=${ANYTHINGLLM_UID:-1000}
 OLLAMA_UID=${OLLAMA_UID:-1001}
 FLOWISE_UID=${FLOWISE_UID:-1000}
-LITELLM_UID=${LITELLM_UID:-1000}
 AUTHENTIK_UID=${AUTHENTIK_UID:-1000}
 CADDY_UID=${CADDY_UID:-1000}
 # Note: Cloud services (Pinecone, Weaviate, ChromaDB, Milvus, OpenAI, Anthropic, LocalAI, VLLM) don't need UIDs
@@ -2270,7 +2184,6 @@ ENABLE_ANYTHINGLLM=${ENABLE_ANYTHINGLLM}
 ENABLE_DIFY=${ENABLE_DIFY}
 ENABLE_N8N=${ENABLE_N8N}
 ENABLE_FLOWISE=${ENABLE_FLOWISE}
-ENABLE_LITELLM=${ENABLE_LITELLM}
 ENABLE_QDRANT=${ENABLE_QDRANT}
 ENABLE_WEAVIATE=${ENABLE_WEAVIATE}
 ENABLE_PINECONE=${ENABLE_PINECONE}
@@ -2323,7 +2236,6 @@ N8N_INTERNAL_URL="http://\${N8N_SERVICE_NAME:-n8n}:\${N8N_PORT:-5678}"
 
 # Service API endpoints
 OLLAMA_API_ENDPOINT="${OLLAMA_INTERNAL_URL}/api/tags"
-LITELLM_API_ENDPOINT="${LITELLM_INTERNAL_URL}/v1"
 QDRANT_API_ENDPOINT="${QDRANT_INTERNAL_URL}"
 
 # ─── Project Configuration ───────────────────────────────────────────────────
@@ -2357,10 +2269,6 @@ BIFROST_AUTH_TOKEN="${BIFROST_AUTH_TOKEN}"
 BIFROST_PORT="${BIFROST_PORT:-4000}"
 BIFROST_PROVIDERS="${BIFROST_PROVIDERS}"
 
-# ─── LiteLLM Routing Strategy ───────────────────────────────────────
-LITELLM_ROUTING_STRATEGY="${LITELLM_ROUTING_STRATEGY:-cost-optimized}"
-LITELLM_INTERNAL_PORT="${LITELLM_INTERNAL_PORT:-4000}"
-
 # ─── Internal Service Ports ───────────────────────────────────────────────
 CADDY_INTERNAL_HTTP_PORT=${CADDY_INTERNAL_HTTP_PORT:-80}
 CADDY_INTERNAL_HTTPS_PORT=${CADDY_INTERNAL_HTTPS_PORT:-443}
@@ -2371,7 +2279,6 @@ OPENWEBUI_INTERNAL_PORT=${OPENWEBUI_INTERNAL_PORT:-8080}
 OPENCLAW_INTERNAL_PORT=${OPENCLAW_INTERNAL_PORT:-8082}
 SIGNAL_INTERNAL_PORT=${SIGNAL_INTERNAL_PORT:-8080}
 VLLM_INTERNAL_PORT=${VLLM_INTERNAL_PORT:-8000}
-LITELLM_INTERNAL_PORT="${LITELLM_INTERNAL_PORT:-4000}"
 N8N_INTERNAL_PORT=${N8N_INTERNAL_PORT:-5678}
 FLOWISE_INTERNAL_PORT=${FLOWISE_INTERNAL_PORT:-5678}
 ANYTHINGLLM_INTERNAL_PORT=${ANYTHINGLLM_INTERNAL_PORT:-3001}
@@ -2394,12 +2301,10 @@ DB_PASSWORD="${POSTGRES_PASSWORD}"
 
 # ─── Per-Service Database URLs (CRITICAL) ───────────────────────────────────
 # These must be resolved at write time with actual values, not variable references
-LITELLM_DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm"
 OPENWEBUI_DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/openwebui"
 N8N_DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/n8n"
 FLOWISE_DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/flowise"
 REDIS_URL="redis://:${REDIS_PASSWORD}@redis:6379/${REDIS_DB:-0}"
-DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm"
 
 # ─── Network Configuration (for dynamic references) ───────────────────
 LOCALHOST=localhost
@@ -2419,7 +2324,7 @@ FLOWISE_SECRET_KEY="${FLOWISE_SECRET_KEY}"
 FLOWISE_USERNAME=admin
 FLOWISE_PASSWORD="${FLOWISE_PASSWORD}"
 
-# LiteLLM configuration disabled (using Bifrost)
+# Bifrost configuration (replaces LiteLLM)
 JWT_SECRET="${JWT_SECRET}"
 ENCRYPTION_KEY="${ENCRYPTION_KEY}"
 # ADMIN_PASSWORD will be set below after AUTHENTIK_BOOTSTRAP_PASSWORD is generated
@@ -2509,7 +2414,6 @@ N8N_SERVICE_NAME=${N8N_SERVICE_NAME}
 N8N_PORT=${N8N_PORT}
 OLLAMA_SERVICE_NAME=${OLLAMA_SERVICE_NAME}
 OLLAMA_PORT=${OLLAMA_PORT}
-LITELLM_SERVICE_NAME=${LITELLM_SERVICE_NAME}
 VLLM_SERVICE_NAME=${VLLM_SERVICE_NAME}
 VLLM_PORT=${VLLM_PORT:-8000}
 
@@ -2726,7 +2630,7 @@ create_directories() {
     mkdir -p "${DATA_ROOT}/signal-data"
     
     # Create service directories
-    ALL_SERVICES="postgres redis qdrant grafana prometheus litellm authentik signal n8n weaviate chromadb milvus ollama localai vllm openwebui anythingllm flowise dify codeserver"
+    ALL_SERVICES="postgres redis qdrant grafana prometheus authentik signal n8n weaviate chromadb milvus ollama localai vllm openwebui anythingllm flowise dify codeserver"
     for service in ${ALL_SERVICES}; do
         # Check if the service is enabled via the ENABLE_SERVICENAME variable
         if [[ $(declare -p "ENABLE_${service^^}" 2>/dev/null) =~ "true" ]]; then
@@ -2804,15 +2708,6 @@ EOF
         cat >> "${CADDYFILE_PATH}" << EOF
 anythingllm.${DOMAIN} {
     reverse_proxy anythingllm:3001
-}
-
-EOF
-    fi
-
-    if [[ "${ENABLE_LITELLM}" = "true" ]]; then
-        cat >> "${CADDYFILE_PATH}" << EOF
-litellm.${DOMAIN} {
-    reverse_proxy litellm:4000
 }
 
 EOF
@@ -3021,7 +2916,6 @@ print_summary() {
         [ "${ENABLE_OPENWEBUI}" = "true" ] && echo -e "    ${CYAN}•${NC} Open WebUI:   https://openwebui.${DOMAIN}"
         [ "${ENABLE_ANYTHINGLLM}" = "true" ] && echo -e "    ${CYAN}•${NC} AnythingLLM:  https://anythingllm.${DOMAIN}"
         [ "${ENABLE_DIFY}" = "true" ] && echo -e "    ${CYAN}•${NC} Dify:         https://dify.${DOMAIN}"
-        [ "${ENABLE_LITELLM}" = "true" ] && echo -e "    ${CYAN}•${NC} LiteLLM:      https://litellm.${DOMAIN}"
         [ "${ENABLE_GRAFANA}" = "true" ] && echo -e "    ${CYAN}•${NC} Grafana:      https://grafana.${DOMAIN}"
         [ "${ENABLE_AUTHENTIK}" = "true" ] && echo -e "    ${CYAN}•${NC} Authentik:    https://auth.${DOMAIN}"
         [ "${ENABLE_RCLONE}" = "true" ] && echo -e "    ${CYAN}•${NC} Rclone:        https://rclone.${DOMAIN}"
@@ -3188,7 +3082,7 @@ main() {
     select_vector_db         # Step 7
     configure_databases      # Step 7.5 - Database configuration
     collect_llm_config       # Step 8
-    select_llm_router        # Step 8.2 - LLM router selection (NEW)
+    configure_llm_router      # Step 8.2 - LLM router configuration (Bifrost only)
     # Initialize router-specific configuration
     if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
         init_bifrost
@@ -3206,9 +3100,6 @@ main() {
         # Bifrost auth token already generated in init_bifrost()
         # Just ensure it's loaded for consistency
         load_or_generate_secret "BIFROST_AUTH_TOKEN"
-    else
-        load_or_generate_secret "LITELLM_MASTER_KEY"
-        load_or_generate_secret "LITELLM_SALT_KEY"
     fi
     
     load_or_generate_secret "ANYTHINGLLM_JWT_SECRET"
@@ -3257,7 +3148,6 @@ main() {
             # AI Runtime
             echo -e "  ${CYAN}🤖 AI Runtime:${NC}"
             [ "${ENABLE_OLLAMA}" = "true" ] && echo -e "    ${GREEN}✓${NC} Ollama: port 11434, local LLM"
-            [ "${ENABLE_LITELLM}" = "true" ] && echo -e "    ${GREEN}✓${NC} LiteLLM: port 4000, LLM proxy"
             [ "${ENABLE_OPENWEBUI}" = "true" ] && echo -e "    ${GREEN}✓${NC} OpenWebUI: https://openwebui.${DOMAIN}"
             echo ""
             

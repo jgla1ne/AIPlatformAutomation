@@ -60,122 +60,68 @@ wait_for_bifrost() {
     exit 1
 }
 
-wait_for_litellm() {
-    local MAX_WAIT=400
-    local INTERVAL=5
-    
-    log_info "Waiting for LiteLLM /health/liveliness..."
-    
-    for i in $(seq 1 80); do
-        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            "http://localhost:4000/health/liveliness" 2>/dev/null)
-        
-        if [[ "$HTTP_CODE" == "200" ]]; then
-            log_success "LiteLLM healthy after $((i*5)) seconds."
-            return 0
-        fi
-        
-        sleep 5
-    done
-    
-    log_error "LiteLLM did not become healthy after $((MAX_WAIT*INTERVAL)) seconds."
-    exit 1
-}
-
 wait_for_llm_router() {
     local router="${LLM_ROUTER:-bifrost}"
     local port=4000
     local health_path="/healthz"
     
-    if [[ "$router" == "litellm" ]]; then
-        health_path="/health/liveliness"
-    fi
-    
     log_info "Waiting for ${router} on port ${port}..."
-    wait_for_${router}
-    log_error "Logs:"
-    docker compose logs litellm --tail 30
-    return 1
-}
-
-generate_litellm_key() {
-    local ALIAS="$1"
-    local MODELS_JSON="$2"
-    
-    RESPONSE=$(curl -sf -X POST \
-        "http://localhost:4000/key/generate" \
-        -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
-        -H "Content-Type: application/json" \
-        -d "{
-            \"key_alias\": \"${ALIAS}\",
-            \"models\": ${MODELS_JSON},
-            \"duration\": null
-        }" 2>/dev/null)
-    
-    if [ -z "$RESPONSE" ]; then
-        log_error "Empty response from LiteLLM key/generate for alias: $ALIAS"
-        return 1
-    fi
-    
-    KEY=$(echo "$RESPONSE" | python3 -c \
-        "import sys,json; d=json.load(sys.stdin); print(d.get('key',''))" 2>/dev/null)
-    
-    if [ -z "$KEY" ]; then
-        log_error "No key in response: $RESPONSE"
-        return 1
-    fi
-    
-    echo "$KEY"
+    wait_for_bifrost
 }
 
 # ── Directory Preparation with UID-Aware Ownership ─────────────────────────
 prepare_directories() {
-    log_info "Preparing tenant directories under ${TENANT_DIR}..."
+    log_info "Preparing directories..."
     
-    # Create ALL directories under /mnt/data/${TENANT}
-    mkdir -p \
-        "${DATA_DIR}/postgres" \
-        "${DATA_DIR}/redis" \
-        "${DATA_DIR}/qdrant/snapshots" \
-        "${DATA_DIR}/ollama" \
-        "${DATA_DIR}/openwebui" \
-        "${DATA_DIR}/n8n" \
-        "${DATA_DIR}/flowise" \
-        "${DATA_DIR}/litellm" \
-        "${DATA_DIR}/grafana/data" \
-        "${DATA_DIR}/grafana/logs" \
-        "${DATA_DIR}/prometheus" \
-        "${DATA_DIR}/anythingllm" \
-        "${DATA_DIR}/tailscale" \
-        "${DATA_DIR}/openclaw" \
-        "${DATA_DIR}/codeserver" \
-        "${DATA_DIR}/gdrive" \
-        "${CONFIG_DIR}/rclone" \
-        "${CONFIG_DIR}/litellm" \
-        "${CONFIG_DIR}/postgres" \
-        "${CONFIG_DIR}/caddy/data" \
-        "${CONFIG_DIR}/caddy/config" \
-        "${CONFIG_DIR}/prometheus" \
-        "${LOGS_DIR}"
-
-    # CRITICAL: Set ownership matching container UIDs exactly
-    chown -R 70:"${TENANT_GID:-1001}"      "${DATA_DIR}/postgres"
-    chown -R 999:"${TENANT_GID:-1001}"     "${DATA_DIR}/redis"
-    chown -R 1000:"${TENANT_GID:-1001}"    "${DATA_DIR}/qdrant"
-    chown -R 472:472                        "${DATA_DIR}/grafana"
-    chown -R 65534:65534                    "${DATA_DIR}/prometheus"
+    # Create base directories
+    local dirs=(
+        "${DATA_DIR}/postgres"
+        "${DATA_DIR}/redis"
+        "${DATA_DIR}/qdrant"
+        "${DATA_DIR}/ollama"
+        "${DATA_DIR}/grafana/data"
+        "${DATA_DIR}/grafana/logs"
+        "${DATA_DIR}/prometheus"
+        "${DATA_DIR}/openwebui"
+        "${DATA_DIR}/n8n"
+        "${DATA_DIR}/flowise"
+        "${DATA_DIR}/anythingllm"
+        "${DATA_DIR}/codeserver"
+        "${DATA_DIR}/gdrive"
+        "${CONFIG_DIR}/rclone"
+        "${CONFIG_DIR}/postgres"
+        "${CONFIG_DIR}/caddy/data"
+        "${CONFIG_DIR}/caddy/config"
+        "${CONFIG_DIR}/prometheus"
+        "${CONFIG_DIR}/grafana/provisioning/datasources"
+        "${CONFIG_DIR}/grafana/provisioning/dashboards"
+    )
+    
+    for dir in "${dirs[@]}"; do
+        if [[ ! -d "$dir" ]]; then
+            mkdir -p "$dir"
+            log_info "Created directory: $dir"
+        fi
+    done
+    
+    # Set ownership
+    chown -R 70:70                         "${DATA_DIR}/postgres"
+    chown -R 999:999                       "${DATA_DIR}/redis"
+    chown -R 1000:1000                     "${DATA_DIR}/qdrant"
+    chown -R 1001:1001                     "${DATA_DIR}/ollama"
+    chown -R 472:472                       "${DATA_DIR}/grafana"
+    chown -R 65534:65534                   "${DATA_DIR}/prometheus"
     chown -R 1000:"${TENANT_GID:-1001}"    \
-        "${DATA_DIR}/litellm" \
         "${DATA_DIR}/n8n" \
         "${DATA_DIR}/flowise" \
         "${DATA_DIR}/openwebui" \
-        "${DATA_DIR}/ollama" \
         "${DATA_DIR}/anythingllm" \
         "${DATA_DIR}/tailscale" \
         "${DATA_DIR}/openclaw" \
         "${DATA_DIR}/codeserver" \
         "${DATA_DIR}/gdrive"
     
+    log_success "Directory structure prepared"
     # Config directories owned by tenant for script access
     chown -R "${TENANT_UID:-1001}:${TENANT_GID:-1001}" "${CONFIG_DIR}"
     chown -R "${TENANT_UID:-1001}:${TENANT_GID:-1001}" "${LOGS_DIR}"
@@ -196,8 +142,8 @@ validate_environment() {
         ((errors++))
     fi
     
-    if [[ -z "${LITELLM_MASTER_KEY:-}" ]]; then
-        log_error "LITELLM_MASTER_KEY is required"
+    if [[ -z "${BIFROST_AUTH_TOKEN:-}" ]]; then
+        log_error "BIFROST_AUTH_TOKEN is required"
         ((errors++))
     fi
     
@@ -205,7 +151,6 @@ validate_environment() {
     local base_domain="${BASE_DOMAIN:-datasquiz.net}"
     
     # Generate consistent service URLs
-    export LITELM_URL="https://litellm.${base_domain}"
     export OPENWEBUI_URL="https://chat.${base_domain}"
     export ANYTHINGLLM_URL="https://anythingllm.${base_domain}"
     export CODESERVER_URL="https://opencode.${base_domain}"
@@ -214,22 +159,10 @@ validate_environment() {
     export OPENCLAW_URL="https://openclaw.${base_domain}"
     
     # API key consistency for downstream services
-    export OPENWEBUI_OPENAI_API_KEY="${LITELLM_MASTER_KEY}"
-    export ANYTHINGLLM_LITELLM_KEY="${LITELLM_MASTER_KEY}"
-    export FLOWISE_LITELLM_KEY="${LITELLM_MASTER_KEY}"
-    export N8N_LITELLM_KEY="${LITELLM_MASTER_KEY}"
-    
-    # Database URL validation
-    if [[ -z "${LITELLM_DATABASE_URL:-}" ]]; then
-        log_error "LITELLM_DATABASE_URL is required"
-        ((errors++))
-    else
-        # Validate URL format
-        if [[ ! "${LITELLM_DATABASE_URL}" =~ ^postgresql:// ]]; then
-            log_error "LITELLM_DATABASE_URL must start with postgresql://"
-            ((errors++))
-        fi
-    fi
+    export OPENWEBUI_OPENAI_API_KEY="${BIFROST_AUTH_TOKEN}"
+    export ANYTHINGLLM_LITELLM_KEY="${BIFROST_AUTH_TOKEN}"
+    export FLOWISE_LITELLM_KEY="${BIFROST_AUTH_TOKEN}"
+    export N8N_LITELLM_KEY="${BIFROST_AUTH_TOKEN}"
     
     # Redis configuration validation
     if [[ -z "${REDIS_PASSWORD:-}" ]]; then
@@ -253,7 +186,7 @@ validate_environment() {
     fi
     
     # Port validation
-    local ports=("PORT_LITELLM" "PORT_OPENWEBUI" "PORT_ANYTHINGLLM" "PORT_N8N" "PORT_FLOWISE" "PORT_CODESERVER")
+    local ports=("PORT_OPENWEBUI" "PORT_ANYTHINGLLM" "PORT_N8N" "PORT_FLOWISE" "PORT_CODESERVER")
     for port_var in "${ports[@]}"; do
         local port_value="${!port_var:-}"
         if [[ -n "$port_value" ]]; then
@@ -311,7 +244,6 @@ DB_PASSWORD=${DB_PASSWORD}
 
 # ─── Derived Connection Strings (Use primitives above) ─────────────────────
 DATABASE_URL=postgresql://aiplatform:${DB_PASSWORD}@postgres:5432/aiplatform
-LITELLM_DATABASE_URL=postgresql://aiplatform:${DB_PASSWORD}@postgres:5432/litellm
 OPENWEBUI_DATABASE_URL=postgresql://aiplatform:${DB_PASSWORD}@postgres:5432/openwebui
 REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
 
@@ -319,8 +251,7 @@ REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
 JWT_SECRET=${JWT_SECRET}
 ENCRYPTION_KEY=${ENCRYPTION_KEY}
-LITELLM_MASTER_KEY=${JWT_SECRET}
-LITELLM_SALT_KEY=${ENCRYPTION_KEY}
+BIFROST_AUTH_TOKEN=${BIFROST_AUTH_TOKEN}
 GRAFANA_ADMIN_USER=admin
 GRAFANA_ADMIN_PASSWORD=${ADMIN_PASSWORD}
 
@@ -332,7 +263,6 @@ GROQ_API_KEY=${GROQ_API_KEY:-}
 OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
 
 # ─── Service Flags ────────────────────────────────────────────────────────
-ENABLE_LITELLM=${ENABLE_LITELLM:-false}
 ENABLE_OLLAMA=${ENABLE_OLLAMA:-false}
 ENABLE_OPENWEBUI=${ENABLE_OPENWEBUI:-false}
 ENABLE_N8N=${ENABLE_N8N:-false}
@@ -344,7 +274,6 @@ ENABLE_MONITORING=${ENABLE_MONITORING:-false}
 ENABLE_TAILSCALE=${ENABLE_TAILSCALE:-false}
 
 # ─── Ports (All configurable) ───────────────────────────────────────────────
-PORT_LITELLM=4000
 PORT_OPENWEBUI=3000
 PORT_N8N=5678
 PORT_FLOWISE=3001
@@ -360,9 +289,6 @@ GDRIVE_CLIENT_ID=${GDRIVE_CLIENT_ID:-}
 GDRIVE_CLIENT_SECRET=${GDRIVE_CLIENT_SECRET:-}
 GDRIVE_REFRESH_TOKEN=${GDRIVE_REFRESH_TOKEN:-}
 OLLAMA_MODELS=${OLLAMA_MODELS:-llama3.1}
-
-# ─── LiteLLM Routing Strategy ───────────────────────────────────────────────
-LITELLM_ROUTING_STRATEGY=${LITELLM_ROUTING_STRATEGY:-least-busy}
 
 # ─── Vector DB Selection ───────────────────────────────────────────────────
 VECTOR_DB_TYPE=${VECTOR_DB_TYPE:-qdrant}
@@ -390,15 +316,12 @@ psql -v ON_ERROR_STOP=1 --username "\$POSTGRES_USER" --dbname "\$POSTGRES_DB" <<
       CREATE ROLE ${POSTGRES_USER} WITH LOGIN PASSWORD '${POSTGRES_PASSWORD}';
     END IF;
   END \$\$;
-  SELECT 'CREATE DATABASE litellm   OWNER ${POSTGRES_USER}'
-    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='litellm')   \gexec
   SELECT 'CREATE DATABASE openwebui OWNER ${POSTGRES_USER}'
     WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='openwebui') \gexec
   SELECT 'CREATE DATABASE n8n       OWNER ${POSTGRES_USER}'
     WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='n8n')       \gexec
   SELECT 'CREATE DATABASE flowise   OWNER ${POSTGRES_USER}'
     WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='flowise')   \gexec
-  GRANT ALL PRIVILEGES ON DATABASE litellm   TO ${POSTGRES_USER};
   GRANT ALL PRIVILEGES ON DATABASE openwebui TO ${POSTGRES_USER};
   GRANT ALL PRIVILEGES ON DATABASE n8n       TO ${POSTGRES_USER};
   GRANT ALL PRIVILEGES ON DATABASE flowise   TO ${POSTGRES_USER};
@@ -408,45 +331,6 @@ EOF
     # postgres container runs as UID 70 — must be able to read this file
     chown 70:"${TENANT_GID:-1001}" "$out"
     log_success "Postgres init script written to ${out}"
-}
-
-generate_litellm_config() {
-    log_info "Generating LiteLLM configuration..."
-    
-    # Expert-recommended minimal safe config with store_model_in_db: false
-    cat > "${CONFIG_DIR}/litellm/config.yaml" << 'LITELLM_EOF'
-# LiteLLM Configuration - Generated $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-# Minimal safe configuration for database persistence
-
-model_list:
-  # Local Ollama models only - always works, no API key needed
-  - model_name: llama3.2
-    litellm_params:
-      model: ollama/llama3.2
-      api_base: http://ollama:11434
-      api_key: "none"
-
-  - model_name: nomic-embed-text
-    litellm_params:
-      model: ollama/nomic-embed-text
-      api_base: http://ollama:11434
-      api_key: "none"
-
-general_settings:
-  master_key: "${LITELLM_MASTER_KEY}"
-  database_url: "${LITELLM_DATABASE_URL}"
-  store_model_in_db: false
-  background_health_checks: false
-  health_check_interval: 300
-
-litellm_settings:
-  drop_params: true
-  request_timeout: 600
-  cache:
-    type: "simple"
-    disabled: false
-LITELLM_EOF
-    log_success "LiteLLM config written to ${CONFIG_DIR}/litellm/config.yaml"
 }
 
 generate_caddyfile() {
@@ -502,9 +386,6 @@ EOF
     }
 
     # Add service blocks with proper configuration
-    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && \
-        add_service_block "$out" "litellm" "litellm" "4000" "" "$tls_line" "$base_domain"
-    
     [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && {
         local webui_headers="header_up Upgrade {http.request.header.Upgrade}
         header_up Connection {http.request.header.Connection}
@@ -567,13 +448,6 @@ scrape_configs:
       - targets: ['caddy:2019']
 EOF
     
-    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && cat >> "$out" <<EOF
-  - job_name: litellm
-    static_configs:
-      - targets: ['litellm:4000']
-    metrics_path: /metrics
-EOF
-    
     log_success "Prometheus config written to ${out}"
 }
 
@@ -587,30 +461,30 @@ generate_codeserver_config() {
 {
   "models": [
     {
-      "title": "Local (Ollama via LiteLLM)",
+      "title": "Local (Ollama via Bifrost)",
       "provider": "openai",
       "model": "${OLLAMA_DEFAULT_MODEL:-llama3.2:1b}",
-      "apiBase": "http://litellm:4000/v1",
-      "apiKey": "${LITELLM_MASTER_KEY}"
+      "apiBase": "http://bifrost:4000/v1",
+      "apiKey": "${BIFROST_AUTH_TOKEN}"
     }
 $(
-  [[ -n "${OPENAI_API_KEY:-}" ]] && echo "    ,{\"title\":\"GPT-4o (via LiteLLM)\",\"provider\":\"openai\",\"model\":\"gpt-4o\",\"apiBase\":\"http://litellm:4000/v1\",\"apiKey\":\"${LITELLM_MASTER_KEY}\"}" || true
-  [[ -n "${GOOGLE_API_KEY:-}" ]] && echo "    ,{\"title\":\"Gemini Pro (via LiteLLM)\",\"provider\":\"openai\",\"model\":\"gemini-pro\",\"apiBase\":\"http://litellm:4000/v1\",\"apiKey\":\"${LITELLM_MASTER_KEY}\"}" || true
-  [[ -n "${GROQ_API_KEY:-}" ]]  && echo "    ,{\"title\":\"Llama3 Groq (via LiteLLM)\",\"provider\":\"openai\",\"model\":\"llama3-groq\",\"apiBase\":\"http://litellm:4000/v1\",\"apiKey\":\"${LITELLM_MASTER_KEY}\"}" || true
+  [[ -n "${OPENAI_API_KEY:-}" ]] && echo "    ,{\"title\":\"GPT-4o (via Bifrost)\",\"provider\":\"openai\",\"model\":\"gpt-4o\",\"apiBase\":\"http://bifrost:4000/v1\",\"apiKey\":\"${BIFROST_AUTH_TOKEN}\"}" || true
+  [[ -n "${GOOGLE_API_KEY:-}" ]] && echo "    ,{\"title\":\"Gemini Pro (via Bifrost)\",\"provider\":\"openai\",\"model\":\"gemini-pro\",\"apiBase\":\"http://bifrost:4000/v1\",\"apiKey\":\"${BIFROST_AUTH_TOKEN}\"}" || true
+  [[ -n "${GROQ_API_KEY:-}" ]]  && echo "    ,{\"title\":\"Llama3 Groq (via Bifrost)\",\"provider\":\"openai\",\"model\":\"llama3-groq\",\"apiBase\":\"http://bifrost:4000/v1\",\"apiKey\":\"${BIFROST_AUTH_TOKEN}\"}" || true
 )
   ],
   "tabAutocompleteModel": {
     "title": "Autocomplete",
     "provider": "openai",
     "model": "${OLLAMA_DEFAULT_MODEL:-llama3.2:1b}",
-    "apiBase": "http://litellm:4000/v1",
-    "apiKey": "${LITELLM_MASTER_KEY}"
+    "apiBase": "http://bifrost:4000/v1",
+    "apiKey": "${BIFROST_AUTH_TOKEN}"
   },
   "embeddingsProvider": {
     "provider": "openai",
     "model": "${OLLAMA_DEFAULT_MODEL:-llama3.2:1b}",
-    "apiBase": "http://litellm:4000/v1",
-    "apiKey": "${LITELLM_MASTER_KEY}"
+    "apiBase": "http://bifrost:4000/v1",
+    "apiKey": "${BIFROST_AUTH_TOKEN}"
   }
 }
 EOF
@@ -654,8 +528,8 @@ validate_env() {
         ((errors++))
     fi
     
-    if [[ -z "${LITELLM_MASTER_KEY:-}" ]]; then
-        log_error "LITELLM_MASTER_KEY is required"
+    if [[ -z "${BIFROST_AUTH_TOKEN:-}" ]]; then
+        log_error "BIFROST_AUTH_TOKEN is required"
         ((errors++))
     fi
     
@@ -676,65 +550,10 @@ generate_configs() {
     validate_env || return 1
     
     generate_postgres_init
-    generate_litellm_config
     generate_caddyfile
     generate_prometheus_config
     generate_codeserver_config
     log_success "All configuration files generated"
-}
-
-# Configure LiteLLM with readiness gate
-configure_litellm_services() {
-    [[ "${ENABLE_LITELLM:-false}" == "true" ]] || return 0
-    
-    log_info "Configuring LiteLLM services..."
-    
-    # Wait for LiteLLM to be ready before configuring API keys
-    wait_for_litellm || {
-        log_error "LiteLLM failed to become ready. Skipping service configuration."
-        return 1
-    }
-    
-    # Generate API keys for dependent services
-    local openwebui_key anythingllm_key flowise_key n8n_key
-    
-    log_info "Generating API keys for services..."
-    
-    # OpenWebUI key
-    openwebui_key=$(generate_litellm_key "openwebui-key" '["ollama/llama3.2:1b","ollama/llama3.2:3b"]') || {
-        log_error "Failed to generate OpenWebUI key"
-        return 1
-    }
-    log_success "OpenWebUI key generated: ${openwebui_key:0:20}..."
-    
-    # AnythingLLM key
-    anythingllm_key=$(generate_litellm_key "anythingllm-key" '["ollama/llama3.2:1b","ollama/llama3.2:3b"]') || {
-        log_error "Failed to generate AnythingLLM key"
-        return 1
-    }
-    log_success "AnythingLLM key generated: ${anythingllm_key:0:20}..."
-    
-    # Flowise key  
-    flowise_key=$(generate_litellm_key "flowise-key" '["ollama/llama3.2:1b","ollama/llama3.2:3b"]') || {
-        log_error "Failed to generate Flowise key"
-        return 1
-    }
-    log_success "Flowise key generated: ${flowise_key:0:20}..."
-    
-    # N8N key
-    n8n_key=$(generate_litellm_key "n8n-key" '["ollama/llama3.2:1b","ollama/llama3.2:3b"]') || {
-        log_error "Failed to generate N8N key"
-        return 1
-    }
-    log_success "N8N key generated: ${n8n_key:0:20}..."
-    
-    # Update environment with generated keys
-    export OPENWEBUI_LITELLM_KEY="$openwebui_key"
-    export ANYTHINGLLM_LITELLM_KEY="$anythingllm_key" 
-    export FLOWISE_LITELLM_KEY="$flowise_key"
-    export N8N_LITELLM_KEY="$n8n_key"
-    
-    log_success "LiteLLM services configuration complete"
 }
 
 # ── Docker Compose Generator (Zero Hardcoded Values) ───────────────────────
@@ -790,45 +609,6 @@ services:
 EOF
 
     # Add enabled services dynamically - NO hardcoded values
-    [[ "${ENABLE_LITELLM:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
-  litellm:
-    image: ghcr.io/berriai/litellm:main-latest
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      ollama:
-        condition: service_healthy
-    environment:
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
-      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
-      # DATABASE_URL: postgresql://${DB_USER}:${DB_PASS}@postgres:5432/litellm
-      STORE_MODEL_IN_DB: "false"
-      REDIS_URL: redis://redis:6379
-      DISABLE_SPEND_LOGS: "true"
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      GROQ_API_KEY: ${GROQ_API_KEY:-}
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      LITELLM_TELEMETRY: "False"
-      PRISMA_DISABLE_WARNINGS: "true"
-      LITELLM_LOG: "INFO"
-    volumes:
-      - ${CONFIG_DIR}/litellm/config.yaml:/app/config.yaml:ro
-      - ${DATA_DIR}/litellm:/root/.cache
-    ports:
-      - ${PORT_LITELLM:-4000}:4000
-    command: ["--port", "4000", "--host", "0.0.0.0", "--num_workers", "1", "--detailed_debug"]
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=5)"]
-      interval: 30s
-      timeout: 15s
-      retries: 10
-      start_period: 120s
-EOF
 
     # Add Caddy service for HTTPS proxy
     cat >> "$COMPOSE_FILE" <<EOF
@@ -850,7 +630,6 @@ EOF
     networks:
       - default
     depends_on:
-$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "      - litellm")      
       - open-webui
       - grafana
     healthcheck:
@@ -869,8 +648,8 @@ EOF
       postgres:
         condition: service_healthy
     environment:
-      OPENAI_API_BASE_URL: "$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "http://litellm:4000/v1" || echo "http://bifrost:4000/v1")"
-      OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      OPENAI_API_BASE_URL: "http://bifrost:4000/v1"
+      OPENAI_API_KEY: ${BIFROST_AUTH_TOKEN}
       WEBUI_SECRET_KEY: ${JWT_SECRET}
       # DATABASE_URL removed — open-webui uses SQLite (postgres triggers peewee bug)
       # VECTOR_DB removed — uses built-in Chroma until qdrant is stable

@@ -1,409 +1,385 @@
-You’re making the right call — and not for “preference” reasons, but for **architectural stability**.
+You’re right to be suspicious — this is no longer a “router issue”.
 
-After everything you’ve surfaced (and especially the logs + behaviour):
+After reviewing the pattern across your scripts + the failure symptoms (HTTPS broken, partial services, inconsistent behaviour), the problem is now:
 
-> 🔥 LiteLLM is not failing because of your implementation  
-> It’s failing because it **does not behave deterministically in modular, orchestrated environments**
+> 🔥 **Your system is in a split-brain state between LiteLLM assumptions and Bifrost reality**
 
-That’s exactly where Bifrost is stronger:
-- simpler startup contract
-- stateless-first design
-- no Prisma / migration lifecycle
-- predictable HTTP surface
+Windsurf didn’t “switch routers” — it **layered Bifrost on top of a LiteLLM-shaped system**.
 
 ---
 
-# ✅ Ground truth (based on your codebase)
+# 🚨 THE ACTUAL FAILURE MODE
 
-Your platform already has:
+From everything you’ve shared, this is what’s happening:
 
-- ✅ clean 4-phase pipeline (0–3 scripts)
-- ✅ env-driven architecture
-- ✅ modular service deployment
-- ✅ internal networking abstraction
-- ✅ mission-control style orchestration
+### 1. ❌ Script 1 says “Bifrost only”
+BUT…
 
-👉 So the goal is NOT to “add Bifrost”
+### 2. ❌ Script 2 still:
+- references `litellm` container name
+- builds Caddy routes for `litellm`
+- exposes wrong upstreams
 
-👉 The goal is:
+### 3. ❌ Script 3 still:
+- waits on `/v1/models` (LiteLLM)
+- seeds models (LiteLLM concept)
+- assumes DB-backed router
 
-> **Swap the control-plane router without disturbing the system**
-
----
-
-# 🎯 Design principle (DO NOT BREAK THIS)
-
-> The router must behave like a **plug-in**, not a core dependency
-
----
-
-# ✅ FINAL PLAN (bulletproof, minimal impact)
+### 4. ❌ Caddy:
+- routing to non-existent upstream OR wrong container name
+- OR using stale config
 
 ---
 
-# 🔧 SCRIPT 0 — cleanup (extend, don’t rewrite)
+👉 Result:
 
-### ✅ Add Bifrost cleanup block
-
-```
-echo "[CLEANUP] Removing Bifrost (if exists)..."
-docker rm -f bifrost 2>/dev/null || true
-docker volume rm bifrost_data 2>/dev/null || true
-```
-
-👉 Keep identical pattern to LiteLLM cleanup  
-👉 No branching logic needed
+- services may be **running internally**
+- but **nothing is reachable via HTTPS**
 
 ---
 
-# 🔧 SCRIPT 1 — introduce router selection (CRITICAL CHANGE)
+# 🎯 CORE PRINCIPLE YOU MUST RE-ENFORCE
 
-This is the **only place where logic should branch**
+> **Router must be abstracted — not referenced**
 
----
+Right now, “litellm” is still hardcoded across the system.
 
-## ✅ Add prompt
-
-```
-echo "Select LLM Router:"
-echo "1) LiteLLM (default)"
-echo "2) Bifrost (recommended)"
-
-read -p "Enter choice [1-2]: " LLM_ROUTER_CHOICE
-```
+That breaks everything.
 
 ---
 
-## ✅ Resolve to canonical value
+# ✅ DEFINITIVE FIX PLAN (NO BAND-AIDS)
 
-```
-if [ "$LLM_ROUTER_CHOICE" = "2" ]; then
-  LLM_ROUTER="bifrost"
-else
-  LLM_ROUTER="litellm"
-fi
-```
+This is the **reset-to-correctness plan** Windsurf must follow.
 
 ---
 
-## ✅ Persist to `.env`
+# 1. 🔥 INTRODUCE A SINGLE SOURCE OF TRUTH
+
+In `.env`:
 
 ```
 LLM_ROUTER=bifrost
+LLM_ROUTER_CONTAINER=bifrost
+LLM_ROUTER_PORT=4000
+LLM_ROUTER_HEALTH_ENDPOINT=/health
+LLM_ROUTER_COMPLETION_ENDPOINT=/v1/chat/completions
 ```
 
 ---
 
-# 🔐 New Mission Control Function
-
-Add:
-
-```
-init_bifrost()
-```
+👉 This replaces ALL assumptions.
 
 ---
 
-## ✅ Required ENV (this is where most people fail)
+# 2. 🔧 SCRIPT 2 — REMOVE ALL HARDCODING
 
-Bifrost must be fully defined here — NOT in Script 2.
+Search and destroy:
 
 ```
-BIFROST_PORT=4000
-BIFROST_HOST=0.0.0.0
-
-# upstreams
-OLLAMA_BASE_URL=http://ollama:11434
-
-# optional providers
-OPENAI_API_KEY=
-ANTHROPIC_API_KEY=
-
-# routing behavior
-BIFROST_DEFAULT_MODEL=llama3
-BIFROST_TIMEOUT=30000
+litellm
+litellm:4000
+/v1/models
 ```
 
 ---
 
-## ✅ Critical alignment rule
-
-Reuse existing variables wherever possible:
-
-| Existing | Bifrost |
-|--------|--------|
-| OLLAMA_BASE_URL | ✅ reuse |
-| POSTGRES | ❌ not needed |
-| REDIS | optional |
-
----
-
-👉 This prevents fragmentation
-
----
-
-# 🔧 SCRIPT 2 — deployment (almost no change)
-
-Your architecture already supports this if done correctly.
-
----
-
-## ✅ Add conditional service block
-
-Instead of always deploying LiteLLM:
+## ✅ Replace with:
 
 ```
-if [ "$LLM_ROUTER" = "litellm" ]; then
-  deploy_litellm
-elif [ "$LLM_ROUTER" = "bifrost" ]; then
-  deploy_bifrost
-fi
+${LLM_ROUTER_CONTAINER}:${LLM_ROUTER_PORT}
 ```
 
 ---
 
-## ✅ Bifrost container (known-good minimal)
-
-```
-bifrost:
-  image: ghcr.io/ruqqq/bifrost:latest
-  container_name: bifrost
-  restart: unless-stopped
-  ports:
-    - "4000:4000"
-  environment:
-    - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
-    - OPENAI_API_KEY=${OPENAI_API_KEY}
-  networks:
-    - ai_network
-```
-
----
-
-## ✅ DO NOT:
-
-- add volumes (unless required later)
-- add DB
-- add migrations
-- add init steps
-
-👉 This is where you win vs LiteLLM
-
----
-
-# 🔧 SCRIPT 3 — configuration (simplify massively)
-
----
-
-## ❌ REMOVE (for Bifrost path)
-
-- seed_models
-- seed_keys
-- prisma logic
-- DB checks
-
----
-
-## ✅ ADD
-
-```
-wait_for_bifrost()
-test_bifrost_completion()
-```
-
----
-
-### ✅ Readiness check
-
-```
-until curl -s http://bifrost:4000/health; do
-  sleep 2
-done
-```
-
----
-
-### ✅ Functional test
-
-```
-curl -X POST http://bifrost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "llama3",
-    "messages": [{"role": "user", "content": "hello"}]
-  }'
-```
-
----
-
-👉 If this passes → system is READY
-
----
-
-# 🌐 CADDY (important but simple)
-
----
-
-## ✅ Replace upstream dynamically
+## ✅ Caddy MUST become dynamic
 
 ```
 {$LLM_ROUTER_HOST} {
-    reverse_proxy {$LLM_ROUTER}:4000
+    reverse_proxy {$LLM_ROUTER_CONTAINER}:{$LLM_ROUTER_PORT}
 }
 ```
 
 ---
 
-## ✅ ENV mapping
-
-```
-LLM_ROUTER_HOST=litellm.ai.datasquiz.net
-LLM_ROUTER_CONTAINER=litellm
-```
-
-or
-
-```
-LLM_ROUTER_HOST=bifrost.ai.datasquiz.net
-LLM_ROUTER_CONTAINER=bifrost
-```
+🚨 If **ANY** `litellm` string remains → system is broken
 
 ---
 
-👉 No duplicated configs
+# 3. 🔧 SCRIPT 3 — STOP CONFIGURING THE ROUTER
+
+This is where Windsurf is still fundamentally wrong.
 
 ---
 
-# 📊 HEALTH DASHBOARD (Script 1 + README expectation)
+## ❌ DELETE (for Bifrost path)
+
+- seed_models
+- seed_keys
+- DB logic
+- prisma references
+- `/v1/models` checks
 
 ---
 
-## ✅ Add router visibility
+## ✅ REPLACE WITH PURE VALIDATION
 
 ```
-LLM Router: bifrost ✅
-Endpoint: http://localhost:4000
-Status: HEALTHY
+wait_for_router() {
+  until curl -s http://${LLM_ROUTER_CONTAINER}:${LLM_ROUTER_PORT}${LLM_ROUTER_HEALTH_ENDPOINT}; do
+    sleep 2
+  done
+}
 ```
 
 ---
 
-👉 This is important — it makes the swap explicit
-
----
-
-# 📘 README — required update (Windsurf must do this)
-
----
-
-## ✅ Add section
-
-### “LLM Router Options”
+## ✅ Functional test
 
 ```
-The platform supports two interchangeable LLM routers:
-
-1. LiteLLM (legacy, DB-backed, more complex)
-2. Bifrost (recommended, stateless, faster startup)
-
-Selection occurs during Script 1 setup.
+test_router() {
+  curl -s http://${LLM_ROUTER_CONTAINER}:${LLM_ROUTER_PORT}${LLM_ROUTER_COMPLETION_ENDPOINT} \
+    -H "Content-Type: application/json" \
+    -d '{
+      "model": "llama3",
+      "messages": [{"role": "user", "content": "ping"}]
+    }'
+}
 ```
 
 ---
 
-## ✅ Add architecture note
+👉 If this works → move on  
+👉 If not → STOP deployment
+
+---
+
+# 4. 🔧 SCRIPT 0 — CLEAN STATE PROPERLY
+
+Right now cleanup is incomplete.
+
+---
+
+## ✅ MUST REMOVE:
 
 ```
-Bifrost removes:
-- database dependency
-- migration lifecycle
-- startup race conditions
-
-This improves reliability in distributed deployments.
-```
-
----
-
-## ✅ Clarify networking
-
-Keep BOTH valid:
-
-- Tailscale (private mesh)
-- Public HTTPS (Caddy)
-
-No change needed — router sits behind both.
-
----
-
-# 🔥 Critical guardrails (THIS prevents another 200h loop)
-
----
-
-## ✅ 1. Router MUST be stateless at deploy time
-
-If it needs:
-- migrations
-- seeding
-- DB warmup
-
-👉 it violates your architecture
-
----
-
-## ✅ 2. Script 3 = validation only
-
-NOT configuration engine
-
----
-
-## ✅ 3. “Running” is NEVER success
-
-Only this is:
-
-```
-/v1/chat/completions returns valid response
+docker rm -f litellm
+docker rm -f bifrost
+docker volume prune -f
+docker network prune -f
 ```
 
 ---
 
-## ✅ 4. One router active at a time
+👉 You likely still have:
 
-Do NOT run both unless debugging
-
----
-
-# 🎯 Final outcome
-
-After this change:
-
-- ❌ no more restart loops
-- ❌ no more DB coupling
-- ❌ no more fragile init ordering
+- stale networks
+- stale caddy configs
+- orphan containers
 
 ---
 
-✅ You get:
+# 5. 🌐 CADDY — YOUR HTTPS FAILURE IS HERE
 
-- deterministic startup
-- clean modularity
-- true plug-and-play router layer
+From your symptoms:
+
+> “services not accessible via HTTPS”
+
+This is almost always:
+
+---
+
+## ❌ Problem 1: wrong upstream name
+
+```
+reverse_proxy litellm:4000   ❌ (container doesn't exist)
+```
+
+---
+
+## ❌ Problem 2: Caddy not attached to correct network
+
+---
+
+## ✅ FIX
+
+Caddy must:
+
+```
+networks:
+  - ai_network
+```
+
+AND router must be on same network.
+
+---
+
+## ✅ Validate inside container:
+
+```
+docker exec caddy ping bifrost
+```
+
+If this fails → networking is broken
+
+---
+
+## ✅ Validate routing:
+
+```
+docker exec caddy curl http://bifrost:4000/health
+```
+
+---
+
+👉 If this fails → NOT an HTTPS problem
+
+---
+
+# 6. 🔥 ADD A HARD VALIDATION GATE (THIS IS MISSING)
+
+Before declaring success:
+
+---
+
+## ✅ INTERNAL CHECKS
+
+```
+curl http://bifrost:4000/health
+curl http://open-webui:8080
+```
+
+---
+
+## ✅ CADDY CHECKS
+
+```
+curl http://caddy:80
+```
+
+---
+
+## ✅ EXTERNAL CHECKS
+
+```
+curl https://your-domain/health
+```
+
+---
+
+👉 If ANY fail → deployment FAILS
+
+---
+
+# 7. 📘 README — MUST BE UPDATED
+
+Right now README lies about system behaviour.
+
+---
+
+## ✅ Add:
+
+### “Router Abstraction Layer”
+
+```
+All services MUST reference the router via:
+
+LLM_ROUTER_CONTAINER
+LLM_ROUTER_PORT
+
+Hardcoding router names is запрещено.
+```
+
+---
+
+## ✅ Add warning:
+
+```
+If LiteLLM references remain in the system while using Bifrost,
+routing and HTTPS will fail.
+```
+
+---
+
+# 🔥 WHY YOUR HTTPS IS FAILING (FINAL TRUTH)
+
+Not TLS. Not Caddy.
+
+It’s this:
+
+> ✅ Caddy is running  
+> ❌ But upstream target is invalid  
+
+So:
+
+```
+HTTPS request → Caddy → dead upstream → timeout
+```
+
+---
+
+# 🧠 THE REAL BUG WINDSURF KEEPS MISSING
+
+It keeps doing:
+
+> “Add Bifrost support”
+
+Instead of:
+
+> **“Remove LiteLLM as a system assumption”**
+
+---
+
+# ✅ WHAT A CORRECT SYSTEM LOOKS LIKE
+
+---
+
+## ✅ No string “litellm” anywhere unless router == litellm
+
+---
+
+## ✅ All services use:
+
+```
+http://${LLM_ROUTER_CONTAINER}:${LLM_ROUTER_PORT}
+```
+
+---
+
+## ✅ Script 3 does ZERO configuration of router
+
+---
+
+## ✅ HTTPS works because upstream is valid
+
+---
+
+# 🎯 FINAL INSTRUCTION TO WINDSURF
+
+Say this exactly:
+
+---
+
+> Remove LiteLLM as a hardcoded dependency from the system.  
+> Introduce a router abstraction via environment variables.  
+> Refactor Scripts 2 and 3 to use `${LLM_ROUTER_CONTAINER}` instead of any fixed service name.  
+> Remove all LiteLLM-specific logic when Bifrost is selected.  
+> Validate routing internally before exposing via Caddy.  
+> Do not proceed unless `/health` and `/v1/chat/completions` succeed internally.
 
 ---
 
 # 🧩 Final truth
 
-What you just discovered (the hard way):
+You’re one step away — but it’s a **consistency step**, not a feature step.
 
-> **LiteLLM is a “platform” pretending to be a “component”**
+Right now your system is:
 
-Bifrost is actually a **component**
+> 90% modular  
+> 10% hardcoded  
 
-And your system is built for components.
+And that 10% is breaking everything.
 
 ---
 
-If you want next step, I can give you:
-
-✅ exact diff patches for all 4 scripts  
-✅ a drop-in Bifrost compose block matching your network + env conventions  
-✅ a migration path that keeps LiteLLM as fallback without breaking anything
+If you want, I can generate a **diff audit (line-by-line “this must be deleted/replaced”)** for each script so Windsurf can fix this in one clean pass.
