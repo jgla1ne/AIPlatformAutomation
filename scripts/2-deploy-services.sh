@@ -305,35 +305,51 @@ deploy_bifrost() {
 }
 
 generate_bifrost_service() {
-    log_info "Generating Bifrost docker-compose service..."
-
-    # NO config file. NO volume mount. NO CLI flags.
-    # Bifrost is 100% environment variable configured.
-    cat >> "${COMPOSE_FILE}" << 'BIFROST_COMPOSE_EOF'
-
-  bifrost:
-    image: ruqqq/bifrost:latest
-    container_name: ${COMPOSE_PROJECT_NAME}_bifrost
+    log_info "Generating Bifrost service with YAML config mount..."
+    
+    # Validate required variables
+    : "${LLM_ROUTER_CONTAINER:?LLM_ROUTER_CONTAINER not set}"
+    : "${LLM_ROUTER_PORT:?LLM_ROUTER_PORT not set}"
+    : "${BIFROST_AUTH_TOKEN:?BIFROST_AUTH_TOKEN not set}"
+    : "${BIFROST_LOG_LEVEL:?BIFROST_LOG_LEVEL not set}"
+    : "${CONFIG_DIR:?CONFIG_DIR not set}"
+    : "${DATA_DIR:?DATA_DIR not set}"
+    : "${DOCKER_NETWORK:?DOCKER_NETWORK not set}"
+    : "${DOCKER_USER_ID:?DOCKER_USER_ID not set}"
+    : "${DOCKER_GROUP_ID:?DOCKER_GROUP_ID not set}"
+    
+    mkdir -p "${DATA_DIR}/bifrost"
+    
+    cat >> "${COMPOSE_FILE}" << EOF
+  ${LLM_ROUTER_CONTAINER}:
+    image: ghcr.io/maximhq/bifrost:latest
+    container_name: ${LLM_ROUTER_CONTAINER}
     restart: unless-stopped
-    depends_on:
-      ollama:
-        condition: service_healthy
-    environment:
-      BIFROST_PORT: "4000"
-      BIFROST_AUTH_TOKEN: ${BIFROST_AUTH_TOKEN}
-      BIFROST_PROVIDERS: ${BIFROST_PROVIDERS}
+    user: "${DOCKER_USER_ID}:${DOCKER_GROUP_ID}"
+    volumes:
+      - ${CONFIG_DIR}/bifrost:/app/config:ro
+      - ${DATA_DIR}/bifrost:/app/data
     networks:
       - ${DOCKER_NETWORK}
+    ports:
+      - "${LLM_ROUTER_PORT}:${BIFROST_PORT}"
+    environment:
+      - BIFROST_CONFIG=/app/config/config.yaml
+      - BIFROST_PORT=${BIFROST_PORT}
+      - BIFROST_AUTH_TOKEN=${BIFROST_AUTH_TOKEN}
+      - BIFROST_LOG_LEVEL=${BIFROST_LOG_LEVEL}
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:4000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:${BIFROST_PORT}/healthz || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 10s
-
-BIFROST_COMPOSE_EOF
-
-    log_success "Bifrost service definition generated"
+      start_period: 30s
+    labels:
+      - "com.${PROJECT_PREFIX}${TENANT_ID}.service=bifrost"
+      - "com.${PROJECT_PREFIX}${TENANT_ID}.role=llm-router"
+EOF
+    
+    log_success "Bifrost service configured with YAML mount"
 }
 
 wait_for_llm_router() {
@@ -359,7 +375,7 @@ wait_for_llm_router() {
         fi
 
         # Health check
-        if curl -sf "http://localhost:4000/health" > /dev/null 2>&1; then
+        if curl -sf "http://localhost:${BIFROST_PORT:-4000}/healthz" > /dev/null 2>&1; then
             log_success "${router} is healthy and accepting requests"
             return 0
         fi

@@ -164,6 +164,10 @@ main() {
         log "Cleaning router variables from .env file..."
         sed -i '/^BIFROST_/d' "${DATA_ROOT}/.env" 2>/dev/null || true
         sed -i '/^LLM_ROUTER/d' "${DATA_ROOT}/.env" 2>/dev/null || true
+        sed -i '/^LLM_ROUTER_CONTAINER/d' "${DATA_ROOT}/.env" 2>/dev/null || true
+        sed -i '/^LLM_ROUTER_PORT/d' "${DATA_ROOT}/.env" 2>/dev/null || true
+        sed -i '/^LLM_GATEWAY_/d' "${DATA_ROOT}/.env" 2>/dev/null || true
+        sed -i '/^LLM_MASTER_KEY/d' "${DATA_ROOT}/.env" 2>/dev/null || true
         sed -i '/^LITELLM_/d' "${DATA_ROOT}/.env" 2>/dev/null || true
         sed -i '/^ENABLE_LITELLM/d' "${DATA_ROOT}/.env" 2>/dev/null || true
         ok "Router variables cleaned from .env."

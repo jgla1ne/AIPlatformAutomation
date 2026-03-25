@@ -1261,29 +1261,80 @@ collect_llm_config() {
 init_bifrost() {
     print_step "8.3" "11" "Bifrost Configuration"
 
-    echo -e "  ${BOLD}⚙️  Bifrost Environment Configuration${NC}"
-    echo -e "  ${DIM}Configuring Bifrost with environment variables${NC}"
+    echo -e "  ${BOLD}⚙️  Bifrost Configuration${NC}"
+    echo -e "  ${DIM}Configuring Bifrost with YAML config file${NC}"
     
-    # API Key - simplified approach
-    echo "DEBUG: Setting BIFROST_AUTH_TOKEN..." >&2
-    BIFROST_AUTH_TOKEN="sk-bifrost-$(openssl rand -hex 24)"
-    echo "BIFROST_AUTH_TOKEN=${BIFROST_AUTH_TOKEN}" >> "${ENV_FILE}"
-    echo "DEBUG: Token written successfully" >&2
-
-    # Port — fixed at 4000 for Bifrost
-    echo "DEBUG: Setting BIFROST_PORT..." >&2
-    echo "BIFROST_PORT=4000" >> "${ENV_FILE}"
-
-    # Providers JSON — this is how Bifrost actually receives provider config
-    echo "DEBUG: Setting BIFROST_PROVIDERS..." >&2
-    # Remove any existing BIFROST_PROVIDERS line
+    # Generate or preserve auth token
+    local existing_token=$(grep "^BIFROST_AUTH_TOKEN=" "${ENV_FILE}" 2>/dev/null \
+        | cut -d= -f2- | tr -d '"')
+    local token="${existing_token:-sk-bifrost-$(openssl rand -hex 24)}"
+    
+    # Get user input for port (default 4000)
+    local port
+    echo -e "  ${CYAN}➤ Bifrost internal port [4000]:${NC} "
+    read -r port
+    port="${port:-4000}"
+    
+    # Ollama URL must already exist from init_ollama()
+    local ollama_url="http://${PROJECT_PREFIX}${TENANT_ID}-ollama:11434"
+    
+    # Create config directory
+    local bifrost_config_dir="${CONFIG_DIR}/bifrost"
+    mkdir -p "${bifrost_config_dir}"
+    
+    # Write CORRECTED YAML config (using printf to avoid expansion issues)
+    printf '%s\n' "version: 1" > "${bifrost_config_dir}/config.yaml"
+    printf '%s\n' "default_model: llama3" >> "${bifrost_config_dir}/config.yaml"
+    printf '%s\n' "" >> "${bifrost_config_dir}/config.yaml"
+    printf '%s\n' "providers:" >> "${bifrost_config_dir}/config.yaml"
+    printf '%s\n' "  ollama:" >> "${bifrost_config_dir}/config.yaml"
+    printf '%s\n' "    base_url: \"${ollama_url}\"" >> "${bifrost_config_dir}/config.yaml"
+    printf '%s\n' "    models:" >> "${bifrost_config_dir}/config.yaml"
+    printf '%s\n' "      - name: \"llama3\"" >> "${bifrost_config_dir}/config.yaml"
+    printf '%s\n' "" >> "${bifrost_config_dir}/config.yaml"
+    printf '%s\n' "server:" >> "${bifrost_config_dir}/config.yaml"
+    printf '%s\n' "  host: 0.0.0.0" >> "${bifrost_config_dir}/config.yaml"
+    printf '%s\n' "  port: ${port}" >> "${bifrost_config_dir}/config.yaml"
+    printf '%s\n' "  auth_token: ${token}" >> "${bifrost_config_dir}/config.yaml"
+    
+    # Set ownership (mkdir handles permissions if run with proper umask)
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${bifrost_config_dir}"
+    
+    # Write router-agnostic variables to .env
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_ROUTER=/d' "${ENV_FILE}" 2>/dev/null || true
+    echo "LLM_ROUTER=bifrost" >> "${ENV_FILE}"
+    
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_ROUTER_CONTAINER=/d' "${ENV_FILE}" 2>/dev/null || true
+    echo "LLM_ROUTER_CONTAINER=${PROJECT_PREFIX}${TENANT_ID}-bifrost" >> "${ENV_FILE}"
+    
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_ROUTER_PORT=/d' "${ENV_FILE}" 2>/dev/null || true
+    echo "LLM_ROUTER_PORT=${port}" >> "${ENV_FILE}"
+    
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_GATEWAY_URL=/d' "${ENV_FILE}" 2>/dev/null || true
+    echo "LLM_GATEWAY_URL=http://${PROJECT_PREFIX}${TENANT_ID}-bifrost:${port}" >> "${ENV_FILE}"
+    
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_GATEWAY_API_URL=/d' "${ENV_FILE}" 2>/dev/null || true
+    echo "LLM_GATEWAY_API_URL=http://${PROJECT_PREFIX}${TENANT_ID}-bifrost:${port}/v1" >> "${ENV_FILE}"
+    
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_MASTER_KEY=/d' "${ENV_FILE}" 2>/dev/null || true
+    echo "LLM_MASTER_KEY=${token}" >> "${ENV_FILE}"
+    
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^BIFROST_AUTH_TOKEN=/d' "${ENV_FILE}" 2>/dev/null || true
+    echo "BIFROST_AUTH_TOKEN=${token}" >> "${ENV_FILE}"
+    
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^BIFROST_PORT=/d' "${ENV_FILE}" 2>/dev/null || true
+    echo "BIFROST_PORT=${port}" >> "${ENV_FILE}"
+    
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^BIFROST_OLLAMA_URL=/d' "${ENV_FILE}" 2>/dev/null || true
+    echo "BIFROST_OLLAMA_URL=${ollama_url}" >> "${ENV_FILE}"
+    
+    # Remove old BIFROST_PROVIDERS (no longer used)
     [[ -f "${ENV_FILE}" ]] && sed -i '/^BIFROST_PROVIDERS=/d' "${ENV_FILE}" 2>/dev/null || true
-    # Write with single quotes so docker compose reads it correctly
-    local providers_json='[{"provider":"ollama","base_url":"http://ollama:11434"}]'
-    echo "BIFROST_PROVIDERS='${providers_json}'" >> "${ENV_FILE}"
-
-    # No config directory needed — bifrost is env-var only
-    log "SUCCESS" "Bifrost configuration complete (env-var based, no config file)"
+    
+    log "SUCCESS" "Bifrost configured with YAML config"
+    echo -e "  ${GREEN}✅${NC} Bifrost YAML config created: ${bifrost_config_dir}/config.yaml"
+    echo -e "  ${DIM}✅ Port: ${port}${NC}"
+    echo -e "  ${DIM}✅ Container: ${PROJECT_PREFIX}${TENANT_ID}-bifrost${NC}"
 }
 
 # ─── LLM Router Configuration (Bifrost Only) ───────────────────────────────

@@ -389,6 +389,12 @@ https://${subdomain}.${base_domain} {
 EOF
     }
 
+    # Add Bifrost LLM Router routing (always enabled when using Bifrost)
+    [[ "${LLM_ROUTER:-bifrost}" == "bifrost" ]] && {
+        local bifrost_headers=""
+        add_service_block "$out" "bifrost" "${LLM_ROUTER_CONTAINER:-ai-datasquiz-bifrost}" "${LLM_ROUTER_PORT:-4000}" "$bifrost_headers" "$tls_line" "$base_domain"
+    }
+    
     # Add service blocks with proper configuration
     [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && {
         local webui_headers="header_up Upgrade {http.request.header.Upgrade}
@@ -468,27 +474,27 @@ generate_codeserver_config() {
       "title": "Local (Ollama via Bifrost)",
       "provider": "openai",
       "model": "${OLLAMA_DEFAULT_MODEL:-llama3.2:1b}",
-      "apiBase": "http://bifrost:4000/v1",
+      "apiBase": "${LLM_GATEWAY_API_URL}",
       "apiKey": "${BIFROST_AUTH_TOKEN}"
     }
 $(
-  [[ -n "${OPENAI_API_KEY:-}" ]] && echo "    ,{\"title\":\"GPT-4o (via Bifrost)\",\"provider\":\"openai\",\"model\":\"gpt-4o\",\"apiBase\":\"http://bifrost:4000/v1\",\"apiKey\":\"${BIFROST_AUTH_TOKEN}\"}" || true
-  [[ -n "${GOOGLE_API_KEY:-}" ]] && echo "    ,{\"title\":\"Gemini Pro (via Bifrost)\",\"provider\":\"openai\",\"model\":\"gemini-pro\",\"apiBase\":\"http://bifrost:4000/v1\",\"apiKey\":\"${BIFROST_AUTH_TOKEN}\"}" || true
-  [[ -n "${GROQ_API_KEY:-}" ]]  && echo "    ,{\"title\":\"Llama3 Groq (via Bifrost)\",\"provider\":\"openai\",\"model\":\"llama3-groq\",\"apiBase\":\"http://bifrost:4000/v1\",\"apiKey\":\"${BIFROST_AUTH_TOKEN}\"}" || true
+  [[ -n "${OPENAI_API_KEY:-}" ]] && echo "    ,{\"title\":\"GPT-4o (via Bifrost)\",\"provider\":\"openai\",\"model\":\"gpt-4o\",\"apiBase\":\"${LLM_GATEWAY_API_URL}\",\"apiKey\":\"${LLM_MASTER_KEY}\"}" || true
+  [[ -n "${GOOGLE_API_KEY:-}" ]] && echo "    ,{\"title\":\"Gemini Pro (via Bifrost)\",\"provider\":\"openai\",\"model\":\"gemini-pro\",\"apiBase\":\"${LLM_GATEWAY_API_URL}\",\"apiKey\":\"${LLM_MASTER_KEY}\"}" || true
+  [[ -n "${GROQ_API_KEY:-}" ]]  && echo "    ,{\"title\":\"Llama3 Groq (via Bifrost)\",\"provider\":\"openai\",\"model\":\"llama3-groq\",\"apiBase\":\"${LLM_GATEWAY_API_URL}\",\"apiKey\":\"${LLM_MASTER_KEY}\"}" || true
 )
   ],
   "tabAutocompleteModel": {
     "title": "Autocomplete",
     "provider": "openai",
     "model": "${OLLAMA_DEFAULT_MODEL:-llama3.2:1b}",
-    "apiBase": "http://bifrost:4000/v1",
-    "apiKey": "${BIFROST_AUTH_TOKEN}"
+    "apiBase": "${LLM_GATEWAY_API_URL}",
+    "apiKey": "${LLM_MASTER_KEY}"
   },
   "embeddingsProvider": {
     "provider": "openai",
     "model": "${OLLAMA_DEFAULT_MODEL:-llama3.2:1b}",
-    "apiBase": "http://bifrost:4000/v1",
-    "apiKey": "${BIFROST_AUTH_TOKEN}"
+    "apiBase": "${LLM_GATEWAY_API_URL}",
+    "apiKey": "${LLM_MASTER_KEY}"
   }
 }
 EOF
@@ -652,8 +658,8 @@ EOF
       postgres:
         condition: service_healthy
     environment:
-      OPENAI_API_BASE_URL: "http://bifrost:4000/v1"
-      OPENAI_API_KEY: ${BIFROST_AUTH_TOKEN}
+      OPENAI_API_BASE_URL: "${LLM_GATEWAY_API_URL}"
+      OPENAI_API_KEY: ${LLM_MASTER_KEY}
       WEBUI_SECRET_KEY: ${JWT_SECRET}
       # DATABASE_URL removed — open-webui uses SQLite (postgres triggers peewee bug)
       # VECTOR_DB removed — uses built-in Chroma until qdrant is stable
@@ -848,8 +854,8 @@ STATE_FILE = "/data/ingestion-state/processed_files.json"
 
 # Environment variables
 QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333")
-BIFROST_URL = os.getenv("BIFROST_URL", "http://bifrost:4000")
-BIFROST_AUTH_TOKEN = os.getenv("BIFROST_AUTH_TOKEN")
+BIFROST_URL = os.getenv("LLM_GATEWAY_URL", "http://localhost:4000")
+BIFROST_AUTH_TOKEN = os.getenv("LLM_MASTER_KEY")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 SYNC_DIR = os.getenv("SYNC_DIR", "/data/gdrive-sync")
 WATCH_INTERVAL = int(os.getenv("WATCH_INTERVAL", "300"))  # 5 minutes
@@ -1139,8 +1145,8 @@ EOF
       - ingestion_state:/data/ingestion-state
     environment:
       QDRANT_URL: "http://qdrant:6333"
-      LITELLM_URL: "http://bifrost:4000"
-      BIFROST_AUTH_TOKEN: "${BIFROST_AUTH_TOKEN}"
+      LLM_GATEWAY_URL: "${LLM_GATEWAY_URL}"
+      BIFROST_AUTH_TOKEN: "${LLM_MASTER_KEY}"
       EMBEDDING_MODEL: "text-embedding-3-small"
       COLLECTION_NAME: "gdrive_documents"
       SYNC_DIR: "/data/gdrive-sync"
@@ -1201,8 +1207,8 @@ EOF
       postgres:
         condition: service_healthy
     environment:
-      N8N_AI_OPENAI_API_KEY: "\${BIFROST_AUTH_TOKEN}"
-      N8N_AI_OPENAI_BASE_URL: "http://bifrost:4000/v1"
+      N8N_AI_OPENAI_API_KEY: "\${LLM_MASTER_KEY}"
+      N8N_AI_OPENAI_BASE_URL: "${LLM_GATEWAY_API_URL}"
       DB_TYPE: "postgresdb"
       DB_POSTGRESDB_HOST: "postgres"
       DB_POSTGRESDB_PORT: "5432"
@@ -1229,8 +1235,8 @@ EOF
     restart: unless-stopped
     user: "1000:\${TENANT_GID:-1001}"
     environment:
-      OPENAI_API_KEY: "\${BIFROST_AUTH_TOKEN}"
-      OPENAI_API_BASE: "http://bifrost:4000/v1"
+      OPENAI_API_KEY: "\${LLM_MASTER_KEY}"
+      OPENAI_API_BASE: "${LLM_GATEWAY_API_URL}"
       DATABASE_PATH: "/root/.flowise"
       FLOWISE_USERNAME: "admin"
       FLOWISE_PASSWORD: "\${ADMIN_PASSWORD}"
@@ -1254,10 +1260,10 @@ EOF
     user: "1000:\${TENANT_GID:-1001}"
     environment:
       LLM_PROVIDER: "openai"
-      OPEN_AI_KEY: "\${BIFROST_AUTH_TOKEN}"
-      OPEN_AI_BASE_PATH: "http://bifrost:4000/v1"
+      OPEN_AI_KEY: "\${LLM_MASTER_KEY}"
+      OPEN_AI_BASE_PATH: "${LLM_GATEWAY_API_URL}"
       EMBEDDING_ENGINE: "openai"
-      EMBEDDING_BASE_PATH: "http://bifrost:4000/v1"
+      EMBEDDING_BASE_PATH: "${LLM_GATEWAY_API_URL}"
       VECTOR_DB: "\${VECTOR_DB_TYPE:-qdrant}"
       QDRANT_ENDPOINT: "http://qdrant:6333"
       STORAGE_DIR: "/app/server/storage"
@@ -1335,8 +1341,8 @@ EOF
       PASSWORD: "\${CODESERVER_PASSWORD}"
       SUDO_PASSWORD: "\${CODESERVER_PASSWORD}"
       DEFAULT_WORKSPACE: "/mnt/data"
-      BIFROST_API_KEY: "\${BIFROST_AUTH_TOKEN}"
-      BIFROST_BASE_URL: "http://bifrost:4000/v1"
+      BIFROST_API_KEY: "\${LLM_MASTER_KEY}"
+      BIFROST_BASE_URL: "${LLM_GATEWAY_API_URL}"
       # Continue.dev extension configuration
       EXTENSIONS_GALLERY: "https://open-vsx.org/vsx-extension-gallery"
       EXTENSIONS: "continuedev.continue"
@@ -1374,21 +1380,21 @@ deploy_service() {
     
     # Check dependencies before deployment
     case "$svc" in
-        "litellm")
+        "bifrost")
             # Core AI Gateway - depends on infrastructure
             wait_for_healthy postgres 60 || { log_error "Postgres not ready - cannot deploy ${svc}"; return 1; }
             wait_for_healthy redis 30 || { log_error "Redis not ready - cannot deploy ${svc}"; return 1; }
             ;;
         "open-webui"|"anythingllm"|"flowise"|"n8n")
-            # AI Applications - depend on LiteLLM + Qdrant
-            wait_for_healthy litellm 60 || { log_error "LiteLLM not ready - cannot deploy ${svc}"; return 1; }
+            # AI Applications - depend on Bifrost + Qdrant
+            wait_for_healthy bifrost 60 || { log_error "Bifrost not ready - cannot deploy ${svc}"; return 1; }
             if [[ "${ENABLE_QDRANT:-false}" == "true" ]]; then
                 wait_for_healthy qdrant 30 || { log_error "Qdrant not ready - cannot deploy ${svc}"; return 1; }
             fi
             ;;
         "caddy"|"nginx")
             # Proxy - depends on all application services being ready
-            for app_service in litellm open-webui anythingllm flowise n8n ollama qdrant; do
+            for app_service in bifrost open-webui anythingllm flowise n8n ollama qdrant; do
                 local enable_var="ENABLE_$(echo "$app_service" | tr '[:lower:]' '[:upper:]' | tr '-' '_')"
                 if [[ "${!enable_var:-false}" == "true" ]]; then
                     wait_for_healthy "$app_service" 30 || { 
@@ -1481,7 +1487,7 @@ disable_service() {
 service_is_enabled() {
     local svc="$1"
     case "$svc" in
-        litellm)   [[ "${ENABLE_LITELLM:-false}"   == "true" ]] ;;
+        bifrost)   [[ "${ENABLE_BIFROST:-false}"   == "true" ]] ;;
         ollama)    [[ "${ENABLE_OLLAMA:-false}"    == "true" ]] ;;
         open-webui)[[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] ;;
         qdrant)    [[ "${ENABLE_QDRANT:-false}"    == "true" ]] ;;
@@ -1516,7 +1522,7 @@ provision_databases() {
     log_success "PostgreSQL is ready"
     
     # Create per-service databases (idempotent — safe to re-run)
-    local databases=("litellm" "openwebui" "n8n" "flowise")
+    local databases=("bifrost" "openwebui" "n8n" "flowise")
     for db in "${databases[@]}"; do
         local exists
         exists=$(docker compose -f "$COMPOSE_FILE" exec postgres \
@@ -1553,7 +1559,7 @@ drop_service_databases() {
         sleep 5
     done
 
-    local databases=("litellm" "openwebui" "n8n" "flowise")
+    local databases=("bifrost" "openwebui" "n8n" "flowise")
     for db in "${databases[@]}"; do
         log_info "  Dropping database '${db}'..."
         docker compose -f "$COMPOSE_FILE" exec -T postgres \
@@ -1573,75 +1579,6 @@ drop_service_databases() {
         || log_warning "  Could not flush Redis — may not be running"
 
     log_success "Service databases dropped and Redis flushed"
-}
-
-# ─── LiteLLM Database Initialization (Mission Control) ──────────────────────
-initialize_litellm_database() {
-    local tenant="${1:-datasquiz}"
-    local logfile="${LOGS_DIR}/litellm-init-$(date +%Y%m%d-%H%M%S).log"
-    
-    log_info "Initializing LiteLLM database for tenant: ${tenant}"
-    
-    # Wait for PostgreSQL to be healthy
-    log_info "  Waiting for PostgreSQL to be ready..."
-    local attempts=0
-    while ! docker exec ai-${tenant}-postgres-1 pg_isready -U ds-admin -d litellm >/dev/null 2>&1; do
-        attempts=$((attempts + 1))
-        if [[ $attempts -gt 30 ]]; then
-            log_error "  PostgreSQL not ready after 60 seconds"
-            return 1
-        fi
-        sleep 2
-    done
-    log_success "  PostgreSQL is ready"
-    
-    # Find actual schema path in LiteLLM image
-    log_info "  Finding Prisma schema path in LiteLLM image..."
-    local schema_path=$(docker run --rm --entrypoint find \
-        ghcr.io/berriai/litellm:main-latest \
-        / -name "schema.prisma" -path "*/litellm/*" 2>/dev/null | head -1)
-    
-    if [[ -z "$schema_path" ]]; then
-        log_error "  Could not find schema.prisma in LiteLLM image"
-        return 1
-    fi
-    
-    log_info "  Using schema path: ${schema_path}"
-    
-    # Run Prisma migration with proper error handling
-    log_info "  Running Prisma database migration..."
-    if docker run --rm \
-        --network ai-${tenant}_default \
-        -e DATABASE_URL="postgresql://litellm:${POSTGRES_PASSWORD}@postgres:5432/litellm" \
-        -v "${LOGS_DIR}/litellm:/app/logs" \
-        ghcr.io/berriai/litellm:main-latest \
-        sh -c "cd /app && prisma db push --schema ${schema_path} --accept-data-loss && \
-                 prisma generate --schema ${schema_path}" \
-        >> "$logfile" 2>&1; then
-        
-        log_success "  Prisma migration completed successfully"
-    else
-        log_error "  Prisma migration failed - check ${logfile}"
-        return 1
-    fi
-    
-    # Verify tables were created with proper error handling
-    log_info "  Verifying database schema..."
-    local table_count
-    table_count=$(docker exec ai-${tenant}-postgres-1 \
-        psql -U ds-admin -d litellm -t -c \
-        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';" \
-        2>/dev/null | tr -d ' ' || echo "0")
-    
-    if [[ -n "$table_count" ]] && [[ "$table_count" -ge 1 ]]; then
-        log_success "  LiteLLM database initialized with ${table_count} tables"
-        return 0
-    else
-        log_error "  LiteLLM database initialization failed - ${table_count:-0} tables found"
-        return 1
-    fi
-    
-    log_success "LiteLLM database initialization complete"
 }
 
 # ─── Log Management ────────────────────────────────────────────────────
@@ -1766,8 +1703,8 @@ health_dashboard() {
     _check_http "caddy"      "http://localhost:2019/metrics"
     echo ""
     echo -e "  ${BOLD}AI Services${NC}"
-    [[ "${ENABLE_LITELLM:-false}"    == "true" ]] && \
-        _check_http "litellm"    "http://localhost:${PORT_LITELLM:-4000}/health/liveliness"
+    [[ "${ENABLE_BIFROST:-false}"    == "true" ]] && \
+        _check_http "bifrost"    "http://localhost:${BIFROST_PORT:-4000}/healthz"
     [[ "${ENABLE_OLLAMA:-false}"     == "true" ]] && \
         _check_http "ollama"     "http://localhost:11434/"
     echo ""
@@ -1788,13 +1725,13 @@ health_dashboard() {
         _check_https "openclaw"      "https://openclaw.${DOMAIN}/"
     echo ""
     echo -e "  ${BOLD}Quick Tests${NC}"
-    echo -e "  LiteLLM models:"
-    echo -e "    curl -s http://localhost:${PORT_LITELLM:-4000}/v1/models \\"
-    echo -e "      -H 'Authorization: Bearer \${LITELLM_MASTER_KEY}' | jq '.data[].id'"
+    echo -e "  Bifrost models:"
+    echo -e "    curl -s http://localhost:${BIFROST_PORT:-4000}/v1/models \\"
+    echo -e "      -H 'Authorization: Bearer \${LLM_MASTER_KEY}' | jq '.data[].id'"
     echo ""
     echo -e "  ${BOLD}🌐 Access URLs${NC}"
     printf "  %-26s %s\n" "Chat (OpenWebUI):"     "https://chat.${DOMAIN}"
-    [[ "${ENABLE_LITELLM:-false}"    == "true" ]] && printf "  %-26s %s\n" "LiteLLM API:"        "https://litellm.${DOMAIN}"
+    [[ "${ENABLE_BIFROST:-false}"    == "true" ]] && printf "  %-26s %s\n" "Bifrost API:"        "https://bifrost.${DOMAIN}"
     [[ "${ENABLE_N8N:-false}"        == "true" ]] && printf "  %-26s %s\n" "n8n Automation:"     "https://n8n.${DOMAIN}"
     [[ "${ENABLE_FLOWISE:-false}"    == "true" ]] && printf "  %-26s %s\n" "Flowise:"            "https://flowise.${DOMAIN}"
     [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && printf "  %-26s %s\n" "AnythingLLM:"       "https://anythingllm.${DOMAIN}"
@@ -1806,9 +1743,9 @@ health_dashboard() {
     [[ "${ENABLE_OPENCLAW:-false}"  == "true" ]] && \
         printf "  %-26s %s\n" "OpenClaw (Tailscale):" "https://${ip:-<tailscale-ip>}:${PORT_OPENCLAW:-18789}"
     echo ""
-    echo -e "  ${BOLD}⚡ LiteLLM Quick Test${NC}"
-    echo -e "    curl -s https://litellm.${DOMAIN}/v1/models \\"
-    echo -e "      -H 'Authorization: Bearer \${LITELLM_MASTER_KEY}' | jq '.data[].id'"
+    echo -e "  ${BOLD}⚡ Bifrost Quick Test${NC}"
+    echo -e "    curl -s https://bifrost.${DOMAIN}/healthz \\"
+    echo -e "      -H 'Authorization: Bearer \${LLM_MASTER_KEY}' | jq '.status'"
     echo ""
     log_write INFO "Health dashboard printed at ${ts}"
 }
@@ -1930,10 +1867,10 @@ EOF
 recover_services() {
     log_info "Recovering failed services..."
     
-    # Restart LiteLLM with configuration validation
-    if [[ "${ENABLE_LITELLM:-false}" == "true" ]]; then
-        log_info "Restarting LiteLLM with configuration validation..."
-        docker compose -f "$COMPOSE_FILE" restart litellm
+    # Restart Bifrost with configuration validation
+    if [[ "${ENABLE_BIFROST:-false}" == "true" ]]; then
+        log_info "Restarting Bifrost with configuration validation..."
+        docker compose -f "$COMPOSE_FILE" restart bifrost
         sleep 10
     fi
     

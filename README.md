@@ -58,7 +58,39 @@ This platform uses a fully dockerized, **100% dynamically generated** `docker-co
 - **System Monitoring** - Grafana + Prometheus integration
 - **Development Environment** - VS Code + Continue.dev + OpenClaw
 
-### **🚀 Production-Ready Features**
+### **�️ Script Dependency Map - Core Architecture Foundation**
+
+This table defines the core dependency relationships that form the foundation of our software architecture. Understanding these dependencies is essential for troubleshooting, development, and system iteration.
+
+| Script | Depends On | Provides To | Core Function | Key Variables |
+|--------|------------|-------------|---------------|---------------|
+| **Script 0** | Docker daemon, System permissions | Clean slate environment | Nuclear cleanup & resource reset | `TENANT_ID`, `CONTAINER_PREFIX` |
+| **Script 1** | Script 3 functions, User input | `.env` file with all variables | Input collection & configuration generation | `TENANT_ID`, `DOMAIN`, service flags |
+| **Script 2** | Script 1 `.env`, Script 3 functions, Docker | Running services | Service deployment & orchestration | `COMPOSE_FILE`, `ENV_FILE`, service configs |
+| **Script 3** | Script 1 `.env`, Running services | Configuration to all scripts | Mission control & configuration hub | All service variables, health states |
+| **External** | None | All scripts | System dependencies | Docker, network access, `/mnt` mount |
+
+#### **🔗 Dependency Flow**
+```
+Script 0 → Clean System
+    ↓
+Script 1 → Generate .env (uses Script 3 functions)
+    ↓  
+Script 2 → Deploy Services (uses Script 1 .env + Script 3 configs)
+    ↓
+Script 3 → Manage Services (reads Script 1 .env, monitors deployed services)
+```
+
+#### **🚨 Critical Dependency Rules**
+1. **Script 1 must source Script 3** for all configuration functions
+2. **Script 2 must load Script 1 `.env`** before deployment
+3. **Script 3 is the single source of truth** for all configuration logic
+4. **Never break the dependency chain** - each script builds on the previous
+5. **All external dependencies** (Docker, network) must be available before Script 0
+
+---
+
+### **� Production-Ready Features**
 - **Deep Deployment Visibility**: Complete docker-compose.yml content, system info, and startup logs
 - **Service-Specific Debug Logging**: Individual log directories per service with configurable levels
 - **Programmatic Health Monitoring**: Port, URL, and container status checks with detailed reporting
@@ -98,19 +130,19 @@ This platform uses a fully dockerized, **100% dynamically generated** `docker-co
 ### **🔧 Fixes Implemented (v3.7.0)**
 
 #### **✅ Bifrost LLM Proxy Implementation**
-- **Issue**: LiteLLM complexity and resource overhead
-- **Solution**: Implemented lightweight Go-based Bifrost proxy as default router
-- **Result**: Instant startup, 50MB footprint, 5000+ req/s performance, zero database dependency
+- **Issue**: LiteLLM complexity and incorrect configuration method
+- **Solution**: Implemented lightweight Go-based Bifrost proxy with YAML configuration
+- **Result**: Instant startup, 50MB footprint, 5000+ req/s performance, correct config schema
 
 #### **✅ Complete LiteLLM Removal**
-- **Issue**: Legacy LiteLLM references causing deployment conflicts
-- **Solution**: Removed all LiteLLM references from script 1, updated router selection
-- **Result**: Clean Bifrost-only deployment with proper JSON quoting
+- **Issue**: Legacy LiteLLM references and hardcoded service URLs throughout system
+- **Solution**: Comprehensive refactoring to remove all LiteLLM references, implement router-agnostic variables
+- **Result**: Clean Bifrost-only deployment with proper YAML configuration and zero hardcoded references
 
-#### **✅ Script 1 Quoting Fixes**
-- **Issue**: JSON parsing errors in BIFROST_PROVIDERS variable
-- **Solution**: Fixed single-quote escaping in environment variable generation
-- **Result**: Clean configuration without parsing errors
+#### **✅ Script 1 Configuration Fixes**
+- **Issue**: Incorrect Bifrost configuration method and JSON parsing errors
+- **Solution**: Implemented proper YAML config generation, removed environment variable approach
+- **Result**: Clean configuration with correct Bifrost schema and no parsing errors
 
 #### **✅ Environment Variable Cleanup**
 - **Issue**: Conflicting service flags and legacy variables
@@ -194,7 +226,7 @@ This platform uses a fully dockerized, **100% dynamically generated** `docker-co
 **Script 3: Mission Control Hub (Configuration & Management)**
 - **PATTERN: Single Source of Truth** - ALL configuration logic and operations
 - Dynamic Postgres initializer generation
-- Dynamic LiteLLM config generation with conditional API key logic
+- Dynamic Bifrost YAML config generation with router-agnostic variables
 - **Integrated Ingestion Pipeline** - GDrive → Qdrant pipeline with inline Dockerfile and script generation
 - **Environment Variable Processing** - Validates empty vs set variables
 - Service health monitoring and diagnostics
@@ -213,7 +245,7 @@ Each tenant deployment generates:
 - A non-root runtime configuration (tenant UID/GID)
 - Reverse proxy configuration (Caddy v2 with automatic HTTPS)
 - A centralized `.env` file (80+ dynamic variables with proper quoting)
-- Intelligent service interconnection via LiteLLM
+- Intelligent service interconnection via Bifrost LLM router
 - Complete configuration files (prometheus.yml, Caddyfile)
 - **Comprehensive logging infrastructure** (`/mnt/data/{tenant}/logs/` with service-specific subdirectories)
 - **Debug logging engine** with per-service log levels and rotation policies
