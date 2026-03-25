@@ -88,6 +88,10 @@ prepare_directories() {
         "${DATA_DIR}/anythingllm"
         "${DATA_DIR}/codeserver"
         "${DATA_DIR}/gdrive"
+        "${DATA_DIR}/tailscale"
+        "${DATA_DIR}/openclaw"
+        "${DATA_DIR}/signal"
+        "${DATA_DIR}/signal-data"
         "${CONFIG_DIR}/rclone"
         "${CONFIG_DIR}/postgres"
         "${CONFIG_DIR}/caddy/data"
@@ -844,8 +848,8 @@ STATE_FILE = "/data/ingestion-state/processed_files.json"
 
 # Environment variables
 QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333")
-LITELLM_URL = os.getenv("LITELLM_URL", "http://litellm:4000")
-LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY")
+BIFROST_URL = os.getenv("BIFROST_URL", "http://bifrost:4000")
+BIFROST_AUTH_TOKEN = os.getenv("BIFROST_AUTH_TOKEN")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 SYNC_DIR = os.getenv("SYNC_DIR", "/data/gdrive-sync")
 WATCH_INTERVAL = int(os.getenv("WATCH_INTERVAL", "300"))  # 5 minutes
@@ -975,9 +979,9 @@ class GDriveIngestor:
         """Get embedding from LiteLLM"""
         try:
             response = requests.post(
-                f"{LITELLM_URL}/v1/embeddings",
+                f"{BIFROST_URL}/v1/embeddings",
                 headers={
-                    "Authorization": f"Bearer {LITELLM_MASTER_KEY}",
+                    "Authorization": f"Bearer {BIFROST_AUTH_TOKEN}",
                     "Content-Type": "application/json"
                 },
                 json={
@@ -1125,24 +1129,18 @@ EOF
     build:
       context: ${CONFIG_DIR}/ingestion
       dockerfile: Dockerfile
-$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "    depends_on:
-      litellm:
-        condition: service_healthy
+    depends_on:
       qdrant:
         condition: service_healthy
       rclone:
-        condition: service_started" || echo "    depends_on:
-      qdrant:
-        condition: service_healthy
-      rclone:
-        condition: service_started")
+        condition: service_started
     volumes:
       - gdrive_data:/data/gdrive-sync:ro
       - ingestion_state:/data/ingestion-state
     environment:
       QDRANT_URL: "http://qdrant:6333"
-      LITELLM_URL: "$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "http://litellm:4000" || echo "http://bifrost:4000")"
-      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY}"
+      LITELLM_URL: "http://bifrost:4000"
+      BIFROST_AUTH_TOKEN: "${BIFROST_AUTH_TOKEN}"
       EMBEDDING_MODEL: "text-embedding-3-small"
       COLLECTION_NAME: "gdrive_documents"
       SYNC_DIR: "/data/gdrive-sync"
@@ -1199,16 +1197,12 @@ EOF
     image: n8nio/n8n:latest
     restart: unless-stopped
     user: "1000:\${TENANT_GID:-1001}"
-$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "    depends_on:
-      litellm:
+    depends_on:
+      postgres:
         condition: service_healthy
-      postgres:
-        condition: service_healthy" || echo "    depends_on:
-      postgres:
-        condition: service_healthy")
     environment:
-      N8N_AI_OPENAI_API_KEY: "\${LITELLM_MASTER_KEY}"
-      N8N_AI_OPENAI_BASE_URL: "$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "http://litellm:4000/v1" || echo "http://bifrost:4000/v1")"
+      N8N_AI_OPENAI_API_KEY: "\${BIFROST_AUTH_TOKEN}"
+      N8N_AI_OPENAI_BASE_URL: "http://bifrost:4000/v1"
       DB_TYPE: "postgresdb"
       DB_POSTGRESDB_HOST: "postgres"
       DB_POSTGRESDB_PORT: "5432"
@@ -1234,12 +1228,9 @@ EOF
     image: flowiseai/flowise:latest
     restart: unless-stopped
     user: "1000:\${TENANT_GID:-1001}"
-$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "    depends_on:
-      litellm:
-        condition: service_healthy")
     environment:
-      OPENAI_API_KEY: "\${LITELLM_MASTER_KEY}"
-      OPENAI_API_BASE: "$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "http://litellm:4000/v1" || echo "http://bifrost:4000/v1")"
+      OPENAI_API_KEY: "\${BIFROST_AUTH_TOKEN}"
+      OPENAI_API_BASE: "http://bifrost:4000/v1"
       DATABASE_PATH: "/root/.flowise"
       FLOWISE_USERNAME: "admin"
       FLOWISE_PASSWORD: "\${ADMIN_PASSWORD}"
@@ -1261,15 +1252,12 @@ EOF
     image: mintplexlabs/anythingllm:latest
     restart: unless-stopped
     user: "1000:\${TENANT_GID:-1001}"
-$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "    depends_on:
-      litellm:
-        condition: service_healthy")
     environment:
       LLM_PROVIDER: "openai"
-      OPEN_AI_KEY: "\${LITELLM_MASTER_KEY}"
-      OPEN_AI_BASE_PATH: "$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "http://litellm:4000/v1" || echo "http://bifrost:4000/v1")"
+      OPEN_AI_KEY: "\${BIFROST_AUTH_TOKEN}"
+      OPEN_AI_BASE_PATH: "http://bifrost:4000/v1"
       EMBEDDING_ENGINE: "openai"
-      EMBEDDING_BASE_PATH: "$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "http://litellm:4000/v1" || echo "http://bifrost:4000/v1")"
+      EMBEDDING_BASE_PATH: "http://bifrost:4000/v1"
       VECTOR_DB: "\${VECTOR_DB_TYPE:-qdrant}"
       QDRANT_ENDPOINT: "http://qdrant:6333"
       STORAGE_DIR: "/app/server/storage"
@@ -1341,17 +1329,14 @@ EOF
     image: lscr.io/linuxserver/code-server:latest
     restart: unless-stopped
     user: "1000:\${TENANT_GID:-1001}"
-$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "    depends_on:
-      litellm:
-        condition: service_healthy")
     environment:
       PUID: "1000"
       PGID: "\${TENANT_GID:-1001}"
       PASSWORD: "\${CODESERVER_PASSWORD}"
       SUDO_PASSWORD: "\${CODESERVER_PASSWORD}"
       DEFAULT_WORKSPACE: "/mnt/data"
-      LITELLM_API_KEY: "\${LITELLM_MASTER_KEY}"
-      LITELLM_BASE_URL: "$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "http://litellm:4000/v1" || echo "http://bifrost:4000/v1")"
+      BIFROST_API_KEY: "\${BIFROST_AUTH_TOKEN}"
+      BIFROST_BASE_URL: "http://bifrost:4000/v1"
       # Continue.dev extension configuration
       EXTENSIONS_GALLERY: "https://open-vsx.org/vsx-extension-gallery"
       EXTENSIONS: "continuedev.continue"
@@ -2118,4 +2103,7 @@ main() {
     esac
 }
 
-main "$@"
+# Only run main if executed directly (not when sourced)
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

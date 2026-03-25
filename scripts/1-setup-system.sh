@@ -1279,7 +1279,8 @@ init_bifrost() {
     # Remove any existing BIFROST_PROVIDERS line
     [[ -f "${ENV_FILE}" ]] && sed -i '/^BIFROST_PROVIDERS=/d' "${ENV_FILE}" 2>/dev/null || true
     # Write with single quotes so docker compose reads it correctly
-    echo "BIFROST_PROVIDERS='[{\"provider\":\"ollama\",\"base_url\":\"http://ollama:11434\"}]'" >> "${ENV_FILE}"
+    local providers_json='[{"provider":"ollama","base_url":"http://ollama:11434"}]'
+    echo "BIFROST_PROVIDERS='${providers_json}'" >> "${ENV_FILE}"
 
     # No config directory needed — bifrost is env-var only
     log "SUCCESS" "Bifrost configuration complete (env-var based, no config file)"
@@ -2267,7 +2268,7 @@ OPENROUTER_API_KEY="${OPENROUTER_API_KEY}"
 # ─── Bifrost Configuration ───────────────────────────────────────────────
 BIFROST_AUTH_TOKEN="${BIFROST_AUTH_TOKEN}"
 BIFROST_PORT="${BIFROST_PORT:-4000}"
-BIFROST_PROVIDERS="${BIFROST_PROVIDERS}"
+BIFROST_PROVIDERS='[{"provider":"ollama","base_url":"http://ollama:11434"}]'
 
 # ─── Internal Service Ports ───────────────────────────────────────────────
 CADDY_INTERNAL_HTTP_PORT=${CADDY_INTERNAL_HTTP_PORT:-80}

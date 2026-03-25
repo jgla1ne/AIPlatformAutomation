@@ -190,8 +190,7 @@ main() {
         # Wait for Ollama HTTP server to be ready BEFORE pulling models
         log_info "Waiting for Ollama HTTP server to be ready..."
         local elapsed=0
-        until docker compose -f "/mnt/data/${TENANT}/docker-compose.yml" exec -T ollama \
-            curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; do
+        until curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; do
             elapsed=$((elapsed + 5))
             if [[ $elapsed -ge 60 ]]; then
                 log_error "Ollama HTTP not ready after 60s — cannot proceed"
@@ -220,6 +219,8 @@ main() {
 
     # 5. AI gateway — Bifrost only deployment
     if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
+        log_info "About to call deploy_bifrost function..."
+        type deploy_bifrost
         deploy_bifrost
     else
         log_error "Unknown LLM router: ${LLM_ROUTER}. Only Bifrost is supported."
@@ -403,4 +404,6 @@ wait_for_llm_router() {
 }
 
 # Only run main if executed directly (not when sourced)
-(return 0 2>/dev/null) || main "$@"
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

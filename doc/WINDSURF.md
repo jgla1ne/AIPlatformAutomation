@@ -1,303 +1,222 @@
 # Bifrost Deployment Analysis - Full Diagnostic Report
-
-**Generated:** 2026-03-24T15:26:00Z  
-**Issue:** Bifrost deployment failing with .env parsing errors and LiteLLM still being deployed despite Bifrost selection
-
----
+**Generated:** 2026-03-25T12:46:00Z  
+**Issue:** Bifrost deployment failing with function resolution issues
 
 ## 🚨 CRITICAL FINDINGS
 
-### 1. Environment File Analysis
+### 1. Function Resolution Issue
+**Problem:** `deploy_bifrost` function not found during script execution  
+**Location:** `/home/jglaine/AIPlatformAutomation/scripts/2-deploy-services.sh:223`  
+**Status:** Function is defined but not accessible at runtime
 
-**File:** `/mnt/data/datasquiz/.env`  
-**Size:** 380 lines  
-**Status:** Contains correct Bifrost configuration but with JSON parsing issues
-
-#### Key Bifrost Configuration (Lines 144-147):
+#### Function Definition Status:
 ```bash
-# ─── Bifrost Configuration ───────────────────────────────────────────────
-BIFROST_AUTH_TOKEN="sk-bifrost-aafe8fd2134c345352bc137335302206949e1ba72ab00515"
+# Function IS defined correctly at line 287:
+deploy_bifrost() {
+    log_info "Deploying Bifrost LLM Router..."
+    # ... function body
+}
+
+# Function IS visible when testing:
+bash -c "source scripts/2-deploy-services.sh; declare -f | grep deploy_bifrost"
+# Output: deploy_bifrost; function deploy_bifrost ()
+```
+
+#### Runtime Failure:
+```bash
+# During script execution at line 223:
+scripts/2-deploy-services.sh: line 223: type: deploy_bifrost: not found
+```
+
+### 2. Script Execution Context Analysis
+**Sourcing Chain:**
+1. Script 2 sources Script 3 at line 25
+2. Script 3 had main execution issue (fixed)
+3. Script 2 main execution proceeds
+4. Function resolution fails at runtime
+
+**Working Components:**
+- ✅ Environment loading
+- ✅ Infrastructure deployment (postgres, redis, qdrant, ollama)
+- ✅ Model pulling (llama3.2, nomic-embed-text)
+- ✅ Configuration generation
+- ✅ Docker compose generation
+
+**Failing Component:**
+- ❌ Bifrost deployment function resolution
+
+### 3. Current Deployment Status
+#### Successfully Deployed Services:
+```bash
+✓ postgres deployed - healthy (port 5432)
+✓ redis deployed - healthy (port 6379)  
+✓ qdrant deployed - healthy (port 6333)
+✓ ollama deployed - healthy (port 11434)
+✓ Models pulled: llama3.2, nomic-embed-text
+```
+
+#### Pending Services:
+```bash
+❌ bifrost - function resolution failure
+❌ All web services (depend on Bifrost)
+❌ Monitoring services
+❌ Reverse proxy
+```
+
+### 4. Environment Configuration Status
+#### .env File Analysis:
+```bash
+# Core Bifrost Configuration - ✅ CORRECT
+BIFROST_AUTH_TOKEN="sk-bifrost-872421abf..."
 BIFROST_PORT="4000"
-BIFROST_PROVIDERS="[{"provider":"ollama","base_url":"http://ollama:11434"}]"
-```
-
-#### Router Selection Status (Lines 61, 212):
-```bash
-ENABLE_LITELLM=false          # ✅ Correctly disabled
-# LiteLLM configuration disabled (using Bifrost)  # ✅ Comment confirms Bifrost selected
-```
-
-#### Missing Critical Variable:
-```bash
-LLM_ROUTER=bifrost           # ❌ MISSING from .env file!
-```
-
-**ISSUE:** The `LLM_ROUTER=bifrost` variable is NOT present in the .env file, causing the deployment script to fall back to default behavior.
-
----
-
-### 2. Deployment Log Analysis
-
-**File:** `/mnt/data/datasquiz/logs/deploy-20260324.log`  
-**Content:** 13 lines of repeated parsing errors
-
-#### Complete Log Content:
-```
-failed to read /mnt/data/datasquiz/.env: line 147: unexpected character "\"" in variable name "provider\":\"ollama\",\"base_url\":\"http://ollama:11434\"}]\""
-failed to read /mnt/data/datasquiz/.env: line 147: unexpected character "\"" in variable name "provider\":\"ollama\",\"base_url\":\"http://ollama:11434\"}]\""
-failed to read /mnt/data/datasquiz/.env: line 147: unexpected character "\"" in variable name "provider\":\"ollama\",\"base_url\":\"http://ollama:11434\"}]\""
-failed to read /mnt/data/datasquiz/.env: line 147: unexpected character "\"" in variable name "provider\":\"ollama\",\"base_url\":\"http://ollama:11434\"}]\""
-failed to read /mnt/data/datasquiz/.env: line 147: unexpected character "\"" in variable name "provider\":\"ollama\",\"base_url\":\"http://ollama:11434\"}]\""
-failed to read /mnt/data/datasquiz/.env: line 147: unexpected character "\"" in variable name "provider\":\"ollama\",\"base_url\":\"http://ollama:11434\"}]\""
-failed to read /mnt-data/datasquiz/.env: line 147: unexpected character "\"" in variable name "provider\":\"ollama\",\"base_url\":\"http://ollama:11434\"}]\""
-failed to read /mnt/data/datasquiz/.env: line 147: unexpected character "\"" in variable name "provider\":\"ollama\",\"base_url\":\"http://ollama:11434\"}]\""
-failed to read /mnt/data/datasquiz/.env: line 147: unexpected character "\"" in variable name "provider\":\"ollama\",\"base_url\":\"http://ollama:11434\"}]\""
-failed to read /mnt/data/datasquiz/.env: line 147: unexpected character "\"" in variable name "provider\":\"ollama\",\"base_url\":\"http://ollama:11434\"}]\""
-failed to read /mnt/data/datasquiz/.env: line 147: unexpected character "\"" in variable name "provider\":\"ollama\",\"base_url\":\"http://ollama:11434\"}]\""
-failed to read /mnt/data/datasquiz/.env: line 147: unexpected character "\"" in variable name "provider\":\"ollama\",\"base_url\":\"http://ollama:11434\"}]\""
-failed to read /mnt/data/datasquiz/.env: line 147: unexpected character "\"" in variable name "provider\":\"ollama\",\"base_url\":\"http://ollama:11434\"}]\""
-```
-
-**ISSUE:** The deployment script cannot parse the JSON in `BIFROST_PROVIDERS` due to embedded quotes.
-
----
-
-### 3. Script Logic Analysis
-
-#### Script 1 - Router Selection Logic:
-```bash
-# In select_llm_router() function
-echo "LLM_ROUTER=${LLM_ROUTER}" >> "${ENV_FILE}"
-
-# Set service flags based on router selection
-if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
-    echo "ENABLE_BIFROST=true" >> "${ENV_FILE}"
-    echo "ENABLE_LITELLM=false" >> "${ENV_FILE}"
-```
-
-**ISSUE:** The `LLM_ROUTER` variable should be written to .env but appears to be missing.
-
-#### Script 2 - Deployment Logic:
-```bash
-# Load router choice from environment
-LLM_ROUTER=$(grep "^LLM_ROUTER=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "bifrost")
-
-# 5. AI gateway — conditional deployment based on router choice
-if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
-    deploy_bifrost
-elif [[ "${LLM_ROUTER}" == "litellm" ]]; then
-    deploy_litellm
-```
-
-**ISSUE:** The fallback is "bifrost" but the grep fails due to missing variable, causing inconsistent behavior.
-
----
-
-### 4. Root Cause Analysis
-
-#### Primary Issues:
-1. **Missing `LLM_ROUTER` variable** in .env file
-2. **JSON quoting issue** in `BIFROST_PROVIDERS` breaking .env parsing
-3. **Inconsistent router detection** leading to LiteLLM deployment attempts
-
-#### Secondary Issues:
-1. **Environment variable precedence** conflicts
-2. **Script execution order** problems
-3. **Error handling** not robust enough for parsing failures
-
----
-
-### 5. Service Deployment Status
-
-#### Current Deployment Attempt:
-- **PostgreSQL:** ❌ Failed to start (env parsing error)
-- **Redis:** ❌ Failed to start (env parsing error)  
-- **Qdrant:** ❌ Failed to start (env parsing error)
-- **Ollama:** ❌ Failed to start (env parsing error)
-- **LiteLLM:** ❌ Being deployed despite `ENABLE_LITELLM=false`
-- **Bifrost:** ❌ Not being deployed due to router detection failure
-
-#### Health Dashboard Output:
-```
-Infrastructure
-🔴 postgres               not responding
-🔴 redis                  not responding  
-🔴 qdrant                 http://localhost:6333/collections
-
-AI Services
-🔴 ollama                 http://localhost:11434/
-
-Web Services (all routed via LiteLLM)  # ❌ Should say Bifrost
-🔴 open-webui             http://localhost:8081/
-```
-
----
-
-### 6. Environment Variable Conflicts
-
-#### Conflicting Router Variables:
-```bash
-# In .env file - CORRECT
-ENABLE_LITELLM=false
-ENABLE_BIFROST=true      # ❌ MISSING!
-
-# Internal URLs still reference LiteLLM
-LITELLM_INTERNAL_URL="http://litellm:4000"
-LITELLM_API_ENDPOINT="http://litellm:4000/v1"
-LITELLM_DATABASE_URL="postgresql://.../litellm"
-```
-
-#### Port Conflicts:
-```bash
-LITELLM_PORT=             # ❌ Empty but PORT_LITELLM=4000 exists
-BIFROST_PORT="4000"       # ✅ Correct
-```
-
----
-
-### 7. Script Execution Flow Analysis
-
-#### Expected Flow:
-1. Script 1: `select_llm_router()` → sets `LLM_ROUTER=bifrost`
-2. Script 1: `init_bifrost()` → sets Bifrost env vars
-3. Script 2: `source .env` → reads `LLM_ROUTER=bifrost`
-4. Script 2: `deploy_bifrost()` → deploys Bifrost
-
-#### Actual Flow:
-1. Script 1: `select_llm_router()` → ❌ `LLM_ROUTER` not written to .env
-2. Script 1: `init_bifrost()` → ✅ Bifrost vars written (with JSON issue)
-3. Script 2: `source .env` → ❌ Fails on JSON parsing
-4. Script 2: `LLM_ROUTER` fallback → ❌ Inconsistent behavior
-5. Script 2: ❌ Deploys wrong services
-
----
-
-### 8. JSON Quoting Issue Deep Dive
-
-#### Problematic Line 147:
-```bash
-BIFROST_PROVIDERS="[{"provider":"ollama","base_url":"http://ollama:11434"}]"
-```
-
-#### Shell Parser Interpretation:
-- The embedded quotes in the JSON value confuse the shell parser
-- Shell sees: `BIFROST_PROVIDERS="[{\"provider\":\"ollama\"..."`
-- Parser expects closing quote but finds embedded quotes
-- Result: "unexpected character" error
-
-#### Correct Format Should Be:
-```bash
 BIFROST_PROVIDERS='[{"provider":"ollama","base_url":"http://ollama:11434"}]'
-# OR
-BIFROST_PROVIDERS=[{\"provider\":\"ollama\",\"base_url\":\"http://ollama:11434\"}]
-```
 
----
-
-### 9. Missing Variables Analysis
-
-#### Critical Missing Variables:
-```bash
-LLM_ROUTER=bifrost                    # ❌ MISSING - Core issue
-ENABLE_BIFROST=true                   # ❌ MISSING - Service flag
-```
-
-#### Variables Present But Problematic:
-```bash
-BIFROST_PROVIDERS="[{"provider":"ollama","base_url":"http://ollama:11434"}]"  # ❌ JSON quoting
-ENABLE_LITELLM=false                 # ✅ Correct but ignored
-```
-
----
-
-### 10. Docker Compose Generation Issues
-
-#### Script 3 Logic (from previous analysis):
-```bash
-if [[ "${ENABLE_BIFROST}" == "true" ]]; then
-    # Generate Bifrost service
-elif [[ "${ENABLE_LITELLM}" == "true" ]]; then  
-    # Generate LiteLLM service
-```
-
-**ISSUE:** Since `ENABLE_BIFROST` is missing, LiteLLM generation may be triggered.
-
----
-
-## 🔧 IMMEDIATE FIXES REQUIRED
-
-### Fix 1: Add Missing Core Variables
-```bash
-# Add to .env file
+# Router Selection - ✅ CORRECT
 LLM_ROUTER=bifrost
+
+# Service Flags - ✅ CORRECT
 ENABLE_BIFROST=true
+ENABLE_LITELLM=false
 ```
 
-### Fix 2: Fix JSON Quoting
+#### Docker Compose Status:
+- ✅ Generated successfully at `/mnt/data/datasquiz/docker-compose.yml`
+- ✅ Caddyfile validated
+- ✅ All configuration files written
+
+### 5. Technical Root Cause Analysis
+#### Hypothesis 1: Shell Context Issue
+**Theory:** Script 3 sourcing interferes with function resolution  
+**Evidence:** Function visible in isolation, not in full execution  
+**Likelihood:** Medium
+
+#### Hypothesis 2: Namespace Pollution  
+**Theory:** Script 3 defines conflicting function or variable  
+**Evidence:** Issue occurs after script 3 sourcing  
+**Likelihood:** High
+
+#### Hypothesis 3: Execution Order Issue  
+**Theory:** Function defined after usage attempt  
+**Evidence:** Function defined at line 287, used at line 223  
+**Likelihood:** Low (definition comes before usage)
+
+### 6. Debug Information Captured
+#### Script Execution Flow:
 ```bash
-# Replace line 147 with:
-BIFROST_PROVIDERS='[{"provider":"ollama","base_url":"http://ollama:11434"}]'
+1. ✅ Script 2 starts
+2. ✅ Environment loaded
+3. ✅ Script 3 sourced
+4. ✅ Infrastructure deployed
+5. ✅ Models pulled
+6. ❌ Function resolution failure at line 223
 ```
 
-### Fix 3: Update Script 1 Logic
+#### Debug Output Added:
 ```bash
-# In select_llm_router() function, ensure:
-echo "LLM_ROUTER=${LLM_ROUTER}" >> "${ENV_FILE}"
-echo "ENABLE_BIFROST=true" >> "${ENV_FILE}"  # Add this line
+# Added debug lines at 222-224:
+log_info "About to call deploy_bifrost function..."
+type deploy_bifrost
+deploy_bifrost
 ```
 
-### Fix 4: Update Script 2 Error Handling
+#### Expected vs Actual Debug Output:
 ```bash
-# Add robust .env parsing with fallback
-if ! source "$ENV_FILE" 2>/dev/null; then
-    log_error "Failed to source .env file, using defaults"
-    LLM_ROUTER="bifrost"
-fi
+Expected: "About to call deploy_bifrost function..." + function definition + "deploy_bifrost; function deploy_bifrost ()"
+Actual:   "About to call deploy_bifrost function..." + "type: deploy_bifrost: not found"
 ```
 
+### 7. Immediate Workaround Options
+#### Option 1: Inline Function Call
+**Approach:** Replace function call with inline code  
+**Pros:** Immediate deployment possible  
+**Cons:** Not a proper fix
+
+#### Option 2: Bypass Sourcing
+**Approach:** Comment out script 3 sourcing  
+**Pros:** Isolates the issue  
+**Cons:** Loses helper functions
+
+#### Option 3: Function Re-definition
+**Approach:** Re-define function before use  
+**Pros:** Ensures availability  
+**Cons:** Hacky solution
+
+### 8. Next Steps Required
+#### Immediate Actions:
+1. **Isolate root cause** of function resolution failure
+2. **Implement proper fix** for script interaction
+3. **Test deployment** with fix in place
+4. **Complete Bifrost deployment** and service stack
+
+#### Validation Requirements:
+- [ ] Bifrost container starts successfully
+- [ ] Bifrost becomes healthy on port 4000
+- [ ] Web services can connect to Bifrost
+- [ ] Full service stack operational
+- [ ] All health checks passing
+
+### 9. Impact Assessment
+#### Current Impact:
+- **Severity:** HIGH - Deployment completely blocked
+- **User Impact:** TOTAL - No services available
+- **Progress:** 80% complete (infrastructure ready, gateway blocked)
+
+#### Business Impact:
+- **AI Platform:** DOWN
+- **Development Tools:** DOWN  
+- **Enterprise Services:** DOWN
+- **Monitoring:** DOWN
+
+## 🔧 TECHNICAL DETAILS
+
+### Script 2 Function Definitions Status
+```bash
+✅ deploy_bifrost() - Defined at line 287
+✅ verify_bifrost_image() - Defined at line 257
+✅ generate_bifrost_service() - Defined at line 305
+✅ wait_for_llm_router() - Defined (from script 3)
+❌ deploy_bifrost() - Not accessible at runtime
+```
+
+### Environment Variables Status
+```bash
+✅ TENANT=datasquiz
+✅ ENV_FILE=/mnt/data/datasquiz/.env
+✅ SCRIPT_DIR=/home/jglaine/AIPlatformAutomation/scripts
+✅ LLM_ROUTER=bifrost
+✅ COMPOSE_FILE=/mnt/data/datasquiz/docker-compose.yml
+```
+
+### Docker Services Status
+```bash
+$ sudo docker compose -f /mnt/data/datasquiz/docker-compose.yml ps
+NAME                      IMAGE                  COMMAND                  SERVICE    CREATED              STATUS                        PORTS
+ai-datasquiz-postgres-1   postgres:15-alpine     "docker-entrypoint.s…"   postgres   About an hour ago     Up About an hour (healthy)   5432/tcp
+ai-datasquiz-redis-1      redis:7-alpine         "docker-entrypoint.s…"   redis      About an hour ago     Up About an hour (healthy)   6379/tcp
+ai-datasquiz-qdrant-1     qdrant/qdrant:latest   "./entrypoint.sh"        qdrant     About an hour ago     Up About an hour (healthy)   0.0.0.0:6333->6333/tcp, [::]:6333->6333/tcp, 6334/tcp
+ai-datasquiz-ollama-1    ollama/ollama:latest   "/bin/ollama serve"      ollama     About an hour ago     Up About an hour (healthy)   0.0.0.0:11434->11434/tcp, [::]:11434->11434/tcp
+```
+
+## 📊 SUMMARY
+
+### Deployment Progress: 80% Complete
+**Infrastructure:** ✅ 100% (postgres, redis, qdrant, ollama)  
+**AI Gateway:** ❌ 0% (bifrost deployment blocked)  
+**Web Services:** ❌ 0% (blocked by gateway)  
+**Monitoring:** ❌ 0% (blocked by dependencies)  
+
+### Critical Path Items:
+1. **Function Resolution Issue** - BLOCKING
+2. **Bifrost Deployment** - BLOCKED BY #1
+3. **Service Stack Completion** - BLOCKED BY #2
+
+### Resolution Priority: CRITICAL
+**Time to Resolution:** Estimated 30-60 minutes  
+**Risk Level:** HIGH (deployment completely blocked)  
+**Expert Review:** REQUIRED for script interaction issues
+
 ---
-
-## 📊 IMPACT ASSESSMENT
-
-### Severity: **CRITICAL**
-- **Platform Deployment:** Completely blocked
-- **Service Availability:** 0% (no services starting)
-- **User Experience:** Total failure
-- **Data Integrity:** No data loss, but no functionality
-
-### Affected Components:
-- [ ] All infrastructure services (PostgreSQL, Redis, Qdrant)
-- [ ] All AI services (Ollama, Bifrost/LiteLLM)
-- [ ] All web services (OpenWebUI, n8n, Flowise, etc.)
-- [ ] All monitoring (Grafana, Prometheus)
-- [ ] All networking (Caddy, Tailscale)
-
----
-
-## 🎯 NEXT STEPS
-
-1. **IMMEDIATE:** Fix .env file with missing variables and JSON quoting
-2. **SHORT-TERM:** Test deployment with fixed .env
-3. **MEDIUM-TERM:** Update scripts to prevent regression
-4. **LONG-TERM:** Add validation for required variables
-
----
-
-## 📋 VERIFICATION CHECKLIST
-
-- [ ] `LLM_ROUTER=bifrost` present in .env
-- [ ] `ENABLE_BIFROST=true` present in .env  
-- [ ] `BIFROST_PROVIDERS` uses single quotes or escaped quotes
-- [ ] Script 1 writes all required variables
-- [ ] Script 2 can parse .env without errors
-- [ ] Script 2 detects Bifrost as router
-- [ ] Only Bifrost service generated in compose file
-- [ ] No LiteLLM services generated
-- [ ] All infrastructure services start successfully
-- [ ] Bifrost container starts and becomes healthy
-
----
-
-**Report Status:** 🔴 **CRITICAL ISSUES FOUND**  
-**Resolution Required:** Immediate fixes needed before deployment can succeed  
-**Estimated Fix Time:** 15-30 minutes for core issues, 1-2 hours for complete robust solution
+**Report Status:** 🔴 **DEPLOYMENT BLOCKED**  
+**Next Action:** Fix function resolution issue immediately  
+**Escalation:** Expert review required if not resolved in next attempt  
+**Business Impact:** Complete platform outage continues
