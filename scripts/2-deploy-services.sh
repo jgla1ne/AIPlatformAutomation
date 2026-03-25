@@ -21,12 +21,14 @@ done
 ENV_FILE="/mnt/data/${TENANT}/.env"
 [[ -f "$ENV_FILE" ]] && set -a && source "$ENV_FILE" && set +a
 
-# Load router choice from environment
-LLM_ROUTER=$(grep "^LLM_ROUTER=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "bifrost")
-echo "ℹ LLM Router selected: ${LLM_ROUTER}"
-
-# Source script 3 for helper functions
+# Source script 3 for helper functions (must be before using log_info)
 source "${SCRIPT_DIR}/3-configure-services.sh"
+
+# Load router choice from environment
+LLM_ROUTER=$(grep "^LLM_ROUTER=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'" || echo "bifrost")
+LLM_ROUTER="${LLM_ROUTER:-bifrost}"
+log_info "LLM Router selected: ${LLM_ROUTER}"
+echo "ℹ LLM Router selected: ${LLM_ROUTER}"
 
 # ── Helper Functions ────────────────────────────────────────────────
 # Service port mapping for health checks

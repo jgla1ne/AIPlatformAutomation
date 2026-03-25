@@ -100,7 +100,6 @@ N8N_PORT=""
 FLOWISE_PORT=""
 OPENWEBUI_PORT=""
 ANYTHINGLLM_PORT=""
-LITELLM_PORT=""
     OPENWEBUI_INTERNAL_PORT="8081"
     OPENCLAW_INTERNAL_PORT="18789"
     SIGNAL_INTERNAL_PORT="8080"
@@ -533,7 +532,6 @@ setup_logging() {
     # Set dynamic service URLs based on tenant configuration
     VECTOR_DB_URL="http://\${QDRANT_SERVICE_NAME:-qdrant}:\${QDRANT_PORT:-6333}"
     OLLAMA_INTERNAL_URL="http://\${OLLAMA_SERVICE_NAME:-ollama}:\${OLLAMA_PORT:-11434}"
-    LITELLM_INTERNAL_URL="http://\${LITELLM_SERVICE_NAME:-litellm}:\${LITELLM_PORT:-4000}"
     QDRANT_INTERNAL_URL="http://\${QDRANT_SERVICE_NAME:-qdrant}:\${QDRANT_PORT:-6333}"
     REDIS_INTERNAL_URL="redis://\${REDIS_SERVICE_NAME:-redis}:\${REDIS_PORT:-6379}"
     POSTGRES_INTERNAL_URL="postgresql://\${POSTGRES_SERVICE_NAME:-postgres}:\${POSTGRES_PORT:-5432}"
@@ -792,10 +790,10 @@ select_stack() {
     echo -e "  ${CYAN}  1)${NC}  🟢  ${BOLD}Minimal${NC}       — Ollama + Open WebUI only"
     echo -e "             ${DIM}Ideal for local LLM inference, low resource usage${NC}"
     echo ""
-    echo -e "  ${CYAN}  2)${NC}  🟢  ${BOLD}Development${NC}   - routed litellm<>ollama<>llm models with code server, continue.dev, ollama, litellm. Openclaw with tailscale for local dev."
+    echo -e "  ${CYAN}  2)${NC}  🟢  ${BOLD}Development${NC}   - Bifrost router + Ollama + code server, continue.dev, Openclaw with tailscale for local dev."
     echo -e "             ${DIM}Full development environment with AI integration${NC}"
     echo ""
-    echo -e "  ${CYAN}  3)${NC}  🔵  ${BOLD}Standard${NC}      — Minimal + n8n + Flowise + Qdrant + LiteLLM"
+    echo -e "  ${CYAN}  3)${NC}  🔵  ${BOLD}Standard${NC}      — Minimal + n8n + Flowise + Qdrant + Bifrost"
     echo -e "             ${DIM}Full AI automation stack, recommended starting point${NC}"
     echo ""
     echo -e "  ${CYAN}  4)${NC}  🟣  ${BOLD}Full${NC}          — Standard + AnythingLLM + Grafana + Prometheus + Authentik + Dev tools"
@@ -936,7 +934,6 @@ select_stack() {
         ask_service "🌐" "Open WebUI"    "Chat UI for Ollama"         "ENABLE_OPENWEBUI"     "$( [[ "${ENABLE_OPENWEBUI}" == "true" ]]     && echo y || echo n )"
         ask_service "🤖" "AnythingLLM"   "AI assistant & RAG"         "ENABLE_ANYTHINGLLM"   "$( [[ "${ENABLE_ANYTHINGLLM}" == "true" ]]   && echo y || echo n )"
         ask_service "🏗️ " "Dify"          "LLM app builder"            "ENABLE_DIFY"          "$( [[ "${ENABLE_DIFY}" == "true" ]]          && echo y || echo n )"
-        ask_service "🔀" "LiteLLM"       "LLM proxy gateway"          "ENABLE_LITELLM"       "$( [[ "${ENABLE_LITELLM}" == "true" ]]       && echo y || echo n )"
         echo ""
         
         # Development Environment (only for Development and Full stacks)
@@ -1284,8 +1281,10 @@ init_bifrost() {
 
     # Providers JSON — this is how Bifrost actually receives provider config
     echo "DEBUG: Setting BIFROST_PROVIDERS..." >&2
-    BIFROST_PROVIDERS='[{"provider":"ollama","base_url":"http://ollama:11434"}]'
-    echo "BIFROST_PROVIDERS='[{"provider":"ollama","base_url":"http://ollama:11434"}]'" >> "${ENV_FILE}"
+    # Remove any existing BIFROST_PROVIDERS line
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^BIFROST_PROVIDERS=/d' "${ENV_FILE}" 2>/dev/null || true
+    # Write with single quotes so docker compose reads it correctly
+    echo "BIFROST_PROVIDERS='[{\"provider\":\"ollama\",\"base_url\":\"http://ollama:11434\"}]'" >> "${ENV_FILE}"
 
     # No config directory needed — bifrost is env-var only
     log "SUCCESS" "Bifrost configuration complete (env-var based, no config file)"
@@ -1300,10 +1299,10 @@ select_llm_router() {
     echo ""
     echo -e "  ${BOLD}Available LLM Routers:${NC}"
     echo ""
-    echo -e "  ${CYAN}  1)${NC} LiteLLM  - Feature-rich, Python-based, requires PostgreSQL"
-    echo -e "     ${DIM}• Cost/speed/capability routing strategies${NC}"
-    echo -e "     ${DIM}• Multiple provider support with advanced features${NC}"
-    echo -e "     ${DIM}• Requires database and has cold start delays${NC}"
+    echo -e "  ${CYAN}  1)${NC} Bifrost  - Lightweight Rust-based router"
+    echo -e "     ${DIM}• Environment variable configuration only${NC}"
+    echo -e "     ${DIM}• Fast startup, minimal dependencies${NC}"
+    echo -e "     ${DIM}• Direct Ollama integration${NC}"
     echo ""
     echo -e "  ${CYAN}  2)${NC} Bifrost  - Lightweight Go binary, no database, fast startup"
     echo -e "     ${DIM}• Instant startup, no cold delays${NC}"
@@ -1316,20 +1315,16 @@ select_llm_router() {
         read -p "  ➤ Select LLM router [1-2] (default: 2): " router_choice
         router_choice="${router_choice:-2}"
         case "$router_choice" in
-            1) 
-                LLM_ROUTER="litellm"
-                echo -e "  ${GREEN}✅${NC} LiteLLM selected - Feature-rich routing with database"
-                ;;
-            2) 
+            1|2) 
                 LLM_ROUTER="bifrost"
-                echo -e "  ${GREEN}✅${NC} Bifrost selected - Lightweight production router"
+                echo -e "  ${GREEN}✅${NC} Bifrost selected - Lightweight, fast routing"
+                break
                 ;;
             *) 
-                echo -e "  ${YELLOW}⚠️ Invalid choice. Enter 1 or 2.${NC}"
+                echo -e "  ${YELLOW}⚠️${NC} Invalid choice. Please select 1 or 2."
                 continue
                 ;;
         esac
-        break
     done
     
     # Set router-specific configuration
@@ -1381,57 +1376,16 @@ select_llm_router() {
         esac
         echo -e "  ${DIM}✅ Bifrost routing mode: ${BIFROST_ROUTING_MODE}${NC}"
         
-    else
-        # LiteLLM needs routing strategy configuration
-        echo ""
-        echo -e "  ${BOLD}🧠  LiteLLM Routing Strategy${NC}"
-        echo -e "  ${DIM}Configure intelligent model routing for cost/latency optimization${NC}"
-        echo ""
-        
-        echo -e "  ${BOLD}Available Routing Strategies:${NC}"
-        echo ""
-        echo -e "  ${CYAN}  1)${NC} Cost-Optimized (recommended)"
-        echo -e "     ${DIM}Prioritize free/local models, then cheapest paid models${NC}"
-        echo ""
-        echo -e "  ${CYAN}  2)${NC} Speed-Optimized"
-        echo -e "     ${DIM}Prioritize fastest response times (Groq > Gemini > Local)${NC}"
-        echo ""
-        echo -e "  ${CYAN}  3)${NC} Balanced"
-        echo -e "     ${DIM}Balance cost, speed, and capability${NC}"
-        echo ""
-        echo -e "  ${CYAN}  4)${NC} Capability-Optimized"
-        echo -e "     ${DIM}Prioritize most capable models (GPT-4o > Claude-3 > Gemini)${NC}"
-        echo ""
-        
-        read -p "  ➤ Select LiteLLM routing strategy [1-4]: " litellm_routing_choice
-        
-        case "${litellm_routing_choice}" in
-            1) 
-                LITELLM_ROUTING_STRATEGY="cost-optimized"
-                echo -e "  ${GREEN}✅${NC} Cost-optimized routing selected"
-                ;;
-            2) 
-                LITELLM_ROUTING_STRATEGY="speed-optimized"
-                echo -e "  ${GREEN}✅${NC} Speed-optimized routing selected"
-                ;;
-            3) 
-                LITELLM_ROUTING_STRATEGY="balanced"
-                echo -e "  ${GREEN}✅${NC} Balanced routing selected"
-                ;;
-            4) 
-                LITELLM_ROUTING_STRATEGY="capability-optimized"
-                echo -e "  ${GREEN}✅${NC} Capability-optimized routing selected"
-                ;;
-            *) 
-                LITELLM_ROUTING_STRATEGY="cost-optimized"
-                echo -e "  ${YELLOW}⚠️${NC} Defaulting to cost-optimized routing"
-                ;;
-        esac
-        echo -e "  ${DIM}✅ LiteLLM routing strategy: ${LITELLM_ROUTING_STRATEGY}${NC}"
     fi
     
     log "SUCCESS" "LLM Router: ${LLM_ROUTER}"
+    
+    # These MUST all be present:
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_ROUTER=/d' "${ENV_FILE}" 2>/dev/null || true
     echo "LLM_ROUTER=${LLM_ROUTER}" >> "${ENV_FILE}"
+    
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^ENABLE_BIFROST=/d' "${ENV_FILE}" 2>/dev/null || true
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^ENABLE_LITELLM=/d' "${ENV_FILE}" 2>/dev/null || true
     
     # Set service flags based on router selection
     if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
@@ -2014,7 +1968,6 @@ collect_ports() {
     [[ "${ENABLE_FLOWISE}" = "true" ]]     && ports_to_configure+=("Flowise:3000:FLOWISE_PORT")
     [[ "${ENABLE_OPENWEBUI}" = "true" ]]   && ports_to_configure+=("Open WebUI:8081:OPENWEBUI_PORT")
     [[ "${ENABLE_ANYTHINGLLM}" = "true" ]] && ports_to_configure+=("AnythingLLM:3001:ANYTHINGLLM_PORT")
-    [[ "${ENABLE_LITELLM}" = "true" ]]     && ports_to_configure+=("LiteLLM:4000:LITELLM_PORT")
     [[ "${ENABLE_VLLM}" = "true" ]]         && ports_to_configure+=("VLLM:8000:VLLM_PORT")
     [[ "${ENABLE_GRAFANA}" = "true" ]]     && ports_to_configure+=("Grafana:3002:GRAFANA_PORT")
     [[ "${ENABLE_PROMETHEUS}" = "true" ]]  && ports_to_configure+=("Prometheus:9090:PROMETHEUS_PORT")
@@ -2359,7 +2312,6 @@ OPENAI_INTERNAL_URL="https://api.openai.com/v1"
 ANTHROPIC_INTERNAL_URL="https://api.anthropic.com"
 LOCALAI_INTERNAL_URL="http://\${LOCALAI_SERVICE_NAME:-localai}:\${LOCALAI_PORT:-8080}"
 VLLM_INTERNAL_URL="http://\${VLLM_SERVICE_NAME:-vllm}:\${VLLM_PORT:-8000}"
-LITELLM_INTERNAL_URL="http://\${LITELLM_SERVICE_NAME:-litellm}:\${LITELLM_PORT:-4000}"
 QDRANT_INTERNAL_URL="http://\${QDRANT_SERVICE_NAME:-qdrant}:\${QDRANT_PORT:-6333}"
 WEAVIATE_INTERNAL_URL="http://\${WEAVIATE_SERVICE_NAME:-weaviate}:\${WEAVIATE_PORT:-8080}"
 PINECONE_INTERNAL_URL="https://\${PINECONE_PROJECT_ID:-your-project-id}.svc.pinecone.io"
@@ -2467,17 +2419,7 @@ FLOWISE_SECRET_KEY="${FLOWISE_SECRET_KEY}"
 FLOWISE_USERNAME=admin
 FLOWISE_PASSWORD="${FLOWISE_PASSWORD}"
 
-# LiteLLM configuration for central AI gateway
-LITELLM_CONFIG_YAML='
-model_list:
-  - model_name: ${OLLAMA_DEFAULT_MODEL}
-    litellm_params:
-      model: ${OLLAMA_DEFAULT_MODEL}
-      api_base: http://${OLLAMA_INTERNAL_URL}
-      rpm_limit: 6
-  - model_name: gpt-3.5-turbo
-
-# ─── Service Secrets (CRITICAL for OpenWebUI) ───────────────────────────────────
+# LiteLLM configuration disabled (using Bifrost)
 JWT_SECRET="${JWT_SECRET}"
 ENCRYPTION_KEY="${ENCRYPTION_KEY}"
 # ADMIN_PASSWORD will be set below after AUTHENTIK_BOOTSTRAP_PASSWORD is generated
@@ -2605,7 +2547,6 @@ N8N_PORT=${N8N_PORT}
 FLOWISE_PORT=${FLOWISE_PORT}
 OPENWEBUI_PORT=${OPENWEBUI_PORT}
 ANYTHINGLLM_PORT=${ANYTHINGLLM_PORT}
-LITELLM_PORT=${LITELLM_PORT}
 GRAFANA_PORT=${GRAFANA_PORT}
 PROMETHEUS_PORT=${PROMETHEUS_PORT}
 OLLAMA_PORT=${OLLAMA_PORT}
@@ -2616,7 +2557,6 @@ TAILSCALE_PORT=${TAILSCALE_PORT}
 RCLONE_PORT=${RCLONE_PORT}
 
 # ─── PORT_ aliases for Docker Compose (Script 3 uses PORT_X naming) ─────────
-PORT_LITELLM=${LITELLM_PORT:-4000}
 PORT_OPENWEBUI=${OPENWEBUI_PORT:-3000}
 PORT_N8N=${N8N_PORT:-5678}
 PORT_FLOWISE=${FLOWISE_PORT:-3001}
@@ -2982,13 +2922,9 @@ print_summary() {
     [ "${ENABLE_DIFY}" = "true" ]        && echo -e "    ${GREEN}✓${NC}  Dify"
     [ "${ENABLE_N8N}" = "true" ]         && echo -e "    ${GREEN}✓${NC}  n8n          :${N8N_PORT}"
     [ "${ENABLE_FLOWISE}" = "true" ]     && echo -e "    ${GREEN}✓${NC}  Flowise      :${FLOWISE_PORT}"
-    [ "${ENABLE_LITELLM}" = "true" ]     && echo -e "    ${GREEN}✓${NC}  LiteLLM      :${LITELLM_PORT}"
     if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
         echo "  LLM Router:    Bifrost (port ${BIFROST_PORT:-4000})"
         echo "  Bifrost Key:   ${BIFROST_AUTH_TOKEN:0:20}..."
-    else
-        echo "  LLM Router:    LiteLLM (port 4000)"
-        echo "  LiteLLM Key:   ${LITELLM_MASTER_KEY:0:20}..."
     fi
     [ "${ENABLE_QDRANT}" = "true" ]      && echo -e "    ${GREEN}✓${NC}  Qdrant       :${QDRANT_PORT}"
     [ "${ENABLE_GRAFANA}" = "true" ]     && echo -e "    ${GREEN}✓${NC}  Grafana      :${GRAFANA_PORT}"

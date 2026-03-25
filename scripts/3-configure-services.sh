@@ -850,7 +850,7 @@ EOF
     networks:
       - default
     depends_on:
-      - litellm
+$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "      - litellm")      
       - open-webui
       - grafana
     healthcheck:
@@ -869,7 +869,7 @@ EOF
       postgres:
         condition: service_healthy
     environment:
-      OPENAI_API_BASE_URL: "http://litellm:4000/v1"
+      OPENAI_API_BASE_URL: "$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "http://litellm:4000/v1" || echo "http://bifrost:4000/v1")"
       OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
       WEBUI_SECRET_KEY: ${JWT_SECRET}
       # DATABASE_URL removed — open-webui uses SQLite (postgres triggers peewee bug)
@@ -1346,19 +1346,23 @@ EOF
     build:
       context: ${CONFIG_DIR}/ingestion
       dockerfile: Dockerfile
-    depends_on:
+$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "    depends_on:
       litellm:
         condition: service_healthy
       qdrant:
         condition: service_healthy
       rclone:
-        condition: service_started
+        condition: service_started" || echo "    depends_on:
+      qdrant:
+        condition: service_healthy
+      rclone:
+        condition: service_started")
     volumes:
       - gdrive_data:/data/gdrive-sync:ro
       - ingestion_state:/data/ingestion-state
     environment:
       QDRANT_URL: "http://qdrant:6333"
-      LITELLM_URL: "http://litellm:4000"
+      LITELLM_URL: "$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "http://litellm:4000" || echo "http://bifrost:4000")"
       LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY}"
       EMBEDDING_MODEL: "text-embedding-3-small"
       COLLECTION_NAME: "gdrive_documents"
@@ -1416,14 +1420,16 @@ EOF
     image: n8nio/n8n:latest
     restart: unless-stopped
     user: "1000:\${TENANT_GID:-1001}"
-    depends_on:
+$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "    depends_on:
       litellm:
         condition: service_healthy
       postgres:
-        condition: service_healthy
+        condition: service_healthy" || echo "    depends_on:
+      postgres:
+        condition: service_healthy")
     environment:
       N8N_AI_OPENAI_API_KEY: "\${LITELLM_MASTER_KEY}"
-      N8N_AI_OPENAI_BASE_URL: "http://litellm:4000/v1"
+      N8N_AI_OPENAI_BASE_URL: "$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "http://litellm:4000/v1" || echo "http://bifrost:4000/v1")"
       DB_TYPE: "postgresdb"
       DB_POSTGRESDB_HOST: "postgres"
       DB_POSTGRESDB_PORT: "5432"
@@ -1449,12 +1455,12 @@ EOF
     image: flowiseai/flowise:latest
     restart: unless-stopped
     user: "1000:\${TENANT_GID:-1001}"
-    depends_on:
+$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "    depends_on:
       litellm:
-        condition: service_healthy
+        condition: service_healthy")
     environment:
       OPENAI_API_KEY: "\${LITELLM_MASTER_KEY}"
-      OPENAI_API_BASE: "http://litellm:4000/v1"
+      OPENAI_API_BASE: "$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "http://litellm:4000/v1" || echo "http://bifrost:4000/v1")"
       DATABASE_PATH: "/root/.flowise"
       FLOWISE_USERNAME: "admin"
       FLOWISE_PASSWORD: "\${ADMIN_PASSWORD}"
@@ -1476,15 +1482,15 @@ EOF
     image: mintplexlabs/anythingllm:latest
     restart: unless-stopped
     user: "1000:\${TENANT_GID:-1001}"
-    depends_on:
+$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "    depends_on:
       litellm:
-        condition: service_healthy
+        condition: service_healthy")
     environment:
       LLM_PROVIDER: "openai"
       OPEN_AI_KEY: "\${LITELLM_MASTER_KEY}"
-      OPEN_AI_BASE_PATH: "http://litellm:4000/v1"
+      OPEN_AI_BASE_PATH: "$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "http://litellm:4000/v1" || echo "http://bifrost:4000/v1")"
       EMBEDDING_ENGINE: "openai"
-      EMBEDDING_BASE_PATH: "http://litellm:4000/v1"
+      EMBEDDING_BASE_PATH: "$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "http://litellm:4000/v1" || echo "http://bifrost:4000/v1")"
       VECTOR_DB: "\${VECTOR_DB_TYPE:-qdrant}"
       QDRANT_ENDPOINT: "http://qdrant:6333"
       STORAGE_DIR: "/app/server/storage"
@@ -1556,9 +1562,9 @@ EOF
     image: lscr.io/linuxserver/code-server:latest
     restart: unless-stopped
     user: "1000:\${TENANT_GID:-1001}"
-    depends_on:
+$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "    depends_on:
       litellm:
-        condition: service_healthy
+        condition: service_healthy")
     environment:
       PUID: "1000"
       PGID: "\${TENANT_GID:-1001}"
@@ -1566,7 +1572,7 @@ EOF
       SUDO_PASSWORD: "\${CODESERVER_PASSWORD}"
       DEFAULT_WORKSPACE: "/mnt/data"
       LITELLM_API_KEY: "\${LITELLM_MASTER_KEY}"
-      LITELLM_BASE_URL: "http://litellm:4000/v1"
+      LITELLM_BASE_URL: "$([[ "${LLM_ROUTER:-bifrost}" == "litellm" ]] && echo "http://litellm:4000/v1" || echo "http://bifrost:4000/v1")"
       # Continue.dev extension configuration
       EXTENSIONS_GALLERY: "https://open-vsx.org/vsx-extension-gallery"
       EXTENSIONS: "continuedev.continue"
@@ -1618,8 +1624,9 @@ deploy_service() {
             ;;
         "caddy"|"nginx")
             # Proxy - depends on all application services being ready
-            for app_service in "litellm open-webui anythingllm flowise n8n ollama qdrant"; do
-                if [[ "${ENABLE_${app_service^^}:-false}" == "true" ]]; then
+            for app_service in litellm open-webui anythingllm flowise n8n ollama qdrant; do
+                local enable_var="ENABLE_$(echo "$app_service" | tr '[:lower:]' '[:upper:]' | tr '-' '_')"
+                if [[ "${!enable_var:-false}" == "true" ]]; then
                     wait_for_healthy "$app_service" 30 || { 
                         log_error "${app_service} not ready - cannot deploy ${svc}"; 
                         return 1; 
@@ -1635,7 +1642,6 @@ deploy_service() {
         
         # Post-deployment health verification
         if [[ "${ENABLE_HEALTH_CHECKS:-true}" == "true" ]]; then
-            source "${SCRIPT_DIR}/2-deploy-services.sh"
             wait_for_healthy "$svc" "$timeout" || {
                 log_warning "${svc} deployment completed but health check failed"
                 return 1
@@ -2005,7 +2011,7 @@ health_dashboard() {
     [[ "${ENABLE_CODESERVER:-false}" == "true" ]] && \
         _check_http "codeserver"     "http://localhost:${PORT_CODESERVER:-8443}/"
     echo ""
-    echo -e "  ${BOLD}Web Services (all routed via LiteLLM)${NC}"
+    echo -e "  ${BOLD}Web Services (all routed via ${LLM_ROUTER:-LiteLLM})${NC}"
     [[ "${ENABLE_OPENWEBUI:-false}"  == "true" ]] && \
         _check_http "open-webui"     "http://localhost:${PORT_OPENWEBUI:-3000}/"
     [[ "${ENABLE_N8N:-false}"        == "true" ]] && \
