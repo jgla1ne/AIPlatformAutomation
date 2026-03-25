@@ -1337,39 +1337,148 @@ init_bifrost() {
     echo -e "  ${DIM}✅ Container: ${PROJECT_PREFIX}${TENANT_ID}-bifrost${NC}"
 }
 
-# ─── LLM Router Configuration (Bifrost Only) ───────────────────────────────
+# ─── LiteLLM Configuration ─────────────────────────────────────────────────────
+init_litellm() {
+    print_step "8.3" "11" "LiteLLM Configuration"
+
+    echo -e "  ${BOLD}⚙️  LiteLLM Configuration${NC}"
+    echo -e "  ${DIM}Configuring LiteLLM with environment variables${NC}"
+    
+    # Generate or preserve master key
+    local existing_key=$(grep "^LITELLM_MASTER_KEY=" "${ENV_FILE}" 2>/dev/null \
+        | cut -d= -f2- | tr -d '"')
+    local master_key="${existing_key:-sk-litellm-$(openssl rand -hex 24)}"
+    
+    # Get user input for port (default 4000)
+    local port
+    echo -e "  ${CYAN}➤ LiteLLM port [4000]:${NC} "
+    read -r port
+    port="${port:-4000}"
+    
+    # Ollama URL must already exist from init_ollama()
+    local ollama_url="http://${PROJECT_PREFIX}${TENANT_ID}-ollama:11434"
+    
+    # Write LiteLLM configuration to .env
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^LITELLM_MASTER_KEY=/d' "${ENV_FILE}" 2>/dev/null || true
+    echo "LITELLM_MASTER_KEY=${master_key}" >> "${ENV_FILE}"
+    
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^LITELLM_PORT=/d' "${ENV_FILE}" 2>/dev/null || true
+    echo "LITELLM_PORT=${port}" >> "${ENV_FILE}"
+    
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^LITELLM_OLLAMA_URL=/d' "${ENV_FILE}" 2>/dev/null || true
+    echo "LITELLM_OLLAMA_URL=${ollama_url}" >> "${ENV_FILE}"
+    
+    # Set router-agnostic variables
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_ROUTER_CONTAINER=/d' "${ENV_FILE}" 2>/dev/null || true
+    echo "LLM_ROUTER_CONTAINER=${PROJECT_PREFIX}${TENANT_ID}-litellm" >> "${ENV_FILE}"
+    
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_ROUTER_PORT=/d' "${ENV_FILE}" 2>/dev/null || true
+    echo "LLM_ROUTER_PORT=${port}" >> "${ENV_FILE}"
+    
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_GATEWAY_URL=/d' "${ENV_FILE}" 2>/dev/null || true
+    echo "LLM_GATEWAY_URL=http://${PROJECT_PREFIX}${TENANT_ID}-litellm:${port}" >> "${ENV_FILE}"
+    
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_GATEWAY_API_URL=/d' "${ENV_FILE}" 2>/dev/null || true
+    echo "LLM_GATEWAY_API_URL=http://${PROJECT_PREFIX}${TENANT_ID}-litellm:${port}/v1" >> "${ENV_FILE}"
+    
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_MASTER_KEY=/d' "${ENV_FILE}" 2>/dev/null || true
+    echo "LLM_MASTER_KEY=${master_key}" >> "${ENV_FILE}"
+    
+    log "SUCCESS" "LiteLLM configured with environment variables"
+    echo -e "  ${GREEN}✅${NC} LiteLLM environment config created"
+    echo -e "  ${DIM}✅ Port: ${port}${NC}"
+    echo -e "  ${DIM}✅ Container: ${PROJECT_PREFIX}${TENANT_ID}-litellm${NC}"
+}
+
+# ─── LLM Router Configuration (Modular Choice) ───────────────────────────────
 configure_llm_router() {
     print_step "8.2" "11" "LLM Router Configuration"
     
     echo -e "  ${BOLD}🚀 LLM Router Configuration${NC}"
-    echo -e "  ${DIM}Configuring Bifrost as the LLM router${NC}"
+    echo -e "  ${DIM}Choose your LLM routing strategy${NC}"
     echo ""
-    echo -e "  ${CYAN}✅${NC} Bifrost - Lightweight Go-based router"
-    echo -e "     ${DIM}• Environment variable configuration only${NC}"
+    echo -e "  ${YELLOW}🟢 Option 1:${NC} Bifrost - Lightweight Go-based router"
+    echo -e "     ${DIM}• YAML configuration file${NC}"
     echo -e "     ${DIM}• Fast startup, minimal dependencies${NC}"
     echo -e "     ${DIM}• Direct Ollama integration${NC}"
     echo -e "     ${DIM}• Production-ready reliability${NC}"
     echo ""
+    echo -e "  ${YELLOW}🟡 Option 2:${NC} LiteLLM - Feature-rich Python router"
+    echo -e "     ${DIM}• Environment variable configuration${NC}"
+    echo -e "     ${DIM}• Advanced load balancing & retry logic${NC}"
+    echo -e "     ${DIM}• Multiple provider support${NC}"
+    echo -e "     ${DIM}• Database-backed configuration${NC}"
+    echo ""
     
-    # Bifrost is the only supported router
-    LLM_ROUTER="bifrost"
-    BIFROST_PORT="${BIFROST_PORT:-4000}"
-    BIFROST_ROUTING_MODE="${BIFROST_ROUTING_MODE:-direct}"
+    # Get user choice
+    local router_choice
+    echo -e "  ${CYAN}➤ Choose LLM router [1=Bifrost, 2=LiteLLM] (default: 1):${NC} "
+    read -r router_choice
+    router_choice="${router_choice:-1}"
     
-    echo -e "  ${GREEN}✅${NC} Bifrost selected - Lightweight, fast routing"
-    echo -e "  ${DIM}✅ Bifrost configured for port ${BIFROST_PORT}${NC}"
-    echo -e "  ${DIM}✅ Bifrost routing mode: ${BIFROST_ROUTING_MODE}${NC}"
+    case "${router_choice}" in
+        1)
+            LLM_ROUTER="bifrost"
+            BIFROST_PORT="${BIFROST_PORT:-4000}"
+            BIFROST_ROUTING_MODE="${BIFROST_ROUTING_MODE:-direct}"
+            
+            echo -e "  ${GREEN}✅${NC} Bifrost selected - Lightweight, fast routing"
+            echo -e "  ${DIM}✅ Bifrost configured for port ${BIFROST_PORT}${NC}"
+            echo -e "  ${DIM}✅ Bifrost routing mode: ${BIFROST_ROUTING_MODE}${NC}"
+            
+            # Write router configuration to .env
+            [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_ROUTER=/d' "${ENV_FILE}" 2>/dev/null || true
+            echo "LLM_ROUTER=${LLM_ROUTER}" >> "${ENV_FILE}"
+            
+            [[ -f "${ENV_FILE}" ]] && sed -i '/^ENABLE_BIFROST=/d' "${ENV_FILE}" 2>/dev/null || true
+            echo "ENABLE_BIFROST=true" >> "${ENV_FILE}"
+            
+            [[ -f "${ENV_FILE}" ]] && sed -i '/^ENABLE_LITELLM=/d' "${ENV_FILE}" 2>/dev/null || true
+            echo "ENABLE_LITELLM=false" >> "${ENV_FILE}"
+            
+            echo -e "  ${DIM}✅ Bifrost enabled${NC}"
+            ;;
+        2)
+            LLM_ROUTER="litellm"
+            LITELLM_PORT="${LITELLM_PORT:-4000}"
+            LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-litellm-$(openssl rand -hex 24)}"
+            
+            echo -e "  ${GREEN}✅${NC} LiteLLM selected - Feature-rich routing"
+            echo -e "  ${DIM}✅ LiteLLM configured for port ${LITELLM_PORT}${NC}"
+            echo -e "  ${DIM}✅ Master key generated${NC}"
+            
+            # Write router configuration to .env
+            [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_ROUTER=/d' "${ENV_FILE}" 2>/dev/null || true
+            echo "LLM_ROUTER=${LLM_ROUTER}" >> "${ENV_FILE}"
+            
+            [[ -f "${ENV_FILE}" ]] && sed -i '/^ENABLE_LITELLM=/d' "${ENV_FILE}" 2>/dev/null || true
+            echo "ENABLE_LITELLM=true" >> "${ENV_FILE}"
+            
+            [[ -f "${ENV_FILE}" ]] && sed -i '/^ENABLE_BIFROST=/d' "${ENV_FILE}" 2>/dev/null || true
+            echo "ENABLE_BIFROST=false" >> "${ENV_FILE}"
+            
+            [[ -f "${ENV_FILE}" ]] && sed -i '/^LITELLM_MASTER_KEY=/d' "${ENV_FILE}" 2>/dev/null || true
+            echo "LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}" >> "${ENV_FILE}"
+            
+            echo -e "  ${DIM}✅ LiteLLM enabled${NC}"
+            ;;
+        *)
+            echo -e "  ${RED}❌ Invalid choice. Defaulting to Bifrost.${NC}"
+            LLM_ROUTER="bifrost"
+            BIFROST_PORT="4000"
+            
+            [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_ROUTER=/d' "${ENV_FILE}" 2>/dev/null || true
+            echo "LLM_ROUTER=${LLM_ROUTER}" >> "${ENV_FILE}"
+            
+            [[ -f "${ENV_FILE}" ]] && sed -i '/^ENABLE_BIFROST=/d' "${ENV_FILE}" 2>/dev/null || true
+            echo "ENABLE_BIFROST=true" >> "${ENV_FILE}"
+            
+            [[ -f "${ENV_FILE}" ]] && sed -i '/^ENABLE_LITELLM=/d' "${ENV_FILE}" 2>/dev/null || true
+            echo "ENABLE_LITELLM=false" >> "${ENV_FILE}"
+            ;;
+    esac
     
     log "SUCCESS" "LLM Router: ${LLM_ROUTER}"
-    
-    # Write router configuration to .env
-    [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_ROUTER=/d' "${ENV_FILE}" 2>/dev/null || true
-    echo "LLM_ROUTER=${LLM_ROUTER}" >> "${ENV_FILE}"
-    
-    [[ -f "${ENV_FILE}" ]] && sed -i '/^ENABLE_BIFROST=/d' "${ENV_FILE}" 2>/dev/null || true
-    echo "ENABLE_BIFROST=true" >> "${ENV_FILE}"
-    
-    echo -e "  ${DIM}✅ Bifrost enabled${NC}"
 }
 
 # ─── Network & Security Configuration ───────────────────────────────────────────
@@ -3134,10 +3243,12 @@ main() {
     select_vector_db         # Step 7
     configure_databases      # Step 7.5 - Database configuration
     collect_llm_config       # Step 8
-    configure_llm_router      # Step 8.2 - LLM router configuration (Bifrost only)
+    configure_llm_router      # Step 8.2 - LLM router configuration (Modular choice)
     # Initialize router-specific configuration
     if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
         init_bifrost
+    elif [[ "${LLM_ROUTER}" == "litellm" ]]; then
+        init_litellm
     fi
     collect_network_config   # Step 9 - NEW: Network & security configuration
     collect_ports            # Step 10
@@ -3152,6 +3263,10 @@ main() {
         # Bifrost auth token already generated in init_bifrost()
         # Just ensure it's loaded for consistency
         load_or_generate_secret "BIFROST_AUTH_TOKEN"
+    elif [[ "${LLM_ROUTER}" == "litellm" ]]; then
+        # LiteLLM master key already generated in init_litellm()
+        # Just ensure it's loaded for consistency
+        load_or_generate_secret "LITELLM_MASTER_KEY"
     fi
     
     load_or_generate_secret "ANYTHINGLLM_JWT_SECRET"
