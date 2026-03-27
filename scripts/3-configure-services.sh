@@ -566,6 +566,111 @@ generate_configs() {
     log_success "All configuration files generated"
 }
 
+# ── Service Generation Functions (Mission Control Modularity) ────────────────────────
+
+generate_bifrost_service() {
+    log_info "Generating Bifrost service with YAML config mount..." >&2
+    
+    # Validate required variables
+    : "${LLM_ROUTER_CONTAINER:?LLM_ROUTER_CONTAINER not set}"
+    : "${LLM_ROUTER_PORT:?LLM_ROUTER_PORT not set}"
+    : "${BIFROST_AUTH_TOKEN:?BIFROST_AUTH_TOKEN not set}"
+    : "${CONFIG_DIR:?CONFIG_DIR not set}"
+    : "${DATA_DIR:?DATA_DIR not set}"
+    : "${DOCKER_NETWORK:?DOCKER_NETWORK not set}"
+    : "${DOCKER_USER_ID:?DOCKER_USER_ID not set}"
+    : "${DOCKER_GROUP_ID:?DOCKER_GROUP_ID not set}"
+    : "${OLLAMA_CONTAINER:?OLLAMA_CONTAINER not set}"
+    : "${MEM0_CONTAINER:?MEM0_CONTAINER not set}"
+    
+    mkdir -p "${DATA_DIR}/bifrost"
+    
+    cat << EOF
+  ${LLM_ROUTER_CONTAINER}:
+    image: maximhq/bifrost:latest
+    container_name: ${LLM_ROUTER_CONTAINER}
+    restart: unless-stopped
+    user: "${DOCKER_USER_ID}:${DOCKER_GROUP_ID}"
+    volumes:
+      - ${CONFIG_DIR}/bifrost/config.yaml:/app/config.yaml:ro
+      - ${DATA_DIR}/bifrost:/app/data
+    networks:
+      - default
+    ports:
+      - "127.0.0.1:${LLM_ROUTER_PORT}:${LLM_ROUTER_PORT}"
+    environment:
+      - CONFIG_FILE_PATH=/app/config.yaml
+      - PORT=${LLM_ROUTER_PORT}
+    command: ["--config", "/app/config.yaml"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+      ai-datasquiz-mem0:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:${LLM_ROUTER_PORT}/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    labels:
+      - "com.${PROJECT_PREFIX}${TENANT_ID}.service=bifrost"
+      - "com.${PROJECT_PREFIX}${TENANT_ID}.role=llm-router"
+EOF
+    
+    log_success "Bifrost service configured with YAML mount" >&2
+}
+
+generate_mem0_service() {
+    log_info "Generating Mem0 service..." >&2
+    
+    # Validate required variables
+    : "${MEM0_CONTAINER:?MEM0_CONTAINER not set}"
+    : "${MEM0_PORT:?MEM0_PORT not set}"
+    : "${MEM0_API_KEY:?MEM0_API_KEY not set}"
+    : "${CONFIG_DIR:?CONFIG_DIR not set}"
+    : "${DATA_DIR:?DATA_DIR not set}"
+    : "${DOCKER_NETWORK:?DOCKER_NETWORK not set}"
+    : "${DOCKER_USER_ID:?DOCKER_USER_ID not set}"
+    : "${DOCKER_GROUP_ID:?DOCKER_GROUP_ID not set}"
+    : "${QDRANT_CONTAINER:?QDRANT_CONTAINER not set}"
+    
+    mkdir -p "${DATA_DIR}/mem0"
+    
+    cat << EOF
+  ${MEM0_CONTAINER}:
+    image: mem0/mem0-api-server:latest
+    container_name: ${MEM0_CONTAINER}
+    restart: unless-stopped
+    user: "${DOCKER_USER_ID}:${DOCKER_GROUP_ID}"
+    networks:
+      - default
+    ports:
+      - "127.0.0.1:${MEM0_PORT}:${MEM0_PORT}"
+    volumes:
+      - ${CONFIG_DIR}/mem0/config.yaml:/app/config.yaml:ro
+      - ${DATA_DIR}/mem0:/app/data
+    environment:
+      - MEM0_CONFIG=/app/config.yaml
+      - MEM0_API_KEY=${MEM0_API_KEY}
+      - PORT=${MEM0_PORT}
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:${MEM0_PORT}/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    labels:
+      - "com.${PROJECT_PREFIX}${TENANT_ID}.service=mem0"
+      - "com.${PROJECT_PREFIX}${TENANT_ID}.role=memory"
+EOF
+    
+    log_success "Mem0 service configured" >&2
+}
+
 # ── Docker Compose Generator (Zero Hardcoded Values) ───────────────────────
 generate_compose() {
     log_info "Generating docker-compose.yml at ${COMPOSE_FILE}..."
@@ -618,8 +723,18 @@ services:
       retries: 5
 EOF
 
-    # Add enabled services dynamically - NO hardcoded values
-
+    # Add enabled services dynamically using generation functions - NO hardcoded values
+    
+    # Add Bifrost service if enabled
+    [[ "${LLM_ROUTER:-}" == "bifrost" && -n "${LLM_ROUTER:-}" ]] && {
+        generate_bifrost_service >> "$COMPOSE_FILE"
+    }
+    
+    # Add Mem0 service if enabled
+    [[ "${ENABLE_MEM0:-false}" == "true" ]] && {
+        generate_mem0_service >> "$COMPOSE_FILE"
+    }
+    
     # Add Caddy service for HTTPS proxy
     cat >> "$COMPOSE_FILE" <<EOF
   caddy:
@@ -710,29 +825,6 @@ EOF
       timeout: 5s
       retries: 5
       start_period: 60s   # was 30s — needs longer on fresh volume
-EOF
-
-    [[ "${ENABLE_MEM0:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
-  mem0:
-    image: mem0ai/mem0:latest
-    restart: unless-stopped
-    user: "1000:\${TENANT_GID:-1001}"
-    volumes:
-      - ${CONFIG_DIR}/mem0/config.yaml:/app/config.yaml:ro
-      - ${DATA_DIR}/mem0:/app/data
-    environment:
-      - MEM0_CONFIG=/app/config.yaml
-      - MEM0_API_KEY=${MEM0_API_KEY}
-      - PORT=8765
-    depends_on:
-      qdrant:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8765/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
 EOF
 
     [[ "${ENABLE_RCLONE:-false}" == "true" ]] && {
@@ -1403,21 +1495,21 @@ deploy_service() {
     
     # Check dependencies before deployment
     case "$svc" in
-        "bifrost")
+        "bifrost"|"ai-datasquiz-bifrost")
             # Core AI Gateway - depends on infrastructure
             wait_for_healthy postgres 60 || { log_error "Postgres not ready - cannot deploy ${svc}"; return 1; }
             wait_for_healthy redis 30 || { log_error "Redis not ready - cannot deploy ${svc}"; return 1; }
             ;;
         "open-webui"|"anythingllm"|"flowise"|"n8n")
             # AI Applications - depend on Bifrost + Qdrant
-            wait_for_healthy bifrost 60 || { log_error "Bifrost not ready - cannot deploy ${svc}"; return 1; }
+            wait_for_healthy ai-datasquiz-bifrost 60 || { log_error "Bifrost not ready - cannot deploy ${svc}"; return 1; }
             if [[ "${ENABLE_QDRANT:-false}" == "true" ]]; then
                 wait_for_healthy qdrant 30 || { log_error "Qdrant not ready - cannot deploy ${svc}"; return 1; }
             fi
             ;;
         "caddy"|"nginx")
             # Proxy - depends on all application services being ready
-            for app_service in bifrost open-webui anythingllm flowise n8n ollama qdrant; do
+            for app_service in ai-datasquiz-bifrost open-webui anythingllm flowise n8n ollama qdrant; do
                 local enable_var="ENABLE_$(echo "$app_service" | tr '[:lower:]' '[:upper:]' | tr '-' '_')"
                 if [[ "${!enable_var:-false}" == "true" ]]; then
                     wait_for_healthy "$app_service" 30 || { 

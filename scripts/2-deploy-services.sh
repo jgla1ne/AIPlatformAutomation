@@ -25,8 +25,7 @@ ENV_FILE="/mnt/data/${TENANT}/.env"
 source "${SCRIPT_DIR}/3-configure-services.sh"
 
 # Load router choice from environment
-LLM_ROUTER=$(grep "^LLM_ROUTER=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'" || echo "bifrost")
-LLM_ROUTER="${LLM_ROUTER:-bifrost}"
+LLM_ROUTER=$(grep "^LLM_ROUTER=" "$ENV_FILE" 2>/dev/null | grep -v "^#" | cut -d= -f2- | tr -d '"' | tr -d "'" || echo "")
 log_info "LLM Router selected: ${LLM_ROUTER}"
 echo "ℹ LLM Router selected: ${LLM_ROUTER}"
 
@@ -218,13 +217,17 @@ main() {
     }
 
     # 5. AI gateway — Bifrost only deployment
-    if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
-        log_info "About to call deploy_bifrost function..."
-        type deploy_bifrost
-        deploy_bifrost
+    if [[ -n "${LLM_ROUTER}" ]]; then
+        if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
+            log_info "About to call deploy_service function..."
+            type deploy_service
+            deploy_service ai-datasquiz-bifrost
+        else
+            log_error "Unknown LLM router: ${LLM_ROUTER}. Only Bifrost is supported."
+            exit 1
+        fi
     else
-        log_error "Unknown LLM router: ${LLM_ROUTER}. Only Bifrost is supported."
-        exit 1
+        log_info "No LLM router configured - skipping gateway deployment"
     fi
 
     # Helper functions
