@@ -130,13 +130,13 @@ Script 3 → Manage Services (reads Script 1 .env, monitors deployed services)
 ### **🔧 Fixes Implemented (v3.7.0)**
 
 #### **✅ Bifrost LLM Proxy Implementation**
-- **Issue**: LiteLLM complexity and incorrect configuration method
+- **Issue**: Bifrost complexity and incorrect configuration method
 - **Solution**: Implemented lightweight Go-based Bifrost proxy with YAML configuration
 - **Result**: Instant startup, 50MB footprint, 5000+ req/s performance, correct config schema
 
 #### **✅ Complete LiteLLM Removal**
-- **Issue**: Legacy LiteLLM references and hardcoded service URLs throughout system
-- **Solution**: Comprehensive refactoring to remove all LiteLLM references, implement router-agnostic variables
+- **Issue**: Legacy Bifrost references and hardcoded service URLs throughout system
+- **Solution**: Comprehensive refactoring to remove all Bifrost references, implement router-agnostic variables
 - **Result**: Clean Bifrost-only deployment with proper YAML configuration and zero hardcoded references
 
 #### **✅ Script 1 Configuration Fixes**
@@ -161,7 +161,7 @@ Script 3 → Manage Services (reads Script 1 .env, monitors deployed services)
 
 #### **✅ Service Orchestration Excellence**
 - **Issue**: Services starting before dependencies ready, no readiness gates
-- **Solution**: Added LiteLLM readiness gate, proper service sequencing, API key generation after health
+- **Solution**: Added Bifrost readiness gate, proper service sequencing, API key generation after health
 - **Result**: All services start in correct order with proper dependencies
 
 #### **✅ Caddy Configuration Fix**
@@ -290,10 +290,10 @@ Each tenant deployment generates:
 - Docker Networking & Service Discovery
 
 **🔧 KNOWN ISSUES:**
-- LiteLLM Database Initialization: Prisma client generation failing
-- LiteLLM Pydantic Warnings: Protected namespace conflicts
-- Service Dependencies: Some services blocked by LiteLLM health
-- Redis Port Configuration: Cache pointing to wrong port (6373 vs 6379)
+- **Bifrost Database Initialization**: Prisma client generation failing
+- **Bifrost Pydantic Warnings**: Protected namespace conflicts
+- **Service Dependencies**: Some services blocked by Bifrost health
+- **Redis Port Configuration**: Cache pointing to wrong port (6373 vs 6379)
 - **RESOLVED: Ingestion Pipeline Integration** - Successfully embedded in core scripts
 - **RESOLVED: External Dependencies** - Zero external folder dependencies
 - **RESOLVED: Architecture Compliance** - 5-key-scripts principle strictly followed
@@ -304,10 +304,9 @@ EC2 Development Environment
 ├── Code Server (Primary IDE) → https://opencode.ai.datasquiz.net
 │   ├── Continue.dev Extension (integrated) → AI Assistant
 │   ├── Git Repository (/mnt/data/git) → Full source control
-│   ├── GitHub Project (/home/coder/project) → README, scripts, docs
-│   └── → LiteLLM API → Your Models (local + cloud)
+│   └── → Bifrost API → Your Models (local + cloud)
 ├── OpenClaw → https://openclaw.ai.datasquiz.net → Tailscale IP:18789
-├── LiteLLM → https://litellm.ai.datasquiz.net → Ollama-first + External
+├── Bifrost → https://bifrost.ai.datasquiz.net → Ollama-first + External
 ├── OpenWebUI → https://chat.ai.datasquiz.net → AI Chat Interface
 └── Your 4 bash scripts (edited and run directly on server)
 ```
@@ -380,7 +379,7 @@ BIFROST_PROVIDERS='[{"provider":"ollama","base_url":"http://ollama:11434"}]'
 ✅ **Nothing as root** - All services run under tenant UID/GID (dynamically detected)  
 ✅ **Data confinement** - Everything under `/mnt/data/tenant/` except cleanup logs in `~/logs/`  
 ✅ **Dynamic compose generation** - No static files, compose generated only after all variables set  
-✅ **Zero hardcoded values** - Maximum modularity, all configuration via `.env` variables  
+✅ **Zero hardcoded values** - All configuration via environment variables  
 ✅ **No unbound variables** - Complete environment sourcing and validation  
 ✅ **True modularity** - Mission Control serves as central utility hub for all scripts
 
@@ -388,11 +387,11 @@ BIFROST_PROVIDERS='[{"provider":"ollama","base_url":"http://ollama:11434"}]'
 
 ✅ **Independent networks** - Tailscale (8443) + OpenClaw (18789) as separate network layers  
 ✅ **Service auto-integration** - All AI stack services automatically share salt keys & Qdrant database  
-✅ **LiteLLM proxy routing** - Intelligent routing between local models and frontier models with multiple strategies  
+✅ **Bifrost proxy routing** - Intelligent routing between local models and frontier models with multiple strategies  
 ✅ **Tailscale VPN integration** - Zero-trust networking with auth key validation  
 ✅ **OpenClaw shell access** - Web-based terminal under dedicated user ID  
 ✅ **Caddy IP-based routing** - Fixed DNS resolution with direct container IP mapping  
-✅ **Development environment** - Code Server and Continue.dev with LiteLLM integration
+✅ **Development environment** - Code Server and Continue.dev with Bifrost integration
 
 ### **📊 Operational Principles**
 
@@ -408,7 +407,7 @@ BIFROST_PROVIDERS='[{"provider":"ollama","base_url":"http://ollama:11434"}]'
 
 ### **🤖 AI Stack Integration**
 - **Local-First LLM**: Ollama with local model hosting
-- **LiteLLM Proxy**: Intelligent load balancing between local and cloud models
+- **Bifrost**: Lightweight LLM gateway with intelligent routing
 - **Central Vector Database**: Qdrant for unified vector storage and retrieval
 - **Google Drive Integration**: Rclone with OAuth/Service Account authentication
 - **Multi-Service Vector Access**: All services can query and use vector database
@@ -449,10 +448,10 @@ Both gateways automatically use Mem0 for conversation memory when enabled.
 - ✅ **Zero External Dependencies** - All logic in 5-key-scripts architecture
 
 **✅ INFRASTRUCTURE SUCCESS (9/12 Services Operational):**
-- ✅ **PostgreSQL**: Healthy with automatic database provisioning (58 LiteLLM tables)
+- ✅ **PostgreSQL**: Healthy with automatic database provisioning (58 Bifrost tables)
 - ✅ **Redis**: Healthy with authentication
 - ✅ **Qdrant**: Healthy with proper permissions
-- ✅ **LiteLLM**: Starting with schema resolved, models loaded
+- ✅ **Bifrost**: Starting with schema resolved, models loaded
 - ✅ **Grafana**: Healthy with admin access
 - ✅ **Prometheus**: Healthy with metrics collection
 - ✅ **Caddy**: Running with infrastructure-only dependencies (2+ hours stable)
@@ -461,15 +460,15 @@ Both gateways automatically use Mem0 for conversation memory when enabled.
 - ✅ **OpenClaw**: Healthy with development environment ready
 - ✅ **Ollama**: Healthy with 2 runners ready for inference
 - 🔄 **RClone**: Restarting (command syntax fix needed)
-- 🔄 **Ingestion Pipeline**: Built and ready (waiting for LiteLLM health)
+- 🔄 **Ingestion Pipeline**: Built and ready (waiting for Bifrost health)
 
 **🔧 APPLICATION LAYER (Available via Mission Control):**
 - 🎮 **OpenWebUI**: `sudo bash scripts/3-configure-services.sh datasquiz --start openwebui` ✅ RUNNING
-- 🎮 **n8n**: `sudo bash scripts/3-configure-services.sh datasquiz --start n8n` (waiting for LiteLLM)
-- 🎮 **Flowise**: `sudo bash scripts/3-configure-services.sh datasquiz --start flowise` (waiting for LiteLLM)
-- 🎮 **AnythingLLM**: `sudo bash scripts/3-configure-services.sh datasquiz --start anythingllm` (waiting for LiteLLM)
+- 🎮 **n8n**: `sudo bash scripts/3-configure-services.sh datasquiz --start n8n` (waiting for Bifrost)
+- 🎮 **Flowise**: `sudo bash scripts/3-configure-services.sh datasquiz --start flowise` (waiting for Bifrost)
+- 🎮 **AnythingLLM**: `sudo bash scripts/3-configure-services.sh datasquiz --start anythingllm` (waiting for Bifrost)
 - 🎮 **GDrive Ingestion**: `sudo bash scripts/3-configure-services.sh datasquiz --start gdrive-ingestion` (built and ready)
-- 🎮 **Code Server**: `sudo bash scripts/3-configure-services.sh datasquiz --start codeserver` (waiting for LiteLLM)
+- 🎮 **Code Server**: `sudo bash scripts/3-configure-services.sh datasquiz --start codeserver` (waiting for Bifrost)
 
 **🌐 NETWORK ACCESS (Gateway Layer):**
 - ✅ **HTTPS Infrastructure**: Fully operational with automatic TLS
@@ -481,11 +480,11 @@ Both gateways automatically use Mem0 for conversation memory when enabled.
 **Phase 1: Foundation Fixes**
 - ✅ Complete environment variable generation with derived connection strings
 - ✅ PostgreSQL initialization script with automatic database creation
-- ✅ LiteLLM configuration generation with runtime environment variables
+- ✅ **Bifrost configuration generation with runtime environment variables**
 
 **Phase 2: Deployment Fixes**
 - ✅ Qdrant health check fixed (collections endpoint)
-- ✅ LiteLLM health check fixed (health/liveliness with 90s start period)
+- ✅ **Bifrost health check fixed (health/liveliness with 90s start period)**
 - ✅ Caddy dependency cleanup (infrastructure-only dependencies)
 - ✅ Storage permissions fixed (Qdrant ownership before deployment)
 
@@ -516,7 +515,7 @@ Both gateways automatically use Mem0 for conversation memory when enabled.
 Core Infrastructure:
   PostgreSQL    🟢 OK
   Redis       🟢 OK
-  LiteLLM     🟢 OK
+  Bifrost     🟢 OK
   Grafana     🟢 OK
   n8n        🟢 OK
   Qdrant      🟢 OK
@@ -530,8 +529,8 @@ Service Access URLs:
   OpenWebUI    🟢 OK  https://openwebui.datasquiz.net
 
 Service Tests:
-  LiteLLM test: curl -s http://localhost:4000/v1/models \
-              -H 'Authorization: Bearer ${LITELLM_MASTER_KEY}'
+  Bifrost test: curl -s http://localhost:4000/v1/models \
+              -H 'Authorization: Bearer ${BIFROST_MASTER_KEY}' | jq '.data[].id'
   OpenClaw test: curl -s http://localhost:8080/signal
 ```
 
@@ -551,11 +550,11 @@ Service Tests:
 ## **🎯 Architectural Goals**
 
 ✅ **Zero hardcoded values** - All 5 scripts 100% dynamic  
-✅ **Intelligent routing** - LiteLLM cost/latency optimization  
+✅ **Intelligent routing** - Bifrost cost/latency optimization  
 ✅ **Multi-tenant isolation** - Dynamic project prefixes  
 ✅ **Fully dockerized** - Dynamic compose-based infrastructure  
 ✅ **Non-root execution** - Tenant UID/GID preservation (automatic detection)  
-✅ **Centralized LLM routing** - Via LiteLLM with fallback strategies  
+✅ **Centralized LLM routing** - Via Bifrost with fallback strategies  
 ✅ **Dynamic service URLs** - All endpoints configurable  
 ✅ **Vector database integration** - Support for any vector DB  
 ✅ **Service auto-integration** - At configuration stage  
@@ -941,11 +940,11 @@ Core Infrastructure:
 
 AI Infrastructure:
 ├── Ollama (Local LLM)
-├── LiteLLM (LLM Router)
+├── Bifrost (LLM Router)
 └── Vector Integration
 
 Development Layer:
-├── Code Server (VS Code + LiteLLM)
+├── Code Server (VS Code + Bifrost)
 ├── Continue.dev (AI Assistant)
 └── OpenClaw (Tailscale Terminal)
 
