@@ -326,59 +326,41 @@ generate_bifrost_service() {
     mkdir -p "${DATA_DIR}/bifrost"
     
     cat >> "${COMPOSE_FILE}" << EOF
-  ${LLM_ROUTER_CONTAINER}:
+  ${LLM_GATEWAY_CONTAINER}:
     image: ghcr.io/maximhq/bifrost:latest
-    container_name: ${LLM_ROUTER_CONTAINER}
+    container_name: ${LLM_GATEWAY_CONTAINER}
     restart: unless-stopped
     user: "${DOCKER_USER_ID}:${DOCKER_GROUP_ID}"
-    volumes:
-      - ${CONFIG_DIR}/bifrost/config.yaml:/app/config.yaml:ro
-      - ${DATA_DIR}/bifrost:/app/data
     networks:
       - ${DOCKER_NETWORK}
     ports:
-      - "127.0.0.1:${LLM_ROUTER_PORT}:${LLM_ROUTER_PORT}"
+      - "127.0.0.1:${BIFROST_PORT}:${BIFROST_PORT}"
+    volumes:
+      - ${CONFIG_DIR}/bifrost/config.yaml:/app/config.yaml:ro
     environment:
       - CONFIG_FILE_PATH=/app/config.yaml
-      - PORT=${LLM_ROUTER_PORT}
-    command: ["--config", "/app/config.yaml"]
+      - PORT=${BIFROST_PORT}
     depends_on:
       ${OLLAMA_CONTAINER}:
         condition: service_healthy
       ${MEM0_CONTAINER}:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:${LLM_ROUTER_PORT}/healthz || exit 1"]
-      interval: 30s
+      test: ["CMD-SHELL", "curl -sf http://localhost:${BIFROST_PORT}/healthz || exit 1"]
+      interval: 15s
       timeout: 10s
-      retries: 5
-      start_period: 60s
+      retries: 8
+      start_period: 30s
     labels:
-      - "com.${PROJECT_PREFIX}${TENANT_ID}.service=bifrost"
-      - "com.${PROJECT_PREFIX}${TENANT_ID}.role=llm-router"
+      - "ai-platform.service=llm-gateway"
+      - "ai-platform.tenant=shared"
 EOF
     
     log_success "Bifrost service configured with YAML mount"
 }
 
 generate_mem0_service() {
-    log_info "Generating Mem0 service..."
-    
-    # Validate required variables
-    : "${MEM0_CONTAINER:?MEM0_CONTAINER not set}"
-    : "${MEM0_PORT:?MEM0_PORT not set}"
-    : "${MEM0_API_KEY:?MEM0_API_KEY not set}"
-    : "${CONFIG_DIR:?CONFIG_DIR not set}"
-    : "${DATA_DIR:?DATA_DIR not set}"
-    : "${DOCKER_NETWORK:?DOCKER_NETWORK not set}"
-    : "${DOCKER_USER_ID:?DOCKER_USER_ID not set}"
-    : "${DOCKER_GROUP_ID:?DOCKER_GROUP_ID not set}"
-    : "${QDRANT_CONTAINER:?QDRANT_CONTAINER not set}"
-    : "${OLLAMA_CONTAINER:?OLLAMA_CONTAINER not set}"
-    
-    mkdir -p "${DATA_DIR}/mem0"
-    
-    cat >> "${COMPOSE_FILE}" << EOF
+    cat << EOF
   ${MEM0_CONTAINER}:
     image: python:3.11-slim
     container_name: ${MEM0_CONTAINER}
@@ -390,16 +372,16 @@ generate_mem0_service() {
       - "127.0.0.1:${MEM0_PORT}:${MEM0_PORT}"
     volumes:
       - ${CONFIG_DIR}/mem0/config.yaml:/app/config.yaml:ro
-      - ${CONFIG_DIR}/mem0/server.py:/app/mem0_server.py:ro
+      - ${CONFIG_DIR}/mem0/server.py:/app/server.py:ro
       - ${DATA_DIR}/mem0:/app/data
-      - mem0-packages:/home/appuser/.local
+      - mem0-pip-cache:/home/nonroot/.local
     environment:
       - MEM0_API_KEY=${MEM0_API_KEY}
-      - HOME=/home/appuser
+      - HOME=/home/nonroot
     working_dir: /app
     command: >
-      sh -c "pip install mem0ai fastapi uvicorn pyyaml --quiet --user &&
-             python -m uvicorn mem0_server:app --host 0.0.0.0 --port ${MEM0_PORT}"
+      sh -c "pip install --quiet --user mem0ai fastapi uvicorn pyyaml &&
+             python -m uvicorn server:app --host 0.0.0.0 --port ${MEM0_PORT}"
     depends_on:
       ${QDRANT_CONTAINER}:
         condition: service_healthy
@@ -408,15 +390,13 @@ generate_mem0_service() {
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:${MEM0_PORT}/health || exit 1"]
       interval: 30s
-      timeout: 10s
+      timeout: 15s
       retries: 5
       start_period: 120s
     labels:
-      - "com.${PROJECT_PREFIX}${TENANT_ID}.service=mem0"
-      - "com.${PROJECT_PREFIX}${TENANT_ID}.role=memory"
+      - "ai-platform.service=memory"
+      - "ai-platform.tenant=shared"
 EOF
-    
-    log_success "Mem0 service configured"
 }
 
 wait_for_llm_router() {

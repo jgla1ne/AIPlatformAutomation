@@ -140,12 +140,15 @@ main() {
         
         # Dynamic named compose volumes based on environment (fallback)
         log "Explicitly removing named compose volumes..."
-        for vol in postgres_data prometheus_data grafana_data bifrost_data bifrost_config qdrant_data ollama_data openwebui_data; do
+        for vol in postgres_data prometheus_data grafana_data bifrost_data bifrost_config qdrant_data ollama_data openwebui_data mem0_packages mem0_pip_cache; do
             local vol_name="${COMPOSE_PROJECT_NAME}_${vol}"
             if docker volume inspect "$vol_name" &>/dev/null; then
                 docker volume rm "$vol_name" 2>/dev/null && ok "Removed volume: ${vol_name}" || warn "Could not remove ${vol_name} (may be in use)"
             fi
         done
+        
+        # Remove mem0-pip-cache volume (global, not project-specific)
+        docker volume rm mem0-pip-cache 2>/dev/null || true
         
         # Final system prune to ensure clean state
         docker system prune -f --volumes 2>/dev/null || true

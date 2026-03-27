@@ -650,16 +650,16 @@ generate_mem0_service() {
       - "127.0.0.1:${MEM0_PORT}:${MEM0_PORT}"
     volumes:
       - ${CONFIG_DIR}/mem0/config.yaml:/app/config.yaml:ro
-      - ${CONFIG_DIR}/mem0/server.py:/app/mem0_server.py:ro
+      - ${CONFIG_DIR}/mem0/server.py:/app/server.py:ro
       - ${DATA_DIR}/mem0:/app/data
-      - mem0-packages:/home/appuser/.local
+      - mem0-pip-cache:/home/nonroot/.local
     environment:
       - MEM0_API_KEY=${MEM0_API_KEY}
-      - HOME=/home/appuser
+      - HOME=/home/nonroot
     working_dir: /app
     command: >
-      sh -c "pip install mem0ai fastapi uvicorn pyyaml --quiet --user &&
-             python -m uvicorn mem0_server:app --host 0.0.0.0 --port ${MEM0_PORT}"
+      sh -c "pip install --quiet --user mem0ai fastapi uvicorn pyyaml &&
+             python -m uvicorn server:app --host 0.0.0.0 --port ${MEM0_PORT}"
     depends_on:
       qdrant:
         condition: service_healthy
@@ -668,12 +668,12 @@ generate_mem0_service() {
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:${MEM0_PORT}/health || exit 1"]
       interval: 30s
-      timeout: 10s
+      timeout: 15s
       retries: 5
       start_period: 120s
     labels:
-      - "com.${PROJECT_PREFIX}${TENANT_ID}.service=mem0"
-      - "com.${PROJECT_PREFIX}${TENANT_ID}.role=memory"
+      - "ai-platform.service=memory"
+      - "ai-platform.tenant=shared"
 EOF
     
     log_success "Mem0 service configured" >&2
@@ -697,6 +697,7 @@ volumes:
   caddy_data:
   caddy_config:
   mem0-packages:
+  mem0-pip-cache:
 
 services:
 
@@ -1370,7 +1371,7 @@ EOF
     ports:
       - "\${PORT_FLOWISE:-3001}:3000"
     healthcheck:
-      test: ["CMD-SHELL","curl -sf http://localhost:3000/api/v1 || exit 1"]
+      test: ["CMD-SHELL","curl -sf http://localhost:3000/api/v1/ping || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -1481,7 +1482,7 @@ EOF
     ports:
       - "\${PORT_CODESERVER:-8443}:8443"
     healthcheck:
-      test: ["CMD-SHELL","curl -sf http://localhost:8443/ || exit 1"]
+      test: ["CMD-SHELL","curl -sf http://localhost:8443/healthz || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -1922,38 +1923,46 @@ configure_tailscale() {
 }
 
 configure_mem0() {
-    log_info "Verifying Mem0 and tenant isolation..."
-
-    local mem0_url="http://localhost:${MEM0_PORT:-8765}"
+    log "INFO" "Verifying Mem0 memory layer..."
+    local mem0_url="http://localhost:${MEM0_PORT}"
     local waited=0
 
+    # Wait for Mem0 to be ready (pip install takes time on first boot)
     while ! curl -sf "${mem0_url}/health" > /dev/null 2>&1; do
-        [[ ${waited} -ge 60 ]] && { log_error "Mem0 not healthy"; exit 1; }
-        sleep 5; waited=$((waited + 5))
+        if [[ ${waited} -ge 180 ]]; then
+            log "ERROR" "Mem0 failed to become healthy after 180s"
+            return 1
+        fi
+        log "INFO" "Waiting for Mem0... (${waited}s)"
+        sleep 10
+        waited=$((waited + 10))
     done
+    log "SUCCESS" "Mem0 is healthy"
 
-    # Write tenant A memory
+    # Verify tenant isolation — write to tenant A, search from tenant B
+    local tenant_a="${MEM0_COLLECTION_PREFIX}_test_a"
+    local tenant_b="${MEM0_COLLECTION_PREFIX}_test_b"
+
     curl -sf -X POST "${mem0_url}/v1/memories" \
         -H "Authorization: Bearer ${MEM0_API_KEY}" \
         -H "Content-Type: application/json" \
-        -d "{\"messages\":[{\"role\":\"user\",\"content\":\"isolation_test_alpha\"}],
-             \"user_id\":\"${TENANT_ID}_tenant_a_test\"}" \
-        > /dev/null
+        -d "{\"messages\":[{\"role\":\"user\",\"content\":\"isolation_marker_xyz\"}],
+             \"user_id\":\"${tenant_a}\"}" > /dev/null \
+        || { log "ERROR" "Mem0 write failed"; return 1; }
 
-    # Verify tenant B cannot see it
     local result
     result="$(curl -sf -X POST "${mem0_url}/v1/memories/search" \
         -H "Authorization: Bearer ${MEM0_API_KEY}" \
         -H "Content-Type: application/json" \
-        -d "{\"query\":\"isolation_test_alpha\",
-             \"user_id\":\"${TENANT_ID}_tenant_b_test\"}")"
+        -d "{\"query\":\"isolation_marker_xyz\",
+             \"user_id\":\"${tenant_b}\"}")"
 
-    if echo "${result}" | grep -q "isolation_test_alpha"; then
-        log_error "CRITICAL: Tenant isolation failed"
-        exit 1
+    if echo "${result}" | grep -q "isolation_marker_xyz"; then
+        log "ERROR" "CRITICAL: Tenant memory isolation FAILED"
+        return 1
     fi
 
-    log_success "Mem0 healthy and tenant isolation verified"
+    log "SUCCESS" "Mem0 tenant isolation verified"
 }
 
 setup_gdrive_rclone() {

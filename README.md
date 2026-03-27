@@ -741,6 +741,41 @@ sudo bash scripts/3-configure-services.sh datasquiz --set-routing cost-optimized
 
 ## **📚 Service Stack**
 
+### **🔧 Software Stack**
+| Service | Purpose | Notes |
+|---------|---------|-------|
+| PostgreSQL | Relational storage | Shared by n8n, OpenWebUI |
+| Redis | Cache and queues | Session storage |
+| Qdrant | Vector database | Memory backend for Mem0 |
+| Ollama | Local LLM inference | GPU/CPU auto-detect |
+| **Bifrost** | **LLM gateway** | **Lightweight Go binary, set `GATEWAY_TYPE=bifrost` (default)** |
+| **Mem0** | **Per-tenant memory** | **Backed by Qdrant + Ollama, tenant-isolated** |
+| OpenWebUI | Chat interface | Connects via LLM_GATEWAY_URL |
+| n8n | Workflow automation | Webhook-triggered AI pipelines |
+| Caddy | Reverse proxy | TLS termination |
+
+### **🚪 Gateway Selection**
+
+```bash
+# Default — lightweight, low memory, Go binary
+export GATEWAY_TYPE=bifrost
+
+# Alternative — full-featured, Python, more provider integrations  
+export GATEWAY_TYPE=litellm
+```
+
+All services consume `LLM_GATEWAY_URL` automatically. Changing gateway requires only `GATEWAY_TYPE` change and re-running scripts 1 and 2.
+
+### **🧠 Per-Tenant Memory (Mem0)**
+
+All AI services have access to persistent, tenant-isolated memory via Mem0:
+
+- Memory stored in Qdrant vector database under `/mnt/ai-platform/data/qdrant` 
+- Each tenant's memory is isolated by `user_id` — cross-tenant search returns empty
+- Memory persists across container restarts
+- API available at `http://localhost:${MEM0_PORT}/v1/memories` 
+- Authentication via `MEM0_API_KEY` from `.env`
+
 ### **🤖 AI Stack Integration**
 - **Local-First LLM**: Ollama with local model hosting
 - **Modular Gateways**: Bifrost (Go) or LiteLLM (Python) based on `GATEWAY_TYPE`
