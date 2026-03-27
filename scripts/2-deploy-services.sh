@@ -375,12 +375,13 @@ generate_mem0_service() {
       - ${CONFIG_DIR}/mem0/server.py:/app/server.py:ro
       - ${DATA_DIR}/mem0:/app/data
       - mem0-pip-cache:/home/nonroot/.local
+      - mem0-home:/home/nonroot
     environment:
       - MEM0_API_KEY=${MEM0_API_KEY}
       - HOME=/home/nonroot
     working_dir: /app
     command: >
-      sh -c "pip install --quiet --user mem0ai fastapi uvicorn pyyaml &&
+      sh -c "pip install --quiet --user mem0ai fastapi uvicorn pyyaml ollama &&
              python -m uvicorn server:app --host 0.0.0.0 --port ${MEM0_PORT}"
     depends_on:
       ${QDRANT_CONTAINER}:

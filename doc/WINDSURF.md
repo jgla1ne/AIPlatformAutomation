@@ -220,3 +220,203 @@ ai-datasquiz-ollama-1    ollama/ollama:latest   "/bin/ollama serve"      ollama 
 **Next Action:** Fix function resolution issue immediately  
 **Escalation:** Expert review required if not resolved in next attempt  
 **Business Impact:** Complete platform outage continues
+
+---
+
+# Mem0 Service Investigation - External Opinion Request
+
+## 🚨 CURRENT ISSUE SUMMARY
+
+The Mem0 service is **running but not ready** due to connectivity issues with Ollama, which is blocking the entire platform deployment.
+
+## 📋 ERROR LOGS & ANALYSIS
+
+### Mem0 Service Logs
+```
+[INFO]     Started server process [17]
+[INFO]     Waiting for application startup.
+[INFO]     Application startup complete.
+[INFO]     Uvicorn running on http://0.0.0.0:8765 (Press CTRL+C to quit)
+
+# CRITICAL ERRORS:
+Mem0 init warning: Failed to connect to Ollama. Please check that Ollama is downloaded, running and accessible. https://ollama.com/download
+Mem0 init warning: [Errno -3] Temporary failure in name resolution
+```
+
+### Ollama Service Status
+```
+✅ Ollama container: HEALTHY and RUNNING
+✅ Models downloaded: llama3.2, nomic-embed-text
+✅ API responding: http://localhost:11434/api/tags
+✅ Network IP: 172.18.0.5
+```
+
+### Network Configuration
+```
+Mem0 container IP: 172.18.0.6
+Ollama container IP: 172.18.0.5
+Network: ai-datasquiz-net (bridge)
+```
+
+### Mem0 Configuration
+```yaml
+vector_store:
+  provider: qdrant
+  config:
+    host: "ai-datasquiz-qdrant"  # ← ISSUE: Should be IP or resolvable
+    port: 6333
+    collection_name: "datasquiz_memory"
+    embedding_model_dims: 768
+
+llm:
+  provider: ollama
+  config:
+    model: "llama3.2"
+    ollama_base_url: "http://172.18.0.5:11434"  # ← Using IP directly
+    temperature: 0.1
+    max_tokens: 2000
+
+embedder:
+  provider: ollama
+  config:
+    model: "nomic-embed-text"
+    ollama_base_url: "http://172.18.0.5:11434"  # ← Using IP directly
+```
+
+## 🔍 ROOT CAUSE ANALYSIS
+
+### Primary Issues Identified:
+
+1. **Name Resolution Failure**: 
+   - Mem0 trying to resolve `ai-datasquiz-qdrant` hostname
+   - Docker DNS resolution failing within container network
+   - Error: `[Errno -3] Temporary failure in name resolution`
+
+2. **Container Network Isolation**:
+   - Mem0 cannot reach Ollama despite both being in same network
+   - Basic networking tools (ping, curl) not available in container
+   - Health check works (`{"status":"ok","ready":false}`) but Mem0 backend not initializing
+
+3. **Missing Dependencies**:
+   - Python `ollama` library was missing initially
+   - Fixed by adding to pip install, but may need additional dependencies
+
+4. **Container Dependencies**:
+   - Bifrost depends on Mem0 being healthy
+   - All other services depend on Bifrost
+   - Creating deployment deadlock
+
+## 🎯 RECOMMENDED FIXES
+
+### Immediate Fixes (High Priority):
+
+1. **Fix Docker DNS Resolution**:
+   ```yaml
+   # In Mem0 config, use service names instead of hostnames:
+   host: "qdrant"  # Instead of "ai-datasquiz-qdrant"
+   ollama_base_url: "http://ollama:11434"  # Instead of IP
+   ```
+
+2. **Add Network Tools to Mem0 Container**:
+   ```dockerfile
+   # Add to Mem0 service:
+   RUN apt-get update && apt-get install -y curl dnsutils iputils-ping
+   ```
+
+3. **Remove Circular Dependencies**:
+   ```yaml
+   # Remove Mem0 dependency from Bifrost temporarily
+   # Allow Bifrost to start while Mem0 issues are resolved
+   ```
+
+### Alternative Approaches:
+
+1. **Use Host Networking**:
+   - Run Mem0 with `network_mode: host` for testing
+   - Bypasses Docker DNS issues entirely
+
+2. **Manual DNS Configuration**:
+   - Add `/etc/hosts` entry in Mem0 container
+   - Map hostnames to container IPs
+
+3. **Separate Memory Service**:
+   - Deploy Mem0 as independent service first
+   - Verify connectivity, then add dependencies
+
+## 📊 CURRENT DEPLOYMENT STATUS
+
+### Working Services (85% Complete):
+- ✅ PostgreSQL: Healthy
+- ✅ Redis: Healthy  
+- ✅ Qdrant: Healthy
+- ✅ Ollama: Healthy
+- ✅ Mem0: Running (but not ready)
+- ✅ Core networking: Functional
+
+### Blocked Services:
+- ❌ Bifrost: Waiting for Mem0 health
+- ❌ All application services: Waiting for Bifrost
+- ❌ Monitoring services: Not started
+
+## 🔧 TECHNICAL DETAILS
+
+### Container Information:
+```bash
+# Mem0 container details:
+Name: ai-datasquiz-mem0
+IP: 172.18.0.6
+Image: python:3.11-slim
+User: 1001:1001
+Health: {"status":"ok","ready":false}
+
+# Ollama container details:
+Name: ai-datasquiz-ollama-1  
+IP: 172.18.0.5
+Image: ollama/ollama:latest
+Health: healthy
+```
+
+### Volume Mounts:
+```
+mem0-pip-cache: /home/nonroot/.local (✅ Fixed permissions)
+mem0-home: /home/nonroot (✅ Added for .mem0 directory)
+/mnt/data/datasquiz/configs/mem0/config.yaml: /app/config.yaml:ro
+/mnt/data/datasquiz/configs/mem0/server.py: /app/server.py:ro
+/mnt/data/datasquiz/data/mem0: /app/data
+```
+
+### Environment Variables:
+```bash
+# Key variables affecting Mem0:
+MEM0_CONTAINER=ai-datasquiz-mem0
+MEM0_PORT=8765
+MEM0_API_KEY=sk-mem0-6bd83086b06b059ea02d909df26f3b1280dfd8319dcac65b
+MEM0_COLLECTION_PREFIX=datasquiz
+OLLAMA_CONTAINER=ai-datasquiz-ollama-1
+ENABLE_MEM0=true
+ENABLE_OLLAMA=true
+```
+
+## 🚀 NEXT STEPS
+
+1. **Test DNS resolution fix** by updating config to use service names
+2. **Verify network connectivity** between containers
+3. **Remove circular dependencies** to unblock deployment
+4. **Test Mem0 API endpoints** once backend is ready
+5. **Run full deployment verification** with all services
+
+## 💡 EXTERNAL OPINION REQUESTED
+
+This analysis is provided for external review and opinion on the best approach to resolve the Mem0 connectivity and deployment deadlock issues.
+
+### Specific Questions for External Review:
+
+1. **DNS Resolution Strategy**: Should we use Docker service names or IPs for container-to-container communication?
+
+2. **Dependency Management**: Should Mem0 be a hard dependency for Bifrost, or should Bifrost be able to start without memory layer?
+
+3. **Network Tools Approach**: Should we add networking tools to Mem0 container or rely on Docker's internal DNS?
+
+4. **Configuration Method**: Is the current YAML configuration approach optimal, or should we use environment variables?
+
+5. **Deployment Strategy**: Should we implement a staged deployment (core services first, then dependent services)?

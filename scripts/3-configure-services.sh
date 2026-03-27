@@ -653,17 +653,16 @@ generate_mem0_service() {
       - ${CONFIG_DIR}/mem0/server.py:/app/server.py:ro
       - ${DATA_DIR}/mem0:/app/data
       - mem0-pip-cache:/home/nonroot/.local
+      - mem0-home:/home/nonroot
     environment:
       - MEM0_API_KEY=${MEM0_API_KEY}
       - HOME=/home/nonroot
     working_dir: /app
     command: >
-      sh -c "pip install --quiet --user mem0ai fastapi uvicorn pyyaml &&
+      sh -c "pip install --quiet --user mem0ai fastapi uvicorn pyyaml ollama &&
              python -m uvicorn server:app --host 0.0.0.0 --port ${MEM0_PORT}"
     depends_on:
-      qdrant:
-        condition: service_healthy
-      ollama:
+      ${OLLAMA_CONTAINER}:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:${MEM0_PORT}/health || exit 1"]
@@ -698,6 +697,7 @@ volumes:
   caddy_config:
   mem0-packages:
   mem0-pip-cache:
+  mem0-home:
 
 services:
 
