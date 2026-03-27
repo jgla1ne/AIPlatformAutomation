@@ -743,16 +743,31 @@ sudo bash scripts/3-configure-services.sh datasquiz --set-routing cost-optimized
 
 ### **🤖 AI Stack Integration**
 - **Local-First LLM**: Ollama with local model hosting
+- **Modular Gateways**: Bifrost (Go) or LiteLLM (Python) based on `GATEWAY_TYPE`
+- **Modular Proxy**: Caddy (default) or Nginx based on `PROXY_TYPE`
 - **Mem0**: Per-tenant conversation memory, backed by Qdrant, used by all gateways
-- **Bifrost**: Lightweight LLM gateway, Set `GATEWAY_TYPE=bifrost` (default)
 - **Central Vector Database**: Qdrant for unified vector storage and retrieval
 - **Google Drive Integration**: Rclone with OAuth/Service Account authentication
 - **Multi-Service Vector Access**: All services can query and use vector database
 
-### **🚪 Gateway Selection**
+### **🚪 Gateway & Proxy Selection**
+The platform supports **modular gateway and proxy selection** via environment variables:
+
+**LLM Gateways:**
 Set `GATEWAY_TYPE` in Script 1 or `.env`:
 - `GATEWAY_TYPE=bifrost` (default) - Lightweight Go-based router
-- `GATEWAY_TYPE=litellm` - Python-based router (if enabled)
+- `GATEWAY_TYPE=litellm` - Python-based router with advanced features
+
+**Reverse Proxy:**
+Set `PROXY_TYPE` in Script 1 or `.env`:
+- `PROXY_TYPE=caddy` (default) - Modern Go-based reverse proxy with automatic HTTPS
+- `PROXY_TYPE=nginx` - High-performance Nginx reverse proxy (if enabled)
+
+**Modular Architecture:**
+- **Any combination** of gateway + proxy can be deployed
+- **Runtime selection** based on environment variables only
+- **Zero hardcoded dependencies** - all services dynamically configured
+- **Service isolation** - each component independently deployable
 
 Both gateways automatically use Mem0 for conversation memory when enabled.
 
@@ -927,7 +942,7 @@ sudo bash scripts/3-configure-services.sh datasquiz --set-routing cost-optimized
 
 ### **Data Flow**
 1. **Google Drive** → **Rclone** → **Local Storage** → **Vector Ingestion** → **Qdrant**
-2. **User Queries** → **LiteLLM** → **Local/Cloud Models** → **Vector Search** → **AI Responses**
+2. **User Queries** → **Gateway (Bifrost/LiteLLM)** → **Local/Cloud Models** → **Vector Search** → **AI Responses**
 3. **OpenClaw** → **Shell Access** → **Vector DB Queries** → **AI-Powered Operations**
 
 ### **Service Dependencies**
@@ -936,15 +951,15 @@ Core Infrastructure:
 ├── PostgreSQL (Database)
 ├── Redis (Cache)
 ├── Qdrant (Vector DB)
-└── Caddy (Reverse Proxy)
+└── Reverse Proxy (Caddy/Nginx)
 
 AI Infrastructure:
 ├── Ollama (Local LLM)
-├── Bifrost (LLM Router)
+├── Gateway (Bifrost/LiteLLM)
 └── Vector Integration
 
 Development Layer:
-├── Code Server (VS Code + Bifrost)
+├── Code Server (VS Code + Gateway Integration)
 ├── Continue.dev (AI Assistant)
 └── OpenClaw (Tailscale Terminal)
 
