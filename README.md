@@ -413,7 +413,14 @@ BIFROST_PROVIDERS='[{"provider":"ollama","base_url":"http://ollama:11434"}]'
 - **Google Drive Integration**: Rclone with OAuth/Service Account authentication
 - **Multi-Service Vector Access**: All services can query and use vector database
 
-### **🔐 Security & Access**
+### **� Gateway Selection**
+Set `GATEWAY_TYPE` in Script 1 or `.env`:
+- `GATEWAY_TYPE=bifrost` (default) - Lightweight Go-based router
+- `GATEWAY_TYPE=litellm` - Python-based router (if enabled)
+
+Both gateways automatically use Mem0 for conversation memory when enabled.
+
+### **�🔐 Security & Access**
 - **Tailscale VPN**: Zero-trust networking with private IP assignment
 - **OpenClaw Web Terminal**: Browser-based shell access under non-root user
 - **Tenant Isolation**: Complete UID/GID separation per tenant
@@ -737,10 +744,18 @@ sudo bash scripts/3-configure-services.sh datasquiz --set-routing cost-optimized
 
 ### **🤖 AI Stack Integration**
 - **Local-First LLM**: Ollama with local model hosting
-- **LiteLLM Proxy**: Intelligent load balancing between local and cloud models
+- **Mem0**: Per-tenant conversation memory, backed by Qdrant, used by all gateways
+- **Bifrost**: Lightweight LLM gateway, Set `GATEWAY_TYPE=bifrost` (default)
 - **Central Vector Database**: Qdrant for unified vector storage and retrieval
 - **Google Drive Integration**: Rclone with OAuth/Service Account authentication
 - **Multi-Service Vector Access**: All services can query and use vector database
+
+### **🚪 Gateway Selection**
+Set `GATEWAY_TYPE` in Script 1 or `.env`:
+- `GATEWAY_TYPE=bifrost` (default) - Lightweight Go-based router
+- `GATEWAY_TYPE=litellm` - Python-based router (if enabled)
+
+Both gateways automatically use Mem0 for conversation memory when enabled.
 
 ### **🔐 Security & Access**
 - **Tailscale VPN**: Zero-trust networking with private IP assignment
