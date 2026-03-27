@@ -1265,7 +1265,7 @@ init_bifrost() {
     echo -e "  ${DIM}Configuring Bifrost with YAML config file${NC}"
     
     # Generate or preserve auth token
-    local existing_token=$(grep "^BIFROST_AUTH_TOKEN=" "${ENV_FILE}" 2>/dev/null \
+    local existing_token=$(grep "^LLM_MASTER_KEY=" "${ENV_FILE}" 2>/dev/null \
         | cut -d= -f2- | tr -d '"')
     local token="${existing_token:-sk-bifrost-$(openssl rand -hex 24)}"
     
@@ -1282,23 +1282,27 @@ init_bifrost() {
     local bifrost_config_dir="${CONFIG_DIR}/bifrost"
     mkdir -p "${bifrost_config_dir}"
     
-    # Write CORRECTED YAML config (using printf to avoid expansion issues)
-    printf '%s\n' "version: 1" > "${bifrost_config_dir}/config.yaml"
-    printf '%s\n' "default_model: llama3" >> "${bifrost_config_dir}/config.yaml"
-    printf '%s\n' "" >> "${bifrost_config_dir}/config.yaml"
-    printf '%s\n' "providers:" >> "${bifrost_config_dir}/config.yaml"
-    printf '%s\n' "  ollama:" >> "${bifrost_config_dir}/config.yaml"
-    printf '%s\n' "    base_url: \"${ollama_url}\"" >> "${bifrost_config_dir}/config.yaml"
-    printf '%s\n' "    models:" >> "${bifrost_config_dir}/config.yaml"
-    printf '%s\n' "      - name: \"llama3\"" >> "${bifrost_config_dir}/config.yaml"
-    printf '%s\n' "" >> "${bifrost_config_dir}/config.yaml"
-    printf '%s\n' "server:" >> "${bifrost_config_dir}/config.yaml"
-    printf '%s\n' "  host: 0.0.0.0" >> "${bifrost_config_dir}/config.yaml"
-    printf '%s\n' "  port: ${port}" >> "${bifrost_config_dir}/config.yaml"
-    printf '%s\n' "  auth_token: ${token}" >> "${bifrost_config_dir}/config.yaml"
+    # Write YAML config using placeholder-sed pattern (CLAUDE.md Change 1)
+    cat > "${bifrost_config_dir}/config.yaml" << 'BIFROST_EOF'
+accounts:
+  - name: default
+    keys:
+      - key: "PLACEHOLDER_KEY"
+        models:
+          - "*"
+    providers:
+      ollama:
+        base_url: "PLACEHOLDER_OLLAMA_URL"
+        timeout: 300
+BIFROST_EOF
+
+    # Substitute placeholders after heredoc to avoid expansion issues
+    sed -i "s|PLACEHOLDER_KEY|${token}|g" "${bifrost_config_dir}/config.yaml"
+    sed -i "s|PLACEHOLDER_OLLAMA_URL|${ollama_url}|g" "${bifrost_config_dir}/config.yaml"
     
-    # Set ownership (mkdir handles permissions if run with proper umask)
+    # Set ownership
     chown -R "${TENANT_UID}:${TENANT_GID}" "${bifrost_config_dir}"
+    chmod 640 "${bifrost_config_dir}/config.yaml"
     
     # Write router-agnostic variables to .env
     [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_ROUTER=/d' "${ENV_FILE}" 2>/dev/null || true
@@ -1316,6 +1320,7 @@ init_bifrost() {
     [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_GATEWAY_API_URL=/d' "${ENV_FILE}" 2>/dev/null || true
     echo "LLM_GATEWAY_API_URL=http://${PROJECT_PREFIX}${TENANT_ID}-bifrost:${port}/v1" >> "${ENV_FILE}"
     
+    # CLAUDE.md Change 2: Remove BIFROST_API_KEY alias, use LLM_MASTER_KEY only
     [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_MASTER_KEY=/d' "${ENV_FILE}" 2>/dev/null || true
     echo "LLM_MASTER_KEY=${token}" >> "${ENV_FILE}"
     
@@ -1335,6 +1340,78 @@ init_bifrost() {
     echo -e "  ${GREEN}✅${NC} Bifrost YAML config created: ${bifrost_config_dir}/config.yaml"
     echo -e "  ${DIM}✅ Port: ${port}${NC}"
     echo -e "  ${DIM}✅ Container: ${PROJECT_PREFIX}${TENANT_ID}-bifrost${NC}"
+}
+
+# ─── Mem0 Configuration ─────────────────────────────────────────────────────
+init_mem0() {
+    print_step "8.4" "11" "Mem0 Configuration"
+
+    echo -e "  ${BOLD}🧠 Mem0 Configuration${NC}"
+    echo -e "  ${DIM}Configuring Mem0 memory layer${NC}"
+    
+    # Generate Mem0 API key if not exists
+    local existing_key=$(grep "^MEM0_API_KEY=" "${ENV_FILE}" 2>/dev/null \
+        | cut -d= -f2- | tr -d '"')
+    local mem0_key="${existing_key:-mem0-$(openssl rand -hex 24)}"
+    
+    # Create directories
+    mkdir -p "${CONFIG_DIR}/mem0" "${DATA_DIR}/mem0"
+    
+    # Write Mem0 config using placeholder-sed pattern
+    cat > "${CONFIG_DIR}/mem0/config.yaml" << 'MEM0_EOF'
+vector_store:
+  provider: qdrant
+  config:
+    host: "PLACEHOLDER_QDRANT_HOST"
+    port: PLACEHOLDER_QDRANT_PORT
+    collection_name: "PLACEHOLDER_COLLECTION"
+    embedding_model_dims: 768
+
+llm:
+  provider: ollama
+  config:
+    model: "PLACEHOLDER_MODEL"
+    ollama_base_url: "PLACEHOLDER_OLLAMA_URL"
+    temperature: 0.1
+    max_tokens: 2000
+
+embedder:
+  provider: ollama
+  config:
+    model: "nomic-embed-text"
+    ollama_base_url: "PLACEHOLDER_OLLAMA_URL"
+MEM0_EOF
+
+    # Substitute placeholders
+    sed -i "s|PLACEHOLDER_QDRANT_HOST|${PROJECT_PREFIX}${TENANT_ID}-qdrant|g" \
+        "${CONFIG_DIR}/mem0/config.yaml"
+    sed -i "s|PLACEHOLDER_QDRANT_PORT|6333|g" \
+        "${CONFIG_DIR}/mem0/config.yaml"
+    sed -i "s|PLACEHOLDER_COLLECTION|${TENANT_ID}_memory|g" \
+        "${CONFIG_DIR}/mem0/config.yaml"
+    sed -i "s|PLACEHOLDER_MODEL|llama3.2|g" \
+        "${CONFIG_DIR}/mem0/config.yaml"
+    sed -i "s|PLACEHOLDER_OLLAMA_URL|http://${PROJECT_PREFIX}${TENANT_ID}-ollama:11434|g" \
+        "${CONFIG_DIR}/mem0/config.yaml"
+
+    # Set ownership
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${CONFIG_DIR}/mem0" "${DATA_DIR}/mem0"
+    chmod 640 "${CONFIG_DIR}/mem0/config.yaml"
+    
+    # Write Mem0 variables to .env
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^MEM0_API_KEY=/d' "${ENV_FILE}" 2>/dev/null || true
+    echo "MEM0_API_KEY=${mem0_key}" >> "${ENV_FILE}"
+    
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^MEM0_PORT=/d' "${ENV_FILE}" 2>/dev/null || true
+    echo "MEM0_PORT=8765" >> "${ENV_FILE}"
+    
+    [[ -f "${ENV_FILE}" ]] && sed -i '/^QDRANT_MEMORY_COLLECTION=/d' "${ENV_FILE}" 2>/dev/null || true
+    echo "QDRANT_MEMORY_COLLECTION=${TENANT_ID}_memory" >> "${ENV_FILE}"
+    
+    log "SUCCESS" "Mem0 configured"
+    echo -e "  ${GREEN}✅${NC} Mem0 config created: ${CONFIG_DIR}/mem0/config.yaml"
+    echo -e "  ${DIM}✅ Port: 8765${NC}"
+    echo -e "  ${DIM}✅ Collection: ${TENANT_ID}_memory${NC}"
 }
 
 # ─── LiteLLM Configuration ─────────────────────────────────────────────────────
@@ -3250,6 +3327,9 @@ main() {
     elif [[ "${LLM_ROUTER}" == "litellm" ]]; then
         init_litellm
     fi
+    
+    # Initialize Mem0 memory layer (CLAUDE.md Change 3)
+    init_mem0
     collect_network_config   # Step 9 - NEW: Network & security configuration
     collect_ports            # Step 10
     generate_secrets         # Step 11
