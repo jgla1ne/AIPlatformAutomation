@@ -1820,6 +1820,41 @@ configure_tailscale() {
     fi
 }
 
+configure_mem0() {
+    log_info "Verifying Mem0 and tenant isolation..."
+
+    local mem0_url="http://localhost:${MEM0_PORT:-8765}"
+    local waited=0
+
+    while ! curl -sf "${mem0_url}/health" > /dev/null 2>&1; do
+        [[ ${waited} -ge 60 ]] && { log_error "Mem0 not healthy"; exit 1; }
+        sleep 5; waited=$((waited + 5))
+    done
+
+    # Write tenant A memory
+    curl -sf -X POST "${mem0_url}/v1/memories" \
+        -H "Authorization: Bearer ${MEM0_API_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{\"messages\":[{\"role\":\"user\",\"content\":\"isolation_test_alpha\"}],
+             \"user_id\":\"${TENANT_ID}_tenant_a_test\"}" \
+        > /dev/null
+
+    # Verify tenant B cannot see it
+    local result
+    result="$(curl -sf -X POST "${mem0_url}/v1/memories/search" \
+        -H "Authorization: Bearer ${MEM0_API_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{\"query\":\"isolation_test_alpha\",
+             \"user_id\":\"${TENANT_ID}_tenant_b_test\"}")"
+
+    if echo "${result}" | grep -q "isolation_test_alpha"; then
+        log_error "CRITICAL: Tenant isolation failed"
+        exit 1
+    fi
+
+    log_success "Mem0 healthy and tenant isolation verified"
+}
+
 setup_gdrive_rclone() {
     [[ -n "${GDRIVE_CLIENT_ID:-}" ]] || { 
         log_info "GDrive not configured — skipping"; 
@@ -2032,6 +2067,7 @@ main() {
 
         # ── External Wiring ──────────────────────────────────────────
         tailscale)      configure_tailscale ;;
+        mem0)           configure_mem0 ;;
         gdrive)         setup_gdrive_rclone && create_ingestion_systemd ;;
         gdrive-ingest)  ingest_gdrive_to_qdrant ;;
         logs-rotate)    log_rotate "${1:-}" "${2:-7}" ;;
