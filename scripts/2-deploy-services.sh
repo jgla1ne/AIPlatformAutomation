@@ -374,12 +374,13 @@ generate_mem0_service() {
     : "${DOCKER_USER_ID:?DOCKER_USER_ID not set}"
     : "${DOCKER_GROUP_ID:?DOCKER_GROUP_ID not set}"
     : "${QDRANT_CONTAINER:?QDRANT_CONTAINER not set}"
+    : "${OLLAMA_CONTAINER:?OLLAMA_CONTAINER not set}"
     
     mkdir -p "${DATA_DIR}/mem0"
     
     cat >> "${COMPOSE_FILE}" << EOF
   ${MEM0_CONTAINER}:
-    image: mem0ai/mem0:latest
+    image: python:3.11-slim
     container_name: ${MEM0_CONTAINER}
     restart: unless-stopped
     user: "${DOCKER_USER_ID}:${DOCKER_GROUP_ID}"
@@ -389,20 +390,27 @@ generate_mem0_service() {
       - "127.0.0.1:${MEM0_PORT}:${MEM0_PORT}"
     volumes:
       - ${CONFIG_DIR}/mem0/config.yaml:/app/config.yaml:ro
+      - ${CONFIG_DIR}/mem0/server.py:/app/mem0_server.py:ro
       - ${DATA_DIR}/mem0:/app/data
+      - mem0-packages:/home/appuser/.local
     environment:
-      - MEM0_CONFIG=/app/config.yaml
       - MEM0_API_KEY=${MEM0_API_KEY}
-      - PORT=${MEM0_PORT}
+      - HOME=/home/appuser
+    working_dir: /app
+    command: >
+      sh -c "pip install mem0ai fastapi uvicorn pyyaml --quiet --user &&
+             python -m uvicorn mem0_server:app --host 0.0.0.0 --port ${MEM0_PORT}"
     depends_on:
       ${QDRANT_CONTAINER}:
+        condition: service_healthy
+      ${OLLAMA_CONTAINER}:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:${MEM0_PORT}/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 60s
+      start_period: 120s
     labels:
       - "com.${PROJECT_PREFIX}${TENANT_ID}.service=mem0"
       - "com.${PROJECT_PREFIX}${TENANT_ID}.role=memory"

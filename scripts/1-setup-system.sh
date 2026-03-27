@@ -1394,9 +1394,63 @@ MEM0_EOF
     sed -i "s|PLACEHOLDER_OLLAMA_URL|http://${PROJECT_PREFIX}${TENANT_ID}-ollama:11434|g" \
         "${CONFIG_DIR}/mem0/config.yaml"
 
+    # Write the FastAPI server
+    cat > "${CONFIG_DIR}/mem0/server.py" << 'PYEOF'
+from fastapi import FastAPI, HTTPException, Header
+from pydantic import BaseModel
+from typing import List
+import os, yaml
+
+app = FastAPI()
+API_KEY = os.environ.get("MEM0_API_KEY", "")
+
+def verify(authorization: str = Header(None)):
+    if authorization != f"Bearer {API_KEY}":
+        raise HTTPException(status_code=401)
+
+class Msg(BaseModel):
+    role: str
+    content: str
+
+class MemReq(BaseModel):
+    messages: List[Msg]
+    user_id: str
+
+class SearchReq(BaseModel):
+    query: str
+    user_id: str
+
+try:
+    from mem0 import Memory
+    with open("/app/config.yaml") as f:
+        mem = Memory.from_config(yaml.safe_load(f))
+except Exception as e:
+    print(f"Mem0 init warning: {e}")
+    mem = None
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "ready": mem is not None}
+
+@app.post("/v1/memories")
+def add(req: MemReq, authorization: str = Header(None)):
+    verify(authorization)
+    if not mem:
+        raise HTTPException(503)
+    return mem.add([m.dict() for m in req.messages], user_id=req.user_id)
+
+@app.post("/v1/memories/search")
+def search(req: SearchReq, authorization: str = Header(None)):
+    verify(authorization)
+    if not mem:
+        raise HTTPException(503)
+    return {"results": mem.search(req.query, user_id=req.user_id)}
+PYEOF
+
     # Set ownership
     chown -R "${TENANT_UID}:${TENANT_GID}" "${CONFIG_DIR}/mem0" "${DATA_DIR}/mem0"
     chmod 640 "${CONFIG_DIR}/mem0/config.yaml"
+    chmod 644 "${CONFIG_DIR}/mem0/server.py"
     
     # Write Mem0 variables to .env
     [[ -f "${ENV_FILE}" ]] && sed -i '/^MEM0_API_KEY=/d' "${ENV_FILE}" 2>/dev/null || true

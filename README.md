@@ -744,9 +744,9 @@ sudo bash scripts/3-configure-services.sh datasquiz --set-routing cost-optimized
 ### **🤖 AI Stack Integration**
 - **Local-First LLM**: Ollama with local model hosting
 - **Modular Gateways**: Bifrost (Go) or LiteLLM (Python) based on `GATEWAY_TYPE`
-- **Modular Proxy**: Caddy (default) or Nginx based on `PROXY_TYPE`
-- **Mem0**: Per-tenant conversation memory, backed by Qdrant, used by all gateways
-- **Central Vector Database**: Qdrant for unified vector storage and retrieval
+- **Modular Proxy**: Caddy (default), Nginx, Traefik, or Custom based on `PROXY_TYPE`
+- **Mem0**: Per-tenant conversation memory, backed by vector DB, used by all gateways
+- **Vector Databases**: Qdrant, Weaviate, ChromaDB, Milvus, Pinecone, or None
 - **Google Drive Integration**: Rclone with OAuth/Service Account authentication
 - **Multi-Service Vector Access**: All services can query and use vector database
 
@@ -758,16 +758,43 @@ Set `GATEWAY_TYPE` in Script 1 or `.env`:
 - `GATEWAY_TYPE=bifrost` (default) - Lightweight Go-based router
 - `GATEWAY_TYPE=litellm` - Python-based router with advanced features
 
-**Reverse Proxy:**
+**Reverse Proxy Options:**
 Set `PROXY_TYPE` in Script 1 or `.env`:
 - `PROXY_TYPE=caddy` (default) - Modern Go-based reverse proxy with automatic HTTPS
-- `PROXY_TYPE=nginx` - High-performance Nginx reverse proxy (if enabled)
+- `PROXY_TYPE=nginx` - High-performance Nginx reverse proxy
+- `PROXY_TYPE=traefik` - Automatic service discovery and routing
+- `PROXY_TYPE=custom` - Custom proxy image
+
+**SSL/TLS Providers:**
+Set `SSL_TYPE` in Script 1 or `.env`:
+- `SSL_TYPE=acme` (default) - Automatic Let's Encrypt certificates
+- `SSL_TYPE=selfsigned` - Self-signed certificates for development
+- `SSL_TYPE=custom` - Custom certificate files
+- `SSL_TYPE=none` - HTTP only (not recommended for production)
+
+**Vector Database Selection:**
+Set `VECTOR_DB` in Script 1 or `.env`:
+- `VECTOR_DB=qdrant` (default) - High-performance vector database
+- `VECTOR_DB=weaviate` - GraphQL API with advanced features
+- `VECTOR_DB=chromadb` - Lightweight, embedded vector database
+- `VECTOR_DB=milvus` - Enterprise-scale vector database
+- `VECTOR_DB=pinecone` - Managed vector database service
+- `VECTOR_DB=none` - Use external vector database
+
+**Deployment Stack Presets:**
+Script 1 offers 5 deployment presets:
+1. **Minimal** - OpenWebUI + Ollama + Qdrant + Core infrastructure
+2. **Development** - Code Server + Continue.dev + OpenClaw + Tailscale
+3. **Standard** - Minimal + n8n + Flowise + Bifrost
+4. **Full** - Standard + AnythingLLM + Grafana + Prometheus + Authentik
+5. **Custom** - Individual service selection
 
 **Modular Architecture:**
-- **Any combination** of gateway + proxy can be deployed
+- **Any combination** of gateway + proxy + vector DB can be deployed
 - **Runtime selection** based on environment variables only
 - **Zero hardcoded dependencies** - all services dynamically configured
 - **Service isolation** - each component independently deployable
+- **Stack presets** for common deployment patterns
 
 Both gateways automatically use Mem0 for conversation memory when enabled.
 

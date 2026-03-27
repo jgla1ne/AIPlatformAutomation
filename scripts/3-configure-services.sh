@@ -634,12 +634,13 @@ generate_mem0_service() {
     : "${DOCKER_USER_ID:?DOCKER_USER_ID not set}"
     : "${DOCKER_GROUP_ID:?DOCKER_GROUP_ID not set}"
     : "${QDRANT_CONTAINER:?QDRANT_CONTAINER not set}"
+    : "${OLLAMA_CONTAINER:?OLLAMA_CONTAINER not set}"
     
     mkdir -p "${DATA_DIR}/mem0"
     
     cat << EOF
   ${MEM0_CONTAINER}:
-    image: mem0/mem0-api-server:latest
+    image: python:3.11-slim
     container_name: ${MEM0_CONTAINER}
     restart: unless-stopped
     user: "${DOCKER_USER_ID}:${DOCKER_GROUP_ID}"
@@ -649,20 +650,27 @@ generate_mem0_service() {
       - "127.0.0.1:${MEM0_PORT}:${MEM0_PORT}"
     volumes:
       - ${CONFIG_DIR}/mem0/config.yaml:/app/config.yaml:ro
+      - ${CONFIG_DIR}/mem0/server.py:/app/mem0_server.py:ro
       - ${DATA_DIR}/mem0:/app/data
+      - mem0-packages:/home/appuser/.local
     environment:
-      - MEM0_CONFIG=/app/config.yaml
       - MEM0_API_KEY=${MEM0_API_KEY}
-      - PORT=${MEM0_PORT}
+      - HOME=/home/appuser
+    working_dir: /app
+    command: >
+      sh -c "pip install mem0ai fastapi uvicorn pyyaml --quiet --user &&
+             python -m uvicorn mem0_server:app --host 0.0.0.0 --port ${MEM0_PORT}"
     depends_on:
       qdrant:
+        condition: service_healthy
+      ollama:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:${MEM0_PORT}/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 60s
+      start_period: 120s
     labels:
       - "com.${PROJECT_PREFIX}${TENANT_ID}.service=mem0"
       - "com.${PROJECT_PREFIX}${TENANT_ID}.role=memory"
@@ -688,6 +696,7 @@ volumes:
   gdrive_cache:
   caddy_data:
   caddy_config:
+  mem0-packages:
 
 services:
 
@@ -1285,7 +1294,7 @@ EOF
       - ${CONFIG_DIR}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     healthcheck:
-      test: ["CMD-SHELL","wget -qO- http://localhost:9090/-/healthy || exit 1"]
+      test: ["CMD-SHELL","curl -sf http://localhost:9090/-/healthy || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
