@@ -317,6 +317,8 @@ generate_bifrost_service() {
     : "${DOCKER_NETWORK:?DOCKER_NETWORK not set}"
     : "${DOCKER_USER_ID:?DOCKER_USER_ID not set}"
     : "${DOCKER_GROUP_ID:?DOCKER_GROUP_ID not set}"
+    : "${OLLAMA_CONTAINER:?OLLAMA_CONTAINER not set}"
+    : "${MEM0_CONTAINER:?MEM0_CONTAINER not set}"
     
     mkdir -p "${DATA_DIR}/bifrost"
     
@@ -327,29 +329,83 @@ generate_bifrost_service() {
     restart: unless-stopped
     user: "${DOCKER_USER_ID}:${DOCKER_GROUP_ID}"
     volumes:
-      - ${CONFIG_DIR}/bifrost:/app/config:ro
+      - ${CONFIG_DIR}/bifrost/config.yaml:/app/config.yaml:ro
       - ${DATA_DIR}/bifrost:/app/data
     networks:
       - ${DOCKER_NETWORK}
     ports:
-      - "${LLM_ROUTER_PORT}:${BIFROST_PORT}"
+      - "127.0.0.1:${LLM_ROUTER_PORT}:${LLM_ROUTER_PORT}"
     environment:
-      - BIFROST_CONFIG=/app/config/config.yaml
-      - BIFROST_PORT=${BIFROST_PORT}
-      - BIFROST_AUTH_TOKEN=${BIFROST_AUTH_TOKEN}
-      - BIFROST_LOG_LEVEL=${BIFROST_LOG_LEVEL}
+      - CONFIG_FILE_PATH=/app/config.yaml
+      - PORT=${LLM_ROUTER_PORT}
+    command: ["--config", "/app/config.yaml"]
+    depends_on:
+      ${OLLAMA_CONTAINER}:
+        condition: service_healthy
+      ${MEM0_CONTAINER}:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:${BIFROST_PORT}/healthz || exit 1"]
-      interval: 15s
-      timeout: 5s
+      test: ["CMD-SHELL", "curl -sf http://localhost:${LLM_ROUTER_PORT}/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
       retries: 5
-      start_period: 30s
+      start_period: 60s
     labels:
       - "com.${PROJECT_PREFIX}${TENANT_ID}.service=bifrost"
       - "com.${PROJECT_PREFIX}${TENANT_ID}.role=llm-router"
 EOF
     
     log_success "Bifrost service configured with YAML mount"
+}
+
+generate_mem0_service() {
+    log_info "Generating Mem0 service..."
+    
+    # Validate required variables
+    : "${MEM0_CONTAINER:?MEM0_CONTAINER not set}"
+    : "${MEM0_PORT:?MEM0_PORT not set}"
+    : "${MEM0_API_KEY:?MEM0_API_KEY not set}"
+    : "${CONFIG_DIR:?CONFIG_DIR not set}"
+    : "${DATA_DIR:?DATA_DIR not set}"
+    : "${DOCKER_NETWORK:?DOCKER_NETWORK not set}"
+    : "${DOCKER_USER_ID:?DOCKER_USER_ID not set}"
+    : "${DOCKER_GROUP_ID:?DOCKER_GROUP_ID not set}"
+    : "${QDRANT_CONTAINER:?QDRANT_CONTAINER not set}"
+    
+    mkdir -p "${DATA_DIR}/mem0"
+    
+    cat >> "${COMPOSE_FILE}" << EOF
+  ${MEM0_CONTAINER}:
+    image: mem0ai/mem0:latest
+    container_name: ${MEM0_CONTAINER}
+    restart: unless-stopped
+    user: "${DOCKER_USER_ID}:${DOCKER_GROUP_ID}"
+    networks:
+      - ${DOCKER_NETWORK}
+    ports:
+      - "127.0.0.1:${MEM0_PORT}:${MEM0_PORT}"
+    volumes:
+      - ${CONFIG_DIR}/mem0/config.yaml:/app/config.yaml:ro
+      - ${DATA_DIR}/mem0:/app/data
+    environment:
+      - MEM0_CONFIG=/app/config.yaml
+      - MEM0_API_KEY=${MEM0_API_KEY}
+      - PORT=${MEM0_PORT}
+    depends_on:
+      ${QDRANT_CONTAINER}:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:${MEM0_PORT}/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    labels:
+      - "com.${PROJECT_PREFIX}${TENANT_ID}.service=mem0"
+      - "com.${PROJECT_PREFIX}${TENANT_ID}.role=memory"
+EOF
+    
+    log_success "Mem0 service configured"
 }
 
 wait_for_llm_router() {

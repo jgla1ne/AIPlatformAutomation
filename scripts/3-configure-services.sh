@@ -392,7 +392,7 @@ EOF
     # Add Bifrost LLM Router routing (always enabled when using Bifrost)
     [[ "${LLM_ROUTER:-bifrost}" == "bifrost" ]] && {
         local bifrost_headers=""
-        add_service_block "$out" "bifrost" "${LLM_ROUTER_CONTAINER:-ai-datasquiz-bifrost}" "${LLM_ROUTER_PORT:-4000}" "$bifrost_headers" "$tls_line" "$base_domain"
+        add_service_block "$out" "bifrost" "${LLM_ROUTER_CONTAINER}" "${LLM_ROUTER_PORT:-4000}" "$bifrost_headers" "$tls_line" "$base_domain"
     }
     
     # Add service blocks with proper configuration
@@ -710,6 +710,29 @@ EOF
       timeout: 5s
       retries: 5
       start_period: 60s   # was 30s — needs longer on fresh volume
+EOF
+
+    [[ "${ENABLE_MEM0:-false}" == "true" ]] && cat >> "$COMPOSE_FILE" <<EOF
+  mem0:
+    image: mem0ai/mem0:latest
+    restart: unless-stopped
+    user: "1000:\${TENANT_GID:-1001}"
+    volumes:
+      - ${CONFIG_DIR}/mem0/config.yaml:/app/config.yaml:ro
+      - ${DATA_DIR}/mem0:/app/data
+    environment:
+      - MEM0_CONFIG=/app/config.yaml
+      - MEM0_API_KEY=${MEM0_API_KEY}
+      - PORT=8765
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8765/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 EOF
 
     [[ "${ENABLE_RCLONE:-false}" == "true" ]] && {
