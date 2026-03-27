@@ -113,7 +113,7 @@ main() {
     cleanup_volumes() {
         log "Finding and destroying ALL AI platform volumes..."
         
-        # Remove all volumes with our prefix
+        # Remove all volumes with our prefix (if any exist)
         local volume_names
         volume_names=$(docker volume ls --filter "name=${CONTAINER_PREFIX}" -q)
         if [[ -n "$volume_names" ]]; then
@@ -121,14 +121,24 @@ main() {
             docker volume rm $volume_names 2>/dev/null || true
             ok "All AI platform volumes removed."
         else
-            ok "No AI platform volumes found."
+            ok "No AI platform volumes found with prefix."
         fi
         
-        # Also prune by project label
+        # Also prune by project label (handles random-named volumes)
         docker volume prune -af --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}" 2>/dev/null || true
         ok "All Docker volumes for project '${COMPOSE_PROJECT_NAME}' have been destroyed."
         
-        # Dynamic named compose volumes based on environment
+        # Remove ALL remaining volumes (aggressive cleanup for "device busy" issues)
+        log "Performing aggressive volume cleanup..."
+        local all_volumes
+        all_volumes=$(docker volume ls -q)
+        if [[ -n "$all_volumes" ]]; then
+            log "Found remaining volumes, removing all..."
+            echo "$all_volumes" | xargs -r docker volume rm -f 2>/dev/null || true
+            ok "All remaining volumes removed."
+        fi
+        
+        # Dynamic named compose volumes based on environment (fallback)
         log "Explicitly removing named compose volumes..."
         for vol in postgres_data prometheus_data grafana_data bifrost_data bifrost_config qdrant_data ollama_data openwebui_data; do
             local vol_name="${COMPOSE_PROJECT_NAME}_${vol}"
@@ -136,6 +146,10 @@ main() {
                 docker volume rm "$vol_name" 2>/dev/null && ok "Removed volume: ${vol_name}" || warn "Could not remove ${vol_name} (may be in use)"
             fi
         done
+        
+        # Final system prune to ensure clean state
+        docker system prune -f --volumes 2>/dev/null || true
+        ok "Final system prune completed."
     }
     
     cleanup_volumes
