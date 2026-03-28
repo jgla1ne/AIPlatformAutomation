@@ -3356,6 +3356,9 @@ main() {
     collect_llm_config       # Step 8
     configure_llm_router      # Step 8.2 - LLM router configuration (Modular choice)
     
+    # Write .env file BEFORE router initialization so variables are available
+    write_env_file
+    
     # Load environment to ensure load_or_generate_secret works correctly
     [[ -f "${ENV_FILE}" ]] && source "${ENV_FILE}"
     
@@ -3394,11 +3397,10 @@ main() {
     load_or_generate_secret "POSTGRES_PASSWORD"
     
     print_summary
-    write_env_file
     
     # Source Script 3 AFTER .env is written so functions can load it
     export TENANT="${TENANT_ID}"
-    source "${SCRIPTS_DIR}/3-configure-services.sh"
+    source "${SCRIPT_DIR}/3-configure-services.sh"
     
     # Directories and ownership — Script 1's responsibility
     create_directories
