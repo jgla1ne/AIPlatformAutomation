@@ -183,16 +183,20 @@ services:
     image: ollama/ollama:latest
     container_name: ${COMPOSE_PROJECT_NAME}_ollama
     restart: unless-stopped
-    user: "${OLLAMA_UID:-1001}:${OLLAMA_GID:-1001}"
+    # NOTE: user directive removed - ollama/ollama image ignores it and causes permission issues
     volumes:
       - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_PORT=11434
+      - OLLAMA_ORIGINS=*
     networks:
       - default
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
       start_period: 60s
     labels:
       - "ai-platform.service=ollama"
@@ -217,12 +221,51 @@ services:
       - "ai-platform.service=bifrost"
       - "ai-platform.tenant=${TENANT_ID}"
 
+  mem0:
+    image: python:3.11-slim
+    container_name: ${COMPOSE_PROJECT_NAME}_mem0
+    restart: unless-stopped
+    user: "${TENANT_UID:-1001}:${TENANT_GID:-1001}"
+    volumes:
+      - /mnt/data/${TENANT_ID}/configs/mem0/config.yaml:/app/config.yaml:ro
+      - /mnt/data/${TENANT_ID}/configs/mem0/server.py:/app/server.py:ro
+      - /mnt/data/${TENANT_ID}/configs/mem0/requirements.txt:/app/requirements.txt:ro
+      - /mnt/data/${TENANT_ID}/data/mem0:/app/data
+      - mem0-pip-cache:/pip-cache
+    environment:
+      - MEM0_API_KEY=${MEM0_API_KEY}
+      - MEM0_PORT=${MEM0_PORT:-8081}
+      - PIP_CACHE_DIR=/pip-cache
+      - HOME=/tmp
+      - PYTHONUNBUFFERED=1
+    working_dir: /app
+    command: >
+      sh -c "pip install --quiet --cache-dir /pip-cache -r /app/requirements.txt &&
+             python /app/server.py"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:${MEM0_PORT:-8081}/health || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 8
+      start_period: 150s
+    labels:
+      - "ai-platform.service=memory"
+      - "ai-platform.type=mem0"
+      - "ai-platform.tenant=${TENANT_ID}"
+
 volumes:
   postgres_data:
     driver: local
   redis_data:
     driver: local
   ollama_data:
+    driver: local
+  mem0-pip-cache:
     driver: local
 
 networks:
@@ -280,11 +323,32 @@ main() {
 
     provision_databases          # waits until postgres ready, verifies DBs
 
-    # 4. Local LLM runtime — BEFORE Bifrost (TEMPORARILY SKIPPED FOR TESTING)
+    # 4. Local LLM runtime — BEFORE Bifrost (FIXED: user directive issue resolved)
     [[ "${ENABLE_OLLAMA:-false}" == "true" ]] && {
-        log_info "Ollama deployment temporarily skipped for Bifrost testing"
-        # TODO: Fix Ollama user directive issue and re-enable
-        # docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d ollama
+        log_info "Deploying Ollama LLM engine..."
+        docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d ollama
+        
+        # Wait for Ollama to be healthy
+        log_info "Waiting for Ollama to be healthy..."
+        local elapsed=0
+        until docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T ollama \
+            curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; do
+            elapsed=$((elapsed + 5))
+            if [[ $elapsed -ge 120 ]]; then
+                log_error "Ollama did not become healthy after 120s"
+                docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" logs ollama --tail 20
+                break
+            fi
+            log_info "  Waiting for Ollama... (${elapsed}s)"
+            sleep 5
+        done
+        
+        if docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T ollama \
+            curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; then
+            log_success "Ollama is healthy and ready"
+        else
+            log_error "Ollama failed to start properly"
+        fi
     }
 
     # 5. Deploy Bifrost LLM Gateway

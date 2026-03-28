@@ -42,14 +42,16 @@ wait_for_bifrost() {
     local MAX_WAIT=60
     local INTERVAL=5
     
-    log_info "Waiting for Bifrost /healthz..."
+    log_info "Waiting for Bifrost API..."
     
     for i in $(seq 1 12); do
-        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            "http://localhost:4000/healthz" 2>/dev/null)
+        API_RESULT=$(curl -sf -H "Authorization: Bearer ${LLM_MASTER_KEY}" \
+            "http://localhost:${BIFROST_PORT:-4000}/v1/models" 2>/dev/null)
         
-        if [[ "$HTTP_CODE" == "200" ]]; then
-            log_success "Bifrost healthy after $((i*5)) seconds."
+        if [[ $? -eq 0 ]] && echo "${API_RESULT}" | jq -e '.data | length >= 0' >/dev/null 2>&1; then
+            local model_count
+            model_count=$(echo "${API_RESULT}" | jq '.data | length')
+            log_success "Bifrost healthy after $((i*5)) seconds with ${model_count} models available."
             return 0
         fi
         
@@ -1373,7 +1375,7 @@ EOF
     ports:
       - "\${PORT_OPENCLAW:-18789}:8443"
     healthcheck:
-      test: ["CMD-SHELL","curl -sf http://localhost:8443/ || exit 1"]
+      test: ["CMD-SHELL","curl -sf http://localhost:8443/healthz || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -1758,6 +1760,8 @@ health_dashboard() {
         _check_http "bifrost"    "http://localhost:${BIFROST_PORT:-4000}/healthz"
     [[ "${ENABLE_OLLAMA:-false}"     == "true" ]] && \
         _check_http "ollama"     "http://localhost:11434/"
+    [[ "${ENABLE_MEM0:-false}"       == "true" ]] && \
+        _check_http "mem0"       "http://localhost:${MEM0_PORT:-8765}/health"
     echo ""
     echo -e "  ${BOLD}Development Environment${NC}"
     [[ "${ENABLE_CODESERVER:-false}" == "true" ]] && \
@@ -1849,47 +1853,68 @@ configure_tailscale() {
 }
 
 configure_mem0() {
-    log "INFO" "Verifying Mem0 memory layer..."
-    local mem0_url="http://localhost:${MEM0_PORT}"
-    local waited=0
-
-    # Wait for Mem0 to be ready (pip install takes time on first boot)
-    while ! curl -sf "${mem0_url}/health" > /dev/null 2>&1; do
-        if [[ ${waited} -ge 180 ]]; then
-            log "ERROR" "Mem0 failed to become healthy after 180s"
+    log "INFO" "Configuring and verifying Mem0 memory layer..."
+    
+    local url="http://localhost:${MEM0_PORT:-8765}"
+    local max_wait=180
+    local elapsed=0
+    
+    log "INFO" "Waiting for Mem0 startup (pip install: 60-120s first boot)..."
+    while ! curl -sf "${url}/health" > /dev/null 2>&1; do
+        if [[ ${elapsed} -ge ${max_wait} ]]; then
+            log "ERROR" "Mem0 failed to start after ${max_wait}s"
+            log "ERROR" "Container logs:"
+            docker logs "${COMPOSE_PROJECT_NAME}_mem0" --tail 30 2>&1 | \
+                while IFS= read -r line; do log "LOG" "${line}"; done
             return 1
         fi
-        log "INFO" "Waiting for Mem0... (${waited}s)"
         sleep 10
-        waited=$((waited + 10))
+        elapsed=$((elapsed + 10))
+        log "INFO" "Mem0 starting... ${elapsed}/${max_wait}s"
     done
-    log "SUCCESS" "Mem0 is healthy"
-
-    # Verify tenant isolation — write to tenant A, search from tenant B
-    local tenant_a="${MEM0_COLLECTION_PREFIX}_test_a"
-    local tenant_b="${MEM0_COLLECTION_PREFIX}_test_b"
-
-    curl -sf -X POST "${mem0_url}/v1/memories" \
+    log "SUCCESS" "Mem0 healthy after ${elapsed}s"
+    
+    # Write test - tenant A
+    local tenant_a="verify_a_$$"
+    local tenant_b="verify_b_$$"
+    local marker="mem0_isolation_${RANDOM}_${RANDOM}"
+    
+    local write_result
+    write_result=$(curl -sf -w "\n%{http_code}" \
+        -X POST "${url}/v1/memories" \
         -H "Authorization: Bearer ${MEM0_API_KEY}" \
         -H "Content-Type: application/json" \
-        -d "{\"messages\":[{\"role\":\"user\",\"content\":\"isolation_marker_xyz\"}],
-             \"user_id\":\"${tenant_a}\"}" > /dev/null \
-        || { log "ERROR" "Mem0 write failed"; return 1; }
-
-    local result
-    result="$(curl -sf -X POST "${mem0_url}/v1/memories/search" \
-        -H "Authorization: Bearer ${MEM0_API_KEY}" \
-        -H "Content-Type: application/json" \
-        -d "{\"query\":\"isolation_marker_xyz\",
-             \"user_id\":\"${tenant_b}\"}")"
-
-    if echo "${result}" | grep -q "isolation_marker_xyz"; then
-        log "ERROR" "CRITICAL: Tenant memory isolation FAILED"
+        -d "{\"messages\":[{\"role\":\"user\",\"content\":\"${marker}\"}],
+             \"user_id\":\"${tenant_a}\"}")
+    
+    local write_code
+    write_code=$(echo "${write_result}" | tail -1)
+    if [[ "${write_code}" != "200" ]]; then
+        log "ERROR" "Mem0 write test failed with HTTP ${write_code}"
         return 1
     fi
-
-    log "SUCCESS" "Mem0 tenant isolation verified"
+    log "SUCCESS" "Mem0 write test passed"
+    
+    # Search from tenant B - must NOT find tenant A data
+    local search_result
+    search_result=$(curl -sf \
+        -X POST "${url}/v1/memories/search" \
+        -H "Authorization: Bearer ${MEM0_API_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{\"query\":\"${marker}\",\"user_id\":\"${tenant_b}\"}")
+    
+    if echo "${search_result}" | grep -q "${marker}"; then
+        log "ERROR" "CRITICAL FAILURE: Mem0 tenant isolation BROKEN"
+        log "ERROR" "Data from tenant_a visible to tenant_b"
+        log "ERROR" "Search result: ${search_result}"
+        return 1
+    fi
+    log "SUCCESS" "Mem0 tenant isolation verified - data scoped correctly"
+    
+    log "SUCCESS" "Mem0 fully configured and verified"
 }
+
+# ── Health Dashboard ────────────────────────────────────────────────────────
 
 setup_gdrive_rclone() {
     [[ -n "${GDRIVE_CLIENT_ID:-}" ]] || { 

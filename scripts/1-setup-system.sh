@@ -1289,7 +1289,7 @@ init_mem0() {
     local mem0_key="${existing_key:-mem0-$(openssl rand -hex 24)}"
     
     # Create directories
-    mkdir -p "${CONFIG_DIR}/mem0" "${DATA_DIR}/mem0"
+    mkdir -p "${CONFIG_DIR}/mem0" "${DATA_DIR}/mem0" "${DATA_DIR}/mem0-pip-cache"
     
     # Write Mem0 config using placeholder-sed pattern
     cat > "${CONFIG_DIR}/mem0/config.yaml" << 'MEM0_EOF'
@@ -1382,7 +1382,7 @@ def search(req: SearchReq, authorization: str = Header(None)):
 PYEOF
 
     # Set ownership
-    chown -R "${TENANT_UID}:${TENANT_GID}" "${CONFIG_DIR}/mem0" "${DATA_DIR}/mem0"
+    chown -R "${TENANT_UID}:${TENANT_GID}" "${CONFIG_DIR}/mem0" "${DATA_DIR}/mem0" "${DATA_DIR}/mem0-pip-cache"
     chmod 640 "${CONFIG_DIR}/mem0/config.yaml"
     chmod 644 "${CONFIG_DIR}/mem0/server.py"
     
