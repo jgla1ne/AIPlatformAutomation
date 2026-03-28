@@ -95,6 +95,10 @@ main() {
         
         # Legacy cleanup for any remaining hardcoded names
         docker rm -f litellm 2>/dev/null || true
+        
+        # Explicit cleanup for new containers (CLAUDE.md Fix 4)
+        docker rm -f ai-${TENANT}-bifrost-1 2>/dev/null || true
+        docker rm -f ${COMPOSE_PROJECT_NAME}_mem0 2>/dev/null || true
     }
     
     cleanup_containers
@@ -178,6 +182,13 @@ main() {
     
     # Clean router environment variables from .env if it exists
     if [[ -f "${DATA_ROOT}/.env" ]]; then
+        # Preserve N8N_ENCRYPTION_KEY if preserve flag set (CLAUDE.md Fix 4)
+        local preserve_n8n_key=""
+        if [[ "${PRESERVE_N8N_KEY:-false}" == "true" ]]; then
+            preserve_n8n_key=$(grep "^N8N_ENCRYPTION_KEY=" "${DATA_ROOT}/.env" 2>/dev/null || echo "")
+            [[ -n "$preserve_n8n_key" ]] && log "Preserving N8N_ENCRYPTION_KEY..."
+        fi
+        
         log "Cleaning router variables from .env file..."
         sed -i '/^BIFROST_/d' "${DATA_ROOT}/.env" 2>/dev/null || true
         sed -i '/^LLM_ROUTER/d' "${DATA_ROOT}/.env" 2>/dev/null || true
@@ -187,6 +198,13 @@ main() {
         sed -i '/^LLM_MASTER_KEY/d' "${DATA_ROOT}/.env" 2>/dev/null || true
         sed -i '/^LITELLM_/d' "${DATA_ROOT}/.env" 2>/dev/null || true
         sed -i '/^ENABLE_LITELLM/d' "${DATA_ROOT}/.env" 2>/dev/null || true
+        
+        # Restore N8N_ENCRYPTION_KEY if preserving
+        if [[ -n "$preserve_n8n_key" && "${PRESERVE_N8N_KEY:-false}" == "true" ]]; then
+            echo "$preserve_n8n_key" >> "${DATA_ROOT}/.env"
+            log "N8N_ENCRYPTION_KEY preserved in .env"
+        fi
+        
         ok "Router variables cleaned from .env."
     fi
     
