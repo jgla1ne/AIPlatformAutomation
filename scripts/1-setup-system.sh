@@ -3354,6 +3354,9 @@ main() {
     collect_llm_config       # Step 8
     configure_llm_router      # Step 8.2 - LLM router configuration (Modular choice)
     
+    # Load environment to ensure load_or_generate_secret works correctly
+    [[ -f "${ENV_FILE}" ]] && source "${ENV_FILE}"
+    
     # Generate router-specific secrets BEFORE initialization
     if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
         load_or_generate_secret "BIFROST_AUTH_TOKEN"
