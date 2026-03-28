@@ -3358,7 +3358,7 @@ main() {
     
     # Generate router-specific secrets BEFORE initialization
     # Set basic variables to prevent unbound errors
-    OLLAMA_CONTAINER="ai-${TENANT_NAME:-datasquiz}-ollama"
+    export OLLAMA_CONTAINER="ai-${TENANT_NAME:-datasquiz}-ollama"
     TENANT_UID="${TENANT_UID:-1001}"
     TENANT_GID="${TENANT_GID:-1001}"
     # But ensure .env file exists first
