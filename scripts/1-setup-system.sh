@@ -576,7 +576,7 @@ load_or_generate_secret() {
     local var_name="$1"
     local current_value
     # Check if the variable already has a value (from a previous run's .env)
-    eval "current_value=\$$var_name"
+    current_value=$(eval echo \$\{$var_name:-\} 2>/dev/null || echo "")
     if [[ -z "$current_value" ]]; then
         # If not, generate a new one
         eval "$var_name=\$(openssl rand -hex 32)"
