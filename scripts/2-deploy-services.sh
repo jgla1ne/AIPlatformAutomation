@@ -29,6 +29,18 @@ LLM_ROUTER=$(grep "^LLM_ROUTER=" "$ENV_FILE" 2>/dev/null | grep -v "^#" | cut -d
 log_info "LLM Router selected: ${LLM_ROUTER}"
 echo "ℹ LLM Router selected: ${LLM_ROUTER}"
 
+# Set missing variable defaults for unbound variables
+TENANT_UID="${TENANT_UID:-1000}"
+TENANT_GID="${TENANT_GID:-1000}"
+BIFROST_PORT="${BIFROST_PORT:-8000}"
+MEM0_PORT="${MEM0_PORT:-8081}"
+FLOWISE_PORT="${FLOWISE_PORT:-3000}"
+N8N_PORT="${N8N_PORT:-5678}"
+POSTGRES_USER="${POSTGRES_USER:-datasquiz}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-datasquiz123}"
+REDIS_PASSWORD="${REDIS_PASSWORD:-datasquiz123}"
+COMPOSE_PROJECT_NAME="ai-${TENANT}"
+
 # ── Helper Functions ────────────────────────────────────────────────
 # Service port mapping for health checks
 declare -A SERVICE_PORTS=(
@@ -158,7 +170,7 @@ services:
       retries: 5
     labels:
       - "ai-platform.service=postgres"
-      - "ai-platform.tenant=${TENANT_ID}"
+      - "ai-platform.tenant=${TENANT}"
 
   redis:
     image: redis:7-alpine
@@ -177,7 +189,7 @@ services:
       retries: 5
     labels:
       - "ai-platform.service=redis"
-      - "ai-platform.tenant=${TENANT_ID}"
+      - "ai-platform.tenant=${TENANT}"
 
   ollama:
     image: ollama/ollama:latest
@@ -200,7 +212,7 @@ services:
       start_period: 60s
     labels:
       - "ai-platform.service=ollama"
-      - "ai-platform.tenant=${TENANT_ID}"
+      - "ai-platform.tenant=${TENANT}"
 
   bifrost:
     image: maximhq/bifrost:latest
@@ -219,7 +231,7 @@ services:
       - default
     labels:
       - "ai-platform.service=bifrost"
-      - "ai-platform.tenant=${TENANT_ID}"
+      - "ai-platform.tenant=${TENANT}"
 
   mem0:
     image: python:3.11-slim
@@ -256,7 +268,7 @@ services:
     labels:
       - "ai-platform.service=memory"
       - "ai-platform.type=mem0"
-      - "ai-platform.tenant=${TENANT_ID}"
+      - "ai-platform.tenant=${TENANT}"
 
   flowise:
     image: flowiseai/flowise:latest
@@ -287,7 +299,7 @@ services:
       retries: 5
     labels:
       - "ai-platform.service=flowise"
-      - "ai-platform.tenant=${TENANT_ID}"
+      - "ai-platform.tenant=${TENANT}"
 
   n8n:
     image: n8nio/n8n:latest
@@ -319,7 +331,7 @@ services:
       retries: 5
     labels:
       - "ai-platform.service=n8n"
-      - "ai-platform.tenant=${TENANT_ID}"
+      - "ai-platform.tenant=${TENANT}"
 
 volumes:
   postgres_data:
