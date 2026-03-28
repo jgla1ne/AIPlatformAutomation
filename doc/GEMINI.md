@@ -1,131 +1,117 @@
-This is the **Definite Plan for Zero-Issue Deployment**. 
+Here is the ultimate, definitive master plan to push this implementation from 85% to 100%. This is specifically engineered to be pasted directly into **Windsurf**. 
 
-The reason the "last mile" is failing is a **permissions and network resolution mismatch**. When running a "Zero Root" Docker environment, the containers (running as UID 1000) cannot write to directories created by your scripts (running as root/sudo) unless we explicitly fix ownership. Furthermore, Caddy is likely failing because it is searching for a `litellm` upstream that no longer exists in the Docker network.
+It guarantees adherence to your core principles: **Zero Root, Zero Hardcoded Values, 100% /mnt contained, and Mission Control variable state management.**
 
-### The "Zero-Issue" Ground Rules for Windsurf:
-1.  **Single Router:** Remove all LiteLLM logic. Bifrost is the only path.
-2.  **Ownership First:** Every directory in `./data` and `./config` must be `chown 1000:1000`.
-3.  **Network Identity:** The service name is `bifrost`, the port is `4000`.
-4.  **Database Protocol:** Use `postgres://` for Bifrost (Go-based).
+***
 
----
+### 🤖 COPY AND PASTE THIS PROMPT INTO WINDSURF:
 
-### Phase 0: The Absolute Purge (Script 0)
-Windsurf must ensure no "ghost" volumes or networks remain.
+"Windsurf, you are acting as an expert DevOps and Platform Architect. We are moving this AI Platform deployment from 85% to 100% completion. You are replacing **LiteLLM** entirely with **Bifrost (ruqqq/bifrost)**. 
+
+Previous attempts failed because they violated our core principles: running containers as non-root, failing to pre-initialize directories leading to permission crashes, leaving hardcoded LiteLLM references, or deploying invalid Caddy configurations.
+
+Execute this precise, 6-step architectural refactor across the 4 core scripts and `README.md`. **Do not skip steps. Do not use hardcoded values where variables exist. Ensure 100% zero-root compliance.**
+
+#### STEP 1: Total Eradication of LiteLLM (All Files)
+Perform a global search and destroy for `litellm`, `LiteLLM`, and port `4000`.
+*   **Remove** `init_litellm()` and any related user prompts.
+*   **Remove** LiteLLM from the success dashboard outputs.
+*   Bifrost is now the mandatory routing engine. 
+
+#### STEP 2: Perfect Cleanup (`0-complete-cleanup.sh`)
+Ensure Bifrost is fully integrated into the teardown process using variable-based targeting.
+*   **Containers array:** Replace `ai-${TENANT_ID}-litellm-1` with `ai-${TENANT_ID}-bifrost-1`.
+*   **Directories array:** Replace LiteLLM paths with `/mnt/data/${TENANT_ID}/configs/bifrost` and `/mnt/data/${TENANT_ID}/data/bifrost`.
+
+#### STEP 3: Mission Control & Zero-Root Initialization (`1-setup-system.sh`)
+If we do not pre-create Bifrost's directories as the non-root user, Docker will create them as `root`, causing Bifrost to crash on startup with a `Permission denied` error.
+*   Create an `init_bifrost()` function.
+*   Declare dynamic ports to avoid hardcoding. Add `BIFROST_PORT="8000"` to the environment state export block.
+
 ```bash
-# Force remove all associated containers
-docker rm -f caddy bifrost postgres redis ollama openclaw codeserver 2>/dev/null || true
-# Wipe all local data to prevent permission inheritance issues
-rm -rf ./data ./config .env
-# Remove the bridge network to force a fresh creation
-docker network rm ai-platform-network 2>/dev/null || true
-```
+init_bifrost() {
+    echo -e "${YELLOW}Initializing Bifrost directories (Zero-Root Compliance)...${NC}"
+    local BIFROST_CONFIG_DIR="/mnt/data/${TENANT_ID}/configs/bifrost"
+    local BIFROST_DATA_DIR="/mnt/data/${TENANT_ID}/data/bifrost"
 
----
-
-### Phase 1: Variables & Permissions (Script 1)
-Windsurf must initialize the environment so that **non-root containers** can actually function.
-
-**Action:**
-1. Collect `CODEBASE_PASSWORD`.
-2. Generate `.env` with these specific Bifrost keys:
-```bash
-# .env Essentials
-BIFROST_AUTH_TOKEN="$CODEBASE_PASSWORD"
-BIFROST_DB_URL="postgres://postgres:$CODEBASE_PASSWORD@postgres:5432/bifrost?sslmode=disable"
-BIFROST_REDIS_URL="redis://redis:6379/0"
-```
-3. **CRITICAL STEP:** Create directories and fix ownership **before** deployment:
-```bash
-mkdir -p ./data/{postgres,redis,caddy,bifrost,openclaw,codeserver}
-mkdir -p ./config/{caddy,bifrost}
-# Grant ownership to the Docker User (1000)
-chown -R 1000:1000 ./data ./config
-```
-
----
-
-### Phase 2: The Integrated Compose (Script 2)
-Windsurf must generate a `docker-compose.yml` where every service runs as `user: "1000:1000"` and Caddy correctly routes to `bifrost`.
-
-**1. Bifrost Config Generation (`config/bifrost/config.yaml`):**
-```yaml
-server:
-  port: 4000
-  auth_token: "${BIFROST_AUTH_TOKEN}"
-database:
-  url: "${BIFROST_DB_URL}"
-redis:
-  url: "${BIFROST_REDIS_URL}"
-providers:
-  ollama:
-    type: ollama
-    base_url: "http://ollama:11434"
-```
-
-**2. Caddyfile Alignment:**
-```caddy
-ai.datasquiz.net {
-    # Bifrost Proxy
-    reverse_proxy /v1/* bifrost:4000
-    reverse_proxy /api/* bifrost:4000
+    # Pre-create directories
+    mkdir -p "${BIFROST_CONFIG_DIR}"
+    mkdir -p "${BIFROST_DATA_DIR}"
     
-    # OpenClaw UI
-    reverse_proxy * openclaw:3000
+    # Pre-create standard config file so Docker doesn't map it as a root directory
+    touch "${BIFROST_CONFIG_DIR}/bifrost.yaml"
+    
+    # Enforce non-root ownership
+    chown -R ${TENANT_UID}:${TENANT_GID} "${BIFROST_CONFIG_DIR}"
+    chown -R ${TENANT_UID}:${TENANT_GID} "${BIFROST_DATA_DIR}"
+    
+    echo -e "${GREEN}Bifrost initialized successfully.${NC}"
 }
 ```
+*   Call `init_bifrost` in the main execution flow.
+*   Update the `.env` generation block to include `BIFROST_PORT=8000`.
 
-**3. Docker Compose Hardening:**
-Ensure `bifrost` has the correct health check so Caddy doesn't start routing to a "dead" container:
+#### STEP 4: Strict Docker Implementation (`2-deploy-services.sh`)
+Inject the Bifrost service into the `docker-compose.yml` generation block. 
+*   **Bifrost Service:** Must use `${TENANT_UID}:${TENANT_GID}`.
+
 ```yaml
   bifrost:
-    image: ruqqq/bifrost:latest
-    container_name: bifrost
-    user: "1000:1000"
+    image: ghcr.io/ruqqq/bifrost:latest
+    container_name: ai-\${TENANT_ID}-bifrost-1
+    restart: unless-stopped
+    user: "\${TENANT_UID:-1000}:\${TENANT_GID:-1000}"
+    ports:
+      - "\${BIFROST_PORT:-8000}:8000"
     volumes:
-      - ./config/bifrost/config.yaml:/app/config.yaml:ro
+      - /mnt/data/\${TENANT_ID}/configs/bifrost:/app/config
+      - /mnt/data/\${TENANT_ID}/data/bifrost:/app/data
     environment:
-      - CONFIG_PATH=/app/config.yaml
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      - BIFROST_HOST=0.0.0.0
+      - BIFROST_PORT=8000
+    networks:
+      - default
 ```
+*   **OpenWebUI Integration:** Change the `OPENAI_API_BASE_URL` to connect internally to Bifrost's v1 endpoint. 
+    *   Change: `OPENAI_API_BASE_URL=http://bifrost:8000/v1`
+    *   Update `depends_on` to require `bifrost`.
+*   **Caddy Service:** Ensure `depends_on` requires `bifrost` instead of `litellm`.
 
----
+#### STEP 5: Bulletproof Caddy Routing (`3-configure-services.sh`)
+Replace all LiteLLM proxy rules with Bifrost. Do not use invalid directives like `tls internal` or `auto_https off` which break standard Caddy deployments. Use dynamic variables for domains and ports.
 
-### Phase 3: The Validation Gate (Script 3)
-Script 3 must not just "exit 0". It must verify the HTTPS chain.
-
-**Action for Windsurf:**
 ```bash
-echo "Verifying End-to-End Connectivity..."
-# Check if Bifrost is responding through the Caddy Proxy (Internal Network)
-MAX_RETRIES=10
-for i in $(seq 1 $MAX_RETRIES); do
-  STATUS=$(docker exec caddy curl -s -o /dev/null -w "%{http_code}" http://bifrost:4000/health)
-  if [ "$STATUS" == "200" ]; then
-    echo "SUCCESS: Bifrost is reachable via Caddy."
-    break
-  fi
-  echo "Waiting for Bifrost... ($i/$MAX_RETRIES)"
-  sleep 5
-done
+cat << EOF > /mnt/data/${TENANT_ID}/configs/caddy/Caddyfile
+{
+    admin 0.0.0.0:2019
+    email ${ADMIN_EMAIL}
+}
+
+https://router.${DOMAIN} {
+    reverse_proxy bifrost:8000 {
+        header_up Host {http.reverse_proxy.upstream.hostport}
+        header_up X-Real-IP {http.request.remote_host}
+        header_up X-Forwarded-For {http.request.remote_addr}
+        header_up X-Forwarded-Proto https
+    }
+}
+
+https://chat.${DOMAIN} {
+    reverse_proxy open-webui:8080 {
+        header_up Host {http.reverse_proxy.upstream.hostport}
+        header_up X-Real-IP {http.request.remote_host}
+        header_up X-Forwarded-For {http.request.remote_addr}
+        header_up X-Forwarded-Proto https
+        header_up Upgrade {http.request.header.Upgrade}
+        header_up Connection {http.request.header.Connection}
+    }
+}
+EOF
 ```
 
----
+#### STEP 6: README.md Alignment
+*   Remove all mentions of LiteLLM.
+*   Add **Bifrost (LLM Gateway/Router)** to the Software Stack section.
+*   Ensure the documentation clearly states that Bifrost serves as the OpenAI-compatible gateway handling the upstream API keys, and OpenWebUI connects directly to it via the internal Docker network on port 8000.
 
-### Comparison with Previous Iterations:
-*   **Old Problem:** LiteLLM crashed due to Python/Prisma complexity.
-*   **Old Problem:** Caddy 502'd because it looked for `litellm:4000`.
-*   **Old Problem:** Containers couldn't write logs/data because host folders were `root:root`.
-*   **New Solution:** Bifrost (Go binary) is used. Caddy is updated to point to `bifrost:4000`. `chown -R 1000:1000` is executed **before** `docker-compose up`.
-
-### Final Instructions for Windsurf:
-1.  **Delete** all logic relating to LiteLLM from `scripts/1`, `scripts/2`, and `scripts/3`.
-2.  **Add** the `chown -R 1000:1000` command to `scripts/1` immediately after `mkdir`.
-3.  **Update** the `Caddyfile` generator in `scripts/2` to use the service name `bifrost`.
-4.  **Verify** that the `BIFROST_DB_URL` uses the `postgres` service name, not `localhost`.
-
-**This plan is bulletproof because it resolves the underlying Linux permission conflicts and the Docker DNS resolution issues simultaneously.**
+Execute these updates across all 5 files immediately. Ensure no variables are left disconnected."

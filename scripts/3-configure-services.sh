@@ -557,6 +557,7 @@ generate_configs() {
     log_info "Generating all configuration files..."
     
     # Validate environment before generating configs
+    prepare_directories
     validate_env || return 1
     
     generate_postgres_init
@@ -2168,7 +2169,7 @@ main() {
                 curl -s "http://localhost:${BIFROST_PORT:-4000}/healthz" | jq .
             else
                 echo "LLM Router: LiteLLM (port 4000)"
-                curl -s "http://localhost:4000/health/liveliness" | jq .
+                curl -s "http://localhost:4000/healthz" | jq .
             fi
             docker compose -f "$COMPOSE_FILE" ps ;;
         logs)           docker compose -f "$COMPOSE_FILE" logs --tail=50 "${1:-}" ;;
