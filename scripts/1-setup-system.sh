@@ -1261,68 +1261,172 @@ collect_llm_config() {
 
 # ─── Bifrost Configuration ─────────────────────────────────────────────────────
 init_bifrost() {
-    log "INFO" "Initializing Bifrost LLM gateway..."
-    mkdir -p "${CONFIG_DIR}/bifrost"
-
-    [[ -z "${BIFROST_AUTH_TOKEN}" ]] && { log "ERROR" "BIFROST_AUTH_TOKEN empty"; return 1; }
-    [[ -z "${OLLAMA_CONTAINER}" ]] && { log "ERROR" "OLLAMA_CONTAINER empty"; return 1; }
-
-    # Validate no special chars that break YAML
-    local key="${BIFROST_AUTH_TOKEN}"
-    local ollama_url="http://${OLLAMA_CONTAINER}:${OLLAMA_PORT:-11434}"
-
-    # Write using python3 to guarantee valid YAML — no sed, no heredoc, no printf issues
-    python3 - << PYEOF
-import yaml, sys
+    log "INFO" "Initializing Bifrost LLM gateway config..."
+    
+    local config_dir="${CONFIG_DIR}/bifrost"
+    mkdir -p "${config_dir}"
+    
+    # Validate required variables before writing anything
+    [[ -z "${LLM_MASTER_KEY}" ]] && {
+        log "ERROR" "LLM_MASTER_KEY is empty — cannot write Bifrost config"
+        return 1
+    }
+    [[ -z "${OLLAMA_CONTAINER}" ]] && {
+        log "ERROR" "OLLAMA_CONTAINER is empty — cannot write Bifrost config"  
+        return 1
+    }
+    
+    # Use python3 to write YAML — guarantees valid output regardless of 
+    # special characters in LLM_MASTER_KEY or other variables
+    # This replaces all sed/heredoc approaches which fail on special chars
+    python3 << PYEOF
+import yaml
+import sys
+import os
 
 config = {
-    "accounts": [{
-        "name": "default",
-        "keys": [{"value": "${key}"}],
-        "providers": {
-            "ollama": {
-                "base_url": "${ollama_url}",
-                "timeout": 300
+    "accounts": [
+        {
+            "name": "primary",
+            "keys": [
+                {
+                    "value": os.environ["LLM_MASTER_KEY"],
+                    "name": "master"
+                }
+            ],
+            "providers": [
+                {
+                    "name": "ollama",
+                    "base_url": "http://{}:{}".format(
+                        os.environ["OLLAMA_CONTAINER"],
+                        os.environ.get("OLLAMA_PORT", "11434")
+                    )
+                }
+            ],
+            "models": {
+                "ollama": ["*"]
             }
-        },
-        "models": {
-            "ollama": ["*"]
         }
-    }],
+    ],
     "server": {
-        "port": ${BIFROST_PORT:-8082}
+        "port": int(os.environ.get("BIFROST_PORT", "8082")),
+        "read_timeout": 300,
+        "write_timeout": 300
+    },
+    "logging": {
+        "level": "info"
     }
 }
 
-with open("${CONFIG_DIR}/bifrost/config.yaml", "w") as f:
-    yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+config_path = "{}/config.yaml".format(os.environ["CONFIG_DIR"] + "/bifrost")
+with open(config_path, "w") as f:
+    yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
-print("OK")
+print("Bifrost config written to: " + config_path)
+
+# Verify it reads back correctly
+with open(config_path, "r") as f:
+    verify = yaml.safe_load(f)
+
+assert verify["accounts"][0]["keys"][0]["value"] == os.environ["LLM_MASTER_KEY"], \
+    "Key verification failed — written key does not match"
+print("Key verification passed")
 PYEOF
-
+    
     local rc=$?
-    if [[ ${rc} -ne 0 ]] || [[ ! -s "${CONFIG_DIR}/bifrost/config.yaml" ]]; then
-        log "ERROR" "Bifrost config write failed"
+    [[ ${rc} -ne 0 ]] && {
+        log "ERROR" "python3 config write failed with exit code ${rc}"
         return 1
-    fi
-
-    log "INFO" "Bifrost config content:"
-    cat "${CONFIG_DIR}/bifrost/config.yaml" | while IFS= read -r line; do
-        log "INFO" "  ${line}"
-    done
-
-    chown "${DOCKER_USER_ID:-1000}:${DOCKER_GROUP_ID:-1000}" \
-        "${CONFIG_DIR}/bifrost/config.yaml"
-    chmod 640 "${CONFIG_DIR}/bifrost/config.yaml"
-
-    update_env "LLM_GATEWAY_CONTAINER" "${LLM_GATEWAY_CONTAINER}"
-    update_env "BIFROST_PORT" "${BIFROST_PORT}"
-    log "SUCCESS" "Bifrost config written and validated"
+    }
+    
+    [[ ! -s "${config_dir}/config.yaml" ]] && {
+        log "ERROR" "Config file empty after write"
+        return 1
+    }
+    
+    # Log the config (mask the key)
+    log "INFO" "Bifrost config written:"
+    sed "s/${LLM_MASTER_KEY}/[MASKED]/g" "${config_dir}/config.yaml" | \
+        while IFS= read -r line; do log "INFO" "  ${line}"; done
+    
+    chown "${CURRENT_USER}:${CURRENT_USER}" "${config_dir}/config.yaml" 2>/dev/null || true
+    chmod 640 "${config_dir}/config.yaml"
+    
+    update_env "BIFROST_CONFIG_FILE" "${config_dir}/config.yaml"
+    log "SUCCESS" "Bifrost config initialized and verified"
 }
 
 # ─── LiteLLM Configuration ─────────────────────────────────────────────────────
 
+# ─── Ollama Model Management ───────────────────────────────────────────────────
+pull_ollama_models() {
+    log "INFO" "Pulling required Ollama models..."
+    
+    local ollama_url="http://localhost:${OLLAMA_PORT:-11434}"
+    local -a models=("llama3.2" "nomic-embed-text")
+    
+    # Wait for Ollama to be ready
+    local elapsed=0
+    while ! curl -sf "${ollama_url}/api/tags" > /dev/null 2>&1; do
+        [[ ${elapsed} -ge 120 ]] && {
+            log "ERROR" "Ollama not responding after ${elapsed}s"
+            return 1
+        }
+        sleep 5; elapsed=$((elapsed+5))
+        log "INFO" "Waiting for Ollama... ${elapsed}s"
+    done
+    log "SUCCESS" "Ollama API responsive"
+    
+    for model in "${models[@]}"; do
+        # Check if already present
+        if curl -sf "${ollama_url}/api/tags" | \
+           python3 -c "import sys,json; models=[m['name'] for m in json.load(sys.stdin)['models']]; exit(0 if any('${model}' in m for m in models) else 1)" \
+           2>/dev/null; then
+            log "SUCCESS" "Model ${model} already present — skipping pull"
+            continue
+        fi
+        
+        log "INFO" "Pulling ${model} — this may take several minutes..."
+        
+        # Stream pull and show progress
+        while IFS= read -r line; do
+            local status
+            status=$(echo "${line}" | python3 -c \
+                "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('status',''))" \
+                2>/dev/null || echo "")
+            [[ -n "${status}" ]] && log "INFO" "  ${model}: ${status}"
+        done < <(curl -sf -X POST "${ollama_url}/api/pull" \
+            -H "Content-Type: application/json" \
+            -d "{\"name\": \"${model}\"}" \
+            --max-time 1800 \
+            --no-buffer 2>&1)
+        
+        # Verify pull succeeded
+        if curl -sf "${ollama_url}/api/tags" | \
+           python3 -c "import sys,json; models=[m['name'] for m in json.load(sys.stdin)['models']]; exit(0 if any('${model}' in m for m in models) else 1)" \
+           2>/dev/null; then
+            log "SUCCESS" "Model ${model} pulled and verified"
+        else
+            log "ERROR" "Model ${model} pull FAILED — not present after pull attempt"
+            return 1
+        fi
+    done
+    
+    log "SUCCESS" "All required models available"
+}
+
 # ─── Mem0 Configuration ─────────────────────────────────────────────────────
+    # Pull required Ollama models if Ollama is running (from previous deployment)
+    # This will be skipped on first deployment since Ollama isn't up yet
+    if [[ "${ENABLE_OLLAMA}" == "true" ]]; then
+        # Check if Ollama is accessible before trying to pull models
+        if curl -sf "http://localhost:${OLLAMA_PORT:-11434}/api/tags" > /dev/null 2>&1; then
+            pull_ollama_models
+        else
+            log "INFO" "Ollama not running yet — models will be pulled during deployment"
+        fi
+    fi
+
 init_mem0() {
     print_step "8.4" "11" "Mem0 Configuration"
 
@@ -3364,7 +3468,7 @@ main() {
     # But ensure .env file exists first
     [[ -f "${ENV_FILE}" ]] && source "${ENV_FILE}"
     if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
-        load_or_generate_secret "BIFROST_AUTH_TOKEN"
+        load_or_generate_secret "LLM_MASTER_KEY"
     elif [[ "${LLM_ROUTER}" == "litellm" ]]; then
         load_or_generate_secret "LITELLM_MASTER_KEY"
     fi
@@ -3377,6 +3481,17 @@ main() {
     fi
     
     # Initialize Mem0 memory layer (CLAUDE.md Change 3)
+    # Pull required Ollama models if Ollama is running (from previous deployment)
+    # This will be skipped on first deployment since Ollama isn't up yet
+    if [[ "${ENABLE_OLLAMA}" == "true" ]]; then
+        # Check if Ollama is accessible before trying to pull models
+        if curl -sf "http://localhost:${OLLAMA_PORT:-11434}/api/tags" > /dev/null 2>&1; then
+            pull_ollama_models
+        else
+            log "INFO" "Ollama not running yet — models will be pulled during deployment"
+        fi
+    fi
+
     init_mem0
     collect_network_config   # Step 9 - NEW: Network & security configuration
     collect_ports            # Step 10
@@ -3531,6 +3646,17 @@ main() {
     fi
     
     # Initialize Mem0 memory layer (CLAUDE.md Change 3)
+    # Pull required Ollama models if Ollama is running (from previous deployment)
+    # This will be skipped on first deployment since Ollama isn't up yet
+    if [[ "${ENABLE_OLLAMA}" == "true" ]]; then
+        # Check if Ollama is accessible before trying to pull models
+        if curl -sf "http://localhost:${OLLAMA_PORT:-11434}/api/tags" > /dev/null 2>&1; then
+            pull_ollama_models
+        else
+            log "INFO" "Ollama not running yet — models will be pulled during deployment"
+        fi
+    fi
+
     init_mem0
     collect_network_config   # Step 9 - NEW: Network & security configuration
     collect_ports            # Step 10
@@ -3579,6 +3705,17 @@ main() {
     fi
     
     # Initialize Mem0 memory layer (CLAUDE.md Change 3)
+    # Pull required Ollama models if Ollama is running (from previous deployment)
+    # This will be skipped on first deployment since Ollama isn't up yet
+    if [[ "${ENABLE_OLLAMA}" == "true" ]]; then
+        # Check if Ollama is accessible before trying to pull models
+        if curl -sf "http://localhost:${OLLAMA_PORT:-11434}/api/tags" > /dev/null 2>&1; then
+            pull_ollama_models
+        else
+            log "INFO" "Ollama not running yet — models will be pulled during deployment"
+        fi
+    fi
+
     init_mem0
     collect_network_config   # Step 9 - NEW: Network & security configuration
     collect_ports            # Step 10
