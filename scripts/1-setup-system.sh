@@ -1175,6 +1175,10 @@ collect_database() {
 }
 
 # ─── LLM Configuration ─────────────────────────────────────────────────────
+    # Set basic variables to prevent unbound errors BEFORE router configuration
+    export OLLAMA_CONTAINER="ai-${TENANT_NAME:-datasquiz}-ollama"
+    TENANT_UID="${TENANT_UID:-1001}"
+    TENANT_GID="${TENANT_GID:-1001}"
 collect_llm_config() {
     print_step "8" "11" "LLM Provider Configuration"
 
@@ -2307,7 +2311,7 @@ generate_secrets() {
     FLOWISE_SECRET_KEY=$(load_existing_secret "FLOWISE_SECRET_KEY"     "$(openssl rand -hex 32)")
     
     # Router-specific API keys
-    BIFROST_AUTH_TOKEN=$(load_existing_secret "BIFROST_AUTH_TOKEN"       "sk-bifrost-$(openssl rand -hex 24)")
+    LLM_MASTER_KEY=$(load_existing_secret "LLM_MASTER_KEY"       "sk-bifrost-$(openssl rand -hex 24)")
     
     ANYTHINGLLM_JWT_SECRET=$(load_existing_secret "ANYTHINGLLM_JWT_SECRET" "$(openssl rand -hex 32)")
     JWT_SECRET=$(load_existing_secret "JWT_SECRET"                   "$(openssl rand -hex 32)")
@@ -2641,7 +2645,7 @@ GROQ_API_KEY="${GROQ_API_KEY}"
 OPENROUTER_API_KEY="${OPENROUTER_API_KEY}"
 
 # ─── Bifrost Configuration ───────────────────────────────────────────────
-BIFROST_AUTH_TOKEN="${BIFROST_AUTH_TOKEN}"
+LLM_MASTER_KEY="${LLM_MASTER_KEY}"
 BIFROST_PORT="${BIFROST_PORT:-8000}"
 BIFROST_PROVIDERS='[{"provider":"ollama","base_url":"http://ollama:11434"}]'
 
@@ -3195,7 +3199,7 @@ print_summary() {
     [ "${ENABLE_FLOWISE}" = "true" ]     && echo -e "    ${GREEN}✓${NC}  Flowise      :${FLOWISE_PORT}"
     if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
         echo "  LLM Router:    Bifrost (port ${BIFROST_PORT:-4000})"
-        echo "  Bifrost Key:   ${BIFROST_AUTH_TOKEN:0:20}..."
+        echo "  Bifrost Key:   ${LLM_MASTER_KEY:0:20}..."
     fi
     [ "${ENABLE_QDRANT}" = "true" ]      && echo -e "    ${GREEN}✓${NC}  Qdrant       :${QDRANT_PORT}"
     [ "${ENABLE_GRAFANA}" = "true" ]     && echo -e "    ${GREEN}✓${NC}  Grafana      :${GRAFANA_PORT}"
@@ -3420,17 +3424,21 @@ main() {
     if [ -z "${TENANT:-}" ]; then
         read -p "Tenant ID (e.g. datasquiz, no spaces): " TENANT_NAME
         TENANT_NAME="${TENANT_NAME// /_}"   # sanitise
+
+    # Set basic paths and variables to prevent unbound errors BEFORE any function calls
+    DATA_ROOT="/mnt/data/${TENANT_NAME}"
+    export CONFIG_DIR="${DATA_ROOT}/configs"
+    export DATA_DIR="${DATA_ROOT}/data"
+    LOGS_DIR="${DATA_ROOT}/logs"
+    COMPOSE_FILE="${DATA_ROOT}/docker-compose.yml"
+    ENV_FILE="${DATA_ROOT}/.env"
+    export OLLAMA_CONTAINER="ai-${TENANT_NAME:-datasquiz}-ollama"
+    TENANT_UID="${TENANT_UID:-1001}"
+    TENANT_GID="${TENANT_GID:-1001}"
     else
         TENANT_NAME="${TENANT}"
     fi
 
-    # ALL paths derive from this single variable - no exceptions
-    DATA_ROOT="/mnt/data/${TENANT_NAME}"
-    CONFIG_DIR="${DATA_ROOT}/configs"
-    DATA_DIR="${DATA_ROOT}/data"
-    LOGS_DIR="${DATA_ROOT}/logs"
-    COMPOSE_FILE="${DATA_ROOT}/docker-compose.yml"
-    ENV_FILE="${DATA_ROOT}/.env"  # Data confinement - everything under /mnt/data/tenant/
 
     # Accept TENANT_ID as optional command line argument (legacy support)
     if [ -n "${1:-}" ]; then
@@ -3457,14 +3465,14 @@ main() {
     configure_dify           # Step 6.5 - Dify configuration (if enabled)
     select_vector_db         # Step 7
     configure_databases      # Step 7.5 - Database configuration
+    # Set basic variables to prevent unbound errors BEFORE router configuration
+    export OLLAMA_CONTAINER="ai-${TENANT_NAME:-datasquiz}-ollama"
+    TENANT_UID="${TENANT_UID:-1001}"
+    TENANT_GID="${TENANT_GID:-1001}"
     collect_llm_config       # Step 8
     configure_llm_router      # Step 8.2 - LLM router configuration (Modular choice)
     
     # Generate router-specific secrets BEFORE initialization
-    # Set basic variables to prevent unbound errors
-    export OLLAMA_CONTAINER="ai-${TENANT_NAME:-datasquiz}-ollama"
-    TENANT_UID="${TENANT_UID:-1001}"
-    TENANT_GID="${TENANT_GID:-1001}"
     # But ensure .env file exists first
     [[ -f "${ENV_FILE}" ]] && source "${ENV_FILE}"
     if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
@@ -3595,13 +3603,6 @@ main() {
         TENANT_NAME="${TENANT}"
     fi
 
-    # ALL paths derive from this single variable - no exceptions
-    DATA_ROOT="/mnt/data/${TENANT_NAME}"
-    CONFIG_DIR="${DATA_ROOT}/configs"
-    DATA_DIR="${DATA_ROOT}/data"
-    LOGS_DIR="${DATA_ROOT}/logs"
-    COMPOSE_FILE="${DATA_ROOT}/docker-compose.yml"
-    ENV_FILE="${DATA_ROOT}/.env"  # Data confinement - everything under /mnt/data/tenant/
 
     # Accept TENANT_ID as optional command line argument (legacy support)
     if [ -n "${1:-}" ]; then
@@ -3628,12 +3629,16 @@ main() {
     configure_dify           # Step 6.5 - Dify configuration (if enabled)
     select_vector_db         # Step 7
     configure_databases      # Step 7.5 - Database configuration
+    # Set basic variables to prevent unbound errors BEFORE router configuration
+    export OLLAMA_CONTAINER="ai-${TENANT_NAME:-datasquiz}-ollama"
+    TENANT_UID="${TENANT_UID:-1001}"
+    TENANT_GID="${TENANT_GID:-1001}"
     collect_llm_config       # Step 8
     configure_llm_router      # Step 8.2 - LLM router configuration (Modular choice)
     
     # Generate router-specific secrets BEFORE initialization
     if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
-        load_or_generate_secret "BIFROST_AUTH_TOKEN"
+        load_or_generate_secret "LLM_MASTER_KEY"
     elif [[ "${LLM_ROUTER}" == "litellm" ]]; then
         load_or_generate_secret "LITELLM_MASTER_KEY"
     fi
