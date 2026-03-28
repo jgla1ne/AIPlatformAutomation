@@ -339,36 +339,179 @@ EC2 Development Environment
 
 ---
 
-## **🚀 LLM Router Selection**
+## **� Modular Software Stack**
 
-The platform supports **Bifrost as the primary LLM router** with superior performance and reliability:
+The AI Platform Automation is **fully modular** - users select their preferred services during Script 1 setup. Each category offers multiple options to suit different use cases.
 
-### **🔥 Bifrost (Default & Recommended)**
-- **Architecture**: Go binary, stateless, no database
-- **Startup**: Instant (no cold start delays)
-- **Memory**: ~50MB footprint
-- **Performance**: Consistent under load, 5000+ req/s
-- **Dependencies**: Zero database dependency
-- **Health**: `/healthz` endpoint
-- **Configuration**: Environment variables only
-- **Use Case**: Production deployments requiring reliability
+### **🔧 Infrastructure Layer (Always Required)**
+- **PostgreSQL** - Primary database with tenant isolation
+- **Redis** - Caching and session management  
+- **Directory Structure** - `/mnt/data/${TENANT_ID}/` with proper permissions
 
-### **⚠️ LiteLLM (Removed)**
-- **Status**: Completely removed from codebase in v3.7.0
-- **Reason**: Complexity, resource overhead, database dependencies
-- **Replacement**: Bifrost provides superior performance and simplicity
+### **� LLM Gateway/Router (User Choice)**
+**Option 1: Bifrost (Default & Recommended)**
+- **Architecture**: Go-based lightweight proxy with YAML configuration
+- **Performance**: 50MB footprint, 5000+ req/s, instant startup
+- **Features**: Model routing, load balancing, health monitoring
+- **Use Case**: Production deployments requiring reliability and speed
 
-### **Router Configuration**
-During setup (Script 1), Bifrost is automatically configured:
-```bash
-# Automatic Bifrost configuration
-LLM_ROUTER=bifrost
-ENABLE_BIFROST=true
-ENABLE_LITELLM=false
-BIFROST_PROVIDERS='[{"provider":"ollama","base_url":"http://ollama:11434"}]'
+**Option 2: LiteLLM (Advanced Features)**
+- **Architecture**: Python-based feature-rich router
+- **Configuration**: Environment variables, database-backed
+- **Features**: Advanced load balancing, retry logic, multiple providers
+- **Use Case**: Complex routing scenarios requiring advanced features
+
+### **🗄️ Vector Database (User Choice)**
+**Option 1: Qdrant (Default & Recommended)**
+- **Type**: High-performance vector database written in Rust
+- **Features**: Real-time updates, filtering, advanced search
+- **Use Case**: Production workloads requiring high performance
+
+**Option 2: Weaviate**
+- **Type**: GraphQL-based vector database with advanced features
+- **Features**: GraphQL API, schema management, multi-tenancy
+- **Use Case**: Applications requiring GraphQL interface
+
+**Option 3: ChromaDB**
+- **Type**: Lightweight, embedded vector database
+- **Features**: In-memory or persistent storage, Python-native
+- **Use Case**: Development, testing, lightweight applications
+
+**Option 4: Milvus**
+- **Type**: Enterprise-scale vector database
+- **Features**: Distributed architecture, cloud-native, high scalability
+- **Use Case**: Large-scale enterprise deployments
+
+**Option 5: Pinecone**
+- **Type**: Managed vector database service
+- **Features**: Fully managed, serverless, auto-scaling
+- **Use Case**: Cloud-first deployments without infrastructure management
+
+**Option 6: None**
+- **Use Case**: Using external vector database or no vector operations
+
+### **🌐 Network & Access (Multiple Entry Points)**
+**HTTPS Entry Point (Caddy)**
+- **Features**: Automatic SSL/TLS, reverse proxy, load balancing
+- **Access**: `https://service.${DOMAIN}` (e.g., `https://chat.datasquiz.net`)
+- **Use Case**: Public internet access with enterprise security
+
+**VPN Entry Point (Tailscale)**
+- **Features**: Zero-trust networking, private access, secure tunnels
+- **Access**: `https://service.tailnet-name.ts.net` or direct IP
+- **Use Case**: Private team access, development environments
+
+**Local Entry Point (Direct)**
+- **Features**: Direct container access, no encryption overhead
+- **Access**: `http://localhost:${PORT}` (e.g., `http://localhost:8080`)
+- **Use Case**: Local development, debugging, internal services
+
+### **🤖 AI Runtime Services**
+- **Ollama** - Local LLM hosting with multiple models
+- **OpenWebUI** - Web interface for AI conversations
+- **Mem0** - Per-tenant conversation memory layer
+
+### **🏢 Application Services (Optional Selection)**
+- **n8n** - Workflow automation and integration
+- **Flowise** - AI workflow builder
+- **AnythingLLM** - Alternative AI interface
+- **Code Server** - Web-based development environment
+- **OpenClaw** - Web-based shell access
+- **Grafana/Prometheus** - Monitoring and observability
+- **Authentik** - Identity and access management
+
+### **🔄 Reverse Proxy Options (User Choice)**
+**Option 1: Caddy (Default & Recommended)**
+- **Features**: Automatic HTTPS, simple configuration, high performance
+- **Use Case**: Production deployments with ease of management
+
+**Option 2: Nginx**
+- **Features**: Advanced configuration, high performance, extensive modules
+- **Use Case**: Complex routing requirements, existing Nginx expertise
+
+**Option 3: Traefik**
+- **Features**: Service discovery, automatic configuration, microservices
+- **Use Case**: Container orchestration, dynamic environments
+
+---
+
+## **📁 Folder Structure & Permissions**
+
+### **🏗️ Directory Layout**
+The platform enforces strict data confinement under `/mnt/data/${TENANT_ID}/`:
+
+```
+/mnt/data/${TENANT_ID}/
+├── configs/                    # Configuration files (read-only in containers)
+│   ├── bifrost/               # Bifrost YAML configuration
+│   ├── mem0/                  # Mem0 memory layer configuration
+│   ├── caddy/                 # Caddy reverse proxy configuration
+│   ├── prometheus/            # Monitoring configuration
+│   ├── postgres/              # PostgreSQL initialization scripts
+│   └── codeserver/            # Code Server settings
+├── data/                      # Runtime data (writable by containers)
+│   ├── bifrost/               # Bifrost runtime data
+│   ├── mem0/                  # Mem0 memory storage
+│   ├── postgres/              # PostgreSQL data files
+│   ├── redis/                 # Redis persistence
+│   ├── qdrant/                # Vector database storage
+│   ├── ollama/                # LLM models and data
+│   └── logs/                  # Application logs
+├── docker-compose.yml         # Generated Docker Compose configuration
+└── .env                       # Environment variables (tenant-specific)
 ```
 
-**Default**: Bifrost (production-ready)
+### **🔐 Permission Model**
+The platform enforces **zero-root execution** with proper UID/GID mapping:
+
+**User/Group Ownership:**
+- **Tenant UID/GID**: Dynamically detected from host user (default: 1000:1000)
+- **PostgreSQL**: System UID 70 (postgres user) for database files
+- **Qdrant**: UID 1000 for vector database operations
+- **All Services**: Run under tenant UID/GID, never as root
+
+**Directory Permissions:**
+- **configs/**: 640 (owner read/write, group read, others no access)
+- **data/**: 750 (owner read/write/execute, group read/execute, others no access)
+- **logs/**: 755 (owner full access, group/others read/execute)
+- **docker-compose.yml**: 640 (secure configuration file)
+
+**Security Enforcement:**
+1. **Pre-creation**: Directories created with correct ownership before containers start
+2. **Volume Mapping**: All volumes use UID/GID mapping to maintain permissions
+3. **Container Users**: All containers specify user directive with tenant UID/GID
+4. **Validation**: Scripts verify permissions before deployment
+
+### **🔑 Environment Variable Security**
+**Sensitive Data Protection:**
+- **API Keys**: Generated with cryptographic randomness
+- **Passwords**: Strong passwords with entropy validation
+- **Tokens**: Auth tokens with proper format validation
+- **Secrets**: All secrets stored in `.env` with restricted permissions (600)
+
+**Variable Categories:**
+```bash
+# Core Identity (Required)
+TENANT_ID=datasquiz
+DOMAIN=datasquiz.net
+ADMIN_EMAIL=admin@datasquiz.net
+
+# Service Selection (User Choice)
+LLM_ROUTER=bifrost|litellm
+VECTOR_DB=qdrant|weaviate|chromadb|milvus|pinecone|none
+ENABLE_TAILSCALE=true|false
+
+# Network Configuration
+BIFROST_PORT=8000
+QDRANT_PORT=6333
+OLLAMA_PORT=11434
+
+# Security (Auto-generated)
+LLM_MASTER_KEY=sk-bifrost-[24-char-hex]
+MEM0_API_KEY=sk-mem0-[24-char-hex]
+POSTGRES_PASSWORD=[strong-password]
+REDIS_PASSWORD=[strong-password]
+```
 
 ---
 
@@ -383,15 +526,30 @@ BIFROST_PROVIDERS='[{"provider":"ollama","base_url":"http://ollama:11434"}]'
 ✅ **No unbound variables** - Complete environment sourcing and validation  
 ✅ **True modularity** - Mission Control serves as central utility hub for all scripts
 
-### **🌐 Network Architecture**
+### **🌐 Network Architecture & Routing**
 
-✅ **Independent networks** - Tailscale (8443) + OpenClaw (18789) as separate network layers  
-✅ **Service auto-integration** - All AI stack services automatically share salt keys & Qdrant database  
-✅ **Bifrost proxy routing** - Intelligent routing between local models and frontier models with multiple strategies  
-✅ **Tailscale VPN integration** - Zero-trust networking with auth key validation  
-✅ **OpenClaw shell access** - Web-based terminal under dedicated user ID  
-✅ **Caddy IP-based routing** - Fixed DNS resolution with direct container IP mapping  
-✅ **Development environment** - Code Server and Continue.dev with Bifrost integration
+**Multi-Entry Point Design:**
+✅ **HTTPS Public Access** - Caddy reverse proxy with automatic SSL/TLS  
+✅ **VPN Private Access** - Tailscale zero-trust networking with secure tunnels  
+✅ **Local Development** - Direct container access for debugging and testing  
+
+**Routing Options:**
+✅ **Service Selection** - Users choose between Bifrost or LiteLLM during setup  
+✅ **Vector Database Integration** - All services can access selected vector database  
+✅ **Memory Layer Integration** - Mem0 provides conversation memory to all gateways  
+✅ **Cross-Service Communication** - Docker networking with service discovery  
+
+**Network Configuration:**
+✅ **Dynamic Port Assignment** - Ports configurable per tenant and service selection  
+✅ **Container Networking** - Bridge networks with proper service isolation  
+✅ **Health Monitoring** - Comprehensive health checks for all network endpoints  
+✅ **SSL/TLS Management** - Automatic certificate generation and renewal  
+
+**Access Patterns:**
+- **Public Services**: `https://service.${DOMAIN}` (Caddy-managed)
+- **Private Services**: `https://service.tailnet-name.ts.net` (Tailscale)
+- **Development**: `http://localhost:${PORT}` (Direct access)
+- **Internal**: Container-to-container via Docker service names
 
 ### **📊 Operational Principles**
 
@@ -405,25 +563,33 @@ BIFROST_PROVIDERS='[{"provider":"ollama","base_url":"http://ollama:11434"}]'
 
 ## **🎯 Key Platform Capabilities**
 
-### **🤖 AI Stack Integration**
-- **Local-First LLM**: Ollama with local model hosting
-- **Bifrost**: Lightweight LLM gateway with intelligent routing
-- **Central Vector Database**: Qdrant for unified vector storage and retrieval
-- **Google Drive Integration**: Rclone with OAuth/Service Account authentication
-- **Multi-Service Vector Access**: All services can query and use vector database
+### **🤖 Modular AI Stack Integration**
+- **Local-First LLM**: Ollama with configurable model selection
+- **Gateway Selection**: Choose between Bifrost (performance) or LiteLLM (features)
+- **Vector Database Options**: Qdrant, Weaviate, ChromaDB, Milvus, Pinecone, or None
+- **Memory Layer**: Mem0 provides conversation memory for all gateway options
+- **Multi-Provider Support**: Local models and cloud providers via selected gateway
 
-### **� Gateway Selection**
-Set `GATEWAY_TYPE` in Script 1 or `.env`:
-- `GATEWAY_TYPE=bifrost` (default) - Lightweight Go-based router
-- `GATEWAY_TYPE=litellm` - Python-based router (if enabled)
+### **🌐 Flexible Network Architecture**
+- **Multiple Entry Points**: HTTPS (public), VPN (private), Local (development)
+- **Reverse Proxy Options**: Caddy (default), Nginx, or Traefik
+- **Service Discovery**: Docker networking with configurable routing
+- **SSL/TLS Management**: Automatic certificates for public endpoints
+- **Zero-Trust Networking**: Tailscale integration for secure access
 
-Both gateways automatically use Mem0 for conversation memory when enabled.
+### **� Development & Operations**
+- **Code Server**: Web-based development environment with VS Code
+- **Workflow Automation**: n8n for complex integrations
+- **AI Workflow Builder**: Flowise for visual AI pipeline creation
+- **Monitoring Stack**: Grafana + Prometheus for observability
+- **Shell Access**: OpenClaw web terminal with proper permissions
 
-### **�🔐 Security & Access**
-- **Tailscale VPN**: Zero-trust networking with private IP assignment
-- **OpenClaw Web Terminal**: Browser-based shell access under non-root user
-- **Tenant Isolation**: Complete UID/GID separation per tenant
-- **OAuth Authentication**: Secure Google Drive integration with token validation
+### **🏢 Enterprise Features**
+- **Multi-Tenancy**: Complete isolation between tenants
+- **Identity Management**: Authentik for SSO and user management
+- **Data Integration**: Rclone for Google Drive and cloud storage
+- **Security**: Zero-root execution, encrypted communications
+- **Scalability**: Modular deployment based on requirements
 
 ### **🔧 Service Management**
 - **Mission Control Hub**: Single interface for all platform operations
