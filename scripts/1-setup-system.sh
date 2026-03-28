@@ -3356,11 +3356,164 @@ main() {
     collect_llm_config       # Step 8
     configure_llm_router      # Step 8.2 - LLM router configuration (Modular choice)
     
-    # Write .env file BEFORE router initialization so variables are available
-    write_env_file
-    
-    # Load environment to ensure load_or_generate_secret works correctly
+    # Generate router-specific secrets BEFORE initialization
+    # Set basic variables to prevent unbound errors
+    TENANT_UID="${TENANT_UID:-1001}"
+    TENANT_GID="${TENANT_GID:-1001}"
+    # But ensure .env file exists first
     [[ -f "${ENV_FILE}" ]] && source "${ENV_FILE}"
+    if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
+        load_or_generate_secret "BIFROST_AUTH_TOKEN"
+    elif [[ "${LLM_ROUTER}" == "litellm" ]]; then
+        load_or_generate_secret "LITELLM_MASTER_KEY"
+    fi
+    
+    # Initialize router-specific configuration
+    if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
+        init_bifrost
+    elif [[ "${LLM_ROUTER}" == "litellm" ]]; then
+        init_litellm
+    fi
+    
+    # Initialize Mem0 memory layer (CLAUDE.md Change 3)
+    init_mem0
+    collect_network_config   # Step 9 - NEW: Network & security configuration
+    collect_ports            # Step 10
+    generate_secrets         # Step 11
+    
+    log "INFO" "Verifying and generating all application secrets..."
+    load_or_generate_secret "N8N_ENCRYPTION_KEY"
+    load_or_generate_secret "FLOWISE_SECRET_KEY"
+    
+    load_or_generate_secret "ANYTHINGLLM_JWT_SECRET"
+    load_or_generate_secret "JWT_SECRET"
+    load_or_generate_secret "ENCRYPTION_KEY"
+    load_or_generate_secret "QDRANT_API_KEY"
+    load_or_generate_secret "GRAFANA_PASSWORD"
+    load_or_generate_secret "AUTHENTIK_SECRET_KEY"
+    load_or_generate_secret "OPENWEBUI_SECRET_KEY"
+    load_or_generate_secret "REDIS_PASSWORD"
+    load_or_generate_secret "POSTGRES_PASSWORD"
+    
+    print_summary
+    
+    # Source Script 3 AFTER .env is written so functions can load it
+    export TENANT="${TENANT_ID}"
+    source "${SCRIPT_DIR}/3-configure-services.sh"
+    
+    # Directories and ownership — Script 1's responsibility
+    create_directories
+    
+    # Apply the final, correct ownership structure (NEW FINAL STEP)
+    apply_final_ownership
+    
+    # Config generation is Script 2's responsibility (via generate_configs)
+    # DO NOT call generate_postgres_init, write_caddyfile, write_prometheus_config here
+    
+    # ── Final Service Configuration Summary ─────────────────────────────────────────
+    final_service_summary() {
+        if [ -n "${DOMAIN}" ] && [ "${DOMAIN}" != "localhost" ]; then
+            echo ""
+            echo -e "  ${BOLD}🎯 Final Service Configuration Summary${NC}"
+            echo ""
+            echo -e "  ${DIM}All enabled services with their configurations:${NC}"
+            echo ""
+            
+            # Core Infrastructure
+            echo -e "  ${CYAN}📊 Infrastructure:${NC}"
+            [ "${ENABLE_POSTGRES}" = "true" ] && echo -e "    ${GREEN}✓${NC} PostgreSQL: port 5432, system UID 70"
+            [ "${ENABLE_REDIS}" = "true" ] && echo -e "    ${GREEN}✓${NC} Redis: port 6379, authenticated"
+            [ "${ENABLE_CADDY}" = "true" ] && echo -e "    ${GREEN}✓${NC} Caddy: ports 80/443, automatic HTTPS"
+            [ "${ENABLE_QDRANT}" = "true" ] && echo -e "    ${GREEN}✓${NC} Qdrant: port 6333, UID 1000"
+            echo ""
+            
+            # AI Runtime
+            echo -e "  ${CYAN}🤖 AI Runtime:${NC}"
+            [ "${ENABLE_OLLAMA}" = "true" ] && echo -e "    ${GREEN}✓${NC} Ollama: port 11434, local LLM"
+            [ "${ENABLE_OPENWEBUI}" = "true" ] && echo -e "    ${GREEN}✓${NC} OpenWebUI: https://openwebui.${DOMAIN}"
+            echo ""
+            
+            # Development Environment
+            echo -e "  ${CYAN}🔧 Development:${NC}"
+            [ "${ENABLE_CODESERVER}" = "true" ] && echo -e "    ${GREEN}✓${NC} Code Server: https://opencode.${DOMAIN} (VS Code + Continue.dev)"
+            [ "${ENABLE_OPENCLAW}" = "true" ] && echo -e "    ${GREEN}✓${NC} OpenClaw: https://openclaw.${DOMAIN} + Tailscale VPN"
+            echo ""
+            
+            # Enterprise Services
+            echo -e "  ${CYAN}🏢 Enterprise:${NC}"
+            [ "${ENABLE_N8N}" = "true" ] && echo -e "    ${GREEN}✓${NC} n8n: https://n8n.${DOMAIN}"
+            [ "${ENABLE_FLOWISE}" = "true" ] && echo -e "    ${GREEN}✓${NC} Flowise: https://flowise.${DOMAIN}"
+            [ "${ENABLE_ANYTHINGLLM}" = "true" ] && echo -e "    ${GREEN}✓${NC} AnythingLLM: https://anythingllm.${DOMAIN}"
+            [ "${ENABLE_DIFY}" = "true" ] && echo -e "    ${GREEN}✓${NC} Dify: https://dify.${DOMAIN}"
+            [ "${ENABLE_GRAFANA}" = "true" ] && echo -e "    ${GREEN}✓${NC} Grafana: https://grafana.${DOMAIN}"
+            [ "${ENABLE_AUTHENTIK}" = "true" ] && echo -e "    ${GREEN}✓${NC} Authentik: https://auth.${DOMAIN}"
+            [ "${ENABLE_SIGNAL}" = "true" ] && echo -e "    ${GREEN}✓${NC} Signal API: https://signal.${DOMAIN}"
+            [ "${ENABLE_RCLONE}" = "true" ] && echo -e "    ${GREEN}✓${NC} Rclone: https://rclone.${DOMAIN}"
+            [ "${ENABLE_MONITORING}" = "true" ] && echo -e "    ${GREEN}✓${NC} Prometheus: https://prometheus.${DOMAIN}"
+            echo ""
+            
+            # LLM Providers
+            echo -e "  ${CYAN}🧠 LLM Providers:${NC}"
+            [ "${LLM_PROVIDERS}" = "local" ] && echo -e "    ${GREEN}✓${NC} Local only (Ollama)"
+            [ "${LLM_PROVIDERS}" = "external" ] && echo -e "    ${GREEN}✓${NC} External only (OpenAI, Anthropic, Gemini, Groq, OpenRouter)"
+            [ "${LLM_PROVIDERS}" = "hybrid" ] && echo -e "    ${GREEN}✓${NC} Hybrid (Local + External)"
+            echo ""
+            
+            echo -e "  ${BOLD}Stack Type: ${STACK_NAME^^}${NC}"
+            echo ""
+        fi
+    }
+    
+    # Show final summary
+    final_service_summary
+    
+    offer_next_step
+}
+
+main() {
+    # Collect tenant identity FIRST - before any other variables
+    if [ -z "${TENANT:-}" ]; then
+        read -p "Tenant ID (e.g. datasquiz, no spaces): " TENANT_NAME
+        TENANT_NAME="${TENANT_NAME// /_}"   # sanitise
+    else
+        TENANT_NAME="${TENANT}"
+    fi
+
+    # ALL paths derive from this single variable - no exceptions
+    DATA_ROOT="/mnt/data/${TENANT_NAME}"
+    CONFIG_DIR="${DATA_ROOT}/configs"
+    DATA_DIR="${DATA_ROOT}/data"
+    LOGS_DIR="${DATA_ROOT}/logs"
+    COMPOSE_FILE="${DATA_ROOT}/docker-compose.yml"
+    ENV_FILE="${DATA_ROOT}/.env"  # Data confinement - everything under /mnt/data/tenant/
+
+    # Accept TENANT_ID as optional command line argument (legacy support)
+    if [ -n "${1:-}" ]; then
+        TENANT_ID="${1,,}"
+        log "INFO" "Using tenant ID from command line: ${TENANT_ID}"
+        # Skip interactive tenant collection if provided
+        SKIP_TENANT_COLLECTION=true
+    fi
+    
+    # Reconcile — TENANT_ID is canonical variable used throughout Script 1
+    # TENANT_NAME comes from interactive input; TENANT_ID from CLI arg
+    # After this line both are always set and equal
+    TENANT_ID="${TENANT_ID:-${TENANT_NAME}}"
+    TENANT_NAME="${TENANT_ID}"
+    
+    print_header
+    check_root
+    check_prerequisites      # Step 1
+    collect_identity         # Step 2
+    detect_and_mount_ebs     # Step 3 - NEW: EBS detection and mounting
+    select_data_volume       # Step 4
+    detect_gpu               # Step 5
+    select_stack             # Step 6
+    configure_dify           # Step 6.5 - Dify configuration (if enabled)
+    select_vector_db         # Step 7
+    configure_databases      # Step 7.5 - Database configuration
+    collect_llm_config       # Step 8
+    configure_llm_router      # Step 8.2 - LLM router configuration (Modular choice)
     
     # Generate router-specific secrets BEFORE initialization
     if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
@@ -3368,6 +3521,54 @@ main() {
     elif [[ "${LLM_ROUTER}" == "litellm" ]]; then
         load_or_generate_secret "LITELLM_MASTER_KEY"
     fi
+    
+    # Initialize router-specific configuration
+    if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
+        init_bifrost
+    elif [[ "${LLM_ROUTER}" == "litellm" ]]; then
+        init_litellm
+    fi
+    
+    # Initialize Mem0 memory layer (CLAUDE.md Change 3)
+    init_mem0
+    collect_network_config   # Step 9 - NEW: Network & security configuration
+    collect_ports            # Step 10
+    generate_secrets         # Step 11
+    
+    log "INFO" "Verifying and generating all application secrets..."
+    load_or_generate_secret "N8N_ENCRYPTION_KEY"
+    load_or_generate_secret "FLOWISE_SECRET_KEY"
+    
+    load_or_generate_secret "ANYTHINGLLM_JWT_SECRET"
+    load_or_generate_secret "JWT_SECRET"
+    load_or_generate_secret "ENCRYPTION_KEY"
+    load_or_generate_secret "QDRANT_API_KEY"
+    load_or_generate_secret "GRAFANA_PASSWORD"
+    load_or_generate_secret "AUTHENTIK_SECRET_KEY"
+    load_or_generate_secret "OPENWEBUI_SECRET_KEY"
+    load_or_generate_secret "REDIS_PASSWORD"
+    load_or_generate_secret "POSTGRES_PASSWORD"
+    
+    print_summary
+    
+    # Source Script 3 AFTER .env is written so functions can load it
+    export TENANT="${TENANT_ID}"
+    source "${SCRIPT_DIR}/3-configure-services.sh"
+    
+    # Directories and ownership — Script 1's responsibility
+    create_directories
+    
+    # Apply the final, correct ownership structure (NEW FINAL STEP)
+    apply_final_ownership
+    
+    # Config generation is Script 2's responsibility (via generate_configs)
+    # DO NOT call generate_postgres_init, write_caddyfile, write_prometheus_config here
+    
+    # Write .env file AFTER all variables are set
+    write_env_file
+    
+    # Load environment to ensure load_or_generate_secret works correctly
+    [[ -f "${ENV_FILE}" ]] && source "${ENV_FILE}"
     
     # Initialize router-specific configuration
     if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
