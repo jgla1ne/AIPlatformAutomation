@@ -2393,7 +2393,7 @@ write_env_file() {
     local temp_env_file="${ENV_FILE}.tmp"
     
     # Define project configuration variables
-    local COMPOSE_PROJECT_NAME=${PROJECT_PREFIX}${TENANT_ID}
+    local COMPOSE_PROJECT_NAME=${PROJECT_PREFIX}${TENANT_NAME}
     local DOCKER_NETWORK="${COMPOSE_PROJECT_NAME}-net"
     
     cat > "${temp_env_file}" << EOF
@@ -2403,8 +2403,8 @@ write_env_file() {
 # ════════════════════════════════════════════════════════════════════════
 
 # ─── Platform Identity ────────────────────────────────────────────────────────
-TENANT_ID=${TENANT_ID}
-TENANT=${TENANT_ID}
+TENANT_ID=${TENANT_NAME}
+TENANT=${TENANT_NAME}
 DOMAIN=${DOMAIN}
 ADMIN_EMAIL=${ADMIN_EMAIL}
 DATA_ROOT=${DATA_ROOT}
