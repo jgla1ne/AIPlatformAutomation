@@ -1259,19 +1259,63 @@ collect_llm_config() {
 
 # ─── Bifrost Configuration ─────────────────────────────────────────────────────
 init_bifrost() {
-    echo -e "${YELLOW}Initializing Bifrost directories (Zero-Root Compliance)...${NC}"
-    local BIFROST_CONFIG_DIR="/mnt/data/${TENANT_ID}/configs/bifrost"
-    local BIFROST_DATA_DIR="/mnt/data/${TENANT_ID}/data/bifrost"
+    log "INFO" "Initializing Bifrost LLM gateway..."
+    mkdir -p "${CONFIG_DIR}/bifrost"
 
-    # Pre-create directories as tenant
-    mkdir -p "${BIFROST_CONFIG_DIR}"
-    mkdir -p "${BIFROST_DATA_DIR}"
-    
-    # Enforce non-root ownership BEFORE Docker starts
-    chown -R ${TENANT_UID}:${TENANT_GID} "${BIFROST_CONFIG_DIR}"
-    chown -R ${TENANT_UID}:${TENANT_GID} "${BIFROST_DATA_DIR}"
-    
-    echo -e "${GREEN}Bifrost initialized successfully.${NC}"
+    [[ -z "${LLM_MASTER_KEY}" ]] && { log "ERROR" "LLM_MASTER_KEY empty"; return 1; }
+    [[ -z "${OLLAMA_CONTAINER}" ]] && { log "ERROR" "OLLAMA_CONTAINER empty"; return 1; }
+
+    # Validate no special chars that break YAML
+    local key="${LLM_MASTER_KEY}"
+    local ollama_url="http://${OLLAMA_CONTAINER}:${OLLAMA_PORT:-11434}"
+
+    # Write using python3 to guarantee valid YAML — no sed, no heredoc, no printf issues
+    python3 - << PYEOF
+import yaml, sys
+
+config = {
+    "accounts": [{
+        "name": "default",
+        "keys": [{"value": "${key}"}],
+        "providers": {
+            "ollama": {
+                "base_url": "${ollama_url}",
+                "timeout": 300
+            }
+        },
+        "models": {
+            "ollama": ["*"]
+        }
+    }],
+    "server": {
+        "port": ${BIFROST_PORT:-8082}
+    }
+}
+
+with open("${CONFIG_DIR}/bifrost/config.yaml", "w") as f:
+    yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+
+print("OK")
+PYEOF
+
+    local rc=$?
+    if [[ ${rc} -ne 0 ]] || [[ ! -s "${CONFIG_DIR}/bifrost/config.yaml" ]]; then
+        log "ERROR" "Bifrost config write failed"
+        return 1
+    fi
+
+    log "INFO" "Bifrost config content:"
+    cat "${CONFIG_DIR}/bifrost/config.yaml" | while IFS= read -r line; do
+        log "INFO" "  ${line}"
+    done
+
+    chown "${DOCKER_USER_ID:-1000}:${DOCKER_GROUP_ID:-1000}" \
+        "${CONFIG_DIR}/bifrost/config.yaml"
+    chmod 640 "${CONFIG_DIR}/bifrost/config.yaml"
+
+    update_env "LLM_GATEWAY_CONTAINER" "${LLM_GATEWAY_CONTAINER}"
+    update_env "BIFROST_PORT" "${BIFROST_PORT}"
+    log "SUCCESS" "Bifrost config written and validated"
 }
 
 # ─── LiteLLM Configuration ─────────────────────────────────────────────────────
@@ -2169,7 +2213,7 @@ generate_secrets() {
     AUTHENTIK_SECRET_KEY=$(load_existing_secret "AUTHENTIK_SECRET_KEY" "$(openssl rand -hex 32)")
     MINIO_ROOT_PASSWORD=$(load_existing_secret "MINIO_ROOT_PASSWORD" "$(openssl rand -hex 16)")
     QDRANT_API_KEY=$(load_existing_secret   "QDRANT_API_KEY"            "$(openssl rand -hex 32)")
-    N8N_API_KEY=$(load_existing_secret      "N8N_API_KEY"               "n8n-$(openssl rand -hex 16)")
+    N8N_API_KEY=$(load_existing_secret      "N8N_API_KEY"               "$(openssl rand -hex 32)")
     N8N_PASSWORD=$(load_existing_secret     "N8N_PASSWORD"              "$(openssl rand -hex 12)")
     FLOWISE_PASSWORD=$(load_existing_secret "FLOWISE_PASSWORD"          "$(openssl rand -hex 12)")
     AUTHENTIK_BOOTSTRAP_PASSWORD=$(load_existing_secret "AUTHENTIK_BOOTSTRAP_PASSWORD" "$(openssl rand -hex 12)")

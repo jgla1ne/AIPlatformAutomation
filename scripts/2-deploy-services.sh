@@ -258,6 +258,69 @@ services:
       - "ai-platform.type=mem0"
       - "ai-platform.tenant=${TENANT_ID}"
 
+  flowise:
+    image: flowiseai/flowise:latest
+    container_name: ${COMPOSE_PROJECT_NAME}_flowise
+    restart: unless-stopped
+    user: "${TENANT_UID:-1000}:${TENANT_GID:-1000}"
+    volumes:
+      - /mnt/data/${TENANT_ID}/data/flowise:/app/data
+    environment:
+      - DATABASE_TYPE=postgres
+      - DATABASE_HOST=${COMPOSE_PROJECT_NAME}_postgres
+      - DATABASE_PORT=5432
+      - DATABASE_USER=${POSTGRES_USER:-datasquiz}
+      - DATABASE_PASSWORD=${POSTGRES_PASSWORD:-datasquiz123}
+      - DATABASE_NAME=flowise
+      - FLOWISE_USERNAME=${FLOWISE_USERNAME:-admin}
+      - FLOWISE_PASSWORD=${FLOWISE_PASSWORD}
+      - FLOWISE_SECRETKEY_OVERWRITE=${FLOWISE_SECRET_KEY}
+      - APIKEY_PATH=/root/.flowise
+      - SECRETKEY_PATH=/root/.flowise
+      - LOG_LEVEL=info
+    networks:
+      - default
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:${FLOWISE_PORT:-3000}/api/v1/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    labels:
+      - "ai-platform.service=flowise"
+      - "ai-platform.tenant=${TENANT_ID}"
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: ${COMPOSE_PROJECT_NAME}_n8n
+    restart: unless-stopped
+    user: "${TENANT_UID:-1000}:${TENANT_GID:-1000}"
+    volumes:
+      - /mnt/data/${TENANT_ID}/data/n8n:/home/node/.n8n
+    environment:
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=${COMPOSE_PROJECT_NAME}_postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=n8n
+      - DB_POSTGRESDB_USER=${POSTGRES_USER:-datasquiz}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD:-datasquiz123}
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_USERNAME:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD}
+      - WEBHOOK_URL=https://n8n.${DOMAIN}
+      - N8N_HOST=0.0.0.0
+      - N8N_PORT=${N8N_PORT:-5678}
+    networks:
+      - default
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:${N8N_PORT:-5678}/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    labels:
+      - "ai-platform.service=n8n"
+      - "ai-platform.tenant=${TENANT_ID}"
+
 volumes:
   postgres_data:
     driver: local
@@ -266,6 +329,8 @@ volumes:
   ollama_data:
     driver: local
   mem0-pip-cache:
+    driver: local
+  n8n-data:
     driver: local
 
 networks:

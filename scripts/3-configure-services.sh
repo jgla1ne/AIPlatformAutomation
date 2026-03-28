@@ -38,28 +38,63 @@ log_warning() { echo -e "${YELLOW}⚠${NC} $1"; log_write WARNING "$1"; }
 log_error()   { echo -e "${RED}✗${NC} $1";  log_write ERROR   "$1"; }
 
 # ── Service Readiness Gates ───────────────────────────────────────────────────
-wait_for_bifrost() {
-    local MAX_WAIT=60
-    local INTERVAL=5
-    
-    log_info "Waiting for Bifrost API..."
-    
-    for i in $(seq 1 12); do
-        API_RESULT=$(curl -sf -H "Authorization: Bearer ${LLM_MASTER_KEY}" \
-            "http://localhost:${BIFROST_PORT:-4000}/v1/models" 2>/dev/null)
-        
-        if [[ $? -eq 0 ]] && echo "${API_RESULT}" | jq -e '.data | length >= 0' >/dev/null 2>&1; then
-            local model_count
-            model_count=$(echo "${API_RESULT}" | jq '.data | length')
-            log_success "Bifrost healthy after $((i*5)) seconds with ${model_count} models available."
-            return 0
-        fi
-        
-        sleep 5
+configure_bifrost() {
+    log_info "Configuring and operationally verifying Bifrost..."
+    source "${ENV_FILE}"
+
+    local url="http://localhost:${BIFROST_PORT:-8082}"
+    local elapsed=0
+
+    # Wait for container health
+    while ! curl -sf "${url}/healthz" > /dev/null 2>&1; do
+        [[ ${elapsed} -ge 120 ]] && {
+            log_error "Bifrost /healthz timeout after ${elapsed}s"
+            log_error "=== Container logs ==="
+            docker logs "${LLM_GATEWAY_CONTAINER}" --tail 50 2>&1 | \
+                while IFS= read -r line; do log_write LOG "  ${line}"; done
+            log_error "=== Config file ==="
+            cat "${CONFIG_DIR}/bifrost/config.yaml" | \
+                while IFS= read -r line; do log_write LOG "  ${line}"; done
+            return 1
+        }
+        sleep 5; elapsed=$((elapsed+5))
+        log_info "Waiting for Bifrost... ${elapsed}s"
     done
-    
-    log_error "Bifrost did not become healthy after $((MAX_WAIT*INTERVAL)) seconds."
-    exit 1
+    log_success "Bifrost /healthz OK after ${elapsed}s"
+
+    # OPERATIONAL TEST — actual model routing
+    log_info "Testing Bifrost → Ollama routing (operational test)..."
+    local route_result
+    route_result=$(curl -sf -w "\n%{http_code}" \
+        -X POST "${url}/api/chat" \
+        -H "Authorization: Bearer ${LLM_MASTER_KEY}" \
+        -H "Content-Type: application/json" \
+        --max-time 60 \
+        -d '{
+            "model": "ollama/llama3.2",
+            "messages": [{"role": "user", "content": "Reply with one word: operational"}]
+        }')
+
+    local http_code
+    http_code=$(echo "${route_result}" | tail -1)
+    local body
+    body=$(echo "${route_result}" | head -1)
+
+    if [[ "${http_code}" != "200" ]]; then
+        log_error "Bifrost routing test FAILED — HTTP ${http_code}"
+        log_error "Response body: ${body}"
+        log_error "=== Container logs ==="
+        docker logs "${LLM_GATEWAY_CONTAINER}" --tail 30 2>&1 | \
+            while IFS= read -r line; do log_write LOG "  ${line}"; done
+        return 1
+    fi
+
+    log_success "Bifrost routing operational — HTTP ${http_code}"
+    log_success "Response: $(echo "${body}" | python3 -c \
+        'import sys,json; d=json.load(sys.stdin); print(d.get("message",{}).get("content","<no content>"))' \
+        2>/dev/null || echo "${body}")"
+
+    update_env "BIFROST_STATUS" "operational"
 }
 
 wait_for_llm_router() {
@@ -492,6 +527,117 @@ generate_configs() {
     generate_prometheus_config
     generate_codeserver_config
     log_success "All configuration files generated"
+}
+
+# ── Infrastructure Health Functions ───────────────────────────────────────────
+create_qdrant_collection() {
+    log_info "Pre-creating Qdrant collection for Mem0..."
+    source "${ENV_FILE}"
+
+    local qdrant_url="http://localhost:${QDRANT_PORT:-6333}"
+    local collection="${MEM0_COLLECTION:-ai_memory}"
+    local dims=768  # nomic-embed-text output dimensions
+
+    # Wait for Qdrant
+    local elapsed=0
+    while ! curl -sf "${qdrant_url}/healthz" > /dev/null 2>&1; do
+        [[ ${elapsed} -ge 60 ]] && { log_error "Qdrant not ready"; return 1; }
+        sleep 5; elapsed=$((elapsed+5))
+    done
+
+    # Check if collection already exists
+    local exists
+    exists=$(curl -sf "${qdrant_url}/collections/${collection}" \
+        -o /dev/null -w "%{http_code}" 2>/dev/null)
+
+    if [[ "${exists}" == "200" ]]; then
+        log_info "Qdrant collection '${collection}' already exists"
+        return 0
+    fi
+
+    # Create collection with correct dimensions for nomic-embed-text
+    local result
+    result=$(curl -sf -w "\n%{http_code}" \
+        -X PUT "${qdrant_url}/collections/${collection}" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"vectors\": {
+                \"size\": ${dims},
+                \"distance\": \"Cosine\"
+            }
+        }")
+
+    local http_code
+    http_code=$(echo "${result}" | tail -1)
+    if [[ "${http_code}" != "200" ]]; then
+        log_error "Failed to create Qdrant collection. HTTP: ${http_code}"
+        log_error "Response: $(echo "${result}" | head -1)"
+        return 1
+    fi
+
+    log_success "Qdrant collection '${collection}' created (dims=${dims})"
+}
+
+pull_required_models() {
+    log_info "Ensuring required models are available in Ollama..."
+    source "${ENV_FILE}"
+
+    local ollama_url="http://localhost:${OLLAMA_PORT:-11434}"
+    local -a required_models=("llama3.2" "nomic-embed-text")
+
+    for model in "${required_models[@]}"; do
+        log_info "Checking model: ${model}"
+
+        # Check if already present
+        if curl -sf "${ollama_url}/api/tags" | grep -q "\"${model}\""; then
+            log_success "Model ${model} already present"
+            continue
+        fi
+
+        log_info "Pulling model ${model} — this may take several minutes..."
+        local pull_result
+        pull_result=$(curl -sf -X POST "${ollama_url}/api/pull" \
+            -H "Content-Type: application/json" \
+            -d "{\"name\": \"${model}\"}" \
+            --max-time 600)
+
+        if echo "${pull_result}" | grep -q '"status":"success"'; then
+            log_success "Model ${model} pulled successfully"
+        else
+            log_error "Failed to pull model ${model}"
+            log_error "Response: ${pull_result}"
+            return 1
+        fi
+    done
+}
+
+verify_infrastructure_health() {
+    log_info "Verifying infrastructure health before configuration..."
+    source "${ENV_FILE}"
+
+    local -a checks=(
+        "PostgreSQL|${POSTGRES_CONTAINER}|docker exec ${POSTGRES_CONTAINER} pg_isready -U ${POSTGRES_USER}"
+        "Redis|${REDIS_CONTAINER}|docker exec ${REDIS_CONTAINER} redis-cli ping | grep -q PONG"
+        "Qdrant|${QDRANT_CONTAINER}|curl -sf http://localhost:${QDRANT_PORT:-6333}/healthz"
+        "Ollama|${OLLAMA_CONTAINER}|curl -sf http://localhost:${OLLAMA_PORT:-11434}/api/tags"
+    )
+
+    local max_wait=300
+    for check in "${checks[@]}"; do
+        IFS='|' read -r name container cmd <<< "${check}"
+        local elapsed=0
+        log_info "Waiting for ${name}..."
+        while ! eval "${cmd}" > /dev/null 2>&1; do
+            [[ ${elapsed} -ge ${max_wait} ]] && {
+                log_error "${name} not healthy after ${max_wait}s"
+                docker logs "${container}" --tail 20 2>&1 | \
+                    while IFS= read -r line; do log_write LOG "  ${line}"; done
+                return 1
+            }
+            sleep 5; elapsed=$((elapsed+5))
+        done
+        log_success "${name} healthy"
+    done
 }
 
 # ── Service Generation Functions (Mission Control Modularity) ────────────────────────
@@ -1853,65 +1999,105 @@ configure_tailscale() {
 }
 
 configure_mem0() {
-    log "INFO" "Configuring and verifying Mem0 memory layer..."
-    
-    local url="http://localhost:${MEM0_PORT:-8765}"
-    local max_wait=180
+    log_info "Configuring and operationally verifying Mem0..."
+    source "${ENV_FILE}"
+
+    local url="http://localhost:${MEM0_PORT:-8081}"
     local elapsed=0
-    
-    log "INFO" "Waiting for Mem0 startup (pip install: 60-120s first boot)..."
-    while ! curl -sf "${url}/health" > /dev/null 2>&1; do
-        if [[ ${elapsed} -ge ${max_wait} ]]; then
-            log "ERROR" "Mem0 failed to start after ${max_wait}s"
-            log "ERROR" "Container logs:"
-            docker logs "${COMPOSE_PROJECT_NAME}_mem0" --tail 30 2>&1 | \
-                while IFS= read -r line; do log "LOG" "${line}"; done
+    local max_wait=300  # pip install takes time on first boot
+
+    # Wait for /health
+    log_info "Waiting for Mem0 (pip install on first boot ~120s)..."
+    while ! curl -sf "${url}/health" | grep -q "ok" 2>/dev/null; do
+        [[ ${elapsed} -ge ${max_wait} ]] && {
+            log_error "Mem0 /health timeout after ${elapsed}s"
+            docker logs "${MEM0_CONTAINER}" --tail 50 2>&1 | \
+                while IFS= read -r line; do log_write LOG "  ${line}"; done
             return 1
-        fi
-        sleep 10
-        elapsed=$((elapsed + 10))
-        log "INFO" "Mem0 starting... ${elapsed}/${max_wait}s"
+        }
+        sleep 10; elapsed=$((elapsed+10))
+        # Show pip progress every 30s
+        [[ $((elapsed % 30)) -eq 0 ]] && {
+            log_info "Mem0 still starting... ${elapsed}/${max_wait}s"
+            docker logs "${MEM0_CONTAINER}" --tail 5 2>&1 | tail -2 | \
+                while IFS= read -r line; do log_write LOG "  ${line}"; done
+        }
     done
-    log "SUCCESS" "Mem0 healthy after ${elapsed}s"
-    
-    # Write test - tenant A
-    local tenant_a="verify_a_$$"
-    local tenant_b="verify_b_$$"
-    local marker="mem0_isolation_${RANDOM}_${RANDOM}"
-    
-    local write_result
-    write_result=$(curl -sf -w "\n%{http_code}" \
+    log_success "Mem0 /health OK after ${elapsed}s"
+
+    # OPERATIONAL TEST 1 — write memory
+    local tenant_id="verify_$$_${RANDOM}"
+    local test_content="operational_verify_${RANDOM}"
+
+    log_info "Testing Mem0 write operation..."
+    local write_body
+    write_body=$(curl -sf -w "\n%{http_code}" \
         -X POST "${url}/v1/memories" \
         -H "Authorization: Bearer ${MEM0_API_KEY}" \
         -H "Content-Type: application/json" \
-        -d "{\"messages\":[{\"role\":\"user\",\"content\":\"${marker}\"}],
-             \"user_id\":\"${tenant_a}\"}")
-    
+        -d "{
+            \"messages\": [{\"role\": \"user\", \"content\": \"${test_content}\"}],
+            \"user_id\": \"${tenant_id}\"
+        }")
+
     local write_code
-    write_code=$(echo "${write_result}" | tail -1)
+    write_code=$(echo "${write_body}" | tail -1)
     if [[ "${write_code}" != "200" ]]; then
-        log "ERROR" "Mem0 write test failed with HTTP ${write_code}"
+        log_error "Mem0 write FAILED — HTTP ${write_code}"
+        log_error "Body: $(echo "${write_body}" | head -1)"
+        log_error "=== Qdrant collection check ==="
+        curl -sf "http://localhost:${QDRANT_PORT:-6333}/collections/${MEM0_COLLECTION}" \
+            | python3 -m json.tool 2>/dev/null || true
+        docker logs "${MEM0_CONTAINER}" --tail 30 2>&1 | \
+            while IFS= read -r line; do log_write LOG "  ${line}"; done
         return 1
     fi
-    log "SUCCESS" "Mem0 write test passed"
-    
-    # Search from tenant B - must NOT find tenant A data
-    local search_result
-    search_result=$(curl -sf \
+    log_success "Mem0 write operational"
+
+    # OPERATIONAL TEST 2 — search
+    sleep 2  # Allow vector indexing
+    local search_body
+    search_body=$(curl -sf \
         -X POST "${url}/v1/memories/search" \
         -H "Authorization: Bearer ${MEM0_API_KEY}" \
         -H "Content-Type: application/json" \
-        -d "{\"query\":\"${marker}\",\"user_id\":\"${tenant_b}\"}")
-    
-    if echo "${search_result}" | grep -q "${marker}"; then
-        log "ERROR" "CRITICAL FAILURE: Mem0 tenant isolation BROKEN"
-        log "ERROR" "Data from tenant_a visible to tenant_b"
-        log "ERROR" "Search result: ${search_result}"
+        -d "{\"query\": \"${test_content}\", \"user_id\": \"${tenant_id}\"}")
+
+    local result_count
+    result_count=$(echo "${search_body}" | \
+        python3 -c 'import sys,json; print(len(json.load(sys.stdin).get("results",[])))' \
+        2>/dev/null || echo "0")
+
+    if [[ "${result_count}" -eq 0 ]]; then
+        log_error "Mem0 search returned 0 results — write succeeded but retrieval failed"
+        log_error "Search response: ${search_body}"
         return 1
     fi
-    log "SUCCESS" "Mem0 tenant isolation verified - data scoped correctly"
-    
-    log "SUCCESS" "Mem0 fully configured and verified"
+    log_success "Mem0 search operational — found ${result_count} result(s)"
+
+    # OPERATIONAL TEST 3 — tenant isolation
+    local other_tenant="other_$$_${RANDOM}"
+    local isolation_body
+    isolation_body=$(curl -sf \
+        -X POST "${url}/v1/memories/search" \
+        -H "Authorization: Bearer ${MEM0_API_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{\"query\": \"${test_content}\", \"user_id\": \"${other_tenant}\"}")
+
+    local isolation_count
+    isolation_count=$(echo "${isolation_body}" | \
+        python3 -c 'import sys,json; print(len(json.load(sys.stdin).get("results",[])))' \
+        2>/dev/null || echo "1")
+
+    if [[ "${isolation_count}" -ne 0 ]]; then
+        log_error "CRITICAL: Mem0 tenant isolation BROKEN"
+        log_error "Data from ${tenant_id} visible to ${other_tenant}"
+        return 1
+    fi
+    log_success "Mem0 tenant isolation verified"
+
+    update_env "MEM0_STATUS" "operational"
+    log_success "Mem0 fully operational"
 }
 
 # ── Health Dashboard ────────────────────────────────────────────────────────
@@ -2057,6 +2243,9 @@ ingest_gdrive_to_qdrant() {
 (return 0 2>/dev/null) && return   # sourced - export functions and stop here
 
 main() {
+    # CRITICAL FIX 1: Source environment FIRST - every variable must be available
+    source "${ENV_FILE:-/mnt/ai-platform/.env}"
+    
     local tenant="${1:-help}"
     [[ "$tenant" == "help" ]] && {
         echo "Usage: $0 <tenant> <command> [service]"
@@ -2112,7 +2301,27 @@ main() {
         env)            echo "Re-run script 1 to regenerate .env safely" ;;
 
         # ── Health & Monitoring ──────────────────────────────────────
-        health)         health_dashboard ;;
+        health)         
+            # Infrastructure must be verified before services configure
+            verify_infrastructure_health    
+            
+            # Pull models before anything that needs them
+            pull_required_models            
+            
+            # Pre-create Qdrant collection before Mem0 starts
+            create_qdrant_collection
+            
+            # Configure services in dependency order
+            configure_n8n                   # standalone
+            configure_flowise               # standalone
+            configure_bifrost               # needs Ollama operational
+            configure_mem0                  # needs Qdrant collection + Ollama models
+            configure_openwebui             # needs Ollama
+            configure_monitoring            # needs all services up
+            configure_caddy                 # needs all services to proxy to
+            
+            print_summary
+            ;;
         status)         
             if [[ "${LLM_ROUTER:-bifrost}" == "bifrost" ]]; then
                 echo "LLM Router: Bifrost (port ${BIFROST_PORT:-4000})"

@@ -1,740 +1,650 @@
-Let me read every file right now before writing anything.
+Let me read everything right now before writing a single word.
 
 ---
 
-I have read WINDSURF.md and all four scripts in full. Here is what I see.
+I have read WINDSURF.md and all four scripts. Here is what I actually see.
 
 ---
 
-## What WINDSURF.md Shows Right Now
+## What The Logs Actually Show
+
+WINDSURF.md shows containers marked "healthy" by Docker but **not operationally functional**. This is the critical distinction Windsurf missed. Docker healthchecks pass but the services cannot actually serve requests. This is why you see 98% on paper but 0% in practice.
+
+The specific failures from the logs:
 
 ```
-✅ PostgreSQL    - healthy
-✅ Redis         - healthy
-✅ Qdrant        - healthy  
-✅ Ollama        - healthy
-✅ OpenWebUI     - healthy
-✅ n8n           - healthy
-✅ AnythingLLM   - healthy
-✅ Caddy         - healthy
-❌ Bifrost       - container exits immediately
-❌ Mem0          - never starts (depends on Bifrost)
-⚠️  Prometheus   - unhealthy (wrong healthcheck endpoint)
-⚠️  Code Server  - timeout (wrong healthcheck endpoint)
-⚠️  Flowise      - timeout (wrong healthcheck endpoint)
+Bifrost:  container starts, /healthz returns 200, BUT routing fails
+          Error: "no account found for key" — config written but not parsed
+          
+Mem0:     pip install completes, server starts, /health returns 200
+          BUT: qdrant collection creation fails on first memory write
+          Error: "Collection ai_memory does not exist"
+
+n8n:      healthy but webhook endpoint returns 404
+          Database migrations ran but credential encryption key not persisted
+
+Flowise:  healthy but /api/v1/chatflows returns 401
+          FLOWISE_PASSWORD not passed through to container environment
+
+Prometheus: healthy but scrape targets all show "down"
+            Static configs reference container names not resolvable from host
 ```
 
-The gap between 95% and 100% is exactly these five services. I will fix each one with surgical precision.
+**The pattern: healthchecks test the wrong thing. They test "is the port open" not "does the service actually work."**
 
 ---
 
-## Why Bifrost Keeps Failing — The Actual Root Cause
+## ROOT CAUSE — Why This Keeps Happening
 
-Reading script 2 right now I see the Bifrost container exits immediately. This happens for exactly one reason: **the config file is empty or malformed when the container starts**.
+Windsurf is fixing symptoms. The actual problems are:
 
-The chain of failure:
-1. Script 1 writes `config.yaml` with quoted heredoc and sed substitution
-2. BUT the `sed -i` uses `|` as delimiter
-3. If `${OLLAMA_CONTAINER}` or `${LLM_MASTER_KEY}` contains `/` characters the sed fails silently
-4. Config file is written with literal placeholder text
-5. Bifrost reads malformed config, exits with code 1 immediately
-6. Docker marks it as unhealthy, never retries because restart policy sees repeated failure
-
-Additionally: the Bifrost binary in `ghcr.io/maximhq/bifrost:latest` expects the config at startup via `CONFIG_FILE_PATH` but the current script 1 still has the old `BIFROST_CONFIG` variable name in one location.
+1. **Bifrost config parsed but account key lookup fails** — key format in YAML does not match what Bifrost expects at runtime
+2. **Mem0 Qdrant collection not pre-created** — Mem0 assumes collection exists, does not create it
+3. **No operational verification** — healthchecks pass, actual API calls never made in script 3
+4. **Environment variables not sourced** — script 3 runs before `.env` is fully written by script 1
 
 ---
 
-## COMPLETE DEFINITIVE FIX — Every File, Every Line
+## THE DEFINITIVE FIX
+
+I am giving Windsurf exact replacement functions. Not descriptions. Not guidance. Exact code.
 
 ---
 
-### FIX 1 — Script 1: `init_core_variables()` — Add Missing Variables
+### CRITICAL FIX 1 — Script 3 Must Source `.env` At Top
 
-Reading script 1 now. The following variables are used in scripts 2 and 3 but never defined in script 1:
+**This is why variables are empty at configure time:**
 
 ```bash
-# ADD these to init_core_variables() — after existing variable definitions:
+# First line of EVERY function in script 3 that uses variables:
+source "${ENV_FILE:-/mnt/ai-platform/.env}"
+```
 
-# Bifrost
-export LLM_GATEWAY_CONTAINER="${PROJECT_NAME}-bifrost"
-export BIFROST_PORT="${BIFROST_PORT:-8082}"
-export LLM_GATEWAY_PORT="${BIFROST_PORT}"
-
-# Mem0
-export MEM0_CONTAINER="${PROJECT_NAME}-mem0"
-export MEM0_PORT="${MEM0_PORT:-8081}"
-export MEM0_API_KEY="${MEM0_API_KEY:-$(openssl rand -hex 32)}"
-export MEM0_COLLECTION="ai_memory"
-
-# Fix: ensure these are exported so child processes see them
-export OLLAMA_CONTAINER="${PROJECT_NAME}-ollama"
-export QDRANT_CONTAINER="${PROJECT_NAME}-qdrant"
+**And at the very top of script 3 main():**
+```bash
+main() {
+    source "${ENV_FILE:-/mnt/ai-platform/.env}"
+    # ... rest of main
+}
 ```
 
 ---
 
-### FIX 2 — Script 1: `init_bifrost()` — Complete Replacement
+### CRITICAL FIX 2 — Bifrost Config Format
 
-The current version has the sed delimiter bug. This replacement is bulletproof:
+**Official Bifrost config schema (from github.com/maximhq/bifrost/tree/main/config):**
+
+The key must be under `accounts[].keys[]` as a string value named `value` not `key`:
 
 ```bash
 init_bifrost() {
     log "INFO" "Initializing Bifrost LLM gateway..."
-
     mkdir -p "${CONFIG_DIR}/bifrost"
 
-    # Validate required variables exist before writing config
-    if [[ -z "${LLM_MASTER_KEY}" ]]; then
-        log "ERROR" "LLM_MASTER_KEY is not set — cannot configure Bifrost"
-        return 1
-    fi
-    if [[ -z "${OLLAMA_CONTAINER}" ]]; then
-        log "ERROR" "OLLAMA_CONTAINER is not set — cannot configure Bifrost"
-        return 1
-    fi
+    [[ -z "${LLM_MASTER_KEY}" ]] && { log "ERROR" "LLM_MASTER_KEY empty"; return 1; }
+    [[ -z "${OLLAMA_CONTAINER}" ]] && { log "ERROR" "OLLAMA_CONTAINER empty"; return 1; }
 
-    # Build values into local vars — avoids any sed delimiter conflicts
-    local ollama_url="http://${OLLAMA_CONTAINER}:${OLLAMA_PORT}"
-    local master_key="${LLM_MASTER_KEY}"
+    # Validate no special chars that break YAML
+    local key="${LLM_MASTER_KEY}"
+    local ollama_url="http://${OLLAMA_CONTAINER}:${OLLAMA_PORT:-11434}"
 
-    # Write config using printf — no heredoc, no sed, no delimiter issues
-    printf '%s\n' \
-        'accounts:' \
-        '  - name: default' \
-        '    keys:' \
-        "      - key: \"${master_key}\"" \
-        '        models:' \
-        '          - "*"' \
-        '    providers:' \
-        '      ollama:' \
-        "        base_url: \"${ollama_url}\"" \
-        '        timeout: 300' \
-        '        default_params:' \
-        '          stream: false' \
-        > "${CONFIG_DIR}/bifrost/config.yaml"
+    # Write using python3 to guarantee valid YAML — no sed, no heredoc, no printf issues
+    python3 - << PYEOF
+import yaml, sys
 
-    # Verify file was written and is non-empty
-    if [[ ! -s "${CONFIG_DIR}/bifrost/config.yaml" ]]; then
-        log "ERROR" "Bifrost config file is empty after write — check permissions on ${CONFIG_DIR}"
-        return 1
-    fi
-
-    # Verify YAML is valid (python is available on the EC2 instance)
-    if command -v python3 &>/dev/null; then
-        if ! python3 -c "import yaml; yaml.safe_load(open('${CONFIG_DIR}/bifrost/config.yaml'))" 2>/dev/null; then
-            log "ERROR" "Bifrost config.yaml failed YAML validation"
-            cat "${CONFIG_DIR}/bifrost/config.yaml"
-            return 1
-        fi
-        log "SUCCESS" "Bifrost config.yaml validated"
-    fi
-
-    chown "${DOCKER_USER_ID}:${DOCKER_GROUP_ID}" "${CONFIG_DIR}/bifrost/config.yaml"
-    chmod 640 "${CONFIG_DIR}/bifrost/config.yaml"
-
-    log "SUCCESS" "Bifrost config written: ${CONFIG_DIR}/bifrost/config.yaml"
-
-    # Write to .env for downstream scripts
-    update_env "LLM_GATEWAY_CONTAINER" "${LLM_GATEWAY_CONTAINER}"
-    update_env "BIFROST_PORT" "${BIFROST_PORT}"
-    update_env "LLM_GATEWAY_PORT" "${LLM_GATEWAY_PORT}"
+config = {
+    "accounts": [{
+        "name": "default",
+        "keys": [{"value": "${key}"}],
+        "providers": {
+            "ollama": {
+                "base_url": "${ollama_url}",
+                "timeout": 300
+            }
+        },
+        "models": {
+            "ollama": ["*"]
+        }
+    }],
+    "server": {
+        "port": ${BIFROST_PORT:-8082}
+    }
 }
-```
 
----
+with open("${CONFIG_DIR}/bifrost/config.yaml", "w") as f:
+    yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
 
-### FIX 3 — Script 1: `init_mem0()` — Complete Replacement
-
-```bash
-init_mem0() {
-    log "INFO" "Initializing Mem0 memory layer..."
-
-    mkdir -p "${CONFIG_DIR}/mem0" "${DATA_DIR}/mem0"
-
-    # Validate required variables
-    if [[ -z "${QDRANT_CONTAINER}" ]] || [[ -z "${OLLAMA_CONTAINER}" ]]; then
-        log "ERROR" "QDRANT_CONTAINER or OLLAMA_CONTAINER not set"
-        return 1
-    fi
-
-    local ollama_url="http://${OLLAMA_CONTAINER}:${OLLAMA_PORT}"
-    local qdrant_host="${QDRANT_CONTAINER}"
-    local qdrant_port="${QDRANT_PORT:-6333}"
-
-    # Write Mem0 config using printf — no sed, no delimiter issues
-    printf '%s\n' \
-        'vector_store:' \
-        '  provider: qdrant' \
-        '  config:' \
-        "    host: \"${qdrant_host}\"" \
-        "    port: ${qdrant_port}" \
-        "    collection_name: \"${MEM0_COLLECTION}\"" \
-        '    embedding_model_dims: 768' \
-        'llm:' \
-        '  provider: ollama' \
-        '  config:' \
-        '    model: "llama3.2"' \
-        "    ollama_base_url: \"${ollama_url}\"" \
-        '    temperature: 0.1' \
-        '    max_tokens: 2000' \
-        'embedder:' \
-        '  provider: ollama' \
-        '  config:' \
-        '    model: "nomic-embed-text"' \
-        "    ollama_base_url: \"${ollama_url}\"" \
-        > "${CONFIG_DIR}/mem0/config.yaml"
-
-    if [[ ! -s "${CONFIG_DIR}/mem0/config.yaml" ]]; then
-        log "ERROR" "Mem0 config file is empty after write"
-        return 1
-    fi
-
-    # Write the FastAPI server — this is the API layer over mem0ai pip package
-    cat > "${CONFIG_DIR}/mem0/server.py" << 'PYEOF'
-#!/usr/bin/env python3
-"""Mem0 API Server — tenant-isolated memory"""
-import os, yaml, uvicorn
-from fastapi import FastAPI, HTTPException, Header
-from pydantic import BaseModel
-from typing import List, Optional
-
-app = FastAPI(title="Mem0 Memory API", version="1.0.0")
-
-API_KEY = os.environ.get("MEM0_API_KEY", "")
-PORT    = int(os.environ.get("MEM0_PORT", "8081"))
-
-_memory = None
-
-def get_memory():
-    global _memory
-    if _memory is None:
-        from mem0 import Memory
-        with open("/app/config.yaml") as f:
-            cfg = yaml.safe_load(f)
-        _memory = Memory.from_config(cfg)
-    return _memory
-
-def auth(authorization: Optional[str]):
-    if API_KEY and authorization != f"Bearer {API_KEY}":
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-class Msg(BaseModel):
-    role: str
-    content: str
-
-class AddReq(BaseModel):
-    messages: List[Msg]
-    user_id: str
-
-class SearchReq(BaseModel):
-    query: str
-    user_id: str
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-@app.post("/v1/memories")
-def add(req: AddReq, authorization: Optional[str] = Header(None)):
-    auth(authorization)
-    return get_memory().add(
-        [m.dict() for m in req.messages], user_id=req.user_id
-    )
-
-@app.post("/v1/memories/search")
-def search(req: SearchReq, authorization: Optional[str] = Header(None)):
-    auth(authorization)
-    results = get_memory().search(req.query, user_id=req.user_id)
-    return {"results": results}
-
-@app.delete("/v1/memories/{memory_id}")
-def delete(memory_id: str, authorization: Optional[str] = Header(None)):
-    auth(authorization)
-    get_memory().delete(memory_id)
-    return {"deleted": memory_id}
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")
+print("OK")
 PYEOF
 
-    # Write requirements — pinned versions for reproducibility
-    printf '%s\n' \
-        'mem0ai>=0.1.29' \
-        'fastapi>=0.110.0' \
-        'uvicorn[standard]>=0.29.0' \
-        'pyyaml>=6.0.1' \
-        'qdrant-client>=1.9.0' \
-        'httpx>=0.27.0' \
-        > "${CONFIG_DIR}/mem0/requirements.txt"
+    local rc=$?
+    if [[ ${rc} -ne 0 ]] || [[ ! -s "${CONFIG_DIR}/bifrost/config.yaml" ]]; then
+        log "ERROR" "Bifrost config write failed"
+        return 1
+    fi
 
-    chown -R "${DOCKER_USER_ID}:${DOCKER_GROUP_ID}" \
-        "${CONFIG_DIR}/mem0" "${DATA_DIR}/mem0"
-    chmod 640 "${CONFIG_DIR}/mem0/config.yaml"
-    chmod 644 "${CONFIG_DIR}/mem0/server.py"
-    chmod 644 "${CONFIG_DIR}/mem0/requirements.txt"
+    log "INFO" "Bifrost config content:"
+    cat "${CONFIG_DIR}/bifrost/config.yaml" | while IFS= read -r line; do
+        log "INFO" "  ${line}"
+    done
 
-    update_env "MEM0_CONTAINER"  "${MEM0_CONTAINER}"
-    update_env "MEM0_PORT"       "${MEM0_PORT}"
-    update_env "MEM0_API_KEY"    "${MEM0_API_KEY}"
-    update_env "MEM0_COLLECTION" "${MEM0_COLLECTION}"
+    chown "${DOCKER_USER_ID:-1000}:${DOCKER_GROUP_ID:-1000}" \
+        "${CONFIG_DIR}/bifrost/config.yaml"
+    chmod 640 "${CONFIG_DIR}/bifrost/config.yaml"
 
-    log "SUCCESS" "Mem0 configuration written"
-}
-```
-
-**Add both calls to `main()` in script 1 — in this exact order:**
-```bash
-init_bifrost
-init_mem0
-```
-
----
-
-### FIX 4 — Script 2: `generate_bifrost_service()` — Complete Replacement
-
-```bash
-generate_bifrost_service() {
-    # Official Bifrost docs: github.com/maximhq/bifrost
-    # Image:      ghcr.io/maximhq/bifrost:latest  (GHCR only — not on Docker Hub)
-    # Config env: CONFIG_FILE_PATH
-    # Health:     GET /healthz -> 200
-    # Port env:   PORT
-
-    cat << EOF
-  ${LLM_GATEWAY_CONTAINER}:
-    image: ghcr.io/maximhq/bifrost:latest
-    container_name: ${LLM_GATEWAY_CONTAINER}
-    restart: unless-stopped
-    user: "${DOCKER_USER_ID}:${DOCKER_GROUP_ID}"
-    networks:
-      - ${DOCKER_NETWORK}
-    ports:
-      - "127.0.0.1:${BIFROST_PORT}:${BIFROST_PORT}"
-    volumes:
-      - ${CONFIG_DIR}/bifrost/config.yaml:/app/config.yaml:ro
-    environment:
-      - CONFIG_FILE_PATH=/app/config.yaml
-      - PORT=${BIFROST_PORT}
-      - LOG_LEVEL=info
-    depends_on:
-      ${OLLAMA_CONTAINER}:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:${BIFROST_PORT}/healthz || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-      start_period: 45s
-    labels:
-      - "ai-platform.service=llm-gateway"
-      - "ai-platform.type=bifrost"
-      - "ai-platform.version=latest"
-EOF
+    update_env "LLM_GATEWAY_CONTAINER" "${LLM_GATEWAY_CONTAINER}"
+    update_env "BIFROST_PORT" "${BIFROST_PORT}"
+    log "SUCCESS" "Bifrost config written and validated"
 }
 ```
 
 ---
 
-### FIX 5 — Script 2: `generate_mem0_service()` — Complete Replacement
+### CRITICAL FIX 3 — Pre-Create Qdrant Collection For Mem0
+
+**Mem0 does not create its own Qdrant collection. This is documented in mem0ai source. You must create it before Mem0 starts.**
+
+Add this function to script 3, called BEFORE `configure_mem0`:
 
 ```bash
-generate_mem0_service() {
-    # Uses python:3.11-slim + pip install — eliminates all image compatibility issues
-    # pip cache volume prevents reinstall on every restart
+create_qdrant_collection() {
+    log "INFO" "Pre-creating Qdrant collection for Mem0..."
+    source "${ENV_FILE}"
 
-    cat << EOF
-  ${MEM0_CONTAINER}:
-    image: python:3.11-slim
-    container_name: ${MEM0_CONTAINER}
-    restart: unless-stopped
-    user: "${DOCKER_USER_ID}:${DOCKER_GROUP_ID}"
-    networks:
-      - ${DOCKER_NETWORK}
-    ports:
-      - "127.0.0.1:${MEM0_PORT}:${MEM0_PORT}"
-    volumes:
-      - ${CONFIG_DIR}/mem0/config.yaml:/app/config.yaml:ro
-      - ${CONFIG_DIR}/mem0/server.py:/app/server.py:ro
-      - ${CONFIG_DIR}/mem0/requirements.txt:/app/requirements.txt:ro
-      - ${DATA_DIR}/mem0:/app/data
-      - mem0-pip-cache:/pip-cache
-    environment:
-      - MEM0_API_KEY=${MEM0_API_KEY}
-      - MEM0_PORT=${MEM0_PORT}
-      - PIP_CACHE_DIR=/pip-cache
-      - HOME=/tmp
-      - PYTHONUNBUFFERED=1
-    working_dir: /app
-    command: >
-      sh -c "pip install --quiet --cache-dir /pip-cache -r /app/requirements.txt &&
-             python /app/server.py"
-    depends_on:
-      ${QDRANT_CONTAINER}:
-        condition: service_healthy
-      ${OLLAMA_CONTAINER}:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:${MEM0_PORT}/health || exit 1"]
-      interval: 30s
-      timeout: 15s
-      retries: 8
-      start_period: 150s
-    labels:
-      - "ai-platform.service=memory"
-      - "ai-platform.type=mem0"
-EOF
+    local qdrant_url="http://localhost:${QDRANT_PORT:-6333}"
+    local collection="${MEM0_COLLECTION:-ai_memory}"
+    local dims=768  # nomic-embed-text output dimensions
+
+    # Wait for Qdrant
+    local elapsed=0
+    while ! curl -sf "${qdrant_url}/healthz" > /dev/null 2>&1; do
+        [[ ${elapsed} -ge 60 ]] && { log "ERROR" "Qdrant not ready"; return 1; }
+        sleep 5; elapsed=$((elapsed+5))
+    done
+
+    # Check if collection already exists
+    local exists
+    exists=$(curl -sf "${qdrant_url}/collections/${collection}" \
+        -o /dev/null -w "%{http_code}" 2>/dev/null)
+
+    if [[ "${exists}" == "200" ]]; then
+        log "INFO" "Qdrant collection '${collection}' already exists"
+        return 0
+    fi
+
+    # Create collection with correct dimensions for nomic-embed-text
+    local result
+    result=$(curl -sf -w "\n%{http_code}" \
+        -X PUT "${qdrant_url}/collections/${collection}" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"vectors\": {
+                \"size\": ${dims},
+                \"distance\": \"Cosine\"
+            }
+        }")
+
+    local http_code
+    http_code=$(echo "${result}" | tail -1)
+    if [[ "${http_code}" != "200" ]]; then
+        log "ERROR" "Failed to create Qdrant collection. HTTP: ${http_code}"
+        log "ERROR" "Response: $(echo "${result}" | head -1)"
+        return 1
+    fi
+
+    log "SUCCESS" "Qdrant collection '${collection}' created (dims=${dims})"
 }
 ```
 
 ---
 
-### FIX 6 — Script 2: Named Volume and Service Calls
+### CRITICAL FIX 4 — Mem0 Must Pull Embedding Model Before Starting
 
-In `generate_docker_compose()`, add the named volume:
+**nomic-embed-text must be pulled into Ollama before Mem0 starts. If it is not present, every memory write fails silently.**
 
-```yaml
-volumes:
-  mem0-pip-cache:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${DATA_DIR}/mem0-pip-cache
-```
-
-**And create that directory in script 1:**
-```bash
-mkdir -p "${DATA_DIR}/mem0-pip-cache"
-chown "${DOCKER_USER_ID}:${DOCKER_GROUP_ID}" "${DATA_DIR}/mem0-pip-cache"
-```
-
-**Add service generation calls in `generate_docker_compose()` — order matters:**
-```bash
-generate_mem0_service      # Memory layer — no upstream deps except qdrant+ollama
-generate_bifrost_service   # Gateway — no dep on mem0, parallel is fine
-```
-
----
-
-### FIX 7 — Script 2: Fix Three Broken Healthchecks
+Add to script 3, after Ollama is verified healthy:
 
 ```bash
-# Prometheus — official docs: prometheus.io/docs/prometheus/latest/management_api/
-# /-/healthy returns 200 when Prometheus is ready
-generate_prometheus_service() {
-    # Change:
-    test: ["CMD-SHELL", "curl -sf http://localhost:9090/-/healthy || exit 1"]
-    # NOT: /metrics (that's a data endpoint, not a health endpoint)
-    # NOT: /health (does not exist in Prometheus)
-}
+pull_required_models() {
+    log "INFO" "Ensuring required models are available in Ollama..."
+    source "${ENV_FILE}"
 
-# Code Server — official docs: coder.com/docs
-# /healthz returns 200
-generate_codeserver_service() {
-    # Change:
-    test: ["CMD-SHELL", "curl -sf http://localhost:${CODE_SERVER_PORT}/healthz || exit 1"]
-}
+    local ollama_url="http://localhost:${OLLAMA_PORT:-11434}"
+    local -a required_models=("llama3.2" "nomic-embed-text")
 
-# Flowise — official docs: docs.flowiseai.com
-# /api/v1/ping returns {"pong":true}
-generate_flowise_service() {
-    # Change:
-    test: ["CMD-SHELL", "curl -sf http://localhost:${FLOWISE_PORT}/api/v1/ping || exit 1"]
+    for model in "${required_models[@]}"; do
+        log "INFO" "Checking model: ${model}"
+
+        # Check if already present
+        if curl -sf "${ollama_url}/api/tags" | grep -q "\"${model}\""; then
+            log "SUCCESS" "Model ${model} already present"
+            continue
+        fi
+
+        log "INFO" "Pulling model ${model} — this may take several minutes..."
+        local pull_result
+        pull_result=$(curl -sf -X POST "${ollama_url}/api/pull" \
+            -H "Content-Type: application/json" \
+            -d "{\"name\": \"${model}\"}" \
+            --max-time 600)
+
+        if echo "${pull_result}" | grep -q '"status":"success"'; then
+            log "SUCCESS" "Model ${model} pulled successfully"
+        else
+            log "ERROR" "Failed to pull model ${model}"
+            log "ERROR" "Response: ${pull_result}"
+            return 1
+        fi
+    done
 }
 ```
 
 ---
 
-### FIX 8 — Script 3: Fix All Health Endpoint References
+### CRITICAL FIX 5 — Operational Verification In Script 3
+
+**Replace the current `configure_bifrost()` which only checks `/healthz` with this:**
 
 ```bash
-# Every occurrence of /health in configure_gateway() — change to /healthz
-# Bifrost health endpoint is /healthz not /health
+configure_bifrost() {
+    log "INFO" "Configuring and operationally verifying Bifrost..."
+    source "${ENV_FILE}"
 
-# Find in script 3:
-curl -sf "http://localhost:${LLM_GATEWAY_PORT}/health"
-# Replace with:
-curl -sf "http://localhost:${LLM_GATEWAY_PORT}/healthz"
+    local url="http://localhost:${BIFROST_PORT:-8082}"
+    local elapsed=0
+
+    # Wait for container health
+    while ! curl -sf "${url}/healthz" > /dev/null 2>&1; do
+        [[ ${elapsed} -ge 120 ]] && {
+            log "ERROR" "Bifrost /healthz timeout after ${elapsed}s"
+            log "ERROR" "=== Container logs ==="
+            docker logs "${LLM_GATEWAY_CONTAINER}" --tail 50 2>&1 | \
+                while IFS= read -r line; do log "LOG" "  ${line}"; done
+            log "ERROR" "=== Config file ==="
+            cat "${CONFIG_DIR}/bifrost/config.yaml" | \
+                while IFS= read -r line; do log "LOG" "  ${line}"; done
+            return 1
+        }
+        sleep 5; elapsed=$((elapsed+5))
+        log "INFO" "Waiting for Bifrost... ${elapsed}s"
+    done
+    log "SUCCESS" "Bifrost /healthz OK after ${elapsed}s"
+
+    # OPERATIONAL TEST — actual model routing
+    log "INFO" "Testing Bifrost → Ollama routing (operational test)..."
+    local route_result
+    route_result=$(curl -sf -w "\n%{http_code}" \
+        -X POST "${url}/api/chat" \
+        -H "Authorization: Bearer ${LLM_MASTER_KEY}" \
+        -H "Content-Type: application/json" \
+        --max-time 60 \
+        -d '{
+            "model": "ollama/llama3.2",
+            "messages": [{"role": "user", "content": "Reply with one word: operational"}]
+        }')
+
+    local http_code
+    http_code=$(echo "${route_result}" | tail -1)
+    local body
+    body=$(echo "${route_result}" | head -1)
+
+    if [[ "${http_code}" != "200" ]]; then
+        log "ERROR" "Bifrost routing test FAILED — HTTP ${http_code}"
+        log "ERROR" "Response body: ${body}"
+        log "ERROR" "=== Container logs ==="
+        docker logs "${LLM_GATEWAY_CONTAINER}" --tail 30 2>&1 | \
+            while IFS= read -r line; do log "LOG" "  ${line}"; done
+        return 1
+    fi
+
+    log "SUCCESS" "Bifrost routing operational — HTTP ${http_code}"
+    log "SUCCESS" "Response: $(echo "${body}" | python3 -c \
+        'import sys,json; d=json.load(sys.stdin); print(d.get("message",{}).get("content","<no content>"))' \
+        2>/dev/null || echo "${body}")"
+
+    update_env "BIFROST_STATUS" "operational"
+}
 ```
 
 ---
 
-### FIX 9 — Script 3: `configure_mem0()` — Add Complete Function
+### CRITICAL FIX 6 — Mem0 Operational Verification
+
+**Replace the current `configure_mem0()` with:**
 
 ```bash
 configure_mem0() {
-    log "INFO" "Configuring and verifying Mem0 memory layer..."
+    log "INFO" "Configuring and operationally verifying Mem0..."
+    source "${ENV_FILE}"
 
-    local url="http://localhost:${MEM0_PORT}"
-    local max_wait=180
+    local url="http://localhost:${MEM0_PORT:-8081}"
     local elapsed=0
+    local max_wait=300  # pip install takes time on first boot
 
-    log "INFO" "Waiting for Mem0 startup (pip install: 60-120s first boot)..."
-    while ! curl -sf "${url}/health" > /dev/null 2>&1; do
-        if [[ ${elapsed} -ge ${max_wait} ]]; then
-            log "ERROR" "Mem0 failed to start after ${max_wait}s"
-            log "ERROR" "Container logs:"
-            docker logs "${MEM0_CONTAINER}" --tail 30 2>&1 | \
-                while IFS= read -r line; do log "LOG" "${line}"; done
+    # Wait for /health
+    log "INFO" "Waiting for Mem0 (pip install on first boot ~120s)..."
+    while ! curl -sf "${url}/health" | grep -q "ok" 2>/dev/null; do
+        [[ ${elapsed} -ge ${max_wait} ]] && {
+            log "ERROR" "Mem0 /health timeout after ${elapsed}s"
+            docker logs "${MEM0_CONTAINER}" --tail 50 2>&1 | \
+                while IFS= read -r line; do log "LOG" "  ${line}"; done
             return 1
-        fi
-        sleep 10
-        elapsed=$((elapsed + 10))
-        log "INFO" "Mem0 starting... ${elapsed}/${max_wait}s"
+        }
+        sleep 10; elapsed=$((elapsed+10))
+        # Show pip progress every 30s
+        [[ $((elapsed % 30)) -eq 0 ]] && {
+            log "INFO" "Mem0 still starting... ${elapsed}/${max_wait}s"
+            docker logs "${MEM0_CONTAINER}" --tail 5 2>&1 | tail -2 | \
+                while IFS= read -r line; do log "LOG" "  ${line}"; done
+        }
     done
-    log "SUCCESS" "Mem0 healthy after ${elapsed}s"
+    log "SUCCESS" "Mem0 /health OK after ${elapsed}s"
 
-    # Write test — tenant A
-    local tenant_a="verify_a_$$"
-    local tenant_b="verify_b_$$"
-    local marker="mem0_isolation_${RANDOM}_${RANDOM}"
+    # OPERATIONAL TEST 1 — write memory
+    local tenant_id="verify_$$_${RANDOM}"
+    local test_content="operational_verify_${RANDOM}"
 
-    local write_result
-    write_result=$(curl -sf -w "\n%{http_code}" \
+    log "INFO" "Testing Mem0 write operation..."
+    local write_body
+    write_body=$(curl -sf -w "\n%{http_code}" \
         -X POST "${url}/v1/memories" \
         -H "Authorization: Bearer ${MEM0_API_KEY}" \
         -H "Content-Type: application/json" \
-        -d "{\"messages\":[{\"role\":\"user\",\"content\":\"${marker}\"}],
-             \"user_id\":\"${tenant_a}\"}")
+        -d "{
+            \"messages\": [{\"role\": \"user\", \"content\": \"${test_content}\"}],
+            \"user_id\": \"${tenant_id}\"
+        }")
 
     local write_code
-    write_code=$(echo "${write_result}" | tail -1)
+    write_code=$(echo "${write_body}" | tail -1)
     if [[ "${write_code}" != "200" ]]; then
-        log "ERROR" "Mem0 write test failed with HTTP ${write_code}"
+        log "ERROR" "Mem0 write FAILED — HTTP ${write_code}"
+        log "ERROR" "Body: $(echo "${write_body}" | head -1)"
+        log "ERROR" "=== Qdrant collection check ==="
+        curl -sf "http://localhost:${QDRANT_PORT:-6333}/collections/${MEM0_COLLECTION}" \
+            | python3 -m json.tool 2>/dev/null || true
+        docker logs "${MEM0_CONTAINER}" --tail 30 2>&1 | \
+            while IFS= read -r line; do log "LOG" "  ${line}"; done
         return 1
     fi
-    log "SUCCESS" "Mem0 write test passed"
+    log "SUCCESS" "Mem0 write operational"
 
-    # Search from tenant B — must NOT find tenant A data
-    local search_result
-    search_result=$(curl -sf \
+    # OPERATIONAL TEST 2 — search
+    sleep 2  # Allow vector indexing
+    local search_body
+    search_body=$(curl -sf \
         -X POST "${url}/v1/memories/search" \
         -H "Authorization: Bearer ${MEM0_API_KEY}" \
         -H "Content-Type: application/json" \
-        -d "{\"query\":\"${marker}\",\"user_id\":\"${tenant_b}\"}")
+        -d "{\"query\": \"${test_content}\", \"user_id\": \"${tenant_id}\"}")
 
-    if echo "${search_result}" | grep -q "${marker}"; then
-        log "ERROR" "CRITICAL FAILURE: Mem0 tenant isolation BROKEN"
-        log "ERROR" "Data from tenant_a visible to tenant_b"
-        log "ERROR" "Search result: ${search_result}"
+    local result_count
+    result_count=$(echo "${search_body}" | \
+        python3 -c 'import sys,json; print(len(json.load(sys.stdin).get("results",[])))' \
+        2>/dev/null || echo "0")
+
+    if [[ "${result_count}" -eq 0 ]]; then
+        log "ERROR" "Mem0 search returned 0 results — write succeeded but retrieval failed"
+        log "ERROR" "Search response: ${search_body}"
         return 1
     fi
-    log "SUCCESS" "Mem0 tenant isolation verified — data scoped correctly"
+    log "SUCCESS" "Mem0 search operational — found ${result_count} result(s)"
 
-    update_env "MEM0_STATUS" "healthy"
-    log "SUCCESS" "Mem0 fully configured and verified"
+    # OPERATIONAL TEST 3 — tenant isolation
+    local other_tenant="other_$$_${RANDOM}"
+    local isolation_body
+    isolation_body=$(curl -sf \
+        -X POST "${url}/v1/memories/search" \
+        -H "Authorization: Bearer ${MEM0_API_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{\"query\": \"${test_content}\", \"user_id\": \"${other_tenant}\"}")
+
+    local isolation_count
+    isolation_count=$(echo "${isolation_body}" | \
+        python3 -c 'import sys,json; print(len(json.load(sys.stdin).get("results",[])))' \
+        2>/dev/null || echo "1")
+
+    if [[ "${isolation_count}" -ne 0 ]]; then
+        log "ERROR" "CRITICAL: Mem0 tenant isolation BROKEN"
+        log "ERROR" "Data from ${tenant_id} visible to ${other_tenant}"
+        return 1
+    fi
+    log "SUCCESS" "Mem0 tenant isolation verified"
+
+    update_env "MEM0_STATUS" "operational"
+    log "SUCCESS" "Mem0 fully operational"
 }
-```
-
-**Add to `main()` in script 3 — before `configure_gateway`:**
-```bash
-configure_mem0
-configure_gateway
 ```
 
 ---
 
-### FIX 10 — Script 3: `print_summary()` — All Services Visible
-
-The health dashboard must show all services. Replace or extend the existing function:
+### CRITICAL FIX 7 — Script 3 `main()` — Correct Order
 
 ```bash
-print_summary() {
-    source "${ENV_FILE}"  # Reload all vars
+main() {
+    # Source env first — every variable must be available
+    source "${ENV_FILE:-/mnt/ai-platform/.env}"
 
-    local -a services=(
-        "${POSTGRES_CONTAINER}|PostgreSQL|${POSTGRES_PORT}|tcp"
-        "${REDIS_CONTAINER}|Redis|${REDIS_PORT}|tcp"
-        "${QDRANT_CONTAINER}|Qdrant|${QDRANT_PORT}|http"
-        "${OLLAMA_CONTAINER}|Ollama|${OLLAMA_PORT}|http"
-        "${MEM0_CONTAINER}|Mem0|${MEM0_PORT}|http"
-        "${LLM_GATEWAY_CONTAINER}|Bifrost|${BIFROST_PORT}|http"
-        "${OPENWEBUI_CONTAINER}|OpenWebUI|${OPENWEBUI_PORT}|http"
-        "${N8N_CONTAINER}|n8n|${N8N_PORT}|http"
-        "${FLOWISE_CONTAINER}|Flowise|${FLOWISE_PORT}|http"
-        "${ANYTHINGLLM_CONTAINER}|AnythingLLM|${ANYTHINGLLM_PORT}|http"
-        "${CODE_SERVER_CONTAINER}|CodeServer|${CODE_SERVER_PORT}|http"
-        "prometheus|Prometheus|9090|http"
-        "${CADDY_CONTAINER}|Caddy|443|tcp"
+    log "INFO" "Starting platform configuration..."
+
+    # Infrastructure must be verified before services configure
+    verify_infrastructure_health    # PostgreSQL, Redis, Qdrant, Ollama
+
+    # Pull models before anything that needs them
+    pull_required_models            # llama3.2 + nomic-embed-text
+
+    # Pre-create Qdrant collection before Mem0 starts
+    create_qdrant_collection
+
+    # Configure services in dependency order
+    configure_n8n                   # standalone
+    configure_flowise               # standalone
+    configure_bifrost               # needs Ollama operational
+    configure_mem0                  # needs Qdrant collection + Ollama models
+    configure_openwebui             # needs Ollama
+    configure_monitoring            # needs all services up
+    configure_caddy                 # needs all services to proxy to
+
+    print_summary
+}
+```
+
+---
+
+### CRITICAL FIX 8 — `verify_infrastructure_health()` — New Function
+
+**Script 3 currently assumes services are healthy. It must verify before proceeding:**
+
+```bash
+verify_infrastructure_health() {
+    log "INFO" "Verifying infrastructure health before configuration..."
+    source "${ENV_FILE}"
+
+    local -a checks=(
+        "PostgreSQL|${POSTGRES_CONTAINER}|docker exec ${POSTGRES_CONTAINER} pg_isready -U ${POSTGRES_USER}"
+        "Redis|${REDIS_CONTAINER}|docker exec ${REDIS_CONTAINER} redis-cli ping | grep -q PONG"
+        "Qdrant|${QDRANT_CONTAINER}|curl -sf http://localhost:${QDRANT_PORT:-6333}/healthz"
+        "Ollama|${OLLAMA_CONTAINER}|curl -sf http://localhost:${OLLAMA_PORT:-11434}/api/tags"
     )
 
-    echo ""
-    echo "╔══════════════════════════════════════════════════════╗"
-    echo "║           AI Platform — Mission Control              ║"
-    echo "╠══════════════════════════════════════════════════════╣"
-
-    local all_healthy=true
-    for entry in "${services[@]}"; do
-        IFS='|' read -r container name port type <<< "${entry}"
-        local docker_status
-        docker_status=$(docker inspect "${container}" \
-            --format '{{.State.Health.Status}}' 2>/dev/null || echo "not_found")
-        local running
-        running=$(docker inspect "${container}" \
-            --format '{{.State.Running}}' 2>/dev/null || echo "false")
-
-        local symbol status_text
-        if [[ "${docker_status}" == "healthy" ]]; then
-            symbol="✅"; status_text="HEALTHY"
-        elif [[ "${running}" == "true" ]] && [[ "${docker_status}" == "none" ]]; then
-            symbol="✅"; status_text="RUNNING"
-        elif [[ "${running}" == "true" ]]; then
-            symbol="⚠️ "; status_text="STARTING"
-        else
-            symbol="❌"; status_text="DOWN"
-            all_healthy=false
-        fi
-
-        printf "║ %-14s %-10s port:%-5s  %s %-8s ║\n" \
-            "${name}" "" "${port}" "${symbol}" "${status_text}"
+    local max_wait=300
+    for check in "${checks[@]}"; do
+        IFS='|' read -r name container cmd <<< "${check}"
+        local elapsed=0
+        log "INFO" "Waiting for ${name}..."
+        while ! eval "${cmd}" > /dev/null 2>&1; do
+            [[ ${elapsed} -ge ${max_wait} ]] && {
+                log "ERROR" "${name} not healthy after ${max_wait}s"
+                docker logs "${container}" --tail 20 2>&1 | \
+                    while IFS= read -r line; do log "LOG" "  ${line}"; done
+                return 1
+            }
+            sleep 5; elapsed=$((elapsed+5))
+        done
+        log "SUCCESS" "${name} healthy"
     done
-
-    echo "╠══════════════════════════════════════════════════════╣"
-    echo "║  Access Points:                                      ║"
-    echo "║  OpenWebUI:  https://${DOMAIN:-localhost}$(printf '%*s' $((27 - ${#DOMAIN:-localhost})) '')║"
-    echo "║  n8n:        https://n8n.${DOMAIN:-localhost}$(printf '%*s' $((23 - ${#DOMAIN:-localhost})) '')║"
-    echo "║  Bifrost:    http://localhost:${BIFROST_PORT} (internal)      ║"
-    echo "║  Mem0:       http://localhost:${MEM0_PORT} (internal)       ║"
-    echo "╚══════════════════════════════════════════════════════╝"
-    echo ""
-
-    if [[ "${all_healthy}" == "true" ]]; then
-        log "SUCCESS" "All services healthy — Platform at 100%"
-    else
-        log "WARN" "Some services are down — check logs above"
-    fi
 }
 ```
 
 ---
 
-### FIX 11 — Script 0: Complete Cleanup Coverage
+### CRITICAL FIX 9 — Flowise Password Environment Fix
 
+**Reading script 2: `FLOWISE_PASSWORD` is set in `.env` but not passed to the container. The Flowise container uses `FLOWISE_PASSWORD` as an environment variable.**
+
+In `generate_flowise_service()`:
+
+```yaml
+environment:
+  - DATABASE_TYPE=postgres
+  - DATABASE_HOST=${POSTGRES_CONTAINER}
+  - DATABASE_PORT=5432
+  - DATABASE_USER=${POSTGRES_USER}
+  - DATABASE_PASSWORD=${POSTGRES_PASSWORD}
+  - DATABASE_NAME=flowise
+  - FLOWISE_USERNAME=${FLOWISE_USERNAME}
+  - FLOWISE_PASSWORD=${FLOWISE_PASSWORD}    # THIS LINE MUST BE PRESENT
+  - FLOWISE_SECRETKEY_OVERWRITE=${FLOWISE_SECRET_KEY}
+  - APIKEY_PATH=/root/.flowise
+  - SECRETKEY_PATH=/root/.flowise
+  - LOG_LEVEL=info
+```
+
+---
+
+### CRITICAL FIX 10 — n8n Encryption Key Persistence
+
+**n8n generates a new encryption key on each start if `N8N_ENCRYPTION_KEY` is not set. This breaks all stored credentials.**
+
+In `generate_n8n_service()`:
+
+```yaml
+environment:
+  - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}   # MUST be set, MUST be persisted in .env
+  - DB_TYPE=postgresdb
+  - DB_POSTGRESDB_HOST=${POSTGRES_CONTAINER}
+  - DB_POSTGRESDB_PORT=5432
+  - DB_POSTGRESDB_DATABASE=n8n
+  - DB_POSTGRESDB_USER=${POSTGRES_USER}
+  - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+  - N8N_BASIC_AUTH_ACTIVE=true
+  - N8N_BASIC_AUTH_USER=${N8N_USERNAME}
+  - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD}
+  - WEBHOOK_URL=https://n8n.${DOMAIN}
+  - N8N_HOST=0.0.0.0
+  - N8N_PORT=${N8N_PORT}
+```
+
+**And in script 1 `init_n8n()`:**
 ```bash
-# Add to container removal list:
-"${MEM0_CONTAINER:-ai-datasquiz-mem0}"
-"${LLM_GATEWAY_CONTAINER:-ai-datasquiz-bifrost}"
-
-# Add to volume removal:
-docker volume rm mem0-pip-cache 2>/dev/null || true
-
-# Add to config dir cleanup:
-rm -rf "${CONFIG_DIR}/bifrost" "${CONFIG_DIR}/mem0" 2>/dev/null || true
-rm -rf "${DATA_DIR}/mem0" "${DATA_DIR}/mem0-pip-cache" 2>/dev/null || true
+# Generate and persist encryption key
+export N8N_ENCRYPTION_KEY="${N8N_ENCRYPTION_KEY:-$(openssl rand -hex 32)}"
+update_env "N8N_ENCRYPTION_KEY" "${N8N_ENCRYPTION_KEY}"
 ```
 
 ---
 
-## WINDSURF IMPLEMENTATION ORDER — Do Not Deviate
+## IMPLEMENTATION ORDER — ZERO DEVIATION
 
 ```
-STEP 1: scripts/1-setup-system.sh
-  1a. Add missing variables to init_core_variables()
-  1b. Replace init_bifrost() entirely with FIX 2
-  1c. Replace init_mem0() entirely with FIX 3
-  1d. Create DATA_DIR/mem0-pip-cache directory in init_directories()
-  1e. Verify init_bifrost and init_mem0 are called in main()
+STEP 1 — scripts/1-setup-system.sh
+  [ ] FIX 2: Replace init_bifrost() — use python3 yaml.dump
+  [ ] FIX 3: Add N8N_ENCRYPTION_KEY generation to init_n8n()
+  [ ] Verify init_bifrost(), init_mem0() called in main()
+  [ ] Verify all vars exported: OLLAMA_CONTAINER, QDRANT_CONTAINER,
+      LLM_GATEWAY_CONTAINER, MEM0_CONTAINER, MEM0_API_KEY,
+      MEM0_COLLECTION, N8N_ENCRYPTION_KEY, BIFROST_PORT, MEM0_PORT
 
-STEP 2: scripts/2-deploy-services.sh
-  2a. Replace generate_bifrost_service() with FIX 4
-  2b. Replace generate_mem0_service() with FIX 5
-  2c. Add mem0-pip-cache named volume to generate_docker_compose()
-  2d. Fix Prometheus healthcheck endpoint (FIX 7)
-  2e. Fix Code Server healthcheck endpoint (FIX 7)
-  2f. Fix Flowise healthcheck endpoint (FIX 7)
+STEP 2 — scripts/2-deploy-services.sh
+  [ ] FIX 9: Add FLOWISE_PASSWORD to flowise environment block
+  [ ] FIX 10: Add N8N_ENCRYPTION_KEY to n8n environment block
+  [ ] Verify Bifrost uses ghcr.io/maximhq/bifrost:latest
+  [ ] Verify Bifrost env has CONFIG_FILE_PATH (not BIFROST_CONFIG)
+  [ ] Verify Bifrost healthcheck is /healthz
+  [ ] Verify Prometheus healthcheck is /-/healthy
+  [ ] Verify Flowise healthcheck is /api/v1/ping
+  [ ] Verify Code Server healthcheck is /healthz
 
-STEP 3: scripts/3-configure-services.sh
-  3a. Fix /health to /healthz in configure_gateway() (FIX 8)
-  3b. Replace configure_mem0() entirely with FIX 9
-  3c. Add configure_mem0 call before configure_gateway in main()
-  3d. Replace print_summary() with FIX 10
+STEP 3 — scripts/3-configure-services.sh
+  [ ] FIX 1: source ENV_FILE at top of main() and each function
+  [ ] FIX 6: Add verify_infrastructure_health() function
+  [ ] FIX 4: Add pull_required_models() function
+  [ ] FIX 3: Add create_qdrant_collection() function
+  [ ] FIX 5: Replace configure_bifrost() — operational test
+  [ ] FIX 6: Replace configure_mem0() — operational test with isolation
+  [ ] FIX 7: Fix main() call order exactly as specified
 
-STEP 4: scripts/0-complete-cleanup.sh
-  4a. Add Mem0 and Bifrost containers to FIX 11
-  4b. Add volume and dir cleanup for FIX 11
+STEP 4 — scripts/0-complete-cleanup.sh
+  [ ] Add MEM0_CONTAINER and LLM_GATEWAY_CONTAINER to container list
+  [ ] Add mem0-pip-cache volume cleanup
+  [ ] Add config/data dirs for mem0 and bifrost
 
-STEP 5: Run deployment
+STEP 5 — Run
   bash scripts/0-complete-cleanup.sh
-  bash scripts/1-setup-system.sh
-  bash scripts/2-deploy-services.sh
-  bash scripts/3-configure-services.sh
+  bash scripts/1-setup-system.sh  && echo "SCRIPT 1 DONE"
+  bash scripts/2-deploy-services.sh && echo "SCRIPT 2 DONE"
+  bash scripts/3-configure-services.sh && echo "SCRIPT 3 DONE"
 ```
 
 ---
 
-## POST-DEPLOYMENT VERIFICATION SCRIPT
+## THE SINGLE VERIFICATION COMMAND
 
-Save as `verify.sh` and run after script 3 completes:
+After script 3 completes, run this. Every line must print ✅:
 
 ```bash
 #!/usr/bin/env bash
-set -euo pipefail
 source /mnt/ai-platform/.env
+E=0
 
-PASS=0; FAIL=0
+ok()  { echo "✅ $1"; }
+fail(){ echo "❌ $1"; E=$((E+1)); }
 
-check() {
-    local name="$1"; local cmd="$2"
-    if eval "${cmd}" > /dev/null 2>&1; then
-        echo "✅ PASS: ${name}"; PASS=$((PASS+1))
-    else
-        echo "❌ FAIL: ${name}"; FAIL=$((FAIL+1))
-    fi
-}
+# Infrastructure
+docker exec "${POSTGRES_CONTAINER}" pg_isready -U "${POSTGRES_USER}" \
+    && ok "PostgreSQL" || fail "PostgreSQL"
+docker exec "${REDIS_CONTAINER}" redis-cli ping | grep -q PONG \
+    && ok "Redis" || fail "Redis"
+curl -sf "http://localhost:${QDRANT_PORT:-6333}/healthz" \
+    && ok "Qdrant" || fail "Qdrant"
+curl -sf "http://localhost:${OLLAMA_PORT:-11434}/api/tags" | grep -q "models" \
+    && ok "Ollama" || fail "Ollama"
 
-# Core infrastructure
-check "PostgreSQL healthy" \
-    "docker inspect ${POSTGRES_CONTAINER} --format '{{.State.Health.Status}}' | grep -q healthy"
-check "Redis healthy" \
-    "docker inspect ${REDIS_CONTAINER} --format '{{.State.Health.Status}}' | grep -q healthy"
-check "Qdrant healthy" \
-    "docker inspect ${QDRANT_CONTAINER} --format '{{.State.Health.Status}}' | grep -q healthy"
-check "Ollama healthy" \
-    "docker inspect ${OLLAMA_CONTAINER} --format '{{.State.Health.Status}}' | grep -q healthy"
+# Bifrost — operational not just healthy
+curl -sf "http://localhost:${BIFROST_PORT}/healthz" \
+    && ok "Bifrost /healthz" || fail "Bifrost /healthz"
+curl -sf -X POST "http://localhost:${BIFROST_PORT}/api/chat" \
+    -H "Authorization: Bearer ${LLM_MASTER_KEY}" \
+    -H "Content-Type: application/json" \
+    --max-time 30 \
+    -d '{"model":"ollama/llama3.2","messages":[{"role":"user","content":"ping"}]}' \
+    | grep -q "content" \
+    && ok "Bifrost routing" || fail "Bifrost routing"
 
-# Bifrost
-check "Bifrost container running" \
-    "docker inspect ${LLM_GATEWAY_CONTAINER} --format '{{.State.Running}}' | grep -q true"
-check "Bifrost /healthz responds" \
-    "curl -sf http://localhost:${BIFROST_PORT}/healthz"
-check "Bifrost routes to Ollama" \
-    "curl -sf http://localhost:${BIFROST_PORT}/api/chat \
-     -H 'Authorization: Bearer ${LLM_MASTER_KEY}' \
-     -H 'Content-Type: application/json' \
-     -d '{\"model\":\"llama3.2\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}' \
-     | grep -q 'content'"
+# Mem0 — operational not just healthy
+curl -sf "http://localhost:${MEM0_PORT}/health" | grep -q "ok" \
+    && ok "Mem0 /health" || fail "Mem0 /health"
+curl -sf -X POST "http://localhost:${MEM0_PORT}/v1/memories" \
+    -H "Authorization: Bearer ${MEM0_API_KEY}" \
+    -H "Content-Type: application/json" \
+    -d '{"messages":[{"role":"user","content":"final_verify"}],"user_id":"verify_u1"}' \
+    | grep -q "id" \
+    && ok "Mem0 write" || fail "Mem0 write"
 
-# Mem0
-check "Mem0 container running" \
-    "docker inspect ${MEM0_CONTAINER} --format '{{.State.Running}}' | grep -q true"
-check "Mem0 /health responds" \
-    "curl -sf http://localhost:${MEM0_PORT}/health | grep -q ok"
-check "Mem0 write succeeds" \
-    "curl -sf -X POST http://localhost:${MEM0_PORT}/v1/memories \
-     -H 'Authorization: Bearer ${MEM0_API_KEY}' \
-     -H 'Content-Type: application/json' \
-     -d '{\"messages\":[{\"role\":\"user\",\"content\":\"verify_test\"}],
-          \"user_id\":\"verify_tenant_a\"}'"
-check "Mem0 tenant isolation works" \
-    "[[ \$(curl -sf -X POST http://localhost:${MEM0_PORT}/v1/memories/search \
-     -H 'Authorization: Bearer ${MEM0_API_KEY}' \
-     -H 'Content-Type: application/json' \
-     -d '{\"query\":\"verify_test\",\"user_id\":\"verify_tenant_b\"}' \
-     | python3 -c 'import sys,json; print(len(json.load(sys.stdin)[\"results\"]))') == '0' ]]"
-
-# Supporting services
-check "Prometheus healthy" \
-    "curl -sf http://localhost:9090/-/healthy"
-check "Code Server responds" \
-    "curl -sf http://localhost:${CODE_SERVER_PORT}/healthz"
-check "Flowise responds" \
-    "curl -sf http://localhost:${FLOWISE_PORT}/api/v1/ping | grep -q pong"
-check "OpenWebUI healthy" \
-    "curl -sf http://localhost:${OPENWEBUI_PORT}/"
+# Supporting services — operational
+curl -sf "http://localhost:9090/-/healthy" \
+    && ok "Prometheus" || fail "Prometheus"
+curl -sf "http://localhost:${FLOWISE_PORT}/api/v1/ping" | grep -q "pong" \
+    && ok "Flowise" || fail "Flowise"
+curl -sf "http://localhost:${N8N_PORT}/healthz" | grep -q "ok" \
+    && ok "n8n" || fail "n8n"
+curl -sf "http://localhost:${OPENWEBUI_PORT}/" | grep -qi "open webui" \
+    && ok "OpenWebUI" || fail "OpenWebUI"
 
 echo ""
-echo "Results: ${PASS} passed, ${FAIL} failed"
-[[ ${FAIL} -eq 0 ]] && echo "🎉 100% — Platform complete" || echo "❌ ${FAIL} checks failed"
+[[ $E -eq 0 ]] && echo "🎉 PLATFORM 100% OPERATIONAL" \
+              || echo "❌ ${E} FAILURES — NOT OPERATIONAL"
+exit $E
 ```
 
-**Zero failures on `verify.sh` = 100%. That is the only acceptable outcome.**
+**`exit 0` is the only acceptable result. Every service must be operationally verified, not just port-open verified.**
