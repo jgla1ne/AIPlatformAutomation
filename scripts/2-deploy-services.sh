@@ -199,7 +199,7 @@ services:
       - "ai-platform.tenant=${TENANT_ID}"
 
   bifrost:
-    image: ghcr.io/ruqqq/bifrost:latest
+    image: maximhq/bifrost:latest
     container_name: ai-${TENANT_ID}-bifrost-1
     restart: unless-stopped
     user: "${TENANT_UID:-1000}:${TENANT_GID:-1000}"
@@ -280,41 +280,40 @@ main() {
 
     provision_databases          # waits until postgres ready, verifies DBs
 
-    # 4. Local LLM runtime — BEFORE Bifrost
-    [[ "${ENABLE_OLLAMA:-false}"     == "true" ]] && {
-        docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d ollama
-        
-        # Wait for Ollama HTTP server to be ready BEFORE pulling models
-        log_info "Waiting for Ollama HTTP server to be ready..."
-        local elapsed=0
-        until curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; do
-            elapsed=$((elapsed + 5))
-            if [[ $elapsed -ge 60 ]]; then
-                log_error "Ollama HTTP not ready after 60s — cannot proceed"
-                exit 1
-            fi
-            log_info "  Waiting for ollama HTTP... (${elapsed}s)"
-            sleep 5
-        done
-        log_success "Ollama HTTP server is ready"
-
-        # Pull models SYNCHRONOUSLY before starting Bifrost
-        log_info "Pulling required Ollama models before starting Bifrost..."
-        local required_models="llama3.2 nomic-embed-text"
-        for model in ${required_models}; do
-            log_info "  Pulling ${model}..."
-            docker compose -f "/mnt/data/${TENANT}/docker-compose.yml" exec -T ollama \
-                ollama pull "$model" \
-                >> "/mnt/data/${TENANT}/logs/ollama-pull-$(date +%Y%m%d).log" 2>&1
-            [[ $? -eq 0 ]] && log_success "  ✓ ${model} pulled successfully" || {
-                log_error "  ✗ Failed to pull ${model}"
-                exit 1
-            }
-        done
-        log_success "All required Ollama models are ready"
+    # 4. Local LLM runtime — BEFORE Bifrost (TEMPORARILY SKIPPED FOR TESTING)
+    [[ "${ENABLE_OLLAMA:-false}" == "true" ]] && {
+        log_info "Ollama deployment temporarily skipped for Bifrost testing"
+        # TODO: Fix Ollama user directive issue and re-enable
+        # docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d ollama
     }
 
-    # 5. Skip complex services for now - focus on core infrastructure
+    # 5. Deploy Bifrost LLM Gateway
+    [[ "${LLM_ROUTER:-bifrost}" == "bifrost" ]] && {
+        log_info "Deploying Bifrost LLM Gateway..."
+        docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d bifrost
+        
+        # Wait for Bifrost to be healthy
+        log_info "Waiting for Bifrost to be healthy..."
+        local elapsed=0
+        until curl -sf http://localhost:8000/healthz > /dev/null 2>&1; do
+            elapsed=$((elapsed + 5))
+            if [[ $elapsed -ge 60 ]]; then
+                log_error "Bifrost did not become healthy after 60s"
+                docker logs "ai-datasquiz-bifrost-1" --tail 20
+                break
+            fi
+            log_info "  Waiting for Bifrost... (${elapsed}s)"
+            sleep 5
+        done
+        
+        if curl -sf http://localhost:8000/healthz > /dev/null 2>&1; then
+            log_success "Bifrost is healthy and ready"
+        else
+            log_error "Bifrost failed to start properly"
+        fi
+    }
+
+    # 6. Skip complex services for now - focus on core infrastructure
     log_info "Core infrastructure deployment complete"
     
     # 10. Health dashboard — script 2 STOPS after this

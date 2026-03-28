@@ -365,9 +365,6 @@ https://chat.${DOMAIN} {
 }
 EOF
 }
-    
-    log_success "Caddyfile written to ${out} with separate server blocks"
-}
 
 generate_prometheus_config() {
     [[ "${ENABLE_MONITORING:-false}" == "true" ]] || return 0
