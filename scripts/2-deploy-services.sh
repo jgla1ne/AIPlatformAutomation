@@ -183,7 +183,7 @@ services:
     image: ollama/ollama:latest
     container_name: ${COMPOSE_PROJECT_NAME}_ollama
     restart: unless-stopped
-    user: "${OLLAMA_UID:-1001}:${OLLAMA_UID:-1001}"
+    user: "${OLLAMA_UID:-1001}:${OLLAMA_GID:-1001}"
     volumes:
       - ollama_data:/root/.ollama
     networks:
@@ -196,6 +196,25 @@ services:
       start_period: 60s
     labels:
       - "ai-platform.service=ollama"
+      - "ai-platform.tenant=${TENANT_ID}"
+
+  bifrost:
+    image: ghcr.io/ruqqq/bifrost:latest
+    container_name: ai-${TENANT_ID}-bifrost-1
+    restart: unless-stopped
+    user: "${TENANT_UID:-1000}:${TENANT_GID:-1000}"
+    ports:
+      - "${BIFROST_PORT:-8000}:8000"
+    volumes:
+      - /mnt/data/${TENANT_ID}/configs/bifrost:/app/config
+      - /mnt/data/${TENANT_ID}/data/bifrost:/app/data
+    environment:
+      - BIFROST_HOST=0.0.0.0
+      - BIFROST_PORT=8000
+    networks:
+      - default
+    labels:
+      - "ai-platform.service=bifrost"
       - "ai-platform.tenant=${TENANT_ID}"
 
 volumes:

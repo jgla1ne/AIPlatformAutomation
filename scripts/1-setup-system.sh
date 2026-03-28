@@ -1259,88 +1259,22 @@ collect_llm_config() {
 
 # ─── Bifrost Configuration ─────────────────────────────────────────────────────
 init_bifrost() {
-    print_step "8.3" "11" "Bifrost Configuration"
+    echo -e "${YELLOW}Initializing Bifrost directories (Zero-Root Compliance)...${NC}"
+    local BIFROST_CONFIG_DIR="/mnt/data/${TENANT_ID}/configs/bifrost"
+    local BIFROST_DATA_DIR="/mnt/data/${TENANT_ID}/data/bifrost"
 
-    echo -e "  ${BOLD}⚙️  Bifrost Configuration${NC}"
-    echo -e "  ${DIM}Configuring Bifrost with YAML config file${NC}"
+    # Pre-create directories as tenant
+    mkdir -p "${BIFROST_CONFIG_DIR}"
+    mkdir -p "${BIFROST_DATA_DIR}"
     
-    # Generate or preserve auth token
-    local existing_token=$(grep "^LLM_MASTER_KEY=" "${ENV_FILE}" 2>/dev/null \
-        | cut -d= -f2- | tr -d '"')
-    local token="${existing_token:-sk-bifrost-$(openssl rand -hex 24)}"
+    # Enforce non-root ownership BEFORE Docker starts
+    chown -R ${TENANT_UID}:${TENANT_GID} "${BIFROST_CONFIG_DIR}"
+    chown -R ${TENANT_UID}:${TENANT_GID} "${BIFROST_DATA_DIR}"
     
-    # Get user input for port (default 4000)
-    local port
-    echo -e "  ${CYAN}➤ Bifrost internal port [4000]:${NC} "
-    read -r port
-    port="${port:-4000}"
-    
-    # Ollama URL must already exist from init_ollama()
-    local ollama_url="http://${PROJECT_PREFIX}${TENANT_ID}-ollama:11434"
-    
-    # Create config directory
-    local bifrost_config_dir="${CONFIG_DIR}/bifrost"
-    mkdir -p "${bifrost_config_dir}"
-    
-    # Write YAML config using placeholder-sed pattern (CLAUDE.md Change 1)
-    cat > "${bifrost_config_dir}/config.yaml" << 'BIFROST_EOF'
-accounts:
-  - name: default
-    keys:
-      - key: "PLACEHOLDER_KEY"
-        models:
-          - "*"
-    providers:
-      ollama:
-        base_url: "PLACEHOLDER_OLLAMA_URL"
-        timeout: 300
-BIFROST_EOF
-
-    # Substitute placeholders after heredoc to avoid expansion issues
-    sed -i "s|PLACEHOLDER_KEY|${token}|g" "${bifrost_config_dir}/config.yaml"
-    sed -i "s|PLACEHOLDER_OLLAMA_URL|${ollama_url}|g" "${bifrost_config_dir}/config.yaml"
-    
-    # Set ownership
-    chown -R "${TENANT_UID}:${TENANT_GID}" "${bifrost_config_dir}"
-    chmod 640 "${bifrost_config_dir}/config.yaml"
-    
-    # Write router-agnostic variables to .env
-    [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_ROUTER=/d' "${ENV_FILE}" 2>/dev/null || true
-    echo "LLM_ROUTER=bifrost" >> "${ENV_FILE}"
-    
-    [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_ROUTER_CONTAINER=/d' "${ENV_FILE}" 2>/dev/null || true
-    echo "LLM_ROUTER_CONTAINER=${PROJECT_PREFIX}${TENANT_ID}-bifrost" >> "${ENV_FILE}"
-    
-    [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_ROUTER_PORT=/d' "${ENV_FILE}" 2>/dev/null || true
-    echo "LLM_ROUTER_PORT=${port}" >> "${ENV_FILE}"
-    
-    [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_GATEWAY_URL=/d' "${ENV_FILE}" 2>/dev/null || true
-    echo "LLM_GATEWAY_URL=http://${PROJECT_PREFIX}${TENANT_ID}-bifrost:${port}" >> "${ENV_FILE}"
-    
-    [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_GATEWAY_API_URL=/d' "${ENV_FILE}" 2>/dev/null || true
-    echo "LLM_GATEWAY_API_URL=http://${PROJECT_PREFIX}${TENANT_ID}-bifrost:${port}/v1" >> "${ENV_FILE}"
-    
-    # CLAUDE.md Change 2: Remove BIFROST_API_KEY alias, use LLM_MASTER_KEY only
-    [[ -f "${ENV_FILE}" ]] && sed -i '/^LLM_MASTER_KEY=/d' "${ENV_FILE}" 2>/dev/null || true
-    echo "LLM_MASTER_KEY=${token}" >> "${ENV_FILE}"
-    
-    [[ -f "${ENV_FILE}" ]] && sed -i '/^BIFROST_AUTH_TOKEN=/d' "${ENV_FILE}" 2>/dev/null || true
-    echo "BIFROST_AUTH_TOKEN=${token}" >> "${ENV_FILE}"
-    
-    [[ -f "${ENV_FILE}" ]] && sed -i '/^BIFROST_PORT=/d' "${ENV_FILE}" 2>/dev/null || true
-    echo "BIFROST_PORT=${port}" >> "${ENV_FILE}"
-    
-    [[ -f "${ENV_FILE}" ]] && sed -i '/^BIFROST_OLLAMA_URL=/d' "${ENV_FILE}" 2>/dev/null || true
-    echo "BIFROST_OLLAMA_URL=${ollama_url}" >> "${ENV_FILE}"
-    
-    # Remove old BIFROST_PROVIDERS (no longer used)
-    [[ -f "${ENV_FILE}" ]] && sed -i '/^BIFROST_PROVIDERS=/d' "${ENV_FILE}" 2>/dev/null || true
-    
-    log "SUCCESS" "Bifrost configured with YAML config"
-    echo -e "  ${GREEN}✅${NC} Bifrost YAML config created: ${bifrost_config_dir}/config.yaml"
-    echo -e "  ${DIM}✅ Port: ${port}${NC}"
-    echo -e "  ${DIM}✅ Container: ${PROJECT_PREFIX}${TENANT_ID}-bifrost${NC}"
+    echo -e "${GREEN}Bifrost initialized successfully.${NC}"
 }
+
+# ─── LiteLLM Configuration ─────────────────────────────────────────────────────
 
 # ─── Mem0 Configuration ─────────────────────────────────────────────────────
 init_mem0() {
@@ -1550,7 +1484,7 @@ configure_llm_router() {
     case "${router_choice}" in
         1)
             LLM_ROUTER="bifrost"
-            BIFROST_PORT="${BIFROST_PORT:-4000}"
+            BIFROST_PORT="${BIFROST_PORT:-8000}"
             BIFROST_ROUTING_MODE="${BIFROST_ROUTING_MODE:-direct}"
             
             echo -e "  ${GREEN}✅${NC} Bifrost selected - Lightweight, fast routing"
@@ -2558,7 +2492,7 @@ OPENROUTER_API_KEY="${OPENROUTER_API_KEY}"
 
 # ─── Bifrost Configuration ───────────────────────────────────────────────
 BIFROST_AUTH_TOKEN="${BIFROST_AUTH_TOKEN}"
-BIFROST_PORT="${BIFROST_PORT:-4000}"
+BIFROST_PORT="${BIFROST_PORT:-8000}"
 BIFROST_PROVIDERS='[{"provider":"ollama","base_url":"http://ollama:11434"}]'
 
 # ─── Internal Service Ports ───────────────────────────────────────────────

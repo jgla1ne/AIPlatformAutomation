@@ -338,105 +338,33 @@ EOF
 }
 
 generate_caddyfile() {
-    local out="${CONFIG_DIR}/caddy/Caddyfile"
-    mkdir -p "$(dirname "$out")"
-    
-    local base_domain="${DOMAIN:-datasquiz.net}"
-    local admin_email="${ADMIN_EMAIL:-admin@${base_domain}}"
-    
-    # Choose TLS directive once based on USE_LETSENCRYPT
-    local tls_line
-    if [[ "${USE_LETSENCRYPT:-false}" == "true" ]]; then
-        tls_line="tls ${admin_email}"
-    else
-        tls_line="tls internal"
-    fi
-    
-    # Write global block with enhanced configuration
-    cat > "$out" <<EOF
+    cat << EOF > /mnt/data/${TENANT_ID}/configs/caddy/Caddyfile
 {
     admin 0.0.0.0:2019
-    email ${admin_email}
-    
-    # Global TLS settings
-    servers {
-        trusted_proxies static private_ranges
-    }
+    email ${ADMIN_EMAIL}
 }
-EOF
 
-    # Helper function to add service block with proper headers
-    add_service_block() {
-        local output_file="$1"
-        local subdomain="$2"
-        local service="$3" 
-        local port="$4"
-        local extra_headers="${5:-}"  # Default to empty string if not provided
-        local tls_line="$6"
-        local base_domain="$7"
-        
-        cat >> "$output_file" <<EOF
-https://${subdomain}.${base_domain} {
-    ${tls_line}
-    reverse_proxy ${service}:${port} {
+https://router.${DOMAIN} {
+    reverse_proxy bifrost:8000 {
         header_up Host {http.reverse_proxy.upstream.hostport}
         header_up X-Real-IP {http.request.remote_host}
         header_up X-Forwarded-For {http.request.remote_addr}
         header_up X-Forwarded-Proto https
-        ${extra_headers}
+    }
+}
+
+https://chat.${DOMAIN} {
+    reverse_proxy open-webui:8080 {
+        header_up Host {http.reverse_proxy.upstream.hostport}
+        header_up X-Real-IP {http.request.remote_host}
+        header_up X-Forwarded-For {http.request.remote_addr}
+        header_up X-Forwarded-Proto https
+        header_up Upgrade {http.request.header.Upgrade}
+        header_up Connection {http.request.header.Connection}
     }
 }
 EOF
-    }
-
-    # Add Bifrost LLM Router routing (always enabled when using Bifrost)
-    [[ "${LLM_ROUTER:-bifrost}" == "bifrost" ]] && {
-        local bifrost_headers=""
-        add_service_block "$out" "bifrost" "${LLM_ROUTER_CONTAINER}" "${LLM_ROUTER_PORT:-4000}" "$bifrost_headers" "$tls_line" "$base_domain"
-    }
-    
-    # Add service blocks with proper configuration
-    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && {
-        local webui_headers="header_up Upgrade {http.request.header.Upgrade}
-        header_up Connection {http.request.header.Connection}
-        transport http {
-            read_timeout 86400s
-            write_timeout 86400s
-        }"
-        add_service_block "$out" "chat" "open-webui" "8080" "$webui_headers" "$tls_line" "$base_domain"
-    }
-    
-    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && \
-        add_service_block "$out" "anythingllm" "anythingllm" "3001" "" "$tls_line" "$base_domain"
-    
-    [[ "${ENABLE_N8N:-false}" == "true" ]] && \
-        add_service_block "$out" "n8n" "n8n" "5678" "" "$tls_line" "$base_domain"
-    
-    [[ "${ENABLE_FLOWISE:-false}" == "true" ]] && \
-        add_service_block "$out" "flowise" "flowise" "3000" "" "$tls_line" "$base_domain"
-    
-    [[ "${ENABLE_CODESERVER:-false}" == "true" ]] && {
-        # Primary IDE access
-        add_service_block "$out" "opencode" "codeserver" "8444" "" "$tls_line" "$base_domain"
-        # Legacy codeserver subdomain
-        add_service_block "$out" "codeserver" "codeserver" "8444" "" "$tls_line" "$base_domain"
-    }
-    
-    [[ "${ENABLE_OPENCLAW:-false}" == "true" ]] && \
-        add_service_block "$out" "openclaw" "openclaw" "18789" "" "$tls_line" "$base_domain"
-    
-    # Monitoring services
-    [[ "${ENABLE_MONITORING:-false}" == "true" ]] && {
-        add_service_block "$out" "grafana" "grafana" "3000" "" "$tls_line" "$base_domain"
-        add_service_block "$out" "prometheus" "prometheus" "9090" "" "$tls_line" "$base_domain"
-    }
-    
-    # Signal API
-    [[ "${ENABLE_SIGNAL:-false}" == "true" ]] && {
-        local signal_headers="header_up Upgrade {http.request.header.Upgrade}
-            header_up Connection {http.request.header.Connection}"
-        add_service_block "$out" "signal" "signal-api" "8080" "$signal_headers" "$tls_line" "$base_domain"
-    }
+}
     
     log_success "Caddyfile written to ${out} with separate server blocks"
 }

@@ -94,7 +94,7 @@ main() {
         fi
         
         # Legacy cleanup for any remaining hardcoded names
-        docker rm -f litellm bifrost caddy 2>/dev/null || true
+        docker rm -f litellm 2>/dev/null || true
     }
     
     cleanup_containers
