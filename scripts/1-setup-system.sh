@@ -1262,11 +1262,11 @@ init_bifrost() {
     log "INFO" "Initializing Bifrost LLM gateway..."
     mkdir -p "${CONFIG_DIR}/bifrost"
 
-    [[ -z "${LLM_MASTER_KEY}" ]] && { log "ERROR" "LLM_MASTER_KEY empty"; return 1; }
+    [[ -z "${BIFROST_AUTH_TOKEN}" ]] && { log "ERROR" "BIFROST_AUTH_TOKEN empty"; return 1; }
     [[ -z "${OLLAMA_CONTAINER}" ]] && { log "ERROR" "OLLAMA_CONTAINER empty"; return 1; }
 
     # Validate no special chars that break YAML
-    local key="${LLM_MASTER_KEY}"
+    local key="${BIFROST_AUTH_TOKEN}"
     local ollama_url="http://${OLLAMA_CONTAINER}:${OLLAMA_PORT:-11434}"
 
     # Write using python3 to guarantee valid YAML — no sed, no heredoc, no printf issues
@@ -3353,6 +3353,14 @@ main() {
     configure_databases      # Step 7.5 - Database configuration
     collect_llm_config       # Step 8
     configure_llm_router      # Step 8.2 - LLM router configuration (Modular choice)
+    
+    # Generate router-specific secrets BEFORE initialization
+    if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
+        load_or_generate_secret "BIFROST_AUTH_TOKEN"
+    elif [[ "${LLM_ROUTER}" == "litellm" ]]; then
+        load_or_generate_secret "LITELLM_MASTER_KEY"
+    fi
+    
     # Initialize router-specific configuration
     if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
         init_bifrost
@@ -3369,17 +3377,6 @@ main() {
     log "INFO" "Verifying and generating all application secrets..."
     load_or_generate_secret "N8N_ENCRYPTION_KEY"
     load_or_generate_secret "FLOWISE_SECRET_KEY"
-    
-    # Generate router-specific secrets
-    if [[ "${LLM_ROUTER}" == "bifrost" ]]; then
-        # Bifrost auth token already generated in init_bifrost()
-        # Just ensure it's loaded for consistency
-        load_or_generate_secret "BIFROST_AUTH_TOKEN"
-    elif [[ "${LLM_ROUTER}" == "litellm" ]]; then
-        # LiteLLM master key already generated in init_litellm()
-        # Just ensure it's loaded for consistency
-        load_or_generate_secret "LITELLM_MASTER_KEY"
-    fi
     
     load_or_generate_secret "ANYTHINGLLM_JWT_SECRET"
     load_or_generate_secret "JWT_SECRET"
