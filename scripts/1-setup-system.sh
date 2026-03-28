@@ -579,11 +579,13 @@ load_or_generate_secret() {
     eval "current_value=\$$var_name"
     if [[ -z "$current_value" ]]; then
         # If not, generate a new one
-        eval "$var_name=$(openssl rand -hex 32)"
+        eval "$var_name=\$(openssl rand -hex 32)"
         log "INFO" "Generated new secret for ${var_name}."
     else
         log "INFO" "Loaded existing secret for ${var_name}."
     fi
+    # Export the variable globally so it's available after function returns
+    export "$var_name"
 }
 
 # ─── Utility Functions ─────────────────────────────────────────────────────
