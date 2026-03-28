@@ -97,8 +97,8 @@ main() {
         docker rm -f litellm 2>/dev/null || true
         
         # Explicit cleanup for new containers (CLAUDE.md Fix 4)
-        docker rm -f ai-${TENANT}-bifrost-1 2>/dev/null || true
-        docker rm -f ${COMPOSE_PROJECT_NAME}_mem0 2>/dev/null || true
+        docker rm -f ${LLM_GATEWAY_CONTAINER} 2>/dev/null || true
+        docker rm -f ${MEM0_CONTAINER} 2>/dev/null || true
     }
     
     cleanup_containers

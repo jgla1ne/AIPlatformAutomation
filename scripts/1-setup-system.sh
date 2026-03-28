@@ -1265,99 +1265,88 @@ collect_llm_config() {
 
 # ─── Bifrost Configuration ─────────────────────────────────────────────────────
 init_bifrost() {
-    log "INFO" "Initializing Bifrost LLM gateway config..."
+    log "INFO" "Initializing Bifrost LLM gateway configuration..."
     
     local config_dir="${CONFIG_DIR}/bifrost"
     mkdir -p "${config_dir}"
+    chown "${CURRENT_USER}:${CURRENT_USER}" "${config_dir}"
     
-    # Validate required variables before writing anything
-    [[ -z "${LLM_MASTER_KEY}" ]] && {
-        log "ERROR" "LLM_MASTER_KEY is empty — cannot write Bifrost config"
-        return 1
-    }
-    [[ -z "${OLLAMA_CONTAINER}" ]] && {
-        log "ERROR" "OLLAMA_CONTAINER is empty — cannot write Bifrost config"  
-        return 1
-    }
+    # Validate required vars exist and are non-empty
+    local required_vars=(LLM_MASTER_KEY OLLAMA_CONTAINER OLLAMA_PORT BIFROST_PORT)
+    for var in "${required_vars[@]}"; do
+        [[ -z "${!var:-}" ]] && {
+            log "ERROR" "Required variable ${var} is empty — cannot write Bifrost config"
+            return 1
+        }
+    done
     
-    # Use python3 to write YAML — guarantees valid output regardless of 
-    # special characters in LLM_MASTER_KEY or other variables
-    # This replaces all sed/heredoc approaches which fail on special chars
-    python3 << PYEOF
-import yaml
-import sys
-import os
+    # Write config using python3 with correct Bifrost schema
+    # Schema source: https://github.com/maximhq/bifrost/blob/main/config/config.yaml
+    python3 -c "
+import yaml, os, sys
+
+key = os.environ['LLM_MASTER_KEY']
+container = os.environ['OLLAMA_CONTAINER']
+port = os.environ['OLLAMA_PORT']
+bifrost_port = int(os.environ['BIFROST_PORT'])
 
 config = {
-    "accounts": [
+    'server': {
+        'port': bifrost_port,
+        'read_timeout': 300,
+        'write_timeout': 300,
+        'max_idle_conns': 100
+    },
+    'accounts': [
         {
-            "name": "primary",
-            "keys": [
+            'name': 'primary',
+            'secret_key': key,
+            'providers': [
                 {
-                    "value": os.environ["LLM_MASTER_KEY"],
-                    "name": "master"
+                    'name': 'ollama',
+                    'base_url': 'http://{}:{}'.format(container, port)
                 }
             ],
-            "providers": [
+            'models': [
                 {
-                    "name": "ollama",
-                    "base_url": "http://{}:{}".format(
-                        os.environ["OLLAMA_CONTAINER"],
-                        os.environ.get("OLLAMA_PORT", "11434")
-                    )
+                    'provider': 'ollama',
+                    'allowed': ['*']
                 }
-            ],
-            "models": {
-                "ollama": ["*"]
-            }
+            ]
         }
     ],
-    "server": {
-        "port": int(os.environ.get("BIFROST_PORT", "8082")),
-        "read_timeout": 300,
-        "write_timeout": 300
-    },
-    "logging": {
-        "level": "info"
+    'logging': {
+        'level': 'info',
+        'format': 'json'
     }
 }
 
-config_path = "{}/config.yaml".format(os.environ["CONFIG_DIR"] + "/bifrost")
-with open(config_path, "w") as f:
+out = '${config_dir}/config.yaml'
+with open(out, 'w') as f:
     yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
-print("Bifrost config written to: " + config_path)
+# Verify round-trip
+with open(out) as f:
+    v = yaml.safe_load(f)
 
-# Verify it reads back correctly
-with open(config_path, "r") as f:
-    verify = yaml.safe_load(f)
-
-assert verify["accounts"][0]["keys"][0]["value"] == os.environ["LLM_MASTER_KEY"], \
-    "Key verification failed — written key does not match"
-print("Key verification passed")
-PYEOF
-    
-    local rc=$?
-    [[ ${rc} -ne 0 ]] && {
-        log "ERROR" "python3 config write failed with exit code ${rc}"
+assert v['accounts'][0]['secret_key'] == key, 'KEY MISMATCH after write'
+assert v['accounts'][0]['providers'][0]['base_url'] == 'http://{}:{}'.format(container, port), 'URL MISMATCH'
+print('Bifrost config verified OK')
+sys.exit(0)
+" || {
+        log "ERROR" "Bifrost config write/verify failed"
         return 1
     }
     
-    [[ ! -s "${config_dir}/config.yaml" ]] && {
-        log "ERROR" "Config file empty after write"
-        return 1
-    }
-    
-    # Log the config (mask the key)
-    log "INFO" "Bifrost config written:"
-    sed "s/${LLM_MASTER_KEY}/[MASKED]/g" "${config_dir}/config.yaml" | \
-        while IFS= read -r line; do log "INFO" "  ${line}"; done
-    
-    chown "${CURRENT_USER}:${CURRENT_USER}" "${config_dir}/config.yaml" 2>/dev/null || true
     chmod 640 "${config_dir}/config.yaml"
+    chown "${CURRENT_USER}:${CURRENT_USER}" "${config_dir}/config.yaml"
     
     update_env "BIFROST_CONFIG_FILE" "${config_dir}/config.yaml"
-    log "SUCCESS" "Bifrost config initialized and verified"
+    
+    log "SUCCESS" "Bifrost config written and verified: ${config_dir}/config.yaml"
+    # Log config with key masked for debugging
+    sed "s/${LLM_MASTER_KEY}/[MASKED]/g" "${config_dir}/config.yaml" | \
+        while IFS= read -r line; do log "DEBUG" "  ${line}"; done
 }
 
 # ─── LiteLLM Configuration ─────────────────────────────────────────────────────
@@ -1367,56 +1356,108 @@ pull_ollama_models() {
     log "INFO" "Pulling required Ollama models..."
     
     local ollama_url="http://localhost:${OLLAMA_PORT:-11434}"
-    local -a models=("llama3.2" "nomic-embed-text")
+    # Both models required: llama3.2 for chat, nomic-embed-text for Mem0 embeddings
+    local -a required_models=("llama3.2" "nomic-embed-text")
     
-    # Wait for Ollama to be ready
+    # Step 1: Wait for Ollama API to be responsive — no timeout bypass
+    log "INFO" "Waiting for Ollama API..."
     local elapsed=0
-    while ! curl -sf "${ollama_url}/api/tags" > /dev/null 2>&1; do
-        [[ ${elapsed} -ge 120 ]] && {
-            log "ERROR" "Ollama not responding after ${elapsed}s"
+    local max_wait=180
+    until curl -sf --max-time 5 "${ollama_url}/api/tags" > /dev/null 2>&1; do
+        [[ ${elapsed} -ge ${max_wait} ]] && {
+            log "ERROR" "Ollama API not responsive after ${max_wait}s"
+            docker logs "${OLLAMA_CONTAINER}" --tail 20 2>&1 | \
+                while IFS= read -r l; do log "LOG" "  ${l}"; done
             return 1
         }
-        sleep 5; elapsed=$((elapsed+5))
-        log "INFO" "Waiting for Ollama... ${elapsed}s"
+        sleep 5
+        elapsed=$((elapsed + 5))
+        log "INFO" "  Ollama not ready yet... ${elapsed}/${max_wait}s"
     done
-    log "SUCCESS" "Ollama API responsive"
+    log "SUCCESS" "Ollama API responsive after ${elapsed}s"
     
-    for model in "${models[@]}"; do
+    # Step 2: Pull each model, verify after each pull
+    for model in "${required_models[@]}"; do
         # Check if already present
         if curl -sf "${ollama_url}/api/tags" | \
-           python3 -c "import sys,json; models=[m['name'] for m in json.load(sys.stdin)['models']]; exit(0 if any('${model}' in m for m in models) else 1)" \
-           2>/dev/null; then
-            log "SUCCESS" "Model ${model} already present — skipping pull"
+           python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+names = [m['name'] for m in data.get('models', [])]
+exit(0 if any('${model}' in n for n in names) else 1)
+" 2>/dev/null; then
+            log "SUCCESS" "Model '${model}' already present — skipping pull"
             continue
         fi
         
-        log "INFO" "Pulling ${model} — this may take several minutes..."
+        log "INFO" "Pulling '${model}' — this may take several minutes..."
         
-        # Stream pull and show progress
+        # Pull with streaming progress and 30-minute timeout
+        local pull_exit=0
+        curl -sf -X POST "${ollama_url}/api/pull" \
+            -H "Content-Type: application/json" \
+            -d "{\"name\": \"${model}\", \"stream\": true}" \
+            --max-time 1800 \
+            --no-buffer 2>&1 | \
         while IFS= read -r line; do
             local status
-            status=$(echo "${line}" | python3 -c \
-                "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('status',''))" \
-                2>/dev/null || echo "")
+            status=$(echo "${line}" | \
+                python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('status',''))" \
+                2>/dev/null || true)
             [[ -n "${status}" ]] && log "INFO" "  ${model}: ${status}"
-        done < <(curl -sf -X POST "${ollama_url}/api/pull" \
-            -H "Content-Type: application/json" \
-            -d "{\"name\": \"${model}\"}" \
-            --max-time 1800 \
-            --no-buffer 2>&1)
+        done || pull_exit=$?
         
-        # Verify pull succeeded
+        # Always verify by checking tags — do not trust exit code alone
         if curl -sf "${ollama_url}/api/tags" | \
-           python3 -c "import sys,json; models=[m['name'] for m in json.load(sys.stdin)['models']]; exit(0 if any('${model}' in m for m in models) else 1)" \
-           2>/dev/null; then
-            log "SUCCESS" "Model ${model} pulled and verified"
+           python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+names = [m['name'] for m in data.get('models', [])]
+exit(0 if any('${model}' in n for n in names) else 1)
+" 2>/dev/null; then
+            log "SUCCESS" "Model '${model}' pull verified via /api/tags"
         else
-            log "ERROR" "Model ${model} pull FAILED — not present after pull attempt"
+            log "ERROR" "Model '${model}' NOT present after pull attempt — FATAL"
+            log "ERROR" "Mem0 requires nomic-embed-text and chat requires llama3.2"
             return 1
         fi
     done
     
-    log "SUCCESS" "All required models available"
+    log "SUCCESS" "All required Ollama models available"
+    
+    # Final model inventory
+    log "INFO" "Available models:"
+    curl -sf "${ollama_url}/api/tags" | \
+        python3 -c "
+import sys, json
+for m in json.load(sys.stdin).get('models', []):
+    print('  - ' + m['name'])
+" 2>/dev/null | while IFS= read -r l; do log "INFO" "${l}"; done
+}
+
+# ─── N8N Encryption Key Persistence ───────────────────────────────────────────
+init_n8n_encryption_key() {
+    log "INFO" "Initializing n8n encryption key..."
+    
+    # CRITICAL: Read existing key from .env before generating new one
+    # If we regenerate, all stored credentials become permanently corrupt
+    if [[ -f "${ENV_FILE}" ]]; then
+        local existing_key
+        existing_key=$(grep "^N8N_ENCRYPTION_KEY=" "${ENV_FILE}" 2>/dev/null | \
+            cut -d= -f2- | tr -d '"' | tr -d "'")
+        
+        if [[ -n "${existing_key}" && ${#existing_key} -ge 32 ]]; then
+            export N8N_ENCRYPTION_KEY="${existing_key}"
+            log "SUCCESS" "Using existing N8N_ENCRYPTION_KEY from ${ENV_FILE}"
+            return 0
+        fi
+    fi
+    
+    # Generate new key only if none exists
+    export N8N_ENCRYPTION_KEY
+    N8N_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+    update_env "N8N_ENCRYPTION_KEY" "${N8N_ENCRYPTION_KEY}"
+    log "SUCCESS" "Generated and persisted new N8N_ENCRYPTION_KEY"
 }
 
 # ─── Mem0 Configuration ─────────────────────────────────────────────────────
@@ -3506,7 +3547,7 @@ main() {
     generate_secrets         # Step 11
     
     log "INFO" "Verifying and generating all application secrets..."
-    load_or_generate_secret "N8N_ENCRYPTION_KEY"
+    init_n8n_encryption_key
     load_or_generate_secret "FLOWISE_SECRET_KEY"
     
     load_or_generate_secret "ANYTHINGLLM_JWT_SECRET"
@@ -3668,7 +3709,7 @@ main() {
     generate_secrets         # Step 11
     
     log "INFO" "Verifying and generating all application secrets..."
-    load_or_generate_secret "N8N_ENCRYPTION_KEY"
+    init_n8n_encryption_key
     load_or_generate_secret "FLOWISE_SECRET_KEY"
     
     load_or_generate_secret "ANYTHINGLLM_JWT_SECRET"
@@ -3727,7 +3768,7 @@ main() {
     generate_secrets         # Step 11
     
     log "INFO" "Verifying and generating all application secrets..."
-    load_or_generate_secret "N8N_ENCRYPTION_KEY"
+    init_n8n_encryption_key
     load_or_generate_secret "FLOWISE_SECRET_KEY"
     
     load_or_generate_secret "ANYTHINGLLM_JWT_SECRET"

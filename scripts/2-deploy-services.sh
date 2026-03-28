@@ -215,29 +215,33 @@ services:
       - "ai-platform.tenant=${TENANT}"
 
   bifrost:
-    image: maximhq/bifrost:latest
-    container_name: ai-${TENANT_ID}-bifrost-1
+    image: ghcr.io/maximhq/bifrost:latest
+    container_name: ${LLM_GATEWAY_CONTAINER}
     restart: unless-stopped
     user: "${TENANT_UID:-1000}:${TENANT_GID:-1000}"
     ports:
-      - "${BIFROST_PORT:-8000}:8000"
+      - "${BIFROST_PORT:-8000}:${BIFROST_PORT:-8000}"
     volumes:
-      - /mnt/data/${TENANT_ID}/configs/bifrost:/app/config
-      - /mnt/data/${TENANT_ID}/data/bifrost:/app/data
+      - ${CONFIG_DIR}/bifrost/config.yaml:/config/config.yaml:ro
     environment:
       - CONFIG_FILE_PATH=/config/config.yaml
       - PORT=${BIFROST_PORT:-8000}
     networks:
-      - default
+      - ${DOCKER_NETWORK}
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:${BIFROST_PORT:-8000}/healthz || exit 1"]
+      test: ["CMD", "curl", "-sf", "http://localhost:${BIFROST_PORT:-8000}/healthz"]
       interval: 15s
       timeout: 10s
-      retries: 8
+      retries: 5
       start_period: 30s
+    depends_on:
+      ${OLLAMA_CONTAINER}:
+        condition: service_healthy
+      ${MEM0_CONTAINER}:
+        condition: service_healthy
     labels:
-      - "ai-platform.service=bifrost"
-      - "ai-platform.tenant=${TENANT}"
+      - "ai-platform.service=llm-gateway"
+      - "ai-platform.tenant=shared"
 
   mem0:
     image: python:3.11-slim
