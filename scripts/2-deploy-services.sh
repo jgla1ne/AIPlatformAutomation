@@ -225,10 +225,16 @@ services:
       - /mnt/data/${TENANT_ID}/configs/bifrost:/app/config
       - /mnt/data/${TENANT_ID}/data/bifrost:/app/data
     environment:
-      - BIFROST_HOST=0.0.0.0
-      - BIFROST_PORT=8000
+      - CONFIG_FILE_PATH=/config/config.yaml
+      - PORT=${BIFROST_PORT:-8000}
     networks:
       - default
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:${BIFROST_PORT:-8000}/healthz || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 30s
     labels:
       - "ai-platform.service=bifrost"
       - "ai-platform.tenant=${TENANT}"
