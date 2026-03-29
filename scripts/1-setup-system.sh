@@ -626,12 +626,6 @@ main() {
     detect_system
     check_prerequisites
     collect_configuration
-    write_env_file
-    validate_env
-    print_summary
-    
-    echo ""
-    echo "  ┌─────────────────────────────────────────────┐"
     echo "  │  Configuration saved to .env                │"
     echo "  │                                             │"
     echo "  │  Next: System setup via Mission Control     │"
@@ -640,13 +634,12 @@ main() {
     echo "  │    • Configure Docker daemon                │"
     echo "  │    • Create /mnt directory structure        │"
     echo "  │    • Generate service configuration files  │"
-    echo "  └─────────────────────────────────────────────┘"
+    echo "  └─────────────────────────────────────┘"
     echo ""
     
     prompt_yesno RUN_SETUP_NOW \
         "Run system setup now?" \
         "Y"
-    
     if [[ "${RUN_SETUP_NOW}" == "true" ]]; then
         echo ""
         echo "  Invoking Mission Control (setup mode)..."
