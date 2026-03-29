@@ -33,6 +33,23 @@ wait_for_healthy() {
     
     log "Waiting for ${container} to be healthy (max ${max_wait}s)..."
     
+    # Special case for Ollama - check API directly
+    if [[ "$container" == *"ollama"* ]]; then
+        while [ $elapsed -lt $max_wait ]; do
+            if docker exec "$container" sh -c "exec 3<>/dev/tcp/localhost/11434" 2>/dev/null; then
+                ok "${container} healthy after ${elapsed}s"
+                return 0
+            fi
+            sleep 5
+            elapsed=$((elapsed + 5))
+            echo "⏳ ${container}: checking API (${elapsed}/${max_wait}s)"
+        done
+        fail "Timeout: ${container} not healthy after ${max_wait}s"
+        docker logs "$container" --tail 30
+        return 1
+    fi
+    
+    # Standard healthcheck for other containers
     while [ $elapsed -lt $max_wait ]; do
         status=$(docker inspect --format='{{.State.Health.Status}}' "$container" 2>/dev/null || echo "starting")
         case "$status" in
