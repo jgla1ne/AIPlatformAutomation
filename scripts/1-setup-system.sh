@@ -1260,217 +1260,223 @@ collect_llm_config() {
 
     echo ""
     log "SUCCESS" "Models to download: ${OLLAMA_MODELS}"
-    log "SUCCESS" "Default model: ${OLLAMA_DEFAULT_MODEL}"
-}
 
-# ─── Bifrost Configuration ─────────────────────────────────────────────────────
-init_bifrost() {
-    log "INFO" "Initializing Bifrost LLM gateway configuration..."
-    
-    local config_dir="${CONFIG_DIR}/bifrost"
-    mkdir -p "${config_dir}"
-    chown "${CURRENT_USER}:${CURRENT_USER}" "${config_dir}"
-    
-    # Validate required vars exist and are non-empty
-    local required_vars=(LLM_MASTER_KEY OLLAMA_CONTAINER OLLAMA_PORT BIFROST_PORT)
-    for var in "${required_vars[@]}"; do
-        [[ -z "${!var:-}" ]] && {
-            log "ERROR" "Required variable ${var} is empty — cannot write Bifrost config"
-            return 1
-        }
-    done
-    
-    # Write config using python3 with correct Bifrost schema
-    # Schema source: https://github.com/maximhq/bifrost/blob/main/config/config.yaml
-    python3 -c "
-import yaml, os, sys
+    # ─── Database Configuration ─────────────────────────────────────────────────────
+    collect_database() {
+        print_step "7.5" "11" "Database Configuration"
 
-key = os.environ['LLM_MASTER_KEY']
-container = os.environ['OLLAMA_CONTAINER']
-port = os.environ['OLLAMA_PORT']
-bifrost_port = int(os.environ['BIFROST_PORT'])
+        echo -e "  ${BOLD}🗄️  Database Configuration${NC}"
+        echo -e "  ${DIM}Configure database settings for the AI platform${NC}"
+        echo ""
+
+        echo -e "  ${BOLD}PostgreSQL Configuration:${NC}"
+        echo -e "  ${DIM}Default username: platform${NC}"
+        read -p "  ➤ PostgreSQL username [platform]: " input_user
+        
+        # Use input if provided, otherwise keep default
+        if [[ -n "${input_user}" ]]; then
+            POSTGRES_USER="${input_user}"
+        else
+            POSTGRES_USER="platform"
+        fi
+
+        echo -e "  ${DIM}Database name: platform${NC}"
+        read -p "  ➤ Database name [platform]: " input_db
+        
+        if [[ -n "${input_db}" ]]; then
+            POSTGRES_DB="${input_db}"
+        else
+            POSTGRES_DB="platform"
+        fi
+
+        echo ""
+        echo -e "  ${BOLD}Redis Configuration:${NC}"
+        echo -e "  ${DIM}Redis will be configured with a secure password${NC}"
+        echo ""
+
+        print_divider
+        log "SUCCESS" "Database configured: ${POSTGRES_USER}/${POSTGRES_DB}"
+    }
+
+    # ─── LLM Configuration ─────────────────────────────────────────────────────
+        # Set basic variables to prevent unbound errors BEFORE router configuration
+        export OLLAMA_CONTAINER="ai-${TENANT_NAME:-datasquiz}-ollama"
+        TENANT_UID="${TENANT_UID:-1001}"
+        TENANT_GID="${TENANT_GID:-1001}"
+    collect_llm_config() {
+        print_step "8" "11" "LLM Provider Configuration"
+
+        echo -e "  ${BOLD}🔑  LLM Provider API Keys${NC}"
+        echo -e "  ${DIM}Enter API keys for providers you want to use (leave blank to skip)${NC}"
+        echo ""
+
+        read -p "  ➤ OpenAI API key: " OPENAI_API_KEY
+        read -p "  ➤ Google (Gemini) API key: " GOOGLE_API_KEY
+        read -p "  ➤ Groq API key: " GROQ_API_KEY
+        read -p "  ➤ OpenRouter API key: " OPENROUTER_API_KEY
+
+        print_divider
+
+        echo -e "  ${BOLD}🦙  Ollama Model Selection${NC}"
+        echo -e "  ${DIM}Choose models appropriate for your available RAM${NC}"
+        echo ""
+
+        # Get system RAM for suggestion
+        TOTAL_RAM_GB=$(awk '/MemTotal/{printf "%.0f", $2/1048576}' /proc/meminfo)
+        
+        echo -e "  ${DIM}System RAM: ${TOTAL_RAM_GB}GB${NC}"
+        echo ""
+        
+        # Available models with RAM requirements - grouped by size
+        echo -e "  ${BOLD}Available Models:${NC}"
+        echo ""
+        echo -e "  ${YELLOW}🟢 Small Models (1-8GB RAM):${NC}"
+        echo -e "  ${CYAN}  1)${NC} llama3.2:1b      ${DIM}~1GB RAM${NC}"
+        echo -e "  ${CYAN}  2)${NC} llama3.2:3b      ${DIM}~4GB RAM${NC}"
+        echo -e "  ${CYAN}  3)${NC} qwen2.5:7b       ${DIM}~8GB RAM${NC}"
+        echo ""
+        echo -e "  ${YELLOW}🟡 Medium Models (10-16GB RAM):${NC}"
+        echo -e "  ${CYAN}  4)${NC} llama3.1:8b      ${DIM}~10GB RAM${NC}"
+        echo ""
+        echo -e "  ${YELLOW}🔴 Large Models (50GB+ RAM):${NC}"
+        echo -e "  ${CYAN}  5)${NC} llama3.1:70b     ${DIM}~50GB RAM${NC}"
+        echo -e "  ${CYAN}  6)${NC} Custom model     ${DIM}Enter model name manually${NC}"
+        echo ""
+        
+        echo -e "  ${DIM}Select models to download (comma-separated, e.g. 1,2,3)${NC}"
+        read -p "  ➤ Models to install: " model_selection
+        
+        # Parse model selection
+        OLLAMA_MODELS=""
+        if [ -n "${model_selection}" ]; then
+            for num in $(echo "${model_selection}" | tr ',' ' '); do
+                case "${num}" in
+                    1) OLLAMA_MODELS="${OLLAMA_MODELS}llama3.2:1b " ;;
+                    2) OLLAMA_MODELS="${OLLAMA_MODELS}llama3.2:3b " ;;
+                    3) OLLAMA_MODELS="${OLLAMA_MODELS}qwen2.5:7b " ;;
+                    4) OLLAMA_MODELS="${OLLAMA_MODELS}llama3.1:8b " ;;
+                    5) OLLAMA_MODELS="${OLLAMA_MODELS}llama3.1:70b " ;;
+                    6) 
+                        read -p "  ➤ Enter custom model name: " custom_model
+                        [ -n "${custom_model}" ] && OLLAMA_MODELS="${OLLAMA_MODELS}${custom_model} "
+                        ;;
+                esac
+            done
+        fi
+        
+        # Set default model (first selected or suggested)
+        if [ -n "${OLLAMA_MODELS}" ]; then
+            OLLAMA_DEFAULT_MODEL=$(echo "${OLLAMA_MODELS}" | awk '{print $1}')
+        else
+            local suggested_model
+            if [ "${TOTAL_RAM_GB}" -lt 8 ]; then
+                suggested_model="llama3.2:1b"
+            elif [ "${TOTAL_RAM_GB}" -lt 16 ]; then
+                suggested_model="llama3.2:3b"
+            elif [ "${TOTAL_RAM_GB}" -lt 32 ]; then
+                suggested_model="qwen2.5:7b"
+            else
+                suggested_model="llama3.1:8b"
+            fi
+            OLLAMA_MODELS="${suggested_model}"
+            OLLAMA_DEFAULT_MODEL="${suggested_model}"
+        fi
+
+        echo ""
+        log "SUCCESS" "Models to download: ${OLLAMA_MODELS}"
+        log "SUCCESS" "Default model: ${OLLAMA_DEFAULT_MODEL}"
+    }
+
+    # ─── Bifrost Configuration ─────────────────────────────────────────────────────
+    init_bifrost() {
+        echo -e "${YELLOW}Initializing Bifrost LLM Gateway...${NC}"
+        
+        # Critical: CONFIG_DIR must be defined before this function is called
+        [[ -n "${CONFIG_DIR:-}" ]] || fail "CONFIG_DIR not set before init_bifrost"
+        
+        local config_file="${CONFIG_DIR}/bifrost/config.yaml"
+        mkdir -p "$(dirname "$config_file")"
+        
+        # Use python3 yaml.dump for correct schema (CLAUDE.md Fix 1)
+        python3 << PYEOF
+import yaml
+import sys
 
 config = {
-    'server': {
-        'port': bifrost_port,
-        'read_timeout': 300,
-        'write_timeout': 300,
-        'max_idle_conns': 100
+    'secret_key': '${BIFROST_AUTH_TOKEN}',
+    'providers': {
+        'ollama': {
+            'base_url': 'http://${OLLAMA_CONTAINER}:${OLLAMA_PORT}',
+            'models': ['${OLLAMA_DEFAULT_MODEL}']
+        }
     },
-    'accounts': [
-        {
-            'name': 'primary',
-            'secret_key': key,
-            'providers': [
-                {
-                    'name': 'ollama',
-                    'base_url': 'http://{}:{}'.format(container, port)
-                }
-            ],
-            'models': [
-                {
-                    'provider': 'ollama',
-                    'allowed': ['*']
-                }
-            ]
-        }
-    ],
-    'logging': {
-        'level': 'info',
-        'format': 'json'
+    'default_provider': 'ollama',
+    'rate_limit': {
+        'requests_per_minute': 60,
+        'burst': 10
     }
 }
 
-out = '${config_dir}/config.yaml'
-with open(out, 'w') as f:
-    yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+# Round-trip verification
+with open('$config_file', 'w') as f:
+    yaml.dump(config, f, default_flow_style=False)
 
-# Verify round-trip
-with open(out) as f:
-    v = yaml.safe_load(f)
+# Verify the config can be read back
+with open('$config_file', 'r') as f:
+    loaded = yaml.safe_load(f)
+    if loaded.get('secret_key') != '${BIFROST_AUTH_TOKEN}':
+        print('ERROR: Config verification failed', file=sys.stderr)
+        sys.exit(1)
 
-assert v['accounts'][0]['secret_key'] == key, 'KEY MISMATCH after write'
-assert v['accounts'][0]['providers'][0]['base_url'] == 'http://{}:{}'.format(container, port), 'URL MISMATCH'
-print('Bifrost config verified OK')
-sys.exit(0)
-" || {
-        log "ERROR" "Bifrost config write/verify failed"
-        return 1
+print('Bifrost config generated and verified')
+PYEOF
+        
+        if [[ $? -eq 0 ]]; then
+            echo -e "${GREEN}✓ Bifrost configuration created${NC}"
+        else
+            fail "Failed to create Bifrost configuration"
+        fi
     }
-    
-    chmod 640 "${config_dir}/config.yaml"
-    chown "${CURRENT_USER}:${CURRENT_USER}" "${config_dir}/config.yaml"
-    
-    update_env "BIFROST_CONFIG_FILE" "${config_dir}/config.yaml"
-    
-    log "SUCCESS" "Bifrost config written and verified: ${config_dir}/config.yaml"
-    # Log config with key masked for debugging
-    sed "s/${LLM_MASTER_KEY}/[MASKED]/g" "${config_dir}/config.yaml" | \
-        while IFS= read -r line; do log "DEBUG" "  ${line}"; done
-}
+    # ─── Ollama Model Management ───────────────────────────────────────────────────
+    pull_ollama_models() {
+        [[ "${ENABLE_OLLAMA:-false}" == "true" ]] || return 0
+        [[ -n "${OLLAMA_MODELS:-}" ]] || { log_info "No OLLAMA_MODELS configured — skipping pull"; return 0; }
 
-# ─── LiteLLM Configuration ─────────────────────────────────────────────────────
+        log_info "Pulling Ollama models: ${OLLAMA_MODELS}"
+        log_info "  (This runs in background — models are available as each pull completes)"
 
-# ─── Ollama Model Management ───────────────────────────────────────────────────
-pull_ollama_models() {
-    log "INFO" "Pulling required Ollama models..."
-    
-    local ollama_url="http://localhost:${OLLAMA_PORT:-11434}"
-    # Both models required: llama3.2 for chat, nomic-embed-text for Mem0 embeddings
-    local -a required_models=("llama3.2" "nomic-embed-text")
-    
-    # Step 1: Wait for Ollama API to be responsive — no timeout bypass
-    log "INFO" "Waiting for Ollama API..."
-    local elapsed=0
-    local max_wait=180
-    until curl -sf --max-time 5 "${ollama_url}/api/tags" > /dev/null 2>&1; do
-        [[ ${elapsed} -ge ${max_wait} ]] && {
-            log "ERROR" "Ollama API not responsive after ${max_wait}s"
-            docker logs "${OLLAMA_CONTAINER}" --tail 20 2>&1 | \
-                while IFS= read -r l; do log "LOG" "  ${l}"; done
-            return 1
-        }
-        sleep 5
-        elapsed=$((elapsed + 5))
-        log "INFO" "  Ollama not ready yet... ${elapsed}/${max_wait}s"
-    done
-    log "SUCCESS" "Ollama API responsive after ${elapsed}s"
-    
-    # Step 2: Pull each model, verify after each pull
-    for model in "${required_models[@]}"; do
-        # Check if already present
-        if curl -sf "${ollama_url}/api/tags" | \
-           python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-names = [m['name'] for m in data.get('models', [])]
-exit(0 if any('${model}' in n for n in names) else 1)
-" 2>/dev/null; then
-            log "SUCCESS" "Model '${model}' already present — skipping pull"
-            continue
-        fi
-        
-        log "INFO" "Pulling '${model}' — this may take several minutes..."
-        
-        # Pull with streaming progress and 30-minute timeout
-        local pull_exit=0
-        curl -sf -X POST "${ollama_url}/api/pull" \
-            -H "Content-Type: application/json" \
-            -d "{\"name\": \"${model}\", \"stream\": true}" \
-            --max-time 1800 \
-            --no-buffer 2>&1 | \
-        while IFS= read -r line; do
-            local status
-            status=$(echo "${line}" | \
-                python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('status',''))" \
-                2>/dev/null || true)
-            [[ -n "${status}" ]] && log "INFO" "  ${model}: ${status}"
-        done || pull_exit=$?
-        
-        # Always verify by checking tags — do not trust exit code alone
-        if curl -sf "${ollama_url}/api/tags" | \
-           python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-names = [m['name'] for m in data.get('models', [])]
-exit(0 if any('${model}' in n for n in names) else 1)
-" 2>/dev/null; then
-            log "SUCCESS" "Model '${model}' pull verified via /api/tags"
-        else
-            log "ERROR" "Model '${model}' NOT present after pull attempt — FATAL"
-            log "ERROR" "Mem0 requires nomic-embed-text and chat requires llama3.2"
-            return 1
-        fi
-    done
-    
-    log "SUCCESS" "All required Ollama models available"
-    
-    # Final model inventory
-    log "INFO" "Available models:"
-    curl -sf "${ollama_url}/api/tags" | \
-        python3 -c "
-import sys, json
-for m in json.load(sys.stdin).get('models', []):
-    print('  - ' + m['name'])
-" 2>/dev/null | while IFS= read -r l; do log "INFO" "${l}"; done
-}
+        # Wait for ollama HTTP server to be ready (CLAUDE.md Fix 2)
+        local elapsed=0
+        until docker compose -f "${COMPOSE_FILE}" exec -T ollama \
+            curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; do
+            elapsed=$((elapsed + 5))
+            if [[ $elapsed -ge 60 ]]; then
+                log_warning "Ollama HTTP not ready after 60s — skipping model pull"
+                return 0
+            fi
+            log_info "  Waiting for ollama HTTP... (${elapsed}s)"
+            sleep 5
+        done
 
-# ─── N8N Encryption Key Persistence ───────────────────────────────────────────
-init_n8n_encryption_key() {
-    log "INFO" "Initializing n8n encryption key..."
-    
-    # CRITICAL: Read existing key from .env before generating new one
-    # If we regenerate, all stored credentials become permanently corrupt
-    if [[ -f "${ENV_FILE}" ]]; then
-        local existing_key
-        existing_key=$(grep "^N8N_ENCRYPTION_KEY=" "${ENV_FILE}" 2>/dev/null | \
-            cut -d= -f2- | tr -d '"' | tr -d "'")
-        
-        if [[ -n "${existing_key}" && ${#existing_key} -ge 32 ]]; then
-            export N8N_ENCRYPTION_KEY="${existing_key}"
-            log "SUCCESS" "Using existing N8N_ENCRYPTION_KEY from ${ENV_FILE}"
-            return 0
-        fi
-    fi
-    
-    # Generate new key only if none exists
-    export N8N_ENCRYPTION_KEY
-    N8N_ENCRYPTION_KEY="$(openssl rand -hex 32)"
-    update_env "N8N_ENCRYPTION_KEY" "${N8N_ENCRYPTION_KEY}"
-    log "SUCCESS" "Generated and persisted new N8N_ENCRYPTION_KEY"
-}
+        # Pull each model and verify (CLAUDE.md Fix 2)
+        for model in ${OLLAMA_MODELS//,/ }; do
+            [[ -z "$model" ]] && continue
+            log_info "  Pulling ${model}..."
+            
+            # Pull model
+            docker compose -f "${COMPOSE_FILE}" exec -T ollama ollama pull "$model" \
+                >> "${LOGS_DIR}/ollama-pull-$(date +%Y%m%d).log" 2>&1
+            
+            # Verify model was pulled
+            if docker compose -f "${COMPOSE_FILE}" exec -T ollama ollama list | grep -q "$model"; then
+                log_success "  ✓ ${model} pulled and verified"
+            else
+                log_warning "  ⚠ ${model} pull failed or not verified"
+            fi
+        done
 
-# ─── Mem0 Configuration ─────────────────────────────────────────────────────
-    # Pull required Ollama models if Ollama is running (from previous deployment)
-    # This will be skipped on first deployment since Ollama isn't up yet
-    if [[ "${ENABLE_OLLAMA}" == "true" ]]; then
-        # Check if Ollama is accessible before trying to pull models
-        if curl -sf "http://localhost:${OLLAMA_PORT:-11434}/api/tags" > /dev/null 2>&1; then
-            pull_ollama_models
-        else
-            log "INFO" "Ollama not running yet — models will be pulled during deployment"
-        fi
-    fi
+        log_success "Ollama model pulls completed"
+    }
 
 init_mem0() {
     print_step "8.4" "11" "Mem0 Configuration"
@@ -2345,10 +2351,27 @@ generate_secrets() {
         echo "${default}"
     }
 
+    # N8N encryption key preservation (CLAUDE.md Fix 3)
+    init_n8n_encryption_key() {
+        if [[ -f "${DATA_ROOT}/.env" && -n "$(grep '^N8N_ENCRYPTION_KEY=' "${DATA_ROOT}/.env" 2>/dev/null || true)" ]]; then
+            # Load existing key
+            export N8N_ENCRYPTION_KEY=$(grep '^N8N_ENCRYPTION_KEY=' "${DATA_ROOT}/.env" | cut -d= -f2-)
+            log_info "Preserved existing N8N_ENCRYPTION_KEY"
+        else
+            # Generate new key
+            export N8N_ENCRYPTION_KEY=$(openssl rand -hex 32)
+            log_info "Generated new N8N_ENCRYPTION_KEY"
+        fi
+        
+        # Always export to .env
+        echo "N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}" >> "${DATA_ROOT}/.env"
+    }
+
+    # Generate remaining secrets
     DB_PASSWORD=$(load_existing_secret "POSTGRES_PASSWORD" "$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-32)")
     REDIS_PASSWORD=$(load_existing_secret "REDIS_PASSWORD" "$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-32)")
     POSTGRES_PASSWORD="${DB_PASSWORD}"
-    N8N_ENCRYPTION_KEY=$(load_existing_secret "N8N_ENCRYPTION_KEY"     "$(openssl rand -hex 32)")
+    init_n8n_encryption_key  # Replace direct assignment with function call
     FLOWISE_SECRET_KEY=$(load_existing_secret "FLOWISE_SECRET_KEY"     "$(openssl rand -hex 32)")
     
     # Router-specific API keys
