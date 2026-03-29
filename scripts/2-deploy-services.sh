@@ -226,6 +226,7 @@ services:
     environment:
       - CONFIG_FILE_PATH=/config/config.yaml
       - PORT=${BIFROST_PORT:-8000}
+      - BIFROST_AUTH_TOKEN=${BIFROST_AUTH_TOKEN}
     networks:
       - ${DOCKER_NETWORK}
     healthcheck:
@@ -300,10 +301,11 @@ services:
       - APIKEY_PATH=/root/.flowise
       - SECRETKEY_PATH=/root/.flowise
       - LOG_LEVEL=info
+      - FLOWISE_PORT=${FLOWISE_PORT:-3001}
     networks:
       - default
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:${FLOWISE_PORT:-3000}/api/v1/ping || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:${FLOWISE_PORT:-3001}/api/v1/ping || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
