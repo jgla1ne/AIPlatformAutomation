@@ -1,2 +1,24 @@
+# Environment files
+.env
+.env.*
+!.env.example
+
+# AI Platform data
+/mnt/
+
+# Logs and backups
+*.backup.*
+*.log
+
+# Temporary files
+*.tmp
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# MCP files
 .idx/mcp.json
 firebase-debug.log
