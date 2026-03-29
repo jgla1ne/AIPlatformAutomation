@@ -74,6 +74,17 @@ main() {
     
     # Load environment before cleanup
     load_env_or_default
+    
+    # Selective N8N encryption key preservation
+    preserve_n8n_encryption_key() {
+        if [[ "${PRESERVE_N8N_KEY:-false}" == "true" && -f "${DATA_ROOT}/.env" ]]; then
+            local existing_key
+            existing_key=$(grep "^N8N_ENCRYPTION_KEY=" "${DATA_ROOT}/.env" 2>/dev/null | \
+                cut -d= -f2- | tr -d '"' | tr -d "'")
+            
+            [[ -n "$existing_key" ]] && log "Preserving N8N_ENCRYPTION_KEY from ${DATA_ROOT}/.env"
+        fi
+    }
 
     # --- 1. Dynamic Container Cleanup ---
     cleanup_containers() {
