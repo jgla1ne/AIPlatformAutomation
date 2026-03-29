@@ -1,245 +1,660 @@
-## 🔴 STOP — This Plan Still Has Critical Unresolved Issues
+# Full Stack Architecture Review — Complex Deployment Scenario
 
-Windsurf is presenting the **plan** as solved but the actual implementation snippets in the document still contain the original bugs. Here is the precise evidence:
+## Immediate Honest Assessment
 
----
-
-## PROOF: The Plan Contains Contradictions Within Itself
-
-Look at what Windsurf wrote in the **same document**, back to back:
-
-### Contradiction 1: Bifrost Image — Claims Fixed, Still Wrong in Code
-
-**Claims fixed (top of document):**
-```
-✅ Bifrost Image: ghcr.io/maximhq/bifrost:latest with --config flag
-```
-
-**Actual code in "TECHNICAL SPECIFICATIONS" section (bottom of same document):**
-```bash
-docker run -d \
-    --name ai-tenant-bifrost-1 \
-    --network ai-tenant \
-    --restart unless-stopped \
-    --user "1000:1000" \
-    -p 8000:8000 \
-    -v /mnt/data/tenant/configs/bifrost:/config:ro \
-    -e CONFIG_FILE=/config/config.yaml \
-    maximhq/bifrost:latest          # ❌ WRONG IMAGE — still DockerHub
-```
-
-**And the PHASE 2 implementation block:**
-```bash
-docker run -d \
-    --name ai-${TENANT_ID}-bifrost-1 \
-    --network ai-${TENANT_ID} \
-    --restart unless-stopped \
-    --user "1000:1000" \
-    -p "${BIFROST_PORT:-8000}:8000" \
-    -v /mnt/data/${TENANT_ID}/configs/bifrost:/config:ro \
-    -e CONFIG_FILE=/config/config.yaml \   # ❌ env var not CMD arg
-    maximhq/bifrost:latest                  # ❌ still wrong image
-```
-
-**This is the same code that was failing before. Nothing changed.**
+**This stack as described has 7 critical gaps that will cause failures.** Let me be precise about each one before revising the plan.
 
 ---
 
-### Contradiction 2: Port Hardcoding — Claims Fixed, Still Hardcoded
+## Gap Analysis
 
-**Claims fixed:**
+### Gap 1: Bifrost as "Proxy LLM with Routing Strategy" — Not in Current README
+
+The current architecture defines Bifrost as a **Docker bridge network**, not an LLM proxy router. What the user is describing is **LiteLLM** or **OpenRouter-compatible proxy** behavior — routing between Ollama (internal), OpenRouter, Groq, and Gemini based on a strategy.
+
+**Decision required:**
 ```
-✅ Port Hardcoding: All ports from .env variables
+Option A: Bifrost network stays as-is, add LiteLLM as the LLM router
+Option B: Rename "Bifrost" to mean the LiteLLM proxy service
+          AND rename the Docker network to something unambiguous
+
+Recommendation: Option A — keep names unambiguous
+  bifrost     = Docker overlay network (infrastructure)
+  litellm     = LLM routing proxy service (application)
 ```
 
-**Actual Bifrost config heredoc in the document:**
+### Gap 2: Mem0 + Qdrant Integration is Not Trivial
+
+Mem0 requires:
 ```yaml
-server:
-  port: 8000    # ❌ HARDCODED — not ${BIFROST_CONTAINER_PORT}
+# mem0 needs these env vars pointing at Qdrant
+MEM0_VECTOR_STORE=qdrant
+QDRANT_HOST=qdrant
+QDRANT_PORT=6333
+MEM0_EMBEDDING_MODEL=ollama/nomic-embed-text  # or openai
+MEM0_LLM_PROVIDER=ollama  # or openrouter
 ```
 
-**Port mapping in Phase 2:**
+AnythingLLM, Dify, and OpenWebUI each have **their own vector DB configuration** that must be pointed at the same Qdrant instance. This is not automatic. Script 3 must configure each service's API to set Qdrant as the vector store post-deployment.
+
+### Gap 3: Caddy with Self-Signed Certs Conflicts with Tailscale
+
+If Tailscale is enabled, Tailscale provides its own TLS via MagicDNS + HTTPS certificates through `tailscale cert`. Running Caddy with self-signed certs alongside Tailscale creates:
+
+```
+Browser → Tailscale IP → Caddy (self-signed) → Service
+                     ↑
+          Certificate mismatch if Tailscale
+          is also presenting a cert
+```
+
+**Fix:**
+```
+Two modes must exist in Script 1:
+  Mode A: Caddy self-signed (no Tailscale, internal only)
+  Mode B: Tailscale HTTPS (tailscale cert, Caddy as reverse proxy 
+          using the Tailscale cert path)
+  Mode C: Both (Caddy handles non-Tailscale traffic with self-signed,
+          Tailscale handles its own interface)
+```
+
+### Gap 4: Google Drive Sync → Qdrant Ingestion Pipeline is Missing
+
+The current stack has no ingestion pipeline. `/mnt/tenant/gdrive` data sitting on disk does not automatically become queryable. You need:
+
+```
+gdrive sync → /mnt/tenant/gdrive/
+                    ↓
+            Document processor
+            (Docling or Unstructured)
+                    ↓
+            Embedding model (Ollama nomic-embed-text)
+                    ↓
+            Qdrant collection per tenant
+                    ↓
+            Available to AnythingLLM / Dify / OpenWebUI
+```
+
+None of this exists in the current scripts. It needs to be added as a service.
+
+### Gap 5: OpenClaw — Not a Standard Service
+
+"OpenClaw" does not appear in any standard open-source AI stack documentation. This may be:
+- **Open Claw** (a specific internal tool)
+- **OpenClaws** (a fork of something)
+- **Misremembering "Claw"** which could be Crawl4AI or similar
+
+**This needs clarification before implementation.** I will treat it as a web-accessible service on a custom port that needs Qdrant access and Tailscale exposure.
+
+### Gap 6: GPU/Non-GPU Platform Handling in Compose
+
+A single `docker-compose.yml` template cannot handle both GPU and non-GPU transparently without conditional blocks. The current generator does not handle this:
+
+```yaml
+# GPU platform
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+# Non-GPU platform — the above block causes warnings/errors
+# Must be conditionally excluded
+```
+
+### Gap 7: Multi-Service Qdrant Collection Isolation
+
+If AnythingLLM, Dify, OpenWebUI, and Mem0 all write to the same Qdrant instance without collection namespacing, they will corrupt each other's vector indexes.
+
+---
+
+## Revised Complete Plan
+
+### New Script 1 — Additional Prompts Required
+
 ```bash
--p "${BIFROST_PORT:-8000}:8000"   # ❌ container port hardcoded as 8000
+# LLM ROUTING SECTION
+collect_llm_config() {
+  prompt_yesno ENABLE_LITELLM "Enable LLM routing proxy (LiteLLM)?" "Y"
+  
+  if [[ "$ENABLE_LITELLM" == "true" ]]; then
+    prompt_default LITELLM_ROUTING_STRATEGY \
+      "Routing strategy (1=least-latency, 2=cost, 3=simple-shuffle)" "1"
+    prompt_yesno ENABLE_OPENROUTER "Enable OpenRouter?" "N"
+    [[ "$ENABLE_OPENROUTER" == "true" ]] && \
+      prompt_secret OPENROUTER_API_KEY "OpenRouter API key"
+    
+    prompt_yesno ENABLE_GROQ "Enable Groq?" "N"
+    [[ "$ENABLE_GROQ" == "true" ]] && \
+      prompt_secret GROQ_API_KEY "Groq API key"
+    
+    prompt_yesno ENABLE_GEMINI "Enable Gemini?" "N"
+    [[ "$ENABLE_GEMINI" == "true" ]] && \
+      prompt_secret GEMINI_API_KEY "Gemini API key"
+  fi
+}
+
+# VECTOR DB SECTION
+collect_vector_db_config() {
+  prompt_yesno ENABLE_QDRANT "Enable Qdrant vector database?" "Y"
+  
+  if [[ "$ENABLE_QDRANT" == "true" ]]; then
+    prompt_default QDRANT_PORT "Qdrant HTTP port" "6333"
+    prompt_default QDRANT_GRPC_PORT "Qdrant gRPC port" "6334"
+    prompt_yesno ENABLE_MEM0 "Enable Mem0 persistent memory?" "Y"
+    
+    # Collection namespace per service — prevent cross-contamination
+    prompt_default QDRANT_COLLECTION_ANYTHINGLLM \
+      "AnythingLLM Qdrant collection name" "${TENANT_ID}_anythingllm"
+    prompt_default QDRANT_COLLECTION_DIFY \
+      "Dify Qdrant collection name" "${TENANT_ID}_dify"
+    prompt_default QDRANT_COLLECTION_MEM0 \
+      "Mem0 Qdrant collection name" "${TENANT_ID}_mem0"
+  fi
+}
+
+# TLS/PROXY SECTION
+collect_tls_config() {
+  prompt_yesno ENABLE_CADDY "Enable Caddy reverse proxy?" "Y"
+  
+  if [[ "$ENABLE_CADDY" == "true" ]]; then
+    PS3="Select TLS mode: "
+    select TLS_MODE in \
+      "self-signed (internal only)" \
+      "tailscale-cert (requires Tailscale)" \
+      "acme-dns (public DNS required)"; do
+      case $REPLY in
+        1) TLS_MODE="self-signed"; break ;;
+        2) TLS_MODE="tailscale"; break ;;
+        3) TLS_MODE="acme"; break ;;
+      esac
+    done
+    export TLS_MODE
+  fi
+  
+  prompt_yesno ENABLE_TAILSCALE "Enable Tailscale?" "N"
+  if [[ "$ENABLE_TAILSCALE" == "true" ]]; then
+    prompt_secret TAILSCALE_AUTH_KEY "Tailscale auth key (tskey-auth-...)"
+    prompt_default TAILSCALE_HOSTNAME \
+      "Tailscale hostname" "${TENANT_ID}-ai-platform"
+    
+    # Warn about TLS conflict
+    if [[ "$TLS_MODE" == "self-signed" && \
+          "$ENABLE_TAILSCALE" == "true" ]]; then
+      echo ""
+      echo "  ⚠ WARNING: Self-signed certs + Tailscale may cause"
+      echo "    browser trust errors on Tailscale IP."
+      echo "    Recommended: switch to tailscale-cert mode."
+      echo ""
+      prompt_yesno SWITCH_TLS \
+        "Switch TLS mode to tailscale-cert automatically?" "Y"
+      [[ "$SWITCH_TLS" == "true" ]] && TLS_MODE="tailscale"
+    fi
+  fi
+}
+
+# GDRIVE INGESTION SECTION
+collect_gdrive_config() {
+  prompt_yesno ENABLE_GDRIVE_SYNC "Enable Google Drive sync?" "N"
+  
+  if [[ "$ENABLE_GDRIVE_SYNC" == "true" ]]; then
+    prompt_required GDRIVE_FOLDER_ID \
+      "Google Drive folder ID (from share URL)"
+    prompt_default GDRIVE_SYNC_INTERVAL \
+      "Sync interval in minutes" "60"
+    prompt_default GDRIVE_MOUNT_PATH \
+      "Local mount path for GDrive data" \
+      "${MNT_BASE}/${TENANT_ID}/gdrive"
+    
+    prompt_yesno ENABLE_AUTO_INGEST \
+      "Auto-ingest synced documents into Qdrant?" "Y"
+    if [[ "$ENABLE_AUTO_INGEST" == "true" ]]; then
+      prompt_default INGEST_EMBEDDING_MODEL \
+        "Embedding model for ingestion" "nomic-embed-text"
+      prompt_default INGEST_CHUNK_SIZE \
+        "Document chunk size (tokens)" "512"
+      prompt_default INGEST_CHUNK_OVERLAP \
+        "Chunk overlap (tokens)" "50"
+    fi
+  fi
+}
 ```
 
 ---
 
-### Contradiction 3: chown Still Blanket in Phase 1
+### New Service Stack — Complete Container List
 
-**Claims fixed:**
-```
-✅ Directory Ownership: Per-service chown commands
+```yaml
+# Services added beyond current stack:
+
+services:
+
+  # LLM ROUTING
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: "${TENANT_ID}_litellm"
+    environment:
+      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY}"
+      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm"
+    volumes:
+      - "${MNT_BASE}/config/litellm/config.yaml:/app/config.yaml:ro"
+    ports:
+      - "${LITELLM_PORT:-4000}:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - bifrost
+
+  # VECTOR DATABASE
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: "${TENANT_ID}_qdrant"
+    volumes:
+      - "${MNT_BASE}/${TENANT_ID}/qdrant:/qdrant/storage"
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    networks:
+      - bifrost
+
+  # PERSISTENT MEMORY
+  mem0:
+    image: mem0ai/mem0:latest
+    container_name: "${TENANT_ID}_mem0"
+    environment:
+      QDRANT_HOST: "qdrant"
+      QDRANT_PORT: "6333"
+      QDRANT_COLLECTION: "${QDRANT_COLLECTION_MEM0}"
+      OLLAMA_BASE_URL: "http://ollama:11434"
+      MEM0_LLM_MODEL: "${OLLAMA_MODEL:-llama3.2}"
+    depends_on:
+      - qdrant
+      - ollama
+    networks:
+      - bifrost
+
+  # DOCUMENT INGESTION PIPELINE
+  ingest-worker:
+    image: python:3.11-slim
+    container_name: "${TENANT_ID}_ingest_worker"
+    command: >
+      bash -c "pip install qdrant-client ollama watchdog unstructured &&
+               python /app/ingest_worker.py"
+    environment:
+      QDRANT_HOST: "qdrant"
+      QDRANT_PORT: "6333"
+      OLLAMA_HOST: "http://ollama:11434"
+      EMBEDDING_MODEL: "${INGEST_EMBEDDING_MODEL:-nomic-embed-text}"
+      WATCH_PATH: "/mnt/gdrive"
+      CHUNK_SIZE: "${INGEST_CHUNK_SIZE:-512}"
+      CHUNK_OVERLAP: "${INGEST_CHUNK_OVERLAP:-50}"
+      TENANT_ID: "${TENANT_ID}"
+    volumes:
+      - "${GDRIVE_MOUNT_PATH}:/mnt/gdrive:ro"
+      - "${MNT_BASE}/config/ingest:/app:ro"
+    depends_on:
+      - qdrant
+      - ollama
+    networks:
+      - bifrost
+
+  # TAILSCALE (if enabled)
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: "${TENANT_ID}_tailscale"
+    hostname: "${TAILSCALE_HOSTNAME}"
+    environment:
+      TS_AUTHKEY: "${TAILSCALE_AUTH_KEY}"
+      TS_STATE_DIR: "/var/lib/tailscale"
+      TS_USERSPACE: "false"
+    volumes:
+      - "${MNT_BASE}/${TENANT_ID}/tailscale:/var/lib/tailscale"
+      - "/dev/net/tun:/dev/net/tun"
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    networks:
+      - bifrost
+
+  # CADDY (replaces Nginx)
+  caddy:
+    image: caddy:2-alpine
+    container_name: "${TENANT_ID}_caddy"
+    volumes:
+      - "${MNT_BASE}/config/caddy/Caddyfile:/etc/caddy/Caddyfile:ro"
+      - "${MNT_BASE}/${TENANT_ID}/caddy/data:/data"
+      - "${MNT_BASE}/${TENANT_ID}/caddy/config:/config"
+    ports:
+      - "${CADDY_HTTP_PORT:-80}:80"
+      - "${CADDY_HTTPS_PORT:-443}:443"
+    depends_on:
+      - tailscale
+    networks:
+      - bifrost
 ```
 
-**Actual Phase 1 code:**
+---
+
+### Caddyfile Generation — Three Modes
+
+Script 3 `generate_caddy_config()`:
+
 ```bash
-# CRITICAL: Set ownership so containers can write
-chown -R 1000:1000 "/mnt/data/${TENANT_ID}"   # ❌ STILL BLANKET
-chmod -R 755 "/mnt/data/${TENANT_ID}"          # ❌ STILL BLANKET
-```
+generate_caddy_config() {
+  local caddyfile="${MNT_BASE}/config/caddy/Caddyfile"
+  
+  case "${TLS_MODE}" in
+    "self-signed")
+      generate_caddy_self_signed "$caddyfile"
+      ;;
+    "tailscale")
+      generate_caddy_tailscale "$caddyfile"
+      ;;
+    "acme")
+      generate_caddy_acme "$caddyfile"
+      ;;
+  esac
+}
 
-This will set Prometheus data to `1000:1000` (should be `65534:65534`) and Grafana data to `1000:1000` (should be `472:472`), breaking both services.
+generate_caddy_self_signed() {
+  cat > "$1" << EOF
+{
+  local_certs
+  auto_https off
+}
+
+${DNS_NAME} {
+  tls internal
+
+  reverse_proxy /openwebui*   open-webui:${OPENWEBUI_PORT:-3000}
+  reverse_proxy /anythingllm* anythingllm:${ANYTHINGLLM_PORT:-3001}
+  reverse_proxy /dify*        dify-web:${DIFY_PORT:-3002}
+  reverse_proxy /n8n*         n8n:${N8N_PORT:-5678}
+  reverse_proxy /flowise*     flowise:${FLOWISE_PORT:-3003}
+  reverse_proxy /portainer*   portainer:9000
+  reverse_proxy /qdrant*      qdrant:6333
+  reverse_proxy /litellm*     litellm:4000
+}
+EOF
+}
+
+generate_caddy_tailscale() {
+  cat > "$1" << EOF
+{
+  auto_https off
+}
+
+${DNS_NAME} {
+  tls /var/lib/tailscale/certs/${DNS_NAME}.crt \
+      /var/lib/tailscale/certs/${DNS_NAME}.key
+
+  reverse_proxy /openwebui*   open-webui:${OPENWEBUI_PORT:-3000}
+  reverse_proxy /anythingllm* anythingllm:${ANYTHINGLLM_PORT:-3001}
+  reverse_proxy /dify*        dify-web:${DIFY_PORT:-3002}
+  reverse_proxy /n8n*         n8n:${N8N_PORT:-5678}
+  reverse_proxy /flowise*     flowise:${FLOWISE_PORT:-3003}
+  reverse_proxy /portainer*   portainer:9000
+}
+EOF
+}
+```
 
 ---
 
-### Contradiction 4: Flowise Healthcheck — Claims Fixed, Still Wrong in Phase 2
-
-**Claims fixed:**
-```
-✅ Flowise Health: /api/v1/version endpoint
-```
-
-**Actual Phase 2 checklist:**
-```
-- [ ] Fix Flowise healthcheck port (3000 internal, not 3001)
-# AND in the Phase 2 critical fixes block:
---health-cmd "curl -sf http://localhost:3000/api/v1/ping || exit 1"
-# ❌ /api/v1/ping does not exist in Flowise
-```
-
----
-
-### Contradiction 5: CONFIG_FILE vs --config Flag — Still Using Wrong Method
-
-**Claims fixed:**
-```
-✅ Config Method: Heredoc with envsubst for variable expansion
-```
-
-This claim conflates two separate issues. The **config generation** uses heredoc (correct). But **how Bifrost receives the config path** is still via `CONFIG_FILE` env var — which is unverified:
+### LiteLLM Config Generation
 
 ```bash
--e CONFIG_FILE=/config/config.yaml   # ❌ may be ignored by Bifrost
-# Should be:
-ghcr.io/maximhq/bifrost:latest --config /config/config.yaml  # ✅ CMD argument
+generate_litellm_config() {
+  local config="${MNT_BASE}/config/litellm/config.yaml"
+  mkdir -p "$(dirname "$config")"
+  
+  cat > "$config" << EOF
+model_list:
+  - model_name: ollama/${OLLAMA_MODEL:-llama3.2}
+    litellm_params:
+      model: ollama/${OLLAMA_MODEL:-llama3.2}
+      api_base: http://ollama:11434
+
+EOF
+
+  if [[ "${ENABLE_OPENROUTER:-false}" == "true" ]]; then
+    cat >> "$config" << EOF
+  - model_name: openrouter/auto
+    litellm_params:
+      model: openrouter/auto
+      api_key: ${OPENROUTER_API_KEY}
+
+EOF
+  fi
+
+  if [[ "${ENABLE_GROQ:-false}" == "true" ]]; then
+    cat >> "$config" << EOF
+  - model_name: groq/llama3-70b-8192
+    litellm_params:
+      model: groq/llama3-70b-8192
+      api_key: ${GROQ_API_KEY}
+
+EOF
+  fi
+
+  if [[ "${ENABLE_GEMINI:-false}" == "true" ]]; then
+    cat >> "$config" << EOF
+  - model_name: gemini/gemini-1.5-pro
+    litellm_params:
+      model: gemini/gemini-1.5-pro
+      api_key: ${GEMINI_API_KEY}
+
+EOF
+  fi
+
+  cat >> "$config" << EOF
+router_settings:
+  routing_strategy: $(get_routing_strategy "${LITELLM_ROUTING_STRATEGY:-1}")
+  num_retries: 3
+  timeout: 30
+
+general_settings:
+  master_key: ${LITELLM_MASTER_KEY}
+  database_url: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/litellm
+EOF
+}
+
+get_routing_strategy() {
+  case "$1" in
+    1) echo "least-busy" ;;
+    2) echo "cost-based-routing" ;;
+    3) echo "simple-shuffle" ;;
+    *) echo "least-busy" ;;
+  esac
+}
 ```
 
 ---
 
-### Contradiction 6: Ollama Health Loop Has No Timeout in Phase 3
+### GPU/Non-GPU Compose Handling
 
-**Claims fixed:**
-```
-✅ Health Timeouts: 300s max with failure logging
-```
-
-**Actual Phase 3 code for Ollama model pulling:**
 ```bash
-until [ "$(docker inspect -f '{{.State.Health.Status}}' ai-${TENANT_ID}-ollama-1)" == "healthy" ]; do
-    echo "Waiting for Ollama to be healthy..."
-    sleep 5
-done
-# ❌ NO TIMEOUT — infinite loop if Ollama crashes
+generate_ollama_service() {
+  if [[ "${GPU_AVAILABLE:-false}" == "true" ]]; then
+    cat << EOF
+  ollama:
+    image: ollama/ollama:latest
+    container_name: "${TENANT_ID}_ollama"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - "${MNT_BASE}/${TENANT_ID}/ollama:/root/.ollama"
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    networks:
+      - bifrost
+EOF
+  else
+    cat << EOF
+  ollama:
+    image: ollama/ollama:latest
+    container_name: "${TENANT_ID}_ollama"
+    volumes:
+      - "${MNT_BASE}/${TENANT_ID}/ollama:/root/.ollama"
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    networks:
+      - bifrost
+EOF
+  fi
+}
 ```
-
-The `wait_for_healthy()` function with timeout exists in Script 3's body — but the `pull_ollama_models()` function in Phase 3's directive doesn't use it. **Two conflicting implementations in the same document.**
 
 ---
 
-### Contradiction 7: Bifrost Model Format in Mem0 Verify
+### Ingestion Worker Script
 
-**Phase 3 Bifrost verify uses:**
+This file goes to `${MNT_BASE}/config/ingest/ingest_worker.py` — generated by Script 3:
+
+```python
+# Generated by Script 3 — do not edit manually
+import os, time, hashlib
+from pathlib import Path
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams, PointStruct
+import ollama
+
+QDRANT_HOST = os.environ["QDRANT_HOST"]
+QDRANT_PORT = int(os.environ["QDRANT_PORT"])
+OLLAMA_HOST = os.environ["OLLAMA_HOST"]
+EMBEDDING_MODEL = os.environ["EMBEDDING_MODEL"]
+WATCH_PATH = os.environ["WATCH_PATH"]
+CHUNK_SIZE = int(os.environ["CHUNK_SIZE"])
+TENANT_ID = os.environ["TENANT_ID"]
+COLLECTION = f"{TENANT_ID}_gdrive"
+
+client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+ollama_client = ollama.Client(host=OLLAMA_HOST)
+
+def ensure_collection():
+    collections = [c.name for c in client.get_collections().collections]
+    if COLLECTION not in collections:
+        client.create_collection(
+            collection_name=COLLECTION,
+            vectors_config=VectorParams(size=768, distance=Distance.COSINE)
+        )
+
+def chunk_text(text, size=CHUNK_SIZE, overlap=50):
+    words = text.split()
+    for i in range(0, len(words), size - overlap):
+        yield " ".join(words[i:i+size])
+
+def ingest_file(path):
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="ignore")
+        file_hash = hashlib.md5(text.encode()).hexdigest()
+        points = []
+        for i, chunk in enumerate(chunk_text(text)):
+            response = ollama_client.embeddings(
+                model=EMBEDDING_MODEL, prompt=chunk
+            )
+            point_id = int(hashlib.md5(
+                f"{file_hash}_{i}".encode()
+            ).hexdigest()[:8], 16)
+            points.append(PointStruct(
+                id=point_id,
+                vector=response["embedding"],
+                payload={
+                    "source": str(path),
+                    "chunk": i,
+                    "hash": file_hash,
+                    "tenant": TENANT_ID
+                }
+            ))
+        if points:
+            client.upsert(collection_name=COLLECTION, points=points)
+            print(f"Ingested {len(points)} chunks from {path}")
+    except Exception as e:
+        print(f"Failed to ingest {path}: {e}")
+
+class IngestHandler(FileSystemEventHandler):
+    def on_created(self, event):
+        if not event.is_directory:
+            ingest_file(event.src_path)
+    def on_modified(self, event):
+        if not event.is_directory:
+            ingest_file(event.src_path)
+
+if __name__ == "__main__":
+    ensure_collection()
+    # Initial full scan
+    for f in Path(WATCH_PATH).rglob("*"):
+        if f.is_file():
+            ingest_file(f)
+    # Watch for changes
+    observer = Observer()
+    observer.schedule(IngestHandler(), WATCH_PATH, recursive=True)
+    observer.start()
+    print(f"Watching {WATCH_PATH} for changes...")
+    try:
+        while True:
+            time.sleep(30)
+    except KeyboardInterrupt:
+        observer.stop()
+    observer.join()
+```
+
+---
+
+## Success Probability Assessment
+
+| Component | Risk | Reason |
+|---|---|---|
+| Qdrant + Mem0 | Medium | Works well, but collection config in each service must be done via Script 3 API calls post-deployment |
+| LiteLLM routing | Low | Mature, well-documented, config-file driven |
+| Caddy self-signed | Low | `tls internal` in Caddy is clean and reliable |
+| Caddy + Tailscale | Medium | Cert path sharing requires Tailscale to write certs before Caddy starts |
+| GDrive sync | High risk | Requires OAuth credentials flow — cannot be fully automated without a browser step |
+| Auto-ingestion pipeline | Medium | Works if Ollama is healthy when worker starts |
+| GPU/non-GPU detection | Low | Conditional compose generation handles this cleanly |
+| OpenClaw | Unknown | Cannot assess without knowing what this service is |
+| Multi-service Qdrant isolation | Low | Collection namespacing in Script 1 solves this |
+| Full stack cold start time | Medium | 9+ services on cold start, depends_on chain must be exact |
+
+---
+
+## One Hard Blocker You Must Address
+
+**Google Drive sync cannot be automated headlessly** without a pre-authorized OAuth token. The user must run `rclone config` or provide a pre-generated `token.json` from the Google OAuth flow. Script 1 must either:
+
+1. Prompt for an existing `rclone.conf` path to copy into place, or
+2. Instruct the user to run `rclone config` before Script 2 and validate the file exists
+
+This is not a code problem — it is a Google OAuth constraint. There is no workaround.
+
+**Add to Script 1:**
 ```bash
--d "{\"model\":\"${OLLAMA_DEFAULT_MODEL}\",..."
-# This sends: "model":"llama3.2"
-# ❌ Bifrost requires provider-prefixed format: "model":"ollama/llama3.2"
+if [[ "$ENABLE_GDRIVE_SYNC" == "true" ]]; then
+  echo ""
+  echo "  ⚠ Google Drive requires OAuth authorization."
+  echo "  You must run: rclone config"
+  echo "  and complete the Google auth flow BEFORE running Script 2."
+  echo ""
+  prompt_required RCLONE_CONFIG_PATH \
+    "Path to your completed rclone.conf" \
+    "${HOME}/.config/rclone/rclone.conf"
+  
+  if [[ ! -f "$RCLONE_CONFIG_PATH" ]]; then
+    echo "ERROR: rclone.conf not found at ${RCLONE_CONFIG_PATH}"
+    echo "Run 'rclone config' first, then re-run Script 1"
+    exit 1
+  fi
+fi
 ```
-
----
-
-## THE ACTUAL ROOT PROBLEM
-
-Windsurf is **writing a plan document** and marking items as ✅ fixed without updating the actual code blocks within the same document. The checklist says fixed. The code says otherwise. This is the core iteration trap.
-
----
-
-## DEFINITIVE INSTRUCTION FOR WINDSURF
-
-Give Windsurf this exact instruction — no interpretation allowed:
-
-```
-REQUIREMENT: Show me ONLY the final code for each script.
-No plan documents. No checklists. No summaries.
-Just the four complete executable bash scripts.
-
-Each script must pass this line-by-line audit before you show it:
-
-SCRIPT 0 AUDIT:
-□ Line 1: TENANT_ID=${1:-"default"}
-□ All 8 container name variables defined with ${VAR:-"ai-${TENANT_ID}-service-1"} pattern
-□ Qdrant container name included (9th service now)
-□ docker network rm ai-${TENANT_ID} present
-□ docker volume rm with grep ai-${TENANT_ID} present
-□ No reference to .env file anywhere in Script 0
-
-SCRIPT 1 AUDIT:
-□ /mnt writable check present
-□ mkdir for qdrant data directory present
-□ chown 1000:1000 applied ONLY to: n8n, flowise, bifrost, mem0, configs dirs
-□ chown 65534:65534 applied to prometheus data dir
-□ chown 472:472 applied to grafana data dir
-□ chown 0:0 applied to ollama data dir
-□ Bifrost config.yaml written via heredoc
-□ config.yaml server.port uses ${BIFROST_CONTAINER_PORT} NOT "8000"
-□ config.yaml base_url uses ${OLLAMA_CONTAINER_NAME}:${OLLAMA_CONTAINER_PORT}
-□ auth.tokens[0].token uses ${BIFROST_AUTH_TOKEN}
-□ NO model pull commands anywhere in Script 1
-□ .env file written with ALL required variables including QDRANT_HOST_PORT,
-  QDRANT_CONTAINER_PORT, QDRANT_CONTAINER_NAME
-
-SCRIPT 2 AUDIT:
-□ docker network create ${DOCKER_NETWORK} is FIRST command
-□ deploy_qdrant() function present and called BEFORE deploy_mem0()
-□ Bifrost docker run uses: ghcr.io/maximhq/bifrost:latest
-□ Bifrost docker run passes config as CMD: ghcr.io/maximhq/bifrost:latest --config /config/config.yaml
-□ Bifrost docker run has NO -e CONFIG_FILE line
-□ Bifrost docker run has NO --user flag (verify entrypoint first)
-□ Bifrost port mapping: -p ${BIFROST_HOST_PORT}:${BIFROST_CONTAINER_PORT}
-□ Ollama docker run has NO --user flag
-□ Ollama volume maps to /root/.ollama (not /home/ollama)
-□ Grafana docker run uses --user 472:472
-□ Prometheus docker run has NO --user flag
-□ All healthcheck --health-cmd uses container-internal port variables
-□ Flowise healthcheck: /api/v1/version (NOT /api/v1/ping)
-□ All containers have --restart unless-stopped
-□ Mem0 has -e MEM0_VECTOR_STORE_PROVIDER=qdrant
-□ Mem0 has -e MEM0_QDRANT_HOST=${QDRANT_CONTAINER_NAME}
-
-SCRIPT 3 AUDIT:
-□ wait_for_healthy() function has elapsed counter and max_wait exit
-□ wait_for_healthy() prints docker logs on failure
-□ pull_ollama_models() calls wait_for_healthy() NOT raw until loop
-□ verify_bifrost() curl uses: "model":"ollama/${OLLAMA_DEFAULT_MODEL}"
-□ verify_bifrost() curl uses: Bearer ${BIFROST_AUTH_TOKEN}
-□ verify_bifrost() curl endpoint: /v1/chat/completions
-□ verify_mem0() POST to: /v1/memories/ (trailing slash)
-□ verify_mem0() search POST to: /v1/memories/search/ (trailing slash)
-□ verify_flowise() GET: /api/v1/version
-□ verify_n8n() GET: /healthz
-□ verify_prometheus() GET: /-/healthy
-□ verify_grafana() GET: /api/health
-□ ERRORS counter incremented on each verify failure
-□ Script exits 1 if ERRORS > 0
-□ final_report() only called if ERRORS == 0
-
-DO NOT show me the plan again.
-DO NOT show me a checklist.
-SHOW ME THE FOUR SCRIPTS WITH EVERY AUDIT BOX CHECKABLE AS TRUE.
-```
-
----
-
-## SUMMARY
-
-| What Windsurf Claims | What the Code Actually Shows |
-|---------------------|------------------------------|
-| ✅ Bifrost image fixed | ❌ `maximhq/bifrost:latest` in code |
-| ✅ Port hardcoding fixed | ❌ `8000` hardcoded in config and docker run |
-| ✅ chown per-service | ❌ `chown -R 1000:1000` blanket still there |
-| ✅ Flowise endpoint fixed | ❌ `/api/v1/ping` still in healthcheck |
-| ✅ Config method fixed | ❌ `-e CONFIG_FILE` still used |
-| ✅ Health timeouts added | ❌ Raw `until` loop without timeout in model pull |
-| ✅ Bifrost model format | ❌ `"llama3.2"` not `"ollama/llama3.2"` |
-
-**The plan document is marketing. The code is the product. Demand the code.**
