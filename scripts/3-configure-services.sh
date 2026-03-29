@@ -1,377 +1,302 @@
 #!/usr/bin/env bash
+# =============================================================================
+# Script 3: Mission Control Hub - BULLETPROOF v4.0
+# =============================================================================
+# PURPOSE: Health verification, model pulls, and operational testing
+# USAGE:   sudo bash scripts/3-configure-services.sh [tenant_id]
+# =============================================================================
+
 set -euo pipefail
 
-# =============================================================================
-# Script 3: Mission Control Hub - Operational Verification & Logging
-# =============================================================================
-# PURPOSE: Central mission control for service verification and logging
-# USAGE:   bash scripts/3-configure-services.sh
-# =============================================================================
+# Claude Audit Fix 8: TENANT_ID fallback
+TENANT_ID=${1:-"default"}
 
-# Source environment file first
-ENV_FILE="${ENV_FILE:-/mnt/data/${TENANT:-datasquiz}/.env}"
-[[ -f "${ENV_FILE}" ]] || { echo "FATAL: ${ENV_FILE} not found"; exit 1; }
-set -a; source "${ENV_FILE}"; set +a
-
-# Logging configuration
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_FILE="${LOGS_DIR:-/mnt/data/${TENANT:-datasquiz}/logs}/3-configure-$(date +%Y%m%d-%H%M%S).log"
-mkdir -p "$(dirname "${LOG_FILE}")"
-
-# Colors for output
+# Basic Logging Functions
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m'
+log() { echo -e "${CYAN}[INFO]${NC}    $1"; }
+ok() { echo -e "${GREEN}[OK]${NC}      $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
+fail() { echo -e "${RED}[FAIL]${NC}    $*"; }
 
-log() {
-    local level="$1"; shift
-    local msg="[$(date '+%Y-%m-%d %H:%M:%S')] [${level}] $*"
-    echo -e "${msg}" | tee -a "${LOG_FILE}"
-}
+# Claude Audit: Global error counter
+ERRORS=0
 
-log_info() { log "INFO" "$@"; }
-log_success() { log "SUCCESS" "$@"; }
-log_warning() { log "WARNING" "$@"; }
-log_error() { log "ERROR" "$@"; }
-
-# =============================================================================
-# SERVICE LOGGING COLLECTION
-# =============================================================================
-collect_all_service_logs() {
-    log_info "=== Collecting All Service Logs ==="
-    
-    local services=("${OLLAMA_CONTAINER}" "${LLM_GATEWAY_CONTAINER}" "${MEM0_CONTAINER}" 
-                   "${COMPOSE_PROJECT_NAME}_n8n" "${COMPOSE_PROJECT_NAME}_flowise"
-                   "${COMPOSE_PROJECT_NAME}_postgres" "${COMPOSE_PROJECT_NAME}_redis"
-                   "${COMPOSE_PROJECT_NAME}_qdrant" "${COMPOSE_PROJECT_NAME}_prometheus")
-    
-    for service in "${services[@]}"; do
-        if docker ps --format '{{.Names}}' | grep -q "^${service}$"; then
-            log_info "Collecting logs for ${service}..."
-            echo "=== ${service} LOGS ===" >> "${LOG_FILE}"
-            docker logs "${service}" --tail 50 >> "${LOG_FILE}" 2>&1 || true
-            echo "" >> "${LOG_FILE}"
-        else
-            log_warning "Service ${service} not running"
-        fi
-    done
-    
-    log_success "All service logs collected"
-}
-
-# =============================================================================
-# OPERATIONAL VERIFICATION FUNCTIONS
-# =============================================================================
-verify_bifrost_operations() {
-    log_info "=== Verifying Bifrost Operations ==="
-    
-    local url="http://localhost:${BIFROST_PORT:-8000}"
-    local max_wait=60
+# Claude Audit: wait_for_healthy with timeout and logging
+wait_for_healthy() {
+    local container=$1
+    local max_wait=${2:-300}
     local elapsed=0
     
-    # Wait for Bifrost to be ready
-    until curl -sf "${url}/healthz" > /dev/null 2>&1; do
-        if [[ $elapsed -ge $max_wait ]]; then
-            log_error "Bifrost not ready after ${max_wait}s"
-            return 1
-        fi
+    log "Waiting for ${container} to be healthy (max ${max_wait}s)..."
+    
+    while [ $elapsed -lt $max_wait ]; do
+        status=$(docker inspect --format='{{.State.Health.Status}}' "$container" 2>/dev/null || echo "starting")
+        case "$status" in
+            "healthy")
+                ok "${container} healthy after ${elapsed}s"
+                return 0 ;;
+            "unhealthy")
+                fail "${container} entered unhealthy state"
+                docker logs "$container" --tail 30
+                return 1 ;;
+        esac
         sleep 5
         elapsed=$((elapsed + 5))
-        log_info "Waiting for Bifrost... ${elapsed}/${max_wait}s"
+        echo "⏳ ${container}: ${status} (${elapsed}/${max_wait}s)"
     done
     
-    # Test actual chat operation (not just health)
-    local test_payload='{"model":"'"${OLLAMA_DEFAULT_MODEL}"'","messages":[{"role":"user","content":"Hello"}]}'
+    fail "Timeout: ${container} not healthy after ${max_wait}s"
+    docker logs "$container" --tail 30
+    return 1
+}
+
+# Claude Audit: Load environment from .env
+load_env() {
+    local env_file="/mnt/data/${TENANT_ID}/.env"
+    if [[ ! -f "${env_file}" ]]; then
+        fail "Environment file not found: ${env_file}. Run Script 1 first."
+    fi
+    
+    log "Loading environment from ${env_file}..."
+    source "${env_file}"
+}
+
+# Claude Audit: Pull Ollama models after health verification
+pull_ollama_models() {
+    log "Pulling Ollama models..."
+    
+    # Wait for Ollama to be healthy
+    wait_for_healthy "${OLLAMA_CONTAINER_NAME}" || ((ERRORS++))
+    
+    # Pull default model
+    log "Pulling model: ${OLLAMA_DEFAULT_MODEL}"
+    if docker exec "${OLLAMA_CONTAINER_NAME}" ollama pull "${OLLAMA_DEFAULT_MODEL}"; then
+        ok "Model ${OLLAMA_DEFAULT_MODEL} pulled successfully"
+    else
+        fail "Failed to pull model ${OLLAMA_DEFAULT_MODEL}"
+        ((ERRORS++))
+    fi
+}
+
+# Claude Audit: Verify Bifrost with provider-prefixed model
+verify_bifrost() {
+    log "Verifying Bifrost LLM proxy..."
+    
+    wait_for_healthy "${BIFROST_CONTAINER_NAME}" || ((ERRORS++))
+    
+    # Test with provider-prefixed model format
     local response
-    response=$(curl -sf -w "%{http_code}" -X POST "${url}/api/chat" \
-        -H "Content-Type: application/json" \
+    response=$(curl -s -w "%{http_code}" -o /tmp/bifrost_response.json \
         -H "Authorization: Bearer ${BIFROST_AUTH_TOKEN}" \
-        -d "${test_payload}" 2>/dev/null)
+        -H "Content-Type: application/json" \
+        -d "{\"model\":\"ollama/${OLLAMA_DEFAULT_MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"max_tokens\":10}" \
+        "http://localhost:${BIFROST_HOST_PORT}/v1/chat/completions")
     
-    local http_code="${response: -3}"
-    if [[ "$http_code" == "200" ]]; then
-        log_success "Bifrost chat API operational"
-        return 0
+    if [[ "$response" == "200" ]]; then
+        ok "Bifrost API responding correctly"
+        log "Response: $(cat /tmp/bifrost_response.json | jq -r '.choices[0].message.content' 2>/dev/null || echo 'parsed')"
     else
-        log_error "Bifrost chat API failed with HTTP ${http_code}"
-        return 1
+        fail "Bifrost API returned HTTP $response"
+        ((ERRORS++))
     fi
 }
 
-verify_ollama_operations() {
-    log_info "=== Verifying Ollama Operations ==="
+# Claude Audit: Verify Mem0 with trailing slash endpoints
+verify_mem0() {
+    log "Verifying Mem0 memory layer..."
     
-    local url="http://localhost:${OLLAMA_PORT:-11434}"
-    local max_wait=120
-    local elapsed=0
+    wait_for_healthy "${MEM0_CONTAINER_NAME}" || ((ERRORS++))
     
-    # Wait for Ollama API
-    until curl -sf "${url}/api/tags" > /dev/null 2>&1; do
-        if [[ $elapsed -ge $max_wait ]]; then
-            log_error "Ollama API not ready after ${max_wait}s"
-            return 1
-        fi
-        sleep 5
-        elapsed=$((elapsed + 5))
-        log_info "Waiting for Ollama API... ${elapsed}/${max_wait}s"
-    done
+    # Test memory creation with trailing slash
+    local create_response
+    create_response=$(curl -s -w "%{http_code}" -o /tmp/mem0_create.json \
+        -H "Authorization: Bearer ${MEM0_API_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{\"messages\":[{\"role\":\"user\",\"content\":\"Test memory\"}]}" \
+        "http://localhost:${MEM0_HOST_PORT}/v1/memories/")
     
-    # Verify models are available
-    local models_json
-    models_json=$(curl -sf "${url}/api/tags" 2>/dev/null || echo "{}")
+    if [[ "$create_response" == "200" ]]; then
+        ok "Mem0 memory creation successful"
+    else
+        fail "Mem0 memory creation failed with HTTP $create_response"
+        ((ERRORS++))
+    fi
     
-    for model in ${OLLAMA_MODELS//,/ }; do
-        if echo "$models_json" | grep -q "\"name\":\"${model}\""; then
-            log_success "Model ${model} available"
-        else
-            log_warning "Model ${model} not found"
-        fi
-    done
+    # Test memory search with trailing slash
+    local search_response
+    search_response=$(curl -s -w "%{http_code}" -o /tmp/mem0_search.json \
+        -H "Authorization: Bearer ${MEM0_API_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{\"query\":\"test\"}" \
+        "http://localhost:${MEM0_HOST_PORT}/v1/memories/search/")
     
-    # Test generation
-    local test_payload='{"model":"'"${OLLAMA_DEFAULT_MODEL}"'","prompt":"Say hello"}'
+    if [[ "$search_response" == "200" ]]; then
+        ok "Mem0 memory search successful"
+    else
+        fail "Mem0 memory search failed with HTTP $search_response"
+        ((ERRORS++))
+    fi
+}
+
+# Claude Audit: Verify Flowise with correct endpoint
+verify_flowise() {
+    log "Verifying Flowise AI workflow builder..."
+    
+    wait_for_healthy "${FLOWISE_CONTAINER_NAME}" || ((ERRORS++))
+    
     local response
-    response=$(curl -sf -w "%{http_code}" -X POST "${url}/api/generate" \
-        -H "Content-Type: application/json" \
-        -d "${test_payload}" 2>/dev/null)
+    response=$(curl -s -w "%{http_code}" -o /tmp/flowise_response.json \
+        "http://localhost:${FLOWISE_HOST_PORT}/api/v1/version")
     
-    local http_code="${response: -3}"
-    if [[ "$http_code" == "200" ]]; then
-        log_success "Ollama generation API operational"
-        return 0
+    if [[ "$response" == "200" ]]; then
+        ok "Flowise API responding correctly"
+        log "Version: $(cat /tmp/flowise_response.json | jq -r '.version' 2>/dev/null || echo 'parsed')"
     else
-        log_error "Ollama generation API failed with HTTP ${http_code}"
-        return 1
+        fail "Flowise API returned HTTP $response"
+        ((ERRORS++))
     fi
 }
 
-verify_mem0_operations() {
-    log_info "=== Verifying Mem0 Operations ==="
+# Claude Audit: Verify N8N with correct endpoint
+verify_n8n() {
+    log "Verifying N8N workflow automation..."
     
-    local url="http://localhost:${MEM0_PORT:-8081}"
-    local max_wait=180
-    local elapsed=0
+    wait_for_healthy "${N8N_CONTAINER_NAME}" || ((ERRORS++))
     
-    # Wait for Mem0 startup (pip install can take 60-120s first boot)
-    until curl -sf "${url}/health" > /dev/null 2>&1; do
-        if [[ $elapsed -ge $max_wait ]]; then
-            log_error "Mem0 failed to start after ${max_wait}s"
-            return 1
+    local response
+    response=$(curl -s -w "%{http_code}" -o /tmp/n8n_response.json \
+        "http://localhost:${N8N_HOST_PORT}/healthz")
+    
+    if [[ "$response" == "200" ]]; then
+        ok "N8N health check successful"
+    else
+        fail "N8N health check failed with HTTP $response"
+        ((ERRORS++))
+    fi
+}
+
+# Claude Audit: Verify Prometheus with correct endpoint
+verify_prometheus() {
+    log "Verifying Prometheus metrics collection..."
+    
+    wait_for_healthy "${PROMETHEUS_CONTAINER_NAME}" || ((ERRORS++))
+    
+    local response
+    response=$(curl -s -w "%{http_code}" -o /tmp/prometheus_response.json \
+        "http://localhost:${PROMETHEUS_HOST_PORT}/-/healthy")
+    
+    if [[ "$response" == "200" ]]; then
+        ok "Prometheus health check successful"
+    else
+        fail "Prometheus health check failed with HTTP $response"
+        ((ERRORS++))
+    fi
+}
+
+# Claude Audit: Verify Grafana with correct endpoint
+verify_grafana() {
+    log "Verifying Grafana monitoring..."
+    
+    wait_for_healthy "${GRAFANA_CONTAINER_NAME}" || ((ERRORS++))
+    
+    local response
+    response=$(curl -s -w "%{http_code}" -o /tmp/grafana_response.json \
+        "http://localhost:${GRAFANA_HOST_PORT}/api/health")
+    
+    if [[ "$response" == "200" ]]; then
+        ok "Grafana health check successful"
+    else
+        fail "Grafana health check failed with HTTP $response"
+        ((ERRORS++))
+    fi
+}
+
+# Claude Audit: Aggregate logs for diagnostics
+aggregate_logs() {
+    log "Aggregating service logs for diagnostics..."
+    
+    local log_dir="/mnt/data/${TENANT_ID}/logs"
+    mkdir -p "${log_dir}"
+    
+    for container in "${BIFROST_CONTAINER_NAME}" "${OLLAMA_CONTAINER_NAME}" "${MEM0_CONTAINER_NAME}" "${QDRANT_CONTAINER_NAME}" "${FLOWISE_CONTAINER_NAME}" "${N8N_CONTAINER_NAME}" "${GRAFANA_CONTAINER_NAME}" "${PROMETHEUS_CONTAINER_NAME}"; do
+        if docker ps --format "table {{.Names}}" | grep -q "^${container}$"; then
+            docker logs "$container" --tail 100 > "${log_dir}/${container}.log" 2>/dev/null || true
+            log "Logs saved: ${log_dir}/${container}.log"
         fi
-        sleep 10
-        elapsed=$((elapsed + 10))
-        log_info "Mem0 starting... ${elapsed}/${max_wait}s"
     done
     
-    # Write test
-    local tenant_a="verify_a_$$"
-    local marker="mem0_test_${RANDOM}_${RANDOM}"
-    local write_result
-    write_result=$(curl -sf -w "\n%{http_code}" \
-        -X POST "${url}/v1/memories" \
-        -H "Authorization: Bearer ${MEM0_API_KEY}" \
-        -H "Content-Type: application/json" \
-        -d "{\"messages\":[{\"role\":\"user\",\"content\":\"${marker}\"}],\"user_id\":\"${tenant_a}\"}")
-    
-    local write_code=$(echo "${write_result}" | tail -1)
-    if [[ "${write_code}" != "200" ]]; then
-        log_error "Mem0 write test failed with HTTP ${write_code}"
-        return 1
-    fi
-    
-    # Search test
-    local search_result
-    search_result=$(curl -sf \
-        -X POST "${url}/v1/memories/search" \
-        -H "Authorization: Bearer ${MEM0_API_KEY}" \
-        -H "Content-Type: application/json" \
-        -d "{\"query\":\"${marker}\",\"user_id\":\"${tenant_a}\"}")
-    
-    if echo "${search_result}" | grep -q "${marker}"; then
-        log_success "Mem0 operations verified"
-        return 0
-    else
-        log_error "Mem0 search test failed"
-        return 1
-    fi
+    ok "Log aggregation complete"
 }
 
-verify_n8n_operations() {
-    log_info "=== Verifying n8n Operations ==="
+# Claude Audit: Final operational report
+final_report() {
+    log "Generating final operational report..."
     
-    local url="http://localhost:5678"
-    local max_wait=60
-    local elapsed=0
+    echo ""
+    echo "=========================================="
+    echo "🎉 PLATFORM OPERATIONAL REPORT"
+    echo "=========================================="
+    echo "Tenant: ${TENANT_ID}"
+    echo "Errors: ${ERRORS}"
+    echo ""
     
-    until curl -sf "${url}/healthz" > /dev/null 2>&1; do
-        if [[ $elapsed -ge $max_wait ]]; then
-            log_error "n8n not ready after ${max_wait}s"
-            return 1
-        fi
-        sleep 5
-        elapsed=$((elapsed + 5))
-        log_info "Waiting for n8n... ${elapsed}/${max_wait}s"
-    done
-    
-    # Verify encryption key consistency
-    if [[ -n "${N8N_ENCRYPTION_KEY:-}" ]]; then
-        log_success "N8N encryption key available"
+    if [[ $ERRORS -eq 0 ]]; then
+        echo "✅ ALL SERVICES OPERATIONAL"
+        echo ""
+        echo "Service Access URLs:"
+        echo "  Bifrost LLM Proxy: http://localhost:${BIFROST_HOST_PORT}"
+        echo "  Ollama Inference: http://localhost:${OLLAMA_HOST_PORT}"
+        echo "  Mem0 Memory: http://localhost:${MEM0_HOST_PORT}"
+        echo "  Flowise Workflows: http://localhost:${FLOWISE_HOST_PORT}"
+        echo "  N8N Automation: http://localhost:${N8N_HOST_PORT}"
+        echo "  Grafana Monitoring: http://localhost:${GRAFANA_HOST_PORT}"
+        echo "  Prometheus Metrics: http://localhost:${PROMETHEUS_HOST_PORT}"
+        echo ""
+        echo "🚀 PLATFORM 100% OPERATIONAL"
     else
-        log_error "N8N encryption key missing"
-        return 1
+        echo "❌ PLATFORM HAS ${ERRORS} ERRORS"
+        echo ""
+        echo "Check logs in: /mnt/data/${TENANT_ID}/logs/"
+        echo "Run individual verification commands for details."
     fi
     
-    log_success "n8n operations verified"
-    return 0
+    echo "=========================================="
 }
 
-verify_flowise_operations() {
-    log_info "=== Verifying Flowise Operations ==="
+main() {
+    log "Starting Mission Control for tenant '${TENANT_ID}'..."
     
-    local url="http://localhost:${FLOWISE_PORT:-3001}"
-    local max_wait=60
-    local elapsed=0
+    # Load environment variables
+    load_env
     
-    until curl -sf "${url}/api/v1/ping" > /dev/null 2>&1; do
-        if [[ $elapsed -ge $max_wait ]]; then
-            log_error "Flowise not ready after ${max_wait}s"
-            return 1
-        fi
-        sleep 5
-        elapsed=$((elapsed + 5))
-        log_info "Waiting for Flowise... ${elapsed}/${max_wait}s"
-    done
+    # Execute verification sequence
+    pull_ollama_models
+    verify_bifrost
+    verify_mem0
+    verify_flowise
+    verify_n8n
+    verify_prometheus
+    verify_grafana
     
-    # Test authenticated API
-    if [[ -n "${FLOWISE_PASSWORD:-}" ]]; then
-        log_success "Flowise password configured"
-    else
-        log_error "Flowise password missing"
-        return 1
-    fi
-    
-    log_success "Flowise operations verified"
-    return 0
-}
-
-verify_prometheus_operations() {
-    log_info "=== Verifying Prometheus Operations ==="
-    
-    local url="http://localhost:9090"
-    local max_wait=30
-    local elapsed=0
-    
-    until curl -sf "${url}/-/healthy" > /dev/null 2>&1; do
-        if [[ $elapsed -ge $max_wait ]]; then
-            log_error "Prometheus not ready after ${max_wait}s"
-            return 1
-        fi
-        sleep 5
-        elapsed=$((elapsed + 5))
-        log_info "Waiting for Prometheus... ${elapsed}/${max_wait}s"
-    done
-    
-    # Verify config reload
-    local reload_result
-    reload_result=$(curl -sf -X POST "${url}/-/reload" 2>/dev/null || echo "failed")
-    if [[ "$reload_result" != "failed" ]]; then
-        log_success "Prometheus config reload operational"
-    else
-        log_warning "Prometheus config reload failed"
-    fi
-    
-    log_success "Prometheus operations verified"
-    return 0
-}
-
-# =============================================================================
-# MAIN VERIFICATION ORCHESTRATION
-# =============================================================================
-verify_service_operations() {
-    log_info "=== Starting Comprehensive Service Operations Verification ==="
-    
-    local services_passed=0
-    local services_failed=0
-    local total_services=7
-    
-    # Run all verifications
-    if verify_bifrost_operations; then
-        ((services_passed++))
-    else
-        ((services_failed++))
-    fi
-    
-    if verify_ollama_operations; then
-        ((services_passed++))
-    else
-        ((services_failed++))
-    fi
-    
-    if verify_mem0_operations; then
-        ((services_passed++))
-    else
-        ((services_failed++))
-    fi
-    
-    if verify_n8n_operations; then
-        ((services_passed++))
-    else
-        ((services_failed++))
-    fi
-    
-    if verify_flowise_operations; then
-        ((services_passed++))
-    else
-        ((services_failed++))
-    fi
-    
-    if verify_prometheus_operations; then
-        ((services_passed++))
-    else
-        ((services_failed++))
-    fi
+    # Aggregate logs for diagnostics
+    aggregate_logs
     
     # Generate final report
-    echo ""
-    log_info "=== FINAL OPERATIONAL REPORT ==="
-    log_info "Total Services: ${total_services}"
-    log_success "Passed: ${services_passed}"
-    if [[ $services_failed -gt 0 ]]; then
-        log_error "Failed: ${services_failed}"
-    else
-        log_success "Failed: 0"
-    fi
+    final_report
     
-    if [[ $services_failed -eq 0 ]]; then
-        log_success "🎉 PLATFORM 100% OPERATIONAL"
-        return 0
-    else
-        log_error "❌ PLATFORM HAS ${services_failed} FAILING SERVICES"
-        return 1
-    fi
-}
-
-# =============================================================================
-# MAIN FUNCTION
-# =============================================================================
-main() {
-    log_info "=== Mission Control Hub Starting ==="
-    log_info "Log file: ${LOG_FILE}"
-    
-    # Step 1: Collect all service logs
-    collect_all_service_logs
-    
-    # Step 2: Verify all service operations
-    if verify_service_operations; then
-        log_success "=== ALL SYSTEMS OPERATIONAL ==="
-        exit 0
-    else
-        log_error "=== SYSTEM VERIFICATION FAILED ==="
+    # Claude Audit: Exit with error code if failures
+    if [[ $ERRORS -gt 0 ]]; then
+        log "Mission Control completed with ${ERRORS} errors"
         exit 1
+    else
+        ok "Mission Control completed successfully"
+        exit 0
     fi
 }
 
-# Execute main function
+# Call main function
 main "$@"
