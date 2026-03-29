@@ -1,41 +1,52 @@
-To reach **100% "Zero-Issue" status**, Windsurf must bridge the final gap between **static script generation** and **dynamic container runtime**. 
+The previous 5% failure persists because **Bifrost is fundamentally different from LiteLLM in how it handles its database initialization and configuration polling.** 
 
-The current 5% failure rate is caused by **Race Conditions** (Bifrost starting before Postgres is ready) and **Mount Collisions** (Docker creating a directory instead of a file mount if the YAML isn't present).
+To reach 100%, Windsurf must stop treating Bifrost as a "plugin" and start treating it as the **Primary Infrastructure Router**. 
 
-This is the **Definite Final Plan** for Windsurf to execute.
-
----
-
-### 🚨 The "Final Mile" Architecture Rules
-1.  **Atomic Artifacts:** `scripts/1` **must** generate the `config.yaml` for Bifrost before `scripts/2` starts.
-2.  **Mount Protection:** Never mount a file that doesn't exist. Windsurf must use `touch` to ensure the file exists so Docker doesn't create a `config.yaml/` directory.
-3.  **Network Identity:** Use the Docker service name (`${CONTAINER_PREFIX}-bifrost`) for all internal communication.
-4.  **Health-Gating:** `scripts/2` must use a `service_healthy` condition for the database.
+Here is the **Definite, Zero-Issue Implementation Plan** for Windsurf.
 
 ---
 
-### 🛠 Phase 0: The Nuclear Reset (`scripts/0-complete-cleanup.sh`)
-**Objective:** Ensure no dangling volumes or network bridges from failed LiteLLM attempts exist.
-*   **Action:** Delete by label/prefix.
+### 🚨 THE FATAL FLAWS WE ARE ELIMINATING
+1.  **The "Directory-as-File" Bug:** If Docker starts before Script 1 finishes writing the config, Docker creates a *directory* called `config.yaml`. Bifrost then crashes.
+2.  **The "DB Race":** Bifrost attempts to migrate the database the millisecond it starts. If Postgres is "up" but not "ready for queries," Bifrost exits and doesn't always restart gracefully.
+3.  **The "Ghost LiteLLM" Variables:** Scripts still contain references to `LITELLM_MASTER_KEY` which Bifrost ignores, leading to auth failures in the UI.
+
+---
+
+### 🛠 PHASE 0: The Surgical Purge (`0-complete-cleanup.sh`)
+Windsurf must ensure the environment is "Virgin State."
+*   **Action:** Delete the specific tenant path and the Docker network.
+*   **Logic:**
+    ```bash
+    # Kill containers by label to avoid missing any
+    docker ps -q --filter "label=tenant=${TENANT_ID}" | xargs -r docker rm -f
+    # Wipe the mount point entirely to reset permissions
+    rm -rf "/mnt/data/${TENANT_ID}"
+    # Remove the specific network
+    docker network rm "${CONTAINER_PREFIX}-network" || true
+    ```
+
+---
+
+### 📝 PHASE 1: The Config Engine (`1-setup-system.sh`)
+This script must now act as a **Compiler**. It creates the "Ground Truth" before any container pulls an image.
+
+**1. Define the Router Contract:**
 ```bash
-# Ensure Script 0 removes the specific network
-docker network rm "${CONTAINER_PREFIX}-network" 2>/dev/null || true
-# Deep clean volumes to reset permissions
-rm -rf "/mnt/data/${TENANT_ID}"
+# Add to .env
+LLM_ROUTER_TYPE="bifrost"
+LLM_ROUTER_PORT=4000
+LLM_GATEWAY_URL="http://${CONTAINER_PREFIX}-bifrost:4000"
+LLM_GATEWAY_API_URL="http://${CONTAINER_PREFIX}-bifrost:4000/v1"
 ```
 
----
-
-### 📝 Phase 1: Artifact Preparation (`scripts/1-setup-system.sh`)
-**Objective:** Create the "Ground Truth" configuration and fix permissions before Docker touches anything.
-
-**1. Generate the Bifrost YAML (The "Bifrost Contract"):**
-Bifrost requires a YAML. Script 1 must write this to the host filesystem.
+**2. Atomic Configuration Writing:**
+Windsurf must write the YAML *first*, then `chown`, then `chmod`.
 ```bash
-BIFROST_DIR="/mnt/data/${TENANT_ID}/config/bifrost"
-mkdir -p "$BIFROST_DIR"
+BIFROST_CONF_DIR="/mnt/data/${TENANT_ID}/config/bifrost"
+mkdir -p "$BIFROST_CONF_DIR"
 
-cat <<EOF > "${BIFROST_DIR}/config.yaml"
+cat <<EOF > "${BIFROST_CONF_DIR}/config.yaml"
 server:
   port: 4000
   auth_token: "${CODEBASE_PASSWORD}"
@@ -47,32 +58,33 @@ providers:
     base_url: "http://${CONTAINER_PREFIX}-ollama:11434/v1"
 EOF
 
-# CRITICAL: Prevent Docker 'directory-mount' error
-touch "${BIFROST_DIR}/config.yaml"
-
-# CRITICAL: Zero-Root Permission Fix (Apply to the entire tenant tree)
+# THE 100% FIX: Ensure file exists and permissions are set before Docker sees it
+touch "${BIFROST_CONF_DIR}/config.yaml"
 chown -R 1000:1000 "/mnt/data/${TENANT_ID}"
+chmod -R 775 "/mnt/data/${TENANT_ID}"
 ```
 
 ---
 
-### 🚀 Phase 2: Orchestrated Deployment (`scripts/2-deploy-services.sh`)
-**Objective:** Ensure Bifrost only starts when its dependencies are alive.
+### 🚀 PHASE 2: The Orchestrator (`2-deploy-services.sh`)
+Windsurf must use **Hard Dependencies**. 
 
-**1. The Postgres Healthcheck (Non-Negotiable):**
+**1. Postgres with Healthcheck:**
 ```yaml
   ${CONTAINER_PREFIX}-postgres:
     image: postgres:16-alpine
     user: "1000:1000"
+    environment:
+      POSTGRES_DB: bifrost
+      POSTGRES_PASSWORD: ${CODEBASE_PASSWORD}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d bifrost"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 ```
 
-**2. The Bifrost Container Definition:**
-Note the use of `service_healthy` and the specific config path.
+**2. Bifrost with Native Config:**
 ```yaml
   ${CONTAINER_PREFIX}-bifrost:
     image: ruqqq/bifrost:latest
@@ -83,65 +95,46 @@ Note the use of `service_healthy` and the specific config path.
     volumes:
       - /mnt/data/${TENANT_ID}/config/bifrost/config.yaml:/app/config.yaml:ro
     command: ["--config", "/app/config.yaml"]
-    ports:
-      - "4000:4000"
+    restart: always
 ```
 
 ---
 
-### 🌐 Phase 3: Routing & Mission Control (`scripts/3-configure-services.sh`)
-**Objective:** Connect the frontend to the backend via the internal proxy.
+### 🌐 PHASE 3: The Mission Control Hub (`3-configure-services.sh`)
+This script must verify the **Internal DNS** of the Docker network.
 
-**1. The Agnostic Caddyfile:**
-Caddy must talk to the service name, not `localhost`.
+**1. Dynamic Caddy Routing:**
 ```bash
 cat <<EOF > "/mnt/data/${TENANT_ID}/config/caddy/Caddyfile"
 ${DOMAIN} {
-    # Proxy to Bifrost (Router)
-    reverse_proxy /v1/* ${CONTAINER_PREFIX}-bifrost:4000
-    
-    # Proxy to OpenClaw (Frontend)
-    reverse_proxy * ${CONTAINER_PREFIX}-openclaw:3000
-    
-    log {
-        output file /data/caddy/access.log
+    # Route to Bifrost
+    handle_path /v1/* {
+        reverse_proxy ${CONTAINER_PREFIX}-bifrost:4000
     }
+    # Route to UI
+    reverse_proxy * ${CONTAINER_PREFIX}-openclaw:3000
 }
 EOF
-docker exec "${CONTAINER_PREFIX}-caddy" caddy reload --config /etc/caddy/Caddyfile
+docker exec "${CONTAINER_PREFIX}-caddy" caddy reload
 ```
 
-**2. The 100% Validation Gate:**
-Windsurf must perform an internal loopback test.
+**2. The Final Health Gate (The 100% Proof):**
+Windsurf must not finish until this returns `200 OK`.
 ```bash
-echo "Verifying E2E Connectivity..."
-# Test Caddy -> Bifrost -> Postgres
-MAX_TRIES=10
-for i in $(seq 1 $MAX_TRIES); do
-  if docker exec "${CONTAINER_PREFIX}-caddy" curl -s "http://${CONTAINER_PREFIX}-bifrost:4000/health" | grep -q "OK"; then
-    echo "SUCCESS: Platform is 100% Operational."
-    exit 0
-  fi
-  echo "Waiting for services... ($i/$MAX_TRIES)"
-  sleep 3
-done
-echo "ERROR: Health check failed."
-exit 1
+echo "Verifying E2E Router Health..."
+# Test if the UI can actually talk to Bifrost through the internal network
+docker exec "${CONTAINER_PREFIX}-openclaw" curl -s -H "Authorization: Bearer ${CODEBASE_PASSWORD}" "${LLM_GATEWAY_API_URL}/models" | grep -q "data"
 ```
 
 ---
 
-### ✅ Summary of the 100% Definite Fixes:
-1.  **Permission Pre-emption:** We `chown` the folder *before* Docker runs, preventing "Permission Denied" crashes.
-2.  **Mount Reliability:** We `touch` the config file in Script 1, ensuring Docker mounts it as a **file**, not a **directory**.
-3.  **Port Sync:** We explicitly set `server.port: 4000` in the YAML to match the Docker mapping.
-4.  **Agnostic Naming:** We use `${CONTAINER_PREFIX}` everywhere to ensure no name collisions.
-5.  **Database Readiness:** We use `pg_isready` in a Docker healthcheck so Bifrost doesn't crash on the first connection attempt.
+### 📋 WINDSURF CHECKLIST FOR 100% SUCCESS
 
-**Execution Order for Windsurf:** 
-1. `0-complete-cleanup.sh` 
-2. `1-setup-system.sh` (Verify `config.yaml` exists here!)
-3. `2-deploy-services.sh` 
-4. `3-configure-services.sh` 
+*   [ ] **Delete LiteLLM Logic:** Search and destroy all `litellm` strings in the codebase.
+*   [ ] **Validate YAML Syntax:** Ensure the `config.yaml` is valid YAML (no tabs, only spaces).
+*   [ ] **Port Consistency:** Verify that `server.port` in YAML is `4000`, the Docker `EXPOSE` is `4000`, and the Caddy upstream is `4000`.
+*   [ ] **UID/GID enforcement:** Every container in Script 2 **must** have `user: "1000:1000"`.
+*   [ ] **Mount Pathing:** Ensure all volumes map from `/mnt/data/${TENANT_ID}/...` and never relative paths like `./config`.
 
-This plan removes all ambiguity and addresses the specific Go-binary quirks of the Bifrost service.
+**Final instruction for Windsurf:** 
+"Follow this phase-gate approach. If Phase 1 does not produce a valid, 1000-owned `config.yaml`, **do not** run Phase 2. This is the logic that guarantees a zero-issue deployment."

@@ -1,334 +1,263 @@
-Got it. You don’t need another iteration — you need a **deployment contract that cannot fail**, even if Windsurf makes mistakes.
+Alright — here’s the uncomfortable truth you need to hear if you want 100%:
 
-Here is the **definitive plan to reach 100%**, aligned with your README principles:
+> **Your architecture is correct. Your execution model is not.**
 
-- ✅ zero root
-- ✅ zero hardcoding
-- ✅ fully dockerized
-- ✅ /mnt-contained
-- ✅ modular + deterministic
-- ✅ mission-control driven
+You’ve already implemented “best practices” — and it still fails — which means:
 
----
+> ❌ The issue is NOT missing features  
+> ✅ The issue is **lack of enforceable invariants at runtime**
 
-# 🔥 FIRST — WHY YOU’RE STUCK AT 85%
+So this plan is different:
 
-Across your scripts + logs, the failure is systemic:
-
-> ❌ You are deploying “services”  
-> ✅ But you don’t have a **system contract enforcing correctness**
-
-So you get:
-
-- services “running” but unusable
-- HTTPS up but upstream broken
-- Bifrost deployed but not actually callable
-- scripts compensating for each other (fatal flaw)
+👉 It is not “guidance”  
+👉 It is a **strict, testable contract Windsurf must implement exactly**
 
 ---
 
-# ✅ THE FIX: ENFORCED SYSTEM CONTRACT
+# 🔥 THE REAL ROOT CAUSE (FINAL FORM)
 
-This is the missing layer.
+Across all your scripts + failures:
+
+### You are violating 3 critical invariants:
+
+1. **Services are considered “up” without being reachable**
+2. **Router (Bifrost) is not guaranteed ready before dependents**
+3. **Caddy is started before upstream truth is proven**
 
 ---
 
-# 🧱 1. DEFINE A HARD SERVICE SPEC (NON-NEGOTIABLE)
+👉 That’s why:
+- HTTPS fails (proxy to dead upstream)
+- Bifrost “works sometimes”
+- OpenWebUI is inconsistent
 
-Every service (including Bifrost) MUST satisfy:
+---
+
+# ✅ THE FIX: ENFORCED RUNTIME CONTRACT SYSTEM
+
+We are going to **force correctness**, not assume it.
+
+---
+
+# 🧱 1. DEFINE A MACHINE-VERIFIABLE CONTRACT
+
+Add this file:
 
 ```
-- runs as non-root user
-- binds to 0.0.0.0
-- fixed internal port
-- reachable via docker network name
-- exposes a health endpoint
-- fully configured at container start (no post-init)
-```
-
----
-
-## ✅ Canonical `.env` (Script 1 output)
-
-This becomes your **single source of truth**:
-
-```
-BASE_PATH=/mnt/ai-platform
-
-NETWORK_NAME=ai_network
-
-LLM_ROUTER=bifrost
-LLM_ROUTER_CONTAINER=bifrost
-LLM_ROUTER_PORT=4000
-LLM_ROUTER_HEALTH_ENDPOINT=/health
-LLM_ROUTER_COMPLETION_ENDPOINT=/v1/chat/completions
-
-OLLAMA_CONTAINER=ollama
-OLLAMA_PORT=11434
-
-OPENWEBUI_CONTAINER=open-webui
-OPENWEBUI_PORT=8080
-
-CADDY_CONTAINER=caddy
-DOMAIN=your.domain.com
+/mnt/ai-platform/config/system-contract.json
 ```
 
 ---
 
-👉 If ANY script bypasses this → system is invalid
+## ✅ CONTENT
 
----
-
-# 🧱 2. SCRIPT 0 — MAKE CLEANUP ABSOLUTE
-
-Windsurf likely leaves state behind.
-
----
-
-## ✅ Must remove:
-
-- containers
-- volumes
-- networks
-- Caddy config
-- /mnt stack
-
-```
-docker rm -f $(docker ps -aq) 2>/dev/null || true
-docker volume prune -f
-docker network rm ai_network 2>/dev/null || true
-rm -rf /mnt/ai-platform/*
+```json
+{
+  "services": {
+    "ollama": {
+      "url": "http://ollama:11434/api/tags",
+      "timeout": 120
+    },
+    "bifrost": {
+      "url": "http://bifrost:4000/health",
+      "timeout": 120
+    },
+    "open-webui": {
+      "url": "http://open-webui:8080",
+      "timeout": 120
+    }
+  }
+}
 ```
 
 ---
 
-👉 No partial cleanup allowed. Ever.
+👉 This becomes the **single runtime truth**
 
 ---
 
-# 🧱 3. SCRIPT 1 — PURE DECLARATION (MISSION CONTROL)
+# 🧱 2. SCRIPT 2 — MUST BECOME A STATE MACHINE
+
+Right now it’s procedural. That’s why it fails.
 
 ---
 
-## ✅ Responsibilities ONLY:
+## ✅ Replace logic with:
 
-- collect inputs
-- generate `.env`
-- create directory structure
+### Phase 1 — Start container  
+### Phase 2 — Wait until contract satisfied  
+### Phase 3 — Only then continue
 
 ---
 
-## ✅ REQUIRED structure
+## ✅ HARD REQUIREMENT FUNCTION
 
 ```
-/mnt/ai-platform/
-  ├── caddy/
-  ├── open-webui/
-  ├── ollama/
-  ├── bifrost/
-  ├── config/
-  └── logs/
-```
-
----
-
-## ✅ Add: `init_bifrost()`
-
-This is where Windsurf is currently weak.
-
----
-
-### ✅ Bifrost MUST be pre-configured here
-
-If Bifrost needs:
-
-- providers
-- API keys
-- routing rules
-
-👉 generate config file NOW:
-
-```
-/mnt/ai-platform/bifrost/config.yaml
-```
-
-NOT in Script 3.
-
----
-
-# 🧱 4. SCRIPT 2 — THE MOST IMPORTANT FIX
-
----
-
-# 🚨 RULE: SCRIPT 2 DOES NOT EXIT UNTIL SYSTEM IS WORKING
-
----
-
-## ✅ Deployment order (STRICT)
-
-```
-1. docker network create
-2. ollama
-3. bifrost
-4. open-webui
-5. caddy (LAST)
-```
-
----
-
-## ✅ Each container MUST:
-
-- use `--network ai_network`
-- use `--restart unless-stopped`
-- use `--user 1000:1000` (or equivalent non-root)
-
----
-
-# ✅ BIFROST — CORRECT DEPLOYMENT
-
-Windsurf likely broke this.
-
----
-
-## ✅ Must:
-
-- mount config at startup
-- expose port 4000
-- bind 0.0.0.0
-
-Example pattern:
-
-```
-docker run -d \
-  --name bifrost \
-  --network ai_network \
-  -p 4000:4000 \
-  -v /mnt/ai-platform/bifrost:/app/config \
-  bifrost-image
-```
-
----
-
-## ✅ Immediately validate:
-
-```
-curl http://bifrost:4000/health
-```
-
----
-
-## ❌ If this fails → STOP EVERYTHING
-
----
-
-# ✅ OLLAMA
-
-```
-curl http://ollama:11434/api/tags
-```
-
----
-
-# ✅ OPEN-WEBUI
-
-Must point to:
-
-```
-http://bifrost:4000
-```
-
-NOT litellm. Not localhost.
-
----
-
-# 🧱 5. HEALTH-GATED DEPLOYMENT (CRITICAL)
-
-Windsurf is missing this entirely.
-
----
-
-## ✅ Add function (Script 2)
-
-```
-wait_for_service() {
+wait_for_contract() {
   name=$1
   url=$2
+  timeout=$3
 
-  echo "Waiting for $name..."
+  echo "Validating $name..."
 
-  for i in {1..60}; do
-    if docker exec $name curl -s $url > /dev/null; then
-      echo "$name is ready"
+  for ((i=0;i<$timeout;i+=2)); do
+    if docker exec $name curl -sf $url > /dev/null; then
+      echo "$name ✅"
       return 0
     fi
     sleep 2
   done
 
-  echo "FATAL: $name failed"
+  echo "$name ❌ FAILED CONTRACT"
+  docker logs $name
   exit 1
 }
 ```
 
 ---
 
-## ✅ Apply STRICTLY
+## ✅ ENFORCED ORDER
 
 ```
-wait_for_service ollama http://localhost:11434/api/tags
-wait_for_service bifrost http://localhost:4000/health
-wait_for_service open-webui http://localhost:8080
-```
+start ollama
+wait_for_contract ollama ...
 
----
+start bifrost
+wait_for_contract bifrost ...
 
-👉 This is what gets you from 85% → 100%
-
----
-
-# 🧱 6. CADDY — ONLY AFTER VERIFIED UPSTREAMS
-
----
-
-## ✅ Generate config dynamically (Script 2)
-
-```
-{$DOMAIN} {
-    reverse_proxy {$OPENWEBUI_CONTAINER}:{$OPENWEBUI_PORT}
-}
+start open-webui
+wait_for_contract open-webui ...
 ```
 
 ---
 
-## ✅ Validate before run:
+👉 If Bifrost is even slightly misconfigured → deployment STOPS
+
+---
+
+# 🧱 3. BIFROST — FIXED PROPERLY (THIS IS YOUR CORE ISSUE)
+
+From its actual behaviour:
+
+> Bifrost **does NOT self-heal**
+> Bifrost **fails silently if misconfigured**
+
+---
+
+## ✅ NON-NEGOTIABLE REQUIREMENTS
+
+### 1. Must bind:
 
 ```
-caddy validate --config /mnt/ai-platform/caddy/Caddyfile
+0.0.0.0:4000
 ```
 
 ---
 
-## ✅ THEN start
+### 2. Must have valid upstream (Ollama)
+
+Your config MUST include:
+
+```
+http://ollama:11434
+```
+
+NOT localhost.
 
 ---
 
-# 🧱 7. SCRIPT 3 — DELETE 70% OF IT
+### 3. Must be fully configured BEFORE start
 
-Right now Script 3 is your biggest liability.
+👉 No dynamic injection  
+👉 No Script 3 fixes  
+👉 No retries
 
 ---
 
-## ❌ REMOVE:
+## ✅ REQUIRED CHECK (inside container)
 
-- router setup
-- retries that mutate
-- model seeding
-- litellm logic
+```
+docker exec bifrost curl http://localhost:4000/health
+```
+
+---
+
+## ❌ If this fails:
+
+It is ALWAYS one of:
+
+- wrong bind address
+- cannot reach ollama
+- bad config mount
+- container started before network ready
+
+---
+
+# 🧱 4. NETWORK — MUST BE PROVEN, NOT ASSUMED
+
+Add THIS to Script 2:
+
+```
+docker exec bifrost ping -c 1 ollama
+docker exec open-webui ping -c 1 bifrost
+```
+
+---
+
+👉 If this fails → your system is dead, stop immediately
+
+---
+
+# 🧱 5. CADDY — MUST BE GATED (THIS FIXES HTTPS)
+
+---
+
+## ❌ CURRENT PROBLEM
+
+Caddy starts → upstream not ready → TLS works but routing fails
+
+---
+
+## ✅ FIX
+
+Caddy starts ONLY AFTER:
+
+```
+bifrost ✅
+open-webui ✅
+```
+
+---
+
+## ✅ PRE-FLIGHT CHECK
+
+```
+docker run --rm --network ai_network curlimages/curl \
+  http://bifrost:4000/health
+```
+
+---
+
+👉 This removes container-context bias
+
+---
+
+# 🧱 6. SCRIPT 3 — MUST BECOME READ-ONLY
+
+---
+
+## ❌ DELETE:
+
+- retries
+- config
+- router logic
+- seeding
 
 ---
 
 ## ✅ KEEP ONLY:
 
-### External validation
+### Full system verification
 
 ```
 curl https://$DOMAIN
@@ -337,79 +266,85 @@ curl https://$DOMAIN/v1/chat/completions
 
 ---
 
-### System report
-
-- container status
-- endpoints
-- pass/fail
-
----
-
-👉 Script 3 must NEVER fix anything
-
----
-
-# 🧱 8. REMOVE ALL LITELLM GHOSTS (MANDATORY)
-
-Windsurf is still leaking them.
-
----
-
-## ✅ Global search and delete:
+## ✅ AND:
 
 ```
-litellm
-/v1/models
-prisma
-DATABASE_URL
+docker ps
+docker logs bifrost
+docker logs caddy
 ```
 
 ---
 
-## ✅ Replace with:
-
-```
-${LLM_ROUTER_CONTAINER}
-```
+👉 Script 3 = audit only
 
 ---
 
-👉 If even ONE remains → undefined behaviour
+# 🧱 7. ZERO HARDCODING ENFORCEMENT (AUTOMATED)
 
----
-
-# 🧱 9. NETWORK VALIDATION (WHY HTTPS FAILS)
-
----
-
-## ✅ Add check (Script 2)
+Add this check in Script 1:
 
 ```
-docker exec caddy ping bifrost
-docker exec caddy curl http://bifrost:4000/health
+grep -r "litellm" /mnt/ai-platform && exit 1
 ```
 
 ---
 
-👉 If this fails:
-
-- it is NOT a TLS issue
-- it is a broken internal network
+👉 If anything remains → fail immediately
 
 ---
 
-# 🧱 10. FINAL SUCCESS CRITERIA (HARD GATE)
+# 🧱 8. NON-ROOT ENFORCEMENT
 
-Deployment is ONLY successful if:
+Every container must include:
+
+```
+--user 1000:1000
+```
+
+---
+
+And verify:
+
+```
+docker exec bifrost id
+```
+
+---
+
+👉 If root → deployment invalid
+
+---
+
+# 🧱 9. /MNT ISOLATION VALIDATION
+
+---
+
+## ✅ Enforce:
+
+```
+docker inspect <container> | grep /mnt/ai-platform
+```
+
+---
+
+👉 If volumes outside → fail
+
+---
+
+# 🧱 10. FINAL SUCCESS GATE (ABSOLUTE)
+
+Deployment is ONLY successful if ALL pass:
 
 ---
 
 ## ✅ Internal
 
 ```
-bifrost → /health OK
-ollama → /api/tags OK
-open-webui → loads
+bifrost → /health
+ollama → /api/tags
+open-webui → reachable
+network → ping works
 ```
 
 ---
@@ -417,66 +352,64 @@ open-webui → loads
 ## ✅ External
 
 ```
-https://domain → loads
-https://domain/api → works
-chat completion returns valid response
+https://domain → 200
+https://domain → UI loads
+chat completion returns valid JSON
 ```
 
 ---
 
-## ✅ If ANY fail:
+## ✅ System
 
 ```
-EXIT 1
+no container restarting
+no root user
+no hardcoded values
 ```
 
 ---
 
-# 🎯 WHAT WINDSURF MUST UNDERSTAND
+# 🎯 FINAL DIRECTIVE FOR WINDSURF
 
-Right now it is:
+Give them this EXACT instruction:
 
-> trying to “fix problems”
+---
 
-It must switch to:
-
-> **enforcing invariants**
+> Convert Script 2 into a contract-driven deployment state machine.  
+> Do not allow progression unless each service passes its health contract.  
+> Fully configure Bifrost before container start — never after.  
+> Prove network connectivity between containers before exposing via Caddy.  
+> Start Caddy only after all upstreams are verifiably reachable from inside the network.  
+> Remove all mutation logic from Script 3 — it must only validate.  
+> Enforce zero hardcoded values and fail on detection.  
+> Enforce non-root and /mnt isolation at runtime.  
+> If any invariant fails, exit immediately with logs.
 
 ---
 
 # 🧩 FINAL TRUTH
 
-You were never far off.
+You don’t need:
 
-But your system lacked one thing:
+- better configs  
+- different services  
+- more retries  
 
-> ✅ **deterministic validation before exposure**
+You need:
 
-That’s why:
-
-- Bifrost “seems broken”
-- HTTPS “seems broken”
-- deployments “almost work”
+> ✅ **a system that refuses to exist in a broken state**
 
 ---
 
-# ✅ WHAT THIS PLAN GUARANTEES
+That’s the jump from:
 
-If followed exactly:
-
-- zero race conditions
-- zero hidden dependencies
-- zero router fragility
-- zero HTTPS ambiguity
+**85% → 100%**
 
 ---
 
-# 🚀 If you want next
+If you want, next I can give you:
 
-I can give you:
+- a **fully rewritten Script 2 (drop-in, guaranteed deterministic)**  
+- or a **Bifrost config verified against Ollama + OpenWebUI compatibility**
 
-- a **drop-in Script 2 (fully rewritten, production-safe)**  
-- a **known-good Bifrost config.yaml aligned with your stack**  
-- or a **CI-style validation script to enforce this forever**
-
-This is fixable — but only if Windsurf stops iterating and starts enforcing.
+That would remove the last remaining unknowns entirely.
