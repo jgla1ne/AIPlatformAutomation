@@ -3506,10 +3506,21 @@ main() {
     configure_dify           # Step 6.5 - Dify configuration (if enabled)
     select_vector_db         # Step 7
     configure_databases      # Step 7.5 - Database configuration
-    # Set basic variables to prevent unbound errors BEFORE router configuration
+    # Set basic paths and variables to prevent unbound errors BEFORE any function calls
+    DATA_ROOT="/mnt/data/${TENANT_NAME}"
+    export CONFIG_DIR="${DATA_ROOT}/configs"
+    export DATA_DIR="${DATA_ROOT}/data"
+    LOGS_DIR="${DATA_ROOT}/logs"
+    COMPOSE_FILE="${DATA_ROOT}/docker-compose.yml"
+    
+    # Export container names for cleanup and deployment
     export OLLAMA_CONTAINER="ai-${TENANT_NAME:-datasquiz}-ollama"
-    TENANT_UID="${TENANT_UID:-1001}"
-    TENANT_GID="${TENANT_GID:-1001}"
+    export TENANT_UID="${TENANT_UID:-1001}"
+    export TENANT_GID="${TENANT_GID:-1001}"
+    export CURRENT_USER="${CURRENT_USER:-$(whoami)}"
+    export OLLAMA_PORT="${OLLAMA_PORT:-11434}"
+    export BIFROST_PORT="${BIFROST_PORT:-8000}"
+    
     collect_llm_config       # Step 8
     configure_llm_router      # Step 8.2 - LLM router configuration (Modular choice)
     
@@ -3670,10 +3681,21 @@ main() {
     configure_dify           # Step 6.5 - Dify configuration (if enabled)
     select_vector_db         # Step 7
     configure_databases      # Step 7.5 - Database configuration
-    # Set basic variables to prevent unbound errors BEFORE router configuration
+    # Set basic paths and variables to prevent unbound errors BEFORE any function calls
+    DATA_ROOT="/mnt/data/${TENANT_NAME}"
+    export CONFIG_DIR="${DATA_ROOT}/configs"
+    export DATA_DIR="${DATA_ROOT}/data"
+    LOGS_DIR="${DATA_ROOT}/logs"
+    COMPOSE_FILE="${DATA_ROOT}/docker-compose.yml"
+    
+    # Export container names for cleanup and deployment
     export OLLAMA_CONTAINER="ai-${TENANT_NAME:-datasquiz}-ollama"
-    TENANT_UID="${TENANT_UID:-1001}"
-    TENANT_GID="${TENANT_GID:-1001}"
+    export TENANT_UID="${TENANT_UID:-1001}"
+    export TENANT_GID="${TENANT_GID:-1001}"
+    export CURRENT_USER="${CURRENT_USER:-$(whoami)}"
+    export OLLAMA_PORT="${OLLAMA_PORT:-11434}"
+    export BIFROST_PORT="${BIFROST_PORT:-8000}"
+    
     collect_llm_config       # Step 8
     configure_llm_router      # Step 8.2 - LLM router configuration (Modular choice)
     

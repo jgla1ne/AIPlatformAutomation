@@ -1,53 +1,169 @@
 ---
 
-## 🔍 SCRIPT 1 DEPLOYMENT ITERATION ANALYSIS
-**Date:** 2026-03-28T23:00:00Z  
-**Objective:** Implement CLAUDE.md fixes for Script 1  
-**Status:** Repeated unbound variable failures despite multiple fix attempts
+## 🔍 SCRIPT 0 & 1 DEPLOYMENT ITERATION ANALYSIS  
+**Date:** 2026-03-29T03:00:00Z  
+**Objective:** Implement CLAUDE.md fixes for Scripts 0 and 1  
+**Status:** Script 0 successful, Script 1 repeatedly fails with unbound variable issues
 
 ---
 
-## 📋 LATEST DEPLOYMENT LOG SUMMARY
+## 📋 SCRIPT 0 EXECUTION EVIDENCE
 
-### Final Script 1 Execution
+### Script 0 Cleanup - SUCCESS
+```bash
+sudo bash scripts/0-complete-cleanup.sh datasquiz
+```
+
+**Exit Code:** 0 ✅  
+**Status:** TRUE NUCLEAR cleanup completed successfully
+
+**Key Results:**
+- ✅ No AI platform containers found
+- ✅ No containers for project 'ai-datasquiz' found  
+- ✅ All lingering processes killed
+- ✅ No AI platform volumes found
+- ✅ All tenant data nuclear wiped
+- ✅ Fresh tenant directory created
+- ✅ Docker system prune completed
+
+**Initial Issue Fixed:**
+- ❌ `LLM_GATEWAY_CONTAINER: unbound variable` 
+- ✅ **Fix Applied:** Added default container name exports in load_env_or_default()
+
+**Final Script 0 State:** Working correctly
+
+---
+
+## 📋 SCRIPT 1 EXECUTION EVIDENCE
+
+### Script 1 Attempt 1 - CONFIG_DIR Unbound
 ```bash
 sudo -E bash scripts/1-setup-system.sh datasquiz
 ```
 
-**Exit Code:** 0 (but with errors)  
-**Key Error:** `scripts/1-setup-system.sh: line 1270: CONFIG_DIR: unbound variable`
+**Progress:** Stack selection (Full Stack) → Dify → Qdrant → Database → LLM Config → Bifrost selection  
+**Exit Code:** 1 ❌  
+**Error:** `scripts/1-setup-system.sh: line 1270: CONFIG_DIR: unbound variable`
 
-**Progress Made:**
-- ✅ Docker daemon detection passed
-- ✅ Stack selection (Full Stack) completed
-- ✅ Dify configuration completed
-- ✅ Vector DB selection (Qdrant) completed  
-- ✅ Database configuration completed
-- ✅ LLM provider API keys entered
-- ✅ Ollama model selection completed
-- ✅ LLM router (Bifrost) selected
-- ❌ Failed at Bifrost initialization due to CONFIG_DIR unbound
+**Fix Applied:** Added CONFIG_DIR export before collect_llm_config()
 
-**Generated .env (incomplete):**
+### Script 1 Attempt 2 - CURRENT_USER Unbound  
+**Exit Code:** 1 ❌  
+**Error:** `scripts/1-setup-system.sh: line 1272: CURRENT_USER: unbound variable`
+
+**Fix Applied:** Added CURRENT_USER export before collect_llm_config()
+
+### Script 1 Attempt 3 - OLLAMA_PORT Unbound
+**Exit Code:** 1 ❌  
+**Error:** `KeyError: 'OLLAMA_PORT'` in Bifrost python3 config
+
+**Fix Applied:** Added OLLAMA_PORT and BIFROST_PORT exports before collect_llm_config()
+
+### Script 1 Attempt 4 - Cancelled by User
+**Status:** User stopped execution before completion
+
+---
+
+## 🔍 ROOT CAUSE ANALYSIS
+
+### **Core Architectural Problem Identified**
+
+**Issue:** Script 1 violates README.md architectural principles:
+1. **Variable Timing:** Functions called before variables are defined/exported
+2. **Function Dependencies:** init_bifrost() depends on variables not yet in scope  
+3. **Script Flow:** Interactive wizard conflicts with static config generation
+4. **No Cohesion:** Fixes applied piecemeal without considering script interdependencies
+
+### **Specific Variable Scoping Issues**
+
+| Variable | Where Used | Where Defined | Problem |
+|----------|------------|----------------|---------|
+| CONFIG_DIR | init_bifrost() line 1270 | After collect_llm_config() | Used before definition |
+| CURRENT_USER | init_bifrost() line 1272 | After collect_llm_config() | Used before definition |
+| OLLAMA_PORT | python3 config in init_bifrost() | After collect_llm_config() | Used before definition |
+| BIFROST_PORT | python3 config in init_bifrost() | After collect_llm_config() | Used before definition |
+| LLM_MASTER_KEY | python3 config in init_bifrost() | During configure_llm_router() | Correctly available |
+
+### **Function Call Order Problem**
+
 ```bash
-LLM_ROUTER=bifrost
-ENABLE_BIFROST=true
-ENABLE_LITELLM=false
+# Current problematic order in main():
+collect_llm_config()       # Step 8
+configure_llm_router()     # Step 8.2 - calls init_bifrost() HERE
+    init_bifrost()         # Needs CONFIG_DIR, CURRENT_USER, OLLAMA_PORT
+# Variables defined AFTER the above calls:
+export CONFIG_DIR="${DATA_ROOT}/configs"
+export CURRENT_USER="${CURRENT_USER:-$(whoami)}"
+export OLLAMA_PORT="${OLLAMA_PORT:-11434}"
 ```
 
 ---
 
-## 🔄 COMPLETE ITERATION HISTORY
+## � CRITICAL ARCHITECTURAL VIOLATIONS
 
-### **Iteration 1: Initial CLAUDE.md Implementation**
-**Problem:** `BIFROST_AUTH_TOKEN: unbound variable`
-**Root Cause:** Variable referenced before definition in init_bifrost()
-**Fix Applied:** Changed `BIFROST_AUTH_TOKEN` to `LLM_MASTER_KEY`
-**Result:** Still failed - new unbound variable emerged
+### **Violates README.md Principles:**
 
-### **Iteration 2: OLLAMA_CONTAINER Issue**
-**Problem:** `OLLAMA_CONTAINER: unbound variable`  
-**Root Cause:** Container name variable not defined before init_bifrost()
+1. **❌ Modular Architecture:** Not achieved - functions have hidden dependencies
+2. **❌ Zero Hardcoded Values:** Attempted but variable timing breaks this  
+3. **❌ Dynamic Config Generation:** Fails due to variable scoping issues
+4. **❌ Environment-Driven Logic:** Broken by variable availability timing
+
+### **Script Interdependency Issues:**
+
+- **Script 0 → Script 1:** Cleanup works, but doesn't prepare environment properly
+- **Script 1 → Script 2:** .env generation incomplete due to early failure
+- **Script 2 → Script 3:** Can't proceed if Script 1 fails
+- **All Scripts:** Variable definitions inconsistent across scripts
+
+---
+
+## 📊 IMPACT ASSESSMENT
+
+### **Current State:**
+- **Script 0:** ✅ Working correctly  
+- **Script 1:** ❌ Broken - cannot complete Bifrost initialization
+- **Script 2:** ❌ Cannot run (depends on Script 1 .env)
+- **Script 3:** ❌ Cannot run (depends on deployed services)
+
+### **Platform Status:** 
+- **Deployment:** 0% operational
+- **Configuration:** Incomplete .env file
+- **Services:** None deployed
+- **Readiness:** Not ready for production
+
+---
+
+## 🛠️ RECOMMENDED SOLUTION APPROACH
+
+### **STOP Ad-Hoc Fixes - Need Architectural Review**
+
+**Required Actions:**
+1. **Comprehensive Analysis:** Review all 4 scripts together for variable dependencies
+2. **Variable Strategy:** Define consistent variable definition order across all scripts  
+3. **Function Dependencies:** Map all function call dependencies and variable requirements
+4. **Architecture Compliance:** Ensure all changes align with README.md principles
+
+### **Next Steps:**
+1. **Do NOT** continue piecemeal fixes to Script 1
+2. **DO** analyze all scripts together for holistic solution
+3. **DO** consider architectural redesign if current approach is fundamentally flawed
+4. **DO** ensure any fix maintains README.md architectural principles
+
+---
+
+## 📝 EVIDENCE SUMMARY
+
+**Files Modified During Attempts:**
+- ✅ scripts/0-complete-cleanup.sh (container defaults added)
+- ❌ scripts/1-setup-system.sh (multiple ad-hoc variable exports)
+
+**Git Commits:**
+- `2767269` - Initial CLAUDE.md fixes (5 files changed)
+- Pending: Script 0 and Script 1 variable fixes
+
+**Critical Finding:** The current approach of adding variable exports piecemeal is not sustainable and violates the modular architecture principles outlined in README.md.
+
+**Recommendation:** Stop individual script fixes and perform comprehensive architectural review of all 4 scripts together.
 **Fix Applied:** Added `export OLLAMA_CONTAINER="ai-${TENANT_NAME}-ollama"` in main()
 **Result:** Still failed - variable not available in function scope
 
