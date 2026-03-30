@@ -69,6 +69,12 @@ dry_run() { [[ "${DRY_RUN:-false}" == "true" ]] && echo -e "${BLUE}[DRY-RUN]${NC
 framework_validate() {
     log "Validating system framework..."
     
+    # Fix Docker socket connection (common issue)
+    if [[ "${DOCKER_HOST:-}" == *"user/1000"* ]]; then
+        log "Fixing Docker socket connection..."
+        unset DOCKER_HOST
+    fi
+    
     # Binary availability checks
     local missing_bins=()
     for bin in curl jq; do
@@ -92,7 +98,7 @@ framework_validate() {
             log "User added to docker group. Please log out and back in, or run: newgrp docker"
             exit 1
         else
-            fail "Docker daemon running but user cannot access. Try: newgrp docker"
+            fail "Docker daemon running but user cannot access. Try: unset DOCKER_HOST"
         fi
     fi
     
