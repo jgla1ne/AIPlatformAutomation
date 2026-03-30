@@ -1,335 +1,193 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script 0: Nuclear Cleanup - BULLETPROOF v5.0 FINAL
+# Script 0: Nuclear Cleanup - README COMPLIANT
 # =============================================================================
-# PURPOSE: Complete system wipe with enhanced safety and validation
+# PURPOSE: Stop containers, remove data, clear all state
 # USAGE:   sudo bash scripts/0-complete-cleanup.sh [tenant_id] [options]
-# OPTIONS: --confirm-destroy    Skip interactive confirmation
-#          --remove-images      Remove all tenant-specific images
-#          --dry-run           Show what would be removed without action
+# OPTIONS: --dry-run           Show what would be removed without action
+#          --containers-only  Only remove containers, keep data
 # =============================================================================
 
 set -euo pipefail
 
 # =============================================================================
-# FRAMEWORK VALIDATION
+# ROOT EXECUTION CHECK (README P7 - exception for script 0)
 # =============================================================================
-framework_validate() {
-    # Binary availability checks
-    local missing_bins=()
-    for bin in docker jq; do
-        if ! command -v "$bin" >/dev/null 2>&1; then
-            missing_bins+=("$bin")
-        fi
-    done
-    
-    if [[ ${#missing_bins[@]} -gt 0 ]]; then
-        echo "ERROR: Missing required binaries: ${missing_bins[*]}" >&2
-        exit 1
-    fi
-    
-    # Docker daemon health
-    if ! docker info >/dev/null 2>&1; then
-        echo "ERROR: Docker daemon not running or accessible" >&2
-        
-        # Check if user is in docker group and fix if needed
-        if ! groups $(whoami) | grep -q docker; then
-            echo "INFO: Adding user $(whoami) to docker group..." >&2
-            sudo usermod -aG docker $(whoami) 2>/dev/null || {
-                echo "ERROR: Failed to add user to docker group. Please run: sudo usermod -aG docker \$USER" >&2
-                exit 1
-            }
-            echo "INFO: User added to docker group. Please log out and back in, or run: newgrp docker" >&2
-            exit 1
-        else
-            echo "ERROR: Docker daemon running but user cannot access. Try: newgrp docker" >&2
-            exit 1
-        fi
-    fi
-    
-    # Root permission check
-    if [[ $EUID -ne 0 ]]; then
-        echo "ERROR: This script must be run as root for complete cleanup" >&2
-        exit 1
-    fi
-    
-    echo "INFO: Framework validation passed" >&2
+if [[ $EUID -ne 0 ]]; then
+    echo "ERROR: This script must be run as root for complete cleanup"
+    exit 1
+fi
+
+# =============================================================================
+# SCRIPT CONFIGURATION
+# =============================================================================
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# =============================================================================
+# LOGGING (README P11)
+# =============================================================================
+LOG_FILE=""
+log() {
+    local msg="[$(date +%H:%M:%S)] $*"
+    echo "$msg"
+    [[ -n "$LOG_FILE" ]] && echo "$msg" >> "$LOG_FILE"
 }
+ok() { log "OK: $*"; }
+warn() { log "WARN: $*"; }
+fail() { log "FAIL: $*"; exit 1; }
+dry_run() { [[ "${DRY_RUN:-false}" == "true" ]] && echo "[DRY-RUN] $1"; }
 
 # =============================================================================
-# LOGGING AND UTILITIES
-# =============================================================================
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-log() { echo -e "${CYAN}[INFO]${NC}    $1"; }
-ok() { echo -e "${GREEN}[OK]${NC}      $*"; }
-warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
-fail() { echo -e "${RED}[FAIL]${NC}    $*"; exit 1; }
-dry_run() { echo -e "${BLUE}[DRY-RUN]${NC} $1"; }
-
-# =============================================================================
-# TYPED CONFIRMATION (Expert Fix)
+# CONFIRMATION FUNCTIONS
 # =============================================================================
 typed_confirmation() {
-    local tenant_id="$1"
-    echo
-    warn "🚨 NUCLEAR CLEANUP CONFIRMATION 🚨"
-    echo
-    echo "This will COMPLETELY DESTROY all data for tenant: ${RED}${tenant_id}${NC}"
-    echo "Including:"
-    echo "  • All containers and networks"
-    echo "  • All volumes and data"
-    echo "  • All configuration files"
-    echo "  • All tenant-specific images (if --remove-images specified)"
-    echo
-    echo -e "${RED}THIS ACTION IS IRREVERSIBLE${NC}"
-    echo
+    local confirmation="$1"
+    local expected="$2"
     
-    # Typed confirmation requirement
-    echo -n "Type '${RED}DESTROY-${tenant_id}${NC}' to confirm: "
-    read -r confirmation
-    
-    if [[ "$confirmation" != "DESTROY-${tenant_id}" ]]; then
-        fail "Confirmation mismatch. Aborting cleanup."
+    echo ""
+    read -r -p "  Type '${expected}' to confirm: " input
+    if [[ "$input" != "$expected" ]]; then
+        fail "Confirmation failed. Expected '${expected}' but got '${input}'"
     fi
-    
-    ok "Confirmation verified. Proceeding with nuclear cleanup..."
 }
 
 # =============================================================================
-# MAIN CLEANUP FUNCTIONS
+# CONTAINER CLEANUP
 # =============================================================================
 cleanup_containers() {
     local tenant_id="$1"
-    local dry_run="$2"
+    local prefix="${2:-ai}"
     
     log "Cleaning up containers for tenant '${tenant_id}'..."
     
-    # Kill any running AI platform scripts
-    if [[ "$dry_run" == "false" ]]; then
-        pkill -f "1-setup-system.sh" || true
-        pkill -f "2-deploy-services.sh" || true
-        pkill -f "3-configure-services.sh" || true
-        sleep 2
-        ok "Platform scripts terminated."
-    else
-        dry_run "Would terminate platform scripts"
+    # Get list of tenant containers
+    local containers
+    containers=$(docker ps -a --format "{{.Names}}" | grep "^${prefix}-${tenant_id}-" || true)
+    
+    if [[ -z "$containers" ]]; then
+        log "No containers found for tenant ${tenant_id}"
+        return 0
     fi
     
-    # Define container patterns (README-compliant naming)
-    local container_patterns=(
-        "ai-${tenant_id}-"
-        "${tenant_id}-"
-    )
-    
-    for pattern in "${container_patterns[@]}"; do
-        local containers
-        containers=$(docker ps -aq --filter "name=${pattern}" 2>/dev/null || true)
+    # Stop and remove containers
+    for container in $containers; do
+        log "Stopping container: ${container}"
+        dry_run "docker stop ${container}"
+        [[ "${DRY_RUN:-false}" != "true" ]] && docker stop "${container}" >/dev/null 2>&1 || true
         
-        if [[ -n "$containers" ]]; then
-            if [[ "$dry_run" == "false" ]]; then
-                log "Stopping containers matching pattern '${pattern}'..."
-                docker stop $containers 2>/dev/null || true
-                docker rm $containers 2>/dev/null || true
-                ok "Removed containers matching '${pattern}'"
-            else
-                dry_run "Would stop and remove containers: $(echo $containers | tr '\n' ' ')"
-            fi
-        fi
+        log "Removing container: ${container}"
+        dry_run "docker rm ${container}"
+        [[ "${DRY_RUN:-false}" != "true" ]] && docker rm "${container}" >/dev/null 2>&1 || true
     done
+    
+    ok "Containers cleaned up"
 }
 
+# =============================================================================
+# NETWORK CLEANUP
+# =============================================================================
 cleanup_networks() {
     local tenant_id="$1"
-    local dry_run="$2"
+    local prefix="${2:-ai}"
     
     log "Cleaning up networks for tenant '${tenant_id}'..."
     
+    # Get list of tenant networks
     local networks
-    networks=$(docker network ls --filter "name=ai-${tenant_id}" -q 2>/dev/null || true)
+    networks=$(docker network ls --format "{{.Name}}" | grep "^${prefix}-${tenant_id}" || true)
     
-    if [[ -n "$networks" ]]; then
-        if [[ "$dry_run" == "false" ]]; then
-            docker network rm $networks 2>/dev/null || true
-            ok "Removed networks for tenant '${tenant_id}'"
-        else
-            dry_run "Would remove networks: $(echo $networks | tr '\n' ' ')"
-        fi
+    if [[ -z "$networks" ]]; then
+        log "No networks found for tenant ${tenant_id}"
+        return 0
     fi
+    
+    # Remove networks
+    for network in $networks; do
+        log "Removing network: ${network}"
+        dry_run "docker network rm ${network}"
+        [[ "${DRY_RUN:-false}" != "true" ]] && docker network rm "${network}" >/dev/null 2>&1 || true
+    done
+    
+    ok "Networks cleaned up"
 }
 
+# =============================================================================
+# VOLUME CLEANUP (README P10 - bind mounts only)
+# =============================================================================
 cleanup_volumes() {
     local tenant_id="$1"
-    local dry_run="$2"
     
-    log "Cleaning up volumes for tenant '${tenant_id}'..."
-    
-    # Safe volume filtering with compose project labels (Expert Fix)
-    local volumes
-    volumes=$(docker volume ls --filter "label=com.docker.compose.project=ai-${tenant_id}" -q 2>/dev/null || true)
-    
-    if [[ -n "$volumes" ]]; then
-        if [[ "$dry_run" == "false" ]]; then
-            docker volume rm $volumes 2>/dev/null || true
-            ok "Removed volumes for tenant '${tenant_id}'"
-        else
-            dry_run "Would remove volumes: $(echo $volumes | tr '\n' ' ')"
-        fi
+    if [[ "${CONTAINERS_ONLY:-false}" == "true" ]]; then
+        log "Skipping volume cleanup (containers-only mode)"
+        return 0
     fi
-    
-    # Fallback: pattern-based volume removal
-    local pattern_volumes
-    pattern_volumes=$(docker volume ls --filter "name=ai-${tenant_id}" -q 2>/dev/null || true)
-    
-    if [[ -n "$pattern_volumes" ]]; then
-        if [[ "$dry_run" == "false" ]]; then
-            docker volume rm $pattern_volumes 2>/dev/null || true
-            ok "Removed pattern-based volumes for tenant '${tenant_id}'"
-        else
-            dry_run "Would remove pattern-based volumes: $(echo $pattern_volumes | tr '\n' ' ')"
-        fi
-    fi
-}
-
-cleanup_images() {
-    local tenant_id="$1"
-    local dry_run="$2"
-    
-    log "Cleaning up images for tenant '${tenant_id}'..."
-    
-    # Safe image filtering with compose project labels (Expert Fix)
-    local images
-    images=$(docker images --filter "label=com.docker.compose.project=ai-${tenant_id}" -q 2>/dev/null || true)
-    
-    if [[ -n "$images" ]]; then
-        if [[ "$dry_run" == "false" ]]; then
-            docker rmi $images 2>/dev/null || true
-            ok "Removed images for tenant '${tenant_id}'"
-        else
-            dry_run "Would remove images: $(echo $images | tr '\n' ' ')"
-        fi
-    fi
-}
-
-cleanup_data_directories() {
-    local tenant_id="$1"
-    local dry_run="$2"
     
     log "Cleaning up data directories for tenant '${tenant_id}'..."
     
-    # Explicitly remove configured directory markers (README P8 requirement)
+    local base_dir="/mnt/${tenant_id}"
+    
+    if [[ -d "$base_dir" ]]; then
+        log "Removing data directory: ${base_dir}"
+        dry_run "rm -rf ${base_dir}"
+        [[ "${DRY_RUN:-false}" != "true" ]] && rm -rf "${base_dir}"
+    fi
+    
+    ok "Data directories cleaned up"
+}
+
+# =============================================================================
+# CONFIGURED MARKERS CLEANUP (README P8)
+# =============================================================================
+cleanup_markers() {
+    local tenant_id="$1"
     local configured_dir="/mnt/${tenant_id}/.configured"
+    
     if [[ -d "$configured_dir" ]]; then
-        if [[ "$dry_run" == "false" ]]; then
-            rm -rf "$configured_dir"
-            ok "Removed configured directory markers: $configured_dir"
-        else
-            dry_run "Would remove configured directory markers: $configured_dir"
-        fi
+        log "Removing configuration markers for tenant '${tenant_id}'..."
+        dry_run "rm -rf ${configured_dir}"
+        [[ "${DRY_RUN:-false}" != "true" ]] && rm -rf "${configured_dir}"
     fi
     
-    local data_dirs=(
-        "/mnt/${tenant_id}"
-        "/mnt/data/${tenant_id}"
-        "/tmp/${tenant_id}"
-    )
-    
-    for dir in "${data_dirs[@]}"; do
-        if [[ -d "$dir" ]]; then
-            if [[ "$dry_run" == "false" ]]; then
-                rm -rf "$dir"
-                ok "Removed directory: $dir"
-            else
-                dry_run "Would remove directory: $dir"
-            fi
-        fi
-    done
+    ok "Configuration markers cleaned up"
 }
 
-cleanup_systemd_units() {
-    local tenant_id="$1"
-    local dry_run="$2"
-    
-    log "Cleaning up systemd units for tenant '${tenant_id}'..."
-    
-    local unit_patterns=(
-        "ai-${tenant_id}-"
-        "${tenant_id}-"
-    )
-    
-    for pattern in "${unit_patterns[@]}"; do
-        local units
-        units=$(systemctl list-unit-files "${pattern}*.service" 2>/dev/null | awk '{print $1}' | grep -v '^UNIT FILE$' || true)
-        
-        for unit in $units; do
-            if [[ -n "$unit" ]]; then
-                if [[ "$dry_run" == "false" ]]; then
-                    systemctl stop "$unit" 2>/dev/null || true
-                    systemctl disable "$unit" 2>/dev/null || true
-                    rm -f "/etc/systemd/system/$unit"
-                    ok "Removed systemd unit: $unit"
-                else
-                    dry_run "Would remove systemd unit: $unit"
-                fi
-            fi
-        done
-    done
-    
-    if [[ "$dry_run" == "false" ]]; then
-        systemctl daemon-reload 2>/dev/null || true
-    fi
-}
-
-cleanup_cron_entries() {
-    local tenant_id="$1"
-    local dry_run="$2"
-    
-    log "Cleaning up cron entries for tenant '${tenant_id}'..."
-    
-    local temp_cron
-    temp_cron=$(mktemp)
-    
-    # Filter out tenant-specific cron entries
-    if crontab -l 2>/dev/null | grep -v "ai-${tenant_id}" | grep -v "${tenant_id}-" > "$temp_cron"; then
-        if [[ "$dry_run" == "false" ]]; then
-            crontab "$temp_cron" 2>/dev/null || true
-            ok "Removed cron entries for tenant '${tenant_id}'"
-        else
-            dry_run "Would remove cron entries for tenant '${tenant_id}'"
-        fi
+# =============================================================================
+# SYSTEM CLEANUP
+# =============================================================================
+cleanup_system() {
+    if [[ "${CONTAINERS_ONLY:-false}" == "true" ]]; then
+        log "Skipping system cleanup (containers-only mode)"
+        return 0
     fi
     
-    rm -f "$temp_cron"
+    log "Performing final system cleanup..."
+    
+    # Clean up any orphaned Docker resources
+    dry_run "docker system prune -f"
+    [[ "${DRY_RUN:-false}" != "true" ]] && docker system prune -f >/dev/null 2>&1 || true
+    
+    ok "System cleanup completed"
 }
 
 # =============================================================================
 # MAIN FUNCTION
 # =============================================================================
 main() {
-    # Parse arguments
-    local tenant_id="${1:-default}"
-    local confirm_destroy=false
-    local remove_images=false
+    local tenant_id="${1:-}"
     local dry_run=false
+    local containers_only=false
     
+    # Parse arguments
     shift
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --confirm-destroy)
-                confirm_destroy=true
-                shift
-                ;;
-            --remove-images)
-                remove_images=true
-                shift
-                ;;
             --dry-run)
                 dry_run=true
+                shift
+                ;;
+            --containers-only)
+                containers_only=true
                 shift
                 ;;
             *)
@@ -338,49 +196,71 @@ main() {
         esac
     done
     
-    # Framework validation
-    framework_validate
+    # Set global variables
+    export DRY_RUN="$dry_run"
+    export CONTAINERS_ONLY="$containers_only"
     
-    # Dry run mode
-    if [[ "$dry_run" == "true" ]]; then
-        log "DRY RUN MODE - No actual changes will be made"
+    # Set up logging
+    LOG_FILE="/tmp/$(basename "$0" .sh)-$(date +%Y%m%d-%H%M%S).log"
+    
+    log "=== Script 0: Nuclear Cleanup ==="
+    log "Tenant: ${tenant_id}"
+    log "Dry-run: ${dry_run}"
+    log "Containers-only: ${containers_only}"
+    
+    if [[ -z "$tenant_id" ]]; then
+        fail "Tenant ID is required"
     fi
     
-    # Confirmation unless skipped
-    if [[ "$confirm_destroy" == "false" && "$dry_run" == "false" ]]; then
-        typed_confirmation "$tenant_id"
-    elif [[ "$confirm_destroy" == "true" && "$dry_run" == "false" ]]; then
-        log "Confirmation skipped via --confirm-destroy flag"
-        ok "Proceeding with nuclear cleanup for tenant '${tenant_id}'..."
+    # Warning and confirmation
+    echo ""
+    echo "╔════════════════════════════════════════════════════╗"
+    echo "║         AI Platform — Nuclear Cleanup                 ║"
+    echo "║                    Script 0 of 4                        ║"
+    echo "╚══════════════════════════════════════════════════════╝"
+    echo ""
+    echo "  ⚠️  WARNING: This will COMPLETELY REMOVE:"
+    echo "     • All containers for tenant '${tenant_id}'"
+    echo "     • All networks for tenant '${tenant_id}'"
+    if [[ "${containers_only}" != "true" ]]; then
+        echo "     • All data directories for tenant '${tenant_id}'"
+        echo "     • All configuration markers"
+        echo "     • All system resources (prune)"
+    fi
+    echo ""
+    echo "  This action cannot be undone!"
+    echo ""
+    
+    if [[ "${dry_run}" != "true" ]]; then
+        typed_confirmation "NUKE-${tenant_id}" "NUKE-${tenant_id}"
     fi
     
-    # Execute cleanup in safe order
-    cleanup_containers "$tenant_id" "$dry_run"
-    cleanup_networks "$tenant_id" "$dry_run"
-    cleanup_volumes "$tenant_id" "$dry_run"
+    # Execute cleanup steps
+    cleanup_containers "$tenant_id" "ai"
+    cleanup_networks "$tenant_id" "ai"
+    cleanup_volumes "$tenant_id"
+    cleanup_markers "$tenant_id"
+    cleanup_system
     
-    if [[ "$remove_images" == "true" ]]; then
-        cleanup_images "$tenant_id" "$dry_run"
+    echo ""
+    echo "╔════════════════════════════════════════════════════╗"
+    echo "║              Script 0 Complete ✓                        ║"
+    echo "╚══════════════════════════════════════════════════════╝"
+    echo ""
+    echo "  ✓ All containers stopped and removed"
+    echo "  ✓ All networks removed"
+    if [[ "${containers_only}" != "true" ]]; then
+        echo "  ✓ All data directories removed"
+        echo "  ✓ Configuration markers cleared"
+        echo "  ✓ System resources pruned"
     fi
-    
-    cleanup_data_directories "$tenant_id" "$dry_run"
-    cleanup_systemd_units "$tenant_id" "$dry_run"
-    cleanup_cron_entries "$tenant_id" "$dry_run"
-    
-    # Final system cleanup
-    if [[ "$dry_run" == "false" ]]; then
-        log "Performing final system cleanup..."
-        docker system prune -af >/dev/null 2>&1 || true
-        
-        # Create fresh base directory with proper permissions
-        mkdir -p "/mnt/${tenant_id}"
-        chown 1000:1000 "/mnt/${tenant_id}" 2>/dev/null || true
-        
-        ok "Nuclear cleanup for tenant '${tenant_id}' completed successfully!"
+    echo ""
+    if [[ "${dry_run}" != "true" ]]; then
+        echo "  Tenant '${tenant_id}' has been completely nuked"
     else
-        dry_run "Would perform final system prune and create fresh directory"
-        ok "DRY RUN completed for tenant '${tenant_id}'"
+        echo "  DRY RUN: Tenant '${tenant_id}' would be completely nuked"
     fi
+    echo ""
 }
 
 # =============================================================================
