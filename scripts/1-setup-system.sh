@@ -71,7 +71,7 @@ framework_validate() {
     
     # Binary availability checks
     local missing_bins=()
-    for bin in docker jq openssl yq curl; do
+    for bin in curl jq; do
         if ! command -v "$bin" >/dev/null 2>&1; then
             missing_bins+=("$bin")
         fi
@@ -81,18 +81,36 @@ framework_validate() {
         fail "Missing required binaries: ${missing_bins[*]}"
     fi
     
-    # Docker daemon health
+    # Docker daemon health and group access
     if ! docker info >/dev/null 2>&1; then
-        fail "Docker daemon not running or accessible"
+        # Check if user is in docker group and fix if needed
+        if ! groups $(whoami) | grep -q docker; then
+            log "Adding user $(whoami) to docker group..."
+            sudo usermod -aG docker $(whoami) 2>/dev/null || {
+                fail "Failed to add user to docker group. Please run: sudo usermod -aG docker \$USER"
+            }
+            log "User added to docker group. Please log out and back in, or run: newgrp docker"
+            exit 1
+        else
+            fail "Docker daemon running but user cannot access. Try: newgrp docker"
+        fi
     fi
     
-    # /mnt mount point validation (Expert Fix)
-    if [[ ! -d "/mnt" ]]; then
-        fail "/mnt directory does not exist"
+    # Docker compose plugin
+    if ! docker compose version >/dev/null 2>&1; then
+        fail "Docker compose plugin not available"
     fi
     
-    if [[ ! -w "/mnt" ]]; then
-        fail "/mnt is not writable. Check permissions and mount options."
+    # EBS mount check
+    if [[ ! -d /mnt ]]; then
+        fail "EBS volume not mounted at /mnt"
+    fi
+    
+    # Disk space check (minimum 10GB free)
+    local free_gb
+    free_gb=$(df /mnt | awk 'NR==2 {print int($4/1024/1024)}')
+    if [[ $free_gb -lt 10 ]]; then
+        fail "Insufficient disk space on /mnt (${free_gb}GB < 10GB minimum)"
     fi
     
     ok "Framework validation passed"

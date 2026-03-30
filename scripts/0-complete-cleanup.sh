@@ -31,7 +31,20 @@ framework_validate() {
     # Docker daemon health
     if ! docker info >/dev/null 2>&1; then
         echo "ERROR: Docker daemon not running or accessible" >&2
-        exit 1
+        
+        # Check if user is in docker group and fix if needed
+        if ! groups $(whoami) | grep -q docker; then
+            echo "INFO: Adding user $(whoami) to docker group..." >&2
+            sudo usermod -aG docker $(whoami) 2>/dev/null || {
+                echo "ERROR: Failed to add user to docker group. Please run: sudo usermod -aG docker \$USER" >&2
+                exit 1
+            }
+            echo "INFO: User added to docker group. Please log out and back in, or run: newgrp docker" >&2
+            exit 1
+        else
+            echo "ERROR: Docker daemon running but user cannot access. Try: newgrp docker" >&2
+            exit 1
+        fi
     fi
     
     # Root permission check
@@ -39,6 +52,8 @@ framework_validate() {
         echo "ERROR: This script must be run as root for complete cleanup" >&2
         exit 1
     fi
+    
+    echo "INFO: Framework validation passed" >&2
 }
 
 # =============================================================================

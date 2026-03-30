@@ -85,9 +85,24 @@ framework_validate() {
         fail "Missing required binaries: ${missing_bins[*]}"
     fi
     
-    # Docker daemon health
+    # Docker daemon health and group access
     if ! docker info >/dev/null 2>&1; then
-        fail "Docker daemon not running or accessible"
+        # Check if user is in docker group and fix if needed
+        if ! groups $(whoami) | grep -q docker; then
+            log "Adding user $(whoami) to docker group..."
+            sudo usermod -aG docker $(whoami) 2>/dev/null || {
+                fail "Failed to add user to docker group. Please run: sudo usermod -aG docker \$USER"
+            }
+            log "User added to docker group. Please log out and back in, or run: newgrp docker"
+            exit 1
+        else
+            fail "Docker daemon running but user cannot access. Try: newgrp docker"
+        fi
+    fi
+    
+    # Docker compose plugin
+    if ! docker compose version >/dev/null 2>&1; then
+        fail "Docker compose plugin not available"
     fi
     
     ok "Framework validation passed"
