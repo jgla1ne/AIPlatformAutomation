@@ -1,1338 +1,1170 @@
---
+# AI Platform Automation
 
-# **AI Platform Automation v3.7.0 - Production-Ready AI Platform**
+> **Modular, production-ready automation for self-hosted AI infrastructure.**  
+> Four sequential scripts. One input session. Every component independently selectable.  
+> True multi-tenant architecture: each tenant isolated by ID, user, and optionally a dedicated EBS volume.
 
-A comprehensive, production-ready AI platform deployment system with **true modular architecture**, **Mission Control utility hub**, **enterprise-grade service management**, and **integrated development environment**.
-
-This platform deploys an **interconnected AI runtime stack** with intelligent service orchestration, **automated tenant ownership**, **unified Mission Control management interface**, **robust error handling**, and **local development capabilities**.
-
-**🎉 PRODUCTION VALIDATED: Bifrost LLM proxy successfully deployed, 85% functionality achieved, core infrastructure stable, architectural compliance verified**
-
----
-
-## **🏗 Architecture Overview**
-
-This platform uses a fully dockerized, **100% dynamically generated** `docker-compose` architecture with **bulletproof ownership management** and **true modular design**.
-
-### **🔥 BREAKTHROUGH: 5-Key-Scripts Architecture with Integrated Ingestion**
-- **Script 0: Nuclear Cleanup** - Complete system wipe and resource cleanup
-- **Script 1: Input Collector Only** - User interaction and simple .env generation (NO operations)
-- **Script 2: Deployment Engine Only** - Runtime configuration generation and service deployment from .env
-- **Script 3: Mission Control Hub** - All configuration management, health monitoring, and service control
-- **Script 4: Service Manager Only** - Dedicated service lifecycle management *(coming soon)*
-- **Script 5: Cleanup Operations Only** - Targeted cleanup and maintenance
-
-### **🎯 CORE ARCHITECTURAL PRINCIPLES (NON-NEGOTIABLE)**
-
-#### **🔧 Modular Architecture**
-- **Perfect Separation of Concerns** - Each script has a single, clear responsibility
-- **Zero Hardcoded Values** - All configuration via environment variables
-- **Dynamic Config Generation** - All configs generated at runtime, no static files
-- **Environment-Driven Logic** - All conditional logic based on environment variables
-
-#### **🎮 Mission Control Pattern**
-- **Script 3 is Single Source of Truth** - All operations centralized in Mission Control
-- **Script 1 Sources Script 3** - No direct operations in input collector
-- **Unified Management Interface** - One hub to rule all services
-- **Centralized Configuration** - All config generation through Mission Control
-
-#### **📜 Simple 5-Script Structure**
-- **Script 0: Nuclear Cleanup** - Complete system reset
-- **Script 1: Input Collector** - User interaction only, writes .env
-- **Script 2: Deployment Engine** - Deploys from .env configuration
-- **Script 3: Mission Control** - All management operations
-- **Script 4: Service Manager** - *(future enhancement)*
-- **Script 5: Cleanup Operations** - Targeted maintenance
-
-#### **🌐 Fully Integrated Stack**
-- **HTTPS-First Design** - All services accessible via HTTPS behind Caddy proxy
-- **Subdomain Architecture** - Professional service organization
-- **Auto-SSL/TLS** - Automatic certificate management
-- **Zero External Dependencies** - All logic embedded in core scripts
-- **Integrated Ingestion** - GDrive → Qdrant pipeline built-in
-
-#### **🚀 Enterprise Deployment**
-- **Production-Ready Services** - Each service containerized and monitored
-- **Health-Based Dependencies** - Services wait for dependencies to be healthy
-- **Comprehensive Logging** - Per-service log directories with rotation
-- **System Monitoring** - Grafana + Prometheus integration
-- **Development Environment** - VS Code + Continue.dev + OpenClaw
-
-### **�️ Script Dependency Map - Core Architecture Foundation**
-
-This table defines the core dependency relationships that form the foundation of our software architecture. Understanding these dependencies is essential for troubleshooting, development, and system iteration.
-
-| Script | Depends On | Provides To | Core Function | Key Variables |
-|--------|------------|-------------|---------------|---------------|
-| **Script 0** | Docker daemon, System permissions | Clean slate environment | Nuclear cleanup & resource reset | `TENANT_ID`, `CONTAINER_PREFIX` |
-| **Script 1** | Script 3 functions, User input | `.env` file with all variables | Input collection & configuration generation | `TENANT_ID`, `DOMAIN`, service flags |
-| **Script 2** | Script 1 `.env`, Script 3 functions, Docker | Running services | Service deployment & orchestration | `COMPOSE_FILE`, `ENV_FILE`, service configs |
-| **Script 3** | Script 1 `.env`, Running services | Configuration to all scripts | Mission control & configuration hub | All service variables, health states |
-| **External** | None | All scripts | System dependencies | Docker, network access, `/mnt` mount |
-
-#### **🔗 Dependency Flow**
-```
-Script 0 → Clean System
-    ↓
-Script 1 → Generate .env (uses Script 3 functions)
-    ↓  
-Script 2 → Deploy Services (uses Script 1 .env + Script 3 configs)
-    ↓
-Script 3 → Manage Services (reads Script 1 .env, monitors deployed services)
-```
-
-#### **🚨 Critical Dependency Rules**
-1. **Script 1 must source Script 3** for all configuration functions
-2. **Script 2 must load Script 1 `.env`** before deployment
-3. **Script 3 is the single source of truth** for all configuration logic
-4. **Never break the dependency chain** - each script builds on the previous
-5. **All external dependencies** (Docker, network) must be available before Script 0
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Shell](https://img.shields.io/badge/shell-bash-blue.svg)](scripts/)
+[![Platform](https://img.shields.io/badge/platform-Ubuntu%2022.04%20%7C2024.04-orange.svg)]()
+[![Docker](https://img.shields.io/badge/requires-Docker-2496ED.svg)](https://docker.com)
 
 ---
 
-### **� Production-Ready Features**
-- **Deep Deployment Visibility**: Complete docker-compose.yml content, system info, and startup logs
-- **Service-Specific Debug Logging**: Individual log directories per service with configurable levels
-- **Programmatic Health Monitoring**: Port, URL, and container status checks with detailed reporting
-- **Real-Time Log Capture**: Docker logs with timestamps and service-specific file output
-- **Debug Mode Flag**: `DEBUG_MODE=true` enables maximum verbosity for troubleshooting
-- **Systematic Issue Resolution**: Root cause analysis and architectural fixes
-- **100% Platform Functionality**: Core infrastructure 100% stable, AI services 100% functional
+## What This Is
 
-### **🎯 Current Deployment Status (v3.7.0)**
+Four bash scripts that turn a fresh Ubuntu server into a fully integrated,
+production-ready AI platform in under 30 minutes — with true multi-tenant
+isolation and AWS-native storage integration.
 
-#### **✅ HEALTHY SERVICES (11/14)**
-- **PostgreSQL** - Primary database, healthy, 4+ hours uptime
-- **Redis** - Cache and session storage, health check issues but running
-- **Qdrant** - Vector database for RAG, UID 1000, health check issues but running
-- **Ollama** - Local LLM inference, llama3.2:1b/3b models available
-- **Caddy** - Reverse proxy, auto-HTTPS, subdomain routing, unhealthy but running
-- **Grafana** - Monitoring dashboard, UID 472, running
-- **Prometheus** - Metrics collection, healthy
-- **OpenWebUI** - AI chat interface, connected to Bifrost, healthy
-- **Bifrost** - ✅ **NEW LLM PROXY** - Lightweight Go-based router, healthy
-- **RClone** - ✅ **COMPLETELY RESOLVED** - Google Drive sync, healthy and stable
-- **AnythingLLM** - Document AI, connected to Qdrant and Bifrost, running
+Every architectural layer — LLM proxy, local LLM inference, vector database,
+web UIs, workflow automation, reverse proxy, TLS, authentication, messaging
+gateway, observability, developer tooling, and backup — is independently
+selectable at runtime. The scripts never assume a fixed stack.
 
-#### **⚠️ STARTING SERVICES (3/14)**
-- **n8n** - Workflow automation, restart loop, needs debugging
-- **Flowise** - AI workflow builder, health starting, should resolve soon
-- **CodeServer** - VS Code in browser, unhealthy, healthcheck issue
+**Fully integrated** means: after script 3 completes, every selected service
+is already wired to every other relevant service. Open-WebUI, Dify, and
+AnythingLLM all know your LLM proxy endpoint and vector DB. Ollama is
+registered as a local model provider inside LLM proxy and surfaced
+through the same routing strategy as external providers. The Signal gateway
+is wired to query LLM proxy so that a Signal message triggers a full
+RAG pipeline: Signal → LLM proxy → Ollama (local) or external LLM →
+Qdrant/Weaviate/Chroma/Milvus → response back to Signal. OpenClaw is served
+behind reverse proxy like all other web services — a managed browser
+session accessible at its own subdomain over HTTPS. n8n and Flowise know
+your LLM proxy credentials. Grafana has pre-imported dashboards for every
+deployed service. Prometheus is pre-configured with scrape targets for
+exactly your stack. rclone targets your tenant's `/mnt/<tenant-id>/` path
+as single backup source covering the entire tenant deployment. You do
+not configure inter-service connections manually.
 
-#### **📈 PLATFORM HEALTH METRICS**
-- **Overall Health**: 85% (11/14 healthy)
-- **Infrastructure Health**: 100% (core services stable)
-- **Application Health**: 80% (user interfaces functional, AI services operational)
-- **Architecture Compliance**: 100% (5-key-scripts principle maintained)
-- **HTTPS Access**: 4/7 core services accessible via HTTPS
-- **LLM Router**: ✅ **Bifrost successfully deployed and routing**
+**The core query path this platform enables:**
 
-### **🔧 Fixes Implemented (v3.7.0)**
-
-#### **✅ Bifrost LLM Proxy Implementation**
-- **Issue**: Bifrost complexity and incorrect configuration method
-- **Solution**: Implemented lightweight Go-based Bifrost proxy with YAML configuration
-- **Result**: Instant startup, 50MB footprint, 5000+ req/s performance, correct config schema
-
-#### **✅ Complete LiteLLM Removal**
-- **Issue**: Legacy Bifrost references and hardcoded service URLs throughout system
-- **Solution**: Comprehensive refactoring to remove all Bifrost references, implement router-agnostic variables
-- **Result**: Clean Bifrost-only deployment with proper YAML configuration and zero hardcoded references
-
-#### **✅ Script 1 Configuration Fixes**
-- **Issue**: Incorrect Bifrost configuration method and JSON parsing errors
-- **Solution**: Implemented proper YAML config generation, removed environment variable approach
-- **Result**: Clean configuration with correct Bifrost schema and no parsing errors
-
-#### **✅ Environment Variable Cleanup**
-- **Issue**: Conflicting service flags and legacy variables
-- **Solution**: Streamlined router selection to Bifrost-only, cleaned up service flags
-- **Result**: Deterministic configuration with zero conflicts
-
-#### **✅ RClone Complete Resolution**
-- **Issue**: Shell syntax errors in heredoc command generation
-- **Solution**: Created dedicated script file approach eliminating variable escaping issues
-- **Result**: RClone now healthy and stable, proper idling when config not found
-
-#### **✅ Environment Variable Consistency**
-- **Issue**: CODEBASE_PASSWORD vs CODESERVER_PASSWORD naming drift
-- **Solution**: Standardized on CODESERVER_PASSWORD, removed conflicting variables
-- **Result**: Consistent authentication across all services
-
-#### **✅ Service Orchestration Excellence**
-- **Issue**: Services starting before dependencies ready, no readiness gates
-- **Solution**: Added Bifrost readiness gate, proper service sequencing, API key generation after health
-- **Result**: All services start in correct order with proper dependencies
-
-#### **✅ Caddy Configuration Fix**
-- **Issue**: Invalid handle_errors directive causing restart loop
-- **Solution**: Removed invalid directive, proper Caddy v2 syntax
-- **Result**: Stable reverse proxy with proper routing
-
-### **🎯 Remaining Tasks (P1)**
-- **None**: Platform achieved 100% functionality through expert guidance
-
-### **🏗️ Architecture Excellence Maintained**
-- **5-Key-Scripts Principle**: All deployment logic within five core scripts
-- **Mission Control Hub**: `scripts/3-configure-services.sh` as central configuration
-- **Zero External Dependencies**: Self-contained deployment architecture
-- **Modular Design**: Each service independently configurable and deployable
-- **Enterprise Deployment**: HTTPS behind reverse proxy with proper routing
-
-### **📋 Key Outcomes Achieved**
-
-#### **🎯 Platform Functionality: 100% Achieved**
-- **Core Infrastructure**: 100% stable and operational
-- **AI Services**: 100% functional with expert-guided resolution
-- **User Interfaces**: Fully functional and accessible
-- **Development Environment**: Complete with monitoring and debugging tools
-- **Enterprise Features**: Production-ready with security and scalability
-
-#### **🏆 Technical Excellence**
-- **Zero Configuration Drift**: All services properly configured and synchronized
-- **Health Monitoring**: Comprehensive health checks and logging for all services
-- **Architecture Compliance**: 100% adherence to 5-key-scripts principle
-- **Debug Capability**: Full visibility into service states and troubleshooting
-- **Scalability**: Modular design supporting easy service addition/removal
-- **Expert Validation**: All three AI experts' recommendations successfully implemented
-
-**Script 0: Nuclear Cleanup**
-- System-wide Docker prune with cache cleanup
-- All containers stopped and removed  
-- All AI platform volumes destroyed
-- Complete /mnt/data wipe (optional COMPLETE_WIPE=true)
-- System-level package cache pruning (pip, npm)
-- Clean slate for fresh deployment
-
-**Script 1: Interactive Setup (Input Collector Only)**
-- **PATTERN: Input Collector Only** - NO operations, NO complex logic, NO conditional execution
-- Tenant identity collection and validation
-- Service stack selection and configuration
-- Simple .env file generation (key-value pairs only)
-- **ALL API keys written to .env** (even empty ones) - Script 3 handles conditional logic
-- High-level configuration flags (no complex structures)
-- **CRITICAL: Sources Script 3 for ALL operations** - generate_postgres_init, generate_caddyfile, etc.
-- **NO direct operations** - All operations delegated to Script 3
-- **NO environment variable validation** - Script 3 validates and processes
-
-**Script 2: Deployment Engine (Generation & Deploy Only)**
-- Complete docker-compose.yml generation from .env
-- Dynamic service configuration generation (via Script 3)
-- Dependency-aware service startup
-- Health verification and deployment completion
-- Clean exit with deployment status
-- Sources Script 3 for all configuration generation
-
-**Script 3: Mission Control Hub (Configuration & Management)**
-- **PATTERN: Single Source of Truth** - ALL configuration logic and operations
-- Dynamic Postgres initializer generation
-- Dynamic Bifrost YAML config generation with router-agnostic variables
-- **Integrated Ingestion Pipeline** - GDrive → Qdrant pipeline with inline Dockerfile and script generation
-- **Environment Variable Processing** - Validates empty vs set variables
-- Service health monitoring and diagnostics
-- Configuration management and validation
-- Service lifecycle management (start/stop/restart)
-- Performance monitoring and alerting
-- All configuration file operations
-- **Root Cause Resolution** - Fixes applied at proper architectural layer
-- **Zero External Dependencies** - All logic embedded in core scripts
-
-### **📋 Production Deployment Features**
-
-Each tenant deployment generates:
-- A custom `docker-compose.yml` (fully dynamic with proper variable escaping)
-- A dedicated Docker network (dynamic naming)
-- A non-root runtime configuration (tenant UID/GID)
-- Reverse proxy configuration (Caddy v2 with automatic HTTPS)
-- A centralized `.env` file (80+ dynamic variables with proper quoting)
-- Intelligent service interconnection via Bifrost LLM router
-- Complete configuration files (prometheus.yml, Caddyfile)
-- **Comprehensive logging infrastructure** (`/mnt/data/{tenant}/logs/` with service-specific subdirectories)
-- **Debug logging engine** with per-service log levels and rotation policies
-
-### **🔧 Service Stack Capabilities**
-
-**Core Infrastructure:**
-- PostgreSQL (persistent database with proper UID 70)
-- Redis (caching with authentication)
-- Caddy (reverse proxy with automatic HTTPS)
-
-**AI Runtime Services:**
-- Ollama (local LLM inference with llama3.2:1b, llama3.2:3b models)
-- **Bifrost** (lightweight Go-based LLM proxy gateway - Ollama-first + External providers)
-- Qdrant (vector database with UID 1000)
-- OpenWebUI (AI chat interface)
-- **GDrive Ingestion Pipeline** (integrated into core scripts, zero external dependencies)
-
-**Development Environment:**
-- Code Server (VS Code in browser with Continue.dev extension integrated)
-- Continue.dev (AI-powered development assistant - INTERNAL to Code Server)
-- OpenClaw (Tailscale-based development terminal)
-
-**Enterprise Services:**
-- Grafana (monitoring dashboard with UID 472)
-- n8n (workflow automation)
-- Flowise (AI workflow builder)
-- AnythingLLM (document AI)
-
-**Security & Networking:**
-- Tailscale (VPN with proxy configuration for isolated services)
-- Rclone (Google Drive integration with Service Account)
-- Authentik (identity management)
-
-### **⚠️ CURRENT DEPLOYMENT STATUS**
-
-**✅ WORKING COMPONENTS:**
-- Core Infrastructure (PostgreSQL, Redis, Caddy)
-- AI Runtime (Ollama, Qdrant)
-- Development Stack (Code Server, OpenClaw)
-- HTTPS Routing & SSL Termination
-- Docker Networking & Service Discovery
-
-**🔧 KNOWN ISSUES:**
-- **Bifrost Database Initialization**: Prisma client generation failing
-- **Bifrost Pydantic Warnings**: Protected namespace conflicts
-- **Service Dependencies**: Some services blocked by Bifrost health
-- **Redis Port Configuration**: Cache pointing to wrong port (6373 vs 6379)
-- **RESOLVED: Ingestion Pipeline Integration** - Successfully embedded in core scripts
-- **RESOLVED: External Dependencies** - Zero external folder dependencies
-- **RESOLVED: Architecture Compliance** - 5-key-scripts principle strictly followed
-
-**🎯 TARGET ARCHITECTURE:**
 ```
-EC2 Development Environment
-├── Code Server (Primary IDE) → https://opencode.ai.datasquiz.net
-│   ├── Continue.dev Extension (integrated) → AI Assistant
-│   ├── Git Repository (/mnt/data/git) → Full source control
-│   └── → Bifrost API → Your Models (local + cloud)
-├── OpenClaw → https://openclaw.ai.datasquiz.net → Tailscale IP:18789
-├── Bifrost → https://bifrost.ai.datasquiz.net → Ollama-first + External
-├── OpenWebUI → https://chat.ai.datasquiz.net → AI Chat Interface
-└── Your 4 bash scripts (edited and run directly on server)
+Signal message  ──or──  OpenClaw browser  ──or──  Web UI (Open-WebUI / Dify / AnythingLLM)
+      │                        │                              │
+      └────────────────────────┴──────────────────────────────┘
+                                       │
+                                       ▼
+                          LLM Proxy (LiteLLM or Bifrost)
+                          routing: local-first / fallback /
+                                   round-robin / cost / latency
+                                       │
+                    ┌──────────────────┴──────────────────┐
+                    ▼                                       ▼
+             Ollama (local)                      External LLM
+         Llama / Mistral / Phi /           OpenAI / Anthropic /
+         Gemma / CodeLlama / …            Gemini / Bedrock / Azure
+                    │                                       │
+                    └──────────────────┬────────────────────┘
+                                       ▼
+                              Vector DB (RAG context)
+                     Qdrant / Weaviate / Chroma / Milvus
+                                       │
+                                       ▼
+                              Response to originating surface
 ```
 
-### **🌐 Network Architecture**
+**OpenClaw** provides a managed browser session behind the reverse proxy,
+accessible at its own subdomain over HTTPS. All platform web interfaces are
+reachable through OpenClaw without requiring any separate network tunnel.
 
-**Docker Network Design:**
-- All services communicate via internal Docker network
-- Caddy acts as reverse proxy for external access with IP-based routing
-- Tailscale provides VPN access to isolated services
-- Service discovery via Docker DNS (service names) with fallback to container IPs
-- Application services managed via Mission Control (script-3)
-- Zero-touch Tailscale VPN activation
-- Non-interactive Rclone authentication
-- **✅ FIXED: Caddy DNS resolution with IP-based routing**
-- **✅ FIXED: Subdomain routing for all services working**
-- **✅ PRODUCTION VALIDATED: Systematic issue resolution and architectural fixes**
+**Post-deployment management** is handled by script 3 without full redeploy:
+add providers, change routing strategy, enable/disable services, regenerate
+proxy config, force rclone ingest, complete Signal registration, persist
+startup state.
 
-**Script 3: Mission Control (Service Management & Utility Hub)**
-- **Primary management interface for all services**
-- **Central utility hub for all platform operations**
-- **Actions: --start, --stop, --restart, --logs, --status, --test-litellm, --set-routing, --enable-persistence, --set-debug, --verify**
-- **Exportable functions for cross-script modularity**
-- **✅ PRODUCTION VALIDATED: Complete service coverage with systematic issue resolution**
-- Interactive service management with real-time monitoring
-- Granular control over application services
-- Comprehensive service health verification
-- Resource usage monitoring and optimization
-- **Debug logging management and configuration**
+Script 1 is the **single source of truth**: it collects every variable,
+generates every internal key, validates DNS, detects available EBS volumes,
+mounts storage, creates the tenant user, and writes `platform.conf`. Scripts
+2 and 3 are fully non-interactive and read exclusively from `platform.conf`.
 
 ---
 
-## **� Modular Software Stack**
+### Non-Root Operation — Enforced, Not Recommended
 
-The AI Platform Automation is **fully modular** - users select their preferred services during Script 1 setup. Each category offers multiple options to suit different use cases.
+**Every script rejects execution if `EUID == 0` and exits immediately.**
 
-### **🔧 Infrastructure Layer (Always Required)**
-- **PostgreSQL** - Primary database with tenant isolation
-- **Redis** - Caching and session management  
-- **Directory Structure** - `/mnt/data/${TENANT_ID}/` with proper permissions
+All scripts run as a named non-root platform user specific to the tenant
+(`<prefix><tenant-id>`). Docker group membership is granted to that user.
+All generated files, mounted volumes, and container bind mounts are owned
+by the platform user, with UID/GID mapping enforced inside containers where
+the service image supports it.
 
-### **� LLM Gateway/Router (User Choice)**
-**Option 1: Bifrost (Default & Recommended)**
-- **Architecture**: Go-based lightweight proxy with YAML configuration
-- **Performance**: 50MB footprint, 5000+ req/s, instant startup
-- **Features**: Model routing, load balancing, health monitoring
-- **Use Case**: Production deployments requiring reliability and speed
-
-**Option 2: LiteLLM (Advanced Features)**
-- **Architecture**: Python-based feature-rich router
-- **Configuration**: Environment variables, database-backed
-- **Features**: Advanced load balancing, retry logic, multiple providers
-- **Use Case**: Complex routing scenarios requiring advanced features
-
-### **🗄️ Vector Database (User Choice)**
-**Option 1: Qdrant (Default & Recommended)**
-- **Type**: High-performance vector database written in Rust
-- **Features**: Real-time updates, filtering, advanced search
-- **Use Case**: Production workloads requiring high performance
-
-**Option 2: Weaviate**
-- **Type**: GraphQL-based vector database with advanced features
-- **Features**: GraphQL API, schema management, multi-tenancy
-- **Use Case**: Applications requiring GraphQL interface
-
-**Option 3: ChromaDB**
-- **Type**: Lightweight, embedded vector database
-- **Features**: In-memory or persistent storage, Python-native
-- **Use Case**: Development, testing, lightweight applications
-
-**Option 4: Milvus**
-- **Type**: Enterprise-scale vector database
-- **Features**: Distributed architecture, cloud-native, high scalability
-- **Use Case**: Large-scale enterprise deployments
-
-**Option 5: Pinecone**
-- **Type**: Managed vector database service
-- **Features**: Fully managed, serverless, auto-scaling
-- **Use Case**: Cloud-first deployments without infrastructure management
-
-**Option 6: None**
-- **Use Case**: Using external vector database or no vector operations
-
-### **🌐 Network & Access (Multiple Entry Points)**
-**HTTPS Entry Point (Caddy)**
-- **Features**: Automatic SSL/TLS, reverse proxy, load balancing
-- **Access**: `https://service.${DOMAIN}` (e.g., `https://chat.datasquiz.net`)
-- **Use Case**: Public internet access with enterprise security
-
-**VPN Entry Point (Tailscale)**
-- **Features**: Zero-trust networking, private access, secure tunnels
-- **Access**: `https://service.tailnet-name.ts.net` or direct IP
-- **Use Case**: Private team access, development environments
-
-**Local Entry Point (Direct)**
-- **Features**: Direct container access, no encryption overhead
-- **Access**: `http://localhost:${PORT}` (e.g., `http://localhost:8080`)
-- **Use Case**: Local development, debugging, internal services
-
-### **🤖 AI Runtime Services**
-- **Ollama** - Local LLM hosting with multiple models
-- **OpenWebUI** - Web interface for AI conversations
-- **Mem0** - Per-tenant conversation memory layer
-
-### **🏢 Application Services (Optional Selection)**
-- **n8n** - Workflow automation and integration
-- **Flowise** - AI workflow builder
-- **AnythingLLM** - Alternative AI interface
-- **Code Server** - Web-based development environment
-- **OpenClaw** - Web-based shell access
-- **Grafana/Prometheus** - Monitoring and observability
-- **Authentik** - Identity and access management
-
-### **🔄 Reverse Proxy Options (User Choice)**
-**Option 1: Caddy (Default & Recommended)**
-- **Features**: Automatic HTTPS, simple configuration, high performance
-- **Use Case**: Production deployments with ease of management
-
-**Option 2: Nginx**
-- **Features**: Advanced configuration, high performance, extensive modules
-- **Use Case**: Complex routing requirements, existing Nginx expertise
-
-**Option 3: Traefik**
-- **Features**: Service discovery, automatic configuration, microservices
-- **Use Case**: Container orchestration, dynamic environments
+No UFW rules are created or modified. Firewall management is handled at the
+AWS security group level.
 
 ---
 
-## **📁 Folder Structure & Permissions**
-
-### **🏗️ Directory Layout**
-The platform enforces strict data confinement under `/mnt/data/${TENANT_ID}/`:
+## Network Architecture
 
 ```
-/mnt/data/${TENANT_ID}/
-├── configs/                    # Configuration files (read-only in containers)
-│   ├── bifrost/               # Bifrost YAML configuration
-│   ├── mem0/                  # Mem0 memory layer configuration
-│   ├── caddy/                 # Caddy reverse proxy configuration
-│   ├── prometheus/            # Monitoring configuration
-│   ├── postgres/              # PostgreSQL initialization scripts
-│   └── codeserver/            # Code Server settings
-├── data/                      # Runtime data (writable by containers)
-│   ├── bifrost/               # Bifrost runtime data
-│   ├── mem0/                  # Mem0 memory storage
-│   ├── postgres/              # PostgreSQL data files
-│   ├── redis/                 # Redis persistence
-│   ├── qdrant/                # Vector database storage
-│   ├── ollama/                # LLM models and data
-│   └── logs/                  # Application logs
-├── docker-compose.yml         # Generated Docker Compose configuration
-└── .env                       # Environment variables (tenant-specific)
+Internet
+    │
+    ▼ :80 (redirect to HTTPS) / :443 (HTTPS)
+┌──────────────────────────────────────────────────────┐
+│              Reverse Proxy (Caddy or Nginx)                   │
+│     TLS: Let's Encrypt / self-signed / provided certificate   │
+│     Routes by subdomain to each service on Docker bridge      │
+│                                                               │
+│  chat.example.com      → Open-WebUI      :3000               │
+│  dify.example.com      → Dify web        :3010               │
+│  anything.example.com  → AnythingLLM     :3001               │
+│  openclaw.example.com  → OpenClaw        :3002               │
+│  n8n.example.com       → n8n             :5678               │
+│  flowise.example.com   → Flowise         :3100               │
+│  auth.example.com      → Authentik       :9000               │
+│  monitor.example.com   → Grafana         :3030               │
+│  llm.example.com       → LiteLLM        :4000               │
+│  code.example.com      → Code Server     :8090               │
+└──────────────────────────────┬───────────────────────────────┘
+                               │  Docker bridge network
+                               │  (<prefix><tenant-id>_net)
+        ┌──────────────────────┼─────────────────────────────┐
+        │                      │                             │
+   ┌────▼────┐          ┌──────▼──────┐           ┌─────────▼──────┐
+   │  Web UIs │          │  Workflow    │           │  Authentication │
+   │Open-WebUI│          │  n8n :5678  │           │  Authentik      │
+   │  Dify    │          │  Flowise    │           │  :9000          │
+   │AnythingLLM          │  :3100      │           └────────────────┘
+   │OpenClaw  │          └────────────┘
+   └────┬─────┘
+        │
+   ┌────▼──────────────────────────────────────┐
+   │      LLM Proxy (LiteLLM :4000                 │
+   │                 or Bifrost :8181)              │
+   │  routing: local-first / fallback /             │
+   │           round-robin / cost / latency         │
+   ├──────────────────┬────────────────────────────┤
+   │                  │                            │
+   ▼                  ▼                            ▼
+Ollama          External LLMs              Vector DBs
+:11434     OpenAI/Anthropic/etc.    Qdrant  :6333/:6334
+(local)         (outbound only)     Weaviate :8082
+                                    Chroma   :8000
+                                    Milvus   :19530
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Signal CLI REST API — :8085 (127.0.0.1 only, temporary during registration)
+Signal gateway      — Docker bridge only; no public or host port at runtime
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  └── LLM Proxy → Vector DB → LLM → Signal response
+
+Observability (internal only, proxied to monitor subdomain)
+  ├── Prometheus :9090
+  └── Grafana    :3030
+
+Developer (proxied to code subdomain)
+  └── Code Server :8090
 ```
 
-### **🔐 Permission Model**
-The platform enforces **zero-root execution** with proper UID/GID mapping:
+**Public:** ports 80 (redirect) and 443 only, via reverse proxy with TLS.
+All services accessible through their subdomain — no direct port exposure.
+**Signal CLI REST API registration:** bound to `127.0.0.1:8085` temporarily
+during device registration only. Removed from host bindings post-registration.
+**Signal gateway runtime:** Docker bridge only. No host port.
+**No host firewall management:** AWS EC2 security groups are the perimeter.
 
-**User/Group Ownership:**
-- **Tenant UID/GID**: Dynamically detected from host user (default: 1000:1000)
-- **PostgreSQL**: System UID 70 (postgres user) for database files
-- **Qdrant**: UID 1000 for vector database operations
-- **All Services**: Run under tenant UID/GID, never as root
+---
 
-**Directory Permissions:**
-- **configs/**: 640 (owner read/write, group read, others no access)
-- **data/**: 750 (owner read/write/execute, group read/execute, others no access)
-- **logs/**: 755 (owner full access, group/others read/execute)
-- **docker-compose.yml**: 640 (secure configuration file)
+## Multi-Tenant Architecture
 
-**Security Enforcement:**
-1. **Pre-creation**: Directories created with correct ownership before containers start
-2. **Volume Mapping**: All volumes use UID/GID mapping to maintain permissions
-3. **Container Users**: All containers specify user directive with tenant UID/GID
-4. **Validation**: Scripts verify permissions before deployment
+Multiple independent AI platform stacks can be deployed on the same server.
+Tenant isolation is enforced at every layer:
 
-### **🔑 Environment Variable Security**
-**Sensitive Data Protection:**
-- **API Keys**: Generated with cryptographic randomness
-- **Passwords**: Strong passwords with entropy validation
-- **Tokens**: Auth tokens with proper format validation
-- **Secrets**: All secrets stored in `.env` with restricted permissions (600)
+| Isolation Layer | Mechanism |
+|-----------------|-----------|
+| **Filesystem** | All data under `/mnt/<tenant-id>/` — separate EBS volume per tenant supported |
+| **OS user** | Dedicated non-root user per tenant: `<platform-prefix><tenant-id>` |
+| **Docker** | Separate Compose project per tenant; separate bridge network per tenant |
+| **Container naming** | All containers: `<platform-prefix><tenant-id>-<service>` |
+| **Config** | Separate `platform.conf` per tenant: `/mnt/<tenant-id>/config/` |
+| **Ports** | All ports independently overridable per tenant; port conflict pre-check before any service starts |
+| **Keys and secrets** | All internal keys generated independently per tenant at init |
 
-**Variable Categories:**
+### Port Conflict Pre-Check
+
+**Before any service is configured or started**, script 3 checks every port
+in `platform.conf` against all currently listening ports on the host using
+`ss -tlnp`. If any collision is detected — between selected services or
+against an already-bound host port — the script reports the conflict,
+identifies the owning process, and halts before writing any configuration.
+The check runs again on re-deployment.
+
+### Tenant ID and Platform Prefix
+
+During `1-setup-system.sh` you provide:
+
+- **Platform prefix** — prepended to all container names, network names, and
+  the OS username. Default: `ai-`. Examples: `ai-`, `prod-`, `staging-`.
+- **Tenant ID** — unique identifier for this deployment. Used as the data
+  directory name under `/mnt/` and as part of the OS username.
+
+All container names follow `<prefix><tenant-id>-<service>`,
+e.g. `ai-acme-litellm`, `ai-acme-qdrant`, `ai-acme-openwebui`.
+
+### EBS Volume Selection and Mounting
+
+Script 1 **mounts storage before any other operation**:
+
+```
+Available block devices:
+  [1] /dev/nvme1n1   50GB   (unformatted — available)
+  [2] /dev/nvme2n1  100GB   (unformatted — available)
+  [3] Use existing /mnt/<tenant-id>/ on OS disk (no separate volume)
+```
+
+Selecting an unformatted EBS volume:
+1. Formats as ext4
+2. Creates `/mnt/<tenant-id>/` as the mount point
+3. Adds to `/etc/fstab` using UUID (persistent across reboots)
+4. Mounts it immediately
+
+---
+
+## Scripts Overview
+
+| Script | Purpose | Interactive |
+|--------|---------|-------------|
+| `0-complete-cleanup.sh` | Nuclear removal of a specific tenant deployment | Yes — tenant selection + confirmation |
+| `1-setup-system.sh` | All input collection, validation, key generation, EBS mount, user creation, `platform.conf` write | Yes — all prompts here only |
+| `2-deploy-services.sh` | Pull images, create networks, start all selected containers in dependency order, display Mission Control health dashboard | No |
+| `3-configure-services.sh` | Generate all configs, proxy rules, inter-service wiring, monitoring, rclone, systemd; post-deployment management | No |
+
+### Quick Start
+
 ```bash
-# Core Identity (Required)
-TENANT_ID=datasquiz
-DOMAIN=datasquiz.net
-ADMIN_EMAIL=admin@datasquiz.net
+bash scripts/1-setup-system.sh   # Interactive: one session only
+bash scripts/2-deploy-services.sh
+bash scripts/3-configure-services.sh
+```
 
-# Service Selection (User Choice)
-LLM_ROUTER=bifrost|litellm
-VECTOR_DB=qdrant|weaviate|chromadb|milvus|pinecone|none
-ENABLE_TAILSCALE=true|false
+Scripts 2 and 3 are re-runnable at any time after initial deployment.
 
-# Network Configuration
-BIFROST_PORT=8000
-QDRANT_PORT=6333
+---
+
+## Script 0 — Complete Cleanup
+
+- Prompts for tenant ID; will not proceed without explicit confirmation
+- Stops and removes all containers matching `<prefix><tenant-id>-*`
+- Removes Docker Compose project and bridge network
+- Removes all generated config files under `/mnt/<tenant-id>/config/`
+- Removes all systemd unit files for the tenant
+- Removes the tenant OS user
+- Optionally unmounts and wipes the tenant EBS volume (separate confirmation required)
+- Does **not** affect other tenants on the same server
+
+---
+
+## Script 1 — Full Input Collection Reference
+
+Script 1 is the only interactive script. Inputs are collected in dependency
+order: identity and storage first, then domain, then each service layer in
+the order that later services depend on earlier ones.
+
+---
+
+### Step 1 — Identity
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| Platform prefix | Prepended to container names, network name, OS username | `ai-` |
+| Tenant ID | Deployment identifier; becomes `/mnt/<tenant-id>/` | Required |
+| Platform OS username | Auto-derived: `<prefix><tenant-id>` | Auto |
+
+---
+
+### Step 2 — Storage (EBS Detection and Mount)
+
+Runs immediately after identity. All subsequent writes go to the mounted volume.
+
+| Input | Description |
+|-------|-------------|
+| EBS block device selection | Numbered list of available unformatted volumes + OS disk option |
+| Volume formatting confirmation | Explicit yes/no before `mkfs.ext4` |
+
+---
+
+### Step 3 — Domain and DNS Validation
+
+| Input | Description |
+|-------|-------------|
+| Base domain | Root domain, e.g. `example.com` |
+| Per-service subdomain overrides | Defaults auto-generated; each individually overridable |
+| DNS validation | Resolves each subdomain against server public IP; warns on mismatch |
+
+DNS validation runs before TLS is configured. A failed validation with
+`letsencrypt` TLS mode triggers an abort recommendation.
+
+---
+
+### Step 4 — Stack Type (Preset Selector)
+
+| Stack Type | Description |
+|------------|-------------|
+| `minimal` | LLM proxy + one vector DB + one web UI only |
+| `dev` | Adds workflow tools, Code Server, Ollama; no auth or monitoring |
+| `full` | All services enabled — all three web UIs, all four vector DBs, all workflow tools, Ollama, Signal, OpenClaw, Authentik, monitoring, Code Server, rclone |
+| `custom` | All services start disabled; user enables each one individually |
+
+---
+
+### Step 5 — Reverse Proxy
+
+| Option | Details |
+|--------|---------|
+| `caddy` | Automatic Let's Encrypt TLS; recommended for public deployment |
+| `nginx` | Manual TLS; self-signed or provided certificate |
+| `none` | No reverse proxy; direct port access only |
+
+---
+
+### Step 6 — TLS Mode
+
+| Option | Details |
+|--------|---------|
+| `letsencrypt` | Caddy auto-obtains and renews; valid public DNS required |
+| `selfsigned` | Script generates self-signed cert; internal or dev use |
+| `provided` | Provide certificate and key file paths |
+| `none` | HTTP only |
+
+---
+
+### Step 7 — OpenClaw
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `OPENCLAW_ENABLED` | Enable managed browser session service | `false` |
+| `OPENCLAW_SUBDOMAIN` | Subdomain served behind reverse proxy | `openclaw.<base-domain>` |
+| `OPENCLAW_PORT` | Internal host port | `3002` |
+| `OPENCLAW_PASSWORD` | Session access password; generated if blank | Auto-generated |
+
+OpenClaw is deployed as a containerised browser session behind the reverse
+proxy. It is accessible at `https://openclaw.<base-domain>` after script 2
+completes. No separate network tunnel required.
+
+---
+
+### Step 8 — LLM Proxy
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `LLM_PROXY` | `litellm` or `bifrost` | `litellm` |
+| `LLM_PROXY_PORT` | Host port | `4000` (LiteLLM) / `8181` (Bifrost) |
+| `LLM_ROUTING_STRATEGY` | `local-first` / `fallback` / `round-robin` / `cost` / `latency` | `local-first` |
+| `LLM_PROXY_MASTER_KEY` | Master API key for proxy; generated if blank | Auto-generated |
+| `LLM_PROXY_DB_URL` | PostgreSQL DSN for proxy state persistence | Auto-generated |
+
+**LiteLLM-specific:**
+
+| Input | Description |
+|-------|-------------|
+| `LITELLM_UI_USERNAME` | LiteLLM dashboard username |
+| `LITELLM_UI_PASSWORD` | LiteLLM dashboard password; generated if blank |
+
+**Bifrost-specific:**
+
+| Input | Description |
+|-------|-------------|
+| `BIFROST_API_KEY` | Bifrost API key; generated if blank |
+
+---
+
+### Step 9 — External LLM Providers
+
+Collected per provider. Only enabled providers are written to `platform.conf`.
+
+| Provider | Variables Collected |
+|----------|-------------------|
+| OpenAI | `OPENAI_API_KEY`, `OPENAI_ENABLED` |
+| Anthropic | `ANTHROPIC_API_KEY`, `ANTHROPIC_ENABLED` |
+| Google Gemini | `GEMINI_API_KEY`, `GEMINI_ENABLED` |
+| AWS Bedrock | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `BEDROCK_ENABLED` |
+| Azure OpenAI | `AZURE_API_KEY`, `AZURE_API_BASE`, `AZURE_API_VERSION`, `AZURE_ENABLED` |
+| Cohere | `COHERE_API_KEY`, `COHERE_ENABLED` |
+| Mistral | `MISTRAL_API_KEY`, `MISTRAL_ENABLED` |
+| Custom endpoint | `CUSTOM_LLM_URL`, `CUSTOM_LLM_API_KEY`, `CUSTOM_LLM_ENABLED` |
+
+At least one provider or Ollama must be enabled (enforced).
+
+---
+
+### Step 10 — Ollama (Local LLM Inference)
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `OLLAMA_ENABLED` | Enable Ollama local inference | `false` |
+| `OLLAMA_PORT` | Host port | `11434` |
+| `OLLAMA_MODELS` | Comma-separated list of models to pull on first start | e.g. `llama3.2,mistral,phi3` |
+| `OLLAMA_GPU_ENABLED` | Mount GPU device if available | `false` |
+
+Ollama is auto-registered as a local provider inside the LLM proxy after
+script 3 runs. The `local-first` routing strategy will route all requests
+to Ollama first and fall back to external providers if Ollama is unavailable
+or the requested model is not present locally.
+
+---
+
+### Step 11 — Vector Database
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `VECTOR_DB_PRIMARY` | Primary vector DB: `qdrant` / `weaviate` / `chroma` / `milvus` | `qdrant` |
+| `QDRANT_ENABLED` | | `false` |
+| `QDRANT_REST_PORT` | Host port for REST API | `6333` |
+| `QDRANT_GRPC_PORT` | Host port for gRPC | `6334` |
+| `WEAVIATE_ENABLED` | | `false` |
+| `WEAVIATE_PORT` | Host port | `8082` |
+| `CHROMA_ENABLED` | | `false` |
+| `CHROMA_PORT` | Host port | `8000` |
+| `MILVUS_ENABLED` | | `false` |
+| `MILVUS_PORT` | Host port | `19530` |
+
+All enabled vector DBs are wired to every enabled web UI and the LLM proxy
+during script 3. The `VECTOR_DB_PRIMARY` value determines which DB is
+offered as the default in each web UI's settings.
+
+---
+
+### Step 12 — Web UIs
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `OPENWEBUI_ENABLED` | | `false` |
+| `OPENWEBUI_PORT` | Host port | `3000` |
+| `OPENWEBUI_SUBDOMAIN` | | `chat.<base-domain>` |
+| `DIFY_ENABLED` | | `false` |
+| `DIFY_WEB_PORT` | Host port for Dify web frontend | `3010` |
+| `DIFY_API_PORT` | Host port for Dify API | `5001` |
+| `DIFY_SUBDOMAIN` | | `dify.<base-domain>` |
+| `DIFY_SECRET_KEY` | Dify application secret; generated if blank | Auto-generated |
+| `ANYTHINGLLM_ENABLED` | | `false` |
+| `ANYTHINGLLM_PORT` | Host port | `3001` |
+| `ANYTHINGLLM_SUBDOMAIN` | | `anything.<base-domain>` |
+| `ANYTHINGLLM_JWT_SECRET` | JWT secret; generated if blank | Auto-generated |
+
+---
+
+### Step 13 — Workflow Automation
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `N8N_ENABLED` | | `false` |
+| `N8N_PORT` | Host port | `5678` |
+| `N8N_SUBDOMAIN` | | `n8n.<base-domain>` |
+| `N8N_ENCRYPTION_KEY` | n8n credential encryption key; generated if blank | Auto-generated |
+| `N8N_BASIC_AUTH_USER` | Basic auth username | Required if enabled |
+| `N8N_BASIC_AUTH_PASSWORD` | Basic auth password; generated if blank | Auto-generated |
+| `FLOWISE_ENABLED` | | `false` |
+| `FLOWISE_PORT` | Host port | `3100` |
+| `FLOWISE_SUBDOMAIN` | | `flowise.<base-domain>` |
+| `FLOWISE_USERNAME` | Flowise auth username | Required if enabled |
+| `FLOWISE_PASSWORD` | Flowise auth password; generated if blank | Auto-generated |
+
+n8n and Flowise are wired to the LLM proxy endpoint and credentials
+automatically during script 3.
+
+---
+
+### Step 14 — Authentication (Authentik)
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `AUTHENTIK_ENABLED` | | `false` |
+| `AUTHENTIK_PORT` | Host port | `9000` |
+| `AUTHENTIK_SUBDOMAIN` | | `auth.<base-domain>` |
+| `AUTHENTIK_SECRET_KEY` | Django secret key; generated if blank | Auto-generated |
+| `AUTHENTIK_BOOTSTRAP_EMAIL` | Initial admin email | Required if enabled |
+| `AUTHENTIK_BOOTSTRAP_PASSWORD` | Initial admin password; generated if blank | Auto-generated |
+| `AUTHENTIK_POSTGRES_PASSWORD` | Dedicated Authentik DB password; generated | Auto-generated |
+
+---
+
+### Step 15 — Signal Gateway
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `SIGNAL_ENABLED` | Enable Signal messaging gateway | `false` |
+| `SIGNAL_PHONE_NUMBER` | Phone number to register with Signal (E.164 format) | Required if enabled |
+| `SIGNAL_REGISTRATION_METHOD` | `sms` or `voice` | `sms` |
+| `SIGNAL_REST_PORT` | Host port for registration API — `127.0.0.1` bound, temporary only | `8085` |
+| `SIGNAL_API_KEY` | Internal API key for gateway ↔ LLM proxy wiring; generated | Auto-generated |
+
+**Signal Registration Flow:**
+
+Signal CLI REST API requires a two-step device registration that must
+happen before the gateway can receive or send messages. The port `8085`
+is bound to `127.0.0.1` only and is temporary — it is removed from host
+bindings after registration completes.
+
+Registration is completed via script 3:
+
+```bash
+bash scripts/3-configure-services.sh --register-signal
+```
+
+This executes the following sequence:
+
+```
+Step 1 — Request verification code
+  POST http://127.0.0.1:8085/v1/register/<SIGNAL_PHONE_NUMBER>
+  Body: {"use_voice": false}
+  → Signal sends SMS verification code to SIGNAL_PHONE_NUMBER
+
+Step 2 — Submit verification code
+  POST http://127.0.0.1:8085/v1/register/<SIGNAL_PHONE_NUMBER>/verify/<CODE>
+  → Returns 201 on success; device is now registered
+
+Step 3 — Verify registration
+  GET http://127.0.0.1:8085/v1/about
+  → Returns {"versions": [...], "build": ...}
+  → Confirms service is operational
+
+Step 4 — Remove temporary host port binding
+  Script 3 removes 127.0.0.1:8085 from docker-compose service definition
+  Signal CLI REST API continues running on Docker bridge only
+  No host port exposed at runtime
+```
+
+After registration, the Signal gateway routes inbound Signal messages
+through the LLM proxy, through the configured vector DB for RAG context,
+and returns the response to the originating Signal conversation.
+
+---
+
+### Step 16 — rclone Backup
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `RCLONE_ENABLED` | Enable automated backup | `false` |
+| `RCLONE_BACKEND` | `gdrive` / `s3` / `b2` | Required if enabled |
+| `RCLONE_SCHEDULE` | Cron expression for backup schedule | `0 2 * * *` |
+| `RCLONE_BACKUP_PATH` | Source path | `/mnt/<tenant-id>/` |
+| `RCLONE_RETENTION_DAYS` | Days to retain remote backups | `30` |
+
+**Backend-specific inputs:**
+
+**Google Drive — OAuth flow (interactive):**
+
+| Input | Description |
+|-------|-------------|
+| `GDRIVE_CLIENT_ID` | OAuth2 client ID from Google Cloud Console |
+| `GDRIVE_CLIENT_SECRET` | OAuth2 client secret |
+| `GDRIVE_ROOT_FOLDER_ID` | Target folder ID in Google Drive |
+
+OAuth authorisation URL is displayed in the terminal during script 1.
+User opens the URL, grants access, and pastes the returned authorisation
+code. Token is stored at `/mnt/<tenant-id>/config/rclone/gdrive.token`.
+
+**Google Drive — Service Account (non-interactive, recommended for servers):**
+
+| Input | Description |
+|-------|-------------|
+| `GDRIVE_SERVICE_ACCOUNT_JSON` | Path to downloaded service account JSON key file |
+| `GDRIVE_ROOT_FOLDER_ID` | Target folder ID shared with the service account |
+
+**AWS S3:**
+
+| Input | Description |
+|-------|-------------|
+| `S3_ACCESS_KEY_ID` | AWS access key |
+| `S3_SECRET_ACCESS_KEY` | AWS secret key |
+| `S3_BUCKET` | Target bucket name |
+| `S3_REGION` | AWS region |
+| `S3_ENDPOINT` | Custom endpoint for S3-compatible stores (optional) |
+
+**Backblaze B2:**
+
+| Input | Description |
+|-------|-------------|
+| `B2_ACCOUNT_ID` | B2 account ID |
+| `B2_APPLICATION_KEY` | B2 application key |
+| `B2_BUCKET` | Target bucket name |
+
+rclone is configured to back up the entire `/mnt/<tenant-id>/` path,
+which contains all service data, configuration, and generated keys for
+the tenant. A delta ingest to the primary vector DB can be triggered
+after any restore:
+
+```bash
+bash scripts/3-configure-services.sh --ingest-delta
+```
+
+---
+
+### Step 17 — Observability
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `PROMETHEUS_ENABLED` | | `false` |
+| `PROMETHEUS_PORT` | Host port | `9090` |
+| `GRAFANA_ENABLED` | | `false` |
+| `GRAFANA_PORT` | Host port | `3030` |
+| `GRAFANA_SUBDOMAIN` | | `monitor.<base-domain>` |
+| `GRAFANA_ADMIN_PASSWORD` | Generated if blank | Auto-generated |
+
+Prometheus is pre-configured with scrape targets for every enabled service
+that exposes a `/metrics` endpoint. Grafana is pre-configured with
+Prometheus as the default data source and pre-imported dashboards for
+Ollama inference metrics, LLM proxy throughput, vector DB performance,
+container resource usage, and host system metrics.
+
+---
+
+### Step 18 — Code Server
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `CODESERVER_ENABLED` | Enable VS Code in browser | `false` |
+| `CODESERVER_PORT` | Host port | `8090` |
+| `CODESERVER_SUBDOMAIN` | | `code.<base-domain>` |
+| `CODESERVER_PASSWORD` | Generated if blank | Auto-generated |
+| `CODESERVER_WORKSPACE` | Workspace path inside container | `/home/coder/project` |
+
+---
+
+### Step 19 — Shared Infrastructure
+
+These are always deployed; inputs are collected once.
+
+**PostgreSQL:**
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `POSTGRES_PORT` | Host port | `5432` |
+| `POSTGRES_PASSWORD` | Root password; generated if blank | Auto-generated |
+| `POSTGRES_DATA_PATH` | Bind mount path | `/mnt/<tenant-id>/postgres/` |
+
+Individual databases and users are auto-created per service during script 3.
+
+**Redis:**
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `REDIS_PORT` | Host port | `6379` |
+| `REDIS_PASSWORD` | Auth password; generated if blank | Auto-generated |
+| `REDIS_DATA_PATH` | Bind mount path | `/mnt/<tenant-id>/redis/` |
+
+---
+
+## Port Reference
+
+All host ports. All container-to-container communication uses Docker
+bridge service names and container ports — not host ports.
+
+| Service | Container Port | Default Host Port | Conflict-Free Assignment |
+|---------|---------------|-------------------|--------------------------|
+| Caddy / Nginx | 80, 443 | 80, 443 | Public ingress only |
+| LiteLLM | 4000 | 4000 | |
+| Bifrost | 8080 | **8181** | Remapped: container 8080 → host 8181 |
+| Ollama | 11434 | 11434 | |
+| Qdrant REST | 6333 | 6333 | |
+| Qdrant gRPC | 6334 | 6334 | |
+| Weaviate | 8080 | **8082** | Remapped: container 8080 → host 8082 |
+| Chroma | 8000 | 8000 | |
+| Milvus | 19530 | 19530 | |
+| Open-WebUI | 3000 | 3000 | |
+| Dify web frontend | 3000 | **3010** | Remapped: container 3000 → host 3010 |
+| Dify API | 5001 | 5001 | |
+| AnythingLLM | 3001 | 3001 | |
+| OpenClaw | 3002 | 3002 | |
+| n8n | 5678 | 5678 | |
+| Flowise | 3100 | 3100 | |
+| Authentik | 9000 | 9000 | |
+| Grafana | 3000 | **3030** | Remapped: container 3000 → host 3030 |
+| Prometheus | 9090 | 9090 | |
+| Code Server | 8080 | **8090** | Remapped: container 8080 → host 8090 |
+| Signal CLI REST API | 8080 | **8085** (127.0.0.1, temporary) | Registration only; removed post-registration |
+| PostgreSQL | 5432 | 5432 | |
+| Redis | 6379 | 6379 | |
+
+All ports are overridable per tenant via `platform.conf`. The port
+conflict pre-check in script 3 validates this full table against live
+host bindings before any service configuration begins.
+
+---
+
+## Service Dependency Chain
+
+Script 2 starts services in strict dependency order. Each layer must
+reach healthy status before the next layer starts.
+
+```
+Layer 0 — Storage and Network
+  └── EBS mounted and verified
+  └── Docker bridge network created: <prefix><tenant-id>_net
+
+Layer 1 — Data Layer (must be healthy before anything else starts)
+  ├── PostgreSQL          health: pg_isready -U postgres
+  └── Redis               health: redis-cli -a $REDIS_PASSWORD ping → PONG
+
+Layer 2 — Inference and Vector (depends on Layer 1)
+  ├── Ollama              health: GET http://localhost:11434/api/version → 200
+  ├── Qdrant              health: GET http://localhost:6333/healthz → {"status":"ok"}
+  ├── Weaviate            health: GET http://localhost:8082/v1/.well-known/ready → 200
+  ├── Chroma              health: GET http://localhost:8000/api/v1/heartbeat → 200
+  └── Milvus              health: grpc_health_probe -addr=localhost:19530
+
+Layer 3 — LLM Proxy (depends on Layer 1 + at least one LLM source)
+  ├── LiteLLM             health: GET http://localhost:4000/health → {"status":"healthy"}
+  └── Bifrost             health: GET http://localhost:8181/health → 200
+
+Layer 4 — Application Layer (depends on Layers 1–3)
+  ├── Open-WebUI          health: GET http://localhost:3000/health → 200
+  ├── Dify API            health: GET http://localhost:5001/health → {"status":"ok"}
+  ├── Dify web            health: GET http://localhost:3010/ → 200
+  ├── AnythingLLM         health: GET http://localhost:3001/api/ping → {"online":true}
+  ├── OpenClaw            health: GET http://localhost:3002/ → 200
+  ├── n8n                 health: GET http://localhost:5678/healthz → {"status":"ok"}
+  ├── Flowise             health: GET http://localhost:3100/api/v1/ping → {"ping":"pong"}
+  └── Authentik           health: GET http://localhost:9000/-/health/ready/ → 200
+
+Layer 5 — Proxy and TLS (depends on Layer 4)
+  └── Caddy / Nginx       health: GET https://<base-domain>/ → 200 or redirect
+
+Layer 6 — Observability (depends on Layers 1–4)
+  ├── Prometheus          health: GET http://localhost:9090/-/healthy → 200
+  └── Grafana             health: GET http://localhost:3030/api/health → {"database":"ok"}
+
+Layer 7 — Developer Tools (depends on Layer 5)
+  └── Code Server         health: GET http://localhost:8090/ → 200
+
+Layer 8 — Messaging Gateway (depends on Layers 3 + 2)
+  └── Signal CLI REST     health: GET http://127.0.0.1:8085/v1/about → {"versions":[...]}
+                          (registration only; not part of runtime health)
+```
+
+Each service's `docker-compose.yml` block includes a `healthcheck`
+directive matching the endpoint above. Script 2 uses `depends_on:
+condition: service_healthy` to enforce layer ordering.
+
+---
+
+## Script 2 — Mission Control Health Dashboard
+
+At the end of script 2, after all selected services have started and
+passed their health checks, the following dashboard is printed to the
+terminal. This is the **expected output** of a successful deployment.
+
+```
+╔════════════════════════════════════════════════════════════════════╗
+║              AI PLATFORM — MISSION CONTROL                                  ║
+║              Tenant: acme    Prefix: ai-    Stack: full                     ║
+╠══════════════════════════════════════════════════════════════╣
+║ LAYER 1 — DATA                                                               ║
+║  ✓  PostgreSQL        :5432   healthy   pg_isready OK                        ║
+║  ✓  Redis             :6379   healthy   PONG                                 ║
+╠════════════════════════════════════════════════════════════════╣
+║ LAYER 2 — INFERENCE & VECTOR                                                 ║
+║  ✓  Ollama            :11434  healthy   version: 0.x.x   models: 3 loaded    ║
+║  ✓  Qdrant            :6333   healthy   {"status":"ok"}                      ║
+║  ✓  Weaviate          :8082   healthy   ready                                ║
+║  ✓  Chroma            :8000   healthy   heartbeat OK                         ║
+║  ✓  Milvus            :19530  healthy   grpc healthy                         ║
+╠════════════════════════════════════════════════════════════════╣
+║ LAYER 3 — LLM PROXY                                                          ║
+║  ✓  LiteLLM           :4000   healthy   {"status":"healthy"}                 ║
+║     Providers wired:  openai ✓  anthropic ✓  ollama/local ✓                 ║
+║     Routing strategy: local-first                                            ║
+╠══════════════════════════════════════════════════════════════════╣
+║ LAYER 4 — APPLICATIONS                                                       ║
+║  ✓  Open-WebUI        :3000   healthy   200 OK                               ║
+║  ✓  Dify API          :5001   healthy   {"status":"ok"}                      ║
+║  ✓  Dify web          :3010   healthy   200 OK                               ║
+║  ✓  AnythingLLM       :3001   healthy   {"online":true}                      ║
+║  ✓  OpenClaw          :3002   healthy   200 OK                               ║
+║  ✓  n8n               :5678   healthy   {"status":"ok"}                      ║
+║  ✓  Flowise           :3100   healthy   {"ping":"pong"}                      ║
+║  ✓  Authentik         :9000   healthy   200 OK                               ║
+╠════════════════════════════════════════════════════════════════╣
+║ LAYER 5 — PROXY & TLS                                                        ║
+║  ✓  Caddy             :443    healthy   TLS: Let's Encrypt                   ║
+╠════════════════════════════════════════════════════════════════════╣
+║ LAYER 6 — OBSERVABILITY                                                      ║
+║  ✓  Prometheus        :9090   healthy   targets: 12 active                   ║
+║  ✓  Grafana           :3030   healthy   {"database":"ok"}                    ║
+╠══════════════════════════════════════════════════════════════════════════╣
+║ LAYER 7 — DEVELOPER                                                          ║
+║  ✓  Code Server       :8090   healthy   200 OK                               ║
+╠══════════════════════════════════════════════════════════════════════════╣
+║ LAYER 8 — MESSAGING                                                          ║
+║  ⚠  Signal            :8085   awaiting registration                          ║
+║     Run: bash scripts/3-configure-services.sh --register-signal             ║
+╠══════════════════════════════════════════════════════════════════════════╣
+║ ACCESS URLS                                                                  ║
+║  Open-WebUI   →  https://chat.example.com                                   ║
+║  Dify         →  https://dify.example.com                                   ║
+║  AnythingLLM  →  https://anything.example.com                               ║
+║  OpenClaw     →  https://openclaw.example.com                               ║
+║  n8n          →  https://n8n.example.com                                    ║
+║  Flowise      →  https://flowise.example.com                                ║
+║  Authentik    →  https://auth.example.com                                   ║
+║  Grafana      →  https://monitor.example.com                                ║
+║  Code Server  →  https://code.example.com                                   ║
+║  LiteLLM UI   →  https://llm.example.com                                    ║
+╠══════════════════════════════════════════════════════════════════╣
+║ CREDENTIALS                                                                  ║
+║  Stored at:   /mnt/acme/config/platform.conf                                ║
+║  Display:     bash scripts/3-configure-services.sh --show-credentials       ║
+╠══════════════════════════════════════════════════════════════════════════╣
+║ NEXT STEP                                                                    ║
+║  bash scripts/3-configure-services.sh                                       ║
+╚════════════════════════════════════════════════════════════════════════════════════╝
+```
+
+**Dashboard rules:**
+
+| Symbol | Meaning |
+|--------|---------|
+| `✓` | Service started, health check passed, endpoint responding |
+| `✗` | Service failed to start or health check timed out — see error recovery |
+| `⚠` | Service running but requires a manual step to become operational |
+| `—` | Service not selected for this deployment |
+
+If any `✗` is present dashboard prints recovery command before exiting.
+
+---
+
+## Script 3 — Post-Deployment Management
+
+Script 3 runs once after script 2 to complete all inter-service wiring.
+It also accepts flags for post-deployment operations without full redeploy.
+
+```bash
+bash scripts/3-configure-services.sh                  # Full initial configuration
+bash scripts/3-configure-services.sh --register-signal    # Complete Signal device registration
+bash scripts/3-configure-services.sh --add-provider       # Add an LLM provider
+bash scripts/3-configure-services.sh --reload-proxy       # Reload LLM proxy config
+bash scripts/3-configure-services.sh --ingest-delta       # Trigger rclone delta ingest to vector DB
+bash scripts/3-configure-services.sh --show-credentials   # Print all generated credentials
+bash scripts/3-configure-services.sh --rotate-keys        # Rotate all internal API keys
+bash scripts/3-configure-services.sh --enable <service>   # Enable a service post-deployment
+bash scripts/3-configure-services.sh --disable <service>  # Disable a service post-deployment
+bash scripts/3-configure-services.sh --reload-proxy       # Reload reverse proxy configuration
+bash scripts/3-configure-services.sh --status             # Re-run health dashboard
+```
+
+Script 3 is idempotent. Re-running it on an already-configured deployment
+is safe and will update configuration where values in `platform.conf`
+have changed.
+
+---
+
+## Error Recovery
+
+### EBS Mount Failure
+```
+ERROR: /dev/nvme1n1 did not mount at /mnt/<tenant-id>/
+```
+- Verify the device is attached: `lsblk`
+- Check for existing filesystem: `blkid /dev/nvme1n1`
+- Check fstab entry: `cat /etc/fstab | grep <tenant-id>`
+- Attempt manual mount: `mount -a` then re-run script 1
+
+### Health Check Timeout
+```
+✗  <service>   :PORT   timeout after 120s
+```
+- View container logs: `docker logs <prefix><tenant-id>-<service>`
+- Check container state: `docker inspect <prefix><tenant-id>-<service>`
+- Verify bind mount exists: `ls -la /mnt/<tenant-id>/<service>/`
+- Re-run script 2; it will skip already-healthy services
+
+### LLM Proxy Unreachable
+```
+✗  LiteLLM     :4000   connection refused
+```
+- Check PostgreSQL health first — LiteLLM requires database on start
+- View logs: `docker logs <prefix><tenant-id>-litellm`
+- Verify `LLM_PROXY_DB_URL` in `platform.conf` is correct
+- Confirm PostgreSQL is accepting connections: `docker exec <prefix><tenant-id>-postgres pg_isready`
+
+### Signal Registration Failure
+```
+POST /v1/register/<number> → 400 or 500
+```
+- Verify `SIGNAL_PHONE_NUMBER` is E.164 format: `+15551234567`
+- Check service is bound: `ss -tlnp | grep 8085`
+- View logs: `docker logs <prefix><tenant-id>-signal-cli-rest-api`
+- Retry: `bash scripts/3-configure-services.sh --register-signal`
+
+### Port Conflict Detected
+```
+ERROR: Port 6333 is already in use by process: <pid> (<name>)
+       Conflicts with: QDRANT_REST_PORT
+```
+- Identify the process: `ss -tlnp | grep 6333`
+- Override the port in `platform.conf`: `QDRANT_REST_PORT=6335`
+- Re-run script 3; the port pre-check will validate the new value
+
+---
+
+## Resource Requirements
+
+### Minimum RAM by Stack Type
+
+| Stack Type | Minimum RAM | Recommended RAM |
+|------------|-------------|-----------------|
+| `minimal` | 4 GB | 8 GB |
+| `dev` | 8 GB | 16 GB |
+| `full` (no GPU) | 24 GB | 32 GB |
+| `full` (with GPU) | 16 GB + VRAM | 32 GB + VRAM |
+
+### Ollama VRAM by Model
+
+| Model | VRAM Required |
+|-------|--------------|
+| `phi3` (3.8B) | 4 GB |
+| `llama3.2` (3B) | 4 GB |
+| `mistral` (7B) | 8 GB |
+| `llama3.1` (8B) | 8 GB |
+| `llama3.1:70b` (70B) | 48 GB |
+| `codellama` (7B) | 8 GB |
+
+### Recommended EC2 Instance Types
+
+| Use Case | Instance | vCPU | RAM | Storage |
+|----------|----------|------|-----|---------|
+| Minimal / dev | `t3.xlarge` | 4 | 16 GB | 50 GB gp3 |
+| Full stack, no local LLM | `m6i.2xlarge` | 8 | 32 GB | 100 GB gp3 |
+| Full stack + Ollama (small models) | `g4dn.xlarge` | 4 | 16 GB | 16 GB VRAM T4 |
+| Full stack + Ollama (large models) | `g4dn.12xlarge` | 48 | 192 GB | 64 GB VRAM 4×T4 |
+
+### Multi-Tenant Guidance
+
+Each additional tenant on the same server requires approximately:
+- Minimal stack: +4 GB RAM, +20 GB disk
+- Full stack: +16 GB RAM, +80 GB disk (separate EBS volume strongly recommended)
+
+---
+
+## platform.conf — Complete Key Reference
+
+Generated by script 1 at `/mnt/<tenant-id>/config/platform.conf`.
+Read by scripts 2 and 3. Never edited manually after generation except
+to override a port before re-running script 3.
+
+```bash
+# Identity
+PLATFORM_PREFIX=ai-
+TENANT_ID=acme
+PLATFORM_USER=ai-acme
+
+# Storage
+TENANT_DATA_PATH=/mnt/acme/
+TENANT_CONFIG_PATH=/mnt/acme/config/
+EBS_DEVICE=/dev/nvme1n1
+EBS_MOUNT_POINT=/mnt/acme/
+
+# Domain
+BASE_DOMAIN=example.com
+
+# Stack
+STACK_TYPE=full
+PROXY_TYPE=caddy
+TLS_MODE=letsencrypt
+
+# OpenClaw
+OPENCLAW_ENABLED=true
+OPENCLAW_PORT=3002
+OPENCLAW_SUBDOMAIN=openclaw.example.com
+OPENCLAW_PASSWORD=<generated>
+
+# LLM Proxy
+LLM_PROXY=litellm
+LLM_PROXY_PORT=4000
+LLM_ROUTING_STRATEGY=local-first
+LLM_PROXY_MASTER_KEY=<generated>
+LLM_PROXY_DB_URL=postgresql://litellm:<generated>@localhost:5432/litellm_acme
+LITELLM_UI_USERNAME=admin
+LITELLM_UI_PASSWORD=<generated>
+
+# External LLM Providers
+OPENAI_ENABLED=true
+OPENAI_API_KEY=sk-...
+ANTHROPIC_ENABLED=true
+ANTHROPIC_API_KEY=sk-ant-...
+GEMINI_ENABLED=false
+BEDROCK_ENABLED=false
+AZURE_ENABLED=false
+COHERE_ENABLED=false
+MISTRAL_ENABLED=false
+CUSTOM_LLM_ENABLED=false
+
+# Ollama
+OLLAMA_ENABLED=true
 OLLAMA_PORT=11434
+OLLAMA_MODELS=llama3.2,mistral,phi3
+OLLAMA_GPU_ENABLED=false
 
-# Security (Auto-generated)
-LLM_MASTER_KEY=sk-bifrost-[24-char-hex]
-MEM0_API_KEY=sk-mem0-[24-char-hex]
-POSTGRES_PASSWORD=[strong-password]
-REDIS_PASSWORD=[strong-password]
+# Vector Databases
+VECTOR_DB_PRIMARY=qdrant
+QDRANT_ENABLED=true
+QDRANT_REST_PORT=6333
+QDRANT_GRPC_PORT=6334
+QDRANT_API_KEY=<generated>
+WEAVIATE_ENABLED=true
+WEAVIATE_PORT=8082
+CHROMA_ENABLED=false
+CHROMA_PORT=8000
+MILVUS_ENABLED=false
+MILVUS_PORT=19530
+
+# Web UIs
+OPENWEBUI_ENABLED=true
+OPENWEBUI_PORT=3000
+OPENWEBUI_SUBDOMAIN=chat.example.com
+OPENWEBUI_SECRET_KEY=<generated>
+DIFY_ENABLED=true
+DIFY_WEB_PORT=3010
+DIFY_API_PORT=5001
+DIFY_SUBDOMAIN=dify.example.com
+DIFY_SECRET_KEY=<generated>
+ANYTHINGLLM_ENABLED=true
+ANYTHINGLLM_PORT=3001
+ANYTHINGLLM_SUBDOMAIN=anything.example.com
+ANYTHINGLLM_JWT_SECRET=<generated>
+
+# Workflow
+N8N_ENABLED=true
+N8N_PORT=5678
+N8N_SUBDOMAIN=n8n.example.com
+N8N_ENCRYPTION_KEY=<generated>
+N8N_BASIC_AUTH_USER=admin
+N8N_BASIC_AUTH_PASSWORD=<generated>
+FLOWISE_ENABLED=true
+FLOWISE_PORT=3100
+FLOWISE_SUBDOMAIN=flowise.example.com
+FLOWISE_USERNAME=admin
+FLOWISE_PASSWORD=<generated>
+
+# Authentication
+AUTHENTIK_ENABLED=true
+AUTHENTIK_PORT=9000
+AUTHENTIK_SUBDOMAIN=auth.example.com
+AUTHENTIK_SECRET_KEY=<generated>
+AUTHENTIK_BOOTSTRAP_EMAIL=admin@example.com
+AUTHENTIK_BOOTSTRAP_PASSWORD=<generated>
+AUTHENTIK_POSTGRES_PASSWORD=<generated>
+
+# Signal
+SIGNAL_ENABLED=true
+SIGNAL_PHONE_NUMBER=+15551234567
+SIGNAL_REGISTRATION_METHOD=sms
+SIGNAL_REST_PORT=8085
+SIGNAL_API_KEY=<generated>
+SIGNAL_REGISTERED=false
+
+# Observability
+PROMETHEUS_ENABLED=true
+PROMETHEUS_PORT=9090
+GRAFANA_ENABLED=true
+GRAFANA_PORT=3030
+GRAFANA_SUBDOMAIN=monitor.example.com
+GRAFANA_ADMIN_PASSWORD=<generated>
+
+# Code Server
+CODESERVER_ENABLED=true
+CODESERVER_PORT=8090
+CODESERVER_SUBDOMAIN=code.example.com
+CODESERVER_PASSWORD=<generated>
+CODESERVER_WORKSPACE=/home/coder/project
+
+# Shared Infrastructure
+POSTGRES_PORT=5432
+POSTGRES_PASSWORD=<generated>
+POSTGRES_DATA_PATH=/mnt/acme/postgres/
+REDIS_PORT=6379
+REDIS_PASSWORD=<generated>
+REDIS_DATA_PATH=/mnt/acme/redis/
+DOCKER_NETWORK=ai-acme_net
 ```
 
 ---
 
-## **🔧 Core Architectural Principles**
+## Data Layout
 
-### **🏗 Foundation Principles (Non-Negotiable)**
-
-✅ **Nothing as root** - All services run under tenant UID/GID (dynamically detected)  
-✅ **Data confinement** - Everything under `/mnt/data/tenant/` except cleanup logs in `~/logs/`  
-✅ **Dynamic compose generation** - No static files, compose generated only after all variables set  
-✅ **Zero hardcoded values** - All configuration via environment variables  
-✅ **No unbound variables** - Complete environment sourcing and validation  
-✅ **True modularity** - Mission Control serves as central utility hub for all scripts
-
-### **🌐 Network Architecture & Routing**
-
-**Multi-Entry Point Design:**
-✅ **HTTPS Public Access** - Caddy reverse proxy with automatic SSL/TLS  
-✅ **VPN Private Access** - Tailscale zero-trust networking with secure tunnels  
-✅ **Local Development** - Direct container access for debugging and testing  
-
-**Routing Options:**
-✅ **Service Selection** - Users choose between Bifrost or LiteLLM during setup  
-✅ **Vector Database Integration** - All services can access selected vector database  
-✅ **Memory Layer Integration** - Mem0 provides conversation memory to all gateways  
-✅ **Cross-Service Communication** - Docker networking with service discovery  
-
-**Network Configuration:**
-✅ **Dynamic Port Assignment** - Ports configurable per tenant and service selection  
-✅ **Container Networking** - Bridge networks with proper service isolation  
-✅ **Health Monitoring** - Comprehensive health checks for all network endpoints  
-✅ **SSL/TLS Management** - Automatic certificate generation and renewal  
-
-**Access Patterns:**
-- **Public Services**: `https://service.${DOMAIN}` (Caddy-managed)
-- **Private Services**: `https://service.tailnet-name.ts.net` (Tailscale)
-- **Development**: `http://localhost:${PORT}` (Direct access)
-- **Internal**: Container-to-container via Docker service names
-
-### **📊 Operational Principles**
-
-✅ **Logging strategy** - Centralized logging with automatic debug configuration  
-✅ **Known issues tracking** - Outbound variables, YAML issues, deprecation warnings documented  
-✅ **Health monitoring** - Comprehensive service health checks and URL testing  
-✅ **Debug infrastructure** - Automatic debug logging in `/mnt/data/{tenant}/logs/debug/`  
-✅ **Modular verification** - Cross-script verification functions with consistent behavior
-
----
-
-## **🎯 Key Platform Capabilities**
-
-### **🤖 Modular AI Stack Integration**
-- **Local-First LLM**: Ollama with configurable model selection
-- **Gateway Selection**: Choose between Bifrost (performance) or LiteLLM (features)
-- **Vector Database Options**: Qdrant, Weaviate, ChromaDB, Milvus, Pinecone, or None
-- **Memory Layer**: Mem0 provides conversation memory for all gateway options
-- **Multi-Provider Support**: Local models and cloud providers via selected gateway
-
-### **🌐 Flexible Network Architecture**
-- **Multiple Entry Points**: HTTPS (public), VPN (private), Local (development)
-- **Reverse Proxy Options**: Caddy (default), Nginx, or Traefik
-- **Service Discovery**: Docker networking with configurable routing
-- **SSL/TLS Management**: Automatic certificates for public endpoints
-- **Zero-Trust Networking**: Tailscale integration for secure access
-
-### **� Development & Operations**
-- **Code Server**: Web-based development environment with VS Code
-- **Workflow Automation**: n8n for complex integrations
-- **AI Workflow Builder**: Flowise for visual AI pipeline creation
-- **Monitoring Stack**: Grafana + Prometheus for observability
-- **Shell Access**: OpenClaw web terminal with proper permissions
-
-### **🏢 Enterprise Features**
-- **Multi-Tenancy**: Complete isolation between tenants
-- **Identity Management**: Authentik for SSO and user management
-- **Data Integration**: Rclone for Google Drive and cloud storage
-- **Security**: Zero-root execution, encrypted communications
-- **Scalability**: Modular deployment based on requirements
-
-### **🔧 Service Management**
-- **Mission Control Hub**: Single interface for all platform operations
-- **On-Demand Services**: Start/stop services as needed via Mission Control
-- **Health Monitoring**: Real-time service status and resource usage
-- **Debug Logging**: Comprehensive debug infrastructure for troubleshooting
-
----
-
-## **📈 Deployment Results**
-
-### **🎯 CURRENT DEPLOYMENT STATUS**
-
-**✅ ARCHITECTURAL COMPLIANCE - 100%**
-- ✅ **5 Scripts Only (0-5)** - Modular architecture with zero external dependencies
-- ✅ **Zero Hardcoded Values** - All configuration via environment variables
-- ✅ **Dynamic Compose Generation** - No static files, generated after all variables set
-- ✅ **Non-root Execution** - All services under tenant UID/GID
-- ✅ **Data Confinement** - Everything under `/mnt/data/tenant/`
-- ✅ **True Modularity** - Mission Control as central utility hub
-- ✅ **Integrated Ingestion** - GDrive → Qdrant pipeline embedded in core scripts
-- ✅ **Zero External Dependencies** - All logic in 5-key-scripts architecture
-
-**✅ INFRASTRUCTURE SUCCESS (9/12 Services Operational):**
-- ✅ **PostgreSQL**: Healthy with automatic database provisioning (58 Bifrost tables)
-- ✅ **Redis**: Healthy with authentication
-- ✅ **Qdrant**: Healthy with proper permissions
-- ✅ **Bifrost**: Starting with schema resolved, models loaded
-- ✅ **Grafana**: Healthy with admin access
-- ✅ **Prometheus**: Healthy with metrics collection
-- ✅ **Caddy**: Running with infrastructure-only dependencies (2+ hours stable)
-- ✅ **OpenWebUI**: Healthy with embeddings loaded
-- ✅ **Tailscale**: Healthy with VPN connection established
-- ✅ **OpenClaw**: Healthy with development environment ready
-- ✅ **Ollama**: Healthy with 2 runners ready for inference
-- 🔄 **RClone**: Restarting (command syntax fix needed)
-- 🔄 **Ingestion Pipeline**: Built and ready (waiting for Bifrost health)
-
-**🔧 APPLICATION LAYER (Available via Mission Control):**
-- 🎮 **OpenWebUI**: `sudo bash scripts/3-configure-services.sh datasquiz --start openwebui` ✅ RUNNING
-- 🎮 **n8n**: `sudo bash scripts/3-configure-services.sh datasquiz --start n8n` (waiting for Bifrost)
-- 🎮 **Flowise**: `sudo bash scripts/3-configure-services.sh datasquiz --start flowise` (waiting for Bifrost)
-- 🎮 **AnythingLLM**: `sudo bash scripts/3-configure-services.sh datasquiz --start anythingllm` (waiting for Bifrost)
-- 🎮 **GDrive Ingestion**: `sudo bash scripts/3-configure-services.sh datasquiz --start gdrive-ingestion` (built and ready)
-- 🎮 **Code Server**: `sudo bash scripts/3-configure-services.sh datasquiz --start codeserver` (waiting for Bifrost)
-
-**🌐 NETWORK ACCESS (Gateway Layer):**
-- ✅ **HTTPS Infrastructure**: Fully operational with automatic TLS
-- ✅ **Domain Routing**: Subdomain routing for all services
-- ✅ **Load Balancing**: Health-aware routing in Caddy configuration
-
-### **🔧 ARCHITECTURAL FIXES APPLIED**
-
-**Phase 1: Foundation Fixes**
-- ✅ Complete environment variable generation with derived connection strings
-- ✅ PostgreSQL initialization script with automatic database creation
-- ✅ **Bifrost configuration generation with runtime environment variables**
-
-**Phase 2: Deployment Fixes**
-- ✅ Qdrant health check fixed (collections endpoint)
-- ✅ **Bifrost health check fixed (health/liveliness with 90s start period)**
-- ✅ Caddy dependency cleanup (infrastructure-only dependencies)
-- ✅ Storage permissions fixed (Qdrant ownership before deployment)
-
-**Phase 3: Configuration Fixes**
-- ✅ Tailscale integration using existing compose service
-- ✅ Health dashboard with comprehensive service testing
-- ✅ Database provisioning with automatic verification
-- ✅ Service configuration without boundary violations
-
-**Phase 4: Ingestion Pipeline Integration**
-- ✅ **Integrated GDrive Ingestion Pipeline** - Embedded into core scripts
-- ✅ **Zero External Dependencies** - Removed separate `/ingestion` folder
-- ✅ **Dynamic Dockerfile Generation** - Created inline during config generation
-- ✅ **Script Integration** - Complete ingestion logic embedded in Script 3
-- ✅ **Volume Management** - gdrive_data and ingestion_state volumes defined
-- ✅ **Service Dependencies** - Proper health-based sequencing
-- ✅ **5-Key-Scripts Compliance** - Strict adherence to architectural principles
-
-### **📊 HEALTH DASHBOARD EXAMPLE**
 ```
-╔══════════════════════════════════════════════╗
-║           PLATFORM HEALTH DASHBOARD                 ║
-╚══════════════════════════════════════════╝
-
-  Tailscale IP : 100.x.x.x.x
-  Domain       : https://datasquiz.net
-
-Core Infrastructure:
-  PostgreSQL    🟢 OK
-  Redis       🟢 OK
-  Bifrost     🟢 OK
-  Grafana     🟢 OK
-  n8n        🟢 OK
-  Qdrant      🟢 OK
-  OpenWebUI   🟢 OK
-  Prometheus  🟢 OK
-
-Service Access URLs:
-  Main Domain    🟢 OK  https://datasquiz.net
-  Grafana      🟢 OK  https://grafana.datasquiz.net
-  n8n          🟢 OK  https://n8n.datasquiz.net
-  OpenWebUI    🟢 OK  https://openwebui.datasquiz.net
-
-Service Tests:
-  Bifrost test: curl -s http://localhost:4000/v1/models \
-              -H 'Authorization: Bearer ${BIFROST_MASTER_KEY}' | jq '.data[].id'
-  OpenClaw test: curl -s http://localhost:8080/signal
-```
-
-### **🎯 EXPECTED OUTCOMES**
-
-**Deployment Success Rate**: 75% (9/12 services healthy, 2 starting, 1 restarting)
-**Architecture Compliance**: 100% README.md aligned with 5-key-scripts principle
-**Deterministic Deployment**: Repeatable success across environments
-**Service Discovery**: Complete with automatic health monitoring
-**Storage**: Stable with proper permissions
-**Routing**: Deterministic with health-aware proxying
-**Ingestion Pipeline**: Fully integrated with zero external dependencies
-**Production Readiness**: Platform operational with clear resolution paths
-
----
-
-## **🎯 Architectural Goals**
-
-✅ **Zero hardcoded values** - All 5 scripts 100% dynamic  
-✅ **Intelligent routing** - Bifrost cost/latency optimization  
-✅ **Multi-tenant isolation** - Dynamic project prefixes  
-✅ **Fully dockerized** - Dynamic compose-based infrastructure  
-✅ **Non-root execution** - Tenant UID/GID preservation (automatic detection)  
-✅ **Centralized LLM routing** - Via Bifrost with fallback strategies  
-✅ **Dynamic service URLs** - All endpoints configurable  
-✅ **Vector database integration** - Support for any vector DB  
-✅ **Service auto-integration** - At configuration stage  
-✅ **Enterprise ready** - SSO, monitoring, VPN integration  
-✅ **True modularity** - Mission Control utility hub for cross-script reuse  
-✅ **Zero code duplication** - Single source of truth for all utilities  
-✅ **Enhanced debugging** - Automatic debug logging and configuration  
-✅ **5-key-scripts compliance** - Zero external dependencies, all logic in core scripts  
-✅ **Integrated ingestion pipeline** - GDrive → Qdrant pipeline embedded in scripts  
-
-This is not a container launcher.  
-It is an **enterprise-grade AI infrastructure orchestration system with true modular architecture**.
-
-## **🚀 Quick Start**
-
-```bash
-# 1. Cleanup (TRUE NUCLEAR)
-sudo bash scripts/0-complete-cleanup.sh
-
-# 2. Interactive Setup with Validation & Pairing
-sudo bash scripts/1-setup-system.sh
-
-# 3. Deploy with Intelligent Verification & Dashboard
-sudo bash scripts/2-deploy-services.sh
-
-# 4. Mission Control Management
-sudo bash scripts/3-configure-services.sh datasquiz --status
-sudo bash scripts/3-configure-services.sh datasquiz --start <service>
-sudo bash scripts/3-configure-services.sh datasquiz --pair-signal
+/mnt/<tenant-id>/
+├── config/
+│   ├── platform.conf          # Single source of truth for this tenant
+│   ├── docker-compose.yml     # Generated by script 2
+│   ├── caddy/Caddyfile        # Generated by script 3
+│   ├── litellm/config.yaml    # Generated by script 3
+│   ├── prometheus/            # Generated by script 3
+│   ├── grafana/               # Dashboards + datasource provisioning
+│   ├── rclone/                # rclone.conf + oauth token if gdrive
+│   └── .configured/           # Per-service completion markers
+├── postgres/                  # PostgreSQL data
+├── redis/                     # Redis data
+├── ollama/                    # Ollama model files
+├── qdrant/                    # Qdrant collections
+├── weaviate/                  # Weaviate data
+├── chroma/                    # Chroma data
+├── milvus/                    # Milvus data
+├── openwebui/                 # Open-WebUI database and uploads
+├── dify/                      # Dify application data
+├── anythingllm/               # AnythingLLM data
+├── openclaw/                  # OpenClaw session data
+├── n8n/                       # n8n workflows and credentials
+├── flowise/                   # Flowise flows
+├── authentik/                 # Authentik media and certs
+├── signal/                    # Signal CLI REST API data and registered account
+├── prometheus/                # Prometheus TSDB
+├── grafana/                   # Grafana dashboards and DB
+├── codeserver/                # Code Server workspace and config
+└── backup/                    # Local backup staging before remote push
 ```
 
 ---
 
-## **🔧 Logging Engine Commands**
+## Contributing
 
-### **Comprehensive Logging Management**
-```bash
-# Deploy with maximum debug visibility
-DEBUG_MODE=true sudo bash scripts/2-deploy-services-logging.sh datasquiz
+### Required for any new service addition
 
-# Configure individual service logging
-sudo bash scripts/3-configure-services-logging.sh datasquiz configure
+1. **Port assignment** — assign a unique host port that does not conflict
+   with any existing entry in Port Reference table; document both
+   container port and assigned host port
+2. **`platform.conf` key** — add `<SERVICE>_ENABLED`, `<SERVICE>_PORT`,
+   and all service-specific variables to Script 1 input collection in
+   dependency order
+3. **Dependency layer** — identify which layer the service belongs to;
+   document its `depends_on` requirements
+4. **Health check** — add a `healthcheck` block to the service's
+   `docker-compose.yml` entry using the actual health endpoint verified
+   against the service's Docker documentation
+5. **Dashboard row** — add a row to the Mission Control dashboard spec
+   in this README and to script 2 dashboard output function
+6. **Data path** — add `/mnt/<tenant-id>/<service>/` to the Data Layout
+   section; all persistent data must go here, nowhere else
+7. **Script 0 cleanup** — add removal of the service's data path and
+   any systemd units to script 0
+8. **Test matrix** — new service × each proxy type (`caddy`, `nginx`,
+   `none`) × each TLS mode × two tenants on same server
 
-# Show logging dashboard
-sudo bash scripts/3-configure-services-logging.sh datasquiz dashboard
+### Design Principles
 
-# Run comprehensive health checks
-sudo bash scripts/3-configure-services-logging.sh datasquiz health
-
-# Rotate and clean logs
-sudo bash scripts/3-configure-services-logging.sh datasquiz rotate
-sudo bash scripts/3-configure-services-logging.sh datasquiz cleanup
-
-# Disable logging for all services
-sudo bash scripts/3-configure-services-logging.sh datasquiz disable
-```
-
-### **Log Locations and Structure**
-```
-/mnt/data/datasquiz/
-├── logs/
-│   ├── deploy-20260311-*.log          # Main deployment logs
-│   └── deploy-<service>-*.log         # Service-specific logs
-├── postgres/
-│   └── logs/                        # Postgres log directory
-├── redis/
-│   └── logs/                        # Redis log directory
-├── qdrant/
-│   └── logs/                        # Qdrant log directory
-├── grafana/
-│   └── logs/                        # Grafana log directory
-├── prometheus/
-│   └── logs/                        # Prometheus log directory
-└── caddy/
-    └── logs/                        # Caddy log directory
-```
-
----
-
-## **🔧 Mission Control Commands**
-
-### **Service Management**
-```bash
-# Start/stop/restart services
-sudo bash scripts/3-configure-services.sh datasquiz --start n8n
-sudo bash scripts/3-configure-services.sh datasquiz --stop n8n
-sudo bash scripts/3-configure-services.sh datasquiz --restart n8n
-
-# View logs
-sudo bash scripts/3-configure-services.sh datasquiz --logs postgres
-```
-
-### **Platform Operations**
-```bash
-# Comprehensive status dashboard
-sudo bash scripts/3-configure-services.sh datasquiz --status
-
-# Debug logging configuration
-sudo bash scripts/3-configure-services.sh datasquiz --set-debug
-
-# Service verification
-sudo bash scripts/3-configure-services.sh datasquiz --verify
-
-# LiteLLM routing management
-sudo bash scripts/3-configure-services.sh datasquiz --test-litellm
-sudo bash scripts/3-configure-services.sh datasquiz --set-routing cost-optimized
-```
+1. Every port, username, database name, and API key is a `platform.conf`
+   variable — never hardcoded in any script or compose file
+2. No script runs as root; `EUID == 0` check at entry exits immediately
+3. No Docker named volumes; only bind mounts to `/mnt/<tenant-id>/`
+4. No UFW or iptables manipulation
+5. DNS validation runs before TLS is attempted
+6. All internal keys are generated at init; never entered manually
+7. Port conflict pre-check runs before any service is configured or started
+8. Signal registration port `127.0.0.1:8085` is temporary and removed
+   post-registration; no host port exposed at runtime
+9. Script 3 is idempotent; re-running is always safe
+10. Every new service must have a health check; scripts 2 and 3 never
+    assume a service is ready without a passing health check response
+11. All services — including browser session tools such as OpenClaw —
+    are served behind reverse proxy over HTTPS; no separate tunnel
+    or network overlay is required or supported
+12. Phased delivery: each phase produces a stable, fully working platform;
+    no phase leaves the system in a partially integrated state
 
 ---
 
-## **🔍 Debug Infrastructure**
+## License
 
-### **Automatic Debug Logging**
-- **Location**: `/mnt/data/{tenant}/logs/debug/`
-- **Services**: postgres, redis, qdrant, ollama
-- **Format**: `{service}-debug.log`
-- **Activation**: Automatic during deployment, manual via `--set-debug`
-
-### **Service Health Verification**
-- **Tailscale Connectivity**: VPN status and IP assignment
-- **Rclone Authentication**: Google Drive access validation
-- **LiteLLM Routing**: Local and cloud model testing
-- **Vector Database**: Qdrant connectivity and operations
-
----
-
-## **🌐 Access URLs**
-
-### **Web Services**
-- **OpenWebUI**: `https://openwebui.{DOMAIN}`
-- **Flowise**: `https://flowise.{DOMAIN}`
-- **n8n**: `https://n8n.{DOMAIN}`
-- **AnythingLLM**: `https://anythingllm.{DOMAIN}`
-- **LiteLLM**: `http://localhost:4000`
-- **Grafana**: `https://grafana.{DOMAIN}`
-- **Authentik**: `https://auth.{DOMAIN}`
-
-### **VPN & Terminal Access**
-- **Tailscale VPN**: Private IP assignment after connection
-- **OpenClaw Terminal**: `http://localhost:18789` (web-based shell)
-- **Tailscale Web**: `https://tailscale.{DOMAIN}`
-
-### **API Endpoints**
-- **Ollama API**: `http://localhost:11434/api/tags`
-- **Qdrant API**: `http://localhost:6333`
-- **Redis**: `localhost:6379`
-- **PostgreSQL**: `localhost:5432`
-
----
-
-## **📊 System Architecture**
-
-### **Data Flow**
-1. **Google Drive** → **Rclone** → **Local Storage** → **Vector Ingestion** → **Qdrant**
-2. **User Queries** → **LiteLLM** → **Local/Cloud Models** → **Vector Search** → **AI Responses**
-3. **OpenClaw** → **Shell Access** → **Vector DB Queries** → **AI-Powered Operations**
-
-### **Service Integration**
-- **All AI services** share Qdrant vector database
-- **LiteLLM** provides unified model access
-- **Tailscale** enables secure remote access
-- **OpenClaw** provides web-based shell under non-root user
-- **Rclone** maintains Google Drive synchronization
-
----
-
-## **� Network Architecture**
-
-✅ **Independent networks** - Tailscale (8443) + OpenClaw (18789) as separate network layers
-✅ **Service auto-integration** - All AI stack services automatically share salt keys & Qdrant database
-✅ **LiteLLM proxy routing** - Intelligent routing between local models and frontier models with multiple strategies
-✅ **Tailscale VPN integration** - Zero-trust networking with auth key validation
-✅ **OpenClaw shell access** - Web-based terminal under dedicated user ID
-
-### **📊 Operational Principles**
-
-✅ **Logging strategy** - Centralized logging with automatic debug configuration
-✅ **Known issues tracking** - Outbound variables, YAML issues, deprecation warnings documented
-✅ **Health monitoring** - Comprehensive service health checks and URL testing
-✅ **Debug infrastructure** - Automatic debug logging in `/mnt/data/{tenant}/logs/debug/`
-✅ **Modular verification** - Cross-script verification functions with consistent behavior
-
----
-
-## **📚 Service Stack**
-
-### **🔧 Software Stack**
-| Service | Purpose | Notes |
-|---------|---------|-------|
-| PostgreSQL | Relational storage | Shared by n8n, OpenWebUI |
-| Redis | Cache and queues | Session storage |
-| Qdrant | Vector database | Memory backend for Mem0 |
-| Ollama | Local LLM inference | GPU/CPU auto-detect |
-| **Bifrost** | **LLM gateway** | **Lightweight Go binary, set `GATEWAY_TYPE=bifrost` (default)** |
-| **Mem0** | **Per-tenant memory** | **Backed by Qdrant + Ollama, tenant-isolated** |
-| OpenWebUI | Chat interface | Connects via LLM_GATEWAY_URL |
-| n8n | Workflow automation | Webhook-triggered AI pipelines |
-| Caddy | Reverse proxy | TLS termination |
-
-### **🚪 Gateway Selection**
-
-```bash
-# Default — lightweight, low memory, Go binary
-export GATEWAY_TYPE=bifrost
-
-# Alternative — full-featured, Python, more provider integrations  
-export GATEWAY_TYPE=litellm
-```
-
-All services consume `LLM_GATEWAY_URL` automatically. Changing gateway requires only `GATEWAY_TYPE` change and re-running scripts 1 and 2.
-
-### **🧠 Per-Tenant Memory (Mem0)**
-
-All AI services have access to persistent, tenant-isolated memory via Mem0:
-
-- Memory stored in Qdrant vector database under `/mnt/ai-platform/data/qdrant` 
-- Each tenant's memory is isolated by `user_id` — cross-tenant search returns empty
-- Memory persists across container restarts
-- API available at `http://localhost:${MEM0_PORT}/v1/memories` 
-- Authentication via `MEM0_API_KEY` from `.env`
-
-### **🤖 AI Stack Integration**
-- **Local-First LLM**: Ollama with local model hosting
-- **Modular Gateways**: Bifrost (Go) or LiteLLM (Python) based on `GATEWAY_TYPE`
-- **Modular Proxy**: Caddy (default), Nginx, Traefik, or Custom based on `PROXY_TYPE`
-- **Mem0**: Per-tenant conversation memory, backed by vector DB, used by all gateways
-- **Vector Databases**: Qdrant, Weaviate, ChromaDB, Milvus, Pinecone, or None
-- **Google Drive Integration**: Rclone with OAuth/Service Account authentication
-- **Multi-Service Vector Access**: All services can query and use vector database
-
-### **🚪 Gateway & Proxy Selection**
-The platform supports **modular gateway and proxy selection** via environment variables:
-
-**LLM Gateways:**
-Set `GATEWAY_TYPE` in Script 1 or `.env`:
-- `GATEWAY_TYPE=bifrost` (default) - Lightweight Go-based router
-- `GATEWAY_TYPE=litellm` - Python-based router with advanced features
-
-**Reverse Proxy Options:**
-Set `PROXY_TYPE` in Script 1 or `.env`:
-- `PROXY_TYPE=caddy` (default) - Modern Go-based reverse proxy with automatic HTTPS
-- `PROXY_TYPE=nginx` - High-performance Nginx reverse proxy
-- `PROXY_TYPE=traefik` - Automatic service discovery and routing
-- `PROXY_TYPE=custom` - Custom proxy image
-
-**SSL/TLS Providers:**
-Set `SSL_TYPE` in Script 1 or `.env`:
-- `SSL_TYPE=acme` (default) - Automatic Let's Encrypt certificates
-- `SSL_TYPE=selfsigned` - Self-signed certificates for development
-- `SSL_TYPE=custom` - Custom certificate files
-- `SSL_TYPE=none` - HTTP only (not recommended for production)
-
-**Vector Database Selection:**
-Set `VECTOR_DB` in Script 1 or `.env`:
-- `VECTOR_DB=qdrant` (default) - High-performance vector database
-- `VECTOR_DB=weaviate` - GraphQL API with advanced features
-- `VECTOR_DB=chromadb` - Lightweight, embedded vector database
-- `VECTOR_DB=milvus` - Enterprise-scale vector database
-- `VECTOR_DB=pinecone` - Managed vector database service
-- `VECTOR_DB=none` - Use external vector database
-
-**Deployment Stack Presets:**
-Script 1 offers 5 deployment presets:
-1. **Minimal** - OpenWebUI + Ollama + Qdrant + Core infrastructure
-2. **Development** - Code Server + Continue.dev + OpenClaw + Tailscale
-3. **Standard** - Minimal + n8n + Flowise + Bifrost
-4. **Full** - Standard + AnythingLLM + Grafana + Prometheus + Authentik
-5. **Custom** - Individual service selection
-
-**Modular Architecture:**
-- **Any combination** of gateway + proxy + vector DB can be deployed
-- **Runtime selection** based on environment variables only
-- **Zero hardcoded dependencies** - all services dynamically configured
-- **Service isolation** - each component independently deployable
-- **Stack presets** for common deployment patterns
-
-Both gateways automatically use Mem0 for conversation memory when enabled.
-
-### **🔐 Security & Access**
-- **Tailscale VPN**: Zero-trust networking with private IP assignment
-- **OpenClaw Web Terminal**: Browser-based shell access under non-root user
-- **Tenant Isolation**: Complete UID/GID separation per tenant
-- **OAuth Authentication**: Secure Google Drive integration with token validation
-
-### **🔧 Service Management**
-- **Mission Control Hub**: Single interface for all platform operations
-- **On-Demand Services**: Start/stop services as needed via Mission Control
-- **Health Monitoring**: Real-time service status and resource usage
-- **Debug Logging**: Comprehensive debug infrastructure for troubleshooting
-
----
-
-## **📈 Deployment Results**
-
-### **Service Status (7/7 Core Services Deployed)**
-- ✅ **postgres** - Running Healthy
-- ✅ **redis** - Running Healthy  
-- ✅ **qdrant** - Running Healthy
-- ✅ **ollama** - Running Healthy
-- ✅ **caddy** - Running Healthy
-- ✅ **openwebui** - Running Healthy (Mission Control managed)
-- ✅ **flowise** - Running Healthy (Mission Control managed)
-
-### **Application Services (On-Demand via Mission Control)**
-- 🎮 **n8n** - Available via `--start n8n`
-- 🎮 **anythingllm** - Available via `--start anythingllm`
-- 🎮 **litellm** - Available via `--start litellm`
-- 🎮 **grafana** - Available via `--start grafana`
-- 🎮 **authentik** - Available via `--start authentik`
-- 🎮 **dify** - Available via `--start dify`
-- 🎮 **tailscale** - Available via `--start tailscale`
-- 🎮 **rclone** - Available via `--start rclone`
-
-### **Architecture Compliance**
-- ✅ **100% Core Principles Compliance**
-- ✅ **100% Deployment Success Rate**
-- ✅ **Zero Hardcoded Values**
-- ✅ **Complete Separation of Concerns**
-- ✅ **Dynamic UID Management**
-- ✅ **Mission Control Management**
-- ✅ **Resource-Optimized Deployment**
-- ✅ **True Modular Architecture**
-- ✅ **Zero Code Duplication**
-
----
-
-## **🎯 Architectural Goals**
-
-✅ **Zero hardcoded values** - All 5 scripts 100% dynamic
-✅ **Intelligent routing** - LiteLLM cost/latency optimization
-✅ **Multi-tenant isolation** - Dynamic project prefixes
-✅ **Fully dockerized** - Dynamic compose-based infrastructure
-✅ **Non-root execution** - Tenant UID/GID preservation (automatic detection)
-✅ **Centralized LLM routing** - Via LiteLLM with fallback strategies
-✅ **Dynamic service URLs** - All endpoints configurable
-✅ **Vector database integration** - Support for any vector DB
-✅ **Service auto-integration** - At configuration stage
-✅ **Enterprise ready** - SSO, monitoring, VPN integration
-✅ **True modularity** - Mission Control utility hub for cross-script reuse
-✅ **Zero code duplication** - Single source of truth for all utilities
-✅ **Enhanced debugging** - Automatic debug logging and configuration
-
-This is not a container launcher.
-It is an **enterprise-grade AI infrastructure orchestration system with true modular architecture**.
-
----
-
-## **🚀 Quick Start**
-
-```bash
-# 1. Cleanup
-sudo bash scripts/0-complete-cleanup.sh datasquiz
-
-# 2. Configure tenant (uses Mission Control utilities for validation)
-sudo bash scripts/1-setup-system.sh datasquiz
-
-# 3. Deploy CORE infrastructure (uses Mission Control for service management)
-sudo bash scripts/2-deploy-services.sh datasquiz
-
-# 4. Manage services with Mission Control
-sudo bash scripts/3-configure-services.sh datasquiz --status
-sudo bash scripts/3-configure-services.sh datasquiz --start tailscale
-sudo bash scripts/3-configure-services.sh datasquiz --set-debug
-
-# 5. Enable debug logging
-sudo bash scripts/3-configure-services.sh datasquiz --set-debug
-
-# 6. Start application services on-demand
-sudo bash scripts/3-configure-services.sh datasquiz --start openwebui
-sudo bash scripts/3-configure-services.sh datasquiz --start rclone
-```
-
----
-
-## **🔧 Mission Control Commands**
-
-### **Service Management**
-```bash
-# Start/stop/restart services
-sudo bash scripts/3-configure-services.sh datasquiz --start n8n
-sudo bash scripts/3-configure-services.sh datasquiz --stop n8n
-sudo bash scripts/3-configure-services.sh datasquiz --restart n8n
-
-# View logs
-sudo bash scripts/3-configure-services.sh datasquiz --logs postgres
-```
-
-### **Platform Operations**
-```bash
-# Comprehensive status dashboard
-sudo bash scripts/3-configure-services.sh datasquiz --status
-
-# Debug logging configuration
-sudo bash scripts/3-configure-services.sh datasquiz --set-debug
-
-# Service verification
-sudo bash scripts/3-configure-services.sh datasquiz --verify
-
-# LiteLLM routing management
-sudo bash scripts/3-configure-services.sh datasquiz --test-litellm
-sudo bash scripts/3-configure-services.sh datasquiz --set-routing cost-optimized
-```
-
----
-
-## **🔍 Debug Infrastructure**
-
-### **Automatic Debug Logging**
-- **Location**: `/mnt/data/{tenant}/logs/debug/`
-- **Services**: postgres, redis, qdrant, ollama
-- **Format**: `{service}-debug.log`
-- **Activation**: Automatic during deployment, manual via `--set-debug`
-
-### **Service Health Verification**
-- **Tailscale Connectivity**: VPN status and IP assignment
-- **Rclone Authentication**: Google Drive access validation
-- **LiteLLM Routing**: Local and cloud model testing
-- **Vector Database**: Qdrant connectivity and operations
-
----
-
-## **🌐 Access URLs**
-
-### **Web Services**
-- **OpenWebUI**: `https://openwebui.{DOMAIN}`
-- **Flowise**: `https://flowise.{DOMAIN}`
-- **n8n**: `https://n8n.{DOMAIN}`
-- **AnythingLLM**: `https://anythingllm.{DOMAIN}`
-- **LiteLLM**: `http://localhost:4000`
-- **Grafana**: `https://grafana.{DOMAIN}`
-- **Authentik**: `https://auth.{DOMAIN}`
-
-### **VPN & Terminal Access**
-- **Tailscale VPN**: Private IP assignment after connection
-- **OpenClaw Terminal**: `http://localhost:18789` (web-based shell)
-- **Tailscale Web**: `https://tailscale.{DOMAIN}`
-
-### **API Endpoints**
-- **Ollama API**: `http://localhost:11434/api/tags`
-- **Qdrant API**: `http://localhost:6333`
-- **Redis**: `localhost:6379`
-- **PostgreSQL**: `localhost:5432`
-
----
-
-## **📊 System Architecture**
-
-### **Data Flow**
-1. **Google Drive** → **Rclone** → **Local Storage** → **Vector Ingestion** → **Qdrant**
-2. **User Queries** → **Gateway (Bifrost/LiteLLM)** → **Local/Cloud Models** → **Vector Search** → **AI Responses**
-3. **OpenClaw** → **Shell Access** → **Vector DB Queries** → **AI-Powered Operations**
-
-### **Service Dependencies**
-```
-Core Infrastructure:
-├── PostgreSQL (Database)
-├── Redis (Cache)
-├── Qdrant (Vector DB)
-└── Reverse Proxy (Caddy/Nginx)
-
-AI Infrastructure:
-├── Ollama (Local LLM)
-├── Gateway (Bifrost/LiteLLM)
-└── Vector Integration
-
-Development Layer:
-├── Code Server (VS Code + Gateway Integration)
-├── Continue.dev (AI Assistant)
-└── OpenClaw (Tailscale Terminal)
-
-Application Layer:
-├── OpenWebUI (Chat Interface)
-├── Flowise (Workflow Builder)
-├── n8n (Automation)
-└── AnythingLLM (Document AI)
-
-Security & Access:
-├── Tailscale (VPN)
-├── OpenClaw (Web Terminal)
-└── Authentik (SSO)
-```
-
----
-
-## **🔧 Core Principles**
-
-### **Zero Hardcoding Architecture**
-✅ **Dynamic compose generation** - No static files, compose generated only after all variables set
-✅ **Zero hardcoded values** - Maximum modularity, all configuration via `.env` variables
-✅ **No unbound variables** - Complete environment sourcing and validation
-✅ **True modularity** - Mission Control serves as central utility hub for all scripts
-
----
-
-## **📋 Current Status**
-
-### **🎉 MAJOR SUCCESS: Complete Platform Operational with Integrated Ingestion (v3.4.0)**
-- ✅ **CRITICAL: All core services fully operational** - 9/12 services healthy, LiteLLM starting
-- ✅ **FIXED: Caddy DNS resolution** - IP-based routing for all subdomains working (2+ hours stable)
-- ✅ **FIXED: OpenClaw authentication** - Proper environment variable mapping
-- ✅ **ADDED: Development environment** - Code Server with LiteLLM integration
-- ✅ **ADDED: Tailscale subdomain routing** - Dynamic IP-based routing for VPN services
-- ✅ **ADDED: Integrated Ingestion Pipeline** - GDrive → Qdrant pipeline embedded in core scripts
-- ✅ **REFACTORED: 5-Key-Scripts Architecture** - Zero external dependencies, strict compliance
-- ✅ **Complete subdomain access** - All services accessible via HTTPS
-- ✅ **Vector DB integration** - Complete RAG pipeline operational
-- ✅ **All core architectural principles maintained** - Zero hardcoded values, dynamic config
-- ✅ **Production Baseline Established** - Platform ready for operations with clear issue resolution
-
-### **Root Cause Resolution**
-The persistent LiteLLM issue was caused by:
-1. **Default image entrypoint** looking for `/app/proxy_server_config.yaml` instead of our mounted `/app/config.yaml`
-2. **Docker entrypoint/command duplication** causing "unexpected extra argument" errors
-3. **Cache configuration errors** causing startup failures at "Setting Cache on Proxy"
-
-### **Latest Changes (v3.2.0)**
-- ✅ **NEW: Comprehensive Logging Engine** - Deep deployment visibility and service-specific debugging
-- ✅ **Script 2 Enhanced** - Added comprehensive debug logging with service-specific visibility
-- ✅ **Script 3 Enhanced** - Added individual service log configuration and management
-- ✅ **Debug Mode Flag** - `DEBUG_MODE=true` enables maximum verbosity for troubleshooting
-- ✅ **Log Lifecycle Management** - Automatic rotation, cleanup, and retention policies
-- ✅ **Programmatic Health Monitoring** - Port, URL, and container status checks
-- ✅ **Logging Dashboard** - Visual overview of all service logging configurations
-- ✅ **Real-Time Log Capture** - Docker logs with timestamps and service-specific output
-- ✅ Fixed Script 0 nuclear cleanup functionality
-- ✅ Restored modular infrastructure from commit 33f0a82
-- ✅ Fixed Script 1 interactive setup with proper .env handling
-- ✅ Fixed Script 2 integration with Script 3 for post-deployment
-- ✅ Added default values to Script 3 to prevent unbound variable errors
-- ✅ Restored Network Architecture and Service Stack sections to README.md
-
-### **Ready for New Workflow**
-- ✅ Baseline established at commit `4439549`
-- ✅ All scripts properly aligned with modular architecture
-- ✅ README.md restored with complete Network and Stack information
-- ✅ Ready for Gemini → Windsurf development workflow
-
----
-
-## **�🎉 Release Notes - v3.0.0 BASELINE**
-
-### **🚀 BREAKTHROUGH FEATURES**
-- **Mission Control Utility Hub**: Centralized functions for all platform operations
-- **True Modular Architecture**: Zero code duplication across scripts
-- **Enhanced Debug Infrastructure**: Automatic debug logging and configuration
-- **OAuth Token Management**: Secure Google Drive integration with validation
-- **Cross-Script Function Reusability**: Any script can leverage Mission Control utilities
-
-### **🔧 Technical Improvements**
-- **Source-Safe Script Design**: Scripts can safely source utilities without conflicts
-- **Unified Service Management**: Consistent service operations across all scripts
-- **Comprehensive Verification**: Post-deployment health checks with detailed reporting
-- **Enhanced Error Handling**: Better logging and diagnostics throughout platform
-
-### **📈 Architecture Benefits**
-- **Single Source of Truth**: All utilities centralized in Mission Control
-- **Maximum Code Reusability**: Functions exported for cross-script use
-- **Consistent Behavior**: Unified error handling and logging
-- **Easy Maintenance**: Changes in Mission Control benefit all scripts
-
-### **🎯 Production Readiness**
-- **100% Core Principles Compliance**
-- **Complete README Documentation**
-- **Comprehensive Testing Coverage**
-- **Enterprise-Grade Security**
-- **Scalable Architecture Design**
-
----
-
-## **🔄 Recent Updates - v3.4.0**
-
-### **� BREAKTHROUGH: 5-Key-Scripts Architecture with Integrated Ingestion**
-- **Complete Architecture Refactor**: Implemented strict 5-key-scripts compliance
-- **Integrated Ingestion Pipeline**: GDrive → Qdrant pipeline embedded in core scripts
-- **Zero External Dependencies**: Removed separate `/ingestion` folder completely
-- **Dynamic Dockerfile Generation**: Created inline during configuration generation
-- **Script Integration**: Complete ingestion logic embedded in Script 3
-- **Volume Management**: gdrive_data and ingestion_state volumes properly defined
-- **Service Dependencies**: Proper health-based sequencing for ingestion service
-
-### **🔧 Critical Platform Stabilization**
-- **LiteLLM Schema Resolution**: Fixed Prisma migration and database initialization
-- **Caddy Configuration Stabilization**: Removed invalid directives, fixed auto_https parsing
-- **Environment Synchronization**: Fixed CODEBASE_PASSWORD consistency across services
-- **Signal API Configuration**: Complete integration with proper routing
-- **Configuration Generation Errors**: All eliminated with proper variable escaping
-
-### **📊 Platform Health Achievement (v3.4.0)**
-- **80% Service Health**: 8/10 services operational and stable
-- **Core Infrastructure**: PostgreSQL (58 tables), Redis, Qdrant, Ollama fully healthy
-- **User Interfaces**: OpenWebUI, Grafana, Prometheus, OpenClaw accessible
-- **Development Environment**: Code Server with Continue.dev ready
-- **VPN Access**: Tailscale connected with stable IP assignment
-- **Production Readiness**: Platform ready for production operations
-- **Clear Resolution Paths**: All issues identified with specific solutions
-
-### **🎯 Architectural Compliance**
-- **5-Key-Scripts Principle**: Strict adherence with zero external dependencies
-- **Mission Control Pattern**: Script 3 as single source of truth for all operations
-- **Dynamic Configuration**: All configs generated at runtime with proper escaping
-- **Non-Root Execution**: All services under proper tenant UID/GID
-- **Data Confinement**: Everything under `/mnt/data/tenant/` structure
-
-### **🚀 Production Impact**
-- **Zero External Dependencies**: Complete self-contained architecture
-- **Deterministic Deployments**: Repeatable success across environments
-- **Enhanced Maintainability**: All logic centralized in core scripts
-- **Operational Readiness**: Platform ready for production operations
-- **Clear Resolution Paths**: All issues identified with specific solutions
-
----
-
-**🚀 AI Platform Automation v3.4.0 - PRODUCTION-READY AI PLATFORM WITH INTEGRATED INGESTION**
-
-*The ultimate modular AI infrastructure platform with 5-key-scripts architecture, integrated GDrive ingestion pipeline, zero external dependencies, Mission Control utility hub, comprehensive logging engine, integrated development environment, complete deployment visibility, and critical platform stabilization for production reliability.*
+MIT — see [LICENSE](LICENSE)
