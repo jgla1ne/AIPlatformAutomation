@@ -1,0 +1,43 @@
+version: '3.8'
+
+networks:
+  default:
+    name: ai-test-deployment-network
+    external: true
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: ai_test-deployment_postgres
+    restart: unless-stopped
+    labels:
+      com.docker.compose.project: test-deployment
+      service: postgres
+    security_opt:
+      - no-new-privileges:true
+    user: "1000:1000"
+    environment:
+      POSTGRES_USER: aiplatform
+      POSTGRES_PASSWORD: testpass123
+      POSTGRES_DB: aiplatform
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiplatform -d aiplatform"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  postgres_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /mnt/test-deployment/data/postgres
+    labels:
+      com.docker.compose.project: test-deployment

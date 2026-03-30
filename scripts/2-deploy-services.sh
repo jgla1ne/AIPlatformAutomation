@@ -27,42 +27,33 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # =============================================================================
 # LOGGING AND UTILITIES (README P11 - mandatory dual logging)
 # =============================================================================
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
 # Set up log file (will be set after tenant_id is known)
 LOG_FILE=""
 
 log() { 
-    local msg="[$(date +%H:%M:%S)] $*"
-    echo -e "${CYAN}[INFO]${NC}    $1"
-    [[ -n "$LOG_FILE" ]] && echo "${msg}" >> "$LOG_FILE"
+    echo "[INFO] $1"
+    [[ -n "$LOG_FILE" ]] && echo "[$(date +%H:%M:%S)] $1" >> "$LOG_FILE"
 }
 ok() { 
-    local msg="[$(date +%H:%M:%S)] $*"
-    echo -e "${GREEN}[OK]${NC}      $*"
-    [[ -n "$LOG_FILE" ]] && echo "${msg}" >> "$LOG_FILE"
+    echo "[OK] $*"
+    [[ -n "$LOG_FILE" ]] && echo "[$(date +%H:%M:%S)] $*" >> "$LOG_FILE"
 }
 warn() { 
-    local msg="[$(date +%H:%M:%S)] $*"
-    echo -e "${YELLOW}[WARN]${NC}    $*"
-    [[ -n "$LOG_FILE" ]] && echo "${msg}" >> "$LOG_FILE"
+    echo "[WARN] $*"
+    [[ -n "$LOG_FILE" ]] && echo "[$(date +%H:%M:%S)] $*" >> "$LOG_FILE"
 }
 fail() { 
-    local msg="[$(date +%H:%M:%S)] $*"
-    echo -e "${RED}[FAIL]${NC}    $*"
-    [[ -n "$LOG_FILE" ]] && echo "${msg}" >> "$LOG_FILE"
+    echo "[FAIL] $*"
+    [[ -n "$LOG_FILE" ]] && echo "[$(date +%H:%M:%S)] $*" >> "$LOG_FILE"
     exit 1
 }
 section() { 
-    echo "" && echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && echo "  $*" && echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    [[ -n "$LOG_FILE" ]] && echo "" >> "$LOG_FILE" && echo "=== $* ===" >> "$LOG_FILE"
+    echo ""
+    echo "=== $* ==="
+    echo ""
+    [[ -n "$LOG_FILE" ]] && echo "" >> "$LOG_FILE" && echo "=== $* ===" >> "$LOG_FILE" && echo "" >> "$LOG_FILE"
 }
-dry_run() { [[ "${DRY_RUN:-false}" == "true" ]] && echo -e "${BLUE}[DRY-RUN]${NC} $1"; }
+dry_run() { [[ "${DRY_RUN:-false}" == "true" ]] && echo "[DRY-RUN] $1"; }
 
 # =============================================================================
 # FRAMEWORK VALIDATION
@@ -70,37 +61,16 @@ dry_run() { [[ "${DRY_RUN:-false}" == "true" ]] && echo -e "${BLUE}[DRY-RUN]${NC
 framework_validate() {
     log "Validating deployment framework..."
     
-    # Fix Docker socket connection (common issue)
-    if [[ "${DOCKER_HOST:-}" == *"user/1000"* ]]; then
-        log "Fixing Docker socket connection..."
-        unset DOCKER_HOST
-    fi
-    
     # Binary availability checks
-    local missing_bins=()
     for bin in docker yq; do
         if ! command -v "$bin" >/dev/null 2>&1; then
-            missing_bins+=("$bin")
+            fail "Missing required binary: $bin"
         fi
     done
     
-    if [[ ${#missing_bins[@]} -gt 0 ]]; then
-        fail "Missing required binaries: ${missing_bins[*]}"
-    fi
-    
-    # Docker daemon health and group access
+    # Docker daemon health
     if ! docker info >/dev/null 2>&1; then
-        # Check if user is in docker group and fix if needed
-        if ! groups $(whoami) | grep -q docker; then
-            log "Adding user $(whoami) to docker group..."
-            sudo usermod -aG docker $(whoami) 2>/dev/null || {
-                fail "Failed to add user to docker group. Please run: sudo usermod -aG docker \$USER"
-            }
-            log "User added to docker group. Please log out and back in, or run: newgrp docker"
-            exit 1
-        else
-            fail "Docker daemon running but user cannot access. Try: unset DOCKER_HOST"
-        fi
+        fail "Docker daemon not running or accessible"
     fi
     
     # Docker compose plugin
