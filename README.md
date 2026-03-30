@@ -1,1170 +1,1678 @@
-# AI Platform Automation
+Reading the current README before writing anything.
 
-> **Modular, production-ready automation for self-hosted AI infrastructure.**  
-> Four sequential scripts. One input session. Every component independently selectable.  
-> True multi-tenant architecture: each tenant isolated by ID, user, and optionally a dedicated EBS volume.
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Shell](https://img.shields.io/badge/shell-bash-blue.svg)](scripts/)
-[![Platform](https://img.shields.io/badge/platform-Ubuntu%2022.04%20%7C2024.04-orange.svg)]()
-[![Docker](https://img.shields.io/badge/requires-Docker-2496ED.svg)](https://docker.com)
+https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/README.md
 
 ---
 
-## What This Is
+```markdown
+# AI Platform Automation — North Star README
+> **Version 2.1.0** | Last updated: 2025-01  
+> This document is the single source of truth for architecture, implementation
+> decisions, and implementation boundaries. Every script, every config, every
+> review comment must be grounded here. When in doubt — read this first.
 
-Four bash scripts that turn a fresh Ubuntu server into a fully integrated,
-production-ready AI platform in under 30 minutes — with true multi-tenant
-isolation and AWS-native storage integration.
+---
 
-Every architectural layer — LLM proxy, local LLM inference, vector database,
-web UIs, workflow automation, reverse proxy, TLS, authentication, messaging
-gateway, observability, developer tooling, and backup — is independently
-selectable at runtime. The scripts never assume a fixed stack.
+## Table of Contents
 
-**Fully integrated** means: after script 3 completes, every selected service
-is already wired to every other relevant service. Open-WebUI, Dify, and
-AnythingLLM all know your LLM proxy endpoint and vector DB. Ollama is
-registered as a local model provider inside LLM proxy and surfaced
-through the same routing strategy as external providers. The Signal gateway
-is wired to query LLM proxy so that a Signal message triggers a full
-RAG pipeline: Signal → LLM proxy → Ollama (local) or external LLM →
-Qdrant/Weaviate/Chroma/Milvus → response back to Signal. OpenClaw is served
-behind reverse proxy like all other web services — a managed browser
-session accessible at its own subdomain over HTTPS. n8n and Flowise know
-your LLM proxy credentials. Grafana has pre-imported dashboards for every
-deployed service. Prometheus is pre-configured with scrape targets for
-exactly your stack. rclone targets your tenant's `/mnt/<tenant-id>/` path
-as single backup source covering the entire tenant deployment. You do
-not configure inter-service connections manually.
+1. [Platform Overview](#1-platform-overview)
+2. [Core Principles — Non-Negotiable](#2-core-principles--non-negotiable)
+3. [Architecture](#3-architecture)
+4. [Directory Structure](#4-directory-structure)
+5. [platform.conf — The Single Source of Truth](#5-platformconf--the-single-source-of-truth)
+6. [Script Responsibilities — Strict Boundaries](#6-script-responsibilities--strict-boundaries)
+7. [Service Catalogue](#7-service-catalogue)
+8. [Stack Presets](#8-stack-presets)
+9. [Proxy Architecture](#9-proxy-architecture)
+10. [Config Generation Rules](#10-config-generation-rules)
+11. [Security Model](#11-security-model)
+12. [Supported Flags](#12-supported-flags)
+13. [Dependencies](#13-dependencies)
+14. [Testing Checkpoints](#14-testing-checkpoints)
+15. [Glossary](#15-glossary)
 
-**The core query path this platform enables:**
+---
+
+## 1. Platform Overview
+
+A self-hosted, multi-tenant AI platform deployed on a single Ubuntu 22.04 LTS
+server (typically an AWS EC2 instance with an attached EBS volume). The platform
+is installed and operated entirely through four bash scripts. No external
+orchestration tools, no Kubernetes, no Helm, no Python, no Makefile.
+
+### What the platform provides
+
+| Category | Services |
+|---|---|
+| **LLM Routing** | LiteLLM proxy (unified API for all LLM providers) |
+| **Local Inference** | Ollama (runs local models on CPU or GPU) |
+| **Web UI** | Open WebUI, LibreChat, OpenClaw (any combination or all three) |
+| **RAG / Vector** | Qdrant |
+| **Automation** | N8N, Flowise, Dify |
+| **Identity** | Authentik (SSO, OAuth2, LDAP) |
+| **Reverse Proxy** | Caddy (automatic HTTPS) or Nginx Proxy Manager |
+| **Database** | PostgreSQL 15, Redis 7 |
+| **Alerting** | Signalbot (Signal messenger notifications) |
+
+### What the platform does NOT provide
+
+- Kubernetes, Docker Swarm, or any multi-node orchestration
+- Managed cloud databases (all databases run as containers)
+- Any service exposed directly to the internet without SSL termination
+- Tailscale or any VPN overlay (SSL via the chosen proxy is sufficient)
+- Any runtime dependency on Python, Node.js, or Go on the host
+
+---
+
+## 2. Core Principles — Non-Negotiable
+
+These are not guidelines. Deviating from any of these requires explicitly
+updating this document first. No exceptions.
+
+---
+
+### P1 — `platform.conf` is the one and only source of truth
 
 ```
-Signal message  ──or──  OpenClaw browser  ──or──  Web UI (Open-WebUI / Dify / AnythingLLM)
-      │                        │                              │
-      └────────────────────────┴──────────────────────────────┘
-                                       │
-                                       ▼
-                          LLM Proxy (LiteLLM or Bifrost)
-                          routing: local-first / fallback /
-                                   round-robin / cost / latency
-                                       │
-                    ┌──────────────────┴──────────────────┐
-                    ▼                                       ▼
-             Ollama (local)                      External LLM
-         Llama / Mistral / Phi /           OpenAI / Anthropic /
-         Gemma / CodeLlama / …            Gemini / Bedrock / Azure
-                    │                                       │
-                    └──────────────────┬────────────────────┘
-                                       ▼
-                              Vector DB (RAG context)
-                     Qdrant / Weaviate / Chroma / Milvus
-                                       │
-                                       ▼
-                              Response to originating surface
+platform.conf  ←  written by script 1
+                   sourced by scripts 0, 2, 3
+                   never regenerated by scripts 0, 2, or 3
+                   chmod 600, owned by the platform user
 ```
 
-**OpenClaw** provides a managed browser session behind the reverse proxy,
-accessible at its own subdomain over HTTPS. All platform web interfaces are
-reachable through OpenClaw without requiring any separate network tunnel.
+- **Format:** bash `KEY=VALUE` pairs. No JSON, no YAML, no TOML.
+- **Access pattern:** `source "${PLATFORM_CONF}"` — direct bash variable
+  expansion. Never `jq`, never `python`, never `grep | cut`.
+- **No secondary formats:** There is no `mission-control.json`,
+  `config.json`, or any derived JSON/YAML representation of `platform.conf`
+  that scripts read at runtime. If tooling external to the scripts needs a
+  JSON representation, it is generated on-demand by a utility function and
+  never read back by the scripts.
+- **Content:** Every key generated by script 1. Every secret. Every port.
+  Every flag. Every path. Nothing is hardcoded in scripts 2, 3, or 0.
+- **Secrets:** All secrets live in `platform.conf`. Never in compose files.
+  Never in `.env` files. Never in any file committed to git.
 
-**Post-deployment management** is handled by script 3 without full redeploy:
-add providers, change routing strategy, enable/disable services, regenerate
-proxy config, force rclone ingest, complete Signal registration, persist
-startup state.
-
-Script 1 is the **single source of truth**: it collects every variable,
-generates every internal key, validates DNS, detects available EBS volumes,
-mounts storage, creates the tenant user, and writes `platform.conf`. Scripts
-2 and 3 are fully non-interactive and read exclusively from `platform.conf`.
-
----
-
-### Non-Root Operation — Enforced, Not Recommended
-
-**Every script rejects execution if `EUID == 0` and exits immediately.**
-
-All scripts run as a named non-root platform user specific to the tenant
-(`<prefix><tenant-id>`). Docker group membership is granted to that user.
-All generated files, mounted volumes, and container bind mounts are owned
-by the platform user, with UID/GID mapping enforced inside containers where
-the service image supports it.
-
-No UFW rules are created or modified. Firewall management is handled at the
-AWS security group level.
+> **Enforcement:** If a script accesses a variable without first sourcing
+> `platform.conf`, that is a bug. If a script reads from a JSON file,
+> that is a bug. If a script writes secrets to a `.env` file, that is a bug.
 
 ---
 
-## Network Architecture
+### P2 — Script boundaries are strict
+
+Each script has exactly one job. These boundaries must never move.
+
+| Script | Owns | Does NOT own |
+|---|---|---|
+| `1-setup-system.sh` | Collect input, write `platform.conf`, create directory skeleton, install packages | Config file generation, container deployment, service configuration |
+| `2-deploy-services.sh` | Source `platform.conf`, generate all derived config files, deploy containers | Input collection, secret generation, service API calls |
+| `3-configure-services.sh` | Source `platform.conf`, call service APIs to complete setup | Config generation, container management |
+| `0-complete-cleanup.sh` | Stop containers, remove data, clear all state | Anything constructive |
+
+> **Enforcement:** If `generate_litellm_config()` appears in script 1, that
+> is a bug. If `docker compose up` appears in script 1, that is a bug. If
+> script 3 modifies `platform.conf`, that is a bug.
+
+---
+
+### P3 — Docker Compose YAML is generated by explicit conditional heredoc blocks
+
+The entire `docker-compose.yml` is produced by a single `generate_compose()`
+function in script 2. The function uses explicit `if/fi` blocks with heredoc
+syntax. No loops. No JSON parsing. No fragment appending from subshells.
+
+**Correct pattern:**
+```bash
+generate_compose() {
+    cat > "${COMPOSE_FILE}" << EOF
+networks:
+  ${DOCKER_NETWORK}:
+    driver: bridge
+services:
+EOF
+
+    if [[ "${POSTGRES_ENABLED}" == "true" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
+  postgres:
+    image: postgres:15-alpine
+    container_name: ${TENANT_PREFIX}-postgres
+    ...
+EOF
+    fi
+}
+```
+
+**Prohibited patterns:**
+```bash
+# PROHIBITED — loop-based generation
+for service in "${enabled_services[@]}"; do
+    echo "  ${service}:" >> docker-compose.yml
+done
+
+# PROHIBITED — JSON-driven generation
+jq -r '.services[]' mission-control.json | while read svc; do ...
+
+# PROHIBITED — fragment appending from subshell
+generate_service_block "postgres" >> docker-compose.yml
+```
+
+The reason: YAML indentation is structural. Only explicit heredoc blocks
+guarantee correct indentation, correct `depends_on` references (a disabled
+service must never appear in another service's `depends_on`), and correct
+volume block structure.
+
+---
+
+### P4 — No `.env` files
+
+Docker Compose `env_file:` is prohibited. All secrets are passed inline in
+the `environment:` block of each service, with values sourced from
+`platform.conf`. This keeps all secret management in one place and makes
+the compose file self-describing.
+
+```yaml
+# CORRECT
+environment:
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}  # expanded from platform.conf at generation time
+
+# PROHIBITED
+env_file:
+  - .env
+```
+
+---
+
+### P5 — No `envsubst` on generated files
+
+Files generated with heredoc variable expansion must not be post-processed
+with `envsubst`. Double-expansion corrupts any secret that contains a `$`
+character. Generate once with heredoc. Do not touch the output again.
+
+---
+
+### P6 — Ports bind to `127.0.0.1` only
+
+No container port is bound to `0.0.0.0` unless the README explicitly marks
+it as internet-facing. The reverse proxy is the only internet-facing service.
+
+```yaml
+# CORRECT
+ports:
+  - "127.0.0.1:${LITELLM_PORT}:4000"
+
+# PROHIBITED
+ports:
+  - "${LITELLM_PORT}:4000"   # binds to 0.0.0.0
+```
+
+---
+
+### P7 — Non-root execution everywhere
+
+- Scripts run as a non-root user (enforced at startup — fail if `$EUID == 0`)
+- Every container runs with `user: "${PUID}:${PGID}"`
+- `PUID` and `PGID` are detected from the running user in script 1 and
+  written to `platform.conf`
+- `DATA_DIR` and all subdirectories are owned by `PUID:PGID`
+- Exception: containers that technically require root internally (e.g.,
+  Caddy binding to port 443) use `cap_add: [NET_BIND_SERVICE]` rather than
+  running as root
+
+---
+
+### P8 — Idempotency via marker files
+
+Every major step in scripts 2 and 3 writes a marker file to
+`${BASE_DIR}/.configured/` on completion. On re-run, steps with existing
+markers are skipped. This allows safe partial-failure recovery without
+re-pulling images or re-initialising already-running services.
+
+```bash
+step_done() { [[ -f "${CONFIGURED_DIR}/${1}" ]]; }
+mark_done() { touch "${CONFIGURED_DIR}/${1}"; }
+
+if ! step_done "postgres_init"; then
+    init_postgres
+    mark_done "postgres_init"
+fi
+```
+
+Script 0 must delete `.configured/` as part of cleanup, otherwise the next
+deployment will skip all steps.
+
+---
+
+### P9 — `set -euo pipefail` is always active
+
+Every script starts with `set -euo pipefail` immediately after the shebang.
+This is never disabled globally. Expected non-zero returns are handled locally:
+
+```bash
+# Correct local handling
+result=$(some_command) || true
+# or
+set +e; some_command; rc=$?; set -e
+```
+
+---
+
+### P10 — All bind mounts, no named Docker volumes
+
+All persistent data uses bind mounts to explicit paths under
+`${DATA_DIR}/${service}/`. Named Docker volumes are prohibited. This ensures
+data is always visible on the filesystem, backup-friendly, and removed by
+script 0 without `docker volume rm` commands.
+
+---
+
+### P11 — Logging to file and stdout simultaneously
+
+Every script writes logs to both stdout and a timestamped log file:
+
+```bash
+LOG_FILE="${BASE_DIR}/logs/$(basename "$0" .sh)-$(date +%Y%m%d-%H%M%S).log"
+log() {
+    local msg="[$(date +%H:%M:%S)] $*"
+    echo "${msg}"
+    echo "${msg}" >> "${LOG_FILE}"
+}
+```
+
+---
+
+## 3. Architecture
 
 ```
 Internet
     │
-    ▼ :80 (redirect to HTTPS) / :443 (HTTPS)
-┌──────────────────────────────────────────────────────┐
-│              Reverse Proxy (Caddy or Nginx)                   │
-│     TLS: Let's Encrypt / self-signed / provided certificate   │
-│     Routes by subdomain to each service on Docker bridge      │
-│                                                               │
-│  chat.example.com      → Open-WebUI      :3000               │
-│  dify.example.com      → Dify web        :3010               │
-│  anything.example.com  → AnythingLLM     :3001               │
-│  openclaw.example.com  → OpenClaw        :3002               │
-│  n8n.example.com       → n8n             :5678               │
-│  flowise.example.com   → Flowise         :3100               │
-│  auth.example.com      → Authentik       :9000               │
-│  monitor.example.com   → Grafana         :3030               │
-│  llm.example.com       → LiteLLM        :4000               │
-│  code.example.com      → Code Server     :8090               │
-└──────────────────────────────┬───────────────────────────────┘
-                               │  Docker bridge network
-                               │  (<prefix><tenant-id>_net)
-        ┌──────────────────────┼─────────────────────────────┐
-        │                      │                             │
-   ┌────▼────┐          ┌──────▼──────┐           ┌─────────▼──────┐
-   │  Web UIs │          │  Workflow    │           │  Authentication │
-   │Open-WebUI│          │  n8n :5678  │           │  Authentik      │
-   │  Dify    │          │  Flowise    │           │  :9000          │
-   │AnythingLLM          │  :3100      │           └────────────────┘
-   │OpenClaw  │          └────────────┘
-   └────┬─────┘
-        │
-   ┌────▼──────────────────────────────────────┐
-   │      LLM Proxy (LiteLLM :4000                 │
-   │                 or Bifrost :8181)              │
-   │  routing: local-first / fallback /             │
-   │           round-robin / cost / latency         │
-   ├──────────────────┬────────────────────────────┤
-   │                  │                            │
-   ▼                  ▼                            ▼
-Ollama          External LLMs              Vector DBs
-:11434     OpenAI/Anthropic/etc.    Qdrant  :6333/:6334
-(local)         (outbound only)     Weaviate :8082
-                                    Chroma   :8000
-                                    Milvus   :19530
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Signal CLI REST API — :8085 (127.0.0.1 only, temporary during registration)
-Signal gateway      — Docker bridge only; no public or host port at runtime
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  └── LLM Proxy → Vector DB → LLM → Signal response
-
-Observability (internal only, proxied to monitor subdomain)
-  ├── Prometheus :9090
-  └── Grafana    :3030
-
-Developer (proxied to code subdomain)
-  └── Code Server :8090
+    │ HTTPS (443)
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│                    Reverse Proxy                         │
+│         Caddy  ──or──  Nginx Proxy Manager              │
+│         (automatic SSL via Let's Encrypt)               │
+└────────────────────┬────────────────────────────────────┘
+                     │ Internal Docker network
+                     │ (${DOCKER_NETWORK})
+        ┌────────────┼────────────────────────────┐
+        │            │                            │
+        ▼            ▼                            ▼
+  ┌──────────┐ ┌───────────┐              ┌──────────────┐
+  │ LiteLLM  │ │  Web UIs  │              │  Automation  │
+  │  Proxy   │ │           │              │              │
+  │          │ │ OpenWebUI │              │     N8N      │
+  │ (unified │ │ LibreChat │              │   Flowise    │
+  │  LLM API)│ │ OpenClaw  │              │    Dify      │
+  └────┬─────┘ └─────┬─────┘              └──────┬───────┘
+       │             │                           │
+       ▼             ▼                           ▼
+  ┌──────────┐ ┌───────────┐              ┌──────────────┐
+  │  Ollama  │ │ Authentik │              │  PostgreSQL  │
+  │  (local  │ │   (SSO)   │              │    Redis     │
+  │  models) │ └───────────┘              │   Qdrant     │
+  └──────────┘                            └──────────────┘
 ```
 
-**Public:** ports 80 (redirect) and 443 only, via reverse proxy with TLS.
-All services accessible through their subdomain — no direct port exposure.
-**Signal CLI REST API registration:** bound to `127.0.0.1:8085` temporarily
-during device registration only. Removed from host bindings post-registration.
-**Signal gateway runtime:** Docker bridge only. No host port.
-**No host firewall management:** AWS EC2 security groups are the perimeter.
+### Network topology
+
+- All services run in a single named Docker bridge network: `${DOCKER_NETWORK}`
+- Inter-service communication uses container names as hostnames
+- The reverse proxy is the only service with host ports bound to `0.0.0.0`
+  (ports 80 and 443)
+- All other services bind host ports to `127.0.0.1` only
+- No Tailscale. No VPN. SSL termination at the proxy is sufficient.
 
 ---
 
-## Multi-Tenant Architecture
-
-Multiple independent AI platform stacks can be deployed on the same server.
-Tenant isolation is enforced at every layer:
-
-| Isolation Layer | Mechanism |
-|-----------------|-----------|
-| **Filesystem** | All data under `/mnt/<tenant-id>/` — separate EBS volume per tenant supported |
-| **OS user** | Dedicated non-root user per tenant: `<platform-prefix><tenant-id>` |
-| **Docker** | Separate Compose project per tenant; separate bridge network per tenant |
-| **Container naming** | All containers: `<platform-prefix><tenant-id>-<service>` |
-| **Config** | Separate `platform.conf` per tenant: `/mnt/<tenant-id>/config/` |
-| **Ports** | All ports independently overridable per tenant; port conflict pre-check before any service starts |
-| **Keys and secrets** | All internal keys generated independently per tenant at init |
-
-### Port Conflict Pre-Check
-
-**Before any service is configured or started**, script 3 checks every port
-in `platform.conf` against all currently listening ports on the host using
-`ss -tlnp`. If any collision is detected — between selected services or
-against an already-bound host port — the script reports the conflict,
-identifies the owning process, and halts before writing any configuration.
-The check runs again on re-deployment.
-
-### Tenant ID and Platform Prefix
-
-During `1-setup-system.sh` you provide:
-
-- **Platform prefix** — prepended to all container names, network names, and
-  the OS username. Default: `ai-`. Examples: `ai-`, `prod-`, `staging-`.
-- **Tenant ID** — unique identifier for this deployment. Used as the data
-  directory name under `/mnt/` and as part of the OS username.
-
-All container names follow `<prefix><tenant-id>-<service>`,
-e.g. `ai-acme-litellm`, `ai-acme-qdrant`, `ai-acme-openwebui`.
-
-### EBS Volume Selection and Mounting
-
-Script 1 **mounts storage before any other operation**:
+## 4. Directory Structure
 
 ```
-Available block devices:
-  [1] /dev/nvme1n1   50GB   (unformatted — available)
-  [2] /dev/nvme2n1  100GB   (unformatted — available)
-  [3] Use existing /mnt/<tenant-id>/ on OS disk (no separate volume)
+/mnt/${TENANT_ID}/                  ← EBS mount point (or fallback: ~/ai-platform/${TENANT_ID})
+├── platform.conf                   ← THE source of truth (chmod 600)
+├── .configured/                    ← Idempotency marker files
+│   ├── compose_generated
+│   ├── postgres_init
+│   ├── authentik_bootstrap
+│   └── ...
+├── logs/                           ← Script execution logs (timestamped)
+├── config/                         ← All generated config files
+│   ├── docker-compose.yml          ← Generated by script 2
+│   ├── caddy/
+│   │   └── Caddyfile               ← Generated by script 2
+│   ├── nginx/
+│   │   └── nginx.conf              ← Generated by script 2 (if NPM selected)
+│   ├── litellm/
+│   │   └── config.yaml             ← Generated by script 2
+│   └── bifrost/
+│       └── config.yaml             ← Generated by script 2
+└── data/                           ← All persistent container data (bind mounts)
+    ├── postgres/
+    ├── redis/
+    ├── ollama/
+    ├── qdrant/
+    ├── litellm/
+    ├── openwebui/
+    ├── librechat/
+    ├── openclaw/
+    ├── n8n/
+    ├── flowise/
+    ├── dify/
+    └── authentik/
 ```
 
-Selecting an unformatted EBS volume:
-1. Formats as ext4
-2. Creates `/mnt/<tenant-id>/` as the mount point
-3. Adds to `/etc/fstab` using UUID (persistent across reboots)
-4. Mounts it immediately
+> **No `/opt`.**  
+> The platform never writes to `/opt`, `/usr/local`, or any system directory.
+> All platform data lives under the EBS mount point or the fallback home
+> directory path. This keeps the platform fully self-contained and removable.
 
 ---
 
-## Scripts Overview
+## 5. `platform.conf` — The Single Source of Truth
 
-| Script | Purpose | Interactive |
-|--------|---------|-------------|
-| `0-complete-cleanup.sh` | Nuclear removal of a specific tenant deployment | Yes — tenant selection + confirmation |
-| `1-setup-system.sh` | All input collection, validation, key generation, EBS mount, user creation, `platform.conf` write | Yes — all prompts here only |
-| `2-deploy-services.sh` | Pull images, create networks, start all selected containers in dependency order, display Mission Control health dashboard | No |
-| `3-configure-services.sh` | Generate all configs, proxy rules, inter-service wiring, monitoring, rclone, systemd; post-deployment management | No |
+Script 1 writes this file. Scripts 0, 2, and 3 source it. It is never
+written by any other script under any circumstance.
 
-### Quick Start
+### Canonical key list
 
 ```bash
-bash scripts/1-setup-system.sh   # Interactive: one session only
-bash scripts/2-deploy-services.sh
-bash scripts/3-configure-services.sh
+# ── Identity ──────────────────────────────────────────────────────────────────
+TENANT_ID="acme"
+TENANT_PREFIX="acme"                  # used as Docker container name prefix
+GENERATED_AT="2025-01-15T10:30:00Z"  # ISO 8601 UTC
+SCRIPT_VERSION="2.1.0"
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+BASE_DIR="/mnt/acme"
+DATA_DIR="/mnt/acme/data"
+CONFIG_DIR="/mnt/acme/config"
+COMPOSE_FILE="/mnt/acme/config/docker-compose.yml"
+CONFIGURED_DIR="/mnt/acme/.configured"
+LOG_DIR="/mnt/acme/logs"
+
+# ── Platform user ─────────────────────────────────────────────────────────────
+PLATFORM_USER="ubuntu"
+PUID="1000"
+PGID="1000"
+PLATFORM_ARCH="x86_64"               # or aarch64
+
+# ── Network ───────────────────────────────────────────────────────────────────
+BASE_DOMAIN="ai.example.com"
+DOCKER_NETWORK="acme-network"
+STACK_PRESET="standard"              # minimal | standard | full | custom
+
+# ── Proxy ─────────────────────────────────────────────────────────────────────
+PROXY_TYPE="caddy"                   # caddy | nginx
+PROXY_EMAIL="admin@example.com"      # for Let's Encrypt
+
+# ── Infrastructure services ───────────────────────────────────────────────────
+POSTGRES_ENABLED="true"
+POSTGRES_PORT="5432"
+POSTGRES_USER="platform"
+POSTGRES_PASSWORD="<generated>"
+POSTGRES_DB="platform"
+
+REDIS_ENABLED="true"
+REDIS_PORT="6379"
+REDIS_PASSWORD="<generated>"
+
+# ── LLM routing ───────────────────────────────────────────────────────────────
+LITELLM_ENABLED="true"
+LITELLM_PORT="4000"
+LITELLM_MASTER_KEY="<generated>"
+LITELLM_UI_PASSWORD="<generated>"
+LITELLM_DB_URL="postgresql://platform:<pw>@acme-postgres:5432/platform"
+
+OLLAMA_ENABLED="true"
+OLLAMA_PORT="11434"
+OLLAMA_DEFAULT_MODEL="llama3.2"
+GPU_ENABLED="false"
+
+# ── LLM provider API keys (empty = provider disabled in LiteLLM config) ────────
+OPENAI_API_KEY=""
+ANTHROPIC_API_KEY=""
+GOOGLE_API_KEY=""
+GROQ_API_KEY=""
+OPENROUTER_API_KEY=""
+
+# ── Web UIs (any combination may be true simultaneously) ──────────────────────
+OPENWEBUI_ENABLED="true"
+OPENWEBUI_PORT="3000"
+OPENWEBUI_SECRET="<generated>"
+
+LIBRECHAT_ENABLED="false"
+LIBRECHAT_PORT="3080"
+LIBRECHAT_JWT_SECRET="<generated>"
+LIBRECHAT_CRYPT_KEY="<generated>"
+
+OPENCLAW_ENABLED="false"
+OPENCLAW_PORT="3001"
+
+# ── RAG / Vector ──────────────────────────────────────────────────────────────
+QDRANT_ENABLED="true"
+QDRANT_PORT="6333"
+QDRANT_API_KEY="<generated>"
+
+# ── Automation ────────────────────────────────────────────────────────────────
+N8N_ENABLED="false"
+N8N_PORT="5678"
+N8N_ENCRYPTION_KEY="<generated>"     # MUST be set before first container start
+N8N_WEBHOOK_URL="https://ai.example.com/n8n"
+
+FLOWISE_ENABLED="false"
+FLOWISE_PORT="3030"
+FLOWISE_USERNAME="admin"
+FLOWISE_PASSWORD="<generated>"
+FLOWISE_SECRETKEY_OVERWRITE="<generated>"
+
+DIFY_ENABLED="false"
+DIFY_PORT="3040"
+DIFY_SECRET_KEY="<generated>"
+DIFY_INIT_PASSWORD="<generated>"
+
+# ── Identity ──────────────────────────────────────────────────────────────────
+AUTHENTIK_ENABLED="false"
+AUTHENTIK_PORT="9000"
+AUTHENTIK_SECRET_KEY="<generated>"
+AUTHENTIK_BOOTSTRAP_PASSWORD="<generated>"
+AUTHENTIK_BOOTSTRAP_EMAIL="admin@example.com"
+
+# ── Alerting ──────────────────────────────────────────────────────────────────
+SIGNALBOT_ENABLED="false"
+SIGNALBOT_PORT="8080"
+SIGNAL_PHONE="+15551234567"
+SIGNAL_RECIPIENT="+15559876543"
+
+# ── Bifrost (optional LLM gateway) ────────────────────────────────────────────
+BIFROST_ENABLED="false"
+BIFROST_PORT="8090"
+BIFROST_API_KEY="<generated>"
 ```
 
-Scripts 2 and 3 are re-runnable at any time after initial deployment.
+> **Secret generation functions (script 1 only):**
+> ```bash
+> gen_secret()   { openssl rand -hex 32; }
+> gen_password() { openssl rand -base64 24 | tr -d '=+/' | cut -c1-20; }
+> ```
 
 ---
 
-## Script 0 — Complete Cleanup
+## 6. Script Responsibilities — Strict Boundaries
 
-- Prompts for tenant ID; will not proceed without explicit confirmation
-- Stops and removes all containers matching `<prefix><tenant-id>-*`
-- Removes Docker Compose project and bridge network
-- Removes all generated config files under `/mnt/<tenant-id>/config/`
-- Removes all systemd unit files for the tenant
-- Removes the tenant OS user
-- Optionally unmounts and wipes the tenant EBS volume (separate confirmation required)
-- Does **not** affect other tenants on the same server
+### Script 1 — `1-setup-system.sh`
 
----
+**Job:** Produce `platform.conf` and the directory skeleton.
 
-## Script 1 — Full Input Collection Reference
+```
+Input  → Interactive prompts (TENANT_ID, BASE_DOMAIN, preset, service flags,
+         API keys, port overrides)
+Output → platform.conf (chmod 600)
+         Directory skeleton (BASE_DIR, DATA_DIR, CONFIG_DIR, CONFIGURED_DIR,
+         LOG_DIR, per-service data directories)
+         Package installations (docker, docker-compose-plugin, curl, jq, yq,
+         openssl, lsof, git)
+```
 
-Script 1 is the only interactive script. Inputs are collected in dependency
-order: identity and storage first, then domain, then each service layer in
-the order that later services depend on earlier ones.
+**Rules:**
+- Detects PLATFORM_ARCH, PUID, PGID automatically
+- Detects and resolves port conflicts before writing ports to `platform.conf`
+- Resolved port values (not proposed values) are written to `platform.conf`
+- Preset selection gates service prompts — services enabled by the preset are
+  set automatically without prompting
+- Fails immediately if run as root
+- Fails if EBS mount is specified but not available
+- Does NOT generate `docker-compose.yml`, `Caddyfile`, `litellm/config.yaml`,
+  or any other derived config file
+- Does NOT pull Docker images
+- Does NOT start containers
 
----
-
-### Step 1 — Identity
-
-| Input | Description | Default |
-|-------|-------------|---------|
-| Platform prefix | Prepended to container names, network name, OS username | `ai-` |
-| Tenant ID | Deployment identifier; becomes `/mnt/<tenant-id>/` | Required |
-| Platform OS username | Auto-derived: `<prefix><tenant-id>` | Auto |
-
----
-
-### Step 2 — Storage (EBS Detection and Mount)
-
-Runs immediately after identity. All subsequent writes go to the mounted volume.
-
-| Input | Description |
-|-------|-------------|
-| EBS block device selection | Numbered list of available unformatted volumes + OS disk option |
-| Volume formatting confirmation | Explicit yes/no before `mkfs.ext4` |
-
----
-
-### Step 3 — Domain and DNS Validation
-
-| Input | Description |
-|-------|-------------|
-| Base domain | Root domain, e.g. `example.com` |
-| Per-service subdomain overrides | Defaults auto-generated; each individually overridable |
-| DNS validation | Resolves each subdomain against server public IP; warns on mismatch |
-
-DNS validation runs before TLS is configured. A failed validation with
-`letsencrypt` TLS mode triggers an abort recommendation.
+**Port conflict resolution (write-back pattern — mandatory):**
+```bash
+resolve_port() {
+    local var_name="$1"
+    local proposed="${!var_name}"
+    while lsof -i ":${proposed}" &>/dev/null 2>&1; do
+        proposed=$(( proposed + 1 ))
+    done
+    printf -v "${var_name}" '%s' "${proposed}"  # mutates variable in place
+}
+resolve_port LITELLM_PORT   # call before writing platform.conf
+```
 
 ---
 
-### Step 4 — Stack Type (Preset Selector)
+### Script 2 — `2-deploy-services.sh`
 
-| Stack Type | Description |
-|------------|-------------|
-| `minimal` | LLM proxy + one vector DB + one web UI only |
-| `dev` | Adds workflow tools, Code Server, Ollama; no auth or monitoring |
-| `full` | All services enabled — all three web UIs, all four vector DBs, all workflow tools, Ollama, Signal, OpenClaw, Authentik, monitoring, Code Server, rclone |
-| `custom` | All services start disabled; user enables each one individually |
+**Job:** Read `platform.conf`, generate all config files, deploy containers.
 
----
+```
+Input  → platform.conf (sourced)
+Output → config/docker-compose.yml
+         config/caddy/Caddyfile  (or config/nginx/nginx.conf)
+         config/litellm/config.yaml
+         config/bifrost/config.yaml  (if BIFROST_ENABLED)
+         Running containers
+         .configured/ marker files
+```
 
-### Step 5 — Reverse Proxy
+**Execution order (strict):**
+```
+1. source platform.conf
+2. Pre-flight checks (docker daemon, disk space, platform.conf exists)
+3. generate_compose()        → config/docker-compose.yml
+4. validate_compose()        → docker compose config (dry run)
+5. generate_litellm_config() → config/litellm/config.yaml
+6. generate_caddyfile()      → config/caddy/Caddyfile  [if caddy]
+7. docker compose pull
+8. validate_caddyfile()      → caddy validate [AFTER pull, not before]
+9. docker compose up -d
+10. wait_for_health() for each enabled service
+11. mark_done() for each step
+```
 
-| Option | Details |
-|--------|---------|
-| `caddy` | Automatic Let's Encrypt TLS; recommended for public deployment |
-| `nginx` | Manual TLS; self-signed or provided certificate |
-| `none` | No reverse proxy; direct port access only |
-
----
-
-### Step 6 — TLS Mode
-
-| Option | Details |
-|--------|---------|
-| `letsencrypt` | Caddy auto-obtains and renews; valid public DNS required |
-| `selfsigned` | Script generates self-signed cert; internal or dev use |
-| `provided` | Provide certificate and key file paths |
-| `none` | HTTP only |
-
----
-
-### Step 7 — OpenClaw
-
-| Input | Description | Default |
-|-------|-------------|---------|
-| `OPENCLAW_ENABLED` | Enable managed browser session service | `false` |
-| `OPENCLAW_SUBDOMAIN` | Subdomain served behind reverse proxy | `openclaw.<base-domain>` |
-| `OPENCLAW_PORT` | Internal host port | `3002` |
-| `OPENCLAW_PASSWORD` | Session access password; generated if blank | Auto-generated |
-
-OpenClaw is deployed as a containerised browser session behind the reverse
-proxy. It is accessible at `https://openclaw.<base-domain>` after script 2
-completes. No separate network tunnel required.
-
----
-
-### Step 8 — LLM Proxy
-
-| Input | Description | Default |
-|-------|-------------|---------|
-| `LLM_PROXY` | `litellm` or `bifrost` | `litellm` |
-| `LLM_PROXY_PORT` | Host port | `4000` (LiteLLM) / `8181` (Bifrost) |
-| `LLM_ROUTING_STRATEGY` | `local-first` / `fallback` / `round-robin` / `cost` / `latency` | `local-first` |
-| `LLM_PROXY_MASTER_KEY` | Master API key for proxy; generated if blank | Auto-generated |
-| `LLM_PROXY_DB_URL` | PostgreSQL DSN for proxy state persistence | Auto-generated |
-
-**LiteLLM-specific:**
-
-| Input | Description |
-|-------|-------------|
-| `LITELLM_UI_USERNAME` | LiteLLM dashboard username |
-| `LITELLM_UI_PASSWORD` | LiteLLM dashboard password; generated if blank |
-
-**Bifrost-specific:**
-
-| Input | Description |
-|-------|-------------|
-| `BIFROST_API_KEY` | Bifrost API key; generated if blank |
-
----
-
-### Step 9 — External LLM Providers
-
-Collected per provider. Only enabled providers are written to `platform.conf`.
-
-| Provider | Variables Collected |
-|----------|-------------------|
-| OpenAI | `OPENAI_API_KEY`, `OPENAI_ENABLED` |
-| Anthropic | `ANTHROPIC_API_KEY`, `ANTHROPIC_ENABLED` |
-| Google Gemini | `GEMINI_API_KEY`, `GEMINI_ENABLED` |
-| AWS Bedrock | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `BEDROCK_ENABLED` |
-| Azure OpenAI | `AZURE_API_KEY`, `AZURE_API_BASE`, `AZURE_API_VERSION`, `AZURE_ENABLED` |
-| Cohere | `COHERE_API_KEY`, `COHERE_ENABLED` |
-| Mistral | `MISTRAL_API_KEY`, `MISTRAL_ENABLED` |
-| Custom endpoint | `CUSTOM_LLM_URL`, `CUSTOM_LLM_API_KEY`, `CUSTOM_LLM_ENABLED` |
-
-At least one provider or Ollama must be enabled (enforced).
-
----
-
-### Step 10 — Ollama (Local LLM Inference)
-
-| Input | Description | Default |
-|-------|-------------|---------|
-| `OLLAMA_ENABLED` | Enable Ollama local inference | `false` |
-| `OLLAMA_PORT` | Host port | `11434` |
-| `OLLAMA_MODELS` | Comma-separated list of models to pull on first start | e.g. `llama3.2,mistral,phi3` |
-| `OLLAMA_GPU_ENABLED` | Mount GPU device if available | `false` |
-
-Ollama is auto-registered as a local provider inside the LLM proxy after
-script 3 runs. The `local-first` routing strategy will route all requests
-to Ollama first and fall back to external providers if Ollama is unavailable
-or the requested model is not present locally.
-
----
-
-### Step 11 — Vector Database
-
-| Input | Description | Default |
-|-------|-------------|---------|
-| `VECTOR_DB_PRIMARY` | Primary vector DB: `qdrant` / `weaviate` / `chroma` / `milvus` | `qdrant` |
-| `QDRANT_ENABLED` | | `false` |
-| `QDRANT_REST_PORT` | Host port for REST API | `6333` |
-| `QDRANT_GRPC_PORT` | Host port for gRPC | `6334` |
-| `WEAVIATE_ENABLED` | | `false` |
-| `WEAVIATE_PORT` | Host port | `8082` |
-| `CHROMA_ENABLED` | | `false` |
-| `CHROMA_PORT` | Host port | `8000` |
-| `MILVUS_ENABLED` | | `false` |
-| `MILVUS_PORT` | Host port | `19530` |
-
-All enabled vector DBs are wired to every enabled web UI and the LLM proxy
-during script 3. The `VECTOR_DB_PRIMARY` value determines which DB is
-offered as the default in each web UI's settings.
-
----
-
-### Step 12 — Web UIs
-
-| Input | Description | Default |
-|-------|-------------|---------|
-| `OPENWEBUI_ENABLED` | | `false` |
-| `OPENWEBUI_PORT` | Host port | `3000` |
-| `OPENWEBUI_SUBDOMAIN` | | `chat.<base-domain>` |
-| `DIFY_ENABLED` | | `false` |
-| `DIFY_WEB_PORT` | Host port for Dify web frontend | `3010` |
-| `DIFY_API_PORT` | Host port for Dify API | `5001` |
-| `DIFY_SUBDOMAIN` | | `dify.<base-domain>` |
-| `DIFY_SECRET_KEY` | Dify application secret; generated if blank | Auto-generated |
-| `ANYTHINGLLM_ENABLED` | | `false` |
-| `ANYTHINGLLM_PORT` | Host port | `3001` |
-| `ANYTHINGLLM_SUBDOMAIN` | | `anything.<base-domain>` |
-| `ANYTHINGLLM_JWT_SECRET` | JWT secret; generated if blank | Auto-generated |
-
----
-
-### Step 13 — Workflow Automation
-
-| Input | Description | Default |
-|-------|-------------|---------|
-| `N8N_ENABLED` | | `false` |
-| `N8N_PORT` | Host port | `5678` |
-| `N8N_SUBDOMAIN` | | `n8n.<base-domain>` |
-| `N8N_ENCRYPTION_KEY` | n8n credential encryption key; generated if blank | Auto-generated |
-| `N8N_BASIC_AUTH_USER` | Basic auth username | Required if enabled |
-| `N8N_BASIC_AUTH_PASSWORD` | Basic auth password; generated if blank | Auto-generated |
-| `FLOWISE_ENABLED` | | `false` |
-| `FLOWISE_PORT` | Host port | `3100` |
-| `FLOWISE_SUBDOMAIN` | | `flowise.<base-domain>` |
-| `FLOWISE_USERNAME` | Flowise auth username | Required if enabled |
-| `FLOWISE_PASSWORD` | Flowise auth password; generated if blank | Auto-generated |
-
-n8n and Flowise are wired to the LLM proxy endpoint and credentials
-automatically during script 3.
-
----
-
-### Step 14 — Authentication (Authentik)
-
-| Input | Description | Default |
-|-------|-------------|---------|
-| `AUTHENTIK_ENABLED` | | `false` |
-| `AUTHENTIK_PORT` | Host port | `9000` |
-| `AUTHENTIK_SUBDOMAIN` | | `auth.<base-domain>` |
-| `AUTHENTIK_SECRET_KEY` | Django secret key; generated if blank | Auto-generated |
-| `AUTHENTIK_BOOTSTRAP_EMAIL` | Initial admin email | Required if enabled |
-| `AUTHENTIK_BOOTSTRAP_PASSWORD` | Initial admin password; generated if blank | Auto-generated |
-| `AUTHENTIK_POSTGRES_PASSWORD` | Dedicated Authentik DB password; generated | Auto-generated |
-
----
-
-### Step 15 — Signal Gateway
-
-| Input | Description | Default |
-|-------|-------------|---------|
-| `SIGNAL_ENABLED` | Enable Signal messaging gateway | `false` |
-| `SIGNAL_PHONE_NUMBER` | Phone number to register with Signal (E.164 format) | Required if enabled |
-| `SIGNAL_REGISTRATION_METHOD` | `sms` or `voice` | `sms` |
-| `SIGNAL_REST_PORT` | Host port for registration API — `127.0.0.1` bound, temporary only | `8085` |
-| `SIGNAL_API_KEY` | Internal API key for gateway ↔ LLM proxy wiring; generated | Auto-generated |
-
-**Signal Registration Flow:**
-
-Signal CLI REST API requires a two-step device registration that must
-happen before the gateway can receive or send messages. The port `8085`
-is bound to `127.0.0.1` only and is temporary — it is removed from host
-bindings after registration completes.
-
-Registration is completed via script 3:
+**`depends_on` correctness (mandatory):**  
+A service's `depends_on` block must contain only services that are also
+enabled. Build dependency lists conditionally before the heredoc:
 
 ```bash
-bash scripts/3-configure-services.sh --register-signal
+webui_deps=""
+[[ "${POSTGRES_ENABLED}" == "true" ]] && webui_deps+="      - postgres"$'\n'
+[[ "${REDIS_ENABLED}"    == "true" ]] && webui_deps+="      - redis"$'\n'
 ```
 
-This executes the following sequence:
+**Health check timeouts:**
 
+| Service | Timeout |
+|---|---|
+| postgres, redis | 60s |
+| ollama | 120s |
+| litellm | 90s |
+| authentik | 180s |
+| All others | 90s |
+
+Use `State.Health.Status == "healthy"` (not `State.Status == "running"`).
+A container that is running but not healthy is not ready.
+
+**Hardcoded value scan (narrow — mandatory before deploy):**
+```bash
+grep -rE "CHANGEME|TODO_REPLACE|FIXME|xxxx|\{\{[A-Z_]+\}\}" \
+    "${CONFIG_DIR}/" && fail "Unreplaced sentinels found" || true
 ```
-Step 1 — Request verification code
-  POST http://127.0.0.1:8085/v1/register/<SIGNAL_PHONE_NUMBER>
-  Body: {"use_voice": false}
-  → Signal sends SMS verification code to SIGNAL_PHONE_NUMBER
-
-Step 2 — Submit verification code
-  POST http://127.0.0.1:8085/v1/register/<SIGNAL_PHONE_NUMBER>/verify/<CODE>
-  → Returns 201 on success; device is now registered
-
-Step 3 — Verify registration
-  GET http://127.0.0.1:8085/v1/about
-  → Returns {"versions": [...], "build": ...}
-  → Confirms service is operational
-
-Step 4 — Remove temporary host port binding
-  Script 3 removes 127.0.0.1:8085 from docker-compose service definition
-  Signal CLI REST API continues running on Docker bridge only
-  No host port exposed at runtime
-```
-
-After registration, the Signal gateway routes inbound Signal messages
-through the LLM proxy, through the configured vector DB for RAG context,
-and returns the response to the originating Signal conversation.
+Do NOT scan for `localhost`, `127.0.0.1`, `http://`, `https://` — these
+appear legitimately in generated configs.
 
 ---
 
-### Step 16 — rclone Backup
+### Script 3 — `3-configure-services.sh`
 
-| Input | Description | Default |
-|-------|-------------|---------|
-| `RCLONE_ENABLED` | Enable automated backup | `false` |
-| `RCLONE_BACKEND` | `gdrive` / `s3` / `b2` | Required if enabled |
-| `RCLONE_SCHEDULE` | Cron expression for backup schedule | `0 2 * * *` |
-| `RCLONE_BACKUP_PATH` | Source path | `/mnt/<tenant-id>/` |
-| `RCLONE_RETENTION_DAYS` | Days to retain remote backups | `30` |
+**Job:** Read `platform.conf`, call service APIs to complete post-deployment
+configuration.
 
-**Backend-specific inputs:**
+```
+Input  → platform.conf (sourced)
+         Running, healthy containers (verified before each configure_ call)
+Output → Configured services
+         AUTHENTIK_API_TOKEN appended to platform.conf
+         .configured/ marker files
+```
 
-**Google Drive — OAuth flow (interactive):**
+**Per-service configuration rules:**
 
-| Input | Description |
-|-------|-------------|
-| `GDRIVE_CLIENT_ID` | OAuth2 client ID from Google Cloud Console |
-| `GDRIVE_CLIENT_SECRET` | OAuth2 client secret |
-| `GDRIVE_ROOT_FOLDER_ID` | Target folder ID in Google Drive |
+- **Authentik:** Verify bootstrap (do NOT create user — Authentik creates
+  `akadmin` automatically when `AUTHENTIK_BOOTSTRAP_PASSWORD` is set).
+  Retrieve and store API token.
+- **LiteLLM:** Health check via `GET /health/liveliness` (not `/health`).
+- **N8N:** `N8N_ENCRYPTION_KEY` must be set in the compose environment
+  *before the first container start* (script 2). Script 3 verifies it is
+  set; it does not set it post-start.
+- **Dify:** Call `POST /console/api/setup` only. Do NOT call
+  `/console/api/workspaces/current/members/invite` — no workspace exists
+  until setup completes.
 
-OAuth authorisation URL is displayed in the terminal during script 1.
-User opens the URL, grants access, and pastes the returned authorisation
-code. Token is stored at `/mnt/<tenant-id>/config/rclone/gdrive.token`.
+**`--show-credentials` output format:**
+```
+══════════════════════════════════════════════════════════
+  AI PLATFORM CREDENTIALS
+  Tenant: ${TENANT_ID}   Built: ${GENERATED_AT}
+══════════════════════════════════════════════════════════
 
-**Google Drive — Service Account (non-interactive, recommended for servers):**
+INFRASTRUCTURE
+  PostgreSQL  postgres.${BASE_DOMAIN}:${POSTGRES_PORT}
+  User        ${POSTGRES_USER}
+  Password    ${POSTGRES_PASSWORD}
 
-| Input | Description |
-|-------|-------------|
-| `GDRIVE_SERVICE_ACCOUNT_JSON` | Path to downloaded service account JSON key file |
-| `GDRIVE_ROOT_FOLDER_ID` | Target folder ID shared with the service account |
+LLM PROXY
+  URL         https://${BASE_DOMAIN}/litellm
+  Master Key  ${LITELLM_MASTER_KEY}
+  UI Password ${LITELLM_UI_PASSWORD}
 
-**AWS S3:**
+[... one block per enabled service only ...]
+══════════════════════════════════════════════════════════
+```
+Disabled services are omitted entirely — not shown as "disabled".
 
-| Input | Description |
-|-------|-------------|
-| `S3_ACCESS_KEY_ID` | AWS access key |
-| `S3_SECRET_ACCESS_KEY` | AWS secret key |
-| `S3_BUCKET` | Target bucket name |
-| `S3_REGION` | AWS region |
-| `S3_ENDPOINT` | Custom endpoint for S3-compatible stores (optional) |
+---
 
-**Backblaze B2:**
+### Script 0 — `0-complete-cleanup.sh`
 
-| Input | Description |
-|-------|-------------|
-| `B2_ACCOUNT_ID` | B2 account ID |
-| `B2_APPLICATION_KEY` | B2 application key |
-| `B2_BUCKET` | Target bucket name |
+**Job:** Completely remove all platform state.
 
-rclone is configured to back up the entire `/mnt/<tenant-id>/` path,
-which contains all service data, configuration, and generated keys for
-the tenant. A delta ingest to the primary vector DB can be triggered
-after any restore:
+**Execution order (strict):**
+```
+1. Typed confirmation: user must type "DELETE ${TENANT_ID}"
+2. docker compose down --volumes --remove-orphans
+3. Remove images (scoped to project label AND tenant prefix)
+4. rm -rf "${DATA_DIR}"
+5. rm -rf "${CONFIG_DIR}"
+6. rm -rf "${CONFIGURED_DIR}"   ← CRITICAL: clears idempotency markers
+7. rm -rf "${LOG_DIR}"
+8. Remove network: docker network rm "${DOCKER_NETWORK}" || true
+9. Optional: unmount EBS (--unmount-ebs flag)
+```
+
+**Typed confirmation (mandatory):**
+```bash
+confirm_destructive() {
+    echo "  ⚠️  This will permanently delete ALL data for tenant: ${TENANT_ID}"
+    echo "  Type exactly to confirm: DELETE ${TENANT_ID}"
+    read -r response
+    [[ "${response}" == "DELETE ${TENANT_ID}" ]] \
+        || { echo "Confirmation did not match. Aborting."; exit 1; }
+}
+```
+
+**Image removal (scoped — no broad purges):**
+```bash
+# By compose project label
+docker images \
+    --filter "label=com.docker.compose.project=${TENANT_ID}" \
+    -q | xargs -r docker rmi --force
+
+# By name prefix (catches label-less images)
+docker images --format "{{.Repository}}:{{.Tag}}" \
+    | grep "^${TENANT_PREFIX}-" \
+    | xargs -r docker rmi --force
+```
+
+---
+
+## 7. Service Catalogue
+
+### Infrastructure (always deployed with any preset)
+
+| Service | Container name | Default port | Image |
+|---|---|---|---|
+| PostgreSQL | `${TENANT_PREFIX}-postgres` | 5432 | `postgres:15-alpine` |
+| Redis | `${TENANT_PREFIX}-redis` | 6379 | `redis:7-alpine` |
+
+### LLM Layer
+
+| Service | Container name | Default port | Image |
+|---|---|---|---|
+| LiteLLM | `${TENANT_PREFIX}-litellm` | 4000 | `ghcr.io/berriai/litellm:main-stable` |
+| Ollama | `${TENANT_PREFIX}-ollama` | 11434 | `ollama/ollama:latest` (or `:rocm` for AMD) |
+
+### Web UI (any combination, including all three simultaneously)
+
+| Service | Container name | Default port | Image |
+|---|---|---|---|
+| Open WebUI | `${TENANT_PREFIX}-openwebui` | 3000 | `ghcr.io/open-webui/open-webui:main` |
+| LibreChat | `${TENANT_PREFIX}-librechat` | 3080 | `ghcr.io/danny-avila/librechat:latest` |
+| OpenClaw | `${TENANT_PREFIX}-openclaw` | 3001 | `openclaw/openclaw:latest` |
+
+> **All three Web UIs can be enabled simultaneously.**  
+> Each connects to LiteLLM independently. The proxy routes them by subdomain
+> or path prefix. There is no "choose one" constraint.
+
+### RAG / Vector
+
+| Service | Container name | Default port | Image |
+|---|---|---|---|
+| Qdrant | `${TENANT_PREFIX}-qdrant` | 6333 | `qdrant/qdrant:latest` |
+
+### Automation
+
+| Service | Container name | Default port | Image |
+|---|---|---|---|
+| N8N | `${TENANT_PREFIX}-n8n` | 5678 | `n8nio/n8n:latest` |
+| Flowise | `${TENANT_PREFIX}-flowise` | 3030 | `flowiseai/flowise:latest` |
+| Dify | `${TENANT_PREFIX}-dify` | 3040 | `langgenius/dify-web:latest` |
+
+### Identity
+
+| Service | Container name | Default port | Image |
+|---|---|---|---|
+| Authentik | `${TENANT_PREFIX}-authentik` | 9000 | `ghcr.io/goauthentik/server:latest` |
+
+### Proxy
+
+| Service | Container name | Ports | Image |
+|---|---|---|---|
+| Caddy | `${TENANT_PREFIX}-caddy` | 80, 443 | `caddy:2-alpine` |
+| Nginx PM | `${TENANT_PREFIX}-nginx` | 80, 443, 81 | `jc21/nginx-proxy-manager:latest` |
+
+### Optional
+
+| Service | Container name | Default port | Image |
+|---|---|---|---|
+| Signalbot | `${TENANT_PREFIX}-signalbot` | 8080 | `bbernhard/signal-cli-rest-api:latest` |
+| Bifrost | `${TENANT_PREFIX}-bifrost` | 8090 | `bifrost/bifrost:latest` |
+
+---
+
+## 8. Stack Presets
+
+Presets define which services are enabled by default. In `custom` mode,
+every service is prompted individually.
+
+| Service | `minimal` | `standard` | `full` | `custom` |
+|---|---|---|---|---|
+| PostgreSQL | ✅ | ✅ | ✅ | prompt |
+| Redis | ✅ | ✅ | ✅ | prompt |
+| LiteLLM | ✅ | ✅ | ✅ | prompt |
+| Ollama | ✅ | ✅ | ✅ | prompt |
+| Open WebUI | ✅ | ✅ | ✅ | prompt |
+| Qdrant | ✅ | ✅ | ✅ | prompt |
+| LibreChat | ❌ | ✅ | ✅ | prompt |
+| OpenClaw | ❌ | ✅ | ✅ | prompt |
+| N8N | ❌ | ✅ | ✅ | prompt |
+| Flowise | ❌ | ✅ | ✅ | prompt |
+| Dify | ❌ | ❌ | ✅ | prompt |
+| Authentik | ❌ | ❌ | ✅ | prompt |
+| Signalbot | ❌ | ❌ | ✅ | prompt |
+| Bifrost | ❌ | ❌ | ✅ | prompt |
+| Nginx PM | ❌ | ❌ | prompt | prompt |
+| Caddy | ✅ | ✅ | ✅ | prompt |
+
+**Preset implementation in script 1 (mandatory pattern):**
+```bash
+service_enabled_by_preset() {
+    local service="$1"
+    case "${STACK_PRESET}" in
+        minimal)  case "${service}" in
+                    postgres|redis|litellm|ollama|openwebui|qdrant|caddy)
+                        return 0 ;; *) return 1 ;; esac ;;
+        standard) case "${service}" in
+                    postgres|redis|litellm|ollama|openwebui|qdrant|caddy|\
+                    librechat|openclaw|n8n|flowise)
+                        return 0 ;; *) return 1 ;; esac ;;
+        full)     return 0 ;;
+        custom)   return 1 ;;
+    esac
+}
+```
+
+---
+
+## 9. Proxy Architecture
+
+### Caddy (default and recommended)
+
+- Automatic HTTPS via Let's Encrypt
+- Reverse proxies each enabled service to its subdomain or path prefix
+- Caddyfile generated by script 2 using the conditional heredoc pattern
+- Validated AFTER `docker compose pull` (caddy image must exist for validation)
+- Caddy is the only service with ports 80/443 bound to `0.0.0.0`
+
+**Subdomain routing example:**
+```
+litellm.${BASE_DOMAIN}   → http://${TENANT_PREFIX}-litellm:4000
+openwebui.${BASE_DOMAIN} → http://${TENANT_PREFIX}-openwebui:3000
+n8n.${BASE_DOMAIN}       → http://${TENANT_PREFIX}-n8n:5678
+```
+
+### Nginx Proxy Manager (alternative)
+
+- Selected via `PROXY_TYPE=nginx`
+- Admin UI available on port 81 (bound to `127.0.0.1:81`)
+- Routes configured manually via the NPM web interface after deployment
+- Script 3 does not auto-configure NPM routes (manual step, documented in
+  the deployment summary)
+
+---
+
+## 10. Config Generation Rules
+
+### LiteLLM `config.yaml`
+
+Generated by `generate_litellm_config()` in script 2. Includes only the
+providers whose API keys are non-empty in `platform.conf`, plus Ollama if
+`OLLAMA_ENABLED=true`.
+
+```yaml
+model_list:
+  # Included only if OLLAMA_ENABLED=true
+  - model_name: ollama/${OLLAMA_DEFAULT_MODEL}
+    litellm_params:
+      model: ollama/${OLLAMA_DEFAULT_MODEL}
+      api_base: http://${TENANT_PREFIX}-ollama:11434
+
+  # Included only if OPENAI_API_KEY is non-empty
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: ${OPENAI_API_KEY}
+
+general_settings:
+  master_key: ${LITELLM_MASTER_KEY}
+  database_url: ${LITELLM_DB_URL}
+```
+
+### Caddyfile
+
+Generated by `generate_caddyfile()` in script 2. One server block per
+enabled service. Brace matching must be validated with `caddy validate`
+before `docker compose up`.
+
+### N8N critical note
+
+`N8N_ENCRYPTION_KEY` must be present in the compose `environment:` block
+before the **first** container start. It cannot be injected post-start.
+If it is missing on first start, N8N generates an internal random key and
+all subsequently stored credentials become undecryptable on restart.
+
+---
+
+## 11. Security Model
+
+| Concern | Implementation |
+|---|---|
+| Secrets at rest | `platform.conf` chmod 600, owned by `PUID:PGID` |
+| Secrets in transit (internal) | Docker bridge network (no host exposure) |
+| Secrets in transit (external) | TLS via Caddy / NPM — Let's Encrypt |
+| Container isolation | All containers non-root, bind mounts only |
+| Port exposure | Only proxy binds to `0.0.0.0`; all others `127.0.0.1` |
+| Secret generation | `openssl rand` — no `$RANDOM`, no `date` seeds |
+| Git safety | `platform.conf` in `.gitignore`; no `.env` files exist |
+| Cleanup | Script 0 typed confirmation; scoped image removal |
+
+---
+
+## 12. Supported Flags
+
+| Flag | Scripts | Description |
+|---|---|---|
+| `--dry-run` | 2, 3 | Print all actions without executing them |
+| `--show-credentials` | 3 | Print all service credentials from `platform.conf` |
+| `--rotate-keys [service]` | 3 | Regenerate secrets for one service and redeploy it |
+| `--unmount-ebs` | 0 | Unmount EBS volume after cleanup |
+
+**`--dry-run` implementation (mandatory pattern):**
+```bash
+DRY_RUN=false
+[[ "${1:-}" == "--dry-run" ]] && DRY_RUN=true
+
+run_cmd() {
+    if [[ "${DRY_RUN}" == "true" ]]; then
+        echo "[DRY-RUN] $*"
+    else
+        "$@"
+    fi
+}
+```
+
+---
+
+## 13. Dependencies
+
+All dependencies installed by script 1. No runtime dependencies on the host
+beyond what script 1 installs.
+
+| Package | Used by | Notes |
+|---|---|---|
+| `docker` + `docker-compose-plugin` | 0, 2, 3 | Docker Engine, not Desktop |
+| `curl` | 2, 3 | Service health checks and API calls |
+| `jq` | 3 | JSON parsing of service API responses only |
+| `yq` | 2 | YAML validation of generated configs |
+| `openssl` | 1 | Secret generation |
+| `lsof` | 1 | Port conflict detection |
+| `git` | 1 | Optional: repo self-update |
+
+> **`jq` scope:** `jq` is used in script 3 only, to parse JSON responses
+> from service REST APIs (e.g., Authentik token response). It is never used
+> to read `platform.conf`. `platform.conf` is always accessed via
+> `source platform.conf`.
+
+---
+
+## 14. Testing Checkpoints
+
+After each phase, these checks must pass before proceeding.
+
+### After script 1
 
 ```bash
-bash scripts/3-configure-services.sh --ingest-delta
+# platform.conf exists and is readable
+[[ -f "/mnt/${TENANT_ID}/platform.conf" ]] && echo "PASS" || echo "FAIL"
+
+# platform.conf has correct permissions
+stat -c "%a" "/mnt/${TENANT_ID}/platform.conf" | grep -q "600" && echo "PASS" || echo "FAIL"
+
+# No port in platform.conf is in use (all conflicts were resolved)
+source "/mnt/${TENANT_ID}/platform.conf"
+for port_var in POSTGRES_PORT REDIS_PORT LITELLM_PORT OLLAMA_PORT; do
+    port="${!port_var}"
+    lsof -i ":${port}" &>/dev/null && echo "FAIL: ${port_var}=${port} in use" || echo "PASS: ${port_var}"
+done
+
+# Directory skeleton exists
+[[ -d "${DATA_DIR}" && -d "${CONFIG_DIR}" && -d "${CONFIGURED_DIR}" ]] \
+    && echo "PASS" || echo "FAIL"
 ```
 
----
-
-### Step 17 — Observability
-
-| Input | Description | Default |
-|-------|-------------|---------|
-| `PROMETHEUS_ENABLED` | | `false` |
-| `PROMETHEUS_PORT` | Host port | `9090` |
-| `GRAFANA_ENABLED` | | `false` |
-| `GRAFANA_PORT` | Host port | `3030` |
-| `GRAFANA_SUBDOMAIN` | | `monitor.<base-domain>` |
-| `GRAFANA_ADMIN_PASSWORD` | Generated if blank | Auto-generated |
-
-Prometheus is pre-configured with scrape targets for every enabled service
-that exposes a `/metrics` endpoint. Grafana is pre-configured with
-Prometheus as the default data source and pre-imported dashboards for
-Ollama inference metrics, LLM proxy throughput, vector DB performance,
-container resource usage, and host system metrics.
-
----
-
-### Step 18 — Code Server
-
-| Input | Description | Default |
-|-------|-------------|---------|
-| `CODESERVER_ENABLED` | Enable VS Code in browser | `false` |
-| `CODESERVER_PORT` | Host port | `8090` |
-| `CODESERVER_SUBDOMAIN` | | `code.<base-domain>` |
-| `CODESERVER_PASSWORD` | Generated if blank | Auto-generated |
-| `CODESERVER_WORKSPACE` | Workspace path inside container | `/home/coder/project` |
-
----
-
-### Step 19 — Shared Infrastructure
-
-These are always deployed; inputs are collected once.
-
-**PostgreSQL:**
-
-| Input | Description | Default |
-|-------|-------------|---------|
-| `POSTGRES_PORT` | Host port | `5432` |
-| `POSTGRES_PASSWORD` | Root password; generated if blank | Auto-generated |
-| `POSTGRES_DATA_PATH` | Bind mount path | `/mnt/<tenant-id>/postgres/` |
-
-Individual databases and users are auto-created per service during script 3.
-
-**Redis:**
-
-| Input | Description | Default |
-|-------|-------------|---------|
-| `REDIS_PORT` | Host port | `6379` |
-| `REDIS_PASSWORD` | Auth password; generated if blank | Auto-generated |
-| `REDIS_DATA_PATH` | Bind mount path | `/mnt/<tenant-id>/redis/` |
-
----
-
-## Port Reference
-
-All host ports. All container-to-container communication uses Docker
-bridge service names and container ports — not host ports.
-
-| Service | Container Port | Default Host Port | Conflict-Free Assignment |
-|---------|---------------|-------------------|--------------------------|
-| Caddy / Nginx | 80, 443 | 80, 443 | Public ingress only |
-| LiteLLM | 4000 | 4000 | |
-| Bifrost | 8080 | **8181** | Remapped: container 8080 → host 8181 |
-| Ollama | 11434 | 11434 | |
-| Qdrant REST | 6333 | 6333 | |
-| Qdrant gRPC | 6334 | 6334 | |
-| Weaviate | 8080 | **8082** | Remapped: container 8080 → host 8082 |
-| Chroma | 8000 | 8000 | |
-| Milvus | 19530 | 19530 | |
-| Open-WebUI | 3000 | 3000 | |
-| Dify web frontend | 3000 | **3010** | Remapped: container 3000 → host 3010 |
-| Dify API | 5001 | 5001 | |
-| AnythingLLM | 3001 | 3001 | |
-| OpenClaw | 3002 | 3002 | |
-| n8n | 5678 | 5678 | |
-| Flowise | 3100 | 3100 | |
-| Authentik | 9000 | 9000 | |
-| Grafana | 3000 | **3030** | Remapped: container 3000 → host 3030 |
-| Prometheus | 9090 | 9090 | |
-| Code Server | 8080 | **8090** | Remapped: container 8080 → host 8090 |
-| Signal CLI REST API | 8080 | **8085** (127.0.0.1, temporary) | Registration only; removed post-registration |
-| PostgreSQL | 5432 | 5432 | |
-| Redis | 6379 | 6379 | |
-
-All ports are overridable per tenant via `platform.conf`. The port
-conflict pre-check in script 3 validates this full table against live
-host bindings before any service configuration begins.
-
----
-
-## Service Dependency Chain
-
-Script 2 starts services in strict dependency order. Each layer must
-reach healthy status before the next layer starts.
-
-```
-Layer 0 — Storage and Network
-  └── EBS mounted and verified
-  └── Docker bridge network created: <prefix><tenant-id>_net
-
-Layer 1 — Data Layer (must be healthy before anything else starts)
-  ├── PostgreSQL          health: pg_isready -U postgres
-  └── Redis               health: redis-cli -a $REDIS_PASSWORD ping → PONG
-
-Layer 2 — Inference and Vector (depends on Layer 1)
-  ├── Ollama              health: GET http://localhost:11434/api/version → 200
-  ├── Qdrant              health: GET http://localhost:6333/healthz → {"status":"ok"}
-  ├── Weaviate            health: GET http://localhost:8082/v1/.well-known/ready → 200
-  ├── Chroma              health: GET http://localhost:8000/api/v1/heartbeat → 200
-  └── Milvus              health: grpc_health_probe -addr=localhost:19530
-
-Layer 3 — LLM Proxy (depends on Layer 1 + at least one LLM source)
-  ├── LiteLLM             health: GET http://localhost:4000/health → {"status":"healthy"}
-  └── Bifrost             health: GET http://localhost:8181/health → 200
-
-Layer 4 — Application Layer (depends on Layers 1–3)
-  ├── Open-WebUI          health: GET http://localhost:3000/health → 200
-  ├── Dify API            health: GET http://localhost:5001/health → {"status":"ok"}
-  ├── Dify web            health: GET http://localhost:3010/ → 200
-  ├── AnythingLLM         health: GET http://localhost:3001/api/ping → {"online":true}
-  ├── OpenClaw            health: GET http://localhost:3002/ → 200
-  ├── n8n                 health: GET http://localhost:5678/healthz → {"status":"ok"}
-  ├── Flowise             health: GET http://localhost:3100/api/v1/ping → {"ping":"pong"}
-  └── Authentik           health: GET http://localhost:9000/-/health/ready/ → 200
-
-Layer 5 — Proxy and TLS (depends on Layer 4)
-  └── Caddy / Nginx       health: GET https://<base-domain>/ → 200 or redirect
-
-Layer 6 — Observability (depends on Layers 1–4)
-  ├── Prometheus          health: GET http://localhost:9090/-/healthy → 200
-  └── Grafana             health: GET http://localhost:3030/api/health → {"database":"ok"}
-
-Layer 7 — Developer Tools (depends on Layer 5)
-  └── Code Server         health: GET http://localhost:8090/ → 200
-
-Layer 8 — Messaging Gateway (depends on Layers 3 + 2)
-  └── Signal CLI REST     health: GET http://127.0.0.1:8085/v1/about → {"versions":[...]}
-                          (registration only; not part of runtime health)
-```
-
-Each service's `docker-compose.yml` block includes a `healthcheck`
-directive matching the endpoint above. Script 2 uses `depends_on:
-condition: service_healthy` to enforce layer ordering.
-
----
-
-## Script 2 — Mission Control Health Dashboard
-
-At the end of script 2, after all selected services have started and
-passed their health checks, the following dashboard is printed to the
-terminal. This is the **expected output** of a successful deployment.
-
-```
-╔════════════════════════════════════════════════════════════════════╗
-║              AI PLATFORM — MISSION CONTROL                                  ║
-║              Tenant: acme    Prefix: ai-    Stack: full                     ║
-╠══════════════════════════════════════════════════════════════╣
-║ LAYER 1 — DATA                                                               ║
-║  ✓  PostgreSQL        :5432   healthy   pg_isready OK                        ║
-║  ✓  Redis             :6379   healthy   PONG                                 ║
-╠════════════════════════════════════════════════════════════════╣
-║ LAYER 2 — INFERENCE & VECTOR                                                 ║
-║  ✓  Ollama            :11434  healthy   version: 0.x.x   models: 3 loaded    ║
-║  ✓  Qdrant            :6333   healthy   {"status":"ok"}                      ║
-║  ✓  Weaviate          :8082   healthy   ready                                ║
-║  ✓  Chroma            :8000   healthy   heartbeat OK                         ║
-║  ✓  Milvus            :19530  healthy   grpc healthy                         ║
-╠════════════════════════════════════════════════════════════════╣
-║ LAYER 3 — LLM PROXY                                                          ║
-║  ✓  LiteLLM           :4000   healthy   {"status":"healthy"}                 ║
-║     Providers wired:  openai ✓  anthropic ✓  ollama/local ✓                 ║
-║     Routing strategy: local-first                                            ║
-╠══════════════════════════════════════════════════════════════════╣
-║ LAYER 4 — APPLICATIONS                                                       ║
-║  ✓  Open-WebUI        :3000   healthy   200 OK                               ║
-║  ✓  Dify API          :5001   healthy   {"status":"ok"}                      ║
-║  ✓  Dify web          :3010   healthy   200 OK                               ║
-║  ✓  AnythingLLM       :3001   healthy   {"online":true}                      ║
-║  ✓  OpenClaw          :3002   healthy   200 OK                               ║
-║  ✓  n8n               :5678   healthy   {"status":"ok"}                      ║
-║  ✓  Flowise           :3100   healthy   {"ping":"pong"}                      ║
-║  ✓  Authentik         :9000   healthy   200 OK                               ║
-╠════════════════════════════════════════════════════════════════╣
-║ LAYER 5 — PROXY & TLS                                                        ║
-║  ✓  Caddy             :443    healthy   TLS: Let's Encrypt                   ║
-╠════════════════════════════════════════════════════════════════════╣
-║ LAYER 6 — OBSERVABILITY                                                      ║
-║  ✓  Prometheus        :9090   healthy   targets: 12 active                   ║
-║  ✓  Grafana           :3030   healthy   {"database":"ok"}                    ║
-╠══════════════════════════════════════════════════════════════════════════╣
-║ LAYER 7 — DEVELOPER                                                          ║
-║  ✓  Code Server       :8090   healthy   200 OK                               ║
-╠══════════════════════════════════════════════════════════════════════════╣
-║ LAYER 8 — MESSAGING                                                          ║
-║  ⚠  Signal            :8085   awaiting registration                          ║
-║     Run: bash scripts/3-configure-services.sh --register-signal             ║
-╠══════════════════════════════════════════════════════════════════════════╣
-║ ACCESS URLS                                                                  ║
-║  Open-WebUI   →  https://chat.example.com                                   ║
-║  Dify         →  https://dify.example.com                                   ║
-║  AnythingLLM  →  https://anything.example.com                               ║
-║  OpenClaw     →  https://openclaw.example.com                               ║
-║  n8n          →  https://n8n.example.com                                    ║
-║  Flowise      →  https://flowise.example.com                                ║
-║  Authentik    →  https://auth.example.com                                   ║
-║  Grafana      →  https://monitor.example.com                                ║
-║  Code Server  →  https://code.example.com                                   ║
-║  LiteLLM UI   →  https://llm.example.com                                    ║
-╠══════════════════════════════════════════════════════════════════╣
-║ CREDENTIALS                                                                  ║
-║  Stored at:   /mnt/acme/config/platform.conf                                ║
-║  Display:     bash scripts/3-configure-services.sh --show-credentials       ║
-╠══════════════════════════════════════════════════════════════════════════╣
-║ NEXT STEP                                                                    ║
-║  bash scripts/3-configure-services.sh                                       ║
-╚════════════════════════════════════════════════════════════════════════════════════╝
-```
-
-**Dashboard rules:**
-
-| Symbol | Meaning |
-|--------|---------|
-| `✓` | Service started, health check passed, endpoint responding |
-| `✗` | Service failed to start or health check timed out — see error recovery |
-| `⚠` | Service running but requires a manual step to become operational |
-| `—` | Service not selected for this deployment |
-
-If any `✗` is present dashboard prints recovery command before exiting.
-
----
-
-## Script 3 — Post-Deployment Management
-
-Script 3 runs once after script 2 to complete all inter-service wiring.
-It also accepts flags for post-deployment operations without full redeploy.
+### After script 2
 
 ```bash
-bash scripts/3-configure-services.sh                  # Full initial configuration
-bash scripts/3-configure-services.sh --register-signal    # Complete Signal device registration
-bash scripts/3-configure-services.sh --add-provider       # Add an LLM provider
-bash scripts/3-configure-services.sh --reload-proxy       # Reload LLM proxy config
-bash scripts/3-configure-services.sh --ingest-delta       # Trigger rclone delta ingest to vector DB
-bash scripts/3-configure-services.sh --show-credentials   # Print all generated credentials
-bash scripts/3-configure-services.sh --rotate-keys        # Rotate all internal API keys
-bash scripts/3-configure-services.sh --enable <service>   # Enable a service post-deployment
-bash scripts/3-configure-services.sh --disable <service>  # Disable a service post-deployment
-bash scripts/3-configure-services.sh --reload-proxy       # Reload reverse proxy configuration
-bash scripts/3-configure-services.sh --status             # Re-run health dashboard
+# Compose file is valid YAML
+docker compose -f "${COMPOSE_FILE}" config > /dev/null && echo "PASS" || echo "FAIL"
+
+# No disabled service is referenced in depends_on of an enabled service
+# (manual review of generated compose file)
+
+# No sentinel values remain
+grep -rE "CHANGEME|TODO_REPLACE|FIXME|xxxx|\{\{[A-Z_]+\}\}" \
+    "${CONFIG_DIR}/" && echo "FAIL" || echo "PASS"
+
+# All enabled containers are healthy
+for container in $(docker compose -f "${COMPOSE_FILE}" ps -q); do
+    status=$(docker inspect --format='{{.State.Health.Status}}' "${container}")
+    echo "${container}: ${status}"
+done
 ```
 
-Script 3 is idempotent. Re-running it on an already-configured deployment
-is safe and will update configuration where values in `platform.conf`
-have changed.
-
----
-
-## Error Recovery
-
-### EBS Mount Failure
-```
-ERROR: /dev/nvme1n1 did not mount at /mnt/<tenant-id>/
-```
-- Verify the device is attached: `lsblk`
-- Check for existing filesystem: `blkid /dev/nvme1n1`
-- Check fstab entry: `cat /etc/fstab | grep <tenant-id>`
-- Attempt manual mount: `mount -a` then re-run script 1
-
-### Health Check Timeout
-```
-✗  <service>   :PORT   timeout after 120s
-```
-- View container logs: `docker logs <prefix><tenant-id>-<service>`
-- Check container state: `docker inspect <prefix><tenant-id>-<service>`
-- Verify bind mount exists: `ls -la /mnt/<tenant-id>/<service>/`
-- Re-run script 2; it will skip already-healthy services
-
-### LLM Proxy Unreachable
-```
-✗  LiteLLM     :4000   connection refused
-```
-- Check PostgreSQL health first — LiteLLM requires database on start
-- View logs: `docker logs <prefix><tenant-id>-litellm`
-- Verify `LLM_PROXY_DB_URL` in `platform.conf` is correct
-- Confirm PostgreSQL is accepting connections: `docker exec <prefix><tenant-id>-postgres pg_isready`
-
-### Signal Registration Failure
-```
-POST /v1/register/<number> → 400 or 500
-```
-- Verify `SIGNAL_PHONE_NUMBER` is E.164 format: `+15551234567`
-- Check service is bound: `ss -tlnp | grep 8085`
-- View logs: `docker logs <prefix><tenant-id>-signal-cli-rest-api`
-- Retry: `bash scripts/3-configure-services.sh --register-signal`
-
-### Port Conflict Detected
-```
-ERROR: Port 6333 is already in use by process: <pid> (<name>)
-       Conflicts with: QDRANT_REST_PORT
-```
-- Identify the process: `ss -tlnp | grep 6333`
-- Override the port in `platform.conf`: `QDRANT_REST_PORT=6335`
-- Re-run script 3; the port pre-check will validate the new value
-
----
-
-## Resource Requirements
-
-### Minimum RAM by Stack Type
-
-| Stack Type | Minimum RAM | Recommended RAM |
-|------------|-------------|-----------------|
-| `minimal` | 4 GB | 8 GB |
-| `dev` | 8 GB | 16 GB |
-| `full` (no GPU) | 24 GB | 32 GB |
-| `full` (with GPU) | 16 GB + VRAM | 32 GB + VRAM |
-
-### Ollama VRAM by Model
-
-| Model | VRAM Required |
-|-------|--------------|
-| `phi3` (3.8B) | 4 GB |
-| `llama3.2` (3B) | 4 GB |
-| `mistral` (7B) | 8 GB |
-| `llama3.1` (8B) | 8 GB |
-| `llama3.1:70b` (70B) | 48 GB |
-| `codellama` (7B) | 8 GB |
-
-### Recommended EC2 Instance Types
-
-| Use Case | Instance | vCPU | RAM | Storage |
-|----------|----------|------|-----|---------|
-| Minimal / dev | `t3.xlarge` | 4 | 16 GB | 50 GB gp3 |
-| Full stack, no local LLM | `m6i.2xlarge` | 8 | 32 GB | 100 GB gp3 |
-| Full stack + Ollama (small models) | `g4dn.xlarge` | 4 | 16 GB | 16 GB VRAM T4 |
-| Full stack + Ollama (large models) | `g4dn.12xlarge` | 48 | 192 GB | 64 GB VRAM 4×T4 |
-
-### Multi-Tenant Guidance
-
-Each additional tenant on the same server requires approximately:
-- Minimal stack: +4 GB RAM, +20 GB disk
-- Full stack: +16 GB RAM, +80 GB disk (separate EBS volume strongly recommended)
-
----
-
-## platform.conf — Complete Key Reference
-
-Generated by script 1 at `/mnt/<tenant-id>/config/platform.conf`.
-Read by scripts 2 and 3. Never edited manually after generation except
-to override a port before re-running script 3.
+### After script 3
 
 ```bash
-# Identity
-PLATFORM_PREFIX=ai-
-TENANT_ID=acme
-PLATFORM_USER=ai-acme
+# Each service responds on its configured port
+curl -sf "http://localhost:${LITELLM_PORT}/health/liveliness" \
+    && echo "LiteLLM PASS" || echo "LiteLLM FAIL"
 
-# Storage
-TENANT_DATA_PATH=/mnt/acme/
-TENANT_CONFIG_PATH=/mnt/acme/config/
-EBS_DEVICE=/dev/nvme1n1
-EBS_MOUNT_POINT=/mnt/acme/
+# Credentials summary is complete
+bash 3-configure-services.sh --show-credentials
+```
 
-# Domain
-BASE_DOMAIN=example.com
+### After script 0
 
-# Stack
-STACK_TYPE=full
-PROXY_TYPE=caddy
-TLS_MODE=letsencrypt
+```bash
+# No containers remain
+docker ps -a | grep "${TENANT_PREFIX}" && echo "FAIL: containers remain" || echo "PASS"
 
-# OpenClaw
-OPENCLAW_ENABLED=true
-OPENCLAW_PORT=3002
-OPENCLAW_SUBDOMAIN=openclaw.example.com
-OPENCLAW_PASSWORD=<generated>
+# No data remains
+[[ -d "/mnt/${TENANT_ID}/data" ]] && echo "FAIL: data remains" || echo "PASS"
 
-# LLM Proxy
-LLM_PROXY=litellm
-LLM_PROXY_PORT=4000
-LLM_ROUTING_STRATEGY=local-first
-LLM_PROXY_MASTER_KEY=<generated>
-LLM_PROXY_DB_URL=postgresql://litellm:<generated>@localhost:5432/litellm_acme
-LITELLM_UI_USERNAME=admin
-LITELLM_UI_PASSWORD=<generated>
+# No idempotency markers remain
+[[ -d "/mnt/${TENANT_ID}/.configured" ]] && echo "FAIL: markers remain" || echo "PASS"
 
-# External LLM Providers
-OPENAI_ENABLED=true
-OPENAI_API_KEY=sk-...
-ANTHROPIC_ENABLED=true
-ANTHROPIC_API_KEY=sk-ant-...
-GEMINI_ENABLED=false
-BEDROCK_ENABLED=false
-AZURE_ENABLED=false
-COHERE_ENABLED=false
-MISTRAL_ENABLED=false
-CUSTOM_LLM_ENABLED=false
-
-# Ollama
-OLLAMA_ENABLED=true
-OLLAMA_PORT=11434
-OLLAMA_MODELS=llama3.2,mistral,phi3
-OLLAMA_GPU_ENABLED=false
-
-# Vector Databases
-VECTOR_DB_PRIMARY=qdrant
-QDRANT_ENABLED=true
-QDRANT_REST_PORT=6333
-QDRANT_GRPC_PORT=6334
-QDRANT_API_KEY=<generated>
-WEAVIATE_ENABLED=true
-WEAVIATE_PORT=8082
-CHROMA_ENABLED=false
-CHROMA_PORT=8000
-MILVUS_ENABLED=false
-MILVUS_PORT=19530
-
-# Web UIs
-OPENWEBUI_ENABLED=true
-OPENWEBUI_PORT=3000
-OPENWEBUI_SUBDOMAIN=chat.example.com
-OPENWEBUI_SECRET_KEY=<generated>
-DIFY_ENABLED=true
-DIFY_WEB_PORT=3010
-DIFY_API_PORT=5001
-DIFY_SUBDOMAIN=dify.example.com
-DIFY_SECRET_KEY=<generated>
-ANYTHINGLLM_ENABLED=true
-ANYTHINGLLM_PORT=3001
-ANYTHINGLLM_SUBDOMAIN=anything.example.com
-ANYTHINGLLM_JWT_SECRET=<generated>
-
-# Workflow
-N8N_ENABLED=true
-N8N_PORT=5678
-N8N_SUBDOMAIN=n8n.example.com
-N8N_ENCRYPTION_KEY=<generated>
-N8N_BASIC_AUTH_USER=admin
-N8N_BASIC_AUTH_PASSWORD=<generated>
-FLOWISE_ENABLED=true
-FLOWISE_PORT=3100
-FLOWISE_SUBDOMAIN=flowise.example.com
-FLOWISE_USERNAME=admin
-FLOWISE_PASSWORD=<generated>
-
-# Authentication
-AUTHENTIK_ENABLED=true
-AUTHENTIK_PORT=9000
-AUTHENTIK_SUBDOMAIN=auth.example.com
-AUTHENTIK_SECRET_KEY=<generated>
-AUTHENTIK_BOOTSTRAP_EMAIL=admin@example.com
-AUTHENTIK_BOOTSTRAP_PASSWORD=<generated>
-AUTHENTIK_POSTGRES_PASSWORD=<generated>
-
-# Signal
-SIGNAL_ENABLED=true
-SIGNAL_PHONE_NUMBER=+15551234567
-SIGNAL_REGISTRATION_METHOD=sms
-SIGNAL_REST_PORT=8085
-SIGNAL_API_KEY=<generated>
-SIGNAL_REGISTERED=false
-
-# Observability
-PROMETHEUS_ENABLED=true
-PROMETHEUS_PORT=9090
-GRAFANA_ENABLED=true
-GRAFANA_PORT=3030
-GRAFANA_SUBDOMAIN=monitor.example.com
-GRAFANA_ADMIN_PASSWORD=<generated>
-
-# Code Server
-CODESERVER_ENABLED=true
-CODESERVER_PORT=8090
-CODESERVER_SUBDOMAIN=code.example.com
-CODESERVER_PASSWORD=<generated>
-CODESERVER_WORKSPACE=/home/coder/project
-
-# Shared Infrastructure
-POSTGRES_PORT=5432
-POSTGRES_PASSWORD=<generated>
-POSTGRES_DATA_PATH=/mnt/acme/postgres/
-REDIS_PORT=6379
-REDIS_PASSWORD=<generated>
-REDIS_DATA_PATH=/mnt/acme/redis/
-DOCKER_NETWORK=ai-acme_net
+# No network remains
+docker network ls | grep "${DOCKER_NETWORK}" && echo "FAIL: network remains" || echo "PASS"
 ```
 
 ---
 
-## Data Layout
+## 15. Glossary
 
+| Term | Definition |
+|---|---|
+| `platform.conf` | The bash key=value file written by script 1 and sourced by all other scripts. The single source of truth. |
+| `TENANT_ID` | The unique identifier for this deployment. Used as the EBS mount directory name, Docker network name prefix, and container name prefix. |
+| `TENANT_PREFIX` | Same as `TENANT_ID`. Used as the prefix for all Docker container names and compose project name. |
+| `BASE_DIR` | Root directory for all platform files: `/mnt/${TENANT_ID}` or `~/ai-platform/${TENANT_ID}`. |
+| `CONFIGURED_DIR` | `${BASE_DIR}/.configured` — directory of empty marker files tracking completed idempotency steps. |
+| `COMPOSE_FILE` | `${CONFIG_DIR}/docker-compose.yml` — the generated compose file. Never edited manually. |
+| `PUID` / `PGID` | UID and GID of the platform user. Written to `platform.conf` by script 1. Used as `user:` in every service block. |
+| `PLATFORM_ARCH` | CPU architecture detected by script 1: `x86_64` or `aarch64`. Used for architecture-specific image tags. |
+| `gen_secret()` | `openssl rand -hex 32` — generates a 64-character hex secret. |
+| `gen_password()` | `openssl rand -base64 24 \| tr -d '=+/' \| cut -c1-20` — generates a 20-character alphanumeric password. |
+| Idempotency marker | An empty file in `CONFIGURED_DIR` whose presence indicates a step has completed successfully. |
+| Bind mount | Docker volume using a host filesystem path. All platform data uses bind mounts. Named volumes are prohibited. |
+| Preset | A named collection of service enable/disable defaults (`minimal`, `standard`, `full`, `custom`). |
 ```
-/mnt/<tenant-id>/
-├── config/
-│   ├── platform.conf          # Single source of truth for this tenant
-│   ├── docker-compose.yml     # Generated by script 2
-│   ├── caddy/Caddyfile        # Generated by script 3
-│   ├── litellm/config.yaml    # Generated by script 3
-│   ├── prometheus/            # Generated by script 3
-│   ├── grafana/               # Dashboards + datasource provisioning
-│   ├── rclone/                # rclone.conf + oauth token if gdrive
-│   └── .configured/           # Per-service completion markers
-├── postgres/                  # PostgreSQL data
-├── redis/                     # Redis data
-├── ollama/                    # Ollama model files
-├── qdrant/                    # Qdrant collections
-├── weaviate/                  # Weaviate data
-├── chroma/                    # Chroma data
-├── milvus/                    # Milvus data
-├── openwebui/                 # Open-WebUI database and uploads
-├── dify/                      # Dify application data
-├── anythingllm/               # AnythingLLM data
-├── openclaw/                  # OpenClaw session data
-├── n8n/                       # n8n workflows and credentials
-├── flowise/                   # Flowise flows
-├── authentik/                 # Authentik media and certs
-├── signal/                    # Signal CLI REST API data and registered account
-├── prometheus/                # Prometheus TSDB
-├── grafana/                   # Grafana dashboards and DB
-├── codeserver/                # Code Server workspace and config
-└── backup/                    # Local backup staging before remote push
+Continuing from where the document ended — adding the implementation enforcement appendices that Windsurf needs to stay grounded.
+
+```markdown
+---
+
+## Appendix A — Prohibited Patterns Reference
+
+This appendix exists because Windsurf repeatedly introduces these patterns
+across iterations. Every pattern below has caused a regression. Treat each
+as a hard lint rule.
+
+---
+
+### A1 — JSON as a runtime data store
+
+```bash
+# ❌ PROHIBITED — any of these forms
+jq '.tenant_id' mission-control.json
+cat config.json | jq -r '.services.litellm.port'
+yq '.litellm.enabled' platform.yaml
+python3 -c "import json; cfg=json.load(open('config.json'))"
+
+# ✅ CORRECT
+source "${PLATFORM_CONF}"
+echo "${LITELLM_PORT}"
+```
+
+**Why:** `platform.conf` is bash. Sourcing it is zero-dependency, atomic,
+and produces native bash variables. JSON parsing requires an external binary,
+introduces parsing failure modes, and splits the source of truth across two
+files. There is no upside.
+
+**Specific file names that must never exist as runtime artifacts:**
+- `mission-control.json`
+- `config.json`
+- `platform.json`
+- `services.json`
+- `stack-config.yaml` (as a runtime input — generated output configs are fine)
+
+---
+
+### A2 — `.env` files for secrets
+
+```bash
+# ❌ PROHIBITED
+cat > "${BASE_DIR}/.env" << EOF
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+EOF
+
+# ❌ PROHIBITED in compose
+services:
+  litellm:
+    env_file:
+      - ../.env
+
+# ✅ CORRECT in compose (values expanded at generation time from platform.conf)
+services:
+  litellm:
+    environment:
+      LITELLM_MASTER_KEY: "sk-generated-value-here"
+      DATABASE_URL: "postgresql://platform:password@acme-postgres:5432/platform"
+```
+
+**Why:** `.env` files create a second location for secrets that must be kept
+in sync with `platform.conf`. They are frequently committed to git by
+accident. They are not chmod 600 by default. Inline environment values in
+the compose file are written once at generation time and require no sync.
+
+---
+
+### A3 — Loop-based compose generation
+
+```bash
+# ❌ PROHIBITED
+declare -A enabled_services
+for service in "${!enabled_services[@]}"; do
+    if [[ "${enabled_services[$service]}" == "true" ]]; then
+        generate_service_block "${service}" >> "${COMPOSE_FILE}"
+    fi
+done
+
+# ❌ PROHIBITED
+python3 generate_compose.py --config platform.conf > docker-compose.yml
+
+# ❌ PROHIBITED
+jq -n --arg name "${TENANT_PREFIX}" '{services: {postgres: {image: "postgres:15"}}}' \
+    > docker-compose.yml
+
+# ✅ CORRECT — explicit conditional heredoc blocks
+if [[ "${POSTGRES_ENABLED}" == "true" ]]; then
+    cat >> "${COMPOSE_FILE}" << EOF
+  ${TENANT_PREFIX}-postgres:
+    image: postgres:15-alpine
+    container_name: ${TENANT_PREFIX}-postgres
+    restart: unless-stopped
+    user: "${PUID}:${PGID}"
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      POSTGRES_DB: "${POSTGRES_DB}"
+    volumes:
+      - ${DATA_DIR}/postgres:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+EOF
+fi
+```
+
+**Why:** YAML is indentation-sensitive. A loop that appends fragments has
+no way to guarantee indentation correctness across all combinations of
+enabled/disabled services. A service block generated inside a subshell may
+have different indentation than the surrounding heredoc. The only reliable
+method is explicit if/fi blocks with the full service definition inline.
+
+---
+
+### A4 — `envsubst` on already-expanded files
+
+```bash
+# ❌ PROHIBITED
+generate_litellm_config()  # writes values via heredoc (already expanded)
+envsubst < config.yaml > config.yaml.tmp && mv config.yaml.tmp config.yaml
+
+# ✅ CORRECT
+generate_litellm_config()  # heredoc expansion is sufficient — do nothing else
+```
+
+**Why:** `openssl rand -hex 32` produces output that may contain sequences
+interpretable as `$VARIABLE`. If a generated secret happens to contain
+`$PATH` or any other environment variable name, `envsubst` will replace it
+with the value of that variable, corrupting the secret silently. This
+failure is non-deterministic and very hard to debug.
+
+---
+
+### A5 — Container ports bound to `0.0.0.0`
+
+```yaml
+# ❌ PROHIBITED
+ports:
+  - "4000:4000"
+  - "${LITELLM_PORT}:4000"
+
+# ✅ CORRECT
+ports:
+  - "127.0.0.1:${LITELLM_PORT}:4000"
+```
+
+**Exception:** The proxy service (Caddy or NPM) binds 80 and 443 to
+`0.0.0.0`. This is the only exception and it is intentional.
+
+---
+
+### A6 — Disabled services in `depends_on`
+
+```yaml
+# ❌ PROHIBITED — if AUTHENTIK_ENABLED=false, this compose file will fail
+services:
+  openwebui:
+    depends_on:
+      - postgres
+      - redis
+      - authentik      # ← authentik service block does not exist
+
+# ✅ CORRECT — depends_on is built conditionally before the heredoc
+build_openwebui_deps() {
+    local deps=""
+    [[ "${POSTGRES_ENABLED}"  == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
+    [[ "${REDIS_ENABLED}"     == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
+    [[ "${AUTHENTIK_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-authentik"$'\n'
+    echo "${deps}"
+}
+OPENWEBUI_DEPS="$(build_openwebui_deps)"
+
+# Then in the heredoc:
+cat >> "${COMPOSE_FILE}" << EOF
+  ${TENANT_PREFIX}-openwebui:
+    depends_on:
+${OPENWEBUI_DEPS}
+EOF
 ```
 
 ---
 
-## Contributing
+### A7 — Writing to system directories
 
-### Required for any new service addition
+```bash
+# ❌ PROHIBITED
+mkdir -p /opt/ai-platform
+cp platform.conf /etc/ai-platform/
+ln -s /usr/local/bin/manage-platform /usr/local/bin/
 
-1. **Port assignment** — assign a unique host port that does not conflict
-   with any existing entry in Port Reference table; document both
-   container port and assigned host port
-2. **`platform.conf` key** — add `<SERVICE>_ENABLED`, `<SERVICE>_PORT`,
-   and all service-specific variables to Script 1 input collection in
-   dependency order
-3. **Dependency layer** — identify which layer the service belongs to;
-   document its `depends_on` requirements
-4. **Health check** — add a `healthcheck` block to the service's
-   `docker-compose.yml` entry using the actual health endpoint verified
-   against the service's Docker documentation
-5. **Dashboard row** — add a row to the Mission Control dashboard spec
-   in this README and to script 2 dashboard output function
-6. **Data path** — add `/mnt/<tenant-id>/<service>/` to the Data Layout
-   section; all persistent data must go here, nowhere else
-7. **Script 0 cleanup** — add removal of the service's data path and
-   any systemd units to script 0
-8. **Test matrix** — new service × each proxy type (`caddy`, `nginx`,
-   `none`) × each TLS mode × two tenants on same server
-
-### Design Principles
-
-1. Every port, username, database name, and API key is a `platform.conf`
-   variable — never hardcoded in any script or compose file
-2. No script runs as root; `EUID == 0` check at entry exits immediately
-3. No Docker named volumes; only bind mounts to `/mnt/<tenant-id>/`
-4. No UFW or iptables manipulation
-5. DNS validation runs before TLS is attempted
-6. All internal keys are generated at init; never entered manually
-7. Port conflict pre-check runs before any service is configured or started
-8. Signal registration port `127.0.0.1:8085` is temporary and removed
-   post-registration; no host port exposed at runtime
-9. Script 3 is idempotent; re-running is always safe
-10. Every new service must have a health check; scripts 2 and 3 never
-    assume a service is ready without a passing health check response
-11. All services — including browser session tools such as OpenClaw —
-    are served behind reverse proxy over HTTPS; no separate tunnel
-    or network overlay is required or supported
-12. Phased delivery: each phase produces a stable, fully working platform;
-    no phase leaves the system in a partially integrated state
+# ✅ CORRECT — everything under BASE_DIR
+mkdir -p "${BASE_DIR}/config"
+mkdir -p "${DATA_DIR}/postgres"
+```
 
 ---
 
-## License
+### A8 — External tooling not in the dependency list
 
-MIT — see [LICENSE](LICENSE)
+```bash
+# ❌ PROHIBITED — not in the dependency list
+pip3 install requests pyyaml
+npm install -g yaml-validator
+helm repo add ...
+kubectl apply ...
+ansible-playbook ...
+
+# ❌ PROHIBITED — GitHub Actions triggers from within scripts
+curl -X POST https://api.github.com/repos/.../dispatches ...
+
+# ✅ CORRECT — only packages listed in Section 13
+apt-get install -y docker.io docker-compose-plugin curl jq yq openssl lsof git
+```
+
+---
+
+### A9 — Calling `docker compose up` in script 1 or 3
+
+```bash
+# ❌ PROHIBITED in script 1
+docker compose -f "${COMPOSE_FILE}" up -d
+
+# ❌ PROHIBITED in script 3
+docker compose -f "${COMPOSE_FILE}" restart litellm
+
+# ✅ CORRECT
+# Script 2 is the only script that calls docker compose up
+# Script 3 calls docker exec or service APIs only
+# Exception: script 3 --rotate-keys may call docker compose up for ONE service
+```
+
+---
+
+### A10 — Broad hardcoding scans
+
+```bash
+# ❌ PROHIBITED — produces thousands of false positives in generated configs
+grep -rE "localhost|127\.0\.0\.1|http://|https://" "${CONFIG_DIR}/"
+
+# ✅ CORRECT — scan for sentinel values only
+grep -rE "CHANGEME|TODO_REPLACE|FIXME|xxxx|\{\{[A-Z_]+\}\}" "${CONFIG_DIR}/" \
+    && { log "ERROR: Unreplaced sentinels found — aborting"; exit 1; } \
+    || log "Sentinel scan: clean"
+```
+
+---
+
+## Appendix B — Function Signatures Reference
+
+These are the canonical function signatures for the four scripts.
+Windsurf must not rename, split, or merge these functions.
+Additional helper functions are permitted but these must exist as named.
+
+### Script 1 — `1-setup-system.sh`
+
+```bash
+check_not_root()
+detect_system()            # sets PLATFORM_ARCH, PUID, PGID
+detect_ebs_mount()         # sets BASE_DIR
+check_dependencies()       # verifies packages, installs if missing
+collect_tenant_config()    # interactive prompts for TENANT_ID, BASE_DOMAIN
+collect_preset()           # sets STACK_PRESET, derives service enable flags
+collect_api_keys()         # prompts for provider keys (skippable)
+collect_port_overrides()   # optional port customisation
+resolve_all_ports()        # port conflict detection and write-back
+generate_secrets()         # calls gen_secret() / gen_password() for all services
+write_platform_conf()      # writes platform.conf, chmod 600
+create_directory_skeleton() # creates BASE_DIR, DATA_DIR, CONFIG_DIR, etc.
+gen_secret()               # openssl rand -hex 32
+gen_password()             # openssl rand -base64 24 | tr -d '=+/' | cut -c1-20
+```
+
+### Script 2 — `2-deploy-services.sh`
+
+```bash
+preflight_checks()         # docker daemon, disk space, platform.conf present
+generate_compose()         # writes config/docker-compose.yml
+validate_compose()         # docker compose config (exits on invalid YAML)
+generate_litellm_config()  # writes config/litellm/config.yaml
+generate_caddyfile()       # writes config/caddy/Caddyfile (if PROXY_TYPE=caddy)
+generate_nginx_conf()      # writes config/nginx/nginx.conf (if PROXY_TYPE=nginx)
+generate_bifrost_config()  # writes config/bifrost/config.yaml (if enabled)
+pull_images()              # docker compose pull
+validate_caddyfile()       # caddy validate (AFTER pull_images)
+deploy_containers()        # docker compose up -d
+wait_for_health()          # polls State.Health.Status per service
+step_done()                # checks .configured/ marker
+mark_done()                # writes .configured/ marker
+run_cmd()                  # DRY_RUN-aware command executor
+```
+
+### Script 3 — `3-configure-services.sh`
+
+```bash
+verify_containers_healthy() # fails fast if any enabled container is not healthy
+configure_postgres()
+configure_redis()
+configure_litellm()
+configure_ollama()
+configure_openwebui()
+configure_librechat()
+configure_openclaw()
+configure_qdrant()
+configure_n8n()
+configure_flowise()
+configure_dify()
+configure_authentik()
+configure_signalbot()
+configure_bifrost()
+show_credentials()          # --show-credentials flag handler
+rotate_keys()               # --rotate-keys [service] flag handler
+step_done()                 # shared with script 2, same implementation
+mark_done()
+run_cmd()
+```
+
+### Script 0 — `0-complete-cleanup.sh`
+
+```bash
+confirm_destructive()       # typed confirmation: "DELETE ${TENANT_ID}"
+stop_containers()
+remove_containers()
+remove_images_scoped()      # by label AND by tenant prefix
+remove_data()
+remove_config()
+remove_markers()            # clears CONFIGURED_DIR
+remove_network()
+unmount_ebs()               # only if --unmount-ebs flag
+```
+
+---
+
+## Appendix C — `wait_for_health` Reference Implementation
+
+This is the canonical implementation. Copy verbatim. Do not redesign.
+
+```bash
+wait_for_health() {
+    local container_name="$1"
+    local timeout="${2:-90}"
+    local interval=5
+    local elapsed=0
+
+    log "Waiting for ${container_name} to become healthy (timeout: ${timeout}s)..."
+
+    while [[ ${elapsed} -lt ${timeout} ]]; do
+        local status
+        status=$(docker inspect \
+            --format='{{.State.Health.Status}}' \
+            "${container_name}" 2>/dev/null) || status="not_found"
+
+        case "${status}" in
+            healthy)
+                log "  ✅ ${container_name} is healthy"
+                return 0
+                ;;
+            unhealthy)
+                log "  ❌ ${container_name} reported unhealthy"
+                docker logs --tail 20 "${container_name}" >&2
+                return 1
+                ;;
+            not_found)
+                log "  ⚠️  ${container_name} not found — is it deployed?"
+                return 1
+                ;;
+            *)
+                # starting | none — keep waiting
+                sleep "${interval}"
+                elapsed=$(( elapsed + interval ))
+                ;;
+        esac
+    done
+
+    log "  ❌ ${container_name} did not become healthy within ${timeout}s"
+    docker logs --tail 30 "${container_name}" >&2
+    return 1
+}
+```
+
+**Timeouts by service (pass as second argument):**
+
+```bash
+wait_for_health "${TENANT_PREFIX}-postgres"  60
+wait_for_health "${TENANT_PREFIX}-redis"     60
+wait_for_health "${TENANT_PREFIX}-litellm"   90
+wait_for_health "${TENANT_PREFIX}-ollama"    120
+wait_for_health "${TENANT_PREFIX}-authentik" 180
+wait_for_health "${TENANT_PREFIX}-openwebui" 90
+wait_for_health "${TENANT_PREFIX}-n8n"       90
+wait_for_health "${TENANT_PREFIX}-flowise"   90
+wait_for_health "${TENANT_PREFIX}-dify"      90
+wait_for_health "${TENANT_PREFIX}-qdrant"    90
+```
+
+---
+
+## Appendix D — `platform.conf` Write Pattern
+
+This is the canonical `write_platform_conf()` implementation.
+All keys in Section 5 must be present. Order must match Section 5.
+
+```bash
+write_platform_conf() {
+    local conf_file="${BASE_DIR}/platform.conf"
+
+    log "Writing platform.conf..."
+
+    cat > "${conf_file}" << EOF
+# AI Platform Configuration
+# Generated by 1-setup-system.sh v${SCRIPT_VERSION}
+# GENERATED_AT: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+# DO NOT EDIT MANUALLY — re-run 1-setup-system.sh to regenerate
+
+# ── Identity ──────────────────────────────────────────────────────────────────
+TENANT_ID="${TENANT_ID}"
+TENANT_PREFIX="${TENANT_PREFIX}"
+GENERATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+SCRIPT_VERSION="${SCRIPT_VERSION}"
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+BASE_DIR="${BASE_DIR}"
+DATA_DIR="${DATA_DIR}"
+CONFIG_DIR="${CONFIG_DIR}"
+COMPOSE_FILE="${COMPOSE_FILE}"
+CONFIGURED_DIR="${CONFIGURED_DIR}"
+LOG_DIR="${LOG_DIR}"
+
+# ── Platform user ─────────────────────────────────────────────────────────────
+PLATFORM_USER="${PLATFORM_USER}"
+PUID="${PUID}"
+PGID="${PGID}"
+PLATFORM_ARCH="${PLATFORM_ARCH}"
+
+# ── Network ───────────────────────────────────────────────────────────────────
+BASE_DOMAIN="${BASE_DOMAIN}"
+DOCKER_NETWORK="${DOCKER_NETWORK}"
+STACK_PRESET="${STACK_PRESET}"
+
+# ── Proxy ─────────────────────────────────────────────────────────────────────
+PROXY_TYPE="${PROXY_TYPE}"
+PROXY_EMAIL="${PROXY_EMAIL}"
+
+# ── Infrastructure ────────────────────────────────────────────────────────────
+POSTGRES_ENABLED="${POSTGRES_ENABLED}"
+POSTGRES_PORT="${POSTGRES_PORT}"
+POSTGRES_USER="${POSTGRES_USER}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD}"
+POSTGRES_DB="${POSTGRES_DB}"
+
+REDIS_ENABLED="${REDIS_ENABLED}"
+REDIS_PORT="${REDIS_PORT}"
+REDIS_PASSWORD="${REDIS_PASSWORD}"
+
+# ── LLM Layer ─────────────────────────────────────────────────────────────────
+LITELLM_ENABLED="${LITELLM_ENABLED}"
+LITELLM_PORT="${LITELLM_PORT}"
+LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}"
+LITELLM_UI_PASSWORD="${LITELLM_UI_PASSWORD}"
+LITELLM_DB_URL="${LITELLM_DB_URL}"
+
+OLLAMA_ENABLED="${OLLAMA_ENABLED}"
+OLLAMA_PORT="${OLLAMA_PORT}"
+OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL}"
+GPU_ENABLED="${GPU_ENABLED}"
+
+# ── Provider API Keys ─────────────────────────────────────────────────────────
+OPENAI_API_KEY="${OPENAI_API_KEY}"
+ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}"
+GOOGLE_API_KEY="${GOOGLE_API_KEY}"
+GROQ_API_KEY="${GROQ_API_KEY}"
+OPENROUTER_API_KEY="${OPENROUTER_API_KEY}"
+
+# ── Web UIs ───────────────────────────────────────────────────────────────────
+OPENWEBUI_ENABLED="${OPENWEBUI_ENABLED}"
+OPENWEBUI_PORT="${OPENWEBUI_PORT}"
+OPENWEBUI_SECRET="${OPENWEBUI_SECRET}"
+
+LIBRECHAT_ENABLED="${LIBRECHAT_ENABLED}"
+LIBRECHAT_PORT="${LIBRECHAT_PORT}"
+LIBRECHAT_JWT_SECRET="${LIBRECHAT_JWT_SECRET}"
+LIBRECHAT_CRYPT_KEY="${LIBRECHAT_CRYPT_KEY}"
+
+OPENCLAW_ENABLED="${OPENCLAW_ENABLED}"
+OPENCLAW_PORT="${OPENCLAW_PORT}"
+
+# ── RAG / Vector ──────────────────────────────────────────────────────────────
+QDRANT_ENABLED="${QDRANT_ENABLED}"
+QDRANT_PORT="${QDRANT_PORT}"
+QDRANT_API_KEY="${QDRANT_API_KEY}"
+
+# ── Automation ────────────────────────────────────────────────────────────────
+N8N_ENABLED="${N8N_ENABLED}"
+N8N_PORT="${N8N_PORT}"
+N8N_ENCRYPTION_KEY="${N8N_ENCRYPTION_KEY}"
+N8N_WEBHOOK_URL="${N8N_WEBHOOK_URL}"
+
+FLOWISE_ENABLED="${FLOWISE_ENABLED}"
+FLOWISE_PORT="${FLOWISE_PORT}"
+FLOWISE_USERNAME="${FLOWISE_USERNAME}"
+FLOWISE_PASSWORD="${FLOWISE_PASSWORD}"
+FLOWISE_SECRETKEY_OVERWRITE="${FLOWISE_SECRETKEY_OVERWRITE}"
+
+DIFY_ENABLED="${DIFY_ENABLED}"
+DIFY_PORT="${DIFY_PORT}"
+DIFY_SECRET_KEY="${DIFY_SECRET_KEY}"
+DIFY_INIT_PASSWORD="${DIFY_INIT_PASSWORD}"
+
+# ── Identity ──────────────────────────────────────────────────────────────────
+AUTHENTIK_ENABLED="${AUTHENTIK_ENABLED}"
+AUTHENTIK_PORT="${AUTHENTIK_PORT}"
+AUTHENTIK_SECRET_KEY="${AUTHENTIK_SECRET_KEY}"
+AUTHENTIK_BOOTSTRAP_PASSWORD="${AUTHENTIK_BOOTSTRAP_PASSWORD}"
+AUTHENTIK_BOOTSTRAP_EMAIL="${AUTHENTIK_BOOTSTRAP_EMAIL}"
+
+# ── Alerting ──────────────────────────────────────────────────────────────────
+SIGNALBOT_ENABLED="${SIGNALBOT_ENABLED}"
+SIGNALBOT_PORT="${SIGNALBOT_PORT}"
+SIGNAL_PHONE="${SIGNAL_PHONE}"
+SIGNAL_RECIPIENT="${SIGNAL_RECIPIENT}"
+
+# ── Bifrost ───────────────────────────────────────────────────────────────────
+BIFROST_ENABLED="${BIFROST_ENABLED}"
+BIFROST_PORT="${BIFROST_PORT}"
+BIFROST_API_KEY="${BIFROST_API_KEY}"
+EOF
+
+    chmod 600 "${conf_file}"
+    log "  ✅ platform.conf written ($(wc -l < "${conf_file}") lines, chmod 600)"
+}
+```
+
+---
+
+## Appendix E — Phased Implementation Checklist
+
+Use this checklist to verify each phase before proceeding.
+Check every box. Do not proceed if any box is unchecked.
+
+### Phase 0 — Before writing code
+
+- [ ] This README is the active north star document in the repo root
+- [ ] Windsurf has read this README in full before generating any code
+- [ ] No `mission-control.json` exists in the repo
+- [ ] No `.env` files exist in the repo
+- [ ] `.gitignore` contains `platform.conf`, `*.env`, `.env*`
+
+### Phase 1 — Script 1 complete
+
+- [ ] `set -euo pipefail` is line 2 (after shebang)
+- [ ] Script fails immediately if `$EUID == 0`
+- [ ] All function names match Appendix B exactly
+- [ ] `write_platform_conf()` matches Appendix D exactly
+- [ ] All keys in Section 5 are present in the written conf
+- [ ] `resolve_all_ports()` uses the write-back pattern from Section 6
+- [ ] `gen_secret()` uses `openssl rand -hex 32`
+- [ ] `gen_password()` uses `openssl rand -base64 24 | tr -d '=+/' | cut -c1-20`
+- [ ] Preset gating uses `service_enabled_by_preset()` from Section 8
+- [ ] Log file is written to `${BASE_DIR}/logs/`
+- [ ] No `docker compose` calls anywhere in script 1
+- [ ] No config file generation (Caddyfile, compose, litellm) in script 1
+- [ ] **Checkpoint:** `bash 1-setup-system.sh` completes, all Phase 1 tests in Section 14 pass
+
+### Phase 2 — Script 2 complete
+
+- [ ] `set -euo pipefail` is line 2
+- [ ] First action after sourcing lib functions is `source "${PLATFORM_CONF}"`
+- [ ] All function names match Appendix B exactly
+- [ ] `wait_for_health()` matches Appendix C exactly
+- [ ] `generate_compose()` uses explicit if/fi heredoc blocks only
+- [ ] No disabled service appears in any `depends_on` block
+- [ ] All service ports use `127.0.0.1:${PORT}:internal` format
+- [ ] All containers have `user: "${PUID}:${PGID}"`
+- [ ] All containers have `restart: unless-stopped`
+- [ ] All volumes use bind mount paths under `${DATA_DIR}`
+- [ ] `validate_compose()` runs before `pull_images()`
+- [ ] `validate_caddyfile()` runs AFTER `pull_images()`
+- [ ] Hardcoding sentinel scan runs before `deploy_containers()`
+- [ ] `--dry-run` flag is implemented using `run_cmd()` pattern
+- [ ] Idempotency markers are written for each major step
+- [ ] No `.env` files are written anywhere
+- [ ] No `mission-control.json` or equivalent is written
+- [ ] **Checkpoint:** `bash 2-deploy-services.sh --dry-run` completes without error
+- [ ] **Checkpoint:** `docker compose -f config/docker-compose.yml config` validates clean
+- [ ] **Checkpoint:** `bash 2-deploy-services.sh` deploys all enabled services healthy
+
+### Phase 3 — Script 3 complete
+
+- [ ] `set -euo pipefail` is line 2
+- [ ] First action is `source "${PLATFORM_CONF}"`
+- [ ] `verify_containers_healthy()` called before any configure_ function
+- [ ] Authentik: verifies bootstrap, retrieves token, does NOT create user
+- [ ] LiteLLM: health check uses `/health/liveliness`
+- [ ] N8N: verifies `N8N_ENCRYPTION_KEY` is set, does not set post-start
+- [ ] Dify: calls setup endpoint only, not workspace/invite endpoint
+- [ ] `show_credentials()` omits disabled services entirely
+- [ ] `--dry-run` implemented
+- [ ] `--show-credentials` implemented
+- [ ] `--rotate-keys [service]` implemented
+- [ ] **Checkpoint:** `bash 3-configure-services.sh --dry-run` completes
+- [ ] **Checkpoint:** `bash 3-configure-services.sh --show-credentials` shows complete output
+
+### Phase 4 — Script 0 complete
+
+- [ ] `set -euo pipefail` is line 2
+- [ ] `confirm_destructive()` requires typed `DELETE ${TENANT_ID}`
+- [ ] Image removal scoped by label AND tenant prefix
+- [ ] `${CONFIGURED_DIR}` is removed (idempotency markers cleared)
+- [ ] Network is removed with `|| true` (non-fatal if already gone)
+- [ ] `--unmount-ebs` flag implemented
+- [ ] `--dry-run` implemented
+- [ ] **Checkpoint:** `bash 0-complete-cleanup.sh --dry-run` prints all actions
+- [ ] **Checkpoint:** All Phase 4 tests in Section 14 pass after full run
+
+---
+
+## Appendix F — Common Failure Modes and Fixes
+
+| Symptom | Root cause | Fix |
+|---|---|---|
+| `docker compose up` fails: `service "authentik" not found` | Disabled service in `depends_on` | Rebuild deps with conditional logic per A6 |
+| Container secret contains `$PATH` instead of actual value | `envsubst` run on heredoc output | Remove all `envsubst` calls per P5 / A4 |
+| Script 2 reads stale values after script 1 re-run | `platform.conf` not re-sourced | Always `source "${PLATFORM_CONF}"` at script start |
+| Port conflict not resolved | `resolve_port()` not called before `write_platform_conf()` | Call `resolve_all_ports()` before write |
+| N8N credentials undecryptable after restart | `N8N_ENCRYPTION_KEY` missing at first start | Set in compose environment from `platform.conf` |
+| `caddy validate` fails: `no such file or directory` | Validated before image pull | Move `validate_caddyfile()` after `pull_images()` |
+| Idempotency steps all skipped on fresh deploy | `.configured/` not cleaned by script 0 | `remove_markers()` must `rm -rf "${CONFIGURED_DIR}"` |
+| All secrets identical across services | `gen_secret()` called in rapid succession with date seed | Always use `openssl rand`, never `$RANDOM` or `date` |
+| `platform.conf` readable by other users | `chmod` not applied after write | `chmod 600 "${conf_file}"` in `write_platform_conf()` |
+| Dify setup fails with 404 | Workspace invite called before setup | Call `POST /console/api/setup` only; workspace comes after |
+| Compose YAML invalid after generation | Loop/fragment appending mixed indentation | Rewrite `generate_compose()` using explicit heredoc blocks only |
+
+---
+
+*End of document.*
+
+> **For Windsurf:** This document is read-only from your perspective.  
+> Your job is to implement what is written here, not to improve upon it.  
+> If you believe a correction is needed, state it explicitly and wait for
+> human confirmation before writing any code that deviates from this README.
+> Any undiscussed deviation is a bug, regardless of intent.
+```

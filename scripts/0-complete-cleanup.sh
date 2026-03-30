@@ -207,6 +207,17 @@ cleanup_data_directories() {
     
     log "Cleaning up data directories for tenant '${tenant_id}'..."
     
+    # Explicitly remove configured directory markers (README P8 requirement)
+    local configured_dir="/mnt/${tenant_id}/.configured"
+    if [[ -d "$configured_dir" ]]; then
+        if [[ "$dry_run" == "false" ]]; then
+            rm -rf "$configured_dir"
+            ok "Removed configured directory markers: $configured_dir"
+        else
+            dry_run "Would remove configured directory markers: $configured_dir"
+        fi
+    fi
+    
     local data_dirs=(
         "/mnt/${tenant_id}"
         "/mnt/data/${tenant_id}"

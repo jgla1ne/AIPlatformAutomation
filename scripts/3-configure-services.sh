@@ -15,13 +15,20 @@
 set -euo pipefail
 
 # =============================================================================
+# NON-ROOT EXECUTION CHECK (README P7 - mandatory)
+# =============================================================================
+if [[ $EUID -eq 0 ]]; then
+    fail "This script must not be run as root (README P7 requirement)"
+fi
+
+# =============================================================================
 # SCRIPT CONFIGURATION
 # =============================================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # =============================================================================
-# LOGGING AND UTILITIES
+# LOGGING AND UTILITIES (README P11 - mandatory dual logging)
 # =============================================================================
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -30,11 +37,35 @@ CYAN='\033[0;36m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-log() { echo -e "${CYAN}[INFO]${NC}    $1"; }
-ok() { echo -e "${GREEN}[OK]${NC}      $*"; }
-warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
-fail() { echo -e "${RED}[FAIL]${NC}    $*"; exit 1; }
-section() { echo "" && echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && echo "  $*" && echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"; }
+# Set up log file (will be set after tenant_id is known)
+LOG_FILE=""
+
+log() { 
+    local msg="[$(date +%H:%M:%S)] $*"
+    echo -e "${CYAN}[INFO]${NC}    $1"
+    [[ -n "$LOG_FILE" ]] && echo "${msg}" >> "$LOG_FILE"
+}
+ok() { 
+    local msg="[$(date +%H:%M:%S)] $*"
+    echo -e "${GREEN}[OK]${NC}      $*"
+    [[ -n "$LOG_FILE" ]] && echo "${msg}" >> "$LOG_FILE"
+}
+warn() { 
+    local msg="[$(date +%H:%M:%S)] $*"
+    echo -e "${YELLOW}[WARN]${NC}    $*"
+    [[ -n "$LOG_FILE" ]] && echo "${msg}" >> "$LOG_FILE"
+}
+fail() { 
+    local msg="[$(date +%H:%M:%S)] $*"
+    echo -e "${RED}[FAIL]${NC}    $*"
+    [[ -n "$LOG_FILE" ]] && echo "${msg}" >> "$LOG_FILE"
+    exit 1
+}
+section() { 
+    echo "" && echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && echo "  $*" && echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    [[ -n "$LOG_FILE" ]] && echo "" >> "$LOG_FILE" && echo "=== $* ===" >> "$LOG_FILE"
+}
+dry_run() { [[ "${DRY_RUN:-false}" == "true" ]] && echo -e "${BLUE}[DRY-RUN]${NC} $1"; }
 
 # =============================================================================
 # FRAMEWORK VALIDATION
@@ -94,6 +125,28 @@ load_platform_conf() {
     if [[ ${#missing[@]} -gt 0 ]]; then
         fail "Missing critical variables in platform.conf: ${missing[*]}"
     fi
+    
+    # Set derived variables
+    CONFIGURED_DIR="${BASE_DIR}/.configured"
+    
+    # Set up log file (README P11 - after tenant_id is known)
+    if [[ "${DRY_RUN:-false}" == "false" ]]; then
+        mkdir -p "${BASE_DIR}/logs"
+        LOG_FILE="${BASE_DIR}/logs/$(basename "$0" .sh)-$(date +%Y%m%d-%H%M%S).log"
+        log "Log file: $LOG_FILE"
+    fi
+}
+
+# =============================================================================
+# IDEMPOTENCY MARKERS (README P8 - mandatory)
+# =============================================================================
+step_done() {
+    [[ -f "${CONFIGURED_DIR}/${1}" ]]
+}
+
+mark_done() {
+    touch "${CONFIGURED_DIR}/${1}"
+    log "Marked step complete: ${1}"
 }
 
 # =============================================================================

@@ -11,13 +11,20 @@
 set -euo pipefail
 
 # =============================================================================
+# NON-ROOT EXECUTION CHECK (README P7 - mandatory)
+# =============================================================================
+if [[ $EUID -eq 0 ]]; then
+    fail "This script must not be run as root (README P7 requirement)"
+fi
+
+# =============================================================================
 # SCRIPT CONFIGURATION
 # =============================================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # =============================================================================
-# LOGGING AND UTILITIES
+# LOGGING AND UTILITIES (README P11 - mandatory dual logging)
 # =============================================================================
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -26,11 +33,34 @@ CYAN='\033[0;36m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-log() { echo -e "${CYAN}[INFO]${NC}    $1"; }
-ok() { echo -e "${GREEN}[OK]${NC}      $*"; }
-warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
-fail() { echo -e "${RED}[FAIL]${NC}    $*"; exit 1; }
-section() { echo "" && echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && echo "  $*" && echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"; }
+# Set up log file (will be set after tenant_id is known)
+LOG_FILE=""
+
+log() { 
+    local msg="[$(date +%H:%M:%S)] $*"
+    echo -e "${CYAN}[INFO]${NC}    $1"
+    [[ -n "$LOG_FILE" ]] && echo "${msg}" >> "$LOG_FILE"
+}
+ok() { 
+    local msg="[$(date +%H:%M:%S)] $*"
+    echo -e "${GREEN}[OK]${NC}      $*"
+    [[ -n "$LOG_FILE" ]] && echo "${msg}" >> "$LOG_FILE"
+}
+warn() { 
+    local msg="[$(date +%H:%M:%S)] $*"
+    echo -e "${YELLOW}[WARN]${NC}    $*"
+    [[ -n "$LOG_FILE" ]] && echo "${msg}" >> "$LOG_FILE"
+}
+fail() { 
+    local msg="[$(date +%H:%M:%S)] $*"
+    echo -e "${RED}[FAIL]${NC}    $*"
+    [[ -n "$LOG_FILE" ]] && echo "${msg}" >> "$LOG_FILE"
+    exit 1
+}
+section() { 
+    echo "" && echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && echo "  $*" && echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    [[ -n "$LOG_FILE" ]] && echo "" >> "$LOG_FILE" && echo "=== $* ===" >> "$LOG_FILE"
+}
 dry_run() { [[ "${DRY_RUN:-false}" == "true" ]] && echo -e "${BLUE}[DRY-RUN]${NC} $1"; }
 
 # =============================================================================
@@ -314,6 +344,46 @@ validate_port_range() {
     if [[ ! "$port" =~ ^[0-9]+$ ]] || [[ "$port" -lt 1024 ]] || [[ "$port" -gt 65535 ]]; then
         fail "Invalid port for $service: $port (must be 1024-65535)"
     fi
+}
+
+# Port conflict resolution with write-back pattern (README mandatory)
+resolve_port() {
+    local var_name="$1"
+    local proposed="${!var_name}"
+    local resolved="$proposed"
+    
+    while lsof -i ":${resolved}" &>/dev/null 2>&1; do
+        resolved=$((resolved + 1))
+        log "Port ${proposed} in use, trying ${resolved} for ${var_name}"
+    done
+    
+    if [[ "$resolved" != "$proposed" ]]; then
+        log "Resolved ${var_name}: ${proposed} → ${resolved} (port conflict)"
+        printf -v "${var_name}" '%s' "${resolved}"
+    fi
+}
+
+resolve_all_ports() {
+    log "Resolving port conflicts..."
+    
+    # Resolve all port variables
+    resolve_port "OPEN_WEBUI_PORT"
+    resolve_port "LITELLM_PORT"
+    resolve_port "BIFROST_PORT"
+    resolve_port "OLLAMA_PORT"
+    resolve_port "POSTGRES_PORT"
+    resolve_port "REDIS_PORT"
+    resolve_port "QDRANT_PORT"
+    resolve_port "WEAVIATE_PORT"
+    resolve_port "CHROMA_PORT"
+    resolve_port "N8N_PORT"
+    resolve_port "FLOWISE_PORT"
+    resolve_port "SEARXNG_PORT"
+    resolve_port "AUTHENTIK_PORT"
+    resolve_port "GRAFANA_PORT"
+    resolve_port "PROMETHEUS_PORT"
+    
+    ok "All port conflicts resolved"
 }
 
 # =============================================================================
@@ -1024,6 +1094,17 @@ main() {
     
     # Configuration collection
     collect_configuration "$tenant_id"
+    
+    # Set up log file (README P11 - after tenant_id is known)
+    local base_dir="/mnt/${tenant_id}"
+    if [[ "${DRY_RUN:-false}" == "false" ]]; then
+        mkdir -p "${base_dir}/logs"
+        LOG_FILE="${base_dir}/logs/$(basename "$0" .sh)-$(date +%Y%m%d-%H%M%S).log"
+        log "Log file: $LOG_FILE"
+    fi
+    
+    # Resolve port conflicts (README mandatory - before writing platform.conf)
+    resolve_all_ports
     
     # Generate platform.conf (primary source of truth)
     write_platform_conf "$tenant_id"

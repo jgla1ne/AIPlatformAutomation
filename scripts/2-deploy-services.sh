@@ -12,13 +12,20 @@
 set -euo pipefail
 
 # =============================================================================
+# NON-ROOT EXECUTION CHECK (README P7 - mandatory)
+# =============================================================================
+if [[ $EUID -eq 0 ]]; then
+    fail "This script must not be run as root (README P7 requirement)"
+fi
+
+# =============================================================================
 # SCRIPT CONFIGURATION
 # =============================================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # =============================================================================
-# LOGGING AND UTILITIES
+# LOGGING AND UTILITIES (README P11 - mandatory dual logging)
 # =============================================================================
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -27,11 +34,34 @@ CYAN='\033[0;36m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-log() { echo -e "${CYAN}[INFO]${NC}    $1"; }
-ok() { echo -e "${GREEN}[OK]${NC}      $*"; }
-warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
-fail() { echo -e "${RED}[FAIL]${NC}    $*"; exit 1; }
-section() { echo "" && echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && echo "  $*" && echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"; }
+# Set up log file (will be set after tenant_id is known)
+LOG_FILE=""
+
+log() { 
+    local msg="[$(date +%H:%M:%S)] $*"
+    echo -e "${CYAN}[INFO]${NC}    $1"
+    [[ -n "$LOG_FILE" ]] && echo "${msg}" >> "$LOG_FILE"
+}
+ok() { 
+    local msg="[$(date +%H:%M:%S)] $*"
+    echo -e "${GREEN}[OK]${NC}      $*"
+    [[ -n "$LOG_FILE" ]] && echo "${msg}" >> "$LOG_FILE"
+}
+warn() { 
+    local msg="[$(date +%H:%M:%S)] $*"
+    echo -e "${YELLOW}[WARN]${NC}    $*"
+    [[ -n "$LOG_FILE" ]] && echo "${msg}" >> "$LOG_FILE"
+}
+fail() { 
+    local msg="[$(date +%H:%M:%S)] $*"
+    echo -e "${RED}[FAIL]${NC}    $*"
+    [[ -n "$LOG_FILE" ]] && echo "${msg}" >> "$LOG_FILE"
+    exit 1
+}
+section() { 
+    echo "" && echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && echo "  $*" && echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    [[ -n "$LOG_FILE" ]] && echo "" >> "$LOG_FILE" && echo "=== $* ===" >> "$LOG_FILE"
+}
 dry_run() { [[ "${DRY_RUN:-false}" == "true" ]] && echo -e "${BLUE}[DRY-RUN]${NC} $1"; }
 
 # =============================================================================
@@ -103,6 +133,31 @@ load_platform_conf() {
     CADDYFILE="${CONFIG_DIR}/caddy/Caddyfile"
     LITELLM_CONFIG="${CONFIG_DIR}/litellm/config.yaml"
     BIFROST_CONFIG="${CONFIG_DIR}/bifrost/config.yaml"
+    CONFIGURED_DIR="${BASE_DIR}/.configured"
+    
+    # Create configured directory for idempotency markers
+    if [[ "${DRY_RUN:-false}" == "false" ]]; then
+        mkdir -p "$CONFIGURED_DIR"
+    fi
+    
+    # Set up log file (README P11 - after tenant_id is known)
+    if [[ "${DRY_RUN:-false}" == "false" ]]; then
+        mkdir -p "${BASE_DIR}/logs"
+        LOG_FILE="${BASE_DIR}/logs/$(basename "$0" .sh)-$(date +%Y%m%d-%H%M%S).log"
+        log "Log file: $LOG_FILE"
+    fi
+}
+
+# =============================================================================
+# IDEMPOTENCY MARKERS (README P8 - mandatory)
+# =============================================================================
+step_done() {
+    [[ -f "${CONFIGURED_DIR}/${1}" ]]
+}
+
+mark_done() {
+    touch "${CONFIGURED_DIR}/${1}"
+    log "Marked step complete: ${1}"
 }
 
 # =============================================================================
@@ -383,7 +438,7 @@ EOF
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "${POSTGRES_PORT}:5432"
+      - "127.0.0.1:${POSTGRES_PORT}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -418,7 +473,7 @@ EOF
     volumes:
       - redis_data:/data
     ports:
-      - "${REDIS_PORT}:6379"
+      - "127.0.0.1:${REDIS_PORT}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
@@ -445,7 +500,7 @@ EOF
       - no-new-privileges:true
     user: "1000:1000"
     ports:
-      - "${OLLAMA_PORT}:11434"
+      - "127.0.0.1:${OLLAMA_PORT}:11434"
     volumes:
       - ollama_data:/root/.ollama
     environment:
@@ -479,7 +534,7 @@ EOF
       - no-new-privileges:true
     user: "1000:1000"
     ports:
-      - "${LITELLM_PORT}:4000"
+      - "127.0.0.1:${LITELLM_PORT}:4000"
     volumes:
       - ${CONFIG_DIR}/litellm:/app/config
     environment:
@@ -535,7 +590,7 @@ EOF
       - no-new-privileges:true
     user: "1000:1000"
     ports:
-      - "${BIFROST_PORT}:8000"
+      - "127.0.0.1:${BIFROST_PORT}:8000"
     volumes:
       - ${CONFIG_DIR}/bifrost:/app/config
     environment:
@@ -568,7 +623,7 @@ EOF
       - no-new-privileges:true
     user: "1000:1000"
     ports:
-      - "${OPEN_WEBUI_PORT}:8080"
+      - "127.0.0.1:${OPEN_WEBUI_PORT}:8080"
     volumes:
       - open_webui_data:/app/backend/data
     environment:
@@ -621,7 +676,7 @@ EOF
       - no-new-privileges:true
     user: "1000:1000"
     ports:
-      - "${QDRANT_PORT}:6333"
+      - "127.0.0.1:${QDRANT_PORT}:6333"
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:
@@ -649,7 +704,7 @@ EOF
       - no-new-privileges:true
     user: "1000:1000"
     ports:
-      - "${WEAVIATE_PORT}:8080"
+      - "127.0.0.1:${WEAVIATE_PORT}:8080"
     volumes:
       - weaviate_data:/var/lib/weaviate
     environment:
@@ -684,7 +739,7 @@ EOF
       - no-new-privileges:true
     user: "1000:1000"
     ports:
-      - "${CHROMA_PORT}:8000"
+      - "127.0.0.1:${CHROMA_PORT}:8000"
     volumes:
       - chroma_data:/chroma/chroma
     environment:
@@ -717,7 +772,7 @@ EOF
       - no-new-privileges:true
     user: "1000:1000"
     ports:
-      - "${N8N_PORT}:5678"
+      - "127.0.0.1:${N8N_PORT}:5678"
     volumes:
       - n8n_data:/home/node/.n8n
     environment:
@@ -760,7 +815,7 @@ EOF
       - no-new-privileges:true
     user: "1000:1000"
     ports:
-      - "${FLOWISE_PORT}:3001"
+      - "127.0.0.1:${FLOWISE_PORT}:3001"
     volumes:
       - flowise_data:/storage
     environment:
@@ -801,7 +856,7 @@ EOF
       - no-new-privileges:true
     user: "1000:1000"
     ports:
-      - "${SEARXNG_PORT}:8080"
+      - "127.0.0.1:${SEARXNG_PORT}:8080"
     volumes:
       - ${CONFIG_DIR}/searxng:/etc/searxng
     environment:
@@ -832,7 +887,7 @@ EOF
       - no-new-privileges:true
     user: "1000:1000"
     ports:
-      - "${AUTHENTIK_PORT}:9000"
+      - "127.0.0.1:${AUTHENTIK_PORT}:9000"
     volumes:
       - ${CONFIG_DIR}/authentik:/media
     environment:
@@ -866,7 +921,7 @@ EOF
       - no-new-privileges:true
     user: "1000:1000"
     ports:
-      - "${GRAFANA_PORT}:3000"
+      - "127.0.0.1:${GRAFANA_PORT}:3000"
     volumes:
       - grafana_data:/var/lib/grafana
     environment:
@@ -898,7 +953,7 @@ EOF
       - no-new-privileges:true
     user: "1000:1000"
     ports:
-      - "${PROMETHEUS_PORT}:9090"
+      - "127.0.0.1:${PROMETHEUS_PORT}:9090"
     volumes:
       - prometheus_data:/prometheus
     command:
