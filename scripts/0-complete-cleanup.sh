@@ -55,10 +55,10 @@ run_cmd() {
 # TYPED CONFIRMATION (README §6 - mandatory pattern)
 # =============================================================================
 confirm_destructive() {
-    echo "  ⚠️  This will permanently delete ALL data for tenant: ${TENANT_ID}"
-    echo "  Type exactly to confirm: DELETE ${TENANT_ID}"
+    echo "  ⚠️  This will permanently delete ALL data for tenant: ${tenant_id}"
+    echo "  Type exactly to confirm: DELETE ${tenant_id}"
     read -r response
-    [[ "${response}" == "DELETE ${TENANT_ID}" ]] \
+    [[ "${response}" == "DELETE ${tenant_id}" ]] \
         || { echo "Confirmation did not match. Aborting."; exit 1; }
 }
 
