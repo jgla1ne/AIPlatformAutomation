@@ -99,57 +99,97 @@ framework_validate() {
 # =============================================================================
 build_litellm_deps() {
     local deps=""
-    [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
-    [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
-    echo "${deps}"
+    if [[ "${POSTGRES_ENABLED}" == "true" ]] || [[ "${REDIS_ENABLED}" == "true" ]]; then
+        deps="    depends_on:"$'\n'
+        [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
+        [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
+        deps+="    networks:"$'\n'
+        deps+="      - ${DOCKER_NETWORK}"$'\n'
+    fi
+    printf '%s' "${deps}"
 }
 
 build_openwebui_deps() {
     local deps=""
-    [[ "${OLLAMA_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-ollama"$'\n'
-    echo "${deps}"
+    if [[ "${OLLAMA_ENABLED}" == "true" ]]; then
+        deps="    depends_on:"$'\n'
+        deps+="      - ${TENANT_PREFIX}-ollama"$'\n'
+        deps+="    networks:"$'\n'
+        deps+="      - ${DOCKER_NETWORK}"$'\n'
+    fi
+    printf '%s' "${deps}"
 }
 
 build_librechat_deps() {
     local deps=""
-    [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
-    [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
-    echo "${deps}"
+    if [[ "${POSTGRES_ENABLED}" == "true" ]] || [[ "${REDIS_ENABLED}" == "true" ]]; then
+        deps="    depends_on:"$'\n'
+        [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
+        [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
+        deps+="    networks:"$'\n'
+        deps+="      - ${DOCKER_NETWORK}"$'\n'
+    fi
+    printf '%s' "${deps}"
 }
 
 build_openclaw_deps() {
     local deps=""
-    [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
-    [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
-    echo "${deps}"
+    if [[ "${POSTGRES_ENABLED}" == "true" ]] || [[ "${REDIS_ENABLED}" == "true" ]]; then
+        deps="    depends_on:"$'\n'
+        [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
+        [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
+        deps+="    networks:"$'\n'
+        deps+="      - ${DOCKER_NETWORK}"$'\n'
+    fi
+    printf '%s' "${deps}"
 }
 
 build_n8n_deps() {
     local deps=""
-    [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
-    [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
-    echo "${deps}"
+    if [[ "${POSTGRES_ENABLED}" == "true" ]] || [[ "${REDIS_ENABLED}" == "true" ]]; then
+        deps="    depends_on:"$'\n'
+        [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
+        [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
+        deps+="    networks:"$'\n'
+        deps+="      - ${DOCKER_NETWORK}"$'\n'
+    fi
+    printf '%s' "${deps}"
 }
 
 build_flowise_deps() {
     local deps=""
-    [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
-    echo "${deps}"
+    if [[ "${POSTGRES_ENABLED}" == "true" ]] || [[ "${REDIS_ENABLED}" == "true" ]]; then
+        deps="    depends_on:"$'\n'
+        [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
+        [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
+        deps+="    networks:"$'\n'
+        deps+="      - ${DOCKER_NETWORK}"$'\n'
+    fi
+    printf '%s' "${deps}"
 }
 
 build_dify_deps() {
     local deps=""
-    [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
-    [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
-    [[ "${QDRANT_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-qdrant"$'\n'
-    echo "${deps}"
+    if [[ "${POSTGRES_ENABLED}" == "true" ]] || [[ "${REDIS_ENABLED}" == "true" ]]; then
+        deps="    depends_on:"$'\n'
+        [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
+        [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
+        deps+="    networks:"$'\n'
+        deps+="      - ${DOCKER_NETWORK}"$'\n'
+    fi
+    printf '%s' "${deps}"
 }
 
 build_authentik_deps() {
     local deps=""
-    [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
-    [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
-    echo "${deps}"
+    if [[ "${POSTGRES_ENABLED}" == "true" ]] || [[ "${REDIS_ENABLED}" == "true" ]]; then
+        deps="    depends_on:"$'\n'
+        [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
+        [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
+        deps+="    networks:"$'\n'
+        deps+="      - ${DOCKER_NETWORK}"$'\n'
+    fi
+    printf '%s' "${deps}"
 }
 
 # =============================================================================
@@ -290,9 +330,7 @@ EOF
       - ${CONFIG_DIR}/litellm/config.yaml:/app/config.yaml
     ports:
       - "127.0.0.1:${LITELLM_PORT}:4000"
-    networks:
-      - ${DOCKER_NETWORK}
-$(if [[ -n "$litellm_deps" ]]; then echo "    depends_on:"; echo "${litellm_deps}"; fi)
+$(build_litellm_deps)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveliness"]
       interval: 30s
@@ -317,9 +355,7 @@ EOF
       - ${DATA_DIR}/openwebui:/app/backend/data
     ports:
       - "127.0.0.1:${OPENWEBUI_PORT}:3000"
-    networks:
-      - ${DOCKER_NETWORK}
-$(if [[ -n "$openwebui_deps" ]]; then echo "    depends_on:"; echo "${openwebui_deps}"; fi)
+$(build_openwebui_deps)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
       interval: 30s
@@ -340,15 +376,11 @@ EOF
     environment:
       JWT_SECRET: ${LIBRECHAT_JWT_SECRET}
       CRYPT_KEY: ${LIBRECHAT_CRYPT_KEY}
-      MONGODB_URI: mongodb://localhost:27017/librechat
-      MONGODB_DB_NAME: librechat
     volumes:
       - ${DATA_DIR}/librechat:/app/backend/data
     ports:
       - "127.0.0.1:${LIBRECHAT_PORT}:3080"
-    networks:
-      - ${DOCKER_NETWORK}
-$(if [[ -n "$librechat_deps" ]]; then echo "    depends_on:"; echo "${librechat_deps}"; fi)
+$(build_librechat_deps)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3080/api/health"]
       interval: 30s
@@ -373,9 +405,7 @@ EOF
       - ${DATA_DIR}/openclaw:/app/data
     ports:
       - "127.0.0.1:${OPENCLAW_PORT}:3001"
-    networks:
-      - ${DOCKER_NETWORK}
-$(if [[ -n "$openclaw_deps" ]]; then echo "    depends_on:"; echo "${openclaw_deps}"; fi)
+$(build_openclaw_deps)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"]
       interval: 30s
@@ -436,9 +466,7 @@ EOF
       - ${DATA_DIR}/n8n:/home/node/.n8n
     ports:
       - "127.0.0.1:${N8N_PORT}:5678"
-    networks:
-      - ${DOCKER_NETWORK}
-$(if [[ -n "$n8n_deps" ]]; then echo "    depends_on:"; echo "${n8n_deps}"; fi)
+$(build_n8n_deps)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5678/healthz"]
       interval: 30s
@@ -470,9 +498,7 @@ EOF
       - ${DATA_DIR}/flowise:/root/.flowise
     ports:
       - "127.0.0.1:${FLOWISE_PORT}:3030"
-    networks:
-      - ${DOCKER_NETWORK}
-$(if [[ -n "$flowise_deps" ]]; then echo "    depends_on:"; echo "${flowise_deps}"; fi)
+$(build_flowise_deps)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3030/api/v1/ping"]
       interval: 30s
@@ -507,9 +533,7 @@ EOF
       - ${DATA_DIR}/dify:/app/api/storage
     ports:
       - "127.0.0.1:${DIFY_PORT}:3040"
-    networks:
-      - ${DOCKER_NETWORK}
-$(if [[ -n "$dify_deps" ]]; then echo "    depends_on:"; echo "${dify_deps}"; fi)
+$(build_dify_deps)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3040/health"]
       interval: 30s
@@ -535,9 +559,7 @@ EOF
       - ${DATA_DIR}/authentik:/media
     ports:
       - "127.0.0.1:${AUTHENTIK_PORT}:9000"
-    networks:
-      - ${DOCKER_NETWORK}
-$(if [[ -n "$authentik_deps" ]]; then echo "    depends_on:"; echo "${authentik_deps}"; fi)
+$(build_authentik_deps)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/-/health/"]
       interval: 30s
@@ -634,7 +656,7 @@ EOF
 validate_compose() {
     log "Validating docker-compose.yml..."
     
-    if ! run_cmd docker compose -f "${COMPOSE_FILE}" config >/dev/null 2>&1; then
+    if ! docker compose -f "${COMPOSE_FILE}" config; then
         fail "docker-compose.yml validation failed"
     fi
     
@@ -1102,12 +1124,7 @@ main() {
     fi
     
     # 4. validate_compose()
-    if ! step_done "compose_validated"; then
-        validate_compose
-        mark_done "compose_validated"
-    else
-        log "docker-compose.yml already validated, skipping"
-    fi
+    validate_compose
     
     # 5. generate_litellm_config()
     if ! step_done "litellm_config_generated"; then
@@ -1148,12 +1165,7 @@ main() {
     fi
     
     # 8. validate_caddyfile() [AFTER pull, not before]
-    if ! step_done "caddyfile_validated"; then
-        validate_caddyfile
-        mark_done "caddyfile_validated"
-    else
-        log "Caddyfile already validated, skipping"
-    fi
+    validate_caddyfile
     
     # 9. docker compose up -d
     if ! step_done "containers_deployed"; then

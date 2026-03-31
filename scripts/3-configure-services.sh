@@ -551,10 +551,29 @@ configure_authentik() {
     # README §6: Verify bootstrap (do NOT create user - Authentik creates akadmin automatically)
     log "  Verifying Authentik bootstrap..."
     
+    # First authenticate to get proper token
+    local auth_response
+    auth_response=$(curl -sf -X POST "${authentik_url}/api/v3/core/token/" \
+        -H "Content-Type: application/json" \
+        -d '{"identifier":"akadmin","password":"'${AUTHENTIK_BOOTSTRAP_PASSWORD}'"}' 2>/dev/null || true)
+    
+    if [[ -z "$auth_response" ]]; then
+        warn "Failed to authenticate with Authentik"
+        return 1
+    fi
+    
+    local auth_token
+    auth_token=$(echo "$auth_response" | jq -r '.access_token' 2>/dev/null || echo "")
+    
+    if [[ -z "$auth_token" || "$auth_token" == "null" ]]; then
+        warn "Failed to extract Authentik auth token"
+        return 1
+    fi
+    
     # Check if akadmin user exists (indicates bootstrap completed)
     local admin_exists
     admin_exists=$(curl -sf "${authentik_url}/api/v1/core/users/" \
-        -H "Authorization: Bearer ${AUTHENTIK_BOOTSTRAP_PASSWORD}" 2>/dev/null | \
+        -H "Authorization: Bearer ${auth_token}" 2>/dev/null | \
         jq -r '.results[] | select(.username=="akadmin") | .username' 2>/dev/null || echo "")
     
     if [[ "$admin_exists" == "akadmin" ]]; then
@@ -568,7 +587,7 @@ configure_authentik() {
     local token_response
     token_response=$(curl -sf -X POST "${authentik_url}/api/v1/core/tokens/" \
         -H "Content-Type: application/json" \
-        -H "Authorization: Bearer ${AUTHENTIK_BOOTSTRAP_PASSWORD}" \
+        -H "Authorization: Bearer ${auth_token}" \
         -d '{"identifier":"akadmin","password":"'${AUTHENTIK_BOOTSTRAP_PASSWORD}'"}' 2>/dev/null || true)
     
     if [[ -n "$token_response" ]]; then
@@ -978,13 +997,13 @@ main() {
         return 0
     fi
     
+    # Verify containers are healthy before any configuration
+    verify_containers_healthy
+    
     if [[ -n "$rotate_keys" ]]; then
         rotate_keys "$rotate_keys"
         return 0
     fi
-    
-    # Verify containers are healthy before any configuration
-    verify_containers_healthy
     
     # Service configuration (unless verify-only)
     if [[ "$verify_only" != "true" ]]; then
