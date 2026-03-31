@@ -159,12 +159,10 @@ prompt_default() {
     # Show prompt and read input with timeout
     echo -n "  ${prompt} [${default}]: "
     if read -t 30 -r response 2>/dev/null; then
-        echo "    DEBUG: Read response = '${response}'" >&2
         printf '%s' "${response:-$default}"
     else
         echo ""
         echo "  WARNING: Input timeout or failed, using default"
-        echo "    DEBUG: Using default = '${default}'" >&2
         printf '%s' "${default}"
     fi
 }
@@ -247,11 +245,8 @@ collect_preset() {
     local preset
     while true; do
         preset=$(prompt_default "Select preset" "minimal")
-        # Debug: show what was captured
-        echo "    DEBUG: Captured preset = '${preset}'"
         # Clean up input - remove whitespace and convert to lowercase
         preset=$(echo "${preset}" | xargs | tr '[:upper:]' '[:lower:]')
-        echo "    DEBUG: After cleanup preset = '${preset}'"
         case "${preset}" in
             minimal|standard|full|custom) break ;;
             *) echo "    Invalid preset. Choose: minimal, standard, full, or custom" ;;
