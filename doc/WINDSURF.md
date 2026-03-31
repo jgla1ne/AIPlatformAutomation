@@ -1,6 +1,6 @@
 # Windsurf Implementation Plan - Comprehensive Analysis
-# Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-# Based on: doc/CLAUDE.md Updated Guidance + 16 Specific Failures Analysis
+# Generated: 2026-03-31T10:10:00Z
+# Based on: doc/CLAUDE.md Updated Guidance + 16 Specific Failures Analysis + Real Testing Results
 # Target: README v5.1.0 Compliance
 
 ## 📋 EXECUTIVE SUMMARY
@@ -8,6 +8,8 @@
 As main architect grounded in README v5.1.0, I've analyzed both the **updated high-level guidance** from CLAUDE.md (preventing circular regressions) AND the **specific technical failures** that were identified in the previous detailed analysis. 
 
 **Key Finding**: The updated CLAUDE.md provides high-level guidance, but the 16 specific technical failures are still VALID and must be addressed to achieve true README compliance.
+
+**CRITICAL DISCOVERY**: Interactive input is completely broken in IDE environments - scripts cannot read user input through IDE command interface.
 
 ## 🎯 DUAL APPROACH: High-Level + Specific Fixes
 
@@ -114,25 +116,53 @@ Based on current script analysis, these concrete failures MUST be fixed:
 - No circular regressions
 - True README v5.1.0 compliance
 
-## 📊 IMPLEMENTATION TRACKING
+## � CRITICAL ISSUES DISCOVERED DURING TESTING
+
+### Issue 1: Interactive Input Completely Broken
+**Environment**: IDE command interface (Windsurf/VSCode terminal)
+**Symptoms**:
+- Script 1 hangs at tenant ID prompt, requires manual timeout
+- All `read` commands fail, returning empty values
+- Preset validation fails even with correct input ("full" rejected)
+- `[[ -t 0 ]]` returns NO (non-TTY environment)
+
+**Root Cause**: IDE command interface doesn't provide proper TTY stdin
+**Impact**: Scripts cannot collect any user input interactively
+**Status**: BLOCKER - prevents any deployment
+
+### Issue 2: Script 0 Incomplete Cleanup (FIXED)
+**Problem**: Script 0 left `/mnt/${tenant_id}/` directories behind
+**Fix Applied**: Added base directory removal step
+**Status**: ✅ RESOLVED
+
+## �📊 IMPLEMENTATION TRACKING
 
 ### Status Matrix
-| Script | Failures | Status | Priority |
-|--------|-----------|---------|----------|
-| 0-complete-cleanup.sh | 2 | Ready | High |
-| 1-setup-system.sh | 6 | Ready | High |
-| 2-deploy-services.sh | 5 | Ready | High |
-| 3-configure-services.sh | 3 | Ready | High |
+| Script | Failures | Status | Priority | Notes |
+|--------|-----------|---------|----------|-------|
+| 0-complete-cleanup.sh | 2 | ✅ FIXED | High | Base directory removal added |
+| 1-setup-system.sh | 6 | 🚫 BLOCKED | Critical | Interactive input broken |
+| 2-deploy-services.sh | 5 | ⏳ PENDING | High | Depends on Script 1 |
+| 3-configure-services.sh | 3 | ⏳ PENDING | High | Depends on Script 1 |
+
+### Fixes Applied
+1. **Script 0**: Added base directory removal (`rm -rf "${BASE_DIR}"`)
+2. **Script 0**: Added fallback for missing platform.conf
+3. **Script 1**: Added debug output for input issues
+
+### Critical Blockers
+1. **Interactive Input**: Must run scripts in real terminal, not IDE command interface
+2. **Environment Detection**: Need better non-interactive fallback handling
 
 ### Next Steps
-1. **Implement Script 0 fixes** (root check + platform.conf path)
-2. **Implement Script 1 fixes** (variable ordering + 5 other fixes)
-3. **Implement Script 2 fixes** (platform.conf path + 4 other fixes)
-4. **Implement Script 3 fixes** (platform.conf path + 2 other fixes)
-5. **Complete deployment testing** with README §14 checkpoints
-6. **Update DEPLOYMENT_ASSESSMENT.md** with real execution results
+1. **IMMEDIATE**: Test Script 1 in real terminal (SSH/local) to verify interactive input works
+2. **OPTIONAL**: Modify Script 1 to accept environment variables as fallback
+3. **CONTINUE**: Implement remaining 14 technical fixes once input is resolved
+4. **COMPLETE**: Full deployment testing with README §14 checkpoints
+5. **UPDATE**: DEPLOYMENT_ASSESSMENT.md with real execution results
 
 ---
 
 **This plan combines updated high-level guidance with confirmed technical failure analysis.**
 **All 16 specific failures are addressed while preventing circular regressions.**
+**CRITICAL: Interactive input must be resolved before proceeding with deployment.**

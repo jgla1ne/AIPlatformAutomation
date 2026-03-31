@@ -137,18 +137,31 @@ main() {
     
     # Source platform.conf (README P1 - BUG-02 fix)
     local platform_conf="/mnt/${tenant_id}/platform.conf"
+    # Set defaults that work whether platform.conf exists or not
+    export TENANT_PREFIX="${tenant_id}"
+    export TENANT_ID="${tenant_id}"
+    export BASE_DIR="/mnt/${tenant_id}"
+    export DATA_DIR="${BASE_DIR}/data"
+    export CONFIG_DIR="${BASE_DIR}/config"
+    export CONFIGURED_DIR="${BASE_DIR}/.configured"
+    export LOG_DIR="${BASE_DIR}/logs"
+    export DOCKER_NETWORK="${tenant_id}-network"
+    
     if [[ ! -f "$platform_conf" ]]; then
-        fail "platform.conf not found at $platform_conf. Cannot clean up safely."
+        warn "platform.conf not found at $platform_conf. Attempting partial cleanup..."
+        # Skip docker compose cleanup since we don't have compose file path
+        log "Skipping docker compose cleanup (no platform.conf)"
+    else
+        # shellcheck source=/dev/null
+        source "$platform_conf"
     fi
-    # shellcheck source=/dev/null
-    source "$platform_conf"
     
     # Execution order (README §6 - strict):
     # 1. Typed confirmation: DELETE ${TENANT_ID} (done above)
     
     # 2. docker compose down --volumes --remove-orphans
     log "Stopping and removing containers with docker compose..."
-    if [[ -f "${COMPOSE_FILE}" ]]; then
+    if [[ -f "${COMPOSE_FILE:-}" ]]; then
         run_cmd docker compose -f "${COMPOSE_FILE}" down --volumes --remove-orphans
         ok "Containers stopped and removed via docker compose"
     else
@@ -222,9 +235,18 @@ main() {
             run_cmd rm -rf "${LOG_DIR}"
             ok "Logs directory removed"
         fi
+        
+        # 8. rm -rf "${BASE_DIR}" ← CRITICAL: remove the entire tenant directory
+        if [[ -n "${BASE_DIR:-}" && -d "${BASE_DIR}" ]]; then
+            log "Removing base tenant directory: ${BASE_DIR}"
+            if [[ "${dry_run}" != "true" ]]; then
+                rm -rf "${BASE_DIR}"
+            fi
+            ok "Base tenant directory removed"
+        fi
     fi
     
-    # 8. docker network rm "${DOCKER_NETWORK}" || true
+    # 9. docker network rm "${DOCKER_NETWORK}" || true
     if [[ -n "${DOCKER_NETWORK:-}" ]]; then
         log "Removing Docker network: ${DOCKER_NETWORK}"
         run_cmd docker network rm "${DOCKER_NETWORK}" || true

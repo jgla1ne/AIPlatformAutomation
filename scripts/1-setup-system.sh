@@ -148,9 +148,22 @@ prompt_default() {
     local default="$2"
     local response
     
+    # Check if stdin is available for interactive input
+    if [[ ! -t 0 ]]; then
+        echo "  WARNING: Non-interactive environment detected"
+        echo "  Using default value for '${prompt}': ${default:-<empty>}"
+        echo "${default}"
+        return
+    fi
+    
+    # Show prompt and read input
     echo -n "  ${prompt} [${default}]: "
-    read -r response
-    echo "${response:-$default}"
+    if read -r response; then
+        echo "${response:-$default}"
+    else
+        echo "  ERROR: Failed to read input, using default"
+        echo "${default}"
+    fi
 }
 
 prompt_yesno() {
@@ -219,6 +232,8 @@ collect_preset() {
     local preset
     while true; do
         preset=$(prompt_default "Select preset" "minimal")
+        # Clean up input - remove whitespace and convert to lowercase
+        preset=$(echo "${preset}" | xargs | tr '[:upper:]' '[:lower:]')
         case "${preset}" in
             minimal|standard|full|custom) break ;;
             *) echo "    Invalid preset. Choose: minimal, standard, full, or custom" ;;
@@ -450,18 +465,19 @@ write_platform_conf() {
     local authentik_secret_key authentik_bootstrap_password qdrant_api_key
     local signal_phone signal_recipient bifrost_api_key
     
-    if [[ "${LITELLM_ENABLED}" == "true" ]]; then
-        litellm_master_key="sk-$(gen_secret)"
-        litellm_ui_password="$(gen_password)"
-        litellm_db_url="postgresql://${postgres_user}:${postgres_password}@${tenant_prefix}-postgres:5432/${postgres_db}"
-    fi
-    
+    # Generate passwords first (before any dependencies)
     if [[ "${POSTGRES_ENABLED}" == "true" ]]; then
         postgres_password="$(gen_password)"
     fi
     
     if [[ "${REDIS_ENABLED}" == "true" ]]; then
         redis_password="$(gen_password)"
+    fi
+    
+    if [[ "${LITELLM_ENABLED}" == "true" ]]; then
+        litellm_master_key="sk-$(gen_secret)"
+        litellm_ui_password="$(gen_password)"
+        litellm_db_url="postgresql://${postgres_user}:${postgres_password}@${tenant_prefix}-postgres:5432/${postgres_db}"
     fi
     
     if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
