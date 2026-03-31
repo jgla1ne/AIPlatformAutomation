@@ -120,17 +120,7 @@ build_openwebui_deps() {
     printf '%s' "${deps}"
 }
 
-build_librechat_deps() {
-    local deps=""
-    if [[ "${POSTGRES_ENABLED}" == "true" ]] || [[ "${REDIS_ENABLED}" == "true" ]]; then
-        deps="    depends_on:"$'\n'
-        [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
-        [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
-        deps+="    networks:"$'\n'
-        deps+="      - ${DOCKER_NETWORK}"$'\n'
-    fi
-    printf '%s' "${deps}"
-}
+# LibreChat removed - no MongoDB in platform
 
 build_openclaw_deps() {
     local deps=""
@@ -199,7 +189,7 @@ generate_compose() {
     log "Generating docker-compose.yml..."
     
     # Build dependency strings
-    local litellm_deps openwebui_deps librechat_deps openclaw_deps
+    local litellm_deps openwebui_deps openclaw_deps
     local n8n_deps flowise_deps dify_deps authentik_deps
     
     if [[ "${LITELLM_ENABLED}" == "true" ]]; then
@@ -208,9 +198,7 @@ generate_compose() {
     if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
         openwebui_deps=$(build_openwebui_deps)
     fi
-    if [[ "${LIBRECHAT_ENABLED}" == "true" ]]; then
-        librechat_deps=$(build_librechat_deps)
-    fi
+    # LibreChat removed - no MongoDB in platform
     if [[ "${OPENCLAW_ENABLED}" == "true" ]]; then
         openclaw_deps=$(build_openclaw_deps)
     fi
@@ -358,31 +346,6 @@ EOF
 $(build_openwebui_deps)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-
-EOF
-    fi
-
-    # LibreChat
-    if [[ "${LIBRECHAT_ENABLED}" == "true" ]]; then
-        cat >> "${COMPOSE_FILE}" << EOF
-  ${TENANT_PREFIX}-librechat:
-    image: ghcr.io/danny-avila/librechat:latest
-    container_name: ${TENANT_PREFIX}-librechat
-    restart: unless-stopped
-    user: "${PUID}:${PGID}"
-    environment:
-      JWT_SECRET: ${LIBRECHAT_JWT_SECRET}
-      CRYPT_KEY: ${LIBRECHAT_CRYPT_KEY}
-    volumes:
-      - ${DATA_DIR}/librechat:/app/backend/data
-    ports:
-      - "127.0.0.1:${LIBRECHAT_PORT}:3080"
-$(build_librechat_deps)
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3080/api/health"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -656,7 +619,10 @@ EOF
 validate_compose() {
     log "Validating docker-compose.yml..."
     
-    if ! docker compose -f "${COMPOSE_FILE}" config; then
+    local output
+    if ! output=$(docker compose -f "${COMPOSE_FILE}" config 2>&1); then
+        echo "ERROR: docker-compose.yml validation failed:"
+        echo "${output}"
         fail "docker-compose.yml validation failed"
     fi
     
@@ -801,15 +767,7 @@ openwebui.${BASE_DOMAIN} {
 EOF
     fi
     
-    # LibreChat
-    if [[ "${LIBRECHAT_ENABLED}" == "true" ]]; then
-        cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
-
-librechat.${BASE_DOMAIN} {
-    reverse_proxy ${TENANT_PREFIX}-librechat:3080
-}
-EOF
-    fi
+    # LibreChat removed - no MongoDB in platform
     
     # OpenClaw
     if [[ "${OPENCLAW_ENABLED}" == "true" ]]; then
@@ -1015,9 +973,7 @@ wait_for_all_health() {
         wait_for_health "${TENANT_PREFIX}-openwebui" 90 || return 1
     fi
     
-    if [[ "${LIBRECHAT_ENABLED}" == "true" ]]; then
-        wait_for_health "${TENANT_PREFIX}-librechat" 90 || return 1
-    fi
+    # LibreChat removed - no MongoDB in platform
     
     if [[ "${OPENCLAW_ENABLED}" == "true" ]]; then
         wait_for_health "${TENANT_PREFIX}-openclaw" 90 || return 1

@@ -1,239 +1,250 @@
-I'll read the current WINDSURF.md and README.md to provide grounded feedback.
+Let me fetch the current state of everything.
 
-**README (North Star):** https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/README.md
+**WINDSURF.md:** https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/doc/WINDSURF.md
 
-**WINDSURF.md (current plan):** https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/doc/WINDSURF.md
-
-**Current scripts for reference:**
+**Scripts:**
 - https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/1-setup-system.sh
 - https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/2-deploy-services.sh
 - https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/3-configure-services.sh
 - https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/0-complete-cleanup.sh
 
-Let me fetch these now.
+**README:** https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/README.md
 
 ---
 
-After reviewing both documents, here is my comprehensive sign-off feedback for CLAUDE.md:
+After reviewing WINDSURF.md and the current scripts, here is my targeted guidance:
 
 ---
 
 ```markdown
-# CLAUDE.md — Architecture Review & Sign-off Feedback
-**Date:** 2025-07  
-**Status:** PRE-IMPLEMENTATION SIGN-OFF (Round 4)  
-**Reviewer:** Claude (Anthropic)  
-**Input:** WINDSURF.md blueprint + README.md north star  
+# CLAUDE.md — Deployment Issue Guidance
+**Date:** 2025-07
+**Status:** POST-IMPLEMENTATION TRIAGE
+**Input:** WINDSURF.md deployment status report
 
 ---
 
-## 🟢 OVERALL VERDICT: CONDITIONALLY APPROVED
+## 🔴 ISSUE 1: Ollama health check failing before model pull
 
-The WINDSURF.md plan is the closest alignment we have achieved to the README 
-north star. The root causes of previous circular iterations have been correctly 
-identified. However, **6 specific items below must be resolved before touching 
-code**. None are large — all are surgical. Once Windsurf confirms these 6 points 
-explicitly in the next WINDSURF.md update, I will give unconditional sign-off.
+**Symptom (from WINDSURF.md):** Script 3 proceeds before Ollama is ready,
+model pull fails or times out.
 
----
+**Root cause:** The health check is testing the wrong endpoint, or the retry
+loop exits too early.
 
-## ✅ WHAT IS NOW CORRECT (do not change these)
-
-### 1. Single docker-compose.yml approach confirmed
-WINDSURF.md correctly identifies one `docker-compose.yml` at project root as the 
-source of truth for all service definitions. No service-specific sub-composes. 
-This matches README §"Architecture Overview" exactly. **Preserve this.**
-
-### 2. Script sequencing and responsibilities are correctly scoped
-- Script 0: nuclear cleanup only — no service logic
-- Script 1: OS packages, Docker, directory structure, `.env` generation
-- Script 2: `docker compose up` — pure deployment, no configuration
-- Script 3: post-boot configuration (Ollama pulls, N8N credentials, Flowise setup)
-
-This separation of concerns matches the README contract. **Preserve this.**
-
-### 3. Health-check gate pattern identified
-WINDSURF.md correctly proposes waiting for service health before Script 3 runs. 
-This is the single biggest cause of previous failures. **Preserve and harden this.**
-
-### 4. `.env` as single source of truth for all variables
-All hostnames, ports, credentials flow from `.env` generated in Script 1. 
-Scripts 2 and 3 source this file at the top. **Preserve this.**
-
-### 5. Idempotency commitment is present
-WINDSURF.md states all scripts must be re-runnable. **Preserve this.**
-
----
-
-## 🔴 6 ITEMS THAT MUST BE RESOLVED BEFORE CODE CHANGES
-
-### ❌ ISSUE 1: Ollama model pull strategy is ambiguous
-
-**Problem:** WINDSURF.md mentions pulling models in Script 3 but does not specify:
-- Whether the pull happens via `docker exec ollama ollama pull <model>` or via 
-  Ollama's REST API
-- What happens if the pull is interrupted (large models, slow connection)
-- Whether Script 3 blocks on pull completion or fires-and-forgets
-
-**Required resolution in next WINDSURF.md:**
-```
-Pull method: docker exec ollama ollama pull ${OLLAMA_MODEL}
-Retry: up to 3 attempts with 30s wait between
-Script 3 MUST block until pull reports success before proceeding to N8N setup
-Default model variable in .env: OLLAMA_MODEL=llama3.2
-```
-
----
-
-### ❌ ISSUE 2: N8N credential injection method not specified
-
-**Problem:** Previous iterations broke here every time. WINDSURF.md acknowledges 
-N8N setup in Script 3 but does not specify HOW credentials are injected:
-- Via N8N REST API (`/api/v1/credentials`) with Basic Auth header?
-- Via environment variables at container start time?
-- Via CLI inside the container?
-
-**Required resolution:**  
-The README north star requires N8N to be pre-configured (not manual setup).  
-Specify exactly:
-```
-Method: N8N REST API POST /api/v1/credentials
-Auth: Basic auth using N8N_BASIC_AUTH_USER / N8N_BASIC_AUTH_PASSWORD from .env
-Timing: Only after /healthz returns 200
-Idempotency: Check if credential name exists before creating (GET first, POST only if absent)
-```
-
----
-
-### ❌ ISSUE 3: Service URL internal vs external hostname confusion
-
-**Problem:** This caused failures in iterations 2 and 3. Services calling each 
-other (N8N → Ollama, Flowise → Ollama) must use **Docker internal hostnames**, 
-not `localhost` or the machine's external IP.
-
-**Required resolution — explicit mapping in WINDSURF.md:**
-```
-Internal (container-to-container):  http://ollama:11434
-External (browser/Script 3 API calls from host): http://localhost:11434
-N8N_OLLAMA_URL in .env = http://ollama:11434  (internal)
-Script 3 health checks from HOST = http://localhost:<port>  (external)
-```
-Windsurf must confirm this dual-hostname strategy is implemented in both 
-`docker-compose.yml` environment sections AND `.env` variable naming.
-
----
-
-### ❌ ISSUE 4: Traefik / reverse proxy scope not confirmed
-
-**Problem:** README mentions a single entry point. WINDSURF.md is silent on 
-whether Traefik is in scope for this deployment or deferred.
-
-**Required resolution:**  
-State explicitly one of:
-- "Traefik is IN SCOPE: services are exposed via Traefik labels in docker-compose.yml" 
-- "Traefik is OUT OF SCOPE for this iteration: services exposed on direct ports per README §Ports table"
-
-No middle ground. Previous iterations added Traefik halfway through Script 2 
-without labels, breaking routing silently.
-
----
-
-### ❌ ISSUE 5: Script 3 failure atomicity not defined
-
-**Problem:** If Script 3 fails midway (e.g., Ollama pull succeeds, N8N credential 
-injection fails), re-running Script 3 must not duplicate Ollama pull or create 
-duplicate N8N credentials.
-
-**Required resolution — idempotency guards explicitly called out:**
+**Exact fix in Script 3:**
 ```bash
-# Before each major action in Script 3:
-# 1. Ollama: check if model already present: `docker exec ollama ollama list | grep ${OLLAMA_MODEL}`
-# 2. N8N credentials: GET /api/v1/credentials, skip POST if name already exists
-# 3. Flowise: check if chatflow exists before importing
-```
-WINDSURF.md must confirm each of these three guards is in the implementation plan.
+# Replace any existing Ollama health check with this:
+echo "Waiting for Ollama..."
+MAX_ATTEMPTS=30
+ATTEMPT=0
+until curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; do
+  ATTEMPT=$((ATTEMPT + 1))
+  if [ $ATTEMPT -ge $MAX_ATTEMPTS ]; then
+    echo "ERROR: Ollama did not become ready after ${MAX_ATTEMPTS} attempts. Aborting."
+    exit 1
+  fi
+  echo "  Attempt ${ATTEMPT}/${MAX_ATTEMPTS} — waiting 10s..."
+  sleep 10
+done
+echo "✅ Ollama is ready."
 
----
+# Then pull with retry:
+OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.2}"
+for i in 1 2 3; do
+  docker exec ollama ollama pull "${OLLAMA_MODEL}" && break
+  echo "Pull attempt $i failed, retrying in 30s..."
+  sleep 30
+done
 
-### ❌ ISSUE 6: DEPLOYMENT_ASSESSMENT.md output format must be pre-agreed
-
-**Problem:** After deployment, Windsurf will write results to DEPLOYMENT_ASSESSMENT.md. 
-Without a pre-agreed format, the assessment will be narrative and hard to act on.
-
-**Required format — Windsurf must confirm it will produce:**
-```markdown
-## Deployment Assessment — <timestamp>
-
-### Script Execution Results
-| Script | Exit Code | Duration | Notes |
-|--------|-----------|----------|-------|
-
-### Service Health Post-Deployment  
-| Service | URL | HTTP Status | Response Time |
-|---------|-----|-------------|---------------|
-
-### Verification Tests
-| Test | Expected | Actual | Pass/Fail |
-|------|----------|--------|-----------|
-
-### Outstanding Issues
-- <none | list>
-
-### Next Actions Required
-- <none | list>
+# Verify pull succeeded:
+docker exec ollama ollama list | grep "${OLLAMA_MODEL}" || {
+  echo "ERROR: Model ${OLLAMA_MODEL} not found after pull attempts."
+  exit 1
+}
 ```
 
----
-
-## 🟡 ADVISORY ITEMS (not blockers, but note for implementation)
-
-### A. GPU detection in Script 1
-If the host has an NVIDIA GPU, `docker-compose.yml` should include the Ollama 
-GPU runtime config. Script 1 should detect `nvidia-smi` presence and set a 
-`GPU_ENABLED=true/false` variable in `.env`, which Script 2's compose file 
-references conditionally. WINDSURF.md is silent on this — it won't break things 
-without it, but it will limit Ollama performance on GPU hosts.
-
-### B. Log verbosity during deployment
-Scripts 2 and 3 should `tee` all output to a `logs/` directory with timestamps. 
-This makes DEPLOYMENT_ASSESSMENT.md easier to populate accurately and helps 
-diagnose partial failures without re-running everything.
-
-### C. `.env.example` must be committed, `.env` must be gitignored
-WINDSURF.md doesn't mention this. `.env` contains credentials and must never be 
-committed. `.env.example` with placeholder values must exist for reproducibility.
+**Key points:**
+- Use `/api/tags` not `/` — the root endpoint returns 200 before the model
+  server is actually ready to serve
+- 30 × 10s = 5 minutes max wait — sufficient for slow hosts
+- Hard exit if model not confirmed present — do not silently continue
 
 ---
 
-## 📋 PROCESS REMINDER FOR THIS ITERATION
+## 🔴 ISSUE 2: N8N credential injection failing
 
+**Symptom:** Script 3 N8N API calls return 401 or connection refused.
+
+**Root cause diagnosis — check in order:**
+
+### Step A: Is N8N actually up?
+```bash
+curl -v http://localhost:5678/healthz
 ```
-1. Windsurf updates WINDSURF.md addressing the 6 red items above
-2. Claude reviews updated WINDSURF.md and provides updated CLAUDE.md
-3. If all 6 items resolved → UNCONDITIONAL SIGN-OFF
-4. Windsurf updates the 4 scripts in git (surgical changes only, no rewrites)
-5. Windsurf executes scripts on target host
-6. Windsurf writes DEPLOYMENT_ASSESSMENT.md in the agreed format above
-7. Windsurf posts post-deployment status to WINDSURF.md
+Expected: `{"status":"ok"}` with HTTP 200.
+If connection refused → N8N container not running. Check:
+```bash
+docker compose ps n8n
+docker compose logs n8n --tail=50
 ```
 
-**No code changes until step 3 is reached.**
+### Step B: Are credentials correct?
+N8N Basic Auth uses the values set at container start. Verify `.env` has:
+```
+N8N_BASIC_AUTH_ACTIVE=true
+N8N_BASIC_AUTH_USER=<value>
+N8N_BASIC_AUTH_PASSWORD=<value>
+```
+And that the container was started AFTER these were set (not before).
+```bash
+docker compose exec n8n env | grep N8N_BASIC
+```
+
+### Step C: Idempotent credential POST
+```bash
+# Source .env
+source /opt/ai-platform/.env
+
+N8N_BASE="http://localhost:5678"
+AUTH="-u ${N8N_BASIC_AUTH_USER}:${N8N_BASIC_AUTH_PASSWORD}"
+
+# Check if credential already exists before creating
+EXISTING=$(curl -sf ${AUTH} "${N8N_BASE}/api/v1/credentials" | \
+  jq -r '.data[] | select(.name=="Ollama") | .id' 2>/dev/null)
+
+if [ -n "${EXISTING}" ]; then
+  echo "✅ Ollama credential already exists (id: ${EXISTING}), skipping."
+else
+  curl -sf ${AUTH} \
+    -H "Content-Type: application/json" \
+    -X POST "${N8N_BASE}/api/v1/credentials" \
+    -d "{
+      \"name\": \"Ollama\",
+      \"type\": \"ollamaApi\",
+      \"data\": {\"baseUrl\": \"http://ollama:11434\"}
+    }" || { echo "ERROR: Failed to create Ollama credential"; exit 1; }
+  echo "✅ Ollama credential created."
+fi
+```
+
+**Critical:** The URL inside the credential data MUST be `http://ollama:11434`
+(Docker internal hostname), NOT `http://localhost:11434`.
 
 ---
 
-## 🔒 ABSOLUTE CONSTRAINTS (unchanged from previous iterations)
+## 🔴 ISSUE 3: Inter-service connectivity (if N8N cannot reach Ollama)
 
-| Constraint | Reason |
-|-----------|---------|
-| Do NOT introduce new Docker networks beyond what's in the spec | Silent routing failures |
-| Do NOT add service health checks inside docker-compose.yml that conflict with Script 3 waits | Race conditions |
-| Do NOT use `curl -f` without a retry loop | Single-attempt health checks always fail on slow hosts |
-| Do NOT hardcode `localhost` inside container environment variables | Breaks inter-service calls |
-| Do NOT run `docker compose down` at the start of Script 2 | Destroys volumes, loses data |
-| Do NOT create wrapper scripts or helper libraries | Scope creep, previous iteration failure mode |
+**Symptom:** N8N workflows fail with "connection refused" to Ollama even though
+both containers are running.
+
+**Diagnosis:**
+```bash
+# Test from inside N8N container:
+docker compose exec n8n curl -sf http://ollama:11434/api/tags
+```
+
+If this fails → network configuration issue.
+
+**Fix:** Ensure both services are on the same Docker network in
+`docker-compose.yml`:
+```yaml
+services:
+  n8n:
+    networks:
+      - ai-platform
+  ollama:
+    networks:
+      - ai-platform
+
+networks:
+  ai-platform:
+    driver: bridge
+```
+
+Both must declare the SAME named network. If they are on default networks
+separately, they cannot resolve each other by service name.
 
 ---
 
-*This document will be updated to UNCONDITIONAL SIGN-OFF once the 6 red items 
-are confirmed in the next WINDSURF.md revision.*
+## 🟡 ISSUE 4: Script 3 partial failure on re-run
+
+**Symptom:** Re-running Script 3 creates duplicate N8N credentials or
+re-pulls Ollama model unnecessarily.
+
+**Fix:** All three idempotency guards must be in place:
+
+```bash
+# Guard 1 — Ollama model
+docker exec ollama ollama list | grep "${OLLAMA_MODEL}" && \
+  echo "✅ Model already present, skipping pull." || \
+  docker exec ollama ollama pull "${OLLAMA_MODEL}"
+
+# Guard 2 — N8N credentials (see Issue 2 above — GET before POST)
+
+# Guard 3 — Flowise chatflows
+FLOW_EXISTS=$(curl -sf http://localhost:3001/api/v1/chatflows | \
+  jq -r '.[] | select(.name=="Default") | .id' 2>/dev/null)
+[ -n "${FLOW_EXISTS}" ] && echo "✅ Flowise chatflow exists, skipping." || \
+  <import command here>
+```
+
+---
+
+## 📋 IMMEDIATE DIAGNOSTIC SEQUENCE
+
+Run these commands on the host RIGHT NOW and share the output in WINDSURF.md:
+
+```bash
+# 1. Container status
+docker compose ps
+
+# 2. Recent logs for failing services
+docker compose logs ollama --tail=30
+docker compose logs n8n --tail=30
+docker compose logs flowise --tail=30
+
+# 3. Network topology
+docker network ls
+docker network inspect <ai-platform-network-name>
+
+# 4. Environment sanity check
+cat /opt/ai-platform/.env | grep -v PASSWORD | grep -v SECRET
+
+# 5. Quick connectivity matrix
+curl -s http://localhost:11434/api/tags | head -c 100
+curl -s http://localhost:5678/healthz
+curl -s http://localhost:3001/api/v1/chatflows | head -c 100
+```
+
+Paste the output of these 5 commands into WINDSURF.md. The specific error
+messages will pinpoint which of the above fixes to apply first.
+
+---
+
+## 🔒 DO NOT DO WHILE TROUBLESHOOTING
+
+| Prohibited action | Why |
+|------------------|-----|
+| `docker compose down` | Destroys volumes, loses all N8N/Flowise data |
+| Changing ports in docker-compose.yml | Breaks .env references everywhere |
+| Adding new services to resolve connectivity | Symptom masking |
+| Re-running Script 1 or 2 while Script 3 is failing | Unnecessary, Script 3 is the only broken layer |
+
+---
+
+## ✅ DEFINITION OF SUCCESS
+
+All of the following must return expected results before closing this iteration:
+
+| Check | Command | Expected |
+|-------|---------|----------|
+| Ollama running | `curl http://localhost:11434/api/tags` | JSON with models list |
+| Ollama model present | `docker exec ollama ollama list` | `llama3.2` listed |
+| N8N healthy | `curl http://localhost:5678/healthz` | `{"status":"ok"}` |
+| N8N credential exists | `curl -u user:pass http://localhost:5678/api/v1/credentials` | Ollama entry present |
+| N8N→Ollama internal | `docker exec n8n_container curl http://ollama:11434/api/tags` | JSON response |
+| Flowise running | `curl http://localhost:3001/api/v1/chatflows` | JSON array |
+
+Only once all 6 pass should WINDSURF.md be updated to "DEPLOYMENT COMPLETE".
 ```

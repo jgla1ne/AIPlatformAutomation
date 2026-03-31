@@ -368,17 +368,61 @@ collect_service_flags() {
     else
         OLLAMA_ENABLED="false"
     fi
-    OPENWEBUI_ENABLED=$(prompt_yesno "Enable Open WebUI" "y" && echo "true" || echo "false")
-    QDRANT_ENABLED=$(prompt_yesno "Enable Qdrant" "y" && echo "true" || echo "false")
-    CADDY_ENABLED=$(prompt_yesno "Enable Caddy" "y" && echo "true" || echo "false")
-    LIBRECHAT_ENABLED=$(prompt_yesno "Enable LibreChat" "n" && echo "true" || echo "false")
-    OPENCLAW_ENABLED=$(prompt_yesno "Enable OpenClaw" "n" && echo "true" || echo "false")
-    N8N_ENABLED=$(prompt_yesno "Enable N8N" "n" && echo "true" || echo "false")
-    FLOWISE_ENABLED=$(prompt_yesno "Enable Flowise" "n" && echo "true" || echo "false")
-    DIFY_ENABLED=$(prompt_yesno "Enable Dify" "n" && echo "true" || echo "false")
-    AUTHENTIK_ENABLED=$(prompt_yesno "Enable Authentik" "n" && echo "true" || echo "false")
-    SIGNALBOT_ENABLED=$(prompt_yesno "Enable Signalbot" "n" && echo "true" || echo "false")
-    BIFROST_ENABLED=$(prompt_yesno "Enable Bifrost" "n" && echo "true" || echo "false")
+    if prompt_yesno "Enable Open WebUI" "y"; then
+        OPENWEBUI_ENABLED="true"
+    else
+        OPENWEBUI_ENABLED="false"
+    fi
+    if prompt_yesno "Enable Qdrant" "y"; then
+        QDRANT_ENABLED="true"
+    else
+        QDRANT_ENABLED="false"
+    fi
+    if prompt_yesno "Enable Caddy" "y"; then
+        CADDY_ENABLED="true"
+    else
+        CADDY_ENABLED="false"
+    fi
+    if prompt_yesno "Enable LibreChat" "n"; then
+        LIBRECHAT_ENABLED="true"
+    else
+        LIBRECHAT_ENABLED="false"
+    fi
+    if prompt_yesno "Enable OpenClaw" "n"; then
+        OPENCLAW_ENABLED="true"
+    else
+        OPENCLAW_ENABLED="false"
+    fi
+    if prompt_yesno "Enable N8N" "n"; then
+        N8N_ENABLED="true"
+    else
+        N8N_ENABLED="false"
+    fi
+    if prompt_yesno "Enable Flowise" "n"; then
+        FLOWISE_ENABLED="true"
+    else
+        FLOWISE_ENABLED="false"
+    fi
+    if prompt_yesno "Enable Dify" "n"; then
+        DIFY_ENABLED="true"
+    else
+        DIFY_ENABLED="false"
+    fi
+    if prompt_yesno "Enable Authentik" "n"; then
+        AUTHENTIK_ENABLED="true"
+    else
+        AUTHENTIK_ENABLED="false"
+    fi
+    if prompt_yesno "Enable Signalbot" "n"; then
+        SIGNALBOT_ENABLED="true"
+    else
+        SIGNALBOT_ENABLED="false"
+    fi
+    if prompt_yesno "Enable Bifrost" "n"; then
+        BIFROST_ENABLED="true"
+    else
+        BIFROST_ENABLED="false"
+    fi
 }
 
 collect_api_keys() {
@@ -477,6 +521,7 @@ write_platform_conf() {
     if [[ "${LITELLM_ENABLED}" == "true" ]]; then
         litellm_master_key="sk-$(gen_secret)"
         litellm_ui_password="$(gen_password)"
+        # Fix: Use tenant_prefix which is already defined above
         litellm_db_url="postgresql://${postgres_user}:${postgres_password}@${tenant_prefix}-postgres:5432/${postgres_db}"
     fi
     
@@ -765,14 +810,8 @@ main() {
     echo "  • Install required packages"
     echo ""
     
-    # Check if tenant ID was provided as argument
-    if [[ -n "$tenant_id" ]]; then
-        TENANT_ID="$tenant_id"
-        log "Using tenant ID from argument: ${TENANT_ID}"
-    else
-        # Interactive collection
-        collect_tenant_config
-    fi
+    # Always collect tenant configuration interactively
+    collect_tenant_config
     
     # Validate tenant ID
     if [[ -z "$TENANT_ID" ]]; then
