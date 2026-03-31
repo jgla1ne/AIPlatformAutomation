@@ -1,28 +1,22 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script 0: Nuclear Cleanup - README COMPLIANT
+# Script 0: Nuclear Cleanup — README v5.1.0 COMPLIANT
 # =============================================================================
 # PURPOSE: Stop containers, remove data, clear all state
 # USAGE:   sudo bash scripts/0-complete-cleanup.sh [tenant_id] [options]
 # OPTIONS: --dry-run           Show what would be removed without action
 #          --containers-only  Only remove containers, keep data
+#          --unmount-ebs      Unmount EBS volume after cleanup
 # =============================================================================
 
 set -euo pipefail
-
-# =============================================================================
-# ROOT EXECUTION CHECK (README P7 - exception for script 0)
-# =============================================================================
-if [[ $EUID -ne 0 ]]; then
-    echo "ERROR: This script must be run as root for complete cleanup"
-    exit 1
-fi
 
 # =============================================================================
 # SCRIPT CONFIGURATION
 # =============================================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+SCRIPT_VERSION="5.1.0"
 
 # =============================================================================
 # LOGGING (README P11)
@@ -39,144 +33,35 @@ fail() { log "FAIL: $*"; exit 1; }
 dry_run() { [[ "${DRY_RUN:-false}" == "true" ]] && echo "[DRY-RUN] $1"; }
 
 # =============================================================================
-# CONFIRMATION FUNCTIONS
+# DRY RUN COMMAND EXECUTOR (README §12)
 # =============================================================================
-typed_confirmation() {
-    local confirmation="$1"
-    local expected="$2"
-    
-    echo ""
-    read -r -p "  Type '${expected}' to confirm: " input
-    if [[ "$input" != "$expected" ]]; then
-        fail "Confirmation failed. Expected '${expected}' but got '${input}'"
+run_cmd() {
+    if [[ "${DRY_RUN:-false}" == "true" ]]; then
+        echo "[DRY-RUN] $*"
+    else
+        "$@"
     fi
 }
 
 # =============================================================================
-# CONTAINER CLEANUP
+# TYPED CONFIRMATION (README §6 - mandatory pattern)
 # =============================================================================
-cleanup_containers() {
-    local tenant_id="$1"
-    local prefix="${2:-ai}"
-    
-    log "Cleaning up containers for tenant '${tenant_id}'..."
-    
-    # Get list of tenant containers
-    local containers
-    containers=$(docker ps -a --format "{{.Names}}" | grep "^${prefix}-${tenant_id}-" || true)
-    
-    if [[ -z "$containers" ]]; then
-        log "No containers found for tenant ${tenant_id}"
-        return 0
-    fi
-    
-    # Stop and remove containers
-    for container in $containers; do
-        log "Stopping container: ${container}"
-        dry_run "docker stop ${container}"
-        [[ "${DRY_RUN:-false}" != "true" ]] && docker stop "${container}" >/dev/null 2>&1 || true
-        
-        log "Removing container: ${container}"
-        dry_run "docker rm ${container}"
-        [[ "${DRY_RUN:-false}" != "true" ]] && docker rm "${container}" >/dev/null 2>&1 || true
-    done
-    
-    ok "Containers cleaned up"
+confirm_destructive() {
+    echo "  ⚠️  This will permanently delete ALL data for tenant: ${TENANT_ID}"
+    echo "  Type exactly to confirm: DELETE ${TENANT_ID}"
+    read -r response
+    [[ "${response}" == "DELETE ${TENANT_ID}" ]] \
+        || { echo "Confirmation did not match. Aborting."; exit 1; }
 }
 
 # =============================================================================
-# NETWORK CLEANUP
-# =============================================================================
-cleanup_networks() {
-    local tenant_id="$1"
-    local prefix="${2:-ai}"
-    
-    log "Cleaning up networks for tenant '${tenant_id}'..."
-    
-    # Get list of tenant networks
-    local networks
-    networks=$(docker network ls --format "{{.Name}}" | grep "^${prefix}-${tenant_id}" || true)
-    
-    if [[ -z "$networks" ]]; then
-        log "No networks found for tenant ${tenant_id}"
-        return 0
-    fi
-    
-    # Remove networks
-    for network in $networks; do
-        log "Removing network: ${network}"
-        dry_run "docker network rm ${network}"
-        [[ "${DRY_RUN:-false}" != "true" ]] && docker network rm "${network}" >/dev/null 2>&1 || true
-    done
-    
-    ok "Networks cleaned up"
-}
-
-# =============================================================================
-# VOLUME CLEANUP (README P10 - bind mounts only)
-# =============================================================================
-cleanup_volumes() {
-    local tenant_id="$1"
-    
-    if [[ "${CONTAINERS_ONLY:-false}" == "true" ]]; then
-        log "Skipping volume cleanup (containers-only mode)"
-        return 0
-    fi
-    
-    log "Cleaning up data directories for tenant '${tenant_id}'..."
-    
-    local base_dir="/mnt/${tenant_id}"
-    
-    if [[ -d "$base_dir" ]]; then
-        log "Removing data directory: ${base_dir}"
-        dry_run "rm -rf ${base_dir}"
-        [[ "${DRY_RUN:-false}" != "true" ]] && rm -rf "${base_dir}"
-    fi
-    
-    ok "Data directories cleaned up"
-}
-
-# =============================================================================
-# CONFIGURED MARKERS CLEANUP (README P8)
-# =============================================================================
-cleanup_markers() {
-    local tenant_id="$1"
-    local configured_dir="/mnt/${tenant_id}/.configured"
-    
-    if [[ -d "$configured_dir" ]]; then
-        log "Removing configuration markers for tenant '${tenant_id}'..."
-        dry_run "rm -rf ${configured_dir}"
-        [[ "${DRY_RUN:-false}" != "true" ]] && rm -rf "${configured_dir}"
-    fi
-    
-    ok "Configuration markers cleaned up"
-}
-
-# =============================================================================
-# SYSTEM CLEANUP
-# =============================================================================
-cleanup_system() {
-    if [[ "${CONTAINERS_ONLY:-false}" == "true" ]]; then
-        log "Skipping system cleanup (containers-only mode)"
-        return 0
-    fi
-    
-    log "Performing final system cleanup..."
-    
-    # Clean up any orphaned Docker resources
-    dry_run "docker system prune -f"
-    [[ "${DRY_RUN:-false}" != "true" ]] && docker system prune -f >/dev/null 2>&1 || true
-    
-    ok "System cleanup completed"
-}
-
-# =============================================================================
-# MAIN FUNCTION
+# MAIN FUNCTION (README §6 - strict execution order)
 # =============================================================================
 main() {
     local tenant_id="${1:-}"
     local dry_run=false
     local containers_only=false
+    local unmount_ebs=false
     
     # Parse arguments
     shift
@@ -190,6 +75,10 @@ main() {
                 containers_only=true
                 shift
                 ;;
+            --unmount-ebs)
+                unmount_ebs=true
+                shift
+                ;;
             *)
                 fail "Unknown option: $1"
                 ;;
@@ -198,26 +87,28 @@ main() {
     
     # Set global variables
     export DRY_RUN="$dry_run"
-    export CONTAINERS_ONLY="$containers_only"
+    
+    # Validate tenant ID
+    if [[ -z "$tenant_id" ]]; then
+        fail "Tenant ID is required"
+    fi
     
     # Set up logging
     LOG_FILE="/tmp/$(basename "$0" .sh)-$(date +%Y%m%d-%H%M%S).log"
     
     log "=== Script 0: Nuclear Cleanup ==="
+    log "Version: ${SCRIPT_VERSION}"
     log "Tenant: ${tenant_id}"
     log "Dry-run: ${dry_run}"
     log "Containers-only: ${containers_only}"
+    log "Unmount-ebs: ${unmount_ebs}"
     
-    if [[ -z "$tenant_id" ]]; then
-        fail "Tenant ID is required"
-    fi
-    
-    # Warning and confirmation
+    # Display banner
     echo ""
-    echo "╔════════════════════════════════════════════════════╗"
+    echo "╔══════════════════════════════════════════════════════════╗"
     echo "║         AI Platform — Nuclear Cleanup                 ║"
     echo "║                    Script 0 of 4                        ║"
-    echo "╚══════════════════════════════════════════════════════╝"
+    echo "╚══════════════════════════════════════════════════════════╝"
     echo ""
     echo "  ⚠️  WARNING: This will COMPLETELY REMOVE:"
     echo "     • All containers for tenant '${tenant_id}'"
@@ -231,28 +122,134 @@ main() {
     echo "  This action cannot be undone!"
     echo ""
     
+    # Typed confirmation (README §6 - mandatory)
     if [[ "${dry_run}" != "true" ]]; then
-        typed_confirmation "NUKE-${tenant_id}" "NUKE-${tenant_id}"
+        confirm_destructive
     fi
     
-    # Execute cleanup steps
-    cleanup_containers "$tenant_id" "ai"
-    cleanup_networks "$tenant_id" "ai"
-    cleanup_volumes "$tenant_id"
-    cleanup_markers "$tenant_id"
-    cleanup_system
+    # Source platform.conf (README P1 - BUG-02 fix)
+    local platform_conf="/mnt/${tenant_id}/config/platform.conf"
+    if [[ ! -f "$platform_conf" ]]; then
+        fail "platform.conf not found at $platform_conf. Cannot clean up safely."
+    fi
+    # shellcheck source=/dev/null
+    source "$platform_conf"
+    
+    # Execution order (README §6 - strict):
+    # 1. Typed confirmation: DELETE ${TENANT_ID} (done above)
+    
+    # 2. docker compose down --volumes --remove-orphans
+    log "Stopping and removing containers with docker compose..."
+    if [[ -f "${COMPOSE_FILE}" ]]; then
+        run_cmd docker compose -f "${COMPOSE_FILE}" down --volumes --remove-orphans
+        ok "Containers stopped and removed via docker compose"
+    else
+        warn "docker-compose.yml not found, manual container removal required"
+        # Manual container removal as fallback
+        local containers
+        containers=$(docker ps -a --format "{{.Names}}" | grep "^${TENANT_PREFIX}-" || true)
+        if [[ -n "$containers" ]]; then
+            for container in $containers; do
+                run_cmd docker stop "$container" >/dev/null 2>&1 || true
+                run_cmd docker rm "$container" >/dev/null 2>&1 || true
+            done
+            ok "Containers stopped and removed manually"
+        else
+            log "No containers found for tenant ${tenant_id}"
+        fi
+    fi
+    
+    # 3. Remove images (scoped by label AND tenant prefix - README §6)
+    log "Removing Docker images (scoped to tenant)..."
+    
+    # By compose project label
+    local images_by_label
+    images_by_label=$(docker images \
+        --filter "label=com.docker.compose.project=${TENANT_ID}" \
+        -q 2>/dev/null || true)
+    if [[ -n "$images_by_label" ]]; then
+        echo "$images_by_label" | xargs -r run_cmd docker rmi --force
+        log "  Removed images by project label"
+    fi
+    
+    # By name prefix (catches label-less images)
+    local images_by_prefix
+    images_by_prefix=$(docker images --format "{{.Repository}}:{{.Tag}}" \
+        | grep "^${TENANT_PREFIX}-" 2>/dev/null || true)
+    if [[ -n "$images_by_prefix" ]]; then
+        echo "$images_by_prefix" | xargs -r run_cmd docker rmi --force
+        log "  Removed images by name prefix"
+    fi
+    
+    ok "Docker images removed (scoped)"
+    
+    # Skip data removal if containers-only mode
+    if [[ "${containers_only}" == "true" ]]; then
+        log "Skipping data removal (containers-only mode)"
+    else
+        # 4. rm -rf "${DATA_DIR}"
+        if [[ -n "${DATA_DIR:-}" && -d "${DATA_DIR}" ]]; then
+            log "Removing data directory: ${DATA_DIR}"
+            run_cmd rm -rf "${DATA_DIR}"
+            ok "Data directory removed"
+        fi
+        
+        # 5. rm -rf "${CONFIG_DIR}"
+        if [[ -n "${CONFIG_DIR:-}" && -d "${CONFIG_DIR}" ]]; then
+            log "Removing config directory: ${CONFIG_DIR}"
+            run_cmd rm -rf "${CONFIG_DIR}"
+            ok "Config directory removed"
+        fi
+        
+        # 6. rm -rf "${CONFIGURED_DIR}" ← CRITICAL: clears idempotency markers
+        if [[ -n "${CONFIGURED_DIR:-}" && -d "${CONFIGURED_DIR}" ]]; then
+            log "Removing configuration markers: ${CONFIGURED_DIR}"
+            run_cmd rm -rf "${CONFIGURED_DIR}"
+            ok "Configuration markers removed"
+        fi
+        
+        # 7. rm -rf "${LOG_DIR}"
+        if [[ -n "${LOG_DIR:-}" && -d "${LOG_DIR}" ]]; then
+            log "Removing logs directory: ${LOG_DIR}"
+            run_cmd rm -rf "${LOG_DIR}"
+            ok "Logs directory removed"
+        fi
+    fi
+    
+    # 8. docker network rm "${DOCKER_NETWORK}" || true
+    if [[ -n "${DOCKER_NETWORK:-}" ]]; then
+        log "Removing Docker network: ${DOCKER_NETWORK}"
+        run_cmd docker network rm "${DOCKER_NETWORK}" || true
+        ok "Docker network removed"
+    fi
+    
+    # 9. Optional: unmount EBS (--unmount-ebs flag)
+    if [[ "${unmount_ebs}" == "true" ]]; then
+        local mount_point="/mnt/${tenant_id}"
+        if mountpoint -q "$mount_point" 2>/dev/null; then
+            log "Unmounting EBS volume: $mount_point"
+            run_cmd umount "$mount_point"
+            ok "EBS volume unmounted"
+        else
+            log "EBS volume not mounted or mount point not found"
+        fi
+    fi
     
     echo ""
-    echo "╔════════════════════════════════════════════════════╗"
+    echo "╔══════════════════════════════════════════════════════════╗"
     echo "║              Script 0 Complete ✓                        ║"
-    echo "╚══════════════════════════════════════════════════════╝"
+    echo "╚══════════════════════════════════════════════════════════╝"
     echo ""
     echo "  ✓ All containers stopped and removed"
     echo "  ✓ All networks removed"
     if [[ "${containers_only}" != "true" ]]; then
         echo "  ✓ All data directories removed"
         echo "  ✓ Configuration markers cleared"
-        echo "  ✓ System resources pruned"
+        echo "  ✓ Logs directory removed"
+    fi
+    echo "  ✓ Docker images removed (scoped)"
+    if [[ "${unmount_ebs}" == "true" ]]; then
+        echo "  ✓ EBS volume unmounted"
     fi
     echo ""
     if [[ "${dry_run}" != "true" ]]; then

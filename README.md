@@ -1,12 +1,6 @@
-Reading the current README before writing anything.
 
-https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/README.md
-
----
-
-```markdown
 # AI Platform Automation — North Star README
-> **Version 2.1.0** | Last updated: 2025-01  
+> **Version 5.1.0** | Last updated: 2026-03-31  
 > This document is the single source of truth for architecture, implementation
 > decisions, and implementation boundaries. Every script, every config, every
 > review comment must be grounded here. When in doubt — read this first.
