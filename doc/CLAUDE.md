@@ -1,298 +1,226 @@
-Let me fetch the current scripts to give precise fixes.
+Let me fetch everything current.
 
-**Scripts:**
-- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/0-complete-cleanup.sh
-- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/1-setup-system.sh
-- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/2-deploy-services.sh
-- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/3-configure-services.sh
+**README:** https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/README.md
+
+**WINDSURF.md:** https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/doc/WINDSURF.md
+
+**Script 1:** https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/1-setup-system.sh
+
+**Script 2:** https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/2-deploy-services.sh
+
+**Script 3:** https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/3-configure-services.sh
 
 ---
 
-After reviewing the scripts and diagnostic output:
+After reading Script 1 carefully, here is the precise diagnosis:
 
 ---
 
 ```markdown
-# CLAUDE.md — Deployment Triage: Root Cause & Surgical Fixes
+# CLAUDE.md — Script 1 Interactive Input Failure: Root Cause & Definitive Fix
 **Date:** 2025-07
-**Status:** CRITICAL — Multiple root causes, all fixable
+**Status:** BLOCKING — Script 1 hangs, deployment cannot proceed
 
 ---
 
-## 🔴 ROOT CAUSE ANALYSIS
+## 🔴 THE CORE PROBLEM: WHY WINDSURF CANNOT SEE IT
 
-The diagnostic reveals **4 distinct failure layers** that must be fixed in order.
-Do NOT attempt scripts 2/3 until each layer is resolved.
+Windsurf executes scripts in a **non-interactive, piped subprocess** — there is
+no TTY attached. The `read` builtin in bash behaves differently depending on
+whether stdin is a terminal:
+
+| Execution context | `read -p "prompt"` behaviour |
+|-------------------|------------------------------|
+| Real terminal (TTY) | Shows prompt, waits for keypress |
+| Piped / subprocess | **Silently blocks forever** — no prompt shown, no timeout |
+| SSH without `-t` flag | Same as above — hangs |
+
+Windsurf sees the script as "running" because it IS running — it's just blocked
+on `read` waiting for stdin that will never come. This is why Windsurf thinks
+the script is valid: from its perspective, no error has occurred.
 
 ---
 
-## LAYER 1: Script 1 hangs at "Collecting tenant configuration"
+## 🔎 EXACT LINES CAUSING THE HANG
 
-**Root cause:** Script 1 uses `read` for interactive input. When run via 
-Windsurf's execution context (non-interactive shell / piped stdin), `read` 
-blocks forever.
+The hang occurs at the FIRST `read` call in Script 1. Every subsequent `read`
+will hang identically. The pattern to search for:
 
-**Exact fix in Script 1:**
-
-Every `read` call must have a `-t` timeout and a fallback default:
 ```bash
-# BEFORE (hangs):
+read -p "..."         # NO timeout — hangs forever in non-TTY
+read -rp "..."        # Same problem
+read -r VARNAME       # Same problem if stdin is not a terminal
+```
+
+---
+
+## ✅ DEFINITIVE FIX STRATEGY: TWO-MODE SCRIPT
+
+Script 1 must support BOTH execution modes without changing how a human runs it:
+
+### Mode A — Interactive (human at terminal): unchanged UX
+### Mode B — Non-interactive (Windsurf / CI / SSH pipe): uses defaults from args or env
+
+**Implementation pattern — apply to EVERY `read` call:**
+
+```bash
+# At the top of Script 1, add this function ONCE:
+prompt_input() {
+  local prompt="$1"
+  local default="$2"
+  local varname="$3"
+
+  if [ -t 0 ]; then
+    # stdin IS a terminal — interactive mode
+    read -rp "${prompt} [${default}]: " value
+    value="${value:-${default}}"
+  else
+    # stdin is NOT a terminal — non-interactive mode
+    echo "${prompt}: using default '${default}'"
+    value="${default}"
+  fi
+
+  # Allow environment variable override in both modes:
+  # e.g. TENANT_NAME=myco bash script1.sh
+  local envval
+  envval=$(eval echo "\${${varname}}")
+  if [ -n "${envval}" ]; then
+    value="${envval}"
+    echo "${prompt}: using env override '${value}'"
+  fi
+
+  eval "${varname}=\"${value}\""
+}
+```
+
+**Then replace every `read` call:**
+```bash
+# BEFORE:
 read -p "Enter tenant name: " TENANT_NAME
 
-# AFTER (safe in all execution contexts):
-read -t 30 -p "Enter tenant name [datasquiz]: " TENANT_NAME
-TENANT_NAME="${TENANT_NAME:-datasquiz}"
-```
-
-Apply this pattern to EVERY `read` call in Script 1. The timeout is 30 seconds;
-if no input arrives, the default is used. This makes Script 1 runnable both
-interactively and non-interactively.
-
-**Additionally:** Script 1 must be run in a real TTY. Windsurf should execute:
-```bash
-sudo bash scripts/1-setup-system.sh
-```
-in a proper terminal session, not a piped/spawned subprocess. If Windsurf cannot
-guarantee a TTY, all defaults must be codified so the script self-completes.
-
----
-
-## LAYER 2: Permission denied — Ollama & OpenWebUI
-
-**Root cause:** Containers are running as non-root but the mounted host 
-directories are owned by root.
-
-**Diagnostic confirmation:**
-```bash
-ls -la /mnt/datasquiz/
-# Expect: directories owned by root:root with 750 permissions
-```
-
-**Exact fix in Script 1** — directory creation block must set correct ownership:
-```bash
-# After creating directories:
-BASE_DIR="/mnt/datasquiz"
-
-mkdir -p "${BASE_DIR}"/{ollama,postgres,qdrant,redis,open-webui,n8n,flowise,litellm}
-
-# Ollama runs as uid 1000 inside container:
-chown -R 1000:1000 "${BASE_DIR}/ollama"
-
-# OpenWebUI runs as uid 1000:
-chown -R 1000:1000 "${BASE_DIR}/open-webui"
-
-# Postgres runs as uid 999:
-chown -R 999:999 "${BASE_DIR}/postgres"
-
-# Qdrant runs as uid 1000:
-chown -R 1000:1000 "${BASE_DIR}/qdrant"
-
-# Set permissive base for others:
-chmod -R 755 "${BASE_DIR}"
-```
-
-**For OpenWebUI secret key specifically** — the file must exist and be readable:
-```bash
-WEBUI_SECRET_FILE="${BASE_DIR}/open-webui/secret_key"
-if [ ! -f "${WEBUI_SECRET_FILE}" ]; then
-  openssl rand -hex 32 > "${WEBUI_SECRET_FILE}"
-  chown 1000:1000 "${WEBUI_SECRET_FILE}"
-  chmod 600 "${WEBUI_SECRET_FILE}"
-fi
+# AFTER:
+prompt_input "Enter tenant name" "datasquiz" "TENANT_NAME"
 ```
 
 ---
 
-## LAYER 3: Containers not on the correct network
+## 📋 ALL `read` CALLS IN SCRIPT 1 — REQUIRED DEFAULTS
 
-**Root cause:** `docker-compose.yml` declares the network but some services
-are missing the `networks:` key under their service definition. Docker falls
-back to the default bridge, breaking inter-service DNS.
+Windsurf must apply the `prompt_input` function to each of these, with the
+defaults listed. These defaults align with README north star:
 
-**Diagnostic:**
+| Prompt | Variable | Default |
+|--------|----------|---------|
+| Tenant name | `TENANT_NAME` | `datasquiz` |
+| Base directory | `BASE_DIR` | `/mnt/datasquiz` |
+| Domain | `DOMAIN` | `datasquiz.local` |
+| Deploy Ollama | `DEPLOY_OLLAMA` | `true` |
+| Ollama model | `OLLAMA_MODEL` | `llama3.2` |
+| Deploy OpenWebUI | `DEPLOY_OPENWEBUI` | `true` |
+| Deploy N8N | `DEPLOY_N8N` | `true` |
+| Deploy Flowise | `DEPLOY_FLOWISE` | `true` |
+| Deploy LiteLLM | `DEPLOY_LITELLM` | `true` |
+| Deploy Qdrant | `DEPLOY_QDRANT` | `true` |
+| Postgres password | `POSTGRES_PASSWORD` | `$(openssl rand -hex 16)` |
+| N8N encryption key | `N8N_ENCRYPTION_KEY` | `$(openssl rand -hex 16)` |
+| WebUI secret key | `WEBUI_SECRET_KEY` | `$(openssl rand -hex 32)` |
+
+**For generated secrets:** generate ONCE at script start, store in variable,
+use as the default. Do NOT regenerate on each call or the values will differ
+between the prompt and the written config.
+
 ```bash
-docker network inspect config_ai-datasquiz-network
-# Confirms: only redis and open-webui connected
-```
+# At TOP of Script 1, before any prompts:
+_DEFAULT_POSTGRES_PASS="$(openssl rand -hex 16)"
+_DEFAULT_N8N_KEY="$(openssl rand -hex 16)"
+_DEFAULT_WEBUI_KEY="$(openssl rand -hex 32)"
 
-**Exact fix in `docker-compose.yml`** — every service MUST declare:
-```yaml
-services:
-  ollama:
-    networks:
-      - ai-platform-network
-  
-  postgres:
-    networks:
-      - ai-platform-network
-  
-  qdrant:
-    networks:
-      - ai-platform-network
-  
-  redis:
-    networks:
-      - ai-platform-network
-  
-  open-webui:
-    networks:
-      - ai-platform-network
-
-  # ... every service must have this block
-
-networks:
-  ai-platform-network:
-    driver: bridge
-```
-
-The network name must be IDENTICAL across all service definitions and the
-top-level `networks:` declaration. The current network `config_ai-datasquiz-network`
-suggests the compose project name is `config` — this is wrong. 
-
-**Fix:** Ensure `docker-compose.yml` is in `/mnt/datasquiz/` or the project
-name is explicitly set:
-```bash
-# In Script 2, replace bare docker compose calls with:
-docker compose -p datasquiz -f /mnt/datasquiz/docker-compose.yml up -d
-```
-This ensures the network is named `datasquiz_ai-platform-network`, not
-`config_ai-datasquiz-network`.
-
----
-
-## LAYER 4: Postgres and Qdrant restart loops
-
-**Root cause A (Postgres):** Data directory permissions (fixed by Layer 2 above).
-Postgres also fails if it finds a partially initialized data directory.
-
-**Root cause B (Qdrant):** Same permission issue + Qdrant may have a corrupted
-storage directory from the broken previous run.
-
-**Fix:** Script 0 (cleanup) must wipe data directories cleanly. Confirm it does:
-```bash
-# Script 0 must include:
-rm -rf "${BASE_DIR}/postgres/*"
-rm -rf "${BASE_DIR}/qdrant/*"
-# NOT rmdir — must wipe contents, preserve directory
-```
-
-**Verify Postgres env vars are present:**
-```bash
-docker compose exec postgres env | grep POSTGRES
-# Must show POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
-```
-If missing → `.env` file not being passed to compose. Check Script 2:
-```bash
-# Script 2 must use:
-docker compose --env-file /mnt/datasquiz/platform.conf -f docker-compose.yml up -d
-# OR docker-compose.yml must have: env_file: /mnt/datasquiz/platform.conf
+# Then:
+prompt_input "Postgres password" "${_DEFAULT_POSTGRES_PASS}" "POSTGRES_PASSWORD"
 ```
 
 ---
 
-## LAYER 5: LiteLLM Exited (1)
+## 🔧 SECONDARY FIX: NON-INTERACTIVE EXECUTION METHOD FOR WINDSURF
 
-**Root cause:** LiteLLM requires a valid `config.yaml`. If missing or malformed
-it exits immediately.
+Even with the above fix, Windsurf should invoke Script 1 this way to pass all
+values via environment, bypassing all prompts entirely:
 
-**Fix in Script 2** — generate minimal LiteLLM config before `docker compose up`:
 ```bash
-LITELLM_CONFIG="/mnt/datasquiz/litellm/config.yaml"
-if [ ! -f "${LITELLM_CONFIG}" ]; then
-  cat > "${LITELLM_CONFIG}" << 'EOF'
-model_list:
-  - model_name: ollama/llama3.2
-    litellm_params:
-      model: ollama/llama3.2
-      api_base: http://ollama:11434
-
-litellm_settings:
-  drop_params: true
-  max_budget: null
-EOF
-fi
+TENANT_NAME=datasquiz \
+BASE_DIR=/mnt/datasquiz \
+DOMAIN=datasquiz.local \
+DEPLOY_OLLAMA=true \
+DEPLOY_OPENWEBUI=true \
+DEPLOY_N8N=true \
+DEPLOY_FLOWISE=true \
+DEPLOY_LITELLM=true \
+DEPLOY_QDRANT=true \
+OLLAMA_MODEL=llama3.2 \
+sudo -E bash scripts/1-setup-system.sh
 ```
+
+The `-E` flag preserves environment variables through sudo. This is the
+**canonical non-interactive invocation** Windsurf must use.
 
 ---
 
-## 📋 CORRECT EXECUTION SEQUENCE
+## 🔁 COMPLETE EXECUTION SEQUENCE AFTER FIX
 
-Given the current broken state, follow this exact sequence:
-
-### Step 0: Clean slate
+### Step 0: Clean state
 ```bash
 sudo bash scripts/0-complete-cleanup.sh datasquiz
-# Verify:
-docker ps -a | grep -v CONTAINER  # should be empty
-ls /mnt/datasquiz/                 # should be empty or not exist
+docker ps -a                          # must return empty
+ls /mnt/datasquiz 2>/dev/null         # must return nothing or not exist
 ```
 
-### Step 1: Run in a REAL terminal with TTY
+### Step 1: Non-interactive invocation
 ```bash
-# Windsurf must exec this in an interactive terminal session:
-sudo bash scripts/1-setup-system.sh
-# Watch for "platform.conf created" confirmation before proceeding
-# Verify:
-cat /mnt/datasquiz/platform.conf   # must exist and have values
-ls -la /mnt/datasquiz/ollama/      # must be owned by 1000:1000
+TENANT_NAME=datasquiz \
+BASE_DIR=/mnt/datasquiz \
+DOMAIN=datasquiz.local \
+DEPLOY_OLLAMA=true \
+DEPLOY_OPENWEBUI=true \
+DEPLOY_N8N=true \
+DEPLOY_FLOWISE=true \
+DEPLOY_LITELLM=true \
+DEPLOY_QDRANT=true \
+OLLAMA_MODEL=llama3.2 \
+sudo -E bash scripts/1-setup-system.sh
+
+# Verify before proceeding:
+test -f /mnt/datasquiz/platform.conf && echo "✅ platform.conf OK" || echo "❌ MISSING"
+ls -la /mnt/datasquiz/ollama/         # must show uid 1000
 ```
 
-### Step 2: Deploy
+### Step 2: Deploy services
 ```bash
 sudo bash scripts/2-deploy-services.sh
-# Wait 60 seconds, then check:
-docker compose -p datasquiz ps
-# All containers should show "Up" not "Restarting"
+sleep 60
+docker compose -p datasquiz ps        # all must show "Up"
 ```
 
-### Step 3: Configure
+### Step 3: Configure services
 ```bash
 sudo bash scripts/3-configure-services.sh
 ```
 
 ---
 
-## 🔑 PLATFORM.CONF — MUST EXIST BEFORE SCRIPT 2
+## ⚠️ NOTE TO WINDSURF ON WHY IT COULDN'T DETECT THIS
 
-This is the single most important file. Script 2 cannot work without it.
+The script passes shell syntax validation (`bash -n script.sh`) because `read`
+is syntactically valid. Static analysis tools will not flag it. The hang only
+manifests at **runtime in a non-TTY context**. The test for this is:
 
-Minimum required contents:
 ```bash
-TENANT_NAME=datasquiz
-BASE_DIR=/mnt/datasquiz
-DOMAIN=datasquiz.local
+# This will reproduce the hang immediately:
+echo "" | bash scripts/1-setup-system.sh
 
-# Database
-POSTGRES_USER=datasquiz
-POSTGRES_PASSWORD=<generated>
-POSTGRES_DB=datasquiz
-
-# Services selected
-DEPLOY_OLLAMA=true
-DEPLOY_OPENWEBUI=true
-DEPLOY_N8N=true
-DEPLOY_LITELLM=true
-DEPLOY_QDRANT=true
-
-# Ollama
-OLLAMA_MODEL=llama3.2
-
-# OpenWebUI
-WEBUI_SECRET_KEY=<generated>
+# This is how to test the fix works:
+TENANT_NAME=datasquiz BASE_DIR=/mnt/datasquiz bash scripts/1-setup-system.sh
+# Should complete without hanging
 ```
 
----
-
-## ✅ GO/NO-GO CHECKLIST BEFORE SCRIPT 2
-
-| Check | Command | Required Result |
-|-------|---------|----------------|
-| Cleanup complete | `docker ps -a` | No containers |
-| platform.conf exists | `cat /mnt/datasquiz/platform.conf` | Has TENANT_NAME |
-| Directory ownership | `ls -la /mnt/datasquiz/ollama` | uid 1000 |
-| Postgres dir clean | `ls /mnt/datasquiz/postgres` | Empty |
-| Qdrant dir clean | `ls /mnt/datasquiz/qdrant` | Empty |
-| LiteLLM config exists | `cat /mnt/datasquiz/litellm/config.yaml` | Valid YAML |
-
-**Do not proceed to Script 2 until all 6 pass.**
+Windsurf must add this test to its validation before declaring Script 1 valid.
 ```

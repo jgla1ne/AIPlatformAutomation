@@ -141,8 +141,40 @@ service_enabled_by_preset() {
 }
 
 # =============================================================================
-# INTERACTIVE PROMPT FUNCTIONS
+# INTERACTIVE PROMPT FUNCTIONS (README P1 - Two-Mode Support)
 # =============================================================================
+
+# Generate default secrets once at script start
+_DEFAULT_POSTGRES_PASS="$(openssl rand -hex 16)"
+_DEFAULT_N8N_KEY="$(openssl rand -hex 16)"
+_DEFAULT_WEBUI_KEY="$(openssl rand -hex 32)"
+
+prompt_input() {
+    local prompt="$1"
+    local default="$2"
+    local varname="$3"
+
+    if [ -t 0 ]; then
+        # stdin IS a terminal — interactive mode
+        read -rp "  ${prompt} [${default}]: " value
+        value="${value:-${default}}"
+    else
+        # stdin is NOT a terminal — non-interactive mode
+        echo "  ${prompt}: using default '${default}'"
+        value="${default}"
+    fi
+
+    # Allow environment variable override in both modes:
+    # e.g. TENANT_NAME=myco bash script1.sh
+    local envval
+    envval=$(eval echo "\${${varname}:-}" 2>/dev/null || echo "")
+    if [ -n "${envval}" ]; then
+        value="${envval}"
+        echo "  ${prompt}: using env override '${value}'"
+    fi
+
+    eval "${varname}=\"${value}\""
+}
 prompt_default() {
     local prompt="$1"
     local default="$2"
@@ -216,12 +248,12 @@ prompt_secret() {
 collect_tenant_config() {
     log "Collecting tenant configuration..."
     
-    TENANT_ID=$(prompt_default "Tenant identifier" "")
+    prompt_input "Tenant identifier" "datasquiz" "TENANT_ID"
     if [[ -z "$TENANT_ID" ]]; then
         fail "Tenant ID is required"
     fi
     
-    BASE_DOMAIN=$(prompt_default "Base domain (example.com or local)" "local")
+    prompt_input "Base domain (example.com or local)" "datasquiz.local" "BASE_DOMAIN"
     
     # Detect EBS mount
     if [[ -d "/mnt" ]]; then
@@ -524,7 +556,7 @@ write_platform_conf() {
     
     # Generate passwords first (before any dependencies)
     if [[ "${POSTGRES_ENABLED}" == "true" ]]; then
-        postgres_password="$(gen_password)"
+        postgres_password="${_DEFAULT_POSTGRES_PASS}"
     fi
     
     if [[ "${REDIS_ENABLED}" == "true" ]]; then
@@ -539,7 +571,7 @@ write_platform_conf() {
     fi
     
     if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
-        openwebui_secret="$(gen_secret)"
+        openwebui_secret="${_DEFAULT_WEBUI_KEY}"
     fi
     
     if [[ "${LIBRECHAT_ENABLED}" == "true" ]]; then
@@ -548,7 +580,7 @@ write_platform_conf() {
     fi
     
     if [[ "${N8N_ENABLED}" == "true" ]]; then
-        n8n_encryption_key="$(gen_secret)"
+        n8n_encryption_key="${_DEFAULT_N8N_KEY}"
     fi
     
     if [[ "${FLOWISE_ENABLED}" == "true" ]]; then

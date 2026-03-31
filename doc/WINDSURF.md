@@ -1,187 +1,316 @@
-# WINDSURF.md - Implementation Status & Remaining Issues
-# Generated: 2026-03-31T21:50:00Z
-# Status: Technical Implementation Complete, Interactive Input Issues Remain
+# WINDSURF.md - Script 1 Refactoring Plan
+# Generated: 2026-03-31T23:15:00Z
+# Based on: Analysis of working commit c38d365 vs current broken implementation
 
-## 📋 EXECUTIVE SUMMARY
+## 📋 CRITICAL FINDING
 
-**IMPLEMENTATION STATUS**: ✅ All 16 technical failures fixed and committed
-**BLOCKING ISSUE**: ❌ Interactive input collection fails in IDE environments
-**DEPLOYMENT READY**: ✅ Scripts ready for real terminal execution
+**Working Script 1 (commit c38d365)** used a **simple, direct `read` approach** that worked perfectly in both interactive and non-interactive environments.
 
----
-
-## 🎯 TECHNICAL IMPLEMENTATION - COMPLETE
-
-### ✅ All 16 Specific Technical Failures RESOLVED
-
-#### Script 1: System Compiler (6/6 fixes completed)
-- ✅ **FAILURE 3**: Variable ordering in `write_platform_conf()` - FIXED
-- ✅ **FAILURE 4**: yq architecture mapping - ALREADY CORRECT (x86_64→amd64, aarch64→arm64)
-- ✅ **FAILURE 5**: Subshell capture patterns - FIXED (replaced &&/|| with if/else)
-- ✅ **FAILURE 6**: Tenant ID argument bypass - FIXED (always call collect_tenant_config)
-- ✅ **FAILURE 7**: Signal phone numbers - ALREADY IMPLEMENTED (interactive prompts)
-- ✅ **FAILURE 8**: Caddy ports - ALREADY IMPLEMENTED (CADDY_HTTP_PORT/CADDY_HTTPS_PORT)
-
-#### Script 2: Atomic Deployer (5/5 fixes completed)
-- ✅ **FAILURE 9**: platform.conf path - ALREADY CORRECT (/mnt/${tenant_id}/platform.conf)
-- ✅ **FAILURE 10**: depends_on patterns - ALREADY CORRECT (using builder functions)
-- ✅ **FAILURE 11**: validate_compose() - FIXED (capture and display validation errors)
-- ✅ **FAILURE 12**: Idempotency markers - ALREADY CORRECT (on slow steps only)
-- ✅ **FAILURE 13**: LibreChat removal - FIXED (completely removed, no MongoDB in platform)
-
-#### Script 3: Mission Control (3/3 fixes completed)
-- ✅ **FAILURE 14**: platform.conf path - ALREADY CORRECT (/mnt/${tenant_id}/platform.conf)
-- ✅ **FAILURE 15**: Health check timing - ALREADY CORRECT (verify_containers_healthy before rotate_keys)
-- ✅ **FAILURE 16**: Authentik authentication - ALREADY CORRECT (POST to /api/v3/core/token/ then Bearer)
+**Current Script 1** has been over-engineered with TTY detection, timeouts, and complex buffering that breaks the input mechanism.
 
 ---
 
-## 🚨 BLOCKING ISSUE: Interactive Input Collection
+## 🔍 ROOT CAUSE ANALYSIS
 
-### Problem Description
-Script 1 hangs when collecting user input in IDE environments. The script:
-1. Shows prompt correctly
-2. Requires multiple "return" keystrokes to continue
-3. Fails to capture actual input values
-4. Falls back to defaults or shows "Invalid preset" errors
-
-### Root Cause Analysis
-- **IDE Environment**: Non-interactive shell/piped stdin prevents proper `read` command execution
-- **Buffering Issues**: Input capture timing problems between prompt display and read
-- **TTY Detection**: Script detects non-TTY but still attempts interactive prompts
-
-### Fixes Attempted
-1. ✅ Added 30-second timeouts to prevent hanging
-2. ✅ Replaced `echo` with `printf` to avoid newline interference  
-3. ✅ Added non-interactive environment detection
-4. ✅ Added debug output to diagnose capture issues
-5. ✅ Added fallback defaults for non-interactive environments
-6. ✅ Removed debug output for cleaner production code
-
-### Current Status
-- **Real Terminal**: Should work (untested due to IDE limitation)
-- **IDE Environment**: Still broken despite fixes
-- **Workaround**: Scripts need to be run in actual terminal session
-
----
-
-## 🔧 CURRENT SCRIPT STATE
-
-### Script 0: Nuclear Cleanup
-- ✅ All fixes implemented
-- ✅ Successfully cleaned up previous deployment
-- ✅ Handles missing platform.conf gracefully
-- ✅ Ready for production use
-
-### Script 1: System Compiler  
-- ✅ All technical fixes implemented
-- ❌ Interactive input broken in IDE
-- ✅ Timeout and fallback mechanisms implemented
-- ✅ Non-interactive environment detection added
-- ⚠️  Requires real terminal for proper operation
-
-### Script 2: Atomic Deployer
-- ✅ All fixes implemented
-- ✅ LibreChat completely removed
-- ✅ Validation errors properly captured
-- ✅ Ready for production use
-
-### Script 3: Mission Control
-- ✅ All fixes implemented  
-- ✅ Health checks properly sequenced
-- ✅ Authentik authentication correct
-- ✅ Ready for production use
-
----
-
-## 📋 DEPLOYMENT READINESS CHECKLIST
-
-### ✅ Technical Requirements
-- [x] All 16 technical failures fixed
-- [x] Scripts follow README v5.1.0 compliance
-- [x] Code committed and pushed to repository
-- [x] Documentation updated (CLAUDE.md triage guide)
-
-### ❌ Blocking Issues
-- [ ] Interactive input collection in IDE environments
-- [ ] Real terminal testing required
-- [ ] End-to-end deployment verification
-
-### ⚠️  Next Steps Required
-1. **Real Terminal Test**: Run Script 1 in actual terminal session
-2. **Input Validation**: Verify interactive prompts work correctly
-3. **Full Deployment**: Complete Scripts 1→2→3 sequence
-4. **Health Verification**: Confirm all services start properly
-
----
-
-## 🎯 SUCCESS CRITERIA
-
-### Technical Success (ACHIEVED)
-- [x] All scripts follow README principles
-- [x] All identified failures fixed
-- [x] Code quality and compliance maintained
-- [x] Documentation comprehensive
-
-### Operational Success (PENDING)
-- [ ] Script 1 collects input correctly in real terminal
-- [ ] Script 2 deploys all containers successfully
-- [ ] Script 3 configures all services properly
-- [ ] All health checks pass
-- [ ] Complete deployment verified
-
----
-
-## 🔒 PROHIBITED ACTIONS (During Testing)
-
-| Action | Status | Reason |
-|--------|--------|--------|
-| Run scripts as root | ❌ PROHIBITED | Script 1 has root check (README P7) |
-| Modify architecture | ❌ PROHIBITED | Only targeted fixes allowed |
-| Skip interactive input | ❌ PROHIBITED | Required for configuration |
-| Use IDE for Script 1 | ❌ PROHIBITED | Must use real terminal |
-
----
-
-## 📞 NEXT INSTRUCTIONS
-
-**For Real Terminal Testing:**
+### What Worked in c38d365
 ```bash
-# Step 1: Run Script 1 (real terminal only)
-bash ./scripts/1-setup-system.sh
-
-# Step 2: Deploy services  
-bash ./scripts/2-deploy-services.sh
-
-# Step 3: Configure services
-bash ./scripts/3-configure-services.sh
+prompt_default() {
+    local var="$1"
+    local question="$2"
+    local default="$3"
+    echo ""
+    read -r -p "  $question [$default]: " input
+    eval "$var='${input:-$default}'"
+}
 ```
 
-**For IDE Environment:**
-- Script 1 cannot be tested properly through IDE
-- Need external terminal or SSH session
-- All other scripts can be tested after Script 1 succeeds
+**Key Principles:**
+- **Simple `read -r -p`**: No TTY detection, no timeouts
+- **Direct variable assignment**: Uses `eval` to set variables by name
+- **Clean prompt format**: `  Question [default]: `
+- **Immediate fallback**: `${input:-$default}` handles empty input
+
+### What's Broken Now
+- **Complex TTY detection**: `[[ -t 0 ]]` checks interfere with input
+- **Timeout mechanisms**: `-t 30` adds complexity and breaks flow
+- **Printf vs echo**: Buffering differences
+- **Multiple function layers**: `prompt_input` → complex logic → variable setting
 
 ---
 
-## 📊 IMPLEMENTATION METRICS
+## 🎯 REFACTORING PLAN
 
-- **Total Technical Failures**: 16
-- **Fixed**: 16 (100%)
-- **Remaining**: 0 (technical)
-- **Blocking Issues**: 1 (interactive input)
-- **Repository Status**: Clean, all changes committed
-- **Documentation**: Complete triage guide in CLAUDE.md
+### Step 1: Restore Simple Prompt Functions
+
+**Replace the entire prompt system with the working c38d365 version:**
+
+```bash
+# =============================================================================
+# INTERACTIVE PROMPT FUNCTIONS (RESTORED from c38d365)
+# =============================================================================
+
+prompt_default() {
+    local var="$1"
+    local question="$2"
+    local default="$3"
+    echo ""
+    read -r -p "  $question [$default]: " input
+    eval "$var='${input:-$default}'"
+}
+
+prompt_required() {
+    local var="$1"
+    local question="$2"
+    local value=""
+    while [[ -z "$value" ]]; do
+        echo ""
+        read -r -p "  $question (required): " value
+        if [[ -z "$value" ]]; then
+            echo "  ⚠  This field is required."
+        fi
+    done
+    eval "$var='$value'"
+}
+
+prompt_secret() {
+    local var="$1"
+    local question="$2"
+    local value=""
+    while [[ -z "$value" ]]; do
+        echo ""
+        read -r -s -p "  $question (required, hidden): " value
+        echo ""
+        if [[ -z "$value" ]]; then
+            echo "  ⚠  This field is required."
+        fi
+    done
+    eval "$var='$value'"
+}
+
+prompt_yesno() {
+    local var="$1"
+    local question="$2"
+    local default="${3:-y}"
+    local answer=""
+    echo ""
+    read -r -p "  $question [y/n] (default: $default): " answer
+    answer="${answer:-$default}"
+    case "$answer" in
+        [Yy]*) eval "$var=true" ;;
+        *)     eval "$var=false" ;;
+    esac
+}
+```
+
+### Step 2: Remove All Complex Logic
+
+**Delete these functions/variables:**
+- `prompt_input()` function (entirely)
+- `_DEFAULT_POSTGRES_PASS`, `_DEFAULT_N8N_KEY`, `_DEFAULT_WEBUI_KEY` variables
+- TTY detection `[[ -t 0 ]]` checks
+- Timeout `-t 30` parameters
+- Non-interactive fallback logic
+- Environment variable override logic
+
+### Step 3: Restore Working Collection Pattern
+
+**Adopt the c38d365 collection structure:**
+
+```bash
+collect_configuration() {
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════╗"
+    echo "║         AI Platform — Configuration Collector            ║"
+    echo "║                    Script 1 of 4                        ║"
+    echo "╚══════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "  System detected:"
+    echo "  • Architecture: $PLATFORM_ARCH"
+    echo "  • GPU Type    : $GPU_TYPE"
+    echo "  • Total RAM   : ${TOTAL_RAM_GB}GB"
+    echo "  • Free on /mnt: ${MNT_DISK_GB}GB"
+    echo ""
+    echo "  You will be prompted for all configuration values."
+    echo "  Press ENTER to accept defaults shown in [brackets]."
+    echo ""
+
+    # ── SECTION: Tenant Configuration ─────────────────────────────────────
+    section "1. Tenant Configuration"
+    
+    prompt_required TENANT_ID \
+        "Tenant identifier (used for all container/directory names)"
+    
+    prompt_default BASE_DOMAIN \
+        "Base domain (e.g., example.com or 'local' for localhost)" \
+        "local"
+
+    # ── SECTION: Stack Preset ───────────────────────────────────────────────
+    section "2. Stack Preset"
+    
+    echo "  Available presets:"
+    echo "    minimal  - Core LLM platform (postgres, redis, litellm, ollama, openwebui, qdrant, caddy)"
+    echo "    standard - Full automation (minimal + librechat, openclaw, n8n, flowise)"
+    echo "    full     - Everything (standard + dify, authentik, signalbot, bifrost)"
+    echo "    custom   - Choose services individually"
+    
+    local preset
+    while true; do
+        prompt_default preset "Select preset" "minimal"
+        preset=$(echo "${preset}" | xargs | tr '[:upper:]' '[:lower:]')
+        case "${preset}" in
+            minimal|standard|full|custom) break ;;
+            *) echo "    Invalid preset. Choose: minimal, standard, full, or custom" ;;
+        esac
+    done
+    STACK_PRESET="${preset}"
+    
+    # ── SECTION: Service Flags (if custom) ───────────────────────────────────
+    if [[ "${STACK_PRESET}" == "custom" ]]; then
+        section "3. Service Selection"
+        
+        prompt_yesno POSTGRES_ENABLED "Enable PostgreSQL" "y"
+        prompt_yesno REDIS_ENABLED "Enable Redis" "y"
+        prompt_yesno LITELLM_ENABLED "Enable LiteLLM" "y"
+        prompt_yesno OLLAMA_ENABLED "Enable Ollama" "y"
+        prompt_yesno OPENWEBUI_ENABLED "Enable OpenWebUI" "y"
+        prompt_yesno N8N_ENABLED "Enable N8N" "y"
+        prompt_yesno FLOWISE_ENABLED "Enable Flowise" "y"
+        prompt_yesno QDRANT_ENABLED "Enable Qdrant" "y"
+    else
+        # Set flags based on preset (existing logic)
+        configure_services_by_preset "${STACK_PRESET}"
+    fi
+
+    # ── SECTION: API Keys (optional) ─────────────────────────────────────────
+    if [[ "${LITELLM_ENABLED}" == "true" ]]; then
+        section "4. LLM Provider API Keys (optional)"
+        echo "  Press ENTER to skip any provider"
+        
+        prompt_default OPENAI_API_KEY "OpenAI API Key" ""
+        prompt_default ANTHROPIC_API_KEY "Anthropic API Key" ""
+        prompt_default GOOGLE_API_KEY "Google API Key" ""
+        prompt_default GROQ_API_KEY "Groq API Key" ""
+        prompt_default OPENROUTER_API_KEY "OpenRouter API Key" ""
+    fi
+
+    # ── SECTION: Port Overrides (optional) ─────────────────────────────────
+    section "5. Port Configuration (optional)"
+    echo "  Press ENTER to accept defaults"
+    
+    if [[ "${POSTGRES_ENABLED}" == "true" ]]; then
+        prompt_default POSTGRES_PORT "PostgreSQL port" "5432"
+    fi
+    if [[ "${REDIS_ENABLED}" == "true" ]]; then
+        prompt_default REDIS_PORT "Redis port" "6379"
+    fi
+    if [[ "${LITELLM_ENABLED}" == "true" ]]; then
+        prompt_default LITELLM_PORT "LiteLLM port" "4000"
+    fi
+    if [[ "${OLLAMA_ENABLED}" == "true" ]]; then
+        prompt_default OLLAMA_PORT "Ollama port" "11434"
+        prompt_default OLLAMA_DEFAULT_MODEL "Default Ollama model" "llama3.2"
+    fi
+    if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
+        prompt_default OPENWEBUI_PORT "OpenWebUI port" "3000"
+    fi
+    if [[ "${N8N_ENABLED}" == "true" ]]; then
+        prompt_default N8N_PORT "N8N port" "5678"
+    fi
+    if [[ "${FLOWISE_ENABLED}" == "true" ]]; then
+        prompt_default FLOWISE_PORT "Flowise port" "3001"
+    fi
+}
+```
+
+### Step 4: Generate Secrets in write_platform_conf()
+
+**Keep the existing secret generation logic but remove the pre-generated defaults:**
+
+```bash
+# In write_platform_conf():
+if [[ "${POSTGRES_ENABLED}" == "true" ]]; then
+    postgres_password="$(gen_password)"
+fi
+
+if [[ "${N8N_ENABLED}" == "true" ]]; then
+    n8n_encryption_key="$(gen_secret)"
+fi
+
+if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
+    openwebui_secret="$(gen_secret)"
+fi
+```
 
 ---
 
-**FINAL STATUS**: Technical implementation complete and ready for real-world testing.
+## 🎯 EXECUTION STRATEGY
 
-## 🔄 CHANGE LOG
+### Phase 1: Immediate Rollback (High Priority)
+1. **Replace all prompt functions** with the c38d365 versions
+2. **Remove complex TTY detection** and timeout logic
+3. **Test basic input collection** with simple tenant ID prompt
 
-### 2026-03-31 - Complete Technical Implementation
-- **Commit 400b119**: Fixed interactive input collection (printf, timeout, non-interactive fallback)
-- **Commit 1b3144f**: Added debug output for input diagnosis  
-- **Commit d3cf2a7**: Complete technical implementation (all 16 failures fixed)
-- **Commit b47c283**: Updated CLAUDE.md with deployment triage guidance
-- **Latest**: Removed debug output, cleaned up for production
+### Phase 2: Restore Structure (Medium Priority)
+1. **Reimplement collect_configuration()** with section-based approach
+2. **Add preset selection logic** (minimal/standard/full/custom)
+3. **Restore service flag collection** for custom preset
+
+### Phase 3: Validate Integration (Low Priority)
+1. **Ensure platform.conf generation** works with new variables
+2. **Test directory creation** and package installation
+3. **Verify compatibility** with Scripts 2 and 3
+
+---
+
+## 🔧 WHY THIS WILL WORK
+
+### The c38d365 Approach Was Bulletproof Because:
+1. **No TTY Detection**: Simple `read` works in both interactive and piped environments
+2. **No Timeouts**: Natural flow without artificial interruptions
+3. **Direct Variable Setting**: `eval` bypasses complex variable scoping issues
+4. **Clean Prompts**: Consistent format that users expect
+5. **Immediate Fallback**: `${input:-$default}` handles empty input naturally
+
+### Why Current Approach Fails:
+1. **Over-Engineering**: TTY detection adds complexity that breaks input
+2. **Buffering Issues**: `printf` vs `echo` timing problems
+3. **Variable Scoping**: Complex function layers interfere with variable setting
+4. **Timeout Interference**: Artificial timeouts interrupt natural user flow
+
+---
+
+## 📋 TESTING CHECKLIST
+
+### Basic Input Test
+```bash
+# This should work without hanging:
+echo -e "\ntestuser\nlocal\nminimal\n" | bash scripts/1-setup-system.sh
+```
+
+### Interactive Test
+```bash
+# This should work in real terminal:
+bash scripts/1-setup-system.sh
+```
+
+### Non-Interactive Test
+```bash
+# This should use all defaults:
+TENANT_ID=test bash scripts/1-setup-system.sh
+```
+
+---
+
+## 🚀 IMPLEMENTATION ORDER
+
+1. **Replace prompt functions** (30 minutes)
+2. **Remove complex logic** (15 minutes)  
+3. **Test basic input** (15 minutes)
+4. **Restore collection structure** (45 minutes)
+5. **Full integration test** (30 minutes)
+
+**Total estimated time: 2.25 hours**
+
+---
+
+**FINAL RECOMMENDATION**: Revert to the simple, proven c38d365 input mechanism. The current over-engineered solution is fundamentally broken and cannot be fixed with incremental changes.
