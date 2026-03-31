@@ -152,17 +152,18 @@ prompt_default() {
     if [[ ! -t 0 ]]; then
         echo "  WARNING: Non-interactive environment detected"
         echo "  Using default value for '${prompt}': ${default:-<empty>}"
-        echo "${default}"
+        printf '%s' "${default}"
         return
     fi
     
-    # Show prompt and read input
+    # Show prompt and read input with timeout
     echo -n "  ${prompt} [${default}]: "
-    if read -r response; then
-        echo "${response:-$default}"
+    if read -t 30 -r response 2>/dev/null; then
+        printf '%s' "${response:-$default}"
     else
-        echo "  ERROR: Failed to read input, using default"
-        echo "${default}"
+        echo ""
+        echo "  WARNING: Input timeout or failed, using default"
+        printf '%s' "${default}"
     fi
 }
 
@@ -171,15 +172,27 @@ prompt_yesno() {
     local default="${2:-n}"
     local response
     
+    # Check if stdin is available for interactive input
+    if [[ ! -t 0 ]]; then
+        echo "  WARNING: Non-interactive environment detected"
+        echo "  Using default value for '${prompt}': ${default}"
+        [[ "${default}" == "y" || "${default}" == "yes" ]] && return 0 || return 1
+    fi
+    
     while true; do
         echo -n "  ${prompt} [y/N]: "
-        read -r response
-        response=$(echo "${response}" | tr '[:upper:]' '[:lower:]')
-        case "${response}" in
-            y|yes) return 0 ;;
-            n|no|"") return 1 ;;
-            *) echo "    Please enter y or n" ;;
-        esac
+        if read -t 30 -r response 2>/dev/null; then
+            response=$(echo "${response}" | tr '[:upper:]' '[:lower:]')
+            case "${response}" in
+                y|yes) return 0 ;;
+                n|no|"") return 1 ;;
+                *) echo "    Please enter y or n" ;;
+            esac
+        else
+            echo ""
+            echo "  WARNING: Input timeout, using default: ${default}"
+            [[ "${default}" == "y" || "${default}" == "yes" ]] && return 0 || return 1
+        fi
     done
 }
 
