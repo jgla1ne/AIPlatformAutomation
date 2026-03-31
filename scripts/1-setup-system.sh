@@ -234,21 +234,95 @@ collect_service_flags() {
     
     # Set defaults based on preset
     if [[ "${STACK_PRESET}" != "custom" ]]; then
-        POSTGRES_ENABLED=$(service_enabled_by_preset "postgres" && echo "true" || echo "false")
-        REDIS_ENABLED=$(service_enabled_by_preset "redis" && echo "true" || echo "false")
-        LITELLM_ENABLED=$(service_enabled_by_preset "litellm" && echo "true" || echo "false")
-        OLLAMA_ENABLED=$(service_enabled_by_preset "ollama" && echo "true" || echo "false")
-        OPENWEBUI_ENABLED=$(service_enabled_by_preset "openwebui" && echo "true" || echo "false")
-        QDRANT_ENABLED=$(service_enabled_by_preset "qdrant" && echo "true" || echo "false")
-        CADDY_ENABLED=$(service_enabled_by_preset "caddy" && echo "true" || echo "false")
-        LIBRECHAT_ENABLED=$(service_enabled_by_preset "librechat" && echo "true" || echo "false")
-        OPENCLAW_ENABLED=$(service_enabled_by_preset "openclaw" && echo "true" || echo "false")
-        N8N_ENABLED=$(service_enabled_by_preset "n8n" && echo "true" || echo "false")
-        FLOWISE_ENABLED=$(service_enabled_by_preset "flowise" && echo "true" || echo "false")
-        DIFY_ENABLED=$(service_enabled_by_preset "dify" && echo "true" || echo "false")
-        AUTHENTIK_ENABLED=$(service_enabled_by_preset "authentik" && echo "true" || echo "false")
-        SIGNALBOT_ENABLED=$(service_enabled_by_preset "signalbot" && echo "true" || echo "false")
-        BIFROST_ENABLED=$(service_enabled_by_preset "bifrost" && echo "true" || echo "false")
+        if service_enabled_by_preset "postgres"; then
+            POSTGRES_ENABLED="true"
+        else
+            POSTGRES_ENABLED="false"
+        fi
+        
+        if service_enabled_by_preset "redis"; then
+            REDIS_ENABLED="true"
+        else
+            REDIS_ENABLED="false"
+        fi
+        
+        if service_enabled_by_preset "litellm"; then
+            LITELLM_ENABLED="true"
+        else
+            LITELLM_ENABLED="false"
+        fi
+        
+        if service_enabled_by_preset "ollama"; then
+            OLLAMA_ENABLED="true"
+        else
+            OLLAMA_ENABLED="false"
+        fi
+        
+        if service_enabled_by_preset "openwebui"; then
+            OPENWEBUI_ENABLED="true"
+        else
+            OPENWEBUI_ENABLED="false"
+        fi
+        
+        if service_enabled_by_preset "qdrant"; then
+            QDRANT_ENABLED="true"
+        else
+            QDRANT_ENABLED="false"
+        fi
+        
+        if service_enabled_by_preset "caddy"; then
+            CADDY_ENABLED="true"
+        else
+            CADDY_ENABLED="false"
+        fi
+        
+        if service_enabled_by_preset "librechat"; then
+            LIBRECHAT_ENABLED="true"
+        else
+            LIBRECHAT_ENABLED="false"
+        fi
+        
+        if service_enabled_by_preset "openclaw"; then
+            OPENCLAW_ENABLED="true"
+        else
+            OPENCLAW_ENABLED="false"
+        fi
+        
+        if service_enabled_by_preset "n8n"; then
+            N8N_ENABLED="true"
+        else
+            N8N_ENABLED="false"
+        fi
+        
+        if service_enabled_by_preset "flowise"; then
+            FLOWISE_ENABLED="true"
+        else
+            FLOWISE_ENABLED="false"
+        fi
+        
+        if service_enabled_by_preset "dify"; then
+            DIFY_ENABLED="true"
+        else
+            DIFY_ENABLED="false"
+        fi
+        
+        if service_enabled_by_preset "authentik"; then
+            AUTHENTIK_ENABLED="true"
+        else
+            AUTHENTIK_ENABLED="false"
+        fi
+        
+        if service_enabled_by_preset "signalbot"; then
+            SIGNALBOT_ENABLED="true"
+        else
+            SIGNALBOT_ENABLED="false"
+        fi
+        
+        if service_enabled_by_preset "bifrost"; then
+            BIFROST_ENABLED="true"
+        else
+            BIFROST_ENABLED="false"
+        fi
         
         log "  Services configured by preset"
         return
@@ -256,10 +330,29 @@ collect_service_flags() {
     
     # Custom mode - prompt for each service
     echo "  Configure individual services:"
-    POSTGRES_ENABLED=$(prompt_yesno "Enable PostgreSQL" "y" && echo "true" || echo "false")
-    REDIS_ENABLED=$(prompt_yesno "Enable Redis" "y" && echo "true" || echo "false")
-    LITELLM_ENABLED=$(prompt_yesno "Enable LiteLLM" "y" && echo "true" || echo "false")
-    OLLAMA_ENABLED=$(prompt_yesno "Enable Ollama" "y" && echo "true" || echo "false")
+    if prompt_yesno "Enable PostgreSQL" "y"; then
+        POSTGRES_ENABLED="true"
+    else
+        POSTGRES_ENABLED="false"
+    fi
+    
+    if prompt_yesno "Enable Redis" "y"; then
+        REDIS_ENABLED="true"
+    else
+        REDIS_ENABLED="false"
+    fi
+    
+    if prompt_yesno "Enable LiteLLM" "y"; then
+        LITELLM_ENABLED="true"
+    else
+        LITELLM_ENABLED="false"
+    fi
+    
+    if prompt_yesno "Enable Ollama" "y"; then
+        OLLAMA_ENABLED="true"
+    else
+        OLLAMA_ENABLED="false"
+    fi
     OPENWEBUI_ENABLED=$(prompt_yesno "Enable Open WebUI" "y" && echo "true" || echo "false")
     QDRANT_ENABLED=$(prompt_yesno "Enable Qdrant" "y" && echo "true" || echo "false")
     CADDY_ENABLED=$(prompt_yesno "Enable Caddy" "y" && echo "true" || echo "false")
@@ -347,6 +440,9 @@ write_platform_conf() {
     log "Writing platform.conf..."
     
     # Generate secrets
+    local postgres_user="platform"
+    local postgres_db="platform"
+    local tenant_prefix="${TENANT_ID}"
     local litellm_master_key litellm_ui_password litellm_db_url
     local postgres_password redis_password openwebui_secret
     local librechat_jwt_secret librechat_crypt_key n8n_encryption_key
@@ -357,7 +453,7 @@ write_platform_conf() {
     if [[ "${LITELLM_ENABLED}" == "true" ]]; then
         litellm_master_key="sk-$(gen_secret)"
         litellm_ui_password="$(gen_password)"
-        litellm_db_url="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${POSTGRES_DB}"
+        litellm_db_url="postgresql://${postgres_user}:${postgres_password}@${tenant_prefix}-postgres:5432/${postgres_db}"
     fi
     
     if [[ "${POSTGRES_ENABLED}" == "true" ]]; then
@@ -401,8 +497,11 @@ write_platform_conf() {
     fi
     
     if [[ "${SIGNALBOT_ENABLED}" == "true" ]]; then
-        signal_phone="+15551234567"
-        signal_recipient="+15559876543"
+        signal_phone=$(prompt_default "Signal sender phone number (E.164 format)" "")
+        signal_recipient=$(prompt_default "Signal recipient phone number (E.164 format)" "")
+        if [[ -z "${signal_phone}" || -z "${signal_recipient}" ]]; then
+            fail "Signal phone numbers are required when Signalbot is enabled"
+        fi
     fi
     
     if [[ "${BIFROST_ENABLED}" == "true" ]]; then
@@ -523,6 +622,11 @@ SIGNALBOT_PORT="${SIGNALBOT_PORT:-8080}"
 SIGNAL_PHONE="${signal_phone:-}"
 SIGNAL_RECIPIENT="${signal_recipient:-}"
 
+# ── Proxy Ports ───────────────────────────────────────────────────────
+CADDY_ENABLED="${CADDY_ENABLED}"
+CADDY_HTTP_PORT="${CADDY_HTTP_PORT:-80}"
+CADDY_HTTPS_PORT="${CADDY_HTTPS_PORT:-443}"
+
 # ── Bifrost ───────────────────────────────────────────────────────────────────
 BIFROST_ENABLED="${BIFROST_ENABLED}"
 BIFROST_PORT="${BIFROST_PORT:-8090}"
@@ -605,8 +709,14 @@ install_packages() {
     # Install yq if not available via apt
     if ! command -v yq >/dev/null 2>&1; then
         log "  Installing yq..."
+        local yq_arch
+        case "${PLATFORM_ARCH}" in
+            x86_64)  yq_arch="amd64" ;;
+            aarch64) yq_arch="arm64" ;;
+            *)       fail "Unsupported architecture for yq: ${PLATFORM_ARCH}" ;;
+        esac
         sudo wget -qO /usr/local/bin/yq \
-            "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${PLATFORM_ARCH}"
+            "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${yq_arch}"
         sudo chmod +x /usr/local/bin/yq
     fi
     

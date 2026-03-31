@@ -12,6 +12,14 @@
 set -euo pipefail
 
 # =============================================================================
+# ROOT EXECUTION CHECK (README P7 exception - script 0 requires root)
+# =============================================================================
+if [[ $EUID -ne 0 ]]; then
+    echo "ERROR: This script must be run as root: sudo bash $0 $*"
+    exit 1
+fi
+
+# =============================================================================
 # SCRIPT CONFIGURATION
 # =============================================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -128,7 +136,7 @@ main() {
     fi
     
     # Source platform.conf (README P1 - BUG-02 fix)
-    local platform_conf="/mnt/${tenant_id}/config/platform.conf"
+    local platform_conf="/mnt/${tenant_id}/platform.conf"
     if [[ ! -f "$platform_conf" ]]; then
         fail "platform.conf not found at $platform_conf. Cannot clean up safely."
     fi

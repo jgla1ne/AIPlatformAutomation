@@ -942,8 +942,8 @@ main() {
         fail "Tenant ID is required"
     fi
     
-    # Source platform.conf (README P1)
-    local platform_conf="/mnt/${tenant_id}/config/platform.conf"
+    # Source platform.conf (README P1 - BUG-02 fix)
+    local platform_conf="/mnt/${tenant_id}/platform.conf"
     if [[ ! -f "$platform_conf" ]]; then
         fail "platform.conf not found at $platform_conf. Run script 1 first."
     fi
