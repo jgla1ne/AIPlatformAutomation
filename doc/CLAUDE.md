@@ -1,250 +1,298 @@
-Let me fetch the current state of everything.
-
-**WINDSURF.md:** https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/doc/WINDSURF.md
+Let me fetch the current scripts to give precise fixes.
 
 **Scripts:**
+- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/0-complete-cleanup.sh
 - https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/1-setup-system.sh
 - https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/2-deploy-services.sh
 - https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/3-configure-services.sh
-- https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/0-complete-cleanup.sh
-
-**README:** https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/README.md
 
 ---
 
-After reviewing WINDSURF.md and the current scripts, here is my targeted guidance:
+After reviewing the scripts and diagnostic output:
 
 ---
 
 ```markdown
-# CLAUDE.md — Deployment Issue Guidance
+# CLAUDE.md — Deployment Triage: Root Cause & Surgical Fixes
 **Date:** 2025-07
-**Status:** POST-IMPLEMENTATION TRIAGE
-**Input:** WINDSURF.md deployment status report
+**Status:** CRITICAL — Multiple root causes, all fixable
 
 ---
 
-## 🔴 ISSUE 1: Ollama health check failing before model pull
+## 🔴 ROOT CAUSE ANALYSIS
 
-**Symptom (from WINDSURF.md):** Script 3 proceeds before Ollama is ready,
-model pull fails or times out.
-
-**Root cause:** The health check is testing the wrong endpoint, or the retry
-loop exits too early.
-
-**Exact fix in Script 3:**
-```bash
-# Replace any existing Ollama health check with this:
-echo "Waiting for Ollama..."
-MAX_ATTEMPTS=30
-ATTEMPT=0
-until curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; do
-  ATTEMPT=$((ATTEMPT + 1))
-  if [ $ATTEMPT -ge $MAX_ATTEMPTS ]; then
-    echo "ERROR: Ollama did not become ready after ${MAX_ATTEMPTS} attempts. Aborting."
-    exit 1
-  fi
-  echo "  Attempt ${ATTEMPT}/${MAX_ATTEMPTS} — waiting 10s..."
-  sleep 10
-done
-echo "✅ Ollama is ready."
-
-# Then pull with retry:
-OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.2}"
-for i in 1 2 3; do
-  docker exec ollama ollama pull "${OLLAMA_MODEL}" && break
-  echo "Pull attempt $i failed, retrying in 30s..."
-  sleep 30
-done
-
-# Verify pull succeeded:
-docker exec ollama ollama list | grep "${OLLAMA_MODEL}" || {
-  echo "ERROR: Model ${OLLAMA_MODEL} not found after pull attempts."
-  exit 1
-}
-```
-
-**Key points:**
-- Use `/api/tags` not `/` — the root endpoint returns 200 before the model
-  server is actually ready to serve
-- 30 × 10s = 5 minutes max wait — sufficient for slow hosts
-- Hard exit if model not confirmed present — do not silently continue
+The diagnostic reveals **4 distinct failure layers** that must be fixed in order.
+Do NOT attempt scripts 2/3 until each layer is resolved.
 
 ---
 
-## 🔴 ISSUE 2: N8N credential injection failing
+## LAYER 1: Script 1 hangs at "Collecting tenant configuration"
 
-**Symptom:** Script 3 N8N API calls return 401 or connection refused.
+**Root cause:** Script 1 uses `read` for interactive input. When run via 
+Windsurf's execution context (non-interactive shell / piped stdin), `read` 
+blocks forever.
 
-**Root cause diagnosis — check in order:**
+**Exact fix in Script 1:**
 
-### Step A: Is N8N actually up?
+Every `read` call must have a `-t` timeout and a fallback default:
 ```bash
-curl -v http://localhost:5678/healthz
+# BEFORE (hangs):
+read -p "Enter tenant name: " TENANT_NAME
+
+# AFTER (safe in all execution contexts):
+read -t 30 -p "Enter tenant name [datasquiz]: " TENANT_NAME
+TENANT_NAME="${TENANT_NAME:-datasquiz}"
 ```
-Expected: `{"status":"ok"}` with HTTP 200.
-If connection refused → N8N container not running. Check:
+
+Apply this pattern to EVERY `read` call in Script 1. The timeout is 30 seconds;
+if no input arrives, the default is used. This makes Script 1 runnable both
+interactively and non-interactively.
+
+**Additionally:** Script 1 must be run in a real TTY. Windsurf should execute:
 ```bash
-docker compose ps n8n
-docker compose logs n8n --tail=50
+sudo bash scripts/1-setup-system.sh
 ```
+in a proper terminal session, not a piped/spawned subprocess. If Windsurf cannot
+guarantee a TTY, all defaults must be codified so the script self-completes.
 
-### Step B: Are credentials correct?
-N8N Basic Auth uses the values set at container start. Verify `.env` has:
-```
-N8N_BASIC_AUTH_ACTIVE=true
-N8N_BASIC_AUTH_USER=<value>
-N8N_BASIC_AUTH_PASSWORD=<value>
-```
-And that the container was started AFTER these were set (not before).
+---
+
+## LAYER 2: Permission denied — Ollama & OpenWebUI
+
+**Root cause:** Containers are running as non-root but the mounted host 
+directories are owned by root.
+
+**Diagnostic confirmation:**
 ```bash
-docker compose exec n8n env | grep N8N_BASIC
+ls -la /mnt/datasquiz/
+# Expect: directories owned by root:root with 750 permissions
 ```
 
-### Step C: Idempotent credential POST
+**Exact fix in Script 1** — directory creation block must set correct ownership:
 ```bash
-# Source .env
-source /opt/ai-platform/.env
+# After creating directories:
+BASE_DIR="/mnt/datasquiz"
 
-N8N_BASE="http://localhost:5678"
-AUTH="-u ${N8N_BASIC_AUTH_USER}:${N8N_BASIC_AUTH_PASSWORD}"
+mkdir -p "${BASE_DIR}"/{ollama,postgres,qdrant,redis,open-webui,n8n,flowise,litellm}
 
-# Check if credential already exists before creating
-EXISTING=$(curl -sf ${AUTH} "${N8N_BASE}/api/v1/credentials" | \
-  jq -r '.data[] | select(.name=="Ollama") | .id' 2>/dev/null)
+# Ollama runs as uid 1000 inside container:
+chown -R 1000:1000 "${BASE_DIR}/ollama"
 
-if [ -n "${EXISTING}" ]; then
-  echo "✅ Ollama credential already exists (id: ${EXISTING}), skipping."
-else
-  curl -sf ${AUTH} \
-    -H "Content-Type: application/json" \
-    -X POST "${N8N_BASE}/api/v1/credentials" \
-    -d "{
-      \"name\": \"Ollama\",
-      \"type\": \"ollamaApi\",
-      \"data\": {\"baseUrl\": \"http://ollama:11434\"}
-    }" || { echo "ERROR: Failed to create Ollama credential"; exit 1; }
-  echo "✅ Ollama credential created."
+# OpenWebUI runs as uid 1000:
+chown -R 1000:1000 "${BASE_DIR}/open-webui"
+
+# Postgres runs as uid 999:
+chown -R 999:999 "${BASE_DIR}/postgres"
+
+# Qdrant runs as uid 1000:
+chown -R 1000:1000 "${BASE_DIR}/qdrant"
+
+# Set permissive base for others:
+chmod -R 755 "${BASE_DIR}"
+```
+
+**For OpenWebUI secret key specifically** — the file must exist and be readable:
+```bash
+WEBUI_SECRET_FILE="${BASE_DIR}/open-webui/secret_key"
+if [ ! -f "${WEBUI_SECRET_FILE}" ]; then
+  openssl rand -hex 32 > "${WEBUI_SECRET_FILE}"
+  chown 1000:1000 "${WEBUI_SECRET_FILE}"
+  chmod 600 "${WEBUI_SECRET_FILE}"
 fi
 ```
 
-**Critical:** The URL inside the credential data MUST be `http://ollama:11434`
-(Docker internal hostname), NOT `http://localhost:11434`.
-
 ---
 
-## 🔴 ISSUE 3: Inter-service connectivity (if N8N cannot reach Ollama)
+## LAYER 3: Containers not on the correct network
 
-**Symptom:** N8N workflows fail with "connection refused" to Ollama even though
-both containers are running.
+**Root cause:** `docker-compose.yml` declares the network but some services
+are missing the `networks:` key under their service definition. Docker falls
+back to the default bridge, breaking inter-service DNS.
 
-**Diagnosis:**
+**Diagnostic:**
 ```bash
-# Test from inside N8N container:
-docker compose exec n8n curl -sf http://ollama:11434/api/tags
+docker network inspect config_ai-datasquiz-network
+# Confirms: only redis and open-webui connected
 ```
 
-If this fails → network configuration issue.
-
-**Fix:** Ensure both services are on the same Docker network in
-`docker-compose.yml`:
+**Exact fix in `docker-compose.yml`** — every service MUST declare:
 ```yaml
 services:
-  n8n:
-    networks:
-      - ai-platform
   ollama:
     networks:
-      - ai-platform
+      - ai-platform-network
+  
+  postgres:
+    networks:
+      - ai-platform-network
+  
+  qdrant:
+    networks:
+      - ai-platform-network
+  
+  redis:
+    networks:
+      - ai-platform-network
+  
+  open-webui:
+    networks:
+      - ai-platform-network
+
+  # ... every service must have this block
 
 networks:
-  ai-platform:
+  ai-platform-network:
     driver: bridge
 ```
 
-Both must declare the SAME named network. If they are on default networks
-separately, they cannot resolve each other by service name.
+The network name must be IDENTICAL across all service definitions and the
+top-level `networks:` declaration. The current network `config_ai-datasquiz-network`
+suggests the compose project name is `config` — this is wrong. 
+
+**Fix:** Ensure `docker-compose.yml` is in `/mnt/datasquiz/` or the project
+name is explicitly set:
+```bash
+# In Script 2, replace bare docker compose calls with:
+docker compose -p datasquiz -f /mnt/datasquiz/docker-compose.yml up -d
+```
+This ensures the network is named `datasquiz_ai-platform-network`, not
+`config_ai-datasquiz-network`.
 
 ---
 
-## 🟡 ISSUE 4: Script 3 partial failure on re-run
+## LAYER 4: Postgres and Qdrant restart loops
 
-**Symptom:** Re-running Script 3 creates duplicate N8N credentials or
-re-pulls Ollama model unnecessarily.
+**Root cause A (Postgres):** Data directory permissions (fixed by Layer 2 above).
+Postgres also fails if it finds a partially initialized data directory.
 
-**Fix:** All three idempotency guards must be in place:
+**Root cause B (Qdrant):** Same permission issue + Qdrant may have a corrupted
+storage directory from the broken previous run.
 
+**Fix:** Script 0 (cleanup) must wipe data directories cleanly. Confirm it does:
 ```bash
-# Guard 1 — Ollama model
-docker exec ollama ollama list | grep "${OLLAMA_MODEL}" && \
-  echo "✅ Model already present, skipping pull." || \
-  docker exec ollama ollama pull "${OLLAMA_MODEL}"
+# Script 0 must include:
+rm -rf "${BASE_DIR}/postgres/*"
+rm -rf "${BASE_DIR}/qdrant/*"
+# NOT rmdir — must wipe contents, preserve directory
+```
 
-# Guard 2 — N8N credentials (see Issue 2 above — GET before POST)
-
-# Guard 3 — Flowise chatflows
-FLOW_EXISTS=$(curl -sf http://localhost:3001/api/v1/chatflows | \
-  jq -r '.[] | select(.name=="Default") | .id' 2>/dev/null)
-[ -n "${FLOW_EXISTS}" ] && echo "✅ Flowise chatflow exists, skipping." || \
-  <import command here>
+**Verify Postgres env vars are present:**
+```bash
+docker compose exec postgres env | grep POSTGRES
+# Must show POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
+```
+If missing → `.env` file not being passed to compose. Check Script 2:
+```bash
+# Script 2 must use:
+docker compose --env-file /mnt/datasquiz/platform.conf -f docker-compose.yml up -d
+# OR docker-compose.yml must have: env_file: /mnt/datasquiz/platform.conf
 ```
 
 ---
 
-## 📋 IMMEDIATE DIAGNOSTIC SEQUENCE
+## LAYER 5: LiteLLM Exited (1)
 
-Run these commands on the host RIGHT NOW and share the output in WINDSURF.md:
+**Root cause:** LiteLLM requires a valid `config.yaml`. If missing or malformed
+it exits immediately.
 
+**Fix in Script 2** — generate minimal LiteLLM config before `docker compose up`:
 ```bash
-# 1. Container status
-docker compose ps
+LITELLM_CONFIG="/mnt/datasquiz/litellm/config.yaml"
+if [ ! -f "${LITELLM_CONFIG}" ]; then
+  cat > "${LITELLM_CONFIG}" << 'EOF'
+model_list:
+  - model_name: ollama/llama3.2
+    litellm_params:
+      model: ollama/llama3.2
+      api_base: http://ollama:11434
 
-# 2. Recent logs for failing services
-docker compose logs ollama --tail=30
-docker compose logs n8n --tail=30
-docker compose logs flowise --tail=30
-
-# 3. Network topology
-docker network ls
-docker network inspect <ai-platform-network-name>
-
-# 4. Environment sanity check
-cat /opt/ai-platform/.env | grep -v PASSWORD | grep -v SECRET
-
-# 5. Quick connectivity matrix
-curl -s http://localhost:11434/api/tags | head -c 100
-curl -s http://localhost:5678/healthz
-curl -s http://localhost:3001/api/v1/chatflows | head -c 100
+litellm_settings:
+  drop_params: true
+  max_budget: null
+EOF
+fi
 ```
 
-Paste the output of these 5 commands into WINDSURF.md. The specific error
-messages will pinpoint which of the above fixes to apply first.
+---
+
+## 📋 CORRECT EXECUTION SEQUENCE
+
+Given the current broken state, follow this exact sequence:
+
+### Step 0: Clean slate
+```bash
+sudo bash scripts/0-complete-cleanup.sh datasquiz
+# Verify:
+docker ps -a | grep -v CONTAINER  # should be empty
+ls /mnt/datasquiz/                 # should be empty or not exist
+```
+
+### Step 1: Run in a REAL terminal with TTY
+```bash
+# Windsurf must exec this in an interactive terminal session:
+sudo bash scripts/1-setup-system.sh
+# Watch for "platform.conf created" confirmation before proceeding
+# Verify:
+cat /mnt/datasquiz/platform.conf   # must exist and have values
+ls -la /mnt/datasquiz/ollama/      # must be owned by 1000:1000
+```
+
+### Step 2: Deploy
+```bash
+sudo bash scripts/2-deploy-services.sh
+# Wait 60 seconds, then check:
+docker compose -p datasquiz ps
+# All containers should show "Up" not "Restarting"
+```
+
+### Step 3: Configure
+```bash
+sudo bash scripts/3-configure-services.sh
+```
 
 ---
 
-## 🔒 DO NOT DO WHILE TROUBLESHOOTING
+## 🔑 PLATFORM.CONF — MUST EXIST BEFORE SCRIPT 2
 
-| Prohibited action | Why |
-|------------------|-----|
-| `docker compose down` | Destroys volumes, loses all N8N/Flowise data |
-| Changing ports in docker-compose.yml | Breaks .env references everywhere |
-| Adding new services to resolve connectivity | Symptom masking |
-| Re-running Script 1 or 2 while Script 3 is failing | Unnecessary, Script 3 is the only broken layer |
+This is the single most important file. Script 2 cannot work without it.
+
+Minimum required contents:
+```bash
+TENANT_NAME=datasquiz
+BASE_DIR=/mnt/datasquiz
+DOMAIN=datasquiz.local
+
+# Database
+POSTGRES_USER=datasquiz
+POSTGRES_PASSWORD=<generated>
+POSTGRES_DB=datasquiz
+
+# Services selected
+DEPLOY_OLLAMA=true
+DEPLOY_OPENWEBUI=true
+DEPLOY_N8N=true
+DEPLOY_LITELLM=true
+DEPLOY_QDRANT=true
+
+# Ollama
+OLLAMA_MODEL=llama3.2
+
+# OpenWebUI
+WEBUI_SECRET_KEY=<generated>
+```
 
 ---
 
-## ✅ DEFINITION OF SUCCESS
+## ✅ GO/NO-GO CHECKLIST BEFORE SCRIPT 2
 
-All of the following must return expected results before closing this iteration:
+| Check | Command | Required Result |
+|-------|---------|----------------|
+| Cleanup complete | `docker ps -a` | No containers |
+| platform.conf exists | `cat /mnt/datasquiz/platform.conf` | Has TENANT_NAME |
+| Directory ownership | `ls -la /mnt/datasquiz/ollama` | uid 1000 |
+| Postgres dir clean | `ls /mnt/datasquiz/postgres` | Empty |
+| Qdrant dir clean | `ls /mnt/datasquiz/qdrant` | Empty |
+| LiteLLM config exists | `cat /mnt/datasquiz/litellm/config.yaml` | Valid YAML |
 
-| Check | Command | Expected |
-|-------|---------|----------|
-| Ollama running | `curl http://localhost:11434/api/tags` | JSON with models list |
-| Ollama model present | `docker exec ollama ollama list` | `llama3.2` listed |
-| N8N healthy | `curl http://localhost:5678/healthz` | `{"status":"ok"}` |
-| N8N credential exists | `curl -u user:pass http://localhost:5678/api/v1/credentials` | Ollama entry present |
-| N8N→Ollama internal | `docker exec n8n_container curl http://ollama:11434/api/tags` | JSON response |
-| Flowise running | `curl http://localhost:3001/api/v1/chatflows` | JSON array |
-
-Only once all 6 pass should WINDSURF.md be updated to "DEPLOYMENT COMPLETE".
+**Do not proceed to Script 2 until all 6 pass.**
 ```
