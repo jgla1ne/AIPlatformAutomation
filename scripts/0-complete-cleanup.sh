@@ -10,6 +10,7 @@
 # =============================================================================
 
 set -euo pipefail
+trap 'echo "ERROR at line $LINENO. Check logs."; exit 1' ERR
 
 # =============================================================================
 # ROOT EXECUTION CHECK (README P7 exception - script 0 requires root)
@@ -26,14 +27,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SCRIPT_VERSION="5.1.0"
 
+# Source shared configuration if available
+[[ -f "${SCRIPT_DIR}/shared-config.sh" ]] && source "${SCRIPT_DIR}/shared-config.sh"
+
 # =============================================================================
 # LOGGING (README P11)
 # =============================================================================
-LOG_FILE=""
+LOG_FILE="/var/log/ai-platform-cleanup.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
 log() {
     local msg="[$(date +%H:%M:%S)] $*"
     echo "$msg"
-    [[ -n "$LOG_FILE" ]] && echo "$msg" >> "$LOG_FILE"
 }
 ok() { log "OK: $*"; }
 warn() { log "WARN: $*"; }
@@ -156,20 +160,28 @@ main() {
         source "$platform_conf"
     fi
     
+    # Remove nginx config and reload if active
+    rm -f /etc/nginx/sites-enabled/ai-platform
+    rm -f /etc/nginx/sites-available/ai-platform
+    if systemctl is-active nginx &>/dev/null; then
+        nginx -t && systemctl reload nginx || warn "Nginx config reload failed"
+    fi
+    
+    # Remove systemd service and reload daemon
+    systemctl disable ai-platform 2>/dev/null || true
+    rm -f /etc/systemd/system/ai-platform.service
+    systemctl daemon-reload
+    
     # Execution order (README §6 - strict):
     # 1. Typed confirmation: DELETE ${TENANT_ID} (done above)
     
     # 2. docker compose down --volumes --remove-orphans
     log "Stopping and removing containers with docker compose..."
-    if [[ -f "${COMPOSE_FILE:-}" ]]; then
-        run_cmd docker compose -f "${COMPOSE_FILE}" down --volumes --remove-orphans
-        ok "Containers stopped and removed via docker compose"
-    else
-        warn "docker-compose.yml not found, manual container removal required"
-        # Manual container removal as fallback
-        local containers
-        containers=$(docker ps -a --format "{{.Names}}" | grep "^${TENANT_PREFIX}-" || true)
-        if [[ -n "$containers" ]]; then
+    [[ -n "$DATA_DIR" && "$DATA_DIR" != "/" ]] || { echo "ERROR: Invalid DATA_DIR: $DATA_DIR"; exit 1; }
+    
+    # Stop and remove containers with timeout
+    if [[ -f "$COMPOSE_FILE" ]]; then
+        docker compose -f "$COMPOSE_FILE" down --timeout 30 --volumes 2>/dev/null || true
             for container in $containers; do
                 run_cmd docker stop "$container" >/dev/null 2>&1 || true
                 run_cmd docker rm "$container" >/dev/null 2>&1 || true

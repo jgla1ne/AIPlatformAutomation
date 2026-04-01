@@ -11,6 +11,7 @@
 # =============================================================================
 
 set -euo pipefail
+trap 'echo "ERROR at line $LINENO. Check logs."; exit 1' ERR
 
 # =============================================================================
 # NON-ROOT EXECUTION CHECK (README P7)
@@ -21,20 +22,41 @@ if [[ $EUID -eq 0 ]]; then
 fi
 
 # =============================================================================
+# PREREQUISITE CHECK - Scripts 1 and 2 must have run first
+# =============================================================================
+if ! command -v docker &>/dev/null; then
+    echo "ERROR: Docker not installed. Run 1-setup-system.sh first"
+    exit 1
+fi
+
+if ! docker info &>/dev/null; then
+    echo "ERROR: Docker daemon not running. Start it with: sudo systemctl start docker"
+    exit 1
+fi
+
+if ! docker ps &>/dev/null; then
+    echo "ERROR: No containers running. Run 2-deploy-services.sh first"
+    exit 1
+fi
+
+# =============================================================================
 # SCRIPT CONFIGURATION
 # =============================================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SCRIPT_VERSION="5.1.0"
 
+# Source shared configuration if available
+[[ -f "${SCRIPT_DIR}/shared-config.sh" ]] && source "${SCRIPT_DIR}/shared-config.sh"
+
 # =============================================================================
 # LOGGING (README P11)
 # =============================================================================
-LOG_FILE=""
+LOG_FILE="/var/log/ai-platform-configure.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
 log() {
     local msg="[$(date +%H:%M:%S)] $*"
     echo "$msg"
-    [[ -n "$LOG_FILE" ]] && echo "$msg" >> "$LOG_FILE"
 }
 ok() { log "OK: $*"; }
 warn() { log "WARN: $*"; }
@@ -201,9 +223,15 @@ configure_ollama() {
         fail "Ollama not ready after timeout"
     fi
     
-    # Pull the default model (README P1 - use platform.conf variable)
+    # Pull the default model with progress indication
     log "Pulling default Ollama model (${OLLAMA_DEFAULT_MODEL})..."
-    run_cmd docker exec "$container_name" ollama pull "${OLLAMA_DEFAULT_MODEL}"
+    log "This may take several minutes depending on connection speed..."
+    if run_cmd docker exec "$container_name" ollama pull "${OLLAMA_DEFAULT_MODEL}"; then
+        log "Model pull complete"
+    else
+        warn "Model pull failed. You can retry with: docker exec $container_name ollama pull ${OLLAMA_DEFAULT_MODEL}"
+        warn "Platform is functional without the model"
+    fi
     
     mark_done "ollama_configured"
     ok "Ollama configured"
@@ -462,7 +490,7 @@ configure_flowise() {
     done
     
     if [[ $attempts -ge $max_attempts ]]; then
-        fail "Flowise not ready after timeout"
+        fail "Flowise not ready after timeout. Check: docker logs $container_name"
     fi
     
     mark_done "flowise_configured"

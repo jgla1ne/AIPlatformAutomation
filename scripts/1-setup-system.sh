@@ -23,14 +23,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SCRIPT_VERSION="5.1.0"
 
+# Source shared configuration if available
+[[ -f "${SCRIPT_DIR}/shared-config.sh" ]] && source "${SCRIPT_DIR}/shared-config.sh"
+
 # =============================================================================
 # LOGGING (README P11)
 # =============================================================================
-LOG_FILE=""
+LOG_FILE="/var/log/ai-platform-setup.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
 log() {
     local msg="[$(date +%H:%M:%S)] $*"
     echo "$msg"
-    [[ -n "${LOG_FILE:-}" ]] && echo "$msg" >> "$LOG_FILE"
 }
 ok() { log "OK: $*"; }
 warn() { log "WARN: $*"; }
@@ -147,6 +150,15 @@ check_prerequisites() {
     section "Checking Prerequisites"
     
     local missing=()
+    
+    # Add user to docker group with proper validation
+    if [[ -n "$SUDO_USER" ]]; then
+        usermod -aG docker "$SUDO_USER"
+        echo "IMPORTANT: Log out and back in (or run 'newgrp docker') before running script 2"
+    else
+        warn "Could not determine invoking user for docker group assignment"
+        warn "You may need to manually add your user to the docker group"
+    fi
     
     # Check Docker
     if ! command -v docker &>/dev/null; then

@@ -8,6 +8,7 @@
 # =============================================================================
 
 set -euo pipefail
+trap 'echo "ERROR at line $LINENO. Check logs."; exit 1' ERR
 
 # =============================================================================
 # NON-ROOT EXECUTION CHECK (README P7)
@@ -18,20 +19,36 @@ if [[ $EUID -eq 0 ]]; then
 fi
 
 # =============================================================================
+# PREREQUISITE CHECK - Script 1 must have run first
+# =============================================================================
+if ! command -v docker &>/dev/null; then
+    echo "ERROR: Docker not installed. Run 1-setup-system.sh first"
+    exit 1
+fi
+
+if ! docker info &>/dev/null; then
+    echo "ERROR: Docker daemon not running. Start it with: sudo systemctl start docker"
+    exit 1
+fi
+
+# =============================================================================
 # SCRIPT CONFIGURATION
 # =============================================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SCRIPT_VERSION="5.1.0"
 
+# Source shared configuration if available
+[[ -f "${SCRIPT_DIR}/shared-config.sh" ]] && source "${SCRIPT_DIR}/shared-config.sh"
+
 # =============================================================================
 # LOGGING (README P11)
 # =============================================================================
-LOG_FILE=""
+LOG_FILE="/var/log/ai-platform-deploy.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
 log() {
     local msg="[$(date +%H:%M:%S)] $*"
     echo "$msg"
-    [[ -n "$LOG_FILE" ]] && echo "$msg" >> "$LOG_FILE"
 }
 ok() { log "OK: $*"; }
 warn() { log "WARN: $*"; }
@@ -284,6 +301,7 @@ EOF
         cat >> "${COMPOSE_FILE}" << EOF
   ${TENANT_PREFIX}-ollama:
     image: ollama/ollama:latest
+    pull_policy: always
     container_name: ${TENANT_PREFIX}-ollama
     restart: unless-stopped
     user: "${PUID}:${PGID}"
@@ -938,12 +956,30 @@ validate_caddyfile() {
 deploy_containers() {
     log "Deploying containers..."
     
+    # Check for port conflicts before deployment
+    log "Checking for port conflicts..."
+    local ports_to_check=("80" "443" "3000" "4000" "5432" "6333" "6379" "11434")
+    local conflicts=()
+    
+    for port in "${ports_to_check[@]}"; do
+        if ss -tlnp | grep -q ":$port "; then
+            conflicts+=("$port")
+        fi
+    done
+    
+    if [[ ${#conflicts[@]} -gt 0 ]]; then
+        fail "Port conflicts detected: ${conflicts[*]}. Stop services using these ports or change configuration."
+    fi
+    
     # Create Docker network
     if ! docker network ls | grep -q "${DOCKER_NETWORK}"; then
         run_cmd docker network create "${DOCKER_NETWORK}"
     fi
     
-    # Deploy containers
+    # Pull latest images then deploy containers
+    log "Pulling latest container images..."
+    run_cmd docker compose -f "${COMPOSE_FILE}" pull
+    log "Deploying containers..."
     run_cmd docker compose -f "${COMPOSE_FILE}" up -d
     
     ok "Containers deployed"
