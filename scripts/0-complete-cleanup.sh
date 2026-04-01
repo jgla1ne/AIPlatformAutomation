@@ -182,6 +182,13 @@ main() {
     # Stop and remove containers with timeout
     if [[ -f "$COMPOSE_FILE" ]]; then
         docker compose -f "$COMPOSE_FILE" down --timeout 30 --volumes 2>/dev/null || true
+        ok "Containers stopped and removed via docker compose"
+    else
+        log "No compose file found at $COMPOSE_FILE"
+        # Try manual container removal
+        local containers
+        containers=$(docker ps -aq --filter "label=com.docker.compose.project=${tenant_id}" 2>/dev/null || true)
+        if [[ -n "$containers" ]]; then
             for container in $containers; do
                 run_cmd docker stop "$container" >/dev/null 2>&1 || true
                 run_cmd docker rm "$container" >/dev/null 2>&1 || true
