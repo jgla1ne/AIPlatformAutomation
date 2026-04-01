@@ -19,6 +19,35 @@ if [[ $EUID -eq 0 ]]; then
 fi
 
 # =============================================================================
+# DOCKER GROUP ACTIVATION (Rule #1 - Programmatic Handling)
+# =============================================================================
+if ! groups | grep -q docker; then
+    echo "ERROR: User not in docker group. This should have been handled in Script 1."
+    echo "Running Script 1 again to fix docker group membership..."
+    "${SCRIPT_DIR}/1-setup-system.sh" "${tenant_id}" --ingest-from "${HOME}/.env" --preserve-secrets
+    if ! groups | grep -q docker; then
+        echo "ERROR: Still not in docker group after Script 1. Please run:"
+        echo "  newgrp docker"
+        echo "Then run this script again."
+        exit 1
+    fi
+fi
+
+# Test docker connectivity
+if ! docker ps &>/dev/null; then
+    echo "ERROR: Cannot connect to Docker daemon. Attempting to activate docker group..."
+    exec newgrp docker << 'EOF'
+        exec "${SCRIPT_DIR}/2-deploy-services.sh" "$@"
+EOF
+fi
+
+# =============================================================================
+# LOGGING (README P11)
+# =============================================================================
+LOG_FILE="/var/log/ai-platform-deploy.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+# =============================================================================
 # PREREQUISITE CHECK - Script 1 must have run first
 # =============================================================================
 if ! command -v docker &>/dev/null; then
