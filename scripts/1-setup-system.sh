@@ -689,8 +689,8 @@ create_directory_skeleton() {
     fi
     if [[ "${OLLAMA_ENABLED}" == "true" ]]; then
         mkdir -p "${DATA_DIR}/ollama"
-        # Ollama container runs as user 1000
-        chown -R 1000:1000 "${DATA_DIR}/ollama"
+        # Ollama container runs as user 1000 - use sudo for chown in /mnt
+        sudo chown -R 1000:1000 "${DATA_DIR}/ollama" || warn "Could not chown ollama directory"
     fi
     if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
         mkdir -p "${DATA_DIR}/openwebui"
