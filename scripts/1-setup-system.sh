@@ -643,8 +643,8 @@ AUTHENTIK_BOOTSTRAP_EMAIL="admin@${BASE_DOMAIN}"
 # ── Alerting ──────────────────────────────────────────────────────────────────
 SIGNALBOT_ENABLED="${SIGNALBOT_ENABLED:-false}"
 SIGNALBOT_PORT="${SIGNALBOT_PORT:-8080}"
-SIGNAL_PHONE="${SIGNAL_PHONE}"
-SIGNAL_RECIPIENT="${SIGNAL_RECIPIENT}"
+SIGNAL_PHONE="${SIGNAL_PHONE:-}"
+SIGNAL_RECIPIENT="${SIGNAL_RECIPIENT:-}"
 
 # ── Bifrost (optional LLM gateway) ────────────────────────────────────────────
 BIFROST_ENABLED="${BIFROST_ENABLED:-false}"
