@@ -655,6 +655,9 @@ EOF
     mv "${tmp_file}" "${conf_file}"
     chmod 600 "${conf_file}"
     echo "✅ platform.conf written to ${conf_file}"
+    
+    # Source shared configuration now that variables are set
+    [[ -f "${SCRIPT_DIR}/shared-config.sh" ]] && source "${SCRIPT_DIR}/shared-config.sh"
 }
 
 # =============================================================================
