@@ -2,7 +2,11 @@
 # =============================================================================
 # Script 1: Input Collector Only - RESTORED c38d365 + TTY SAFETY
 # PURPOSE: Interactive user input and platform.conf generation ONLY
-# USAGE:   bash scripts/1-setup-system.sh [tenant_id]
+# USAGE:   bash scripts/1-setup-system.sh [tenant_id] [options]
+# OPTIONS: --ingest-from <file>    Ingest credentials from existing .env file
+#          --preserve-secrets       Preserve existing secrets from .env
+#          --generate-new          Generate new secrets for all services
+#          --deployment-mode <mode> Set deployment mode (minimal|standard|full)
 # =============================================================================
 
 set -euo pipefail
@@ -598,6 +602,11 @@ GOOGLE_API_KEY="${GOOGLE_API_KEY:-}"
 GROQ_API_KEY="${GROQ_API_KEY:-}"
 OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}"
 
+# ── Service Configuration Keys ───────────────────────────────────────────────────────
+BRAVE_API_KEY="${BRAVE_API_KEY:-}"
+SERPAPI_KEY="${SERPAPI_KEY:-}"
+TAILSCALE_AUTH_KEY="${TAILSCALE_AUTH_KEY:-}"
+
 # ── Web UIs (any combination may be true simultaneously) ──────────────────────
 OPENWEBUI_ENABLED="${OPENWEBUI_ENABLED:-true}"
 OPENWEBUI_PORT="${OPENWEBUI_PORT:-3000}"
@@ -771,23 +780,195 @@ install_packages() {
 }
 
 # =============================================================================
+# ENHANCED INGESTION FUNCTIONALITY
+# =============================================================================
+ingest_existing_env() {
+    local env_file="${1:-$HOME/.env}"
+    
+    if [[ ! -f "$env_file" ]]; then
+        warn "No .env file found at $env_file"
+        return 1
+    fi
+    
+    log "Ingesting configuration from $env_file..."
+    
+    # Source the .env file
+    set -a
+    source "$env_file"
+    set +a
+    
+    # Map .env variables to platform.conf format
+    TENANT_ID="${TENANT_ID:-datasquiz}"
+    BASE_DOMAIN="${BASE_DOMAIN:-datasquiz.net}"
+    BASE_DIR="/mnt/${TENANT_ID}"
+    
+    # Service Enable Flags (based on deployment mode)
+    case "${DEPLOYMENT_MODE:-minimal}" in
+        minimal)
+            POSTGRES_ENABLED="true"
+            REDIS_ENABLED="true"
+            LITELLM_ENABLED="true"
+            OLLAMA_ENABLED="true"
+            OPENWEBUI_ENABLED="true"
+            QDRANT_ENABLED="true"
+            CADDY_ENABLED="true"
+            N8N_ENABLED="false"
+            FLOWISE_ENABLED="false"
+            LIBRECHAT_ENABLED="false"
+            DIFY_ENABLED="false"
+            AUTHENTIK_ENABLED="false"
+            SIGNALBOT_ENABLED="false"
+            OPENCLAW_ENABLED="false"
+            BIFROST_ENABLED="false"
+            ;;
+        standard)
+            # Include minimal + additional services
+            POSTGRES_ENABLED="true"
+            REDIS_ENABLED="true"
+            LITELLM_ENABLED="true"
+            OLLAMA_ENABLED="true"
+            OPENWEBUI_ENABLED="true"
+            QDRANT_ENABLED="true"
+            CADDY_ENABLED="true"
+            N8N_ENABLED="true"
+            FLOWISE_ENABLED="true"
+            LIBRECHAT_ENABLED="true"
+            OPENCLAW_ENABLED="true"
+            DIFY_ENABLED="false"
+            AUTHENTIK_ENABLED="false"
+            SIGNALBOT_ENABLED="false"
+            BIFROST_ENABLED="false"
+            ;;
+        full)
+            # Include all services
+            POSTGRES_ENABLED="true"
+            REDIS_ENABLED="true"
+            LITELLM_ENABLED="true"
+            OLLAMA_ENABLED="true"
+            OPENWEBUI_ENABLED="true"
+            QDRANT_ENABLED="true"
+            CADDY_ENABLED="true"
+            N8N_ENABLED="true"
+            FLOWISE_ENABLED="true"
+            LIBRECHAT_ENABLED="true"
+            OPENCLAW_ENABLED="true"
+            DIFY_ENABLED="true"
+            AUTHENTIK_ENABLED="true"
+            SIGNALBOT_ENABLED="true"
+            BIFROST_ENABLED="true"
+            ;;
+    esac
+    
+    # API Keys
+    OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+    ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+    GOOGLE_API_KEY="${GOOGLE_API_KEY:-}"
+    GROQ_API_KEY="${GROQ_API_KEY:-}"
+    OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}"
+    
+    # Service Configuration
+    BRAVE_API_KEY="${BRAVE_API_KEY:-}"
+    SERPAPI_KEY="${SERPAPI_KEY:-}"
+    TAILSCALE_AUTH_KEY="${TAILSCALE_AUTH_KEY:-}"
+    
+    # Existing Secrets (preserve if they exist)
+    N8N_ENCRYPTION_KEY="${N8N_ENCRYPTION_KEY:-$(gen_secret)}"
+    LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-$(gen_secret)}"
+    QDRANT_API_KEY="${QDRANT_API_KEY:-$(gen_secret)}"
+    
+    # Service Ports (use existing or defaults)
+    OLLAMA_PORT="${OLLAMA_PORT:-11434}"
+    OPENWEBUI_PORT="${OPENWEBUI_PORT:-8081}"
+    N8N_PORT="${N8N_PORT:-5678}"
+    QDRANT_PORT="${QDRANT_PORT:-6333}"
+    LITELLM_PORT="${LITELLM_PORT:-4000}"
+    
+    # Network Configuration
+    PROXY_EMAIL="${PROXY_EMAIL:-admin@${BASE_DOMAIN}}"
+    
+    log "Configuration ingested successfully from $env_file"
+    return 0
+}
+
+parse_arguments() {
+    local ingest_from=""
+    local preserve_secrets="false"
+    local generate_new="false"
+    local deployment_mode="minimal"
+    
+    # Parse command line arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --ingest-from)
+                ingest_from="$2"
+                shift 2
+                ;;
+            --preserve-secrets)
+                preserve_secrets="true"
+                shift
+                ;;
+            --generate-new)
+                generate_new="true"
+                shift
+                ;;
+            --deployment-mode)
+                deployment_mode="$2"
+                shift 2
+                ;;
+            *)
+                # Assume it's tenant_id
+                TENANT_ID="$1"
+                shift
+                ;;
+        esac
+    done
+    
+    # Export for use in other functions
+    export INGEST_FROM="$ingest_from"
+    export PRESERVE_SECRETS="$preserve_secrets"
+    export GENERATE_NEW="$generate_new"
+    export DEPLOYMENT_MODE="$deployment_mode"
+}
+
+# =============================================================================
 # MAIN EXECUTION
 # =============================================================================
 main() {
+    # Parse arguments first
+    parse_arguments "$@"
+    
     # Execute phases first to set BASE_DIR
     detect_system
     check_prerequisites
-    collect_configuration
     
-    # Set up logging after BASE_DIR is defined
-    if [[ -n "${BASE_DIR}" ]]; then
-        LOG_FILE="${BASE_DIR}/logs/$(basename "$0" .sh)-$(date +%Y%m%d-%H%M%S).log"
-        mkdir -p "$(dirname "$LOG_FILE")"
+    # Use ingestion if specified, otherwise interactive
+    if [[ -n "${INGEST_FROM:-}" ]]; then
+        if ingest_existing_env "$INGEST_FROM"; then
+            log "Using ingested configuration from $INGEST_FROM"
+            # Set up logging after BASE_DIR is defined
+            if [[ -n "${BASE_DIR}" ]]; then
+                LOG_FILE="${BASE_DIR}/logs/$(basename "$0" .sh)-$(date +%Y%m%d-%H%M%S).log"
+                mkdir -p "$(dirname "$LOG_FILE")"
+            fi
+            # Generate platform.conf with ingested values
+            write_platform_conf
+            create_directory_skeleton
+            install_packages
+        else
+            fail "Failed to ingest configuration from $INGEST_FROM"
+        fi
+    else
+        # Original interactive flow
+        collect_configuration
+        # Set up logging after BASE_DIR is defined
+        if [[ -n "${BASE_DIR}" ]]; then
+            LOG_FILE="${BASE_DIR}/logs/$(basename "$0" .sh)-$(date +%Y%m%d-%H%M%S).log"
+            mkdir -p "$(dirname "$LOG_FILE")"
+        fi
+        write_platform_conf
+        create_directory_skeleton
+        install_packages
     fi
-    
-    write_platform_conf
-    create_directory_skeleton
-    install_packages
     
     echo ""
     echo "╔══════════════════════════════════════════════════════════╗"
