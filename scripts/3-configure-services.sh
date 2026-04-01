@@ -46,9 +46,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SCRIPT_VERSION="5.1.0"
 
-# Source shared configuration if available
-[[ -f "${SCRIPT_DIR}/shared-config.sh" ]] && source "${SCRIPT_DIR}/shared-config.sh"
-
 # =============================================================================
 # LOGGING (README P11)
 # =============================================================================
@@ -996,6 +993,9 @@ main() {
     fi
     # shellcheck source=/dev/null
     source "$platform_conf"
+    
+    # Source shared configuration now that variables are set
+    [[ -f "${SCRIPT_DIR}/shared-config.sh" ]] && source "${SCRIPT_DIR}/shared-config.sh"
     
     # Set up logging
     LOG_FILE="${LOG_DIR}/$(basename "$0" .sh)-$(date +%Y%m%d-%H%M%S).log"

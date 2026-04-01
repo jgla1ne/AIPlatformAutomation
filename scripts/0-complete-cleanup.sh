@@ -27,9 +27,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SCRIPT_VERSION="5.1.0"
 
-# Source shared configuration if available
-[[ -f "${SCRIPT_DIR}/shared-config.sh" ]] && source "${SCRIPT_DIR}/shared-config.sh"
-
 # =============================================================================
 # LOGGING (README P11)
 # =============================================================================
@@ -159,6 +156,9 @@ main() {
         # shellcheck source=/dev/null
         source "$platform_conf"
     fi
+    
+    # Source shared configuration now that variables are set
+    [[ -f "${SCRIPT_DIR}/shared-config.sh" ]] && source "${SCRIPT_DIR}/shared-config.sh"
     
     # Remove nginx config and reload if active
     rm -f /etc/nginx/sites-enabled/ai-platform
