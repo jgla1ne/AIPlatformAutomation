@@ -547,7 +547,7 @@ SCRIPT_VERSION="5.1.0"
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 BASE_DIR="${BASE_DIR}"
-DATA_DIR="${BASE_DIR}/data"
+DATA_DIR="${BASE_DIR}"
 CONFIG_DIR="${BASE_DIR}/config"
 COMPOSE_FILE="${BASE_DIR}/config/docker-compose.yml"
 CONFIGURED_DIR="${BASE_DIR}/.configured"
@@ -584,7 +584,7 @@ LITELLM_ENABLED="${LITELLM_ENABLED:-true}"
 LITELLM_PORT="${LITELLM_PORT:-4000}"
 LITELLM_MASTER_KEY="${litellm_master_key}"
 LITELLM_UI_PASSWORD="${litellm_ui_password}"
-LITELLM_DB_URL="postgresql://${POSTGRES_USER}:${postgres_password}@${TENANT_ID}-postgres:5432/${POSTGRES_DB}"
+LITELLM_DB_URL="postgresql://${POSTGRES_USER:-platform}:${postgres_password}@${TENANT_ID}-postgres:5432/${POSTGRES_DB:-platform}"
 
 OLLAMA_ENABLED="${OLLAMA_ENABLED:-true}"
 OLLAMA_PORT="${OLLAMA_PORT:-11434}"
