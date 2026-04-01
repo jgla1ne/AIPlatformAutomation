@@ -26,7 +26,7 @@ SCRIPT_VERSION="5.1.0"
 # =============================================================================
 # LOGGING (README P11)
 # =============================================================================
-LOG_FILE="/var/log/ai-platform-setup.log"
+LOG_FILE="/tmp/ai-platform-setup.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 log() {
     local msg="[$(date +%H:%M:%S)] $*"
@@ -149,7 +149,7 @@ check_prerequisites() {
     local missing=()
     
     # Add user to docker group with proper validation
-    if [[ -n "$SUDO_USER" ]]; then
+    if [[ -n "${SUDO_USER:-}" ]]; then
         usermod -aG docker "$SUDO_USER"
         echo "IMPORTANT: Log out and back in (or run 'newgrp docker') before running script 2"
     else
