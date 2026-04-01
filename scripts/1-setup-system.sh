@@ -605,8 +605,8 @@ OPENWEBUI_SECRET="${openwebui_secret}"
 
 LIBRECHAT_ENABLED="${LIBRECHAT_ENABLED:-false}"
 LIBRECHAT_PORT="${LIBRECHAT_PORT:-3080}"
-LIBRECHAT_JWT_SECRET="${librechat_jwt_secret}"
-LIBRECHAT_CRYPT_KEY="${librechat_crypt_key}"
+LIBRECHAT_JWT_SECRET="${librechat_jwt_secret:-}"
+LIBRECHAT_CRYPT_KEY="${librechat_crypt_key:-}"
 
 OPENCLAW_ENABLED="${OPENCLAW_ENABLED:-false}"
 OPENCLAW_PORT="${OPENCLAW_PORT:-3001}"
@@ -614,30 +614,30 @@ OPENCLAW_PORT="${OPENCLAW_PORT:-3001}"
 # ── RAG / Vector ──────────────────────────────────────────────────────────────
 QDRANT_ENABLED="${QDRANT_ENABLED:-true}"
 QDRANT_PORT="${QDRANT_PORT:-6333}"
-QDRANT_API_KEY="${qdrant_api_key}"
+QDRANT_API_KEY="${qdrant_api_key:-}"
 
 # ── Automation ────────────────────────────────────────────────────────────────
 N8N_ENABLED="${N8N_ENABLED:-false}"
 N8N_PORT="${N8N_PORT:-5678}"
-N8N_ENCRYPTION_KEY="${n8n_encryption_key}"
+N8N_ENCRYPTION_KEY="${n8n_encryption_key:-}"
 N8N_WEBHOOK_URL="https://${BASE_DOMAIN}/n8n"
 
 FLOWISE_ENABLED="${FLOWISE_ENABLED:-false}"
 FLOWISE_PORT="${FLOWISE_PORT:-3030}"
 FLOWISE_USERNAME="${FLOWISE_USERNAME:-admin}"
-FLOWISE_PASSWORD="${flowise_password}"
-FLOWISE_SECRETKEY_OVERWRITE="${flowise_secretkey_overwrite}"
+FLOWISE_PASSWORD="${flowise_password:-}"
+FLOWISE_SECRETKEY_OVERWRITE="${flowise_secretkey_overwrite:-}"
 
 DIFY_ENABLED="${DIFY_ENABLED:-false}"
 DIFY_PORT="${DIFY_PORT:-3040}"
-DIFY_SECRET_KEY="${dify_secret_key}"
-DIFY_INIT_PASSWORD="${dify_init_password}"
+DIFY_SECRET_KEY="${dify_secret_key:-}"
+DIFY_INIT_PASSWORD="${dify_init_password:-}"
 
 # ── Identity ──────────────────────────────────────────────────────────────────
 AUTHENTIK_ENABLED="${AUTHENTIK_ENABLED:-false}"
 AUTHENTIK_PORT="${AUTHENTIK_PORT:-9000}"
-AUTHENTIK_SECRET_KEY="${authentik_secret_key}"
-AUTHENTIK_BOOTSTRAP_PASSWORD="${authentik_bootstrap_password}"
+AUTHENTIK_SECRET_KEY="${authentik_secret_key:-}"
+AUTHENTIK_BOOTSTRAP_PASSWORD="${authentik_bootstrap_password:-}"
 AUTHENTIK_BOOTSTRAP_EMAIL="admin@${BASE_DOMAIN}"
 
 # ── Alerting ──────────────────────────────────────────────────────────────────
@@ -649,7 +649,7 @@ SIGNAL_RECIPIENT="${SIGNAL_RECIPIENT}"
 # ── Bifrost (optional LLM gateway) ────────────────────────────────────────────
 BIFROST_ENABLED="${BIFROST_ENABLED:-false}"
 BIFROST_PORT="${BIFROST_PORT:-8090}"
-BIFROST_API_KEY="${bifrost_api_key}"
+BIFROST_API_KEY="${bifrost_api_key:-}"
 EOF
 
     mv "${tmp_file}" "${conf_file}"
