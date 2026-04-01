@@ -1,226 +1,246 @@
-Let me fetch everything current.
-
-**README:** https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/README.md
+Let me fetch everything.
 
 **WINDSURF.md:** https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/doc/WINDSURF.md
 
-**Script 1:** https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/1-setup-system.sh
+**Script 1 current:** https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/1-setup-system.sh
 
-**Script 2:** https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/2-deploy-services.sh
+**README:** https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/README.md
 
-**Script 3:** https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/refs/heads/main/scripts/3-configure-services.sh
-
----
-
-After reading Script 1 carefully, here is the precise diagnosis:
+**Working commit c38d365 Script 1:** https://raw.githubusercontent.com/jgla1ne/AIPlatformAutomation/c38d365/scripts/1-setup-system.sh
 
 ---
 
 ```markdown
-# CLAUDE.md — Script 1 Interactive Input Failure: Root Cause & Definitive Fix
+# CLAUDE.md — Script 1 Restoration Plan
 **Date:** 2025-07
-**Status:** BLOCKING — Script 1 hangs, deployment cannot proceed
+**Reference commit:** c38d365 (known working input collector)
 
 ---
 
-## 🔴 THE CORE PROBLEM: WHY WINDSURF CANNOT SEE IT
+## 🔎 DIAGNOSIS: What Windsurf's plan gets right vs wrong
 
-Windsurf executes scripts in a **non-interactive, piped subprocess** — there is
-no TTY attached. The `read` builtin in bash behaves differently depending on
-whether stdin is a terminal:
+After reading WINDSURF.md proposed plan and comparing c38d365 vs current Script 1:
 
-| Execution context | `read -p "prompt"` behaviour |
-|-------------------|------------------------------|
-| Real terminal (TTY) | Shows prompt, waits for keypress |
-| Piped / subprocess | **Silently blocks forever** — no prompt shown, no timeout |
-| SSH without `-t` flag | Same as above — hangs |
+### ✅ Windsurf correctly identified:
+- The `read` calls hang in non-TTY context
+- c38d365 had a working UI/input pattern worth restoring
+- The `prompt_input` function approach is the right abstraction
 
-Windsurf sees the script as "running" because it IS running — it's just blocked
-on `read` waiting for stdin that will never come. This is why Windsurf thinks
-the script is valid: from its perspective, no error has occurred.
+### ❌ Windsurf's plan is INCOMPLETE on these points:
+
+1. **It plans to rewrite Script 1 from scratch** — this is the same circular
+   mistake made before. The correct approach is SURGICAL: restore c38d365's
+   input collection block verbatim, then ADD the non-TTY safety wrapper.
+
+2. **It does not account for the full service menu** from README — the input
+   collector must cover ALL service categories as defined in the north star,
+   not just the subset Windsurf remembers.
+
+3. **The `platform.conf` write block** must be atomic — write to a temp file
+   then `mv`, never write directly, to prevent partial configs on interrupt.
 
 ---
 
-## 🔎 EXACT LINES CAUSING THE HANG
+## 📋 THE CORRECT RESTORATION PLAN — 4 SURGICAL STEPS ONLY
 
-The hang occurs at the FIRST `read` call in Script 1. Every subsequent `read`
-will hang identically. The pattern to search for:
+### STEP 1: Restore c38d365 input collection verbatim
+
+Do NOT rewrite. Do NOT refactor. Extract these exact blocks from c38d365
+and place them in the current Script 1:
+
+- The banner/UI display function
+- The `collect_input()` or equivalent function containing all `read` calls
+- The service selection menu (all categories)
+- The `write_platform_conf()` block
 
 ```bash
-read -p "..."         # NO timeout — hangs forever in non-TTY
-read -rp "..."        # Same problem
-read -r VARNAME       # Same problem if stdin is not a terminal
+# Windsurf command to get the exact diff:
+git show c38d365:scripts/1-setup-system.sh > /tmp/script1_working.sh
+diff /tmp/script1_working.sh scripts/1-setup-system.sh
+# Apply ONLY the input collection sections from the working version
 ```
 
----
+### STEP 2: Wrap EVERY `read` call with TTY detection — ONE function
 
-## ✅ DEFINITIVE FIX STRATEGY: TWO-MODE SCRIPT
-
-Script 1 must support BOTH execution modes without changing how a human runs it:
-
-### Mode A — Interactive (human at terminal): unchanged UX
-### Mode B — Non-interactive (Windsurf / CI / SSH pipe): uses defaults from args or env
-
-**Implementation pattern — apply to EVERY `read` call:**
+Add this single function at the top of Script 1, above all other functions.
+Do not add it inline at each `read` call:
 
 ```bash
-# At the top of Script 1, add this function ONCE:
-prompt_input() {
+# ─── NON-INTERACTIVE SAFE INPUT ──────────────────────────────────────────────
+safe_read() {
+  # Usage: safe_read "Prompt text" DEFAULT_VALUE VARIABLE_NAME
   local prompt="$1"
   local default="$2"
   local varname="$3"
+  local value
 
-  if [ -t 0 ]; then
-    # stdin IS a terminal — interactive mode
-    read -rp "${prompt} [${default}]: " value
+  # Check for env var override first (allows: VAR=x sudo -E bash script1.sh)
+  value=$(printenv "${varname}" 2>/dev/null || true)
+
+  if [ -n "${value}" ]; then
+    echo "  ${prompt}: ${value} (from environment)"
+  elif [ -t 0 ]; then
+    # Real TTY — show prompt and wait for input
+    read -rp "  ${prompt} [${default}]: " value
     value="${value:-${default}}"
   else
-    # stdin is NOT a terminal — non-interactive mode
-    echo "${prompt}: using default '${default}'"
+    # Non-TTY (Windsurf, CI, pipe) — use default silently
     value="${default}"
+    echo "  ${prompt}: ${value} (default — non-interactive mode)"
   fi
 
-  # Allow environment variable override in both modes:
-  # e.g. TENANT_NAME=myco bash script1.sh
-  local envval
-  envval=$(eval echo "\${${varname}}")
-  if [ -n "${envval}" ]; then
-    value="${envval}"
-    echo "${prompt}: using env override '${value}'"
-  fi
+  printf -v "${varname}" '%s' "${value}"
+}
+# ─────────────────────────────────────────────────────────────────────────────
+```
 
-  eval "${varname}=\"${value}\""
+### STEP 3: Replace every `read` call with `safe_read`
+
+Pattern — mechanical find-and-replace, no logic changes:
+```bash
+# BEFORE:
+read -rp "  Enter tenant name: " TENANT_NAME
+
+# AFTER:
+safe_read "Enter tenant name" "datasquiz" "TENANT_NAME"
+```
+
+### STEP 4: Atomic platform.conf write
+
+```bash
+write_platform_conf() {
+  local conf_file="${BASE_DIR}/platform.conf"
+  local tmp_file="${conf_file}.tmp"
+
+  cat > "${tmp_file}" << EOF
+# AI Platform Configuration
+# Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# Tenant: ${TENANT_NAME}
+
+TENANT_NAME=${TENANT_NAME}
+BASE_DIR=${BASE_DIR}
+DOMAIN=${DOMAIN}
+
+# ── Postgres ──────────────────────────────────────────────
+POSTGRES_USER=${POSTGRES_USER}
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+POSTGRES_DB=${POSTGRES_DB}
+
+# ── Service Flags ─────────────────────────────────────────
+DEPLOY_OLLAMA=${DEPLOY_OLLAMA}
+DEPLOY_OPENWEBUI=${DEPLOY_OPENWEBUI}
+DEPLOY_N8N=${DEPLOY_N8N}
+DEPLOY_FLOWISE=${DEPLOY_FLOWISE}
+DEPLOY_LITELLM=${DEPLOY_LITELLM}
+DEPLOY_QDRANT=${DEPLOY_QDRANT}
+DEPLOY_REDIS=${DEPLOY_REDIS}
+
+# ── Ollama ────────────────────────────────────────────────
+OLLAMA_MODEL=${OLLAMA_MODEL}
+
+# ── N8N ──────────────────────────────────────────────────
+N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+N8N_USER=${N8N_USER}
+N8N_PASSWORD=${N8N_PASSWORD}
+
+# ── OpenWebUI ────────────────────────────────────────────
+WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
+
+# ── LiteLLM ──────────────────────────────────────────────
+LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+EOF
+
+  mv "${tmp_file}" "${conf_file}"
+  chmod 600 "${conf_file}"
+  echo "✅ platform.conf written to ${conf_file}"
 }
 ```
 
-**Then replace every `read` call:**
-```bash
-# BEFORE:
-read -p "Enter tenant name: " TENANT_NAME
+---
 
-# AFTER:
-prompt_input "Enter tenant name" "datasquiz" "TENANT_NAME"
+## 📦 FULL SERVICE INPUT COLLECTION — README NORTH STAR ALIGNMENT
+
+Script 1 must collect input for ALL services from README. 
+Windsurf must NOT reduce this list:
+
+```bash
+collect_all_inputs() {
+  echo ""
+  echo "━━━ TENANT CONFIGURATION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  safe_read "Tenant name (alphanumeric, no spaces)" "datasquiz" "TENANT_NAME"
+  safe_read "Base data directory" "/mnt/${TENANT_NAME}" "BASE_DIR"
+  safe_read "Domain name" "${TENANT_NAME}.local" "DOMAIN"
+
+  echo ""
+  echo "━━━ AI ENGINE ────────────────────────────────────────────────"
+  safe_read "Deploy Ollama (local LLM runner)" "true" "DEPLOY_OLLAMA"
+  safe_read "Default Ollama model" "llama3.2" "OLLAMA_MODEL"
+  safe_read "Deploy LiteLLM (unified LLM API gateway)" "true" "DEPLOY_LITELLM"
+
+  echo ""
+  echo "━━━ AI INTERFACES ────────────────────────────────────────────"
+  safe_read "Deploy OpenWebUI (chat interface)" "true" "DEPLOY_OPENWEBUI"
+  safe_read "Deploy Flowise (visual AI workflows)" "true" "DEPLOY_FLOWISE"
+
+  echo ""
+  echo "━━━ AUTOMATION & INTEGRATION ─────────────────────────────────"
+  safe_read "Deploy N8N (workflow automation)" "true" "DEPLOY_N8N"
+
+  echo ""
+  echo "━━━ DATA & STORAGE ───────────────────────────────────────────"
+  safe_read "Deploy Qdrant (vector database)" "true" "DEPLOY_QDRANT"
+  safe_read "Deploy Redis (cache/queue)" "true" "DEPLOY_REDIS"
+
+  echo ""
+  echo "━━━ DATABASE CREDENTIALS ─────────────────────────────────────"
+  safe_read "Postgres username" "${TENANT_NAME}" "POSTGRES_USER"
+  safe_read "Postgres database name" "${TENANT_NAME}" "POSTGRES_DB"
+  safe_read "Postgres password" "$(openssl rand -hex 16)" "POSTGRES_PASSWORD"
+
+  echo ""
+  echo "━━━ SERVICE SECRETS (auto-generated if blank) ────────────────"
+  safe_read "N8N admin user" "admin" "N8N_USER"
+  safe_read "N8N admin password" "$(openssl rand -hex 8)" "N8N_PASSWORD"
+  safe_read "N8N encryption key" "$(openssl rand -hex 16)" "N8N_ENCRYPTION_KEY"
+  safe_read "OpenWebUI secret key" "$(openssl rand -hex 32)" "WEBUI_SECRET_KEY"
+  safe_read "LiteLLM master key" "$(openssl rand -hex 16)" "LITELLM_MASTER_KEY"
+}
 ```
 
 ---
 
-## 📋 ALL `read` CALLS IN SCRIPT 1 — REQUIRED DEFAULTS
+## ⚠️ CRITICAL CONSTRAINTS FOR WINDSURF
 
-Windsurf must apply the `prompt_input` function to each of these, with the
-defaults listed. These defaults align with README north star:
-
-| Prompt | Variable | Default |
-|--------|----------|---------|
-| Tenant name | `TENANT_NAME` | `datasquiz` |
-| Base directory | `BASE_DIR` | `/mnt/datasquiz` |
-| Domain | `DOMAIN` | `datasquiz.local` |
-| Deploy Ollama | `DEPLOY_OLLAMA` | `true` |
-| Ollama model | `OLLAMA_MODEL` | `llama3.2` |
-| Deploy OpenWebUI | `DEPLOY_OPENWEBUI` | `true` |
-| Deploy N8N | `DEPLOY_N8N` | `true` |
-| Deploy Flowise | `DEPLOY_FLOWISE` | `true` |
-| Deploy LiteLLM | `DEPLOY_LITELLM` | `true` |
-| Deploy Qdrant | `DEPLOY_QDRANT` | `true` |
-| Postgres password | `POSTGRES_PASSWORD` | `$(openssl rand -hex 16)` |
-| N8N encryption key | `N8N_ENCRYPTION_KEY` | `$(openssl rand -hex 16)` |
-| WebUI secret key | `WEBUI_SECRET_KEY` | `$(openssl rand -hex 32)` |
-
-**For generated secrets:** generate ONCE at script start, store in variable,
-use as the default. Do NOT regenerate on each call or the values will differ
-between the prompt and the written config.
-
-```bash
-# At TOP of Script 1, before any prompts:
-_DEFAULT_POSTGRES_PASS="$(openssl rand -hex 16)"
-_DEFAULT_N8N_KEY="$(openssl rand -hex 16)"
-_DEFAULT_WEBUI_KEY="$(openssl rand -hex 32)"
-
-# Then:
-prompt_input "Postgres password" "${_DEFAULT_POSTGRES_PASS}" "POSTGRES_PASSWORD"
-```
+| Rule | Reason |
+|------|--------|
+| Do NOT rewrite Script 1 from scratch | Creates new bugs, loses c38d365 UI |
+| Do NOT remove any service from the menu | README defines all services |
+| Do NOT change Script 2 or 3 during this fix | Scope is Script 1 only |
+| Do NOT use `echo -n` + `read` pattern | Fails in non-TTY |
+| DO run `echo "" \| bash scripts/1-setup-system.sh` to test | Validates non-TTY |
+| DO run `bash scripts/1-setup-system.sh` to test interactively | Validates TTY |
 
 ---
 
-## 🔧 SECONDARY FIX: NON-INTERACTIVE EXECUTION METHOD FOR WINDSURF
-
-Even with the above fix, Windsurf should invoke Script 1 this way to pass all
-values via environment, bypassing all prompts entirely:
+## ✅ VALIDATION TESTS — BOTH MUST PASS
 
 ```bash
-TENANT_NAME=datasquiz \
-BASE_DIR=/mnt/datasquiz \
-DOMAIN=datasquiz.local \
-DEPLOY_OLLAMA=true \
-DEPLOY_OPENWEBUI=true \
-DEPLOY_N8N=true \
-DEPLOY_FLOWISE=true \
-DEPLOY_LITELLM=true \
-DEPLOY_QDRANT=true \
-OLLAMA_MODEL=llama3.2 \
-sudo -E bash scripts/1-setup-system.sh
+# Test 1: Non-interactive (Windsurf's execution context)
+echo "" | sudo bash scripts/1-setup-system.sh
+# Expected: completes without hanging, writes platform.conf with defaults
+
+# Test 2: Env var override
+TENANT_NAME=mytest sudo -E bash scripts/1-setup-system.sh
+# Expected: platform.conf contains TENANT_NAME=mytest
+
+# Test 3: Verify output
+cat /mnt/datasquiz/platform.conf
+# Expected: all variables present, no blank values
+
+# Test 4: Interactive smoke test
+sudo bash scripts/1-setup-system.sh
+# Expected: prompts appear, accepts input, writes platform.conf
 ```
 
-The `-E` flag preserves environment variables through sudo. This is the
-**canonical non-interactive invocation** Windsurf must use.
-
----
-
-## 🔁 COMPLETE EXECUTION SEQUENCE AFTER FIX
-
-### Step 0: Clean state
-```bash
-sudo bash scripts/0-complete-cleanup.sh datasquiz
-docker ps -a                          # must return empty
-ls /mnt/datasquiz 2>/dev/null         # must return nothing or not exist
-```
-
-### Step 1: Non-interactive invocation
-```bash
-TENANT_NAME=datasquiz \
-BASE_DIR=/mnt/datasquiz \
-DOMAIN=datasquiz.local \
-DEPLOY_OLLAMA=true \
-DEPLOY_OPENWEBUI=true \
-DEPLOY_N8N=true \
-DEPLOY_FLOWISE=true \
-DEPLOY_LITELLM=true \
-DEPLOY_QDRANT=true \
-OLLAMA_MODEL=llama3.2 \
-sudo -E bash scripts/1-setup-system.sh
-
-# Verify before proceeding:
-test -f /mnt/datasquiz/platform.conf && echo "✅ platform.conf OK" || echo "❌ MISSING"
-ls -la /mnt/datasquiz/ollama/         # must show uid 1000
-```
-
-### Step 2: Deploy services
-```bash
-sudo bash scripts/2-deploy-services.sh
-sleep 60
-docker compose -p datasquiz ps        # all must show "Up"
-```
-
-### Step 3: Configure services
-```bash
-sudo bash scripts/3-configure-services.sh
-```
-
----
-
-## ⚠️ NOTE TO WINDSURF ON WHY IT COULDN'T DETECT THIS
-
-The script passes shell syntax validation (`bash -n script.sh`) because `read`
-is syntactically valid. Static analysis tools will not flag it. The hang only
-manifests at **runtime in a non-TTY context**. The test for this is:
-
-```bash
-# This will reproduce the hang immediately:
-echo "" | bash scripts/1-setup-system.sh
-
-# This is how to test the fix works:
-TENANT_NAME=datasquiz BASE_DIR=/mnt/datasquiz bash scripts/1-setup-system.sh
-# Should complete without hanging
-```
-
-Windsurf must add this test to its validation before declaring Script 1 valid.
+**Script 1 is not done until all 4 tests pass.**
 ```
