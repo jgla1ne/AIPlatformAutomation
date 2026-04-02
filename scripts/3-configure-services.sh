@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
+# Script 3: Service Configuration Only
+# PURPOSE: Configure services using platform.conf ONLY
+# =============================================================================
+
+set -euo pipefail
+trap 'echo "FAILED at line $LINENO. Command: $BASH_COMMAND" >&2' ERR
+
+# =============================================================================
 # Script 3: Mission Control — README v5.1.0 COMPLIANT
 # =============================================================================
 # PURPOSE: Source platform.conf, call service APIs to complete setup
@@ -22,22 +30,34 @@ if [[ $EUID -eq 0 ]]; then
 fi
 
 # =============================================================================
-# PREREQUISITE CHECK - Scripts 1 and 2 must have run first
+# PREREQUISITE CHAIN CHECKS (P2 fix)
 # =============================================================================
-if ! command -v docker &>/dev/null; then
-    echo "ERROR: Docker not installed. Run 1-setup-system.sh first"
-    exit 1
+# Source shared configuration
+if [[ -f /etc/ai-platform.env ]]; then
+    source /etc/ai-platform.env
+else
+    fail "ERROR: /etc/ai-platform.env not found. Run 1-setup-system.sh first."
 fi
 
-if ! docker info &>/dev/null; then
-    echo "ERROR: Docker daemon not running. Start it with: sudo systemctl start docker"
-    exit 1
-fi
+# Check Docker installation
+command -v docker &>/dev/null || {
+    fail "ERROR: Docker not found. Run 1-setup-system.sh first."
+}
 
-if ! docker ps &>/dev/null; then
-    echo "ERROR: No containers running. Run 2-deploy-services.sh first"
-    exit 1
-fi
+# Check Docker daemon
+docker info &>/dev/null || {
+    fail "ERROR: Docker daemon not running. Start it with: sudo systemctl start docker"
+}
+
+# Check compose file exists
+[[ -f "${COMPOSE_FILE}" ]] || {
+    fail "ERROR: Compose file not found at ${COMPOSE_FILE}. Run 2-deploy-services.sh first."
+}
+
+# Check containers are running
+docker ps --filter "name=ollama" --filter "status=running" --quiet | grep -q . || {
+    fail "ERROR: Ollama container not running. Run 2-deploy-services.sh first."
+}
 
 # =============================================================================
 # SCRIPT CONFIGURATION
@@ -190,6 +210,27 @@ verify_containers_healthy() {
 # =============================================================================
 # SERVICE CONFIGURATION FUNCTIONS
 # =============================================================================
+
+# Wait for service to be ready with proper error handling (P0 fix)
+wait_for_service() {
+    local name="$1" url="$2" container="$3" retries="${4:-30}"
+    echo "Waiting for $name..."
+    
+    for i in $(seq 1 "$retries"); do
+        if curl -sf "$url" &>/dev/null; then
+            echo "✓ $name is ready."
+            return 0
+        fi
+        sleep 2
+    done
+    
+    echo "✗ ERROR: $name did not become ready after $((retries * 2)) seconds."
+    echo "       Diagnose with: docker logs $container"
+    echo "       Current container status:"
+    docker ps --filter "name=$container" --format "table {{.Names}}\t{{.Status}}"
+    return 1
+}
+
 configure_ollama() {
     if [[ "${OLLAMA_ENABLED}" != "true" ]]; then
         return 0
@@ -204,20 +245,9 @@ configure_ollama() {
     
     log "Configuring Ollama..."
     
-    # Wait for Ollama to be ready
-    local attempts=0
-    local max_attempts=30
-    
-    while [[ $attempts -lt $max_attempts ]]; do
-        if docker exec "$container_name" ollama list >/dev/null 2>&1; then
-            break
-        fi
-        attempts=$((attempts + 1))
-        sleep 2
-    done
-    
-    if [[ $attempts -ge $max_attempts ]]; then
-        fail "Ollama not ready after timeout"
+    # Wait for Ollama to be ready using improved function
+    if ! wait_for_service "Ollama" "http://localhost:${OLLAMA_PORT}/api/tags" "$container_name"; then
+        fail "Ollama failed to start within timeout"
     fi
     
     # Pull the default model with progress indication
@@ -1051,6 +1081,38 @@ main() {
     
     # Show credentials summary
     show_credentials
+    
+    # End-to-end final verification (P2 fix)
+    echo ""
+    echo "=== Final Platform Verification ==="
+    SERVICES=(
+        "Ollama API|http://localhost:${OLLAMA_PORT}/api/tags"
+        "Open WebUI|http://localhost:${OPENWEBUI_PORT}"
+        "n8n|http://localhost:${N8N_PORT}/healthz"
+        "Qdrant|http://localhost:${QDRANT_PORT}/healthz"
+    )
+    ALL_OK=true
+    for svc in "${SERVICES[@]}"; do
+        name="${svc%%|*}"
+        url="${svc##*|}"
+        if curl -sf "$url" &>/dev/null; then
+            echo "  ✓ $name"
+        else
+            echo "  ✗ $name — check nginx config and container logs"
+            ALL_OK=false
+        fi
+    done
+
+    if $ALL_OK; then
+        echo ""
+        echo "Platform is ready. Access at:"
+        echo "  Open WebUI : http://$(hostname -I | awk '{print $1}')"
+        echo "  n8n        : http://$(hostname -I | awk '{print $1}')/n8n"
+        echo "  Qdrant     : http://$(hostname -I | awk '{print $1}')/qdrant"
+    else
+        echo ""
+        echo "Some services failed. Run: docker ps && docker compose -f $COMPOSE_FILE logs"
+    fi
     
     echo ""
     echo "╔══════════════════════════════════════════════════════════╗"

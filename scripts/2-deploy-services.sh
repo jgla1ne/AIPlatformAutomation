@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script 2: Atomic Deployer — README v5.1.0 COMPLIANT
+# Script 2: Docker Deployment Only
+# PURPOSE: Deploy containers using platform.conf ONLY
 # =============================================================================
+
+set -euo pipefail
+trap 'echo "FAILED at line $LINENO. Command: $BASH_COMMAND" >&2' ERR
+
 # PURPOSE: Source platform.conf, generate all derived config files, deploy containers
 # USAGE:   bash scripts/2-deploy-services.sh [tenant_id] [options]
 # OPTIONS: --dry-run           Show what would be deployed without action
 # =============================================================================
-
-set -euo pipefail
-trap 'echo "ERROR at line $LINENO. Check logs."; exit 1' ERR
 
 # =============================================================================
 # NON-ROOT EXECUTION CHECK (README P7)
@@ -24,24 +26,38 @@ fi
 LOG_FILE="/var/log/ai-platform-deploy.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
+# =============================================================================
+# PREREQUISITE CHAIN CHECKS (P2 fix)
+# =============================================================================
+# Source shared configuration
+if [[ -f /etc/ai-platform.env ]]; then
+    source /etc/ai-platform.env
+else
+    fail "ERROR: /etc/ai-platform.env not found. Run 1-setup-system.sh first."
+fi
+
+# Check Docker installation
+command -v docker &>/dev/null || {
+    fail "ERROR: Docker not found. Run 1-setup-system.sh first."
+}
+
+# Check Docker Compose
+docker compose version &>/dev/null || {
+    fail "ERROR: Docker Compose not found. Run 1-setup-system.sh first."
+}
+
+# Check platform.conf exists
+[[ -f "${DATA_DIR}/platform.conf" ]] || {
+    fail "ERROR: platform.conf not found at ${DATA_DIR}/platform.conf. Run 1-setup-system.sh first."
+}
+
 # Test docker connectivity
 if ! docker ps &>/dev/null; then
     echo "ERROR: Cannot connect to Docker daemon. Please ensure you are in the docker group and try again."
     exit 1
 fi
 
-# =============================================================================
-# PREREQUISITE CHECK - Script 1 must have run first
-# =============================================================================
-if ! command -v docker &>/dev/null; then
-    echo "ERROR: Docker not installed. Run 1-setup-system.sh first"
-    exit 1
-fi
-
-if ! docker info &>/dev/null; then
-    echo "ERROR: Docker daemon not running. Start it with: sudo systemctl start docker"
-    exit 1
-fi
+ok "Prerequisites validated"
 
 # =============================================================================
 # SCRIPT CONFIGURATION
@@ -214,6 +230,30 @@ build_authentik_deps() {
 generate_compose() {
     log "Generating docker-compose.yml..."
     
+    # Generate N8N_ENCRYPTION_KEY if needed (P0 fix)
+    N8N_KEY_FILE="${DATA_DIR}/.n8n_encryption_key"
+    if [[ -f "$N8N_KEY_FILE" ]]; then
+        N8N_ENCRYPTION_KEY=$(cat "$N8N_KEY_FILE")
+        log "Using existing N8N encryption key"
+    else
+        N8N_ENCRYPTION_KEY=$(openssl rand -hex 32)
+        echo "$N8N_ENCRYPTION_KEY" > "$N8N_KEY_FILE"
+        chmod 600 "$N8N_KEY_FILE"
+        log "Generated new N8N encryption key"
+    fi
+    
+    # GPU docker access verification (P2 fix)
+    if [[ "${GPU_TYPE}" == "nvidia" ]]; then
+        log "Verifying NVIDIA GPU access in Docker..."
+        if ! docker run --rm --gpus all nvidia/cuda:12.0-base-ubuntu22.04 nvidia-smi &>/dev/null; then
+            warn "WARNING: NVIDIA GPU detected but docker GPU access failed."
+            warn "         Deploying without GPU. Check nvidia-container-toolkit install."
+            GPU_TYPE="none"
+        else
+            ok "NVIDIA GPU access verified"
+        fi
+    fi
+    
     # Build dependency strings
     local litellm_deps openwebui_deps openclaw_deps
     local n8n_deps flowise_deps dify_deps authentik_deps
@@ -242,6 +282,12 @@ generate_compose() {
     fi
     
     # Header and networks
+    # Backup existing compose file (P3 fix)
+    if [[ -f "${COMPOSE_FILE}" ]]; then
+        cp "${COMPOSE_FILE}" "${COMPOSE_FILE}.bak.$(date +%Y%m%d_%H%M%S)"
+        echo "Existing compose file backed up to ${COMPOSE_FILE}.bak.$(date +%Y%m%d_%H%M%S)"
+    fi
+    
     cat > "${COMPOSE_FILE}" << EOF
 version: '3.8'
 
@@ -365,6 +411,7 @@ EOF
     user: "${PUID}:${PGID}"
     environment:
       OLLAMA_BASE_URL: http://${TENANT_PREFIX}-ollama:11434
+      OLLAMA_API_BASE_URL: http://${TENANT_PREFIX}-ollama:11434
       WEBUI_SECRET: ${OPENWEBUI_SECRET}
     volumes:
       - ${DATA_DIR}/openwebui:/app/backend/data

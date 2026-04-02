@@ -227,11 +227,17 @@ main() {
     if [[ "${containers_only}" == "true" ]]; then
         log "Skipping data removal (containers-only mode)"
     else
-        # 4. rm -rf "${DATA_DIR}"
-        if [[ -n "${DATA_DIR:-}" && -d "${DATA_DIR}" ]]; then
+        # 4. rm -rf "${DATA_DIR}" (P1 fix - safety guard)
+        if [[ -n "${DATA_DIR:-}" && -d "${DATA_DIR}" && "${DATA_DIR}" =~ ^/opt/ ]]; then
             log "Removing data directory: ${DATA_DIR}"
             run_cmd rm -rf "${DATA_DIR}"
             ok "Data directory removed"
+        elif [[ -z "${DATA_DIR:-}" ]]; then
+            warn "DATA_DIR is empty - skipping data removal"
+        elif [[ ! "${DATA_DIR}" =~ ^/opt/ ]]; then
+            fail "DATA_DIR '${DATA_DIR}' is invalid. Refusing to delete (must be in /opt/)."
+        else
+            warn "DATA_DIR '${DATA_DIR}' does not exist - skipping"
         fi
         
         # 5. rm -rf "${CONFIG_DIR}"
