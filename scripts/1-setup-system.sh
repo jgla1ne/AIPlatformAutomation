@@ -7,7 +7,6 @@
 #          --preserve-secrets       Preserve existing secrets from .env
 #          --generate-new          Generate new secrets for all services
 #          --deployment-mode <mode> Set deployment mode (minimal|standard|full)
-#          --no-cleanup           Skip Script 0 cleanup (use existing setup)
 # =============================================================================
 
 set -euo pipefail
@@ -699,7 +698,7 @@ create_directory_skeleton() {
     fi
     if [[ "${OLLAMA_ENABLED}" == "true" ]]; then
         mkdir -p "${DATA_DIR}/ollama"
-        # Ollama container runs as user 1000 - should be handled by Docker, not manual chown
+        # Ollama container will handle permissions via Docker volume
         log "Created ollama directory (Docker will handle permissions)"
     fi
     if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
@@ -896,7 +895,6 @@ parse_arguments() {
     local preserve_secrets="false"
     local generate_new="false"
     local deployment_mode="minimal"
-    local force_cleanup="true"
     
     # Parse command line arguments
     while [[ $# -gt 0 ]]; do
@@ -917,10 +915,6 @@ parse_arguments() {
                 deployment_mode="$2"
                 shift 2
                 ;;
-            --no-cleanup)
-                force_cleanup="false"
-                shift
-                ;;
             *)
                 # Assume it's tenant_id
                 TENANT_ID="$1"
@@ -934,7 +928,6 @@ parse_arguments() {
     export PRESERVE_SECRETS="$preserve_secrets"
     export GENERATE_NEW="$generate_new"
     export DEPLOYMENT_MODE="$deployment_mode"
-    export FORCE_CLEANUP="$force_cleanup"
 }
 
 # =============================================================================
@@ -943,16 +936,6 @@ parse_arguments() {
 main() {
     # Parse arguments first
     parse_arguments "$@"
-    
-    # Rule #3: Always run Script 0 before Script 1 for clean state
-    if [[ "${FORCE_CLEANUP:-true}" == "true" ]]; then
-        log "Rule #3: Running Script 0 for clean slate..."
-        if sudo "${SCRIPT_DIR}/0-complete-cleanup.sh" "${TENANT_ID:-datasquiz}"; then
-            ok "Script 0 completed successfully"
-        else
-            fail "Script 0 failed - cannot proceed with setup"
-        fi
-    fi
     
     # Execute phases first to set BASE_DIR
     detect_system
