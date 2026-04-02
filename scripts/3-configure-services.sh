@@ -32,7 +32,7 @@ fi
 # =============================================================================
 # PREREQUISITE CHAIN CHECKS (P2 fix)
 # =============================================================================
-# Source shared configuration
+# Source shared configuration (supports both /mnt and /opt)
 if [[ -f /etc/ai-platform.env ]]; then
     source /etc/ai-platform.env
 else

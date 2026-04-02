@@ -27,29 +27,12 @@ LOG_FILE="/var/log/ai-platform-deploy.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 # =============================================================================
-# PREREQUISITE CHAIN CHECKS (P2 fix)
-# =============================================================================
-# Source shared configuration
+# Source shared configuration (supports both /mnt and /opt)
 if [[ -f /etc/ai-platform.env ]]; then
     source /etc/ai-platform.env
 else
     fail "ERROR: /etc/ai-platform.env not found. Run 1-setup-system.sh first."
 fi
-
-# Check Docker installation
-command -v docker &>/dev/null || {
-    fail "ERROR: Docker not found. Run 1-setup-system.sh first."
-}
-
-# Check Docker Compose
-docker compose version &>/dev/null || {
-    fail "ERROR: Docker Compose not found. Run 1-setup-system.sh first."
-}
-
-# Check platform.conf exists
-[[ -f "${DATA_DIR}/platform.conf" ]] || {
-    fail "ERROR: platform.conf not found at ${DATA_DIR}/platform.conf. Run 1-setup-system.sh first."
-}
 
 # Test docker connectivity
 if ! docker ps &>/dev/null; then
@@ -60,11 +43,18 @@ fi
 ok "Prerequisites validated"
 
 # =============================================================================
-# SCRIPT CONFIGURATION
+# SCRIPT CONFIGURATION (P2 fix - use shared config)
 # =============================================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SCRIPT_VERSION="5.1.0"
+
+# Source shared configuration (supports both /mnt and /opt)
+if [[ -f /etc/ai-platform.env ]]; then
+    source /etc/ai-platform.env
+else
+    fail "ERROR: /etc/ai-platform.env not found. Run 1-setup-system.sh first."
+fi
 
 # =============================================================================
 # LOGGING (README P11)
