@@ -40,24 +40,24 @@ else
 fi
 
 # Check Docker installation
-command -v docker &>/dev/null || {
+if ! command -v docker &>/dev/null; then
     fail "ERROR: Docker not found. Run 1-setup-system.sh first."
-}
+fi
 
 # Check Docker daemon
-docker info &>/dev/null || {
+if ! docker info &>/dev/null; then
     fail "ERROR: Docker daemon not running. Start it with: sudo systemctl start docker"
-}
+fi
 
 # Check compose file exists
-[[ -f "${COMPOSE_FILE}" ]] || {
+if [[ ! -f "${COMPOSE_FILE}" ]]; then
     fail "ERROR: Compose file not found at ${COMPOSE_FILE}. Run 2-deploy-services.sh first."
-}
+fi
 
 # Check containers are running
-docker ps --filter "name=ollama" --filter "status=running" --quiet | grep -q . || {
+if ! docker ps --filter "name=ollama" --filter "status=running" --quiet | grep -q .; then
     fail "ERROR: Ollama container not running. Run 2-deploy-services.sh first."
-}
+fi
 
 # =============================================================================
 # SCRIPT CONFIGURATION
