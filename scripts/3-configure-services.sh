@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Script 3: Mission Control Hub
-# PURPOSE: Service management, health monitoring, credentials, key rotation, and post-deployment configuration
+# PURPOSE: Complete service management, health monitoring, credentials, key rotation, and post-deployment configuration
 # =============================================================================
 # USAGE:   bash scripts/3-configure-services.sh [tenant_id] [options]
 # OPTIONS: --verify-only     Only verify deployment, don't configure
@@ -199,7 +199,12 @@ verify_containers_healthy() {
     
     # Fail if any containers are unhealthy
     if [[ ${#unhealthy_containers[@]} -gt 0 ]]; then
-        fail "Unhealthy containers: ${unhealthy_containers[*]}"
+        warn "Unhealthy containers: ${unhealthy_containers[*]}"
+        for container in "${unhealthy_containers[@]}"; do
+            log "Checking logs for $container..."
+            docker logs --tail 50 "${TENANT_PREFIX}-${container}"
+        done
+        fail "Some containers are unhealthy. Check logs above."
     fi
     
     ok "All containers are healthy"
