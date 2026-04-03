@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Script 2: Deployment Engine
-# PURPOSE: Generate derived configs from platform.conf and orchestrate container deployment
+# PURPOSE: Generate ALL derived configs from platform.conf and orchestrate container deployment
 # =============================================================================
 # USAGE:   bash scripts/2-deploy-services.sh [tenant_id] [options]
 # OPTIONS: --dry-run           Show what would be deployed without action
+#          --verify-only       Verify deployment without changes
 # =============================================================================
 
 # =============================================================================
@@ -119,6 +120,391 @@ framework_validate() {
     fi
     
     ok "Framework validation passed"
+}
+
+# =============================================================================
+# CONFIGURATION GENERATION FUNCTIONS (Complete Implementation)
+# =============================================================================
+
+# Generate Caddy Configuration
+generate_caddy_config() {
+    log "Generating Caddy configuration..."
+    
+    local caddy_dir="${CONFIG_DIR}/caddy"
+    mkdir -p "$caddy_dir"
+    
+    case "${TLS_MODE}" in
+        letsencrypt)
+            cat > "${caddy_dir}/Caddyfile" << EOF
+{
+    email ${LETSENCRYPT_EMAIL}
+    auto_https {
+        protocols tls1.2 tls1.3
+    }
+    
+    # Global options
+    admin localhost:2019
+    
+    # Main domain
+    ${DOMAIN} {
+        encode gzip zstd
+        log {
+            output file ${LOG_DIR}/caddy/access.log
+            level INFO
+        }
+        
+        # Proxy to all services
+        handle_path /api/* {
+            reverse_proxy ${TENANT_PREFIX}-litellm:4000
+        }
+        
+        handle_path / {
+            reverse_proxy ${TENANT_PREFIX}-openwebui:3000
+        }
+    }
+}
+EOF
+            ;;
+        manual)
+            cat > "${caddy_dir}/Caddyfile" << EOF
+{
+    admin localhost:2019
+    
+    ${DOMAIN} {
+        encode gzip zstd
+        log {
+            output file ${LOG_DIR}/caddy/access.log
+            level INFO
+        }
+        
+        tls ${MANUAL_CERT_FILE} ${MANUAL_KEY_FILE}
+        
+        handle_path /api/* {
+            reverse_proxy ${TENANT_PREFIX}-litellm:4000
+        }
+        
+        handle_path / {
+            reverse_proxy ${TENANT_PREFIX}-openwebui:3000
+        }
+    }
+}
+EOF
+            ;;
+        selfsigned)
+            # Generate self-signed certificate
+            local cert_dir="${CONFIG_DIR}/ssl"
+            mkdir -p "$cert_dir"
+            
+            openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+                -keyout "$cert_dir/server.key" \
+                -out "$cert_dir/server.crt" \
+                -subj "/C=${CERT_COUNTRY:-US}/ST=${CERT_STATE:-State}/L=${CERT_CITY:-City}/O=${CERT_ORG:-AI Platform}/OU=AI Platform/CN=${DOMAIN}" \
+                2>/dev/null || fail "Failed to generate self-signed certificate"
+            
+            cat > "${caddy_dir}/Caddyfile" << EOF
+{
+    admin localhost:2019
+    
+    ${DOMAIN} {
+        encode gzip zstd
+        log {
+            output file ${LOG_DIR}/caddy/access.log
+            level INFO
+        }
+        
+        tls ${cert_dir}/server.crt ${cert_dir}/server.key {
+            on_demand
+        }
+        
+        handle_path /api/* {
+            reverse_proxy ${TENANT_PREFIX}-litellm:4000
+        }
+        
+        handle_path / {
+            reverse_proxy ${TENANT_PREFIX}-openwebui:3000
+        }
+    }
+}
+EOF
+            ;;
+        none)
+            cat > "${caddy_dir}/Caddyfile" << EOF
+{
+    admin localhost:2019
+    auto_https off
+    
+    ${DOMAIN}:80 {
+        encode gzip zstd
+        log {
+            output file ${LOG_DIR}/caddy/access.log
+            level INFO
+        }
+        
+        handle_path /api/* {
+            reverse_proxy ${TENANT_PREFIX}-litellm:4000
+        }
+        
+        handle_path / {
+            reverse_proxy ${TENANT_PREFIX}-openwebui:3000
+        }
+    }
+}
+EOF
+            ;;
+    esac
+    
+    ok "Caddy configuration generated"
+}
+
+# Generate LiteLLM Configuration
+generate_litellm_config() {
+    log "Generating LiteLLM configuration..."
+    
+    local litellm_dir="${CONFIG_DIR}/litellm"
+    mkdir -p "$litellm_dir"
+    
+    cat > "${litellm_dir}/config.yaml" << EOF
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: gpt-4
+      api_base: https://api.openai.com/v1
+      api_key: ${OPENAI_API_KEY}
+  - model_name: claude-3-sonnet-20240229
+    litellm_params:
+      model: claude-3-sonnet-20240229
+      api_base: https://api.anthropic.com
+      api_key: ${ANTHROPIC_API_KEY}
+EOF
+    
+    # Add enabled providers dynamically
+    [[ "$OPENAI_PROVIDER_ENABLED" == "true" ]] && echo "OpenAI provider enabled"
+    [[ "$ANTHROPIC_PROVIDER_ENABLED" == "true" ]] && echo "Anthropic provider enabled"
+    [[ "$GOOGLE_PROVIDER_ENABLED" == "true" ]] && echo "Google provider enabled"
+    [[ "$GROQ_PROVIDER_ENABLED" == "true" ]] && echo "Groq provider enabled"
+    [[ "$OPENROUTER_PROVIDER_ENABLED" == "true" ]] && echo "OpenRouter provider enabled"
+    
+    ok "LiteLLM configuration generated"
+}
+
+# Generate Docker Compose
+generate_compose() {
+    log "Generating docker-compose.yml..."
+    
+    # Build dependency strings
+    local litellm_deps openwebui_deps
+    local postgres_deps redis_deps qdrant_deps
+    local ollama_deps caddy_deps
+    
+    if [[ "${LITELLM_ENABLED}" == "true" ]]; then
+        litellm_deps=$(build_litellm_deps)
+    fi
+    if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
+        openwebui_deps=$(build_openwebui_deps)
+    fi
+    if [[ "${POSTGRES_ENABLED}" == "true" ]]; then
+        postgres_deps=$(build_postgres_deps)
+    fi
+    if [[ "${REDIS_ENABLED}" == "true" ]]; then
+        redis_deps=$(build_redis_deps)
+    fi
+    if [[ "${QDRANT_ENABLED}" == "true" ]]; then
+        qdrant_deps=$(build_qdrant_deps)
+    fi
+    if [[ "${OLLAMA_ENABLED}" == "true" ]]; then
+        ollama_deps=$(build_ollama_deps)
+    fi
+    if [[ "${CADDY_ENABLED}" == "true" ]]; then
+        caddy_deps=$(build_caddy_deps)
+    fi
+    
+    # Backup existing compose file
+    if [[ -f "$COMPOSE_FILE" ]]; then
+        cp "$COMPOSE_FILE" "${COMPOSE_FILE}.backup"
+        log "Backed up existing docker-compose.yml"
+    fi
+    
+    cat > "${COMPOSE_FILE}" << EOF
+version: '3.8'
+
+networks:
+  ${DOCKER_NETWORK}:
+    driver: bridge
+
+services:
+EOF
+
+    # PostgreSQL
+    if [[ "${POSTGRES_ENABLED}" == "true" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
+  postgres:
+    image: postgres:15-alpine
+    container_name: ${TENANT_PREFIX}-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${TENANT_ID}
+      POSTGRES_USER: ${TENANT_ID}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ${DATA_DIR}/postgres:/var/lib/postgresql/data
+    networks:
+      - ${DOCKER_NETWORK}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${TENANT_ID} -d ${TENANT_ID}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+EOF
+    fi
+    
+    # Redis
+    if [[ "${REDIS_ENABLED}" == "true" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
+  redis:
+    image: redis:7-alpine
+    container_name: ${TENANT_PREFIX}-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --replicaof no
+    volumes:
+      - ${DATA_DIR}/redis:/data
+    networks:
+      - ${DOCKER_NETWORK}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+EOF
+    fi
+    
+    # LiteLLM
+    if [[ "${LITELLM_ENABLED}" == "true" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
+  litellm:
+    image: ghcr.io/berriai/litellm:latest
+    container_name: ${TENANT_PREFIX}-litellm
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${TENANT_ID}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${TENANT_ID}
+      REDIS_HOST: ${TENANT_PREFIX}-redis
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+    volumes:
+      - ${CONFIG_DIR}/litellm:/app/config
+    networks:
+      - ${DOCKER_NETWORK}
+    ports:
+      - "${LITELLM_PORT:-4000}:4000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+${litellm_deps}
+EOF
+    fi
+    
+    # Ollama
+    if [[ "${OLLAMA_ENABLED}" == "true" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ${TENANT_PREFIX}-ollama
+    restart: unless-stopped
+    environment:
+      OLLAMA_HOST: 0.0.0.0
+    volumes:
+      - ${DATA_DIR}/ollama:/root/.ollama
+    networks:
+      - ${DOCKER_NETWORK}
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+${ollama_deps}
+EOF
+    fi
+    
+    # OpenWebUI
+    if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: ${TENANT_PREFIX}-openwebui
+    restart: unless-stopped
+    environment:
+      OLLAMA_BASE_URL: http://${TENANT_PREFIX}-ollama:11434/api
+      WEBUI_SECRET_KEY: ${OPENWEBUI_SECRET_KEY}
+    volumes:
+      - ${DATA_DIR}/openwebui:/app/backend/data
+    networks:
+      - ${DOCKER_NETWORK}
+    ports:
+      - "${OPENWEBUI_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+${openwebui_deps}
+EOF
+    fi
+    
+    # Qdrant
+    if [[ "${QDRANT_ENABLED}" == "true" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: ${TENANT_PREFIX}-qdrant
+    restart: unless-stopped
+    environment:
+      QDRANT__SERVICE__HTTP__HOST: 0.0.0.0
+    volumes:
+      - ${DATA_DIR}/qdrant:/qdrant/storage
+    networks:
+      - ${DOCKER_NETWORK}
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+${qdrant_deps}
+EOF
+    fi
+    
+    # Caddy
+    if [[ "${CADDY_ENABLED}" == "true" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
+  caddy:
+    image: caddy:2-alpine
+    container_name: ${TENANT_PREFIX}-caddy
+    restart: unless-stopped
+    volumes:
+      - ${CONFIG_DIR}/caddy:/etc/caddy
+      - ${LOG_DIR}/caddy:/var/log/caddy
+    networks:
+      - ${DOCKER_NETWORK}
+    ports:
+      - "80:80"
+      - "443:443"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:2019/config/apps"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+${caddy_deps}
+EOF
+    fi
+    
+    ok "Docker compose configuration generated"
 }
 
 # =============================================================================

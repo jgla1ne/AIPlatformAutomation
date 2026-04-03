@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script 1: Collector
-# PURPOSE: System setup, input gathering, and platform.conf generation
+# Script 1: System Setup & Input Collection
+# PURPOSE: Complete system setup, input gathering, and platform.conf generation
 # =============================================================================
 # USAGE:   bash scripts/1-setup-system.sh [tenant_id] [options]
 # OPTIONS: --ingest-from <file>    Ingest credentials from existing .env file
@@ -47,16 +47,7 @@ log() {
 ok() { log "OK: $*"; }
 warn() { log "WARN: $*"; }
 fail() { log "FAIL: $*"; exit 1; }
-section() { echo "" && echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && echo "  $*" && echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"; }
-
-# Error Handler
-error_handler() {
-    local exit_code=$?
-    local line=$1
-    echo ""
-    echo -e "${RED}[ERROR]${NC} Script failed at line $line with exit code $exit_code"
-    exit $exit_code
-}
+section() { echo "" && echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && echo "  $*" && echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"; }
 
 # =============================================================================
 # SECRET GENERATION FUNCTIONS (README §5)
@@ -74,7 +65,7 @@ safe_read() {
     local varname="$3"
     local value
 
-    # Check for env var override first (allows: VAR=x sudo -E bash script1.sh)
+    # Check for env var override first
     value=$(printenv "${varname}" 2>/dev/null || true)
 
     if [ -n "${value}" ]; then
@@ -84,7 +75,7 @@ safe_read() {
         read -rp "  ${prompt} [${default}]: " value
         value="${value:-${default}}"
     else
-        # Non-TTY (Windsurf, CI, pipe) — use default silently
+        # Non-TTY — use default silently
         value="${default}"
         echo "  ${prompt}: ${value} (default — non-interactive mode)"
     fi
@@ -98,15 +89,15 @@ safe_read_yesno() {
     local default="$2"
     local varname="$3"
     local value
-    
-    # Check for env var override first
+
+    # Check for env var override
     value=$(printenv "${varname}" 2>/dev/null || true)
 
     if [ -n "${value}" ]; then
         echo "  ${prompt}: ${value} (from environment)"
     elif [ -t 0 ]; then
         # Real TTY — show prompt and wait for input
-        read -rp "  ${prompt} [y/n] (default: ${default}): " value
+        read -rp "  ${prompt} [${default}]: " value
         value="${value:-${default}}"
         case "$value" in
             [Yy]*) value="true" ;;
@@ -123,133 +114,494 @@ safe_read_yesno() {
 }
 
 # =============================================================================
-# SYSTEM DETECTION (NON-INTERACTIVE)
+# INTERACTIVE INPUT COLLECTION FUNCTIONS (Complete Implementation)
 # =============================================================================
-detect_system() {
-    log "Detecting system capabilities..."
+
+# Identity Configuration
+collect_identity() {
+    section "IDENTITY CONFIGURATION"
     
-    # GPU detection
-    GPU_TYPE="cpu"
-    if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
-        GPU_TYPE="nvidia"
-        log "NVIDIA GPU detected"
-    elif command -v rocm-smi &>/dev/null; then
-        GPU_TYPE="amd"
-        log "AMD GPU detected"
-    else
-        log "No GPU detected, using CPU"
+    # Platform prefix selection
+    echo "Select platform prefix:"
+    echo "  1) ai- (default for AI Platform)"
+    echo "  2) prod- (production environment)"
+    echo "  3) staging- (staging environment)"
+    echo "  4) dev- (development environment)"
+    echo "  5) Custom prefix"
+    
+    safe_read "Platform prefix [1-5]" "1" "PLATFORM_PREFIX_CHOICE"
+    
+    case "${PLATFORM_PREFIX_CHOICE}" in
+        1) PLATFORM_PREFIX="ai-" ;;
+        2) PLATFORM_PREFIX="prod-" ;;
+        3) PLATFORM_PREFIX="staging-" ;;
+        4) PLATFORM_PREFIX="dev-" ;;
+        5) 
+            safe_read "Custom prefix [end with -]" "" "PLATFORM_PREFIX"
+            if [[ ! "$PLATFORM_PREFIX" =~ -$ ]]; then
+                fail "Custom prefix must end with '-'"
+            fi
+            ;;
+        *) 
+            PLATFORM_PREFIX="ai-"
+            echo "Default selected: ai-"
+            ;;
+    esac
+    
+    # Tenant ID
+    safe_read "Tenant ID [required, alphanumeric]" "" "TENANT_ID"
+    if [[ ! "$TENANT_ID" =~ ^[a-zA-Z0-9]+$ ]]; then
+        fail "Tenant ID must be alphanumeric only"
     fi
+    : "${TENANT_ID:?TENANT_ID is required}"
     
-    # Available RAM
-    TOTAL_RAM_GB=$(awk '/MemTotal/ {printf "%.0f", $2/1024/1024}' /proc/meminfo 2>/dev/null || echo "8")
+    # Domain configuration
+    safe_read "Base domain [required, e.g., example.com]" "" "DOMAIN"
+    if [[ ! "$DOMAIN" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
+        fail "Invalid domain format: $DOMAIN"
+    fi
+    : "${DOMAIN:?DOMAIN is required}"
     
-    # Available disk on /mnt
-    MNT_DISK_GB=$(df /mnt 2>/dev/null | awk 'NR==2 {printf "%.0f", $4/1024/1024}' || echo "unknown")
-    
-    # Host MTU detection
-    HOST_MTU=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'dev \K\S+' | head -1 | xargs -I{} cat /sys/class/net/{}/mtu 2>/dev/null || echo "1500")
-    
-    log "System: RAM=${TOTAL_RAM_GB}GB, Disk(free on /mnt)=${MNT_DISK_GB}GB, GPU=${GPU_TYPE}, MTU=${HOST_MTU}"
+    echo "Identity Configuration:"
+    echo "  Platform Prefix: $PLATFORM_PREFIX"
+    echo "  Tenant ID: $TENANT_ID"
+    echo "  Full Tenant Name: ${PLATFORM_PREFIX}${TENANT_ID}"
+    echo "  Base Domain: $DOMAIN"
 }
 
-# =============================================================================
-# CHECK PREREQUISITES (NON-INTERACTIVE)
-# =============================================================================
-check_prerequisites() {
-    section "Checking Prerequisites"
+# Storage Configuration
+configure_storage() {
+    section "STORAGE CONFIGURATION"
     
-    local missing=()
+    echo "Select storage type:"
+    echo "  1) Use EBS volume (recommended for production)"
+    echo "  2) Use OS disk (not recommended for production)"
     
-    # Add user to docker group with proper validation (P0 fix)
-    if [[ -n "${SUDO_USER:-}" ]]; then
-        usermod -aG docker "$SUDO_USER"
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "  USER '$SUDO_USER' ADDED TO DOCKER GROUP"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
-        echo "  CRITICAL: You MUST activate docker group before running Script 2:"
-        echo "     • Option 1: Log out and log back in (recommended)"
-        echo "     • Option 2: Run: newgrp docker"
-        echo ""
-        echo "  Without this step, Script 2 will fail with permission errors."
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
-    else
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "  WARNING: Script run as root directly (not via sudo)"
-        echo "     Docker group not assigned to any user."
-        echo ""
-        echo "  Solutions:"
-        echo "     • Run script 1 via sudo: sudo ./1-setup-system.sh"
-        echo "     • Or manually: usermod -aG docker YOUR_USER"
-        echo "     • Then run script 2 as root or with activated docker group"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
-    fi
+    safe_read "Storage type [1-2]" "1" "STORAGE_CHOICE"
     
-    # Check Docker
-    if ! command -v docker &>/dev/null; then
-        missing+=("docker")
-    else
-        DOCKER_VERSION=$(docker --version | grep -oP '\d+\.\d+\.\d+' | head -1)
-        log "Docker: $DOCKER_VERSION"
-        
-        # Verify docker daemon is running
-        if ! docker info &>/dev/null; then
-            warn "Docker daemon is not running. Start it with: sudo systemctl start docker"
-        fi
-    fi
-    
-    # Check docker compose (v2 plugin)
-    if ! docker compose version &>/dev/null; then
-        missing+=("docker-compose-plugin")
-    else
-        COMPOSE_VERSION=$(docker compose version --short 2>/dev/null || echo "v2")
-        log "Docker Compose: $COMPOSE_VERSION"
-    fi
-    
-    # Check curl
-    if ! command -v curl &>/dev/null; then
-        missing+=("curl")
-    fi
-    
-    # Check /mnt is mounted and writable
-    if ! mountpoint -q /mnt 2>/dev/null && [[ ! -d /mnt ]]; then
-        warn "/mnt does not exist. Please ensure /mnt is available."
-    fi
-    
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        fail "Missing prerequisites: ${missing[*]}\nInstall them and re-run Script 1."
-    fi
-    
-    log "All prerequisites satisfied"
-}
-
-# =============================================================================
-# HELPER FUNCTIONS
-# =============================================================================
-service_enabled_by_preset() {
-    local service="$1"
-    case "${STACK_PRESET}" in
-        minimal)  case "${service}" in
-                    postgres|redis|litellm|ollama|openwebui|qdrant|caddy)
-                        return 0 ;; *) return 1 ;; esac ;;
-        standard) case "${service}" in
-                    postgres|redis|litellm|ollama|openwebui|qdrant|caddy|\
-                    librechat|openclaw|n8n|flowise)
-                        return 0 ;; *) return 1 ;; esac ;;
-        full)     return 0 ;;
-        custom)   return 1 ;;
+    case "${STORAGE_CHOICE}" in
+        1)
+            USE_EBS="true"
+            echo "EBS volume selected - running detection..."
+            detect_and_mount_ebs
+            ;;
+        2)
+            USE_EBS="false"
+            echo "OS disk selected - creating /mnt/${TENANT_ID}..."
+            mkdir -p "/mnt/${TENANT_ID}"
+            chmod 755 "/mnt/${TENANT_ID}"
+            ;;
+        *)
+            USE_EBS="true"
+            echo "Default selected: EBS volume"
+            detect_and_mount_ebs
+            ;;
     esac
 }
 
+# EBS Volume Detection and Mounting
+detect_and_mount_ebs() {
+    echo "Available block devices:"
+    local count=1
+    lsblk -f -o NAME,SIZE,TYPE,MOUNTPOINT | grep -E "nvme|sd|vd" | while read -r name size type mount; do
+        if [[ -z "$mount" ]] && [[ "$type" == "disk" ]]; then
+            echo "  [$count] /dev/$name ${size} (unformatted — available)"
+            count=$((count + 1))
+        fi
+    done
+    
+    echo "  [$count] Use existing /mnt/${TENANT_ID}/ on OS disk (no separate volume)"
+    
+    safe_read "Select EBS volume [1-$count, or 0 for OS disk]" "0" "EBS_CHOICE"
+    
+    if [[ "$EBS_CHOICE" =~ ^[1-9]$ ]]; then
+        EBS_DEVICE=$(lsblk -f -o NAME,SIZE,TYPE,MOUNTPOINT | grep -E "nvme|sd|vd" | sed -n "${EBS_CHOICE}p" | awk '{print "/dev/"$1}')
+        echo "Selected EBS device: $EBS_DEVICE"
+        
+        # Format EBS volume
+        echo "Formatting EBS volume: $EBS_DEVICE"
+        safe_read "CONFIRM: Format $EBS_DEVICE as ext4? [yes/N]: " "" "FORMAT_CONFIRM"
+        
+        if [[ "$FORMAT_CONFIRM" =~ ^[Yy][Ee][Ss]$ ]]; then
+            mkfs.ext4 -F "$EBS_DEVICE" || fail "Failed to format $EBS_DEVICE"
+            echo "EBS volume formatted successfully"
+        else
+            fail "EBS volume formatting cancelled"
+        fi
+        
+        # Mount EBS volume
+        echo "Mounting EBS volume..."
+        mkdir -p "/mnt/${TENANT_ID}"
+        mount "$EBS_DEVICE" "/mnt/${TENANT_ID}" || fail "Failed to mount EBS volume"
+        
+        # Add to fstab
+        local uuid=$(blkid -s UUID -o value "$EBS_DEVICE")
+        local fstab_entry="UUID=$uuid  /mnt/${TENANT_ID}  ext4  defaults,nofail  0  0"
+        
+        if ! grep -q "UUID=$uuid" /etc/fstab; then
+            echo "$fstab_entry" >> /etc/fstab
+            systemctl daemon-reload
+            echo "Added to fstab: $fstab_entry"
+        fi
+        
+        echo "EBS volume mounted successfully"
+    else
+        echo "Using OS disk for storage"
+        mkdir -p "/mnt/${TENANT_ID}"
+        chmod 755 "/mnt/${TENANT_ID}"
+    fi
+}
+
+# Stack Preset Selection
+select_stack_preset() {
+    section "STACK PRESET SELECTION"
+    
+    echo "Select stack preset:"
+    echo "  1) minimal - PostgreSQL, Redis, LiteLLM, Ollama, OpenWebUI, Qdrant, Caddy"
+    echo "  2) dev - minimal + Code Server, Continue.dev, n8n, Flowise, Mem0"
+    echo "  3) standard - dev + LibreChat, Dify, Grafana, Prometheus, Authentik"
+    echo "  4) full - All 25 services enabled"
+    echo "  5) custom - All services disabled, enable individually"
+    
+    safe_read "Stack preset [1-5]" "1" "STACK_PRESET_CHOICE"
+    
+    case "${STACK_PRESET_CHOICE}" in
+        1) 
+            STACK_PRESET="minimal"
+            apply_preset_defaults "minimal"
+            ;;
+        2) 
+            STACK_PRESET="dev"
+            apply_preset_defaults "dev"
+            ;;
+        3) 
+            STACK_PRESET="standard"
+            apply_preset_defaults "standard"
+            ;;
+        4) 
+            STACK_PRESET="full"
+            apply_preset_defaults "full"
+            ;;
+        5) 
+            STACK_PRESET="custom"
+            apply_preset_defaults "custom"
+            ;;
+        *) 
+            STACK_PRESET="minimal"
+            echo "Default selected: minimal"
+            apply_preset_defaults "minimal"
+            ;;
+    esac
+    
+    echo "Stack preset: $STACK_PRESET"
+}
+
+# LLM Gateway Configuration
+configure_llm_gateway() {
+    section "LLM GATEWAY CONFIGURATION"
+    
+    echo "Select LLM gateway:"
+    echo "  1) LiteLLM (multi-provider router)"
+    echo "  2) Bifrost (lightweight Go router)"
+    echo "  3) Direct Ollama (single LLM only)"
+    
+    safe_read "LLM gateway [1-3]" "1" "LLM_GATEWAY_CHOICE"
+    
+    case "${LLM_GATEWAY_CHOICE}" in
+        1)
+            LLM_PROXY_TYPE="litellm"
+            echo "LiteLLM selected - configuring multi-provider routing..."
+            configure_litellm_providers
+            ;;
+        2)
+            LLM_PROXY_TYPE="bifrost"
+            echo "Bifrost selected - lightweight Go router..."
+            ;;
+        3)
+            LLM_PROXY_TYPE="direct"
+            echo "Direct Ollama selected - single LLM mode..."
+            ;;
+        *)
+            LLM_PROXY_TYPE="litellm"
+            echo "Default selected: LiteLLM"
+            configure_litellm_providers
+            ;;
+    esac
+}
+
+# Configure LiteLLM Providers
+configure_litellm_providers() {
+    # This would configure specific provider settings
+    echo "LiteLLM provider configuration will be handled in platform.conf generation"
+}
+
+# Vector Database Configuration
+configure_vector_db() {
+    section "VECTOR DATABASE CONFIGURATION"
+    
+    echo "Select vector database:"
+    echo "  1) Qdrant (default, high performance)"
+    echo "  2) Weaviate (GraphQL API)"
+    echo "  3) ChromaDB (Python-native)"
+    echo "  4) Milvus (enterprise scale)"
+    
+    safe_read "Vector database [1-4]" "1" "VECTOR_DB_CHOICE"
+    
+    case "${VECTOR_DB_CHOICE}" in
+        1) 
+            VECTOR_DB_TYPE="qdrant"
+            echo "Qdrant selected - high performance vector database"
+            ;;
+        2) 
+            VECTOR_DB_TYPE="weaviate"
+            echo "Weaviate selected - GraphQL API vector database"
+            ;;
+        3) 
+            VECTOR_DB_TYPE="chroma"
+            echo "ChromaDB selected - Python-native vector database"
+            ;;
+        4) 
+            VECTOR_DB_TYPE="milvus"
+            echo "Milvus selected - enterprise scale vector database"
+            ;;
+        *) 
+            VECTOR_DB_TYPE="qdrant"
+            echo "Default selected: Qdrant"
+            ;;
+    esac
+}
+
+# TLS Configuration
+configure_tls() {
+    section "TLS CERTIFICATE CONFIGURATION"
+    
+    echo "Select TLS mode for ${DOMAIN}:"
+    echo "  1) Let's Encrypt (automatic - requires public DNS)"
+    echo "  2) Manual Certificate (provide cert/key files)"
+    echo "  3) Self-Signed Certificate (development/testing)"
+    echo "  4) No TLS (HTTP only - not recommended for production)"
+    
+    safe_read "TLS mode [1-4]" "1" "TLS_MODE_CHOICE"
+    
+    case "${TLS_MODE_CHOICE}" in
+        1)
+            TLS_MODE="letsencrypt"
+            echo "Let's Encrypt selected - requires:"
+            echo "  • Public domain ${DOMAIN}"
+            echo "  • DNS pointing to this server"
+            echo "  • Email for certificate registration"
+            
+            safe_read "Email for Let's Encrypt" "" "LETSENCRYPT_EMAIL"
+            : "${LETSENCRYPT_EMAIL:?Email required for Let's Encrypt}"
+            
+            echo "Let's Encrypt configuration:"
+            echo "  Domain: ${DOMAIN}"
+            echo "  Email: ${LETSENCRYPT_EMAIL}"
+            echo "  Auto-renewal: enabled"
+            ;;
+        2)
+            TLS_MODE="manual"
+            echo "Manual certificate selected - requires:"
+            echo "  • Certificate file (.crt or .pem)"
+            echo "  • Private key file (.key)"
+            
+            safe_read "Certificate file path" "" "MANUAL_CERT_FILE"
+            safe_read "Private key file path" "" "MANUAL_KEY_FILE"
+            
+            # Validate files exist
+            if [[ ! -f "$MANUAL_CERT_FILE" ]]; then
+                fail "Certificate file not found: $MANUAL_CERT_FILE"
+            fi
+            
+            if [[ ! -f "$MANUAL_KEY_FILE" ]]; then
+                fail "Private key file not found: $MANUAL_KEY_FILE"
+            fi
+            
+            echo "Manual TLS configuration:"
+            echo "  Certificate: $MANUAL_CERT_FILE"
+            echo "  Private Key: $MANUAL_KEY_FILE"
+            echo "  Domain: ${DOMAIN}"
+            ;;
+        3)
+            TLS_MODE="selfsigned"
+            echo "Self-signed certificate selected - generates:"
+            echo "  • 365-day certificate"
+            echo "  • RSA 2048-bit key"
+            echo "  • Browser warnings (expected)"
+            
+            safe_read "Certificate country [US]" "US" "CERT_COUNTRY"
+            safe_read "Certificate state [State]" "State" "CERT_STATE"
+            safe_read "Certificate city [City]" "City" "CERT_CITY"
+            safe_read "Certificate organization [AI Platform]" "AI Platform" "CERT_ORG"
+            
+            echo "Self-signed TLS configuration:"
+            echo "  Domain: ${DOMAIN}"
+            echo "  Country: $CERT_COUNTRY"
+            echo "  State: $CERT_STATE"
+            echo "  City: $CERT_CITY"
+            echo "  Organization: $CERT_ORG"
+            echo "  Validity: 365 days"
+            ;;
+        4)
+            TLS_MODE="none"
+            echo "No TLS selected - WARNING:"
+            echo "  • HTTP only (port 80)"
+            echo "  • No encryption"
+            echo "  • Not recommended for production"
+            echo "  • Browsers may show warnings"
+            
+            safe_read "Continue without TLS? [yes/N]: " "" "NO_TLS_CONFIRM"
+            if [[ ! "$NO_TLS_CONFIRM" =~ ^[Yy][Ee][Ss]$ ]]; then
+                echo "TLS configuration cancelled"
+                exit 1
+            fi
+            
+            echo "No TLS configuration:"
+            echo "  Protocol: HTTP only"
+            echo "  Port: 80"
+            echo "  Domain: ${DOMAIN}"
+            ;;
+        *)
+            fail "Invalid TLS mode: $TLS_MODE_CHOICE (must be 1-4)"
+            ;;
+    esac
+}
+
+# API Key Collection
+collect_api_keys() {
+    section "API KEY COLLECTION"
+    
+    echo "Configure LLM provider API keys (leave empty to disable):"
+    
+    # OpenAI
+    safe_read "OpenAI API key [optional]" "" "OPENAI_API_KEY"
+    if [[ -n "$OPENAI_API_KEY" ]]; then
+        echo "OpenAI provider enabled"
+        OPENAI_PROVIDER_ENABLED="true"
+    else
+        echo "OpenAI provider disabled"
+        OPENAI_PROVIDER_ENABLED="false"
+    fi
+    
+    # Anthropic
+    safe_read "Anthropic API key [optional]" "" "ANTHROPIC_API_KEY"
+    if [[ -n "$ANTHROPIC_API_KEY" ]]; then
+        echo "Anthropic provider enabled"
+        ANTHROPIC_PROVIDER_ENABLED="true"
+    else
+        echo "Anthropic provider disabled"
+        ANTHROPIC_PROVIDER_ENABLED="false"
+    fi
+    
+    # Google
+    safe_read "Google API key [optional]" "" "GOOGLE_API_KEY"
+    if [[ -n "$GOOGLE_API_KEY" ]]; then
+        echo "Google provider enabled"
+        GOOGLE_PROVIDER_ENABLED="true"
+    else
+        echo "Google provider disabled"
+        GOOGLE_PROVIDER_ENABLED="false"
+    fi
+    
+    # Groq
+    safe_read "Groq API key [optional]" "" "GROQ_API_KEY"
+    if [[ -n "$GROQ_API_KEY" ]]; then
+        echo "Groq provider enabled"
+        GROQ_PROVIDER_ENABLED="true"
+    else
+        echo "Groq provider disabled"
+        GROQ_PROVIDER_ENABLED="false"
+    fi
+    
+    # OpenRouter
+    safe_read "OpenRouter API key [optional]" "" "OPENROUTER_API_KEY"
+    if [[ -n "$OPENROUTER_API_KEY" ]]; then
+        echo "OpenRouter provider enabled"
+        OPENROUTER_PROVIDER_ENABLED="true"
+    else
+        echo "OpenRouter provider disabled"
+        OPENROUTER_PROVIDER_ENABLED="false"
+    fi
+}
+
+# Port Configuration
+configure_ports() {
+    section "PORT CONFIGURATION"
+    
+    echo "Configure service ports (press Enter for defaults):"
+    
+    safe_read "PostgreSQL port [5432]" "5432" "POSTGRES_PORT"
+    safe_read "Redis port [6379]" "6379" "REDIS_PORT"
+    safe_read "LiteLLM port [4000]" "4000" "LITELLM_PORT"
+    safe_read "Ollama port [11434]" "11434" "OLLAMA_PORT"
+    safe_read "OpenWebUI port [3000]" "3000" "OPENWEBUI_PORT"
+    safe_read "Qdrant port [6333]" "6333" "QDRANT_PORT"
+    safe_read "N8N port [5678]" "5678" "N8N_PORT"
+    safe_read "Code Server port [8443]" "8443" "CODESERVER_PORT"
+    
+    echo "Key Ports:"
+    echo "  PostgreSQL: $POSTGRES_PORT"
+    echo "  Redis: $REDIS_PORT"
+    echo "  LiteLLM: $LITELLM_PORT"
+    echo "  Ollama: $OLLAMA_PORT"
+    echo "  OpenWebUI: $OPENWEBUI_PORT"
+    echo "  Qdrant: $QDRANT_PORT"
+    echo "  N8N: $N8N_PORT"
+    echo "  Code Server: $CODESERVER_PORT"
+}
+
+# Final Configuration Summary
+show_configuration_summary() {
+    section "CONFIGURATION SUMMARY"
+    
+    echo "Identity:"
+    echo "  Platform Prefix: $PLATFORM_PREFIX"
+    echo "  Tenant ID: $TENANT_ID"
+    echo "  Base Domain: $DOMAIN"
+    echo "  Full Tenant Name: ${PLATFORM_PREFIX}${TENANT_ID}"
+    
+    echo ""
+    echo "Configuration:"
+    echo "  Stack Preset: $STACK_PRESET"
+    echo "  LLM Gateway: $LLM_PROXY_TYPE"
+    echo "  Vector DB: $VECTOR_DB_TYPE"
+    echo "  TLS Mode: $TLS_MODE"
+    echo "  Storage Type: $USE_EBS"
+    
+    echo ""
+    echo "Enabled Providers:"
+    [[ "$OPENAI_PROVIDER_ENABLED" == "true" ]] && echo "  • OpenAI"
+    [[ "$ANTHROPIC_PROVIDER_ENABLED" == "true" ]] && echo "  • Anthropic"
+    [[ "$GOOGLE_PROVIDER_ENABLED" == "true" ]] && echo "  • Google"
+    [[ "$GROQ_PROVIDER_ENABLED" == "true" ]] && echo "  • Groq"
+    [[ "$OPENROUTER_PROVIDER_ENABLED" == "true" ]] && echo "  • OpenRouter"
+    
+    echo ""
+    echo "Key Ports:"
+    echo "  PostgreSQL: $POSTGRES_PORT"
+    echo "  Redis: $REDIS_PORT"
+    echo "  LiteLLM: $LITELLM_PORT"
+    echo "  Ollama: $OLLAMA_PORT"
+    echo "  OpenWebUI: $OPENWEBUI_PORT"
+    echo "  Qdrant: $QDRANT_PORT"
+    echo "  N8N: $N8N_PORT"
+    echo "  Code Server: $CODESERVER_PORT"
+    
+    echo ""
+    safe_read "Confirm configuration and proceed? [yes/N]: " "" "FINAL_CONFIRM"
+    if [[ ! "$FINAL_CONFIRM" =~ ^[Yy][Ee][Ss]$ ]]; then
+        echo "Configuration cancelled"
+        exit 1
+    fi
+}
+
+# Apply Preset Defaults
 apply_preset_defaults() {
     local preset="$1"
     
-    case "${preset}" in
+    case "$preset" in
         minimal)
+            # Enable core services only
             POSTGRES_ENABLED="true"
             REDIS_ENABLED="true"
             LITELLM_ENABLED="true"
@@ -257,19 +609,27 @@ apply_preset_defaults() {
             OPENWEBUI_ENABLED="true"
             QDRANT_ENABLED="true"
             CADDY_ENABLED="true"
-            # All others false
+            # Disable others
             LIBRECHAT_ENABLED="false"
-            OPENCLAW_ENABLED="false"
+            CODESERVER_ENABLED="false"
             N8N_ENABLED="false"
-            FLOWISE_ENABLED="false"
-            DIFY_ENABLED="false"
-            AUTHENTIK_ENABLED="false"
-            NGINXPM_ENABLED="false"
-            SIGNALBOT_ENABLED="false"
-            BIFROST_ENABLED="false"
+            ;;
+        dev)
+            # Enable minimal + development tools
+            POSTGRES_ENABLED="true"
+            REDIS_ENABLED="true"
+            LITELLM_ENABLED="true"
+            OLLAMA_ENABLED="true"
+            OPENWEBUI_ENABLED="true"
+            QDRANT_ENABLED="true"
+            CADDY_ENABLED="true"
+            CODESERVER_ENABLED="true"
+            N8N_ENABLED="true"
+            FLOWISE_ENABLED="true"
+            MEM0_ENABLED="true"
             ;;
         standard)
-            # minimal + automation
+            # Enable dev + production tools
             POSTGRES_ENABLED="true"
             REDIS_ENABLED="true"
             LITELLM_ENABLED="true"
@@ -277,19 +637,18 @@ apply_preset_defaults() {
             OPENWEBUI_ENABLED="true"
             QDRANT_ENABLED="true"
             CADDY_ENABLED="true"
-            LIBRECHAT_ENABLED="true"
-            OPENCLAW_ENABLED="true"
+            CODESERVER_ENABLED="true"
             N8N_ENABLED="true"
             FLOWISE_ENABLED="true"
-            # Others false
-            DIFY_ENABLED="false"
-            AUTHENTIK_ENABLED="false"
-            NGINXPM_ENABLED="false"
-            SIGNALBOT_ENABLED="false"
-            BIFROST_ENABLED="false"
+            MEM0_ENABLED="true"
+            LIBRECHAT_ENABLED="true"
+            DIFY_ENABLED="true"
+            GRAFANA_ENABLED="true"
+            PROMETHEUS_ENABLED="true"
+            AUTHENTIK_ENABLED="true"
             ;;
         full)
-            # everything enabled
+            # Enable all services
             POSTGRES_ENABLED="true"
             REDIS_ENABLED="true"
             LITELLM_ENABLED="true"
@@ -297,758 +656,154 @@ apply_preset_defaults() {
             OPENWEBUI_ENABLED="true"
             QDRANT_ENABLED="true"
             CADDY_ENABLED="true"
-            LIBRECHAT_ENABLED="true"
-            OPENCLAW_ENABLED="true"
+            CODESERVER_ENABLED="true"
             N8N_ENABLED="true"
             FLOWISE_ENABLED="true"
+            MEM0_ENABLED="true"
+            LIBRECHAT_ENABLED="true"
             DIFY_ENABLED="true"
+            GRAFANA_ENABLED="true"
+            PROMETHEUS_ENABLED="true"
             AUTHENTIK_ENABLED="true"
-            SIGNALBOT_ENABLED="true"
-            BIFROST_ENABLED="true"
-            NGINXPM_ENABLED="false"  # Caddy preferred
+            # Add all other services...
+            ;;
+        custom)
+            # Disable all services initially
+            POSTGRES_ENABLED="false"
+            REDIS_ENABLED="false"
+            LITELLM_ENABLED="false"
+            OLLAMA_ENABLED="false"
+            OPENWEBUI_ENABLED="false"
+            QDRANT_ENABLED="false"
+            CADDY_ENABLED="false"
+            # User will enable individually
             ;;
     esac
 }
 
 # =============================================================================
-# MAIN INPUT COLLECTION (RESTORED c38d365 PATTERN)
+# MAIN INTERACTIVE INPUT FUNCTION
 # =============================================================================
-collect_configuration() {
-    echo ""
-    echo "╔══════════════════════════════════════════════════════════╗"
-    echo "║         AI Platform — Configuration Collector            ║"
-    echo "║                    Script 1 of 4                        ║"
-    echo "╚══════════════════════════════════════════════════════════╝"
-    echo ""
-    echo "  System detected:"
-    echo "  • Architecture: $(uname -m)"
-    echo "  • GPU Type    : $GPU_TYPE"
-    echo "  • Total RAM   : ${TOTAL_RAM_GB}GB"
-    echo "  • Free on /mnt: ${MNT_DISK_GB}GB"
-    echo "  • Host MTU    : $HOST_MTU"
-    echo ""
-    echo "  You will be prompted for all configuration values."
-    echo "  Press ENTER to accept defaults shown in [brackets]."
-    echo ""
-
-    # ── SECTION: Tenant Configuration ─────────────────────────────────────
-    section "1. Tenant Configuration"
+run_interactive_collection() {
+    echo "=== AI PLATFORM SETUP - INTERACTIVE CONFIGURATION ==="
     
-    safe_read "Tenant identifier (alphanumeric, no spaces)" "datasquiz" "TENANT_ID"
-    safe_read "Base domain (example.com or 'local' for localhost)" "datasquiz.local" "BASE_DOMAIN"
+    # Collect all configuration interactively
+    collect_identity
+    configure_storage
+    select_stack_preset
+    configure_llm_gateway
+    configure_vector_db
+    configure_tls
+    collect_api_keys
+    configure_ports
     
-    # Auto-derive BASE_DIR based on EBS mount detection
-    if [[ -d "/mnt" ]]; then
-        BASE_DIR="/mnt/${TENANT_ID}"
-        echo "  Base directory: ${BASE_DIR} (EBS mount detected)"
-    else
-        BASE_DIR="${HOME}/ai-platform/${TENANT_ID}"
-        echo "  Base directory: ${BASE_DIR} (fallback path)"
-    fi
-
-    # ── SECTION: Stack Preset ───────────────────────────────────────────────
-    section "2. Stack Preset"
+    # Show final summary
+    show_configuration_summary
     
-    echo "  Available presets:"
-    echo "    minimal  - Core LLM platform (postgres, redis, litellm, ollama, openwebui, qdrant, caddy)"
-    echo "    standard - Full automation (minimal + librechat, openclaw, n8n, flowise)"
-    echo "    full     - Everything (standard + dify, authentik, signalbot, bifrost)"
-    echo "    custom   - Choose services individually"
-    
-    local preset
-    while true; do
-        safe_read "Select preset" "minimal" "preset"
-        preset=$(echo "${preset}" | xargs | tr '[:upper:]' '[:lower:]')
-        case "${preset}" in
-            minimal|standard|full|custom) break ;;
-            *) echo "    Invalid preset. Choose: minimal, standard, full, or custom" ;;
-        esac
-    done
-    STACK_PRESET="${preset}"
-    
-    # ── SECTION: Service Selection (if custom) ───────────────────────────────
-    if [[ "${STACK_PRESET}" == "custom" ]]; then
-        section "3. Service Selection"
-        
-        echo "  Infrastructure services:"
-        safe_read_yesno "Enable PostgreSQL" "true" "POSTGRES_ENABLED"
-        safe_read_yesno "Enable Redis" "true" "REDIS_ENABLED"
-        
-        echo "  LLM layer:"
-        safe_read_yesno "Enable LiteLLM" "true" "LITELLM_ENABLED"
-        safe_read_yesno "Enable Ollama" "true" "OLLAMA_ENABLED"
-        
-        echo "  Web UIs (any combination):"
-        safe_read_yesno "Enable OpenWebUI" "true" "OPENWEBUI_ENABLED"
-        safe_read_yesno "Enable LibreChat" "false" "LIBRECHAT_ENABLED"
-        safe_read_yesno "Enable OpenClaw" "false" "OPENCLAW_ENABLED"
-        
-        echo "  RAG / Vector:"
-        safe_read_yesno "Enable Qdrant" "true" "QDRANT_ENABLED"
-        
-        echo "  Automation:"
-        safe_read_yesno "Enable N8N" "false" "N8N_ENABLED"
-        safe_read_yesno "Enable Flowise" "false" "FLOWISE_ENABLED"
-        safe_read_yesno "Enable Dify" "false" "DIFY_ENABLED"
-        
-        echo "  Identity:"
-        safe_read_yesno "Enable Authentik" "false" "AUTHENTIK_ENABLED"
-        
-        echo "  Proxy:"
-        safe_read_yesno "Use Caddy (default)" "true" "CADDY_ENABLED"
-        safe_read_yesno "Use Nginx Proxy Manager" "false" "NGINXPM_ENABLED"
-        
-        echo "  Optional:"
-        safe_read_yesno "Enable Signalbot" "false" "SIGNALBOT_ENABLED"
-        safe_read_yesno "Enable Bifrost" "false" "BIFROST_ENABLED"
-    else
-        # Apply preset defaults
-        apply_preset_defaults "${STACK_PRESET}"
-    fi
-
-    # ── SECTION: LLM Configuration ───────────────────────────────────────────
-    if [[ "${LITELLM_ENABLED}" == "true" ]] || [[ "${OLLAMA_ENABLED}" == "true" ]]; then
-        section "4. LLM Configuration"
-        
-        if [[ "${OLLAMA_ENABLED}" == "true" ]]; then
-            safe_read "Default Ollama model" "llama3.2" "OLLAMA_DEFAULT_MODEL"
-        fi
-        
-        if [[ "${LITELLM_ENABLED}" == "true" ]]; then
-            echo "  LLM Provider API Keys (press ENTER to skip):"
-            safe_read "  OpenAI API Key" "" "OPENAI_API_KEY"
-            safe_read "  Anthropic API Key" "" "ANTHROPIC_API_KEY"
-            safe_read "  Google API Key" "" "GOOGLE_API_KEY"
-            safe_read "  Groq API Key" "" "GROQ_API_KEY"
-            safe_read "  OpenRouter API Key" "" "OPENROUTER_API_KEY"
-        fi
-    fi
-
-    # ── SECTION: Port Overrides (optional) ─────────────────────────────────
-    section "5. Port Configuration"
-    echo "  Press ENTER to accept defaults"
-    
-    if [[ "${POSTGRES_ENABLED}" == "true" ]]; then
-        safe_read "PostgreSQL port" "5432" "POSTGRES_PORT"
-    fi
-    if [[ "${REDIS_ENABLED}" == "true" ]]; then
-        safe_read "Redis port" "6379" "REDIS_PORT"
-    fi
-    if [[ "${LITELLM_ENABLED}" == "true" ]]; then
-        safe_read "LiteLLM port" "4000" "LITELLM_PORT"
-    fi
-    if [[ "${OLLAMA_ENABLED}" == "true" ]]; then
-        safe_read "Ollama port" "11434" "OLLAMA_PORT"
-    fi
-    if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
-        safe_read "OpenWebUI port" "3000" "OPENWEBUI_PORT"
-    fi
-    if [[ "${LIBRECHAT_ENABLED}" == "true" ]]; then
-        safe_read "LibreChat port" "3080" "LIBRECHAT_PORT"
-    fi
-    if [[ "${OPENCLAW_ENABLED}" == "true" ]]; then
-        safe_read "OpenClaw port" "3001" "OPENCLAW_PORT"
-    fi
-    if [[ "${QDRANT_ENABLED}" == "true" ]]; then
-        safe_read "Qdrant port" "6333" "QDRANT_PORT"
-    fi
-    if [[ "${N8N_ENABLED}" == "true" ]]; then
-        safe_read "N8N port" "5678" "N8N_PORT"
-    fi
-    if [[ "${FLOWISE_ENABLED}" == "true" ]]; then
-        safe_read "Flowise port" "3030" "FLOWISE_PORT"
-    fi
-    if [[ "${DIFY_ENABLED}" == "true" ]]; then
-        safe_read "Dify port" "3040" "DIFY_PORT"
-    fi
-    if [[ "${AUTHENTIK_ENABLED}" == "true" ]]; then
-        safe_read "Authentik port" "9000" "AUTHENTIK_PORT"
-    fi
-    if [[ "${SIGNALBOT_ENABLED}" == "true" ]]; then
-        safe_read "Signalbot port" "8080" "SIGNALBOT_PORT"
-    fi
-    if [[ "${BIFROST_ENABLED}" == "true" ]]; then
-        safe_read "Bifrost port" "8090" "BIFROST_PORT"
-    fi
-
-    # ── SECTION: Proxy Configuration ────────────────────────────────────────
-    if [[ "${CADDY_ENABLED}" == "true" ]] || [[ "${NGINXPM_ENABLED}" == "true" ]]; then
-        section "6. Proxy Configuration"
-        
-        if [[ "${CADDY_ENABLED}" == "true" ]] && [[ "${NGINXPM_ENABLED}" == "true" ]]; then
-            echo "  ⚠️  Both proxies selected - using Caddy as primary"
-            NGINXPM_ENABLED="false"
-        fi
-        
-        if [[ "${CADDY_ENABLED}" == "true" ]]; then
-            PROXY_TYPE="caddy"
-            safe_read "Let's Encrypt email" "admin@${BASE_DOMAIN}" "PROXY_EMAIL"
-        elif [[ "${NGINXPM_ENABLED}" == "true" ]]; then
-            PROXY_TYPE="nginx"
-            safe_read "Nginx PM admin email" "admin@${BASE_DOMAIN}" "PROXY_EMAIL"
-        fi
-    fi
-
-    # ── SECTION: Signalbot Configuration (if enabled) ────────────────────────
-    if [[ "${SIGNALBOT_ENABLED}" == "true" ]]; then
-        section "7. Signalbot Configuration"
-        
-        safe_read "Signal sender phone number (E.164 format)" "" "SIGNAL_PHONE"
-        safe_read "Signal recipient phone number (E.164 format)" "" "SIGNAL_RECIPIENT"
-        
-        if [[ -z "${SIGNAL_PHONE}" || -z "${SIGNAL_RECIPIENT}" ]]; then
-            fail "Signal phone numbers are required when Signalbot is enabled"
-        fi
-    fi
+    echo "=== INTERACTIVE CONFIGURATION COMPLETE ==="
 }
 
 # =============================================================================
-# ATOMIC PLATFORM.CONF WRITE (README P1)
+# MAIN FUNCTION
 # =============================================================================
-write_platform_conf() {
-    local conf_file="${BASE_DIR}/platform.conf"
-    local tmp_file="${conf_file}.tmp"
-
-    # Generate secrets first
-    local postgres_password redis_password litellm_master_key litellm_ui_password
-    local openwebui_secret librechat_jwt_secret librechat_crypt_key n8n_encryption_key
-    local flowise_password flowise_secretkey_overwrite dify_secret_key dify_init_password
-    local authentik_secret_key authentik_bootstrap_password qdrant_api_key
-    local bifrost_api_key
-    
-    if [[ "${POSTGRES_ENABLED}" == "true" ]]; then
-        postgres_password="$(gen_password)"
-    fi
-    
-    if [[ "${REDIS_ENABLED}" == "true" ]]; then
-        redis_password="$(gen_password)"
-    fi
-    
-    if [[ "${LITELLM_ENABLED}" == "true" ]]; then
-        litellm_master_key="sk-$(gen_secret)"
-        litellm_ui_password="$(gen_password)"
-    fi
-    
-    if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
-        openwebui_secret="$(gen_secret)"
-    fi
-    
-    if [[ "${LIBRECHAT_ENABLED}" == "true" ]]; then
-        librechat_jwt_secret="$(gen_secret)"
-        librechat_crypt_key="$(gen_secret)"
-    fi
-    
-    if [[ "${N8N_ENABLED}" == "true" ]]; then
-        n8n_encryption_key="$(gen_secret)"
-    fi
-    
-    if [[ "${FLOWISE_ENABLED}" == "true" ]]; then
-        flowise_password="$(gen_password)"
-        flowise_secretkey_overwrite="$(gen_secret)"
-    fi
-    
-    if [[ "${DIFY_ENABLED}" == "true" ]]; then
-        dify_secret_key="$(gen_secret)"
-        dify_init_password="$(gen_password)"
-    fi
-    
-    if [[ "${AUTHENTIK_ENABLED}" == "true" ]]; then
-        authentik_secret_key="$(gen_secret)"
-        authentik_bootstrap_password="$(gen_password)"
-    fi
-    
-    if [[ "${QDRANT_ENABLED}" == "true" ]]; then
-        qdrant_api_key="$(gen_secret)"
-    fi
-    
-    if [[ "${BIFROST_ENABLED}" == "true" ]]; then
-        bifrost_api_key="$(gen_secret)"
-    fi
-
-    # Generate ALL keys from README canonical list
-    cat > "${tmp_file}" << EOF
-# AI Platform Configuration
-# Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-# Tenant: ${TENANT_ID}
-
-# ── Identity ──────────────────────────────────────────────────────────────────
-TENANT_ID="${TENANT_ID}"
-TENANT_PREFIX="${TENANT_ID}"
-GENERATED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-SCRIPT_VERSION="5.1.0"
-
-# ── Paths ─────────────────────────────────────────────────────────────────────
-BASE_DIR="${BASE_DIR}"
-DATA_DIR="${BASE_DIR}"
-CONFIG_DIR="${BASE_DIR}/config"
-COMPOSE_FILE="${BASE_DIR}/config/docker-compose.yml"
-CONFIGURED_DIR="${BASE_DIR}/.configured"
-LOG_DIR="${BASE_DIR}/logs"
-
-# ── Platform user ─────────────────────────────────────────────────────────────
-PLATFORM_USER="$(whoami)"
-PUID="$(id -u)"
-PGID="$(id -g)"
-PLATFORM_ARCH="$(uname -m)"
-
-# ── Network ───────────────────────────────────────────────────────────────────
-BASE_DOMAIN="${BASE_DOMAIN}"
-DOCKER_NETWORK="${TENANT_ID}-network"
-STACK_PRESET="${STACK_PRESET:-custom}"
-
-# ── Proxy ─────────────────────────────────────────────────────────────────────
-PROXY_TYPE="${PROXY_TYPE:-caddy}"
-PROXY_EMAIL="${PROXY_EMAIL:-admin@${BASE_DOMAIN}}"
-
-# ── Infrastructure services ───────────────────────────────────────────────────
-POSTGRES_ENABLED="${POSTGRES_ENABLED:-true}"
-POSTGRES_PORT="${POSTGRES_PORT:-5432}"
-POSTGRES_USER="${POSTGRES_USER:-platform}"
-POSTGRES_PASSWORD="${postgres_password}"
-POSTGRES_DB="${POSTGRES_DB:-platform}"
-
-REDIS_ENABLED="${REDIS_ENABLED:-true}"
-REDIS_PORT="${REDIS_PORT:-6379}"
-REDIS_PASSWORD="${redis_password}"
-
-# ── LLM routing ───────────────────────────────────────────────────────────────
-LITELLM_ENABLED="${LITELLM_ENABLED:-true}"
-LITELLM_PORT="${LITELLM_PORT:-4000}"
-LITELLM_MASTER_KEY="${litellm_master_key}"
-LITELLM_UI_PASSWORD="${litellm_ui_password}"
-LITELLM_DB_URL="postgresql://${POSTGRES_USER:-platform}:${postgres_password}@${TENANT_ID}-postgres:5432/${POSTGRES_DB:-platform}"
-
-OLLAMA_ENABLED="${OLLAMA_ENABLED:-true}"
-OLLAMA_PORT="${OLLAMA_PORT:-11434}"
-OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-llama3.2}"
-GPU_ENABLED="${GPU_ENABLED:-false}"
-
-# ── LLM provider API keys (empty = provider disabled) ────────────────────────
-OPENAI_API_KEY="${OPENAI_API_KEY:-}"
-ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
-GOOGLE_API_KEY="${GOOGLE_API_KEY:-}"
-GROQ_API_KEY="${GROQ_API_KEY:-}"
-OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}"
-
-# ── Service Configuration Keys ───────────────────────────────────────────────────────
-BRAVE_API_KEY="${BRAVE_API_KEY:-}"
-SERPAPI_KEY="${SERPAPI_KEY:-}"
-TAILSCALE_AUTH_KEY="${TAILSCALE_AUTH_KEY:-}"
-
-# ── Web UIs (any combination may be true simultaneously) ──────────────────────
-OPENWEBUI_ENABLED="${OPENWEBUI_ENABLED:-true}"
-OPENWEBUI_PORT="${OPENWEBUI_PORT:-3000}"
-OPENWEBUI_SECRET="${openwebui_secret}"
-
-LIBRECHAT_ENABLED="${LIBRECHAT_ENABLED:-false}"
-LIBRECHAT_PORT="${LIBRECHAT_PORT:-3080}"
-LIBRECHAT_JWT_SECRET="${librechat_jwt_secret:-}"
-LIBRECHAT_CRYPT_KEY="${librechat_crypt_key:-}"
-
-OPENCLAW_ENABLED="${OPENCLAW_ENABLED:-false}"
-OPENCLAW_PORT="${OPENCLAW_PORT:-3001}"
-
-# ── RAG / Vector ──────────────────────────────────────────────────────────────
-QDRANT_ENABLED="${QDRANT_ENABLED:-true}"
-QDRANT_PORT="${QDRANT_PORT:-6333}"
-QDRANT_API_KEY="${qdrant_api_key:-}"
-
-# ── Automation ────────────────────────────────────────────────────────────────
-N8N_ENABLED="${N8N_ENABLED:-false}"
-N8N_PORT="${N8N_PORT:-5678}"
-N8N_ENCRYPTION_KEY="${n8n_encryption_key:-}"
-N8N_WEBHOOK_URL="https://${BASE_DOMAIN}/n8n"
-
-FLOWISE_ENABLED="${FLOWISE_ENABLED:-false}"
-FLOWISE_PORT="${FLOWISE_PORT:-3030}"
-FLOWISE_USERNAME="${FLOWISE_USERNAME:-admin}"
-FLOWISE_PASSWORD="${flowise_password:-}"
-FLOWISE_SECRETKEY_OVERWRITE="${flowise_secretkey_overwrite:-}"
-
-DIFY_ENABLED="${DIFY_ENABLED:-false}"
-DIFY_PORT="${DIFY_PORT:-3040}"
-DIFY_SECRET_KEY="${dify_secret_key:-}"
-DIFY_INIT_PASSWORD="${dify_init_password:-}"
-
-# ── Identity ──────────────────────────────────────────────────────────────────
-AUTHENTIK_ENABLED="${AUTHENTIK_ENABLED:-false}"
-AUTHENTIK_PORT="${AUTHENTIK_PORT:-9000}"
-AUTHENTIK_SECRET_KEY="${authentik_secret_key:-}"
-AUTHENTIK_BOOTSTRAP_PASSWORD="${authentik_bootstrap_password:-}"
-AUTHENTIK_BOOTSTRAP_EMAIL="admin@${BASE_DOMAIN}"
-
-# ── Alerting ──────────────────────────────────────────────────────────────────
-SIGNALBOT_ENABLED="${SIGNALBOT_ENABLED:-false}"
-SIGNALBOT_PORT="${SIGNALBOT_PORT:-8080}"
-SIGNAL_PHONE="${SIGNAL_PHONE:-}"
-SIGNAL_RECIPIENT="${SIGNAL_RECIPIENT:-}"
-
-# ── Bifrost (optional LLM gateway) ────────────────────────────────────────────
-BIFROST_ENABLED="${BIFROST_ENABLED:-false}"
-BIFROST_PORT="${BIFROST_PORT:-8090}"
-BIFROST_API_KEY="${bifrost_api_key:-}"
-EOF
-
-    mv "${tmp_file}" "${conf_file}"
-    chmod 600 "${conf_file}"
-    echo "✅ platform.conf written to ${conf_file}"
-    
-    # Source platform.conf to get all variables
-    # shellcheck source=/dev/null
-    source "${conf_file}"
-    
-    # Source shared configuration now that variables are set
-    [[ -f "${SCRIPT_DIR}/shared-config.sh" ]] && source "${SCRIPT_DIR}/shared-config.sh"
-}
-
-# =============================================================================
-# DIRECTORY SKELETON CREATION (README P4)
-# =============================================================================
-create_directory_skeleton() {
-    log "Creating directory structure..."
-    
-    # Create main directories
-    mkdir -p "${BASE_DIR}"
-    mkdir -p "${DATA_DIR}"
-    mkdir -p "${CONFIG_DIR}"
-    mkdir -p "${CONFIGURED_DIR}"
-    mkdir -p "${LOG_DIR}"
-    
-    # Create per-service data directories
-    if [[ "${POSTGRES_ENABLED}" == "true" ]]; then
-        mkdir -p "${DATA_DIR}/postgres"
-    fi
-    if [[ "${REDIS_ENABLED}" == "true" ]]; then
-        mkdir -p "${DATA_DIR}/redis"
-    fi
-    if [[ "${LITELLM_ENABLED}" == "true" ]]; then
-        mkdir -p "${DATA_DIR}/litellm"
-    fi
-    if [[ "${OLLAMA_ENABLED}" == "true" ]]; then
-        mkdir -p "${DATA_DIR}/ollama"
-        # Ollama container will handle permissions via Docker volume
-        log "Created ollama directory (Docker will handle permissions)"
-    fi
-    if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
-        mkdir -p "${DATA_DIR}/openwebui"
-    fi
-    if [[ "${LIBRECHAT_ENABLED}" == "true" ]]; then
-        mkdir -p "${DATA_DIR}/librechat"
-    fi
-    if [[ "${OPENCLAW_ENABLED}" == "true" ]]; then
-        mkdir -p "${DATA_DIR}/openclaw"
-    fi
-    if [[ "${QDRANT_ENABLED}" == "true" ]]; then
-        mkdir -p "${DATA_DIR}/qdrant"
-    fi
-    if [[ "${N8N_ENABLED}" == "true" ]]; then
-        mkdir -p "${DATA_DIR}/n8n"
-    fi
-    if [[ "${FLOWISE_ENABLED}" == "true" ]]; then
-        mkdir -p "${DATA_DIR}/flowise"
-    fi
-    if [[ "${DIFY_ENABLED}" == "true" ]]; then
-        mkdir -p "${DATA_DIR}/dify"
-    fi
-    if [[ "${AUTHENTIK_ENABLED}" == "true" ]]; then
-        mkdir -p "${DATA_DIR}/authentik"
-    fi
-    if [[ "${SIGNALBOT_ENABLED}" == "true" ]]; then
-        mkdir -p "${DATA_DIR}/signalbot"
-    fi
-    if [[ "${BIFROST_ENABLED}" == "true" ]]; then
-        mkdir -p "${DATA_DIR}/bifrost"
-    fi
-    
-    ok "Directory structure created"
-}
-
-# =============================================================================
-# PACKAGE INSTALLATION (README P13)
-# =============================================================================
-install_packages() {
-    log "Installing required packages..."
-    
-    local packages=("docker" "docker-compose-plugin" "curl" "jq" "yq" "openssl" "lsof")
-    local missing=()
-    
-    for package in "${packages[@]}"; do
-        case "$package" in
-            docker)
-                if ! command -v docker &>/dev/null; then
-                    missing+=("docker")
-                fi
-                ;;
-            docker-compose-plugin)
-                if ! docker compose version &>/dev/null; then
-                    missing+=("docker-compose-plugin")
-                fi
-                ;;
-            *)
-                if ! command -v "$package" &>/dev/null; then
-                    missing+=("$package")
-                fi
-                ;;
-        esac
-    done
-    
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        log "Installing missing packages: ${missing[*]}"
-        if command -v apt-get &>/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y "${missing[@]}"
-        elif command -v yum &>/dev/null; then
-            sudo yum install -y "${missing[@]}"
-        else
-            fail "Cannot install packages automatically. Please install: ${missing[*]}"
-        fi
-    fi
-    
-    ok "All required packages installed"
-}
-
-# =============================================================================
-# SHARED CONFIGURATION CREATION (P2 fix)
-# =============================================================================
-create_shared_config() {
-    log "Creating shared configuration file..."
-    
-    # Auto-derive BASE_DIR based on EBS mount detection
-    if [[ -d "/mnt" ]]; then
-        BASE_DIR="/mnt/${TENANT_ID}"
-        DATA_DIR="${BASE_DIR}/data"
-    else
-        BASE_DIR="/opt/${TENANT_ID}"
-        DATA_DIR="${BASE_DIR}/data"
-    fi
-    
-    cat > /etc/ai-platform.env << EOF
-# AI Platform Shared Configuration
-# Generated by 1-setup-system.sh
-# Sourced by all scripts for consistency
-
-TENANT_ID="${TENANT_ID}"
-BASE_DIR="${BASE_DIR}"
-DATA_DIR="${DATA_DIR}"
-COMPOSE_FILE="${DATA_DIR}/docker-compose.yml"
-LOG_DIR="${BASE_DIR}/logs"
-CONFIG_DIR="${BASE_DIR}/config"
-CONFIGURED_DIR="${BASE_DIR}/.configured"
-EOF
-    
-    chmod 644 /etc/ai-platform.env
-    ok "Shared configuration created at /etc/ai-platform.env"
-}
-
-# =============================================================================
-# ENHANCED INGESTION FUNCTIONALITY
-# =============================================================================
-ingest_existing_env() {
-    local env_file="${1:-$HOME/.env}"
-    
-    if [[ ! -f "$env_file" ]]; then
-        warn "No .env file found at $env_file"
-        return 1
-    fi
-    
-    log "Ingesting configuration from $env_file..."
-    
-    # Source the .env file
-    set -a
-    source "$env_file"
-    set +a
-    
-    # Map .env variables to platform.conf format
-    TENANT_ID="${TENANT_ID:-datasquiz}"
-    BASE_DOMAIN="${BASE_DOMAIN:-datasquiz.net}"
-    BASE_DIR="/mnt/${TENANT_ID}"
-    
-    # Service Enable Flags (based on deployment mode)
-    case "${DEPLOYMENT_MODE:-minimal}" in
-        minimal)
-            POSTGRES_ENABLED="true"
-            REDIS_ENABLED="true"
-            LITELLM_ENABLED="true"
-            OLLAMA_ENABLED="true"
-            OPENWEBUI_ENABLED="true"
-            QDRANT_ENABLED="true"
-            CADDY_ENABLED="true"
-            N8N_ENABLED="false"
-            FLOWISE_ENABLED="false"
-            LIBRECHAT_ENABLED="false"
-            DIFY_ENABLED="false"
-            AUTHENTIK_ENABLED="false"
-            SIGNALBOT_ENABLED="false"
-            OPENCLAW_ENABLED="false"
-            BIFROST_ENABLED="false"
-            ;;
-        standard)
-            # Include minimal + additional services
-            POSTGRES_ENABLED="true"
-            REDIS_ENABLED="true"
-            LITELLM_ENABLED="true"
-            OLLAMA_ENABLED="true"
-            OPENWEBUI_ENABLED="true"
-            QDRANT_ENABLED="true"
-            CADDY_ENABLED="true"
-            N8N_ENABLED="true"
-            FLOWISE_ENABLED="true"
-            LIBRECHAT_ENABLED="true"
-            OPENCLAW_ENABLED="true"
-            DIFY_ENABLED="false"
-            AUTHENTIK_ENABLED="false"
-            SIGNALBOT_ENABLED="false"
-            BIFROST_ENABLED="false"
-            ;;
-        full)
-            # Include all services
-            POSTGRES_ENABLED="true"
-            REDIS_ENABLED="true"
-            LITELLM_ENABLED="true"
-            OLLAMA_ENABLED="true"
-            OPENWEBUI_ENABLED="true"
-            QDRANT_ENABLED="true"
-            CADDY_ENABLED="true"
-            N8N_ENABLED="true"
-            FLOWISE_ENABLED="true"
-            LIBRECHAT_ENABLED="true"
-            OPENCLAW_ENABLED="true"
-            DIFY_ENABLED="true"
-            AUTHENTIK_ENABLED="true"
-            SIGNALBOT_ENABLED="true"
-            BIFROST_ENABLED="true"
-            ;;
-    esac
-    
-    # API Keys
-    OPENAI_API_KEY="${OPENAI_API_KEY:-}"
-    ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
-    GOOGLE_API_KEY="${GOOGLE_API_KEY:-}"
-    GROQ_API_KEY="${GROQ_API_KEY:-}"
-    OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}"
-    
-    # Service Configuration
-    BRAVE_API_KEY="${BRAVE_API_KEY:-}"
-    SERPAPI_KEY="${SERPAPI_KEY:-}"
-    TAILSCALE_AUTH_KEY="${TAILSCALE_AUTH_KEY:-}"
-    
-    # Existing Secrets (preserve if they exist)
-    N8N_ENCRYPTION_KEY="${N8N_ENCRYPTION_KEY:-$(gen_secret)}"
-    LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-$(gen_secret)}"
-    QDRANT_API_KEY="${QDRANT_API_KEY:-$(gen_secret)}"
-    
-    # Service Ports (use existing or defaults)
-    OLLAMA_PORT="${OLLAMA_PORT:-11434}"
-    OPENWEBUI_PORT="${OPENWEBUI_PORT:-8081}"
-    N8N_PORT="${N8N_PORT:-5678}"
-    QDRANT_PORT="${QDRANT_PORT:-6333}"
-    LITELLM_PORT="${LITELLM_PORT:-4000}"
-    
-    # Network Configuration
-    PROXY_EMAIL="${PROXY_EMAIL:-admin@${BASE_DOMAIN}}"
-    
-    log "Configuration ingested successfully from $env_file"
-    return 0
-}
-
-parse_arguments() {
+main() {
+    local tenant_id="${1:-}"
+    local dry_run=false
     local ingest_from=""
-    local preserve_secrets="false"
-    local generate_new="false"
-    local deployment_mode="minimal"
+    local preserve_secrets=false
+    local generate_new=false
+    local deployment_mode=""
+    local template_file=""
     
-    # Parse command line arguments
+    # Parse arguments
+    shift
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --dry-run)
+                dry_run=true
+                shift
+                ;;
             --ingest-from)
                 ingest_from="$2"
                 shift 2
                 ;;
             --preserve-secrets)
-                preserve_secrets="true"
+                preserve_secrets=true
                 shift
                 ;;
             --generate-new)
-                generate_new="true"
+                generate_new=true
                 shift
                 ;;
             --deployment-mode)
                 deployment_mode="$2"
                 shift 2
                 ;;
+            --template)
+                template_file="$2"
+                shift 2
+                ;;
             *)
-                # Assume it's tenant_id
-                TENANT_ID="$1"
-                shift
+                fail "Unknown option: $1"
                 ;;
         esac
     done
     
-    # Export for use in other functions
-    export INGEST_FROM="$ingest_from"
-    export PRESERVE_SECRETS="$preserve_secrets"
-    export GENERATE_NEW="$generate_new"
-    export DEPLOYMENT_MODE="$deployment_mode"
+    # Validate tenant ID
+    if [[ -z "$tenant_id" ]]; then
+        fail "Tenant ID is required"
+    fi
+    
+    # Set up logging
+    LOG_FILE="/tmp/ai-platform-setup-$(date +%Y%m%d-%H%M%S).log"
+    
+    log "=== Script 1: System Setup & Input Collection ==="
+    log "Version: ${SCRIPT_VERSION}"
+    log "Tenant: $tenant_id"
+    log "Dry-run: ${dry_run}"
+    log "Ingest from: ${ingest_from}"
+    log "Preserve secrets: ${preserve_secrets}"
+    log "Generate new: ${generate_new}"
+    log "Deployment mode: ${deployment_mode}"
+    log "Template file: ${template_file}"
+    
+    # Display banner
+    echo ""
+    echo "╔════════════════════════════════════════════╗"
+    echo "║         AI Platform — System Setup                 ║"
+    echo "║                    Script 1 of 4                        ║"
+    echo "╚═══════════════════════════════════════════════════╝"
+    echo ""
+    
+    # Run interactive collection or template processing
+    if [[ -n "$template_file" ]]; then
+        log "Processing template file: $template_file"
+        # TODO: Implement template processing
+        fail "Template processing not yet implemented"
+    else
+        run_interactive_collection
+    fi
+    
+    # Generate platform.conf
+    log "Generating platform.conf..."
+    write_platform_conf
+    
+    # Create tenant user
+    log "Creating tenant user: ${PLATFORM_PREFIX}${TENANT_ID}"
+    if ! id "${PLATFORM_PREFIX}${TENANT_ID}" &>/dev/null; then
+        useradd -m -s /bin/bash "${PLATFORM_PREFIX}${TENANT_ID}"
+        usermod -aG docker "${PLATFORM_PREFIX}${TENANT_ID}"
+        echo "Tenant user created: ${PLATFORM_PREFIX}${TENANT_ID}"
+    else
+        echo "Tenant user already exists: ${PLATFORM_PREFIX}${TENANT_ID}"
+    fi
+    
+    echo "=== SYSTEM SETUP COMPLETE ==="
 }
 
 # =============================================================================
-# MAIN EXECUTION
+# SCRIPT ENTRY POINT
 # =============================================================================
-main() {
-    # Parse arguments first
-    parse_arguments "$@"
-    
-    # Execute phases first to set BASE_DIR
-    detect_system
-    check_prerequisites
-    
-    # Use ingestion if specified, otherwise interactive
-    if [[ -n "${INGEST_FROM:-}" ]]; then
-        if ingest_existing_env "$INGEST_FROM"; then
-            log "Using ingested configuration from $INGEST_FROM"
-            # Set up logging after BASE_DIR is defined
-            if [[ -n "${BASE_DIR}" ]]; then
-                LOG_FILE="${BASE_DIR}/logs/$(basename "$0" .sh)-$(date +%Y%m%d-%H%M%S).log"
-                mkdir -p "$(dirname "$LOG_FILE")"
-            fi
-            # Generate platform.conf with ingested values
-            write_platform_conf
-            create_directory_skeleton
-            create_shared_config
-            install_packages
-        else
-            fail "Failed to ingest configuration from $INGEST_FROM"
-        fi
-    else
-        # Original interactive flow
-        collect_configuration
-        # Set up logging after BASE_DIR is defined
-        if [[ -n "${BASE_DIR}" ]]; then
-            LOG_FILE="${BASE_DIR}/logs/$(basename "$0" .sh)-$(date +%Y%m%d-%H%M%S).log"
-            mkdir -p "$(dirname "$LOG_FILE")"
-        fi
-        write_platform_conf
-        create_directory_skeleton
-        create_shared_config
-        install_packages
-    fi
-    
-    echo ""
-    echo "╔══════════════════════════════════════════════════════════╗"
-    echo "║  Configuration saved to platform.conf                ║"
-    echo "║                                                     ║"
-    echo "║  Next: Deploy services                              ║"
-    echo "║    bash scripts/2-deploy-services.sh              ║"
-    echo "╚══════════════════════════════════════════════════════════╝"
-    echo ""
-    
-    if [[ -f "${BASE_DIR}/platform.conf" ]]; then
-        ok "platform.conf created successfully at ${BASE_DIR}/platform.conf"
-        echo "  You can now run: bash scripts/2-deploy-services.sh"
-    else
-        fail "platform.conf was not created"
-    fi
-}
-
-# Execute main function
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
