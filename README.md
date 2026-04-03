@@ -3519,6 +3519,174 @@ MEM0_API_KEY="mem0-key-..." \
 
 ---
 
+## 🏆 **GOLDEN SUCCESS CRITERIA - SCRIPT STANDARDS**
+
+### **SCRIPT 0: NUCLEAR CLEANUP - SUCCESS CRITERIA**
+
+#### **🎯 PRIMARY OBJECTIVE**
+Complete removal of all platform components with zero residual artifacts
+
+#### **✅ EXECUTION ORDER (Mandatory Sequence)**
+1. **Typed Confirmation**: `DELETE ${TENANT_ID}` verification
+2. **Container Cleanup**: `docker compose down --volumes --remove-orphans`
+3. **Image Removal**: Scoped by tenant prefix and project labels
+4. **Data Directory Removal**: `/mnt/${TENANT_ID}/data/` (safety validated)
+5. **Config Directory Removal**: `/mnt/${TENANT_ID}/config/`
+6. **Marker Removal**: `/mnt/${TENANT_ID}/.configured/`
+7. **Log Directory Removal**: `/mnt/${TENANT_ID}/logs/`
+8. **Base Directory Removal**: `/mnt/${TENANT_ID}/`
+9. **Network Removal**: `${TENANT_ID}-network`
+10. **Optional EBS Unmount**: With fstab cleanup
+
+#### **🔍 VALIDATION CHECKPOINTS**
+- [ ] **Root Execution**: Script must run as root (P7 exception)
+- [ ] **Safety Guards**: DATA_DIR validation for `/mnt/` and `/opt/` paths only
+- [ ] **Complete Removal**: All containers, networks, images removed
+- [ ] **Scoped Cleanup**: Only tenant-specific resources affected
+- [ ] **System Cleanup**: nginx configs, systemd services, daemon-reload
+- [ ] **No Residuals**: Zero platform artifacts remaining
+- [ ] **Idempotency**: Can run multiple times safely
+- [ ] **Error Handling**: Graceful failure with clear messages
+
+#### **📊 SUCCESS METRICS**
+- **Container Count**: 0 running/stopped containers
+- **Network Count**: 0 tenant networks
+- **Image Count**: 0 tenant-specific images
+- **Disk Usage**: 0 bytes in `/mnt/${TENANT_ID}/`
+- **System State**: Clean, no platform services
+
+---
+
+### **SCRIPT 1: SYSTEM SETUP & INPUT COLLECTION - SUCCESS CRITERIA**
+
+#### **🎯 PRIMARY OBJECTIVE**
+Complete interactive configuration collection with comprehensive validation and platform.conf generation
+
+#### **✅ EXECUTION ORDER (Mandatory Sequence)**
+1. **Identity Collection**: Platform prefix, tenant ID, domain validation
+2. **Storage Configuration**: EBS detection, formatting, mounting, fstab updates
+3. **Stack Preset Selection**: minimal/dev/standard/full/custom with service enablement
+4. **LLM Gateway Configuration**: LiteLLM/Bifrost/Direct Ollama selection
+5. **Vector Database Selection**: Qdrant/Weaviate/ChromaDB/Milvus configuration
+6. **TLS Configuration**: Let's Encrypt/Manual/Self-Signed/None with validation
+7. **API Key Collection**: All LLM providers with enable/disable logic
+8. **Port Configuration**: All service ports with conflict detection
+9. **Configuration Summary**: Complete review with user confirmation
+10. **platform.conf Generation**: 95+ variables with proper formatting
+11. **Tenant User Creation**: System user with Docker group membership
+
+#### **🔍 VALIDATION CHECKPOINTS**
+- [ ] **Non-Root Execution**: Script must not run as root (P7)
+- [ ] **Identity Validation**: Alphanumeric tenant ID, valid domain format
+- [ ] **Storage Validation**: EBS device detection, formatting success, mount verification
+- [ ] **Dependency Validation**: Required binaries available, Docker accessible
+- [ ] **Input Validation**: All user inputs validated with defaults
+- [ ] **TLS Validation**: Certificate files exist, domain resolvable, email valid
+- [ ] **Port Validation**: No conflicts, all within valid ranges
+- [ ] **Configuration Complete**: All 95+ variables generated in platform.conf
+- [ ] **Directory Structure**: `/mnt/${TENANT_ID}/` with proper subdirectories
+- [ ] **Permission Setup**: Tenant user created, Docker group added
+- [ ] **Idempotency Markers**: `.configured/setup-system` created
+- [ ] **Error Recovery**: Graceful handling of all failure scenarios
+
+#### **📊 SUCCESS METRICS**
+- **platform.conf**: Generated with 95+ variables
+- **Directory Structure**: Complete `/mnt/${TENANT_ID}/` hierarchy
+- **User Account**: Created with proper permissions
+- **Storage Status**: EBS mounted and persistent (or OS disk fallback)
+- **Validation Status**: All inputs validated and confirmed
+- **Configuration Status**: Ready for Script 2 deployment
+
+---
+
+### **SCRIPT 2: DEPLOYMENT ENGINE - SUCCESS CRITERIA**
+
+#### **🎯 PRIMARY OBJECTIVE**
+Generate all derived configurations and orchestrate container deployment with proper dependencies
+
+#### **✅ EXECUTION ORDER (Mandatory Sequence)**
+1. **Framework Validation**: Docker connectivity, binary availability, disk space
+2. **Configuration Generation**: Caddy, LiteLLM, docker-compose.yml
+3. **Image Pre-Pulling**: All required images downloaded
+4. **Network Creation**: `${TENANT_ID}-network` Docker bridge
+5. **Volume Creation**: All bind mount directories created
+6. **Infrastructure Deployment**: PostgreSQL, Redis (dependency order)
+7. **LLM Services**: Ollama, LiteLLM (depends on infrastructure)
+8. **Web Services**: OpenWebUI, Caddy (depends on LLM)
+9. **Vector Database**: Qdrant (depends on infrastructure)
+10. **Health Verification**: All containers healthy and responding
+11. **Integration Testing**: Cross-service connectivity validation
+12. **Idempotency Markers**: `.configured/deploy-services` created
+
+#### **🔍 VALIDATION CHECKPOINTS**
+- [ ] **Non-Root Execution**: Script must not run as root (P7)
+- [ ] **Prerequisite Validation**: platform.conf exists, Docker accessible
+- [ ] **Configuration Generation**: All service configs generated correctly
+- [ ] **TLS Configuration**: Caddyfile generated for selected TLS mode
+- [ ] **Dependency Order**: Services deployed in correct sequence
+- [ ] **Health Checks**: All containers passing health checks
+- [ ] **Port Binding**: All services accessible on configured ports
+- [ ] **Network Connectivity**: Internal service communication working
+- [ ] **Volume Mounting**: All data persisted to `/mnt/${TENANT_ID}/`
+- [ ] **GPU Support**: Detected and configured if available
+- [ ] **Integration Testing**: Cross-service API calls successful
+- [ ] **Error Recovery**: Failed deployments cleaned up properly
+
+#### **📊 SUCCESS METRICS**
+- **Container Health**: 100% healthy status
+- **Service Accessibility**: All services responding on ports
+- **Configuration Files**: All generated with correct variables
+- **Network Status**: Docker network created and functional
+- **Volume Status**: All data properly mounted and persistent
+- **Integration Status**: All cross-service calls working
+- **Resource Usage**: Within expected RAM/CPU limits
+- **Deployment Time**: Complete within 10 minutes
+
+---
+
+### **SCRIPT 3: MISSION CONTROL HUB - SUCCESS CRITERIA**
+
+#### **🎯 PRIMARY OBJECTIVE**
+Complete service management, health monitoring, credential management, and post-deployment operations
+
+#### **✅ EXECUTION ORDER (Mandatory Sequence)**
+1. **Framework Validation**: Docker connectivity, binary availability
+2. **Service Health Check**: All containers status verification
+3. **Health Dashboard Generation**: Dynamic URLs and status indicators
+4. **Service Management Operations**: restart/add/remove/disable/enable functions
+5. **Credential Management**: Display and rotation capabilities
+6. **Integration Testing**: End-to-end service verification
+7. **Configuration Updates**: Hot reload for service changes
+8. **Monitoring Setup**: Health check scheduling and alerting
+9. **Backup Operations**: Configuration and data backup procedures
+10. **Idempotency Markers**: `.configured/configure-services` created
+
+#### **🔍 VALIDATION CHECKPOINTS**
+- [ ] **Non-Root Execution**: Script must not run as root (P7)
+- [ ] **Service Management**: All lifecycle operations working
+- [ ] **Health Monitoring**: Real-time status with dynamic URLs
+- [ ] **Credential Security**: Secure display and rotation of secrets
+- [ ] **Integration Testing**: All cross-service integrations verified
+- [ ] **Dynamic Configuration**: Service add/remove without full redeploy
+- [ ] **Error Recovery**: Service failures detected and handled
+- [ ] **Logging**: Comprehensive service logs in `/mnt/${TENANT_ID}/logs/`
+- [ ] **Performance Monitoring**: Resource usage tracking
+- [ ] **Backup Operations**: Automated configuration backups
+- [ ] **User Interface**: Clear CLI with helpful error messages
+- [ ] **Documentation**: Inline help and examples for all functions
+
+#### **📊 SUCCESS METRICS**
+- **Service Uptime**: 99%+ availability with auto-recovery
+- **Health Response**: Dashboard generation under 5 seconds
+- **Service Operations**: Add/remove/restart under 30 seconds
+- **Integration Tests**: All cross-service calls passing
+- **Credential Security**: Encrypted storage and secure rotation
+- **Monitoring Coverage**: All services monitored with alerts
+- **User Experience**: Intuitive CLI with clear feedback
+- **Recovery Time**: Service recovery under 60 seconds
+
+---
+
 ## 🎯 **DEPLOYMENT OUTCOMES**
 
 ### **✅ Minimal Stack**
