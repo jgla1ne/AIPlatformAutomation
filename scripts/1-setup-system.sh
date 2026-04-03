@@ -710,6 +710,7 @@ main() {
     local tenant_id="${1:-}"
     local dry_run=false
     local ingest_from=""
+    litellm_master_key="$(gen_secret)"
     local preserve_secrets=false
     local generate_new=false
     local deployment_mode=""
