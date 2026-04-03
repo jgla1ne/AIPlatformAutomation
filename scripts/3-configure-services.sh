@@ -1,21 +1,19 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script 3: Service Configuration Only
-# PURPOSE: Configure services using platform.conf ONLY
+# Script 3: Mission Control Hub
+# PURPOSE: Service management, health monitoring, credentials, key rotation, and post-deployment configuration
 # =============================================================================
-
-set -euo pipefail
-trap 'echo "FAILED at line $LINENO. Command: $BASH_COMMAND" >&2' ERR
-
-# =============================================================================
-# Script 3: Mission Control — README v5.1.0 COMPLIANT
-# =============================================================================
-# PURPOSE: Source platform.conf, call service APIs to complete setup
 # USAGE:   bash scripts/3-configure-services.sh [tenant_id] [options]
 # OPTIONS: --verify-only     Only verify deployment, don't configure
 #          --health-check    Show detailed health status
 #          --show-credentials Print all service credentials
 #          --rotate-keys [service] Regenerate secrets for one service
+#          --restart [service]   Restart specific service
+#          --add [service]       Add new service to platform
+#          --remove [service]    Remove service from platform
+#          --disable [service]   Temporarily disable service
+#          --enable [service]    Re-enable disabled service
+#          --dry-run         Show what would be done
 # =============================================================================
 
 set -euo pipefail
@@ -976,6 +974,11 @@ main() {
     local health_check=false
     local show_credentials=false
     local rotate_keys=""
+    local restart_service=""
+    local add_service=""
+    local remove_service=""
+    local disable_service=""
+    local enable_service=""
     local dry_run=false
     
     # Parse arguments
@@ -996,6 +999,26 @@ main() {
                 ;;
             --rotate-keys)
                 rotate_keys="$2"
+                shift 2
+                ;;
+            --restart)
+                restart_service="$2"
+                shift 2
+                ;;
+            --add)
+                add_service="$2"
+                shift 2
+                ;;
+            --remove)
+                remove_service="$2"
+                shift 2
+                ;;
+            --disable)
+                disable_service="$2"
+                shift 2
+                ;;
+            --enable)
+                enable_service="$2"
                 shift 2
                 ;;
             --dry-run)
@@ -1039,6 +1062,11 @@ main() {
     log "Health-check: ${health_check}"
     log "Show-credentials: ${show_credentials}"
     log "Rotate-keys: ${rotate_keys}"
+    log "Restart-service: ${restart_service}"
+    log "Add-service: ${add_service}"
+    log "Remove-service: ${remove_service}"
+    log "Disable-service: ${disable_service}"
+    log "Enable-service: ${enable_service}"
     log "Dry-run: ${dry_run}"
     
     # Framework validation
@@ -1052,6 +1080,32 @@ main() {
     
     if [[ "$show_credentials" == "true" ]]; then
         show_credentials
+        return 0
+    fi
+    
+    # Handle platform operations
+    if [[ -n "$restart_service" ]]; then
+        restart_service "$restart_service"
+        return 0
+    fi
+    
+    if [[ -n "$add_service" ]]; then
+        add_service "$add_service"
+        return 0
+    fi
+    
+    if [[ -n "$remove_service" ]]; then
+        remove_service "$remove_service"
+        return 0
+    fi
+    
+    if [[ -n "$disable_service" ]]; then
+        disable_service "$disable_service"
+        return 0
+    fi
+    
+    if [[ -n "$enable_service" ]]; then
+        enable_service "$enable_service"
         return 0
     fi
     
@@ -1127,6 +1181,128 @@ main() {
     echo ""
     echo "  Platform is ready for use!"
     echo ""
+}
+
+# =============================================================================
+# PLATFORM OPERATIONS - MISSION CONTROL HUB
+# =============================================================================
+
+# Restart a specific service
+restart_service() {
+    local service="$1"
+    local container_name="${TENANT_PREFIX}-${service}"
+    
+    log "Restarting service: $service (container: $container_name)"
+    
+    if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
+        docker restart "$container_name"
+        log "Service $service restarted successfully"
+        
+        # Wait for service to be healthy again
+        case "$service" in
+            "postgres"|"redis"|"ollama"|"litellm"|"openwebui"|"qdrant")
+                wait_for_service "$service" "http://localhost:${service^^}_PORT/health" "$container_name"
+                ;;
+        esac
+    else
+        fail "Service $service container $container_name not found"
+    fi
+}
+
+# Add new service to platform
+add_service() {
+    local service="$1"
+    
+    log "Adding service to platform: $service"
+    
+    # Check if service is already enabled
+    local service_var="${service^^}_ENABLED"
+    if [[ "${!service_var}" == "true" ]]; then
+        warn "Service $service is already enabled"
+        return 0
+    fi
+    
+    # Enable service in platform.conf
+    sed -i "s/^${service_var}=.*/${service_var}=true/" "${BASE_DIR}/platform.conf"
+    
+    # Regenerate docker-compose.yml
+    log "Regenerating docker-compose.yml for new service..."
+    "${SCRIPT_DIR}/2-deploy-services.sh" "${TENANT_ID}" --dry-run
+    
+    # Deploy new service
+    log "Deploying new service..."
+    docker compose -f "${COMPOSE_FILE}" up -d "$service"
+    
+    log "Service $service added successfully"
+}
+
+# Remove service from platform
+remove_service() {
+    local service="$1"
+    local container_name="${TENANT_PREFIX}-${service}"
+    
+    log "Removing service from platform: $service"
+    
+    # Stop and remove container
+    if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
+        docker stop "$container_name"
+        docker rm "$container_name"
+        log "Service $service container removed"
+    fi
+    
+    # Disable service in platform.conf
+    local service_var="${service^^}_ENABLED"
+    sed -i "s/^${service_var}=.*/${service_var}=false/" "${BASE_DIR}/platform.conf"
+    
+    # Remove volumes and data
+    local data_dir="${BASE_DIR}/data/${service}"
+    if [[ -d "$data_dir" ]]; then
+        backup_configuration "$data_dir"
+        rm -rf "$data_dir"
+        log "Service $service data removed"
+    fi
+    
+    log "Service $service removed successfully"
+}
+
+# Temporarily disable service
+disable_service() {
+    local service="$1"
+    local container_name="${TENANT_PREFIX}-${service}"
+    
+    log "Disabling service: $service"
+    
+    if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
+        docker stop "$container_name"
+        log "Service $service disabled (stopped)"
+    else
+        warn "Service $service is not running"
+    fi
+    
+    # Mark as disabled in platform.conf
+    local service_var="${service^^}_ENABLED"
+    sed -i "s/^${service_var}=.*/${service_var}=false/" "${BASE_DIR}/platform.conf"
+}
+
+# Re-enable disabled service
+enable_service() {
+    local service="$1"
+    local container_name="${TENANT_PREFIX}-${service}"
+    
+    log "Enabling service: $service"
+    
+    # Enable in platform.conf
+    local service_var="${service^^}_ENABLED"
+    sed -i "s/^${service_var}=.*/${service_var}=true/" "${BASE_DIR}/platform.conf"
+    
+    # Start service
+    if docker ps -a --format "{{.Names}}" | grep -q "^${container_name}$"; then
+        docker start "$container_name"
+        log "Service $service enabled (started)"
+    else
+        log "Starting new service container..."
+        docker compose -f "${COMPOSE_FILE}" up -d "$service"
+    fi
 }
 
 # =============================================================================

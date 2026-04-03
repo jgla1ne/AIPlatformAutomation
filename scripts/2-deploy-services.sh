@@ -1,13 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script 2: Docker Deployment Only
-# PURPOSE: Deploy containers using platform.conf ONLY
+# Script 2: Deployment Engine
+# PURPOSE: Generate derived configs from platform.conf and orchestrate container deployment
 # =============================================================================
-
-set -euo pipefail
-trap 'echo "FAILED at line $LINENO. Command: $BASH_COMMAND" >&2' ERR
-
-# PURPOSE: Source platform.conf, generate all derived config files, deploy containers
 # USAGE:   bash scripts/2-deploy-services.sh [tenant_id] [options]
 # OPTIONS: --dry-run           Show what would be deployed without action
 # =============================================================================

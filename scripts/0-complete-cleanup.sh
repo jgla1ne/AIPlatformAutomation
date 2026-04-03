@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script 0: Nuclear Cleanup — README v5.1.0 COMPLIANT
+# Script 0: Nuclear Cleanup
+# PURPOSE: Remove all containers and data for complete platform reset
 # =============================================================================
-# PURPOSE: Stop containers, remove data, clear all state
-# USAGE:   sudo bash scripts/0-complete-cleanup.sh [tenant_id] [options]
-# OPTIONS: --dry-run           Show what would be removed without action
-#          --containers-only  Only remove containers, keep data
-#          --unmount-ebs      Unmount EBS volume after cleanup
+# USAGE:   bash scripts/0-complete-cleanup.sh [tenant_id] [options]
+# OPTIONS: --dry-run         Show what would be cleaned without action
+#          --force           Skip confirmation prompts
 # =============================================================================
 
 set -euo pipefail

@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script 1: Input Collector Only - RESTORED c38d365 + TTY SAFETY
-# PURPOSE: Interactive user input and platform.conf generation ONLY
+# Script 1: Collector
+# PURPOSE: System setup, input gathering, and platform.conf generation
+# =============================================================================
 # USAGE:   bash scripts/1-setup-system.sh [tenant_id] [options]
 # OPTIONS: --ingest-from <file>    Ingest credentials from existing .env file
 #          --preserve-secrets       Preserve existing secrets from .env
 #          --generate-new          Generate new secrets for all services
 #          --deployment-mode <mode> Set deployment mode (minimal|standard|full)
+#          --template FILE         Use template file for configuration
+#          --dry-run               Show what would be configured
 # =============================================================================
 
 set -euo pipefail
