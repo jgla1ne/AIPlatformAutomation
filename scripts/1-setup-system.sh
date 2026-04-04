@@ -1039,6 +1039,15 @@ collect_api_keys() {
     fi
     echo ""
     
+    # OpenRouter
+    echo "  🌐 OpenRouter Configuration:"
+    safe_read_yesno "Enable OpenRouter" "false" "ENABLE_OPENROUTER"
+    if [[ "$ENABLE_OPENROUTER" == "true" ]]; then
+        safe_read "OpenRouter API key" "" "OPENROUTER_API_KEY" "^sk-or-[A-Za-z0-9_-]+$"
+        safe_read "OpenRouter models" "anthropic/claude-3-sonnet,openai/gpt-4" "OPENROUTER_MODELS"
+    fi
+    echo ""
+    
     # Local Models (Ollama)
     echo "  🦙 Local Models Configuration:"
     safe_read_yesno "Enable local models" "true" "ENABLE_LOCAL_MODELS"
@@ -1059,7 +1068,8 @@ collect_api_keys() {
         "Groq - Fast inference with Llama models" \
         "Cohere - Command models" \
         "Hugging Face - Open model hub" \
-        "Local Ollama - Self-hosted models"
+        "Local Ollama - Self-hosted models" \
+        "OpenRouter - Multi-provider aggregator"
     local preferred_provider_choice=$?
     
     case $preferred_provider_choice in
@@ -1070,6 +1080,7 @@ collect_api_keys() {
         4) PREFERRED_LLM_PROVIDER="cohere" ;;
         5) PREFERRED_LLM_PROVIDER="huggingface" ;;
         6) PREFERRED_LLM_PROVIDER="ollama" ;;
+        7) PREFERRED_LLM_PROVIDER="openrouter" ;;
     esac
     
     echo ""
@@ -1293,6 +1304,33 @@ configure_google_drive() {
     echo ""
 }
 
+# =============================================================================
+# SIGNAL-BOT CONFIGURATION (README §4.13)
+# =============================================================================
+configure_signalbot() {
+    section "📡 SIGNAL-BOT CONFIGURATION"
+    
+    echo "  📋 Configure Signal bot for notifications"
+    echo ""
+    
+    safe_read_yesno "Enable Signal bot" "false" "ENABLE_SIGNALBOT"
+    if [[ "$ENABLE_SIGNALBOT" == "true" ]]; then
+        echo ""
+        safe_read "Signal phone number (E.164 format, e.g., +15551234567)" "" "SIGNAL_PHONE" "^\+[1-9][0-9]{1,14}$"
+        safe_read "Signal recipient number (E.164 format)" "" "SIGNAL_RECIPIENT" "^\+[1-9][0-9]{1,14}$"
+        safe_read "Signal bot port" "8080" "SIGNALBOT_PORT" "^[0-9]+$"
+        
+        echo ""
+        echo "  ✅ Signal Bot Configuration:"
+        echo "    Phone Number: $SIGNAL_PHONE"
+        echo "    Recipient: $SIGNAL_RECIPIENT"
+        echo "    Port: $SIGNALBOT_PORT"
+    else
+        echo "  ℹ️  Signal bot disabled"
+    fi
+    echo ""
+}
+
 # Enhanced port conflict detection
 check_port_conflicts() {
     echo "Checking for port conflicts..."
@@ -1489,10 +1527,10 @@ check_dns_health() {
 }
 
 # =============================================================================
-# TLS CONFIGURATION WITH DNS VALIDATION (README §4.7) - ENHANCED
+# CONFIGURATION SUMMARY DISPLAY
 # =============================================================================
-configure_tls() {
-    section "� TLS CONFIGURATION WITH DNS VALIDATION"
+display_configuration_summary() {
+    section "🔐 CONFIGURATION SUMMARY"
     
     echo "  🔐 TLS Configuration:"
     echo "    • Certificate management with DNS validation"
@@ -1963,52 +2001,88 @@ create_tenant_user() {
     echo "  📋 Creating system user for tenant: ${TENANT_ID}"
     echo ""
     
-    # Check if user already exists
-    if id "$username" >/dev/null 2>&1; then
-        echo "  ✅ User '$username' already exists"
-        echo "  🔄 Updating user groups and permissions..."
+    # Check if running as root for user creation
+    if [[ $EUID -ne 0 ]]; then
+        warn "User creation requires root privileges"
+        warn "Current user: $(whoami) (UID: $EUID)"
+        warn "Skipping user creation - will use current user"
+        username=$(whoami)
+        user_home="$HOME"
+        user_config="$user_home/.ai-platform"
         
-        # Add to docker group
-        usermod -aG docker "$username" 2>/dev/null || {
-            warn "Could not add user to docker group"
-            warn "Manual intervention may be required"
-        }
-        
-        # Update home directory
-        usermod -d "/home/$username" "$username" 2>/dev/null || true
-        
+        echo "  🏠 Using current user: $username"
+        echo "  📁 Config directory: $user_config"
     else
-        echo "  👤 Creating new user: $username"
-        
-        # Create user with home directory
-        if useradd -m -s /bin/bash "$username" 2>/dev/null; then
-            echo "  ✅ User '$username' created successfully"
+        # Check if user already exists
+        if id "$username" >/dev/null 2>&1; then
+            echo "  ✅ User '$username' already exists"
+            echo "  🔄 Updating user groups and permissions..."
+            
+            # Add to docker group
+            usermod -aG docker "$username" 2>/dev/null || {
+                warn "Could not add user to docker group"
+                warn "Manual intervention may be required"
+            }
+            
+            # Update home directory
+            usermod -d "/home/$username" "$username" 2>/dev/null || true
+            
         else
-            warn "Failed to create user $username (permission denied)"
-            warn "User creation requires sudo privileges"
-            warn "Manual intervention may be required"
-            echo "  ⚠️  Continuing without user creation..."
+            echo "  👤 Creating new user: $username"
+            
+            # Create user with home directory
+            if useradd -m -s /bin/bash "$username" 2>/dev/null; then
+                echo "  ✅ User '$username' created successfully"
+            else
+                warn "Failed to create user $username"
+                warn "Manual intervention may be required"
+                echo "  ⚠️  Continuing without user creation..."
+                username=$(whoami)
+                user_home="$HOME"
+            fi
+            
+            # Add to docker group
+            if [[ "$username" != "$(whoami)" ]]; then
+                usermod -aG docker "$username" 2>/dev/null || {
+                    warn "Could not add user to docker group"
+                    warn "Manual intervention may be required"
+                }
+            fi
         fi
-        
-        # Add to docker group
-        usermod -aG docker "$username" 2>/dev/null || {
-            warn "Could not add user to docker group"
-            warn "Manual intervention may be required"
-        }
     fi
+    
+    # Set user home directory
+    if [[ "$username" == "$(whoami)" ]]; then
+        user_home="$HOME"
+    else
+        user_home="/home/$username"
+    fi
+    user_config="$user_home/.ai-platform"
     
     # Create user directories
     echo ""
     echo "  📁 Setting up user directories..."
     
-    local user_home="/home/$username"
-    local user_config="$user_home/.ai-platform"
+    mkdir -p "$user_config/logs" "$user_config/data" 2>/dev/null || {
+        warn "Could not create directories in $user_home"
+        warn "Using fallback: $DATA_DIR"
+        user_config="$DATA_DIR"
+        mkdir -p "$user_config/logs" "$user_config/data"
+    }
     
-    mkdir -p "$user_config/logs" "$user_config/data"
-    chown -R "$username:$username" "$user_home"
+    # Set ownership only if running as root and not current user
+    if [[ $EUID -eq 0 && "$username" != "$(whoami)" ]]; then
+        chown -R "$username:$username" "$user_home" 2>/dev/null || {
+            warn "Could not set ownership for $username"
+        }
+    fi
     
     # Create user's .env file with essential variables
-    cat > "$user_config/.env" << EOF
+    if [[ ! -d "$user_config" ]]; then
+        warn "Config directory $user_config does not exist"
+        warn "Skipping .env file creation"
+    else
+        cat > "$user_config/.env" << EOF
 # AI Platform Environment for $username
 # Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
@@ -2027,19 +2101,43 @@ COMPOSE_FILE="${DATA_DIR}/config/docker-compose.yml"
 DOCKER_NETWORK="${DOCKER_NETWORK}"
 EOF
     
-    chown "$username:$username" "$user_config/.env"
-    chmod 600 "$user_config/.env"
+    # Set permissions only if file was created
+    if [[ -f "$user_config/.env" ]]; then
+        # Set ownership only if running as root and not current user
+        if [[ $EUID -eq 0 && "$username" != "$(whoami)" ]]; then
+            chown "$username:$username" "$user_config/.env" 2>/dev/null || {
+                warn "Could not set ownership for .env file"
+            }
+        fi
+        chmod 600 "$user_config/.env"
+        echo "  🔐 .env file: $user_config/.env"
+    fi
+    fi
     
     echo "  ✅ User setup complete"
     echo "  🏠 Home directory: $user_home"
     echo "  📁 Config directory: $user_config"
-    echo "  🔐 .env file: $user_config/.env"
+    if [[ -f "$user_config/.env" ]]; then
+        echo "  🔐 .env file: $user_config/.env"
+    fi
     echo ""
     echo "  📋 USER SUMMARY:"
     echo "    Username: $username"
-    echo "    UID: $(id -u "$username")"
-    echo "    Groups: $(id -Gn "$username" | tr ' ' ',')"
-    echo "    Shell: $(getent passwd "$username" | cut -d: -f7)"
+    if [[ "$username" == "$(whoami)" ]]; then
+        echo "    UID: $EUID"
+    else
+        echo "    UID: $(id -u "$username" 2>/dev/null || echo "N/A")"
+    fi
+    if [[ "$username" == "$(whoami)" ]]; then
+        echo "    Groups: $(id -Gn | tr ' ' ',')"
+    else
+        echo "    Groups: $(id -Gn "$username" 2>/dev/null | tr ' ' ',' || echo "N/A")"
+    fi
+    if [[ "$username" == "$(whoami)" ]]; then
+        echo "    Shell: $SHELL"
+    else
+        echo "    Shell: $(getent passwd "$username" 2>/dev/null | cut -d: -f7 || echo "N/A")"
+    fi
     echo ""
     echo "  🎯 User '$username' is ready for platform management"
 }
@@ -2281,6 +2379,18 @@ display_service_summary() {
     if [[ "$ENABLE_LOCAL_MODELS" == "true" ]]; then
         echo "    ✅ Local Models: ✅"
     fi
+    if [[ "$ENABLE_OPENROUTER" == "true" ]]; then
+        echo "    ✅ OpenRouter"
+    fi
+    echo ""
+    
+    echo "  📡 Additional Services:"
+    if [[ "$ENABLE_SIGNALBOT" == "true" ]]; then
+        echo "    ✅ Signal Bot: ${SIGNALBOT_PORT:-8080}"
+    fi
+    if [[ "$ENABLE_GDRIVE" == "true" ]]; then
+        echo "    ✅ Google Drive: ${GDRIVE_FOLDER_NAME:-AI Platform}"
+    fi
     echo ""
     
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -2369,6 +2479,7 @@ run_interactive_collection() {
     configure_ports
     configure_proxy
     configure_google_drive
+    configure_signalbot
     
     # Service Summary Health Check (README compliance)
     display_service_summary
@@ -2773,7 +2884,7 @@ initialize_service_variables() {
     OPENAI_API_KEY="${OPENAI_API_KEY:-}"
     GOOGLE_API_KEY="${GOOGLE_API_KEY:-}"
     GROQ_API_KEY="${GROQ_API_KEY:-}"
-    # OpenRouter removed as requested
+    OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}"
     
     # LiteLLM Routing Strategy
     LITELLM_ROUTING_STRATEGY="${LITELLM_ROUTING_STRATEGY:-cost-optimized}"
@@ -3030,7 +3141,7 @@ initialize_service_variables() {
     ENABLE_NGINX="${ENABLE_NGINX:-false}"
     ENABLE_CADDY="${ENABLE_CADDY:-false}"
     
-    # LLM Providers (moved after model configuration)
+    # LLM Providers
     PREFERRED_LLM_PROVIDER="${PREFERRED_LLM_PROVIDER:-ollama}"
     ENABLE_OPENAI="${ENABLE_OPENAI:-false}"
     ENABLE_ANTHROPIC="${ENABLE_ANTHROPIC:-false}"
@@ -3040,6 +3151,14 @@ initialize_service_variables() {
     ENABLE_HUGGINGFACE="${ENABLE_HUGGINGFACE:-false}"
     ENABLE_OLLAMA_PROVIDER="${ENABLE_OLLAMA_PROVIDER:-false}"
     ENABLE_LOCAL_MODELS="${ENABLE_LOCAL_MODELS:-false}"
+    ENABLE_OPENROUTER="${ENABLE_OPENROUTER:-false}"
+    
+    # Additional Services
+    ENABLE_GDRIVE="${ENABLE_GDRIVE:-false}"
+    ENABLE_SIGNALBOT="${ENABLE_SIGNALBOT:-false}"
+    
+    # Port variables
+    SIGNALBOT_PORT="${SIGNALBOT_PORT:-8080}"
 }
 
 # =============================================================================
