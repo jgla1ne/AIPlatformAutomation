@@ -14,7 +14,8 @@
 #          --save-template FILE    Save configuration as reusable template
 # =============================================================================
 
-set -euo pipefail
+# Allow interactive mode to continue even if individual commands fail
+set -uo pipefail
 
 # =============================================================================
 # NON-INTERACTIVE MODE (P3 fix)
@@ -65,6 +66,53 @@ gen_secret() { openssl rand -hex 32; }
 gen_password() { openssl rand -base64 24 | tr -d '=+/' | cut -c1-20; }
 
 # =============================================================================
+# ENHANCED MENU SELECTION FUNCTIONS
+# =============================================================================
+select_menu_option() {
+    local title="$1"
+    shift
+    local options=("$@")
+    local count=${#options[@]}
+    
+    # Handle non-TTY case (piped input) - use default option
+    if [[ ! -t 0 ]]; then
+        # Try to read from piped input
+        local choice
+        if read -t 5 choice 2>/dev/null; then
+            # Validate choice
+            if [[ "$choice" =~ ^[1-9]$ ]] && [[ $choice -le $count ]]; then
+                return $((choice-1))
+            fi
+        fi
+        # Default to first option if no valid input
+        echo "  🎯 $title (auto-selecting option 1: ${options[0]})"
+        return 0
+    fi
+    
+    # Real TTY - show menu
+    echo "  🎯 $title:"
+    echo ""
+    
+    local i=1
+    for option in "${options[@]}"; do
+        echo "    $i) $option"
+        ((i++))
+    done
+    echo ""
+    
+    while true; do
+        read -rp "  🎯 Select option [1-$count]: " choice
+        
+        if [[ "$choice" =~ ^[1-9]$ ]] && [[ $choice -le $count ]]; then
+            echo "  ✅ Selected: ${options[$((choice-1))]}"
+            return $((choice-1))
+        else
+            echo "  ❌ Invalid selection. Please enter a number between 1 and $count"
+        fi
+    done
+}
+
+# =============================================================================
 # ENHANCED UX INPUT FUNCTIONS
 # =============================================================================
 safe_read() {
@@ -89,9 +137,21 @@ safe_read() {
         # Real TTY — show prompt and wait for input with validation
         while [[ $attempts -lt $max_attempts ]]; do
             if [[ -n "$default" ]]; then
-                read -rp "  🎯 ${prompt} [${default}]: " value
+                echo -n "  🎯 ${prompt} [${default}]: "
+                read -r value
+                if [[ -z "$value" ]]; then
+                    value="$default"
+                fi
             else
-                read -rp "  🎯 ${prompt}: " value
+                echo -n "  🎯 ${prompt}: "
+                read -r value
+            fi
+            
+            # Check if value is empty for required fields
+            if [[ -z "$value" && -z "$default" ]]; then
+                echo "  ❌ This field is required. Please enter a value."
+                ((attempts++))
+                continue
             fi
             
             value="${value:-${default}}"
@@ -110,9 +170,16 @@ safe_read() {
             fail "Maximum validation attempts reached for $varname"
         fi
     else
-        # Non-TTY — use default silently
-        value="${default}"
-        echo "  🎯 ${prompt}: ${value} (default — non-interactive mode)"
+        # Non-TTY — try to read from piped input first, then use default
+        if read -t 5 value 2>/dev/null; then
+            # Successfully read from pipe
+            value="${value:-${default}}"
+            echo "  🎯 ${prompt}: ${value} (pipelined input)"
+        else
+            # No piped input, use default
+            value="${default}"
+            echo "  🎯 ${prompt}: ${value} (default — non-interactive mode)"
+        fi
     fi
 
     printf -v "${varname}" '%s' "${value}"
@@ -121,15 +188,42 @@ safe_read() {
 safe_read_yesno() {
     local prompt="$1"
     local default="${2:-n}"
+    local varname="$3"
     local value
     local attempts=0
     local max_attempts=3
 
+    # Convert boolean defaults to y/n
+    case "${default,,}" in
+        true|yes) default="y" ;;
+        false|no) default="n" ;;
+    esac
+
+    # Real TTY - show prompt and wait for input
     while [[ $attempts -lt $max_attempts ]]; do
         if [[ -n "$default" ]]; then
-            read -rp "  🤔 ${prompt} [Y/n]: " value
+            if [[ "$default" == "y" ]]; then
+                echo -n "  🤔 ${prompt} [Y/n]: "
+                if ! read -r value 2>/dev/null; then
+                    echo ""
+                    echo "  ⏰ Input timeout - using default: $default"
+                    value="$default"
+                fi
+            else
+                echo -n "  🤔 ${prompt} [y/N]: "
+                if ! read -r value 2>/dev/null; then
+                    echo ""
+                    echo "  ⏰ Input timeout - using default: $default"
+                    value="$default"
+                fi
+            fi
         else
-            read -rp "  🤔 ${prompt} [y/N]: " value
+            echo -n "  🤔 ${prompt} [y/N]: "
+            if ! read -r value 2>/dev/null; then
+                echo ""
+                echo "  ⏰ Input timeout - using default: n"
+                value="n"
+            fi
         fi
         
         value="${value:-${default}}"
@@ -138,13 +232,13 @@ safe_read_yesno() {
             y|yes) 
                 value="true" 
                 echo "  ✅ ${prompt}: $value"
-                printf -v "${3:-value}" '%s' "$value"
+                printf -v "${varname}" '%s' "$value"
                 return 0
                 ;;
             n|no) 
                 value="false"
                 echo "  ✅ ${prompt}: $value"
-                printf -v "${3:-value}" '%s' "$value"
+                printf -v "${varname}" '%s' "$value"
                 return 0
                 ;;
             *) 
@@ -244,7 +338,7 @@ collect_identity() {
     echo "    Admin: ${ADMIN_EMAIL}"
     echo ""
     
-    safe_read_yesno "Confirm identity configuration" "y" IDENTITY_CONFIRMED
+    safe_read_yesno "Confirm identity configuration" "y" "IDENTITY_CONFIRMED"
     if [[ "$IDENTITY_CONFIRMED" != "true" ]]; then
         fail "Identity configuration cancelled"
     fi
@@ -263,61 +357,75 @@ configure_storage() {
     echo "    • Fallback to OS disk if no EBS found"
     echo ""
     
-    safe_read_yesno "Use EBS volume (auto-detect)" "true" USE_EBS
+    # Direct to EBS detection and selection
+    detect_and_select_ebs
     
-    if [[ "$USE_EBS" == "true" ]]; then
-        detect_and_select_ebs
-    else
-        echo "Using OS disk for storage"
-        EBS_DEVICE=""
-    fi
+    # Create mount point directory
+    mkdir -p "/mnt/${TENANT_ID}"
     
-    # Always create mount point
-    local mount_point="/mnt/${TENANT_ID}"
-    echo "Creating mount point: $mount_point"
-    mkdir -p "$mount_point"
-    chmod 755 "$mount_point"
+    # Set data directory
+    DATA_DIR="/mnt/${TENANT_ID}"
     
-    # Format and mount if EBS selected
-    if [[ -n "$EBS_DEVICE" ]]; then
-        format_and_mount_ebs
-    fi
+    # Set defaults for EBS configuration
+    EBS_DEVICE_PATTERN="${EBS_DEVICE_PATTERN:-/dev/sd[f-z]}"
+    EBS_FILESYSTEM="${EBS_FILESYSTEM:-ext4}"
     
-    ok "Storage configuration complete"
+    log "OK: Storage configuration complete"
 }
 
 # CORRECTED EBS detection using fdisk and Amazon EBS identification
 detect_and_select_ebs() {
-    echo "Available block devices:"
-    local count=1
+    echo ""
+    echo "🔍 Scanning for Amazon EBS volumes..."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
-    # Use fdisk to detect Amazon EBS volumes specifically
-    fdisk -l 2>/dev/null | grep -A 1 "Amazon Elastic Block Store" | while read -r line; do
-        if [[ "$line" =~ ^/dev/ ]]; then
-            local device=$(echo "$line" | awk '{print $1}')
-            local size=$(echo "$line" | awk '{print $3,$4}')
+    local count=1
+    local devices=()
+    local descriptions=()
+    
+    # Use fdisk -l to find EBS volumes by looking for "Amazon Elastic Block Store"
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^Disk\ /dev/.*:\ .* ]]; then
+            local disk=$(echo "$line" | awk '{print $2}' | sed 's/://')
+            local size=$(echo "$line" | awk '{print $3}' | sed 's/,//')
             
-            # Check if device is already mounted
-            if ! findmnt "$device" >/dev/null 2>&1; then
-                echo "  [$count] $device ${size} (unmounted — available)"
-                count=$((count + 1))
-            else
-                echo "  [X] $device ${size} (mounted - unavailable)"
+            # Check if this is an EBS volume by examining its description
+            if fdisk -l "$disk" 2>/dev/null | grep -q "Amazon Elastic Block Store"; then
+                devices+=("$disk")
+                descriptions+=("$disk - Amazon EBS Volume ($size)")
+                ((count++))
             fi
         fi
-    done
+    done < <(fdisk -l 2>/dev/null | grep "^Disk /dev/")
     
-    echo "  [$count] Use existing /mnt/${TENANT_ID}/ on OS disk (no separate volume)"
+    # Add OS disk option
+    devices+=("")
+    descriptions+=("Use existing /mnt/${TENANT_ID}/ on OS disk (no separate volume)")
     
-    safe_read "Select EBS volume [1-$count, or 0 for OS disk]" "0" EBS_CHOICE
-    
-    if [[ "$EBS_CHOICE" =~ ^[1-9]$ ]]; then
-        # Extract device from fdisk output
-        EBS_DEVICE=$(fdisk -l 2>/dev/null | grep -A 1 "Amazon Elastic Block Store" | grep "^/dev/" | sed -n "${EBS_CHOICE}p" | awk '{print $1}')
-        echo "Selected EBS device: $EBS_DEVICE"
+    # Use menu system for selection
+    if [[ ${#devices[@]} -gt 1 ]]; then
+        select_menu_option "EBS Volume Selection" "${descriptions[@]}"
+        local choice=$?
+        
+        if [[ $choice -eq $((${#devices[@]}-1)) ]]; then
+            echo "✅ Selected: OS disk storage"
+            EBS_DEVICE=""
+            USE_EBS="false"
+        else
+            EBS_DEVICE="${devices[$choice]}"
+            echo "✅ Selected: $EBS_DEVICE"
+            USE_EBS="true"
+            # Format and mount the selected EBS volume
+            format_and_mount_ebs
+        fi
     else
-        echo "Using OS disk for storage"
+        echo ""
+        echo "⚠️  No EBS volumes found."
+        echo "   This is normal if running on local instances or non-AWS environments."
+        echo "   Will use OS disk for storage."
+        echo ""
         EBS_DEVICE=""
+        USE_EBS="false"
     fi
 }
 
@@ -366,52 +474,23 @@ select_stack_preset() {
     echo "  📋 Choose your platform complexity and features"
     echo ""
     
-    echo "  🔹 MINIMAL STACK:"
-    echo "     • PostgreSQL + Redis (infrastructure)"
-    echo "     • LiteLLM + Ollama (LLM services)"
-    echo "     • OpenWebUI (web interface)"
-    echo "     • Qdrant (vector database)"
-    echo "     • Resource usage: ~4GB RAM, ~20GB disk"
-    echo ""
+    select_menu_option "Stack Preset Selection" \
+        "MINIMAL - PostgreSQL + Redis + LiteLLM + Ollama + OpenWebUI + Qdrant (~4GB RAM)" \
+        "DEVELOPMENT - All Minimal + Code Server + Dev tools (~6GB RAM)" \
+        "STANDARD - All Development + N8N + Flowise + Grafana + Prometheus (~8GB RAM)" \
+        "FULL - All Standard + All web interfaces + Complete monitoring (~16GB RAM)" \
+        "CUSTOM - Select individual services (full control)"
+    local preset_choice=$?
     
-    echo "  🔹 DEVELOPMENT STACK:"
-    echo "     • All Minimal features"
-    echo "     • Code Server (IDE)"
-    echo "     • Development tools"
-    echo "     • Resource usage: ~6GB RAM, ~30GB disk"
-    echo ""
-    
-    echo "  🔹 STANDARD STACK:"
-    echo "     • All Development features"
-    echo "     • N8N (workflow automation)"
-    echo "     • Flowise (AI workflow builder)"
-    echo "     • Grafana + Prometheus (monitoring)"
-    echo "     • Resource usage: ~8GB RAM, ~50GB disk"
-    echo ""
-    
-    echo "  🔹 FULL STACK:"
-    echo "     • All Standard features"
-    echo "     • All web interfaces (LibreChat, OpenClaw, AnythingLLM)"
-    echo "     • All automation tools (Dify, SignalBot)"
-    echo "     • Complete monitoring and logging"
-    echo "     • Resource usage: ~16GB RAM, ~100GB disk"
-    echo ""
-    
-    echo "  🔹 CUSTOM STACK:"
-    echo "     • Select individual services"
-    echo "     • Full control over components"
-    echo ""
-    
-    safe_read "Stack preset [1-5]" "3" "STACK_PRESET" "^[1-5]$"
-    
-    case "$STACK_PRESET" in
-        1) STACK_NAME="minimal" ;;
-        2) STACK_NAME="development" ;;
-        3) STACK_NAME="standard" ;;
-        4) STACK_NAME="full" ;;
-        5) STACK_NAME="custom" ;;
+    case $preset_choice in
+        0) STACK_PRESET="1"; STACK_NAME="minimal" ;;
+        1) STACK_PRESET="2"; STACK_NAME="development" ;;
+        2) STACK_PRESET="3"; STACK_NAME="standard" ;;
+        3) STACK_PRESET="4"; STACK_NAME="full" ;;
+        4) STACK_PRESET="5"; STACK_NAME="custom" ;;
     esac
     
+    echo ""
     echo "  ✅ Selected: ${STACK_NAME^} Stack"
     
     if [[ "$STACK_PRESET" == "5" ]]; then
@@ -551,25 +630,17 @@ configure_llm_gateway() {
     echo "  📋 Configure LLM service gateway and model access"
     echo ""
     
-    echo "  🔹 LITELLM (Recommended for multi-provider):"
-    echo "     • Unified API for multiple LLM providers"
-    echo "     • Load balancing and failover"
-    echo "     • Cost tracking and rate limiting"
-    echo ""
+    select_menu_option "LLM Gateway Selection" \
+        "LITELLM - Unified API for multiple providers with load balancing" \
+        "BIFROST - Advanced gateway with enterprise features" \
+        "DIRECT OLLAMA - Simple direct access to local models"
+    local gateway_choice=$?
     
-    echo "  🔹 BIFROST (Advanced gateway):"
-    echo "     • Enterprise features"
-    echo "     • Advanced routing"
-    echo "     • Enhanced security"
-    echo ""
-    
-    echo "  🔹 DIRECT OLLAMA (Simple setup):"
-    echo "     • Direct access to local models"
-    echo "     • No gateway overhead"
-    echo "     • Single provider only"
-    echo ""
-    
-    safe_read "LLM Gateway type" "litellm" "LLM_GATEWAY_TYPE" "^(litellm|bifrost|direct)$"
+    case $gateway_choice in
+        0) LLM_GATEWAY_TYPE="litellm" ;;
+        1) LLM_GATEWAY_TYPE="bifrost" ;;
+        2) LLM_GATEWAY_TYPE="direct" ;;
+    esac
     
     case "$LLM_GATEWAY_TYPE" in
         litellm)
@@ -589,7 +660,23 @@ configure_litellm_gateway() {
     log "🎯 Configuring LiteLLM Gateway..."
     
     safe_read "LiteLLM API key (auto-generated)" "$(gen_secret)" "LITELLM_MASTER_KEY"
-    safe_read "LiteLLM routing strategy" "least-busy" "LITELLM_ROUTING_STRATEGY" "^(least-busy|weighted|simple)$"
+    
+    # Use menu selection for routing strategy
+    select_menu_option "LiteLLM Load Balancing Strategy" \
+        "cost-optimized (Prefer local models, fallback to external)" \
+        "least-busy (Route to least busy model)" \
+        "weighted (Weighted round-robin)" \
+        "simple (Round-robin)" \
+        "performance-first (Prefer fastest response time)"
+    local routing_choice=$?
+    case $routing_choice in
+        0) LITELLM_ROUTING_STRATEGY="cost-optimized" ;;
+        1) LITELLM_ROUTING_STRATEGY="least-busy" ;;
+        2) LITELLM_ROUTING_STRATEGY="weighted" ;;
+        3) LITELLM_ROUTING_STRATEGY="simple" ;;
+        4) LITELLM_ROUTING_STRATEGY="performance-first" ;;
+    esac
+    
     safe_read "Enable request logging" "true" "LITELLM_ENABLE_LOGGING"
     safe_read "Enable cost tracking" "true" "LITELLM_ENABLE_COST_TRACKING"
     
@@ -641,31 +728,19 @@ configure_vector_database() {
     echo "  📋 Configure vector database for AI memory and search"
     echo ""
     
-    echo "  🔹 QDRANT (Recommended):"
-    echo "     • High-performance vector search"
-    echo "     • Built-in filtering and metadata"
-    echo "     • Easy integration"
-    echo ""
+    select_menu_option "Vector Database Selection" \
+        "QDRANT - High-performance vector search with built-in filtering" \
+        "WEAVIATE - Enterprise GraphQL API with multi-modal support" \
+        "CHROMADB - Lightweight Python-focused database" \
+        "MILVUS - Distributed cloud-native massive scale database"
+    local vector_choice=$?
     
-    echo "  🔹 WEAVIATE (Enterprise):"
-    echo "     • GraphQL API"
-    echo "     • Advanced filtering"
-    echo "     • Multi-modal support"
-    echo ""
-    
-    echo "  🔹 CHROMADB (Lightweight):"
-    echo "     • Simple setup"
-    echo "     • Good for development"
-    echo "     • Python-focused"
-    echo ""
-    
-    echo "  🔹 MILVUS (Scale):"
-    echo "     • Distributed architecture"
-    echo "     • Massive scale"
-    echo "     • Cloud-native"
-    echo ""
-    
-    safe_read "Vector database" "qdrant" "VECTOR_DB_TYPE" "^(qdrant|weaviate|chroma|milvus)$"
+    case $vector_choice in
+        0) VECTOR_DB_TYPE="qdrant" ;;
+        1) VECTOR_DB_TYPE="weaviate" ;;
+        2) VECTOR_DB_TYPE="chroma" ;;
+        3) VECTOR_DB_TYPE="milvus" ;;
+    esac
     
     case "$VECTOR_DB_TYPE" in
         qdrant)
@@ -752,48 +827,41 @@ configure_tls() {
     echo "  📋 Configure SSL/TLS certificates for secure access"
     echo ""
     
-    echo "  🔹 LET'S ENCRYPT (Recommended for production):"
-    echo "     • Automatic certificate issuance"
-    echo "     • Free certificates"
-    echo "     • Requires public DNS and domain"
-    echo "     • Automatic renewal"
-    echo ""
+    select_menu_option "TLS Certificate Selection" \
+        "LET'S ENCRYPT - Automatic free certificates for production" \
+        "MANUAL CERTIFICATES - Use existing certificates with manual renewal" \
+        "SELF-SIGNED - Quick setup for development/testing" \
+        "HTTP ONLY - No HTTPS (not recommended for production)" \
+        "HTTPS REDIRECT - Force all HTTP traffic to HTTPS"
+    local tls_choice=$?
     
-    echo "  🔹 MANUAL CERTIFICATES:"
-    echo "     • Use existing certificates"
-    echo "     • Full control over certificates"
-    echo "     • Manual renewal required"
-    echo ""
+    case $tls_choice in
+        0) TLS_MODE="letsencrypt" ;;
+        1) TLS_MODE="manual" ;;
+        2) TLS_MODE="selfsigned" ;;
+        3) TLS_MODE="none" ;;
+        4) TLS_MODE="letsencrypt"; HTTP_TO_HTTPS_REDIRECT="true" ;;
+    esac
     
-    echo "  🔹 SELF-SIGNED (Development):"
-    echo "     • Quick setup for testing"
-    echo "     • Browser warnings expected"
-    echo "     • Not for production"
-    echo ""
+    # Ask about HTTP to HTTPS redirect (unless already set)
+    if [[ "$TLS_MODE" != "none" && "$HTTP_TO_HTTPS_REDIRECT" != "true" ]]; then
+        echo ""
+        safe_read_yesno "Enable HTTP to HTTPS redirect" "true" "HTTP_TO_HTTPS_REDIRECT"
+    elif [[ "$TLS_MODE" == "none" ]]; then
+        HTTP_TO_HTTPS_REDIRECT="false"
+    fi
     
-    echo "  🔹 NO TLS (HTTP only):"
-    echo "     • Unencrypted connections"
-    echo "     • Not recommended for production"
-    echo "     • For testing only"
-    echo ""
-    
-    safe_read "TLS mode [1-4]" "1" "TLS_MODE_CHOICE" "^[1-4]$"
-    
-    case "$TLS_MODE_CHOICE" in
-        1)
-            TLS_MODE="letsencrypt"
+    case "$TLS_MODE" in
+        letsencrypt)
             configure_letsencrypt
             ;;
-        2)
-            TLS_MODE="manual"
+        manual)
             configure_manual_tls
             ;;
-        3)
-            TLS_MODE="selfsigned"
+        selfsigned)
             configure_selfsigned_tls
             ;;
-        4)
-            TLS_MODE="none"
+        none)
             configure_no_tls
             ;;
     esac
@@ -914,6 +982,8 @@ collect_api_keys() {
     echo "  🔐 Keys are encrypted and stored securely"
     echo ""
     
+    # Now configure individual providers first
+    
     # OpenAI
     echo "  🤖 OpenAI Configuration:"
     safe_read_yesno "Enable OpenAI" "false" "ENABLE_OPENAI"
@@ -973,8 +1043,101 @@ collect_api_keys() {
     echo "  🦙 Local Models Configuration:"
     safe_read_yesno "Enable local models" "true" "ENABLE_LOCAL_MODELS"
     if [[ "$ENABLE_LOCAL_MODELS" == "true" ]]; then
-        safe_read "Default Ollama models" "llama3.1:8b,mistral:7b" "OLLAMA_MODELS"
-        safe_read "Auto-download models" "true" "OLLAMA_AUTO_DOWNLOAD"
+        select_ollama_models
+        safe_read_yesno "Auto-download models" "true" "OLLAMA_AUTO_DOWNLOAD"
+    fi
+    echo ""
+    
+    # Preferred LLM Provider for routing (after model configuration)
+    echo "  🎯 Select your preferred LLM provider for LiteLLM routing priority:"
+    echo "     This determines which provider gets first priority when multiple are available"
+    echo ""
+    select_menu_option "Preferred LLM Provider (Routing Priority)" \
+        "OpenAI - GPT-4 and GPT-3.5 models" \
+        "Anthropic Claude - Claude 3 family" \
+        "Google AI - Gemini models" \
+        "Groq - Fast inference with Llama models" \
+        "Cohere - Command models" \
+        "Hugging Face - Open model hub" \
+        "Local Ollama - Self-hosted models"
+    local preferred_provider_choice=$?
+    
+    case $preferred_provider_choice in
+        0) PREFERRED_LLM_PROVIDER="openai" ;;
+        1) PREFERRED_LLM_PROVIDER="anthropic" ;;
+        2) PREFERRED_LLM_PROVIDER="google" ;;
+        3) PREFERRED_LLM_PROVIDER="groq" ;;
+        4) PREFERRED_LLM_PROVIDER="cohere" ;;
+        5) PREFERRED_LLM_PROVIDER="huggingface" ;;
+        6) PREFERRED_LLM_PROVIDER="ollama" ;;
+    esac
+    
+    echo ""
+    echo "  ✅ Preferred provider for routing: ${PREFERRED_LLM_PROVIDER^}"
+    echo ""
+}
+
+# =============================================================================
+# OLLAMA MODEL SELECTION
+# =============================================================================
+select_ollama_models() {
+    echo ""
+    echo "  🦙 Available Ollama Models:"
+    echo ""
+    
+    # Model groups
+    echo "  📦 Small Models (< 4GB RAM):"
+    echo "    1) Llama 3.1 8B - General purpose, good balance"
+    echo "    2) Mistral 7B - Fast, efficient for most tasks"
+    echo "    3) Phi-3 Mini 3.8B - Microsoft's compact model"
+    echo "    4) Gemma 2B - Google's lightweight model"
+    echo ""
+    
+    echo "  📦 Medium Models (4-8GB RAM):"
+    echo "    5) Llama 3.1 70B - High performance, larger context"
+    echo "    6) Mixtral 8x7B - Mixture of experts, excellent reasoning"
+    echo "    7) Qwen 72B - Strong multilingual capabilities"
+    echo ""
+    
+    echo "  📦 Large Models (8-16GB+ RAM):"
+    echo "    8) CodeLlama 70B - Specialized for code generation"
+    echo "    9) Llama 3 8B Chat - Optimized for conversations"
+    echo "   10) Deepseek Coder 33B - Advanced coding assistant"
+    echo ""
+    
+    echo "  🎯 Select models (comma-separated numbers, e.g., 1,3,5):"
+    echo -n "  🎯 Models selection [1-10]: "
+    read -r selection
+    
+    if [[ -z "$selection" ]]; then
+        selection="1,2"  # Default: Llama 3.1 8B + Mistral 7B
+    fi
+    
+    # Convert selection to model names
+    local models=""
+    IFS=',' read -ra selections <<< "$selection"
+    for num in "${selections[@]}"; do
+        case "${num// /}" in
+            1) models="${models:+$models,}llama3.1:8b" ;;
+            2) models="${models:+$models,}mistral:7b" ;;
+            3) models="${models:+$models,}phi3:mini" ;;
+            4) models="${models:+$models,}gemma:2b" ;;
+            5) models="${models:+$models,}llama3.1:70b" ;;
+            6) models="${models:+$models,}mixtral:8x7b" ;;
+            7) models="${models:+$models,}qwen:72b" ;;
+            8) models="${models:+$models,}codellama:70b" ;;
+            9) models="${models:+$models,}llama3:8b" ;;
+            10) models="${models:+$models,}deepseek-coder:33b" ;;
+            *) echo "  ⚠️  Invalid selection: $num (skipping)" ;;
+        esac
+    done
+    
+    if [[ -n "$models" ]]; then
+        OLLAMA_MODELS="$models"
+        echo "  ✅ Selected models: $OLLAMA_MODELS"
+    else
+        OLLAMA_MODELS="llama3.1:8b,mistral:7b"
+        echo "  ⚠️  No valid models selected, using defaults: $OLLAMA_MODELS"
     fi
 }
 
@@ -1046,6 +1209,88 @@ configure_ports() {
     fi
     
     ok "Port configuration complete"
+}
+
+# =============================================================================
+# PROXY CONFIGURATION (README §4.8)
+# =============================================================================
+configure_proxy() {
+    section "🌐 PROXY CONFIGURATION"
+    
+    echo "  📋 Configure proxy settings for external access"
+    echo ""
+    
+    safe_read_yesno "Enable proxy server" "false" "ENABLE_PROXY"
+    if [[ "$ENABLE_PROXY" == "true" ]]; then
+        echo ""
+        select_menu_option "Proxy Type" \
+            "NGINX - High performance web server" \
+            "CADDY - Automatic HTTPS with Let's Encrypt"
+        local proxy_type_choice=$?
+        
+        case $proxy_type_choice in
+            0) PROXY_TYPE="nginx" ;;
+            1) PROXY_TYPE="caddy" ;;
+        esac
+        
+        echo ""
+        echo "  🔄 Routing Configuration:"
+        select_menu_option "Routing Method" \
+            "PATH_BASED - Use URL paths (e.g., /ollama, /webui)" \
+            "SUBDOMAIN - Use subdomains (e.g., ollama.domain.com)"
+        local routing_choice=$?
+        
+        case $routing_choice in
+            0) PROXY_ROUTING="path_based" ;;
+            1) PROXY_ROUTING="subdomain" ;;
+        esac
+        
+        echo ""
+        safe_read "Proxy HTTP port" "80" "PROXY_HTTP_PORT" "^[0-9]+$"
+        safe_read "Proxy HTTPS port" "443" "PROXY_HTTPS_PORT" "^[0-9]+$"
+        
+        if [[ "$TLS_MODE" != "none" ]]; then
+            safe_read_yesno "Force HTTPS redirect" "true" "PROXY_FORCE_HTTPS"
+        else
+            PROXY_FORCE_HTTPS="false"
+        fi
+        
+        echo ""
+        echo "  ✅ Proxy Configuration:"
+        echo "    Type: ${PROXY_TYPE^}"
+        echo "    Routing: ${PROXY_ROUTING/_/ }"
+        echo "    HTTP Port: $PROXY_HTTP_PORT"
+        echo "    HTTPS Port: $PROXY_HTTPS_PORT"
+        echo "    Force HTTPS: $PROXY_FORCE_HTTPS"
+    else
+        echo "  ℹ️  Proxy disabled - services will be accessed directly via ports"
+    fi
+    echo ""
+}
+
+# =============================================================================
+# GOOGLE DRIVE INTEGRATION (README §4.9)
+# =============================================================================
+configure_google_drive() {
+    section "📁 GOOGLE DRIVE INTEGRATION"
+    
+    echo "  📋 Configure Google Drive backup and sync"
+    echo ""
+    
+    safe_read_yesno "Enable Google Drive integration" "false" "ENABLE_GDRIVE"
+    if [[ "$ENABLE_GDRIVE" == "true" ]]; then
+        echo ""
+        safe_read "Google Drive Folder ID" "" "GDRIVE_FOLDER_ID"
+        safe_read "Google Drive Folder Name [AI Platform]" "AI Platform" "GDRIVE_FOLDER_NAME"
+        
+        echo ""
+        echo "  ✅ Google Drive Configuration:"
+        echo "    Folder ID: ${GDRIVE_FOLDER_ID:-Not set}"
+        echo "    Folder Name: $GDRIVE_FOLDER_NAME"
+    else
+        echo "  ℹ️  Google Drive integration disabled"
+    fi
+    echo ""
 }
 
 # Enhanced port conflict detection
@@ -1396,6 +1641,18 @@ configure_tls() {
 write_platform_conf() {
     section "📝 GENERATING PLATFORM.CONF"
     
+    # Ensure DATA_DIR is set correctly based on TENANT_ID
+    if [[ -z "${DATA_DIR:-}" || -z "${TENANT_ID:-}" ]]; then
+        DATA_DIR="/mnt/${TENANT_ID:-default}"
+        log "⚠️  TENANT_ID was empty, using default directory: $DATA_DIR"
+    fi
+    
+    # Create the directory structure if it doesn't exist
+    mkdir -p "${DATA_DIR}/config"
+    mkdir -p "${DATA_DIR}/data"
+    mkdir -p "${DATA_DIR}/logs"
+    mkdir -p "${DATA_DIR}/.configured"
+    
     local config_file="${DATA_DIR}/config/platform.conf"
     local temp_file="/tmp/platform.conf.$$"
     
@@ -1474,13 +1731,33 @@ ENABLE_AUTHENTIK="${ENABLE_AUTHENTIK:-false}"
 ENABLE_SIGNALBOT="${ENABLE_SIGNALBOT:-false}"
 
 # =============================================================================
+# INGESTION CONFIGURATION
+# =============================================================================
+ENABLE_INGESTION="${ENABLE_INGESTION:-false}"
+INGESTION_METHOD="${INGESTION_METHOD:-rclone}"
+RCLONE_REMOTE="${RCLONE_REMOTE:-gdrive}"
+RCLONE_POLL_INTERVAL="${RCLONE_POLL_INTERVAL:-5}"
+RCLONE_TRANSFERS="${RCLONE_TRANSFERS:-4}"
+RCLONE_CHECKERS="${RCLONE_CHECKERS:-8}"
+RCLONE_VFS_CACHE="${RCLONE_VFS_CACHE:-writes}"
+GDRIVE_CREDENTIALS_FILE="${GDRIVE_CREDENTIALS_FILE:-}"
+AWS_S3_BUCKET="${AWS_S3_BUCKET:-}"
+AWS_REGION="${AWS_REGION:-us-east-1}"
+AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}"
+AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}"
+AZURE_STORAGE_ACCOUNT="${AZURE_STORAGE_ACCOUNT:-}"
+AZURE_CONTAINER="${AZURE_CONTAINER:-}"
+AZURE_ACCESS_KEY="${AZURE_ACCESS_KEY:-}"
+LOCAL_INGESTION_PATH="${LOCAL_INGESTION_PATH:-/mnt/${TENANT_ID}/ingestion}"
+
+# =============================================================================
 # LLM GATEWAY CONFIGURATION
 # =============================================================================
 LLM_GATEWAY_TYPE="${LLM_GATEWAY_TYPE}"
 
 # LiteLLM Configuration
 LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-$(gen_secret)}"
-LITELLM_ROUTING_STRATEGY="${LITELLM_ROUTING_STRATEGY:-least-busy}"
+LITELLM_ROUTING_STRATEGY="${LITELLM_ROUTING_STRATEGY:-cost-optimized}"
 LITELLM_ENABLE_LOGGING="${LITELLM_ENABLE_LOGGING:-true}"
 LITELLM_ENABLE_COST_TRACKING="${LITELLM_ENABLE_COST_TRACKING:-true}"
 
@@ -1704,17 +1981,20 @@ create_tenant_user() {
         echo "  👤 Creating new user: $username"
         
         # Create user with home directory
-        useradd -m -s /bin/bash "$username" || {
-            fail "Failed to create user $username"
-        }
+        if useradd -m -s /bin/bash "$username" 2>/dev/null; then
+            echo "  ✅ User '$username' created successfully"
+        else
+            warn "Failed to create user $username (permission denied)"
+            warn "User creation requires sudo privileges"
+            warn "Manual intervention may be required"
+            echo "  ⚠️  Continuing without user creation..."
+        fi
         
         # Add to docker group
-        usermod -aG docker "$username" || {
+        usermod -aG docker "$username" 2>/dev/null || {
             warn "Could not add user to docker group"
             warn "Manual intervention may be required"
         }
-        
-        echo "  ✅ User '$username' created successfully"
     fi
     
     # Create user directories
@@ -1765,7 +2045,306 @@ EOF
 }
 
 # =============================================================================
-# INTERACTIVE COLLECTION FUNCTIONS
+# PORT HEALTH CHECKS (README COMPLIANCE)
+# =============================================================================
+check_port_conflicts() {
+    echo "Checking for port conflicts..."
+    
+    # Define default ports (only used for conflict checking)
+    local DEFAULT_POSTGRES_PORT=5432
+    local DEFAULT_REDIS_PORT=6379
+    local DEFAULT_OLLAMA_PORT=11434
+    local DEFAULT_LITELLM_PORT=4000
+    local DEFAULT_OPENWEBUI_PORT=3000
+    local DEFAULT_QDRANT_PORT=6333
+    local DEFAULT_WEAVIATE_PORT=8080
+    local DEFAULT_CHROMADB_PORT=8000
+    local DEFAULT_MILVUS_PORT=19530
+    
+    local required_ports=()
+    local port_names=()
+    
+    # Collect all required ports from enabled services using defaults
+    if [[ "${ENABLE_POSTGRES:-false}" == "true" ]]; then
+        required_ports+=("$DEFAULT_POSTGRES_PORT")
+        port_names+=("PostgreSQL")
+    fi
+    
+    if [[ "${ENABLE_REDIS:-false}" == "true" ]]; then
+        required_ports+=("$DEFAULT_REDIS_PORT")
+        port_names+=("Redis")
+    fi
+    
+    if [[ "${ENABLE_LITELLM:-false}" == "true" ]]; then
+        required_ports+=("$DEFAULT_LITELLM_PORT")
+        port_names+=("LiteLLM")
+    fi
+    
+    if [[ "${ENABLE_OLLAMA:-false}" == "true" ]]; then
+        required_ports+=("$DEFAULT_OLLAMA_PORT")
+        port_names+=("Ollama")
+    fi
+    
+    if [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]]; then
+        required_ports+=("$DEFAULT_OPENWEBUI_PORT")
+        port_names+=("OpenWebUI")
+    fi
+    
+    if [[ "${ENABLE_QDRANT:-false}" == "true" ]]; then
+        required_ports+=("$DEFAULT_QDRANT_PORT")
+        port_names+=("Qdrant")
+    fi
+    
+    if [[ "${ENABLE_WEAVIATE:-false}" == "true" ]]; then
+        required_ports+=("$DEFAULT_WEAVIATE_PORT")
+        port_names+=("Weaviate")
+    fi
+    
+    if [[ "${ENABLE_CHROMADB:-false}" == "true" ]]; then
+        required_ports+=("$DEFAULT_CHROMADB_PORT")
+        port_names+=("ChromaDB")
+    fi
+    
+    if [[ "${ENABLE_MILVUS:-false}" == "true" ]]; then
+        required_ports+=("$DEFAULT_MILVUS_PORT")
+        port_names+=("Milvus")
+    fi
+    
+    # Check each port for conflicts
+    local conflicts=0
+    for i in "${!required_ports[@]}"; do
+        local port="${required_ports[$i]}"
+        local name="${port_names[$i]}"
+        
+        if ss -tlnp 2>/dev/null | grep -q ":$port "; then
+            echo "  ❌ CONFLICT: $name port $port is already in use"
+            conflicts=$((conflicts + 1))
+        else
+            echo "  ✅ OK: $name port $port is available"
+        fi
+    done
+    
+    if [[ $conflicts -gt 0 ]]; then
+        fail "Found $conflicts port conflicts. Please resolve before proceeding."
+    fi
+    
+    ok "All required ports are available"
+}
+
+# =============================================================================
+# DNS VALIDATION (README COMPLIANCE)
+# =============================================================================
+validate_domain() {
+    local domain="$1"
+    
+    # Basic domain format validation
+    if [[ ! "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
+        fail "Invalid domain format: $domain"
+    fi
+    
+    # Test DNS resolution
+    if ! nslookup "$domain" >/dev/null 2>&1; then
+        warn "Domain $domain does not resolve in DNS"
+        return 1
+    fi
+    
+    ok "Domain $domain is valid and resolves"
+    return 0
+}
+
+test_dns_resolution() {
+    local domain="$1"
+    echo "=== DNS VALIDATION FOR $domain ==="
+    
+    # Validate domain format
+    validate_domain "$domain" || return 1
+    
+    # Detect public IP
+    local public_ip
+    public_ip=$(curl -s http://checkip.amazonaws.com/ 2>/dev/null || curl -s http://icanhazip.com/ 2>/dev/null)
+    
+    if [[ -z "$public_ip" ]]; then
+        warn "Could not detect public IP"
+        return 1
+    fi
+    
+    # Check domain resolution
+    local domain_ip
+    domain_ip=$(nslookup "$domain" | grep -A 1 "Name:" | tail -1 | awk '{print $2}')
+    
+    if [[ "$domain_ip" != "$public_ip" ]]; then
+        warn "Domain IP ($domain_ip) does not match public IP ($public_ip)"
+        warn "DNS may not be properly configured for this domain"
+        return 1
+    fi
+    
+    ok "DNS validation successful for $domain"
+    return 0
+}
+
+# =============================================================================
+# SERVICE SUMMARY HEALTH CHECK (README COMPLIANCE)
+# =============================================================================
+display_service_summary() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  📊 SERVICE CONFIGURATION SUMMARY"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    echo "  🏷️  Platform Identity:"
+    echo "    Platform: $PLATFORM_PREFIX"
+    echo "    Tenant: $TENANT_ID"
+    echo "    Domain: $DOMAIN"
+    echo "    Organization: $ORGANIZATION"
+    echo "    Admin: $ADMIN_EMAIL"
+    echo ""
+    
+    echo "  💾 Storage Configuration:"
+    if [[ -n "$EBS_DEVICE" ]]; then
+        echo "    EBS Device: $EBS_DEVICE"
+        echo "    Mount Point: /mnt/$TENANT_ID"
+    else
+        echo "    Storage: OS disk (/mnt/$TENANT_ID)"
+    fi
+    echo ""
+    
+    echo "  🚀 Stack Configuration:"
+    echo "    Preset: $STACK_PRESET"
+    echo "    LLM Gateway: ${LLM_GATEWAY_TYPE:-none}"
+    echo "    Vector DB: ${VECTOR_DB_TYPE:-none}"
+    echo ""
+    
+    echo "  🔐 TLS Configuration:"
+    echo "    Mode: $TLS_MODE"
+    case "$TLS_MODE" in
+        "letsencrypt")
+            echo "    Domain: $DOMAIN"
+            echo "    Email: $ADMIN_EMAIL"
+            ;;
+        "provided")
+            echo "    Cert: $TLS_CERT_PATH"
+            echo "    Key: $TLS_KEY_PATH"
+            ;;
+    esac
+    echo ""
+    
+    echo "  🌐 Enabled Services & Ports:"
+    if [[ "${ENABLE_POSTGRES:-false}" == "true" ]]; then
+        echo "    ✅ PostgreSQL: ${POSTGRES_PORT:-5432}"
+    fi
+    if [[ "${ENABLE_REDIS:-false}" == "true" ]]; then
+        echo "    ✅ Redis: ${REDIS_PORT:-6379}"
+    fi
+    if [[ "${ENABLE_LITELLM:-false}" == "true" ]]; then
+        echo "    ✅ LiteLLM: ${LITELLM_PORT:-4000}"
+    fi
+    if [[ "${ENABLE_OLLAMA:-false}" == "true" ]]; then
+        echo "    ✅ Ollama: ${OLLAMA_PORT:-11434}"
+    fi
+    if [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]]; then
+        echo "    ✅ OpenWebUI: ${OPENWEBUI_PORT:-3000}"
+    fi
+    if [[ "${ENABLE_QDRANT:-false}" == "true" ]]; then
+        echo "    ✅ Qdrant: ${QDRANT_PORT:-6333}"
+    fi
+    if [[ "${ENABLE_WEAVIATE:-false}" == "true" ]]; then
+        echo "    ✅ Weaviate: ${WEAVIATE_PORT:-8080}"
+    fi
+    if [[ "${ENABLE_CHROMADB:-false}" == "true" ]]; then
+        echo "    ✅ ChromaDB: ${CHROMADB_PORT:-8000}"
+    fi
+    if [[ "${ENABLE_MILVUS:-false}" == "true" ]]; then
+        echo "    ✅ Milvus: ${MILVUS_PORT:-19530}"
+    fi
+    echo ""
+    
+    echo "  🔑 LLM Providers:"
+    echo "    Preferred: ${PREFERRED_LLM_PROVIDER:-none}"
+    if [[ "$ENABLE_OPENAI" == "true" ]]; then
+        echo "    ✅ OpenAI"
+    fi
+    if [[ "$ENABLE_ANTHROPIC" == "true" ]]; then
+        echo "    ✅ Anthropic"
+    fi
+    if [[ "$ENABLE_GOOGLE" == "true" ]]; then
+        echo "    ✅ Google"
+    fi
+    if [[ "$ENABLE_GROQ" == "true" ]]; then
+        echo "    ✅ Groq"
+    fi
+    if [[ "$ENABLE_COHERE" == "true" ]]; then
+        echo "    ✅ Cohere"
+    fi
+    if [[ "$ENABLE_HUGGINGFACE" == "true" ]]; then
+        echo "    ✅ Hugging Face"
+    fi
+    if [[ "$ENABLE_LOCAL_MODELS" == "true" ]]; then
+        echo "    ✅ Local Models: ✅"
+    fi
+    echo ""
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+}
+
+# =============================================================================
+# ENHANCED PORT CONFIGURATION WITH OVERRIDES
+# =============================================================================
+configure_ports() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  🌐 PORT CONFIGURATION WITH HEALTH VALIDATION"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  📋 Configure service ports with conflict detection"
+    echo ""
+    
+    # Check port conflicts first
+    check_port_conflicts
+    
+    # Allow per-service port overrides using defaults
+    if [[ "${ENABLE_POSTGRES:-false}" == "true" ]]; then
+        safe_read "PostgreSQL port [5432]" "5432" "POSTGRES_PORT" "^[0-9]+$"
+    fi
+    
+    if [[ "${ENABLE_REDIS:-false}" == "true" ]]; then
+        safe_read "Redis port [6379]" "6379" "REDIS_PORT" "^[0-9]+$"
+    fi
+    
+    if [[ "${ENABLE_LITELLM:-false}" == "true" ]]; then
+        safe_read "LiteLLM port [4000]" "4000" "LITELLM_PORT" "^[0-9]+$"
+    fi
+    
+    if [[ "${ENABLE_OLLAMA:-false}" == "true" ]]; then
+        safe_read "Ollama port [11434]" "11434" "OLLAMA_PORT" "^[0-9]+$"
+    fi
+    
+    if [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]]; then
+        safe_read "OpenWebUI port [3000]" "3000" "OPENWEBUI_PORT" "^[0-9]+$"
+    fi
+    
+    if [[ "${ENABLE_QDRANT:-false}" == "true" ]]; then
+        safe_read "Qdrant port [6333]" "6333" "QDRANT_PORT" "^[0-9]+$"
+    fi
+    
+    if [[ "${ENABLE_WEAVIATE:-false}" == "true" ]]; then
+        safe_read "Weaviate port [8080]" "8080" "WEAVIATE_PORT" "^[0-9]+$"
+    fi
+    
+    if [[ "${ENABLE_CHROMADB:-false}" == "true" ]]; then
+        safe_read "ChromaDB port [8000]" "8000" "CHROMADB_PORT" "^[0-9]+$"
+    fi
+    
+    if [[ "${ENABLE_MILVUS:-false}" == "true" ]]; then
+        safe_read "Milvus port [19530]" "19530" "MILVUS_PORT" "^[0-9]+$"
+    fi
+    
+    # Final port conflict check after overrides
+    check_port_conflicts
+    
+    ok "Port configuration complete"
+}
+
+# =============================================================================
+# MAIN INTERACTIVE INPUT COLLECTION (ENHANCED) FUNCTIONS
 # =============================================================================
 run_interactive_collection() {
     banner
@@ -1776,12 +2355,165 @@ run_interactive_collection() {
     select_stack_preset
     configure_llm_gateway
     configure_vector_database
+    
+    # Initialize TLS_MODE before validation
+    TLS_MODE="none"
+    
+    # DNS Validation before TLS (README compliance)
+    if [[ "$TLS_MODE" == "letsencrypt" ]] || [[ "$TLS_MODE" == "provided" ]]; then
+        test_dns_resolution "$DOMAIN" || warn "DNS validation failed - TLS may not work properly"
+    fi
+    
     configure_tls
     collect_api_keys
     configure_ports
-    show_configuration_summary
+    configure_proxy
+    configure_google_drive
+    
+    # Service Summary Health Check (README compliance)
+    display_service_summary
+    
+    # =============================================================================
+    # INGESTION CONFIGURATION (README §4.7)
+    # =============================================================================
+    configure_ingestion
+    
+    # =============================================================================
+    # TEMPLATE GENERATION
+    # =============================================================================
+    save_configuration_template
+    
     write_platform_conf
     create_tenant_user
+}
+
+# =============================================================================
+# INGESTION CONFIGURATION (README §4.7)
+# =============================================================================
+configure_ingestion() {
+    section "🔄 INGESTION CONFIGURATION"
+    
+    echo "  📋 Configure automated data ingestion pipeline"
+    echo "    • Rclone for cloud storage synchronization"
+    echo "    • Automated processing and indexing"
+    echo "    • Support for multiple providers (GDrive, S3, Azure)"
+    echo ""
+    
+    safe_read_yesno "Enable automated ingestion pipeline" "false" "ENABLE_INGESTION"
+    
+    if [[ "$ENABLE_INGESTION" == "true" ]]; then
+        echo ""
+        echo "  🔹 Ingestion Providers:"
+        echo "    1) Rclone (Google Drive, S3, Azure, etc.)"
+        echo "    2) Google Drive (direct)"
+        echo "    3) AWS S3 (direct)"
+        echo "    4) Azure Blob (direct)"
+        echo "    5) Local filesystem"
+        
+        safe_read "Ingestion method [1-5]" "1" "INGESTION_METHOD" "^[1-5]$"
+        
+        case "$INGESTION_METHOD" in
+            1)
+                safe_read "Rclone remote name" "gdrive" "RCLONE_REMOTE"
+                safe_read "Sync interval (minutes)" "5" "RCLONE_POLL_INTERVAL" "^[0-9]+$"
+                safe_read "Parallel transfers" "4" "RCLONE_TRANSFERS" "^[0-9]+$"
+                safe_read "Parallel checkers" "8" "RCLONE_CHECKERS" "^[0-9]+$"
+                safe_read "VFS cache mode" "writes" "RCLONE_VFS_CACHE" "^(writes|off|full)$"
+                
+                echo ""
+                echo "  📋 Rclone Configuration Methods:"
+                echo "    1) Paste JSON credentials directly"
+                echo "    2) Provide file path to credentials"
+                
+                safe_read "Credentials input method [1-2]" "1" "RCLONE_CRED_METHOD" "^[1-2]$"
+                
+                case "$RCLONE_CRED_METHOD" in
+                    1)
+                        echo ""
+                        echo "  📋 Paste your Rclone configuration JSON:"
+                        echo "    (Press Enter on empty line to finish)"
+                        echo ""
+                        
+                        local json_content=""
+                        local line
+                        while true; do
+                            if [[ -t 0 ]]; then
+                                read -r line
+                                [[ -z "$line" ]] && break
+                                json_content+="$line"$'\n'
+                            else
+                                # For piped input, read all at once
+                                json_content=$(cat)
+                                break
+                            fi
+                        done
+                        
+                        # Save JSON to file
+                        local rclone_conf_dir="/mnt/${TENANT_ID}/config"
+                        mkdir -p "$rclone_conf_dir"
+                        echo "$json_content" > "${rclone_conf_dir}/rclone.conf"
+                        chmod 600 "${rclone_conf_dir}/rclone.conf"
+                        
+                        echo ""
+                        echo "  ✅ Rclone configuration saved to: ${rclone_conf_dir}/rclone.conf"
+                        ;;
+                    2)
+                        safe_read "Rclone configuration file path" "/mnt/${TENANT_ID}/config/rclone.conf" "RCLONE_CONFIG_FILE"
+                        
+                        if [[ ! -f "$RCLONE_CONFIG_FILE" ]]; then
+                            fail "Rclone configuration file not found: $RCLONE_CONFIG_FILE"
+                        fi
+                        
+                        # Copy to standard location
+                        local rclone_conf_dir="/mnt/${TENANT_ID}/config"
+                        mkdir -p "$rclone_conf_dir"
+                        cp "$RCLONE_CONFIG_FILE" "${rclone_conf_dir}/rclone.conf"
+                        chmod 600 "${rclone_conf_dir}/rclone.conf"
+                        
+                        echo "  ✅ Rclone configuration copied to: ${rclone_conf_dir}/rclone.conf"
+                        ;;
+                esac
+                
+                echo ""
+                echo "  📋 Rclone Configuration Summary:"
+                echo "    Remote: ${RCLONE_REMOTE}"
+                echo "    Sync Interval: ${RCLONE_POLL_INTERVAL} minutes"
+                echo "    Transfers: ${RCLONE_TRANSFERS} parallel"
+                echo "    Checkers: ${RCLONE_CHECKERS} parallel"
+                echo "    VFS Cache: ${RCLONE_VFS_CACHE}"
+                echo "    Config: ${rclone_conf_dir}/rclone.conf"
+                ;;
+            2)
+                safe_read "Google Drive credentials JSON path" "/mnt/${TENANT_ID}/config/gdrive-credentials.json" "GDRIVE_CREDENTIALS_FILE"
+                ;;
+            3)
+                safe_read "AWS S3 bucket name" "" "AWS_S3_BUCKET"
+                safe_read "AWS region" "us-east-1" "AWS_REGION"
+                safe_read "AWS access key ID" "" "AWS_ACCESS_KEY_ID"
+                safe_read "AWS secret access key" "" "AWS_SECRET_ACCESS_KEY"
+                ;;
+            4)
+                safe_read "Azure storage account" "" "AZURE_STORAGE_ACCOUNT"
+                safe_read "Azure container name" "" "AZURE_CONTAINER"
+                safe_read "Azure access key" "" "AZURE_ACCESS_KEY"
+                ;;
+            5)
+                safe_read "Local source path" "/mnt/${TENANT_ID}/ingestion" "LOCAL_INGESTION_PATH"
+                ;;
+        esac
+        
+        # Confirmation
+        echo ""
+        safe_read_yesno "Confirm ingestion configuration" "true" "INGESTION_CONFIRMED"
+        if [[ "$INGESTION_CONFIRMED" != "true" ]]; then
+            warn "Ingestion configuration cancelled"
+            ENABLE_INGESTION="false"
+        fi
+    else
+        echo "Ingestion disabled - manual data loading only"
+    fi
+    
+    ok "Ingestion configuration complete"
 }
 
 # =============================================================================
@@ -1824,8 +2556,7 @@ ADMIN_EMAIL="${ADMIN_EMAIL}"
 # STORAGE CONFIGURATION
 # =============================================================================
 USE_EBS="${USE_EBS}"
-EBS_DEVICE="${EBS_DEVICE}"
-EBS_MOUNT_POINT="${EBS_MOUNT_POINT}"
+EBS_DEVICE="${EBS_DEVICE:-}"
 DATA_DIR="${DATA_DIR}"
 
 # =============================================================================
@@ -1843,7 +2574,7 @@ ENABLE_DIRECT_OLLAMA="${ENABLE_DIRECT_OLLAMA}"
 # =============================================================================
 # VECTOR DATABASE CONFIGURATION
 # =============================================================================
-VECTOR_DB="${VECTOR_DB}"
+VECTOR_DB_TYPE="${VECTOR_DB_TYPE:-none}"
 
 # =============================================================================
 # TLS CONFIGURATION
@@ -1856,44 +2587,44 @@ TLS_KEY_PATH="${TLS_KEY_PATH:-}"
 # =============================================================================
 # SERVICE PORTS CONFIGURATION
 # =============================================================================
-POSTGRES_PORT="${POSTGRES_PORT}"
-REDIS_PORT="${REDIS_PORT}"
-OLLAMA_PORT="${OLLAMA_PORT}"
-LITELLM_PORT="${LITELLM_PORT}"
-OPENWEBUI_PORT="${OPENWEBUI_PORT}"
-QDRANT_PORT="${QDRANT_PORT}"
-WEAVIATE_PORT="${WEAVIATE_PORT}"
-CHROMADB_PORT="${CHROMADB_PORT}"
-MILVUS_PORT="${MILVUS_PORT}"
-N8N_PORT="${N8N_PORT}"
-FLOWISEAI_PORT="${FLOWISEAI_PORT}"
-LANGFLOW_PORT="${LANGFLOW_PORT}"
-CODE_SERVER_PORT="${CODE_SERVER_PORT}"
-CONTINUE_DEV_PORT="${CONTINUE_DEV_PORT}"
-MEM0_PORT="${MEM0_PORT}"
-NGINX_PORT="${NGINX_PORT}"
-CADDY_HTTP_PORT="${CADDY_HTTP_PORT}"
-CADDY_HTTPS_PORT="${CADDY_HTTPS_PORT}"
+POSTGRES_PORT="${POSTGRES_PORT:-5432}"
+REDIS_PORT="${REDIS_PORT:-6379}"
+OLLAMA_PORT="${OLLAMA_PORT:-11434}"
+LITELLM_PORT="${LITELLM_PORT:-4000}"
+OPENWEBUI_PORT="${OPENWEBUI_PORT:-3000}"
+QDRANT_PORT="${QDRANT_PORT:-6333}"
+WEAVIATE_PORT="${WEAVIATE_PORT:-8080}"
+CHROMADB_PORT="${CHROMADB_PORT:-8000}"
+MILVUS_PORT="${MILVUS_PORT:-19530}"
+N8N_PORT="${N8N_PORT:-5678}"
+FLOWISEAI_PORT="${FLOWISEAI_PORT:-3000}"
+LANGFLOW_PORT="${LANGFLOW_PORT:-4000}"
+CODE_SERVER_PORT="${CODE_SERVER_PORT:-8080}"
+CONTINUE_DEV_PORT="${CONTINUE_DEV_PORT:-3000}"
+MEM0_PORT="${MEM0_PORT:-8080}"
+NGINX_PORT="${NGINX_PORT:-80}"
+CADDY_HTTP_PORT="${CADDY_HTTP_PORT:-80}"
+CADDY_HTTPS_PORT="${CADDY_HTTPS_PORT:-443}"
 
 # =============================================================================
 # SERVICE ENABLEMENT FLAGS
 # =============================================================================
-ENABLE_POSTGRES="${ENABLE_POSTGRES}"
-ENABLE_REDIS="${ENABLE_REDIS}"
-ENABLE_OLLAMA="${ENABLE_OLLAMA}"
-ENABLE_OPENWEBUI="${ENABLE_OPENWEBUI}"
-ENABLE_QDRANT="${ENABLE_QDRANT}"
-ENABLE_WEAVIATE="${ENABLE_WEAVIATE}"
-ENABLE_CHROMADB="${ENABLE_CHROMADB}"
-ENABLE_MILVUS="${ENABLE_MILVUS}"
-ENABLE_N8N="${ENABLE_N8N}"
-ENABLE_FLOWISEAI="${ENABLE_FLOWISEAI}"
-ENABLE_LANGFLOW="${ENABLE_LANGFLOW}"
-ENABLE_CODE_SERVER="${ENABLE_CODE_SERVER}"
-ENABLE_CONTINUE_DEV="${ENABLE_CONTINUE_DEV}"
-ENABLE_MEM0="${ENABLE_MEM0}"
-ENABLE_NGINX="${ENABLE_NGINX}"
-ENABLE_CADDY="${ENABLE_CADDY}"
+ENABLE_POSTGRES="${ENABLE_POSTGRES:-false}"
+ENABLE_REDIS="${ENABLE_REDIS:-false}"
+ENABLE_OLLAMA="${ENABLE_OLLAMA:-false}"
+ENABLE_OPENWEBUI="${ENABLE_OPENWEBUI:-false}"
+ENABLE_QDRANT="${ENABLE_QDRANT:-false}"
+ENABLE_WEAVIATE="${ENABLE_WEAVIATE:-false}"
+ENABLE_CHROMADB="${ENABLE_CHROMADB:-false}"
+ENABLE_MILVUS="${ENABLE_MILVUS:-false}"
+ENABLE_N8N="${ENABLE_N8N:-false}"
+ENABLE_FLOWISEAI="${ENABLE_FLOWISEAI:-false}"
+ENABLE_LANGFLOW="${ENABLE_LANGFLOW:-false}"
+ENABLE_CODE_SERVER="${ENABLE_CODE_SERVER:-false}"
+ENABLE_CONTINUE_DEV="${ENABLE_CONTINUE_DEV:-false}"
+ENABLE_MEM0="${ENABLE_MEM0:-false}"
+ENABLE_NGINX="${ENABLE_NGINX:-false}"
+ENABLE_CADDY="${ENABLE_CADDY:-false}"
 
 # =============================================================================
 # LLM PROVIDER CONFIGURATION (API KEYS - SECURE)
@@ -1933,6 +2664,382 @@ EOF
     echo "  Template location (outside git repo):"
     echo "    ${HOME}/.ai-platform-templates/"
     echo ""
+}
+
+# =============================================================================
+# SERVICE VARIABLE INITIALIZATION - ALIGNED WITH .env
+# =============================================================================
+initialize_service_variables() {
+    # Platform Identity (from .env)
+    PLATFORM_PREFIX="${PLATFORM_PREFIX:-ai-}"
+    TENANT_ID="${TENANT_ID:-}"
+    DOMAIN="${DOMAIN:-}"
+    ORGANIZATION="${ORGANIZATION:-}"
+    ADMIN_EMAIL="${ADMIN_EMAIL:-}"
+    DATA_ROOT="${DATA_ROOT:-/mnt/data/}"
+    PROJECT_PREFIX="${PROJECT_PREFIX:-ai-}"
+    
+    # Tenant User Configuration
+    TENANT_UID="${TENANT_UID:-1001}"
+    TENANT_GID="${TENANT_GID:-1001}"
+    
+    # Service Ownership UIDs (Pragmatic Exception Pattern)
+    POSTGRES_UID="${POSTGRES_UID:-70}"
+    PROMETHEUS_UID="${PROMETHEUS_UID:-65534}"
+    GRAFANA_UID="${GRAFANA_UID:-472}"
+    N8N_UID="${N8N_UID:-1000}"
+    QDRANT_UID="${QDRANT_UID:-1000}"
+    REDIS_UID="${REDIS_UID:-999}"
+    OPENWEBUI_UID="${OPENWEBUI_UID:-1000}"
+    ANYTHINGLLM_UID="${ANYTHINGLLM_UID:-1000}"
+    OLLAMA_UID="${OLLAMA_UID:-1001}"
+    FLOWISE_UID="${FLOWISE_UID:-1000}"
+    LITELLM_UID="${LITELLM_UID:-1000}"
+    AUTHENTIK_UID="${AUTHENTIK_UID:-1000}"
+    CADDY_UID="${CADDY_UID:-1000}"
+    
+    # Service Flags (complete list from .env)
+    ENABLE_POSTGRES="${ENABLE_POSTGRES:-false}"
+    ENABLE_REDIS="${ENABLE_REDIS:-false}"
+    ENABLE_CADDY="${ENABLE_CADDY:-false}"
+    ENABLE_OLLAMA="${ENABLE_OLLAMA:-false}"
+    ENABLE_OPENAI="${ENABLE_OPENAI:-false}"
+    ENABLE_ANTHROPIC="${ENABLE_ANTHROPIC:-false}"
+    ENABLE_LOCALAI="${ENABLE_LOCALAI:-false}"
+    ENABLE_VLLM="${ENABLE_VLLM:-false}"
+    ENABLE_OPENWEBUI="${ENABLE_OPENWEBUI:-false}"
+    ENABLE_ANYTHINGLLM="${ENABLE_ANYTHINGLLM:-false}"
+    ENABLE_DIFY="${ENABLE_DIFY:-false}"
+    ENABLE_N8N="${ENABLE_N8N:-false}"
+    ENABLE_FLOWISE="${ENABLE_FLOWISE:-false}"
+    ENABLE_LITELLM="${ENABLE_LITELLM:-false}"
+    ENABLE_QDRANT="${ENABLE_QDRANT:-false}"
+    ENABLE_WEAVIATE="${ENABLE_WEAVIATE:-false}"
+    ENABLE_PINECONE="${ENABLE_PINECONE:-false}"
+    ENABLE_CHROMADB="${ENABLE_CHROMADB:-false}"
+    ENABLE_MILVUS="${ENABLE_MILVUS:-false}"
+    ENABLE_GRAFANA="${ENABLE_GRAFANA:-false}"
+    ENABLE_PROMETHEUS="${ENABLE_PROMETHEUS:-false}"
+    ENABLE_AUTHENTIK="${ENABLE_AUTHENTIK:-false}"
+    ENABLE_SIGNAL="${ENABLE_SIGNAL:-false}"
+    ENABLE_OPENCLAW="${ENABLE_OPENCLAW:-false}"
+    ENABLE_RCLONE="${ENABLE_RCLONE:-false}"
+    ENABLE_MINIO="${ENABLE_MINIO:-false}"
+    ENABLE_CODE_SERVER="${ENABLE_CODE_SERVER:-false}"
+    ENABLE_SEARXNG="${ENABLE_SEARXNG:-false}"
+    
+    # Vector Database Configuration
+    PINECONE_PROJECT_ID="${PINECONE_PROJECT_ID:-}"
+    
+    # Service URLs (internal Docker network)
+    OLLAMA_INTERNAL_URL="http://ollama:11434"
+    OLLAMA_BASE_URL="http://ollama:11434"
+    OPENAI_INTERNAL_URL="https://api.openai.com/v1"
+    ANTHROPIC_INTERNAL_URL="https://api.anthropic.com"
+    LOCALAI_INTERNAL_URL="http://localai:8080"
+    VLLM_INTERNAL_URL="http://vllm:8000"
+    LITELLM_INTERNAL_URL="http://litellm:4000"
+    QDRANT_INTERNAL_URL="http://qdrant:6333"
+    WEAVIATE_INTERNAL_URL="http://weaviate:8080"
+    PINECONE_INTERNAL_URL="https://pinecone.io"
+    CHROMADB_INTERNAL_URL="http://chromadb:8000"
+    MILVUS_INTERNAL_URL="http://milvus:19530"
+    REDIS_INTERNAL_URL="redis://redis:6379"
+    POSTGRES_INTERNAL_URL="postgresql://postgres:5432"
+    N8N_INTERNAL_URL="http://n8n:5678"
+    
+    # Service API endpoints
+    OLLAMA_API_ENDPOINT="http://ollama:11434/api/tags"
+    LITELLM_API_ENDPOINT="http://litellm:4000/v1"
+    QDRANT_API_ENDPOINT="http://qdrant:6333"
+    
+    # Project Configuration
+    COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-}"
+    DOCKER_NETWORK="${DOCKER_NETWORK:-}"
+    
+    # Hardware Configuration
+    GPU_TYPE="${GPU_TYPE:-cpu}"
+    GPU_COUNT="${GPU_COUNT:-0}"
+    OLLAMA_GPU_LAYERS="${OLLAMA_GPU_LAYERS:-auto}"
+    CPU_CORES="${CPU_CORES:-2}"
+    TOTAL_RAM_GB="${TOTAL_RAM_GB:-8}"
+    
+    # Ollama Configuration
+    OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-qwen2.5:7b}"
+    OLLAMA_MODELS="${OLLAMA_MODELS:-qwen2.5:7b,llama3.1:8b}"
+    
+    # LLM Providers
+    LLM_PROVIDERS="${LLM_PROVIDERS:-local}"
+    OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+    GOOGLE_API_KEY="${GOOGLE_API_KEY:-}"
+    GROQ_API_KEY="${GROQ_API_KEY:-}"
+    # OpenRouter removed as requested
+    
+    # LiteLLM Routing Strategy
+    LITELLM_ROUTING_STRATEGY="${LITELLM_ROUTING_STRATEGY:-cost-optimized}"
+    LITELLM_INTERNAL_PORT="${LITELLM_INTERNAL_PORT:-4000}"
+    
+    # Internal Service Ports
+    CADDY_INTERNAL_HTTP_PORT="${CADDY_INTERNAL_HTTP_PORT:-80}"
+    CADDY_INTERNAL_HTTPS_PORT="${CADDY_INTERNAL_HTTPS_PORT:-443}"
+    OLLAMA_INTERNAL_PORT="${OLLAMA_INTERNAL_PORT:-11434}"
+    QDRANT_INTERNAL_PORT="${QDRANT_INTERNAL_PORT:-6333}"
+    QDRANT_INTERNAL_HTTP_PORT="${QDRANT_INTERNAL_HTTP_PORT:-6333}"
+    OPENWEBUI_INTERNAL_PORT="${OPENWEBUI_INTERNAL_PORT:-8081}"
+    OPENCLAW_INTERNAL_PORT="${OPENCLAW_INTERNAL_PORT:-18789}"
+    SIGNAL_INTERNAL_PORT="${SIGNAL_INTERNAL_PORT:-8080}"
+    N8N_INTERNAL_PORT="${N8N_INTERNAL_PORT:-5678}"
+    FLOWISE_INTERNAL_PORT="${FLOWISE_INTERNAL_PORT:-3000}"
+    ANYTHINGLLM_INTERNAL_PORT="${ANYTHINGLLM_INTERNAL_PORT:-3001}"
+    GRAFANA_INTERNAL_PORT="${GRAFANA_INTERNAL_PORT:-3000}"
+    PROMETHEUS_INTERNAL_PORT="${PROMETHEUS_INTERNAL_PORT:-9090}"
+    MINIO_INTERNAL_PORT="${MINIO_INTERNAL_PORT:-9000}"
+    MINIO_CONSOLE_INTERNAL_PORT="${MINIO_CONSOLE_INTERNAL_PORT:-9001}"
+    POSTGRES_INTERNAL_PORT="${POSTGRES_INTERNAL_PORT:-5432}"
+    REDIS_INTERNAL_PORT="${REDIS_INTERNAL_PORT:-6379}"
+    
+    # Database Configuration
+    POSTGRES_USER="${POSTGRES_USER:-}"
+    POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
+    POSTGRES_DB="${POSTGRES_DB:-}"
+    DB_USER="${DB_USER:-}"
+    DB_PASSWORD="${DB_PASSWORD:-}"
+    
+    # Redis Configuration
+    REDIS_PASSWORD="${REDIS_PASSWORD:-}"
+    
+    # n8n Configuration
+    N8N_BASIC_AUTH_ACTIVE="${N8N_BASIC_AUTH_ACTIVE:-false}"
+    N8N_BASIC_AUTH_USER="${N8N_BASIC_AUTH_USER:-}"
+    N8N_BASIC_AUTH_PASSWORD="${N8N_BASIC_AUTH_PASSWORD:-}"
+    
+    # Flowise Configuration
+    FLOWISE_USERNAME="${FLOWISE_USERNAME:-}"
+    FLOWISE_PASSWORD="${FLOWISE_PASSWORD:-}"
+    
+    # LiteLLM Configuration
+    LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-}"
+    LITELLM_DATABASE_URL="${LITELLM_DATABASE_URL:-postgresql://postgres:password@localhost:5432/litellm}"
+    LITELLM_ENABLE_LOGGING="${LITELLM_ENABLE_LOGGING:-true}"
+    
+    # AnythingLLM Configuration
+    ANYTHINGLLM_STORAGE_PATH="${ANYTHINGLLM_STORAGE_PATH:-}"
+    ANYTHINGLLM_JWT_SECRET="${ANYTHINGLLM_JWT_SECRET:-}"
+    
+    # Qdrant Configuration
+    QDRANT_API_KEY="${QDRANT_API_KEY:-}"
+    QDRANT_COLLECTION_NAME="${QDRANT_COLLECTION_NAME:-}"
+    
+    # Grafana Configuration
+    GRAFANA_ADMIN_USER="${GRAFANA_ADMIN_USER:-admin}"
+    GRAFANA_ADMIN_PASSWORD="${GRAFANA_ADMIN_PASSWORD:-}"
+    
+    # Authentik Configuration
+    AUTHENTIK_SECRET_KEY="${AUTHENTIK_SECRET_KEY:-}"
+    AUTHENTIK_ADMIN_TOKEN="${AUTHENTIK_ADMIN_TOKEN:-}"
+    
+    # MinIO Configuration
+    MINIO_ROOT_USER="${MINIO_ROOT_USER:-minioadmin}"
+    MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-minioadmin}"
+    MINIO_BUCKET="${MINIO_BUCKET:-}"
+    
+    # Dify Configuration
+    DIFY_SECRET_KEY="${DIFY_SECRET_KEY:-}"
+    DIFY_DATABASE_URL="${DIFY_DATABASE_URL:-}"
+    
+    # Network & Security
+    TLS_MODE="${TLS_MODE:-none}"
+    LETSENCRYPT_EMAIL="${LETSENCRYPT_EMAIL:-}"
+    LETSENCRYPT_STAGING="${LETSENCRYPT_STAGING:-false}"
+    LETSENCRYPT_AUTO_RENEW="${LETSENCRYPT_AUTO_RENEW:-true}"
+    HTTP_TO_HTTPS_REDIRECT="${HTTP_TO_HTTPS_REDIRECT:-false}"
+    
+    # Proxy Configuration
+    ENABLE_PROXY="${ENABLE_PROXY:-false}"
+    PROXY_TYPE="${PROXY_TYPE:-nginx}"
+    PROXY_ROUTING="${PROXY_ROUTING:-path_based}"
+    PROXY_HTTP_PORT="${PROXY_HTTP_PORT:-80}"
+    PROXY_HTTPS_PORT="${PROXY_HTTPS_PORT:-443}"
+    PROXY_FORCE_HTTPS="${PROXY_FORCE_HTTPS:-false}"
+    
+    # Google Drive Integration
+    ENABLE_GDRIVE="${ENABLE_GDRIVE:-false}"
+    GDRIVE_FOLDER_ID="${GDRIVE_FOLDER_ID:-}"
+    GDRIVE_FOLDER_NAME="${GDRIVE_FOLDER_NAME:-AI Platform}"
+    
+    # Search APIs
+    SEARXNG_SECRET_KEY="${SEARXNG_SECRET_KEY:-}"
+    
+    # Additional Service Ports
+    WEAVIATE_PORT="${WEAVIATE_PORT:-8080}"
+    CHROMADB_PORT="${CHROMADB_PORT:-8000}"
+    MILVUS_PORT="${MILVUS_PORT:-19530}"
+    CODESERVER_PORT="${CODESERVER_PORT:-8443}"
+    
+    # Self-signed TLS
+    SELF_SIGNED_DAYS="${SELF_SIGNED_DAYS:-365}"
+    
+    # Manual TLS
+    TLS_CERT_FILE="${TLS_CERT_FILE:-}"
+    TLS_KEY_FILE="${TLS_KEY_FILE:-}"
+    
+    # Network Configuration
+    LOCALHOST="${LOCALHOST:-localhost}"
+    
+    # Service Passwords and Secrets
+    REDIS_PASSWORD="${REDIS_PASSWORD:-}"
+    N8N_ENCRYPTION_KEY="${N8N_ENCRYPTION_KEY:-}"
+    N8N_API_KEY="${N8N_API_KEY:-}"
+    N8N_USER="${N8N_USER:-}"
+    N8N_PASSWORD="${N8N_PASSWORD:-}"
+    FLOWISE_SECRET_KEY="${FLOWISE_SECRET_KEY:-}"
+    FLOWISE_USERNAME="${FLOWISE_USERNAME:-}"
+    FLOWISE_PASSWORD="${FLOWISE_PASSWORD:-}"
+    LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-}"
+    LITELLM_SALT_KEY="${LITELLM_SALT_KEY:-}"
+    ANYTHINGLLM_API_KEY="${ANYTHINGLLM_API_KEY:-}"
+    ANYTHINGLLM_JWT_SECRET="${ANYTHINGLLM_JWT_SECRET:-}"
+    ANYTHINGLLM_AUTH_TOKEN="${ANYTHINGLLM_AUTH_TOKEN:-}"
+    ANYTHINGLLM_PORT="${ANYTHINGLLM_PORT:-3001}"
+    QDRANT_API_KEY="${QDRANT_API_KEY:-}"
+    QDRANT_VECTOR_SIZE="${QDRANT_VECTOR_SIZE:-768}"
+    GRAFANA_ADMIN_USER="${GRAFANA_ADMIN_USER:-}"
+    GRAFANA_PASSWORD="${GRAFANA_PASSWORD:-}"
+    GF_SECURITY_ADMIN_PASSWORD="${GF_SECURITY_ADMIN_PASSWORD:-}"
+    AUTHENTIK_SECRET_KEY="${AUTHENTIK_SECRET_KEY:-}"
+    AUTHENTIK_BOOTSTRAP_EMAIL="${AUTHENTIK_BOOTSTRAP_EMAIL:-}"
+    AUTHENTIK_BOOTSTRAP_PASSWORD="${AUTHENTIK_BOOTSTRAP_PASSWORD:-}"
+    ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
+    MINIO_ROOT_USER="${MINIO_ROOT_USER:-}"
+    MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-}"
+    DIFY_SECRET_KEY="${DIFY_SECRET_KEY:-}"
+    DIFY_INNER_API_KEY="${DIFY_INNER_API_KEY:-}"
+    
+    # Google Drive Integration (added GDRIVE_FOLDER_ID)
+    GDRIVE_AUTH_METHOD="${GDRIVE_AUTH_METHOD:-service_account}"
+    GDRIVE_CLIENT_ID="${GDRIVE_CLIENT_ID:-}"
+    GDRIVE_CLIENT_SECRET="${GDRIVE_CLIENT_SECRET:-}"
+    GDRIVE_FOLDER_NAME="${GDRIVE_FOLDER_NAME:-}"
+    GDRIVE_FOLDER_ID="${GDRIVE_FOLDER_ID:-}"  # Added as requested
+    GDRIVE_TOKEN="${GDRIVE_TOKEN:-service_account_valid}"
+    
+    # Rclone Configuration
+    RCLONE_AUTH_METHOD="${RCLONE_AUTH_METHOD:-service_account}"
+    RCLONE_CONFIG_PATH="${RCLONE_CONFIG_PATH:-}"
+    RCLONE_GDRIVE_ROOT_ID="${RCLONE_GDRIVE_ROOT_ID:-}"
+    
+    # Search APIs
+    SEARCH_PROVIDER="${SEARCH_PROVIDER:-multiple}"
+    BRAVE_API_KEY="${BRAVE_API_KEY:-}"
+    SERPAPI_KEY="${SERPAPI_KEY:-}"
+    SERPAPI_ENGINE="${SERPAPI_ENGINE:-google}"
+    CUSTOM_SEARCH_URL="${CUSTOM_SEARCH_URL:-}"
+    CUSTOM_SEARCH_KEY="${CUSTOM_SEARCH_KEY:-}"
+    
+    # Proxy Configuration (added for user selection)
+    PROXY_TYPE="${PROXY_TYPE:-caddy}"
+    ROUTING_METHOD="${ROUTING_METHOD:-subdomain}"
+    SSL_TYPE="${SSL_TYPE:-selfsigned}"
+    CUSTOM_PROXY_IMAGE="${CUSTOM_PROXY_IMAGE:-}"
+    HTTP_PROXY="${HTTP_PROXY:-}"
+    HTTPS_PROXY="${HTTPS_PROXY:-}"
+    NO_PROXY="${NO_PROXY:-localhost,127.0.0.1,.local}"
+    HTTP_TO_HTTPS_REDIRECT="${HTTP_TO_HTTPS_REDIRECT:-true}"
+    
+    # OpenClaw Configuration
+    OPENCLAW_PASSWORD="${OPENCLAW_PASSWORD:-}"
+    OPENCLAW_ADMIN_USER="${OPENCLAW_ADMIN_USER:-}"
+    OPENCLAW_SECRET="${OPENCLAW_SECRET:-}"
+    OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
+    OPENCLAW_IMAGE="${OPENCLAW_IMAGE:-openclaw:latest}"
+    
+    # External Ports
+    CADDY_HTTP_PORT="${CADDY_HTTP_PORT:-80}"
+    CADDY_HTTPS_PORT="${CADDY_HTTPS_PORT:-443}"
+    N8N_PORT="${N8N_PORT:-5678}"
+    FLOWISE_PORT="${FLOWISE_PORT:-3000}"
+    OPENWEBUI_PORT="${OPENWEBUI_PORT:-8081}"
+    ANYTHINGLLM_PORT="${ANYTHINGLLM_PORT:-3001}"
+    LITELLM_PORT="${LITELLM_PORT:-4000}"
+    GRAFANA_PORT="${GRAFANA_PORT:-3002}"
+    PROMETHEUS_PORT="${PROMETHEUS_PORT:-9090}"
+    OLLAMA_PORT="${OLLAMA_PORT:-11434}"
+    QDRANT_PORT="${QDRANT_PORT:-6333}"
+    SIGNAL_PORT="${SIGNAL_PORT:-8080}"
+    OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
+    RCLONE_PORT="${RCLONE_PORT:-5572}"
+    
+    # Additional Variables
+    SSL_EMAIL="${SSL_EMAIL:-}"
+    GPU_DEVICE="${GPU_DEVICE:-cpu}"
+    TENANT_DIR="${TENANT_DIR:-}"
+    MINIO_CONSOLE_PORT="${MINIO_CONSOLE_PORT:-9001}"
+    MINIO_PORT="${MINIO_PORT:-9000}"
+    
+    # Authentik Redis Configuration
+    AUTHENTIK_REDIS__HOST="${AUTHENTIK_REDIS__HOST:-redis}"
+    
+    # Dify Storage Configuration
+    DIFY_STORAGE_TYPE="${DIFY_STORAGE_TYPE:-local}"
+    DIFY_STORAGE_LOCAL_ROOT="${DIFY_STORAGE_LOCAL_ROOT:-/data}"
+    
+    # Infrastructure Services
+    ENABLE_POSTGRES="${ENABLE_POSTGRES:-false}"
+    ENABLE_POSTGRESQL="${ENABLE_POSTGRESQL:-false}"  # Alias for compatibility
+    ENABLE_REDIS="${ENABLE_REDIS:-false}"
+    
+    # LLM Services
+    ENABLE_OLLAMA="${ENABLE_OLLAMA:-false}"
+    ENABLE_LITELLM="${ENABLE_LITELLM:-false}"
+    ENABLE_BIFROST="${ENABLE_BIFROST:-false}"
+    ENABLE_DIRECT_OLLAMA="${ENABLE_DIRECT_OLLAMA:-false}"
+    
+    # Web Interfaces
+    ENABLE_OPENWEBUI="${ENABLE_OPENWEBUI:-false}"
+    ENABLE_LIBRECHAT="${ENABLE_LIBRECHAT:-false}"
+    ENABLE_OPENCLAW="${ENABLE_OPENCLAW:-false}"
+    ENABLE_ANYTHINGLLM="${ENABLE_ANYTHINGLLM:-false}"
+    
+    # Vector Databases
+    ENABLE_QDRANT="${ENABLE_QDRANT:-false}"
+    ENABLE_WEAVIATE="${ENABLE_WEAVIATE:-false}"
+    ENABLE_CHROMA="${ENABLE_CHROMA:-false}"
+    ENABLE_MILVUS="${ENABLE_MILVUS:-false}"
+    
+    # Automation
+    ENABLE_N8N="${ENABLE_N8N:-false}"
+    ENABLE_FLOWISE="${ENABLE_FLOWISE:-false}"
+    ENABLE_FLOWISEAI="${ENABLE_FLOWISEAI:-false}"
+    ENABLE_LANGFLOW="${ENABLE_LANGFLOW:-false}"
+    ENABLE_DIFY="${ENABLE_DIFY:-false}"
+    ENABLE_SIGNALBOT="${ENABLE_SIGNALBOT:-false}"
+    
+    # Development
+    ENABLE_CODE_SERVER="${ENABLE_CODE_SERVER:-false}"
+    ENABLE_CONTINUE_DEV="${ENABLE_CONTINUE_DEV:-false}"
+    
+    # Monitoring
+    ENABLE_GRAFANA="${ENABLE_GRAFANA:-false}"
+    ENABLE_PROMETHEUS="${ENABLE_PROMETHEUS:-false}"
+    
+    # Authentication
+    ENABLE_AUTHENTIK="${ENABLE_AUTHENTIK:-false}"
+    
+    # Additional Services
+    ENABLE_MEM0="${ENABLE_MEM0:-false}"
+    ENABLE_NGINX="${ENABLE_NGINX:-false}"
+    ENABLE_CADDY="${ENABLE_CADDY:-false}"
+    
+    # LLM Providers (moved after model configuration)
+    PREFERRED_LLM_PROVIDER="${PREFERRED_LLM_PROVIDER:-ollama}"
+    ENABLE_OPENAI="${ENABLE_OPENAI:-false}"
+    ENABLE_ANTHROPIC="${ENABLE_ANTHROPIC:-false}"
+    ENABLE_GOOGLE="${ENABLE_GOOGLE:-false}"
+    ENABLE_GROQ="${ENABLE_GROQ:-false}"
+    ENABLE_COHERE="${ENABLE_COHERE:-false}"
+    ENABLE_HUGGINGFACE="${ENABLE_HUGGINGFACE:-false}"
+    ENABLE_OLLAMA_PROVIDER="${ENABLE_OLLAMA_PROVIDER:-false}"
+    ENABLE_LOCAL_MODELS="${ENABLE_LOCAL_MODELS:-false}"
 }
 
 # =============================================================================
@@ -2006,6 +3113,9 @@ main() {
     log "🆕 Generate new: ${generate_new}"
     log "🎯 Deployment mode: ${deployment_mode}"
     log "💾 Save template: ${save_template}"
+    
+    # Initialize all service enable variables to prevent unbound variable errors
+    initialize_service_variables
     
     # Run interactive collection or template processing
     if [[ -n "$template_file" ]]; then

@@ -141,16 +141,15 @@ main() {
     export TENANT_PREFIX="${tenant_id}"
     export TENANT_ID="${tenant_id}"
     export BASE_DIR="/mnt/${tenant_id}"
-    export DATA_DIR="${BASE_DIR}/data"
-    export CONFIG_DIR="${BASE_DIR}/config"
-    export CONFIGURED_DIR="${BASE_DIR}/.configured"
-    export LOG_DIR="${BASE_DIR}/logs"
+    export DATA_DIR="/mnt/${tenant_id}"
+    export CONFIG_DIR="/mnt/${tenant_id}/config"
+    export LOGS_DIR="/mnt/${tenant_id}/logs"
+    export COMPOSE_FILE="/mnt/${tenant_id}/docker-compose.yml"
     export DOCKER_NETWORK="${tenant_id}-network"
     
     if [[ ! -f "$platform_conf" ]]; then
         warn "platform.conf not found at $platform_conf. Attempting partial cleanup..."
-        # Skip docker compose cleanup since we don't have compose file path
-        log "Skipping docker compose cleanup (no platform.conf)"
+        log "Using default paths for cleanup (no platform.conf)"
     else
         # shellcheck source=/dev/null
         source "$platform_conf"
