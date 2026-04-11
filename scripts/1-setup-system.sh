@@ -455,9 +455,31 @@ detect_and_select_ebs() {
 # Format and mount EBS volume
 format_and_mount_ebs() {
     if [[ -n "$EBS_DEVICE" ]] && [[ -b "$EBS_DEVICE" ]]; then
+        # If device is currently mounted somewhere, unmount it first
+        local current_mounts
+        current_mounts=$(lsblk -no MOUNTPOINT "$EBS_DEVICE" 2>/dev/null | grep -v '^$' || true)
+        if [[ -n "$current_mounts" ]]; then
+            echo ""
+            echo "  ⚠️  Device $EBS_DEVICE is currently mounted at: $current_mounts"
+            echo "     It must be unmounted before formatting."
+            echo "     Unmounting now..."
+            while IFS= read -r mount_pt; do
+                [[ -z "$mount_pt" ]] && continue
+                sudo umount "$mount_pt" || fail "Could not unmount $mount_pt — stop any processes using it first"
+                echo "     Unmounted: $mount_pt"
+                # Remove stale fstab entry for this mount point
+                local old_uuid
+                old_uuid=$(blkid -s UUID -o value "$EBS_DEVICE" 2>/dev/null || true)
+                if [[ -n "$old_uuid" ]] && grep -q "UUID=$old_uuid" /etc/fstab 2>/dev/null; then
+                    sudo sed -i "/UUID=$old_uuid/d" /etc/fstab
+                    echo "     Removed stale fstab entry for UUID=$old_uuid"
+                fi
+            done <<< "$current_mounts"
+        fi
+
         echo "Formatting EBS volume: $EBS_DEVICE"
         safe_read "CONFIRM: Format $EBS_DEVICE as ext4? [yes/N]: " "" FORMAT_CONFIRM
-        
+
         if [[ "$FORMAT_CONFIRM" =~ ^[Yy][Ee][Ss]$ ]]; then
             sudo mkfs.ext4 -F "$EBS_DEVICE" || fail "Failed to format $EBS_DEVICE (requires sudo)"
             echo "EBS volume formatted successfully"
