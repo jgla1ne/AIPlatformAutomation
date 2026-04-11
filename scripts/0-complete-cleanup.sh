@@ -208,45 +208,18 @@ main() {
     if [[ "${containers_only}" == "true" ]]; then
         log "Skipping data removal (containers-only mode)"
     else
-        # 4. rm -rf "${DATA_DIR}" (P1 fix - safety guard)
-        if [[ -n "${DATA_DIR:-}" && -d "${DATA_DIR}" && ("${DATA_DIR}" =~ ^/opt/ || "${DATA_DIR}" =~ ^/mnt/) ]]; then
-            log "Removing data directory: ${DATA_DIR}"
-            run_cmd rm -rf "${DATA_DIR}"
-            ok "Data directory removed"
-        elif [[ -z "${DATA_DIR:-}" ]]; then
-            warn "DATA_DIR is empty - skipping data removal"
+        # 4-8. Remove tenant directory tree — single rm -rf on BASE_DIR covers everything.
+        # Safety: reject empty or paths outside /opt/ /mnt/; skip gracefully if already gone.
+        if [[ -z "${BASE_DIR:-}" ]]; then
+            warn "BASE_DIR is empty - skipping data removal"
+        elif [[ ! "${BASE_DIR}" =~ ^/opt/ && ! "${BASE_DIR}" =~ ^/mnt/ ]]; then
+            fail "BASE_DIR '${BASE_DIR}' is outside /opt/ or /mnt/ — refusing to delete"
+        elif [[ -d "${BASE_DIR}" ]]; then
+            log "Removing tenant directory tree: ${BASE_DIR}"
+            run_cmd rm -rf "${BASE_DIR}"
+            ok "Tenant directory removed: ${BASE_DIR}"
         else
-            fail "DATA_DIR '${DATA_DIR}' is invalid. Refusing to delete (must be in /opt/ or /mnt/)."
-        fi
-        
-        # 5. rm -rf "${CONFIG_DIR}"
-        if [[ -n "${CONFIG_DIR:-}" && -d "${CONFIG_DIR}" ]]; then
-            log "Removing config directory: ${CONFIG_DIR}"
-            run_cmd rm -rf "${CONFIG_DIR}"
-            ok "Config directory removed"
-        fi
-        
-        # 6. rm -rf "${CONFIGURED_DIR}" ← CRITICAL: clears idempotency markers
-        if [[ -n "${CONFIGURED_DIR:-}" && -d "${CONFIGURED_DIR}" ]]; then
-            log "Removing configuration markers: ${CONFIGURED_DIR}"
-            run_cmd rm -rf "${CONFIGURED_DIR}"
-            ok "Configuration markers removed"
-        fi
-        
-        # 7. rm -rf "${LOG_DIR}"
-        if [[ -n "${LOG_DIR:-}" && -d "${LOG_DIR}" ]]; then
-            log "Removing logs directory: ${LOG_DIR}"
-            run_cmd rm -rf "${LOG_DIR}"
-            ok "Logs directory removed"
-        fi
-        
-        # 8. rm -rf "${BASE_DIR}" ← CRITICAL: remove the entire tenant directory
-        if [[ -n "${BASE_DIR:-}" && -d "${BASE_DIR}" ]]; then
-            log "Removing base tenant directory: ${BASE_DIR}"
-            if [[ "${dry_run}" != "true" ]]; then
-                rm -rf "${BASE_DIR}"
-            fi
-            ok "Base tenant directory removed"
+            log "Tenant directory already gone (nothing to remove): ${BASE_DIR}"
         fi
     fi
     
