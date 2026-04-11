@@ -414,10 +414,20 @@ detect_and_select_ebs() {
             label="$dev ($size)"
         fi
 
-        # Annotate if already mounted somewhere
+        # Annotate mount status — flag other tenants clearly to prevent accidental overwrite
         local current_mount
-        current_mount=$(lsblk -no MOUNTPOINT "$dev" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
-        [[ -n "$current_mount" ]] && label+="  [mounted: $current_mount]"
+        current_mount=$(lsblk -no MOUNTPOINT "$dev" 2>/dev/null | grep -v '^$' | tr '\n' ' ' | sed 's/ $//')
+        if [[ -n "$current_mount" ]]; then
+            if [[ "$current_mount" == "/mnt/${TENANT_ID}" ]]; then
+                label+="  [already mounted for THIS tenant — will reuse]"
+            elif echo "$current_mount" | grep -qE '^/mnt/'; then
+                local other
+                other=$(echo "$current_mount" | grep -oE '/mnt/[^ ]+' | head -1)
+                label+="  ⚠ IN USE BY TENANT: ${other} — format blocked"
+            else
+                label+="  [mounted: $current_mount]"
+            fi
+        fi
 
         devices+=("$dev")
         descriptions+=("$label")
@@ -453,18 +463,53 @@ detect_and_select_ebs() {
 }
 
 # Format and mount EBS volume
-# All privileged ops run in a single sudo bash invocation — one password prompt,
-# no partial-state races between individual sudo calls.
+# Multi-tenant safety:
+#   • If device already mounted at /mnt/<TENANT_ID> → reuse as-is, skip format
+#   • If device mounted at any other /mnt/<name> → BLOCK (another tenant owns it)
+#   • Only format if device is unmounted or mounted at an unrecognised path
+# All privileged ops run in a single sudo bash invocation — one password prompt.
 format_and_mount_ebs() {
     if [[ -n "$EBS_DEVICE" ]] && [[ -b "$EBS_DEVICE" ]]; then
 
-        # Show what's currently on the device so user can confirm
+        local mount_point="/mnt/${TENANT_ID}"
         local current_mounts
         current_mounts=$(lsblk -no MOUNTPOINT "$EBS_DEVICE" 2>/dev/null | grep -v '^$' || true)
+
+        # ── Case 1: already mounted at OUR tenant path → reuse, no format ──────
+        if echo "$current_mounts" | grep -qx "$mount_point"; then
+            echo ""
+            echo "  ✅ $EBS_DEVICE is already mounted at $mount_point"
+            echo "     Skipping format — reusing existing filesystem."
+            sudo chown "${EUID}:$(id -g)" "$mount_point" 2>/dev/null || true
+            return 0
+        fi
+
+        # ── Case 2: mounted at another /mnt/<X> → BLOCK (tenant data at risk) ──
+        local other_tenant_mount
+        other_tenant_mount=$(echo "$current_mounts" | grep -E '^/mnt/' | head -1 || true)
+        if [[ -n "$other_tenant_mount" ]]; then
+            echo ""
+            echo "  ╔══════════════════════════════════════════════════════════╗"
+            echo "  ║  ⛔  TENANT CONFLICT — FORMAT BLOCKED                   ║"
+            echo "  ╚══════════════════════════════════════════════════════════╝"
+            echo ""
+            echo "  Device $EBS_DEVICE is currently in use by another tenant:"
+            echo "    Mount point : $other_tenant_mount"
+            echo ""
+            echo "  Formatting this device would DESTROY that tenant's data."
+            echo "  To proceed, first run Script 0 for that tenant:"
+            local other_tenant
+            other_tenant=$(basename "$other_tenant_mount")
+            echo "    sudo bash scripts/0-complete-cleanup.sh ${other_tenant}"
+            echo ""
+            fail "Format blocked to protect tenant data at $other_tenant_mount"
+        fi
+
+        # ── Case 3: unmounted or mounted at non-/mnt path → proceed ─────────────
         if [[ -n "$current_mounts" ]]; then
             echo ""
             echo "  ⚠️  $EBS_DEVICE is currently mounted at: $current_mounts"
-            echo "     It will be unmounted automatically before formatting."
+            echo "     It will be unmounted before formatting."
         fi
 
         echo ""
@@ -550,12 +595,14 @@ select_stack_preset() {
     echo "  📋 Choose your platform complexity and features"
     echo ""
     
+    echo "  Services can always be added/removed after initial setup via Script 3."
+    echo ""
     select_menu_option "Stack Preset Selection" \
-        "MINIMAL - PostgreSQL + Redis + LiteLLM + Ollama + OpenWebUI + Qdrant (~4GB RAM)" \
-        "DEVELOPMENT - All Minimal + Code Server + Dev tools (~6GB RAM)" \
-        "STANDARD - All Development + N8N + Flowise + Grafana + Prometheus (~8GB RAM)" \
-        "FULL - All Standard + All web interfaces + Complete monitoring (~16GB RAM)" \
-        "CUSTOM - Select individual services (full control)"
+        "MINIMAL (~4 GB RAM)  — PostgreSQL · Redis · Ollama · LiteLLM · OpenWebUI · Qdrant" \
+        "DEVELOPMENT (~6 GB)  — Minimal + Code Server" \
+        "STANDARD (~8 GB)     — Development + N8N · Flowise · Grafana · Prometheus" \
+        "FULL (~16 GB)        — Standard + LibreChat · OpenClaw · AnythingLLM · Dify · Authentik · SignalBot" \
+        "CUSTOM               — Pick every service individually (full control)"
     local preset_choice=$?
     
     case $preset_choice in
@@ -568,11 +615,50 @@ select_stack_preset() {
     
     echo ""
     echo "  ✅ Selected: ${STACK_NAME^} Stack"
-    
+
     if [[ "$STACK_PRESET" == "5" ]]; then
         configure_custom_stack
     else
         apply_preset_defaults
+        echo ""
+        echo "  📦 Services included in ${STACK_NAME^}:"
+        case "$STACK_NAME" in
+            minimal)
+                echo "    Infrastructure : PostgreSQL, Redis"
+                echo "    LLM            : Ollama (local models), LiteLLM (gateway/proxy)"
+                echo "    Web UI         : OpenWebUI"
+                echo "    Vector DB      : Qdrant"
+                ;;
+            development)
+                echo "    Infrastructure : PostgreSQL, Redis"
+                echo "    LLM            : Ollama, LiteLLM"
+                echo "    Web UI         : OpenWebUI"
+                echo "    Vector DB      : Qdrant"
+                echo "    Dev tools      : Code Server (browser IDE)"
+                ;;
+            standard)
+                echo "    Infrastructure : PostgreSQL, Redis"
+                echo "    LLM            : Ollama, LiteLLM"
+                echo "    Web UI         : OpenWebUI"
+                echo "    Vector DB      : Qdrant"
+                echo "    Dev tools      : Code Server"
+                echo "    Automation     : N8N (workflows), Flowise (AI pipelines)"
+                echo "    Monitoring     : Grafana, Prometheus"
+                ;;
+            full)
+                echo "    Infrastructure : PostgreSQL, Redis"
+                echo "    LLM            : Ollama, LiteLLM"
+                echo "    Web UI         : OpenWebUI, LibreChat, OpenClaw, AnythingLLM"
+                echo "    Vector DB      : Qdrant"
+                echo "    Dev tools      : Code Server"
+                echo "    Automation     : N8N, Flowise, Dify"
+                echo "    Monitoring     : Grafana, Prometheus"
+                echo "    Identity       : Authentik (SSO)"
+                echo "    Alerting       : SignalBot (Signal messenger)"
+                ;;
+        esac
+        echo ""
+        echo "  💡 You can enable/disable any individual service in Script 3 at any time."
     fi
 }
 
@@ -695,6 +781,48 @@ configure_custom_stack() {
     # Additional Services
     echo "  📡 Additional:"
     safe_read_yesno "SignalBot (messaging)" "false" "ENABLE_SIGNALBOT"
+}
+
+# =============================================================================
+# SERVICE CREDENTIALS (system-generated but user-overridable)
+# Called after stack selection so we know which services are enabled.
+# =============================================================================
+configure_service_credentials() {
+    section "🔑 SERVICE CREDENTIALS"
+    echo "  System-generated secrets are shown as defaults."
+    echo "  Press Enter to accept, or type your own value to override."
+    echo ""
+
+    # PostgreSQL
+    if [[ "${ENABLE_POSTGRES:-false}" == "true" ]]; then
+        echo "  🐘 PostgreSQL:"
+        safe_read "Database username" "${TENANT_ID}" "POSTGRES_USER"
+        safe_read "Database name"     "${TENANT_ID}" "POSTGRES_DB"
+        # Password auto-generated in write_platform_conf; allow override here
+        local pg_pass_placeholder="<auto-generated>"
+        echo "    Password: ${pg_pass_placeholder} (override with POSTGRES_PASSWORD env var before running)"
+        echo ""
+    fi
+
+    # Redis
+    if [[ "${ENABLE_REDIS:-false}" == "true" ]]; then
+        echo "  📦 Redis:"
+        local redis_pass_placeholder="<auto-generated>"
+        echo "    Password: ${redis_pass_placeholder} (override with REDIS_PASSWORD env var before running)"
+        echo ""
+    fi
+
+    # OpenClaw
+    if [[ "${ENABLE_OPENCLAW:-false}" == "true" ]]; then
+        echo "  🦅 OpenClaw:"
+        safe_read "OpenClaw admin username" "admin"       "OPENCLAW_USERNAME"
+        safe_read "OpenClaw admin password (leave blank to auto-generate)" "" "OPENCLAW_PASSWORD"
+        if [[ -z "${OPENCLAW_PASSWORD:-}" ]]; then
+            OPENCLAW_PASSWORD="$(openssl rand -base64 18 | tr -d '=+/' | cut -c1-16)"
+            echo "    Auto-generated password: ${OPENCLAW_PASSWORD}"
+        fi
+        echo ""
+    fi
 }
 
 # =============================================================================
@@ -904,28 +1032,27 @@ configure_tls() {
     echo ""
     
     select_menu_option "TLS Certificate Selection" \
-        "LET'S ENCRYPT - Automatic free certificates for production" \
-        "MANUAL CERTIFICATES - Use existing certificates with manual renewal" \
-        "SELF-SIGNED - Quick setup for development/testing" \
-        "HTTP ONLY - No HTTPS (not recommended for production)" \
-        "HTTPS REDIRECT - Force all HTTP traffic to HTTPS"
+        "LET'S ENCRYPT - Automatic free certificates for production (recommended)" \
+        "MANUAL CERTIFICATES - Provide your own cert/key files" \
+        "SELF-SIGNED - Auto-generated cert for development/internal use" \
+        "HTTP ONLY - No TLS (internal networks only)"
     local tls_choice=$?
-    
+
     case $tls_choice in
         0) TLS_MODE="letsencrypt" ;;
         1) TLS_MODE="manual" ;;
         2) TLS_MODE="selfsigned" ;;
         3) TLS_MODE="none" ;;
-        4) TLS_MODE="letsencrypt"; HTTP_TO_HTTPS_REDIRECT="true" ;;
     esac
-    
-    # Ask about HTTP to HTTPS redirect (unless already set)
-    if [[ "$TLS_MODE" != "none" && "$HTTP_TO_HTTPS_REDIRECT" != "true" ]]; then
+
+    # Collect HTTP→HTTPS redirect exactly once here; never re-ask in configure_proxy
+    if [[ "$TLS_MODE" != "none" ]]; then
         echo ""
-        safe_read_yesno "Enable HTTP to HTTPS redirect" "true" "HTTP_TO_HTTPS_REDIRECT"
-    elif [[ "$TLS_MODE" == "none" ]]; then
+        safe_read_yesno "Force HTTP to HTTPS redirect" "true" "HTTP_TO_HTTPS_REDIRECT"
+    else
         HTTP_TO_HTTPS_REDIRECT="false"
     fi
+    PROXY_FORCE_HTTPS="${HTTP_TO_HTTPS_REDIRECT}"
     
     case "$TLS_MODE" in
         letsencrypt)
@@ -1123,7 +1250,17 @@ collect_api_keys() {
         safe_read "OpenRouter models" "anthropic/claude-3-sonnet,openai/gpt-4" "OPENROUTER_MODELS"
     fi
     echo ""
-    
+
+    # Mammouth
+    echo "  🦣 Mammouth AI Configuration (https://api.mammouth.ai/):"
+    safe_read_yesno "Enable Mammouth" "false" "ENABLE_MAMMOUTH"
+    if [[ "$ENABLE_MAMMOUTH" == "true" ]]; then
+        safe_read "Mammouth API key" "" "MAMMOUTH_API_KEY"
+        safe_read "Mammouth base URL" "https://api.mammouth.ai/v1" "MAMMOUTH_BASE_URL"
+        safe_read "Mammouth models (comma-separated)" "mammouth" "MAMMOUTH_MODELS"
+    fi
+    echo ""
+
     # Local Models (Ollama)
     echo "  🦙 Local Models Configuration:"
     safe_read_yesno "Enable local models" "true" "ENABLE_LOCAL_MODELS"
@@ -1145,9 +1282,10 @@ collect_api_keys() {
         "Cohere - Command models" \
         "Hugging Face - Open model hub" \
         "Local Ollama - Self-hosted models" \
-        "OpenRouter - Multi-provider aggregator"
+        "OpenRouter - Multi-provider aggregator" \
+        "Mammouth - mammouth.ai models"
     local preferred_provider_choice=$?
-    
+
     case $preferred_provider_choice in
         0) PREFERRED_LLM_PROVIDER="openai" ;;
         1) PREFERRED_LLM_PROVIDER="anthropic" ;;
@@ -1157,6 +1295,7 @@ collect_api_keys() {
         5) PREFERRED_LLM_PROVIDER="huggingface" ;;
         6) PREFERRED_LLM_PROVIDER="ollama" ;;
         7) PREFERRED_LLM_PROVIDER="openrouter" ;;
+        8) PREFERRED_LLM_PROVIDER="mammouth" ;;
     esac
     
     echo ""
@@ -1336,11 +1475,8 @@ configure_proxy() {
         safe_read "Proxy HTTP port" "80" "PROXY_HTTP_PORT" "^[0-9]+$"
         safe_read "Proxy HTTPS port" "443" "PROXY_HTTPS_PORT" "^[0-9]+$"
         
-        if [[ "$TLS_MODE" != "none" ]]; then
-            safe_read_yesno "Force HTTPS redirect" "true" "PROXY_FORCE_HTTPS"
-        else
-            PROXY_FORCE_HTTPS="false"
-        fi
+        # PROXY_FORCE_HTTPS is set once in configure_tls — not re-asked here
+        PROXY_FORCE_HTTPS="${HTTP_TO_HTTPS_REDIRECT:-false}"
         
         echo ""
         echo "  ✅ Proxy Configuration:"
@@ -2069,9 +2205,9 @@ CONFIGURED_DIR="${DATA_DIR}/.configured"
 PUID="$(id -u)"
 PGID="$(id -g)"
 
-# Database credentials (Postgres uses TENANT_ID for user+db)
-POSTGRES_USER="${TENANT_ID}"
-POSTGRES_DB="${TENANT_ID}"
+# Database credentials (defaults to TENANT_ID; user-overridable in configure_service_credentials)
+POSTGRES_USER="${POSTGRES_USER:-${TENANT_ID}}"
+POSTGRES_DB="${POSTGRES_DB:-${TENANT_ID}}"
 
 # Ollama default model (first in list)
 OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-qwen2.5:7b}"
@@ -2090,6 +2226,12 @@ N8N_WEBHOOK_URL="http://${DOMAIN}/"
 # API key aliases (Script 2 uses GOOGLE_API_KEY / OPENROUTER_API_KEY)
 GOOGLE_API_KEY="${GOOGLE_AI_API_KEY:-}"
 OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}"
+
+# Mammouth AI (https://api.mammouth.ai/)
+ENABLE_MAMMOUTH="${ENABLE_MAMMOUTH:-false}"
+MAMMOUTH_API_KEY="${MAMMOUTH_API_KEY:-}"
+MAMMOUTH_BASE_URL="${MAMMOUTH_BASE_URL:-https://api.mammouth.ai/v1}"
+MAMMOUTH_MODELS="${MAMMOUTH_MODELS:-mammouth}"
 
 # =============================================================================
 # SERVICE _ENABLED FLAGS (Script 2/3 compatibility — mirrors ENABLE_* above)
@@ -2110,6 +2252,8 @@ CADDY_ENABLED="${ENABLE_CADDY:-false}"
 AUTHENTIK_ENABLED="${ENABLE_AUTHENTIK:-false}"
 SIGNALBOT_ENABLED="${ENABLE_SIGNALBOT:-false}"
 OPENCLAW_ENABLED="${ENABLE_OPENCLAW:-false}"
+OPENCLAW_USERNAME="${OPENCLAW_USERNAME:-admin}"
+OPENCLAW_PASSWORD="${OPENCLAW_PASSWORD:-}"
 BIFROST_ENABLED="${ENABLE_BIFROST:-false}"
 ANYTHINGLLM_ENABLED="${ENABLE_ANYTHINGLLM:-false}"
 
@@ -2522,6 +2666,9 @@ display_service_summary() {
     if [[ "$ENABLE_OPENROUTER" == "true" ]]; then
         echo "    ✅ OpenRouter"
     fi
+    if [[ "$ENABLE_MAMMOUTH" == "true" ]]; then
+        echo "    ✅ Mammouth (${MAMMOUTH_BASE_URL:-https://api.mammouth.ai/v1})"
+    fi
     echo ""
     
     echo "  📡 Additional Services:"
@@ -2532,7 +2679,39 @@ display_service_summary() {
         echo "    ✅ Google Drive: ${GDRIVE_FOLDER_NAME:-AI Platform}"
     fi
     echo ""
-    
+
+    # ── Access URL preview ───────────────────────────────────────────────────
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  🌐 CONFIGURED ACCESS URLS"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    local server_ip
+    server_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
+    local base_proto="http"
+    [[ "${TLS_MODE:-none}" != "none" ]] && base_proto="https"
+
+    echo "  (Services bound to 127.0.0.1 — access via reverse proxy or SSH tunnel)"
+    echo ""
+    [[ "${ENABLE_OPENWEBUI:-false}"  == "true" ]] && echo "    Open WebUI   → ${base_proto}://${DOMAIN:-$server_ip}   (direct: http://127.0.0.1:${OPENWEBUI_PORT:-3000})"
+    [[ "${ENABLE_LITELLM:-false}"    == "true" ]] && echo "    LiteLLM      → http://127.0.0.1:${LITELLM_PORT:-4000}"
+    [[ "${ENABLE_OLLAMA:-false}"     == "true" ]] && echo "    Ollama API   → http://127.0.0.1:${OLLAMA_PORT:-11434}"
+    [[ "${ENABLE_N8N:-false}"        == "true" ]] && echo "    N8N          → http://127.0.0.1:${N8N_PORT:-5678}"
+    [[ "${ENABLE_FLOWISE:-false}"    == "true" ]] && echo "    Flowise      → http://127.0.0.1:${FLOWISE_PORT:-3000}"
+    [[ "${ENABLE_DIFY:-false}"       == "true" ]] && echo "    Dify         → http://127.0.0.1:${DIFY_PORT:-3001}"
+    [[ "${ENABLE_QDRANT:-false}"     == "true" ]] && echo "    Qdrant       → http://127.0.0.1:${QDRANT_PORT:-6333}"
+    [[ "${ENABLE_GRAFANA:-false}"    == "true" ]] && echo "    Grafana      → http://127.0.0.1:${GRAFANA_PORT:-3001}"
+    [[ "${ENABLE_PROMETHEUS:-false}" == "true" ]] && echo "    Prometheus   → http://127.0.0.1:${PROMETHEUS_PORT:-9090}"
+    [[ "${ENABLE_AUTHENTIK:-false}"  == "true" ]] && echo "    Authentik    → http://127.0.0.1:${AUTHENTIK_PORT:-9000}"
+    [[ "${ENABLE_SIGNALBOT:-false}"  == "true" ]] && echo "    SignalBot    → http://127.0.0.1:${SIGNALBOT_PORT:-8080}"
+    [[ "${ENABLE_OPENCLAW:-false}"   == "true" ]] && echo "    OpenClaw     → http://127.0.0.1:${OPENCLAW_PORT:-3081}"
+    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && echo "    AnythingLLM  → http://127.0.0.1:${ANYTHINGLLM_PORT:-3082}"
+    [[ "${ENABLE_LIBRECHAT:-false}"  == "true" ]] && echo "    LibreChat    → http://127.0.0.1:${LIBRECHAT_PORT:-3080}"
+    [[ "${ENABLE_CADDY:-false}"      == "true" ]] && echo "    Caddy proxy  → ${base_proto}://${DOMAIN:-$server_ip} (ports ${CADDY_HTTP_PORT:-80}/${CADDY_HTTPS_PORT:-443})"
+    echo ""
+    echo "  DB & Cache (internal only — not exposed to host):"
+    [[ "${ENABLE_POSTGRES:-false}"   == "true" ]] && echo "    PostgreSQL   → ${TENANT_PREFIX:-${PLATFORM_PREFIX:-ai}-${TENANT_ID:-tenant}}-postgres:5432  user=${POSTGRES_USER:-${TENANT_ID}} db=${POSTGRES_DB:-${TENANT_ID}}"
+    [[ "${ENABLE_REDIS:-false}"      == "true" ]] && echo "    Redis        → ${TENANT_PREFIX:-${PLATFORM_PREFIX:-ai}-${TENANT_ID:-tenant}}-redis:6379"
+
+    echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
@@ -2603,6 +2782,7 @@ run_interactive_collection() {
     collect_identity
     configure_storage
     select_stack_preset
+    configure_service_credentials
     configure_llm_gateway
     configure_vector_database
     
@@ -3292,7 +3472,8 @@ initialize_service_variables() {
     ENABLE_OLLAMA_PROVIDER="${ENABLE_OLLAMA_PROVIDER:-false}"
     ENABLE_LOCAL_MODELS="${ENABLE_LOCAL_MODELS:-false}"
     ENABLE_OPENROUTER="${ENABLE_OPENROUTER:-false}"
-    
+    ENABLE_MAMMOUTH="${ENABLE_MAMMOUTH:-false}"
+
     # Additional Services
     ENABLE_GDRIVE="${ENABLE_GDRIVE:-false}"
     ENABLE_SIGNALBOT="${ENABLE_SIGNALBOT:-false}"
