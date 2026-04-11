@@ -599,9 +599,9 @@ select_stack_preset() {
     echo ""
     select_menu_option "Stack Preset Selection" \
         "MINIMAL (~4 GB RAM)  — PostgreSQL · Redis · Ollama · LiteLLM · OpenWebUI · Qdrant" \
-        "DEVELOPMENT (~6 GB)  — Minimal + Code Server" \
-        "STANDARD (~8 GB)     — Development + N8N · Flowise · Grafana · Prometheus" \
-        "FULL (~16 GB)        — Standard + LibreChat · OpenClaw · AnythingLLM · Dify · Authentik · SignalBot" \
+        "DEVELOPMENT (~6 GB)  — Minimal + Code Server · Continue.dev config" \
+        "STANDARD (~8 GB)     — Development + N8N · Flowise · Grafana · Prometheus · Mem0" \
+        "FULL (~16 GB)        — Standard + OpenClaw · AnythingLLM · Dify · Authentik · SignalBot · Mem0 · Continue.dev" \
         "CUSTOM               — Pick every service individually (full control)"
     local preset_choice=$?
     
@@ -631,27 +631,29 @@ select_stack_preset() {
                 ;;
             development)
                 echo "    Infrastructure : PostgreSQL, Redis"
-                echo "    LLM            : Ollama, LiteLLM"
-                echo "    Web UI         : OpenWebUI"
+                echo "    LLM            : Ollama (local), LiteLLM (unified gateway)"
+                echo "    Web UI         : OpenWebUI (→ LiteLLM, Qdrant RAG)"
                 echo "    Vector DB      : Qdrant"
-                echo "    Dev tools      : Code Server (browser IDE)"
+                echo "    Dev tools      : Code Server (browser IDE), Continue.dev config"
                 ;;
             standard)
                 echo "    Infrastructure : PostgreSQL, Redis"
-                echo "    LLM            : Ollama, LiteLLM"
-                echo "    Web UI         : OpenWebUI"
-                echo "    Vector DB      : Qdrant"
+                echo "    LLM            : Ollama (local), LiteLLM (unified gateway)"
+                echo "    Web UI         : OpenWebUI (→ LiteLLM, vectordb RAG)"
+                echo "    Vector DB      : Qdrant (default)"
+                echo "    Memory         : Mem0 (per-tenant context, → vectordb + LiteLLM)"
                 echo "    Dev tools      : Code Server"
-                echo "    Automation     : N8N (workflows), Flowise (AI pipelines)"
+                echo "    Automation     : N8N (workflows, → LiteLLM), Flowise (AI pipelines, → vectordb)"
                 echo "    Monitoring     : Grafana, Prometheus"
                 ;;
             full)
                 echo "    Infrastructure : PostgreSQL, Redis"
-                echo "    LLM            : Ollama, LiteLLM"
-                echo "    Web UI         : OpenWebUI, LibreChat, OpenClaw, AnythingLLM"
-                echo "    Vector DB      : Qdrant"
-                echo "    Dev tools      : Code Server"
-                echo "    Automation     : N8N, Flowise, Dify"
+                echo "    LLM            : Ollama (local), LiteLLM (unified gateway)"
+                echo "    Web UI         : OpenWebUI, OpenClaw, AnythingLLM (→ LiteLLM + vectordb)"
+                echo "    Vector DB      : Qdrant (default; Weaviate/Chroma selectable)"
+                echo "    Memory         : Mem0 (per-tenant context, → vectordb + LiteLLM)"
+                echo "    Dev tools      : Code Server, Continue.dev config (→ LiteLLM)"
+                echo "    Automation     : N8N, Flowise, Dify (all → LiteLLM + vectordb)"
                 echo "    Monitoring     : Grafana, Prometheus"
                 echo "    Identity       : Authentik (SSO)"
                 echo "    Alerting       : SignalBot (Signal messenger)"
@@ -685,7 +687,7 @@ apply_preset_defaults() {
             ENABLE_CODE_SERVER="true"
             ;;
         standard)
-            # Development + N8N + Flowise + Monitoring
+            # Development + N8N + Flowise + Monitoring + Mem0
             ENABLE_POSTGRES="true"
             ENABLE_REDIS="true"
             ENABLE_OLLAMA="true"
@@ -697,9 +699,10 @@ apply_preset_defaults() {
             ENABLE_FLOWISE="true"
             ENABLE_GRAFANA="true"
             ENABLE_PROMETHEUS="true"
+            ENABLE_MEM0="true"
             ;;
         full)
-            # Standard + All remaining services
+            # Standard + All remaining services + Mem0 + Continue.dev
             ENABLE_POSTGRES="true"
             ENABLE_REDIS="true"
             ENABLE_OLLAMA="true"
@@ -717,6 +720,8 @@ apply_preset_defaults() {
             ENABLE_DIFY="true"
             ENABLE_SIGNALBOT="true"
             ENABLE_AUTHENTIK="true"
+            ENABLE_MEM0="true"
+            ENABLE_CONTINUE_DEV="true"
             ;;
     esac
 }
@@ -762,25 +767,31 @@ configure_custom_stack() {
     safe_read_yesno "Dify (LLM ops)" "false" "ENABLE_DIFY"
     echo ""
     
+    # Memory Layer
+    echo "  🧠 Memory Layer:"
+    safe_read_yesno "Mem0 (AI memory & context persistence, connects to VectorDB)" "false" "ENABLE_MEM0"
+    echo ""
+
     # Development
     echo "  💻 Development:"
-    safe_read_yesno "Code Server (IDE)" "false" "ENABLE_CODE_SERVER"
+    safe_read_yesno "Code Server (browser IDE)" "false" "ENABLE_CODE_SERVER"
+    safe_read_yesno "Continue.dev config (AI coding assistant, auto-pointed to LiteLLM)" "false" "ENABLE_CONTINUE_DEV"
     echo ""
-    
+
     # Monitoring
     echo "  📊 Monitoring:"
     safe_read_yesno "Grafana (dashboards)" "false" "ENABLE_GRAFANA"
     safe_read_yesno "Prometheus (metrics)" "false" "ENABLE_PROMETHEUS"
     echo ""
-    
+
     # Authentication
     echo "  🔐 Authentication:"
     safe_read_yesno "Authentik (SSO)" "false" "ENABLE_AUTHENTIK"
     echo ""
-    
+
     # Additional Services
     echo "  📡 Additional:"
-    safe_read_yesno "SignalBot (messaging)" "false" "ENABLE_SIGNALBOT"
+    safe_read_yesno "SignalBot (Signal messenger notifications)" "false" "ENABLE_SIGNALBOT"
 }
 
 # =============================================================================
@@ -1258,6 +1269,20 @@ collect_api_keys() {
         safe_read "Mammouth API key" "" "MAMMOUTH_API_KEY"
         safe_read "Mammouth base URL" "https://api.mammouth.ai/v1" "MAMMOUTH_BASE_URL"
         safe_read "Mammouth models (comma-separated)" "mammouth" "MAMMOUTH_MODELS"
+    fi
+    echo ""
+
+    # Search APIs (SerpAPI + Brave)
+    echo "  🔍 Search API Configuration:"
+    echo "     (Enables web search in OpenClaw, N8N, Flowise, and AnythingLLM)"
+    safe_read_yesno "Enable SerpAPI (Google/Bing/DDG search)" "false" "ENABLE_SERPAPI"
+    if [[ "$ENABLE_SERPAPI" == "true" ]]; then
+        safe_read "SerpAPI key" "" "SERPAPI_KEY"
+        safe_read "SerpAPI engine" "google" "SERPAPI_ENGINE"
+    fi
+    safe_read_yesno "Enable Brave Search API" "false" "ENABLE_BRAVE"
+    if [[ "$ENABLE_BRAVE" == "true" ]]; then
+        safe_read "Brave Search API key" "" "BRAVE_API_KEY"
     fi
     echo ""
 
@@ -1982,6 +2007,24 @@ ENABLE_SIGNALBOT="${ENABLE_SIGNALBOT:-false}"
 SIGNAL_PHONE="${SIGNAL_PHONE:-}"
 SIGNAL_RECIPIENT="${SIGNAL_RECIPIENT:-}"
 
+# Memory Layer
+ENABLE_MEM0="${ENABLE_MEM0:-false}"
+MEM0_PORT="${MEM0_PORT:-8081}"
+MEM0_API_KEY="${MEM0_API_KEY:-$(gen_secret)}"
+
+# Development
+ENABLE_CODE_SERVER="${ENABLE_CODE_SERVER:-false}"
+CODE_SERVER_PORT="${CODE_SERVER_PORT:-8080}"
+CODE_SERVER_PASSWORD="${CODE_SERVER_PASSWORD:-$(gen_password)}"
+ENABLE_CONTINUE_DEV="${ENABLE_CONTINUE_DEV:-false}"
+
+# Search APIs
+ENABLE_SERPAPI="${ENABLE_SERPAPI:-false}"
+SERPAPI_KEY="${SERPAPI_KEY:-}"
+SERPAPI_ENGINE="${SERPAPI_ENGINE:-google}"
+ENABLE_BRAVE="${ENABLE_BRAVE:-false}"
+BRAVE_API_KEY="${BRAVE_API_KEY:-}"
+
 # =============================================================================
 # INGESTION CONFIGURATION
 # =============================================================================
@@ -2256,6 +2299,12 @@ OPENCLAW_USERNAME="${OPENCLAW_USERNAME:-admin}"
 OPENCLAW_PASSWORD="${OPENCLAW_PASSWORD:-}"
 BIFROST_ENABLED="${ENABLE_BIFROST:-false}"
 ANYTHINGLLM_ENABLED="${ENABLE_ANYTHINGLLM:-false}"
+ANYTHINGLLM_JWT_SECRET="${ANYTHINGLLM_JWT_SECRET:-$(gen_secret)}"
+MEM0_ENABLED="${ENABLE_MEM0:-false}"
+CODE_SERVER_ENABLED="${ENABLE_CODE_SERVER:-false}"
+CONTINUE_DEV_ENABLED="${ENABLE_CONTINUE_DEV:-false}"
+WEAVIATE_ENABLED="${ENABLE_WEAVIATE:-false}"
+CHROMA_ENABLED="${ENABLE_CHROMA:-false}"
 
 # =============================================================================
 # END OF CONFIGURATION
@@ -2565,154 +2614,106 @@ test_dns_resolution() {
 }
 
 # =============================================================================
-# SERVICE SUMMARY HEALTH CHECK (README COMPLIANCE)
+# MISSION CONTROL DASHBOARD (end-of-Script-1 display)
 # =============================================================================
 display_service_summary() {
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  📊 SERVICE CONFIGURATION SUMMARY"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    
-    echo "  🏷️  Platform Identity:"
-    echo "    Platform: $PLATFORM_PREFIX"
-    echo "    Tenant: $TENANT_ID"
-    echo "    Domain: $DOMAIN"
-    echo "    Organization: $ORGANIZATION"
-    echo "    Admin: $ADMIN_EMAIL"
-    echo ""
-    
-    echo "  💾 Storage Configuration:"
-    if [[ -n "$EBS_DEVICE" ]]; then
-        echo "    EBS Device: $EBS_DEVICE"
-        echo "    Mount Point: /mnt/$TENANT_ID"
-    else
-        echo "    Storage: OS disk (/mnt/$TENANT_ID)"
-    fi
-    echo ""
-    
-    echo "  🚀 Stack Configuration:"
-    echo "    Preset: $STACK_PRESET"
-    echo "    LLM Gateway: ${LLM_GATEWAY_TYPE:-none}"
-    echo "    Vector DB: ${VECTOR_DB_TYPE:-none}"
-    echo ""
-    
-    echo "  🔐 TLS Configuration:"
-    echo "    Mode: $TLS_MODE"
-    case "$TLS_MODE" in
-        "letsencrypt")
-            echo "    Domain: $DOMAIN"
-            echo "    Email: $ADMIN_EMAIL"
-            ;;
-        "provided")
-            echo "    Cert: $TLS_CERT_PATH"
-            echo "    Key: $TLS_KEY_PATH"
-            ;;
-    esac
-    echo ""
-    
-    echo "  🌐 Enabled Services & Ports:"
-    if [[ "${ENABLE_POSTGRES:-false}" == "true" ]]; then
-        echo "    ✅ PostgreSQL: ${POSTGRES_PORT:-5432}"
-    fi
-    if [[ "${ENABLE_REDIS:-false}" == "true" ]]; then
-        echo "    ✅ Redis: ${REDIS_PORT:-6379}"
-    fi
-    if [[ "${ENABLE_LITELLM:-false}" == "true" ]]; then
-        echo "    ✅ LiteLLM: ${LITELLM_PORT:-4000}"
-    fi
-    if [[ "${ENABLE_OLLAMA:-false}" == "true" ]]; then
-        echo "    ✅ Ollama: ${OLLAMA_PORT:-11434}"
-    fi
-    if [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]]; then
-        echo "    ✅ OpenWebUI: ${OPENWEBUI_PORT:-3000}"
-    fi
-    if [[ "${ENABLE_QDRANT:-false}" == "true" ]]; then
-        echo "    ✅ Qdrant: ${QDRANT_PORT:-6333}"
-    fi
-    if [[ "${ENABLE_WEAVIATE:-false}" == "true" ]]; then
-        echo "    ✅ Weaviate: ${WEAVIATE_PORT:-8080}"
-    fi
-    if [[ "${ENABLE_CHROMADB:-false}" == "true" ]]; then
-        echo "    ✅ ChromaDB: ${CHROMADB_PORT:-8000}"
-    fi
-    if [[ "${ENABLE_MILVUS:-false}" == "true" ]]; then
-        echo "    ✅ Milvus: ${MILVUS_PORT:-19530}"
-    fi
-    echo ""
-    
-    echo "  🔑 LLM Providers:"
-    echo "    Preferred: ${PREFERRED_LLM_PROVIDER:-none}"
-    if [[ "$ENABLE_OPENAI" == "true" ]]; then
-        echo "    ✅ OpenAI"
-    fi
-    if [[ "$ENABLE_ANTHROPIC" == "true" ]]; then
-        echo "    ✅ Anthropic"
-    fi
-    if [[ "$ENABLE_GOOGLE" == "true" ]]; then
-        echo "    ✅ Google"
-    fi
-    if [[ "$ENABLE_GROQ" == "true" ]]; then
-        echo "    ✅ Groq"
-    fi
-    if [[ "$ENABLE_COHERE" == "true" ]]; then
-        echo "    ✅ Cohere"
-    fi
-    if [[ "$ENABLE_HUGGINGFACE" == "true" ]]; then
-        echo "    ✅ Hugging Face"
-    fi
-    if [[ "$ENABLE_LOCAL_MODELS" == "true" ]]; then
-        echo "    ✅ Local Models: ✅"
-    fi
-    if [[ "$ENABLE_OPENROUTER" == "true" ]]; then
-        echo "    ✅ OpenRouter"
-    fi
-    if [[ "$ENABLE_MAMMOUTH" == "true" ]]; then
-        echo "    ✅ Mammouth (${MAMMOUTH_BASE_URL:-https://api.mammouth.ai/v1})"
-    fi
-    echo ""
-    
-    echo "  📡 Additional Services:"
-    if [[ "$ENABLE_SIGNALBOT" == "true" ]]; then
-        echo "    ✅ Signal Bot: ${SIGNALBOT_PORT:-8080}"
-    fi
-    if [[ "$ENABLE_GDRIVE" == "true" ]]; then
-        echo "    ✅ Google Drive: ${GDRIVE_FOLDER_NAME:-AI Platform}"
-    fi
-    echo ""
-
-    # ── Access URL preview ───────────────────────────────────────────────────
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  🌐 CONFIGURED ACCESS URLS"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     local server_ip
     server_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
     local base_proto="http"
     [[ "${TLS_MODE:-none}" != "none" ]] && base_proto="https"
+    local pfx="${TENANT_PREFIX:-${PLATFORM_PREFIX:-ai}-${TENANT_ID:-tenant}}"
+    local W=78  # inner width of box
 
-    echo "  (Services bound to 127.0.0.1 — access via reverse proxy or SSH tunnel)"
-    echo ""
-    [[ "${ENABLE_OPENWEBUI:-false}"  == "true" ]] && echo "    Open WebUI   → ${base_proto}://${DOMAIN:-$server_ip}   (direct: http://127.0.0.1:${OPENWEBUI_PORT:-3000})"
-    [[ "${ENABLE_LITELLM:-false}"    == "true" ]] && echo "    LiteLLM      → http://127.0.0.1:${LITELLM_PORT:-4000}"
-    [[ "${ENABLE_OLLAMA:-false}"     == "true" ]] && echo "    Ollama API   → http://127.0.0.1:${OLLAMA_PORT:-11434}"
-    [[ "${ENABLE_N8N:-false}"        == "true" ]] && echo "    N8N          → http://127.0.0.1:${N8N_PORT:-5678}"
-    [[ "${ENABLE_FLOWISE:-false}"    == "true" ]] && echo "    Flowise      → http://127.0.0.1:${FLOWISE_PORT:-3000}"
-    [[ "${ENABLE_DIFY:-false}"       == "true" ]] && echo "    Dify         → http://127.0.0.1:${DIFY_PORT:-3001}"
-    [[ "${ENABLE_QDRANT:-false}"     == "true" ]] && echo "    Qdrant       → http://127.0.0.1:${QDRANT_PORT:-6333}"
-    [[ "${ENABLE_GRAFANA:-false}"    == "true" ]] && echo "    Grafana      → http://127.0.0.1:${GRAFANA_PORT:-3001}"
-    [[ "${ENABLE_PROMETHEUS:-false}" == "true" ]] && echo "    Prometheus   → http://127.0.0.1:${PROMETHEUS_PORT:-9090}"
-    [[ "${ENABLE_AUTHENTIK:-false}"  == "true" ]] && echo "    Authentik    → http://127.0.0.1:${AUTHENTIK_PORT:-9000}"
-    [[ "${ENABLE_SIGNALBOT:-false}"  == "true" ]] && echo "    SignalBot    → http://127.0.0.1:${SIGNALBOT_PORT:-8080}"
-    [[ "${ENABLE_OPENCLAW:-false}"   == "true" ]] && echo "    OpenClaw     → http://127.0.0.1:${OPENCLAW_PORT:-3081}"
-    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && echo "    AnythingLLM  → http://127.0.0.1:${ANYTHINGLLM_PORT:-3082}"
-    [[ "${ENABLE_LIBRECHAT:-false}"  == "true" ]] && echo "    LibreChat    → http://127.0.0.1:${LIBRECHAT_PORT:-3080}"
-    [[ "${ENABLE_CADDY:-false}"      == "true" ]] && echo "    Caddy proxy  → ${base_proto}://${DOMAIN:-$server_ip} (ports ${CADDY_HTTP_PORT:-80}/${CADDY_HTTPS_PORT:-443})"
-    echo ""
-    echo "  DB & Cache (internal only — not exposed to host):"
-    [[ "${ENABLE_POSTGRES:-false}"   == "true" ]] && echo "    PostgreSQL   → ${TENANT_PREFIX:-${PLATFORM_PREFIX:-ai}-${TENANT_ID:-tenant}}-postgres:5432  user=${POSTGRES_USER:-${TENANT_ID}} db=${POSTGRES_DB:-${TENANT_ID}}"
-    [[ "${ENABLE_REDIS:-false}"      == "true" ]] && echo "    Redis        → ${TENANT_PREFIX:-${PLATFORM_PREFIX:-ai}-${TENANT_ID:-tenant}}-redis:6379"
+    _mc_line() { printf "║  %-${W}s║\n" "$*"; }
+    _mc_sep()  { printf "╠%s╣\n" "$(printf '═%.0s' $(seq 1 $((W+2))))"; }
+    _mc_top()  { printf "╔%s╗\n" "$(printf '═%.0s' $(seq 1 $((W+2))))"; }
+    _mc_bot()  { printf "╚%s╝\n" "$(printf '═%.0s' $(seq 1 $((W+2))))"; }
+    _mc_blank(){ _mc_line ""; }
 
     echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    _mc_top
+    _mc_line "$(printf '%*s' $(( (W + 34) / 2 )) '🎛️  MISSION CONTROL — CONFIGURATION READY')"
+    _mc_sep
+
+    _mc_line "TENANT : ${TENANT_ID}   PREFIX : ${TENANT_PREFIX}   STACK : ${STACK_NAME:-custom}"
+    _mc_line "DOMAIN : ${DOMAIN}   TLS : ${TLS_MODE:-none}   GATEWAY : ${LLM_GATEWAY_TYPE:-litellm}"
+    local storage_info
+    if [[ -n "${EBS_DEVICE:-}" ]]; then
+        storage_info="EBS ${EBS_DEVICE} → /mnt/${TENANT_ID}"
+    else
+        storage_info="OS disk → /mnt/${TENANT_ID}"
+    fi
+    _mc_line "VECTOR : ${VECTOR_DB_TYPE:-qdrant}   MEMORY : ${ENABLE_MEM0:-false}   STORAGE : ${storage_info}"
+    _mc_sep
+
+    _mc_line "SERVICES CONFIGURED                                    PORT"
+    _mc_blank
+    [[ "${ENABLE_POSTGRES:-false}"  == "true" ]] && _mc_line "  ✅ PostgreSQL  (${POSTGRES_USER:-$TENANT_ID} / ${POSTGRES_DB:-$TENANT_ID})           :${POSTGRES_PORT:-5432}"
+    [[ "${ENABLE_REDIS:-false}"     == "true" ]] && _mc_line "  ✅ Redis                                                :${REDIS_PORT:-6379}"
+    [[ "${ENABLE_OLLAMA:-false}"    == "true" ]] && _mc_line "  ✅ Ollama (models: ${OLLAMA_MODELS:-llama3.1:8b})          :${OLLAMA_PORT:-11434}"
+    [[ "${ENABLE_LITELLM:-false}"   == "true" ]] && _mc_line "  ✅ LiteLLM (routing: ${LITELLM_ROUTING_STRATEGY:-cost-optimized})             :${LITELLM_PORT:-4000}"
+    [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && _mc_line "  ✅ OpenWebUI  (→ LiteLLM + Ollama RAG)                 :${OPENWEBUI_PORT:-3000}"
+    [[ "${ENABLE_MEM0:-false}"      == "true" ]] && _mc_line "  ✅ Mem0       (→ ${VECTOR_DB_TYPE:-qdrant} + LiteLLM)                :${MEM0_PORT:-8081}"
+    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && _mc_line "  ✅ AnythingLLM (→ LiteLLM + ${VECTOR_DB_TYPE:-qdrant})             :${ANYTHINGLLM_PORT:-3001}"
+    [[ "${ENABLE_OPENCLAW:-false}"  == "true" ]] && _mc_line "  ✅ OpenClaw   (user: ${OPENCLAW_USERNAME:-admin})                  :${OPENCLAW_PORT:-3081}"
+    [[ "${ENABLE_QDRANT:-false}"    == "true" ]] && _mc_line "  ✅ Qdrant                                               :${QDRANT_PORT:-6333}"
+    [[ "${ENABLE_WEAVIATE:-false}"  == "true" ]] && _mc_line "  ✅ Weaviate                                             :${WEAVIATE_PORT:-8080}"
+    [[ "${ENABLE_CHROMA:-false}"    == "true" ]] && _mc_line "  ✅ ChromaDB                                             :${CHROMA_PORT:-8000}"
+    [[ "${ENABLE_N8N:-false}"       == "true" ]] && _mc_line "  ✅ N8N        (→ LiteLLM)                              :${N8N_PORT:-5678}"
+    [[ "${ENABLE_FLOWISE:-false}"   == "true" ]] && _mc_line "  ✅ Flowise    (→ LiteLLM + ${VECTOR_DB_TYPE:-qdrant})            :${FLOWISE_PORT:-3030}"
+    [[ "${ENABLE_DIFY:-false}"      == "true" ]] && _mc_line "  ✅ Dify       (→ LiteLLM + ${VECTOR_DB_TYPE:-qdrant})            :${DIFY_PORT:-3001}"
+    [[ "${ENABLE_GRAFANA:-false}"   == "true" ]] && _mc_line "  ✅ Grafana                                              :${GRAFANA_PORT:-3002}"
+    [[ "${ENABLE_PROMETHEUS:-false}" == "true" ]] && _mc_line "  ✅ Prometheus                                          :${PROMETHEUS_PORT:-9090}"
+    [[ "${ENABLE_AUTHENTIK:-false}" == "true" ]] && _mc_line "  ✅ Authentik  (SSO)                                    :${AUTHENTIK_PORT:-9000}"
+    [[ "${ENABLE_SIGNALBOT:-false}" == "true" ]] && _mc_line "  ✅ SignalBot  (${SIGNAL_PHONE:-not set})                   :${SIGNALBOT_PORT:-8080}"
+    [[ "${ENABLE_CODE_SERVER:-false}" == "true" ]] && _mc_line "  ✅ Code Server                                         :${CODE_SERVER_PORT:-8080}"
+    [[ "${ENABLE_CONTINUE_DEV:-false}" == "true" ]] && _mc_line "  ✅ Continue.dev (config → LiteLLM at :${LITELLM_PORT:-4000})       local"
+    _mc_sep
+
+    _mc_line "LLM PROVIDERS                    SEARCH APIS"
+    _mc_blank
+    local prov_line=""
+    [[ "${ENABLE_OPENAI:-false}"      == "true" ]] && prov_line+="OpenAI "
+    [[ "${ENABLE_ANTHROPIC:-false}"   == "true" ]] && prov_line+="Anthropic "
+    [[ "${ENABLE_GOOGLE:-false}"      == "true" ]] && prov_line+="Google "
+    [[ "${ENABLE_GROQ:-false}"        == "true" ]] && prov_line+="Groq "
+    [[ "${ENABLE_COHERE:-false}"      == "true" ]] && prov_line+="Cohere "
+    [[ "${ENABLE_HUGGINGFACE:-false}" == "true" ]] && prov_line+="HuggingFace "
+    [[ "${ENABLE_OPENROUTER:-false}"  == "true" ]] && prov_line+="OpenRouter "
+    [[ "${ENABLE_MAMMOUTH:-false}"    == "true" ]] && prov_line+="Mammouth "
+    [[ "${ENABLE_LOCAL_MODELS:-false}" == "true" ]] && prov_line+="Ollama(local) "
+    local search_line=""
+    [[ "${ENABLE_SERPAPI:-false}"     == "true" ]] && search_line+="SerpAPI(${SERPAPI_ENGINE:-google}) "
+    [[ "${ENABLE_BRAVE:-false}"       == "true" ]] && search_line+="BraveSearch "
+    _mc_line "  ${prov_line:-none}   |   ${search_line:-none}"
+    _mc_line "  Preferred: ${PREFERRED_LLM_PROVIDER:-ollama}   Gateway: ${LLM_GATEWAY_TYPE:-litellm} → all services"
+    _mc_sep
+
+    _mc_line "ACCESS URLS  (all bound to 127.0.0.1 — use proxy or SSH tunnel for external)"
+    _mc_blank
+    [[ "${ENABLE_OPENWEBUI:-false}"   == "true" ]] && _mc_line "  Open WebUI   → ${base_proto}://${DOMAIN:-$server_ip}  (direct: http://127.0.0.1:${OPENWEBUI_PORT:-3000})"
+    [[ "${ENABLE_LITELLM:-false}"     == "true" ]] && _mc_line "  LiteLLM API  → http://127.0.0.1:${LITELLM_PORT:-4000}/v1"
+    [[ "${ENABLE_OLLAMA:-false}"      == "true" ]] && _mc_line "  Ollama       → http://127.0.0.1:${OLLAMA_PORT:-11434}"
+    [[ "${ENABLE_MEM0:-false}"        == "true" ]] && _mc_line "  Mem0         → http://127.0.0.1:${MEM0_PORT:-8081}"
+    [[ "${ENABLE_N8N:-false}"         == "true" ]] && _mc_line "  N8N          → http://127.0.0.1:${N8N_PORT:-5678}"
+    [[ "${ENABLE_FLOWISE:-false}"     == "true" ]] && _mc_line "  Flowise      → http://127.0.0.1:${FLOWISE_PORT:-3030}"
+    [[ "${ENABLE_DIFY:-false}"        == "true" ]] && _mc_line "  Dify         → http://127.0.0.1:${DIFY_PORT:-3001}"
+    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && _mc_line "  AnythingLLM  → http://127.0.0.1:${ANYTHINGLLM_PORT:-3001}"
+    [[ "${ENABLE_OPENCLAW:-false}"    == "true" ]] && _mc_line "  OpenClaw     → http://127.0.0.1:${OPENCLAW_PORT:-3081}  (user: ${OPENCLAW_USERNAME:-admin})"
+    [[ "${ENABLE_GRAFANA:-false}"     == "true" ]] && _mc_line "  Grafana      → http://127.0.0.1:${GRAFANA_PORT:-3002}"
+    [[ "${ENABLE_AUTHENTIK:-false}"   == "true" ]] && _mc_line "  Authentik    → http://127.0.0.1:${AUTHENTIK_PORT:-9000}"
+    [[ "${ENABLE_CODE_SERVER:-false}" == "true" ]] && _mc_line "  Code Server  → http://127.0.0.1:${CODE_SERVER_PORT:-8080}"
+    [[ "${ENABLE_CADDY:-false}"       == "true" ]] && _mc_line "  Caddy proxy  → ${base_proto}://${DOMAIN:-$server_ip} (ports ${CADDY_HTTP_PORT:-80}/${CADDY_HTTPS_PORT:-443})"
+    _mc_blank
+    _mc_line "  DB/Cache (internal containers only):"
+    [[ "${ENABLE_POSTGRES:-false}"    == "true" ]] && _mc_line "    ${pfx}-postgres:5432  user=${POSTGRES_USER:-$TENANT_ID} db=${POSTGRES_DB:-$TENANT_ID}"
+    [[ "${ENABLE_REDIS:-false}"       == "true" ]] && _mc_line "    ${pfx}-redis:6379"
+    _mc_sep
+
+    _mc_line "NEXT STEP:  bash scripts/2-deploy-services.sh ${TENANT_ID}"
+    _mc_line "CONF FILE:  ${DATA_DIR:-/mnt/${TENANT_ID}}/config/platform.conf"
+    _mc_bot
+    echo ""
 }
 
 # =============================================================================
@@ -2800,10 +2801,7 @@ run_interactive_collection() {
     configure_proxy
     configure_google_drive
     configure_signalbot
-    
-    # Service Summary Health Check (README compliance)
-    display_service_summary
-    
+
     # =============================================================================
     # INGESTION CONFIGURATION (README §4.7)
     # =============================================================================
@@ -2964,117 +2962,156 @@ save_configuration_template() {
     
     log "💾 Saving configuration template: $template_path"
     
-    # Create template file with all configuration variables (excluding secrets)
+    # Create template file — all non-secret configuration variables.
+    # Secrets (passwords, API keys) are intentionally excluded so this file is
+    # safe to store in version control. The template auto-confirms every value
+    # shown here when passed via --template; unset a variable to re-prompt.
     cat > "$template_path" << EOF
 # =============================================================================
 # AI Platform Configuration Template
 # Generated: $(date)
 # Tenant: ${TENANT_ID}
+# Stack: ${STACK_NAME:-custom}
 # =============================================================================
 # USAGE: bash scripts/1-setup-system.sh ${TENANT_ID} --template "$template_path"
+# Secrets (passwords, API keys) are NOT stored here — re-enter them each deploy
+# or export them as environment variables before running.
 # =============================================================================
 
-# =============================================================================
-# IDENTITY CONFIGURATION
-# =============================================================================
+# IDENTITY
 PLATFORM_PREFIX="${PLATFORM_PREFIX}"
 TENANT_ID="${TENANT_ID}"
 DOMAIN="${DOMAIN}"
 ORGANIZATION="${ORGANIZATION}"
 ADMIN_EMAIL="${ADMIN_EMAIL}"
 
-# =============================================================================
-# STORAGE CONFIGURATION
-# =============================================================================
+# STORAGE
 USE_EBS="${USE_EBS}"
 EBS_DEVICE="${EBS_DEVICE:-}"
 DATA_DIR="${DATA_DIR}"
 
-# =============================================================================
-# STACK PRESET CONFIGURATION
-# =============================================================================
+# STACK
 STACK_PRESET="${STACK_PRESET}"
+STACK_NAME="${STACK_NAME:-custom}"
 
-# =============================================================================
-# LLM GATEWAY CONFIGURATION
-# =============================================================================
-ENABLE_LITELLM="${ENABLE_LITELLM}"
-ENABLE_BIFROST="${ENABLE_BIFROST}"
-ENABLE_DIRECT_OLLAMA="${ENABLE_DIRECT_OLLAMA}"
+# LLM GATEWAY
+LLM_GATEWAY_TYPE="${LLM_GATEWAY_TYPE:-litellm}"
+LITELLM_ROUTING_STRATEGY="${LITELLM_ROUTING_STRATEGY:-cost-optimized}"
 
-# =============================================================================
-# VECTOR DATABASE CONFIGURATION
-# =============================================================================
-VECTOR_DB_TYPE="${VECTOR_DB_TYPE:-none}"
+# VECTOR DATABASE
+VECTOR_DB_TYPE="${VECTOR_DB_TYPE:-qdrant}"
+QDRANT_PORT="${QDRANT_PORT:-6333}"
+WEAVIATE_PORT="${WEAVIATE_PORT:-8080}"
+CHROMA_PORT="${CHROMA_PORT:-8000}"
+MILVUS_PORT="${MILVUS_PORT:-19530}"
 
-# =============================================================================
-# TLS CONFIGURATION
-# =============================================================================
-TLS_MODE="${TLS_MODE:-self-signed}"
-TLS_EMAIL="${TLS_EMAIL:-}"
-TLS_CERT_PATH="${TLS_CERT_PATH:-}"
-TLS_KEY_PATH="${TLS_KEY_PATH:-}"
+# TLS
+TLS_MODE="${TLS_MODE:-none}"
+LETSENCRYPT_EMAIL="${LETSENCRYPT_EMAIL:-}"
+HTTP_TO_HTTPS_REDIRECT="${HTTP_TO_HTTPS_REDIRECT:-false}"
+PROXY_FORCE_HTTPS="${PROXY_FORCE_HTTPS:-false}"
 
-# =============================================================================
-# SERVICE PORTS CONFIGURATION
-# =============================================================================
+# PROXY
+ENABLE_PROXY="${ENABLE_PROXY:-false}"
+PROXY_TYPE="${PROXY_TYPE:-caddy}"
+PROXY_ROUTING="${PROXY_ROUTING:-subdomain}"
+CADDY_HTTP_PORT="${CADDY_HTTP_PORT:-80}"
+CADDY_HTTPS_PORT="${CADDY_HTTPS_PORT:-443}"
+
+# SERVICE ENABLEMENT FLAGS
+ENABLE_POSTGRES="${ENABLE_POSTGRES:-false}"
+ENABLE_REDIS="${ENABLE_REDIS:-false}"
+ENABLE_OLLAMA="${ENABLE_OLLAMA:-false}"
+ENABLE_LITELLM="${ENABLE_LITELLM:-false}"
+ENABLE_OPENWEBUI="${ENABLE_OPENWEBUI:-false}"
+ENABLE_LIBRECHAT="${ENABLE_LIBRECHAT:-false}"
+ENABLE_OPENCLAW="${ENABLE_OPENCLAW:-false}"
+ENABLE_ANYTHINGLLM="${ENABLE_ANYTHINGLLM:-false}"
+ENABLE_QDRANT="${ENABLE_QDRANT:-false}"
+ENABLE_WEAVIATE="${ENABLE_WEAVIATE:-false}"
+ENABLE_CHROMA="${ENABLE_CHROMA:-false}"
+ENABLE_MILVUS="${ENABLE_MILVUS:-false}"
+ENABLE_N8N="${ENABLE_N8N:-false}"
+ENABLE_FLOWISE="${ENABLE_FLOWISE:-false}"
+ENABLE_DIFY="${ENABLE_DIFY:-false}"
+ENABLE_CODE_SERVER="${ENABLE_CODE_SERVER:-false}"
+ENABLE_CONTINUE_DEV="${ENABLE_CONTINUE_DEV:-false}"
+ENABLE_MEM0="${ENABLE_MEM0:-false}"
+ENABLE_GRAFANA="${ENABLE_GRAFANA:-false}"
+ENABLE_PROMETHEUS="${ENABLE_PROMETHEUS:-false}"
+ENABLE_AUTHENTIK="${ENABLE_AUTHENTIK:-false}"
+ENABLE_SIGNALBOT="${ENABLE_SIGNALBOT:-false}"
+ENABLE_CADDY="${ENABLE_CADDY:-false}"
+ENABLE_INGESTION="${ENABLE_INGESTION:-false}"
+INGESTION_METHOD="${INGESTION_METHOD:-rclone}"
+RCLONE_REMOTE="${RCLONE_REMOTE:-gdrive}"
+RCLONE_POLL_INTERVAL="${RCLONE_POLL_INTERVAL:-5}"
+
+# SERVICE PORTS
 POSTGRES_PORT="${POSTGRES_PORT:-5432}"
 REDIS_PORT="${REDIS_PORT:-6379}"
 OLLAMA_PORT="${OLLAMA_PORT:-11434}"
 LITELLM_PORT="${LITELLM_PORT:-4000}"
 OPENWEBUI_PORT="${OPENWEBUI_PORT:-3000}"
-QDRANT_PORT="${QDRANT_PORT:-6333}"
-WEAVIATE_PORT="${WEAVIATE_PORT:-8080}"
-CHROMADB_PORT="${CHROMADB_PORT:-8000}"
-MILVUS_PORT="${MILVUS_PORT:-19530}"
+OPENCLAW_PORT="${OPENCLAW_PORT:-3081}"
+ANYTHINGLLM_PORT="${ANYTHINGLLM_PORT:-3001}"
 N8N_PORT="${N8N_PORT:-5678}"
-FLOWISEAI_PORT="${FLOWISEAI_PORT:-3000}"
-LANGFLOW_PORT="${LANGFLOW_PORT:-4000}"
+FLOWISE_PORT="${FLOWISE_PORT:-3030}"
+DIFY_PORT="${DIFY_PORT:-3001}"
 CODE_SERVER_PORT="${CODE_SERVER_PORT:-8080}"
-CONTINUE_DEV_PORT="${CONTINUE_DEV_PORT:-3000}"
-MEM0_PORT="${MEM0_PORT:-8080}"
-NGINX_PORT="${NGINX_PORT:-80}"
-CADDY_HTTP_PORT="${CADDY_HTTP_PORT:-80}"
-CADDY_HTTPS_PORT="${CADDY_HTTPS_PORT:-443}"
+MEM0_PORT="${MEM0_PORT:-8081}"
+GRAFANA_PORT="${GRAFANA_PORT:-3002}"
+PROMETHEUS_PORT="${PROMETHEUS_PORT:-9090}"
+AUTHENTIK_PORT="${AUTHENTIK_PORT:-9000}"
+SIGNALBOT_PORT="${SIGNALBOT_PORT:-8080}"
 
-# =============================================================================
-# SERVICE ENABLEMENT FLAGS
-# =============================================================================
-ENABLE_POSTGRES="${ENABLE_POSTGRES:-false}"
-ENABLE_REDIS="${ENABLE_REDIS:-false}"
-ENABLE_OLLAMA="${ENABLE_OLLAMA:-false}"
-ENABLE_OPENWEBUI="${ENABLE_OPENWEBUI:-false}"
-ENABLE_QDRANT="${ENABLE_QDRANT:-false}"
-ENABLE_WEAVIATE="${ENABLE_WEAVIATE:-false}"
-ENABLE_CHROMADB="${ENABLE_CHROMADB:-false}"
-ENABLE_MILVUS="${ENABLE_MILVUS:-false}"
-ENABLE_N8N="${ENABLE_N8N:-false}"
-ENABLE_FLOWISEAI="${ENABLE_FLOWISEAI:-false}"
-ENABLE_LANGFLOW="${ENABLE_LANGFLOW:-false}"
-ENABLE_CODE_SERVER="${ENABLE_CODE_SERVER:-false}"
-ENABLE_CONTINUE_DEV="${ENABLE_CONTINUE_DEV:-false}"
-ENABLE_MEM0="${ENABLE_MEM0:-false}"
-ENABLE_NGINX="${ENABLE_NGINX:-false}"
-ENABLE_CADDY="${ENABLE_CADDY:-false}"
+# LOCAL MODELS
+ENABLE_LOCAL_MODELS="${ENABLE_LOCAL_MODELS:-true}"
+OLLAMA_MODELS="${OLLAMA_MODELS:-llama3.1:8b,mistral:7b}"
+OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-llama3.1:8b}"
+OLLAMA_AUTO_DOWNLOAD="${OLLAMA_AUTO_DOWNLOAD:-true}"
 
-# =============================================================================
-# LLM PROVIDER CONFIGURATION (API KEYS - SECURE)
-# =============================================================================
-# Note: API keys are stored in platform.conf for security
-# Template shows which providers are enabled
-ENABLE_OPENAI="${ENABLE_OPENAI}"
-ENABLE_ANTHROPIC="${ENABLE_ANTHROPIC}"
-ENABLE_GOOGLE="${ENABLE_GOOGLE}"
-ENABLE_GROQ="${ENABLE_GROQ}"
-ENABLE_COHERE="${ENABLE_COHERE}"
-ENABLE_HUGGINGFACE="${ENABLE_HUGGINGFACE}"
-ENABLE_OLLAMA_PROVIDER="${ENABLE_OLLAMA_PROVIDER}"
+# LLM PROVIDERS (enable flags only — API keys excluded from template)
+PREFERRED_LLM_PROVIDER="${PREFERRED_LLM_PROVIDER:-ollama}"
+ENABLE_OPENAI="${ENABLE_OPENAI:-false}"
+OPENAI_MODELS="${OPENAI_MODELS:-gpt-4o,gpt-4o-mini}"
+ENABLE_ANTHROPIC="${ENABLE_ANTHROPIC:-false}"
+ANTHROPIC_MODELS="${ANTHROPIC_MODELS:-claude-3-5-sonnet-20241022}"
+ENABLE_GOOGLE="${ENABLE_GOOGLE:-false}"
+GOOGLE_MODELS="${GOOGLE_MODELS:-gemini-pro}"
+ENABLE_GROQ="${ENABLE_GROQ:-false}"
+GROQ_MODELS="${GROQ_MODELS:-llama3-70b-8192}"
+ENABLE_COHERE="${ENABLE_COHERE:-false}"
+ENABLE_HUGGINGFACE="${ENABLE_HUGGINGFACE:-false}"
+ENABLE_OPENROUTER="${ENABLE_OPENROUTER:-false}"
+ENABLE_MAMMOUTH="${ENABLE_MAMMOUTH:-false}"
+MAMMOUTH_BASE_URL="${MAMMOUTH_BASE_URL:-https://api.mammouth.ai/v1}"
+MAMMOUTH_MODELS="${MAMMOUTH_MODELS:-mammouth}"
+
+# SEARCH APIS (key values excluded from template)
+ENABLE_SERPAPI="${ENABLE_SERPAPI:-false}"
+SERPAPI_ENGINE="${SERPAPI_ENGINE:-google}"
+ENABLE_BRAVE="${ENABLE_BRAVE:-false}"
+
+# SERVICE CREDENTIALS (usernames only — passwords excluded from template)
+POSTGRES_USER="${POSTGRES_USER:-${TENANT_ID}}"
+POSTGRES_DB="${POSTGRES_DB:-${TENANT_ID}}"
+OPENCLAW_USERNAME="${OPENCLAW_USERNAME:-admin}"
+FLOWISE_USERNAME="${FLOWISE_USERNAME:-admin}"
+GRAFANA_ADMIN_USER="${GRAFANA_ADMIN_USER:-admin}"
+
+# SIGNAL BOT
+SIGNAL_PHONE="${SIGNAL_PHONE:-}"
+SIGNAL_RECIPIENT="${SIGNAL_RECIPIENT:-}"
+
+# GOOGLE DRIVE
+ENABLE_GDRIVE="${ENABLE_GDRIVE:-false}"
+GDRIVE_FOLDER_NAME="${GDRIVE_FOLDER_NAME:-AI Platform}"
 
 # =============================================================================
 # END OF TEMPLATE
-# =============================================================================
 # This template can be used to recreate the same configuration:
-# bash scripts/1-setup-system.sh ${TENANT_ID} --template "$template_path"
+#   bash scripts/1-setup-system.sh ${TENANT_ID} --template "$template_path"
 # =============================================================================
 EOF
 
@@ -3576,11 +3613,14 @@ main() {
         log "   To override any value, unset the variable before running"
     fi
     run_interactive_collection
-    
+
     # Create idempotency marker
     mkdir -p "${DATA_DIR}/.configured"
     touch "${DATA_DIR}/.configured/setup-system"
-    
+
+    # Mission Control dashboard — shown after everything is written/confirmed
+    display_service_summary
+
     echo ""
     echo "╔══════════════════════════════════════════════════════════╗"
     echo "║              🎉 SYSTEM SETUP COMPLETE 🎉                   ║"

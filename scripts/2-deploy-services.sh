@@ -560,6 +560,20 @@ build_authentik_deps() {
 }
 
 # =============================================================================
+# VECTORDB URL HELPER — returns internal Docker URL for the chosen vectordb.
+# Used throughout compose generation so no service has a hardcoded DB type.
+# =============================================================================
+get_vectordb_url() {
+    case "${VECTOR_DB_TYPE:-qdrant}" in
+        qdrant)   echo "http://${TENANT_PREFIX}-qdrant:6333" ;;
+        weaviate) echo "http://${TENANT_PREFIX}-weaviate:8080" ;;
+        chroma)   echo "http://${TENANT_PREFIX}-chroma:8000" ;;
+        milvus)   echo "http://${TENANT_PREFIX}-milvus:19530" ;;
+        *)        echo "http://${TENANT_PREFIX}-qdrant:6333" ;;
+    esac
+}
+
+# =============================================================================
 # DOCKER COMPOSE GENERATION (README P3 - explicit heredoc blocks)
 # =============================================================================
 generate_compose() {
@@ -743,8 +757,10 @@ $(build_litellm_deps)
 EOF
     fi
 
-    # Open WebUI
+    # Open WebUI — wired to LiteLLM (unified gateway) + Ollama + vectordb RAG
     if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
+        local vdb_url
+        vdb_url=$(get_vectordb_url)
         cat >> "${COMPOSE_FILE}" << EOF
   ${TENANT_PREFIX}-openwebui:
     image: ghcr.io/open-webui/open-webui:main
@@ -752,9 +768,17 @@ EOF
     restart: unless-stopped
     user: "${PUID}:${PGID}"
     environment:
+      # Ollama for local models
       OLLAMA_BASE_URL: http://${TENANT_PREFIX}-ollama:11434
-      OLLAMA_API_BASE_URL: http://${TENANT_PREFIX}-ollama:11434
+      # LiteLLM as unified OpenAI-compatible gateway for all providers
+      OPENAI_API_BASE_URL: http://${TENANT_PREFIX}-litellm:4000/v1
+      OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
       WEBUI_SECRET: ${OPENWEBUI_SECRET}
+      DEFAULT_MODELS: ${OLLAMA_DEFAULT_MODEL}
+      # RAG — embed via Ollama, retrieve from chosen vectordb
+      ENABLE_RAG_WEB_SEARCH: "false"
+      RAG_EMBEDDING_ENGINE: ollama
+      RAG_OLLAMA_BASE_URL: http://${TENANT_PREFIX}-ollama:11434
     volumes:
       - ${DATA_DIR}/openwebui:/app/backend/data
     ports:
@@ -769,7 +793,7 @@ $(build_openwebui_deps)
 EOF
     fi
 
-    # OpenClaw
+    # OpenClaw — gateway with LiteLLM + search API integration
     if [[ "${OPENCLAW_ENABLED}" == "true" ]]; then
         cat >> "${COMPOSE_FILE}" << EOF
   ${TENANT_PREFIX}-openclaw:
@@ -780,6 +804,12 @@ EOF
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://:${REDIS_PASSWORD}@${TENANT_PREFIX}-redis:6379
+      OPENAI_API_BASE: http://${TENANT_PREFIX}-litellm:4000/v1
+      OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      SERPAPI_KEY: ${SERPAPI_KEY:-}
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
+      ADMIN_USERNAME: ${OPENCLAW_USERNAME:-admin}
+      ADMIN_PASSWORD: ${OPENCLAW_PASSWORD}
     volumes:
       - ${DATA_DIR}/openclaw:/app/data
     ports:
@@ -855,8 +885,10 @@ $(build_n8n_deps)
 EOF
     fi
 
-    # Flowise
+    # Flowise — wired to LiteLLM + chosen vectordb
     if [[ "${FLOWISE_ENABLED}" == "true" ]]; then
+        local vdb_url
+        vdb_url=$(get_vectordb_url)
         cat >> "${COMPOSE_FILE}" << EOF
   ${TENANT_PREFIX}-flowise:
     image: flowiseai/flowise:latest
@@ -873,6 +905,17 @@ EOF
       FLOWISE_USERNAME: ${FLOWISE_USERNAME}
       FLOWISE_PASSWORD: ${FLOWISE_PASSWORD}
       SECRETKEY_OVERWRITE: ${FLOWISE_SECRETKEY_OVERWRITE}
+      # LiteLLM as unified LLM gateway
+      OPENAI_API_BASE: http://${TENANT_PREFIX}-litellm:4000/v1
+      OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      # VectorDB integration (dynamic — set by VECTOR_DB_TYPE)
+      QDRANT_SERVER_URL: http://${TENANT_PREFIX}-qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      WEAVIATE_URL: http://${TENANT_PREFIX}-weaviate:8080
+      CHROMA_URL: http://${TENANT_PREFIX}-chroma:8000
+      # Search
+      SERPAPI_API_KEY: ${SERPAPI_KEY:-}
+      BRAVE_SEARCH_API_KEY: ${BRAVE_API_KEY:-}
     volumes:
       - ${DATA_DIR}/flowise:/root/.flowise
     ports:
@@ -887,8 +930,10 @@ $(build_flowise_deps)
 EOF
     fi
 
-    # Dify
+    # Dify — wired to LiteLLM + dynamic vectordb (no hardcoded Qdrant)
     if [[ "${DIFY_ENABLED}" == "true" ]]; then
+        local vdb_url
+        vdb_url=$(get_vectordb_url)
         cat >> "${COMPOSE_FILE}" << EOF
   ${TENANT_PREFIX}-dify:
     image: langgenius/dify-web:latest
@@ -905,9 +950,18 @@ EOF
       REDIS_HOST: ${TENANT_PREFIX}-redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
-      QDRANT_HOST: ${TENANT_PREFIX}-qdrant
-      QDRANT_PORT: 6333
-      QDRANT_API_KEY: ${QDRANT_API_KEY}
+      # LiteLLM as unified LLM gateway
+      OPENAI_API_BASE: http://${TENANT_PREFIX}-litellm:4000/v1
+      OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      # VectorDB — dynamic, driven by VECTOR_DB_TYPE (no hardcoded qdrant)
+      VECTOR_STORE: ${VECTOR_DB_TYPE:-qdrant}
+      QDRANT_URL: http://${TENANT_PREFIX}-qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      WEAVIATE_ENDPOINT: http://${TENANT_PREFIX}-weaviate:8080
+      CHROMA_HOST: ${TENANT_PREFIX}-chroma
+      CHROMA_PORT: 8000
+      MILVUS_HOST: ${TENANT_PREFIX}-milvus
+      MILVUS_PORT: 19530
     volumes:
       - ${DATA_DIR}/dify:/app/api/storage
     ports:
@@ -1062,6 +1116,283 @@ RCLONE_EOF
 EOF
     fi
 
+    # Weaviate vector database
+    if [[ "${WEAVIATE_ENABLED:-${ENABLE_WEAVIATE:-false}}" == "true" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
+  ${TENANT_PREFIX}-weaviate:
+    image: semitechnologies/weaviate:latest
+    container_name: ${TENANT_PREFIX}-weaviate
+    restart: unless-stopped
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'false'
+      AUTHENTICATION_APIKEY_ENABLED: 'true'
+      AUTHENTICATION_APIKEY_ALLOWED_KEYS: ${WEAVIATE_API_KEY}
+      PERSISTENCE_DATA_PATH: /var/lib/weaviate
+      DEFAULT_VECTORIZER_MODULE: none
+      ENABLE_MODULES: ''
+      CLUSTER_HOSTNAME: node1
+    volumes:
+      - ${DATA_DIR}/weaviate:/var/lib/weaviate
+    ports:
+      - "127.0.0.1:${WEAVIATE_PORT}:8080"
+    networks:
+      - ${DOCKER_NETWORK}
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+EOF
+    fi
+
+    # ChromaDB vector database
+    if [[ "${CHROMA_ENABLED:-${ENABLE_CHROMA:-false}}" == "true" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
+  ${TENANT_PREFIX}-chroma:
+    image: chromadb/chroma:latest
+    container_name: ${TENANT_PREFIX}-chroma
+    restart: unless-stopped
+    user: "${PUID}:${PGID}"
+    environment:
+      CHROMA_SERVER_AUTH_CREDENTIALS: ${CHROMA_AUTH_TOKEN}
+      CHROMA_SERVER_AUTH_CREDENTIALS_PROVIDER: chromadb.auth.token.TokenConfigServerAuthCredentialsProvider
+      CHROMA_SERVER_AUTH_PROVIDER: chromadb.auth.token.TokenAuthServerProvider
+    volumes:
+      - ${DATA_DIR}/chroma:/chroma/chroma
+    ports:
+      - "127.0.0.1:${CHROMA_PORT}:8000"
+    networks:
+      - ${DOCKER_NETWORK}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+EOF
+    fi
+
+    # AnythingLLM — document chat, wired to LiteLLM + chosen vectordb
+    if [[ "${ANYTHINGLLM_ENABLED:-${ENABLE_ANYTHINGLLM:-false}}" == "true" ]]; then
+        local vdb_url
+        vdb_url=$(get_vectordb_url)
+        # Map VECTOR_DB_TYPE to AnythingLLM's vector_db param
+        local allm_vdb
+        case "${VECTOR_DB_TYPE:-qdrant}" in
+            qdrant)   allm_vdb="qdrant" ;;
+            weaviate) allm_vdb="weaviate" ;;
+            chroma)   allm_vdb="chroma" ;;
+            milvus)   allm_vdb="milvus" ;;
+            *)        allm_vdb="qdrant" ;;
+        esac
+        cat >> "${COMPOSE_FILE}" << EOF
+  ${TENANT_PREFIX}-anythingllm:
+    image: mintplexlabs/anythingllm:latest
+    container_name: ${TENANT_PREFIX}-anythingllm
+    restart: unless-stopped
+    user: "${PUID}:${PGID}"
+    environment:
+      STORAGE_DIR: /app/server/storage
+      JWT_SECRET: ${ANYTHINGLLM_JWT_SECRET}
+      # LLM via LiteLLM unified gateway
+      LLM_PROVIDER: openai
+      OPENAI_API_BASE: http://${TENANT_PREFIX}-litellm:4000/v1
+      OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      OPENAI_MODEL_PREF: ${OLLAMA_DEFAULT_MODEL}
+      # Embedding via Ollama
+      EMBEDDING_ENGINE: ollama
+      OLLAMA_EMBEDDING_BASE_PATH: http://${TENANT_PREFIX}-ollama:11434
+      # VectorDB — dynamic, no hardcoded type
+      VECTOR_DB: ${allm_vdb}
+      QDRANT_ENDPOINT: http://${TENANT_PREFIX}-qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      WEAVIATE_ENDPOINT: http://${TENANT_PREFIX}-weaviate:8080
+      WEAVIATE_API_KEY: ${WEAVIATE_API_KEY:-}
+      CHROMA_ENDPOINT: http://${TENANT_PREFIX}-chroma:8000
+      CHROMA_API_HEADER: Authorization
+      CHROMA_API_KEY: ${CHROMA_AUTH_TOKEN:-}
+      # Search
+      AGENT_SERP_KEY: ${SERPAPI_KEY:-}
+    volumes:
+      - ${DATA_DIR}/anythingllm:/app/server/storage
+    ports:
+      - "127.0.0.1:${ANYTHINGLLM_PORT}:3001"
+    networks:
+      - ${DOCKER_NETWORK}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+EOF
+    fi
+
+    # Mem0 — AI memory layer, connects to Postgres + vectordb + LiteLLM
+    if [[ "${MEM0_ENABLED:-${ENABLE_MEM0:-false}}" == "true" ]]; then
+        local vdb_url
+        vdb_url=$(get_vectordb_url)
+        cat >> "${COMPOSE_FILE}" << EOF
+  ${TENANT_PREFIX}-mem0:
+    image: mem0ai/mem0:latest
+    container_name: ${TENANT_PREFIX}-mem0
+    restart: unless-stopped
+    user: "${PUID}:${PGID}"
+    environment:
+      # Postgres for history storage
+      POSTGRES_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${POSTGRES_DB}
+      # LiteLLM as embedding + LLM gateway
+      OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      OPENAI_API_BASE: http://${TENANT_PREFIX}-litellm:4000/v1
+      EMBEDDING_MODEL: ${OLLAMA_DEFAULT_MODEL}
+      # VectorDB — dynamic
+      VECTOR_STORE: ${VECTOR_DB_TYPE:-qdrant}
+      QDRANT_URL: http://${TENANT_PREFIX}-qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      WEAVIATE_URL: http://${TENANT_PREFIX}-weaviate:8080
+      CHROMA_URL: http://${TENANT_PREFIX}-chroma:8000
+      MEM0_API_KEY: ${MEM0_API_KEY:-}
+    volumes:
+      - ${DATA_DIR}/mem0:/app/data
+    ports:
+      - "127.0.0.1:${MEM0_PORT:-8081}:8080"
+    networks:
+      - ${DOCKER_NETWORK}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+EOF
+    fi
+
+    # Grafana dashboards
+    if [[ "${GRAFANA_ENABLED:-${ENABLE_GRAFANA:-false}}" == "true" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
+  ${TENANT_PREFIX}-grafana:
+    image: grafana/grafana:latest
+    container_name: ${TENANT_PREFIX}-grafana
+    restart: unless-stopped
+    # grafana manages its own internal user (uid 472) — do not override user:
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_PATHS_DATA: /var/lib/grafana
+      GF_SERVER_ROOT_URL: http://localhost:${GRAFANA_PORT:-3002}
+    volumes:
+      - ${DATA_DIR}/grafana:/var/lib/grafana
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3002}:3000"
+    networks:
+      - ${DOCKER_NETWORK}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+EOF
+    fi
+
+    # Prometheus metrics
+    if [[ "${PROMETHEUS_ENABLED:-${ENABLE_PROMETHEUS:-false}}" == "true" ]]; then
+        mkdir -p "${CONFIG_DIR}/prometheus"
+        # Minimal prometheus.yml — scrape self + docker if host networking
+        cat > "${CONFIG_DIR}/prometheus/prometheus.yml" << PROMEOF
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]
+PROMEOF
+        cat >> "${COMPOSE_FILE}" << EOF
+  ${TENANT_PREFIX}-prometheus:
+    image: prom/prometheus:latest
+    container_name: ${TENANT_PREFIX}-prometheus
+    restart: unless-stopped
+    # prometheus manages its own internal user (nobody/65534) — do not override user:
+    volumes:
+      - ${CONFIG_DIR}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ${DATA_DIR}/prometheus:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    networks:
+      - ${DOCKER_NETWORK}
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+EOF
+    fi
+
+    # Code Server (browser-based VS Code IDE)
+    if [[ "${CODE_SERVER_ENABLED:-${ENABLE_CODE_SERVER:-false}}" == "true" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
+  ${TENANT_PREFIX}-code-server:
+    image: codercom/code-server:latest
+    container_name: ${TENANT_PREFIX}-code-server
+    restart: unless-stopped
+    user: "${PUID}:${PGID}"
+    environment:
+      PASSWORD: ${CODE_SERVER_PASSWORD:-changeme}
+    volumes:
+      - ${DATA_DIR}/code-server:/home/coder
+      - ${DATA_DIR}:/mnt/tenant-data:ro
+    ports:
+      - "127.0.0.1:${CODE_SERVER_PORT:-8080}:8080"
+    networks:
+      - ${DOCKER_NETWORK}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+EOF
+    fi
+
+    # Continue.dev config generation (no container — it's a VS Code extension)
+    # Generates ~/.continue/config.json pointing to LiteLLM as the LLM provider
+    if [[ "${CONTINUE_DEV_ENABLED:-${ENABLE_CONTINUE_DEV:-false}}" == "true" ]]; then
+        local continue_dir="${DATA_DIR}/continue-dev"
+        mkdir -p "${continue_dir}"
+        cat > "${continue_dir}/config.json" << CONTEOF
+{
+  "models": [
+    {
+      "title": "${TENANT_ID} LiteLLM",
+      "provider": "openai",
+      "model": "${OLLAMA_DEFAULT_MODEL:-llama3.1:8b}",
+      "apiBase": "http://127.0.0.1:${LITELLM_PORT:-4000}/v1",
+      "apiKey": "${LITELLM_MASTER_KEY}"
+    }
+  ],
+  "tabAutocompleteModel": {
+    "title": "Autocomplete",
+    "provider": "openai",
+    "model": "${OLLAMA_DEFAULT_MODEL:-llama3.1:8b}",
+    "apiBase": "http://127.0.0.1:${LITELLM_PORT:-4000}/v1",
+    "apiKey": "${LITELLM_MASTER_KEY}"
+  },
+  "embeddingsProvider": {
+    "provider": "openai",
+    "model": "${OLLAMA_DEFAULT_MODEL:-llama3.1:8b}",
+    "apiBase": "http://127.0.0.1:${LITELLM_PORT:-4000}/v1",
+    "apiKey": "${LITELLM_MASTER_KEY}"
+  }
+}
+CONTEOF
+        chown -R "${PUID}:${PGID}" "${continue_dir}"
+        ok "Continue.dev config.json generated at ${continue_dir}/config.json"
+        ok "  → Copy to ~/.continue/config.json on your dev machine"
+    fi
+
     ok "docker-compose.yml generated"
 }
 
@@ -1156,7 +1487,24 @@ EOF
       api_key: ${OPENROUTER_API_KEY}
 EOF
     fi
-    
+
+    # Mammouth AI (only if enabled and API key is non-empty)
+    if [[ "${ENABLE_MAMMOUTH:-false}" == "true" && -n "${MAMMOUTH_API_KEY:-}" ]]; then
+        # Expand comma-separated model list into one entry per model
+        IFS=',' read -ra _mammouth_models <<< "${MAMMOUTH_MODELS:-mammouth}"
+        for _m in "${_mammouth_models[@]}"; do
+            _m="${_m// /}"
+            cat >> "${CONFIG_DIR}/litellm/config.yaml" << EOF
+  - model_name: ${_m}
+    litellm_params:
+      model: openai/${_m}
+      api_base: ${MAMMOUTH_BASE_URL:-https://api.mammouth.ai/v1}
+      api_key: ${MAMMOUTH_API_KEY}
+EOF
+        done
+        unset _mammouth_models _m
+    fi
+
     # General settings
     cat >> "${CONFIG_DIR}/litellm/config.yaml" << EOF
 
@@ -1424,6 +1772,15 @@ prepare_data_dirs() {
     [[ "${BIFROST_ENABLED}"   == "true" ]] && mkdir -p "${DATA_DIR}/bifrost"
     [[ "${ENABLE_INGESTION:-false}" == "true" ]] && mkdir -p "${DATA_DIR}/ingestion" "${DATA_DIR}/rclone"
     [[ "${CADDY_ENABLED}"     == "true" ]] && mkdir -p "${DATA_DIR}/caddy" "${DATA_DIR}/logs/caddy"
+    # New services
+    [[ "${WEAVIATE_ENABLED:-${ENABLE_WEAVIATE:-false}}" == "true" ]] && mkdir -p "${DATA_DIR}/weaviate"
+    [[ "${CHROMA_ENABLED:-${ENABLE_CHROMA:-false}}"     == "true" ]] && mkdir -p "${DATA_DIR}/chroma"
+    [[ "${ANYTHINGLLM_ENABLED:-${ENABLE_ANYTHINGLLM:-false}}" == "true" ]] && mkdir -p "${DATA_DIR}/anythingllm"
+    [[ "${MEM0_ENABLED:-${ENABLE_MEM0:-false}}"         == "true" ]] && mkdir -p "${DATA_DIR}/mem0"
+    [[ "${GRAFANA_ENABLED:-${ENABLE_GRAFANA:-false}}"   == "true" ]] && mkdir -p "${DATA_DIR}/grafana"
+    [[ "${PROMETHEUS_ENABLED:-${ENABLE_PROMETHEUS:-false}}" == "true" ]] && mkdir -p "${DATA_DIR}/prometheus" "${CONFIG_DIR}/prometheus"
+    [[ "${CODE_SERVER_ENABLED:-${ENABLE_CODE_SERVER:-false}}" == "true" ]] && mkdir -p "${DATA_DIR}/code-server"
+    [[ "${CONTINUE_DEV_ENABLED:-${ENABLE_CONTINUE_DEV:-false}}" == "true" ]] && mkdir -p "${DATA_DIR}/continue-dev"
 
     # Set ownership of the entire tenant tree to PUID:PGID
     # (chown -R is safe here: all paths are under /mnt/<tenant>)
@@ -1615,6 +1972,26 @@ main() {
     OPENCLAW_ENABLED="${OPENCLAW_ENABLED:-${ENABLE_OPENCLAW:-false}}"
     BIFROST_ENABLED="${BIFROST_ENABLED:-${ENABLE_BIFROST:-false}}"
     SIGNALBOT_ENABLED="${SIGNALBOT_ENABLED:-${ENABLE_SIGNALBOT:-false}}"
+    ANYTHINGLLM_ENABLED="${ANYTHINGLLM_ENABLED:-${ENABLE_ANYTHINGLLM:-false}}"
+    ANYTHINGLLM_JWT_SECRET="${ANYTHINGLLM_JWT_SECRET:-$(openssl rand -hex 32)}"
+    WEAVIATE_ENABLED="${WEAVIATE_ENABLED:-${ENABLE_WEAVIATE:-false}}"
+    CHROMA_ENABLED="${CHROMA_ENABLED:-${ENABLE_CHROMA:-false}}"
+    MEM0_ENABLED="${MEM0_ENABLED:-${ENABLE_MEM0:-false}}"
+    MEM0_PORT="${MEM0_PORT:-8081}"
+    MEM0_API_KEY="${MEM0_API_KEY:-}"
+    GRAFANA_ENABLED="${GRAFANA_ENABLED:-${ENABLE_GRAFANA:-false}}"
+    PROMETHEUS_ENABLED="${PROMETHEUS_ENABLED:-${ENABLE_PROMETHEUS:-false}}"
+    CODE_SERVER_ENABLED="${CODE_SERVER_ENABLED:-${ENABLE_CODE_SERVER:-false}}"
+    CODE_SERVER_PORT="${CODE_SERVER_PORT:-8080}"
+    CODE_SERVER_PASSWORD="${CODE_SERVER_PASSWORD:-changeme}"
+    CONTINUE_DEV_ENABLED="${CONTINUE_DEV_ENABLED:-${ENABLE_CONTINUE_DEV:-false}}"
+    # Search APIs
+    SERPAPI_KEY="${SERPAPI_KEY:-}"
+    BRAVE_API_KEY="${BRAVE_API_KEY:-}"
+    # Mammouth
+    MAMMOUTH_API_KEY="${MAMMOUTH_API_KEY:-}"
+    MAMMOUTH_BASE_URL="${MAMMOUTH_BASE_URL:-https://api.mammouth.ai/v1}"
+    MAMMOUTH_MODELS="${MAMMOUTH_MODELS:-mammouth}"
 
     # Re-compute LITELLM_DB_URL now that TENANT_PREFIX and POSTGRES_USER are resolved
     POSTGRES_USER="${POSTGRES_USER:-${TENANT_ID}}"

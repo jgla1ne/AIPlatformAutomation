@@ -204,12 +204,27 @@ main() {
     
     ok "Docker images removed (scoped)"
     
+    # 3. Unmount EBS volume FIRST — must happen before rm -rf, because the
+    #    mount point IS the tenant directory (/mnt/<tenant>).
+    #    Trying rm -rf while still mounted returns "Device or resource busy".
+    local mount_point="/mnt/${tenant_id}"
+    if mountpoint -q "$mount_point" 2>/dev/null; then
+        log "Unmounting EBS volume: $mount_point (required before directory removal)"
+        run_cmd umount "$mount_point" || {
+            log "WARN: umount returned non-zero — attempting lazy unmount"
+            run_cmd umount -l "$mount_point" || true
+        }
+        ok "EBS volume unmounted: $mount_point"
+    else
+        log "No EBS volume mounted at $mount_point (nothing to unmount)"
+    fi
+
+    # 4-8. Remove tenant directory tree — single rm -rf on BASE_DIR covers everything.
+    # Safety: reject empty or paths outside /opt/ /mnt/; skip gracefully if already gone.
     # Skip data removal if containers-only mode
     if [[ "${containers_only}" == "true" ]]; then
         log "Skipping data removal (containers-only mode)"
     else
-        # 4-8. Remove tenant directory tree — single rm -rf on BASE_DIR covers everything.
-        # Safety: reject empty or paths outside /opt/ /mnt/; skip gracefully if already gone.
         if [[ -z "${BASE_DIR:-}" ]]; then
             warn "BASE_DIR is empty - skipping data removal"
         elif [[ ! "${BASE_DIR}" =~ ^/opt/ && ! "${BASE_DIR}" =~ ^/mnt/ ]]; then
@@ -222,22 +237,12 @@ main() {
             log "Tenant directory already gone (nothing to remove): ${BASE_DIR}"
         fi
     fi
-    
+
     # 9. docker network rm "${DOCKER_NETWORK}" || true
     if [[ -n "${DOCKER_NETWORK:-}" ]]; then
         log "Removing Docker network: ${DOCKER_NETWORK}"
         run_cmd docker network rm "${DOCKER_NETWORK}" || true
         ok "Docker network removed"
-    fi
-    
-    # 9. Unmount EBS volume if mounted (always — EBS is tenant-scoped)
-    local mount_point="/mnt/${tenant_id}"
-    if mountpoint -q "$mount_point" 2>/dev/null; then
-        log "Unmounting EBS volume: $mount_point"
-        run_cmd umount "$mount_point"
-        ok "EBS volume unmounted: $mount_point"
-    else
-        log "No EBS volume mounted at $mount_point (nothing to unmount)"
     fi
     
     echo ""
