@@ -373,40 +373,65 @@ configure_storage() {
     log "OK: Storage configuration complete"
 }
 
-# CORRECTED EBS detection using fdisk and Amazon EBS identification
+# EBS detection using lsblk — works for both legacy /dev/sd* and NVMe /dev/nvme* devices
 detect_and_select_ebs() {
     echo ""
-    echo "🔍 Scanning for Amazon EBS volumes..."
+    echo "🔍 Scanning for available block devices (including NVMe)..."
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    
-    local count=1
+
     local devices=()
     local descriptions=()
-    
-    # Use fdisk -l to find EBS volumes by looking for "Amazon Elastic Block Store"
+
+    # Determine which device hosts the root filesystem so we can skip it
+    local root_dev
+    root_dev=$(lsblk -no PKNAME "$(findmnt -n -o SOURCE /)" 2>/dev/null \
+        || lsblk -no NAME "$(findmnt -n -o SOURCE /)" 2>/dev/null \
+        || true)
+
+    # Enumerate all whole-disk block devices (TYPE=disk, no loop/ram)
     while IFS= read -r line; do
-        if [[ "$line" =~ ^Disk\ /dev/.*:\ .* ]]; then
-            local disk=$(echo "$line" | awk '{print $2}' | sed 's/://')
-            local size=$(echo "$line" | awk '{print $3}' | sed 's/,//')
-            
-            # Check if this is an EBS volume by examining its description
-            if fdisk -l "$disk" 2>/dev/null | grep -q "Amazon Elastic Block Store"; then
-                devices+=("$disk")
-                descriptions+=("$disk - Amazon EBS Volume ($size)")
-                ((count++))
-            fi
+        local name size model
+        name=$(awk '{print $1}' <<<"$line")
+        size=$(awk '{print $2}' <<<"$line")
+        # Model is everything after name+size (may be empty)
+        model=$(awk '{$1=""; $2=""; sub(/^[[:space:]]+/,"",$0); print}' <<<"$line")
+
+        local dev="/dev/$name"
+        [[ -b "$dev" ]] || continue
+
+        # Skip the root device
+        [[ "$name" == "$root_dev" ]] && continue
+
+        # Build human-readable label; highlight EBS volumes explicitly
+        local label
+        if echo "$model" | grep -qi "Amazon Elastic Block Store"; then
+            label="$dev — Amazon EBS ($size)"
+        elif echo "$model" | grep -qi "amazon"; then
+            label="$dev — Amazon volume ($size) [$model]"
+        elif [[ -n "$model" ]]; then
+            label="$dev — $model ($size)"
+        else
+            label="$dev ($size)"
         fi
-    done < <(fdisk -l 2>/dev/null | grep "^Disk /dev/")
-    
-    # Add OS disk option
+
+        # Annotate if already mounted somewhere
+        local current_mount
+        current_mount=$(lsblk -no MOUNTPOINT "$dev" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+        [[ -n "$current_mount" ]] && label+="  [mounted: $current_mount]"
+
+        devices+=("$dev")
+        descriptions+=("$label")
+    done < <(lsblk -d -o NAME,SIZE,MODEL --noheadings 2>/dev/null \
+        | grep -v "^loop" | grep -v "^ram")
+
+    # Always offer an "OS disk" fallback as the last option
     devices+=("")
-    descriptions+=("Use existing /mnt/${TENANT_ID}/ on OS disk (no separate volume)")
-    
-    # Use menu system for selection
+    descriptions+=("Use OS disk — no separate volume (data under /mnt/${TENANT_ID})")
+
     if [[ ${#devices[@]} -gt 1 ]]; then
-        select_menu_option "EBS Volume Selection" "${descriptions[@]}"
+        select_menu_option "Block Device Selection" "${descriptions[@]}"
         local choice=$?
-        
+
         if [[ $choice -eq $((${#devices[@]}-1)) ]]; then
             echo "✅ Selected: OS disk storage"
             EBS_DEVICE=""
@@ -415,13 +440,11 @@ detect_and_select_ebs() {
             EBS_DEVICE="${devices[$choice]}"
             echo "✅ Selected: $EBS_DEVICE"
             USE_EBS="true"
-            # Format and mount the selected EBS volume
             format_and_mount_ebs
         fi
     else
         echo ""
-        echo "⚠️  No EBS volumes found."
-        echo "   This is normal if running on local instances or non-AWS environments."
+        echo "⚠️  No additional block devices found."
         echo "   Will use OS disk for storage."
         echo ""
         EBS_DEVICE=""
@@ -1734,8 +1757,8 @@ EBS_MOUNT_OPTS="${EBS_MOUNT_OPTS:-defaults,noatime}"
 # =============================================================================
 # STACK CONFIGURATION
 # =============================================================================
-STACK_PRESET="${STACK_PRESET}"
-STACK_NAME="${STACK_NAME}"
+STACK_PRESET="${STACK_PRESET:-5}"
+STACK_NAME="${STACK_NAME:-custom}"
 
 # Infrastructure Services
 ENABLE_POSTGRES="${ENABLE_POSTGRES:-false}"
@@ -1774,6 +1797,8 @@ ENABLE_AUTHENTIK="${ENABLE_AUTHENTIK:-false}"
 
 # Additional Services
 ENABLE_SIGNALBOT="${ENABLE_SIGNALBOT:-false}"
+SIGNAL_PHONE="${SIGNAL_PHONE:-}"
+SIGNAL_RECIPIENT="${SIGNAL_RECIPIENT:-}"
 
 # =============================================================================
 # INGESTION CONFIGURATION
@@ -1798,7 +1823,7 @@ LOCAL_INGESTION_PATH="${LOCAL_INGESTION_PATH:-/mnt/${TENANT_ID}/ingestion}"
 # =============================================================================
 # LLM GATEWAY CONFIGURATION
 # =============================================================================
-LLM_GATEWAY_TYPE="${LLM_GATEWAY_TYPE}"
+LLM_GATEWAY_TYPE="${LLM_GATEWAY_TYPE:-litellm}"
 
 # LiteLLM Configuration
 LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-$(gen_secret)}"
@@ -1818,7 +1843,7 @@ OLLAMA_PORT="${OLLAMA_PORT:-11434}"
 # =============================================================================
 # VECTOR DATABASE CONFIGURATION
 # =============================================================================
-VECTOR_DB_TYPE="${VECTOR_DB_TYPE}"
+VECTOR_DB_TYPE="${VECTOR_DB_TYPE:-qdrant}"
 
 # Qdrant Configuration
 QDRANT_PORT="${QDRANT_PORT:-6333}"
@@ -1841,7 +1866,7 @@ MILVUS_API_KEY="${MILVUS_API_KEY:-$(gen_secret)}"
 # =============================================================================
 # TLS CONFIGURATION
 # =============================================================================
-TLS_MODE="${TLS_MODE}"
+TLS_MODE="${TLS_MODE:-self-signed}"
 
 # Let's Encrypt Configuration
 LETSENCRYPT_EMAIL="${LETSENCRYPT_EMAIL:-${ADMIN_EMAIL}}"
@@ -1958,8 +1983,8 @@ GPU_TYPE="${GPU_TYPE:-none}"
 GPU_MEMORY="${GPU_MEMORY:-0}"
 
 # Memory Configuration
-TOTAL_RAM="${TOTAL_RAM}"
-AVAILABLE_RAM="${AVAILABLE_RAM}"
+TOTAL_RAM="${TOTAL_RAM:-0}"
+AVAILABLE_RAM="${AVAILABLE_RAM:-0}"
 
 # Network Configuration
 HOST_MTU="${HOST_MTU:-1500}"
@@ -2759,7 +2784,7 @@ VECTOR_DB_TYPE="${VECTOR_DB_TYPE:-none}"
 # =============================================================================
 # TLS CONFIGURATION
 # =============================================================================
-TLS_MODE="${TLS_MODE}"
+TLS_MODE="${TLS_MODE:-self-signed}"
 TLS_EMAIL="${TLS_EMAIL:-}"
 TLS_CERT_PATH="${TLS_CERT_PATH:-}"
 TLS_KEY_PATH="${TLS_KEY_PATH:-}"
@@ -3305,14 +3330,25 @@ main() {
     # Initialize all service enable variables to prevent unbound variable errors
     initialize_service_variables
     
-    # Run interactive collection or template processing
+    # Run interactive collection, optionally pre-seeding from a template
     if [[ -n "$template_file" ]]; then
-        log "📄 Processing template file: $template_file"
-        # TODO: Implement template processing
-        fail "Template processing not yet implemented"
-    else
-        run_interactive_collection
+        log "📄 Loading template: $template_file"
+        if [[ ! -f "$template_file" ]]; then
+            fail "Template file not found: $template_file"
+        fi
+        # Source template to pre-fill variables
+        # shellcheck source=/dev/null
+        source "$template_file" || fail "Failed to load template: $template_file"
+        # Export all uppercase vars so safe_read() can detect them via printenv
+        while IFS='=' read -r key _; do
+            [[ "$key" =~ ^[A-Z][A-Z0-9_]+$ ]] && export "$key" 2>/dev/null || true
+        done < <(grep -E '^[A-Z][A-Z0-9_]+=' "$template_file" | grep -v '^#')
+        # CLI tenant_id overrides template TENANT_ID
+        [[ -n "$tenant_id" ]] && export TENANT_ID="$tenant_id"
+        log "✅ Template loaded — all pre-filled variables will auto-confirm"
+        log "   To override any value, unset the variable before running"
     fi
+    run_interactive_collection
     
     # Create idempotency marker
     mkdir -p "${DATA_DIR}/.configured"

@@ -1136,38 +1136,9 @@ main() {
     
     # Show credentials summary
     show_credentials
-    
-    # End-to-end final verification (P2 fix)
-    echo ""
-    echo "=== Final Platform Verification ==="
-    SERVICES=(
-        "Ollama API|http://localhost:${OLLAMA_PORT}/api/tags"
-        "Open WebUI|http://localhost:${OPENWEBUI_PORT}"
-        "n8n|http://localhost:${N8N_PORT}/healthz"
-        "Qdrant|http://localhost:${QDRANT_PORT}/healthz"
-    )
-    ALL_OK=true
-    for svc in "${SERVICES[@]}"; do
-        name="${svc%%|*}"
-        url="${svc##*|}"
-        if curl -sf "$url" &>/dev/null; then
-            echo "  ✓ $name"
-        else
-            echo "  ✗ $name — check nginx config and container logs"
-            ALL_OK=false
-        fi
-    done
 
-    if $ALL_OK; then
-        echo ""
-        echo "Platform is ready. Access at:"
-        echo "  Open WebUI : http://$(hostname -I | awk '{print $1}')"
-        echo "  n8n        : http://$(hostname -I | awk '{print $1}')/n8n"
-        echo "  Qdrant     : http://$(hostname -I | awk '{print $1}')/qdrant"
-    else
-        echo ""
-        echo "Some services failed. Run: docker ps && docker compose -f $COMPOSE_FILE logs"
-    fi
+    # Comprehensive Mission Control checks
+    run_mission_control
     
     echo ""
     echo "╔══════════════════════════════════════════════════════════╗"
@@ -1176,11 +1147,319 @@ main() {
     echo ""
     echo "  ✓ platform.conf sourced (single source of truth)"
     echo "  ✓ Service APIs called for setup"
-    echo "  ✓ Health checks performed"
-    echo "  ✓ Connectivity verified"
-    echo "  ✓ Access summary generated"
+    echo "  ✓ Port health checks (per-service)"
+    echo "  ✓ DNS resolution validated"
+    echo "  ✓ API keys live-tested"
+    echo "  ✓ Rclone credentials validated"
+    echo "  ✓ Signal pairing status checked"
+    echo "  ✓ Access URLs displayed"
     echo ""
-    echo "  Platform is ready for use!"
+    echo "  Mission Control complete. Platform is ready for use!"
+    echo ""
+}
+
+# =============================================================================
+# MISSION CONTROL: MODULAR HEALTH CHECKS
+# Each function is self-contained, non-fatal (warns rather than fails),
+# and returns 0=OK 1=degraded so callers can aggregate results.
+# =============================================================================
+
+# ── Port Health ───────────────────────────────────────────────────────────────
+check_port_health() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  PORT HEALTH CHECKS"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    local all_ok=true
+
+    _port_check() {
+        local label="$1" port="$2" path="${3:-/}"
+        local url="http://127.0.0.1:${port}${path}"
+        if curl -sf --max-time 5 "$url" >/dev/null 2>&1; then
+            echo "  ✓ ${label} (port ${port})"
+        else
+            echo "  ✗ ${label} (port ${port}) — not responding"
+            all_ok=false
+        fi
+    }
+
+    [[ "${POSTGRES_ENABLED:-false}"   == "true" ]] && \
+        { docker exec "${TENANT_PREFIX}-postgres" pg_isready -U "${POSTGRES_USER}" >/dev/null 2>&1 \
+          && echo "  ✓ PostgreSQL (port ${POSTGRES_PORT:-5432})" \
+          || { echo "  ✗ PostgreSQL (port ${POSTGRES_PORT:-5432}) — not ready"; all_ok=false; }; }
+
+    [[ "${REDIS_ENABLED:-false}"      == "true" ]] && \
+        { docker exec "${TENANT_PREFIX}-redis" redis-cli -a "${REDIS_PASSWORD}" ping 2>/dev/null | grep -q PONG \
+          && echo "  ✓ Redis (port ${REDIS_PORT:-6379})" \
+          || { echo "  ✗ Redis (port ${REDIS_PORT:-6379}) — PING failed"; all_ok=false; }; }
+
+    [[ "${OLLAMA_ENABLED:-false}"     == "true" ]] && _port_check "Ollama"     "${OLLAMA_PORT:-11434}"   "/api/tags"
+    [[ "${LITELLM_ENABLED:-false}"    == "true" ]] && _port_check "LiteLLM"    "${LITELLM_PORT:-4000}"   "/health/liveliness"
+    [[ "${OPENWEBUI_ENABLED:-false}"  == "true" ]] && _port_check "Open WebUI" "${OPENWEBUI_PORT:-3000}" "/"
+    [[ "${QDRANT_ENABLED:-false}"     == "true" ]] && _port_check "Qdrant"     "${QDRANT_PORT:-6333}"    "/healthz"
+    [[ "${N8N_ENABLED:-false}"        == "true" ]] && _port_check "N8N"        "${N8N_PORT:-5678}"       "/healthz"
+    [[ "${FLOWISE_ENABLED:-false}"    == "true" ]] && _port_check "Flowise"    "${FLOWISE_PORT:-3000}"   "/api/v1/ping"
+    [[ "${DIFY_ENABLED:-false}"       == "true" ]] && _port_check "Dify"       "${DIFY_PORT:-3001}"      "/health"
+    [[ "${GRAFANA_ENABLED:-false}"    == "true" ]] && _port_check "Grafana"    "${GRAFANA_PORT:-3001}"   "/api/health"
+    [[ "${PROMETHEUS_ENABLED:-false}" == "true" ]] && _port_check "Prometheus" "${PROMETHEUS_PORT:-9090}" "/-/healthy"
+    [[ "${AUTHENTIK_ENABLED:-false}"  == "true" ]] && _port_check "Authentik"  "${AUTHENTIK_PORT:-9000}" "/-/health/"
+    [[ "${SIGNALBOT_ENABLED:-false}"  == "true" ]] && _port_check "Signalbot"  "${SIGNALBOT_PORT:-8080}" "/v1/about"
+
+    $all_ok && ok "All port checks passed" || warn "Some services are not responding on their ports"
+    $all_ok
+}
+
+# ── DNS Resolution ─────────────────────────────────────────────────────────────
+check_dns_resolution() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  DNS RESOLUTION CHECK"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    local domain="${BASE_DOMAIN:-${DOMAIN:-}}"
+    if [[ -z "$domain" ]]; then
+        warn "DOMAIN not set — skipping DNS check"
+        return 0
+    fi
+
+    local host_ip
+    host_ip=$(dig +short "$domain" 2>/dev/null | tail -1 || true)
+    local server_ip
+    server_ip=$(curl -sf --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
+
+    if [[ -z "$host_ip" ]]; then
+        warn "DNS: ${domain} does not resolve — check your DNS provider"
+        return 1
+    fi
+
+    if [[ "$host_ip" == "$server_ip" ]]; then
+        echo "  ✓ DNS: ${domain} → ${host_ip} (matches server IP)"
+    else
+        echo "  ⚠ DNS: ${domain} → ${host_ip} (server IP: ${server_ip}) — may be behind a load balancer or misconfigured"
+    fi
+    ok "DNS check complete"
+}
+
+# ── API Key Live Tests ─────────────────────────────────────────────────────────
+check_api_keys() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  API KEY VALIDATION"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    local any_tested=false
+
+    _test_openai() {
+        [[ -z "${OPENAI_API_KEY:-}" ]] && return 0
+        any_tested=true
+        local resp
+        resp=$(curl -sf --max-time 10 https://api.openai.com/v1/models \
+            -H "Authorization: Bearer ${OPENAI_API_KEY}" 2>/dev/null || true)
+        if echo "$resp" | grep -q '"id"'; then
+            echo "  ✓ OpenAI API key valid"
+        else
+            echo "  ✗ OpenAI API key invalid or network error"
+        fi
+    }
+
+    _test_anthropic() {
+        [[ -z "${ANTHROPIC_API_KEY:-}" ]] && return 0
+        any_tested=true
+        local resp
+        resp=$(curl -sf --max-time 10 https://api.anthropic.com/v1/models \
+            -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+            -H "anthropic-version: 2023-06-01" 2>/dev/null || true)
+        if echo "$resp" | grep -q '"id"'; then
+            echo "  ✓ Anthropic API key valid"
+        else
+            echo "  ✗ Anthropic API key invalid or network error"
+        fi
+    }
+
+    _test_google() {
+        local key="${GOOGLE_AI_API_KEY:-${GOOGLE_API_KEY:-}}"
+        [[ -z "$key" ]] && return 0
+        any_tested=true
+        local resp
+        resp=$(curl -sf --max-time 10 \
+            "https://generativelanguage.googleapis.com/v1/models?key=${key}" 2>/dev/null || true)
+        if echo "$resp" | grep -q '"name"'; then
+            echo "  ✓ Google AI API key valid"
+        else
+            echo "  ✗ Google AI API key invalid or network error"
+        fi
+    }
+
+    _test_groq() {
+        [[ -z "${GROQ_API_KEY:-}" ]] && return 0
+        any_tested=true
+        local resp
+        resp=$(curl -sf --max-time 10 https://api.groq.com/openai/v1/models \
+            -H "Authorization: Bearer ${GROQ_API_KEY}" 2>/dev/null || true)
+        if echo "$resp" | grep -q '"id"'; then
+            echo "  ✓ Groq API key valid"
+        else
+            echo "  ✗ Groq API key invalid or network error"
+        fi
+    }
+
+    _test_openai
+    _test_anthropic
+    _test_google
+    _test_groq
+
+    if $any_tested; then
+        ok "API key checks complete"
+    else
+        echo "  ℹ  No API keys configured — skipping live tests"
+    fi
+}
+
+# ── Rclone / JSON Credentials ──────────────────────────────────────────────────
+check_rclone_credentials() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  RCLONE / INGESTION CREDENTIALS CHECK"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    if [[ "${ENABLE_INGESTION:-false}" != "true" ]]; then
+        echo "  ℹ  Ingestion not enabled — skipping"
+        return 0
+    fi
+
+    if [[ "${INGESTION_METHOD:-rclone}" != "rclone" ]]; then
+        echo "  ℹ  Ingestion method is '${INGESTION_METHOD}', not rclone — skipping"
+        return 0
+    fi
+
+    local cred_file="${GDRIVE_CREDENTIALS_FILE:-}"
+    if [[ -z "$cred_file" ]]; then
+        warn "GDRIVE_CREDENTIALS_FILE not set — rclone sync will fail"
+        return 1
+    fi
+
+    if [[ ! -f "$cred_file" ]]; then
+        warn "Credentials file not found: $cred_file"
+        return 1
+    fi
+
+    # Validate JSON structure
+    if ! jq -e '.type // .client_email // .token_uri' "$cred_file" >/dev/null 2>&1; then
+        warn "Credentials file is not valid Google service account JSON: $cred_file"
+        return 1
+    fi
+
+    echo "  ✓ Credentials file valid JSON: $cred_file"
+
+    # Test rclone connectivity if rclone is available
+    if command -v rclone >/dev/null 2>&1; then
+        local rclone_conf="${DATA_DIR}/rclone/rclone.conf"
+        if [[ -f "$rclone_conf" ]]; then
+            if rclone lsd "${RCLONE_REMOTE:-gdrive}:" --config "$rclone_conf" --max-depth 1 >/dev/null 2>&1; then
+                echo "  ✓ Rclone can connect to remote '${RCLONE_REMOTE:-gdrive}'"
+            else
+                warn "Rclone cannot connect to remote '${RCLONE_REMOTE:-gdrive}' — check credentials and permissions"
+                return 1
+            fi
+        else
+            echo "  ℹ  rclone.conf not yet generated (run Script 2 first)"
+        fi
+    else
+        echo "  ℹ  rclone binary not installed on host — validation via container only"
+    fi
+
+    ok "Rclone credentials check complete"
+}
+
+# ── Signal Pairing Status ──────────────────────────────────────────────────────
+check_signal_pairing() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  SIGNAL PAIRING STATUS"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    if [[ "${SIGNALBOT_ENABLED:-false}" != "true" ]]; then
+        echo "  ℹ  Signalbot not enabled — skipping"
+        return 0
+    fi
+
+    local signalbot_url="http://127.0.0.1:${SIGNALBOT_PORT:-8080}"
+    local phone="${SIGNAL_PHONE:-}"
+
+    # Check if API is reachable
+    local about
+    about=$(curl -sf --max-time 5 "${signalbot_url}/v1/about" 2>/dev/null || true)
+    if [[ -z "$about" ]]; then
+        warn "Signalbot API not reachable at ${signalbot_url}"
+        return 1
+    fi
+
+    echo "  ✓ Signalbot API reachable"
+    local api_version
+    api_version=$(echo "$about" | jq -r '.build.version // "unknown"' 2>/dev/null || true)
+    echo "    Version: ${api_version}"
+
+    if [[ -z "$phone" ]]; then
+        warn "SIGNAL_PHONE not configured — cannot check pairing status"
+        return 1
+    fi
+
+    # Check if number is registered/linked
+    local accounts
+    accounts=$(curl -sf --max-time 5 "${signalbot_url}/v1/accounts" 2>/dev/null || true)
+    if echo "$accounts" | jq -e '.[] | select(. == "'"${phone}"'")' >/dev/null 2>&1; then
+        echo "  ✓ Signal number ${phone} is registered and linked"
+    else
+        echo "  ✗ Signal number ${phone} is NOT paired"
+        echo ""
+        echo "  To pair your Signal account:"
+        echo "    Option A — Link existing device (scan QR code):"
+        echo "      curl -s '${signalbot_url}/v1/qrcodelink/${phone}?device_name=ai-platform' | jq -r '.uri'"
+        echo "      Then scan the URI with: signal-cli link -n 'ai-platform'"
+        echo ""
+        echo "    Option B — Register new number:"
+        echo "      curl -s -X POST '${signalbot_url}/v1/register/${phone}'"
+        echo "      curl -s -X POST '${signalbot_url}/v1/register/${phone}/verify/<CODE>'"
+        return 1
+    fi
+
+    ok "Signal pairing check complete"
+}
+
+# ── Comprehensive Mission Control ──────────────────────────────────────────────
+run_mission_control() {
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════╗"
+    echo "║            MISSION CONTROL — PLATFORM STATUS             ║"
+    echo "╚══════════════════════════════════════════════════════════╝"
+
+    local overall_ok=true
+
+    check_port_health       || overall_ok=false
+    check_dns_resolution    || overall_ok=false
+    check_api_keys          || true  # non-fatal — keys may be optional
+    check_rclone_credentials || true  # non-fatal — ingestion may not be configured
+    check_signal_pairing    || true  # non-fatal — pairing is a setup step
+
+    echo ""
+    if $overall_ok; then
+        echo "  ✓ Platform is fully operational"
+    else
+        echo "  ⚠  Platform has degraded services — review warnings above"
+    fi
+    echo ""
+
+    echo "  Access URLs:"
+    local host_ip
+    host_ip=$(hostname -I | awk '{print $1}')
+    [[ "${OPENWEBUI_ENABLED:-false}"  == "true" ]] && echo "    Open WebUI  → http://${host_ip}:${OPENWEBUI_PORT:-3000}"
+    [[ "${LITELLM_ENABLED:-false}"    == "true" ]] && echo "    LiteLLM     → http://${host_ip}:${LITELLM_PORT:-4000}"
+    [[ "${N8N_ENABLED:-false}"        == "true" ]] && echo "    N8N         → http://${host_ip}:${N8N_PORT:-5678}"
+    [[ "${FLOWISE_ENABLED:-false}"    == "true" ]] && echo "    Flowise     → http://${host_ip}:${FLOWISE_PORT:-3000}"
+    [[ "${GRAFANA_ENABLED:-false}"    == "true" ]] && echo "    Grafana     → http://${host_ip}:${GRAFANA_PORT:-3001}"
+    [[ "${AUTHENTIK_ENABLED:-false}"  == "true" ]] && echo "    Authentik   → http://${host_ip}:${AUTHENTIK_PORT:-9000}"
+    [[ "${CADDY_ENABLED:-false}"      == "true" ]] && echo "    Caddy (TLS) → https://${BASE_DOMAIN:-${DOMAIN:-localhost}}"
     echo ""
 }
 

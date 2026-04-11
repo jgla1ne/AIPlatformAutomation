@@ -290,7 +290,6 @@ generate_compose() {
     fi
     
     cat > "${COMPOSE_FILE}" << EOF
-version: '3.8'
 
 networks:
   ${DOCKER_NETWORK}:
@@ -633,7 +632,6 @@ generate_compose() {
     fi
 
     cat > "${COMPOSE_FILE}" << EOF
-version: '3.8'
 
 networks:
   ${DOCKER_NETWORK}:
@@ -649,7 +647,7 @@ EOF
     image: postgres:15-alpine
     container_name: ${TENANT_PREFIX}-postgres
     restart: unless-stopped
-    user: "${PUID}:${PGID}"
+    # postgres manages its own internal uid (70/alpine) — do not override user:
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -678,7 +676,7 @@ EOF
     image: redis:7-alpine
     container_name: ${TENANT_PREFIX}-redis
     restart: unless-stopped
-    user: "${PUID}:${PGID}"
+    # redis manages its own internal uid (999) — do not override user:
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
     volumes:
       - ${DATA_DIR}/redis:/data
@@ -703,7 +701,7 @@ EOF
     pull_policy: always
     container_name: ${TENANT_PREFIX}-ollama
     restart: unless-stopped
-    user: "${PUID}:${PGID}"
+    # ollama runs as root internally, stores models in /root/.ollama — do not override user:
     volumes:
       - ${DATA_DIR}/ollama:/root/.ollama
     ports:
@@ -830,7 +828,7 @@ EOF
     image: n8nio/n8n:latest
     container_name: ${TENANT_PREFIX}-n8n
     restart: unless-stopped
-    user: "${PUID}:${PGID}"
+    # n8n runs as node (uid 1000) with /home/node — do not override user:
     environment:
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
       N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL}
@@ -864,7 +862,7 @@ EOF
     image: flowiseai/flowise:latest
     container_name: ${TENANT_PREFIX}-flowise
     restart: unless-stopped
-    user: "${PUID}:${PGID}"
+    # flowise stores data in /root/.flowise — do not override user:
     environment:
       DATABASE_TYPE: postgres
       DATABASE_HOST: ${TENANT_PREFIX}-postgres
@@ -931,7 +929,7 @@ EOF
     image: ghcr.io/goauthentik/server:latest
     container_name: ${TENANT_PREFIX}-authentik
     restart: unless-stopped
-    user: "${PUID}:${PGID}"
+    # authentik manages its own internal user — do not override user:
     environment:
       AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
       AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
@@ -957,13 +955,12 @@ EOF
     image: bbernhard/signal-cli-rest-api:latest
     container_name: ${TENANT_PREFIX}-signalbot
     restart: unless-stopped
-    user: "${PUID}:${PGID}"
+    # signal-cli-rest-api runs as internal user (uid 1000) — do not override user:
     environment:
-      MODE: normal
-      PHONE_NUMBER: ${SIGNAL_PHONE}
-      RECIPIENTS: ${SIGNAL_RECIPIENT}
+      MODE: json-rpc
+      PHONE_NUMBER: ${SIGNAL_PHONE:-}
     volumes:
-      - ${DATA_DIR}/signalbot:/home/.local/share/signal-cli
+      - ${DATA_DIR}/signalbot:/home/user/.local/share/signal-cli
     ports:
       - "127.0.0.1:${SIGNALBOT_PORT}:8080"
     networks:
@@ -1024,6 +1021,43 @@ EOF
       interval: 30s
       timeout: 10s
       retries: 5
+
+EOF
+    fi
+
+    # Rclone ingestion (only if ENABLE_INGESTION=true and INGESTION_METHOD=rclone)
+    if [[ "${ENABLE_INGESTION:-false}" == "true" && "${INGESTION_METHOD:-rclone}" == "rclone" ]]; then
+        # Build rclone config inside the data dir so all paths stay under /mnt/$TENANT
+        local rclone_conf_dir="${DATA_DIR}/rclone"
+        mkdir -p "${rclone_conf_dir}"
+        # Generate minimal rclone.conf if credentials file is provided
+        if [[ -n "${GDRIVE_CREDENTIALS_FILE:-}" && -f "${GDRIVE_CREDENTIALS_FILE}" ]]; then
+            cat > "${rclone_conf_dir}/rclone.conf" << RCLONE_EOF
+[${RCLONE_REMOTE:-gdrive}]
+type = drive
+service_account_file = /credentials/credentials.json
+scope = drive.readonly
+RCLONE_EOF
+            chmod 600 "${rclone_conf_dir}/rclone.conf"
+            ok "rclone.conf generated at ${rclone_conf_dir}/rclone.conf"
+        else
+            warn "GDRIVE_CREDENTIALS_FILE not set or not found — rclone container will start but sync will fail until credentials are provided"
+            touch "${rclone_conf_dir}/rclone.conf"
+        fi
+
+        cat >> "${COMPOSE_FILE}" << EOF
+  ${TENANT_PREFIX}-rclone:
+    image: rclone/rclone:latest
+    container_name: ${TENANT_PREFIX}-rclone
+    restart: unless-stopped
+    user: "${PUID}:${PGID}"
+    entrypoint: ["/bin/sh", "-c", "while true; do rclone sync ${RCLONE_REMOTE:-gdrive}: /data --transfers=${RCLONE_TRANSFERS:-4} --checkers=${RCLONE_CHECKERS:-8} --log-level INFO 2>&1; sleep \$((${RCLONE_POLL_INTERVAL:-5}*60)); done"]
+    volumes:
+      - ${rclone_conf_dir}/rclone.conf:/config/rclone/rclone.conf:ro
+      - ${GDRIVE_CREDENTIALS_FILE:-/dev/null}:/credentials/credentials.json:ro
+      - ${DATA_DIR}/ingestion:/data
+    networks:
+      - ${DOCKER_NETWORK}
 
 EOF
     fi
@@ -1388,6 +1422,7 @@ prepare_data_dirs() {
     [[ "${AUTHENTIK_ENABLED}" == "true" ]] && mkdir -p "${DATA_DIR}/authentik"
     [[ "${SIGNALBOT_ENABLED}" == "true" ]] && mkdir -p "${DATA_DIR}/signalbot"
     [[ "${BIFROST_ENABLED}"   == "true" ]] && mkdir -p "${DATA_DIR}/bifrost"
+    [[ "${ENABLE_INGESTION:-false}" == "true" ]] && mkdir -p "${DATA_DIR}/ingestion" "${DATA_DIR}/rclone"
     [[ "${CADDY_ENABLED}"     == "true" ]] && mkdir -p "${DATA_DIR}/caddy" "${DATA_DIR}/logs/caddy"
 
     # Set ownership of the entire tenant tree to PUID:PGID

@@ -69,8 +69,7 @@ main() {
     local tenant_id="${1:-}"
     local dry_run=false
     local containers_only=false
-    local unmount_ebs=false
-    
+
     # Parse arguments
     shift
     while [[ $# -gt 0 ]]; do
@@ -81,10 +80,6 @@ main() {
                 ;;
             --containers-only)
                 containers_only=true
-                shift
-                ;;
-            --unmount-ebs)
-                unmount_ebs=true
                 shift
                 ;;
             *)
@@ -109,7 +104,6 @@ main() {
     log "Tenant: ${tenant_id}"
     log "Dry-run: ${dry_run}"
     log "Containers-only: ${containers_only}"
-    log "Unmount-ebs: ${unmount_ebs}"
     
     # Display banner
     echo ""
@@ -125,6 +119,7 @@ main() {
         echo "     • All data directories for tenant '${tenant_id}'"
         echo "     • All configuration markers"
         echo "     • All system resources (prune)"
+        echo "     • EBS volume unmounted at /mnt/${tenant_id}"
     fi
     echo ""
     echo "  This action cannot be undone!"
@@ -136,7 +131,7 @@ main() {
     fi
     
     # Source platform.conf (README P1 - BUG-02 fix)
-    local platform_conf="/mnt/${tenant_id}/platform.conf"
+    local platform_conf="/mnt/${tenant_id}/config/platform.conf"
     # Set defaults that work whether platform.conf exists or not
     export TENANT_PREFIX="${tenant_id}"
     export TENANT_ID="${tenant_id}"
@@ -144,7 +139,7 @@ main() {
     export DATA_DIR="/mnt/${tenant_id}"
     export CONFIG_DIR="/mnt/${tenant_id}/config"
     export LOGS_DIR="/mnt/${tenant_id}/logs"
-    export COMPOSE_FILE="/mnt/${tenant_id}/docker-compose.yml"
+    export COMPOSE_FILE="/mnt/${tenant_id}/config/docker-compose.yml"
     export DOCKER_NETWORK="${tenant_id}-network"
     
     if [[ ! -f "$platform_conf" ]]; then
@@ -157,19 +152,7 @@ main() {
     
     # Source shared configuration now that variables are set
     [[ -f "${SCRIPT_DIR}/shared-config.sh" ]] && source "${SCRIPT_DIR}/shared-config.sh"
-    
-    # Remove nginx config and reload if active
-    rm -f /etc/nginx/sites-enabled/ai-platform
-    rm -f /etc/nginx/sites-available/ai-platform
-    if systemctl is-active nginx &>/dev/null; then
-        nginx -t && systemctl reload nginx || warn "Nginx config reload failed"
-    fi
-    
-    # Remove systemd service and reload daemon
-    systemctl disable ai-platform 2>/dev/null || true
-    rm -f /etc/systemd/system/ai-platform.service
-    systemctl daemon-reload
-    
+
     # Execution order (README §6 - strict):
     # 1. Typed confirmation: DELETE ${TENANT_ID} (done above)
     
@@ -274,16 +257,14 @@ main() {
         ok "Docker network removed"
     fi
     
-    # 9. Optional: unmount EBS (--unmount-ebs flag)
-    if [[ "${unmount_ebs}" == "true" ]]; then
-        local mount_point="/mnt/${tenant_id}"
-        if mountpoint -q "$mount_point" 2>/dev/null; then
-            log "Unmounting EBS volume: $mount_point"
-            run_cmd umount "$mount_point"
-            ok "EBS volume unmounted"
-        else
-            log "EBS volume not mounted or mount point not found"
-        fi
+    # 9. Unmount EBS volume if mounted (always — EBS is tenant-scoped)
+    local mount_point="/mnt/${tenant_id}"
+    if mountpoint -q "$mount_point" 2>/dev/null; then
+        log "Unmounting EBS volume: $mount_point"
+        run_cmd umount "$mount_point"
+        ok "EBS volume unmounted: $mount_point"
+    else
+        log "No EBS volume mounted at $mount_point (nothing to unmount)"
     fi
     
     echo ""
@@ -299,9 +280,7 @@ main() {
         echo "  ✓ Logs directory removed"
     fi
     echo "  ✓ Docker images removed (scoped)"
-    if [[ "${unmount_ebs}" == "true" ]]; then
-        echo "  ✓ EBS volume unmounted"
-    fi
+    echo "  ✓ EBS volume unmounted (if was mounted)"
     echo ""
     if [[ "${dry_run}" != "true" ]]; then
         echo "  Tenant '${tenant_id}' has been completely nuked"
