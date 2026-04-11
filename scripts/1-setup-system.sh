@@ -436,25 +436,32 @@ format_and_mount_ebs() {
         safe_read "CONFIRM: Format $EBS_DEVICE as ext4? [yes/N]: " "" FORMAT_CONFIRM
         
         if [[ "$FORMAT_CONFIRM" =~ ^[Yy][Ee][Ss]$ ]]; then
-            mkfs.ext4 -F "$EBS_DEVICE" || fail "Failed to format $EBS_DEVICE"
+            sudo mkfs.ext4 -F "$EBS_DEVICE" || fail "Failed to format $EBS_DEVICE (requires sudo)"
             echo "EBS volume formatted successfully"
         else
             fail "EBS volume formatting cancelled"
         fi
-        
-        # Mount EBS volume
+
+        # Mount EBS volume (requires sudo — block device operation)
         echo "Mounting EBS volume..."
-        mkdir -p "/mnt/${TENANT_ID}"
-        mount "$EBS_DEVICE" "/mnt/${TENANT_ID}" || fail "Failed to mount EBS volume"
+        sudo mkdir -p "/mnt/${TENANT_ID}"
+        sudo mount "$EBS_DEVICE" "/mnt/${TENANT_ID}" || fail "Failed to mount EBS volume (requires sudo)"
+        # Hand ownership of the mount point to the current user so scripts can write without root
+        sudo chown "${EUID}:$(id -g)" "/mnt/${TENANT_ID}"
         
-        # Add to fstab
-        local uuid=$(blkid -s UUID -o value "$EBS_DEVICE")
+        # Add to fstab (requires sudo — non-root execution; graceful fallback)
+        local uuid
+        uuid=$(blkid -s UUID -o value "$EBS_DEVICE")
         local fstab_entry="UUID=$uuid  /mnt/${TENANT_ID}  ext4  defaults,nofail  0  0"
-        
-        if ! grep -q "UUID=$uuid" /etc/fstab; then
-            echo "$fstab_entry" >> /etc/fstab
-            systemctl daemon-reload
-            echo "Added to fstab: $fstab_entry"
+
+        if ! grep -q "UUID=$uuid" /etc/fstab 2>/dev/null; then
+            if echo "$fstab_entry" | sudo tee -a /etc/fstab >/dev/null 2>&1; then
+                sudo systemctl daemon-reload 2>/dev/null || true
+                echo "  ✅ fstab updated for persistent mount"
+            else
+                warn "Could not write to /etc/fstab (no sudo?). Mount is session-only."
+                warn "To persist manually: echo '$fstab_entry' | sudo tee -a /etc/fstab"
+            fi
         fi
         
         echo "EBS volume mounted successfully"
@@ -913,8 +920,8 @@ configure_manual_tls() {
     echo ""
     log "🎯 Configuring Manual TLS..."
     
-    safe_read "Certificate file path" "/etc/ssl/certs/${DOMAIN}.crt" "TLS_CERT_FILE"
-    safe_read "Private key file path" "/etc/ssl/private/${DOMAIN}.key" "TLS_KEY_FILE"
+    safe_read "Certificate file path" "${DATA_DIR}/config/ssl/${DOMAIN}.crt" "TLS_CERT_FILE"
+    safe_read "Private key file path" "${DATA_DIR}/config/ssl/${DOMAIN}.key" "TLS_KEY_FILE"
     
     # Validate files exist
     if [[ ! -f "$TLS_CERT_FILE" ]]; then
@@ -1842,8 +1849,8 @@ LETSENCRYPT_STAGING="${LETSENCRYPT_STAGING:-false}"
 LETSENCRYPT_AUTO_RENEW="${LETSENCRYPT_AUTO_RENEW:-true}"
 
 # Manual TLS Configuration
-TLS_CERT_FILE="${TLS_CERT_FILE:-/etc/ssl/certs/${DOMAIN}.crt}"
-TLS_KEY_FILE="${TLS_KEY_FILE:-/etc/ssl/private/${DOMAIN}.key}"
+TLS_CERT_FILE="${TLS_CERT_FILE:-${DATA_DIR}/config/ssl/${DOMAIN}.crt}"
+TLS_KEY_FILE="${TLS_KEY_FILE:-${DATA_DIR}/config/ssl/${DOMAIN}.key}"
 
 # Self-Signed TLS Configuration
 SELF_SIGNED_DAYS="${SELF_SIGNED_DAYS:-365}"

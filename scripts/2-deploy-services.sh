@@ -617,13 +617,21 @@ generate_compose() {
         authentik_deps=$(build_authentik_deps)
     fi
     
+    # VOLUME MOUNT NOTE (for reviewers):
+    # Volume entries follow the format  host_path:container_path
+    # ALL host-side paths are under ${DATA_DIR} (/mnt/<tenant>/...) — core principle.
+    # Container-side paths (right side) are the images' internal expectations and
+    # cannot be changed (e.g. :/etc/caddy, :/root/.ollama, :/var/lib/postgresql/data).
+    # They are NOT host paths. Ownership is enforced by prepare_data_dirs() which runs
+    # before this function and sets PUID:PGID on every host-side directory.
+
     # Header and networks
     # Backup existing compose file (P3 fix)
     if [[ -f "${COMPOSE_FILE}" ]]; then
         cp "${COMPOSE_FILE}" "${COMPOSE_FILE}.bak.$(date +%Y%m%d_%H%M%S)"
         echo "Existing compose file backed up to ${COMPOSE_FILE}.bak.$(date +%Y%m%d_%H%M%S)"
     fi
-    
+
     cat > "${COMPOSE_FILE}" << EOF
 version: '3.8'
 
@@ -1345,6 +1353,50 @@ validate_caddyfile() {
     ok "Caddyfile is valid"
 }
 
+# =============================================================================
+# DATA DIRECTORY PREPARATION (core principle: /mnt ownership, non-root)
+# Must run before compose up so Docker never creates dirs as root.
+# Each dir is created with PUID:PGID ownership so containers running as that
+# user can write without privilege escalation.
+# =============================================================================
+prepare_data_dirs() {
+    log "Preparing tenant data directories under ${DATA_DIR} ..."
+
+    # Base structure
+    mkdir -p \
+        "${DATA_DIR}/config" \
+        "${DATA_DIR}/config/ssl" \
+        "${DATA_DIR}/config/caddy" \
+        "${DATA_DIR}/config/litellm" \
+        "${DATA_DIR}/config/bifrost" \
+        "${DATA_DIR}/logs" \
+        "${DATA_DIR}/.configured"
+
+    # Per-service data directories (only create what is enabled to avoid clutter)
+    [[ "${POSTGRES_ENABLED}"  == "true" ]] && mkdir -p "${DATA_DIR}/postgres"
+    [[ "${REDIS_ENABLED}"     == "true" ]] && mkdir -p "${DATA_DIR}/redis"
+    [[ "${OLLAMA_ENABLED}"    == "true" ]] && mkdir -p "${DATA_DIR}/ollama"
+    [[ "${OPENWEBUI_ENABLED}" == "true" ]] && mkdir -p "${DATA_DIR}/openwebui"
+    [[ "${OPENCLAW_ENABLED}"  == "true" ]] && mkdir -p "${DATA_DIR}/openclaw"
+    [[ "${QDRANT_ENABLED}"    == "true" ]] && mkdir -p "${DATA_DIR}/qdrant"
+    [[ "${WEAVIATE_ENABLED}"  == "true" ]] && mkdir -p "${DATA_DIR}/weaviate"
+    [[ "${N8N_ENABLED}"       == "true" ]] && mkdir -p "${DATA_DIR}/n8n"
+    [[ "${FLOWISE_ENABLED}"   == "true" ]] && mkdir -p "${DATA_DIR}/flowise"
+    [[ "${DIFY_ENABLED}"      == "true" ]] && mkdir -p "${DATA_DIR}/dify"
+    [[ "${GRAFANA_ENABLED}"   == "true" ]] && mkdir -p "${DATA_DIR}/grafana"
+    [[ "${PROMETHEUS_ENABLED}" == "true" ]] && mkdir -p "${DATA_DIR}/prometheus"
+    [[ "${AUTHENTIK_ENABLED}" == "true" ]] && mkdir -p "${DATA_DIR}/authentik"
+    [[ "${SIGNALBOT_ENABLED}" == "true" ]] && mkdir -p "${DATA_DIR}/signalbot"
+    [[ "${BIFROST_ENABLED}"   == "true" ]] && mkdir -p "${DATA_DIR}/bifrost"
+    [[ "${CADDY_ENABLED}"     == "true" ]] && mkdir -p "${DATA_DIR}/caddy" "${DATA_DIR}/logs/caddy"
+
+    # Set ownership of the entire tenant tree to PUID:PGID
+    # (chown -R is safe here: all paths are under /mnt/<tenant>)
+    chown -R "${PUID}:${PGID}" "${DATA_DIR}"
+
+    ok "Data directories ready under ${DATA_DIR} (owner ${PUID}:${PGID})"
+}
+
 deploy_containers() {
     log "Deploying containers..."
     
@@ -1550,7 +1602,11 @@ main() {
     else
         log "Pre-flight checks already completed, skipping"
     fi
-    
+
+    # 2b. Prepare data directories (idempotent — safe to re-run)
+    #     Runs every time to ensure ownership is correct even after re-mounts.
+    prepare_data_dirs
+
     # 3. generate_compose()
     if ! step_done "compose_generated"; then
         generate_compose
