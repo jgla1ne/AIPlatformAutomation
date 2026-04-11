@@ -17,7 +17,6 @@
 # =============================================================================
 
 set -euo pipefail
-trap 'echo "ERROR at line $LINENO. Check logs."; exit 1' ERR
 
 # =============================================================================
 # NON-ROOT EXECUTION CHECK (README P7)
@@ -28,36 +27,6 @@ if [[ $EUID -eq 0 ]]; then
 fi
 
 # =============================================================================
-# PREREQUISITE CHAIN CHECKS (P2 fix)
-# =============================================================================
-# Source shared configuration (supports both /mnt and /opt)
-if [[ -f /etc/ai-platform.env ]]; then
-    source /etc/ai-platform.env
-else
-    fail "ERROR: /etc/ai-platform.env not found. Run 1-setup-system.sh first."
-fi
-
-# Check Docker installation
-if ! command -v docker &>/dev/null; then
-    fail "ERROR: Docker not found. Run 1-setup-system.sh first."
-fi
-
-# Check Docker daemon
-if ! docker info &>/dev/null; then
-    fail "ERROR: Docker daemon not running. Start it with: sudo systemctl start docker"
-fi
-
-# Check compose file exists
-if [[ ! -f "${COMPOSE_FILE}" ]]; then
-    fail "ERROR: Compose file not found at ${COMPOSE_FILE}. Run 2-deploy-services.sh first."
-fi
-
-# Check containers are running
-if ! docker ps --filter "name=ollama" --filter "status=running" --quiet | grep -q .; then
-    fail "ERROR: Ollama container not running. Run 2-deploy-services.sh first."
-fi
-
-# =============================================================================
 # SCRIPT CONFIGURATION
 # =============================================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -65,10 +34,9 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SCRIPT_VERSION="5.1.0"
 
 # =============================================================================
-# LOGGING (README P11)
+# LOGGING (README P11) — path resolved after sourcing platform.conf in main()
 # =============================================================================
-LOG_FILE="/var/log/ai-platform-configure.log"
-exec > >(tee -a "$LOG_FILE") 2>&1
+LOG_FILE="/tmp/ai-platform-configure.log"
 log() {
     local msg="[$(date +%H:%M:%S)] $*"
     echo "$msg"
@@ -1044,21 +1012,49 @@ main() {
         fail "Tenant ID is required"
     fi
     
-    # Source platform.conf (README P1 - BUG-02 fix)
-    local platform_conf="/mnt/${tenant_id}/platform.conf"
+    # Source platform.conf (single source of truth)
+    local platform_conf="/mnt/${tenant_id}/config/platform.conf"
     if [[ ! -f "$platform_conf" ]]; then
         fail "platform.conf not found at $platform_conf. Run script 1 first."
     fi
     # shellcheck source=/dev/null
     source "$platform_conf"
-    
-    # Source shared configuration now that variables are set
-    [[ -f "${SCRIPT_DIR}/shared-config.sh" ]] && source "${SCRIPT_DIR}/shared-config.sh"
-    
-    # Set up logging
-    LOG_FILE="${LOG_DIR}/$(basename "$0" .sh)-$(date +%Y%m%d-%H%M%S).log"
-    CONFIGURED_DIR="${BASE_DIR}/.configured"
-    mkdir -p "$CONFIGURED_DIR"
+
+    # Normalise / derive variables
+    CONFIGURED_DIR="${DATA_DIR}/.configured"
+    BASE_DIR="${DATA_DIR}"
+    CONFIG_DIR="${DATA_DIR}/config"
+    LOG_FILE="${DATA_DIR}/logs/configure-$(date +%Y%m%d-%H%M%S).log"
+
+    mkdir -p "${DATA_DIR}/logs" "$CONFIGURED_DIR"
+
+    # Derive TENANT_PREFIX if not in platform.conf (backward compat)
+    TENANT_PREFIX="${TENANT_PREFIX:-${PLATFORM_PREFIX}-${TENANT_ID}}"
+    POSTGRES_USER="${POSTGRES_USER:-${TENANT_ID}}"
+    POSTGRES_DB="${POSTGRES_DB:-${TENANT_ID}}"
+    BASE_DOMAIN="${BASE_DOMAIN:-${DOMAIN}}"
+    PROXY_EMAIL="${PROXY_EMAIL:-${ADMIN_EMAIL}}"
+    PUID="${PUID:-$(id -u)}"
+    PGID="${PGID:-$(id -g)}"
+
+    # Map ENABLE_* → *_ENABLED (backward compat with old platform.conf)
+    POSTGRES_ENABLED="${POSTGRES_ENABLED:-${ENABLE_POSTGRES:-false}}"
+    REDIS_ENABLED="${REDIS_ENABLED:-${ENABLE_REDIS:-false}}"
+    OLLAMA_ENABLED="${OLLAMA_ENABLED:-${ENABLE_OLLAMA:-false}}"
+    LITELLM_ENABLED="${LITELLM_ENABLED:-${ENABLE_LITELLM:-false}}"
+    OPENWEBUI_ENABLED="${OPENWEBUI_ENABLED:-${ENABLE_OPENWEBUI:-false}}"
+    QDRANT_ENABLED="${QDRANT_ENABLED:-${ENABLE_QDRANT:-false}}"
+    WEAVIATE_ENABLED="${WEAVIATE_ENABLED:-${ENABLE_WEAVIATE:-false}}"
+    N8N_ENABLED="${N8N_ENABLED:-${ENABLE_N8N:-false}}"
+    FLOWISE_ENABLED="${FLOWISE_ENABLED:-${ENABLE_FLOWISE:-false}}"
+    DIFY_ENABLED="${DIFY_ENABLED:-${ENABLE_DIFY:-false}}"
+    GRAFANA_ENABLED="${GRAFANA_ENABLED:-${ENABLE_GRAFANA:-false}}"
+    PROMETHEUS_ENABLED="${PROMETHEUS_ENABLED:-${ENABLE_PROMETHEUS:-false}}"
+    CADDY_ENABLED="${CADDY_ENABLED:-${ENABLE_CADDY:-false}}"
+    AUTHENTIK_ENABLED="${AUTHENTIK_ENABLED:-${ENABLE_AUTHENTIK:-false}}"
+    OPENCLAW_ENABLED="${OPENCLAW_ENABLED:-${ENABLE_OPENCLAW:-false}}"
+    BIFROST_ENABLED="${BIFROST_ENABLED:-${ENABLE_BIFROST:-false}}"
+    SIGNALBOT_ENABLED="${SIGNALBOT_ENABLED:-${ENABLE_SIGNALBOT:-false}}"
     
     log "=== Script 3: Mission Control ==="
     log "Version: ${SCRIPT_VERSION}"

@@ -1974,6 +1974,68 @@ export N8N_ENCRYPTION_KEY
 export GRAFANA_ADMIN_PASSWORD
 
 # =============================================================================
+# DERIVED CONFIGURATION (computed at generation time — do not edit manually)
+# =============================================================================
+
+# Container naming prefix
+TENANT_PREFIX="${PLATFORM_PREFIX}-${TENANT_ID}"
+BASE_DOMAIN="${DOMAIN}"
+PROXY_EMAIL="${ADMIN_EMAIL}"
+
+# Directory aliases (Script 2/3 compatibility)
+BASE_DIR="${DATA_DIR}"
+CONFIG_DIR="${DATA_DIR}/config"
+CONFIGURED_DIR="${DATA_DIR}/.configured"
+
+# Process ownership (current user UID/GID)
+PUID="$(id -u)"
+PGID="$(id -g)"
+
+# Database credentials (Postgres uses TENANT_ID for user+db)
+POSTGRES_USER="${TENANT_ID}"
+POSTGRES_DB="${TENANT_ID}"
+
+# Ollama default model (first in list)
+OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-qwen2.5:7b}"
+
+# Application secrets (generated once, stable across deploys)
+LITELLM_UI_PASSWORD="$(gen_password)"
+OPENWEBUI_SECRET="$(gen_secret)"
+FLOWISE_USERNAME="admin"
+FLOWISE_PASSWORD="$(gen_password)"
+FLOWISE_SECRETKEY_OVERWRITE="$(gen_secret)"
+DIFY_SECRET_KEY="$(gen_secret)"
+
+# N8N webhook URL
+N8N_WEBHOOK_URL="http://${DOMAIN}/"
+
+# API key aliases (Script 2 uses GOOGLE_API_KEY / OPENROUTER_API_KEY)
+GOOGLE_API_KEY="${GOOGLE_AI_API_KEY:-}"
+OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}"
+
+# =============================================================================
+# SERVICE _ENABLED FLAGS (Script 2/3 compatibility — mirrors ENABLE_* above)
+# =============================================================================
+POSTGRES_ENABLED="${ENABLE_POSTGRES:-false}"
+REDIS_ENABLED="${ENABLE_REDIS:-false}"
+OLLAMA_ENABLED="${ENABLE_OLLAMA:-false}"
+LITELLM_ENABLED="${ENABLE_LITELLM:-false}"
+OPENWEBUI_ENABLED="${ENABLE_OPENWEBUI:-false}"
+QDRANT_ENABLED="${ENABLE_QDRANT:-false}"
+WEAVIATE_ENABLED="${ENABLE_WEAVIATE:-false}"
+N8N_ENABLED="${ENABLE_N8N:-false}"
+FLOWISE_ENABLED="${ENABLE_FLOWISE:-false}"
+DIFY_ENABLED="${ENABLE_DIFY:-false}"
+GRAFANA_ENABLED="${ENABLE_GRAFANA:-false}"
+PROMETHEUS_ENABLED="${ENABLE_PROMETHEUS:-false}"
+CADDY_ENABLED="${ENABLE_CADDY:-false}"
+AUTHENTIK_ENABLED="${ENABLE_AUTHENTIK:-false}"
+SIGNALBOT_ENABLED="${ENABLE_SIGNALBOT:-false}"
+OPENCLAW_ENABLED="${ENABLE_OPENCLAW:-false}"
+BIFROST_ENABLED="${ENABLE_BIFROST:-false}"
+ANYTHINGLLM_ENABLED="${ENABLE_ANYTHINGLLM:-false}"
+
+# =============================================================================
 # END OF CONFIGURATION
 # =============================================================================
 EOF
