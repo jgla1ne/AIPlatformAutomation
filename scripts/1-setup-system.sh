@@ -453,65 +453,89 @@ detect_and_select_ebs() {
 }
 
 # Format and mount EBS volume
+# All privileged ops run in a single sudo bash invocation — one password prompt,
+# no partial-state races between individual sudo calls.
 format_and_mount_ebs() {
     if [[ -n "$EBS_DEVICE" ]] && [[ -b "$EBS_DEVICE" ]]; then
-        # If device is currently mounted somewhere, unmount it first
+
+        # Show what's currently on the device so user can confirm
         local current_mounts
         current_mounts=$(lsblk -no MOUNTPOINT "$EBS_DEVICE" 2>/dev/null | grep -v '^$' || true)
         if [[ -n "$current_mounts" ]]; then
             echo ""
-            echo "  ⚠️  Device $EBS_DEVICE is currently mounted at: $current_mounts"
-            echo "     It must be unmounted before formatting."
-            echo "     Unmounting now..."
-            while IFS= read -r mount_pt; do
-                [[ -z "$mount_pt" ]] && continue
-                sudo umount "$mount_pt" || fail "Could not unmount $mount_pt — stop any processes using it first"
-                echo "     Unmounted: $mount_pt"
-                # Remove stale fstab entry for this mount point
-                local old_uuid
-                old_uuid=$(blkid -s UUID -o value "$EBS_DEVICE" 2>/dev/null || true)
-                if [[ -n "$old_uuid" ]] && grep -q "UUID=$old_uuid" /etc/fstab 2>/dev/null; then
-                    sudo sed -i "/UUID=$old_uuid/d" /etc/fstab
-                    echo "     Removed stale fstab entry for UUID=$old_uuid"
-                fi
-            done <<< "$current_mounts"
+            echo "  ⚠️  $EBS_DEVICE is currently mounted at: $current_mounts"
+            echo "     It will be unmounted automatically before formatting."
         fi
 
+        echo ""
         echo "Formatting EBS volume: $EBS_DEVICE"
         safe_read "CONFIRM: Format $EBS_DEVICE as ext4? [yes/N]: " "" FORMAT_CONFIRM
 
-        if [[ "$FORMAT_CONFIRM" =~ ^[Yy][Ee][Ss]$ ]]; then
-            sudo mkfs.ext4 -F "$EBS_DEVICE" || fail "Failed to format $EBS_DEVICE (requires sudo)"
-            echo "EBS volume formatted successfully"
-        else
+        if [[ ! "$FORMAT_CONFIRM" =~ ^[Yy][Ee][Ss]$ ]]; then
             fail "EBS volume formatting cancelled"
         fi
 
-        # Mount EBS volume (requires sudo — block device operation)
-        echo "Mounting EBS volume..."
-        sudo mkdir -p "/mnt/${TENANT_ID}"
-        sudo mount "$EBS_DEVICE" "/mnt/${TENANT_ID}" || fail "Failed to mount EBS volume (requires sudo)"
-        # Hand ownership of the mount point to the current user so scripts can write without root
-        sudo chown "${EUID}:$(id -g)" "/mnt/${TENANT_ID}"
-        
-        # Add to fstab (requires sudo — non-root execution; graceful fallback)
-        local uuid
-        uuid=$(blkid -s UUID -o value "$EBS_DEVICE")
-        local fstab_entry="UUID=$uuid  /mnt/${TENANT_ID}  ext4  defaults,nofail  0  0"
+        local user_uid user_gid tenant_id mount_point
+        user_uid=$(id -u)
+        user_gid=$(id -g)
+        tenant_id="${TENANT_ID}"
+        mount_point="/mnt/${tenant_id}"
 
-        if ! grep -q "UUID=$uuid" /etc/fstab 2>/dev/null; then
-            if echo "$fstab_entry" | sudo tee -a /etc/fstab >/dev/null 2>&1; then
-                sudo systemctl daemon-reload 2>/dev/null || true
-                echo "  ✅ fstab updated for persistent mount"
-            else
-                warn "Could not write to /etc/fstab (no sudo?). Mount is session-only."
-                warn "To persist manually: echo '$fstab_entry' | sudo tee -a /etc/fstab"
+        echo "  Running privileged EBS setup (sudo required)..."
+
+        # Single sudo bash block — unmount, wipe fstab, format, mount, chown, add fstab
+        sudo bash -s -- "$EBS_DEVICE" "$mount_point" "$user_uid" "$user_gid" <<'SUDO_EOF'
+            device="$1"
+            mount_point="$2"
+            owner_uid="$3"
+            owner_gid="$4"
+
+            set -e
+
+            # Unmount all current mounts of this device (handles /mnt/data etc.)
+            current_mounts=$(lsblk -no MOUNTPOINT "$device" 2>/dev/null | grep -v '^$' || true)
+            if [[ -n "$current_mounts" ]]; then
+                while IFS= read -r mp; do
+                    [[ -z "$mp" ]] && continue
+                    echo "     Unmounting: $mp"
+                    umount "$mp" || { echo "ERROR: Could not unmount $mp"; exit 1; }
+                done <<< "$current_mounts"
             fi
+
+            # Remove any stale fstab entry for this device (pre-format UUID)
+            old_uuid=$(blkid -s UUID -o value "$device" 2>/dev/null || true)
+            if [[ -n "$old_uuid" ]]; then
+                sed -i "/UUID=${old_uuid}/d" /etc/fstab
+                echo "     Removed stale fstab entry (UUID=${old_uuid})"
+            fi
+
+            # Format
+            echo "     Formatting ${device} as ext4..."
+            mkfs.ext4 -F "$device"
+
+            # Mount
+            mkdir -p "$mount_point"
+            mount "$device" "$mount_point"
+
+            # Hand ownership to the non-root caller
+            chown "${owner_uid}:${owner_gid}" "$mount_point"
+
+            # Add new fstab entry (new UUID after format)
+            new_uuid=$(blkid -s UUID -o value "$device")
+            fstab_entry="UUID=${new_uuid}  ${mount_point}  ext4  defaults,nofail  0  0"
+            if ! grep -q "UUID=${new_uuid}" /etc/fstab; then
+                echo "$fstab_entry" >> /etc/fstab
+                echo "     fstab updated (UUID=${new_uuid})"
+            fi
+SUDO_EOF
+
+        if [[ $? -ne 0 ]]; then
+            fail "EBS privileged setup failed — see errors above"
         fi
-        
-        echo "EBS volume mounted successfully"
-        echo "Mount point: /mnt/${TENANT_ID}"
-        echo "Device: $EBS_DEVICE (UUID: $uuid)"
+
+        echo "  ✅ EBS volume formatted and mounted at ${mount_point}"
+        echo "  ✅ Owned by ${user_uid}:${user_gid}"
+        echo "  ✅ fstab updated for persistent mount"
     else
         fail "Invalid EBS device: $EBS_DEVICE"
     fi
