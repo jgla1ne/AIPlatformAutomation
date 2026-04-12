@@ -519,115 +519,33 @@ log() {
 
 ### **📁 EBS VOLUME DETECTION & MOUNTING**
 
-**Script 1 handles complete EBS volume lifecycle with Amazon EBS detection:**
+**Script 1 handles EBS volume lifecycle with `lsblk`-based detection and multi-tenant safety.**
+
+Detection uses `lsblk -dpno NAME,SIZE,TYPE,MOUNTPOINT` to enumerate block devices, then
+applies **3-case safety logic** before any format/mount:
+
+| Case | Condition | Action |
+|------|-----------|--------|
+| **Reuse** | Device already mounted at `/mnt/<TENANT_ID>` | Skip format/mount — filesystem intact |
+| **Blocked** | Device mounted at any other `/mnt/<X>` | Hard fail — protects other tenant's data |
+| **Format** | Device unmounted | `mkfs.ext4 -F`, add UUID to `/etc/fstab`, mount |
+
+The EBS steps run inside a single `sudo bash -s` heredoc (Script 1 is non-root; only the
+EBS sub-shell runs privileged). After mount, Script 1 resumes as the normal user.
+
 ```bash
-# Step 1: EBS Detection (Script 1) - CORRECTED LOGIC
-detect_ebs_volumes() {
-    echo "Available block devices:"
-    local count=1
-    
-    # Use fdisk to detect Amazon EBS volumes specifically
-    fdisk -l 2>/dev/null | grep -A 1 "Amazon Elastic Block Store" | while read -r line; do
-        if [[ "$line" =~ ^/dev/ ]]; then
-            local device=$(echo "$line" | awk '{print $1}')
-            local size=$(echo "$line" | awk '{print $3,$4}')
-            
-            # Check if device is already mounted
-            if ! findmnt "$device" >/dev/null 2>&1; then
-                echo "  [$count] $device ${size} (unmounted — available)"
-                count=$((count + 1))
-            else
-                echo "  [X] $device ${size} (mounted - unavailable)"
-            fi
-        fi
-    done
-    
-    echo "  [$count] Use existing /mnt/${TENANT_ID}/ on OS disk (no separate volume)"
-    
-    read -p "Select EBS volume [1-$count, or 0 for OS disk]: " choice
-    
-    if [[ "$choice" =~ ^[1-9]$ ]]; then
-        # Extract device from fdisk output
-        EBS_DEVICE=$(fdisk -l 2>/dev/null | grep -A 1 "Amazon Elastic Block Store" | grep "^/dev/" | sed -n "${choice}p" | awk '{print $1}')
-        echo "Selected EBS device: $EBS_DEVICE"
-    else
-        echo "Using OS disk for storage"
-        EBS_DEVICE=""
-    fi
-}
-
-# Step 2: Volume Formatting (Script 1)
-format_ebs_volume() {
-    if [[ -n "$EBS_DEVICE" ]] && [[ -b "$EBS_DEVICE" ]]; then
-        echo "Formatting EBS volume: $EBS_DEVICE"
-        read -p "CONFIRM: Format $EBS_DEVICE as ext4? [yes/N]: " confirm
-        
-        if [[ "$confirm" =~ ^[Yy][Ee][Ss]$ ]]; then
-            mkfs.ext4 -F "$EBS_DEVICE" || fail "Failed to format $EBS_DEVICE"
-            echo "EBS volume formatted successfully"
-        else
-            fail "EBS volume formatting cancelled"
-        fi
-    fi
-}
-
-# Step 3: Mount Point Creation (Script 1)
-create_mount_point() {
-    local mount_point="/mnt/${TENANT_ID}"
-    echo "Creating mount point: $mount_point"
-    mkdir -p "$mount_point"
-    chmod 755 "$mount_point"
-}
-
-# Step 4: UUID Detection (Script 1)
-detect_volume_uuid() {
-    if [[ -n "$EBS_DEVICE" ]]; then
-        VOLUME_UUID=$(blkid -s -o UUID "$EBS_DEVICE") || fail "Failed to detect UUID for $EBS_DEVICE"
-        echo "EBS volume UUID: $VOLUME_UUID"
-    fi
-}
-
-# Step 5: fstab Update (Script 1)
-update_fstab() {
-    if [[ -n "$VOLUME_UUID" ]]; then
-        local fstab_entry="UUID=${VOLUME_UUID}  /mnt/${TENANT_ID}  ext4  defaults,nofail  0  0"
-        
-        # Backup original fstab
-        cp /etc/fstab /etc/fstab.backup
-        
-        # Add new entry (avoid duplicates)
-        if ! grep -q "UUID=${VOLUME_UUID}" /etc/fstab; then
-            echo "$fstab_entry" >> /etc/fstab
-            echo "Added to fstab: $fstab_entry"
-        else
-            echo "EBS volume already in fstab"
-        fi
-        
-        # Reload systemd daemons
-        systemctl daemon-reload || warn "Failed to reload systemd daemons"
-    fi
-}
-
-# Step 6: Mount Volume (Script 1)
-mount_ebs_volume() {
-    if [[ -n "$VOLUME_UUID" ]]; then
-        echo "Mounting EBS volume..."
-        mount "/mnt/${TENANT_ID}" 2>/dev/null || {
-            echo "EBS volume already mounted or mount failed"
-            echo "Checking current mount status..."
-            mount | grep "/mnt/${TENANT_ID}"
-        }
-        
-        if mount | grep -q "/mnt/${TENANT_ID}"; then
-            echo "EBS volume mounted successfully"
-            echo "Mount point: /mnt/${TENANT_ID}"
-            echo "Device: $EBS_DEVICE (UUID: $VOLUME_UUID)"
-        else
-            fail "Failed to mount EBS volume"
-        fi
-    fi
-}
+# EBS sub-steps (inside sudo bash -s):
+# 1. lsblk device enumeration — NVMe-aware (nvme0n1, xvdf, etc.)
+# 2. 3-case mount check (reuse / block / format)
+# 3. mkfs.ext4 -F <device>        (only if unmounted)
+# 4. blkid UUID detection
+# 5. /etc/fstab append (UUID=... /mnt/<TENANT_ID> ext4 defaults,nofail 0 0)
+# 6. mount /mnt/<TENANT_ID>
+# 7. mkdir -p <all data subdirs>, chown PUID:PGID
 ```
+
+Script 0 reverses this: it **unmounts before `rm -rf`** because the mount point IS the
+tenant directory. Trying to delete a live mount returns "Device or resource busy".
 
 ### **🌐 DNS RESOLUTION & VALIDATION - MISSION CONTROL**
 
@@ -763,329 +681,14 @@ check_dns_health() {
         fi
         sleep 1
         waited=$((waited + 1))
-    # Test reverse DNS (optional)
-    echo "Testing reverse DNS lookup..."
-    local reverse_dns
-    if reverse_dns=$(dig -x "$public_ip" +short 2>/dev/null); then
-        echo "Reverse DNS: $public_ip → $reverse_dns"
-        if [[ "$reverse_dns" != "$domain" ]]; then
-            warning "Reverse DNS mismatch: $public_ip → $reverse_dns (expected $domain)"
-        fi
-    else
-        echo "Reverse DNS lookup failed for $public_ip"
-    fi
-        echo "Default selected: Mem0 enabled"
-        ;;
-esac
-
-# =============================================================================
-# BACKUP CONFIGURATION
-# =============================================================================
-echo ""
-echo "=== BACKUP CONFIGURATION ==="
-
-echo "Enable automated backups?"
-echo "  1) Enable backups (recommended for production)"
-echo "  2) Disable backups (simpler setup)"
-
-read -p "Backup configuration [1-2]: " backup_choice
-
-case "${backup_choice}" in
-    1)
-        ENABLE_BACKUP="true"
-        echo "Backups enabled - configuring automated backup schedule..."
-        configure_backup_settings
-        ;;
-    2)
-        ENABLE_BACKUP="false"
-        echo "Backups disabled - no automated backups"
-        ;;
-    *)
-        ENABLE_BACKUP="true"
-        echo "Default selected: backups enabled"
-        configure_backup_settings
-        ;;
-esac
-
-# =============================================================================
-# INGESTION CONFIGURATION
-# =============================================================================
-echo ""
-echo "=== INGESTION CONFIGURATION ==="
-
-echo "Enable data ingestion pipeline?"
-echo "  1) Enable ingestion (Rclone + automated processing)"
-echo "  2) Disable ingestion (manual data loading only)"
-
-read -p "Ingestion configuration [1-2]: " ingestion_choice
-
-case "${ingestion_choice}" in
-    1)
-        ENABLE_INGESTION="true"
-        echo "Ingestion enabled - configuring Rclone and pipeline..."
-        configure_ingestion_settings
-        ;;
-    2)
-        ENABLE_INGESTION="false"
-        echo "Ingestion disabled - manual data loading only"
-        ;;
-    *)
-        ENABLE_INGESTION="true"
-        echo "Default selected: ingestion enabled"
-        configure_ingestion_settings
-        ;;
-esac
-
-# =============================================================================
-# TLS CONFIGURATION (previously added)
-# =============================================================================
-echo ""
-echo "=== TLS CERTIFICATE CONFIGURATION ==="
-# ... (TLS configuration from previous section)
-
-# =============================================================================
-# SERVICE ENABLEMENT (CUSTOM MODE)
-# =============================================================================
-if [[ "$STACK_PRESET" == "custom" ]]; then
-    echo ""
-    echo "=== CUSTOM SERVICE ENABLEMENT ==="
+    done
     
-    # Infrastructure services
-    echo "Infrastructure services:"
-    read -p "Enable PostgreSQL? [Y/n]: " enable_postgres
-    POSTGRES_ENABLED="${enable_postgres:-Y}"
-    
-    read -p "Enable Redis? [Y/n]: " enable_redis
-    REDIS_ENABLED="${enable_redis:-Y}"
-    
-    # LLM services
-    echo ""
-    echo "LLM services:"
-    read -p "Enable LiteLLM? [Y/n]: " enable_litellm
-    LITELLM_ENABLED="${enable_litellm:-Y}"
-    
-    read -p "Enable Ollama? [Y/n]: " enable_ollama
-    OLLAMA_ENABLED="${enable_ollama:-Y}"
-    
-    # Web UIs
-    echo ""
-    echo "Web UIs:"
-    read -p "Enable Open WebUI? [Y/n]: " enable_openwebui
-    OPENWEBUI_ENABLED="${enable_openwebui:-Y}"
-    
-    read -p "Enable LibreChat? [y/N]: " enable_librechat
-    LIBRECHAT_ENABLED="${enable_librechat:-N}"
-    
-    # Continue with all other services...
-    echo "Configuring remaining services..."
-    # ... (service enablement logic)
-fi
-
-# =============================================================================
-# API KEY COLLECTION - ENHANCED WITH PREFERRED PROVIDER SELECTION
-# =============================================================================
-echo ""
-echo "=== API KEY COLLECTION ==="
-
-echo "Configure LLM provider API keys with preferred provider selection:"
-
-# Step 1: Configure individual providers first (enable/disable as needed)
-echo ""
-echo "Configure individual LLM providers:"
-
-# OpenAI
-read -p "Enable OpenAI? [y/N]: " enable_openai
-if [[ "$enable_openai" =~ ^[Yy]$ ]]; then
-    read -p "OpenAI API key: " OPENAI_API_KEY
-    read -p "OpenAI organization ID [optional]: " OPENAI_ORG_ID
-    read -p "OpenAI models [gpt-4,gpt-3.5-turbo]: " OPENAI_MODELS
-fi
-
-# Anthropic
-read -p "Enable Anthropic Claude? [y/N]: " enable_anthropic
-if [[ "$enable_anthropic" =~ ^[Yy]$ ]]; then
-    read -p "Anthropic API key: " ANTHROPIC_API_KEY
-    read -p "Anthropic models [claude-3-sonnet-20240229,claude-3-haiku-20240307]: " ANTHROPIC_MODELS
-fi
-
-# Google AI
-read -p "Enable Google AI? [y/N]: " enable_google
-if [[ "$enable_google" =~ ^[Yy]$ ]]; then
-    read -p "Google AI API key: " GOOGLE_AI_API_KEY
-    read -p "Google models [gemini-pro,gemini-pro-vision]: " GOOGLE_MODELS
-fi
-
-# Groq
-read -p "Enable Groq? [y/N]: " enable_groq
-if [[ "$enable_groq" =~ ^[Yy]$ ]]; then
-    read -p "Groq API key: " GROQ_API_KEY
-    read -p "Groq models [llama2-70b-4096,mixtral-8x7b-32768]: " GROQ_MODELS
-fi
-
-# Cohere
-read -p "Enable Cohere? [y/N]: " enable_cohere
-if [[ "$enable_cohere" =~ ^[Yy]$ ]]; then
-    read -p "Cohere API key: " COHERE_API_KEY
-    read -p "Cohere models [command,command-nightly,command-light]: " COHERE_MODELS
-fi
-
-# Hugging Face
-read -p "Enable Hugging Face? [y/N]: " enable_huggingface
-if [[ "$enable_huggingface" =~ ^[Yy]$ ]]; then
-    read -p "Hugging Face API key: " HUGGINGFACE_API_KEY
-    read -p "Hugging Face models [microsoft/DialoGPT-medium,google/flan-t5-base]: " HUGGINGFACE_MODELS
-fi
-
-# Local Ollama
-read -p "Enable local models? [Y/n]: " enable_local
-if [[ "$enable_local" =~ ^[Nn]$ ]]; then
-    echo "Local models disabled"
-else
-    echo "Local models enabled"
-    # Model selection logic here
-fi
-
-# Step 2: Select preferred LLM provider for routing priority (AFTER model configuration)
-echo ""
-echo "Select your preferred LLM provider for LiteLLM routing priority:"
-echo "  This determines which provider gets first priority when multiple are available"
-echo ""
-echo "  1) OpenAI - GPT-4 and GPT-3.5 models"
-echo "  2) Anthropic Claude - Claude 3 family"
-echo "  3) Google AI - Gemini models"
-echo "  4) Groq - Fast inference with Llama models"
-echo "  5) Cohere - Command models"
-echo "  6) Hugging Face - Open model hub"
-echo "  7) Local Ollama - Self-hosted models"
-
-select_menu_option "Preferred LLM Provider (Routing Priority)" \
-    "OpenAI - GPT-4 and GPT-3.5 models" \
-    "Anthropic Claude - Claude 3 family" \
-    "Google AI - Gemini models" \
-    "Groq - Fast inference with Llama models" \
-    "Cohere - Command models" \
-    "Hugging Face - Open model hub" \
-    "Local Ollama - Self-hosted models"
-
-case $preferred_provider_choice in
-    0) PREFERRED_LLM_PROVIDER="openai" ;;
-    1) PREFERRED_LLM_PROVIDER="anthropic" ;;
-    2) PREFERRED_LLM_PROVIDER="google" ;;
-    3) PREFERRED_LLM_PROVIDER="groq" ;;
-    4) PREFERRED_LLM_PROVIDER="cohere" ;;
-    5) PREFERRED_LLM_PROVIDER="huggingface" ;;
-    6) PREFERRED_LLM_PROVIDER="ollama" ;;
-esac
-
-echo "✅ Preferred provider for routing: ${PREFERRED_LLM_PROVIDER^}"
-echo ""
-
-# Step 3: Configure Google Drive Integration
-echo ""
-echo "=== GOOGLE DRIVE INTEGRATION ==="
-echo "Configure Google Drive backup and sync:"
-
-read -p "Enable Google Drive integration? [y/N]: " enable_gdrive
-if [[ "$enable_gdrive" =~ ^[Yy]$ ]]; then
-    read -p "Google Drive Folder ID: " GDRIVE_FOLDER_ID
-    read -p "Google Drive Folder Name [AI Platform]: " GDRIVE_FOLDER_NAME
-    echo "✅ Google Drive configured"
-else
-    echo "ℹ️ Google Drive integration disabled"
-fi
-
-# Step 4: Configure Signal-Bot
-echo ""
-echo "=== SIGNAL-BOT CONFIGURATION ==="
-echo "Configure Signal bot for notifications:"
-
-read -p "Enable Signal bot? [y/N]: " enable_signalbot
-if [[ "$enable_signalbot" =~ ^[Yy]$ ]]; then
-    read -p "Signal phone number (E.164 format, e.g., +15551234567): " SIGNAL_PHONE
-    read -p "Signal recipient number (E.164 format): " SIGNAL_RECIPIENT
-    read -p "Signal bot port [8080]: " SIGNALBOT_PORT
-    SIGNALBOT_PORT="${SIGNALBOT_PORT:-8080}"
-    echo "✅ Signal Bot configured"
-    echo "  Phone Number: $SIGNAL_PHONE"
-    echo "  Recipient: $SIGNAL_RECIPIENT"
-    echo "  Port: $SIGNALBOT_PORT"
-else
-    echo "ℹ️ Signal bot disabled"
-fi
-
-# =============================================================================
-# PORT CONFIGURATION
-# =============================================================================
-echo ""
-echo "=== PORT CONFIGURATION ==="
-
-echo "Configure service ports (press Enter for defaults):"
-
-read -p "PostgreSQL port [5432]: " POSTGRES_PORT
-POSTGRES_PORT="${POSTGRES_PORT:-5432}"
-
-read -p "Redis port [6379]: " REDIS_PORT
-REDIS_PORT="${REDIS_PORT:-6379}"
-
-read -p "LiteLLM port [4000]: " LITELLM_PORT
-LITELLM_PORT="${LITELLM_PORT:-4000}"
-
-read -p "Ollama port [11434]: " OLLAMA_PORT
-OLLAMA_PORT="${OLLAMA_PORT:-11434}"
-
-read -p "OpenWebUI port [3000]: " OPENWEBUI_PORT
-OPENWEBUI_PORT="${OPENWEBUI_PORT:-3000}"
-
-# Continue with all other ports...
-echo "Configuring remaining service ports..."
-
-# =============================================================================
-# FINAL VALIDATION & SUMMARY
-# =============================================================================
-echo ""
-echo "=== CONFIGURATION SUMMARY ==="
-
-echo "Identity:"
-echo "  Platform Prefix: $PLATFORM_PREFIX"
-echo "  Tenant ID: $TENANT_ID"
-echo "  Base Domain: $DOMAIN"
-echo "  Full Tenant Name: ${PLATFORM_PREFIX}${TENANT_ID}"
-
-echo ""
-echo "Configuration:"
-echo "  Stack Preset: $STACK_PRESET"
-echo "  LLM Gateway: $LLM_PROXY_TYPE"
-echo "  Vector DB: $VECTOR_DB_TYPE"
-echo "  Memory Layer: $MEM0_ENABLED"
-echo "  TLS Mode: $TLS_MODE"
-echo "  Backups: $ENABLE_BACKUP"
-echo "  Ingestion: $ENABLE_INGESTION"
-
-echo ""
-echo "Enabled Providers:"
-[[ "$OPENAI_PROVIDER_ENABLED" == "true" ]] && echo "  • OpenAI"
-[[ "$ANTHROPIC_PROVIDER_ENABLED" == "true" ]] && echo "  • Anthropic"
-[[ "$GOOGLE_PROVIDER_ENABLED" == "true" ]] && echo "  • Google"
-[[ "$GROQ_PROVIDER_ENABLED" == "true" ]] && echo "  • Groq"
-[[ "$OPENROUTER_PROVIDER_ENABLED" == "true" ]] && echo "  • OpenRouter"
-
-echo ""
-echo "Key Ports:"
-echo "  PostgreSQL: $POSTGRES_PORT"
-echo "  Redis: $REDIS_PORT"
-echo "  LiteLLM: $LITELLM_PORT"
-echo "  Ollama: $OLLAMA_PORT"
-echo "  OpenWebUI: $OPENWEBUI_PORT"
-
-echo ""
-read -p "Confirm configuration and proceed? [yes/N]: " confirm
-if [[ ! "$confirm" =~ ^[Yy][Ee][Ss]$ ]]; then
-    echo "Configuration cancelled"
-    exit 1
-fi
-
-echo "=== INTERACTIVE CONFIGURATION COMPLETE ==="
+    echo "❌ DNS resolution timeout for $domain"
+    return 1
+}
 ```
+
+
 
 **Script 1 Input Collection Summary:**
 
@@ -2156,6 +1759,20 @@ curl -s -X POST "http://127.0.0.1:${SIGNALBOT_PORT}/v1/register/+15551234567/ver
 Mammouth (`https://api.mammouth.ai/`) is supported as an external LLM provider alongside
 OpenAI, Anthropic, Google, Groq, Cohere, HuggingFace, OpenRouter, and local Ollama.
 Configure it during Script 1's API key collection step.
+
+---
+
+### **🔍 Search APIs (SerpAPI & Brave Search)**
+
+Two web-search integrations are available for AI workflows (N8N, Flowise, agents):
+
+| Provider | Platform.conf flag | Key variable | Notes |
+|----------|--------------------|--------------|-------|
+| **SerpAPI** | `ENABLE_SERPAPI="true"` | `SERPAPI_KEY` | Google/Bing/DDG; configurable engine via `SERPAPI_ENGINE` |
+| **Brave Search** | `ENABLE_BRAVE="true"` | `BRAVE_API_KEY` | Privacy-first web search |
+
+Both keys are injected into Flowise, N8N, and OpenClaw containers at deploy time.
+Configure during Script 1's API key collection step.
 
 ---
 
@@ -4326,19 +3943,14 @@ This AI Platform Automation provides:
 
 ---
 
-## 📚 **HANDOVER DOCUMENTATION**
+## 📚 **PROJECT STATUS**
 
-### **For Next Expert Taking Over**
-- **[ARCHITECT_HANDOVER_DOCUMENT.md](ARCHITECT_HANDOVER_DOCUMENT.md)** - Complete project overview and roadmap
-- **[PATTERNS_AND_SOLUTIONS.md](PATTERNS_AND_SOLUTIONS.md)** - All recurring patterns and implementations
-- **[FINAL_HANDOVER_PACKAGE.md](FINAL_HANDOVER_PACKAGE.md)** - Immediate action items and success criteria
-- **[SCRIPT1_FIXES_SUMMARY.md](SCRIPT1_FIXES_SUMMARY.md)** - Complete bug fix history and lessons learned
-
-### **Current Status**
-- ✅ **Script 1**: 99% Complete - Production Ready
-- 🔄 **Scripts 2-4**: Ready for Implementation
-- 📚 **Documentation**: Complete and Comprehensive
-- 🎯 **Platform Vision**: Fully Defined and Achievable
+| Script | Status | Notes |
+|--------|--------|-------|
+| **Script 0** — Nuclear Cleanup | ✅ Production ready | EBS unmount before rm -rf, typed confirmation |
+| **Script 1** — Setup Wizard | ✅ Production ready | 100+ vars, Mission Control dashboard at completion |
+| **Script 2** — Deployment Engine | ✅ Production ready | Flush-and-redeploy on every run, full service matrix |
+| **Script 3** — Mission Control | ✅ Production ready | Health checks, credential display, key rotation |
 
 ---
 

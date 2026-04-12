@@ -88,391 +88,9 @@ framework_validate() {
 }
 
 # =============================================================================
-# CONFIGURATION GENERATION FUNCTIONS (Complete Implementation)
-# =============================================================================
-
-# Generate Caddy Configuration
-generate_caddy_config() {
-    log "Generating Caddy configuration..."
-    
-    local caddy_dir="${CONFIG_DIR}/caddy"
-    mkdir -p "$caddy_dir"
-    
-    case "${TLS_MODE}" in
-        letsencrypt)
-            cat > "${caddy_dir}/Caddyfile" << EOF
-{
-    email ${LETSENCRYPT_EMAIL}
-    auto_https {
-        protocols tls1.2 tls1.3
-    }
-    
-    # Global options
-    admin localhost:2019
-    
-    # Main domain
-    ${DOMAIN} {
-        encode gzip zstd
-        log {
-            output file ${LOG_DIR}/caddy/access.log
-            level INFO
-        }
-        
-        # Proxy to all services
-        handle_path /api/* {
-            reverse_proxy ${TENANT_PREFIX}-litellm:4000
-        }
-        
-        handle_path / {
-            reverse_proxy ${TENANT_PREFIX}-openwebui:3000
-        }
-    }
-}
-EOF
-            ;;
-        manual)
-            cat > "${caddy_dir}/Caddyfile" << EOF
-{
-    admin localhost:2019
-    
-    ${DOMAIN} {
-        encode gzip zstd
-        log {
-            output file ${LOG_DIR}/caddy/access.log
-            level INFO
-        }
-        
-        tls ${MANUAL_CERT_FILE} ${MANUAL_KEY_FILE}
-        
-        handle_path /api/* {
-            reverse_proxy ${TENANT_PREFIX}-litellm:4000
-        }
-        
-        handle_path / {
-            reverse_proxy ${TENANT_PREFIX}-openwebui:3000
-        }
-    }
-}
-EOF
-            ;;
-        selfsigned)
-            # Generate self-signed certificate
-            local cert_dir="${CONFIG_DIR}/ssl"
-            mkdir -p "$cert_dir"
-            
-            openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-                -keyout "$cert_dir/server.key" \
-                -out "$cert_dir/server.crt" \
-                -subj "/C=${CERT_COUNTRY:-US}/ST=${CERT_STATE:-State}/L=${CERT_CITY:-City}/O=${CERT_ORG:-AI Platform}/OU=AI Platform/CN=${DOMAIN}" \
-                2>/dev/null || fail "Failed to generate self-signed certificate"
-            
-            cat > "${caddy_dir}/Caddyfile" << EOF
-{
-    admin localhost:2019
-    
-    ${DOMAIN} {
-        encode gzip zstd
-        log {
-            output file ${LOG_DIR}/caddy/access.log
-            level INFO
-        }
-        
-        tls ${cert_dir}/server.crt ${cert_dir}/server.key {
-            on_demand
-        }
-        
-        handle_path /api/* {
-            reverse_proxy ${TENANT_PREFIX}-litellm:4000
-        }
-        
-        handle_path / {
-            reverse_proxy ${TENANT_PREFIX}-openwebui:3000
-        }
-    }
-}
-EOF
-            ;;
-        none)
-            cat > "${caddy_dir}/Caddyfile" << EOF
-{
-    admin localhost:2019
-    auto_https off
-    
-    ${DOMAIN}:80 {
-        encode gzip zstd
-        log {
-            output file ${LOG_DIR}/caddy/access.log
-            level INFO
-        }
-        
-        handle_path /api/* {
-            reverse_proxy ${TENANT_PREFIX}-litellm:4000
-        }
-        
-        handle_path / {
-            reverse_proxy ${TENANT_PREFIX}-openwebui:3000
-        }
-    }
-}
-EOF
-            ;;
-    esac
-    
-    ok "Caddy configuration generated"
-}
-
-# Generate LiteLLM Configuration
-generate_litellm_config() {
-    log "Generating LiteLLM configuration..."
-    
-    local litellm_dir="${CONFIG_DIR}/litellm"
-    mkdir -p "$litellm_dir"
-    
-    cat > "${litellm_dir}/config.yaml" << EOF
-model_list:
-  - model_name: gpt-4
-    litellm_params:
-      model: gpt-4
-      api_base: https://api.openai.com/v1
-      api_key: ${OPENAI_API_KEY}
-  - model_name: claude-3-sonnet-20240229
-    litellm_params:
-      model: claude-3-sonnet-20240229
-      api_base: https://api.anthropic.com
-      api_key: ${ANTHROPIC_API_KEY}
-EOF
-    
-    # Add enabled providers dynamically
-    [[ "$OPENAI_PROVIDER_ENABLED" == "true" ]] && echo "OpenAI provider enabled"
-    [[ "$ANTHROPIC_PROVIDER_ENABLED" == "true" ]] && echo "Anthropic provider enabled"
-    [[ "$GOOGLE_PROVIDER_ENABLED" == "true" ]] && echo "Google provider enabled"
-    [[ "$GROQ_PROVIDER_ENABLED" == "true" ]] && echo "Groq provider enabled"
-    [[ "$OPENROUTER_PROVIDER_ENABLED" == "true" ]] && echo "OpenRouter provider enabled"
-    
-    ok "LiteLLM configuration generated"
-}
-
-# Generate Docker Compose
-generate_compose() {
-    log "Generating docker-compose.yml..."
-    
-    # Build dependency strings
-    local litellm_deps openwebui_deps
-    local postgres_deps redis_deps qdrant_deps
-    local ollama_deps caddy_deps
-    
-    if [[ "${LITELLM_ENABLED}" == "true" ]]; then
-        litellm_deps=$(build_litellm_deps)
-    fi
-    if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
-        openwebui_deps=$(build_openwebui_deps)
-    fi
-    if [[ "${POSTGRES_ENABLED}" == "true" ]]; then
-        postgres_deps=$(build_postgres_deps)
-    fi
-    if [[ "${REDIS_ENABLED}" == "true" ]]; then
-        redis_deps=$(build_redis_deps)
-    fi
-    if [[ "${QDRANT_ENABLED}" == "true" ]]; then
-        qdrant_deps=$(build_qdrant_deps)
-    fi
-    if [[ "${OLLAMA_ENABLED}" == "true" ]]; then
-        ollama_deps=$(build_ollama_deps)
-    fi
-    if [[ "${CADDY_ENABLED}" == "true" ]]; then
-        caddy_deps=$(build_caddy_deps)
-    fi
-    
-    # Backup existing compose file
-    if [[ -f "$COMPOSE_FILE" ]]; then
-        cp "$COMPOSE_FILE" "${COMPOSE_FILE}.backup"
-        log "Backed up existing docker-compose.yml"
-    fi
-    
-    cat > "${COMPOSE_FILE}" << EOF
-
-networks:
-  ${DOCKER_NETWORK}:
-    driver: bridge
-
-services:
-EOF
-
-    # PostgreSQL
-    if [[ "${POSTGRES_ENABLED}" == "true" ]]; then
-        cat >> "${COMPOSE_FILE}" << EOF
-  postgres:
-    image: postgres:15-alpine
-    container_name: ${TENANT_PREFIX}-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${TENANT_ID}
-      POSTGRES_USER: ${TENANT_ID}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes:
-      - ${DATA_DIR}/postgres:/var/lib/postgresql/data
-    networks:
-      - ${DOCKER_NETWORK}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${TENANT_ID} -d ${TENANT_ID}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-EOF
-    fi
-    
-    # Redis
-    if [[ "${REDIS_ENABLED}" == "true" ]]; then
-        cat >> "${COMPOSE_FILE}" << EOF
-  redis:
-    image: redis:7-alpine
-    container_name: ${TENANT_PREFIX}-redis
-    restart: unless-stopped
-    command: redis-server --appendonly yes --replicaof no
-    volumes:
-      - ${DATA_DIR}/redis:/data
-    networks:
-      - ${DOCKER_NETWORK}
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-EOF
-    fi
-    
-    # LiteLLM
-    if [[ "${LITELLM_ENABLED}" == "true" ]]; then
-        cat >> "${COMPOSE_FILE}" << EOF
-  litellm:
-    image: ghcr.io/berriai/litellm:latest
-    container_name: ${TENANT_PREFIX}-litellm
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgresql://${TENANT_ID}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${TENANT_ID}
-      REDIS_HOST: ${TENANT_PREFIX}-redis
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
-    volumes:
-      - ${CONFIG_DIR}/litellm:/app/config
-    networks:
-      - ${DOCKER_NETWORK}
-    ports:
-      - "${LITELLM_PORT:-4000}:4000"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-${litellm_deps}
-EOF
-    fi
-    
-    # Ollama
-    if [[ "${OLLAMA_ENABLED}" == "true" ]]; then
-        cat >> "${COMPOSE_FILE}" << EOF
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ${TENANT_PREFIX}-ollama
-    restart: unless-stopped
-    environment:
-      OLLAMA_HOST: 0.0.0.0
-    volumes:
-      - ${DATA_DIR}/ollama:/root/.ollama
-    networks:
-      - ${DOCKER_NETWORK}
-    ports:
-      - "${OLLAMA_PORT:-11434}:11434"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-${ollama_deps}
-EOF
-    fi
-    
-    # OpenWebUI
-    if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
-        cat >> "${COMPOSE_FILE}" << EOF
-  openwebui:
-    image: ghcr.io/open-webui/open-webui:main
-    container_name: ${TENANT_PREFIX}-openwebui
-    restart: unless-stopped
-    environment:
-      OLLAMA_BASE_URL: http://${TENANT_PREFIX}-ollama:11434/api
-      WEBUI_SECRET_KEY: ${OPENWEBUI_SECRET_KEY}
-    volumes:
-      - ${DATA_DIR}/openwebui:/app/backend/data
-    networks:
-      - ${DOCKER_NETWORK}
-    ports:
-      - "${OPENWEBUI_PORT:-3000}:3000"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-${openwebui_deps}
-EOF
-    fi
-    
-    # Qdrant
-    if [[ "${QDRANT_ENABLED}" == "true" ]]; then
-        cat >> "${COMPOSE_FILE}" << EOF
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: ${TENANT_PREFIX}-qdrant
-    restart: unless-stopped
-    environment:
-      QDRANT__SERVICE__HTTP__HOST: 0.0.0.0
-    volumes:
-      - ${DATA_DIR}/qdrant:/qdrant/storage
-    networks:
-      - ${DOCKER_NETWORK}
-    ports:
-      - "${QDRANT_PORT:-6333}:6333"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-${qdrant_deps}
-EOF
-    fi
-    
-    # Caddy
-    if [[ "${CADDY_ENABLED}" == "true" ]]; then
-        cat >> "${COMPOSE_FILE}" << EOF
-  caddy:
-    image: caddy:2-alpine
-    container_name: ${TENANT_PREFIX}-caddy
-    restart: unless-stopped
-    volumes:
-      - ${CONFIG_DIR}/caddy:/etc/caddy
-      - ${LOG_DIR}/caddy:/var/log/caddy
-    networks:
-      - ${DOCKER_NETWORK}
-    ports:
-      - "80:80"
-      - "443:443"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:2019/config/apps"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-${caddy_deps}
-EOF
-    fi
-    
-    ok "Docker compose configuration generated"
-}
-
-# =============================================================================
-# DEPENDENCY BUILDERS (README §6 - mandatory pattern)
+# CONFIGURATION GENERATION FUNCTIONS
+# (generate_compose, generate_litellm_config, generate_caddyfile,
+#  generate_bifrost_config — all defined below the dependency builders)
 # =============================================================================
 build_litellm_deps() {
     local deps=""
@@ -480,8 +98,6 @@ build_litellm_deps() {
         deps="    depends_on:"$'\n'
         [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
         [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
-        deps+="    networks:"$'\n'
-        deps+="      - ${DOCKER_NETWORK}"$'\n'
     fi
     printf '%s' "${deps}"
 }
@@ -491,8 +107,6 @@ build_openwebui_deps() {
     if [[ "${OLLAMA_ENABLED}" == "true" ]]; then
         deps="    depends_on:"$'\n'
         deps+="      - ${TENANT_PREFIX}-ollama"$'\n'
-        deps+="    networks:"$'\n'
-        deps+="      - ${DOCKER_NETWORK}"$'\n'
     fi
     printf '%s' "${deps}"
 }
@@ -505,8 +119,6 @@ build_openclaw_deps() {
         deps="    depends_on:"$'\n'
         [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
         [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
-        deps+="    networks:"$'\n'
-        deps+="      - ${DOCKER_NETWORK}"$'\n'
     fi
     printf '%s' "${deps}"
 }
@@ -517,8 +129,6 @@ build_n8n_deps() {
         deps="    depends_on:"$'\n'
         [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
         [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
-        deps+="    networks:"$'\n'
-        deps+="      - ${DOCKER_NETWORK}"$'\n'
     fi
     printf '%s' "${deps}"
 }
@@ -529,8 +139,6 @@ build_flowise_deps() {
         deps="    depends_on:"$'\n'
         [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
         [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
-        deps+="    networks:"$'\n'
-        deps+="      - ${DOCKER_NETWORK}"$'\n'
     fi
     printf '%s' "${deps}"
 }
@@ -541,8 +149,6 @@ build_dify_deps() {
         deps="    depends_on:"$'\n'
         [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
         [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
-        deps+="    networks:"$'\n'
-        deps+="      - ${DOCKER_NETWORK}"$'\n'
     fi
     printf '%s' "${deps}"
 }
@@ -553,8 +159,6 @@ build_authentik_deps() {
         deps="    depends_on:"$'\n'
         [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
         [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
-        deps+="    networks:"$'\n'
-        deps+="      - ${DOCKER_NETWORK}"$'\n'
     fi
     printf '%s' "${deps}"
 }
@@ -571,6 +175,45 @@ get_vectordb_url() {
         milvus)   echo "http://${TENANT_PREFIX}-milvus:19530" ;;
         *)        echo "http://${TENANT_PREFIX}-qdrant:6333" ;;
     esac
+}
+
+# =============================================================================
+# PORT ALLOCATOR — ensures every service gets a unique host-side port.
+#
+# platform.conf stores the user's PREFERRED port (validated by Script 1 against
+# the live system at collection time). Script 2 honours that preference at
+# compose-generation time but auto-increments past any same-run collision
+# (e.g. two services sharing the same preferred port number like 3000).
+#
+# Results are written to PORT_ALLOCATIONS_FILE (a source-able key=value file)
+# so that Script 3 can reference the *actual* allocated ports for health
+# checks rather than the preferred values from platform.conf.
+# =============================================================================
+PORT_ALLOCATIONS_FILE=""  # resolved in main() after DATA_DIR is known
+declare -gA _PORT_CLAIMED=()
+
+init_port_allocator() {
+    _PORT_CLAIMED=()
+    PORT_ALLOCATIONS_FILE="${CONFIGURED_DIR}/port-allocations"
+    : > "${PORT_ALLOCATIONS_FILE}"
+    log "Port allocator initialised (${PORT_ALLOCATIONS_FILE})"
+}
+
+# allocate_host_port SERVICE PREFERRED_PORT
+# Prints the resolved unique host port; records it so the next service won't reuse it.
+allocate_host_port() {
+    local svc="$1" preferred="$2" port
+    port="${preferred}"
+    # Walk forward until we find an unclaimed port in this run
+    while [[ -n "${_PORT_CLAIMED[${port}]:-}" ]]; do
+        port=$(( port + 1 ))
+    done
+    _PORT_CLAIMED["${port}"]="${svc}"
+    # Persist  e.g.  OPENWEBUI_HOST_PORT="3000"
+    local key="${svc^^}_HOST_PORT"
+    key="${key//-/_}"   # code-server -> CODE_SERVER_HOST_PORT
+    printf '%s="%s"\n' "${key}" "${port}" >> "${PORT_ALLOCATIONS_FILE}"
+    printf '%s' "${port}"
 }
 
 # =============================================================================
@@ -630,6 +273,64 @@ generate_compose() {
         authentik_deps=$(build_authentik_deps)
     fi
     
+    # PORT ALLOCATION (Runtime conflict resolution)
+    # Fix: Call directly to preserve _PORT_CLAIMED array, then source the file
+    [[ "${POSTGRES_ENABLED}" == "true" ]] && allocate_host_port postgres "${POSTGRES_PORT:-5432}" >/dev/null
+    [[ "${REDIS_ENABLED}" == "true" ]] && allocate_host_port redis "${REDIS_PORT:-6379}" >/dev/null
+    [[ "${OLLAMA_ENABLED}" == "true" ]] && allocate_host_port ollama "${OLLAMA_PORT:-11434}" >/dev/null
+    [[ "${LITELLM_ENABLED}" == "true" ]] && allocate_host_port litellm "${LITELLM_PORT:-4000}" >/dev/null
+    [[ "${OPENWEBUI_ENABLED}" == "true" ]] && allocate_host_port openwebui "${OPENWEBUI_PORT:-3000}" >/dev/null
+    [[ "${OPENCLAW_ENABLED}" == "true" ]] && allocate_host_port openclaw "${OPENCLAW_PORT:-3001}" >/dev/null
+    [[ "${QDRANT_ENABLED}" == "true" ]] && allocate_host_port qdrant "${QDRANT_PORT:-6333}" >/dev/null
+    [[ "${N8N_ENABLED}" == "true" ]] && allocate_host_port n8n "${N8N_PORT:-5678}" >/dev/null
+    [[ "${FLOWISE_ENABLED}" == "true" ]] && allocate_host_port flowise "${FLOWISE_PORT:-3030}" >/dev/null
+    [[ "${DIFY_ENABLED}" == "true" ]] && allocate_host_port dify "${DIFY_PORT:-3040}" >/dev/null
+    [[ "${AUTHENTIK_ENABLED}" == "true" ]] && allocate_host_port authentik "${AUTHENTIK_PORT:-9000}" >/dev/null
+    [[ "${SIGNALBOT_ENABLED}" == "true" ]] && allocate_host_port signalbot "${SIGNALBOT_PORT:-8080}" >/dev/null
+    [[ "${BIFROST_ENABLED}" == "true" ]] && allocate_host_port bifrost "${BIFROST_PORT:-8090}" >/dev/null
+    [[ "${WEAVIATE_ENABLED:-${ENABLE_WEAVIATE:-false}}" == "true" ]] && allocate_host_port weaviate "${WEAVIATE_PORT:-8080}" >/dev/null
+    [[ "${CHROMA_ENABLED:-${ENABLE_CHROMA:-false}}" == "true" ]] && allocate_host_port chroma "${CHROMA_PORT:-8000}" >/dev/null
+    [[ "${MILVUS_ENABLED:-${ENABLE_MILVUS:-false}}" == "true" ]] && allocate_host_port milvus "${MILVUS_PORT:-19530}" >/dev/null
+    [[ "${CODE_SERVER_ENABLED}" == "true" ]] && allocate_host_port code-server "${CODE_SERVER_PORT:-8080}" >/dev/null
+    [[ "${GRAFANA_ENABLED}" == "true" ]] && allocate_host_port grafana "${GRAFANA_PORT:-3002}" >/dev/null
+    [[ "${PROMETHEUS_ENABLED}" == "true" ]] && allocate_host_port prometheus "${PROMETHEUS_PORT:-9090}" >/dev/null
+    [[ "${ANYTHINGLLM_ENABLED}" == "true" ]] && allocate_host_port anythingllm "${ANYTHINGLLM_PORT:-3001}" >/dev/null
+    [[ "${MEM0_ENABLED}" == "true" ]] && allocate_host_port mem0 "${MEM0_PORT:-8081}" >/dev/null
+
+    if [[ "${CADDY_ENABLED}" == "true" ]]; then
+        allocate_host_port caddy-http "${CADDY_HTTP_PORT:-80}" >/dev/null
+        allocate_host_port caddy-https "${CADDY_HTTPS_PORT:-443}" >/dev/null
+    fi
+
+    # Load resolved ports and override locals correctly
+    if [[ -f "${PORT_ALLOCATIONS_FILE}" ]]; then
+        # shellcheck source=/dev/null
+        source "${PORT_ALLOCATIONS_FILE}"
+        [[ -n "${POSTGRES_HOST_PORT:-}" ]] && POSTGRES_PORT="${POSTGRES_HOST_PORT}"
+        [[ -n "${REDIS_HOST_PORT:-}" ]] && REDIS_PORT="${REDIS_HOST_PORT}"
+        [[ -n "${OLLAMA_HOST_PORT:-}" ]] && OLLAMA_PORT="${OLLAMA_HOST_PORT}"
+        [[ -n "${LITELLM_HOST_PORT:-}" ]] && LITELLM_PORT="${LITELLM_HOST_PORT}"
+        [[ -n "${OPENWEBUI_HOST_PORT:-}" ]] && OPENWEBUI_PORT="${OPENWEBUI_HOST_PORT}"
+        [[ -n "${OPENCLAW_HOST_PORT:-}" ]] && OPENCLAW_PORT="${OPENCLAW_HOST_PORT}"
+        [[ -n "${QDRANT_HOST_PORT:-}" ]] && QDRANT_PORT="${QDRANT_HOST_PORT}"
+        [[ -n "${N8N_HOST_PORT:-}" ]] && N8N_PORT="${N8N_HOST_PORT}"
+        [[ -n "${FLOWISE_HOST_PORT:-}" ]] && FLOWISE_PORT="${FLOWISE_HOST_PORT}"
+        [[ -n "${DIFY_HOST_PORT:-}" ]] && DIFY_PORT="${DIFY_HOST_PORT}"
+        [[ -n "${AUTHENTIK_HOST_PORT:-}" ]] && AUTHENTIK_PORT="${AUTHENTIK_HOST_PORT}"
+        [[ -n "${SIGNALBOT_HOST_PORT:-}" ]] && SIGNALBOT_PORT="${SIGNALBOT_HOST_PORT}"
+        [[ -n "${BIFROST_HOST_PORT:-}" ]] && BIFROST_PORT="${BIFROST_HOST_PORT}"
+        [[ -n "${WEAVIATE_HOST_PORT:-}" ]] && WEAVIATE_PORT="${WEAVIATE_HOST_PORT}"
+        [[ -n "${CHROMA_HOST_PORT:-}" ]] && CHROMA_PORT="${CHROMA_HOST_PORT}"
+        [[ -n "${MILVUS_HOST_PORT:-}" ]] && MILVUS_PORT="${MILVUS_HOST_PORT}"
+        [[ -n "${CODE_SERVER_HOST_PORT:-}" ]] && CODE_SERVER_PORT="${CODE_SERVER_HOST_PORT}"
+        [[ -n "${GRAFANA_HOST_PORT:-}" ]] && GRAFANA_PORT="${GRAFANA_HOST_PORT}"
+        [[ -n "${PROMETHEUS_HOST_PORT:-}" ]] && PROMETHEUS_PORT="${PROMETHEUS_HOST_PORT}"
+        [[ -n "${ANYTHINGLLM_HOST_PORT:-}" ]] && ANYTHINGLLM_PORT="${ANYTHINGLLM_HOST_PORT}"
+        [[ -n "${MEM0_HOST_PORT:-}" ]] && MEM0_PORT="${MEM0_HOST_PORT}"
+        [[ -n "${CADDY_HTTP_HOST_PORT:-}" ]] && CADDY_HTTP_PORT="${CADDY_HTTP_HOST_PORT}"
+        [[ -n "${CADDY_HTTPS_HOST_PORT:-}" ]] && CADDY_HTTPS_PORT="${CADDY_HTTPS_HOST_PORT}"
+    fi
+
     # VOLUME MOUNT NOTE (for reviewers):
     # Volume entries follow the format  host_path:container_path
     # ALL host-side paths are under ${DATA_DIR} (/mnt/<tenant>/...) — core principle.
@@ -1789,35 +1490,65 @@ prepare_data_dirs() {
     ok "Data directories ready under ${DATA_DIR} (owner ${PUID}:${PGID})"
 }
 
+# =============================================================================
+# FLUSH EXISTING DEPLOYMENT (idempotency — always start clean)
+# Tears down any running containers and clears step markers so that every
+# invocation of Script 2 is a full fresh deploy.  The markers still protect
+# against partial failures *within* the current run.
+# =============================================================================
+flush_existing_deployment() {
+    local old_compose="${COMPOSE_FILE}"
+    if [[ -f "${old_compose}" ]]; then
+        log "Flushing existing deployment: docker compose down..."
+        docker compose -f "${old_compose}" down --timeout 30 --remove-orphans 2>/dev/null || true
+        ok "Existing containers stopped and removed"
+    else
+        log "No existing compose file found — nothing to flush"
+    fi
+
+    # Clear all idempotency markers so every step re-runs cleanly
+    if [[ -d "${CONFIGURED_DIR}" ]]; then
+        rm -f "${CONFIGURED_DIR}"/*
+        log "Idempotency markers cleared"
+    fi
+}
+
 deploy_containers() {
     log "Deploying containers..."
-    
-    # Check for port conflicts before deployment
+
+    # Check for port conflicts against CONFIGURED ports only.
+    # By this point flush_existing_deployment() has already run docker compose down,
+    # so any conflicts here are from EXTERNAL services — not our own stack.
     log "Checking for port conflicts..."
-    local ports_to_check=("80" "443" "3000" "4000" "5432" "6333" "6379" "11434")
+    local ports_to_check=()
+    [[ "${CADDY_ENABLED}" == "true" ]] && ports_to_check+=("80" "443")
+    [[ "${POSTGRES_ENABLED}" == "true" ]] && ports_to_check+=("${POSTGRES_PORT:-5432}")
+    [[ "${REDIS_ENABLED}" == "true" ]] && ports_to_check+=("${REDIS_PORT:-6379}")
+    [[ "${LITELLM_ENABLED}" == "true" ]] && ports_to_check+=("${LITELLM_PORT:-4000}")
+    [[ "${OLLAMA_ENABLED}" == "true" ]] && ports_to_check+=("${OLLAMA_PORT:-11434}")
+    [[ "${OPENWEBUI_ENABLED}" == "true" ]] && ports_to_check+=("${OPENWEBUI_PORT:-3000}")
+    [[ "${QDRANT_ENABLED}" == "true" ]] && ports_to_check+=("${QDRANT_REST_PORT:-6333}")
+
     local conflicts=()
-    
     for port in "${ports_to_check[@]}"; do
-        if ss -tlnp | grep -q ":$port "; then
+        if ss -tlnp 2>/dev/null | grep -q ":${port} "; then
             conflicts+=("$port")
         fi
     done
-    
+
     if [[ ${#conflicts[@]} -gt 0 ]]; then
-        fail "Port conflicts detected: ${conflicts[*]}. Stop services using these ports or change configuration."
+        fail "Port conflicts detected on external services: ${conflicts[*]}. Free these ports or change configuration in platform.conf."
     fi
-    
+
     # Create Docker network
     if ! docker network ls | grep -q "${DOCKER_NETWORK}"; then
         run_cmd docker network create "${DOCKER_NETWORK}"
     fi
-    
-    # Pull latest images then deploy containers
-    log "Pulling latest container images..."
-    run_cmd docker compose -f "${COMPOSE_FILE}" pull
-    log "Deploying containers..."
+
+    # Deploy containers
+    log "Starting containers..."
     run_cmd docker compose -f "${COMPOSE_FILE}" up -d
-    
+
     ok "Containers deployed"
 }
 
@@ -1932,6 +1663,9 @@ main() {
 
     mkdir -p "${DATA_DIR}/logs" "$CONFIGURED_DIR"
 
+    # --- FLUSH FIRST (idempotency: every run is a fresh deploy) ---
+    flush_existing_deployment
+
     # Database URL (needs passwords from platform.conf)
     LITELLM_DB_URL="postgresql://${POSTGRES_USER:-${TENANT_ID}}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${POSTGRES_DB:-${TENANT_ID}}"
 
@@ -2018,6 +1752,9 @@ main() {
     # 2b. Prepare data directories (idempotent — safe to re-run)
     #     Runs every time to ensure ownership is correct even after re-mounts.
     prepare_data_dirs
+
+    # 2c. Initialize port allocator
+    init_port_allocator
 
     # 3. generate_compose()
     if ! step_done "compose_generated"; then

@@ -711,7 +711,7 @@ show_credentials() {
     echo ""
     echo "══════════════════════════════════════════════════════════"
     echo "  AI PLATFORM CREDENTIALS"
-    echo "  Tenant: ${TENANT_ID}   Built: ${GENERATED_AT}"
+    echo "  Tenant: ${TENANT_ID}   Built: ${GENERATED_AT:-Unknown}"
     echo "══════════════════════════════════════════════════════════"
     echo ""
     
@@ -744,8 +744,8 @@ show_credentials() {
     if [[ "${LIBRECHAT_ENABLED}" == "true" ]]; then
         echo "WEB UI"
         echo "  LibreChat   https://${BASE_DOMAIN}/librechat"
-        echo "  JWT Secret  ${LIBRECHAT_JWT_SECRET}"
-        echo "  Crypt Key   ${LIBRECHAT_CRYPT_KEY}"
+        echo "  JWT Secret  ${LIBRECHAT_JWT_SECRET:-Unknown}"
+        echo "  Crypt Key   ${LIBRECHAT_CRYPT_KEY:-Unknown}"
         echo ""
     fi
     
@@ -775,8 +775,8 @@ show_credentials() {
     if [[ "${DIFY_ENABLED}" == "true" ]]; then
         echo "AUTOMATION"
         echo "  Dify        https://${BASE_DOMAIN}/dify"
-        echo "  Secret Key  ${DIFY_SECRET_KEY}"
-        echo "  Init Pass   ${DIFY_INIT_PASSWORD}"
+        echo "  Secret Key  ${DIFY_SECRET_KEY:-Unknown}"
+        echo "  Init Pass   ${DIFY_INIT_PASSWORD:-Unknown}"
         echo ""
     fi
     
@@ -1028,6 +1028,33 @@ main() {
 
     mkdir -p "${DATA_DIR}/logs" "$CONFIGURED_DIR"
 
+    # Load dynamic port allocations
+    if [[ -f "${CONFIGURED_DIR}/port-allocations" ]]; then
+        # shellcheck source=/dev/null
+        source "${CONFIGURED_DIR}/port-allocations"
+        [[ -n "${POSTGRES_HOST_PORT:-}" ]] && POSTGRES_PORT="${POSTGRES_HOST_PORT}"
+        [[ -n "${REDIS_HOST_PORT:-}" ]] && REDIS_PORT="${REDIS_HOST_PORT}"
+        [[ -n "${OLLAMA_HOST_PORT:-}" ]] && OLLAMA_PORT="${OLLAMA_HOST_PORT}"
+        [[ -n "${LITELLM_HOST_PORT:-}" ]] && LITELLM_PORT="${LITELLM_HOST_PORT}"
+        [[ -n "${OPENWEBUI_HOST_PORT:-}" ]] && OPENWEBUI_PORT="${OPENWEBUI_HOST_PORT}"
+        [[ -n "${OPENCLAW_HOST_PORT:-}" ]] && OPENCLAW_PORT="${OPENCLAW_HOST_PORT}"
+        [[ -n "${QDRANT_HOST_PORT:-}" ]] && QDRANT_PORT="${QDRANT_HOST_PORT}"
+        [[ -n "${N8N_HOST_PORT:-}" ]] && N8N_PORT="${N8N_HOST_PORT}"
+        [[ -n "${FLOWISE_HOST_PORT:-}" ]] && FLOWISE_PORT="${FLOWISE_HOST_PORT}"
+        [[ -n "${DIFY_HOST_PORT:-}" ]] && DIFY_PORT="${DIFY_HOST_PORT}"
+        [[ -n "${AUTHENTIK_HOST_PORT:-}" ]] && AUTHENTIK_PORT="${AUTHENTIK_HOST_PORT}"
+        [[ -n "${SIGNALBOT_HOST_PORT:-}" ]] && SIGNALBOT_PORT="${SIGNALBOT_HOST_PORT}"
+        [[ -n "${BIFROST_HOST_PORT:-}" ]] && BIFROST_PORT="${BIFROST_HOST_PORT}"
+        [[ -n "${WEAVIATE_HOST_PORT:-}" ]] && WEAVIATE_PORT="${WEAVIATE_HOST_PORT}"
+        [[ -n "${CHROMA_HOST_PORT:-}" ]] && CHROMA_PORT="${CHROMA_HOST_PORT}"
+        [[ -n "${MILVUS_HOST_PORT:-}" ]] && MILVUS_PORT="${MILVUS_HOST_PORT}"
+        [[ -n "${CODE_SERVER_HOST_PORT:-}" ]] && CODE_SERVER_PORT="${CODE_SERVER_HOST_PORT}"
+        [[ -n "${GRAFANA_HOST_PORT:-}" ]] && GRAFANA_PORT="${GRAFANA_HOST_PORT}"
+        [[ -n "${PROMETHEUS_HOST_PORT:-}" ]] && PROMETHEUS_PORT="${PROMETHEUS_HOST_PORT}"
+        [[ -n "${ANYTHINGLLM_HOST_PORT:-}" ]] && ANYTHINGLLM_PORT="${ANYTHINGLLM_HOST_PORT}"
+        [[ -n "${MEM0_HOST_PORT:-}" ]] && MEM0_PORT="${MEM0_HOST_PORT}"
+    fi
+
     # Derive TENANT_PREFIX if not in platform.conf (backward compat)
     TENANT_PREFIX="${TENANT_PREFIX:-${PLATFORM_PREFIX}-${TENANT_ID}}"
     POSTGRES_USER="${POSTGRES_USER:-${TENANT_ID}}"
@@ -1055,6 +1082,12 @@ main() {
     OPENCLAW_ENABLED="${OPENCLAW_ENABLED:-${ENABLE_OPENCLAW:-false}}"
     BIFROST_ENABLED="${BIFROST_ENABLED:-${ENABLE_BIFROST:-false}}"
     SIGNALBOT_ENABLED="${SIGNALBOT_ENABLED:-${ENABLE_SIGNALBOT:-false}}"
+    LIBRECHAT_ENABLED="${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}"
+    ANYTHINGLLM_ENABLED="${ANYTHINGLLM_ENABLED:-${ENABLE_ANYTHINGLLM:-false}}"
+    MEM0_ENABLED="${MEM0_ENABLED:-${ENABLE_MEM0:-false}}"
+    CODE_SERVER_ENABLED="${CODE_SERVER_ENABLED:-${ENABLE_CODE_SERVER:-false}}"
+    CHROMA_ENABLED="${CHROMA_ENABLED:-${ENABLE_CHROMA:-false}}"
+    MILVUS_ENABLED="${MILVUS_ENABLED:-${ENABLE_MILVUS:-false}}"
     
     log "=== Script 3: Mission Control ==="
     log "Version: ${SCRIPT_VERSION}"
