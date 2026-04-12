@@ -83,7 +83,8 @@ Internet
 | | Prometheus | `prom/prometheus` | Metrics scraping |
 | **Dev** | Code Server | `codercom/code-server` | Browser VS Code |
 | **Alerting** | Signalbot | `bbernhard/signal-cli-rest-api` | Signal messenger API |
-| **Memory** | Mem0 | `mem0ai/mem0:latest` | Optional memory layer |
+| **Memory** | Zep CE | `ghcr.io/getzep/zep:latest` | Long-term conversation memory; backed by Postgres + pgvector, embeddings via LiteLLM |
+| | Letta | `letta-ai/letta:latest` | Stateful agent memory server (MemGPT); backed by Postgres, LLM via LiteLLM |
 
 ---
 
@@ -169,6 +170,8 @@ All internal services are localhost-only. Only the reverse proxy (80/443) is wor
 Most services run as `user: "${PUID}:${PGID}"`. Exceptions (must run as root):
 - **LiteLLM** — Prisma writes baseline migrations to Python package directories at startup.
 - **OpenWebUI** — writes `.webui_secret_key` to `/app/backend/` (image-internal path).
+- **LibreChat** — writes to `/app/uploads` and `/app/logs` (image-internal paths).
+- **Letta** — writes agent state to `/root/.letta` (image-internal path).
 
 **P7 — Idempotency via marker files**  
 `${CONFIGURED_DIR}/service_name` markers in `.configured/`. Scripts skip completed steps. Script 0 removes the entire `.configured/` tree.
@@ -204,6 +207,8 @@ Not every image ships `curl`. Use the right tool per image or the healthcheck wi
 | Flowise | `curl` | `curl -f http://localhost:3000/api/v1/ping` |
 | LibreChat | `wget` | `wget -q --spider http://localhost:3080/api/health` |
 | Signalbot | `curl` | `curl -sf http://localhost:8080/v1/about` |
+| Zep CE | `curl` | `curl -f http://localhost:8000/healthz` |
+| Letta | `curl` | `curl -f http://localhost:8283/v1/health` |
 
 > **Dify-web** (Next.js) binds to the container's bridge network IP, not `127.0.0.1`. `wget http://localhost:3000` always returns connection refused. Use `http://$(hostname):3000` (escaped in heredoc as `\$(hostname)`).
 
@@ -295,9 +300,9 @@ bash scripts/3-configure-services.sh <tenant_id>
 | Preset | Services |
 |---|---|
 | `minimal` | Postgres, Redis, Ollama, LiteLLM, OpenWebUI, Qdrant |
-| `dev` | Minimal + N8N, Flowise, Code Server, Grafana |
-| `standard` | Dev + Dify, Authentik, Prometheus, Signalbot |
-| `full` | Standard + AnythingLLM, Mem0, Bifrost, all vector DBs |
+| `development` | Minimal + Code Server |
+| `standard` | Development + N8N, Flowise, Grafana, Prometheus, Zep |
+| `full` | Standard + OpenClaw, AnythingLLM, Dify, Authentik, SignalBot, LibreChat, Zep + Letta |
 
 ### TLS Modes
 
@@ -317,7 +322,7 @@ Use this when implementing or reviewing any script change:
 - [ ] Does Script 2 write `platform.conf`? Only via `update_conf_value()` for runtime secrets.
 - [ ] Does every `build_*_deps()` emit both `depends_on:` and `networks:`?
 - [ ] Does every service with a fixed internal UID get `chmod 777` on its data dir?
-- [ ] Does LiteLLM / OpenWebUI omit `user:` override (must run as root)?
+- [ ] Does LiteLLM / OpenWebUI / LibreChat / Letta omit `user:` override (must run as root)?
 - [ ] Does every `configure_*()` function in Script 3 guard against container non-existence?
 - [ ] Are all healthcheck endpoints correct (see table above)?
 - [ ] Are `start_period` values set for slow-starting services?

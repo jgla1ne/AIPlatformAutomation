@@ -196,6 +196,28 @@ build_authentik_deps() {
     printf '%s' "${deps}"
 }
 
+build_zep_deps() {
+    local deps=""
+    if [[ "${POSTGRES_ENABLED}" == "true" ]]; then
+        deps="    depends_on:"$'\n'
+        deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
+    fi
+    deps+="    networks:"$'\n'
+    deps+="      - ${DOCKER_NETWORK}"$'\n'
+    printf '%s' "${deps}"
+}
+
+build_letta_deps() {
+    local deps=""
+    if [[ "${POSTGRES_ENABLED}" == "true" ]]; then
+        deps="    depends_on:"$'\n'
+        deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
+    fi
+    deps+="    networks:"$'\n'
+    deps+="      - ${DOCKER_NETWORK}"$'\n'
+    printf '%s' "${deps}"
+}
+
 # =============================================================================
 # VECTORDB URL HELPER — returns internal Docker URL for the chosen vectordb.
 # Used throughout compose generation so no service has a hardcoded DB type.
@@ -237,6 +259,14 @@ persist_generated_secrets() {
     if [[ "${AUTHENTIK_ENABLED}" == "true" ]]; then
         update_conf_value "AUTHENTIK_BOOTSTRAP_PASSWORD" "${AUTHENTIK_BOOTSTRAP_PASSWORD}"
         update_conf_value "AUTHENTIK_BOOTSTRAP_EMAIL" "${AUTHENTIK_BOOTSTRAP_EMAIL:-${ADMIN_EMAIL:-}}"
+    fi
+    if [[ "${ZEP_ENABLED:-false}" == "true" ]]; then
+        ZEP_AUTH_SECRET="${ZEP_AUTH_SECRET:-$(openssl rand -hex 32)}"
+        update_conf_value "ZEP_AUTH_SECRET" "${ZEP_AUTH_SECRET}"
+    fi
+    if [[ "${LETTA_ENABLED:-false}" == "true" ]]; then
+        LETTA_SERVER_PASS="${LETTA_SERVER_PASS:-$(openssl rand -hex 24)}"
+        update_conf_value "LETTA_SERVER_PASS" "${LETTA_SERVER_PASS}"
     fi
     log "Generated secrets persisted to platform.conf"
 }
@@ -339,7 +369,6 @@ generate_compose() {
     if [[ "${AUTHENTIK_ENABLED}" == "true" ]]; then
         authentik_deps=$(build_authentik_deps)
     fi
-    
     # PORT ALLOCATION (Runtime conflict resolution)
     # Fix: Call directly to preserve _PORT_CLAIMED array, then source the file
     [[ "${POSTGRES_ENABLED}" == "true" ]] && allocate_host_port postgres "${POSTGRES_PORT:-5432}" >/dev/null
@@ -364,6 +393,8 @@ generate_compose() {
     [[ "${PROMETHEUS_ENABLED}" == "true" ]] && allocate_host_port prometheus "${PROMETHEUS_PORT:-9090}" >/dev/null
     [[ "${ANYTHINGLLM_ENABLED}" == "true" ]] && allocate_host_port anythingllm "${ANYTHINGLLM_PORT:-3001}" >/dev/null
     [[ "${MEM0_ENABLED}" == "true" ]] && allocate_host_port mem0 "${MEM0_PORT:-8081}" >/dev/null
+    [[ "${ZEP_ENABLED:-false}" == "true" ]] && allocate_host_port zep "${ZEP_PORT:-8100}" >/dev/null
+    [[ "${LETTA_ENABLED:-false}" == "true" ]] && allocate_host_port letta "${LETTA_PORT:-8283}" >/dev/null
 
     if [[ "${CADDY_ENABLED}" == "true" ]]; then
         allocate_host_port caddy-http "${CADDY_HTTP_PORT:-80}" >/dev/null
@@ -396,6 +427,8 @@ generate_compose() {
         [[ -n "${PROMETHEUS_HOST_PORT:-}" ]] && PROMETHEUS_PORT="${PROMETHEUS_HOST_PORT}"
         [[ -n "${ANYTHINGLLM_HOST_PORT:-}" ]] && ANYTHINGLLM_PORT="${ANYTHINGLLM_HOST_PORT}"
         [[ -n "${MEM0_HOST_PORT:-}" ]] && MEM0_PORT="${MEM0_HOST_PORT}"
+        [[ -n "${ZEP_HOST_PORT:-}" ]] && ZEP_PORT="${ZEP_HOST_PORT}"
+        [[ -n "${LETTA_HOST_PORT:-}" ]] && LETTA_PORT="${LETTA_HOST_PORT}"
         [[ -n "${CADDY_HTTP_HOST_PORT:-}" ]] && CADDY_HTTP_PORT="${CADDY_HTTP_HOST_PORT}"
         [[ -n "${CADDY_HTTPS_HOST_PORT:-}" ]] && CADDY_HTTPS_PORT="${CADDY_HTTPS_HOST_PORT}"
     fi
@@ -1176,6 +1209,64 @@ EOF
 EOF
     fi
 
+    # Zep CE — long-term memory layer backed by Postgres, LLM via LiteLLM proxy
+    if [[ "${ZEP_ENABLED:-false}" == "true" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
+  ${TENANT_PREFIX}-zep:
+    image: ghcr.io/getzep/zep:latest
+    container_name: ${TENANT_PREFIX}-zep
+    restart: unless-stopped
+    environment:
+      ZEP_STORE_POSTGRES_DSN: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${POSTGRES_DB}?sslmode=disable"
+      ZEP_AUTH_REQUIRED: "true"
+      ZEP_AUTH_SECRET: ${ZEP_AUTH_SECRET}
+      ZEP_LOG_LEVEL: info
+      ZEP_OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      ZEP_OPENAI_API_BASE: http://${TENANT_PREFIX}-litellm:4000/v1
+      ZEP_EMBEDDING_DIMENSIONS: "1536"
+    volumes:
+      - ${DATA_DIR}/zep:/app/data
+    ports:
+      - "127.0.0.1:${ZEP_PORT}:8000"
+$(build_zep_deps)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+EOF
+    fi
+
+    # Letta (MemGPT) — stateful agent memory server backed by Postgres, LLM via LiteLLM
+    if [[ "${LETTA_ENABLED:-false}" == "true" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
+  ${TENANT_PREFIX}-letta:
+    image: letta-ai/letta:latest
+    container_name: ${TENANT_PREFIX}-letta
+    restart: unless-stopped
+    # Letta writes agent state to /root/.letta — run as root (image default):
+    environment:
+      LETTA_SERVER_PASS: ${LETTA_SERVER_PASS}
+      LETTA_PG_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${POSTGRES_DB}
+      OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      OPENAI_API_BASE: http://${TENANT_PREFIX}-litellm:4000/v1
+    volumes:
+      - ${DATA_DIR}/letta:/root/.letta
+    ports:
+      - "127.0.0.1:${LETTA_PORT}:8283"
+$(build_letta_deps)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8283/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+EOF
+    fi
+
     # Grafana dashboards
     if [[ "${GRAFANA_ENABLED:-${ENABLE_GRAFANA:-false}}" == "true" ]]; then
         cat >> "${COMPOSE_FILE}" << EOF
@@ -1694,6 +1785,8 @@ prepare_data_dirs() {
     [[ "${CHROMA_ENABLED:-${ENABLE_CHROMA:-false}}"     == "true" ]] && mkdir -p "${DATA_DIR}/chroma"
     [[ "${ANYTHINGLLM_ENABLED:-${ENABLE_ANYTHINGLLM:-false}}" == "true" ]] && mkdir -p "${DATA_DIR}/anythingllm"
     [[ "${MEM0_ENABLED:-${ENABLE_MEM0:-false}}"         == "true" ]] && mkdir -p "${DATA_DIR}/mem0"
+    [[ "${ZEP_ENABLED:-false}"                          == "true" ]] && mkdir -p "${DATA_DIR}/zep"
+    [[ "${LETTA_ENABLED:-false}"                        == "true" ]] && mkdir -p "${DATA_DIR}/letta"
     [[ "${GRAFANA_ENABLED:-${ENABLE_GRAFANA:-false}}"   == "true" ]] && mkdir -p "${DATA_DIR}/grafana"
     [[ "${PROMETHEUS_ENABLED:-${ENABLE_PROMETHEUS:-false}}" == "true" ]] && mkdir -p "${DATA_DIR}/prometheus" "${CONFIG_DIR}/prometheus"
     [[ "${CODE_SERVER_ENABLED:-${ENABLE_CODE_SERVER:-false}}" == "true" ]] && mkdir -p "${DATA_DIR}/code-server"
@@ -1788,6 +1881,18 @@ wait_for_all_health() {
         wait_for_health "${TENANT_PREFIX}-postgres" 60 || return 1
     fi
     
+    if [[ "${MEM0_ENABLED}" == "true" ]]; then
+        wait_for_health "${TENANT_PREFIX}-mem0" 120 || return 1
+    fi
+    
+    if [[ "${ZEP_ENABLED:-false}" == "true" ]]; then
+        wait_for_health "${TENANT_PREFIX}-zep" 120 || return 1
+    fi
+
+    if [[ "${LETTA_ENABLED:-false}" == "true" ]]; then
+        wait_for_health "${TENANT_PREFIX}-letta" 120 || return 1
+    fi
+    
     if [[ "${REDIS_ENABLED}" == "true" ]]; then
         wait_for_health "${TENANT_PREFIX}-redis" 60 || return 1
     fi
@@ -1797,7 +1902,7 @@ wait_for_all_health() {
     fi
     
     if [[ "${LITELLM_ENABLED}" == "true" ]]; then
-        wait_for_health "${TENANT_PREFIX}-litellm" 300 || return 1
+        wait_for_health "${TENANT_PREFIX}-litellm" 600 || return 1
     fi
     
     if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then

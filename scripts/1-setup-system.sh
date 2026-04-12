@@ -600,8 +600,8 @@ select_stack_preset() {
     select_menu_option "Stack Preset Selection" \
         "MINIMAL (~4 GB RAM)  — PostgreSQL · Redis · Ollama · LiteLLM · OpenWebUI · Qdrant" \
         "DEVELOPMENT (~6 GB)  — Minimal + Code Server · Continue.dev config" \
-        "STANDARD (~8 GB)     — Development + N8N · Flowise · Grafana · Prometheus · Mem0" \
-        "FULL (~16 GB)        — Standard + OpenClaw · AnythingLLM · Dify · Authentik · SignalBot · Mem0 · Continue.dev" \
+        "STANDARD (~8 GB)     — Development + N8N · Flowise · Grafana · Prometheus · Zep (memory)" \
+        "FULL (~16 GB)        — Standard + OpenClaw · AnythingLLM · Dify · Authentik · SignalBot · Zep · Letta · Continue.dev" \
         "CUSTOM               — Pick every service individually (full control)"
     local preset_choice=$?
     
@@ -641,7 +641,7 @@ select_stack_preset() {
                 echo "    LLM            : Ollama (local), LiteLLM (unified gateway)"
                 echo "    Web UI         : OpenWebUI (→ LiteLLM, vectordb RAG)"
                 echo "    Vector DB      : Qdrant (default)"
-                echo "    Memory         : Mem0 (per-tenant context, → vectordb + LiteLLM)"
+                echo "    Memory         : Zep CE (long-term memory, → Postgres + LiteLLM)"
                 echo "    Dev tools      : Code Server"
                 echo "    Automation     : N8N (workflows, → LiteLLM), Flowise (AI pipelines, → vectordb)"
                 echo "    Monitoring     : Grafana, Prometheus"
@@ -651,7 +651,7 @@ select_stack_preset() {
                 echo "    LLM            : Ollama (local), LiteLLM (unified gateway)"
                 echo "    Web UI         : OpenWebUI, OpenClaw, AnythingLLM (→ LiteLLM + vectordb)"
                 echo "    Vector DB      : Qdrant (default; Weaviate/Chroma selectable)"
-                echo "    Memory         : Mem0 (per-tenant context, → vectordb + LiteLLM)"
+                echo "    Memory         : Zep CE (long-term memory) + Letta (stateful agents)"
                 echo "    Dev tools      : Code Server, Continue.dev config (→ LiteLLM)"
                 echo "    Automation     : N8N, Flowise, Dify (all → LiteLLM + vectordb)"
                 echo "    Monitoring     : Grafana, Prometheus"
@@ -687,7 +687,7 @@ apply_preset_defaults() {
             ENABLE_CODE_SERVER="true"
             ;;
         standard)
-            # Development + N8N + Flowise + Monitoring + Mem0
+            # Development + N8N + Flowise + Monitoring + Zep (memory)
             ENABLE_POSTGRES="true"
             ENABLE_REDIS="true"
             ENABLE_OLLAMA="true"
@@ -699,10 +699,10 @@ apply_preset_defaults() {
             ENABLE_FLOWISE="true"
             ENABLE_GRAFANA="true"
             ENABLE_PROMETHEUS="true"
-            ENABLE_MEM0="true"
+            ENABLE_ZEP="true"
             ;;
         full)
-            # Standard + All remaining services + Mem0 + Continue.dev
+            # Standard + All remaining services + Zep + Letta + Continue.dev
             ENABLE_POSTGRES="true"
             ENABLE_REDIS="true"
             ENABLE_OLLAMA="true"
@@ -720,7 +720,8 @@ apply_preset_defaults() {
             ENABLE_DIFY="true"
             ENABLE_SIGNALBOT="true"
             ENABLE_AUTHENTIK="true"
-            ENABLE_MEM0="true"
+            ENABLE_ZEP="true"
+            ENABLE_LETTA="true"
             ENABLE_CONTINUE_DEV="true"
             ;;
     esac
@@ -769,7 +770,8 @@ configure_custom_stack() {
     
     # Memory Layer
     echo "  🧠 Memory Layer:"
-    safe_read_yesno "Mem0 (AI memory & context persistence, connects to VectorDB)" "false" "ENABLE_MEM0"
+    safe_read_yesno "Zep CE (long-term conversation memory, connects to Postgres + LiteLLM)" "false" "ENABLE_ZEP"
+    safe_read_yesno "Letta / MemGPT (stateful agent memory server, connects to Postgres + LiteLLM)" "false" "ENABLE_LETTA"
     echo ""
 
     # Development
@@ -835,11 +837,8 @@ configure_service_credentials() {
         echo ""
     fi
 
-    # Mem0
-    if [[ "${ENABLE_MEM0:-false}" == "true" ]]; then
-        MEM0_IMAGE="mem0ai/mem0:latest"
-        echo ""
-    fi
+    # Zep / Letta — public images, no prompts needed
+    # Images: ghcr.io/getzep/zep:latest  |  letta-ai/letta:latest
 }
 
 # =============================================================================
@@ -2014,10 +2013,13 @@ SIGNAL_PHONE="${SIGNAL_PHONE:-}"
 SIGNAL_RECIPIENT="${SIGNAL_RECIPIENT:-}"
 
 # Memory Layer
-ENABLE_MEM0="${ENABLE_MEM0:-false}"
-MEM0_IMAGE="${MEM0_IMAGE:-mem0ai/mem0:latest}"
-MEM0_PORT="${MEM0_PORT:-8081}"
-MEM0_API_KEY="${MEM0_API_KEY:-$(gen_secret)}"
+ENABLE_ZEP="${ENABLE_ZEP:-false}"
+ZEP_PORT="${ZEP_PORT:-8100}"
+ZEP_AUTH_SECRET="${ZEP_AUTH_SECRET:-}"
+
+ENABLE_LETTA="${ENABLE_LETTA:-false}"
+LETTA_PORT="${LETTA_PORT:-8283}"
+LETTA_SERVER_PASS="${LETTA_SERVER_PASS:-}"
 
 # Development
 ENABLE_CODE_SERVER="${ENABLE_CODE_SERVER:-false}"
@@ -2313,6 +2315,8 @@ BIFROST_ENABLED="${ENABLE_BIFROST:-false}"
 ANYTHINGLLM_ENABLED="${ENABLE_ANYTHINGLLM:-false}"
 ANYTHINGLLM_JWT_SECRET="${ANYTHINGLLM_JWT_SECRET:-$(gen_secret)}"
 MEM0_ENABLED="${ENABLE_MEM0:-false}"
+ZEP_ENABLED="${ENABLE_ZEP:-false}"
+LETTA_ENABLED="${ENABLE_LETTA:-false}"
 CODE_SERVER_ENABLED="${ENABLE_CODE_SERVER:-false}"
 CONTINUE_DEV_ENABLED="${ENABLE_CONTINUE_DEV:-false}"
 WEAVIATE_ENABLED="${ENABLE_WEAVIATE:-false}"
@@ -2655,7 +2659,7 @@ display_service_summary() {
     else
         storage_info="OS disk → /mnt/${TENANT_ID}"
     fi
-    _mc_line "VECTOR : ${VECTOR_DB_TYPE:-qdrant}   MEMORY : ${ENABLE_MEM0:-false}   STORAGE : ${storage_info}"
+    _mc_line "VECTOR : ${VECTOR_DB_TYPE:-qdrant}   ZEP : ${ENABLE_ZEP:-false}   LETTA : ${ENABLE_LETTA:-false}   STORAGE : ${storage_info}"
     _mc_sep
 
     _mc_line "SERVICES CONFIGURED                                    PORT"
@@ -2665,7 +2669,8 @@ display_service_summary() {
     [[ "${ENABLE_OLLAMA:-false}"    == "true" ]] && _mc_line "  ✅ Ollama (models: ${OLLAMA_MODELS:-llama3.1:8b})          :${OLLAMA_PORT:-11434}"
     [[ "${ENABLE_LITELLM:-false}"   == "true" ]] && _mc_line "  ✅ LiteLLM (routing: ${LITELLM_ROUTING_STRATEGY:-cost-optimized})             :${LITELLM_PORT:-4000}"
     [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && _mc_line "  ✅ OpenWebUI  (→ LiteLLM + Ollama RAG)                 :${OPENWEBUI_PORT:-3000}"
-    [[ "${ENABLE_MEM0:-false}"      == "true" ]] && _mc_line "  ✅ Mem0       (→ ${VECTOR_DB_TYPE:-qdrant} + LiteLLM)                :${MEM0_PORT:-8081}"
+    [[ "${ENABLE_ZEP:-false}"       == "true" ]] && _mc_line "  ✅ Zep CE     (→ Postgres + LiteLLM)                   :${ZEP_PORT:-8100}"
+    [[ "${ENABLE_LETTA:-false}"     == "true" ]] && _mc_line "  ✅ Letta      (→ Postgres + LiteLLM)                   :${LETTA_PORT:-8283}"
     [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && _mc_line "  ✅ AnythingLLM (→ LiteLLM + ${VECTOR_DB_TYPE:-qdrant})             :${ANYTHINGLLM_PORT:-3001}"
     [[ "${ENABLE_OPENCLAW:-false}"  == "true" ]] && _mc_line "  ✅ OpenClaw   (user: ${OPENCLAW_USERNAME:-admin})                  :${OPENCLAW_PORT:-3081}"
     [[ "${ENABLE_QDRANT:-false}"    == "true" ]] && _mc_line "  ✅ Qdrant                                               :${QDRANT_PORT:-6333}"
@@ -2706,7 +2711,8 @@ display_service_summary() {
     [[ "${ENABLE_OPENWEBUI:-false}"   == "true" ]] && _mc_line "  Open WebUI   → ${base_proto}://${DOMAIN:-$server_ip}  (direct: http://127.0.0.1:${OPENWEBUI_PORT:-3000})"
     [[ "${ENABLE_LITELLM:-false}"     == "true" ]] && _mc_line "  LiteLLM API  → http://127.0.0.1:${LITELLM_PORT:-4000}/v1"
     [[ "${ENABLE_OLLAMA:-false}"      == "true" ]] && _mc_line "  Ollama       → http://127.0.0.1:${OLLAMA_PORT:-11434}"
-    [[ "${ENABLE_MEM0:-false}"        == "true" ]] && _mc_line "  Mem0         → http://127.0.0.1:${MEM0_PORT:-8081}"
+    [[ "${ENABLE_ZEP:-false}"          == "true" ]] && _mc_line "  Zep          → http://127.0.0.1:${ZEP_PORT:-8100}"
+    [[ "${ENABLE_LETTA:-false}"        == "true" ]] && _mc_line "  Letta        → http://127.0.0.1:${LETTA_PORT:-8283}"
     [[ "${ENABLE_N8N:-false}"         == "true" ]] && _mc_line "  N8N          → http://127.0.0.1:${N8N_PORT:-5678}"
     [[ "${ENABLE_FLOWISE:-false}"     == "true" ]] && _mc_line "  Flowise      → http://127.0.0.1:${FLOWISE_PORT:-3030}"
     [[ "${ENABLE_DIFY:-false}"        == "true" ]] && _mc_line "  Dify         → http://127.0.0.1:${DIFY_PORT:-3001}"
@@ -3048,7 +3054,8 @@ ENABLE_FLOWISE="${ENABLE_FLOWISE:-false}"
 ENABLE_DIFY="${ENABLE_DIFY:-false}"
 ENABLE_CODE_SERVER="${ENABLE_CODE_SERVER:-false}"
 ENABLE_CONTINUE_DEV="${ENABLE_CONTINUE_DEV:-false}"
-ENABLE_MEM0="${ENABLE_MEM0:-false}"
+ENABLE_ZEP="${ENABLE_ZEP:-false}"
+ENABLE_LETTA="${ENABLE_LETTA:-false}"
 ENABLE_GRAFANA="${ENABLE_GRAFANA:-false}"
 ENABLE_PROMETHEUS="${ENABLE_PROMETHEUS:-false}"
 ENABLE_AUTHENTIK="${ENABLE_AUTHENTIK:-false}"
@@ -3071,7 +3078,8 @@ N8N_PORT="${N8N_PORT:-5678}"
 FLOWISE_PORT="${FLOWISE_PORT:-3030}"
 DIFY_PORT="${DIFY_PORT:-3001}"
 CODE_SERVER_PORT="${CODE_SERVER_PORT:-8080}"
-MEM0_PORT="${MEM0_PORT:-8081}"
+ZEP_PORT="${ZEP_PORT:-8100}"
+LETTA_PORT="${LETTA_PORT:-8283}"
 GRAFANA_PORT="${GRAFANA_PORT:-3002}"
 PROMETHEUS_PORT="${PROMETHEUS_PORT:-9090}"
 AUTHENTIK_PORT="${AUTHENTIK_PORT:-9000}"
@@ -3511,7 +3519,8 @@ initialize_service_variables() {
     ENABLE_AUTHENTIK="${ENABLE_AUTHENTIK:-false}"
     
     # Additional Services
-    ENABLE_MEM0="${ENABLE_MEM0:-false}"
+    ENABLE_ZEP="${ENABLE_ZEP:-false}"
+    ENABLE_LETTA="${ENABLE_LETTA:-false}"
     ENABLE_NGINX="${ENABLE_NGINX:-false}"
     ENABLE_CADDY="${ENABLE_CADDY:-false}"
     

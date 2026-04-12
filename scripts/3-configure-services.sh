@@ -164,6 +164,17 @@ verify_containers_healthy() {
             unhealthy_containers+=("qdrant")
         fi
     fi
+
+    if [[ "${ZEP_ENABLED:-false}" == "true" ]]; then
+        if ! docker ps --format "{{.Names}}" | grep -q "^${TENANT_PREFIX}-zep$"; then
+            fail "Zep container not running"
+        fi
+        local status
+        status=$(docker inspect --format='{{.State.Health.Status}}' "${TENANT_PREFIX}-zep" 2>/dev/null || echo "none")
+        if [[ "$status" != "healthy" ]]; then
+            unhealthy_containers+=("zep")
+        fi
+    fi
     
     # Fail if any containers are unhealthy
     if [[ ${#unhealthy_containers[@]} -gt 0 ]]; then
@@ -617,6 +628,73 @@ configure_signalbot() {
     ok "Signalbot configured"
 }
 
+configure_zep() {
+    if [[ "${ZEP_ENABLED:-false}" != "true" ]]; then
+        return 0
+    fi
+
+    if step_done "zep_configured"; then
+        log "Zep already configured, skipping"
+        return 0
+    fi
+
+    local container_name="${TENANT_PREFIX}-zep"
+    local zep_url="http://127.0.0.1:${ZEP_PORT}"
+
+    log "Configuring Zep..."
+
+    # Wait for Zep to be ready
+    local attempts=0
+    local max_attempts=30
+
+    while [[ $attempts -lt $max_attempts ]]; do
+        if curl -sf "${zep_url}/healthz" >/dev/null 2>&1; then
+            break
+        fi
+        attempts=$((attempts + 1))
+        sleep 2
+    done
+
+    if [[ $attempts -ge $max_attempts ]]; then
+        fail "Zep not ready after timeout"
+    fi
+
+    mark_done "zep_configured"
+    ok "Zep configured"
+}
+
+configure_letta() {
+    if [[ "${LETTA_ENABLED:-false}" != "true" ]]; then
+        return 0
+    fi
+
+    if step_done "letta_configured"; then
+        log "Letta already configured, skipping"
+        return 0
+    fi
+
+    local letta_url="http://127.0.0.1:${LETTA_PORT:-8283}"
+
+    log "Configuring Letta..."
+
+    local attempts=0
+    local max_attempts=30
+    while [[ $attempts -lt $max_attempts ]]; do
+        if curl -sf "${letta_url}/v1/health" >/dev/null 2>&1; then
+            break
+        fi
+        attempts=$((attempts + 1))
+        sleep 2
+    done
+
+    if [[ $attempts -ge $max_attempts ]]; then
+        fail "Letta not ready after timeout"
+    fi
+
+    mark_done "letta_configured"
+    ok "Letta configured"
+}
+
 configure_bifrost() {
     if [[ "${BIFROST_ENABLED}" != "true" ]]; then
         return 0
@@ -744,6 +822,20 @@ show_credentials() {
     if [[ "${QDRANT_ENABLED}" == "true" ]]; then
         echo "RAG/VECTOR"
         echo "  Qdrant      ${QDRANT_API_KEY}"
+        echo ""
+    fi
+
+    if [[ "${ZEP_ENABLED:-false}" == "true" ]]; then
+        echo "MEMORY — ZEP"
+        echo "  API         http://127.0.0.1:${ZEP_PORT:-8100}"
+        echo "  Auth Secret ${ZEP_AUTH_SECRET:-<not set — check platform.conf>}"
+        echo ""
+    fi
+
+    if [[ "${LETTA_ENABLED:-false}" == "true" ]]; then
+        echo "MEMORY — LETTA"
+        echo "  API         http://127.0.0.1:${LETTA_PORT:-8283}"
+        echo "  Server Pass ${LETTA_SERVER_PASS:-<not set — check platform.conf>}"
         echo ""
     fi
     
@@ -1002,6 +1094,8 @@ main() {
         [[ -n "${PROMETHEUS_HOST_PORT:-}" ]] && PROMETHEUS_PORT="${PROMETHEUS_HOST_PORT}"
         [[ -n "${ANYTHINGLLM_HOST_PORT:-}" ]] && ANYTHINGLLM_PORT="${ANYTHINGLLM_HOST_PORT}"
         [[ -n "${MEM0_HOST_PORT:-}" ]] && MEM0_PORT="${MEM0_HOST_PORT}"
+        [[ -n "${ZEP_HOST_PORT:-}" ]] && ZEP_PORT="${ZEP_HOST_PORT}"
+        [[ -n "${LETTA_HOST_PORT:-}" ]] && LETTA_PORT="${LETTA_HOST_PORT}"
     fi
 
     # Derive TENANT_PREFIX if not in platform.conf (backward compat)
@@ -1034,6 +1128,8 @@ main() {
     LIBRECHAT_ENABLED="${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}"
     ANYTHINGLLM_ENABLED="${ANYTHINGLLM_ENABLED:-${ENABLE_ANYTHINGLLM:-false}}"
     MEM0_ENABLED="${MEM0_ENABLED:-${ENABLE_MEM0:-false}}"
+    ZEP_ENABLED="${ZEP_ENABLED:-${ENABLE_ZEP:-false}}"
+    LETTA_ENABLED="${LETTA_ENABLED:-${ENABLE_LETTA:-false}}"
     CODE_SERVER_ENABLED="${CODE_SERVER_ENABLED:-${ENABLE_CODE_SERVER:-false}}"
     CHROMA_ENABLED="${CHROMA_ENABLED:-${ENABLE_CHROMA:-false}}"
     MILVUS_ENABLED="${MILVUS_ENABLED:-${ENABLE_MILVUS:-false}}"
@@ -1113,6 +1209,8 @@ main() {
         configure_dify
         configure_authentik
         configure_signalbot
+        configure_zep
+        configure_letta
         configure_bifrost
     fi
     
@@ -1188,6 +1286,8 @@ check_port_health() {
     [[ "${PROMETHEUS_ENABLED:-false}" == "true" ]] && _port_check "Prometheus" "${PROMETHEUS_PORT:-9090}" "/-/healthy"
     [[ "${AUTHENTIK_ENABLED:-false}"  == "true" ]] && _port_check "Authentik"  "${AUTHENTIK_PORT:-9000}" "/-/health/live/"
     [[ "${SIGNALBOT_ENABLED:-false}"  == "true" ]] && _port_check "Signalbot"  "${SIGNALBOT_PORT:-8080}" "/v1/about"
+    [[ "${ZEP_ENABLED:-false}"        == "true" ]] && _port_check "Zep"        "${ZEP_PORT:-8100}"       "/healthz"
+    [[ "${LETTA_ENABLED:-false}"      == "true" ]] && _port_check "Letta"      "${LETTA_PORT:-8283}"     "/v1/health"
 
     $all_ok && ok "All port checks passed" || warn "Some services are not responding on their ports"
     $all_ok
