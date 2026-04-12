@@ -532,10 +532,12 @@ EOF
     image: qdrant/qdrant:latest
     container_name: ${TENANT_PREFIX}-qdrant
     restart: unless-stopped
-    user: "${PUID}:${PGID}"
+    # qdrant runs as its own internal user (uid 1000) — do not override user:
+    # redirect snapshots into the mounted volume so they are always writable
     environment:
       QDRANT__SERVICE__HTTP_PORT: 6333
       QDRANT__SERVICE__GRPC_PORT: 6334
+      QDRANT__STORAGE__SNAPSHOTS_PATH: /qdrant/storage/snapshots
       API_KEY: ${QDRANT_API_KEY}
     volumes:
       - ${DATA_DIR}/qdrant:/qdrant/storage
@@ -685,20 +687,28 @@ EOF
     container_name: ${TENANT_PREFIX}-authentik
     restart: unless-stopped
     # authentik manages its own internal user — do not override user:
+    command: server
     environment:
       AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
       AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
-      AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL}
+      AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL:-${ADMIN_EMAIL:-admin@localhost}}
+      AUTHENTIK_POSTGRESQL__HOST: ${TENANT_PREFIX}-postgres
+      AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER}
+      AUTHENTIK_POSTGRESQL__NAME: ${POSTGRES_DB}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD}
+      AUTHENTIK_REDIS__HOST: ${TENANT_PREFIX}-redis
+      AUTHENTIK_REDIS__PASSWORD: ${REDIS_PASSWORD}
     volumes:
       - ${DATA_DIR}/authentik:/media
     ports:
       - "127.0.0.1:${AUTHENTIK_PORT}:9000"
 $(build_authentik_deps)
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/-/health/"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/-/health/live/"]
       interval: 30s
       timeout: 10s
-      retries: 5
+      retries: 10
+      start_period: 60s
 
 EOF
     fi
@@ -893,7 +903,7 @@ EOF
     image: mintplexlabs/anythingllm:latest
     container_name: ${TENANT_PREFIX}-anythingllm
     restart: unless-stopped
-    user: "${PUID}:${PGID}"
+    # anythingllm entrypoint does cd /app/server — do not override user:
     environment:
       STORAGE_DIR: /app/server/storage
       JWT_SECRET: ${ANYTHINGLLM_JWT_SECRET}
@@ -977,7 +987,7 @@ EOF
     image: grafana/grafana:latest
     container_name: ${TENANT_PREFIX}-grafana
     restart: unless-stopped
-    # grafana manages its own internal user (uid 472) — do not override user:
+    user: "${PUID}:${PGID}"
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
@@ -1015,7 +1025,7 @@ PROMEOF
     image: prom/prometheus:latest
     container_name: ${TENANT_PREFIX}-prometheus
     restart: unless-stopped
-    # prometheus manages its own internal user (nobody/65534) — do not override user:
+    user: "${PUID}:${PGID}"
     volumes:
       - ${CONFIG_DIR}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ${DATA_DIR}/prometheus:/prometheus
@@ -1487,6 +1497,11 @@ prepare_data_dirs() {
     # (chown -R is safe here: all paths are under /mnt/<tenant>)
     chown -R "${PUID}:${PGID}" "${DATA_DIR}"
 
+    # Services that run as fixed internal UIDs need their data dirs to be
+    # world-writable (we can't chown to their internal UID without root).
+    # Qdrant (uid 1000) — storage + snapshots subdir
+    [[ "${QDRANT_ENABLED}" == "true" ]] && chmod 777 "${DATA_DIR}/qdrant"
+
     ok "Data directories ready under ${DATA_DIR} (owner ${PUID}:${PGID})"
 }
 
@@ -1708,6 +1723,9 @@ main() {
     SIGNALBOT_ENABLED="${SIGNALBOT_ENABLED:-${ENABLE_SIGNALBOT:-false}}"
     ANYTHINGLLM_ENABLED="${ANYTHINGLLM_ENABLED:-${ENABLE_ANYTHINGLLM:-false}}"
     ANYTHINGLLM_JWT_SECRET="${ANYTHINGLLM_JWT_SECRET:-$(openssl rand -hex 32)}"
+    # Authentik requires a non-empty secret key
+    AUTHENTIK_SECRET_KEY="${AUTHENTIK_SECRET_KEY:-$(openssl rand -hex 50)}"
+    AUTHENTIK_BOOTSTRAP_PASSWORD="${AUTHENTIK_BOOTSTRAP_PASSWORD:-${ADMIN_PASSWORD:-$(openssl rand -base64 16 | tr -d '=+/')}}"
     WEAVIATE_ENABLED="${WEAVIATE_ENABLED:-${ENABLE_WEAVIATE:-false}}"
     CHROMA_ENABLED="${CHROMA_ENABLED:-${ENABLE_CHROMA:-false}}"
     MEM0_ENABLED="${MEM0_ENABLED:-${ENABLE_MEM0:-false}}"
