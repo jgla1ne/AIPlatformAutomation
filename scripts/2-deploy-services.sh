@@ -728,6 +728,8 @@ EOF
     container_name: ${TENANT_PREFIX}-openclaw
     restart: unless-stopped
     user: "${PUID}:${PGID}"
+    # Override CMD to enforce port — alpine/openclaw reads port from --port flag, not env
+    command: ["node", "openclaw.mjs", "gateway", "--allow-unconfigured", "--port", "${OPENCLAW_PORT}"]
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://:${REDIS_PASSWORD}@${TENANT_PREFIX}-redis:6379

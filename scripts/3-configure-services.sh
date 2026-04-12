@@ -1359,6 +1359,7 @@ check_port_health() {
     [[ "${LITELLM_ENABLED:-false}"    == "true" ]] && _port_check "LiteLLM"    "${LITELLM_PORT:-4000}"   "/health/liveliness"
     [[ "${OPENWEBUI_ENABLED:-false}"  == "true" ]] && _port_check "Open WebUI" "${OPENWEBUI_PORT:-3000}" "/"
     [[ "${LIBRECHAT_ENABLED:-false}"  == "true" ]] && _port_check "LibreChat"  "${LIBRECHAT_PORT:-3080}" "/health"
+    [[ "${OPENCLAW_ENABLED:-false}"   == "true" ]] && _port_check "OpenClaw"   "${OPENCLAW_PORT:-3081}"  "/health"
     [[ "${QDRANT_ENABLED:-false}"     == "true" ]] && _port_check "Qdrant"     "${QDRANT_PORT:-6333}"    "/healthz"
     [[ "${N8N_ENABLED:-false}"        == "true" ]] && _port_check "N8N"        "${N8N_PORT:-5678}"       "/healthz"
     [[ "${FLOWISE_ENABLED:-false}"    == "true" ]] && _port_check "Flowise"    "${FLOWISE_PORT:-3000}"   "/api/v1/ping"
