@@ -36,9 +36,9 @@ Internet
      │              │                    │
      ▼              ▼                    ▼
 ┌──────────┐ ┌──────────────┐     ┌──────────────────┐
-│  Ollama  │ │  Authentik   │     │  PostgreSQL       │
+│  Ollama  │ │  Authentik   │     │  PostgreSQL+pgvec │
 │  (local  │ │  (SSO/IdP)   │     │  Redis            │
-│  models) │ └──────────────┘     │  Qdrant (vector)  │
+│  models) │ └──────────────┘     │  MongoDB          │
 └──────────┘                      └──────────────────┘
       │
       ▼
@@ -55,22 +55,24 @@ Internet
 └──────────────────────────────────────────┘
 ```
 
-> **LibreChat** is offered by Script 1 but is **not deployed** — no MongoDB is in the stack. Script 3 guards against waiting for a container that was never started.
+> **LibreChat** is deployed when enabled. MongoDB is co-deployed automatically as its backing store. No manual intervention needed.
 
 ### All Services — Full Stack
 
 | Layer | Service | Image | Notes |
 |---|---|---|---|
-| **Infrastructure** | PostgreSQL | `postgres:15-alpine` | Shared DB for LiteLLM, Dify, Authentik |
+| **Infrastructure** | PostgreSQL | `pgvector/pgvector:pg15` | Shared DB + vector store (pgvector ext built-in); used by LiteLLM, Dify, Authentik, LibreChat RAG API |
 | | Redis | `redis:7-alpine` | Session / queue store |
+| | MongoDB | `mongo:7` | Required by LibreChat; deployed only when LibreChat is enabled |
 | **LLM** | Ollama | `ollama/ollama` | Local model runner |
 | | LiteLLM | `ghcr.io/berriai/litellm:main-stable` | Unified LLM proxy + cost tracking |
 | | Bifrost | `bifrost` | Optional alt gateway |
 | **Web UIs** | OpenWebUI | `ghcr.io/open-webui/open-webui:main` | Primary chat UI |
 | | AnythingLLM | `mintplexlabs/anythingllm` | RAG-first UI |
 | | OpenClaw | `alpine/openclaw:latest` | |
-| | ~~LibreChat~~ | ~~requires MongoDB~~ | ~~Not deployed~~ |
-| **Vector DB** | Qdrant | `qdrant/qdrant` | Default vector store |
+| | LibreChat | `ghcr.io/danny-avila/librechat:latest` | Requires MongoDB (co-deployed automatically); LLMs routed via LiteLLM |
+| | LibreChat RAG API | `registry.librechat.ai/danny-avila/librechat-rag-api-dev-lite:latest` | Document RAG sidecar; embeddings via LiteLLM, vector store via pgvector |
+| **Vector DB** | Qdrant | `qdrant/qdrant` | Optional; LibreChat RAG API uses pgvector (Postgres) by default |
 | | Weaviate | `semitechnologies/weaviate` | Optional |
 | | ChromaDB | `chromadb/chroma` | Optional |
 | **Automation** | N8N | `n8nio/n8n` | Workflow orchestration |
@@ -200,6 +202,7 @@ Not every image ships `curl`. Use the right tool per image or the healthcheck wi
 | Dify-web | `wget` | `wget -q --spider http://$(hostname):3000` (binds to bridge IP, not localhost) |
 | Authentik | `python3` | `python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:9000/-/health/live/')"` |
 | Flowise | `curl` | `curl -f http://localhost:3000/api/v1/ping` |
+| LibreChat | `wget` | `wget -q --spider http://localhost:3080/api/health` |
 | Signalbot | `curl` | `curl -sf http://localhost:8080/v1/about` |
 
 > **Dify-web** (Next.js) binds to the container's bridge network IP, not `127.0.0.1`. `wget http://localhost:3000` always returns connection refused. Use `http://$(hostname):3000` (escaped in heredoc as `\$(hostname)`).
@@ -261,9 +264,7 @@ HOME: /tmp                                         # prevents PermissionError in
 
 ### Services with Container-Existence Guards in Script 3
 
-Script 3's `configure_*()` functions for services that may be enabled but not deployed must check for container existence before waiting on health endpoints:
-
-- **LibreChat**: skipped if the container is not running (`docker inspect` fails). LibreChat is not deployed because the stack has no MongoDB.
+Script 3's `configure_*()` functions guard against enabled-but-not-deployed services. Currently no guards are active — all enabled services are deployed by Script 2.
 
 ### networks: in build_*_deps() Functions
 

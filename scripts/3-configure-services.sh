@@ -318,39 +318,32 @@ configure_librechat() {
         return 0
     fi
 
-    # Guard: LibreChat requires MongoDB which is not deployed in this platform.
-    # If the container doesn't exist, skip rather than timing out waiting for it.
-    local container_name="${TENANT_PREFIX}-librechat"
-    if ! docker inspect "${container_name}" >/dev/null 2>&1; then
-        log "LibreChat container not deployed, skipping"
-        return 0
-    fi
-
     if step_done "librechat_configured"; then
         log "LibreChat already configured, skipping"
         return 0
     fi
 
+    local container_name="${TENANT_PREFIX}-librechat"
     local librechat_url="http://127.0.0.1:${LIBRECHAT_PORT}"
 
     log "Configuring LibreChat..."
-    
-    # Wait for LibreChat to be ready
+
+    # Wait for LibreChat to be ready (image has wget, not curl)
     local attempts=0
     local max_attempts=30
-    
+
     while [[ $attempts -lt $max_attempts ]]; do
-        if curl -sf "${librechat_url}/api/health" >/dev/null 2>&1; then
+        if wget -q --spider "${librechat_url}/api/health" >/dev/null 2>&1; then
             break
         fi
         attempts=$((attempts + 1))
         sleep 2
     done
-    
+
     if [[ $attempts -ge $max_attempts ]]; then
         fail "LibreChat not ready after timeout"
     fi
-    
+
     mark_done "librechat_configured"
     ok "LibreChat configured"
 }
@@ -992,6 +985,7 @@ main() {
         [[ -n "${OLLAMA_HOST_PORT:-}" ]] && OLLAMA_PORT="${OLLAMA_HOST_PORT}"
         [[ -n "${LITELLM_HOST_PORT:-}" ]] && LITELLM_PORT="${LITELLM_HOST_PORT}"
         [[ -n "${OPENWEBUI_HOST_PORT:-}" ]] && OPENWEBUI_PORT="${OPENWEBUI_HOST_PORT}"
+        [[ -n "${LIBRECHAT_HOST_PORT:-}" ]] && LIBRECHAT_PORT="${LIBRECHAT_HOST_PORT}"
         [[ -n "${OPENCLAW_HOST_PORT:-}" ]] && OPENCLAW_PORT="${OPENCLAW_HOST_PORT}"
         [[ -n "${QDRANT_HOST_PORT:-}" ]] && QDRANT_PORT="${QDRANT_HOST_PORT}"
         [[ -n "${N8N_HOST_PORT:-}" ]] && N8N_PORT="${N8N_HOST_PORT}"
@@ -1185,6 +1179,7 @@ check_port_health() {
     [[ "${OLLAMA_ENABLED:-false}"     == "true" ]] && _port_check "Ollama"     "${OLLAMA_PORT:-11434}"   "/api/tags"
     [[ "${LITELLM_ENABLED:-false}"    == "true" ]] && _port_check "LiteLLM"    "${LITELLM_PORT:-4000}"   "/health/liveliness"
     [[ "${OPENWEBUI_ENABLED:-false}"  == "true" ]] && _port_check "Open WebUI" "${OPENWEBUI_PORT:-3000}" "/"
+    [[ "${LIBRECHAT_ENABLED:-false}"  == "true" ]] && _port_check "LibreChat"  "${LIBRECHAT_PORT:-3080}" "/api/health"
     [[ "${QDRANT_ENABLED:-false}"     == "true" ]] && _port_check "Qdrant"     "${QDRANT_PORT:-6333}"    "/healthz"
     [[ "${N8N_ENABLED:-false}"        == "true" ]] && _port_check "N8N"        "${N8N_PORT:-5678}"       "/healthz"
     [[ "${FLOWISE_ENABLED:-false}"    == "true" ]] && _port_check "Flowise"    "${FLOWISE_PORT:-3000}"   "/api/v1/ping"

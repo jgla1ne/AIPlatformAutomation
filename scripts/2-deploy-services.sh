@@ -115,7 +115,30 @@ build_openwebui_deps() {
     printf '%s' "${deps}"
 }
 
-# LibreChat removed - no MongoDB in platform
+build_librechat_deps() {
+    local deps=""
+    deps="    depends_on:"$'\n'
+    deps+="      - ${TENANT_PREFIX}-mongodb"$'\n'
+    deps+="    networks:"$'\n'
+    deps+="      - ${DOCKER_NETWORK}"$'\n'
+    printf '%s' "${deps}"
+}
+
+build_rag_api_deps() {
+    # Emit depends_on for the RAG API's vector store backend + networks block
+    local vector_db="${1:-pgvector}"
+    local deps=""
+    if [[ "${vector_db}" == "pgvector" ]] && [[ "${POSTGRES_ENABLED}" == "true" ]]; then
+        deps="    depends_on:"$'\n'
+        deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
+    elif [[ "${vector_db}" == "qdrant" ]] && [[ "${QDRANT_ENABLED}" == "true" ]]; then
+        deps="    depends_on:"$'\n'
+        deps+="      - ${TENANT_PREFIX}-qdrant"$'\n'
+    fi
+    deps+="    networks:"$'\n'
+    deps+="      - ${DOCKER_NETWORK}"$'\n'
+    printf '%s' "${deps}"
+}
 
 build_openclaw_deps() {
     local deps=""
@@ -297,7 +320,10 @@ generate_compose() {
     if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
         openwebui_deps=$(build_openwebui_deps)
     fi
-    # LibreChat removed - no MongoDB in platform
+    local librechat_deps=""
+    if [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]]; then
+        librechat_deps=$(build_librechat_deps)
+    fi
     if [[ "${OPENCLAW_ENABLED}" == "true" ]]; then
         openclaw_deps=$(build_openclaw_deps)
     fi
@@ -321,6 +347,7 @@ generate_compose() {
     [[ "${OLLAMA_ENABLED}" == "true" ]] && allocate_host_port ollama "${OLLAMA_PORT:-11434}" >/dev/null
     [[ "${LITELLM_ENABLED}" == "true" ]] && allocate_host_port litellm "${LITELLM_PORT:-4000}" >/dev/null
     [[ "${OPENWEBUI_ENABLED}" == "true" ]] && allocate_host_port openwebui "${OPENWEBUI_PORT:-3000}" >/dev/null
+    [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]] && allocate_host_port librechat "${LIBRECHAT_PORT:-3080}" >/dev/null
     [[ "${OPENCLAW_ENABLED}" == "true" ]] && allocate_host_port openclaw "${OPENCLAW_PORT:-3001}" >/dev/null
     [[ "${QDRANT_ENABLED}" == "true" ]] && allocate_host_port qdrant "${QDRANT_PORT:-6333}" >/dev/null
     [[ "${N8N_ENABLED}" == "true" ]] && allocate_host_port n8n "${N8N_PORT:-5678}" >/dev/null
@@ -352,6 +379,7 @@ generate_compose() {
         [[ -n "${OLLAMA_HOST_PORT:-}" ]] && OLLAMA_PORT="${OLLAMA_HOST_PORT}"
         [[ -n "${LITELLM_HOST_PORT:-}" ]] && LITELLM_PORT="${LITELLM_HOST_PORT}"
         [[ -n "${OPENWEBUI_HOST_PORT:-}" ]] && OPENWEBUI_PORT="${OPENWEBUI_HOST_PORT}"
+        [[ -n "${LIBRECHAT_HOST_PORT:-}" ]] && LIBRECHAT_PORT="${LIBRECHAT_HOST_PORT}"
         [[ -n "${OPENCLAW_HOST_PORT:-}" ]] && OPENCLAW_PORT="${OPENCLAW_HOST_PORT}"
         [[ -n "${QDRANT_HOST_PORT:-}" ]] && QDRANT_PORT="${QDRANT_HOST_PORT}"
         [[ -n "${N8N_HOST_PORT:-}" ]] && N8N_PORT="${N8N_HOST_PORT}"
@@ -400,7 +428,7 @@ EOF
     if [[ "${POSTGRES_ENABLED}" == "true" ]]; then
         cat >> "${COMPOSE_FILE}" << EOF
   ${TENANT_PREFIX}-postgres:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg15
     container_name: ${TENANT_PREFIX}-postgres
     restart: unless-stopped
     # postgres manages its own internal uid (70/alpine) — do not override user:
@@ -445,6 +473,31 @@ EOF
       interval: 10s
       timeout: 5s
       retries: 6
+
+EOF
+    fi
+
+    # MongoDB — required by LibreChat
+    if [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
+  ${TENANT_PREFIX}-mongodb:
+    image: mongo:7
+    container_name: ${TENANT_PREFIX}-mongodb
+    restart: unless-stopped
+    # MongoDB manages its own internal uid (999) — do not override user:
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: librechat
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+    volumes:
+      - ${DATA_DIR}/mongodb:/data/db
+    networks:
+      - ${DOCKER_NETWORK}
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
 
 EOF
     fi
@@ -537,6 +590,98 @@ $(build_openwebui_deps)
       timeout: 10s
       retries: 5
       start_period: 120s
+
+EOF
+    fi
+
+    # LibreChat — multi-provider chat UI backed by MongoDB
+    # RAG API sidecar uses pgvector on existing Postgres by default; Qdrant only when Postgres unavailable
+    if [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]]; then
+        # Default to pgvector (eliminates separate vector DB component).
+        # Fall back to Qdrant only when Postgres is disabled but Qdrant is running.
+        local _rag_vector_db="pgvector"
+        local _rag_qdrant_url=""
+        if [[ "${POSTGRES_ENABLED}" != "true" ]] && [[ "${QDRANT_ENABLED}" == "true" ]]; then
+            _rag_vector_db="qdrant"
+            _rag_qdrant_url="http://${TENANT_PREFIX}-qdrant:6333"
+        fi
+
+        cat >> "${COMPOSE_FILE}" << EOF
+  ${TENANT_PREFIX}-librechat:
+    image: ghcr.io/danny-avila/librechat:latest
+    container_name: ${TENANT_PREFIX}-librechat
+    restart: unless-stopped
+    # LibreChat writes to /app/uploads and /app/logs — run as root (image default):
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3080
+      MONGO_URI: mongodb://librechat:${MONGO_PASSWORD}@${TENANT_PREFIX}-mongodb:27017/LibreChat?authSource=admin
+      JWT_SECRET: ${LIBRECHAT_JWT_SECRET}
+      JWT_REFRESH_SECRET: ${LIBRECHAT_JWT_SECRET}
+      CREDS_KEY: ${LIBRECHAT_CRYPT_KEY}
+      CREDS_IV: $(openssl rand -hex 16)
+      # All LLM providers routed through LiteLLM proxy
+      OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      OPENAI_REVERSE_PROXY: http://${TENANT_PREFIX}-litellm:4000/v1
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_KEY: ${GOOGLE_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      # RAG API sidecar
+      RAG_API_URL: http://${TENANT_PREFIX}-rag-api:8000
+      # Platform settings
+      SEARCH: "false"
+      ALLOW_REGISTRATION: "false"
+      ALLOW_SOCIAL_LOGIN: "false"
+    volumes:
+      - ${DATA_DIR}/librechat/uploads:/app/uploads
+      - ${DATA_DIR}/librechat/logs:/app/logs
+    ports:
+      - "127.0.0.1:${LIBRECHAT_PORT}:3080"
+    depends_on:
+      - ${TENANT_PREFIX}-mongodb
+      - ${TENANT_PREFIX}-rag-api
+    networks:
+      - ${DOCKER_NETWORK}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # LibreChat RAG API — document ingestion + retrieval via vector store
+  ${TENANT_PREFIX}-rag-api:
+    image: registry.librechat.ai/danny-avila/librechat-rag-api-dev-lite:latest
+    container_name: ${TENANT_PREFIX}-rag-api
+    restart: unless-stopped
+    user: "${PUID}:${PGID}"
+    environment:
+      # JWT must match LibreChat's JWT_SECRET for request authentication
+      JWT_SECRET: ${LIBRECHAT_JWT_SECRET}
+      # Embeddings via LiteLLM proxy (OpenAI-compatible)
+      EMBEDDINGS_PROVIDER: openai
+      RAG_OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      RAG_OPENAI_BASEURL: http://${TENANT_PREFIX}-litellm:4000/v1
+      EMBEDDINGS_MODEL: text-embedding-ada-002
+      # Vector store — pgvector on existing Postgres (default) or Qdrant fallback
+      VECTOR_DB_TYPE: ${_rag_vector_db}
+      QDRANT_URL: ${_rag_qdrant_url}
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      # pgvector: same Postgres instance (image pgvector/pgvector:pg15 has the extension built-in)
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_HOST: ${TENANT_PREFIX}-postgres
+      RAG_PORT: "8000"
+    volumes:
+      - ${DATA_DIR}/rag-api:/app/uploads
+$(build_rag_api_deps "${_rag_vector_db}")
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
 EOF
     fi
@@ -1329,8 +1474,15 @@ openwebui.${BASE_DOMAIN} {
 EOF
     fi
     
-    # LibreChat removed - no MongoDB in platform
-    
+    if [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]]; then
+        cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
+
+librechat.${BASE_DOMAIN} {
+    reverse_proxy ${TENANT_PREFIX}-librechat:3080
+}
+EOF
+    fi
+
     # OpenClaw
     if [[ "${OPENCLAW_ENABLED}" == "true" ]]; then
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
@@ -1523,6 +1675,7 @@ prepare_data_dirs() {
     [[ "${REDIS_ENABLED}"     == "true" ]] && mkdir -p "${DATA_DIR}/redis"
     [[ "${OLLAMA_ENABLED}"    == "true" ]] && mkdir -p "${DATA_DIR}/ollama"
     [[ "${OPENWEBUI_ENABLED}" == "true" ]] && mkdir -p "${DATA_DIR}/openwebui"
+    [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]] && mkdir -p "${DATA_DIR}/mongodb" "${DATA_DIR}/librechat/uploads" "${DATA_DIR}/librechat/logs"
     [[ "${OPENCLAW_ENABLED}"  == "true" ]] && mkdir -p "${DATA_DIR}/openclaw"
     [[ "${QDRANT_ENABLED}"    == "true" ]] && mkdir -p "${DATA_DIR}/qdrant"
     [[ "${WEAVIATE_ENABLED}"  == "true" ]] && mkdir -p "${DATA_DIR}/weaviate"
@@ -1650,9 +1803,11 @@ wait_for_all_health() {
     if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
         wait_for_health "${TENANT_PREFIX}-openwebui" 180 || return 1
     fi
-    
-    # LibreChat removed - no MongoDB in platform
-    
+
+    if [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]]; then
+        wait_for_health "${TENANT_PREFIX}-librechat" 120 || return 1
+    fi
+
     if [[ "${OPENCLAW_ENABLED}" == "true" ]]; then
         wait_for_health "${TENANT_PREFIX}-openclaw" 90 || return 1
     fi
