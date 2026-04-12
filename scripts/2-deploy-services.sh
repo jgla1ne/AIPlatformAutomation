@@ -948,12 +948,15 @@ EOF
     fi
 
     # Mem0 — AI memory layer, connects to Postgres + vectordb + LiteLLM
-    if [[ "${MEM0_ENABLED:-${ENABLE_MEM0:-false}}" == "true" ]]; then
+    # Requires MEM0_IMAGE to be set in platform.conf. mem0ai/mem0 is not
+    # publicly available on Docker Hub; set MEM0_IMAGE to a real image.
+    local _mem0_img="${MEM0_IMAGE:-mem0ai/mem0:latest}"
+    if [[ "${MEM0_ENABLED:-${ENABLE_MEM0:-false}}" == "true" ]] && [[ "${_mem0_img}" != "mem0ai/mem0:latest" ]]; then
         local vdb_url
         vdb_url=$(get_vectordb_url)
         cat >> "${COMPOSE_FILE}" << EOF
   ${TENANT_PREFIX}-mem0:
-    image: mem0ai/mem0:latest
+    image: ${_mem0_img}
     container_name: ${TENANT_PREFIX}-mem0
     restart: unless-stopped
     user: "${PUID}:${PGID}"
@@ -984,6 +987,9 @@ EOF
       retries: 5
 
 EOF
+    elif [[ "${MEM0_ENABLED:-${ENABLE_MEM0:-false}}" == "true" ]]; then
+        warn "MEM0_ENABLED=true but MEM0_IMAGE is not set — mem0ai/mem0 has no public image."
+        warn "Set MEM0_IMAGE=<your-image> in platform.conf to enable it."
     fi
 
     # Grafana dashboards
@@ -1429,9 +1435,11 @@ wait_for_health() {
 # =============================================================================
 pull_images() {
     log "Pulling Docker images..."
-    
-    run_cmd docker compose -f "${COMPOSE_FILE}" pull
-    
+
+    if ! run_cmd docker compose -f "${COMPOSE_FILE}" pull; then
+        fail "docker compose pull failed — one or more images could not be pulled. Check warnings above."
+    fi
+
     ok "Images pulled"
 }
 
@@ -1568,7 +1576,9 @@ deploy_containers() {
 
     # Deploy containers
     log "Starting containers..."
-    run_cmd docker compose -f "${COMPOSE_FILE}" up -d
+    if ! run_cmd docker compose -f "${COMPOSE_FILE}" up -d; then
+        fail "docker compose up -d failed — check image pull errors or config issues above"
+    fi
 
     ok "Containers deployed"
 }
@@ -1847,7 +1857,9 @@ main() {
     
     # 10. wait_for_health() for each enabled service
     if ! step_done "health_checks_passed"; then
-        wait_for_all_health
+        if ! wait_for_all_health; then
+            fail "One or more services failed health checks — deployment incomplete"
+        fi
         mark_done "health_checks_passed"
     else
         log "Health checks already passed, skipping"
