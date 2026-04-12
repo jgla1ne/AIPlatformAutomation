@@ -99,6 +99,8 @@ build_litellm_deps() {
         [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
         [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
     fi
+    deps+="    networks:"$'\n'
+    deps+="      - ${DOCKER_NETWORK}"$'\n'
     printf '%s' "${deps}"
 }
 
@@ -108,6 +110,8 @@ build_openwebui_deps() {
         deps="    depends_on:"$'\n'
         deps+="      - ${TENANT_PREFIX}-ollama"$'\n'
     fi
+    deps+="    networks:"$'\n'
+    deps+="      - ${DOCKER_NETWORK}"$'\n'
     printf '%s' "${deps}"
 }
 
@@ -120,6 +124,8 @@ build_openclaw_deps() {
         [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
         [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
     fi
+    deps+="    networks:"$'\n'
+    deps+="      - ${DOCKER_NETWORK}"$'\n'
     printf '%s' "${deps}"
 }
 
@@ -130,16 +136,16 @@ build_n8n_deps() {
         [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
         [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
     fi
+    deps+="    networks:"$'\n'
+    deps+="      - ${DOCKER_NETWORK}"$'\n'
     printf '%s' "${deps}"
 }
 
 build_flowise_deps() {
     local deps=""
-    if [[ "${POSTGRES_ENABLED}" == "true" ]] || [[ "${REDIS_ENABLED}" == "true" ]]; then
-        deps="    depends_on:"$'\n'
-        [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
-        [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
-    fi
+    # flowise uses SQLite — no postgres/redis dependency
+    deps+="    networks:"$'\n'
+    deps+="      - ${DOCKER_NETWORK}"$'\n'
     printf '%s' "${deps}"
 }
 
@@ -150,6 +156,8 @@ build_dify_deps() {
         [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
         [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
     fi
+    deps+="    networks:"$'\n'
+    deps+="      - ${DOCKER_NETWORK}"$'\n'
     printf '%s' "${deps}"
 }
 
@@ -160,6 +168,8 @@ build_authentik_deps() {
         [[ "${POSTGRES_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
         [[ "${REDIS_ENABLED}" == "true" ]] && deps+="      - ${TENANT_PREFIX}-redis"$'\n'
     fi
+    deps+="    networks:"$'\n'
+    deps+="      - ${DOCKER_NETWORK}"$'\n'
     printf '%s' "${deps}"
 }
 
@@ -283,7 +293,7 @@ generate_compose() {
     [[ "${OPENCLAW_ENABLED}" == "true" ]] && allocate_host_port openclaw "${OPENCLAW_PORT:-3001}" >/dev/null
     [[ "${QDRANT_ENABLED}" == "true" ]] && allocate_host_port qdrant "${QDRANT_PORT:-6333}" >/dev/null
     [[ "${N8N_ENABLED}" == "true" ]] && allocate_host_port n8n "${N8N_PORT:-5678}" >/dev/null
-    [[ "${FLOWISE_ENABLED}" == "true" ]] && allocate_host_port flowise "${FLOWISE_PORT:-3030}" >/dev/null
+    [[ "${FLOWISE_ENABLED}" == "true" ]] && allocate_host_port flowise "${FLOWISE_PORT:-3000}" >/dev/null
     [[ "${DIFY_ENABLED}" == "true" ]] && allocate_host_port dify "${DIFY_PORT:-3040}" >/dev/null
     [[ "${AUTHENTIK_ENABLED}" == "true" ]] && allocate_host_port authentik "${AUTHENTIK_PORT:-9000}" >/dev/null
     [[ "${SIGNALBOT_ENABLED}" == "true" ]] && allocate_host_port signalbot "${SIGNALBOT_PORT:-8080}" >/dev/null
@@ -424,10 +434,11 @@ EOF
     networks:
       - ${DOCKER_NETWORK}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD", "ollama", "list"]
       interval: 30s
-      timeout: 10s
+      timeout: 15s
       retries: 5
+      start_period: 30s
 
 EOF
     fi
@@ -439,21 +450,25 @@ EOF
     image: ghcr.io/berriai/litellm:main-stable
     container_name: ${TENANT_PREFIX}-litellm
     restart: unless-stopped
-    user: "${PUID}:${PGID}"
+    # litellm needs to write to Python pkg dirs for Prisma baseline migrations — run as root
     environment:
       DATABASE_URL: ${LITELLM_DB_URL}
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
       LITELLM_UI_PASSWORD: ${LITELLM_UI_PASSWORD}
+      # Redirect Prisma migration and cache dirs so they survive across restarts
+      LITELLM_MIGRATION_DIR: /tmp/litellm-migrations
+      PRISMA_BINARY_CACHE_DIR: /tmp/prisma-cache
     volumes:
       - ${CONFIG_DIR}/litellm/config.yaml:/app/config.yaml
     ports:
       - "127.0.0.1:${LITELLM_PORT}:4000"
 $(build_litellm_deps)
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveliness"]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')\" 2>/dev/null || exit 1"]
       interval: 30s
-      timeout: 10s
-      retries: 5
+      timeout: 15s
+      retries: 8
+      start_period: 120s
 
 EOF
     fi
@@ -467,14 +482,14 @@ EOF
     image: ghcr.io/open-webui/open-webui:main
     container_name: ${TENANT_PREFIX}-openwebui
     restart: unless-stopped
-    user: "${PUID}:${PGID}"
+    # open-webui writes .webui_secret_key to /app/backend — run as root (image default)
     environment:
       # Ollama for local models
       OLLAMA_BASE_URL: http://${TENANT_PREFIX}-ollama:11434
       # LiteLLM as unified OpenAI-compatible gateway for all providers
       OPENAI_API_BASE_URL: http://${TENANT_PREFIX}-litellm:4000/v1
       OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
-      WEBUI_SECRET: ${OPENWEBUI_SECRET}
+      WEBUI_SECRET_KEY: ${OPENWEBUI_SECRET}
       DEFAULT_MODELS: ${OLLAMA_DEFAULT_MODEL}
       # RAG — embed via Ollama, retrieve from chosen vectordb
       ENABLE_RAG_WEB_SEARCH: "false"
@@ -483,13 +498,14 @@ EOF
     volumes:
       - ${DATA_DIR}/openwebui:/app/backend/data
     ports:
-      - "127.0.0.1:${OPENWEBUI_PORT}:3000"
+      - "127.0.0.1:${OPENWEBUI_PORT}:8080"
 $(build_openwebui_deps)
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 120s
 
 EOF
     fi
@@ -552,10 +568,11 @@ EOF
     networks:
       - ${DOCKER_NETWORK}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/6333"]
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 10s
 
 EOF
     fi
@@ -586,10 +603,11 @@ EOF
       - "127.0.0.1:${N8N_PORT}:5678"
 $(build_n8n_deps)
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5678/healthz"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:5678/healthz 2>/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 60s
 
 EOF
     fi
@@ -604,13 +622,9 @@ EOF
     container_name: ${TENANT_PREFIX}-flowise
     restart: unless-stopped
     # flowise stores data in /root/.flowise — do not override user:
+    # Use SQLite (default) to avoid enterprise Postgres migration conflicts across image updates
     environment:
-      DATABASE_TYPE: postgres
-      DATABASE_HOST: ${TENANT_PREFIX}-postgres
-      DATABASE_PORT: 5432
-      DATABASE_NAME: ${POSTGRES_DB}
-      DATABASE_USER: ${POSTGRES_USER}
-      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      DATABASE_TYPE: sqlite
       FLOWISE_USERNAME: ${FLOWISE_USERNAME}
       FLOWISE_PASSWORD: ${FLOWISE_PASSWORD}
       SECRETKEY_OVERWRITE: ${FLOWISE_SECRETKEY_OVERWRITE}
@@ -628,13 +642,14 @@ EOF
     volumes:
       - ${DATA_DIR}/flowise:/root/.flowise
     ports:
-      - "127.0.0.1:${FLOWISE_PORT}:3030"
+      - "127.0.0.1:${FLOWISE_PORT}:3000"
 $(build_flowise_deps)
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3030/api/v1/ping"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/ping"]
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 60s
 
 EOF
     fi
@@ -674,13 +689,14 @@ EOF
     volumes:
       - ${DATA_DIR}/dify:/app/api/storage
     ports:
-      - "127.0.0.1:${DIFY_PORT}:3040"
+      - "127.0.0.1:${DIFY_PORT}:3000"
 $(build_dify_deps)
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3040/health"]
+      test: ["CMD-SHELL", "wget -q --spider http://\$(hostname):3000 2>/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 60s
 
 EOF
     fi
@@ -710,7 +726,7 @@ EOF
       - "127.0.0.1:${AUTHENTIK_PORT}:9000"
 $(build_authentik_deps)
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/-/health/live/"]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:9000/-/health/live/')\" 2>/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 10
@@ -737,10 +753,11 @@ EOF
     networks:
       - ${DOCKER_NETWORK}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/about"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/v1/about"]
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 60s
 
 EOF
     fi
@@ -943,6 +960,7 @@ EOF
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 60s
 
 EOF
     fi
@@ -1285,7 +1303,7 @@ EOF
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
 openwebui.${BASE_DOMAIN} {
-    reverse_proxy ${TENANT_PREFIX}-openwebui:3000
+    reverse_proxy ${TENANT_PREFIX}-openwebui:8080
 }
 EOF
     fi
@@ -1317,7 +1335,7 @@ EOF
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
 flowise.${BASE_DOMAIN} {
-    reverse_proxy ${TENANT_PREFIX}-flowise:3030
+    reverse_proxy ${TENANT_PREFIX}-flowise:3000
 }
 EOF
     fi
@@ -1327,7 +1345,7 @@ EOF
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
 dify.${BASE_DOMAIN} {
-    reverse_proxy ${TENANT_PREFIX}-dify:3040
+    reverse_proxy ${TENANT_PREFIX}-dify:3000
 }
 EOF
     fi
@@ -1515,6 +1533,11 @@ prepare_data_dirs() {
     # world-writable (we can't chown to their internal UID without root).
     # Qdrant (uid 1000) — storage + snapshots subdir
     [[ "${QDRANT_ENABLED}" == "true" ]] && chmod 777 "${DATA_DIR}/qdrant"
+    # N8N runs as node (uid 1000); Signalbot runs as internal uid 1000
+    [[ "${N8N_ENABLED}" == "true" ]] && chmod 777 "${DATA_DIR}/n8n"
+    [[ "${SIGNALBOT_ENABLED}" == "true" ]] && chmod 777 "${DATA_DIR}/signalbot"
+    # Authentik migration creates /media/public (mounted as DATA_DIR/authentik) — needs world-writable
+    [[ "${AUTHENTIK_ENABLED}" == "true" ]] && chmod 777 "${DATA_DIR}/authentik"
 
     ok "Data directories ready under ${DATA_DIR} (owner ${PUID}:${PGID})"
 }
@@ -1600,16 +1623,18 @@ wait_for_all_health() {
     fi
     
     if [[ "${LITELLM_ENABLED}" == "true" ]]; then
-        wait_for_health "${TENANT_PREFIX}-litellm" 90 || return 1
+        wait_for_health "${TENANT_PREFIX}-litellm" 300 || return 1
     fi
     
     if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
-        wait_for_health "${TENANT_PREFIX}-openwebui" 90 || return 1
+        wait_for_health "${TENANT_PREFIX}-openwebui" 180 || return 1
     fi
     
     # LibreChat removed - no MongoDB in platform
     
-    if [[ "${OPENCLAW_ENABLED}" == "true" ]]; then
+    # openclaw is only deployed when OPENCLAW_IMAGE is explicitly set
+    local _openclaw_img="${OPENCLAW_IMAGE:-openclaw/openclaw:latest}"
+    if [[ "${OPENCLAW_ENABLED}" == "true" ]] && [[ "${_openclaw_img}" != "openclaw/openclaw:latest" ]]; then
         wait_for_health "${TENANT_PREFIX}-openclaw" 90 || return 1
     fi
     
