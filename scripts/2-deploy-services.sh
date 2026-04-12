@@ -585,7 +585,7 @@ $(build_litellm_deps)
       interval: 30s
       timeout: 15s
       retries: 8
-      start_period: 120s
+      start_period: 600s
 
 EOF
     fi
@@ -676,7 +676,7 @@ EOF
     networks:
       - ${DOCKER_NETWORK}
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3080/api/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://0.0.0.0:3080/health"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -710,7 +710,7 @@ EOF
       - ${DATA_DIR}/rag-api:/app/uploads
 $(build_rag_api_deps "${_rag_vector_db}")
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" 2>/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -738,12 +738,13 @@ EOF
       ADMIN_USERNAME: ${OPENCLAW_USERNAME:-admin}
       ADMIN_PASSWORD: ${OPENCLAW_PASSWORD}
     volumes:
-      - ${DATA_DIR}/openclaw:/app/data
+      - ${DATA_DIR}/openclaw/data:/app/data
+      - ${DATA_DIR}/openclaw/config:/.openclaw
     ports:
-      - "127.0.0.1:${OPENCLAW_PORT}:3001"
+      - "127.0.0.1:${OPENCLAW_PORT}:${OPENCLAW_PORT}"
 $(build_openclaw_deps)
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:${OPENCLAW_PORT}/health"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -1210,29 +1211,42 @@ EOF
     fi
 
     # Zep CE — long-term memory layer backed by Postgres, LLM via LiteLLM proxy
+    # Note: Zep 0.x requires store.type in a config.yaml (not settable via env).
+    # This follows the same pattern as litellm_config.yaml — script writes the file,
+    # compose mounts it read-only. Secrets are inlined via bash expansion at generation time.
     if [[ "${ZEP_ENABLED:-false}" == "true" ]]; then
+        mkdir -p "${CONFIG_DIR}/zep"
+        cat > "${CONFIG_DIR}/zep/config.yaml" << ZEP_CONF
+store:
+  type: postgres
+  postgres:
+    dsn: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${POSTGRES_DB}?sslmode=disable"
+auth:
+  required: true
+  secret: "${ZEP_AUTH_SECRET}"
+server:
+  port: 8000
+log:
+  level: info
+llm:
+  openai_api_key: "${LITELLM_MASTER_KEY}"
+  openai_api_base: "http://${TENANT_PREFIX}-litellm:4000/v1"
+ZEP_CONF
         cat >> "${COMPOSE_FILE}" << EOF
   ${TENANT_PREFIX}-zep:
     image: ghcr.io/getzep/zep:latest
     container_name: ${TENANT_PREFIX}-zep
     restart: unless-stopped
-    environment:
-      ZEP_STORE_POSTGRES_DSN: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${POSTGRES_DB}?sslmode=disable"
-      ZEP_AUTH_REQUIRED: "true"
-      ZEP_AUTH_SECRET: ${ZEP_AUTH_SECRET}
-      ZEP_LOG_LEVEL: info
-      ZEP_OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
-      ZEP_OPENAI_API_BASE: http://${TENANT_PREFIX}-litellm:4000/v1
-      ZEP_EMBEDDING_DIMENSIONS: "1536"
     volumes:
+      - ${CONFIG_DIR}/zep/config.yaml:/app/config.yaml:ro
       - ${DATA_DIR}/zep:/app/data
     ports:
       - "127.0.0.1:${ZEP_PORT}:8000"
 $(build_zep_deps)
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/8000"]
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       retries: 3
       start_period: 60s
 
@@ -1579,7 +1593,7 @@ EOF
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
 openclaw.${BASE_DOMAIN} {
-    reverse_proxy ${TENANT_PREFIX}-openclaw:3001
+    reverse_proxy ${TENANT_PREFIX}-openclaw:${OPENCLAW_PORT}
 }
 EOF
     fi
@@ -1767,7 +1781,7 @@ prepare_data_dirs() {
     [[ "${OLLAMA_ENABLED}"    == "true" ]] && mkdir -p "${DATA_DIR}/ollama"
     [[ "${OPENWEBUI_ENABLED}" == "true" ]] && mkdir -p "${DATA_DIR}/openwebui"
     [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]] && mkdir -p "${DATA_DIR}/mongodb" "${DATA_DIR}/librechat/uploads" "${DATA_DIR}/librechat/logs"
-    [[ "${OPENCLAW_ENABLED}"  == "true" ]] && mkdir -p "${DATA_DIR}/openclaw"
+    [[ "${OPENCLAW_ENABLED}"  == "true" ]] && mkdir -p "${DATA_DIR}/openclaw/data" "${DATA_DIR}/openclaw/config"
     [[ "${QDRANT_ENABLED}"    == "true" ]] && mkdir -p "${DATA_DIR}/qdrant"
     [[ "${WEAVIATE_ENABLED}"  == "true" ]] && mkdir -p "${DATA_DIR}/weaviate"
     [[ "${N8N_ENABLED}"       == "true" ]] && mkdir -p "${DATA_DIR}/n8n"
@@ -1805,6 +1819,10 @@ prepare_data_dirs() {
     [[ "${SIGNALBOT_ENABLED}" == "true" ]] && chmod 777 "${DATA_DIR}/signalbot"
     # Authentik migration creates /media/public (mounted as DATA_DIR/authentik) — needs world-writable
     [[ "${AUTHENTIK_ENABLED}" == "true" ]] && chmod 777 "${DATA_DIR}/authentik"
+    # LibreChat runs as 'node' (uid 1000) — writes to /app/uploads and /app/logs
+    if [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]]; then
+        chmod 777 "${DATA_DIR}/librechat/uploads" "${DATA_DIR}/librechat/logs"
+    fi
 
     ok "Data directories ready under ${DATA_DIR} (owner ${PUID}:${PGID})"
 }
@@ -1902,7 +1920,7 @@ wait_for_all_health() {
     fi
     
     if [[ "${LITELLM_ENABLED}" == "true" ]]; then
-        wait_for_health "${TENANT_PREFIX}-litellm" 600 || return 1
+        wait_for_health "${TENANT_PREFIX}-litellm" 900 || return 1
     fi
     
     if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then

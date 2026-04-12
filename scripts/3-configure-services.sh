@@ -344,7 +344,7 @@ configure_librechat() {
     local max_attempts=30
 
     while [[ $attempts -lt $max_attempts ]]; do
-        if wget -q --spider "${librechat_url}/api/health" >/dev/null 2>&1; then
+        if wget -q --spider "${librechat_url}/health" >/dev/null 2>&1; then
             break
         fi
         attempts=$((attempts + 1))
@@ -379,7 +379,7 @@ configure_openclaw() {
     local max_attempts=30
     
     while [[ $attempts -lt $max_attempts ]]; do
-        if curl -sf "${openclaw_url}/api/health" >/dev/null 2>&1; then
+        if curl -sf "${openclaw_url}/health" >/dev/null 2>&1; then
             break
         fi
         attempts=$((attempts + 1))
@@ -648,7 +648,7 @@ configure_zep() {
     local max_attempts=30
 
     while [[ $attempts -lt $max_attempts ]]; do
-        if curl -sf "${zep_url}/healthz" >/dev/null 2>&1; then
+        if bash -c "echo > /dev/tcp/127.0.0.1/${ZEP_PORT:-8100}" 2>/dev/null; then
             break
         fi
         attempts=$((attempts + 1))
@@ -974,7 +974,88 @@ show_health_status() {
         fi
         printf "%-15s %-12s %-20s %-15s\n" "Qdrant" "$status" "$container_name" "${QDRANT_PORT}"
     fi
-    
+
+    if [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]]; then
+        local status="DOWN"
+        local container_name="${TENANT_PREFIX}-librechat"
+        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
+            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
+        fi
+        printf "%-15s %-12s %-20s %-15s\n" "LibreChat" "$status" "$container_name" "${LIBRECHAT_PORT:-3080}"
+    fi
+
+    if [[ "${OPENCLAW_ENABLED}" == "true" ]]; then
+        local status="DOWN"
+        local container_name="${TENANT_PREFIX}-openclaw"
+        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
+            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
+        fi
+        printf "%-15s %-12s %-20s %-15s\n" "OpenClaw" "$status" "$container_name" "${OPENCLAW_PORT}"
+    fi
+
+    if [[ "${N8N_ENABLED}" == "true" ]]; then
+        local status="DOWN"
+        local container_name="${TENANT_PREFIX}-n8n"
+        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
+            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
+        fi
+        printf "%-15s %-12s %-20s %-15s\n" "N8N" "$status" "$container_name" "${N8N_PORT}"
+    fi
+
+    if [[ "${FLOWISE_ENABLED}" == "true" ]]; then
+        local status="DOWN"
+        local container_name="${TENANT_PREFIX}-flowise"
+        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
+            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
+        fi
+        printf "%-15s %-12s %-20s %-15s\n" "Flowise" "$status" "$container_name" "${FLOWISE_PORT}"
+    fi
+
+    if [[ "${DIFY_ENABLED}" == "true" ]]; then
+        local status="DOWN"
+        local container_name="${TENANT_PREFIX}-dify"
+        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
+            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
+        fi
+        printf "%-15s %-12s %-20s %-15s\n" "Dify" "$status" "$container_name" "${DIFY_PORT:-3002}"
+    fi
+
+    if [[ "${AUTHENTIK_ENABLED}" == "true" ]]; then
+        local status="DOWN"
+        local container_name="${TENANT_PREFIX}-authentik"
+        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
+            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
+        fi
+        printf "%-15s %-12s %-20s %-15s\n" "Authentik" "$status" "$container_name" "${AUTHENTIK_PORT:-9000}"
+    fi
+
+    if [[ "${SIGNALBOT_ENABLED}" == "true" ]]; then
+        local status="DOWN"
+        local container_name="${TENANT_PREFIX}-signalbot"
+        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
+            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
+        fi
+        printf "%-15s %-12s %-20s %-15s\n" "Signalbot" "$status" "$container_name" "${SIGNALBOT_PORT:-8080}"
+    fi
+
+    if [[ "${ZEP_ENABLED:-false}" == "true" ]]; then
+        local status="DOWN"
+        local container_name="${TENANT_PREFIX}-zep"
+        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
+            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
+        fi
+        printf "%-15s %-12s %-20s %-15s\n" "Zep" "$status" "$container_name" "${ZEP_PORT:-8100}"
+    fi
+
+    if [[ "${LETTA_ENABLED:-false}" == "true" ]]; then
+        local status="DOWN"
+        local container_name="${TENANT_PREFIX}-letta"
+        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
+            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
+        fi
+        printf "%-15s %-12s %-20s %-15s\n" "Letta" "$status" "$container_name" "${LETTA_PORT:-8283}"
+    fi
+
     echo ""
 }
 
@@ -1277,7 +1358,7 @@ check_port_health() {
     [[ "${OLLAMA_ENABLED:-false}"     == "true" ]] && _port_check "Ollama"     "${OLLAMA_PORT:-11434}"   "/api/tags"
     [[ "${LITELLM_ENABLED:-false}"    == "true" ]] && _port_check "LiteLLM"    "${LITELLM_PORT:-4000}"   "/health/liveliness"
     [[ "${OPENWEBUI_ENABLED:-false}"  == "true" ]] && _port_check "Open WebUI" "${OPENWEBUI_PORT:-3000}" "/"
-    [[ "${LIBRECHAT_ENABLED:-false}"  == "true" ]] && _port_check "LibreChat"  "${LIBRECHAT_PORT:-3080}" "/api/health"
+    [[ "${LIBRECHAT_ENABLED:-false}"  == "true" ]] && _port_check "LibreChat"  "${LIBRECHAT_PORT:-3080}" "/health"
     [[ "${QDRANT_ENABLED:-false}"     == "true" ]] && _port_check "Qdrant"     "${QDRANT_PORT:-6333}"    "/healthz"
     [[ "${N8N_ENABLED:-false}"        == "true" ]] && _port_check "N8N"        "${N8N_PORT:-5678}"       "/healthz"
     [[ "${FLOWISE_ENABLED:-false}"    == "true" ]] && _port_check "Flowise"    "${FLOWISE_PORT:-3000}"   "/api/v1/ping"

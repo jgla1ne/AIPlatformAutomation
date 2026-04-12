@@ -170,8 +170,9 @@ All internal services are localhost-only. Only the reverse proxy (80/443) is wor
 Most services run as `user: "${PUID}:${PGID}"`. Exceptions (must run as root):
 - **LiteLLM** — Prisma writes baseline migrations to Python package directories at startup.
 - **OpenWebUI** — writes `.webui_secret_key` to `/app/backend/` (image-internal path).
-- **LibreChat** — writes to `/app/uploads` and `/app/logs` (image-internal paths).
 - **Letta** — writes agent state to `/root/.letta` (image-internal path).
+
+> **LibreChat** runs as `node` (uid 1000), NOT root. Its data dirs need `chmod 777` — see directory permissions table below.
 
 **P7 — Idempotency via marker files**  
 `${CONFIGURED_DIR}/service_name` markers in `.configured/`. Scripts skip completed steps. Script 0 removes the entire `.configured/` tree.
@@ -205,9 +206,9 @@ Not every image ships `curl`. Use the right tool per image or the healthcheck wi
 | Dify-web | `wget` | `wget -q --spider http://$(hostname):3000` (binds to bridge IP, not localhost) |
 | Authentik | `python3` | `python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:9000/-/health/live/')"` |
 | Flowise | `curl` | `curl -f http://localhost:3000/api/v1/ping` |
-| LibreChat | `wget` | `wget -q --spider http://localhost:3080/api/health` |
+| LibreChat | `wget` | `wget -q --spider http://0.0.0.0:3080/health` (binds to 0.0.0.0; `/health` not `/api/health`) |
 | Signalbot | `curl` | `curl -sf http://localhost:8080/v1/about` |
-| Zep CE | `curl` | `curl -f http://localhost:8000/healthz` |
+| Zep CE | `bash` (no curl/wget) | `["CMD", "bash", "-c", "echo > /dev/tcp/localhost/8000"]` |
 | Letta | `curl` | `curl -f http://localhost:8283/v1/health` |
 
 > **Dify-web** (Next.js) binds to the container's bridge network IP, not `127.0.0.1`. `wget http://localhost:3000` always returns connection refused. Use `http://$(hostname):3000` (escaped in heredoc as `\$(hostname)`).
@@ -234,7 +235,7 @@ Not every image ships `curl`. Use the right tool per image or the healthcheck wi
 | Signalbot | 60s | signal-cli daemon takes ~26 s |
 | AnythingLLM | 60s | DB migrations |
 
-`wait_for_all_health()` timeouts to match: litellm 300 s, openwebui 180 s, authentik 180 s.
+`wait_for_all_health()` timeouts to match: litellm 900 s (600 s start_period + migration time), openwebui 180 s, authentik 180 s.
 
 ### Directory Permissions
 
@@ -246,6 +247,7 @@ Services running as internal UIDs (not PUID:PGID) cannot write to host-side data
 | N8N | `${DATA_DIR}/n8n` | uid 1000 (node) |
 | Signalbot | `${DATA_DIR}/signalbot` | uid 1000 |
 | Authentik | `${DATA_DIR}/authentik` | migration creates `/media/public` |
+| LibreChat | `${DATA_DIR}/librechat/uploads` `${DATA_DIR}/librechat/logs` | runs as `node` (uid 1000), not root |
 
 ### Flowise — SQLite Only
 
@@ -322,7 +324,8 @@ Use this when implementing or reviewing any script change:
 - [ ] Does Script 2 write `platform.conf`? Only via `update_conf_value()` for runtime secrets.
 - [ ] Does every `build_*_deps()` emit both `depends_on:` and `networks:`?
 - [ ] Does every service with a fixed internal UID get `chmod 777` on its data dir?
-- [ ] Does LiteLLM / OpenWebUI / LibreChat / Letta omit `user:` override (must run as root)?
+- [ ] Does LiteLLM / OpenWebUI / Letta omit `user:` override (must run as root)?
+- [ ] Does LibreChat have `chmod 777` on its uploads/ and logs/ dirs (runs as node uid 1000)?
 - [ ] Does every `configure_*()` function in Script 3 guard against container non-existence?
 - [ ] Are all healthcheck endpoints correct (see table above)?
 - [ ] Are `start_period` values set for slow-starting services?
