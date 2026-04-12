@@ -2635,7 +2635,7 @@ display_service_summary() {
     _mc_line "$(printf '%*s' $(( (W + 34) / 2 )) '🎛️  MISSION CONTROL — CONFIGURATION READY')"
     _mc_sep
 
-    _mc_line "TENANT : ${TENANT_ID}   PREFIX : ${TENANT_PREFIX}   STACK : ${STACK_NAME:-custom}"
+    _mc_line "TENANT : ${TENANT_ID:-?}   PREFIX : ${pfx}   STACK : ${STACK_NAME:-custom}"
     _mc_line "DOMAIN : ${DOMAIN}   TLS : ${TLS_MODE:-none}   GATEWAY : ${LLM_GATEWAY_TYPE:-litellm}"
     local storage_info
     if [[ -n "${EBS_DEVICE:-}" ]]; then
