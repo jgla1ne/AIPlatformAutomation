@@ -3437,7 +3437,7 @@ initialize_service_variables() {
     OPENCLAW_ADMIN_USER="${OPENCLAW_ADMIN_USER:-}"
     OPENCLAW_SECRET="${OPENCLAW_SECRET:-}"
     OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
-    OPENCLAW_IMAGE="${OPENCLAW_IMAGE:-openclaw:latest}"
+    OPENCLAW_IMAGE="${OPENCLAW_IMAGE:-}"
     
     # External Ports
     CADDY_HTTP_PORT="${CADDY_HTTP_PORT:-80}"
