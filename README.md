@@ -207,6 +207,8 @@ Not every image ships `curl`. Use the right tool per image or the healthcheck wi
 | Authentik | `python3` | `python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:9000/-/health/live/')"` |
 | Flowise | `curl` | `curl -f http://localhost:3000/api/v1/ping` |
 | LibreChat | `wget` | `wget -q --spider http://0.0.0.0:3080/health` (binds to 0.0.0.0; `/health` not `/api/health`) |
+| LibreChat RAG API | `python3` (no curl/wget) | `python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"` |
+| OpenClaw | `curl` | `curl -f http://localhost:${OPENCLAW_PORT}/health` (port dynamic — see quirk below) |
 | Signalbot | `curl` | `curl -sf http://localhost:8080/v1/about` |
 | Zep CE | `bash` (no curl/wget) | `["CMD", "bash", "-c", "echo > /dev/tcp/localhost/8000"]` |
 | Letta | `curl` | `curl -f http://localhost:8283/v1/health` |
@@ -221,13 +223,17 @@ Not every image ships `curl`. Use the right tool per image or the healthcheck wi
 | Dify-web | `/health` (404) | `/apps` |
 | Authentik | `/-/health/` (404) | `/-/health/live/` |
 | LiteLLM | `/health` | `/health/liveliness` |
+| LibreChat | `/api/health` (404) | `/health` |
+| OpenClaw | `/api/health` (404) | `/health` |
+| Zep CE | `/` (404) | `/healthz` |
 
 ### Slow-Starting Services — `start_period` Required
 
 | Service | `start_period` | Reason |
 |---|---|---|
-| LiteLLM | 120s | Downloads Prisma engine binaries (~3 min cold) |
+| LiteLLM | 600s | Downloads Prisma binaries + handles migration conflicts on re-deploy (~6 min) |
 | OpenWebUI | 120s | DB migrations on first run |
+| Zep CE | 60s | Postgres migrations + hnsw index creation |
 | N8N | 60s | DB init |
 | Flowise | 60s | SQLite init |
 | Dify-web | 60s | Next.js hydration |
@@ -235,7 +241,7 @@ Not every image ships `curl`. Use the right tool per image or the healthcheck wi
 | Signalbot | 60s | signal-cli daemon takes ~26 s |
 | AnythingLLM | 60s | DB migrations |
 
-`wait_for_all_health()` timeouts to match: litellm 900 s (600 s start_period + migration time), openwebui 180 s, authentik 180 s.
+`wait_for_all_health()` timeouts to match: litellm 900 s (600 s start_period + migration time on re-deploy), openwebui 180 s, authentik 180 s.
 
 ### Directory Permissions
 
@@ -264,6 +270,32 @@ HOME: /tmp                                         # prevents PermissionError in
 ### OpenWebUI — Correct Variable Names
 
 `WEBUI_SECRET_KEY` (not `WEBUI_SECRET`). Container listens on port **8080** (not 3000). Port mapping: `"127.0.0.1:${OPENWEBUI_PORT}:8080"`.
+
+### OpenClaw — Dynamic Port and Config Mount
+
+OpenClaw reads `OPENCLAW_PORT` from its environment and binds to **that port** inside the container (not a fixed 3001). Correct port mapping: `"127.0.0.1:${OPENCLAW_PORT}:${OPENCLAW_PORT}"`. Caddy reverse proxy must also target `${TENANT_PREFIX}-openclaw:${OPENCLAW_PORT}`.
+
+OpenClaw writes its config to `/.openclaw` (container root). This path must be explicitly bind-mounted:
+```yaml
+volumes:
+  - ${DATA_DIR}/openclaw/data:/app/data
+  - ${DATA_DIR}/openclaw/config:/.openclaw
+```
+Without the second mount the container crashes on startup with permission denied.
+
+### Zep CE — Config File Required (Not Env Vars)
+
+Zep 0.27.x uses viper's `AutomaticEnv()` but does **not** honour env vars for `store.type`. Core settings must be in a `/app/config.yaml` file:
+```yaml
+store:
+  type: postgres
+  postgres:
+    dsn: "postgres://user:pass@host:5432/db?sslmode=disable"
+auth:
+  required: true
+  secret: "..."
+```
+Script 2 generates this file at deploy time (same pattern as `litellm_config.yaml`) and mounts it `:ro`. Zep has no `curl` or `wget` — use `bash /dev/tcp` for the healthcheck.
 
 ### Authentik — Bootstrap
 
@@ -386,4 +418,4 @@ curl -s -X POST "http://127.0.0.1:${SIGNALBOT_PORT}/v1/register/+<number>/verify
 
 ---
 
-*Version: 4.0.0 | Last Updated: 2026-04-12 | Architecture: 4 scripts, ~20 services, single-tenant per EBS volume*
+*Version: 4.1.0 | Last Updated: 2026-04-12 | Architecture: 4 scripts, ~20 services, single-tenant per EBS volume*
