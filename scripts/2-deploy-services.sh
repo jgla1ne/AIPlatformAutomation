@@ -495,10 +495,13 @@ EOF
     fi
 
     # OpenClaw — gateway with LiteLLM + search API integration
-    if [[ "${OPENCLAW_ENABLED}" == "true" ]]; then
+    # Requires OPENCLAW_IMAGE to be set in platform.conf to a real Docker image.
+    # The default placeholder (openclaw/openclaw) does not exist on Docker Hub.
+    local _openclaw_img="${OPENCLAW_IMAGE:-openclaw/openclaw:latest}"
+    if [[ "${OPENCLAW_ENABLED}" == "true" ]] && [[ "${_openclaw_img}" != "openclaw/openclaw:latest" ]]; then
         cat >> "${COMPOSE_FILE}" << EOF
   ${TENANT_PREFIX}-openclaw:
-    image: openclaw/openclaw:latest
+    image: ${_openclaw_img}
     container_name: ${TENANT_PREFIX}-openclaw
     restart: unless-stopped
     user: "${PUID}:${PGID}"
@@ -523,6 +526,9 @@ $(build_openclaw_deps)
       retries: 5
 
 EOF
+    elif [[ "${OPENCLAW_ENABLED}" == "true" ]]; then
+        warn "OPENCLAW_ENABLED=true but OPENCLAW_IMAGE is not set — skipping openclaw container."
+        warn "Set OPENCLAW_IMAGE=<your-image> in platform.conf to enable it."
     fi
 
     # Qdrant
@@ -1677,6 +1683,11 @@ main() {
     LOG_FILE="${DATA_DIR}/logs/deploy-$(date +%Y%m%d-%H%M%S).log"
 
     mkdir -p "${DATA_DIR}/logs" "$CONFIGURED_DIR"
+
+    # Fix Docker socket BEFORE any docker calls (rootless socket check)
+    if [[ "${DOCKER_HOST:-}" == *"user/"* ]]; then
+        unset DOCKER_HOST
+    fi
 
     # --- FLUSH FIRST (idempotency: every run is a fresh deploy) ---
     flush_existing_deployment
