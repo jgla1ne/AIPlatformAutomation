@@ -360,12 +360,6 @@ configure_openclaw() {
         return 0
     fi
 
-    # Skip if no custom image provided — container was not deployed
-    if [[ -z "${OPENCLAW_IMAGE:-}" ]]; then
-        log "OpenClaw: no image configured, skipping"
-        return 0
-    fi
-
     if step_done "openclaw_configured"; then
         log "OpenClaw already configured, skipping"
         return 0

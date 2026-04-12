@@ -55,7 +55,6 @@ Internet
 └──────────────────────────────────────────┘
 ```
 
-> **\* OpenClaw** requires a private image. It is enabled in the config but skipped during deploy and configure if `OPENCLAW_IMAGE` is empty.  
 > **LibreChat** is offered by Script 1 but is **not deployed** — no MongoDB is in the stack. Script 3 guards against waiting for a container that was never started.
 
 ### All Services — Full Stack
@@ -69,7 +68,7 @@ Internet
 | | Bifrost | `bifrost` | Optional alt gateway |
 | **Web UIs** | OpenWebUI | `ghcr.io/open-webui/open-webui:main` | Primary chat UI |
 | | AnythingLLM | `mintplexlabs/anythingllm` | RAG-first UI |
-| | OpenClaw | custom image | Skipped if `OPENCLAW_IMAGE` unset |
+| | OpenClaw | `alpine/openclaw:latest` | |
 | | ~~LibreChat~~ | ~~requires MongoDB~~ | ~~Not deployed~~ |
 | **Vector DB** | Qdrant | `qdrant/qdrant` | Default vector store |
 | | Weaviate | `semitechnologies/weaviate` | Optional |
@@ -82,7 +81,7 @@ Internet
 | | Prometheus | `prom/prometheus` | Metrics scraping |
 | **Dev** | Code Server | `codercom/code-server` | Browser VS Code |
 | **Alerting** | Signalbot | `bbernhard/signal-cli-rest-api` | Signal messenger API |
-| **Memory** | Mem0 | custom | Optional memory layer |
+| **Memory** | Mem0 | `mem0ai/mem0:latest` | Optional memory layer |
 
 ---
 
@@ -264,7 +263,6 @@ HOME: /tmp                                         # prevents PermissionError in
 
 Script 3's `configure_*()` functions for services that may be enabled but not deployed must check for container existence before waiting on health endpoints:
 
-- **OpenClaw**: skipped if `OPENCLAW_IMAGE` is empty.
 - **LibreChat**: skipped if the container is not running (`docker inspect` fails). LibreChat is not deployed because the stack has no MongoDB.
 
 ### networks: in build_*_deps() Functions

@@ -825,12 +825,8 @@ configure_service_credentials() {
 
     # OpenClaw
     if [[ "${ENABLE_OPENCLAW:-false}" == "true" ]]; then
-        echo "  🦅 OpenClaw:"
-        echo "    Note: openclaw/openclaw is not a public Docker Hub image."
-        echo "    Set the Docker image you want to use (e.g. ghcr.io/your-org/openclaw:latest)."
-        echo "    Leave blank to skip the OpenClaw container at deploy time."
-        safe_read "OpenClaw Docker image" "" "OPENCLAW_IMAGE"
-        safe_read "OpenClaw admin username" "admin"       "OPENCLAW_USERNAME"
+        OPENCLAW_IMAGE="alpine/openclaw:latest"
+        safe_read "OpenClaw admin username" "admin" "OPENCLAW_USERNAME"
         safe_read "OpenClaw admin password (leave blank to auto-generate)" "" "OPENCLAW_PASSWORD"
         if [[ -z "${OPENCLAW_PASSWORD:-}" ]]; then
             OPENCLAW_PASSWORD="$(openssl rand -base64 18 | tr -d '=+/' | cut -c1-16)"
@@ -841,11 +837,7 @@ configure_service_credentials() {
 
     # Mem0
     if [[ "${ENABLE_MEM0:-false}" == "true" ]]; then
-        echo "  🧠 Mem0 image:"
-        echo "    mem0ai/mem0 has no public Docker Hub image."
-        echo "    Set a real image (e.g. ghcr.io/mem0ai/mem0:latest if you have access)."
-        echo "    Leave blank to skip the Mem0 container at deploy time."
-        safe_read "Mem0 Docker image" "" "MEM0_IMAGE"
+        MEM0_IMAGE="mem0ai/mem0:latest"
         echo ""
     fi
 }
@@ -2023,7 +2015,7 @@ SIGNAL_RECIPIENT="${SIGNAL_RECIPIENT:-}"
 
 # Memory Layer
 ENABLE_MEM0="${ENABLE_MEM0:-false}"
-MEM0_IMAGE="${MEM0_IMAGE:-}"
+MEM0_IMAGE="${MEM0_IMAGE:-mem0ai/mem0:latest}"
 MEM0_PORT="${MEM0_PORT:-8081}"
 MEM0_API_KEY="${MEM0_API_KEY:-$(gen_secret)}"
 
@@ -2310,7 +2302,7 @@ CADDY_ENABLED="${ENABLE_CADDY:-false}"
 AUTHENTIK_ENABLED="${ENABLE_AUTHENTIK:-false}"
 SIGNALBOT_ENABLED="${ENABLE_SIGNALBOT:-false}"
 OPENCLAW_ENABLED="${ENABLE_OPENCLAW:-false}"
-OPENCLAW_IMAGE="${OPENCLAW_IMAGE:-}"
+OPENCLAW_IMAGE="${OPENCLAW_IMAGE:-alpine/openclaw:latest}"
 OPENCLAW_USERNAME="${OPENCLAW_USERNAME:-admin}"
 OPENCLAW_PASSWORD="${OPENCLAW_PASSWORD:-}"
 BIFROST_ENABLED="${ENABLE_BIFROST:-false}"
@@ -3113,8 +3105,8 @@ ENABLE_BRAVE="${ENABLE_BRAVE:-false}"
 POSTGRES_USER="${POSTGRES_USER:-${TENANT_ID}}"
 POSTGRES_DB="${POSTGRES_DB:-${TENANT_ID}}"
 OPENCLAW_USERNAME="${OPENCLAW_USERNAME:-admin}"
-OPENCLAW_IMAGE="${OPENCLAW_IMAGE:-}"
-MEM0_IMAGE="${MEM0_IMAGE:-}"
+OPENCLAW_IMAGE="${OPENCLAW_IMAGE:-alpine/openclaw:latest}"
+MEM0_IMAGE="${MEM0_IMAGE:-mem0ai/mem0:latest}"
 FLOWISE_USERNAME="${FLOWISE_USERNAME:-admin}"
 GRAFANA_ADMIN_USER="${GRAFANA_ADMIN_USER:-admin}"
 
@@ -3437,8 +3429,8 @@ initialize_service_variables() {
     OPENCLAW_ADMIN_USER="${OPENCLAW_ADMIN_USER:-}"
     OPENCLAW_SECRET="${OPENCLAW_SECRET:-}"
     OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
-    OPENCLAW_IMAGE="${OPENCLAW_IMAGE:-}"
-    
+    OPENCLAW_IMAGE="${OPENCLAW_IMAGE:-alpine/openclaw:latest}"
+
     # External Ports
     CADDY_HTTP_PORT="${CADDY_HTTP_PORT:-80}"
     CADDY_HTTPS_PORT="${CADDY_HTTPS_PORT:-443}"

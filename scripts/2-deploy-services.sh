@@ -542,10 +542,8 @@ EOF
     fi
 
     # OpenClaw — gateway with LiteLLM + search API integration
-    # Requires OPENCLAW_IMAGE to be set in platform.conf to a real Docker image.
-    # The default placeholder (openclaw/openclaw) does not exist on Docker Hub.
-    local _openclaw_img="${OPENCLAW_IMAGE:-openclaw/openclaw:latest}"
-    if [[ "${OPENCLAW_ENABLED}" == "true" ]] && [[ "${_openclaw_img}" != "openclaw/openclaw:latest" ]]; then
+    local _openclaw_img="${OPENCLAW_IMAGE:-alpine/openclaw:latest}"
+    if [[ "${OPENCLAW_ENABLED}" == "true" ]]; then
         cat >> "${COMPOSE_FILE}" << EOF
   ${TENANT_PREFIX}-openclaw:
     image: ${_openclaw_img}
@@ -573,9 +571,6 @@ $(build_openclaw_deps)
       retries: 5
 
 EOF
-    elif [[ "${OPENCLAW_ENABLED}" == "true" ]]; then
-        warn "OPENCLAW_ENABLED=true but OPENCLAW_IMAGE is not set — skipping openclaw container."
-        warn "Set OPENCLAW_IMAGE=<your-image> in platform.conf to enable it."
     fi
 
     # Qdrant
@@ -997,10 +992,8 @@ EOF
     fi
 
     # Mem0 — AI memory layer, connects to Postgres + vectordb + LiteLLM
-    # Requires MEM0_IMAGE to be set in platform.conf. mem0ai/mem0 is not
-    # publicly available on Docker Hub; set MEM0_IMAGE to a real image.
     local _mem0_img="${MEM0_IMAGE:-mem0ai/mem0:latest}"
-    if [[ "${MEM0_ENABLED:-${ENABLE_MEM0:-false}}" == "true" ]] && [[ "${_mem0_img}" != "mem0ai/mem0:latest" ]]; then
+    if [[ "${MEM0_ENABLED:-${ENABLE_MEM0:-false}}" == "true" ]]; then
         local vdb_url
         vdb_url=$(get_vectordb_url)
         cat >> "${COMPOSE_FILE}" << EOF
@@ -1036,9 +1029,6 @@ EOF
       retries: 5
 
 EOF
-    elif [[ "${MEM0_ENABLED:-${ENABLE_MEM0:-false}}" == "true" ]]; then
-        warn "MEM0_ENABLED=true but MEM0_IMAGE is not set — mem0ai/mem0 has no public image."
-        warn "Set MEM0_IMAGE=<your-image> in platform.conf to enable it."
     fi
 
     # Grafana dashboards
@@ -1663,9 +1653,7 @@ wait_for_all_health() {
     
     # LibreChat removed - no MongoDB in platform
     
-    # openclaw is only deployed when OPENCLAW_IMAGE is explicitly set
-    local _openclaw_img="${OPENCLAW_IMAGE:-openclaw/openclaw:latest}"
-    if [[ "${OPENCLAW_ENABLED}" == "true" ]] && [[ "${_openclaw_img}" != "openclaw/openclaw:latest" ]]; then
+    if [[ "${OPENCLAW_ENABLED}" == "true" ]]; then
         wait_for_health "${TENANT_PREFIX}-openclaw" 90 || return 1
     fi
     
