@@ -317,15 +317,22 @@ configure_librechat() {
     if [[ "${LIBRECHAT_ENABLED}" != "true" ]]; then
         return 0
     fi
-    
+
+    # Guard: LibreChat requires MongoDB which is not deployed in this platform.
+    # If the container doesn't exist, skip rather than timing out waiting for it.
+    local container_name="${TENANT_PREFIX}-librechat"
+    if ! docker inspect "${container_name}" >/dev/null 2>&1; then
+        log "LibreChat container not deployed, skipping"
+        return 0
+    fi
+
     if step_done "librechat_configured"; then
         log "LibreChat already configured, skipping"
         return 0
     fi
-    
-    local container_name="${TENANT_PREFIX}-librechat"
+
     local librechat_url="http://127.0.0.1:${LIBRECHAT_PORT}"
-    
+
     log "Configuring LibreChat..."
     
     # Wait for LibreChat to be ready
@@ -738,8 +745,8 @@ show_credentials() {
     if [[ "${AUTHENTIK_ENABLED}" == "true" ]]; then
         echo "IDENTITY"
         echo "  Authentik    https://${BASE_DOMAIN}/authentik"
-        echo "  Bootstrap    ${AUTHENTIK_BOOTSTRAP_EMAIL}"
-        echo "  Password     ${AUTHENTIK_BOOTSTRAP_PASSWORD}"
+        echo "  Bootstrap    ${AUTHENTIK_BOOTSTRAP_EMAIL:-${ADMIN_EMAIL:-unknown}}"
+        echo "  Password     ${AUTHENTIK_BOOTSTRAP_PASSWORD:-<not set — check docker-compose.yml>}"
         if [[ -n "${AUTHENTIK_API_TOKEN:-}" ]]; then
             echo "  API Token    ${AUTHENTIK_API_TOKEN}"
         fi

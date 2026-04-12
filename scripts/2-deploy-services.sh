@@ -188,6 +188,37 @@ get_vectordb_url() {
 }
 
 # =============================================================================
+# SECRET WRITE-BACK
+#
+# Script 2 generates certain secrets dynamically (e.g. AUTHENTIK_BOOTSTRAP_PASSWORD)
+# that Script 1 has no knowledge of. These must be persisted to platform.conf so
+# that Script 3 can display them in the credentials summary without hitting
+# set -u "unbound variable" errors.
+#
+# update_conf_value KEY VALUE — in-place updates an existing KEY= line in
+# platform.conf, or appends a new one. Safe to call multiple times (idempotent).
+# =============================================================================
+update_conf_value() {
+    local key="$1" value="$2"
+    local conf_file="${CONFIG_DIR}/platform.conf"
+    if grep -q "^${key}=" "${conf_file}"; then
+        sed -i "s|^${key}=.*|${key}=\"${value}\"|" "${conf_file}"
+    else
+        printf '%s="%s"\n' "${key}" "${value}" >> "${conf_file}"
+    fi
+}
+
+persist_generated_secrets() {
+    # Write secrets that Script 2 generates at runtime back to platform.conf.
+    # Script 3 sources platform.conf; without this, show_credentials crashes (set -u).
+    if [[ "${AUTHENTIK_ENABLED}" == "true" ]]; then
+        update_conf_value "AUTHENTIK_BOOTSTRAP_PASSWORD" "${AUTHENTIK_BOOTSTRAP_PASSWORD}"
+        update_conf_value "AUTHENTIK_BOOTSTRAP_EMAIL" "${AUTHENTIK_BOOTSTRAP_EMAIL:-${ADMIN_EMAIL:-}}"
+    fi
+    log "Generated secrets persisted to platform.conf"
+}
+
+# =============================================================================
 # PORT ALLOCATOR — ensures every service gets a unique host-side port.
 #
 # platform.conf stores the user's PREFERRED port (validated by Script 1 against
@@ -1797,7 +1828,11 @@ main() {
     LITELLM_DB_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${POSTGRES_DB}"
 
     mkdir -p "$CONFIGURED_DIR"
-    
+
+    # Write any dynamically-generated secrets back to platform.conf so Script 3
+    # can source them. Idempotent — safe on re-runs.
+    persist_generated_secrets
+
     log "=== Script 2: Atomic Deployer ==="
     log "Version: ${SCRIPT_VERSION}"
     log "Tenant: ${tenant_id}"
