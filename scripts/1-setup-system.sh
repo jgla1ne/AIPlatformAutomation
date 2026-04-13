@@ -620,6 +620,7 @@ select_stack_preset() {
         configure_custom_stack
     else
         apply_preset_defaults
+        select_memory_layer
         echo ""
         echo "  📦 Services included in ${STACK_NAME^}:"
         case "$STACK_NAME" in
@@ -641,7 +642,8 @@ select_stack_preset() {
                 echo "    LLM            : Ollama (local), LiteLLM (unified gateway)"
                 echo "    Web UI         : OpenWebUI (→ LiteLLM, vectordb RAG)"
                 echo "    Vector DB      : Qdrant (default)"
-                echo "    Memory         : Zep CE (long-term memory, → Postgres + LiteLLM)"
+                [[ "${ENABLE_ZEP:-false}"   == "true" ]] && echo "    Memory         : Zep CE (→ Postgres + LiteLLM)"
+                [[ "${ENABLE_LETTA:-false}" == "true" ]] && echo "    Memory         : Letta (→ Postgres + LiteLLM)"
                 echo "    Dev tools      : Code Server"
                 echo "    Automation     : N8N (workflows, → LiteLLM), Flowise (AI pipelines, → vectordb)"
                 echo "    Monitoring     : Grafana, Prometheus"
@@ -651,7 +653,8 @@ select_stack_preset() {
                 echo "    LLM            : Ollama (local), LiteLLM (unified gateway)"
                 echo "    Web UI         : OpenWebUI, OpenClaw, AnythingLLM (→ LiteLLM + vectordb)"
                 echo "    Vector DB      : Qdrant (default; Weaviate/Chroma selectable)"
-                echo "    Memory         : Zep CE (long-term memory) + Letta (stateful agents)"
+                [[ "${ENABLE_ZEP:-false}"   == "true" ]] && echo "    Memory         : Zep CE (→ Postgres + LiteLLM)"
+                [[ "${ENABLE_LETTA:-false}" == "true" ]] && echo "    Memory         : Letta (→ Postgres + LiteLLM)"
                 echo "    Dev tools      : Code Server, Continue.dev config (→ LiteLLM)"
                 echo "    Automation     : N8N, Flowise, Dify (all → LiteLLM + vectordb)"
                 echo "    Monitoring     : Grafana, Prometheus"
@@ -666,7 +669,7 @@ select_stack_preset() {
 
 apply_preset_defaults() {
     log "🎯 Applying ${STACK_NAME^} stack defaults..."
-    
+
     case "$STACK_NAME" in
         minimal)
             ENABLE_POSTGRES="true"
@@ -687,7 +690,7 @@ apply_preset_defaults() {
             ENABLE_CODE_SERVER="true"
             ;;
         standard)
-            # Development + N8N + Flowise + Monitoring + Zep (memory)
+            # Development + N8N + Flowise + Monitoring; memory asked separately
             ENABLE_POSTGRES="true"
             ENABLE_REDIS="true"
             ENABLE_OLLAMA="true"
@@ -699,10 +702,9 @@ apply_preset_defaults() {
             ENABLE_FLOWISE="true"
             ENABLE_GRAFANA="true"
             ENABLE_PROMETHEUS="true"
-            ENABLE_ZEP="true"
             ;;
         full)
-            # Standard + All remaining services + Zep + Letta + Continue.dev
+            # Standard + All remaining services; memory asked separately
             ENABLE_POSTGRES="true"
             ENABLE_REDIS="true"
             ENABLE_OLLAMA="true"
@@ -720,11 +722,48 @@ apply_preset_defaults() {
             ENABLE_DIFY="true"
             ENABLE_SIGNALBOT="true"
             ENABLE_AUTHENTIK="true"
-            ENABLE_ZEP="true"
-            ENABLE_LETTA="true"
             ENABLE_CONTINUE_DEV="true"
             ;;
     esac
+}
+
+# Memory-layer selection — called after apply_preset_defaults for standard + full presets.
+# Minimal and development have no memory layer option.
+select_memory_layer() {
+    [[ "$STACK_NAME" != "standard" && "$STACK_NAME" != "full" ]] && return 0
+
+    section "🧠 MEMORY LAYER SELECTION"
+    echo "  Both Zep CE and Letta connect to your existing Postgres + LiteLLM."
+    echo "  Zep CE  — long-term conversation memory (sessions, summaries, search)"
+    echo "  Letta   — stateful agent memory server (MemGPT-style persistent agents)"
+    echo ""
+
+    select_menu_option "Memory Layer" \
+        "NONE     — No memory service" \
+        "ZEP CE   — Conversation memory only (recommended, lighter)" \
+        "LETTA    — Agent memory only (MemGPT)" \
+        "BOTH     — Zep CE + Letta"
+    local choice=$?
+
+    ENABLE_ZEP="false"
+    ENABLE_LETTA="false"
+    case $choice in
+        0) ;;                                            # none
+        1) ENABLE_ZEP="true" ;;                         # zep only
+        2) ENABLE_LETTA="true" ;;                       # letta only
+        3) ENABLE_ZEP="true"; ENABLE_LETTA="true" ;;   # both
+    esac
+
+    echo ""
+    if [[ "${ENABLE_ZEP}" == "true" && "${ENABLE_LETTA}" == "true" ]]; then
+        echo "  ✅ Memory: Zep CE + Letta"
+    elif [[ "${ENABLE_ZEP}" == "true" ]]; then
+        echo "  ✅ Memory: Zep CE"
+    elif [[ "${ENABLE_LETTA}" == "true" ]]; then
+        echo "  ✅ Memory: Letta"
+    else
+        echo "  ℹ️  Memory: none selected"
+    fi
 }
 
 configure_custom_stack() {
@@ -838,7 +877,7 @@ configure_service_credentials() {
     fi
 
     # Zep / Letta — public images, no prompts needed
-    # Images: ghcr.io/getzep/zep:latest  |  letta-ai/letta:latest
+    # Images: ghcr.io/getzep/zep:latest  |  letta/letta:latest
 }
 
 # =============================================================================

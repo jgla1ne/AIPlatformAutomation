@@ -1259,7 +1259,7 @@ EOF
     if [[ "${LETTA_ENABLED:-false}" == "true" ]]; then
         cat >> "${COMPOSE_FILE}" << EOF
   ${TENANT_PREFIX}-letta:
-    image: letta-ai/letta:latest
+    image: letta/letta:latest
     container_name: ${TENANT_PREFIX}-letta
     restart: unless-stopped
     # Letta writes agent state to /root/.letta — run as root (image default):

@@ -84,7 +84,7 @@ Internet
 | **Dev** | Code Server | `codercom/code-server` | Browser VS Code |
 | **Alerting** | Signalbot | `bbernhard/signal-cli-rest-api` | Signal messenger API |
 | **Memory** | Zep CE | `ghcr.io/getzep/zep:latest` | Long-term conversation memory; backed by Postgres + pgvector, embeddings via LiteLLM |
-| | Letta | `letta-ai/letta:latest` | Stateful agent memory server (MemGPT); backed by Postgres, LLM via LiteLLM |
+| | Letta | `letta/letta:latest` | Stateful agent memory server (MemGPT); backed by Postgres, LLM via LiteLLM |
 
 ---
 
@@ -335,8 +335,19 @@ bash scripts/3-configure-services.sh <tenant_id>
 |---|---|
 | `minimal` | Postgres, Redis, Ollama, LiteLLM, OpenWebUI, Qdrant |
 | `development` | Minimal + Code Server |
-| `standard` | Development + N8N, Flowise, Grafana, Prometheus, Zep |
-| `full` | Standard + OpenClaw, AnythingLLM, Dify, Authentik, SignalBot, LibreChat, Zep + Letta |
+| `standard` | Development + N8N, Flowise, Grafana, Prometheus + **memory layer prompt** |
+| `full` | Standard + OpenClaw, AnythingLLM, Dify, Authentik, SignalBot, LibreChat + **memory layer prompt** |
+
+After selecting `standard` or `full`, Script 1 shows a dedicated **Memory Layer** prompt:
+
+| Choice | Services deployed |
+|---|---|
+| None | No memory service |
+| Zep CE | `ghcr.io/getzep/zep:latest` (recommended — lighter, conversation memory) |
+| Letta | `letta/letta:latest` (MemGPT-style stateful agents) |
+| Both | Zep CE + Letta |
+
+`minimal` and `development` presets have no memory layer option. The custom stack wizard prompts for each individually.
 
 ### TLS Modes
 
