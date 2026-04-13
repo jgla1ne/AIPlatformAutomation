@@ -229,8 +229,9 @@ bash scripts/2-deploy-services.sh <tenant_id>
 6. `generate_compose()` — writes `docker-compose.yml` via heredoc blocks (one per enabled service); no templating, no `.env` files
 7. Config file generation — `litellm_config.yaml`, `Caddyfile` (Caddy only), `zep-config.yaml` (Zep only)
 8. `docker compose up -d`
-9. `wait_for_all_health()` — polls every enabled service health endpoint with per-service timeouts; creates Letta's dedicated PostgreSQL database + pgvector extension after Postgres healthy; restarts Letta after DB creation
-10. `show_post_deploy_dashboard()` — prints all service URLs (domain-aware), credentials, and pipeline description
+9. `wait_for_all_health()` — polls every enabled service health endpoint with per-service timeouts; creates Letta's dedicated PostgreSQL database + pgvector extension after Postgres healthy; restarts Letta after DB creation; proactively creates Zep watermill tables to prevent startup error loop
+10. `trigger_initial_rclone_sync()` — restarts the rclone container immediately after all health checks pass so the first Google Drive sync fires without waiting for the poll interval
+11. `show_post_deploy_dashboard()` — prints all service URLs (domain-aware), credentials, and pipeline description
 
 **Outputs:**
 - `/mnt/<tenant>/config/docker-compose.yml`
@@ -255,6 +256,9 @@ LITELLM_HOST_PORT="4000"
 LITELLM_MASTER_KEY, POSTGRES_PASSWORD, REDIS_PASSWORD
 AUTHENTIK_BOOTSTRAP_PASSWORD, AUTHENTIK_SECRET_KEY
 ANYTHINGLLM_JWT_SECRET, ZEP_AUTH_SECRET, LETTA_SERVER_PASS
+CODE_SERVER_PASSWORD   (random; shown in dashboard + Script 3 credentials)
+LITELLM_UI_PASSWORD    (random; for LiteLLM web UI login)
+DIFY_INIT_PASSWORD     (random; used by Script 3 configure_dify() to bootstrap first admin)
 ```
 
 ---
@@ -285,20 +289,44 @@ Port-allocations file is sourced after platform.conf so any Script 2 conflict-re
 6. Displays all credentials in a single summary block
 
 **Outputs:**
-- Health status table printed to stdout
-- Credentials summary printed to stdout
+- Health status table printed to stdout (all containers including dify-api, dify-worker)
+- Credentials summary printed to stdout — every web service has a URL + login credentials
 - Access URLs printed to stdout
-- Service-specific configuration applied (Authentik bootstrap, Grafana datasource, N8N credentials, etc.)
+- Service-specific configuration applied (Authentik bootstrap, Grafana datasource, Dify init, etc.)
 
-**Expected outcome:** All enabled services show `healthy` or `running`. Access URLs resolve. Credentials summary contains everything needed to log in to every service. No manual post-deploy steps required.
+**Expected outcome:** All enabled services show `healthy` or `running`. Access URLs use correct subdomain format when Caddy is active. Credentials summary contains login details for every service — the user never needs to hunt for a password after a fresh deploy.
 
-**Domain-aware URL logic:**
+**Credentials covered per service:**
+| Service | What's shown |
+|---|---|
+| PostgreSQL | Host, user, password |
+| Redis | Password |
+| LiteLLM | URL, master key, UI password |
+| OpenWebUI | URL (register on first visit) |
+| LibreChat | URL (register on first visit) |
+| OpenClaw | URL, username, password |
+| AnythingLLM | URL, JWT secret |
+| N8N | URL, encryption key |
+| Flowise | URL, username, password |
+| Dify | Web URL, API URL, init password |
+| Authentik | URL, bootstrap email, bootstrap password |
+| Grafana | URL, admin/password |
+| Prometheus | URL |
+| Code Server | URL, password |
+| Signalbot | API URL, QR pairing link |
+| Zep CE | URL, auth secret |
+| Letta | URL, server password |
+| Qdrant | API key |
+
+**Domain-aware URL logic (both `show_credentials()` and access URL section):**
 ```
 if CADDY_ENABLED=true or NPM_ENABLED=true and DOMAIN is set:
-    base = https://<DOMAIN>
+    URL = https://<subdomain>.<DOMAIN>       ← subdomain routing, no port
 else:
-    base = http://<server-LAN-IP>:<port>
+    URL = http://<server-LAN-IP>:<port>      ← direct IP:port
 ```
+
+Every `_url <subdomain> <port>` call in Script 3 applies this logic. Caddy is configured for subdomains — path-based URLs (`https://domain/service`) are NOT used anywhere.
 
 ---
 
@@ -323,7 +351,9 @@ else:
 | | Milvus | `milvusdb/milvus:v2.4.0` | 3-container stack: etcd + MinIO + milvus (standalone) |
 | **Automation** | N8N | `n8nio/n8n` | Workflow orchestration; pre-wired to LiteLLM |
 | | Flowise | `flowiseai/flowise` | Low-code AI chains; SQLite backend |
-| | Dify | `langgenius/dify-web` | LLM app builder (web frontend) |
+| | Dify (web) | `langgenius/dify-web` | LLM app builder frontend (Next.js); requires dify-api |
+| | Dify (api) | `langgenius/dify-api` | Flask backend (`command: api`); `CONSOLE_API_URL` must point here |
+| | Dify (worker) | `langgenius/dify-api` | Celery background tasks (`command: worker`) |
 | **Memory** | Zep CE | `ghcr.io/getzep/zep:latest` | Conversation memory; Postgres + pgvector; embeddings via LiteLLM |
 | | Letta | `letta/letta:latest` | Stateful agent runtime (MemGPT); dedicated Postgres DB; LLMs via LiteLLM |
 | | Mem0 | `mem0ai/mem0` | Persistent AI memory layer |
@@ -394,7 +424,8 @@ Not every image ships `curl`. Use the right tool per image or the healthcheck wi
 | LiteLLM | `python3` | `python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"` |
 | Qdrant | `bash` (no curl/wget) | `["CMD", "bash", "-c", "echo > /dev/tcp/localhost/6333"]` |
 | N8N | `wget` | `wget -q --spider http://localhost:5678/healthz` |
-| Dify-web | `wget` | `wget -q --spider http://$(hostname):3000` (binds to bridge IP, not localhost) |
+| Dify-web | `wget` | `wget -q --spider http://localhost:3000` |
+| Dify-api | `curl` | `curl -sf http://localhost:5001/health` |
 | Authentik | `python3` | `python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:9000/-/health/live/')"` |
 | Flowise | `curl` | `curl -f http://localhost:3000/api/v1/ping` |
 | LibreChat | `wget` | `wget -q --spider http://0.0.0.0:3080/health` (binds to 0.0.0.0; `/health` not `/api/health`) |
@@ -404,14 +435,14 @@ Not every image ships `curl`. Use the right tool per image or the healthcheck wi
 | Zep CE | `bash` (no curl/wget) | `["CMD", "bash", "-c", "echo > /dev/tcp/localhost/8000"]` |
 | Letta | `curl` | `curl -f http://localhost:8283/v1/health` |
 
-> **Dify-web** (Next.js) binds to the container's bridge network IP, not `127.0.0.1`. `wget http://localhost:3000` always returns connection refused. Use `http://$(hostname):3000` (escaped in heredoc as `\$(hostname)`).
+> **Dify-api** is a separate container (`langgenius/dify-api:latest`, `command: api`). Without it the web frontend loops forever on `/install`. `CONSOLE_API_URL` in the web container must point to the **browser-accessible** dify-api URL (Caddy subdomain when active, not `http://127.0.0.1:5001` which resolves inside the container).
 
 ### Correct Health Endpoints
 
 | Service | Wrong | Correct |
 |---|---|---|
 | Qdrant | `/health` (404) | `/healthz` |
-| Dify-web | `/health` (404) | `/apps` |
+| Dify-api | — | `/health` |
 | Authentik | `/-/health/` (404) | `/-/health/live/` |
 | LiteLLM | `/health` | `/health/liveliness` |
 | LibreChat | `/api/health` (404) | `/health` |
@@ -428,6 +459,8 @@ Not every image ships `curl`. Use the right tool per image or the healthcheck wi
 | N8N | 60s | DB init |
 | Flowise | 60s | SQLite init |
 | Dify-web | 60s | Next.js hydration |
+| Dify-api | 90s | DB migrations + Celery init |
+| Dify-worker | 120s | Celery worker startup |
 | Authentik | 60s | Migration runner |
 | Signalbot | 60s | signal-cli daemon takes ~26 s |
 | AnythingLLM | 60s | DB migrations |
@@ -523,18 +556,71 @@ command: ["--config", "/app/config.yaml", "--port", "4000"]
 
 Without this, LiteLLM starts with 0 models registered (model list API returns empty array) and all routing attempts fail.
 
-### rclone — Config Format
+### rclone — Config Format and service-account.json Mount
 
-The rclone config file must be INI-format, not a raw JSON service account file. The Google service account JSON must be a separate file referenced by `service_account_file`:
+The rclone config file must be INI-format, not a raw JSON service account file. Script 2 copies `GDRIVE_CREDENTIALS_FILE` to `${DATA_DIR}/rclone/service-account.json` and mounts it at `/credentials/service-account.json` inside the container:
 
 ```ini
 [gdrive]
 type = drive
 scope = drive.readonly
-service_account_file = /path/to/service-account.json
+service_account_file = /credentials/service-account.json
 ```
 
 The service account must have the target Google Drive folder explicitly shared with its email (`service-account@project.iam.gserviceaccount.com`). Service accounts have no access to Drive by default.
+
+After all health checks pass, Script 2 calls `trigger_initial_rclone_sync()` which restarts the rclone container to kick off an immediate sync — files appear in `${DATA_DIR}/ingestion/` without waiting for the first poll interval.
+
+### N8N — Webhook URL Must Use HTTPS Subdomain When Caddy Active
+
+`N8N_WEBHOOK_URL=http://${DOMAIN}/` (the old default) causes "Error connecting to n8n" in the browser because n8n tries to establish a WebSocket connection to the wrong host/protocol.
+
+When `CADDY_ENABLED=true`, Script 2 sets:
+```
+N8N_WEBHOOK_URL=https://n8n.${BASE_DOMAIN}/
+N8N_HOST=n8n.${BASE_DOMAIN}
+N8N_PROTOCOL=https
+N8N_EDITOR_BASE_URL=https://n8n.${BASE_DOMAIN}
+```
+
+### Signalbot — Caddy Route Required for QR Pairing
+
+Signalbot's REST API binds to `127.0.0.1:8080` only. Without a Caddy route the pairing URL (`/v1/qrcodelink`) is not reachable from a browser. Script 2 generates a `signal.${BASE_DOMAIN}` route in the Caddyfile. The post-deploy dashboard prints the full QR link URL:
+```
+https://signal.ai.yourdomain.net/v1/qrcodelink?device_name=signal-api
+```
+
+### OpenClaw — "Origin Not Allowed" CORS Error
+
+OpenClaw's gateway CORS check rejects requests from `https://openclaw.${BASE_DOMAIN}` unless explicitly allowed. Script 2 applies a two-layer fix:
+
+1. Env vars in compose: `CORS_ORIGIN=*`, `ALLOWED_ORIGINS=*`, `GATEWAY_CONTROL_UI_ALLOWED_ORIGINS=*`
+2. Config JSON written by `prepare_data_dirs()` at `${DATA_DIR}/openclaw/config/config.json` (mounted at `/.openclaw/config.json`):
+```json
+{
+  "gateway": {
+    "controlUi": {
+      "allowedOrigins": ["https://openclaw.yourdomain.net", "*"]
+    }
+  }
+}
+```
+
+### Code Server — Password Generated and Persisted
+
+The default `changeme` password was replaced. Script 2 now generates a random password via `openssl rand -base64 16` and writes it to `platform.conf` via `persist_generated_secrets()`. The password is shown in the post-deploy dashboard credentials block and at `code.${BASE_DOMAIN}`.
+
+### Dify — Full Stack Required (web + api + worker)
+
+Deploying only `langgenius/dify-web` causes the browser to loop forever on `/install`. The full stack requires three containers using two images:
+
+| Container | Image | Command | Port |
+|---|---|---|---|
+| `dify` | `langgenius/dify-web:latest` | (default) | 3000 |
+| `dify-api` | `langgenius/dify-api:latest` | `api` | 5001 |
+| `dify-worker` | `langgenius/dify-api:latest` | `worker` | — |
+
+`CONSOLE_API_URL` in the web container must be the **browser-accessible** URL of dify-api. When Caddy is active: `https://dify-api.${BASE_DOMAIN}`. Script 2 generates a `dify-api.${BASE_DOMAIN}` Caddy route automatically.
 
 ### Milvus — Three-Container Stack
 
@@ -648,6 +734,15 @@ Use when implementing or reviewing any script change:
 - [ ] Is `AUTHENTIK_SECRET_KEY` persisted (not regenerated) across redeploys?
 - [ ] Is `LETTA_PG_URI` pointing to `.../${POSTGRES_DB}_letta` (not the shared DB)?
 - [ ] Does every web UI pass LiteLLM master key + base URL (not direct model endpoints)?
+- [ ] Is `N8N_WEBHOOK_URL` using `https://n8n.${BASE_DOMAIN}/` when Caddy is active?
+- [ ] Does `CODE_SERVER_PASSWORD` use a generated random value (not `changeme`) and is it in `persist_generated_secrets()`?
+- [ ] Is Dify deployed as 3 containers (web + api + worker)? Is `CONSOLE_API_URL` set to the public dify-api URL?
+- [ ] Does Signalbot have a Caddy route (`signal.${BASE_DOMAIN}`)? Is the QR link URL printed in the dashboard?
+- [ ] Does the rclone config reference `service_account_file = /credentials/service-account.json` (not `credentials.json`)?
+- [ ] Does `trigger_initial_rclone_sync()` fire after `wait_for_all_health()` in main()?
+- [ ] Do Script 3 URLs use `https://subdomain.${BASE_DOMAIN}` when Caddy active (not path-based `https://${BASE_DOMAIN}/service` and not IP:port)?
+- [ ] Does `show_credentials()` display login credentials for every enabled web service?
+- [ ] Does `configure_dify()` call `/console/api/setup` on dify-api port (5001), not on dify-web port?
 
 ---
 
@@ -681,6 +776,23 @@ Set `LITELLM_MIGRATION_DIR: /tmp/litellm-migrations` in the compose environment 
 
 Letta is sharing a database with LiteLLM. `LETTA_PG_URI` must point to a dedicated `${POSTGRES_DB}_letta` database, not the shared `${POSTGRES_DB}`. Script 2 creates this database automatically after Postgres is healthy.
 
+### Dify loops on `/install`
+
+`CONSOLE_API_URL` points to a dify-api that isn't running or isn't reachable from the browser. Check:
+1. The `dify-api` container is healthy: `docker ps | grep dify-api`
+2. The Caddy route `dify-api.${BASE_DOMAIN}` is present: `curl -s http://127.0.0.1:2019/config/ | grep dify-api`
+3. `CONSOLE_API_URL` in the web container env matches the Caddy route URL: `docker inspect ${TENANT_PREFIX}-dify | grep CONSOLE_API_URL`
+
+If `CONSOLE_API_URL=http://127.0.0.1:5001`, it resolves inside the container (loopback to the dify-web container itself, not dify-api). Re-deploy with the fix in Script 2.
+
+### N8N — "Error connecting to n8n"
+
+`N8N_WEBHOOK_URL` is set to the wrong host or protocol. Check:
+```bash
+docker inspect ${TENANT_PREFIX}-n8n | grep N8N_WEBHOOK_URL
+```
+It must be `https://n8n.${BASE_DOMAIN}/` when Caddy is active. Also verify `N8N_HOST`, `N8N_PROTOCOL`, and `N8N_EDITOR_BASE_URL` match.
+
 ### EBS format fails (`/dev/nvme1n1 apparently in use`)
 
 Docker daemon's `data-root` is on the EBS volume and holds open file descriptors to the block device. Script 0 must stop the Docker daemon before unmounting. If running cleanup manually, stop Docker first: `sudo systemctl stop docker`.
@@ -691,10 +803,15 @@ Check that `ENABLE_CADDY="true"` **or** `ENABLE_NPM="true"` is in platform.conf 
 
 ### Signalbot — number not paired
 
-After deploy, pair the phone number manually:
+After deploy, pair the phone number. The post-deploy dashboard prints the exact QR link URL. When Caddy is active, open it in the browser directly:
+```
+https://signal.ai.yourdomain.net/v1/qrcodelink?device_name=signal-api
+```
+
+From the server (without Caddy), use curl:
 ```bash
 # Option A — link existing device (scan QR in Signal app)
-curl -s "http://127.0.0.1:${SIGNALBOT_PORT}/v1/qrcodelink/+<number>?device_name=ai-platform"
+curl -s "http://127.0.0.1:${SIGNALBOT_PORT}/v1/qrcodelink?device_name=ai-platform"
 
 # Option B — register a new number (receives SMS code)
 curl -s -X POST "http://127.0.0.1:${SIGNALBOT_PORT}/v1/register/+<number>"
@@ -714,4 +831,4 @@ curl -s -X POST "http://127.0.0.1:${SIGNALBOT_PORT}/v1/register/+<number>/verify
 
 ---
 
-*Version: 5.0.0 | Last Updated: 2026-04-13 | Architecture: 4 scripts, ~28 services, single-tenant per EBS volume*
+*Version: 5.1.0 | Last Updated: 2026-04-13 | Architecture: 4 scripts, ~30 services (Dify 3-container stack), single-tenant per EBS volume*

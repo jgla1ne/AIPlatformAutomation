@@ -516,40 +516,57 @@ configure_dify() {
         return 0
     fi
     
+    # Dify has two separate containers — the setup API lives on dify-api (Flask backend),
+    # NOT on dify-web (Next.js frontend). Calling /console/api/setup on the web port
+    # returns 404; it must target the api port (5001).
     local container_name="${TENANT_PREFIX}-dify"
-    local dify_url="http://127.0.0.1:${DIFY_PORT}"
-    
+    local dify_api_url="http://127.0.0.1:${DIFY_API_PORT:-5001}"
+    local dify_web_url="http://127.0.0.1:${DIFY_PORT:-3040}"
+
     log "Configuring Dify..."
-    
-    # Wait for Dify to be ready
+
+    # Guard: dify-api container must exist
+    if ! docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^${TENANT_PREFIX}-dify-api$"; then
+        warn "dify-api container not found — skipping Dify setup (will retry on next Script 3 run)"
+        return 0
+    fi
+
+    # Wait for dify-api to be ready (setup endpoint is on the Flask backend)
     local attempts=0
     local max_attempts=30
-    
+
     while [[ $attempts -lt $max_attempts ]]; do
-        if curl -sf "${dify_url}/apps" >/dev/null 2>&1; then
+        if curl -sf "${dify_api_url}/health" >/dev/null 2>&1; then
             break
         fi
         attempts=$((attempts + 1))
         sleep 2
     done
-    
+
     if [[ $attempts -ge $max_attempts ]]; then
-        fail "Dify not ready after timeout"
+        warn "dify-api not ready after timeout — skipping setup"
+        return 0
     fi
-    
-    # README §6: Call POST /console/api/setup only (not workspace invite)
-    log "  Calling Dify setup API..."
-    local setup_response
-    setup_response=$(curl -s -X POST "${dify_url}/console/api/setup" \
-        -H "Content-Type: application/json" \
-        -d "{\"init_password\":\"${DIFY_INIT_PASSWORD:-}\"}" 2>/dev/null || true)
-    
-    if [[ -n "$setup_response" ]]; then
-        log "  Dify setup completed"
+
+    # Call setup only if DIFY_INIT_PASSWORD is set; skip silently if empty (user will set up manually)
+    if [[ -n "${DIFY_INIT_PASSWORD:-}" ]]; then
+        log "  Calling Dify setup API on dify-api (port ${DIFY_API_PORT:-5001})..."
+        local setup_response
+        setup_response=$(curl -s -X POST "${dify_api_url}/console/api/setup" \
+            -H "Content-Type: application/json" \
+            -d "{\"init_password\":\"${DIFY_INIT_PASSWORD}\"}" 2>/dev/null || true)
+
+        if echo "${setup_response:-}" | grep -qi '"result":"success"\|already_setup\|setup_finished'; then
+            ok "  Dify setup completed"
+        else
+            log "  Dify setup response: ${setup_response:-<empty>}"
+            warn "  Dify setup API call returned unexpected response — may already be set up"
+        fi
     else
-        warn "Dify setup API call failed"
+        log "  DIFY_INIT_PASSWORD not set — skipping automated setup"
+        log "  Open $(_url dify-api ${DIFY_API_PORT:-5001} 2>/dev/null || echo "http://127.0.0.1:${DIFY_API_PORT:-5001}") and complete setup manually"
     fi
-    
+
     mark_done "dify_configured"
     ok "Dify configured"
 }
@@ -734,127 +751,204 @@ configure_bifrost() {
 # CREDENTIALS DISPLAY (README §6)
 # =============================================================================
 show_credentials() {
+    # Compute correct URLs — subdomain-based when Caddy/NPM active, IP:port otherwise.
+    # This is the definitive reference a user can open in their browser.
+    local _cred_proto="http"
+    local _cred_host
+    _cred_host=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
+    local _use_subs=false
+    if [[ "${CADDY_ENABLED:-false}" == "true" || "${NPM_ENABLED:-false}" == "true" ]]; then
+        local _dom="${BASE_DOMAIN:-${DOMAIN:-}}"
+        if [[ -n "$_dom" ]]; then
+            _cred_proto="https"
+            _cred_host="$_dom"
+            _use_subs=true
+        fi
+    fi
+    # _url <subdomain> <fallback-port>  →  correct browser URL
+    _url() {
+        if [[ "$_use_subs" == "true" ]]; then
+            echo "${_cred_proto}://${1}.${_cred_host}"
+        else
+            echo "${_cred_proto}://${_cred_host}:${2}"
+        fi
+    }
+
     echo ""
-    echo "══════════════════════════════════════════════════════════"
-    echo "  AI PLATFORM CREDENTIALS"
-    echo "  Tenant: ${TENANT_ID}   Built: ${GENERATED_AT:-Unknown}"
-    echo "══════════════════════════════════════════════════════════"
+    echo "══════════════════════════════════════════════════════════════════════"
+    echo "  AI PLATFORM — CREDENTIALS & ACCESS URLS"
+    echo "  Tenant: ${TENANT_ID}   Built: ${GENERATED_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+    echo "══════════════════════════════════════════════════════════════════════"
     echo ""
-    
-    # Infrastructure
-    if [[ "${POSTGRES_ENABLED}" == "true" ]]; then
+
+    # ── Infrastructure ────────────────────────────────────────────────────────
+    if [[ "${POSTGRES_ENABLED:-false}" == "true" ]]; then
         echo "INFRASTRUCTURE"
-        echo "  PostgreSQL  postgres.${BASE_DOMAIN}:${POSTGRES_PORT}"
-        echo "  User        ${POSTGRES_USER}"
-        echo "  Password    ${POSTGRES_PASSWORD}"
+        echo "  PostgreSQL   ${_cred_host}:${POSTGRES_PORT:-5432}  (internal)"
+        echo "  User         ${POSTGRES_USER:-${TENANT_ID}}"
+        echo "  Password     ${POSTGRES_PASSWORD:-<not set>}"
+        [[ "${REDIS_ENABLED:-false}" == "true" ]] && \
+            echo "  Redis pass   ${REDIS_PASSWORD:-<not set>}"
         echo ""
     fi
-    
-    # LLM Proxy
-    if [[ "${LITELLM_ENABLED}" == "true" ]]; then
-        echo "LLM PROXY"
-        echo "  URL         https://${BASE_DOMAIN}/litellm"
-        echo "  Master Key  ${LITELLM_MASTER_KEY}"
-        echo "  UI Password ${LITELLM_UI_PASSWORD}"
+
+    # ── LLM Gateway ───────────────────────────────────────────────────────────
+    if [[ "${LITELLM_ENABLED:-false}" == "true" ]]; then
+        echo "LLM GATEWAY"
+        echo "  URL          $(_url litellm ${LITELLM_PORT:-4000})"
+        echo "  Master Key   ${LITELLM_MASTER_KEY:-<not set>}"
+        echo "  UI Password  ${LITELLM_UI_PASSWORD:-<not set — check platform.conf>}"
         echo ""
     fi
-    
-    # Web UIs
-    if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
-        echo "WEB UI"
-        echo "  Open WebUI  https://${BASE_DOMAIN}/openwebui"
-        echo "  Secret      ${OPENWEBUI_SECRET}"
-        echo ""
-    fi
-    
-    if [[ "${LIBRECHAT_ENABLED}" == "true" ]]; then
-        echo "WEB UI"
-        echo "  LibreChat   https://${BASE_DOMAIN}/librechat"
-        echo "  JWT Secret  ${LIBRECHAT_JWT_SECRET:-Unknown}"
-        echo "  Crypt Key   ${LIBRECHAT_CRYPT_KEY:-Unknown}"
-        echo ""
-    fi
-    
-    if [[ "${OPENCLAW_ENABLED}" == "true" ]]; then
-        echo "WEB UI"
-        echo "  OpenClaw    https://${BASE_DOMAIN}/openclaw"
-        echo "  Port        ${OPENCLAW_PORT}"
-        echo ""
-    fi
-    
-    # Automation
-    if [[ "${N8N_ENABLED}" == "true" ]]; then
-        echo "AUTOMATION"
-        echo "  N8N         https://${BASE_DOMAIN}/n8n"
-        echo "  Encryption   ${N8N_ENCRYPTION_KEY}"
-        echo ""
-    fi
-    
-    if [[ "${FLOWISE_ENABLED}" == "true" ]]; then
-        echo "AUTOMATION"
-        echo "  Flowise     https://${BASE_DOMAIN}/flowise"
-        echo "  Username    ${FLOWISE_USERNAME}"
-        echo "  Password    ${FLOWISE_PASSWORD}"
-        echo ""
-    fi
-    
-    if [[ "${DIFY_ENABLED}" == "true" ]]; then
-        echo "AUTOMATION"
-        echo "  Dify        https://${BASE_DOMAIN}/dify"
-        echo "  Secret Key  ${DIFY_SECRET_KEY:-Unknown}"
-        echo "  Init Pass   ${DIFY_INIT_PASSWORD:-Unknown}"
-        echo ""
-    fi
-    
-    # Identity
-    if [[ "${AUTHENTIK_ENABLED}" == "true" ]]; then
-        echo "IDENTITY"
-        echo "  Authentik    https://${BASE_DOMAIN}/authentik"
-        echo "  Bootstrap    ${AUTHENTIK_BOOTSTRAP_EMAIL:-${ADMIN_EMAIL:-unknown}}"
-        echo "  Password     ${AUTHENTIK_BOOTSTRAP_PASSWORD:-<not set — check docker-compose.yml>}"
-        if [[ -n "${AUTHENTIK_API_TOKEN:-}" ]]; then
-            echo "  API Token    ${AUTHENTIK_API_TOKEN}"
+
+    # ── Web UIs ───────────────────────────────────────────────────────────────
+    local _has_webui=false
+    [[ "${OPENWEBUI_ENABLED:-false}" == "true" ]] && _has_webui=true
+    [[ "${LIBRECHAT_ENABLED:-false}" == "true" ]] && _has_webui=true
+    [[ "${OPENCLAW_ENABLED:-false}"  == "true" ]] && _has_webui=true
+    [[ "${ANYTHINGLLM_ENABLED:-false}" == "true" ]] && _has_webui=true
+    if [[ "$_has_webui" == "true" ]]; then
+        echo "WEB UIs"
+        if [[ "${OPENWEBUI_ENABLED:-false}" == "true" ]]; then
+            echo "  OpenWebUI    $(_url openwebui ${OPENWEBUI_PORT:-3000})"
+            echo "    Login      Register on first visit (no default password)"
+        fi
+        if [[ "${LIBRECHAT_ENABLED:-false}" == "true" ]]; then
+            echo "  LibreChat    $(_url librechat ${LIBRECHAT_PORT:-3080})"
+            echo "    Login      Register on first visit"
+        fi
+        if [[ "${OPENCLAW_ENABLED:-false}" == "true" ]]; then
+            echo "  OpenClaw     $(_url openclaw ${OPENCLAW_PORT:-18789})"
+            echo "    Username   ${OPENCLAW_USERNAME:-admin}"
+            echo "    Password   ${OPENCLAW_PASSWORD:-<not set — check platform.conf>}"
+        fi
+        if [[ "${ANYTHINGLLM_ENABLED:-false}" == "true" ]]; then
+            echo "  AnythingLLM  $(_url anythingllm ${ANYTHINGLLM_PORT:-3001})"
+            echo "    Login      Register on first visit (no default password)"
+            echo "    JWT Secret ${ANYTHINGLLM_JWT_SECRET:-<not set>}  (internal)"
         fi
         echo ""
     fi
-    
-    # RAG/Vector
-    if [[ "${QDRANT_ENABLED}" == "true" ]]; then
-        echo "RAG/VECTOR"
-        echo "  Qdrant      ${QDRANT_API_KEY}"
+
+    # ── Automation ────────────────────────────────────────────────────────────
+    local _has_auto=false
+    [[ "${N8N_ENABLED:-false}"    == "true" ]] && _has_auto=true
+    [[ "${FLOWISE_ENABLED:-false}" == "true" ]] && _has_auto=true
+    [[ "${DIFY_ENABLED:-false}"   == "true" ]] && _has_auto=true
+    if [[ "$_has_auto" == "true" ]]; then
+        echo "AUTOMATION"
+        if [[ "${N8N_ENABLED:-false}" == "true" ]]; then
+            echo "  N8N          $(_url n8n ${N8N_PORT:-5678})"
+            echo "    Login      Register on first visit (no default password)"
+            echo "    Enc. Key   ${N8N_ENCRYPTION_KEY:-<not set>}  (internal)"
+        fi
+        if [[ "${FLOWISE_ENABLED:-false}" == "true" ]]; then
+            echo "  Flowise      $(_url flowise ${FLOWISE_PORT:-3001})"
+            echo "    Username   ${FLOWISE_USERNAME:-admin}"
+            echo "    Password   ${FLOWISE_PASSWORD:-<not set>}"
+        fi
+        if [[ "${DIFY_ENABLED:-false}" == "true" ]]; then
+            echo "  Dify (web)   $(_url dify ${DIFY_PORT:-3040})"
+            echo "  Dify (api)   $(_url dify-api ${DIFY_API_PORT:-5001})"
+            echo "    Init Pass  ${DIFY_INIT_PASSWORD:-<not set — check platform.conf>}  (set on first login)"
+        fi
         echo ""
     fi
 
-    if [[ "${ZEP_ENABLED:-false}" == "true" ]]; then
-        echo "MEMORY — ZEP"
-        echo "  API         http://127.0.0.1:${ZEP_PORT:-8100}"
-        echo "  Auth Secret ${ZEP_AUTH_SECRET:-<not set — check platform.conf>}"
+    # ── Vector DBs ────────────────────────────────────────────────────────────
+    local _has_vec=false
+    [[ "${QDRANT_ENABLED:-false}" == "true" ]] && _has_vec=true
+    if [[ "$_has_vec" == "true" ]]; then
+        echo "VECTOR DB"
+        if [[ "${QDRANT_ENABLED:-false}" == "true" ]]; then
+            echo "  Qdrant       http://127.0.0.1:${QDRANT_PORT:-6333}  (internal)"
+            echo "    API Key    ${QDRANT_API_KEY:-<not set>}"
+        fi
         echo ""
     fi
 
-    if [[ "${LETTA_ENABLED:-false}" == "true" ]]; then
-        echo "MEMORY — LETTA"
-        echo "  API         http://127.0.0.1:${LETTA_PORT:-8283}"
-        echo "  Server Pass ${LETTA_SERVER_PASS:-<not set — check platform.conf>}"
+    # ── Memory Layer ──────────────────────────────────────────────────────────
+    local _has_mem=false
+    [[ "${ZEP_ENABLED:-false}"   == "true" ]] && _has_mem=true
+    [[ "${LETTA_ENABLED:-false}" == "true" ]] && _has_mem=true
+    [[ "${MEM0_ENABLED:-false}"  == "true" ]] && _has_mem=true
+    if [[ "$_has_mem" == "true" ]]; then
+        echo "MEMORY LAYER"
+        if [[ "${ZEP_ENABLED:-false}" == "true" ]]; then
+            echo "  Zep CE       $(_url zep ${ZEP_PORT:-8100})"
+            echo "    Auth Sec   ${ZEP_AUTH_SECRET:-<not set>}"
+        fi
+        if [[ "${LETTA_ENABLED:-false}" == "true" ]]; then
+            echo "  Letta        $(_url letta ${LETTA_PORT:-8283})"
+            echo "    Password   ${LETTA_SERVER_PASS:-<not set>}"
+        fi
+        if [[ "${MEM0_ENABLED:-false}" == "true" ]]; then
+            echo "  Mem0         http://127.0.0.1:${MEM0_PORT:-8081}  (internal)"
+        fi
         echo ""
     fi
-    
-    # Alerting
-    if [[ "${SIGNALBOT_ENABLED}" == "true" ]]; then
-        echo "ALERTING"
-        echo "  Signalbot   ${SIGNAL_PHONE}"
-        echo "  Recipient    ${SIGNAL_RECIPIENT}"
+
+    # ── Identity ──────────────────────────────────────────────────────────────
+    if [[ "${AUTHENTIK_ENABLED:-false}" == "true" ]]; then
+        echo "IDENTITY"
+        echo "  Authentik    $(_url authentik ${AUTHENTIK_PORT:-9000})"
+        echo "    Email      ${AUTHENTIK_BOOTSTRAP_EMAIL:-${ADMIN_EMAIL:-akadmin@localhost}}"
+        echo "    Password   ${AUTHENTIK_BOOTSTRAP_PASSWORD:-<not set — check platform.conf>}"
+        [[ -n "${AUTHENTIK_API_TOKEN:-}" ]] && \
+            echo "    API Token  ${AUTHENTIK_API_TOKEN}"
         echo ""
     fi
-    
-    # Bifrost
-    if [[ "${BIFROST_ENABLED}" == "true" ]]; then
+
+    # ── Monitoring ────────────────────────────────────────────────────────────
+    local _has_mon=false
+    [[ "${GRAFANA_ENABLED:-false}"    == "true" ]] && _has_mon=true
+    [[ "${PROMETHEUS_ENABLED:-false}" == "true" ]] && _has_mon=true
+    if [[ "$_has_mon" == "true" ]]; then
+        echo "MONITORING"
+        if [[ "${GRAFANA_ENABLED:-false}" == "true" ]]; then
+            echo "  Grafana      $(_url grafana ${GRAFANA_PORT:-3000})"
+            echo "    Username   admin"
+            echo "    Password   ${GRAFANA_ADMIN_PASSWORD:-admin}"
+        fi
+        if [[ "${PROMETHEUS_ENABLED:-false}" == "true" ]]; then
+            echo "  Prometheus   $(_url prometheus ${PROMETHEUS_PORT:-9090})"
+        fi
+        echo ""
+    fi
+
+    # ── Development ───────────────────────────────────────────────────────────
+    if [[ "${CODE_SERVER_ENABLED:-false}" == "true" ]]; then
+        echo "DEVELOPMENT"
+        echo "  Code Server  $(_url code ${CODE_SERVER_PORT:-8080})"
+        echo "    Password   ${CODE_SERVER_PASSWORD:-<not set — check platform.conf>}"
+        echo ""
+    fi
+
+    # ── Alerting / Comms ──────────────────────────────────────────────────────
+    if [[ "${SIGNALBOT_ENABLED:-false}" == "true" ]]; then
+        local _sig_url
+        if [[ "$_use_subs" == "true" ]]; then
+            _sig_url="${_cred_proto}://signal.${_cred_host}"
+        else
+            _sig_url="http://127.0.0.1:${SIGNALBOT_PORT:-8080}"
+        fi
+        echo "ALERTING / COMMS"
+        echo "  Signalbot    ${_sig_url}/v1/about"
+        echo "    QR Pair    ${_sig_url}/v1/qrcodelink?device_name=signal-api"
+        echo "    Phone      ${SIGNAL_PHONE:-<not configured>}"
+        [[ -n "${SIGNAL_RECIPIENT:-}" ]] && \
+            echo "    Recipient  ${SIGNAL_RECIPIENT}"
+        echo ""
+    fi
+
+    # ── Bifrost ───────────────────────────────────────────────────────────────
+    if [[ "${BIFROST_ENABLED:-false}" == "true" ]]; then
         echo "BIFROST"
-        echo "  API Key     ${BIFROST_API_KEY}"
+        echo "  API Key      ${BIFROST_API_KEY:-<not set>}"
         echo ""
     fi
-    
-    echo "══════════════════════════════════════════════════════════"
+
+    echo "══════════════════════════════════════════════════════════════════════"
     echo ""
 }
 
@@ -955,7 +1049,11 @@ show_health_status() {
     # Automation
     [[ "${N8N_ENABLED:-false}"        == "true" ]] && _svc_row "N8N"          "n8n"         "${N8N_PORT:-5678}"
     [[ "${FLOWISE_ENABLED:-false}"    == "true" ]] && _svc_row "Flowise"      "flowise"     "${FLOWISE_PORT:-3001}"
-    [[ "${DIFY_ENABLED:-false}"       == "true" ]] && _svc_row "Dify"         "dify"        "${DIFY_PORT:-3002}"
+    if [[ "${DIFY_ENABLED:-false}"    == "true" ]]; then
+        _svc_row "Dify (web)"     "dify"        "${DIFY_PORT:-3040}"
+        _svc_row "Dify (api)"     "dify-api"    "${DIFY_API_PORT:-5001}"
+        _svc_row "Dify (worker)"  "dify-worker" "-"
+    fi
 
     # Memory
     [[ "${ZEP_ENABLED:-false}"        == "true" ]] && _svc_row "Zep CE"       "zep"         "${ZEP_PORT:-8100}"
@@ -1558,34 +1656,59 @@ run_mission_control() {
     fi
     local base="${base_proto}://${display_host}"
 
+    # Helper: compute correct browser URL
+    # When Caddy/NPM active: https://subdomain.domain  (no port — proxy handles it)
+    # Otherwise:             http://IP:port
+    _access_url() {
+        local subdomain="$1" port="$2"
+        if [[ "$use_subdomains" == "true" ]]; then
+            echo "${base_proto}://${subdomain}.${display_host}"
+        else
+            echo "${base_proto}://${display_host}:${port}"
+        fi
+    }
+    local use_subdomains=false
+    [[ "${CADDY_ENABLED:-false}" == "true" || "${NPM_ENABLED:-false}" == "true" ]] && \
+        [[ -n "${BASE_DOMAIN:-${DOMAIN:-}}" ]] && use_subdomains=true
+
     echo "  Access URLs:"
     echo ""
 
-    # Web UIs — public-facing
-    [[ "${OPENWEBUI_ENABLED:-false}"   == "true" ]] && echo "    OpenWebUI    → ${base}:${OPENWEBUI_PORT:-3000}"
-    [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]] && echo "    LibreChat    → ${base}:${LIBRECHAT_PORT:-3080}"
-    [[ "${OPENCLAW_ENABLED:-false}"    == "true" ]] && echo "    OpenClaw     → ${base}:${OPENCLAW_PORT:-18789}"
-    [[ "${ANYTHINGLLM_ENABLED:-false}" == "true" ]] && echo "    AnythingLLM  → ${base}:${ANYTHINGLLM_PORT:-3001}"
+    # Web UIs
+    [[ "${OPENWEBUI_ENABLED:-false}"   == "true" ]] && echo "    OpenWebUI    → $(_access_url openwebui   ${OPENWEBUI_PORT:-3000})"
+    [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]] && \
+                                                        echo "    LibreChat    → $(_access_url librechat   ${LIBRECHAT_PORT:-3080})"
+    [[ "${OPENCLAW_ENABLED:-false}"    == "true" ]] && echo "    OpenClaw     → $(_access_url openclaw    ${OPENCLAW_PORT:-18789})"
+    [[ "${ANYTHINGLLM_ENABLED:-false}" == "true" ]] && echo "    AnythingLLM  → $(_access_url anythingllm ${ANYTHINGLLM_PORT:-3001})"
 
-    # LLM gateway
-    [[ "${LITELLM_ENABLED:-false}"     == "true" ]] && echo "    LiteLLM      → http://127.0.0.1:${LITELLM_PORT:-4000}  (internal)"
+    # LLM gateway — internal only
+    [[ "${LITELLM_ENABLED:-false}"     == "true" ]] && echo "    LiteLLM      → $(_access_url litellm ${LITELLM_PORT:-4000})  (LLM gateway)"
 
     # Automation
-    [[ "${N8N_ENABLED:-false}"         == "true" ]] && echo "    N8N          → ${base}:${N8N_PORT:-5678}"
-    [[ "${FLOWISE_ENABLED:-false}"     == "true" ]] && echo "    Flowise      → ${base}:${FLOWISE_PORT:-3001}"
-    [[ "${DIFY_ENABLED:-false}"        == "true" ]] && echo "    Dify         → ${base}:${DIFY_PORT:-3002}"
+    [[ "${N8N_ENABLED:-false}"         == "true" ]] && echo "    N8N          → $(_access_url n8n     ${N8N_PORT:-5678})"
+    [[ "${FLOWISE_ENABLED:-false}"     == "true" ]] && echo "    Flowise      → $(_access_url flowise ${FLOWISE_PORT:-3001})"
+    if [[ "${DIFY_ENABLED:-false}"     == "true" ]]; then
+        echo "    Dify         → $(_access_url dify    ${DIFY_PORT:-3040})"
+        echo "    Dify API     → $(_access_url dify-api ${DIFY_API_PORT:-5001})  (backend)"
+    fi
 
     # Memory
-    [[ "${ZEP_ENABLED:-false}"         == "true" ]] && echo "    Zep CE       → http://127.0.0.1:${ZEP_PORT:-8100}  (API)"
-    [[ "${LETTA_ENABLED:-false}"       == "true" ]] && echo "    Letta        → http://127.0.0.1:${LETTA_PORT:-8283}  (API)"
-    [[ "${MEM0_ENABLED:-false}"        == "true" ]] && echo "    Mem0         → http://127.0.0.1:${MEM0_PORT:-8081}  (API)"
+    [[ "${ZEP_ENABLED:-false}"         == "true" ]] && echo "    Zep CE       → $(_access_url zep   ${ZEP_PORT:-8100})"
+    [[ "${LETTA_ENABLED:-false}"       == "true" ]] && echo "    Letta        → $(_access_url letta ${LETTA_PORT:-8283})"
+    [[ "${MEM0_ENABLED:-false}"        == "true" ]] && echo "    Mem0         → http://127.0.0.1:${MEM0_PORT:-8081}  (internal)"
 
     # Identity + monitoring
-    [[ "${AUTHENTIK_ENABLED:-false}"   == "true" ]] && echo "    Authentik    → ${base}:${AUTHENTIK_PORT:-9000}"
-    [[ "${GRAFANA_ENABLED:-false}"     == "true" ]] && echo "    Grafana      → http://127.0.0.1:${GRAFANA_PORT:-3002}"
-    [[ "${PROMETHEUS_ENABLED:-false}"  == "true" ]] && echo "    Prometheus   → http://127.0.0.1:${PROMETHEUS_PORT:-9090}"
-    [[ "${CODE_SERVER_ENABLED:-false}" == "true" ]] && echo "    Code Server  → http://127.0.0.1:${CODE_SERVER_PORT:-8080}"
-    [[ "${SIGNALBOT_ENABLED:-false}"   == "true" ]] && echo "    Signalbot    → http://127.0.0.1:${SIGNALBOT_PORT:-8080}  (API)"
+    [[ "${AUTHENTIK_ENABLED:-false}"   == "true" ]] && echo "    Authentik    → $(_access_url authentik  ${AUTHENTIK_PORT:-9000})"
+    [[ "${GRAFANA_ENABLED:-false}"     == "true" ]] && echo "    Grafana      → $(_access_url grafana    ${GRAFANA_PORT:-3000})"
+    [[ "${PROMETHEUS_ENABLED:-false}"  == "true" ]] && echo "    Prometheus   → $(_access_url prometheus ${PROMETHEUS_PORT:-9090})"
+    [[ "${CODE_SERVER_ENABLED:-false}" == "true" ]] && echo "    Code Server  → $(_access_url code       ${CODE_SERVER_PORT:-8080})"
+
+    # Signalbot — show QR link
+    if [[ "${SIGNALBOT_ENABLED:-false}" == "true" ]]; then
+        local _sig="$(_access_url signal ${SIGNALBOT_PORT:-8080})"
+        echo "    Signalbot    → ${_sig}/v1/about"
+        echo "    Signal QR    → ${_sig}/v1/qrcodelink?device_name=signal-api"
+    fi
 
     # Reverse proxy admin
     [[ "${CADDY_ENABLED:-false}"       == "true" ]] && echo "    Caddy        → https://${BASE_DOMAIN:-${DOMAIN:-localhost}}  (TLS: ${TLS_MODE:-none})"
