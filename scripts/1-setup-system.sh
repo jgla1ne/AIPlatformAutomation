@@ -587,6 +587,82 @@ SUDO_EOF
 }
 
 # =============================================================================
+# DOCKER DATA-ROOT CONFIGURATION
+# Move Docker's data directory to the EBS volume so image pulls don't exhaust
+# the small root volume. Without this, docker pull writes to /var/lib/docker/tmp
+# on the root volume — typically only 8-20 GB on EC2 instances.
+#
+# Writes /etc/docker/daemon.json and restarts Docker (requires sudo).
+# Safe to re-run — skips if data-root is already set to our target.
+# =============================================================================
+configure_docker_dataroot() {
+    local target_root="${DATA_DIR}/docker"
+
+    # Check current data-root
+    local current_root
+    current_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "/var/lib/docker")
+
+    if [[ "$current_root" == "$target_root" ]]; then
+        log "Docker data-root already set to ${target_root} — skipping"
+        return 0
+    fi
+
+    section "🐳 DOCKER DATA DIRECTORY"
+    echo "  Docker's default data root is ${current_root} (root volume — limited space)."
+    echo "  Moving it to the EBS volume: ${target_root}"
+    echo ""
+    echo "  This requires sudo to update /etc/docker/daemon.json and restart Docker."
+    echo ""
+
+    sudo bash -s -- "$target_root" <<'DOCKER_CONF_EOF'
+        set -e
+        target="$1"
+
+        # Create the target directory
+        mkdir -p "$target"
+
+        # Read existing daemon.json (if any) and merge data-root into it
+        daemon_json="/etc/docker/daemon.json"
+        if [[ -f "$daemon_json" ]]; then
+            # Use python3 to merge: preserve existing keys, set/override data-root
+            python3 - "$daemon_json" "$target" <<'PY'
+import json, sys
+path, root = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    cfg = json.load(f)
+cfg["data-root"] = root
+with open(path, "w") as f:
+    json.dump(cfg, f, indent=2)
+    f.write("\n")
+PY
+        else
+            # No existing daemon.json — create it
+            cat > "$daemon_json" <<JSON
+{
+  "data-root": "$target"
+}
+JSON
+        fi
+
+        echo "  ✅ /etc/docker/daemon.json updated (data-root: $target)"
+
+        # Restart Docker to apply the new data-root
+        systemctl restart docker
+        echo "  ✅ Docker daemon restarted"
+DOCKER_CONF_EOF
+
+    if [[ $? -ne 0 ]]; then
+        warn "Docker data-root configuration failed — images will be pulled to ${current_root}"
+        warn "Ensure the root volume has enough free space, or configure data-root manually:"
+        warn "  echo '{\"data-root\": \"${target_root}\"}' | sudo tee /etc/docker/daemon.json"
+        warn "  sudo systemctl restart docker"
+        return 0  # non-fatal — deployment can still proceed
+    fi
+
+    ok "Docker data-root: ${target_root} (on EBS volume)"
+}
+
+# =============================================================================
 # STACK PRESET SELECTION (README §4.3)
 # =============================================================================
 select_stack_preset() {
@@ -2839,6 +2915,7 @@ run_interactive_collection() {
     detect_system
     collect_identity
     configure_storage
+    configure_docker_dataroot
     select_stack_preset
     configure_service_credentials
     configure_llm_gateway

@@ -77,13 +77,26 @@ framework_validate() {
         fail "Docker compose plugin not available"
     fi
     
+    # Docker data-root check — must be on EBS (DATA_DIR), not on root volume.
+    # If Docker pulls to /var/lib/docker (root volume), large image sets exhaust
+    # the root disk. Script 1's configure_docker_dataroot() sets this during setup.
+    local docker_root
+    docker_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "/var/lib/docker")
+    local expected_docker_root="${DATA_DIR}/docker"
+    if [[ "$docker_root" != "$expected_docker_root" ]]; then
+        warn "Docker data-root is ${docker_root} (not on EBS volume: ${expected_docker_root})"
+        warn "Image pulls will use the root volume — risk of 'no space left on device'."
+        warn "Fix: sudo bash -c 'echo \"{\\\"data-root\\\":\\\"${expected_docker_root}\\\"}\" > /etc/docker/daemon.json && systemctl restart docker'"
+        warn "Then re-run Script 2. Continuing anyway — you were warned."
+    fi
+
     # Disk space check
     local available_gb
     available_gb=$(df "${BASE_DIR}" | awk 'NR==2{print int($4/1024/1024)}')
     if [[ $available_gb -lt 10 ]]; then
         fail "Insufficient disk space: ${available_gb}GB available, 10GB required"
     fi
-    
+
     ok "Framework validation passed"
 }
 
