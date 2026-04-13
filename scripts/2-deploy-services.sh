@@ -2509,108 +2509,150 @@ show_post_deploy_dashboard() {
     local base_proto="http"
     local display_host
     display_host=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
+    local use_subdomains=false
 
-    if [[ "${CADDY_ENABLED:-false}" == "true" || "${NPM_ENABLED:-false}" == "true" ]] && [[ -n "${BASE_DOMAIN:-${DOMAIN:-}}" ]]; then
-        base_proto="https"
-        display_host="${BASE_DOMAIN:-${DOMAIN}}"
+    # When a proxy is active and domain is set, use subdomain-based URLs (e.g. openwebui.ai.domain.net)
+    if [[ "${CADDY_ENABLED:-false}" == "true" || "${NPM_ENABLED:-false}" == "true" ]]; then
+        local dom="${BASE_DOMAIN:-${DOMAIN:-}}"
+        if [[ -n "$dom" ]]; then
+            base_proto="https"
+            display_host="$dom"
+            use_subdomains=true
+        fi
     fi
 
-    local W=72
+    # Helper: build a service URL — subdomain when proxy active, host:port otherwise
+    _svc_url() {
+        local subdomain="$1" port="$2"
+        if [[ "$use_subdomains" == "true" ]]; then
+            echo "${base_proto}://${subdomain}.${display_host}"
+        else
+            echo "${base_proto}://${display_host}:${port}"
+        fi
+    }
+
+    local W=74
     _d_sep()   { printf "╠%s╣\n" "$(printf '═%.0s' $(seq 1 $W))"; }
     _d_top()   { printf "╔%s╗\n" "$(printf '═%.0s' $(seq 1 $W))"; }
     _d_bot()   { printf "╚%s╝\n" "$(printf '═%.0s' $(seq 1 $W))"; }
     _d_line()  { printf "║  %-${W}s║\n" "$*"; }
-    _d_blank() { printf "║%${W}s║\n" ""; }
+    _d_blank() { printf "║%$((W+2))s║\n" ""; }
+    _d_head()  { _d_line "── $* ──────────────────────────────────────────────────────────────────────" | cut -c1-$((W+4)); }
 
     echo ""
     _d_top
-    _d_line "$(printf '%*s' $(( (W + 26) / 2 )) 'DEPLOYMENT COMPLETE — SERVICE DASHBOARD')"
+    _d_line "  DEPLOYMENT COMPLETE — SERVICE DASHBOARD"
     _d_sep
-    _d_line "Tenant: ${TENANT_ID}   Stack: ${STACK_NAME:-custom}   Domain: ${display_host}"
+    _d_line "  Tenant : ${TENANT_ID}"
+    _d_line "  Stack  : ${STACK_NAME:-custom}"
+    _d_line "  Domain : ${display_host}   TLS: ${TLS_MODE:-none}"
     _d_sep
     _d_blank
 
-    # Reverse proxy
+    # REVERSE PROXY
     if [[ "${CADDY_ENABLED:-false}" == "true" ]]; then
-        _d_line "REVERSE PROXY"
-        _d_line "  Caddy        ${base_proto}://${display_host}  (TLS: ${TLS_MODE:-none})"
+        _d_line "REVERSE PROXY (Caddy — routes auto-configured)"
+        _d_line "  ${base_proto}://${display_host}"
         _d_blank
-    fi
-    if [[ "${NPM_ENABLED:-false}" == "true" ]]; then
-        _d_line "REVERSE PROXY"
-        _d_line "  NPM Admin    http://127.0.0.1:${NPM_ADMIN_PORT:-81}  (configure routes here)"
+    elif [[ "${NPM_ENABLED:-false}" == "true" ]]; then
+        _d_line "REVERSE PROXY (Nginx Proxy Manager — configure routes at :81)"
+        _d_line "  Admin        http://127.0.0.1:${NPM_ADMIN_PORT:-81}"
         _d_line "  Login        admin@example.com / changeme  ← change immediately"
         _d_blank
     fi
 
-    # Web UIs
+    # WEB UIs
     local has_ui=false
-    [[ "${OPENWEBUI_ENABLED:-false}"  == "true" ]] && has_ui=true
-    [[ "${LIBRECHAT_ENABLED:-false}"  == "true" || "${ENABLE_LIBRECHAT:-false}" == "true" ]] && has_ui=true
-    [[ "${OPENCLAW_ENABLED:-false}"   == "true" ]] && has_ui=true
-    [[ "${ANYTHINGLLM_ENABLED:-false}" == "true" ]] && has_ui=true
+    for _v in OPENWEBUI LIBRECHAT OPENCLAW ANYTHINGLLM; do
+        [[ "${!_v+x}" == "x" ]] || true
+        eval "[[ \"\${${_v}_ENABLED:-false}\" == \"true\" || \"\${ENABLE_${_v}:-false}\" == \"true\" ]]" 2>/dev/null && has_ui=true
+    done
     if [[ "$has_ui" == "true" ]]; then
         _d_line "WEB UIs"
-        [[ "${OPENWEBUI_ENABLED:-false}"   == "true" ]] && _d_line "  OpenWebUI    ${base_proto}://${display_host}:${OPENWEBUI_PORT}  (via LiteLLM)"
-        [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]] && _d_line "  LibreChat    ${base_proto}://${display_host}:${LIBRECHAT_PORT}"
-        [[ "${OPENCLAW_ENABLED:-false}"    == "true" ]] && _d_line "  OpenClaw     ${base_proto}://${display_host}:${OPENCLAW_PORT}"
-        [[ "${ANYTHINGLLM_ENABLED:-false}" == "true" ]] && _d_line "  AnythingLLM  ${base_proto}://${display_host}:${ANYTHINGLLM_PORT}"
+        [[ "${OPENWEBUI_ENABLED:-false}"   == "true" ]] && _d_line "  OpenWebUI    $(_svc_url openwebui   ${OPENWEBUI_PORT})"
+        [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]] \
+                                                          && _d_line "  LibreChat    $(_svc_url librechat   ${LIBRECHAT_PORT})"
+        [[ "${OPENCLAW_ENABLED:-false}"    == "true" ]] && _d_line "  OpenClaw     $(_svc_url openclaw    ${OPENCLAW_PORT})"
+        [[ "${ANYTHINGLLM_ENABLED:-false}" == "true" ]] && _d_line "  AnythingLLM  $(_svc_url anythingllm ${ANYTHINGLLM_PORT})"
         _d_blank
     fi
 
-    # LLM Gateway
+    # LLM GATEWAY
     if [[ "${LITELLM_ENABLED:-false}" == "true" ]]; then
-        _d_line "LLM GATEWAY"
-        _d_line "  LiteLLM      http://127.0.0.1:${LITELLM_PORT}  key: ${LITELLM_MASTER_KEY}"
+        _d_line "LLM GATEWAY  (internal — all UIs route through here)"
+        _d_line "  LiteLLM      http://127.0.0.1:${LITELLM_PORT}/v1"
+        _d_line "  Master Key   ${LITELLM_MASTER_KEY}"
+        [[ "$use_subdomains" == "true" ]] && _d_line "  UI           $(_svc_url litellm ${LITELLM_PORT})/ui"
         _d_blank
     fi
 
-    # Automation
+    # AUTOMATION
     local has_auto=false
     [[ "${N8N_ENABLED:-false}" == "true" || "${FLOWISE_ENABLED:-false}" == "true" || "${DIFY_ENABLED:-false}" == "true" ]] && has_auto=true
     if [[ "$has_auto" == "true" ]]; then
         _d_line "AUTOMATION"
-        [[ "${N8N_ENABLED:-false}"     == "true" ]] && _d_line "  N8N          ${base_proto}://${display_host}:${N8N_PORT}"
-        [[ "${FLOWISE_ENABLED:-false}" == "true" ]] && _d_line "  Flowise      ${base_proto}://${display_host}:${FLOWISE_PORT}"
-        [[ "${DIFY_ENABLED:-false}"    == "true" ]] && _d_line "  Dify         ${base_proto}://${display_host}:${DIFY_PORT}"
+        [[ "${N8N_ENABLED:-false}"     == "true" ]] && _d_line "  N8N          $(_svc_url n8n     ${N8N_PORT})"
+        [[ "${FLOWISE_ENABLED:-false}" == "true" ]] && _d_line "  Flowise      $(_svc_url flowise ${FLOWISE_PORT})"
+        [[ "${DIFY_ENABLED:-false}"    == "true" ]] && _d_line "  Dify         $(_svc_url dify    ${DIFY_PORT})"
         _d_blank
     fi
 
-    # Memory
+    # MEMORY LAYER
     local has_mem=false
     [[ "${ZEP_ENABLED:-false}" == "true" || "${LETTA_ENABLED:-false}" == "true" || "${MEM0_ENABLED:-false}" == "true" ]] && has_mem=true
     if [[ "$has_mem" == "true" ]]; then
         _d_line "MEMORY LAYER"
-        [[ "${ZEP_ENABLED:-false}"   == "true" ]] && _d_line "  Zep CE       http://127.0.0.1:${ZEP_PORT}  (conversation memory → Web UIs)"
-        [[ "${LETTA_ENABLED:-false}" == "true" ]] && _d_line "  Letta        http://127.0.0.1:${LETTA_PORT}  (agent memory runtime)"
+        [[ "${ZEP_ENABLED:-false}"   == "true" ]] && _d_line "  Zep CE       $(_svc_url zep   ${ZEP_PORT})  (conversation memory)"
+        [[ "${LETTA_ENABLED:-false}" == "true" ]] && _d_line "  Letta        $(_svc_url letta ${LETTA_PORT})  (agent memory runtime)"
         [[ "${MEM0_ENABLED:-false}"  == "true" ]] && _d_line "  Mem0         http://127.0.0.1:${MEM0_PORT:-8081}"
         _d_blank
     fi
 
-    # Auth + monitoring
+    # IDENTITY
     if [[ "${AUTHENTIK_ENABLED:-false}" == "true" ]]; then
         _d_line "IDENTITY"
-        _d_line "  Authentik    ${base_proto}://${display_host}:${AUTHENTIK_PORT}"
-        _d_line "  Bootstrap    ${AUTHENTIK_BOOTSTRAP_EMAIL:-admin}  /  ${AUTHENTIK_BOOTSTRAP_PASSWORD:-<see platform.conf>}"
+        _d_line "  Authentik    $(_svc_url authentik ${AUTHENTIK_PORT})"
+        _d_line "  Bootstrap    ${AUTHENTIK_BOOTSTRAP_EMAIL:-admin@${display_host}}  /  ${AUTHENTIK_BOOTSTRAP_PASSWORD:-<see platform.conf>}"
         _d_blank
     fi
+
+    # MONITORING
     if [[ "${GRAFANA_ENABLED:-false}" == "true" || "${PROMETHEUS_ENABLED:-false}" == "true" ]]; then
         _d_line "MONITORING"
-        [[ "${GRAFANA_ENABLED:-false}"    == "true" ]] && _d_line "  Grafana      http://127.0.0.1:${GRAFANA_PORT}  user: admin / ${GRAFANA_ADMIN_PASSWORD:-admin}"
-        [[ "${PROMETHEUS_ENABLED:-false}" == "true" ]] && _d_line "  Prometheus   http://127.0.0.1:${PROMETHEUS_PORT}"
+        [[ "${GRAFANA_ENABLED:-false}"    == "true" ]] && _d_line "  Grafana      $(_svc_url grafana    ${GRAFANA_PORT})  admin / ${GRAFANA_ADMIN_PASSWORD:-admin}"
+        [[ "${PROMETHEUS_ENABLED:-false}" == "true" ]] && _d_line "  Prometheus   $(_svc_url prometheus ${PROMETHEUS_PORT})"
         _d_blank
     fi
-    if [[ "${CODE_SERVER_ENABLED:-false}" == "true" ]]; then
-        _d_line "DEVELOPMENT"
-        _d_line "  Code Server  http://127.0.0.1:${CODE_SERVER_PORT}  pass: ${CODE_SERVER_PASSWORD:-<see platform.conf>}"
+
+    # DEVELOPMENT
+    local has_dev=false
+    [[ "${CODE_SERVER_ENABLED:-false}" == "true" || "${SIGNALBOT_ENABLED:-false}" == "true" ]] && has_dev=true
+    if [[ "$has_dev" == "true" ]]; then
+        _d_line "DEVELOPMENT / COMMS"
+        [[ "${CODE_SERVER_ENABLED:-false}" == "true" ]] && _d_line "  Code Server  $(_svc_url code ${CODE_SERVER_PORT})  pass: ${CODE_SERVER_PASSWORD:-<see platform.conf>}"
+        [[ "${SIGNALBOT_ENABLED:-false}"   == "true" ]] && _d_line "  Signalbot    http://127.0.0.1:${SIGNALBOT_PORT}/v1  (pair phone: see README)"
         _d_blank
     fi
+
+    # CREDENTIALS SUMMARY
+    _d_sep
+    _d_line "CREDENTIALS"
+    [[ -n "${LITELLM_MASTER_KEY:-}"           ]] && _d_line "  LiteLLM key          ${LITELLM_MASTER_KEY}"
+    [[ -n "${POSTGRES_PASSWORD:-}"            ]] && _d_line "  Postgres             ${POSTGRES_USER:-ds-admin} / ${POSTGRES_PASSWORD}"
+    [[ -n "${AUTHENTIK_BOOTSTRAP_PASSWORD:-}" ]] && _d_line "  Authentik akadmin    ${AUTHENTIK_BOOTSTRAP_PASSWORD}"
+    [[ -n "${GRAFANA_ADMIN_PASSWORD:-}"       ]] && _d_line "  Grafana admin        ${GRAFANA_ADMIN_PASSWORD}"
+    [[ -n "${CODE_SERVER_PASSWORD:-}"         ]] && _d_line "  Code Server          ${CODE_SERVER_PASSWORD}"
+    [[ -n "${ZEP_AUTH_SECRET:-}"              ]] && _d_line "  Zep token            ${ZEP_AUTH_SECRET}"
+    [[ -n "${LETTA_SERVER_PASS:-}"            ]] && _d_line "  Letta password       ${LETTA_SERVER_PASS}"
+    [[ -n "${ANYTHINGLLM_JWT_SECRET:-}"       ]] && _d_line "  AnythingLLM JWT      ${ANYTHINGLLM_JWT_SECRET}"
+    _d_blank
 
     _d_sep
     _d_line "PIPELINE:  Gdrive → rclone → ${DATA_DIR}/ingestion → Qdrant/Zep/Letta → LiteLLM → Web UIs"
     _d_sep
-    _d_line "All services healthy. Configure services: bash scripts/3-configure-services.sh ${TENANT_ID}"
+    _d_line "  Next step:  bash scripts/3-configure-services.sh ${TENANT_ID}"
     _d_bot
+    echo ""
 }
 
 # =============================================================================
