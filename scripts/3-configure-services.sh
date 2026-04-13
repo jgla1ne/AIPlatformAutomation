@@ -913,148 +913,67 @@ rotate_keys() {
 show_health_status() {
     echo ""
     echo "╔══════════════════════════════════════════════════════════╗"
-    echo "║              SERVICE HEALTH STATUS                    ║"
+    echo "║              SERVICE HEALTH STATUS                      ║"
     echo "╚══════════════════════════════════════════════════════════╝"
     echo ""
-    
-    printf "%-15s %-12s %-20s %-15s\n" "SERVICE" "STATUS" "CONTAINER" "PORT"
-    echo "────────────────────────────────────────────────────────"
-    
-    # Check each enabled service
-    if [[ "${POSTGRES_ENABLED}" == "true" ]]; then
-        local status="DOWN"
-        local container_name="${TENANT_PREFIX}-postgres"
-        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
-            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
-        fi
-        printf "%-15s %-12s %-20s %-15s\n" "PostgreSQL" "$status" "$container_name" "${POSTGRES_PORT}"
-    fi
-    
-    if [[ "${REDIS_ENABLED}" == "true" ]]; then
-        local status="DOWN"
-        local container_name="${TENANT_PREFIX}-redis"
-        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
-            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
-        fi
-        printf "%-15s %-12s %-20s %-15s\n" "Redis" "$status" "$container_name" "${REDIS_PORT}"
-    fi
-    
-    if [[ "${OLLAMA_ENABLED}" == "true" ]]; then
-        local status="DOWN"
-        local container_name="${TENANT_PREFIX}-ollama"
-        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
-            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
-        fi
-        printf "%-15s %-12s %-20s %-15s\n" "Ollama" "$status" "$container_name" "${OLLAMA_PORT}"
-    fi
-    
-    if [[ "${LITELLM_ENABLED}" == "true" ]]; then
-        local status="DOWN"
-        local container_name="${TENANT_PREFIX}-litellm"
-        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
-            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
-        fi
-        printf "%-15s %-12s %-20s %-15s\n" "LiteLLM" "$status" "$container_name" "${LITELLM_PORT}"
-    fi
-    
-    if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
-        local status="DOWN"
-        local container_name="${TENANT_PREFIX}-openwebui"
-        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
-            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
-        fi
-        printf "%-15s %-12s %-20s %-15s\n" "OpenWebUI" "$status" "$container_name" "${OPENWEBUI_PORT}"
-    fi
-    
-    if [[ "${QDRANT_ENABLED}" == "true" ]]; then
-        local status="DOWN"
-        local container_name="${TENANT_PREFIX}-qdrant"
-        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
-            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
-        fi
-        printf "%-15s %-12s %-20s %-15s\n" "Qdrant" "$status" "$container_name" "${QDRANT_PORT}"
-    fi
+    printf "%-18s %-12s %-30s %-10s\n" "SERVICE" "STATUS" "CONTAINER" "PORT"
+    echo "────────────────────────────────────────────────────────────────────────"
 
-    if [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]]; then
-        local status="DOWN"
-        local container_name="${TENANT_PREFIX}-librechat"
-        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
-            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
+    # Helper: print one service row (label, container suffix, port)
+    _svc_row() {
+        local label="$1" suffix="$2" port="$3"
+        local cname="${TENANT_PREFIX}-${suffix}"
+        local st="DOWN"
+        if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^${cname}$"; then
+            st=$(docker inspect --format='{{.State.Health.Status}}' "$cname" 2>/dev/null || echo "running")
         fi
-        printf "%-15s %-12s %-20s %-15s\n" "LibreChat" "$status" "$container_name" "${LIBRECHAT_PORT:-3080}"
-    fi
+        printf "%-18s %-12s %-30s %-10s\n" "$label" "$st" "$cname" "$port"
+    }
 
-    if [[ "${OPENCLAW_ENABLED}" == "true" ]]; then
-        local status="DOWN"
-        local container_name="${TENANT_PREFIX}-openclaw"
-        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
-            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
-        fi
-        printf "%-15s %-12s %-20s %-15s\n" "OpenClaw" "$status" "$container_name" "${OPENCLAW_PORT}"
-    fi
+    # Infrastructure
+    [[ "${POSTGRES_ENABLED:-false}"   == "true" ]] && _svc_row "PostgreSQL"   "postgres"    "${POSTGRES_PORT:-5432}"
+    [[ "${REDIS_ENABLED:-false}"      == "true" ]] && _svc_row "Redis"        "redis"       "${REDIS_PORT:-6379}"
+    [[ "${MONGODB_ENABLED:-${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}}" == "true" ]] && _svc_row "MongoDB" "mongodb" "27017"
 
-    if [[ "${N8N_ENABLED}" == "true" ]]; then
-        local status="DOWN"
-        local container_name="${TENANT_PREFIX}-n8n"
-        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
-            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
-        fi
-        printf "%-15s %-12s %-20s %-15s\n" "N8N" "$status" "$container_name" "${N8N_PORT}"
-    fi
+    # LLM
+    [[ "${OLLAMA_ENABLED:-false}"     == "true" ]] && _svc_row "Ollama"       "ollama"      "${OLLAMA_PORT:-11434}"
+    [[ "${LITELLM_ENABLED:-false}"    == "true" ]] && _svc_row "LiteLLM"      "litellm"     "${LITELLM_PORT:-4000}"
+    [[ "${BIFROST_ENABLED:-false}"    == "true" ]] && _svc_row "Bifrost"      "bifrost"     "${BIFROST_PORT:-8090}"
 
-    if [[ "${FLOWISE_ENABLED}" == "true" ]]; then
-        local status="DOWN"
-        local container_name="${TENANT_PREFIX}-flowise"
-        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
-            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
-        fi
-        printf "%-15s %-12s %-20s %-15s\n" "Flowise" "$status" "$container_name" "${FLOWISE_PORT}"
-    fi
+    # Web UIs
+    [[ "${OPENWEBUI_ENABLED:-false}"  == "true" ]] && _svc_row "OpenWebUI"    "openwebui"   "${OPENWEBUI_PORT:-3000}"
+    [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]] && _svc_row "LibreChat" "librechat" "${LIBRECHAT_PORT:-3080}"
+    [[ "${OPENCLAW_ENABLED:-false}"   == "true" ]] && _svc_row "OpenClaw"     "openclaw"    "${OPENCLAW_PORT:-18789}"
+    [[ "${ANYTHINGLLM_ENABLED:-false}" == "true" ]] && _svc_row "AnythingLLM" "anythingllm" "${ANYTHINGLLM_PORT:-3001}"
 
-    if [[ "${DIFY_ENABLED}" == "true" ]]; then
-        local status="DOWN"
-        local container_name="${TENANT_PREFIX}-dify"
-        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
-            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
-        fi
-        printf "%-15s %-12s %-20s %-15s\n" "Dify" "$status" "$container_name" "${DIFY_PORT:-3002}"
-    fi
+    # Vector DBs
+    [[ "${QDRANT_ENABLED:-false}"     == "true" ]] && _svc_row "Qdrant"       "qdrant"      "${QDRANT_PORT:-6333}"
+    [[ "${WEAVIATE_ENABLED:-false}"   == "true" ]] && _svc_row "Weaviate"     "weaviate"    "${WEAVIATE_PORT:-8080}"
+    [[ "${CHROMA_ENABLED:-false}"     == "true" ]] && _svc_row "ChromaDB"     "chroma"      "${CHROMA_PORT:-8000}"
+    [[ "${MILVUS_ENABLED:-false}"     == "true" ]] && _svc_row "Milvus"       "milvus"      "${MILVUS_PORT:-19530}"
 
-    if [[ "${AUTHENTIK_ENABLED}" == "true" ]]; then
-        local status="DOWN"
-        local container_name="${TENANT_PREFIX}-authentik"
-        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
-            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
-        fi
-        printf "%-15s %-12s %-20s %-15s\n" "Authentik" "$status" "$container_name" "${AUTHENTIK_PORT:-9000}"
-    fi
+    # Automation
+    [[ "${N8N_ENABLED:-false}"        == "true" ]] && _svc_row "N8N"          "n8n"         "${N8N_PORT:-5678}"
+    [[ "${FLOWISE_ENABLED:-false}"    == "true" ]] && _svc_row "Flowise"      "flowise"     "${FLOWISE_PORT:-3001}"
+    [[ "${DIFY_ENABLED:-false}"       == "true" ]] && _svc_row "Dify"         "dify"        "${DIFY_PORT:-3002}"
 
-    if [[ "${SIGNALBOT_ENABLED}" == "true" ]]; then
-        local status="DOWN"
-        local container_name="${TENANT_PREFIX}-signalbot"
-        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
-            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
-        fi
-        printf "%-15s %-12s %-20s %-15s\n" "Signalbot" "$status" "$container_name" "${SIGNALBOT_PORT:-8080}"
-    fi
+    # Memory
+    [[ "${ZEP_ENABLED:-false}"        == "true" ]] && _svc_row "Zep CE"       "zep"         "${ZEP_PORT:-8100}"
+    [[ "${LETTA_ENABLED:-false}"      == "true" ]] && _svc_row "Letta"        "letta"       "${LETTA_PORT:-8283}"
+    [[ "${MEM0_ENABLED:-false}"       == "true" ]] && _svc_row "Mem0"         "mem0"        "${MEM0_PORT:-8081}"
 
-    if [[ "${ZEP_ENABLED:-false}" == "true" ]]; then
-        local status="DOWN"
-        local container_name="${TENANT_PREFIX}-zep"
-        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
-            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
-        fi
-        printf "%-15s %-12s %-20s %-15s\n" "Zep" "$status" "$container_name" "${ZEP_PORT:-8100}"
-    fi
+    # Identity + monitoring
+    [[ "${AUTHENTIK_ENABLED:-false}"  == "true" ]] && _svc_row "Authentik"    "authentik"   "${AUTHENTIK_PORT:-9000}"
+    [[ "${GRAFANA_ENABLED:-false}"    == "true" ]] && _svc_row "Grafana"      "grafana"     "${GRAFANA_PORT:-3002}"
+    [[ "${PROMETHEUS_ENABLED:-false}" == "true" ]] && _svc_row "Prometheus"   "prometheus"  "${PROMETHEUS_PORT:-9090}"
 
-    if [[ "${LETTA_ENABLED:-false}" == "true" ]]; then
-        local status="DOWN"
-        local container_name="${TENANT_PREFIX}-letta"
-        if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
-            status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "UNKNOWN")
-        fi
-        printf "%-15s %-12s %-20s %-15s\n" "Letta" "$status" "$container_name" "${LETTA_PORT:-8283}"
-    fi
+    # Dev + alerting
+    [[ "${CODE_SERVER_ENABLED:-false}" == "true" ]] && _svc_row "Code Server" "code-server" "${CODE_SERVER_PORT:-8080}"
+    [[ "${SIGNALBOT_ENABLED:-false}"  == "true" ]] && _svc_row "Signalbot"    "signalbot"   "${SIGNALBOT_PORT:-8080}"
+
+    # Reverse proxy
+    [[ "${CADDY_ENABLED:-false}"      == "true" ]] && _svc_row "Caddy"        "caddy"       "80/443"
+    [[ "${NPM_ENABLED:-false}"        == "true" ]] && _svc_row "NPM"          "npm"         "${NPM_ADMIN_PORT:-81}(admin)"
 
     echo ""
 }
@@ -1360,16 +1279,30 @@ check_port_health() {
     [[ "${OPENWEBUI_ENABLED:-false}"  == "true" ]] && _port_check "Open WebUI" "${OPENWEBUI_PORT:-3000}" "/"
     [[ "${LIBRECHAT_ENABLED:-false}"  == "true" ]] && _port_check "LibreChat"  "${LIBRECHAT_PORT:-3080}" "/health"
     [[ "${OPENCLAW_ENABLED:-false}"   == "true" ]] && _port_check "OpenClaw"   "${OPENCLAW_PORT:-3081}"  "/health"
-    [[ "${QDRANT_ENABLED:-false}"     == "true" ]] && _port_check "Qdrant"     "${QDRANT_PORT:-6333}"    "/healthz"
-    [[ "${N8N_ENABLED:-false}"        == "true" ]] && _port_check "N8N"        "${N8N_PORT:-5678}"       "/healthz"
-    [[ "${FLOWISE_ENABLED:-false}"    == "true" ]] && _port_check "Flowise"    "${FLOWISE_PORT:-3000}"   "/api/v1/ping"
-    [[ "${DIFY_ENABLED:-false}"       == "true" ]] && _port_check "Dify"       "${DIFY_PORT:-3002}"      "/apps"
-    [[ "${GRAFANA_ENABLED:-false}"    == "true" ]] && _port_check "Grafana"    "${GRAFANA_PORT:-3003}"   "/api/health"
-    [[ "${PROMETHEUS_ENABLED:-false}" == "true" ]] && _port_check "Prometheus" "${PROMETHEUS_PORT:-9090}" "/-/healthy"
-    [[ "${AUTHENTIK_ENABLED:-false}"  == "true" ]] && _port_check "Authentik"  "${AUTHENTIK_PORT:-9000}" "/-/health/live/"
-    [[ "${SIGNALBOT_ENABLED:-false}"  == "true" ]] && _port_check "Signalbot"  "${SIGNALBOT_PORT:-8080}" "/v1/about"
-    [[ "${ZEP_ENABLED:-false}"        == "true" ]] && _port_check "Zep"        "${ZEP_PORT:-8100}"       "/healthz"
-    [[ "${LETTA_ENABLED:-false}"      == "true" ]] && _port_check "Letta"      "${LETTA_PORT:-8283}"     "/v1/health"
+    # Vector databases
+    [[ "${QDRANT_ENABLED:-false}"     == "true" ]] && _port_check "Qdrant"      "${QDRANT_PORT:-6333}"     "/healthz"
+    [[ "${WEAVIATE_ENABLED:-false}"   == "true" ]] && _port_check "Weaviate"    "${WEAVIATE_PORT:-8080}"   "/v1/.well-known/ready"
+    [[ "${CHROMA_ENABLED:-false}"     == "true" ]] && _port_check "ChromaDB"    "${CHROMA_PORT:-8000}"     "/api/v1/heartbeat"
+    [[ "${MILVUS_ENABLED:-false}"     == "true" ]] && _port_check "Milvus"      "${MILVUS_PORT:-19530}"    "/healthz"
+    # Automation
+    [[ "${N8N_ENABLED:-false}"        == "true" ]] && _port_check "N8N"         "${N8N_PORT:-5678}"        "/healthz"
+    [[ "${FLOWISE_ENABLED:-false}"    == "true" ]] && _port_check "Flowise"     "${FLOWISE_PORT:-3000}"    "/api/v1/ping"
+    [[ "${DIFY_ENABLED:-false}"       == "true" ]] && _port_check "Dify"        "${DIFY_PORT:-3002}"       "/apps"
+    # Web UIs (additional)
+    [[ "${ANYTHINGLLM_ENABLED:-false}" == "true" ]] && _port_check "AnythingLLM" "${ANYTHINGLLM_PORT:-3001}" "/"
+    # Identity + monitoring
+    [[ "${GRAFANA_ENABLED:-false}"    == "true" ]] && _port_check "Grafana"     "${GRAFANA_PORT:-3003}"    "/api/health"
+    [[ "${PROMETHEUS_ENABLED:-false}" == "true" ]] && _port_check "Prometheus"  "${PROMETHEUS_PORT:-9090}" "/-/healthy"
+    [[ "${AUTHENTIK_ENABLED:-false}"  == "true" ]] && _port_check "Authentik"   "${AUTHENTIK_PORT:-9000}"  "/-/health/live/"
+    [[ "${SIGNALBOT_ENABLED:-false}"  == "true" ]] && _port_check "Signalbot"   "${SIGNALBOT_PORT:-8080}"  "/v1/about"
+    [[ "${CODE_SERVER_ENABLED:-false}" == "true" ]] && _port_check "Code Server" "${CODE_SERVER_PORT:-8080}" "/healthz"
+    [[ "${BIFROST_ENABLED:-false}"    == "true" ]] && _port_check "Bifrost"     "${BIFROST_PORT:-8090}"    "/health"
+    # Memory layer
+    [[ "${ZEP_ENABLED:-false}"        == "true" ]] && _port_check "Zep"         "${ZEP_PORT:-8100}"        "/healthz"
+    [[ "${LETTA_ENABLED:-false}"      == "true" ]] && _port_check "Letta"       "${LETTA_PORT:-8283}"      "/v1/health"
+    [[ "${MEM0_ENABLED:-false}"       == "true" ]] && _port_check "Mem0"        "${MEM0_PORT:-8081}"       "/health"
+    # Reverse proxy admin
+    [[ "${NPM_ENABLED:-false}"        == "true" ]] && _port_check "NPM Admin"   "${NPM_ADMIN_PORT:-81}"    "/api/"
 
     $all_ok && ok "All port checks passed" || warn "Some services are not responding on their ports"
     $all_ok
@@ -1615,16 +1548,48 @@ run_mission_control() {
     fi
     echo ""
 
+    # Determine base URL — use domain when a reverse proxy is active
+    local base_proto="http"
+    local display_host
+    display_host=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
+    if [[ "${CADDY_ENABLED:-false}" == "true" || "${NPM_ENABLED:-false}" == "true" ]] && [[ -n "${BASE_DOMAIN:-${DOMAIN:-}}" ]]; then
+        base_proto="https"
+        display_host="${BASE_DOMAIN:-${DOMAIN}}"
+    fi
+    local base="${base_proto}://${display_host}"
+
     echo "  Access URLs:"
-    local host_ip
-    host_ip=$(hostname -I | awk '{print $1}')
-    [[ "${OPENWEBUI_ENABLED:-false}"  == "true" ]] && echo "    Open WebUI  → http://${host_ip}:${OPENWEBUI_PORT:-3000}"
-    [[ "${LITELLM_ENABLED:-false}"    == "true" ]] && echo "    LiteLLM     → http://${host_ip}:${LITELLM_PORT:-4000}"
-    [[ "${N8N_ENABLED:-false}"        == "true" ]] && echo "    N8N         → http://${host_ip}:${N8N_PORT:-5678}"
-    [[ "${FLOWISE_ENABLED:-false}"    == "true" ]] && echo "    Flowise     → http://${host_ip}:${FLOWISE_PORT:-3000}"
-    [[ "${GRAFANA_ENABLED:-false}"    == "true" ]] && echo "    Grafana     → http://${host_ip}:${GRAFANA_PORT:-3001}"
-    [[ "${AUTHENTIK_ENABLED:-false}"  == "true" ]] && echo "    Authentik   → http://${host_ip}:${AUTHENTIK_PORT:-9000}"
-    [[ "${CADDY_ENABLED:-false}"      == "true" ]] && echo "    Caddy (TLS) → https://${BASE_DOMAIN:-${DOMAIN:-localhost}}"
+    echo ""
+
+    # Web UIs — public-facing
+    [[ "${OPENWEBUI_ENABLED:-false}"   == "true" ]] && echo "    OpenWebUI    → ${base}:${OPENWEBUI_PORT:-3000}"
+    [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]] && echo "    LibreChat    → ${base}:${LIBRECHAT_PORT:-3080}"
+    [[ "${OPENCLAW_ENABLED:-false}"    == "true" ]] && echo "    OpenClaw     → ${base}:${OPENCLAW_PORT:-18789}"
+    [[ "${ANYTHINGLLM_ENABLED:-false}" == "true" ]] && echo "    AnythingLLM  → ${base}:${ANYTHINGLLM_PORT:-3001}"
+
+    # LLM gateway
+    [[ "${LITELLM_ENABLED:-false}"     == "true" ]] && echo "    LiteLLM      → http://127.0.0.1:${LITELLM_PORT:-4000}  (internal)"
+
+    # Automation
+    [[ "${N8N_ENABLED:-false}"         == "true" ]] && echo "    N8N          → ${base}:${N8N_PORT:-5678}"
+    [[ "${FLOWISE_ENABLED:-false}"     == "true" ]] && echo "    Flowise      → ${base}:${FLOWISE_PORT:-3001}"
+    [[ "${DIFY_ENABLED:-false}"        == "true" ]] && echo "    Dify         → ${base}:${DIFY_PORT:-3002}"
+
+    # Memory
+    [[ "${ZEP_ENABLED:-false}"         == "true" ]] && echo "    Zep CE       → http://127.0.0.1:${ZEP_PORT:-8100}  (API)"
+    [[ "${LETTA_ENABLED:-false}"       == "true" ]] && echo "    Letta        → http://127.0.0.1:${LETTA_PORT:-8283}  (API)"
+    [[ "${MEM0_ENABLED:-false}"        == "true" ]] && echo "    Mem0         → http://127.0.0.1:${MEM0_PORT:-8081}  (API)"
+
+    # Identity + monitoring
+    [[ "${AUTHENTIK_ENABLED:-false}"   == "true" ]] && echo "    Authentik    → ${base}:${AUTHENTIK_PORT:-9000}"
+    [[ "${GRAFANA_ENABLED:-false}"     == "true" ]] && echo "    Grafana      → http://127.0.0.1:${GRAFANA_PORT:-3002}"
+    [[ "${PROMETHEUS_ENABLED:-false}"  == "true" ]] && echo "    Prometheus   → http://127.0.0.1:${PROMETHEUS_PORT:-9090}"
+    [[ "${CODE_SERVER_ENABLED:-false}" == "true" ]] && echo "    Code Server  → http://127.0.0.1:${CODE_SERVER_PORT:-8080}"
+    [[ "${SIGNALBOT_ENABLED:-false}"   == "true" ]] && echo "    Signalbot    → http://127.0.0.1:${SIGNALBOT_PORT:-8080}  (API)"
+
+    # Reverse proxy admin
+    [[ "${CADDY_ENABLED:-false}"       == "true" ]] && echo "    Caddy        → https://${BASE_DOMAIN:-${DOMAIN:-localhost}}  (TLS: ${TLS_MODE:-none})"
+    [[ "${NPM_ENABLED:-false}"         == "true" ]] && echo "    NPM Admin    → http://127.0.0.1:${NPM_ADMIN_PORT:-81}  (admin@example.com / changeme)"
     echo ""
 }
 

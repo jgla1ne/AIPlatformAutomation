@@ -77,17 +77,13 @@ framework_validate() {
         fail "Docker compose plugin not available"
     fi
     
-    # Docker data-root check — must be on EBS (DATA_DIR), not on root volume.
-    # If Docker pulls to /var/lib/docker (root volume), large image sets exhaust
-    # the root disk. Script 1's configure_docker_dataroot() sets this during setup.
+    # Docker data-root must be on EBS (DATA_DIR) — Script 1's configure_docker_dataroot() sets this.
+    # Proceeding with the wrong data-root will exhaust the root volume mid-pull.
     local docker_root
     docker_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "/var/lib/docker")
     local expected_docker_root="${DATA_DIR}/docker"
     if [[ "$docker_root" != "$expected_docker_root" ]]; then
-        warn "Docker data-root is ${docker_root} (not on EBS volume: ${expected_docker_root})"
-        warn "Image pulls will use the root volume — risk of 'no space left on device'."
-        warn "Fix: sudo bash -c 'echo \"{\\\"data-root\\\":\\\"${expected_docker_root}\\\"}\" > /etc/docker/daemon.json && systemctl restart docker'"
-        warn "Then re-run Script 2. Continuing anyway — you were warned."
+        fail "Docker data-root is '${docker_root}' — expected '${expected_docker_root}' (EBS volume). Re-run Script 1 to fix this before deploying."
     fi
 
     # Disk space check
@@ -269,7 +265,12 @@ update_conf_value() {
 persist_generated_secrets() {
     # Write secrets that Script 2 generates at runtime back to platform.conf.
     # Script 3 sources platform.conf; without this, show_credentials crashes (set -u).
+    # IMPORTANT: use :-$(gen) pattern so secrets are never regenerated on re-deploy.
     if [[ "${AUTHENTIK_ENABLED}" == "true" ]]; then
+        # AUTHENTIK_SECRET_KEY must be stable across redeploys — regenerating it
+        # invalidates all active sessions and tokens.
+        AUTHENTIK_SECRET_KEY="${AUTHENTIK_SECRET_KEY:-$(openssl rand -hex 50)}"
+        update_conf_value "AUTHENTIK_SECRET_KEY" "${AUTHENTIK_SECRET_KEY}"
         update_conf_value "AUTHENTIK_BOOTSTRAP_PASSWORD" "${AUTHENTIK_BOOTSTRAP_PASSWORD}"
         update_conf_value "AUTHENTIK_BOOTSTRAP_EMAIL" "${AUTHENTIK_BOOTSTRAP_EMAIL:-${ADMIN_EMAIL:-}}"
     fi
@@ -280,6 +281,11 @@ persist_generated_secrets() {
     if [[ "${LETTA_ENABLED:-false}" == "true" ]]; then
         LETTA_SERVER_PASS="${LETTA_SERVER_PASS:-$(openssl rand -hex 24)}"
         update_conf_value "LETTA_SERVER_PASS" "${LETTA_SERVER_PASS}"
+    fi
+    # ANYTHINGLLM_JWT_SECRET must also be stable — regenerating it logs out all users.
+    if [[ "${ANYTHINGLLM_ENABLED}" == "true" ]]; then
+        ANYTHINGLLM_JWT_SECRET="${ANYTHINGLLM_JWT_SECRET:-$(openssl rand -hex 32)}"
+        update_conf_value "ANYTHINGLLM_JWT_SECRET" "${ANYTHINGLLM_JWT_SECRET}"
     fi
     log "Generated secrets persisted to platform.conf"
 }
@@ -413,6 +419,11 @@ generate_compose() {
         allocate_host_port caddy-http "${CADDY_HTTP_PORT:-80}" >/dev/null
         allocate_host_port caddy-https "${CADDY_HTTPS_PORT:-443}" >/dev/null
     fi
+    if [[ "${NPM_ENABLED:-false}" == "true" ]]; then
+        allocate_host_port npm-http  "${NPM_HTTP_PORT:-80}"  >/dev/null
+        allocate_host_port npm-https "${NPM_HTTPS_PORT:-443}" >/dev/null
+        allocate_host_port npm-admin "${NPM_ADMIN_PORT:-81}"  >/dev/null
+    fi
 
     # Load resolved ports and override locals correctly
     if [[ -f "${PORT_ALLOCATIONS_FILE}" ]]; then
@@ -444,6 +455,9 @@ generate_compose() {
         [[ -n "${LETTA_HOST_PORT:-}" ]] && LETTA_PORT="${LETTA_HOST_PORT}"
         [[ -n "${CADDY_HTTP_HOST_PORT:-}" ]] && CADDY_HTTP_PORT="${CADDY_HTTP_HOST_PORT}"
         [[ -n "${CADDY_HTTPS_HOST_PORT:-}" ]] && CADDY_HTTPS_PORT="${CADDY_HTTPS_HOST_PORT}"
+        [[ -n "${NPM_HTTP_HOST_PORT:-}" ]]  && NPM_HTTP_PORT="${NPM_HTTP_HOST_PORT}"
+        [[ -n "${NPM_HTTPS_HOST_PORT:-}" ]] && NPM_HTTPS_PORT="${NPM_HTTPS_HOST_PORT}"
+        [[ -n "${NPM_ADMIN_HOST_PORT:-}" ]] && NPM_ADMIN_PORT="${NPM_ADMIN_HOST_PORT}"
     fi
 
     # VOLUME MOUNT NOTE (for reviewers):
@@ -581,6 +595,7 @@ EOF
     container_name: ${TENANT_PREFIX}-litellm
     restart: unless-stopped
     # litellm needs to write to Python pkg dirs for Prisma baseline migrations — run as root
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
     environment:
       DATABASE_URL: ${LITELLM_DB_URL}
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
@@ -588,6 +603,7 @@ EOF
       # Redirect Prisma migration and cache dirs so they survive across restarts
       LITELLM_MIGRATION_DIR: /tmp/litellm-migrations
       PRISMA_BINARY_CACHE_DIR: /tmp/prisma-cache
+      HOME: /tmp
     volumes:
       - ${CONFIG_DIR}/litellm/config.yaml:/app/config.yaml
     ports:
@@ -625,6 +641,24 @@ EOF
       ENABLE_RAG_WEB_SEARCH: "false"
       RAG_EMBEDDING_ENGINE: ollama
       RAG_OLLAMA_BASE_URL: http://${TENANT_PREFIX}-ollama:11434
+EOF
+        # Zep memory integration — inject only when Zep is deployed
+        if [[ "${ZEP_ENABLED:-false}" == "true" ]]; then
+            cat >> "${COMPOSE_FILE}" << EOF
+      # Zep memory integration
+      ZEP_API_URL: http://${TENANT_PREFIX}-zep:8000
+      ZEP_API_KEY: ${ZEP_AUTH_SECRET}
+EOF
+        fi
+        # Letta integration — inject only when Letta is deployed
+        if [[ "${LETTA_ENABLED:-false}" == "true" ]]; then
+            cat >> "${COMPOSE_FILE}" << EOF
+      # Letta agent memory integration
+      LETTA_API_URL: http://${TENANT_PREFIX}-letta:8283
+      LETTA_API_KEY: ${LETTA_SERVER_PASS}
+EOF
+        fi
+        cat >> "${COMPOSE_FILE}" << EOF
     volumes:
       - ${DATA_DIR}/openwebui:/app/backend/data
     ports:
@@ -817,6 +851,9 @@ EOF
       REDIS_HOST: ${TENANT_PREFIX}-redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
+      # LiteLLM integration — N8N AI nodes use LiteLLM as their OpenAI-compatible endpoint
+      OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      OPENAI_API_BASE_URL: http://${TENANT_PREFIX}-litellm:4000/v1
     volumes:
       - ${DATA_DIR}/n8n:/home/node/.n8n
     ports:
@@ -1033,6 +1070,36 @@ EOF
 EOF
     fi
 
+    # Nginx Proxy Manager — web UI for managing proxy routes (mutually exclusive with Caddy)
+    # Routes are configured via the NPM web UI at port ${NPM_ADMIN_PORT} — no Nginx config generated.
+    # Default login: admin@example.com / changeme (change immediately after first login).
+    if [[ "${NPM_ENABLED:-false}" == "true" ]]; then
+        mkdir -p "${DATA_DIR}/npm/data" "${DATA_DIR}/npm/letsencrypt"
+        cat >> "${COMPOSE_FILE}" << EOF
+  ${TENANT_PREFIX}-npm:
+    image: jc21/nginx-proxy-manager:latest
+    container_name: ${TENANT_PREFIX}-npm
+    restart: unless-stopped
+    # NPM must run as root (writes to /data and /etc/letsencrypt internally)
+    ports:
+      - "${NPM_HTTP_PORT:-80}:80"
+      - "${NPM_HTTPS_PORT:-443}:443"
+      - "127.0.0.1:${NPM_ADMIN_PORT:-81}:81"
+    volumes:
+      - ${DATA_DIR}/npm/data:/data
+      - ${DATA_DIR}/npm/letsencrypt:/etc/letsencrypt
+    networks:
+      - ${DOCKER_NETWORK}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:81/api/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+EOF
+    fi
+
     # Rclone ingestion (only if ENABLE_INGESTION=true and INGESTION_METHOD=rclone)
     if [[ "${ENABLE_INGESTION:-false}" == "true" && "${INGESTION_METHOD:-rclone}" == "rclone" ]]; then
         # Build rclone config inside the data dir so all paths stay under /mnt/$TENANT
@@ -1124,6 +1191,80 @@ EOF
       interval: 30s
       timeout: 10s
       retries: 5
+
+EOF
+    fi
+
+    # Milvus standalone — vector database (bundles etcd + MinIO internally via standalone mode)
+    # Requires two sidecar containers: etcd and minio.
+    if [[ "${MILVUS_ENABLED:-${ENABLE_MILVUS:-false}}" == "true" ]]; then
+        mkdir -p "${DATA_DIR}/milvus" "${DATA_DIR}/milvus-etcd" "${DATA_DIR}/milvus-minio"
+        cat >> "${COMPOSE_FILE}" << EOF
+  ${TENANT_PREFIX}-milvus-etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    container_name: ${TENANT_PREFIX}-milvus-etcd
+    restart: unless-stopped
+    user: "${PUID}:${PGID}"
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+    command: etcd --advertise-client-urls=http://127.0.0.1:2379 --listen-client-urls=http://0.0.0.0:2379 --data-dir=/etcd
+    volumes:
+      - ${DATA_DIR}/milvus-etcd:/etcd
+    networks:
+      - ${DOCKER_NETWORK}
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  ${TENANT_PREFIX}-milvus-minio:
+    image: minio/minio:latest
+    container_name: ${TENANT_PREFIX}-milvus-minio
+    restart: unless-stopped
+    user: "${PUID}:${PGID}"
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    command: minio server /minio_data --console-address ":9001"
+    volumes:
+      - ${DATA_DIR}/milvus-minio:/minio_data
+    networks:
+      - ${DOCKER_NETWORK}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  ${TENANT_PREFIX}-milvus:
+    image: milvusdb/milvus:v2.4.0
+    container_name: ${TENANT_PREFIX}-milvus
+    restart: unless-stopped
+    command: milvus run standalone
+    environment:
+      ETCD_ENDPOINTS: ${TENANT_PREFIX}-milvus-etcd:2379
+      MINIO_ADDRESS: ${TENANT_PREFIX}-milvus-minio:9000
+    volumes:
+      - ${DATA_DIR}/milvus:/var/lib/milvus
+    ports:
+      - "127.0.0.1:${MILVUS_PORT:-19530}:19530"
+    depends_on:
+      - ${TENANT_PREFIX}-milvus-etcd
+      - ${TENANT_PREFIX}-milvus-minio
+    networks:
+      - ${DOCKER_NETWORK}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
 EOF
     fi
@@ -1278,7 +1419,7 @@ EOF
     # Letta writes agent state to /root/.letta — run as root (image default):
     environment:
       LETTA_SERVER_PASS: ${LETTA_SERVER_PASS}
-      LETTA_PG_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${POSTGRES_DB}
+      LETTA_PG_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${POSTGRES_DB}_letta
       OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
       OPENAI_API_BASE: http://${TENANT_PREFIX}-litellm:4000/v1
     volumes:
@@ -1290,8 +1431,8 @@ $(build_letta_deps)
       test: ["CMD", "curl", "-f", "http://localhost:8283/v1/health"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 60s
+      retries: 5
+      start_period: 120s
 
 EOF
     fi
@@ -1560,7 +1701,7 @@ generate_caddyfile() {
     
     cat > "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 {
-    admin localhost:2019
+    admin :2019
     email ${PROXY_EMAIL}
     log {
         output file ${LOG_DIR}/caddy.log
@@ -1568,9 +1709,9 @@ generate_caddyfile() {
     }
 }
 
-# Base domain redirect
+# Base domain
 ${BASE_DOMAIN} {
-    respond "AI Platform - ${BASE_DOMAIN}"
+    respond "AI Platform — ${BASE_DOMAIN}"
 }
 EOF
     
@@ -1652,7 +1793,67 @@ authentik.${BASE_DOMAIN} {
 }
 EOF
     fi
-    
+
+    # AnythingLLM
+    if [[ "${ANYTHINGLLM_ENABLED:-${ENABLE_ANYTHINGLLM:-false}}" == "true" ]]; then
+        cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
+
+anythingllm.${BASE_DOMAIN} {
+    reverse_proxy ${TENANT_PREFIX}-anythingllm:3001
+}
+EOF
+    fi
+
+    # Grafana
+    if [[ "${GRAFANA_ENABLED:-${ENABLE_GRAFANA:-false}}" == "true" ]]; then
+        cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
+
+grafana.${BASE_DOMAIN} {
+    reverse_proxy ${TENANT_PREFIX}-grafana:3000
+}
+EOF
+    fi
+
+    # Zep
+    if [[ "${ZEP_ENABLED:-${ENABLE_ZEP:-false}}" == "true" ]]; then
+        cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
+
+zep.${BASE_DOMAIN} {
+    reverse_proxy ${TENANT_PREFIX}-zep:8000
+}
+EOF
+    fi
+
+    # Letta
+    if [[ "${LETTA_ENABLED:-${ENABLE_LETTA:-false}}" == "true" ]]; then
+        cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
+
+letta.${BASE_DOMAIN} {
+    reverse_proxy ${TENANT_PREFIX}-letta:8283
+}
+EOF
+    fi
+
+    # Code Server
+    if [[ "${CODE_SERVER_ENABLED:-${ENABLE_CODE_SERVER:-false}}" == "true" ]]; then
+        cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
+
+code.${BASE_DOMAIN} {
+    reverse_proxy ${TENANT_PREFIX}-code-server:8080
+}
+EOF
+    fi
+
+    # Prometheus (internal monitoring — only expose if explicitly enabled)
+    if [[ "${PROMETHEUS_ENABLED:-${ENABLE_PROMETHEUS:-false}}" == "true" ]]; then
+        cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
+
+prometheus.${BASE_DOMAIN} {
+    reverse_proxy ${TENANT_PREFIX}-prometheus:9090
+}
+EOF
+    fi
+
     chown -R "$PUID:$PGID" "${CONFIG_DIR}/caddy"
     ok "Caddyfile generated"
 }
@@ -1812,6 +2013,8 @@ prepare_data_dirs() {
     # New services
     [[ "${WEAVIATE_ENABLED:-${ENABLE_WEAVIATE:-false}}" == "true" ]] && mkdir -p "${DATA_DIR}/weaviate"
     [[ "${CHROMA_ENABLED:-${ENABLE_CHROMA:-false}}"     == "true" ]] && mkdir -p "${DATA_DIR}/chroma"
+    [[ "${MILVUS_ENABLED:-${ENABLE_MILVUS:-false}}"    == "true" ]] && mkdir -p "${DATA_DIR}/milvus" "${DATA_DIR}/milvus-etcd" "${DATA_DIR}/milvus-minio"
+    [[ "${NPM_ENABLED:-false}"                         == "true" ]] && mkdir -p "${DATA_DIR}/npm/data" "${DATA_DIR}/npm/letsencrypt"
     [[ "${ANYTHINGLLM_ENABLED:-${ENABLE_ANYTHINGLLM:-false}}" == "true" ]] && mkdir -p "${DATA_DIR}/anythingllm"
     [[ "${MEM0_ENABLED:-${ENABLE_MEM0:-false}}"         == "true" ]] && mkdir -p "${DATA_DIR}/mem0"
     [[ "${ZEP_ENABLED:-false}"                          == "true" ]] && mkdir -p "${DATA_DIR}/zep"
@@ -1821,9 +2024,14 @@ prepare_data_dirs() {
     [[ "${CODE_SERVER_ENABLED:-${ENABLE_CODE_SERVER:-false}}" == "true" ]] && mkdir -p "${DATA_DIR}/code-server"
     [[ "${CONTINUE_DEV_ENABLED:-${ENABLE_CONTINUE_DEV:-false}}" == "true" ]] && mkdir -p "${DATA_DIR}/continue-dev"
 
-    # Set ownership of the entire tenant tree to PUID:PGID
-    # (chown -R is safe here: all paths are under /mnt/<tenant>)
-    chown -R "${PUID}:${PGID}" "${DATA_DIR}"
+    # Set ownership of tenant subdirectories to PUID:PGID.
+    # Deliberately skip root-owned EBS system dirs (lost+found, docker) —
+    # chown -R on the root DATA_DIR would fail with "Permission denied" on those.
+    # The top-level mount point itself is also chowned so the deploy user can write.
+    find "${DATA_DIR}" -mindepth 1 -maxdepth 1 \
+        ! -name "lost+found" ! -name "docker" \
+        -exec chown -R "${PUID}:${PGID}" {} \; 2>/dev/null || true
+    chown "${PUID}:${PGID}" "${DATA_DIR}" 2>/dev/null || true
 
     # Services that run as fixed internal UIDs need their data dirs to be
     # world-writable (we can't chown to their internal UID without root).
@@ -1834,6 +2042,8 @@ prepare_data_dirs() {
     [[ "${SIGNALBOT_ENABLED}" == "true" ]] && chmod 777 "${DATA_DIR}/signalbot"
     # Authentik migration creates /media/public (mounted as DATA_DIR/authentik) — needs world-writable
     [[ "${AUTHENTIK_ENABLED}" == "true" ]] && chmod 777 "${DATA_DIR}/authentik"
+    # AnythingLLM runs as uid 1000 (anythingllm user) — writes SQLite DB + vector index to storage/
+    [[ "${ANYTHINGLLM_ENABLED:-${ENABLE_ANYTHINGLLM:-false}}" == "true" ]] && chmod 777 "${DATA_DIR}/anythingllm"
     # LibreChat runs as 'node' (uid 1000) — writes to /app/uploads and /app/logs
     if [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]]; then
         chmod 777 "${DATA_DIR}/librechat/uploads" "${DATA_DIR}/librechat/logs"
@@ -1912,18 +2122,67 @@ wait_for_all_health() {
     # Health check timeouts per service (README §6)
     if [[ "${POSTGRES_ENABLED}" == "true" ]]; then
         wait_for_health "${TENANT_PREFIX}-postgres" 60 || return 1
+        # Create dedicated Letta database if needed (avoids 'users' table conflict with LiteLLM)
+        if [[ "${LETTA_ENABLED:-false}" == "true" ]]; then
+            log "Creating dedicated Letta database ${POSTGRES_DB}_letta..."
+            local create_db_out
+            create_db_out=$(docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d postgres \
+                -c "CREATE DATABASE ${POSTGRES_DB}_letta;" 2>&1 || true)
+            if echo "$create_db_out" | grep -qi "already exists"; then
+                log "  Database ${POSTGRES_DB}_letta already exists — skipping"
+            elif echo "$create_db_out" | grep -qi "error\|fatal"; then
+                warn "  CREATE DATABASE output: ${create_db_out}"
+            else
+                ok "  Database ${POSTGRES_DB}_letta created"
+            fi
+            # Enable pgvector extension in the Letta database.
+            # Letta's schema includes VECTOR() columns — the extension must be
+            # present in _letta's own database, not just the main one.
+            docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}_letta" \
+                -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>&1 | grep -v "^$" | grep -v "already exists" || true
+            ok "  pgvector extension enabled in ${POSTGRES_DB}_letta"
+            # Restart Letta so it gets a clean attempt now that the DB exists.
+            # Without this, Letta may be in Docker's crash-restart backoff loop
+            # (it crashed before the DB was created) and could wait 64s+ per retry.
+            log "Restarting Letta container after database creation..."
+            docker restart "${TENANT_PREFIX}-letta" 2>/dev/null || true
+        fi
     fi
-    
+
     if [[ "${MEM0_ENABLED}" == "true" ]]; then
         wait_for_health "${TENANT_PREFIX}-mem0" 120 || return 1
     fi
-    
+
     if [[ "${ZEP_ENABLED:-false}" == "true" ]]; then
         wait_for_health "${TENANT_PREFIX}-zep" 120 || return 1
+        # Ensure Zep's watermill tables exist — Zep runs CREATE TABLE IF NOT EXISTS at startup,
+        # but if Postgres was busy during the first init the tables may not be created.
+        # Creating them explicitly here prevents the subscriber error loop on restart.
+        log "Ensuring Zep watermill schema tables exist..."
+        docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "
+            CREATE TABLE IF NOT EXISTS watermill_message_token_count (
+                \"offset\" SERIAL,
+                uuid VARCHAR(36) NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                payload JSON DEFAULT NULL,
+                metadata JSON DEFAULT NULL,
+                transaction_id xid8 NOT NULL,
+                PRIMARY KEY (transaction_id, \"offset\")
+            );
+            CREATE TABLE IF NOT EXISTS watermill_offsets_message_token_count (
+                consumer_group VARCHAR(255) NOT NULL,
+                offset_acked BIGINT,
+                last_processed_transaction_id xid8 NOT NULL,
+                PRIMARY KEY(consumer_group)
+            );" 2>&1 | grep -v "^$" | grep -v "already exists" || true
+        # Restart Zep so it picks up the freshly created tables
+        docker restart "${TENANT_PREFIX}-zep" 2>/dev/null || true
+        ok "Zep watermill tables verified"
+        wait_for_health "${TENANT_PREFIX}-zep" 60 || return 1
     fi
 
     if [[ "${LETTA_ENABLED:-false}" == "true" ]]; then
-        wait_for_health "${TENANT_PREFIX}-letta" 120 || return 1
+        wait_for_health "${TENANT_PREFIX}-letta" 300 || return 1
     fi
     
     if [[ "${REDIS_ENABLED}" == "true" ]]; then
@@ -1953,6 +2212,32 @@ wait_for_all_health() {
     if [[ "${QDRANT_ENABLED}" == "true" ]]; then
         wait_for_health "${TENANT_PREFIX}-qdrant" 90 || return 1
     fi
+
+    if [[ "${WEAVIATE_ENABLED:-${ENABLE_WEAVIATE:-false}}" == "true" ]]; then
+        wait_for_health "${TENANT_PREFIX}-weaviate" 90 || return 1
+    fi
+
+    if [[ "${CHROMA_ENABLED:-${ENABLE_CHROMA:-false}}" == "true" ]]; then
+        wait_for_health "${TENANT_PREFIX}-chroma" 90 || return 1
+    fi
+
+    if [[ "${MILVUS_ENABLED:-${ENABLE_MILVUS:-false}}" == "true" ]]; then
+        wait_for_health "${TENANT_PREFIX}-milvus-etcd" 60 || return 1
+        wait_for_health "${TENANT_PREFIX}-milvus-minio" 60 || return 1
+        wait_for_health "${TENANT_PREFIX}-milvus" 120 || return 1
+    fi
+
+    if [[ "${ANYTHINGLLM_ENABLED:-${ENABLE_ANYTHINGLLM:-false}}" == "true" ]]; then
+        wait_for_health "${TENANT_PREFIX}-anythingllm" 90 || return 1
+    fi
+
+    if [[ "${GRAFANA_ENABLED}" == "true" ]]; then
+        wait_for_health "${TENANT_PREFIX}-grafana" 60 || return 1
+    fi
+
+    if [[ "${CODE_SERVER_ENABLED}" == "true" ]]; then
+        wait_for_health "${TENANT_PREFIX}-code-server" 60 || return 1
+    fi
     
     if [[ "${N8N_ENABLED}" == "true" ]]; then
         wait_for_health "${TENANT_PREFIX}-n8n" 90 || return 1
@@ -1981,7 +2266,11 @@ wait_for_all_health() {
     if [[ "${CADDY_ENABLED}" == "true" ]]; then
         wait_for_health "${TENANT_PREFIX}-caddy" 90 || return 1
     fi
-    
+
+    if [[ "${NPM_ENABLED:-false}" == "true" ]]; then
+        wait_for_health "${TENANT_PREFIX}-npm" 90 || return 1
+    fi
+
     ok "All services are healthy"
 }
 
@@ -2206,20 +2495,122 @@ main() {
         log "Health checks already passed, skipping"
     fi
     
+    show_post_deploy_dashboard
     echo ""
-    echo "╔══════════════════════════════════════════════════════════╗"
-    echo "║              Script 2 Complete ✓                        ║"
-    echo "╚══════════════════════════════════════════════════════════╝"
+    echo "  Next step: bash scripts/3-configure-services.sh ${tenant_id}"
     echo ""
-    echo "  ✓ platform.conf sourced (single source of truth)"
-    echo "  ✓ docker-compose.yml generated (heredoc only)"
-    echo "  ✓ Configuration files generated"
-    echo "  ✓ Containers deployed with health checks"
-    echo "  ✓ All services verified healthy"
+}
+
+# =============================================================================
+# POST-DEPLOY HEALTH DASHBOARD — shown immediately after all containers healthy
+# Displays every deployed service with its status, URL, and key credentials.
+# =============================================================================
+show_post_deploy_dashboard() {
+    local base_proto="http"
+    local display_host
+    display_host=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
+
+    if [[ "${CADDY_ENABLED:-false}" == "true" || "${NPM_ENABLED:-false}" == "true" ]] && [[ -n "${BASE_DOMAIN:-${DOMAIN:-}}" ]]; then
+        base_proto="https"
+        display_host="${BASE_DOMAIN:-${DOMAIN}}"
+    fi
+
+    local W=72
+    _d_sep()   { printf "╠%s╣\n" "$(printf '═%.0s' $(seq 1 $W))"; }
+    _d_top()   { printf "╔%s╗\n" "$(printf '═%.0s' $(seq 1 $W))"; }
+    _d_bot()   { printf "╚%s╝\n" "$(printf '═%.0s' $(seq 1 $W))"; }
+    _d_line()  { printf "║  %-${W}s║\n" "$*"; }
+    _d_blank() { printf "║%${W}s║\n" ""; }
+
     echo ""
-    echo "  Next step:"
-    echo "  1. Configure services: bash scripts/3-configure-services.sh ${tenant_id}"
-    echo ""
+    _d_top
+    _d_line "$(printf '%*s' $(( (W + 26) / 2 )) 'DEPLOYMENT COMPLETE — SERVICE DASHBOARD')"
+    _d_sep
+    _d_line "Tenant: ${TENANT_ID}   Stack: ${STACK_NAME:-custom}   Domain: ${display_host}"
+    _d_sep
+    _d_blank
+
+    # Reverse proxy
+    if [[ "${CADDY_ENABLED:-false}" == "true" ]]; then
+        _d_line "REVERSE PROXY"
+        _d_line "  Caddy        ${base_proto}://${display_host}  (TLS: ${TLS_MODE:-none})"
+        _d_blank
+    fi
+    if [[ "${NPM_ENABLED:-false}" == "true" ]]; then
+        _d_line "REVERSE PROXY"
+        _d_line "  NPM Admin    http://127.0.0.1:${NPM_ADMIN_PORT:-81}  (configure routes here)"
+        _d_line "  Login        admin@example.com / changeme  ← change immediately"
+        _d_blank
+    fi
+
+    # Web UIs
+    local has_ui=false
+    [[ "${OPENWEBUI_ENABLED:-false}"  == "true" ]] && has_ui=true
+    [[ "${LIBRECHAT_ENABLED:-false}"  == "true" || "${ENABLE_LIBRECHAT:-false}" == "true" ]] && has_ui=true
+    [[ "${OPENCLAW_ENABLED:-false}"   == "true" ]] && has_ui=true
+    [[ "${ANYTHINGLLM_ENABLED:-false}" == "true" ]] && has_ui=true
+    if [[ "$has_ui" == "true" ]]; then
+        _d_line "WEB UIs"
+        [[ "${OPENWEBUI_ENABLED:-false}"   == "true" ]] && _d_line "  OpenWebUI    ${base_proto}://${display_host}:${OPENWEBUI_PORT}  (via LiteLLM)"
+        [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]] && _d_line "  LibreChat    ${base_proto}://${display_host}:${LIBRECHAT_PORT}"
+        [[ "${OPENCLAW_ENABLED:-false}"    == "true" ]] && _d_line "  OpenClaw     ${base_proto}://${display_host}:${OPENCLAW_PORT}"
+        [[ "${ANYTHINGLLM_ENABLED:-false}" == "true" ]] && _d_line "  AnythingLLM  ${base_proto}://${display_host}:${ANYTHINGLLM_PORT}"
+        _d_blank
+    fi
+
+    # LLM Gateway
+    if [[ "${LITELLM_ENABLED:-false}" == "true" ]]; then
+        _d_line "LLM GATEWAY"
+        _d_line "  LiteLLM      http://127.0.0.1:${LITELLM_PORT}  key: ${LITELLM_MASTER_KEY}"
+        _d_blank
+    fi
+
+    # Automation
+    local has_auto=false
+    [[ "${N8N_ENABLED:-false}" == "true" || "${FLOWISE_ENABLED:-false}" == "true" || "${DIFY_ENABLED:-false}" == "true" ]] && has_auto=true
+    if [[ "$has_auto" == "true" ]]; then
+        _d_line "AUTOMATION"
+        [[ "${N8N_ENABLED:-false}"     == "true" ]] && _d_line "  N8N          ${base_proto}://${display_host}:${N8N_PORT}"
+        [[ "${FLOWISE_ENABLED:-false}" == "true" ]] && _d_line "  Flowise      ${base_proto}://${display_host}:${FLOWISE_PORT}"
+        [[ "${DIFY_ENABLED:-false}"    == "true" ]] && _d_line "  Dify         ${base_proto}://${display_host}:${DIFY_PORT}"
+        _d_blank
+    fi
+
+    # Memory
+    local has_mem=false
+    [[ "${ZEP_ENABLED:-false}" == "true" || "${LETTA_ENABLED:-false}" == "true" || "${MEM0_ENABLED:-false}" == "true" ]] && has_mem=true
+    if [[ "$has_mem" == "true" ]]; then
+        _d_line "MEMORY LAYER"
+        [[ "${ZEP_ENABLED:-false}"   == "true" ]] && _d_line "  Zep CE       http://127.0.0.1:${ZEP_PORT}  (conversation memory → Web UIs)"
+        [[ "${LETTA_ENABLED:-false}" == "true" ]] && _d_line "  Letta        http://127.0.0.1:${LETTA_PORT}  (agent memory runtime)"
+        [[ "${MEM0_ENABLED:-false}"  == "true" ]] && _d_line "  Mem0         http://127.0.0.1:${MEM0_PORT:-8081}"
+        _d_blank
+    fi
+
+    # Auth + monitoring
+    if [[ "${AUTHENTIK_ENABLED:-false}" == "true" ]]; then
+        _d_line "IDENTITY"
+        _d_line "  Authentik    ${base_proto}://${display_host}:${AUTHENTIK_PORT}"
+        _d_line "  Bootstrap    ${AUTHENTIK_BOOTSTRAP_EMAIL:-admin}  /  ${AUTHENTIK_BOOTSTRAP_PASSWORD:-<see platform.conf>}"
+        _d_blank
+    fi
+    if [[ "${GRAFANA_ENABLED:-false}" == "true" || "${PROMETHEUS_ENABLED:-false}" == "true" ]]; then
+        _d_line "MONITORING"
+        [[ "${GRAFANA_ENABLED:-false}"    == "true" ]] && _d_line "  Grafana      http://127.0.0.1:${GRAFANA_PORT}  user: admin / ${GRAFANA_ADMIN_PASSWORD:-admin}"
+        [[ "${PROMETHEUS_ENABLED:-false}" == "true" ]] && _d_line "  Prometheus   http://127.0.0.1:${PROMETHEUS_PORT}"
+        _d_blank
+    fi
+    if [[ "${CODE_SERVER_ENABLED:-false}" == "true" ]]; then
+        _d_line "DEVELOPMENT"
+        _d_line "  Code Server  http://127.0.0.1:${CODE_SERVER_PORT}  pass: ${CODE_SERVER_PASSWORD:-<see platform.conf>}"
+        _d_blank
+    fi
+
+    _d_sep
+    _d_line "PIPELINE:  Gdrive → rclone → ${DATA_DIR}/ingestion → Qdrant/Zep/Letta → LiteLLM → Web UIs"
+    _d_sep
+    _d_line "All services healthy. Configure services: bash scripts/3-configure-services.sh ${TENANT_ID}"
+    _d_bot
 }
 
 # =============================================================================

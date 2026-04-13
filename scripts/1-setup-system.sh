@@ -830,13 +830,25 @@ select_memory_layer() {
         3) ENABLE_ZEP="true"; ENABLE_LETTA="true" ;;   # both
     esac
 
+    # Dependency enforcement: Zep and Letta both require Postgres + LiteLLM
+    if [[ "${ENABLE_ZEP}" == "true" || "${ENABLE_LETTA}" == "true" ]]; then
+        if [[ "${ENABLE_POSTGRES:-false}" != "true" ]]; then
+            warn "Zep/Letta require PostgreSQL — forcing ENABLE_POSTGRES=true"
+            ENABLE_POSTGRES="true"
+        fi
+        if [[ "${ENABLE_LITELLM:-false}" != "true" ]]; then
+            warn "Zep/Letta require LiteLLM for embeddings — forcing ENABLE_LITELLM=true"
+            ENABLE_LITELLM="true"
+        fi
+    fi
+
     echo ""
     if [[ "${ENABLE_ZEP}" == "true" && "${ENABLE_LETTA}" == "true" ]]; then
-        echo "  ✅ Memory: Zep CE + Letta"
+        echo "  ✅ Memory: Zep CE + Letta  (requires Postgres + LiteLLM — auto-enabled)"
     elif [[ "${ENABLE_ZEP}" == "true" ]]; then
-        echo "  ✅ Memory: Zep CE"
+        echo "  ✅ Memory: Zep CE  (requires Postgres + LiteLLM — auto-enabled if needed)"
     elif [[ "${ENABLE_LETTA}" == "true" ]]; then
-        echo "  ✅ Memory: Letta"
+        echo "  ✅ Memory: Letta  (requires Postgres + LiteLLM — auto-enabled if needed)"
     else
         echo "  ℹ️  Memory: none selected"
     fi
@@ -885,8 +897,9 @@ configure_custom_stack() {
     
     # Memory Layer
     echo "  🧠 Memory Layer:"
-    safe_read_yesno "Zep CE (long-term conversation memory, connects to Postgres + LiteLLM)" "false" "ENABLE_ZEP"
-    safe_read_yesno "Letta / MemGPT (stateful agent memory server, connects to Postgres + LiteLLM)" "false" "ENABLE_LETTA"
+    safe_read_yesno "Zep CE (conversation memory → Postgres + pgvector + LiteLLM)" "false" "ENABLE_ZEP"
+    safe_read_yesno "Letta / MemGPT (stateful agent memory → Postgres + LiteLLM)" "false" "ENABLE_LETTA"
+    safe_read_yesno "Mem0 (persistent AI memory layer)" "false" "ENABLE_MEM0"
     echo ""
 
     # Development
@@ -909,6 +922,7 @@ configure_custom_stack() {
     # Additional Services
     echo "  📡 Additional:"
     safe_read_yesno "SignalBot (Signal messenger notifications)" "false" "ENABLE_SIGNALBOT"
+    safe_read_yesno "Bifrost (alternative LLM gateway / advanced routing)" "false" "ENABLE_BIFROST"
 }
 
 # =============================================================================
@@ -1584,55 +1598,62 @@ configure_ports() {
 
 # =============================================================================
 # PROXY CONFIGURATION (README §4.8)
+# Supports: Caddy (auto-configured routes) or Nginx Proxy Manager (web UI managed)
+# Only one reverse proxy may be active per deployment (mutually exclusive).
 # =============================================================================
 configure_proxy() {
     section "🌐 PROXY CONFIGURATION"
-    
-    echo "  📋 Configure proxy settings for external access"
+
+    echo "  📋 Configure reverse proxy for HTTPS termination and service routing"
     echo ""
-    
-    safe_read_yesno "Enable proxy server" "false" "ENABLE_PROXY"
-    if [[ "$ENABLE_PROXY" == "true" ]]; then
+
+    safe_read_yesno "Enable reverse proxy (recommended when domain is configured)" "true" "ENABLE_PROXY"
+    if [[ "$ENABLE_PROXY" != "true" ]]; then
+        ENABLE_CADDY="false"
+        ENABLE_NPM="false"
+        PROXY_TYPE="none"
+        echo "  ℹ️  No reverse proxy — services accessible via direct ports only"
         echo ""
-        select_menu_option "Proxy Type" \
-            "NGINX - High performance web server" \
-            "CADDY - Automatic HTTPS with Let's Encrypt"
-        local proxy_type_choice=$?
-        
-        case $proxy_type_choice in
-            0) PROXY_TYPE="nginx" ;;
-            1) PROXY_TYPE="caddy" ;;
-        esac
-        
-        echo ""
-        echo "  🔄 Routing Configuration:"
-        select_menu_option "Routing Method" \
-            "PATH_BASED - Use URL paths (e.g., /ollama, /webui)" \
-            "SUBDOMAIN - Use subdomains (e.g., ollama.domain.com)"
-        local routing_choice=$?
-        
-        case $routing_choice in
-            0) PROXY_ROUTING="path_based" ;;
-            1) PROXY_ROUTING="subdomain" ;;
-        esac
-        
-        echo ""
-        safe_read "Proxy HTTP port" "80" "PROXY_HTTP_PORT" "^[0-9]+$"
-        safe_read "Proxy HTTPS port" "443" "PROXY_HTTPS_PORT" "^[0-9]+$"
-        
-        # PROXY_FORCE_HTTPS is set once in configure_tls — not re-asked here
-        PROXY_FORCE_HTTPS="${HTTP_TO_HTTPS_REDIRECT:-false}"
-        
-        echo ""
-        echo "  ✅ Proxy Configuration:"
-        echo "    Type: ${PROXY_TYPE^}"
-        echo "    Routing: ${PROXY_ROUTING/_/ }"
-        echo "    HTTP Port: $PROXY_HTTP_PORT"
-        echo "    HTTPS Port: $PROXY_HTTPS_PORT"
-        echo "    Force HTTPS: $PROXY_FORCE_HTTPS"
-    else
-        echo "  ℹ️  Proxy disabled - services will be accessed directly via ports"
+        return 0
     fi
+
+    echo ""
+    select_menu_option "Reverse Proxy Type" \
+        "CADDY             — Auto-configures all routes; Caddyfile generated by Script 2" \
+        "NGINX PROXY MGR   — Web UI at :81 for manual route management (more flexible)"
+    local proxy_choice=$?
+
+    ENABLE_CADDY="false"
+    ENABLE_NPM="false"
+
+    case $proxy_choice in
+        0)
+            PROXY_TYPE="caddy"
+            ENABLE_CADDY="true"
+            echo ""
+            safe_read "HTTP port"  "80"  "PROXY_HTTP_PORT"  "^[0-9]+$"
+            safe_read "HTTPS port" "443" "PROXY_HTTPS_PORT" "^[0-9]+$"
+            CADDY_HTTP_PORT="${PROXY_HTTP_PORT:-80}"
+            CADDY_HTTPS_PORT="${PROXY_HTTPS_PORT:-443}"
+            PROXY_FORCE_HTTPS="${HTTP_TO_HTTPS_REDIRECT:-false}"
+            echo ""
+            echo "  ✅ Caddy: HTTP=${CADDY_HTTP_PORT}  HTTPS=${CADDY_HTTPS_PORT}  Force-HTTPS=${PROXY_FORCE_HTTPS}"
+            ;;
+        1)
+            PROXY_TYPE="npm"
+            ENABLE_NPM="true"
+            echo ""
+            safe_read "HTTP port"       "80"  "PROXY_HTTP_PORT"  "^[0-9]+$"
+            safe_read "HTTPS port"      "443" "PROXY_HTTPS_PORT" "^[0-9]+$"
+            safe_read "NPM admin port"  "81"  "NPM_ADMIN_PORT"   "^[0-9]+$"
+            NPM_HTTP_PORT="${PROXY_HTTP_PORT:-80}"
+            NPM_HTTPS_PORT="${PROXY_HTTPS_PORT:-443}"
+            echo ""
+            echo "  ✅ Nginx Proxy Manager: HTTP=${NPM_HTTP_PORT}  HTTPS=${NPM_HTTPS_PORT}  Admin=:${NPM_ADMIN_PORT}"
+            echo "     Routes must be configured via the NPM web UI after first deploy."
+            echo "     Default login: admin@example.com / changeme (change immediately)"
+            ;;
+    esac
     echo ""
 }
 
@@ -2127,6 +2148,9 @@ ENABLE_SIGNALBOT="${ENABLE_SIGNALBOT:-false}"
 SIGNAL_PHONE="${SIGNAL_PHONE:-}"
 SIGNAL_RECIPIENT="${SIGNAL_RECIPIENT:-}"
 
+ENABLE_BIFROST="${ENABLE_BIFROST:-false}"
+BIFROST_PORT="${BIFROST_PORT:-8000}"
+
 # Memory Layer
 ENABLE_ZEP="${ENABLE_ZEP:-false}"
 ZEP_PORT="${ZEP_PORT:-8100}"
@@ -2135,6 +2159,9 @@ ZEP_AUTH_SECRET="${ZEP_AUTH_SECRET:-}"
 ENABLE_LETTA="${ENABLE_LETTA:-false}"
 LETTA_PORT="${LETTA_PORT:-8283}"
 LETTA_SERVER_PASS="${LETTA_SERVER_PASS:-}"
+
+ENABLE_MEM0="${ENABLE_MEM0:-false}"
+MEM0_PORT="${MEM0_PORT:-8081}"
 
 # Development
 ENABLE_CODE_SERVER="${ENABLE_CODE_SERVER:-false}"
@@ -3145,12 +3172,17 @@ LETSENCRYPT_EMAIL="${LETSENCRYPT_EMAIL:-}"
 HTTP_TO_HTTPS_REDIRECT="${HTTP_TO_HTTPS_REDIRECT:-false}"
 PROXY_FORCE_HTTPS="${PROXY_FORCE_HTTPS:-false}"
 
-# PROXY
+# PROXY — Caddy and NPM are mutually exclusive; only one may be true
 ENABLE_PROXY="${ENABLE_PROXY:-false}"
-PROXY_TYPE="${PROXY_TYPE:-caddy}"
+PROXY_TYPE="${PROXY_TYPE:-none}"
 PROXY_ROUTING="${PROXY_ROUTING:-subdomain}"
+ENABLE_CADDY="${ENABLE_CADDY:-false}"
 CADDY_HTTP_PORT="${CADDY_HTTP_PORT:-80}"
 CADDY_HTTPS_PORT="${CADDY_HTTPS_PORT:-443}"
+ENABLE_NPM="${ENABLE_NPM:-false}"
+NPM_HTTP_PORT="${NPM_HTTP_PORT:-80}"
+NPM_HTTPS_PORT="${NPM_HTTPS_PORT:-443}"
+NPM_ADMIN_PORT="${NPM_ADMIN_PORT:-81}"
 
 # SERVICE ENABLEMENT FLAGS
 ENABLE_POSTGRES="${ENABLE_POSTGRES:-false}"
@@ -3172,11 +3204,14 @@ ENABLE_CODE_SERVER="${ENABLE_CODE_SERVER:-false}"
 ENABLE_CONTINUE_DEV="${ENABLE_CONTINUE_DEV:-false}"
 ENABLE_ZEP="${ENABLE_ZEP:-false}"
 ENABLE_LETTA="${ENABLE_LETTA:-false}"
+ENABLE_MEM0="${ENABLE_MEM0:-false}"
 ENABLE_GRAFANA="${ENABLE_GRAFANA:-false}"
 ENABLE_PROMETHEUS="${ENABLE_PROMETHEUS:-false}"
 ENABLE_AUTHENTIK="${ENABLE_AUTHENTIK:-false}"
 ENABLE_SIGNALBOT="${ENABLE_SIGNALBOT:-false}"
+ENABLE_BIFROST="${ENABLE_BIFROST:-false}"
 ENABLE_CADDY="${ENABLE_CADDY:-false}"
+ENABLE_NPM="${ENABLE_NPM:-false}"
 ENABLE_INGESTION="${ENABLE_INGESTION:-false}"
 INGESTION_METHOD="${INGESTION_METHOD:-rclone}"
 RCLONE_REMOTE="${RCLONE_REMOTE:-gdrive}"
@@ -3196,10 +3231,13 @@ DIFY_PORT="${DIFY_PORT:-3001}"
 CODE_SERVER_PORT="${CODE_SERVER_PORT:-8080}"
 ZEP_PORT="${ZEP_PORT:-8100}"
 LETTA_PORT="${LETTA_PORT:-8283}"
+MEM0_PORT="${MEM0_PORT:-8081}"
 GRAFANA_PORT="${GRAFANA_PORT:-3002}"
 PROMETHEUS_PORT="${PROMETHEUS_PORT:-9090}"
 AUTHENTIK_PORT="${AUTHENTIK_PORT:-9000}"
 SIGNALBOT_PORT="${SIGNALBOT_PORT:-8080}"
+BIFROST_PORT="${BIFROST_PORT:-8000}"
+NPM_ADMIN_PORT="${NPM_ADMIN_PORT:-81}"
 
 # LOCAL MODELS
 ENABLE_LOCAL_MODELS="${ENABLE_LOCAL_MODELS:-true}"

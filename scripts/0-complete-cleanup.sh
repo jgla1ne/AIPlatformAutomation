@@ -203,16 +203,29 @@ main() {
     fi
     
     ok "Docker images removed (scoped)"
-    
+
+    # Stop Docker daemon if its data-root is on the EBS volume.
+    # Without this, the daemon holds open FDs to the block device, umount falls
+    # back to lazy-unmount, and the device stays "in use" — mkfs.ext4 in Script 1
+    # then fails with "apparently in use by the system".
+    # Script 1's configure_docker_dataroot() restarts Docker after the fresh mount.
+    local docker_data_root
+    docker_data_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "")
+    if [[ "$docker_data_root" == /mnt/* ]]; then
+        log "Stopping Docker daemon (data-root is on EBS: $docker_data_root)..."
+        sudo systemctl stop docker
+        ok "Docker daemon stopped — will be restarted by Script 1"
+    fi
+
     # 3. Unmount EBS volume FIRST — must happen before rm -rf, because the
     #    mount point IS the tenant directory (/mnt/<tenant>).
     #    Trying rm -rf while still mounted returns "Device or resource busy".
     local mount_point="/mnt/${tenant_id}"
     if mountpoint -q "$mount_point" 2>/dev/null; then
         log "Unmounting EBS volume: $mount_point (required before directory removal)"
-        run_cmd umount "$mount_point" || {
+        run_cmd sudo umount "$mount_point" || {
             log "WARN: umount returned non-zero — attempting lazy unmount"
-            run_cmd umount -l "$mount_point" || true
+            run_cmd sudo umount -l "$mount_point" || true
         }
         ok "EBS volume unmounted: $mount_point"
     else
