@@ -464,9 +464,9 @@ Not every image ships `curl`. Use the right tool per image or the healthcheck wi
 | Authentik | 60s | Migration runner |
 | Signalbot | 60s | signal-cli daemon takes ~26 s |
 | AnythingLLM | 60s | DB migrations |
-| Letta | 120s | Postgres migration runs on startup; dedicated `_letta` DB must be created before container starts |
+| Letta | 600s | Alembic migrations run before HTTP server binds — observed 5-8 min on first run; dedicated `_letta` DB must exist first |
 
-`wait_for_all_health()` timeouts: litellm 900s (600s start_period + migration time), openwebui 180s, authentik 180s, letta 300s.
+`wait_for_all_health()` timeouts: litellm 900s, openwebui 180s, authentik 180s, letta 900s (15 min — migration window).
 
 ### Directory Permissions
 
@@ -771,6 +771,14 @@ The litellm service is on the wrong Docker network. Every `build_*_deps()` funct
 ### LiteLLM P3005 (database schema not empty)
 
 Set `LITELLM_MIGRATION_DIR: /tmp/litellm-migrations` in the compose environment block.
+
+### Letta reported unhealthy — migrations still running
+
+Letta runs Alembic schema migrations before binding the HTTP server. On first deploy against a new `_letta` database this takes 5-8 minutes. If `wait_for_health` fires before the server is up, Docker reports `unhealthy` and deployment fails.
+
+**Root cause:** Docker's healthcheck `start_period` was too short — failed checks during migration counted toward the retry limit, flipping status to `unhealthy` before migration finished.
+
+**Fix (already applied):** `start_period: 600s` in the Letta healthcheck (keeps Docker in `starting` through the migration window) and `wait_for_health letta 900s`. The server comes up ~30s after "Starting Letta Server..." appears in logs.
 
 ### Letta `relation "users" already exists`
 

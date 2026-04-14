@@ -1537,10 +1537,12 @@ EOF
 $(build_letta_deps)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8283/v1/health"]
-      interval: 30s
+      interval: 15s
       timeout: 10s
       retries: 5
-      start_period: 120s
+      # Letta runs Alembic migrations before binding — can take 5-8 min on first run.
+      # start_period keeps Docker in 'starting' (not 'unhealthy') through that window.
+      start_period: 600s
 
 EOF
     fi
@@ -2328,7 +2330,10 @@ wait_for_all_health() {
     fi
 
     if [[ "${LETTA_ENABLED:-false}" == "true" ]]; then
-        wait_for_health "${TENANT_PREFIX}-letta" 300 || return 1
+        # Letta runs Alembic migrations before binding the HTTP server.
+        # Observed migration time: 5-8 min. start_period:600s in healthcheck keeps Docker
+        # in 'starting' through that window; we wait up to 15 min total here.
+        wait_for_health "${TENANT_PREFIX}-letta" 900 || return 1
     fi
     
     if [[ "${REDIS_ENABLED}" == "true" ]]; then
