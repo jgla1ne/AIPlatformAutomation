@@ -424,7 +424,7 @@ Not every image ships `curl`. Use the right tool per image or the healthcheck wi
 | LiteLLM | `python3` | `python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"` |
 | Qdrant | `bash` (no curl/wget) | `["CMD", "bash", "-c", "echo > /dev/tcp/localhost/6333"]` |
 | N8N | `wget` | `wget -q --spider http://localhost:5678/healthz` |
-| Dify-web | `wget` | `wget -q --spider http://localhost:3000` |
+| Dify-web | `wget` | `wget -q --spider http://$(hostname):3000` (binds to container hostname, not localhost) |
 | Dify-api | `curl` | `curl -sf http://localhost:5001/health` |
 | Authentik | `python3` | `python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:9000/-/health/live/')"` |
 | Flowise | `curl` | `curl -f http://localhost:3000/api/v1/ping` |
@@ -442,6 +442,7 @@ Not every image ships `curl`. Use the right tool per image or the healthcheck wi
 | Service | Wrong | Correct |
 |---|---|---|
 | Qdrant | `/health` (404) | `/healthz` |
+| Dify-web | — | `http://$(hostname):3000` (NOT localhost — Next.js binds to container hostname) |
 | Dify-api | — | `/health` |
 | Authentik | `/-/health/` (404) | `/-/health/live/` |
 | LiteLLM | `/health` | `/health/liveliness` |

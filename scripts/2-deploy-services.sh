@@ -974,11 +974,12 @@ EOF
       - "127.0.0.1:${DIFY_PORT}:3000"
 $(build_dify_deps)
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000 2>/dev/null || exit 1"]
-      interval: 30s
+      # Next.js binds to the container hostname (not localhost) — use $(hostname).
+      test: ["CMD-SHELL", "wget -q --spider http://$(hostname):3000 2>/dev/null || exit 1"]
+      interval: 15s
       timeout: 10s
       retries: 5
-      start_period: 60s
+      start_period: 120s
 
   # --- Dify API (Flask backend) ---
   ${TENANT_PREFIX}-dify-api:
