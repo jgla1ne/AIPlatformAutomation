@@ -815,7 +815,7 @@ EOF
       GATEWAY_CONTROL_UI_ALLOWED_ORIGINS: "*"
     volumes:
       - ${DATA_DIR}/openclaw/data:/app/data
-      - ${DATA_DIR}/openclaw/config:/.openclaw
+      - ${DATA_DIR}/openclaw/config:/root/.openclaw
     ports:
       - "127.0.0.1:${OPENCLAW_PORT}:${OPENCLAW_PORT}"
 $(build_openclaw_deps)
@@ -891,6 +891,9 @@ EOF
       REDIS_HOST: ${TENANT_PREFIX}-redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
+      # Force SSE push mode — WebSocket push is unreliable through Caddy reverse proxy;
+      # SSE works without HTTP upgrade headers and is the recommended proxy-safe choice.
+      N8N_PUSH_BACKEND: sse
       # LiteLLM integration — N8N AI nodes use LiteLLM as their OpenAI-compatible endpoint
       OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
       OPENAI_API_BASE_URL: http://${TENANT_PREFIX}-litellm:4000/v1
@@ -980,9 +983,9 @@ EOF
       - "127.0.0.1:${DIFY_PORT}:3000"
 $(build_dify_deps)
     healthcheck:
-      # /dev/tcp is bash-only and bash is not in the dify-web Node.js image.
-      # Use node (always present) to make an HTTP request instead.
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      # Use curl — same check as the official langgenius docker-compose.yaml.
+      # bash and node are not available in the standalone Next.js image.
+      test: ["CMD", "curl", "-f", "http://localhost:3000/apps"]
       interval: 15s
       timeout: 10s
       retries: 5
@@ -1221,11 +1224,18 @@ EOF
             # The file is mounted at /credentials/service-account.json inside the container.
             cp "${GDRIVE_CREDENTIALS_FILE}" "${rclone_conf_dir}/service-account.json"
             chmod 600 "${rclone_conf_dir}/service-account.json"
+            # root_folder_id scopes rclone to the shared folder.
+            # Service accounts have no personal My Drive — without this, sync is always empty.
+            local _rclone_folder_line=""
+            if [[ -n "${GDRIVE_FOLDER_ID:-}" ]]; then
+                _rclone_folder_line="root_folder_id = ${GDRIVE_FOLDER_ID}"
+            fi
             cat > "${rclone_conf_dir}/rclone.conf" << RCLONE_EOF
 [${RCLONE_REMOTE:-gdrive}]
 type = drive
 scope = drive.readonly
 service_account_file = /credentials/service-account.json
+${_rclone_folder_line}
 RCLONE_EOF
             chmod 600 "${rclone_conf_dir}/rclone.conf"
             ok "rclone.conf generated at ${rclone_conf_dir}/rclone.conf"
