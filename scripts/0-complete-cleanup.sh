@@ -216,21 +216,22 @@ main() {
     # then fails with "apparently in use by the system".
     # Script 1's configure_docker_dataroot() restarts Docker after the fresh mount.
     # Script 1's configure_docker_dataroot() restarts Docker after the fresh mount.
+    # Script 1's configure_docker_dataroot() restarts Docker after the fresh mount.
     local docker_data_root
     docker_data_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "")
     if [[ "$docker_data_root" == "${BASE_DIR}"* ]]; then
-        log "Stopping Docker daemon (data-root is scoped to this tenant: $docker_data_root)..."
-        sudo systemctl stop docker || true
+        log "Stopping Docker daemon and socket (data-root is scoped to this tenant)..."
+        sudo systemctl stop docker.socket docker.service || true
         # Give it a moment to release file handles
         sleep 2
-        ok "Docker daemon stopped"
+        ok "Docker daemon and socket stopped"
     fi
 
     # 3. Unmount EBS volume FIRST — must happen before rm -rf, because the
     #    mount point IS the tenant directory (/mnt/<tenant>).
     #    Trying rm -rf while still mounted returns "Device or resource busy".
     local mount_point="/mnt/${tenant_id}"
-    if mountpoint -q "$mount_point" 2>/dev/null; then
+    if grep -qs "$mount_point" /proc/mounts; then
         log "Unmounting EBS volume: $mount_point (required before directory removal)"
         
         # Aggressively kill processes using the mount (README §6)
@@ -246,8 +247,8 @@ main() {
         }
         
         # Verify unmount succeeded
-        if mountpoint -q "$mount_point" 2>/dev/null; then
-            fail "CRITICAL: $mount_point is STILL MOUNTED. Wipe aborted to protect EBS data. Manually stop all processes (e.g., Docker, Caddy) and try again."
+        if grep -qs "$mount_point" /proc/mounts; then
+            fail "CRITICAL: $mount_point is STILL MOUNTED (detected in /proc/mounts). Wipe aborted to protect EBS data. Manually stop all processes (e.g., Docker, Caddy) and try again."
         fi
         ok "EBS volume unmounted: $mount_point"
     else
