@@ -6,6 +6,11 @@
 # USAGE:   bash scripts/2-deploy-services.sh [tenant_id] [options]
 # OPTIONS: --dry-run           Show what would be deployed without action
 #          --verify-only       Verify deployment without changes
+#          --flushall          Wipe databases, Ollama models, and Docker image
+#                              cache before deploying. Use when iterating on
+#                              script fixes. Without this flag, existing data
+#                              (Postgres, Redis, MongoDB, Ollama models, images)
+#                              is preserved — enabling fast cost-efficient retries.
 # =============================================================================
 
 # =============================================================================
@@ -2230,6 +2235,52 @@ flush_existing_deployment() {
     fi
 }
 
+flush_all_data() {
+    # Only called when --flushall is passed.
+    # Containers are already stopped by flush_existing_deployment() at this point.
+    # prepare_data_dirs() will recreate the empty directories afterwards.
+    warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    warn "  --flushall: wiping all persisted state for tenant ${TENANT_ID}"
+    warn "  Databases, Ollama models, and Docker image cache will be removed."
+    warn "  This cannot be undone. Starting in 5 seconds..."
+    warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    sleep 5
+
+    # 1. Database data directories — each service re-initializes on fresh start
+    local -a db_dirs=("postgres" "redis" "mongodb")
+    for dir in "${db_dirs[@]}"; do
+        if [[ -d "${DATA_DIR}/${dir}" ]]; then
+            log "  Wiping database dir: ${DATA_DIR}/${dir}"
+            rm -rf "${DATA_DIR:?}/${dir}"
+        fi
+    done
+
+    # 2. Ollama model blobs — large downloads; keep the parent dir so
+    #    prepare_data_dirs() doesn't fail, but purge the model cache
+    if [[ -d "${DATA_DIR}/ollama/models" ]]; then
+        log "  Removing Ollama model cache: ${DATA_DIR}/ollama/models"
+        rm -rf "${DATA_DIR:?}/ollama/models"
+    fi
+
+    # 3. Other service state directories that accumulate stale schema files
+    #    (litellm Prisma state, dify storage, anythingllm, flowise, n8n, etc.)
+    local -a svc_dirs=("litellm" "dify" "anythingllm" "flowise" "n8n" "letta" "zep" "mem0"
+                       "openclaw" "grafana" "prometheus" "authentik" "librechat"
+                       "openwebui" "qdrant" "weaviate" "chroma" "milvus" "milvus-etcd" "milvus-minio")
+    for dir in "${svc_dirs[@]}"; do
+        if [[ -d "${DATA_DIR}/${dir}" ]]; then
+            log "  Wiping service dir: ${DATA_DIR}/${dir}"
+            rm -rf "${DATA_DIR:?}/${dir}"
+        fi
+    done
+
+    # 4. Docker image cache — forces re-pull of every service image on next deploy
+    log "  Pruning all Docker images..."
+    docker image prune -af 2>/dev/null || true
+
+    ok "--flushall complete — deploy will start from a fully clean state"
+}
+
 deploy_containers() {
     log "Deploying containers..."
 
@@ -2478,7 +2529,8 @@ trigger_initial_rclone_sync() {
 main() {
     local tenant_id="${1:-}"
     local dry_run=false
-    
+    local flush_all=false
+
     # Parse arguments
     shift
     while [[ $# -gt 0 ]]; do
@@ -2487,14 +2539,19 @@ main() {
                 dry_run=true
                 shift
                 ;;
+            --flushall)
+                flush_all=true
+                shift
+                ;;
             *)
                 fail "Unknown option: $1"
                 ;;
         esac
     done
-    
+
     # Set global variables
     export DRY_RUN="$dry_run"
+    export FLUSH_ALL="$flush_all"
     
     # Validate tenant ID
     if [[ -z "$tenant_id" ]]; then
@@ -2525,6 +2582,11 @@ main() {
 
     # --- FLUSH FIRST (idempotency: every run is a fresh deploy) ---
     flush_existing_deployment
+
+    # --- OPTIONAL: wipe all persisted data for a true clean redeploy ---
+    if [[ "${FLUSH_ALL}" == "true" ]]; then
+        flush_all_data
+    fi
 
     # Database URL (needs passwords from platform.conf)
     LITELLM_DB_URL="postgresql://${POSTGRES_USER:-${TENANT_ID}}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${POSTGRES_DB:-${TENANT_ID}}"
