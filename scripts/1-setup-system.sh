@@ -2187,6 +2187,7 @@ RCLONE_TRANSFERS="${RCLONE_TRANSFERS:-4}"
 RCLONE_CHECKERS="${RCLONE_CHECKERS:-8}"
 RCLONE_VFS_CACHE="${RCLONE_VFS_CACHE:-writes}"
 GDRIVE_CREDENTIALS_FILE="${GDRIVE_CREDENTIALS_FILE:-}"
+GDRIVE_FOLDER_ID="${GDRIVE_FOLDER_ID:-}"
 AWS_S3_BUCKET="${AWS_S3_BUCKET:-}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}"
@@ -3045,12 +3046,15 @@ configure_ingestion() {
                         GDRIVE_CREDENTIALS_FILE="${rclone_conf_dir}/service-account.json"
 
                         # Generate proper INI-format rclone.conf
-                        cat > "${rclone_conf_dir}/rclone.conf" << RCLONE_INI
-[${RCLONE_REMOTE:-gdrive}]
-type = drive
-scope = drive.readonly
-service_account_file = /credentials/service-account.json
-RCLONE_INI
+                        # root_folder_id scopes sync to the shared folder — service accounts
+                        # have no personal My Drive so root sync is always empty without this.
+                        {
+                            echo "[${RCLONE_REMOTE:-gdrive}]"
+                            echo "type = drive"
+                            echo "scope = drive.readonly"
+                            echo "service_account_file = /credentials/service-account.json"
+                            [[ -n "${GDRIVE_FOLDER_ID:-}" ]] && echo "root_folder_id = ${GDRIVE_FOLDER_ID}"
+                        } > "${rclone_conf_dir}/rclone.conf"
                         chmod 600 "${rclone_conf_dir}/rclone.conf"
 
                         echo "  Credentials saved to: ${rclone_conf_dir}/service-account.json"
@@ -3070,12 +3074,13 @@ RCLONE_INI
                         GDRIVE_CREDENTIALS_FILE="${rclone_conf_dir}/service-account.json"
 
                         # Generate proper INI-format rclone.conf
-                        cat > "${rclone_conf_dir}/rclone.conf" << RCLONE_INI
-[${RCLONE_REMOTE:-gdrive}]
-type = drive
-scope = drive.readonly
-service_account_file = /credentials/service-account.json
-RCLONE_INI
+                        {
+                            echo "[${RCLONE_REMOTE:-gdrive}]"
+                            echo "type = drive"
+                            echo "scope = drive.readonly"
+                            echo "service_account_file = /credentials/service-account.json"
+                            [[ -n "${GDRIVE_FOLDER_ID:-}" ]] && echo "root_folder_id = ${GDRIVE_FOLDER_ID}"
+                        } > "${rclone_conf_dir}/rclone.conf"
                         chmod 600 "${rclone_conf_dir}/rclone.conf"
 
                         echo "  Credentials saved to: ${rclone_conf_dir}/service-account.json"
