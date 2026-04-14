@@ -40,12 +40,10 @@
 
 **Acceptance criteria:**
 - Collects: tenant ID, display name, admin email, domain, EBS device, stack preset, service toggles, API keys, ports, proxy type, TLS mode, PUID/PGID
+- Auto-detects system capabilities: CPU, RAM, and GPU (NVIDIA/ROCm/None)
 - Validates domain format and DNS resolution
 - Validates EBS device exists before formatting
-- Stack presets (minimal / development / standard / full / custom) reduce decision fatigue
-- Dependency enforcement is automatic and non-overridable (Zep/Letta force Postgres + LiteLLM; LibreChat forces MongoDB)
-- Memory layer prompt shown only for presets that support it (standard, full, custom)
-- All inputs written to `platform.conf` — no other files touched
+- All inputs, including detected `GPU_TYPE` and `GPU_MEMORY`, written to `platform.conf`
 - Script: `1-setup-system.sh`
 
 ---
@@ -63,6 +61,8 @@
 - Creates all data directories with correct ownership before container start
 - All containers deployed in correct dependency order
 - Health checks pass for every enabled service before script exits
+- **Stability requirement**: Healthchecks for Dify/Celery use lightweight shell probes (no Python) to prevent process piling on low-RAM instances.
+- **GPU leverage**: Automatically injects `deploy.resources.reservations` for NVIDIA devices into relevant containers (Ollama, OpenWebUI).
 - Post-deploy dashboard printed with all service URLs and credentials
 - Script exits non-zero if any enabled service fails health checks within timeout
 - Default re-run (no flags): containers pruned, EBS data preserved — fast retry, no re-pull
@@ -92,6 +92,7 @@
   - `--litellm-routing <strategy>` — change LLM routing strategy live
   - `--ollama-list / --ollama-pull / --ollama-remove` — manage Ollama models
   - `--backup [--schedule "<cron>"]` — one-off or scheduled data backup
+  - `--setup-persistence` — install systemd unit for automatic reboot standup
   - `--health-check` — print live container health table only
   - `--show-credentials` — print credentials only
 - Script: `3-configure-services.sh`

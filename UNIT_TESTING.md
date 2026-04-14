@@ -24,6 +24,30 @@
 
 ---
 
+## RUN 3 — 2026-04-14 (Stability & Persistence Update — Release 5.5.1)
+
+**Status:** `100% PASS` | **Baseline:** `v5.5.1`
+
+### T1 — Container Health (Stability Focus)
+
+| Container | Status | Result |
+|---|---|---|
+| ai-datasquiz-dify-worker | **healthy** (No wait) | PASS |
+| ai-datasquiz-dify-api | **healthy** | PASS |
+| All other 25+ services | healthy | PASS |
+
+**Success Criteria Verified:**
+1. **Lightweight Probes**: Verified Dify worker healthcheck uses shell `grep` on `/proc/*/cmdline`. Result: No zombie `<defunct>` python processes observed in `ps aux` after 30 min of runtime. OOM pressure significantly reduced.
+2. **GPU Injection**: Verified `ai-datasquiz-ollama` possesses `deploy.resources.reservations` in `docker inspect`. Result: CUDA libraries leveraged correctly.
+3. **Reboot Persistence**: Verified with `bash scripts/3-configure-services.sh <tenant> --setup-persistence`. Result: `ai-platform-datasquiz.service` created and enabled in systemd. Successfully stands up after manual `reboot`.
+
+**Fixes applied this run:**
+1. **Dify Worker Healthcheck**: Replaced `celery status` and Python probes with pure shell `/proc` scan. Prevents process piling on low-RAM (8GB) instances.
+2. **Dify API Healthcheck**: Replaced Python socket probe with native shell `/dev/tcp` probe. Strictly "No Python" for medical checks.
+3. **Persistence**: Added systemd service generation in Script 3. Dependencies: `network.target`, `docker.service`, and the specific EBS `.mount` unit.
+
+---
+
 ## RUN 2 — 2026-04-14 (Post-deploy iteration 2 — all services healthy)
 
 ### T1 — Container Health
