@@ -2309,30 +2309,37 @@ wait_for_all_health() {
 
     if [[ "${ZEP_ENABLED:-false}" == "true" ]]; then
         wait_for_health "${TENANT_PREFIX}-zep" 120 || return 1
-        # Ensure Zep's watermill tables exist — Zep runs CREATE TABLE IF NOT EXISTS at startup,
-        # but if Postgres was busy during the first init the tables may not be created.
-        # Creating them explicitly here prevents the subscriber error loop on restart.
-        log "Ensuring Zep watermill schema tables exist..."
-        docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "
-            CREATE TABLE IF NOT EXISTS watermill_message_token_count (
-                \"offset\" SERIAL,
-                uuid VARCHAR(36) NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                payload JSON DEFAULT NULL,
-                metadata JSON DEFAULT NULL,
-                transaction_id xid8 NOT NULL,
-                PRIMARY KEY (transaction_id, \"offset\")
-            );
-            CREATE TABLE IF NOT EXISTS watermill_offsets_message_token_count (
-                consumer_group VARCHAR(255) NOT NULL,
-                offset_acked BIGINT,
-                last_processed_transaction_id xid8 NOT NULL,
-                PRIMARY KEY(consumer_group)
-            );" 2>&1 | grep -v "^$" | grep -v "already exists" || true
-        # Restart Zep so it picks up the freshly created tables
-        docker restart "${TENANT_PREFIX}-zep" 2>/dev/null || true
+        # Zep creates its own watermill tables at startup via "Initializing subscriber schema".
+        # Only intervene if the tables are actually missing (rare: Postgres was overloaded at Zep first-start).
+        # Unconditional restart causes a second boot cycle that can exceed the health timeout.
+        log "Verifying Zep watermill tables..."
+        local _zep_table_count
+        _zep_table_count=$(docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+            -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' \
+                  AND table_name IN ('watermill_message_token_count','watermill_offsets_message_token_count');" \
+            2>/dev/null || echo "0")
+        if [[ "${_zep_table_count:-0}" -lt 2 ]]; then
+            log "  Watermill tables missing — creating manually and restarting Zep..."
+            docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "
+                CREATE TABLE IF NOT EXISTS watermill_message_token_count (
+                    \"offset\" SERIAL,
+                    uuid VARCHAR(36) NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    payload JSON DEFAULT NULL,
+                    metadata JSON DEFAULT NULL,
+                    transaction_id xid8 NOT NULL,
+                    PRIMARY KEY (transaction_id, \"offset\")
+                );
+                CREATE TABLE IF NOT EXISTS watermill_offsets_message_token_count (
+                    consumer_group VARCHAR(255) NOT NULL,
+                    offset_acked BIGINT,
+                    last_processed_transaction_id xid8 NOT NULL,
+                    PRIMARY KEY(consumer_group)
+                );" 2>&1 | grep -v "^$" | grep -v "already exists" || true
+            docker restart "${TENANT_PREFIX}-zep" 2>/dev/null || true
+            wait_for_health "${TENANT_PREFIX}-zep" 120 || return 1
+        fi
         ok "Zep watermill tables verified"
-        wait_for_health "${TENANT_PREFIX}-zep" 60 || return 1
     fi
 
     if [[ "${LETTA_ENABLED:-false}" == "true" ]]; then
