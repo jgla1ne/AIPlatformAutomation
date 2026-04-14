@@ -981,6 +981,10 @@ EOF
       APP_API_URL: ${_dify_api_public_url}
       # Disable Next.js telemetry
       NEXT_TELEMETRY_DISABLED: 1
+      # Next.js standalone server binds to $HOSTNAME. Without this it resolves the container
+      # hostname to the Docker bridge IP (e.g. 172.17.0.2), making 127.0.0.1 unreachable
+      # and breaking all internal health checks and loopback probes.
+      HOSTNAME: "0.0.0.0"
     ports:
       - "127.0.0.1:${DIFY_PORT}:3000"
 $(build_dify_deps)
@@ -2117,15 +2121,20 @@ validate_caddyfile() {
         return 0
     fi
     
-    log "Validating Caddyfile..."
-    
-    # Run validation inside the caddy container
+    log "Formatting and validating Caddyfile..."
+
+    # Format first (caddy requires tabs; our heredoc uses spaces) then validate.
+    # Both steps run in a throwaway caddy container — fmt needs a writable mount.
+    docker run --rm \
+        -v "${CONFIG_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile" \
+        caddy:2-alpine caddy fmt --overwrite /etc/caddy/Caddyfile 2>/dev/null || true
+
     if ! run_cmd docker run --rm \
         -v "${CONFIG_DIR}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
         caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile; then
         fail "Caddyfile validation failed"
     fi
-    
+
     ok "Caddyfile is valid"
 }
 
