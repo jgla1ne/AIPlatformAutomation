@@ -985,13 +985,12 @@ EOF
       - "127.0.0.1:${DIFY_PORT}:3000"
 $(build_dify_deps)
     healthcheck:
-      # nc (busybox netcat) is always present in Alpine — just verify port 3000 accepts
-      # connections. curl/bash/node are absent or unreliable in the standalone Next.js image.
-      # start_period must outlast the LiteLLM wait (~30 min) because all containers start
-      # simultaneously and dify-web is checked last.
-      test: ["CMD-SHELL", "nc -z -w1 127.0.0.1 3000"]
+      # Node.js is guaranteed in the dify-web image. Make a TCP connection to port 3000;
+      # exit 0 on success, exit 1 on error or 3s timeout. Avoids reliance on nc/-z support
+      # or curl which may be absent. start_period outlasts LiteLLM's ~30 min cold start.
+      test: ["CMD-SHELL", "node -e \"const net=require('net');const s=net.connect(3000,'127.0.0.1',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),3000);\""]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 5
       start_period: 2400s
 
