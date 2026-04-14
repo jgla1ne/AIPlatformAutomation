@@ -817,7 +817,7 @@ EOF
       GATEWAY_CONTROL_UI_ALLOWED_ORIGINS: "*"
     volumes:
       - ${DATA_DIR}/openclaw/data:/app/data
-      - ${DATA_DIR}/openclaw/config:/root/.openclaw
+      - ${DATA_DIR}/openclaw/config:/.openclaw
     ports:
       - "127.0.0.1:${OPENCLAW_PORT}:${OPENCLAW_PORT}"
 $(build_openclaw_deps)
