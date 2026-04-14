@@ -975,8 +975,9 @@ EOF
       - "127.0.0.1:${DIFY_PORT}:3000"
 $(build_dify_deps)
     healthcheck:
-      # Next.js may bind to container hostname rather than localhost — use /dev/tcp.
-      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/3000"]
+      # /dev/tcp is bash-only and bash is not in the dify-web Node.js image.
+      # Use node (always present) to make an HTTP request instead.
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
       interval: 15s
       timeout: 10s
       retries: 5
