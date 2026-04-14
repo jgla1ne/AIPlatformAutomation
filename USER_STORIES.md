@@ -20,11 +20,14 @@
 **Acceptance criteria:**
 - Typed confirmation (`DELETE <tenant_id>`) required before any destructive action
 - All containers stopped and removed
+- All containers stopped and removed
 - All Docker volumes removed
 - Tenant data directory removed (`/mnt/<tenant>`)
 - Docker images scoped to tenant removed (by label and name prefix)
-- Docker daemon stopped if data-root is on EBS (prevents block device busy error on re-format)
-- EBS unmounted before directory removal
+- Docker daemon stopped if data-root is on EBS (with cooldown period)
+- EBS unmounted before directory removal; uses `fuser -km` to break process locks
+- Post-unmount verification: Script fails if mountpoint remains (protects data)
+- Path safety: Refuses to delete `/mnt` or `/opt` root directories
 - Docker network removed
 - Supports `--dry-run` (print actions, execute nothing)
 - Supports `--containers-only` (leave data intact)

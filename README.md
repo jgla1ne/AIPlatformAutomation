@@ -836,6 +836,7 @@ Use when implementing or reviewing any script change:
 - [ ] Does Script 1 save rclone credentials as `service-account.json` + generate INI `rclone.conf` (not write raw JSON as `rclone.conf`)?
 - [ ] Does `reconfigure_service()` in Script 3 also update platform.conf (not just restart the container)?
 - [ ] Does `change_litellm_routing()` update both `litellm_config.yaml` and `platform.conf`?
+- [ ] Does Script 0 stop Docker, use `fuser -km` on the mount, and verify unmount success?
 - [ ] Is `GPU_TYPE` detected in Script 1 and respected in Script 2 (Ollama/OpenWebUI reservations)?
 - [ ] Does Script 3 install the `ai-platform-${TENANT_ID}` systemd unit when `--setup-persistence` is used?
 - [ ] Is the Dify worker healthcheck using the lightweight Python-based `/proc` probe (not `celery status`)?

@@ -137,6 +137,12 @@ main() {
     export TENANT_ID="${tenant_id}"
     export BASE_DIR="/mnt/${tenant_id}"
     export DATA_DIR="/mnt/${tenant_id}"
+    
+    # Path safety: ensure BASE_DIR is a subdirectory, not /mnt or /opt root
+    if [[ "${BASE_DIR}" == "/mnt" || "${BASE_DIR}" == "/mnt/" || "${BASE_DIR}" == "/opt" || "${BASE_DIR}" == "/opt/" ]]; then
+        fail "Forbidden: BASE_DIR resolves to a root directory (${BASE_DIR}). Cleanup must be scoped to a tenant."
+    fi
+
     export CONFIG_DIR="/mnt/${tenant_id}/config"
     export LOGS_DIR="/mnt/${tenant_id}/logs"
     export COMPOSE_FILE="/mnt/${tenant_id}/config/docker-compose.yml"
@@ -209,12 +215,15 @@ main() {
     # back to lazy-unmount, and the device stays "in use" — mkfs.ext4 in Script 1
     # then fails with "apparently in use by the system".
     # Script 1's configure_docker_dataroot() restarts Docker after the fresh mount.
+    # Script 1's configure_docker_dataroot() restarts Docker after the fresh mount.
     local docker_data_root
     docker_data_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "")
-    if [[ "$docker_data_root" == /mnt/* ]]; then
-        log "Stopping Docker daemon (data-root is on EBS: $docker_data_root)..."
-        sudo systemctl stop docker
-        ok "Docker daemon stopped — will be restarted by Script 1"
+    if [[ "$docker_data_root" == "${BASE_DIR}"* ]]; then
+        log "Stopping Docker daemon (data-root is scoped to this tenant: $docker_data_root)..."
+        sudo systemctl stop docker || true
+        # Give it a moment to release file handles
+        sleep 2
+        ok "Docker daemon stopped"
     fi
 
     # 3. Unmount EBS volume FIRST — must happen before rm -rf, because the
@@ -223,10 +232,23 @@ main() {
     local mount_point="/mnt/${tenant_id}"
     if mountpoint -q "$mount_point" 2>/dev/null; then
         log "Unmounting EBS volume: $mount_point (required before directory removal)"
+        
+        # Aggressively kill processes using the mount (README §6)
+        if command -v fuser >/dev/null 2>&1; then
+            log "  Terminating processes accessing $mount_point..."
+            sudo fuser -km "$mount_point" >/dev/null 2>&1 || true
+            sleep 1
+        fi
+
         run_cmd sudo umount "$mount_point" || {
             log "WARN: umount returned non-zero — attempting lazy unmount"
             run_cmd sudo umount -l "$mount_point" || true
         }
+        
+        # Verify unmount succeeded
+        if mountpoint -q "$mount_point" 2>/dev/null; then
+            fail "CRITICAL: $mount_point is STILL MOUNTED. Wipe aborted to protect EBS data. Manually stop all processes (e.g., Docker, Caddy) and try again."
+        fi
         ok "EBS volume unmounted: $mount_point"
     else
         log "No EBS volume mounted at $mount_point (nothing to unmount)"
