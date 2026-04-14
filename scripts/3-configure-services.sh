@@ -26,6 +26,7 @@
 #          --ollama-remove <model>    Remove an Ollama model
 #          --backup                   Create a one-off backup of tenant data
 #          --schedule "<cron>"        Schedule recurring backups (use with --backup)
+#          --setup-persistence        Ensure platform stands up automatically after reboot
 # =============================================================================
 
 set -euo pipefail
@@ -1115,6 +1116,7 @@ main() {
     local ollama_model=""
     local do_backup=false
     local backup_schedule=""
+    local setup_persistence=false
 
     # Parse arguments
     shift
@@ -1197,6 +1199,10 @@ main() {
                 ollama_action="pull"
                 ollama_model="$2"
                 shift 2
+                ;;
+            --setup-persistence)
+                setup_persistence=true
+                shift
                 ;;
             --ollama-remove)
                 ollama_action="remove"
@@ -1335,6 +1341,11 @@ main() {
         return 0
     fi
     
+    if [[ "$setup_persistence" == "true" ]]; then
+        configure_persistence
+        return 0
+    fi
+
     # Handle platform operations
     if [[ -n "$restart_service" ]]; then
         restart_service "$restart_service"
@@ -2440,6 +2451,56 @@ enable_service() {
         log "Starting new service container..."
         docker compose -f "${COMPOSE_FILE}" up -d "$service"
     fi
+}
+
+# =============================================================================
+# REBOOT PERSISTENCE (README §4.2)
+# =============================================================================
+configure_persistence() {
+    section "🛡️  REBOOT PERSISTENCE"
+    log "Configuring systemd service for automatic standup..."
+    
+    local service_name="ai-platform-${TENANT_ID}"
+    local mount_point="/mnt/${TENANT_ID}"
+    
+    # Resolve the mount unit name for systemd dependency
+    local mount_unit
+    mount_unit=$(systemd-escape --suffix=mount "${mount_point}")
+    
+    sudo bash -s -- "${service_name}" "${TENANT_ID}" "${REPO_ROOT}" "${COMPOSE_FILE}" "${mount_unit}" << 'SUDO_EOF'
+        service_name="$1"
+        tenant_id="$2"
+        repo_root="$3"
+        compose_file="$4"
+        mount_unit="$5"
+        
+        # Create systemd unit
+        cat > "/etc/systemd/system/${service_name}.service" << UNITEFF
+[Unit]
+Description=AI Platform stack for ${tenant_id}
+After=network.target docker.service ${mount_unit}
+Requires=docker.service ${mount_unit}
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=${repo_root}
+# Run Script 2 to ensure containers (including web UIs and workers) are healthy
+ExecStart=/usr/bin/bash scripts/2-deploy-services.sh ${tenant_id}
+ExecStop=/usr/bin/docker compose -f ${compose_file} stop
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+UNITEFF
+
+        systemctl daemon-reload
+        systemctl enable "${service_name}"
+        echo "  ✅ systemd service created and enabled: ${service_name}"
+SUDO_EOF
+
+    ok "Persistence configured. The platform will stand up automatically after reboot."
 }
 
 # =============================================================================

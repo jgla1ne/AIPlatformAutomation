@@ -836,6 +836,9 @@ Use when implementing or reviewing any script change:
 - [ ] Does Script 1 save rclone credentials as `service-account.json` + generate INI `rclone.conf` (not write raw JSON as `rclone.conf`)?
 - [ ] Does `reconfigure_service()` in Script 3 also update platform.conf (not just restart the container)?
 - [ ] Does `change_litellm_routing()` update both `litellm_config.yaml` and `platform.conf`?
+- [ ] Is `GPU_TYPE` detected in Script 1 and respected in Script 2 (Ollama/OpenWebUI reservations)?
+- [ ] Does Script 3 install the `ai-platform-${TENANT_ID}` systemd unit when `--setup-persistence` is used?
+- [ ] Is the Dify worker healthcheck using the lightweight Python-based `/proc` probe (not `celery status`)?
 
 ---
 
@@ -928,8 +931,8 @@ curl -s -X POST "http://127.0.0.1:${SIGNALBOT_PORT}/v1/register/+<number>/verify
 | **Script 0** — Nuclear Cleanup | Production ready | Typed confirmation, Docker daemon stop before EBS unmount, scoped image removal |
 | **Script 1** — Setup Wizard | Production ready | Interactive wizard, stack presets, memory layer selection, dependency enforcement, writes platform.conf |
 | **Script 2** — Deployment Engine | Production ready | Heredoc compose generation, port allocator, secret persistence, Letta DB creation, post-deploy dashboard |
-| **Script 3** — Mission Control | Production ready | Sources port-allocations (takes precedence), 28-service health table, domain-aware URLs, credentials summary, ingestion pipeline, log management, service reconfigure, LiteLLM routing, Ollama model management, backup |
+| **Script 3** — Mission Control | Production ready | Sources port-allocations (takes precedence), 28-service health table, domain-aware URLs, credentials summary, ingestion pipeline, log management, service reconfigure, LiteLLM routing, Ollama model management, backup, **reboot persistence** |
 
 ---
 
-*Version: 5.4.0 | Last Updated: 2026-04-14 | Architecture: 4 scripts, ~30 services (Dify 3-container stack), single-tenant per EBS volume*
+*Version: 5.5.0 | Last Updated: 2026-04-14 | Architecture: 4 scripts, ~30 services (Dify 3-container stack), single-tenant per EBS volume*

@@ -198,6 +198,21 @@ build_dify_deps() {
     printf '%s' "${deps}"
 }
 
+# Helper to emit GPU reservation block if NVIDIA is active (README §4.2)
+emit_gpu_reservation() {
+    if [[ "${GPU_TYPE:-none}" == "nvidia" ]]; then
+        cat <<EOF
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+EOF
+    fi
+}
+
 build_authentik_deps() {
     local deps=""
     if [[ "${POSTGRES_ENABLED}" == "true" ]] || [[ "${REDIS_ENABLED}" == "true" ]]; then
@@ -305,6 +320,8 @@ persist_generated_secrets() {
     fi
     # DIFY_INIT_PASSWORD — used by configure_dify() in Script 3 to bootstrap the first admin.
     if [[ "${DIFY_ENABLED:-false}" == "true" ]]; then
+        DIFY_SECRET_KEY="${DIFY_SECRET_KEY:-$(openssl rand -hex 32)}"
+        update_conf_value "DIFY_SECRET_KEY" "${DIFY_SECRET_KEY}"
         DIFY_INIT_PASSWORD="${DIFY_INIT_PASSWORD:-$(openssl rand -base64 16 | tr -d '=+/')}"
         update_conf_value "DIFY_INIT_PASSWORD" "${DIFY_INIT_PASSWORD}"
     fi
@@ -600,6 +617,7 @@ EOF
       - "127.0.0.1:${OLLAMA_PORT}:11434"
     networks:
       - ${DOCKER_NETWORK}
+$(emit_gpu_reservation)
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 30s
@@ -1010,7 +1028,11 @@ $(build_dify_deps)
     # dify-api manages its own internal user
     command: api
     environment:
+      MODE: api
+      MIGRATION_ENABLED: "true"
       SECRET_KEY: ${DIFY_SECRET_KEY}
+      CONSOLE_API_URL: ${_dify_api_public_url}
+      APP_API_URL: ${_dify_api_public_url}
       DB_USERNAME: ${POSTGRES_USER}
       DB_PASSWORD: ${POSTGRES_PASSWORD}
       DB_HOST: ${TENANT_PREFIX}-postgres
@@ -1056,7 +1078,10 @@ $(build_dify_deps)
     restart: unless-stopped
     command: worker
     environment:
+      MODE: worker
       SECRET_KEY: ${DIFY_SECRET_KEY}
+      CONSOLE_API_URL: ${_dify_api_public_url}
+      APP_API_URL: ${_dify_api_public_url}
       DB_USERNAME: ${POSTGRES_USER}
       DB_PASSWORD: ${POSTGRES_PASSWORD}
       DB_HOST: ${TENANT_PREFIX}-postgres
@@ -1075,7 +1100,9 @@ $(build_dify_deps)
       - ${DATA_DIR}/dify:/app/api/storage
 $(build_dify_deps)
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'celery' > /dev/null || exit 1"]
+      # Use lightweight Python probe to check for celery process in /proc.
+      # Avoids 'celery status' which is too heavy for limited RAM environments.
+      test: ["CMD-SHELL", "python3 -c \"import os, sys; [sys.exit(0) for p in os.listdir('/proc') if p.isdigit() and 'celery' in open('/proc/'+p+'/cmdline').read()]; sys.exit(1)\""]
       interval: 30s
       timeout: 10s
       retries: 5
