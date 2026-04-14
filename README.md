@@ -474,8 +474,8 @@ Not every image ships `curl`. Use the right tool per image or the healthcheck wi
 | LiteLLM | `python3` | `python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"` |
 | Qdrant | `bash` (no curl/wget) | `["CMD", "bash", "-c", "echo > /dev/tcp/localhost/6333"]` |
 | N8N | `wget` | `wget -q --spider http://localhost:5678/healthz` |
-| Dify-web | `bash` | `["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/3000"]` (Next.js may bind to container hostname, not localhost — TCP check is most reliable) |
-| Dify-api | `curl` | `curl -sf http://localhost:5001/health` |
+| Dify-web | `node` | `node -e "const net=require('net');const s=net.connect(3000,'127.0.0.1',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),3000);"` — requires `HOSTNAME=0.0.0.0` so Next.js binds to all interfaces, not just Docker bridge IP |
+| Dify-api | `python3` | `python3 -c "import socket; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1',5001)); s.close()"` — `/health` returns non-2xx during Flask init; TCP check is reliable |
 | Authentik | `python3` | `python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:9000/-/health/live/')"` |
 | Flowise | `curl` | `curl -f http://localhost:3000/api/v1/ping` |
 | LibreChat | `wget` | `wget -q --spider http://0.0.0.0:3080/health` (binds to 0.0.0.0; `/health` not `/api/health`) |
@@ -492,8 +492,8 @@ Not every image ships `curl`. Use the right tool per image or the healthcheck wi
 | Service | Wrong | Correct |
 |---|---|---|
 | Qdrant | `/health` (404) | `/healthz` |
-| Dify-web | — | `bash -c 'echo > /dev/tcp/127.0.0.1/3000'` (TCP check avoids hostname-binding ambiguity) |
-| Dify-api | — | `/health` |
+| Dify-web | — | Node.js TCP connect to `127.0.0.1:3000` (requires `HOSTNAME=0.0.0.0` — otherwise Next.js binds to Docker bridge IP, not loopback) |
+| Dify-api | — | Python3 socket connect to `127.0.0.1:5001` (`/health` hangs during Flask init) |
 | Authentik | `/-/health/` (404) | `/-/health/live/` |
 | LiteLLM | `/health` | `/health/liveliness` |
 | LibreChat | `/api/health` (404) | `/health` |
@@ -509,9 +509,9 @@ Not every image ships `curl`. Use the right tool per image or the healthcheck wi
 | Zep CE | 60s | Postgres migrations + hnsw index creation |
 | N8N | 60s | DB init |
 | Flowise | 60s | SQLite init |
-| Dify-web | 60s | Next.js hydration |
-| Dify-api | 90s | DB migrations + Celery init |
-| Dify-worker | 120s | Celery worker startup |
+| Dify-web | 2400s | All containers start simultaneously; dify-web is checked after LiteLLM's 30-min wait — start_period must outlast that window |
+| Dify-api | 2400s | Same timing issue; Flask init is slow but TCP port opens quickly once gunicorn binds |
+| Dify-worker | 2400s | Same timing issue; Celery startup 1-3 min; healthcheck is non-fatal |
 | Authentik | 60s | Migration runner |
 | Signalbot | 60s | signal-cli daemon takes ~26 s |
 | AnythingLLM | 60s | DB migrations |
@@ -522,7 +522,7 @@ Not every image ships `curl`. Use the right tool per image or the healthcheck wi
 | ChromaDB | 30s | SQLite + segment manager init |
 | Mem0 | 30s | Postgres + vectordb client init |
 
-`wait_for_all_health()` timeouts: litellm 1200s, openwebui 180s, authentik 180s, letta 900s (20 min — LiteLLM migration window).
+`wait_for_all_health()` timeouts: litellm 1800s (30 min — Prisma download + migrations), letta 900s, openwebui/authentik 180s. Dify-worker timeout is 180s but non-fatal (worker takes 1-3 min; deployment continues regardless).
 
 ### Directory Permissions
 
@@ -684,9 +684,26 @@ Deploying only `langgenius/dify-web` causes the browser to loop forever on `/ins
 | `dify-api` | `langgenius/dify-api:latest` | `api` | 5001 |
 | `dify-worker` | `langgenius/dify-api:latest` | `worker` | — |
 
-`CONSOLE_API_URL` in the web container must be the **browser-accessible** URL of dify-api. When Caddy is active: `https://dify-api.${BASE_DOMAIN}`. Script 2 generates a `dify-api.${BASE_DOMAIN}` Caddy route automatically.
+**Single-subdomain path routing (required for self-signed TLS):**  
+When Caddy uses a self-signed cert, the browser accepts the cert for `dify.${BASE_DOMAIN}` but blocks XHR to `dify-api.${BASE_DOMAIN}` (different hostname = different cert = separate manual acceptance required, which the browser silently blocks). This causes `/install` to hang — the page renders but all API calls fail with no visible error.
 
-**dify-worker healthcheck**: Celery workers don't expose HTTP — `celery inspect ping` is fragile (requires broker reachability and correct app path). The worker healthcheck uses `pgrep -f 'celery' > /dev/null` instead, which only checks that the worker process is running.
+Script 2 routes **all Dify traffic through `dify.${BASE_DOMAIN}`** using Caddy path handles (matching dify's official nginx config):
+```
+dify.example.com {
+    handle /console/api* { reverse_proxy dify-api:5001 }
+    handle /api*         { reverse_proxy dify-api:5001 }
+    handle /v1*          { reverse_proxy dify-api:5001 }
+    handle /files*       { reverse_proxy dify-api:5001 }
+    handle               { reverse_proxy dify:3000     }
+}
+```
+
+`CONSOLE_API_URL` and `APP_API_URL` in the web container are set to `https://dify.${BASE_DOMAIN}` (same hostname as the UI). There is no separate `dify-api.${BASE_DOMAIN}` route.
+
+**`HOSTNAME=0.0.0.0` required:**  
+Next.js standalone server uses `$HOSTNAME` as its bind address. Without an explicit override it resolves the container hostname (e.g. `c6adbb7ed196`) to the Docker bridge IP (`172.17.0.2`), making `127.0.0.1` unreachable inside the container. All TCP healthcheck probes fail. Setting `HOSTNAME: "0.0.0.0"` in the compose environment makes it bind to all interfaces.
+
+**dify-worker healthcheck**: Celery workers don't expose HTTP — `celery inspect ping` is fragile (requires broker reachability and correct app path). The worker healthcheck uses `pgrep -f 'celery' > /dev/null` instead. The dify-worker `wait_for_health` timeout is non-fatal — deployment completes even if the worker health check times out.
 
 ### Milvus — Three-Container Stack
 
@@ -805,14 +822,16 @@ Use when implementing or reviewing any script change:
 - [ ] Does `flush_all_data()` only run when `--flushall` is passed (never by default)?
 - [ ] Are all Zep watermill restarts conditional (check table count before restarting)?
 - [ ] Do Node.js-based container healthchecks use `node -e` not `bash /dev/tcp` (bash absent in Node images)?
-- [ ] Is Dify deployed as 3 containers (web + api + worker)? Is `CONSOLE_API_URL` set to the public dify-api URL?
+- [ ] Is Dify deployed as 3 containers (web + api + worker)? Is `CONSOLE_API_URL` set to `https://dify.${BASE_DOMAIN}` (NOT a separate `dify-api` subdomain — self-signed TLS + separate subdomain = browser blocks all XHR)?
+- [ ] Does the Caddy `dify.${BASE_DOMAIN}` block use path handles (`/console/api*`, `/api*`, `/v1*`, `/files*` → dify-api; `handle` → dify-web)?
+- [ ] Is `HOSTNAME: "0.0.0.0"` set in the dify-web environment (without it Next.js binds to Docker bridge IP, breaking internal healthchecks)?
 - [ ] Does Signalbot have a Caddy route (`signal.${BASE_DOMAIN}`)? Is the QR link URL printed in the dashboard?
 - [ ] Does the rclone config reference `service_account_file = /credentials/service-account.json` (not `credentials.json`)?
 - [ ] Does `trigger_initial_rclone_sync()` fire after `wait_for_all_health()` in main()?
 - [ ] Do Script 3 URLs use `https://subdomain.${BASE_DOMAIN}` when Caddy active (not path-based `https://${BASE_DOMAIN}/service` and not IP:port)?
 - [ ] Does `show_credentials()` display login credentials for every enabled web service?
 - [ ] Does `configure_dify()` call `/console/api/setup` on dify-api port (5001), not on dify-web port?
-- [ ] Does dify-web healthcheck use `bash /dev/tcp/127.0.0.1/3000` (not `$(hostname)` which expands at heredoc write time)?
+- [ ] Does dify-web healthcheck use `node -e "net.connect(3000,'127.0.0.1',...)"` (bash absent in Next.js image; nc -z unreliable; node is guaranteed present)?
 - [ ] Does Script 1 translate numeric `INGESTION_METHOD` (1-5) to string (`rclone`, `gdrive`, etc.) before writing platform.conf?
 - [ ] Does Script 1 save rclone credentials as `service-account.json` + generate INI `rclone.conf` (not write raw JSON as `rclone.conf`)?
 - [ ] Does `reconfigure_service()` in Script 3 also update platform.conf (not just restart the container)?

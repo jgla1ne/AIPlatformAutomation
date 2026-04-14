@@ -960,12 +960,16 @@ EOF
     # Without dify-api the web frontend loops on /install forever — CONSOLE_API_URL must
     # point to a running dify-api backend, not 127.0.0.1 which resolves inside the container.
     if [[ "${DIFY_ENABLED}" == "true" ]]; then
-        # Public URL the browser uses to reach the API (via Caddy when active)
+        # Public URL the browser uses to reach the API.
+        # MUST share the same hostname as the web UI — Caddy routes /console/api*, /api*,
+        # /v1*, /files* on dify.${BASE_DOMAIN} to dify-api internally. A separate
+        # dify-api.${BASE_DOMAIN} subdomain requires the browser to trust an additional
+        # self-signed cert, blocking all XHR and causing /install to hang forever.
         local _dify_api_public_url
         if [[ "${CADDY_ENABLED:-false}" == "true" && -n "${BASE_DOMAIN:-}" ]]; then
-            _dify_api_public_url="https://dify-api.${BASE_DOMAIN}"
+            _dify_api_public_url="https://dify.${BASE_DOMAIN}"
         else
-            _dify_api_public_url="http://${DOMAIN:-localhost}:${DIFY_API_PORT:-5001}"
+            _dify_api_public_url="http://${DOMAIN:-localhost}:${DIFY_PORT:-3040}"
         fi
 
         cat >> "${COMPOSE_FILE}" << EOF
@@ -1915,12 +1919,28 @@ flowise.${BASE_DOMAIN} {
 EOF
     fi
     
-    # Dify
+    # Dify — path-based routing on one subdomain (mirrors dify's official nginx config).
+    # /console/api*, /api*, /v1*, /files* → dify-api; everything else → dify-web.
+    # Single subdomain = single self-signed cert = browser XHR works without extra prompts.
     if [[ "${DIFY_ENABLED}" == "true" ]]; then
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
 dify.${BASE_DOMAIN} {
-    reverse_proxy ${TENANT_PREFIX}-dify:3000
+	handle /console/api* {
+		reverse_proxy ${TENANT_PREFIX}-dify-api:5001
+	}
+	handle /api* {
+		reverse_proxy ${TENANT_PREFIX}-dify-api:5001
+	}
+	handle /v1* {
+		reverse_proxy ${TENANT_PREFIX}-dify-api:5001
+	}
+	handle /files* {
+		reverse_proxy ${TENANT_PREFIX}-dify-api:5001
+	}
+	handle {
+		reverse_proxy ${TENANT_PREFIX}-dify:3000
+	}
 }
 EOF
     fi
@@ -2005,15 +2025,9 @@ signal.${BASE_DOMAIN} {
 EOF
     fi
 
-    # Dify API backend — separate subdomain so the web frontend can reach it from the browser
-    if [[ "${DIFY_ENABLED:-${ENABLE_DIFY:-false}}" == "true" ]]; then
-        cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
-
-dify-api.${BASE_DOMAIN} {
-    reverse_proxy ${TENANT_PREFIX}-dify-api:5001
-}
-EOF
-    fi
+    # dify-api subdomain removed — API traffic is now routed through dify.${BASE_DOMAIN}
+    # via path handles above. A separate subdomain requires a second self-signed cert
+    # acceptance in the browser, blocking XHR and making /install hang.
 
     chown -R "$PUID:$PGID" "${CONFIG_DIR}/caddy"
     ok "Caddyfile generated"
@@ -2893,12 +2907,7 @@ show_post_deploy_dashboard() {
         [[ "${N8N_ENABLED:-false}"     == "true" ]] && _d_line "  N8N          $(_svc_url n8n     ${N8N_PORT})"
         [[ "${FLOWISE_ENABLED:-false}" == "true" ]] && _d_line "  Flowise      $(_svc_url flowise ${FLOWISE_PORT})"
         if [[ "${DIFY_ENABLED:-false}" == "true" ]]; then
-            _d_line "  Dify         $(_svc_url dify ${DIFY_PORT})"
-            if [[ "$use_subdomains" == "true" ]]; then
-                _d_line "  Dify API     ${base_proto}://dify-api.${display_host}  (backend)"
-            else
-                _d_line "  Dify API     http://127.0.0.1:${DIFY_API_PORT:-5001}  (backend)"
-            fi
+            _d_line "  Dify         $(_svc_url dify ${DIFY_PORT})  (web + api via path routing)"
         fi
         _d_blank
     fi

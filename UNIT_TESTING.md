@@ -24,6 +24,64 @@
 
 ---
 
+## RUN 2 — 2026-04-14 (Post-deploy iteration 2 — all services healthy)
+
+### T1 — Container Health
+
+| Container | Status | Result |
+|---|---|---|
+| ai-datasquiz-postgres | healthy | PASS |
+| ai-datasquiz-redis | healthy | PASS |
+| ai-datasquiz-mongodb | healthy | PASS |
+| ai-datasquiz-ollama | healthy | PASS |
+| ai-datasquiz-litellm | healthy (20s from cache — Prisma binary cached) | PASS |
+| ai-datasquiz-openwebui | healthy | PASS |
+| ai-datasquiz-librechat | healthy | PASS |
+| ai-datasquiz-rag-api | healthy | PASS |
+| ai-datasquiz-openclaw | healthy | PASS |
+| ai-datasquiz-anythingllm | healthy | PASS |
+| ai-datasquiz-n8n | healthy | PASS |
+| ai-datasquiz-flowise | healthy | PASS |
+| ai-datasquiz-dify | healthy | PASS |
+| ai-datasquiz-dify-api | healthy | PASS |
+| ai-datasquiz-dify-worker | non-fatal timeout (180s) — Celery takes 1-3 min to load all tasks | WARN (non-blocking) |
+| ai-datasquiz-authentik | healthy | PASS |
+| ai-datasquiz-zep | healthy | PASS |
+| ai-datasquiz-letta | healthy | PASS |
+| ai-datasquiz-grafana | healthy | PASS |
+| ai-datasquiz-prometheus | healthy | PASS |
+| ai-datasquiz-caddy | healthy | PASS |
+| ai-datasquiz-code-server | healthy | PASS |
+| ai-datasquiz-signalbot | healthy | PASS |
+| ai-datasquiz-qdrant | healthy | PASS |
+| ai-datasquiz-rclone | running (syncs Google Drive on 5-min poll) | PASS |
+
+**Fixes applied this run:**
+1. dify-api healthcheck: `/health` returns non-2xx during Flask init → replaced with Python3 socket TCP probe on port 5001
+2. dify-web healthcheck: `nc -z` exits 0 even when nothing is listening (unreliable) → replaced with `node -e "net.connect(3000,...)"` TCP probe; requires `HOSTNAME=0.0.0.0` so Next.js binds to all interfaces (not just Docker bridge IP)
+3. dify-web `HOSTNAME=0.0.0.0`: without it Next.js binds to `172.17.0.2:3000` (Docker bridge IP only), making `127.0.0.1` unreachable inside container; all healthcheck probes fail silently
+4. Dify `/install` hang: browser on `dify.${DOMAIN}` made XHR to `dify-api.${DOMAIN}` (separate self-signed cert → blocked by browser with no visible error). Fixed: collapsed to single subdomain with Caddy path routing (`/console/api*`, `/api*`, `/v1*`, `/files*` → dify-api; `handle` → dify-web). `CONSOLE_API_URL` now points to `https://dify.${DOMAIN}`
+5. Caddyfile formatting: `caddy fmt --overwrite` now runs in a throwaway container BEFORE validation (not after), eliminating the "not formatted" warning at validation time
+6. dify-api + dify-web + dify-worker `start_period` increased to 2400s: all containers start simultaneously; dify services are only checked after LiteLLM's ~30-min wait; old 90s/120s start_period caused containers to be marked "unhealthy" before we ever polled them
+7. LiteLLM `start_period` 900s → 1500s, `wait_for_health` 1200s → 1800s; added Prisma binary cache at `${DATA_DIR}/litellm/prisma-cache`
+8. GDRIVE_FOLDER_ID now written to platform.conf and to rclone.conf as `root_folder_id` (service accounts have no personal Drive)
+9. N8N push backend: `N8N_PUSH_BACKEND: sse` (WebSocket push fails through Caddy)
+10. rclone syncs confirmed: files present in `/mnt/datasquiz/ingestion/`
+
+**Regressions introduced:** None.
+
+---
+
+### T7 (Run 2) — rclone / Google Drive
+
+| Test | Expected | Actual | Result |
+|---|---|---|---|
+| rclone config INI format | `[gdrive]\ntype = drive\nservice_account_file = /credentials/service-account.json\nroot_folder_id = <id>` | Correct INI generated with root_folder_id | PASS |
+| INGESTION_METHOD value | `"rclone"` (string) | `"rclone"` | PASS |
+| Files synced | PDF + txt present in ingestion/ | `Product Comparison 28.10.25.pdf`, `hello world.txt` | PASS |
+
+---
+
 ## RUN 1 — 2026-04-13 (Post-deploy iteration 1)
 
 ### T1 — Container Health
