@@ -65,6 +65,8 @@
 - Health checks pass for every enabled service before script exits
 - Post-deploy dashboard printed with all service URLs and credentials
 - Script exits non-zero if any enabled service fails health checks within timeout
+- Default re-run (no flags): containers pruned, EBS data preserved — fast retry, no re-pull
+- `--flushall` flag: wipes all databases, service state, Ollama models, Docker image cache — true clean redeploy
 - Script: `2-deploy-services.sh`
 
 ---
@@ -108,6 +110,26 @@
 - Script 2: marker files in `.configured/` skip already-completed steps; port allocations idempotent; secrets not regenerated if already in platform.conf
 - Script 3: `configure_*()` functions guard against already-configured services; re-run safe
 - Secret persistence: `AUTHENTIK_SECRET_KEY`, `ANYTHINGLLM_JWT_SECRET`, `LITELLM_MASTER_KEY` stable across redeploys
+
+---
+
+### Feature 1.6 — Cost-Efficient Deployment Iteration
+
+**As a** DevOps engineer iterating on deployment fixes,  
+**I want** to re-run Script 2 without re-downloading images or re-running long migrations,  
+**so that** I minimise EC2 data transfer costs and time spent waiting during debugging cycles.
+
+**Acceptance criteria:**
+- Default Script 2 re-run preserves all EBS-mounted data: Postgres, Redis, MongoDB, Ollama models, Docker image cache
+- EBS bind-mount directories survive `docker compose down` — no data loss on container restart
+- `CREATE TABLE IF NOT EXISTS` / migration idempotency means existing schemas don't block re-deploy
+- `--flushall` flag available when a genuinely clean state is required:
+  - Deletes: `postgres/`, `redis/`, `mongodb/`, all service state dirs, `ollama/models/`
+  - Runs `docker image prune -af` to force re-pull of all images
+  - 5-second countdown warning before irreversible deletion
+  - Skips deletion of: `config/`, `logs/`, `rclone/` (credentials from Script 1)
+- Script 0 full teardown (`rm -rf ${BASE_DIR}`) wipes EBS filesystem entirely; Script 1 re-formats it
+- Script: `2-deploy-services.sh --flushall`
 
 ---
 
@@ -659,4 +681,4 @@ Epic 10 — Dev           code-server, continue-dev
 
 ---
 
-*Version: 2.0.0 | Last Updated: 2026-04-14*
+*Version: 2.1.0 | Last Updated: 2026-04-14*

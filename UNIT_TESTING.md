@@ -20,6 +20,7 @@
 | **T9** — AnythingLLM ↔ LiteLLM ↔ Qdrant Pipeline | 4 checks | API chain validation |
 | **T10** — Ingestion Pipeline | 5 checks | rclone sync → embed → Qdrant upsert |
 | **T11** — Script 3 Management Commands | 8 checks | CLI flags validation |
+| **T12** — Script 2 `--flushall` Flag | 5 checks | Data wipe + fresh deploy verification |
 
 ---
 
@@ -276,6 +277,28 @@ ls -lh /mnt/datasquiz/backups/
 
 ---
 
+### T12 — Script 2 `--flushall` Flag
+
+| Check | Command / Verify | Expected | Result |
+|---|---|---|---|
+| Postgres wiped | `--flushall` then check `${DATA_DIR}/postgres` | Directory absent before `prepare_data_dirs()` recreates it | PENDING |
+| Redis wiped | `--flushall` then check `${DATA_DIR}/redis` | Directory absent | PENDING |
+| Ollama models wiped | `--flushall` then check `${DATA_DIR}/ollama/models` | Directory absent; models re-downloaded by Ollama | PENDING |
+| Docker image cache cleared | `docker images` after `--flushall` | No tenant images; all re-pulled on next `docker compose up` | PENDING |
+| Config/rclone preserved | `--flushall` then check `${DATA_DIR}/config` and `rclone/` | Both survive (not in wipe list) | PENDING |
+
+**How to re-run T12:**
+```bash
+# Run with --flushall and verify clean state before containers start
+bash scripts/2-deploy-services.sh datasquiz --flushall 2>&1 | grep -E "Wiping|Pruning|flushall"
+
+# After deploy completes, verify fresh schema (no stale tables from prior run)
+docker exec ai-datasquiz-postgres psql -U postgres -c "\l"   # databases recreated fresh
+docker images | grep -v REPOSITORY                           # images re-pulled
+```
+
+---
+
 ## RUN 1 — FINAL INTEGRATION RESULTS (2026-04-13T14:29:34Z)
 
 | Suite | Result | Evidence |
@@ -287,6 +310,7 @@ ls -lh /mnt/datasquiz/backups/
 | T6 — Zep errors (last 60s) | **PASS** | 0 errors after watermill table fix |
 | T10 — Ingestion Pipeline | **PENDING** | Blocked on INGESTION_METHOD fix + GDrive folder share |
 | T11 — Script 3 Management | **PENDING** | New commands added post-run; no blocking issues |
+| T12 — `--flushall` Flag | **PENDING** | Feature added post-run; will validate on next clean deploy cycle |
 
 ---
 
@@ -303,7 +327,7 @@ ls -lh /mnt/datasquiz/backups/
 | Signalbot phone number not paired | MEDIUM | Manual step — use `bash scripts/3-configure-services.sh datasquiz --logs signalbot` to check |
 | Letta SECURITY log warnings | LOW — expected default behavior | No action |
 | Caddy UDP buffer warning | LOW — cosmetic | No action |
-| dify-web healthcheck `$(hostname)` bug | FIXED | Now uses `bash /dev/tcp/127.0.0.1/3000` |
+| dify-web healthcheck `$(hostname)` bug | FIXED | Now uses `node -e "require('http').get(...)"` — bash not present in Node.js image |
 | dify-api + dify-worker missing from first deploy | FIXED | Full 3-container stack in Script 2; pending clean re-deploy validation |
 | LiteLLM unhealthy during Prisma migrations (main-stable image, Apr 2026) | FIXED | `start_period` 600s→900s; `wait_for_health` timeout 900→1200 |
 | dify-worker celery healthcheck fragile | FIXED | Replaced `celery inspect ping` with `pgrep -f celery` |
@@ -326,13 +350,15 @@ ls -lh /mnt/datasquiz/backups/
 | Caddyfile missing 7 service routes | Added: anythingllm, grafana, zep, letta, code, prometheus | `generate_caddyfile()` |
 | rclone.conf written as raw JSON instead of INI | Fixed format; service-account.json is a separate file | `generate_caddyfile()` / manual |
 | `chown -R` on DATA_DIR root failed on lost+found, docker | Use `find -mindepth 1 ! -name lost+found ! -name docker` | `prepare_data_dirs()` |
-| Zep watermill tables not created on first deploy | Create tables proactively after Zep health, then restart | `wait_for_all_health()` |
+| Zep watermill tables not created on first deploy | Conditional restart: only restart Zep if table count < 2; 60s unconditional restart exceeded health timeout | `wait_for_all_health()` |
 | rclone.conf written as raw service account JSON | Fixed: proper INI config + separate `rclone/service-account.json` | `generate_rclone_config()` |
 | LiteLLM `start_period: 600s` too short for new image migrations (13-15 min) | Increased to `900s`; wait_for_health timeout 900→1200 | `generate_compose()` |
 | dify-worker healthcheck `celery inspect ping` fragile (requires broker) | Replaced with `pgrep -f 'celery'` | `generate_compose()` |
 | OpenClaw missing `start_period` — immediate healthcheck failure on slow DB connect | Added `start_period: 60s` | `generate_compose()` |
 | Code Server missing `start_period` | Added `start_period: 30s` | `generate_compose()` |
 | Weaviate, ChromaDB, Mem0 missing `start_period` | Added `start_period: 30s` to all three | `generate_compose()` |
+| dify-web healthcheck used `bash /dev/tcp` — bash not in Node.js image | Replaced with `node -e "require('http').get(...)"` | `generate_compose()` |
+| No way to wipe EBS data without Script 0+1 full teardown | Added `--flushall` flag to Script 2 | `flush_all_data()` / `main()` |
 
 ---
 

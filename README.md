@@ -213,8 +213,26 @@ PUID, PGID
 
 **Usage:**
 ```bash
+# Default: containers pruned; EBS data (Postgres, Redis, MongoDB, Ollama models,
+# Docker image cache) preserved for fast cost-efficient retry
 bash scripts/2-deploy-services.sh <tenant_id>
+
+# True clean redeploy: wipes all databases, service state dirs, Ollama model
+# cache, and Docker image cache before deploying
+bash scripts/2-deploy-services.sh <tenant_id> --flushall
 ```
+
+**Flags:**
+| Flag | Effect |
+|---|---|
+| _(none)_ | Prune containers; keep all EBS data intact. Images and models already cached are reused. Fast retry path — no re-download, no re-migration from scratch. |
+| `--flushall` | After stopping containers, delete all DB data dirs (postgres/redis/mongodb), all service state dirs, Ollama model cache, and Docker image cache. Equivalent to a fresh deploy on a wiped volume without running Script 0+1. |
+| `--dry-run` | Print what would be deployed; execute nothing. |
+
+**Data persistence model:**
+- EBS data directories (`${DATA_DIR}/postgres`, `redis`, `mongodb`, etc.) are **bind mounts** — `docker compose down` never touches them.
+- Re-running Script 2 without `--flushall` gives idempotent retries: migrations are skipped (tables already exist), models are already downloaded, images are already pulled.
+- `--flushall` is the right choice when you need a clean Prisma/Alembic migration state, or when releasing to a new environment.
 
 **Inputs:**
 - `/mnt/<tenant>/config/platform.conf` (written by Script 1)
@@ -229,7 +247,7 @@ bash scripts/2-deploy-services.sh <tenant_id>
 6. `generate_compose()` — writes `docker-compose.yml` via heredoc blocks (one per enabled service); no templating, no `.env` files
 7. Config file generation — `litellm_config.yaml`, `Caddyfile` (Caddy only), `zep-config.yaml` (Zep only)
 8. `docker compose up -d`
-9. `wait_for_all_health()` — polls every enabled service health endpoint with per-service timeouts; creates Letta's dedicated PostgreSQL database + pgvector extension after Postgres healthy; restarts Letta after DB creation; proactively creates Zep watermill tables to prevent startup error loop
+9. `wait_for_all_health()` — polls every enabled service health endpoint with per-service timeouts; creates Letta's dedicated PostgreSQL database + pgvector extension after Postgres healthy; restarts Letta after DB creation; checks Zep watermill tables exist (only restarts Zep if tables were missing — avoids unnecessary second boot cycle)
 10. `trigger_initial_rclone_sync()` — restarts the rclone container immediately after all health checks pass so the first Google Drive sync fires without waiting for the poll interval
 11. `show_post_deploy_dashboard()` — prints all service URLs (domain-aware), credentials, and pipeline description
 
@@ -571,18 +589,24 @@ Letta and LiteLLM both create a `users` table. They **cannot share a database**.
 
 `LETTA_PG_URI` must point to `.../${POSTGRES_DB}_letta`, not `.../${POSTGRES_DB}`.
 
-### Zep — Watermill Tables Must Be Pre-Created
+### Zep — Watermill Table Guard (Conditional Restart)
 
-Zep runs `CREATE TABLE IF NOT EXISTS watermill_*` at startup, but if Postgres is slow to accept connections during the first initialization the tables may not be created. Zep then enters an error loop (`ERROR: relation "watermill_offsets_message_token_count" does not exist`) even though it reports healthy (the healthcheck only tests TCP connectivity).
+Zep runs `CREATE TABLE IF NOT EXISTS watermill_*` at startup via its own "Initializing subscriber schema" routine. In the rare case where Postgres is slow to accept connections at Zep's first init, those tables may not be created — causing a subscriber error loop on subsequent starts.
 
-Script 2 proactively creates the two watermill tables after Zep is healthy, then restarts Zep so it gets a clean startup with the tables present:
+After Zep is healthy, Script 2 queries Postgres to check whether both watermill tables exist. It only restarts Zep if the tables are actually missing:
 
 ```bash
-# watermill_message_token_count and watermill_offsets_message_token_count
-# must exist before Zep's subscriber goroutine starts reading
-docker exec postgres psql -U user -d db -c "CREATE TABLE IF NOT EXISTS watermill_message_token_count ..."
-docker restart zep
+# Count watermill tables — only restart if fewer than 2 exist
+count=$(psql -tAc "SELECT COUNT(*) FROM information_schema.tables
+    WHERE table_schema='public'
+    AND table_name IN ('watermill_message_token_count','watermill_offsets_message_token_count');")
+if [[ "$count" -lt 2 ]]; then
+    psql -c "CREATE TABLE IF NOT EXISTS watermill_message_token_count ..."
+    docker restart zep   # only when tables were actually missing
+fi
 ```
+
+**Why conditional?** An unconditional restart causes a second boot cycle (migrations + hnsw index rebuild) that exceeds the `wait_for_health` timeout. Zep normally creates its own tables — the restart is only needed on the rare Postgres-busy edge case.
 
 ### LiteLLM — Config Flag Required
 
@@ -778,6 +802,9 @@ Use when implementing or reviewing any script change:
 - [ ] Does every web UI pass LiteLLM master key + base URL (not direct model endpoints)?
 - [ ] Is `N8N_WEBHOOK_URL` using `https://n8n.${BASE_DOMAIN}/` when Caddy is active?
 - [ ] Does `CODE_SERVER_PASSWORD` use a generated random value (not `changeme`) and is it in `persist_generated_secrets()`?
+- [ ] Does `flush_all_data()` only run when `--flushall` is passed (never by default)?
+- [ ] Are all Zep watermill restarts conditional (check table count before restarting)?
+- [ ] Do Node.js-based container healthchecks use `node -e` not `bash /dev/tcp` (bash absent in Node images)?
 - [ ] Is Dify deployed as 3 containers (web + api + worker)? Is `CONSOLE_API_URL` set to the public dify-api URL?
 - [ ] Does Signalbot have a Caddy route (`signal.${BASE_DOMAIN}`)? Is the QR link URL printed in the dashboard?
 - [ ] Does the rclone config reference `service_account_file = /credentials/service-account.json` (not `credentials.json`)?
@@ -886,4 +913,4 @@ curl -s -X POST "http://127.0.0.1:${SIGNALBOT_PORT}/v1/register/+<number>/verify
 
 ---
 
-*Version: 5.3.0 | Last Updated: 2026-04-14 | Architecture: 4 scripts, ~30 services (Dify 3-container stack), single-tenant per EBS volume*
+*Version: 5.4.0 | Last Updated: 2026-04-14 | Architecture: 4 scripts, ~30 services (Dify 3-container stack), single-tenant per EBS volume*
