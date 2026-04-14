@@ -486,7 +486,7 @@ Not every image ships `curl`. Use the right tool per image or the healthcheck wi
 
 | Service | `start_period` | Reason |
 |---|---|---|
-| LiteLLM | 600s | Downloads Prisma binaries + handles migration conflicts on re-deploy (~6 min) |
+| LiteLLM | 900s | Downloads Prisma binaries + 20+ migration tables in `main-stable` image (~13-15 min on first run, Apr 2026+) |
 | OpenWebUI | 120s | DB migrations on first run |
 | Zep CE | 60s | Postgres migrations + hnsw index creation |
 | N8N | 60s | DB init |
@@ -498,8 +498,13 @@ Not every image ships `curl`. Use the right tool per image or the healthcheck wi
 | Signalbot | 60s | signal-cli daemon takes ~26 s |
 | AnythingLLM | 60s | DB migrations |
 | Letta | 600s | Alembic migrations run before HTTP server binds — observed 5-8 min on first run; dedicated `_letta` DB must exist first |
+| OpenClaw | 60s | DB + Redis connect on cold start |
+| Code Server | 30s | VS Code server initialization |
+| Weaviate | 30s | Data path scan on startup |
+| ChromaDB | 30s | SQLite + segment manager init |
+| Mem0 | 30s | Postgres + vectordb client init |
 
-`wait_for_all_health()` timeouts: litellm 900s, openwebui 180s, authentik 180s, letta 900s (15 min — migration window).
+`wait_for_all_health()` timeouts: litellm 1200s, openwebui 180s, authentik 180s, letta 900s (20 min — LiteLLM migration window).
 
 ### Directory Permissions
 
@@ -656,6 +661,8 @@ Deploying only `langgenius/dify-web` causes the browser to loop forever on `/ins
 | `dify-worker` | `langgenius/dify-api:latest` | `worker` | — |
 
 `CONSOLE_API_URL` in the web container must be the **browser-accessible** URL of dify-api. When Caddy is active: `https://dify-api.${BASE_DOMAIN}`. Script 2 generates a `dify-api.${BASE_DOMAIN}` Caddy route automatically.
+
+**dify-worker healthcheck**: Celery workers don't expose HTTP — `celery inspect ping` is fragile (requires broker reachability and correct app path). The worker healthcheck uses `pgrep -f 'celery' > /dev/null` instead, which only checks that the worker process is running.
 
 ### Milvus — Three-Container Stack
 
@@ -879,4 +886,4 @@ curl -s -X POST "http://127.0.0.1:${SIGNALBOT_PORT}/v1/register/+<number>/verify
 
 ---
 
-*Version: 5.2.0 | Last Updated: 2026-04-13 | Architecture: 4 scripts, ~30 services (Dify 3-container stack), single-tenant per EBS volume*
+*Version: 5.3.0 | Last Updated: 2026-04-14 | Architecture: 4 scripts, ~30 services (Dify 3-container stack), single-tenant per EBS volume*

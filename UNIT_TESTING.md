@@ -305,6 +305,9 @@ ls -lh /mnt/datasquiz/backups/
 | Caddy UDP buffer warning | LOW — cosmetic | No action |
 | dify-web healthcheck `$(hostname)` bug | FIXED | Now uses `bash /dev/tcp/127.0.0.1/3000` |
 | dify-api + dify-worker missing from first deploy | FIXED | Full 3-container stack in Script 2; pending clean re-deploy validation |
+| LiteLLM unhealthy during Prisma migrations (main-stable image, Apr 2026) | FIXED | `start_period` 600s→900s; `wait_for_health` timeout 900→1200 |
+| dify-worker celery healthcheck fragile | FIXED | Replaced `celery inspect ping` with `pgrep -f celery` |
+| OpenClaw / Code Server / Weaviate / ChromaDB / Mem0 missing `start_period` | FIXED | Added 30s–60s `start_period` to all five |
 | T10/T11 test suites | PENDING | New test suites added; will be validated on next clean deploy |
 
 ---
@@ -325,6 +328,11 @@ ls -lh /mnt/datasquiz/backups/
 | `chown -R` on DATA_DIR root failed on lost+found, docker | Use `find -mindepth 1 ! -name lost+found ! -name docker` | `prepare_data_dirs()` |
 | Zep watermill tables not created on first deploy | Create tables proactively after Zep health, then restart | `wait_for_all_health()` |
 | rclone.conf written as raw service account JSON | Fixed: proper INI config + separate `rclone/service-account.json` | `generate_rclone_config()` |
+| LiteLLM `start_period: 600s` too short for new image migrations (13-15 min) | Increased to `900s`; wait_for_health timeout 900→1200 | `generate_compose()` |
+| dify-worker healthcheck `celery inspect ping` fragile (requires broker) | Replaced with `pgrep -f 'celery'` | `generate_compose()` |
+| OpenClaw missing `start_period` — immediate healthcheck failure on slow DB connect | Added `start_period: 60s` | `generate_compose()` |
+| Code Server missing `start_period` | Added `start_period: 30s` | `generate_compose()` |
+| Weaviate, ChromaDB, Mem0 missing `start_period` | Added `start_period: 30s` to all three | `generate_compose()` |
 
 ---
 

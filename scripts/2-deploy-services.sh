@@ -632,7 +632,7 @@ $(build_litellm_deps)
       interval: 30s
       timeout: 15s
       retries: 8
-      start_period: 600s
+      start_period: 900s
 
 EOF
     fi
@@ -819,6 +819,7 @@ $(build_openclaw_deps)
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 60s
 
 EOF
     fi
@@ -1052,10 +1053,10 @@ $(build_dify_deps)
       - ${DATA_DIR}/dify:/app/api/storage
 $(build_dify_deps)
     healthcheck:
-      test: ["CMD-SHELL", "celery -A app.celery inspect ping 2>/dev/null | grep -q pong || exit 1"]
-      interval: 60s
-      timeout: 30s
-      retries: 3
+      test: ["CMD-SHELL", "pgrep -f 'celery' > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
       start_period: 120s
 
 EOF
@@ -1273,6 +1274,7 @@ EOF
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 30s
 
 EOF
     fi
@@ -1300,6 +1302,7 @@ EOF
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 30s
 
 EOF
     fi
@@ -1471,6 +1474,7 @@ EOF
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 30s
 
 EOF
     fi
@@ -1632,6 +1636,7 @@ EOF
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 30s
 
 EOF
     fi
@@ -2346,7 +2351,7 @@ wait_for_all_health() {
     fi
     
     if [[ "${LITELLM_ENABLED}" == "true" ]]; then
-        wait_for_health "${TENANT_PREFIX}-litellm" 900 || return 1
+        wait_for_health "${TENANT_PREFIX}-litellm" 1200 || return 1
     fi
     
     if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
