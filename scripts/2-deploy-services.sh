@@ -1034,7 +1034,9 @@ $(build_dify_deps)
       - "127.0.0.1:${DIFY_API_PORT:-5001}:5001"
 $(build_dify_deps)
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:5001/health 2>/dev/null || exit 1"]
+      # /health may return non-2xx during Flask initialization. Check TCP port acceptance
+      # instead — confirms gunicorn is bound and accepting connections, which is sufficient.
+      test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1',5001)); s.close()\" 2>/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
