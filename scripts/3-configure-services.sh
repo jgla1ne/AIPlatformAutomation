@@ -4,16 +4,28 @@
 # PURPOSE: Complete service management, health monitoring, credentials, key rotation, and post-deployment configuration
 # =============================================================================
 # USAGE:   bash scripts/3-configure-services.sh [tenant_id] [options]
-# OPTIONS: --verify-only     Only verify deployment, don't configure
-#          --health-check    Show detailed health status
-#          --show-credentials Print all service credentials
-#          --rotate-keys [service] Regenerate secrets for one service
-#          --restart [service]   Restart specific service
-#          --add [service]       Add new service to platform
-#          --remove [service]    Remove service from platform
-#          --disable [service]   Temporarily disable service
-#          --enable [service]    Re-enable disabled service
-#          --dry-run         Show what would be done
+# OPTIONS: --verify-only              Only verify deployment, don't configure
+#          --health-check             Show live health table for all containers
+#          --show-credentials         Print all service credentials and URLs
+#          --rotate-keys <service>    Regenerate secrets for one service
+#          --restart <service>        Restart specific service
+#          --add <service>            Add new service to platform
+#          --remove <service>         Remove service from platform
+#          --disable <service>        Temporarily stop service
+#          --enable <service>         Re-enable stopped service
+#          --dry-run                  Show what would be done
+#          --ingest                   Run ingestion pipeline (rclone → vector DB)
+#          --skip-sync                Skip rclone sync, ingest existing files only
+#          --logs <service>           Tail logs for a service (interactive)
+#          --log-lines <N>            Number of lines to show (default: 200)
+#          --audit-logs               Show ERROR/WARN counts for all containers
+#          --reconfigure <service>    Reset credentials for a service
+#          --litellm-routing <strat>  Change LiteLLM routing strategy
+#          --ollama-list              List loaded Ollama models
+#          --ollama-pull <model>      Pull a new Ollama model
+#          --ollama-remove <model>    Remove an Ollama model
+#          --backup                   Create a one-off backup of tenant data
+#          --schedule "<cron>"        Schedule recurring backups (use with --backup)
 # =============================================================================
 
 set -euo pipefail
@@ -1091,7 +1103,19 @@ main() {
     local disable_service=""
     local enable_service=""
     local dry_run=false
-    
+    # New feature flags
+    local do_ingest=false
+    local skip_sync=false
+    local show_logs_svc=""
+    local log_lines=200
+    local do_audit_logs=false
+    local reconfigure_svc=""
+    local litellm_routing=""
+    local ollama_action=""
+    local ollama_model=""
+    local do_backup=false
+    local backup_schedule=""
+
     # Parse arguments
     shift
     while [[ $# -gt 0 ]]; do
@@ -1135,6 +1159,57 @@ main() {
             --dry-run)
                 dry_run=true
                 shift
+                ;;
+            # ── New features ──────────────────────────────────────────────────
+            --ingest)
+                do_ingest=true
+                shift
+                ;;
+            --skip-sync)
+                skip_sync=true
+                shift
+                ;;
+            --logs)
+                show_logs_svc="$2"
+                shift 2
+                ;;
+            --log-lines)
+                log_lines="$2"
+                shift 2
+                ;;
+            --audit-logs)
+                do_audit_logs=true
+                shift
+                ;;
+            --reconfigure)
+                reconfigure_svc="$2"
+                shift 2
+                ;;
+            --litellm-routing)
+                litellm_routing="$2"
+                shift 2
+                ;;
+            --ollama-list)
+                ollama_action="list"
+                shift
+                ;;
+            --ollama-pull)
+                ollama_action="pull"
+                ollama_model="$2"
+                shift 2
+                ;;
+            --ollama-remove)
+                ollama_action="remove"
+                ollama_model="$2"
+                shift 2
+                ;;
+            --backup)
+                do_backup=true
+                shift
+                ;;
+            --schedule)
+                backup_schedule="$2"
+                shift 2
                 ;;
             *)
                 fail "Unknown option: $1"
@@ -1265,24 +1340,60 @@ main() {
         restart_service "$restart_service"
         return 0
     fi
-    
+
     if [[ -n "$add_service" ]]; then
         add_service "$add_service"
         return 0
     fi
-    
+
     if [[ -n "$remove_service" ]]; then
         remove_service "$remove_service"
         return 0
     fi
-    
+
     if [[ -n "$disable_service" ]]; then
         disable_service "$disable_service"
         return 0
     fi
-    
+
     if [[ -n "$enable_service" ]]; then
         enable_service "$enable_service"
+        return 0
+    fi
+
+    # ── New feature dispatches ─────────────────────────────────────────────────
+    if [[ "$do_ingest" == "true" ]]; then
+        run_ingestion_pipeline "$skip_sync"
+        return 0
+    fi
+
+    if [[ -n "$show_logs_svc" ]]; then
+        show_logs "$show_logs_svc" "$log_lines"
+        return 0
+    fi
+
+    if [[ "$do_audit_logs" == "true" ]]; then
+        audit_logs
+        return 0
+    fi
+
+    if [[ -n "$reconfigure_svc" ]]; then
+        reconfigure_service "$reconfigure_svc"
+        return 0
+    fi
+
+    if [[ -n "$litellm_routing" ]]; then
+        change_litellm_routing "$litellm_routing"
+        return 0
+    fi
+
+    if [[ -n "$ollama_action" ]]; then
+        manage_ollama_models "$ollama_action" "$ollama_model"
+        return 0
+    fi
+
+    if [[ "$do_backup" == "true" ]]; then
+        run_backup "$backup_schedule"
         return 0
     fi
     
@@ -1714,6 +1825,499 @@ run_mission_control() {
     [[ "${CADDY_ENABLED:-false}"       == "true" ]] && echo "    Caddy        → https://${BASE_DOMAIN:-${DOMAIN:-localhost}}  (TLS: ${TLS_MODE:-none})"
     [[ "${NPM_ENABLED:-false}"         == "true" ]] && echo "    NPM Admin    → http://127.0.0.1:${NPM_ADMIN_PORT:-81}  (admin@example.com / changeme)"
     echo ""
+}
+
+# =============================================================================
+# INGESTION PIPELINE — rclone sync → vector DB embeddings
+# =============================================================================
+
+# Trigger rclone sync manually and/or ingest files into vector DB
+run_ingestion_pipeline() {
+    local skip_sync="${1:-false}"   # pass "true" to skip the rclone step
+
+    if [[ "${ENABLE_INGESTION:-false}" != "true" ]]; then
+        warn "Ingestion is not enabled (ENABLE_INGESTION=false). Enable it in platform.conf and re-run Script 2."
+        return 1
+    fi
+
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  INGESTION PIPELINE"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    local ingestion_dir="${DATA_DIR}/ingestion"
+    local rclone_container="${TENANT_PREFIX}-rclone"
+    local vector_db="${VECTOR_DB_TYPE:-qdrant}"
+    local embed_model="${EMBED_MODEL:-text-embedding-3-small}"
+
+    # ── Step 1: rclone sync ────────────────────────────────────────────────────
+    if [[ "$skip_sync" != "true" && "${INGESTION_METHOD:-rclone}" == "rclone" ]]; then
+        if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^${rclone_container}$"; then
+            echo "  Triggering rclone sync (one-shot)..."
+            # Exec a one-shot sync inside the running container
+            if docker exec "${rclone_container}" sh -c \
+                "rclone sync \${RCLONE_REMOTE:-gdrive}: /data --transfers=4 --checkers=8 --log-level INFO 2>&1"; then
+                echo "  Sync complete."
+            else
+                warn "rclone sync exited with an error — check container logs: docker logs ${rclone_container}"
+            fi
+        else
+            warn "rclone container ${rclone_container} is not running. Start it first (run Script 2)."
+        fi
+    else
+        echo "  Skipping rclone sync (--skip-sync or non-rclone method)."
+    fi
+
+    # ── Step 2: discover files ─────────────────────────────────────────────────
+    if [[ ! -d "$ingestion_dir" ]]; then
+        warn "Ingestion directory not found: ${ingestion_dir}"
+        return 1
+    fi
+
+    local file_count
+    file_count=$(find "$ingestion_dir" -type f | wc -l)
+    echo "  Files in ingestion dir: ${file_count}"
+
+    if [[ "$file_count" -eq 0 ]]; then
+        echo "  No files to ingest. Share a Google Drive folder with the service account first."
+        return 0
+    fi
+
+    # ── Step 3: embed + upsert via LiteLLM → Qdrant ───────────────────────────
+    if [[ "${LITELLM_ENABLED:-false}" != "true" ]]; then
+        warn "LiteLLM is not enabled — cannot embed files."
+        return 1
+    fi
+
+    local litellm_url="http://127.0.0.1:${LITELLM_PORT:-4000}"
+    local litellm_key="${LITELLM_MASTER_KEY:-}"
+    local qdrant_url="http://127.0.0.1:${QDRANT_PORT:-6333}"
+    local collection="${INGESTION_COLLECTION:-ingestion}"
+
+    echo "  Embedding model : ${embed_model}"
+    echo "  Vector DB       : ${vector_db} (collection: ${collection})"
+
+    # Ensure Qdrant collection exists (1536-dim for OpenAI text-embedding-3-small)
+    if [[ "$vector_db" == "qdrant" ]]; then
+        local col_check
+        col_check=$(curl -sf "${qdrant_url}/collections/${collection}" 2>/dev/null || true)
+        if ! echo "$col_check" | grep -q '"status":"ok"'; then
+            echo "  Creating Qdrant collection '${collection}' (1536-dim cosine)..."
+            curl -sf -X PUT "${qdrant_url}/collections/${collection}" \
+                -H "Content-Type: application/json" \
+                -d '{"vectors":{"size":1536,"distance":"Cosine"}}' >/dev/null
+        fi
+    fi
+
+    local ingested=0
+    local failed=0
+    while IFS= read -r -d '' filepath; do
+        local filename
+        filename=$(basename "$filepath")
+        local ext="${filename##*.}"
+        # Only ingest text-based files
+        case "$ext" in
+            txt|md|pdf|csv|json|yaml|yml|rst|log|html|xml) ;;
+            *) continue ;;
+        esac
+
+        # Read content (truncate to 8000 chars to stay within embedding context)
+        local content
+        content=$(head -c 8000 "$filepath" 2>/dev/null | tr -d '\000' || true)
+        [[ -z "$content" ]] && continue
+
+        # Get embedding from LiteLLM
+        local embed_response
+        embed_response=$(curl -sf --max-time 30 \
+            "${litellm_url}/v1/embeddings" \
+            -H "Authorization: Bearer ${litellm_key}" \
+            -H "Content-Type: application/json" \
+            -d "{\"model\":\"${embed_model}\",\"input\":$(echo "$content" | jq -Rs .)}" \
+            2>/dev/null || true)
+
+        if ! echo "$embed_response" | jq -e '.data[0].embedding' >/dev/null 2>&1; then
+            warn "  Failed to embed: ${filename}"
+            failed=$((failed + 1))
+            continue
+        fi
+
+        local vector
+        vector=$(echo "$embed_response" | jq '.data[0].embedding')
+        local point_id
+        point_id=$(echo -n "$filepath" | md5sum | awk '{print $1}' | cut -c1-8)
+        # Convert hex to integer for Qdrant point ID
+        point_id=$((16#${point_id}))
+
+        if [[ "$vector_db" == "qdrant" ]]; then
+            curl -sf -X PUT "${qdrant_url}/collections/${collection}/points" \
+                -H "Content-Type: application/json" \
+                -d "{\"points\":[{\"id\":${point_id},\"vector\":${vector},\"payload\":{\"filename\":\"${filename}\",\"path\":\"${filepath}\",\"source\":\"ingestion\"}}]}" \
+                >/dev/null 2>&1 && ingested=$((ingested + 1)) || failed=$((failed + 1))
+        fi
+    done < <(find "$ingestion_dir" -type f -print0)
+
+    echo "  Ingested: ${ingested} files | Failed: ${failed} files"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    ok "Ingestion pipeline complete"
+}
+
+# =============================================================================
+# LOG MANAGEMENT
+# =============================================================================
+
+show_logs() {
+    local service="$1"
+    local lines="${2:-100}"
+    local container="${TENANT_PREFIX}-${service}"
+
+    if ! docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^${container}$"; then
+        # Check all, dify has 3 containers
+        if [[ "$service" == "dify" ]]; then
+            for suf in dify dify-api dify-worker; do
+                local c="${TENANT_PREFIX}-${suf}"
+                docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^${c}$" && \
+                    echo "=== ${c} ===" && docker logs --tail "$lines" "$c" 2>&1 && echo ""
+            done
+            return 0
+        fi
+        fail "Container ${container} is not running"
+    fi
+
+    docker logs --tail "$lines" -f "${container}" 2>&1
+}
+
+audit_logs() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  LOG AUDIT (last 60s — ERROR/FATAL/WARN)"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    local since="60s"
+    while IFS= read -r cname; do
+        local errs
+        errs=$(docker logs --since "$since" "$cname" 2>&1 | grep -cE "ERROR|FATAL" || true)
+        local warns
+        warns=$(docker logs --since "$since" "$cname" 2>&1 | grep -cE "WARN|WARNING" || true)
+        if [[ "$errs" -gt 0 ]]; then
+            printf "  %-35s  ERRORS: %s  WARNS: %s\n" "$cname" "$errs" "$warns"
+        fi
+    done < <(docker ps --format "{{.Names}}" --filter "name=${TENANT_PREFIX}-" 2>/dev/null)
+    echo "  (Only containers with errors shown — all others are clean)"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+}
+
+# =============================================================================
+# SERVICE RECONFIGURATION — reset passwords / API keys
+# =============================================================================
+reconfigure_service() {
+    local service="$1"
+
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  RECONFIGURE: ${service}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    _update_conf() {
+        local key="$1" val="$2"
+        local conf="${DATA_DIR}/config/platform.conf"
+        if grep -q "^${key}=" "$conf"; then
+            sed -i "s|^${key}=.*|${key}=\"${val}\"|" "$conf"
+        else
+            echo "${key}=\"${val}\"" >> "$conf"
+        fi
+    }
+
+    case "$service" in
+
+        openwebui)
+            local new_secret
+            new_secret=$(openssl rand -hex 32)
+            _update_conf "WEBUI_SECRET_KEY" "$new_secret"
+            docker restart "${TENANT_PREFIX}-openwebui" 2>/dev/null || true
+            echo "  OpenWebUI secret key rotated. Users will need to log in again."
+            echo "  New WEBUI_SECRET_KEY written to platform.conf."
+            ;;
+
+        librechat)
+            local new_jwt new_enc
+            new_jwt=$(openssl rand -hex 32)
+            new_enc=$(openssl rand -hex 32)
+            _update_conf "LIBRECHAT_JWT_SECRET" "$new_jwt"
+            _update_conf "LIBRECHAT_JWT_REFRESH_SECRET" "$new_enc"
+            docker restart "${TENANT_PREFIX}-librechat" 2>/dev/null || true
+            echo "  LibreChat JWT secrets rotated. Users will need to log in again."
+            ;;
+
+        openclaw)
+            local new_pass
+            new_pass=$(openssl rand -base64 16 | tr -d '=+/')
+            _update_conf "OPENCLAW_ADMIN_PASSWORD" "$new_pass"
+            # OpenClaw stores password in its config file — rewrite it
+            local cfg="${DATA_DIR}/openclaw/config/config.json"
+            if [[ -f "$cfg" ]]; then
+                jq --arg p "$new_pass" '.auth.adminPassword = $p' "$cfg" > "${cfg}.tmp" && mv "${cfg}.tmp" "$cfg"
+            fi
+            docker restart "${TENANT_PREFIX}-openclaw" 2>/dev/null || true
+            echo "  OpenClaw admin password reset to: ${new_pass}"
+            echo "  Written to platform.conf and config.json."
+            ;;
+
+        dify)
+            local new_pass
+            new_pass=$(openssl rand -base64 12 | tr -d '=+/')
+            _update_conf "DIFY_INIT_PASSWORD" "$new_pass"
+            # Reset via Dify API (only works if setup already complete)
+            local dify_api_url="http://127.0.0.1:${DIFY_API_PORT:-5001}"
+            local reset_resp
+            reset_resp=$(curl -sf --max-time 10 -X POST \
+                "${dify_api_url}/console/api/account/password" \
+                -H "Content-Type: application/json" \
+                -d "{\"password\":\"${new_pass}\"}" 2>/dev/null || true)
+            if echo "$reset_resp" | grep -q '"result":"success"'; then
+                echo "  Dify password reset via API: ${new_pass}"
+            else
+                echo "  Dify API reset not available (may need manual reset in UI)."
+                echo "  New password for next setup: ${new_pass}"
+            fi
+            echo "  Written to platform.conf."
+            ;;
+
+        flowise)
+            local new_pass
+            new_pass=$(openssl rand -base64 12 | tr -d '=+/')
+            _update_conf "FLOWISE_PASSWORD" "$new_pass"
+            docker restart "${TENANT_PREFIX}-flowise" 2>/dev/null || true
+            echo "  Flowise password reset to: ${new_pass}"
+            echo "  Written to platform.conf. Container restarted."
+            ;;
+
+        n8n)
+            local new_pass
+            new_pass=$(openssl rand -base64 12 | tr -d '=+/')
+            _update_conf "N8N_BASIC_AUTH_PASSWORD" "$new_pass"
+            docker restart "${TENANT_PREFIX}-n8n" 2>/dev/null || true
+            echo "  N8N basic-auth password reset to: ${new_pass}"
+            echo "  Written to platform.conf. Container restarted."
+            ;;
+
+        litellm)
+            rotate_keys "litellm"
+            ;;
+
+        grafana)
+            local new_pass
+            new_pass=$(openssl rand -base64 12 | tr -d '=+/')
+            _update_conf "GRAFANA_ADMIN_PASSWORD" "$new_pass"
+            docker restart "${TENANT_PREFIX}-grafana" 2>/dev/null || true
+            echo "  Grafana admin password reset to: ${new_pass}"
+            echo "  Written to platform.conf. Container restarted."
+            ;;
+
+        code-server)
+            local new_pass
+            new_pass=$(openssl rand -base64 16 | tr -d '=+/')
+            _update_conf "CODE_SERVER_PASSWORD" "$new_pass"
+            docker restart "${TENANT_PREFIX}-code-server" 2>/dev/null || true
+            echo "  Code Server password reset to: ${new_pass}"
+            echo "  Written to platform.conf. Container restarted."
+            ;;
+
+        anythingllm)
+            local new_pass
+            new_pass=$(openssl rand -base64 12 | tr -d '=+/')
+            _update_conf "ANYTHINGLLM_PASSWORD" "$new_pass"
+            docker restart "${TENANT_PREFIX}-anythingllm" 2>/dev/null || true
+            echo "  AnythingLLM password reset to: ${new_pass}"
+            echo "  Written to platform.conf. Container restarted."
+            ;;
+
+        *)
+            fail "Reconfigure not implemented for service: ${service}. Supported: openwebui, librechat, openclaw, dify, flowise, n8n, litellm, grafana, code-server, anythingllm"
+            ;;
+    esac
+
+    echo "  NOTE: Re-run Script 3 --show-credentials to see updated credentials."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+}
+
+# =============================================================================
+# LITELLM ROUTING STRATEGY
+# =============================================================================
+change_litellm_routing() {
+    local strategy="$1"
+
+    local valid_strategies="simple-shuffle least-busy usage-based-routing cost-based-routing latency-based-routing"
+    if ! echo "$valid_strategies" | grep -qw "$strategy"; then
+        fail "Invalid routing strategy: ${strategy}
+Valid options: ${valid_strategies}"
+    fi
+
+    if [[ "${LITELLM_ENABLED:-false}" != "true" ]]; then
+        fail "LiteLLM is not enabled"
+    fi
+
+    local litellm_config="${DATA_DIR}/config/litellm_config.yaml"
+    if [[ ! -f "$litellm_config" ]]; then
+        fail "LiteLLM config not found: ${litellm_config}"
+    fi
+
+    # Update routing_strategy in the YAML
+    if grep -q "routing_strategy:" "$litellm_config"; then
+        sed -i "s|routing_strategy:.*|routing_strategy: ${strategy}|" "$litellm_config"
+    else
+        # Insert under router_settings if present
+        if grep -q "router_settings:" "$litellm_config"; then
+            sed -i "/router_settings:/a\\  routing_strategy: ${strategy}" "$litellm_config"
+        else
+            echo "" >> "$litellm_config"
+            printf "router_settings:\n  routing_strategy: %s\n" "$strategy" >> "$litellm_config"
+        fi
+    fi
+
+    # Also update platform.conf
+    if grep -q "^LITELLM_ROUTING_STRATEGY=" "${DATA_DIR}/config/platform.conf"; then
+        sed -i "s|^LITELLM_ROUTING_STRATEGY=.*|LITELLM_ROUTING_STRATEGY=\"${strategy}\"|" "${DATA_DIR}/config/platform.conf"
+    fi
+
+    # Reload LiteLLM by restart (config is file-mounted)
+    log "Restarting LiteLLM to apply new routing strategy: ${strategy}..."
+    docker restart "${TENANT_PREFIX}-litellm"
+
+    # Wait for it to come back
+    local attempts=0
+    while [[ $attempts -lt 30 ]]; do
+        if curl -sf "http://127.0.0.1:${LITELLM_PORT:-4000}/health/liveliness" >/dev/null 2>&1; then
+            break
+        fi
+        attempts=$((attempts + 1))
+        sleep 3
+    done
+
+    ok "LiteLLM routing strategy changed to: ${strategy}"
+}
+
+# =============================================================================
+# OLLAMA MODEL MANAGEMENT
+# =============================================================================
+manage_ollama_models() {
+    local action="$1"
+    local model="${2:-}"
+
+    if [[ "${OLLAMA_ENABLED:-false}" != "true" ]]; then
+        fail "Ollama is not enabled"
+    fi
+
+    local container="${TENANT_PREFIX}-ollama"
+    if ! docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^${container}$"; then
+        fail "Ollama container ${container} is not running"
+    fi
+
+    case "$action" in
+        list)
+            echo ""
+            echo "  Ollama — Loaded Models:"
+            echo "  ──────────────────────────"
+            docker exec "${container}" ollama list 2>/dev/null || true
+            echo ""
+            ;;
+        pull)
+            [[ -z "$model" ]] && fail "Usage: --ollama-pull <model>"
+            log "Pulling Ollama model: ${model} (this may take several minutes)..."
+            docker exec "${container}" ollama pull "$model"
+            ok "Model pulled: ${model}"
+            ;;
+        remove)
+            [[ -z "$model" ]] && fail "Usage: --ollama-remove <model>"
+            log "Removing Ollama model: ${model}..."
+            docker exec "${container}" ollama rm "$model"
+            ok "Model removed: ${model}"
+            ;;
+        *)
+            fail "Unknown ollama action: ${action}. Use: list, pull, remove"
+            ;;
+    esac
+}
+
+# =============================================================================
+# BACKUP STRATEGY
+# =============================================================================
+run_backup() {
+    local schedule="${1:-}"   # empty = one-off; non-empty = cron expression
+
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  BACKUP"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    local backup_dir="${DATA_DIR}/backups"
+    mkdir -p "$backup_dir"
+
+    local timestamp
+    timestamp=$(date +%Y%m%d-%H%M%S)
+    local archive="${backup_dir}/${TENANT_ID}-backup-${timestamp}.tar.gz"
+
+    # Exclude the backups directory itself, ingestion cache, and rclone sync dir
+    local exclude_args=(
+        "--exclude=${DATA_DIR}/backups"
+        "--exclude=${DATA_DIR}/ingestion"
+        "--exclude=${DATA_DIR}/rclone"
+        "--exclude=${DATA_DIR}/ollama"
+    )
+
+    log "Creating backup archive: ${archive}"
+    log "This includes: config, postgres data, redis data, qdrant data, service configs"
+    log "This excludes: ingestion cache, rclone sync, ollama models (re-pullable)"
+
+    # Pause write-heavy services briefly if possible (best-effort)
+    local paused_services=()
+    for svc in postgres redis mongodb qdrant; do
+        local cname="${TENANT_PREFIX}-${svc}"
+        if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^${cname}$"; then
+            docker pause "$cname" 2>/dev/null && paused_services+=("$cname") || true
+        fi
+    done
+
+    tar czf "$archive" "${exclude_args[@]}" -C "$(dirname "${DATA_DIR}")" "$(basename "${DATA_DIR}")" 2>/dev/null || true
+
+    # Resume paused services
+    for cname in "${paused_services[@]}"; do
+        docker unpause "$cname" 2>/dev/null || true
+    done
+
+    local size
+    size=$(du -sh "$archive" 2>/dev/null | awk '{print $1}' || echo "unknown")
+    echo "  Archive: ${archive}"
+    echo "  Size:    ${size}"
+
+    # Upload to GDrive if rclone is available
+    if [[ "${ENABLE_INGESTION:-false}" == "true" && "${INGESTION_METHOD:-rclone}" == "rclone" ]]; then
+        local rclone_container="${TENANT_PREFIX}-rclone"
+        if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^${rclone_container}$"; then
+            local remote_path="${RCLONE_REMOTE:-gdrive}:backups/${TENANT_ID}"
+            log "Uploading backup to ${remote_path}..."
+            local archive_basename
+            archive_basename=$(basename "$archive")
+            # Copy the backup into the rclone data volume so the container can see it
+            docker cp "$archive" "${rclone_container}:/data-backup/${archive_basename}" 2>/dev/null || \
+                log "Could not copy to rclone container — upload skipped"
+        else
+            echo "  rclone container not running — skipping GDrive upload"
+        fi
+    fi
+
+    if [[ -n "$schedule" ]]; then
+        # Add/replace cron entry for scheduled backups
+        local cron_marker="# ai-platform-backup-${TENANT_ID}"
+        local cron_cmd="bash ${SCRIPT_DIR}/3-configure-services.sh ${TENANT_ID} --backup >> ${DATA_DIR}/logs/backup.log 2>&1"
+        # Remove old entry if present
+        crontab -l 2>/dev/null | grep -v "$cron_marker" | crontab - 2>/dev/null || true
+        # Add new entry
+        (crontab -l 2>/dev/null; echo "${schedule} ${cron_cmd} ${cron_marker}") | crontab - 2>/dev/null
+        echo "  Backup scheduled: ${schedule}"
+        echo "  Cron entry added for tenant ${TENANT_ID}"
+    fi
+
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    ok "Backup complete: ${archive}"
 }
 
 # =============================================================================

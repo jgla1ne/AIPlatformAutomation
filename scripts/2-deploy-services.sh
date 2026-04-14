@@ -974,8 +974,8 @@ EOF
       - "127.0.0.1:${DIFY_PORT}:3000"
 $(build_dify_deps)
     healthcheck:
-      # Next.js binds to the container hostname (not localhost) — use $(hostname).
-      test: ["CMD-SHELL", "wget -q --spider http://$(hostname):3000 2>/dev/null || exit 1"]
+      # Next.js may bind to container hostname rather than localhost — use /dev/tcp.
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/3000"]
       interval: 15s
       timeout: 10s
       retries: 5

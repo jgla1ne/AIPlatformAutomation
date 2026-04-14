@@ -318,6 +318,38 @@ Port-allocations file is sourced after platform.conf so any Script 2 conflict-re
 | Letta | URL, server password |
 | Qdrant | API key |
 
+**Management commands (post-deploy):**
+```bash
+# Ingestion pipeline — rclone → vector DB
+bash scripts/3-configure-services.sh <tenant_id> --ingest
+bash scripts/3-configure-services.sh <tenant_id> --ingest --skip-sync   # skip rclone step
+
+# Tail logs for a service
+bash scripts/3-configure-services.sh <tenant_id> --logs n8n
+bash scripts/3-configure-services.sh <tenant_id> --logs n8n --log-lines 500
+
+# Error audit across all containers
+bash scripts/3-configure-services.sh <tenant_id> --audit-logs
+
+# Reset credentials for a service
+bash scripts/3-configure-services.sh <tenant_id> --reconfigure openwebui
+bash scripts/3-configure-services.sh <tenant_id> --reconfigure dify
+# Supported: openwebui, librechat, openclaw, dify, flowise, n8n, litellm, grafana, code-server, anythingllm
+
+# Change LiteLLM routing strategy
+bash scripts/3-configure-services.sh <tenant_id> --litellm-routing least-busy
+# Valid: simple-shuffle, least-busy, usage-based-routing, cost-based-routing, latency-based-routing
+
+# Ollama model management
+bash scripts/3-configure-services.sh <tenant_id> --ollama-list
+bash scripts/3-configure-services.sh <tenant_id> --ollama-pull llama3.2:3b
+bash scripts/3-configure-services.sh <tenant_id> --ollama-remove llama3.2:1b
+
+# Backup
+bash scripts/3-configure-services.sh <tenant_id> --backup
+bash scripts/3-configure-services.sh <tenant_id> --backup --schedule "0 3 * * *"  # daily at 3am
+```
+
 **Domain-aware URL logic (both `show_credentials()` and access URL section):**
 ```
 if CADDY_ENABLED=true or NPM_ENABLED=true and DOMAIN is set:
@@ -424,7 +456,7 @@ Not every image ships `curl`. Use the right tool per image or the healthcheck wi
 | LiteLLM | `python3` | `python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"` |
 | Qdrant | `bash` (no curl/wget) | `["CMD", "bash", "-c", "echo > /dev/tcp/localhost/6333"]` |
 | N8N | `wget` | `wget -q --spider http://localhost:5678/healthz` |
-| Dify-web | `wget` | `wget -q --spider http://$(hostname):3000` (binds to container hostname, not localhost) |
+| Dify-web | `bash` | `["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/3000"]` (Next.js may bind to container hostname, not localhost — TCP check is most reliable) |
 | Dify-api | `curl` | `curl -sf http://localhost:5001/health` |
 | Authentik | `python3` | `python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:9000/-/health/live/')"` |
 | Flowise | `curl` | `curl -f http://localhost:3000/api/v1/ping` |
@@ -442,7 +474,7 @@ Not every image ships `curl`. Use the right tool per image or the healthcheck wi
 | Service | Wrong | Correct |
 |---|---|---|
 | Qdrant | `/health` (404) | `/healthz` |
-| Dify-web | — | `http://$(hostname):3000` (NOT localhost — Next.js binds to container hostname) |
+| Dify-web | — | `bash -c 'echo > /dev/tcp/127.0.0.1/3000'` (TCP check avoids hostname-binding ambiguity) |
 | Dify-api | — | `/health` |
 | Authentik | `/-/health/` (404) | `/-/health/live/` |
 | LiteLLM | `/health` | `/health/liveliness` |
@@ -559,7 +591,7 @@ Without this, LiteLLM starts with 0 models registered (model list API returns em
 
 ### rclone — Config Format and service-account.json Mount
 
-The rclone config file must be INI-format, not a raw JSON service account file. Script 2 copies `GDRIVE_CREDENTIALS_FILE` to `${DATA_DIR}/rclone/service-account.json` and mounts it at `/credentials/service-account.json` inside the container:
+Script 1 saves the pasted service account JSON as `service-account.json` and generates a proper INI `rclone.conf` alongside it. The `INGESTION_METHOD` variable is stored as `"rclone"` (not numeric `"1"`) — Script 2 reads this string to decide whether to deploy the rclone container. The rclone config file must be INI-format, not a raw JSON service account file. Script 2 copies `GDRIVE_CREDENTIALS_FILE` to `${DATA_DIR}/rclone/service-account.json` and mounts it at `/credentials/service-account.json` inside the container:
 
 ```ini
 [gdrive]
@@ -571,6 +603,8 @@ service_account_file = /credentials/service-account.json
 The service account must have the target Google Drive folder explicitly shared with its email (`service-account@project.iam.gserviceaccount.com`). Service accounts have no access to Drive by default.
 
 After all health checks pass, Script 2 calls `trigger_initial_rclone_sync()` which restarts the rclone container to kick off an immediate sync — files appear in `${DATA_DIR}/ingestion/` without waiting for the first poll interval.
+
+**Ingestion pipeline (Script 3 `--ingest`):** After files are synced to `${DATA_DIR}/ingestion/`, Script 3's `run_ingestion_pipeline()` discovers text-based files (txt, md, pdf, csv, json, yaml, etc.), embeds each via LiteLLM (`/v1/embeddings`), and upserts vectors into the selected vector DB (Qdrant by default, collection `ingestion`). The Qdrant collection is created automatically if it doesn't exist (1536-dim cosine for OpenAI `text-embedding-3-small`). The pipeline can be triggered after an rclone sync or with `--skip-sync` to embed already-synced files only. Trigger: `bash scripts/3-configure-services.sh <tenant_id> --ingest`.
 
 ### N8N — Webhook URL Must Use HTTPS Subdomain When Caddy Active
 
@@ -744,6 +778,11 @@ Use when implementing or reviewing any script change:
 - [ ] Do Script 3 URLs use `https://subdomain.${BASE_DOMAIN}` when Caddy active (not path-based `https://${BASE_DOMAIN}/service` and not IP:port)?
 - [ ] Does `show_credentials()` display login credentials for every enabled web service?
 - [ ] Does `configure_dify()` call `/console/api/setup` on dify-api port (5001), not on dify-web port?
+- [ ] Does dify-web healthcheck use `bash /dev/tcp/127.0.0.1/3000` (not `$(hostname)` which expands at heredoc write time)?
+- [ ] Does Script 1 translate numeric `INGESTION_METHOD` (1-5) to string (`rclone`, `gdrive`, etc.) before writing platform.conf?
+- [ ] Does Script 1 save rclone credentials as `service-account.json` + generate INI `rclone.conf` (not write raw JSON as `rclone.conf`)?
+- [ ] Does `reconfigure_service()` in Script 3 also update platform.conf (not just restart the container)?
+- [ ] Does `change_litellm_routing()` update both `litellm_config.yaml` and `platform.conf`?
 
 ---
 
@@ -836,8 +875,8 @@ curl -s -X POST "http://127.0.0.1:${SIGNALBOT_PORT}/v1/register/+<number>/verify
 | **Script 0** — Nuclear Cleanup | Production ready | Typed confirmation, Docker daemon stop before EBS unmount, scoped image removal |
 | **Script 1** — Setup Wizard | Production ready | Interactive wizard, stack presets, memory layer selection, dependency enforcement, writes platform.conf |
 | **Script 2** — Deployment Engine | Production ready | Heredoc compose generation, port allocator, secret persistence, Letta DB creation, post-deploy dashboard |
-| **Script 3** — Mission Control | Production ready | Sources port-allocations (takes precedence), 28-service health table, domain-aware URLs, credentials summary |
+| **Script 3** — Mission Control | Production ready | Sources port-allocations (takes precedence), 28-service health table, domain-aware URLs, credentials summary, ingestion pipeline, log management, service reconfigure, LiteLLM routing, Ollama model management, backup |
 
 ---
 
-*Version: 5.1.0 | Last Updated: 2026-04-13 | Architecture: 4 scripts, ~30 services (Dify 3-container stack), single-tenant per EBS volume*
+*Version: 5.2.0 | Last Updated: 2026-04-13 | Architecture: 4 scripts, ~30 services (Dify 3-container stack), single-tenant per EBS volume*

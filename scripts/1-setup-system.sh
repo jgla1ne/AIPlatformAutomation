@@ -3020,58 +3020,77 @@ configure_ingestion() {
                 case "$RCLONE_CRED_METHOD" in
                     1)
                         echo ""
-                        echo "  📋 Paste your Rclone configuration JSON:"
-                        echo "    (Press Enter on empty line to finish)"
+                        echo "  Paste your Google service account JSON credentials:"
+                        echo "  (Press Enter on an empty line to finish)"
                         echo ""
-                        
+
                         local json_content=""
-                        local line
+                        local _line
                         while true; do
                             if [[ -t 0 ]]; then
-                                read -r line
-                                [[ -z "$line" ]] && break
-                                json_content+="$line"$'\n'
+                                read -r _line
+                                [[ -z "$_line" ]] && break
+                                json_content+="$_line"$'\n'
                             else
-                                # For piped input, read all at once
                                 json_content=$(cat)
                                 break
                             fi
                         done
-                        
-                        # Save JSON to file
+
+                        # Save JSON as service-account.json (NOT as rclone.conf)
                         local rclone_conf_dir="/mnt/${TENANT_ID}/config"
                         mkdir -p "$rclone_conf_dir"
-                        echo "$json_content" > "${rclone_conf_dir}/rclone.conf"
+                        echo "$json_content" > "${rclone_conf_dir}/service-account.json"
+                        chmod 600 "${rclone_conf_dir}/service-account.json"
+                        GDRIVE_CREDENTIALS_FILE="${rclone_conf_dir}/service-account.json"
+
+                        # Generate proper INI-format rclone.conf
+                        cat > "${rclone_conf_dir}/rclone.conf" << RCLONE_INI
+[${RCLONE_REMOTE:-gdrive}]
+type = drive
+scope = drive.readonly
+service_account_file = /credentials/service-account.json
+RCLONE_INI
                         chmod 600 "${rclone_conf_dir}/rclone.conf"
-                        
-                        echo ""
-                        echo "  ✅ Rclone configuration saved to: ${rclone_conf_dir}/rclone.conf"
+
+                        echo "  Credentials saved to: ${rclone_conf_dir}/service-account.json"
+                        echo "  rclone.conf generated at: ${rclone_conf_dir}/rclone.conf"
                         ;;
                     2)
-                        safe_read "Rclone configuration file path" "/mnt/${TENANT_ID}/config/rclone.conf" "RCLONE_CONFIG_FILE"
-                        
+                        safe_read "Path to Google service account JSON file" "/mnt/${TENANT_ID}/config/service-account.json" "RCLONE_CONFIG_FILE"
+
                         if [[ ! -f "$RCLONE_CONFIG_FILE" ]]; then
-                            fail "Rclone configuration file not found: $RCLONE_CONFIG_FILE"
+                            fail "Credentials file not found: $RCLONE_CONFIG_FILE"
                         fi
-                        
-                        # Copy to standard location
+
                         local rclone_conf_dir="/mnt/${TENANT_ID}/config"
                         mkdir -p "$rclone_conf_dir"
-                        cp "$RCLONE_CONFIG_FILE" "${rclone_conf_dir}/rclone.conf"
+                        cp "$RCLONE_CONFIG_FILE" "${rclone_conf_dir}/service-account.json"
+                        chmod 600 "${rclone_conf_dir}/service-account.json"
+                        GDRIVE_CREDENTIALS_FILE="${rclone_conf_dir}/service-account.json"
+
+                        # Generate proper INI-format rclone.conf
+                        cat > "${rclone_conf_dir}/rclone.conf" << RCLONE_INI
+[${RCLONE_REMOTE:-gdrive}]
+type = drive
+scope = drive.readonly
+service_account_file = /credentials/service-account.json
+RCLONE_INI
                         chmod 600 "${rclone_conf_dir}/rclone.conf"
-                        
-                        echo "  ✅ Rclone configuration copied to: ${rclone_conf_dir}/rclone.conf"
+
+                        echo "  Credentials saved to: ${rclone_conf_dir}/service-account.json"
+                        echo "  rclone.conf generated at: ${rclone_conf_dir}/rclone.conf"
                         ;;
                 esac
-                
+
                 echo ""
-                echo "  📋 Rclone Configuration Summary:"
+                echo "  Rclone Configuration Summary:"
                 echo "    Remote: ${RCLONE_REMOTE}"
                 echo "    Sync Interval: ${RCLONE_POLL_INTERVAL} minutes"
                 echo "    Transfers: ${RCLONE_TRANSFERS} parallel"
                 echo "    Checkers: ${RCLONE_CHECKERS} parallel"
                 echo "    VFS Cache: ${RCLONE_VFS_CACHE}"
-                echo "    Config: ${rclone_conf_dir}/rclone.conf"
+                echo "    Credentials: ${GDRIVE_CREDENTIALS_FILE}"
                 ;;
             2)
                 safe_read "Google Drive credentials JSON path" "/mnt/${TENANT_ID}/config/gdrive-credentials.json" "GDRIVE_CREDENTIALS_FILE"
@@ -3092,6 +3111,15 @@ configure_ingestion() {
                 ;;
         esac
         
+        # Translate numeric INGESTION_METHOD to canonical string for Script 2 compatibility
+        case "$INGESTION_METHOD" in
+            1) INGESTION_METHOD="rclone" ;;
+            2) INGESTION_METHOD="gdrive" ;;
+            3) INGESTION_METHOD="s3" ;;
+            4) INGESTION_METHOD="azure" ;;
+            5) INGESTION_METHOD="local" ;;
+        esac
+
         # Confirmation
         echo ""
         safe_read_yesno "Confirm ingestion configuration" "true" "INGESTION_CONFIRMED"
@@ -3102,7 +3130,7 @@ configure_ingestion() {
     else
         echo "Ingestion disabled - manual data loading only"
     fi
-    
+
     ok "Ingestion configuration complete"
 }
 
