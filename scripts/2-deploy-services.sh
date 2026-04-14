@@ -623,12 +623,14 @@ EOF
       DATABASE_URL: ${LITELLM_DB_URL}
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
       LITELLM_UI_PASSWORD: ${LITELLM_UI_PASSWORD}
-      # Redirect Prisma migration and cache dirs so they survive across restarts
+      # Persist Prisma binary across container restarts — avoids 5-8 min re-download on re-deploy.
+      # On a full --flushall the cache dir is wiped and re-downloaded once, then cached again.
+      PRISMA_BINARY_CACHE_DIR: /app/prisma-cache
       LITELLM_MIGRATION_DIR: /tmp/litellm-migrations
-      PRISMA_BINARY_CACHE_DIR: /tmp/prisma-cache
       HOME: /tmp
     volumes:
       - ${CONFIG_DIR}/litellm/config.yaml:/app/config.yaml
+      - ${DATA_DIR}/litellm/prisma-cache:/app/prisma-cache
     ports:
       - "127.0.0.1:${LITELLM_PORT}:4000"
 $(build_litellm_deps)
@@ -636,8 +638,8 @@ $(build_litellm_deps)
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')\" 2>/dev/null || exit 1"]
       interval: 30s
       timeout: 15s
-      retries: 8
-      start_period: 900s
+      retries: 10
+      start_period: 1500s
 
 EOF
     fi
@@ -1722,7 +1724,7 @@ generate_litellm_config() {
     
     log "Generating LiteLLM configuration..."
     
-    mkdir -p "${CONFIG_DIR}/litellm"
+    mkdir -p "${CONFIG_DIR}/litellm" "${DATA_DIR}/litellm/prisma-cache"
     
     cat > "${CONFIG_DIR}/litellm/config.yaml" << EOF
 model_list:
@@ -2420,7 +2422,7 @@ wait_for_all_health() {
     fi
     
     if [[ "${LITELLM_ENABLED}" == "true" ]]; then
-        wait_for_health "${TENANT_PREFIX}-litellm" 1200 || return 1
+        wait_for_health "${TENANT_PREFIX}-litellm" 1800 || return 1
     fi
     
     if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
@@ -2494,6 +2496,11 @@ wait_for_all_health() {
     
     if [[ "${CADDY_ENABLED}" == "true" ]]; then
         wait_for_health "${TENANT_PREFIX}-caddy" 90 || return 1
+        # Caddy warns "Caddyfile input is not formatted" because the generated file uses
+        # spaces instead of tabs. Format it in-place and reload so the warning disappears.
+        log "Formatting Caddyfile and reloading Caddy..."
+        docker exec "${TENANT_PREFIX}-caddy" caddy fmt --overwrite /etc/caddy/Caddyfile 2>/dev/null || true
+        docker exec "${TENANT_PREFIX}-caddy" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile 2>/dev/null || true
     fi
 
     if [[ "${NPM_ENABLED:-false}" == "true" ]]; then
