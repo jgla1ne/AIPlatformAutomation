@@ -707,6 +707,7 @@ EOF
     ports:
       - "127.0.0.1:${OPENWEBUI_PORT}:8080"
 $(build_openwebui_deps)
+$(emit_gpu_reservation)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
       interval: 30s
@@ -1063,9 +1064,9 @@ $(build_dify_deps)
       - "127.0.0.1:${DIFY_API_PORT:-5001}:5001"
 $(build_dify_deps)
     healthcheck:
-      # /health may return non-2xx during Flask initialization. Check TCP port acceptance
-      # instead — confirms gunicorn is bound and accepting connections, which is sufficient.
-      test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1',5001)); s.close()\" 2>/dev/null || exit 1"]
+      # Lightweight shell probe: checks TCP port 5001 connectivity using native /dev/tcp.
+      # Adheres to 'NO PYTHON' requirement for healthchecks to prevent process piling.
+      test: ["CMD-SHELL", "timeout 3 bash -c 'cat < /dev/tcp/127.0.0.1/5001' 2>/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -1100,9 +1101,9 @@ $(build_dify_deps)
       - ${DATA_DIR}/dify:/app/api/storage
 $(build_dify_deps)
     healthcheck:
-      # Use lightweight Python probe to check for celery process in /proc.
-      # Avoids 'celery status' which is too heavy for limited RAM environments.
-      test: ["CMD-SHELL", "python3 -c \"import os, sys; [sys.exit(0) for p in os.listdir('/proc') if p.isdigit() and 'celery' in open('/proc/'+p+'/cmdline').read()]; sys.exit(1)\""]
+      # Lightweight shell probe: checks /proc for celery without spawning python/celery clients.
+      # Prevents process piling and defunct zombies on low-RAM instances.
+      test: ["CMD-SHELL", "grep -l \"celery\" /proc/*/cmdline > /dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
