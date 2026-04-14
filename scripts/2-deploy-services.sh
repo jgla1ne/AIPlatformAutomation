@@ -985,13 +985,15 @@ EOF
       - "127.0.0.1:${DIFY_PORT}:3000"
 $(build_dify_deps)
     healthcheck:
-      # Use curl — same check as the official langgenius docker-compose.yaml.
-      # bash and node are not available in the standalone Next.js image.
-      test: ["CMD", "curl", "-f", "http://localhost:3000/apps"]
-      interval: 15s
-      timeout: 10s
+      # nc (busybox netcat) is always present in Alpine — just verify port 3000 accepts
+      # connections. curl/bash/node are absent or unreliable in the standalone Next.js image.
+      # start_period must outlast the LiteLLM wait (~30 min) because all containers start
+      # simultaneously and dify-web is checked last.
+      test: ["CMD-SHELL", "nc -z -w1 127.0.0.1 3000"]
+      interval: 30s
+      timeout: 5s
       retries: 5
-      start_period: 120s
+      start_period: 2400s
 
   # --- Dify API (Flask backend) ---
   ${TENANT_PREFIX}-dify-api:
@@ -1036,7 +1038,7 @@ $(build_dify_deps)
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 90s
+      start_period: 2400s
 
   # --- Dify Worker (Celery background tasks) ---
   ${TENANT_PREFIX}-dify-worker:
@@ -1068,7 +1070,7 @@ $(build_dify_deps)
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 120s
+      start_period: 2400s
 
 EOF
     fi
