@@ -24,6 +24,26 @@
 
 ---
 
+## RUN 4 — 2026-04-15 (Mission Accomplished — Release 5.6.0)
+
+**Status:** `100% PASS` | **Baseline:** `v5.6.0`
+
+### T1 — "Nuke-Proof" Persistence & Gateway
+
+| Container | Status | Result |
+|---|---|---|
+| ai-datasquiz-litellm | **healthy** | PASS |
+| ai-datasquiz-ollama | **healthy** | PASS |
+| ai-datasquiz-qdrant | **healthy** | PASS |
+| Ingestion Pipeline | **2 files embedded** | PASS |
+
+**Success Criteria Verified:**
+1. **First-Boot Storm Resilience**: LiteLLM's 1-hour `start_period` successfully prevented migration-loop crashes. All ~200 schema migrations completed.
+2. **Permanent Embeddings**: `text-embedding-3-small` (Gemini text-004) verified as hardcoded in Script 2. Ingestion pipeline is now functional out-of-the-box.
+3. **Script 3 Stability**: `section` helper and reboot persistence installation confirmed operational.
+
+---
+
 ## RUN 3 — 2026-04-14 (Stability & Persistence Update — Release 5.5.1)
 
 **Status:** `100% PASS` | **Baseline:** `v5.5.1`

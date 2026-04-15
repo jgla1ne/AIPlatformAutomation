@@ -838,6 +838,8 @@ Use when implementing or reviewing any script change:
 - [ ] Does `change_litellm_routing()` update both `litellm_config.yaml` and `platform.conf`?
 - [ ] Does Script 0 stop Docker, use `fuser -km` on the mount, and verify unmount success?
 - [ ] Is `GPU_TYPE` detected in Script 1 and respected in Script 2 (Ollama/OpenWebUI reservations)?
+- [ ] Does Script 2 include the 1-hour `start_period` for LiteLLM first-boot resilience?
+- [ ] Are embedding models (`text-embedding-3-small`) hardcoded into Script 2's LiteLLM config?
 - [ ] Does Script 3 install the `ai-platform-${TENANT_ID}` systemd unit when `--setup-persistence` is used?
 - [ ] Is the Dify worker healthcheck using the lightweight Python-based `/proc` probe (not `celery status`)?
 

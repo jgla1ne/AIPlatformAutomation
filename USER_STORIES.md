@@ -64,8 +64,10 @@
 - Creates all data directories with correct ownership before container start
 - All containers deployed in correct dependency order
 - Health checks pass for every enabled service before script exits
-- **Stability requirement**: Healthchecks for Dify/Celery use lightweight shell probes (no Python) to prevent process piling on low-RAM instances.
-- **GPU leverage**: Automatically injects `deploy.resources.reservations` for NVIDIA devices into relevant containers (Ollama, OpenWebUI).
+- **Stability requirement**: Healthchecks for Dify/Celery use lightweight shell probes (no Python) to prevent process piling.
+- **First-Boot Resilience**: LiteLLM/Letta support 1-hour `start_period` to safely complete migrations on fresh EBS volumes.
+- **Permanent Gateway**: Automatic injection of `text-embedding-3-small` and local Ollama routing into `config.yaml`.
+- **GPU leverage**: Automatically injects `deploy.resources.reservations` for NVIDIA devices.
 - Post-deploy dashboard printed with all service URLs and credentials
 - Script exits non-zero if any enabled service fails health checks within timeout
 - Default re-run (no flags): containers pruned, EBS data preserved — fast retry, no re-pull
