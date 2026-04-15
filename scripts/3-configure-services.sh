@@ -58,6 +58,10 @@ ok() { log "OK: $*"; }
 warn() { log "WARN: $*"; }
 fail() { log "FAIL: $*"; exit 1; }
 dry_run() { [[ "${DRY_RUN:-false}" == "true" ]] && echo "[DRY-RUN] $1"; }
+section() {
+    echo ""
+    echo "── $1 ──────────────────────────────────────────────────"
+}
 
 # =============================================================================
 # DRY RUN COMMAND EXECUTOR (README §12)

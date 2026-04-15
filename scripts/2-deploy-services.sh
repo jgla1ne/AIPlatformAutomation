@@ -657,7 +657,7 @@ $(build_litellm_deps)
       interval: 30s
       timeout: 15s
       retries: 10
-      start_period: 1800s
+      start_period: 3600s
 
 EOF
     fi
@@ -1805,6 +1805,10 @@ EOF
   - model_name: gemini-pro
     litellm_params:
       model: google/gemini-pro
+      api_key: ${GOOGLE_API_KEY}
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: google/text-embedding-004
       api_key: ${GOOGLE_API_KEY}
 EOF
     fi
