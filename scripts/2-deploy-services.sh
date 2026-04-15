@@ -657,7 +657,7 @@ $(build_litellm_deps)
       interval: 30s
       timeout: 15s
       retries: 10
-      start_period: 1500s
+      start_period: 1800s
 
 EOF
     fi
@@ -2476,7 +2476,8 @@ wait_for_all_health() {
     fi
     
     if [[ "${LITELLM_ENABLED}" == "true" ]]; then
-        wait_for_health "${TENANT_PREFIX}-litellm" 1800 || return 1
+        # Extended to 3000s to allow for full bootstrap/migrations on fresh EBS volumes
+        wait_for_health "${TENANT_PREFIX}-litellm" 3000 || return 1
     fi
     
     if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then

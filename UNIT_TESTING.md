@@ -86,8 +86,8 @@
 3. dify-web `HOSTNAME=0.0.0.0`: without it Next.js binds to `172.17.0.2:3000` (Docker bridge IP only), making `127.0.0.1` unreachable inside container; all healthcheck probes fail silently
 4. Dify `/install` hang: browser on `dify.${DOMAIN}` made XHR to `dify-api.${DOMAIN}` (separate self-signed cert → blocked by browser with no visible error). Fixed: collapsed to single subdomain with Caddy path routing (`/console/api*`, `/api*`, `/v1*`, `/files*` → dify-api; `handle` → dify-web). `CONSOLE_API_URL` now points to `https://dify.${DOMAIN}`
 5. Caddyfile formatting: `caddy fmt --overwrite` now runs in a throwaway container BEFORE validation (not after), eliminating the "not formatted" warning at validation time
-6. dify-api + dify-web + dify-worker `start_period` increased to 2400s: all containers start simultaneously; dify services are only checked after LiteLLM's ~30-min wait; old 90s/120s start_period caused containers to be marked "unhealthy" before we ever polled them
-7. LiteLLM `start_period` 900s → 1500s, `wait_for_health` 1200s → 1800s; added Prisma binary cache at `${DATA_DIR}/litellm/prisma-cache`
+6. dify-api + dify-web + dify-worker `start_period` increased to 2400s: all containers start simultaneously; dify services are only checked after LiteLLM's ~30-min wait.
+7. LiteLLM `start_period` 1800s, `wait_for_health` 3000s: Necessary for 'Nuclear Star Runs' where Prisma engines must be re-downloaded and ~200 schema migrations must run against an empty DB. Added Prisma binary cache at `${DATA_DIR}/litellm/prisma-cache`.
 8. GDRIVE_FOLDER_ID now written to platform.conf and to rclone.conf as `root_folder_id` (service accounts have no personal Drive)
 9. N8N push backend: `N8N_PUSH_BACKEND: sse` (WebSocket push fails through Caddy)
 10. rclone syncs confirmed: files present in `/mnt/datasquiz/ingestion/`
