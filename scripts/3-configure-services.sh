@@ -214,6 +214,16 @@ verify_containers_healthy() {
 # Test complete rclone -> Qdrant -> LiteLLM -> external LLM pipeline
 test_full_pipeline() {
     local tenant_id="${1}"
+    
+    # Source platform.conf to get all required variables
+    local platform_conf="/mnt/${tenant_id}/config/platform.conf"
+    if [[ ! -f "$platform_conf" ]]; then
+        echo "ERROR: platform.conf not found at $platform_conf. Run script 1 first."
+        return 1
+    fi
+    # shellcheck source=/dev/null
+    source "$platform_conf"
+    
     echo "=== TESTING FULL AI PIPELINE ==="
     echo "Tenant: ${tenant_id}"
     echo ""
