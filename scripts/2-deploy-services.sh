@@ -11,6 +11,9 @@
 #                              script fixes. Without this flag, existing data
 #                              (Postgres, Redis, MongoDB, Ollama models, images)
 #                              is preserved — enabling fast cost-efficient retries.
+#          --flush-dbs         Wipe only database directories (postgres, redis, mongodb)
+#                              while preserving containers and models. Use for
+#                              database corruption recovery without full re-deploy.
 # =============================================================================
 
 # =============================================================================
@@ -2500,6 +2503,28 @@ flush_all_data() {
     ok "--flushall complete — deploy will start from a fully clean state"
 }
 
+flush_databases_only() {
+    # Only called when --flush-dbs is passed.
+    # Wipes database directories while preserving containers and models.
+    warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    warn "  --flush-dbs: wiping database directories only for tenant ${TENANT_ID}"
+    warn "  Containers and models will be preserved."
+    warn "  This cannot be undone. Starting in 3 seconds..."
+    warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    sleep 3
+
+    # Database directories only — each service re-initializes on fresh start
+    local -a db_dirs=("postgres" "redis" "mongodb")
+    for dir in "${db_dirs[@]}"; do
+        if [[ -d "${DATA_DIR}/${dir}" ]]; then
+            log "  Wiping database dir: ${DATA_DIR}/${dir}"
+            sudo rm -rf "${DATA_DIR:?}/${dir}"
+        fi
+    done
+
+    ok "--flush-dbs complete — databases wiped, containers and models preserved"
+}
+
 deploy_containers() {
     log "Deploying containers..."
 
@@ -2645,13 +2670,13 @@ wait_for_all_health() {
         # Verify MongoDB is actually responsive - fix corruption if needed
         if ! docker exec "${TENANT_PREFIX}-mongodb" mongosh --eval "db.adminCommand('ping')" 2>/dev/null; then
             log "WARNING: MongoDB not responding - possible corruption detected"
-            log "Attempting corruption recovery by clearing MongoDB data..."
+            log "Attempting automatic corruption recovery..."
             
             # Stop MongoDB container
-            docker stop "${TENANT_PREFIX}-mongodb"
+            docker stop "${TENANT_PREFIX}-mongodb" 2>/dev/null || true
             
             # Clear corrupted data (this will recreate fresh database)
-            rm -rf "${DATA_DIR}/mongodb/*"
+            rm -rf "${DATA_DIR}/mongodb/*" 2>/dev/null || true
             
             # Restart MongoDB
             docker start "${TENANT_PREFIX}-mongodb"
@@ -2664,7 +2689,7 @@ wait_for_all_health() {
             if docker exec "${TENANT_PREFIX}-mongodb" mongosh --eval "db.adminCommand('ping')" 2>/dev/null; then
                 log "SUCCESS: MongoDB corruption recovery completed"
             else
-                fail "FATAL: MongoDB recovery failed"
+                fail "FATAL: MongoDB recovery failed - manual intervention required"
             fi
         else
             log "SUCCESS: MongoDB is healthy and responsive"
@@ -2720,6 +2745,36 @@ wait_for_all_health() {
         wait_for_health "${TENANT_PREFIX}-dify" 90 || return 1
         # dify-worker health check uses celery inspect — may be slow, don't block on it
         wait_for_health "${TENANT_PREFIX}-dify-worker" 180 || log "dify-worker health check timed out (non-fatal — worker may still be starting)"
+        
+        # Check for Dify database migration issues and auto-recover
+        if ! docker logs "${TENANT_PREFIX}-dify-api" --tail 10 2>/dev/null | grep -q "Database migration failed\|DuplicateTable\|already exists"; then
+            log "Dify database appears healthy"
+        else
+            log "WARNING: Dify database migration issues detected"
+            log "Attempting automatic database recovery..."
+            
+            # Stop Dify containers
+            docker stop "${TENANT_PREFIX}-dify-api" "${TENANT_PREFIX}-dify" "${TENANT_PREFIX}-dify-worker" 2>/dev/null || true
+            
+            # Clear Dify database (PostgreSQL tables)
+            log "Clearing Dify database tables..."
+            docker exec "${TENANT_PREFIX}-postgres" psql -U ds-admin -d datasquiz_ai -c "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO ds-admin; GRANT ALL ON SCHEMA public TO public; CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";" 2>/dev/null || true
+            
+            # Restart Dify containers
+            docker start "${TENANT_PREFIX}-dify-api" "${TENANT_PREFIX}-dify" "${TENANT_PREFIX}-dify-worker"
+            
+            # Wait for Dify to be healthy again
+            log "Waiting for Dify services to re-initialize..."
+            wait_for_health "${TENANT_PREFIX}-dify-api" 180 || return 1
+            wait_for_health "${TENANT_PREFIX}-dify" 90 || return 1
+            wait_for_health "${TENANT_PREFIX}-dify-worker" 180 || log "dify-worker health check timed out (non-fatal — worker may still be starting)"
+            
+            if ! docker logs "${TENANT_PREFIX}-dify-api" --tail 5 2>/dev/null | grep -q "Database migration failed"; then
+                log "SUCCESS: Dify database recovery completed"
+            else
+                log "WARNING: Dify recovery may need manual intervention"
+            fi
+        fi
     fi
     
     if [[ "${AUTHENTIK_ENABLED}" == "true" ]]; then
@@ -2851,6 +2906,10 @@ main() {
                 flush_all=true
                 shift
                 ;;
+            --flush-dbs)
+                flush_dbs=true
+                shift
+                ;;
             *)
                 fail "Unknown option: $1"
                 ;;
@@ -2860,6 +2919,7 @@ main() {
     # Set global variables
     export DRY_RUN="$dry_run"
     export FLUSH_ALL="$flush_all"
+    export FLUSH_DBS="$flush_dbs"
     
     # Validate tenant ID
     if [[ -z "$tenant_id" ]]; then
@@ -2894,6 +2954,11 @@ main() {
     # --- OPTIONAL: wipe all persisted data for a true clean redeploy ---
     if [[ "${FLUSH_ALL}" == "true" ]]; then
         flush_all_data
+    fi
+
+    # --- OPTIONAL: wipe only database directories for corruption recovery ---
+    if [[ "${FLUSH_DBS}" == "true" ]]; then
+        flush_databases_only
     fi
 
     # Database URL (needs passwords from platform.conf)

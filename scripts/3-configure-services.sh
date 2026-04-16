@@ -24,6 +24,7 @@
 #          --ollama-list              List loaded Ollama models
 #          --ollama-pull <model>      Pull a new Ollama model
 #          --ollama-remove <model>    Remove an Ollama model
+#          --configure-models         Configure Ollama and external LLM models interactively
 #          --backup                   Create a one-off backup of tenant data
 #          --schedule "<cron>"        Schedule recurring backups (use with --backup)
 #          --setup-persistence        Ensure platform stands up automatically after reboot
@@ -1407,6 +1408,10 @@ main() {
                 ollama_model="$2"
                 shift 2
                 ;;
+            --configure-models)
+                configure_models=true
+                shift
+                ;;
             --backup)
                 do_backup=true
                 shift
@@ -1636,6 +1641,11 @@ main() {
         configure_bifrost
     fi
     
+    # Model configuration (new feature)
+    if [[ -n "$configure_models" ]]; then
+        configure_models
+    fi
+    
     # Show credentials summary
     show_credentials
 
@@ -1658,6 +1668,221 @@ main() {
     echo ""
     echo "  Mission Control complete. Platform is ready for use!"
     echo ""
+}
+
+configure_models() {
+    # Interactive model configuration for Ollama and external LLM providers
+    log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log "  Interactive Model Configuration"
+    log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # Source platform.conf to get current configuration
+    source "${CONFIG_DIR}/platform.conf"
+    
+    echo ""
+    echo "🤖 Current Model Configuration:"
+    echo ""
+    
+    # Show current Ollama models
+    if [[ "${OLLAMA_ENABLED:-false}" == "true" ]]; then
+        echo "📦 Ollama Models:"
+        docker exec "${TENANT_PREFIX}-ollama" ollama list 2>/dev/null || echo "  (No models loaded)"
+        echo ""
+    fi
+    
+    # Show current LiteLLM configuration
+    if [[ "${LITELLM_ENABLED:-false}" == "true" ]]; then
+        echo "🌐 LiteLLM Configuration:"
+        echo "  Master Key: ${LITELLM_MASTER_KEY:0:20}..."
+        echo "  Routing Strategy: ${LITELLM_ROUTING_STRATEGY:-default}"
+        echo ""
+    fi
+    
+    echo "🎛 Configuration Options:"
+    echo "1. Configure Ollama Models"
+    echo "2. Configure External LLM Providers (Groq, OpenAI, Anthropic, etc.)"
+    echo "3. Change LiteLLM Routing Strategy"
+    echo "4. Save and Re-deploy Stack"
+    echo ""
+    echo "Enter choice (1-4) or 'q' to quit:"
+    read -r choice
+    
+    case $choice in
+        1)
+            configure_ollama_models
+            ;;
+        2)
+            configure_external_llms
+            ;;
+        3)
+            change_litellm_routing
+            ;;
+        4)
+            save_and_redeploy
+            ;;
+        q)
+            log "Model configuration cancelled"
+            return 0
+            ;;
+        *)
+            log "Invalid choice. Please try again."
+            configure_models
+            return
+            ;;
+    esac
+}
+
+configure_ollama_models() {
+    echo ""
+    echo "📦 Configure Ollama Models:"
+    echo ""
+    echo "Available model sizes:"
+    echo "1. Small (3B parameters) - Fast, low memory"
+    echo "2. Medium (7B parameters) - Balanced performance"
+    echo "3. Large (13B+ parameters) - High quality, slower"
+    echo ""
+    echo "Enter size choice (1-3) or model name (e.g., 'llama3.2:3b'):"
+    read -r model_choice
+    
+    case $model_choice in
+        1)
+            model_name="llama3.2:3b"
+            ;;
+        2)
+            model_name="llama3.2:7b"
+            ;;
+        3)
+            model_name="llama3.1:70b"
+            ;;
+        *)
+            model_name="$model_choice"
+            ;;
+    esac
+    
+    log "Pulling Ollama model: $model_name"
+    if docker exec "${TENANT_PREFIX}-ollama" ollama pull "$model_name"; then
+        log "✅ Model '$model_name' pulled successfully"
+    else
+        log "❌ Failed to pull model '$model_name'"
+    fi
+}
+
+configure_external_llms() {
+    echo ""
+    echo "🌐 Configure External LLM Providers:"
+    echo ""
+    
+    # Display current provider configuration
+    echo "Current providers:"
+    [[ -n "${GROQ_API_KEY:-}" ]] && echo "  ✅ Groq API configured"
+    [[ -n "${OPENAI_API_KEY:-}" ]] && echo "  ✅ OpenAI API configured"
+    [[ -n "${ANTHROPIC_API_KEY:-}" ]] && echo "  ✅ Anthropic API configured"
+    [[ -n "${GOOGLE_KEY:-}" ]] && echo "  ✅ Google API configured"
+    echo ""
+    
+    echo "Available providers to configure:"
+    echo "1. Groq (llama3-70b, mixtral-8x7b)"
+    echo "2. OpenAI (gpt-4, gpt-3.5-turbo)"
+    echo "3. Anthropic (claude-3-sonnet, claude-3-haiku)"
+    echo "4. Google (gemini-pro, gemini-1.5-flash)"
+    echo ""
+    echo "Enter provider to configure (1-4) or 'q' to return:"
+    read -r provider_choice
+    
+    case $provider_choice in
+        1)
+            configure_groq_provider
+            ;;
+        2)
+            configure_openai_provider
+            ;;
+        3)
+            configure_anthropic_provider
+            ;;
+        4)
+            configure_google_provider
+            ;;
+        q)
+            return 0
+            ;;
+        *)
+            echo "Invalid choice. Please try again."
+            configure_external_llms
+            return
+            ;;
+    esac
+}
+
+configure_groq_provider() {
+    echo "Configuring Groq provider..."
+    echo "Enter Groq API key (or press Enter to keep current):"
+    read -s api_key
+    if [[ -n "$api_key" ]]; then
+        update_conf_value "GROQ_API_KEY" "$api_key"
+        log "✅ Groq API key updated"
+    fi
+}
+
+configure_openai_provider() {
+    echo "Configuring OpenAI provider..."
+    echo "Enter OpenAI API key (or press Enter to keep current):"
+    read -s api_key
+    if [[ -n "$api_key" ]]; then
+        update_conf_value "OPENAI_API_KEY" "$api_key"
+        log "✅ OpenAI API key updated"
+    fi
+}
+
+configure_anthropic_provider() {
+    echo "Configuring Anthropic provider..."
+    echo "Enter Anthropic API key (or press Enter to keep current):"
+    read -s api_key
+    if [[ -n "$api_key" ]]; then
+        update_conf_value "ANTHROPIC_API_KEY" "$api_key"
+        log "✅ Anthropic API key updated"
+    fi
+}
+
+configure_google_provider() {
+    echo "Configuring Google provider..."
+    echo "Enter Google API key (or press Enter to keep current):"
+    read -s api_key
+    if [[ -n "$api_key" ]]; then
+        update_conf_value "GOOGLE_KEY" "$api_key"
+        log "✅ Google API key updated"
+    fi
+}
+
+save_and_redeploy() {
+    echo ""
+    echo "💾 Save configuration and re-deploy?"
+    echo "This will save current model configuration and re-run Script 2."
+    echo "Continue? (y/N):"
+    read -r confirm
+    
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        log "Saving model configuration..."
+        
+        # Save current configuration as template
+        local template_file="/home/jglaine/.ai-platform-templates/${TENANT_ID}-model-config.conf"
+        cp "${CONFIG_DIR}/platform.conf" "$template_file"
+        log "✅ Configuration saved to template: $template_file"
+        
+        log "Re-deploying stack with new model configuration..."
+        log "Run: bash scripts/2-deploy-services.sh ${TENANT_ID}"
+        
+        # Offer to run Script 2 automatically
+        echo "Automatically re-run Script 2 now? (y/N):"
+        read -r auto_deploy
+        
+        if [[ "$auto_deploy" =~ ^[Yy]$ ]]; then
+            bash scripts/2-deploy-services.sh "${TENANT_ID}"
+        else
+            log "Manual re-deploy required. Run Script 2 when ready."
+        fi
+    else
+        log "Configuration save cancelled"
+    fi
 }
 
 # =============================================================================
