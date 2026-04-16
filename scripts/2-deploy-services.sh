@@ -102,9 +102,116 @@ framework_validate() {
 }
 
 # =============================================================================
+# DYNAMIC MODEL VALIDATION
+# =============================================================================
+
+# Function to validate Groq models against their API
+validate_groq_models() {
+    local api_key="${1}"
+    local candidate_models="${2}"
+    local valid_models=""
+    
+    if [[ -z "${api_key}" ]]; then
+        echo "${candidate_models}"
+        return
+    fi
+    
+    # Query Groq API for available models
+    local available_models
+    available_models=$(curl -s -H "Authorization: Bearer ${api_key}" \
+        "https://api.groq.com/openai/v1/models" | \
+        jq -r '.data[] | select(.id | contains("llama") or contains("mixtral")) | .id' 2>/dev/null || echo "")
+    
+    if [[ -z "${available_models}" ]]; then
+        echo "WARNING: Could not validate Groq models, using defaults" >&2
+        echo "${candidate_models}"
+        return
+    fi
+    
+    # Filter candidate models against available ones
+    IFS=',' read -ra candidates <<< "${candidate_models}"
+    for model in "${candidates[@]}"; do
+        model=$(echo "${model// /}" | xargs)  # trim whitespace
+        if echo "${available_models}" | grep -q "${model}"; then
+            valid_models="${valid_models}${valid_models:+,}${model}"
+        else
+            echo "WARNING: Groq model '${model}' not available, skipping" >&2
+        fi
+    done
+    
+    echo "${valid_models}"
+}
+
+# Function to validate OpenAI models
+validate_openai_models() {
+    local api_key="${1}"
+    local candidate_models="${2}"
+    local valid_models=""
+    
+    if [[ -z "${api_key}" ]]; then
+        echo "${candidate_models}"
+        return
+    fi
+    
+    # Query OpenAI API for available models
+    local available_models
+    available_models=$(curl -s -H "Authorization: Bearer ${api_key}" \
+        "https://api.openai.com/v1/models" | \
+        jq -r '.data[] | select(.id | contains("gpt")) | .id' 2>/dev/null || echo "")
+    
+    if [[ -z "${available_models}" ]]; then
+        echo "WARNING: Could not validate OpenAI models, using defaults" >&2
+        echo "${candidate_models}"
+        return
+    fi
+    
+    # Filter candidate models against available ones
+    IFS=',' read -ra candidates <<< "${candidate_models}"
+    for model in "${candidates[@]}"; do
+        model=$(echo "${model// /}" | xargs)  # trim whitespace
+        if echo "${available_models}" | grep -q "${model}"; then
+            valid_models="${valid_models}${valid_models:+,}${model}"
+        else
+            echo "WARNING: OpenAI model '${model}' not available, skipping" >&2
+        fi
+    done
+    
+    echo "${valid_models}"
+}
+
+# Function to get latest Ollama models
+get_latest_ollama_models() {
+    local candidate_models="${1}"
+    local latest_models=""
+    
+    # Map of deprecated to latest models
+    declare -A model_upgrade_map=(
+        ["llama3.2:1b"]="llama3.2:1b"
+        ["llama3.2:3b"]="llama3.2:3b" 
+        ["llama3.1:8b"]="llama3.2:3b"
+        ["llama3:8b"]="llama3.2:3b"
+        ["qwen2.5:7b"]="qwen2.5:7b"
+        ["mistral:7b"]="mistral:7b"
+    )
+    
+    IFS=',' read -ra candidates <<< "${candidate_models}"
+    for model in "${candidates[@]}"; do
+        model=$(echo "${model// /}" | xargs)  # trim whitespace
+        if [[ -n "${model_upgrade_map[${model}]:-}" ]]; then
+            latest_models="${latest_models}${latest_models:+,}${model_upgrade_map[${model}]}"
+            echo "INFO: Upgrading Ollama model '${model}' to '${model_upgrade_map[${model}]}'" >&2
+        else
+            latest_models="${latest_models}${latest_models:+,}${model}"
+        fi
+    done
+    
+    echo "${latest_models}"
+}
+
+# =============================================================================
 # CONFIGURATION GENERATION FUNCTIONS
 # (generate_compose, generate_litellm_config, generate_caddyfile,
-#  generate_bifrost_config — all defined below the dependency builders)
+#  generate_bifrost_config — all defined below as dependency builders)
 # =============================================================================
 build_litellm_deps() {
     local deps=""
@@ -1769,24 +1876,53 @@ generate_litellm_config() {
 model_list:
 EOF
     
-    # Ollama model (only if enabled)
+    # Ollama (local models - always enabled if Ollama is enabled)
     if [[ "${OLLAMA_ENABLED}" == "true" ]]; then
-        cat >> "${CONFIG_DIR}/litellm/config.yaml" << EOF
-  - model_name: ollama/${OLLAMA_DEFAULT_MODEL}
+        # Get latest Ollama models (upgrades deprecated ones)
+        local latest_ollama_models
+        latest_ollama_models=$(get_latest_ollama_models "${OLLAMA_MODELS:-llama3.2:3b}")
+        
+        # Update the default model if it was deprecated
+        local updated_default_model
+        updated_default_model=$(get_latest_ollama_models "${OLLAMA_DEFAULT_MODEL:-llama3.2:3b}")
+        
+        # Expand comma-separated model list into one entry per model
+        IFS=',' read -ra ollama_models <<< "${latest_ollama_models}"
+        for model in "${ollama_models[@]}"; do
+            model=$(echo "${model// /}" | xargs)  # trim whitespace
+            cat >> "${CONFIG_DIR}/litellm/config.yaml" << EOF
+  - model_name: ollama/${model}
     litellm_params:
-      model: ollama/${OLLAMA_DEFAULT_MODEL}
+      model: ollama/${model}
       api_base: http://${TENANT_PREFIX}-ollama:11434
 EOF
+        done
+        
+        # Update platform.conf with the new default model
+        update_conf_value "OLLAMA_DEFAULT_MODEL" "${updated_default_model}"
     fi
     
     # OpenAI (only if API key is non-empty)
     if [[ -n "${OPENAI_API_KEY}" ]]; then
-        cat >> "${CONFIG_DIR}/litellm/config.yaml" << EOF
-  - model_name: gpt-4o
+        # Validate and get only available OpenAI models
+        local valid_openai_models
+        valid_openai_models=$(validate_openai_models "${OPENAI_API_KEY}" "${OPENAI_MODELS:-gpt-4o,gpt-4o-mini}")
+        
+        if [[ -n "${valid_openai_models}" ]]; then
+            # Expand comma-separated model list into one entry per model
+            IFS=',' read -ra openai_models <<< "${valid_openai_models}"
+            for model in "${openai_models[@]}"; do
+                model=$(echo "${model// /}" | xargs)  # trim whitespace
+                cat >> "${CONFIG_DIR}/litellm/config.yaml" << EOF
+  - model_name: ${model}
     litellm_params:
-      model: openai/gpt-4o
+      model: openai/${model}
       api_key: ${OPENAI_API_KEY}
 EOF
+            done
+        else
+            echo "WARNING: No valid OpenAI models available, skipping OpenAI configuration" >&2
+        fi
     fi
     
     # Anthropic (only if API key is non-empty)
@@ -1815,12 +1951,25 @@ EOF
     
     # Groq (only if API key is non-empty)
     if [[ -n "${GROQ_API_KEY}" ]]; then
-        cat >> "${CONFIG_DIR}/litellm/config.yaml" << EOF
-  - model_name: llama3-70b-8192
+        # Validate and get only available Groq models
+        local valid_groq_models
+        valid_groq_models=$(validate_groq_models "${GROQ_API_KEY}" "${GROQ_MODELS:-llama-3.1-8b-instant}")
+        
+        if [[ -n "${valid_groq_models}" ]]; then
+            # Expand comma-separated model list into one entry per model
+            IFS=',' read -ra groq_models <<< "${valid_groq_models}"
+            for model in "${groq_models[@]}"; do
+                model=$(echo "${model// /}" | xargs)  # trim whitespace
+                cat >> "${CONFIG_DIR}/litellm/config.yaml" << EOF
+  - model_name: ${model}-groq
     litellm_params:
-      model: groq/llama3-70b-8192
+      model: groq/${model}
       api_key: ${GROQ_API_KEY}
 EOF
+            done
+        else
+            echo "WARNING: No valid Groq models available, skipping Groq configuration" >&2
+        fi
     fi
     
     # OpenRouter (only if API key is non-empty)
@@ -2567,6 +2716,57 @@ wait_for_all_health() {
     fi
 
     ok "All services are healthy"
+    
+    # =============================================================================
+    # OLLAMA MODEL MANAGEMENT (P13 - Dynamic Model Loading)
+    # =============================================================================
+    if [[ "${OLLAMA_ENABLED}" == "true" ]]; then
+        log "Managing Ollama models..."
+        
+        local container_name="${TENANT_PREFIX}-ollama"
+        
+        # Get the validated and potentially upgraded model list
+        local latest_ollama_models
+        latest_ollama_models=$(get_latest_ollama_models "${OLLAMA_MODELS:-llama3.2:3b}")
+        
+        # Expand comma-separated model list
+        IFS=',' read -ra model_list <<< "${latest_ollama_models}"
+        
+        # Pull each model if not already present (check first to avoid re-download costs)
+        for model in "${model_list[@]}"; do
+            model=$(echo "${model// /}" | xargs)  # trim whitespace
+            
+            log "Checking if Ollama model '${model}' is already downloaded..."
+            if docker exec "${container_name}" ollama list 2>/dev/null | grep -q "${model}"; then
+                log "  Model '${model}' already present, skipping download"
+            else
+                log "  Pulling Ollama model '${model}' (this may take several minutes)..."
+                if run_cmd docker exec "${container_name}" ollama pull "${model}"; then
+                    log "  Model '${model}' pulled successfully"
+                else
+                    warn "  Failed to pull model '${model}'. Platform remains functional without it."
+                    warn "  You can retry manually with: docker exec ${container_name} ollama pull ${model}"
+                fi
+            fi
+        done
+        
+        # Verify the default model is available
+        local default_model
+        default_model=$(get_latest_ollama_models "${OLLAMA_DEFAULT_MODEL:-llama3.2:3b}")
+        
+        if docker exec "${container_name}" ollama list 2>/dev/null | grep -q "${default_model}"; then
+            log "Default Ollama model '${default_model}' is available"
+        else
+            warn "Default model '${default_model}' not found. Attempting to pull..."
+            if run_cmd docker exec "${container_name}" ollama pull "${default_model}"; then
+                log "Default model '${default_model}' pulled successfully"
+            else
+                warn "Failed to pull default model '${default_model}'. Some services may not work properly."
+            fi
+        fi
+        
+        ok "Ollama model management complete"
+    fi
 }
 
 # =============================================================================

@@ -27,6 +27,7 @@
 #          --backup                   Create a one-off backup of tenant data
 #          --schedule "<cron>"        Schedule recurring backups (use with --backup)
 #          --setup-persistence        Ensure platform stands up automatically after reboot
+#          --test-pipeline           Test complete rclone→Qdrant→LiteLLM→LLM pipeline
 # =============================================================================
 
 set -euo pipefail
@@ -207,6 +208,195 @@ verify_containers_healthy() {
 }
 
 # =============================================================================
+# COMPREHENSIVE PIPELINE TESTING FUNCTIONS
+# =============================================================================
+
+# Test complete rclone -> Qdrant -> LiteLLM -> external LLM pipeline
+test_full_pipeline() {
+    local tenant_id="${1}"
+    echo "=== TESTING FULL AI PIPELINE ==="
+    echo "Tenant: ${tenant_id}"
+    echo ""
+    
+    # Test 1: rclone configuration and connectivity
+    echo "1. Testing rclone configuration..."
+    local rclone_container="${TENANT_PREFIX}-rclone"
+    if docker ps --format "{{.Names}}" | grep -q "${rclone_container}"; then
+        echo "   ✅ rclone container is running"
+        
+        # Test rclone config
+        if docker exec "${rclone_container}" rclone config show 2>/dev/null | grep -q "gdrive"; then
+            echo "   ✅ rclone GDrive config found"
+        else
+            echo "   ❌ rclone GDrive config missing"
+            return 1
+        fi
+        
+        # Test GDrive connectivity
+        if docker exec "${rclone_container}" rclone lsd gdrive: 2>/dev/null; then
+            echo "   ✅ GDrive connectivity OK"
+        else
+            echo "   ⚠️  GDrive connectivity failed (may need folder sharing)"
+        fi
+    else
+        echo "   ⚠️  rclone container not running"
+    fi
+    echo ""
+    
+    # Test 2: Qdrant vector database operations
+    echo "2. Testing Qdrant operations..."
+    local qdrant_url="http://127.0.0.1:${QDRANT_REST_PORT:-6333}"
+    local qdrant_container="${TENANT_PREFIX}-qdrant"
+    
+    if docker ps --format "{{.Names}}" | grep -q "${qdrant_container}"; then
+        echo "   ✅ Qdrant container is running"
+        
+        # Test collection creation
+        local test_collection="pipeline-test-$(date +%s)"
+        if curl -sf -X PUT "${qdrant_url}/collections/${test_collection}" \
+            -H "Content-Type: application/json" \
+            -d '{"vectors": {"size": 1536, "distance": "Cosine"}}' >/dev/null; then
+            echo "   ✅ Qdrant collection creation OK"
+            
+            # Test vector upsert
+            if curl -sf -X PUT "${qdrant_url}/collections/${test_collection}/points" \
+                -H "Content-Type: application/json" \
+                -d '{"points": [{"id": 1, "vector": [0.1] * 1536}]}' >/dev/null; then
+                echo "   ✅ Qdrant vector upsert OK"
+                
+                # Test vector search
+                if curl -sf -X POST "${qdrant_url}/collections/${test_collection}/points/search" \
+                    -H "Content-Type: application/json" \
+                    -d '{"vector": [0.1] * 1536, "limit": 1}' >/dev/null; then
+                    echo "   ✅ Qdrant vector search OK"
+                else
+                    echo "   ❌ Qdrant vector search failed"
+                fi
+            else
+                echo "   ❌ Qdrant vector upsert failed"
+            fi
+            
+            # Cleanup test collection
+            curl -sf -X DELETE "${qdrant_url}/collections/${test_collection}" >/dev/null
+        else
+            echo "   ❌ Qdrant collection creation failed"
+        fi
+    else
+        echo "   ❌ Qdrant container not running"
+    fi
+    echo ""
+    
+    # Test 3: LiteLLM model availability and routing
+    echo "3. Testing LiteLLM model routing..."
+    local litellm_url="http://127.0.0.1:${LITELLM_PORT:-4000}"
+    
+    if curl -sf "${litellm_url}/health/liveliness" >/dev/null; then
+        echo "   ✅ LiteLLM service is healthy"
+        
+        # Test model list
+        local model_count
+        model_count=$(curl -sf -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
+            "${litellm_url}/v1/models" | jq '.data | length' 2>/dev/null || echo "0")
+        echo "   ✅ Available models: ${model_count}"
+        
+        # Test each provider category
+        echo "   Testing provider categories:"
+        
+        # Test Ollama models
+        local ollama_models
+        ollama_models=$(curl -sf -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
+            "${litellm_url}/v1/models" | jq -r '.data[] | select(.id | startswith("ollama/")) | .id' 2>/dev/null)
+        if [[ -n "${ollama_models}" ]]; then
+            echo "     ✅ Ollama models: $(echo "${ollama_models}" | wc -l)"
+        else
+            echo "   ❌ No Ollama models found"
+        fi
+        
+        # Test Groq models
+        local groq_models
+        groq_models=$(curl -sf -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
+            "${litellm_url}/v1/models" | jq -r '.data[] | select(.id | contains("groq")) | .id' 2>/dev/null)
+        if [[ -n "${groq_models}" ]]; then
+            echo "     ✅ Groq models: $(echo "${groq_models}" | wc -l)"
+        else
+            echo "   ⚠️  No Groq models found"
+        fi
+        
+        # Test embedding models
+        local embedding_models
+        embedding_models=$(curl -sf -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
+            "${litellm_url}/v1/models" | jq -r '.data[] | select(.id | contains("embedding")) | .id' 2>/dev/null)
+        if [[ -n "${embedding_models}" ]]; then
+            echo "     ✅ Embedding models: $(echo "${embedding_models}" | wc -l)"
+        else
+            echo "   ❌ No embedding models found"
+        fi
+        
+        # Test actual chat completion with first available model
+        local test_model
+        test_model=$(curl -sf -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
+            "${litellm_url}/v1/models" | jq -r '.data[0].id' 2>/dev/null)
+        
+        if [[ -n "${test_model}" ]]; then
+            echo "   Testing chat completion with model: ${test_model}"
+            local test_response
+            test_response=$(curl -sf -X POST -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
+                -H "Content-Type: application/json" \
+                -d "{\"model\":\"${test_model}\",\"messages\":[{\"role\":\"user\",\"content\":\"Say OK\"}],\"max_tokens\":5}" \
+                "${litellm_url}/v1/chat/completions" | jq -r '.choices[0].message.content' 2>/dev/null)
+            
+            if [[ "${test_response}" == *"OK"* ]]; then
+                echo "     ✅ Chat completion test PASSED"
+            else
+                echo "     ❌ Chat completion test FAILED: ${test_response}"
+            fi
+        else
+            echo "   ❌ No models available for testing"
+        fi
+    else
+        echo "   ❌ LiteLLM service not healthy"
+    fi
+    echo ""
+    
+    # Test 4: External LLM provider connectivity (if keys configured)
+    echo "4. Testing external LLM provider connectivity..."
+    
+    if [[ -n "${GROQ_API_KEY}" ]]; then
+        echo "   Testing Groq API connectivity..."
+        if curl -sf -H "Authorization: Bearer ${GROQ_API_KEY}" \
+            "https://api.groq.com/openai/v1/models" >/dev/null; then
+            echo "     ✅ Groq API connectivity OK"
+        else
+            echo "     ❌ Groq API connectivity failed"
+        fi
+    fi
+    
+    if [[ -n "${OPENAI_API_KEY}" ]]; then
+        echo "   Testing OpenAI API connectivity..."
+        if curl -sf -H "Authorization: Bearer ${OPENAI_API_KEY}" \
+            "https://api.openai.com/v1/models" >/dev/null; then
+            echo "     ✅ OpenAI API connectivity OK"
+        else
+            echo "     ❌ OpenAI API connectivity failed"
+        fi
+    fi
+    
+    if [[ -n "${ANTHROPIC_API_KEY}" ]]; then
+        echo "   Testing Anthropic API connectivity..."
+        if curl -sf -H "Authorization: Bearer ${ANTHROPIC_API_KEY}" \
+            "https://api.anthropic.com/v1/messages" >/dev/null; then
+            echo "     ✅ Anthropic API connectivity OK"
+        else
+            echo "     ❌ Anthropic API connectivity failed"
+        fi
+    fi
+    
+    echo ""
+    echo "=== PIPELINE TEST COMPLETE ==="
+    return 0
+}
+
+# =============================================================================
 # SERVICE CONFIGURATION FUNCTIONS
 # =============================================================================
 
@@ -249,15 +439,9 @@ configure_ollama() {
         fail "Ollama failed to start within timeout"
     fi
     
-    # Pull the default model with progress indication
-    log "Pulling default Ollama model (${OLLAMA_DEFAULT_MODEL})..."
-    log "This may take several minutes depending on connection speed..."
-    if run_cmd docker exec "$container_name" ollama pull "${OLLAMA_DEFAULT_MODEL}"; then
-        log "Model pull complete"
-    else
-        warn "Model pull failed. You can retry with: docker exec $container_name ollama pull ${OLLAMA_DEFAULT_MODEL}"
-        warn "Platform is functional without the model"
-    fi
+    # Note: Model pulling is handled in Script 2 during deployment to avoid
+    # re-download costs on Script 3 re-runs. Use --ollama-pull to add models.
+    log "Ollama is ready. Model management available via --ollama-* commands."
     
     mark_done "ollama_configured"
     ok "Ollama configured"
@@ -1220,6 +1404,10 @@ main() {
             --schedule)
                 backup_schedule="$2"
                 shift 2
+                ;;
+            --test-pipeline)
+                test_full_pipeline "$tenant_id"
+                exit 0
                 ;;
             *)
                 fail "Unknown option: $1"

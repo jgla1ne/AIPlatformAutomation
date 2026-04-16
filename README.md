@@ -460,6 +460,12 @@ EBS mount: `/mnt/${TENANT_ID}/`. Fallback: `~/ai-platform/${TENANT_ID}/`. Never 
 **P12 — LiteLLM as central gateway**  
 Every web UI and automation tool must be wired to LiteLLM (`http://${TENANT_PREFIX}-litellm:4000/v1`). No service connects to Ollama or external APIs directly.
 
+**P13 - Dynamic Model Validation**  
+All model configurations must be validated against provider APIs before deployment. No hardcoded model names. Deprecated models are automatically upgraded to latest available versions. Invalid models are gracefully skipped with warnings.
+
+**P14 - Model Download Cost Optimization**  
+Model downloads happen only in Script 2 during initial deployment. Script 3 re-runs avoid re-downloading existing models unless explicitly requested via --ollama-pull. The --flushall flag properly wipes model cache when clean re-deploy is needed.
+
 ---
 
 ## SERVICE QUIRKS (hard-won — required for correct deployment)
@@ -836,10 +842,15 @@ Use when implementing or reviewing any script change:
 - [ ] Does Script 1 save rclone credentials as `service-account.json` + generate INI `rclone.conf` (not write raw JSON as `rclone.conf`)?
 - [ ] Does `reconfigure_service()` in Script 3 also update platform.conf (not just restart the container)?
 - [ ] Does `change_litellm_routing()` update both `litellm_config.yaml` and `platform.conf`?
-- [ ] Does Script 0 stop Docker, use `fuser -km` on the mount, and verify unmount success?
+- [ ] Does Script 0 stop Docker, use `fuser -km` on mount, and verify unmount success?
 - [ ] Is `GPU_TYPE` detected in Script 1 and respected in Script 2 (Ollama/OpenWebUI reservations)?
-- [ ] Does Script 2 include the 1-hour `start_period` for LiteLLM first-boot resilience?
-- [ ] Are embedding models (`text-embedding-3-small`) hardcoded into Script 2's LiteLLM config?
+- [ ] Does Script 2 include 1-hour `start_period` for LiteLLM first-boot resilience?
+- [ ] Does Script 2 implement dynamic model validation (P13) before configuring LiteLLM?
+- [ ] Are embedding models (`text-embedding-3-small`) dynamically validated and injected into Script 2's LiteLLM config?
+- [ ] Does Script 2 handle model downloads (not Script 3) to avoid re-download costs on re-runs (P14)?
+- [ ] Does Script 2 check if models already exist before pulling to avoid unnecessary downloads?
+- [ ] Does --flushall properly wipe Ollama model cache for clean re-deploys?
+- [ ] Does Script 3 include `--test-pipeline` command for end-to-end validation?
 - [ ] Does Script 3 install the `ai-platform-${TENANT_ID}` systemd unit when `--setup-persistence` is used?
 - [ ] Is the Dify worker healthcheck using the lightweight Python-based `/proc` probe (not `celery status`)?
 

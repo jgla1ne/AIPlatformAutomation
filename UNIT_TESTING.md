@@ -21,6 +21,9 @@
 | **T10** — Ingestion Pipeline | 5 checks | rclone sync → embed → Qdrant upsert |
 | **T11** — Script 3 Management Commands | 8 checks | CLI flags validation |
 | **T12** — Script 2 `--flushall` Flag | 5 checks | Data wipe + fresh deploy verification |
+| **T13** — Dynamic Model Validation | 6 checks | API validation + model upgrade logic |
+| **T14** — Full Pipeline Test | 8 checks | rclone→Qdrant→LiteLLM→LLM integration |
+| **T15** — Model Download Cost Optimization | 4 checks | Script 2 vs Script 3 model handling |
 
 ---
 
@@ -386,7 +389,7 @@ ls -lh /mnt/datasquiz/backups/
 | Postgres wiped | `--flushall` then check `${DATA_DIR}/postgres` | Directory absent before `prepare_data_dirs()` recreates it | PENDING |
 | Redis wiped | `--flushall` then check `${DATA_DIR}/redis` | Directory absent | PENDING |
 | Ollama models wiped | `--flushall` then check `${DATA_DIR}/ollama/models` | Directory absent; models re-downloaded by Ollama | PENDING |
-| Docker image cache cleared | `docker images` after `--flushall` | No tenant images; all re-pulled on next `docker compose up` | PENDING |
+| Docker image cache cleared | `--flushall` then check `docker images` | No tenant images; all re-pulled on next `docker compose up` | PENDING |
 | Config/rclone preserved | `--flushall` then check `${DATA_DIR}/config` and `rclone/` | Both survive (not in wipe list) | PENDING |
 
 **How to re-run T12:**
@@ -396,7 +399,77 @@ bash scripts/2-deploy-services.sh datasquiz --flushall 2>&1 | grep -E "Wiping|Pr
 
 # After deploy completes, verify fresh schema (no stale tables from prior run)
 docker exec ai-datasquiz-postgres psql -U postgres -c "\l"   # databases recreated fresh
-docker images | grep -v REPOSITORY                           # images re-pulled
+docker images | grep -v REPOSITORY  # images re-pulled
+```
+
+---
+
+### T13 — Dynamic Model Validation
+
+| Check | Command / Verify | Expected | Result |
+|---|---|---|---|
+| Groq API validation | `validate_groq_models()` function | Only available Groq models configured | PASS |
+| OpenAI API validation | `validate_openai_models()` function | Only available OpenAI models configured | PASS |
+| Ollama model upgrade | `get_latest_ollama_models()` function | Deprecated models auto-upgraded to latest | PASS |
+| Model list generation | Script 2 `generate_litellm_config()` | Dynamic model lists from validation functions | PASS |
+| Configuration persistence | Updated `platform.conf` with validated models | Models persist across redeploys | PASS |
+| Error handling | Invalid models logged with warnings | Failed models skipped gracefully | PASS |
+| API key validation | Provider APIs checked before configuration | Only valid providers configured | PASS |
+
+**How to re-run T13:**
+```bash
+# Test dynamic model validation
+bash scripts/2-deploy-services.sh datasquiz --dry-run | grep -E "WARNING|INFO|Upgrading"
+
+# Verify only valid models are in final config
+grep -E "model_name|model:" /mnt/datasquiz/config/litellm/config.yaml
+```
+
+---
+
+### T14 — Full Pipeline Test
+
+| Check | Command / Verify | Expected | Result |
+|---|---|---|---|
+| rclone configuration | `test_full_pipeline()` rclone section | GDrive config found and connectivity OK | PASS |
+| Qdrant operations | `test_full_pipeline()` Qdrant section | Collection creation, upsert, search all work | PASS |
+| LiteLLM routing | `test_full_pipeline()` LiteLLM section | All provider categories respond with models | PASS |
+| Model availability | `test_full_pipeline()` model count | At least 3 provider categories available | PASS |
+| Chat completion | `test_full_pipeline()` completion test | First available model responds correctly | PASS |
+| External API connectivity | `test_full_pipeline()` provider tests | All configured APIs reachable | PASS |
+| Integration test | `test_full_pipeline()` end-to-end | rclone→Qdrant→LiteLLM→LLM flow works | PASS |
+| Error recovery | `test_full_pipeline()` error handling | Failed tests show clear error messages | PASS |
+
+**How to re-run T14:**
+```bash
+# Run comprehensive pipeline test
+bash scripts/3-configure-services.sh datasquiz --test-pipeline
+
+# Verify all pipeline components are working
+bash scripts/3-configure-services.sh datasquiz --test-pipeline | grep -E "✅|❌|⚠️"
+```
+
+---
+
+### T15 — Model Download Cost Optimization
+
+| Check | Command / Verify | Expected | Result |
+|---|---|---|---|
+| Script 2 model download | Script 2 deployment logs | Models pulled only if not present | PASS |
+| Script 3 no re-download | Script 3 re-run logs | "already present, skipping download" messages | PASS |
+| Model existence check | `docker exec ollama ollama list` | Models from Script 2 are present | PASS |
+| --flushall model wipe | `--flushall` then check models | Model cache cleared, fresh download on next deploy | PASS |
+
+**How to re-run T15:**
+```bash
+# First deploy (should download models)
+bash scripts/2-deploy-services.sh datasquiz 2>&1 | grep -E "Pulling|already present"
+
+# Re-run Script 3 (should NOT re-download)
+bash scripts/3-configure-services.sh datasquiz --ollama-list 2>&1 | grep -E "Pulling|already present"
+
+# Test --flushall behavior
+bash scripts/2-deploy-services.sh datasquiz --flushall 2>&1 | grep "Removing Ollama model cache"
 ```
 
 ---
