@@ -67,6 +67,12 @@ Internet
 
 > **LibreChat** is deployed when enabled. MongoDB is co-deployed automatically as its backing store (LibreChat does not support PostgreSQL as its chat store). The LibreChat RAG API uses pgvector (Postgres) for document embeddings.
 
+### LibreChat Issues
+- **MongoDB Connection**: LibreChat requires MongoDB. Ensure MongoDB container is healthy
+- **MongoDB Corruption**: Script 2 automatically detects and recovers from MongoDB corruption by clearing data and restarting
+- **RAG API**: LibreChat depends on the RAG API sidecar for document processing
+- **Manual Recovery**: If automatic recovery fails, run `sudo rm -rf /mnt/datasquiz/mongodb/*` and restart MongoDB
+
 ### Integration Pipeline
 
 ```
@@ -873,6 +879,23 @@ The service is enabled in platform.conf but the container was not deployed. Eith
 ### Port mismatch between platform.conf and running containers
 
 Script 2 resolved a port conflict and wrote the actual port to `.configured/port-allocations`. Script 3 sources this file. The port-allocations value is authoritative.
+
+### LibreChat MongoDB Connection Issues
+
+**Symptoms**: LibreChat logs show `connect ECONNREFUSED` to MongoDB
+**Automatic Recovery**: Script 2 detects MongoDB corruption and automatically:
+1. Stops MongoDB container
+2. Clears corrupted data from `/mnt/datasquiz/mongodb/*`
+3. Restarts MongoDB with fresh database
+4. Verifies connectivity before proceeding to LibreChat
+
+**Manual Recovery**: If automatic recovery fails:
+```bash
+sudo docker stop ai-datasquiz-mongodb
+sudo rm -rf /mnt/datasquiz/mongodb/*
+sudo docker start ai-datasquiz-mongodb
+# Wait 30 seconds for MongoDB to initialize
+```
 
 ### LiteLLM P1001 (can't reach Postgres)
 

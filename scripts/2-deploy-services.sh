@@ -688,8 +688,6 @@ EOF
     if [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]]; then
         cat >> "${COMPOSE_FILE}" << EOF
   ${TENANT_PREFIX}-mongodb:
-    image: mongo:7
-    container_name: ${TENANT_PREFIX}-mongodb
     restart: unless-stopped
     # MongoDB manages its own internal uid (999) — do not override user:
     environment:
@@ -2638,6 +2636,38 @@ wait_for_all_health() {
     fi
 
     if [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]]; then
+        # MongoDB health check with corruption detection
+        log "Checking MongoDB health and connectivity..."
+        wait_for_health "${TENANT_PREFIX}-mongodb" 60 || return 1
+        
+        # Verify MongoDB is actually responsive - fix corruption if needed
+        if ! docker exec "${TENANT_PREFIX}-mongodb" mongosh --eval "db.adminCommand('ping')" 2>/dev/null; then
+            log "WARNING: MongoDB not responding - possible corruption detected"
+            log "Attempting corruption recovery by clearing MongoDB data..."
+            
+            # Stop MongoDB container
+            docker stop "${TENANT_PREFIX}-mongodb"
+            
+            # Clear corrupted data (this will recreate fresh database)
+            rm -rf "${DATA_DIR}/mongodb/*"
+            
+            # Restart MongoDB
+            docker start "${TENANT_PREFIX}-mongodb"
+            
+            # Wait for MongoDB to be ready again
+            log "Waiting for MongoDB to initialize with fresh database..."
+            wait_for_health "${TENANT_PREFIX}-mongodb" 60 || return 1
+            
+            # Verify MongoDB is responsive
+            if docker exec "${TENANT_PREFIX}-mongodb" mongosh --eval "db.adminCommand('ping')" 2>/dev/null; then
+                log "SUCCESS: MongoDB corruption recovery completed"
+            else
+                fail "FATAL: MongoDB recovery failed"
+            fi
+        else
+            log "SUCCESS: MongoDB is healthy and responsive"
+        fi
+        
         wait_for_health "${TENANT_PREFIX}-librechat" 120 || return 1
     fi
 

@@ -474,6 +474,29 @@ bash scripts/2-deploy-services.sh datasquiz --flushall 2>&1 | grep "Removing Oll
 
 ---
 
+### T16 — MongoDB Corruption Recovery
+
+| Check | Command / Verify | Expected | Result |
+|---|---|---|---|
+| MongoDB corruption detection | `--flushall` then check MongoDB logs | Corruption detected, data cleared | PENDING |
+| MongoDB recovery | `--flushall` then check LibreChat logs | LibreChat connects successfully after recovery | PENDING |
+
+**How to re-run T16:**
+```bash
+# Corrupt MongoDB data
+sudo docker stop ai-datasquiz-mongodb
+sudo touch /mnt/datasquiz/mongodb/corrupted_file
+sudo docker start ai-datasquiz-mongodb
+
+# Run Script 2 - should detect and recover
+bash scripts/2-deploy-services.sh datasquiz 2>&1 | grep -E "WARNING.*corruption|SUCCESS.*recovery"
+
+# Verify LibreChat connects after recovery
+docker logs ai-datasquiz-librechat --tail 5 | grep -E "Server listening|MongoDB"
+```
+
+---
+
 ## RUN 1 — FINAL INTEGRATION RESULTS (2026-04-13T14:29:34Z)
 
 | Suite | Result | Evidence |
