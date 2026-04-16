@@ -2522,6 +2522,14 @@ flush_databases_only() {
         fi
     done
 
+    # Restart database containers to re-initialize with fresh directories
+    log "Restarting database containers..."
+    docker compose -f "${CONFIG_DIR}/docker-compose.yml" up -d postgres redis mongodb 2>/dev/null || true
+    
+    # Wait for database containers to be healthy
+    log "Waiting for database containers to initialize..."
+    sleep 10
+    
     ok "--flush-dbs complete — databases wiped, containers and models preserved"
 }
 
