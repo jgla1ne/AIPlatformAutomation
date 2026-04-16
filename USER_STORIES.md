@@ -666,6 +666,44 @@
 
 ---
 
+## EPIC 11 — Model Management
+
+**Goal:** Users can configure and manage Ollama and external LLM models through an interactive interface without manual configuration file editing.
+
+---
+
+### Feature 11.1 — Interactive Model Configuration
+
+**As an** operator,  
+**I want** to configure Ollama and external LLM models through an interactive interface,  
+**so that** I can easily switch between different models and providers without editing configuration files.
+
+**Acceptance criteria:**
+- Interactive menu for model configuration (Script 3 --configure-models)
+- Ollama model size selection (Small/Medium/Large) or custom model names
+- External LLM provider configuration (Groq, OpenAI, Anthropic, Google)
+- API key management with secure input
+- Template saving for model configurations
+- Automatic re-deployment with new model settings
+- Validation of model availability before deployment
+
+---
+
+### Feature 11.2 — Database Recovery Automation
+
+**As an** operator,  
+**I want** automatic database corruption detection and recovery,  
+**so that** Script 2 re-runs succeed without manual intervention.
+
+**Acceptance criteria:**
+- MongoDB corruption detection and automatic recovery
+- Dify database migration issue detection and recovery
+- --flush-dbs flag for database-only recovery
+- Container and model preservation during database recovery
+- Graceful error handling with informative logs
+
+---
+
 ## STORY MAP SUMMARY
 
 ```
@@ -688,6 +726,9 @@ Epic 8 — Monitoring     prometheus → grafana
                         script 3 --backup: tar + cron scheduling
 Epic 9 — Alerting       signalbot → Signal messenger
 Epic 10 — Dev           code-server, continue-dev
+Epic 11 — Model Management Script 3 --configure-models, --flush-dbs flag
+                        Interactive Ollama/external LLM configuration, template saving
+                        Automatic database corruption detection and recovery
 ```
 
 ---
@@ -698,6 +739,10 @@ Epic 10 — Dev           code-server, continue-dev
 
 ### Completed Features (2026-04-16)
 - **MongoDB Corruption Recovery**: Automatic detection and recovery implemented in Script 2
+- **Dify Database Recovery**: Automatic detection and recovery of database migration issues
+- **--flush-dbs Flag**: Database-only recovery while preserving containers and models
 - **P14 Model Download Cost Optimization**: Models download once, preserved on re-runs, cleared with --flushall
 - **Full 24-Container Deployment**: All services healthy and operational
 - **Dynamic Model Validation**: Groq, OpenAI, and Ollama models validated before configuration
+- **Interactive Model Management**: Script 3 --configure-models for Ollama and external LLM configuration
+- **Template Saving**: Model configurations saved as reusable templates

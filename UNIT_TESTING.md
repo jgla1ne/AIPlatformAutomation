@@ -497,7 +497,46 @@ docker logs ai-datasquiz-librechat --tail 5 | grep -E "Server listening|MongoDB"
 
 ---
 
-## RUN 1 — FINAL INTEGRATION RESULTS (2026-04-16T14:28:10Z)
+### T17 — Database Recovery (--flush-dbs)
+
+| Check | Command / Verify | Expected | Result |
+|---|---|---|---|
+| --flush-dbs flag | `bash scripts/2-deploy-services.sh datasquiz --flush-dbs` | Database directories wiped, containers/models preserved | **PASS** |
+| MongoDB recovery | Corrupt MongoDB, run --flush-dbs | MongoDB data cleared, container restarts | **PASS** |
+| Dify recovery | Corrupt Dify DB, run --flush-dbs | Dify tables cleared, migrations succeed | **PASS** |
+
+**How to re-run T17:**
+```bash
+# Test --flush-dbs functionality
+bash scripts/2-deploy-services.sh datasquiz --flush-dbs 2>&1 | grep -E "Wiping database|complete"
+
+# Verify containers preserved
+docker ps | grep -E "datasquiz.*Up" | wc -l  # Should be >0
+```
+
+---
+
+### T18 — Interactive Model Configuration
+
+| Check | Command / Verify | Expected | Result |
+|---|---|---|---|
+| --configure-models menu | `bash scripts/3-configure-services.sh datasquiz --configure-models` | Interactive menu displayed | **PASS** |
+| Ollama model selection | Select size option 1-3 | Model pulled successfully | **PASS** |
+| External LLM config | Configure provider API key | Key saved to platform.conf | **PASS** |
+| Template saving | Save configuration | Template file created | **PASS** |
+
+**How to re-run T18:**
+```bash
+# Test interactive model configuration
+bash scripts/3-configure-services.sh datasquiz --configure-models
+
+# Verify template was created
+ls -la /home/jglaine/.ai-platform-templates/datasquiz-model-config.conf
+```
+
+---
+
+## RUN 1 — FINAL INTEGRATION RESULTS (2026-04-16T22:18:00Z)
 
 | Suite | Result | Evidence |
 |---|---|---|
@@ -509,6 +548,8 @@ docker logs ai-datasquiz-librechat --tail 5 | grep -E "Server listening|MongoDB"
 | T10 - Ingestion Pipeline | **PENDING** | Blocked on INGESTION_METHOD fix + GDrive folder share |
 | T15 - Model Download Cost Optimization | **PASS** | qwen2.5:7b downloaded once, preserved on re-runs |
 | T16 - MongoDB Corruption Recovery | **PASS** | Corruption detected and recovered automatically |
+| T17 - Database Recovery (--flush-dbs) | **PASS** | Database-only recovery working, containers/models preserved |
+| T18 - Interactive Model Configuration | **PASS** | Script 3 --configure-models menu functional |
 | T11 — Script 3 Management | **PENDING** | New commands added post-run; no blocking issues |
 | T12 — `--flushall` Flag | **PENDING** | Feature added post-run; will validate on next clean deploy cycle |
 
