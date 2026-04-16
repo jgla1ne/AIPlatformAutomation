@@ -2525,7 +2525,7 @@ flush_databases_only() {
     # Restart database containers to re-initialize with fresh directories
     log "Restarting database containers..."
     cd "${CONFIG_DIR}"
-    docker compose up -d postgres redis mongodb || true
+    docker compose up -d ${TENANT_PREFIX}-postgres ${TENANT_PREFIX}-redis ${TENANT_PREFIX}-mongodb || true
     cd - > /dev/null
     
     # Wait for database containers to initialize
