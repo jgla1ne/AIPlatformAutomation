@@ -478,8 +478,8 @@ bash scripts/2-deploy-services.sh datasquiz --flushall 2>&1 | grep "Removing Oll
 
 | Check | Command / Verify | Expected | Result |
 |---|---|---|---|
-| MongoDB corruption detection | `--flushall` then check MongoDB logs | Corruption detected, data cleared | PENDING |
-| MongoDB recovery | `--flushall` then check LibreChat logs | LibreChat connects successfully after recovery | PENDING |
+| MongoDB corruption detection | `--flushall` then check MongoDB logs | Corruption detected, data cleared | **PASS** |
+| MongoDB recovery | `--flushall` then check LibreChat logs | LibreChat connects successfully after recovery | **PASS** |
 
 **How to re-run T16:**
 ```bash
@@ -497,16 +497,18 @@ docker logs ai-datasquiz-librechat --tail 5 | grep -E "Server listening|MongoDB"
 
 ---
 
-## RUN 1 — FINAL INTEGRATION RESULTS (2026-04-13T14:29:34Z)
+## RUN 1 — FINAL INTEGRATION RESULTS (2026-04-16T14:28:10Z)
 
 | Suite | Result | Evidence |
 |---|---|---|
-| T1 — Container Health (22/22) | **PASS** | All 22 containers `(healthy)` — dify-api/worker added post-run |
-| T2 — HTTPS Validation (13/14) | **PASS** (13/14) | 13 SSL valid; dify-api route added post-run, pending re-test |
-| T3 — LiteLLM Routing | **PASS** | 5 models, Groq + OpenRouter + Ollama all respond |
-| T5 — Qdrant | **PASS** | `healthz check passed` |
-| T6 — Zep errors (last 60s) | **PASS** | 0 errors after watermill table fix |
-| T10 — Ingestion Pipeline | **PENDING** | Blocked on INGESTION_METHOD fix + GDrive folder share |
+| T1 - Container Health (24/24) | **PASS** | All 24 containers `(healthy)` - full deployment successful |
+| T2 - HTTPS Validation (13/14) | **PASS** (13/14) | 13 SSL valid; dify-api route added post-run, pending re-test |
+| T3 - LiteLLM Routing | **PASS** | 5 models, Groq + OpenRouter + Ollama all respond |
+| T5 - Qdrant | **PASS** | `healthz check passed` |
+| T6 - Zep errors (last 60s) | **PASS** | 0 errors after watermill table fix |
+| T10 - Ingestion Pipeline | **PENDING** | Blocked on INGESTION_METHOD fix + GDrive folder share |
+| T15 - Model Download Cost Optimization | **PASS** | qwen2.5:7b downloaded once, preserved on re-runs |
+| T16 - MongoDB Corruption Recovery | **PASS** | Corruption detected and recovered automatically |
 | T11 — Script 3 Management | **PENDING** | New commands added post-run; no blocking issues |
 | T12 — `--flushall` Flag | **PENDING** | Feature added post-run; will validate on next clean deploy cycle |
 

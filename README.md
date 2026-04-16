@@ -856,6 +856,8 @@ Use when implementing or reviewing any script change:
 - [ ] Does Script 2 handle model downloads (not Script 3) to avoid re-download costs on re-runs (P14)?
 - [ ] Does Script 2 check if models already exist before pulling to avoid unnecessary downloads?
 - [ ] Does --flushall properly wipe Ollama model cache for clean re-deploys?
+- [ ] Does Script 2 implement MongoDB corruption detection and recovery before LibreChat health check?
+- [ ] Does Script 2 clear MongoDB data directory and restart container when corruption is detected?
 - [ ] Does Script 3 include `--test-pipeline` command for end-to-end validation?
 - [ ] Does Script 3 install the `ai-platform-${TENANT_ID}` systemd unit when `--setup-persistence` is used?
 - [ ] Is the Dify worker healthcheck using the lightweight Python-based `/proc` probe (not `celery status`)?
@@ -967,9 +969,9 @@ curl -s -X POST "http://127.0.0.1:${SIGNALBOT_PORT}/v1/register/+<number>/verify
 |---|---|---|
 | **Script 0** — Nuclear Cleanup | Production ready | Typed confirmation, Docker daemon stop before EBS unmount, scoped image removal |
 | **Script 1** — Setup Wizard | Production ready | Interactive wizard, stack presets, memory layer selection, dependency enforcement, writes platform.conf |
-| **Script 2** — Deployment Engine | Production ready | Heredoc compose generation, port allocator, secret persistence, Letta DB creation, post-deploy dashboard |
-| **Script 3** — Mission Control | Production ready | Sources port-allocations (takes precedence), 28-service health table, domain-aware URLs, credentials summary, ingestion pipeline, log management, service reconfigure, LiteLLM routing, Ollama model management, backup, **reboot persistence** |
+| **Script 2** — Deployment Engine | Production ready | Heredoc compose generation, port allocator, secret persistence, Letta DB creation, MongoDB corruption recovery, P14 model cost optimization, post-deploy dashboard |
+| **Script 3** — Mission Control | Production ready | Sources port-allocations (takes precedence), 24-service health table, domain-aware URLs, credentials summary, ingestion pipeline, log management, service reconfigure, LiteLLM routing, Ollama model management, backup, **reboot persistence** |
 
 ---
 
-*Version: 5.5.0 | Last Updated: 2026-04-14 | Architecture: 4 scripts, ~30 services (Dify 3-container stack), single-tenant per EBS volume*
+*Version: 5.6.0 | Last Updated: 2026-04-16 | Architecture: 4 scripts, 24 services (Dify 3-container stack), single-tenant per EBS volume, MongoDB corruption recovery, P14 model cost optimization*

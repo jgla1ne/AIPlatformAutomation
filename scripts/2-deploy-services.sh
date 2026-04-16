@@ -688,6 +688,8 @@ EOF
     if [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]]; then
         cat >> "${COMPOSE_FILE}" << EOF
   ${TENANT_PREFIX}-mongodb:
+    image: mongo:7
+    container_name: ${TENANT_PREFIX}-mongodb
     restart: unless-stopped
     # MongoDB manages its own internal uid (999) — do not override user:
     environment:
