@@ -2513,7 +2513,7 @@ flush_databases_only() {
     warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     sleep 3
 
-    # Database directories only — each service re-initializes on fresh start
+    # Database directories only - each service re-initializes on fresh start
     local -a db_dirs=("postgres" "redis" "mongodb")
     for dir in "${db_dirs[@]}"; do
         if [[ -d "${DATA_DIR}/${dir}" ]]; then
@@ -2524,13 +2524,23 @@ flush_databases_only() {
 
     # Restart database containers to re-initialize with fresh directories
     log "Restarting database containers..."
-    docker compose -f "${CONFIG_DIR}/docker-compose.yml" up -d postgres redis mongodb 2>/dev/null || true
+    cd "${CONFIG_DIR}"
+    docker compose up -d postgres redis mongodb || true
+    cd - > /dev/null
     
-    # Wait for database containers to be healthy
+    # Wait for database containers to initialize
     log "Waiting for database containers to initialize..."
-    sleep 10
+    sleep 15
     
-    ok "--flush-dbs complete — databases wiped, containers and models preserved"
+    # Verify containers are running
+    log "Verifying database containers are running..."
+    if docker ps | grep -q "${TENANT_PREFIX}-postgres.*Up"; then
+        log "PostgreSQL container is running"
+    else
+        log "WARNING: PostgreSQL container may not be running properly"
+    fi
+
+    ok "--flush-dbs complete - databases wiped, containers and models preserved"
 }
 
 deploy_containers() {
