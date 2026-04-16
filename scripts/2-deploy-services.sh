@@ -2522,23 +2522,35 @@ flush_databases_only() {
         fi
     done
 
-    # Restart database containers to re-initialize with fresh directories
-    log "Restarting database containers..."
+    # Restart all containers to ensure full stack is available
+    log "Restarting all containers..."
     cd "${CONFIG_DIR}"
-    docker compose up -d ${TENANT_PREFIX}-postgres ${TENANT_PREFIX}-redis ${TENANT_PREFIX}-mongodb || true
+    docker compose up -d || true
     cd - > /dev/null
     
-    # Wait for database containers to initialize
-    log "Waiting for database containers to initialize..."
-    sleep 15
+    # Wait for all containers to initialize
+    log "Waiting for all containers to initialize..."
+    sleep 30
     
-    # Verify containers are running
-    log "Verifying database containers are running..."
+    # Verify key containers are running
+    log "Verifying key containers are running..."
+    local containers_running=0
+    
     if docker ps | grep -q "${TENANT_PREFIX}-postgres.*Up"; then
         log "PostgreSQL container is running"
+        ((containers_running++))
     else
         log "WARNING: PostgreSQL container may not be running properly"
     fi
+    
+    if docker ps | grep -q "${TENANT_PREFIX}-ollama.*Up"; then
+        log "Ollama container is running"
+        ((containers_running++))
+    else
+        log "WARNING: Ollama container may not be running properly"
+    fi
+    
+    log "Found $containers_running key containers running"
 
     ok "--flush-dbs complete - databases wiped, containers and models preserved"
 }
