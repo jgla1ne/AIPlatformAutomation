@@ -2967,6 +2967,15 @@ main() {
     # --- OPTIONAL: wipe only database directories for corruption recovery ---
     if [[ "${FLUSH_DBS}" == "true" ]]; then
         flush_databases_only
+        echo ""
+        echo "╔══════════════════════════════════════════════════════════╗"
+        echo "║              Database Recovery Complete ✓                   ║"
+        echo "╚══════════════════════════════════════════════════════════╝"
+        echo ""
+        echo "  Database directories wiped and containers restarted successfully."
+        echo "  You can now run Script 3 for service configuration."
+        echo ""
+        exit 0
     fi
 
     # Database URL (needs passwords from platform.conf)
