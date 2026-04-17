@@ -857,6 +857,38 @@ configure_signalbot() {
     ok "Signalbot configured"
 }
 
+configure_searxng() {
+    if [[ "${SEARXNG_ENABLED}" != "true" ]]; then
+        return 0
+    fi
+    
+    if step_done "searxng_configured"; then
+        log "SearXNG already configured, skipping"
+        return 0
+    fi
+    
+    local container_name="${TENANT_PREFIX}-searxng"
+    
+    # Wait for SearXNG to be healthy
+    wait_for_health "$container_name" 90 || {
+        warn "SearXNG container not healthy, skipping configuration"
+        return 1
+    }
+    
+    log "Configuring SearXNG..."
+    
+    # SearXNG is pre-configured via environment variables
+    # Just verify it's accessible
+    if curl -s "http://127.0.0.1:${SEARXNG_PORT}" | grep -q "SearXNG"; then
+        log "SearXNG is accessible and working"
+    else
+        warn "SearXNG may not be fully configured yet"
+    fi
+    
+    mark_done "searxng_configured"
+    ok "SearXNG configured"
+}
+
 configure_zep() {
     if [[ "${ZEP_ENABLED:-false}" != "true" ]]; then
         return 0
@@ -1133,6 +1165,20 @@ show_credentials() {
         echo "DEVELOPMENT"
         echo "  Code Server  $(_url code ${CODE_SERVER_PORT:-8080})"
         echo "    Password   ${CODE_SERVER_PASSWORD:-<not set — check platform.conf>}"
+        echo ""
+    fi
+
+    # ── Search Engine ──────────────────────────────────────────────────────────
+    if [[ "${SEARXNG_ENABLED:-false}" == "true" ]]; then
+        local _search_url
+        if [[ "$_use_subs" == "true" ]]; then
+            _search_url="${_cred_proto}://search.${_cred_host}"
+        else
+            _search_url="http://127.0.0.1:${SEARXNG_PORT:-8888}"
+        fi
+        echo "SEARCH ENGINE"
+        echo "  SearXNG      ${_search_url}"
+        echo "    Secret     ${SEARXNG_SECRET_KEY:0:16}..."
         echo ""
     fi
 
@@ -1636,6 +1682,7 @@ main() {
         configure_dify
         configure_authentik
         configure_signalbot
+        configure_searxng
         configure_zep
         configure_letta
         configure_bifrost

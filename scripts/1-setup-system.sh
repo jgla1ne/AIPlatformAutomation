@@ -754,6 +754,7 @@ apply_preset_defaults() {
             ENABLE_LITELLM="true"
             ENABLE_OPENWEBUI="true"
             ENABLE_QDRANT="true"
+            ENABLE_SEARXNG="true"
             ;;
         development)
             # Minimal + Code Server
@@ -764,6 +765,7 @@ apply_preset_defaults() {
             ENABLE_OPENWEBUI="true"
             ENABLE_QDRANT="true"
             ENABLE_CODE_SERVER="true"
+            ENABLE_SEARXNG="true"
             ;;
         standard)
             # Development + N8N + Flowise + Monitoring; memory asked separately
@@ -778,6 +780,7 @@ apply_preset_defaults() {
             ENABLE_FLOWISE="true"
             ENABLE_GRAFANA="true"
             ENABLE_PROMETHEUS="true"
+            ENABLE_SEARXNG="true"
             ;;
         full)
             # Standard + All remaining services; memory asked separately
@@ -797,6 +800,7 @@ apply_preset_defaults() {
             ENABLE_ANYTHINGLLM="true"
             ENABLE_DIFY="true"
             ENABLE_SIGNALBOT="true"
+            ENABLE_SEARXNG="true"
             ENABLE_AUTHENTIK="true"
             ENABLE_CONTINUE_DEV="true"
             ;;
@@ -915,13 +919,14 @@ configure_custom_stack() {
     echo ""
 
     # Authentication
-    echo "  🔐 Authentication:"
+    echo "  Authentication:"
     safe_read_yesno "Authentik (SSO)" "false" "ENABLE_AUTHENTIK"
     echo ""
 
     # Additional Services
-    echo "  📡 Additional:"
+    echo "  Additional:"
     safe_read_yesno "SignalBot (Signal messenger notifications)" "false" "ENABLE_SIGNALBOT"
+    safe_read_yesno "SearXNG (privacy-respecting search engine)" "false" "ENABLE_SEARXNG"
     safe_read_yesno "Bifrost (alternative LLM gateway / advanced routing)" "false" "ENABLE_BIFROST"
 }
 
@@ -1706,6 +1711,28 @@ configure_signalbot() {
     else
         echo "  ℹ️  Signal bot disabled"
     fi
+    
+    # SearXNG Configuration
+    echo "  📋 Configure SearXNG search engine"
+    echo ""
+    
+    safe_read_yesno "Enable SearXNG" "false" "ENABLE_SEARXNG"
+    if [[ "$ENABLE_SEARXNG" == "true" ]]; then
+        echo ""
+        safe_read "SearXNG port" "8888" "SEARXNG_PORT" "^[0-9]+$"
+        safe_read "SearXNG secret key (leave blank to auto-generate)" "" "SEARXNG_SECRET_KEY"
+        if [[ -z "${SEARXNG_SECRET_KEY:-}" ]]; then
+            SEARXNG_SECRET_KEY="$(openssl rand -hex 32)"
+            echo "    Auto-generated secret key: ${SEARXNG_SECRET_KEY}"
+        fi
+        
+        echo ""
+        echo "  ✅ SearXNG Configuration:"
+        echo "    Port: $SEARXNG_PORT"
+        echo "    Secret Key: ${SEARXNG_SECRET_KEY:0:16}..."
+    else
+        echo "  ℹ️  SearXNG disabled"
+    fi
     echo ""
 }
 
@@ -2148,6 +2175,10 @@ ENABLE_SIGNALBOT="${ENABLE_SIGNALBOT:-false}"
 SIGNAL_PHONE="${SIGNAL_PHONE:-}"
 SIGNAL_RECIPIENT="${SIGNAL_RECIPIENT:-}"
 
+ENABLE_SEARXNG="${ENABLE_SEARXNG:-false}"
+SEARXNG_PORT="${SEARXNG_PORT:-8888}"
+SEARXNG_SECRET_KEY="${SEARXNG_SECRET_KEY:-$(gen_secret)}"
+
 ENABLE_BIFROST="${ENABLE_BIFROST:-false}"
 BIFROST_PORT="${BIFROST_PORT:-8000}"
 
@@ -2342,6 +2373,7 @@ AUTHENTIK_PORT="${AUTHENTIK_PORT:-9000}"
 
 # Additional Ports
 SIGNALBOT_PORT="${SIGNALBOT_PORT:-8080}"
+SEARXNG_PORT="${SEARXNG_PORT:-8888}"
 
 # =============================================================================
 # SYSTEM CONFIGURATION
@@ -2450,6 +2482,7 @@ PROMETHEUS_ENABLED="${ENABLE_PROMETHEUS:-false}"
 CADDY_ENABLED="${ENABLE_CADDY:-false}"
 AUTHENTIK_ENABLED="${ENABLE_AUTHENTIK:-false}"
 SIGNALBOT_ENABLED="${ENABLE_SIGNALBOT:-false}"
+SEARXNG_ENABLED="${ENABLE_SEARXNG:-false}"
 OPENCLAW_ENABLED="${ENABLE_OPENCLAW:-false}"
 OPENCLAW_IMAGE="${OPENCLAW_IMAGE:-alpine/openclaw:latest}"
 OPENCLAW_USERNAME="${OPENCLAW_USERNAME:-admin}"
@@ -2826,6 +2859,7 @@ display_service_summary() {
     [[ "${ENABLE_PROMETHEUS:-false}" == "true" ]] && _mc_line "  ✅ Prometheus                                          :${PROMETHEUS_PORT:-9090}"
     [[ "${ENABLE_AUTHENTIK:-false}" == "true" ]] && _mc_line "  ✅ Authentik  (SSO)                                    :${AUTHENTIK_PORT:-9000}"
     [[ "${ENABLE_SIGNALBOT:-false}" == "true" ]] && _mc_line "  ✅ SignalBot  (${SIGNAL_PHONE:-not set})                   :${SIGNALBOT_PORT:-8080}"
+    [[ "${ENABLE_SEARXNG:-false}"   == "true" ]] && _mc_line "  ✅ SearXNG    (privacy search)                        :${SEARXNG_PORT:-8888}"
     [[ "${ENABLE_CODE_SERVER:-false}" == "true" ]] && _mc_line "  ✅ Code Server                                         :${CODE_SERVER_PORT:-8080}"
     [[ "${ENABLE_CONTINUE_DEV:-false}" == "true" ]] && _mc_line "  ✅ Continue.dev (config → LiteLLM at :${LITELLM_PORT:-4000})       local"
     _mc_sep
@@ -3242,6 +3276,7 @@ ENABLE_GRAFANA="${ENABLE_GRAFANA:-false}"
 ENABLE_PROMETHEUS="${ENABLE_PROMETHEUS:-false}"
 ENABLE_AUTHENTIK="${ENABLE_AUTHENTIK:-false}"
 ENABLE_SIGNALBOT="${ENABLE_SIGNALBOT:-false}"
+ENABLE_SEARXNG="${ENABLE_SEARXNG:-false}"
 ENABLE_BIFROST="${ENABLE_BIFROST:-false}"
 ENABLE_CADDY="${ENABLE_CADDY:-false}"
 ENABLE_NPM="${ENABLE_NPM:-false}"
@@ -3269,6 +3304,7 @@ GRAFANA_PORT="${GRAFANA_PORT:-3002}"
 PROMETHEUS_PORT="${PROMETHEUS_PORT:-9090}"
 AUTHENTIK_PORT="${AUTHENTIK_PORT:-9000}"
 SIGNALBOT_PORT="${SIGNALBOT_PORT:-8080}"
+SEARXNG_PORT="${SEARXNG_PORT:-8888}"
 BIFROST_PORT="${BIFROST_PORT:-8000}"
 NPM_ADMIN_PORT="${NPM_ADMIN_PORT:-81}"
 
@@ -3730,6 +3766,7 @@ initialize_service_variables() {
     
     # Port variables
     SIGNALBOT_PORT="${SIGNALBOT_PORT:-8080}"
+    SEARXNG_PORT="${SEARXNG_PORT:-8888}"
 }
 
 # =============================================================================

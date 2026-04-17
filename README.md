@@ -782,10 +782,11 @@ bash scripts/3-configure-services.sh <tenant_id>
 
 | Preset | Services |
 |---|---|
-| `minimal` | Postgres, Redis, Ollama, LiteLLM, OpenWebUI, Qdrant |
+| `minimal` | Postgres, Redis, Ollama, LiteLLM, OpenWebUI, Qdrant, SearXNG |
 | `development` | Minimal + Code Server |
 | `standard` | Development + N8N, Flowise, Grafana, Prometheus + **memory layer prompt** |
 | `full` | Standard + OpenClaw, AnythingLLM, Dify, Authentik, SignalBot, LibreChat + **memory layer prompt** |
+| `coding` | Minimal + Code Server, Continue.dev, SearXNG (optimized for development) |
 | `custom` | Individual toggle per service |
 
 After selecting `standard`, `full`, or `custom`, Script 1 shows the **Memory Layer** prompt:

@@ -1268,16 +1268,46 @@ EOF
       MODE: json-rpc
       PHONE_NUMBER: ${SIGNAL_PHONE:-}
     volumes:
-      - ${DATA_DIR}/signalbot:/home/user/.local/share/signal-cli
-    ports:
-      - "127.0.0.1:${SIGNALBOT_PORT}:8080"
+      - ${DATA_DIR}/signalbot:/app/.local/share/signal-cli
     networks:
       - ${DOCKER_NETWORK}
+    ports:
+      - "127.0.0.1:${SIGNALBOT_PORT:-8080}:8080"
+$(build_signalbot_deps)
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/v1/about"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8080/v1/about"]
       interval: 30s
       timeout: 10s
-      retries: 5
+      retries: 3
+      start_period: 60s
+
+EOF
+    fi
+
+    # SearXNG
+    if [[ "${SEARXNG_ENABLED}" == "true" ]]; then
+        cat >> "${COMPOSE_FILE}" << EOF
+  ${TENANT_PREFIX}-searxng:
+    image: searxng/searxng:latest
+    container_name: ${TENANT_PREFIX}-searxng
+    restart: unless-stopped
+    user: "${PUID}:${PGID}"
+    environment:
+      SEARXNG_SECRET_KEY: ${SEARXNG_SECRET_KEY}
+      SEARXNG_BIND_ADDRESS: "0.0.0.0"
+      SEARXNG_PORT: "8888"
+      SEARXNG_BASE_URL: "http://127.0.0.1:8888"
+    volumes:
+      - ${DATA_DIR}/searxng:/etc/searxng
+    networks:
+      - ${DOCKER_NETWORK}
+    ports:
+      - "127.0.0.1:${SEARXNG_PORT:-8888}:8888"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8888"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
       start_period: 60s
 
 EOF
@@ -2209,6 +2239,16 @@ signal.${BASE_DOMAIN} {
 EOF
     fi
 
+    # SearXNG - privacy-respecting search engine
+    if [[ "${SEARXNG_ENABLED:-${ENABLE_SEARXNG:-false}}" == "true" ]]; then
+        cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
+
+search.${BASE_DOMAIN} {
+    reverse_proxy ${TENANT_PREFIX}-searxng:8888
+}
+EOF
+    fi
+
     # dify-api subdomain removed — API traffic is now routed through dify.${BASE_DOMAIN}
     # via path handles above. A separate subdomain requires a second self-signed cert
     # acceptance in the browser, blocking XHR and making /install hang.
@@ -2389,6 +2429,7 @@ OCEOF
     [[ "${PROMETHEUS_ENABLED}" == "true" ]] && mkdir -p "${DATA_DIR}/prometheus"
     [[ "${AUTHENTIK_ENABLED}" == "true" ]] && mkdir -p "${DATA_DIR}/authentik"
     [[ "${SIGNALBOT_ENABLED}" == "true" ]] && mkdir -p "${DATA_DIR}/signalbot"
+    [[ "${SEARXNG_ENABLED}" == "true" ]] && mkdir -p "${DATA_DIR}/searxng"
     [[ "${BIFROST_ENABLED}"   == "true" ]] && mkdir -p "${DATA_DIR}/bifrost"
     [[ "${ENABLE_INGESTION:-false}" == "true" ]] && mkdir -p "${DATA_DIR}/ingestion" "${DATA_DIR}/rclone"
     [[ "${CADDY_ENABLED}"     == "true" ]] && mkdir -p "${DATA_DIR}/caddy" "${DATA_DIR}/logs/caddy"
@@ -2422,6 +2463,8 @@ OCEOF
     # N8N runs as node (uid 1000); Signalbot runs as internal uid 1000
     [[ "${N8N_ENABLED}" == "true" ]] && chmod 777 "${DATA_DIR}/n8n"
     [[ "${SIGNALBOT_ENABLED}" == "true" ]] && chmod 777 "${DATA_DIR}/signalbot"
+    # SearXNG runs as user: "${PUID}:${PGID}"
+    [[ "${SEARXNG_ENABLED}" == "true" ]] && chmod 755 "${DATA_DIR}/searxng"
     # Authentik migration creates /media/public (mounted as DATA_DIR/authentik) — needs world-writable
     [[ "${AUTHENTIK_ENABLED}" == "true" ]] && chmod 777 "${DATA_DIR}/authentik"
     # AnythingLLM runs as uid 1000 (anythingllm user) — writes SQLite DB + vector index to storage/
@@ -2815,6 +2858,10 @@ wait_for_all_health() {
         wait_for_health "${TENANT_PREFIX}-signalbot" 90 || return 1
     fi
     
+    if [[ "${SEARXNG_ENABLED}" == "true" ]]; then
+        wait_for_health "${TENANT_PREFIX}-searxng" 90 || return 1
+    fi
+    
     if [[ "${BIFROST_ENABLED}" == "true" ]]; then
         wait_for_health "${TENANT_PREFIX}-bifrost" 90 || return 1
     fi
@@ -3047,6 +3094,7 @@ main() {
     OPENCLAW_ENABLED="${OPENCLAW_ENABLED:-${ENABLE_OPENCLAW:-false}}"
     BIFROST_ENABLED="${BIFROST_ENABLED:-${ENABLE_BIFROST:-false}}"
     SIGNALBOT_ENABLED="${SIGNALBOT_ENABLED:-${ENABLE_SIGNALBOT:-false}}"
+    SEARXNG_ENABLED="${SEARXNG_ENABLED:-${ENABLE_SEARXNG:-false}}"
     ANYTHINGLLM_ENABLED="${ANYTHINGLLM_ENABLED:-${ENABLE_ANYTHINGLLM:-false}}"
     ANYTHINGLLM_JWT_SECRET="${ANYTHINGLLM_JWT_SECRET:-$(openssl rand -hex 32)}"
     # Authentik requires a non-empty secret key
@@ -3310,7 +3358,7 @@ show_post_deploy_dashboard() {
 
     # DEVELOPMENT
     local has_dev=false
-    [[ "${CODE_SERVER_ENABLED:-false}" == "true" || "${SIGNALBOT_ENABLED:-false}" == "true" ]] && has_dev=true
+    [[ "${CODE_SERVER_ENABLED:-false}" == "true" || "${SIGNALBOT_ENABLED:-false}" == "true" || "${SEARXNG_ENABLED:-false}" == "true" ]] && has_dev=true
     if [[ "$has_dev" == "true" ]]; then
         _d_line "DEVELOPMENT / COMMS"
         [[ "${CODE_SERVER_ENABLED:-false}" == "true" ]] && _d_line "  Code Server  $(_svc_url code ${CODE_SERVER_PORT})  pass: ${CODE_SERVER_PASSWORD:-<see platform.conf>}"
@@ -3323,6 +3371,15 @@ show_post_deploy_dashboard() {
             fi
             _d_line "  Signalbot    ${_sig_url}/v1/about"
             _d_line "  Signal QR    ${_sig_url}/v1/qrcodelink?device_name=signal-api  (open to pair phone)"
+        fi
+        if [[ "${SEARXNG_ENABLED:-false}" == "true" ]]; then
+            local _search_url
+            if [[ "$use_subdomains" == "true" ]]; then
+                _search_url="${base_proto}://search.${display_host}"
+            else
+                _search_url="http://127.0.0.1:${SEARXNG_PORT}"
+            fi
+            _d_line "  SearXNG      ${_search_url} (privacy search)"
         fi
         _d_blank
     fi
@@ -3337,9 +3394,10 @@ show_post_deploy_dashboard() {
     [[ -n "${GRAFANA_ADMIN_PASSWORD:-}"       ]] && _d_line "  Grafana admin        ${GRAFANA_ADMIN_PASSWORD}"
     [[ -n "${CODE_SERVER_PASSWORD:-}"         ]] && _d_line "  Code Server          ${CODE_SERVER_PASSWORD}"
     [[ -n "${FLOWISE_PASSWORD:-}"             ]] && _d_line "  Flowise              ${FLOWISE_USERNAME:-admin} / ${FLOWISE_PASSWORD}"
-    [[ -n "${OPENCLAW_PASSWORD:-}"            ]] && _d_line "  OpenClaw             ${OPENCLAW_USERNAME:-admin} / ${OPENCLAW_PASSWORD}"
-    [[ -n "${DIFY_INIT_PASSWORD:-}"           ]] && _d_line "  Dify init pass       ${DIFY_INIT_PASSWORD}"
-    [[ -n "${ZEP_AUTH_SECRET:-}"              ]] && _d_line "  Zep token            ${ZEP_AUTH_SECRET}"
+    [[ -n "${SIGNAL_PHONE:-}"                ]] && _d_line "  Signal phone         ${SIGNAL_PHONE}"
+    [[ -n "${SIGNAL_RECIPIENT:-}"           ]] && _d_line "  Signal recipient     ${SIGNAL_RECIPIENT}"
+    [[ -n "${SEARXNG_SECRET_KEY:-}"         ]] && _d_line "  SearXNG secret       ${SEARXNG_SECRET_KEY:0:16}..."
+    [[ -n "${ZEP_AUTH_SECRET:-}"            ]] && _d_line "  Zep token            ${ZEP_AUTH_SECRET}"
     [[ -n "${LETTA_SERVER_PASS:-}"            ]] && _d_line "  Letta password       ${LETTA_SERVER_PASS}"
     [[ -n "${ANYTHINGLLM_JWT_SECRET:-}"       ]] && _d_line "  AnythingLLM JWT      ${ANYTHINGLLM_JWT_SECRET}"
     _d_blank
