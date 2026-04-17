@@ -1813,6 +1813,63 @@ EOF
 
     # Code Server (browser-based VS Code IDE)
     if [[ "${CODE_SERVER_ENABLED:-${ENABLE_CODE_SERVER:-false}}" == "true" ]]; then
+        # Generate Code Server settings for AI integration
+        local code_settings_dir="${DATA_DIR}/code-server/.local/share/code-server"
+        mkdir -p "${code_settings_dir}"
+        
+        # Create settings.json with AI/LiteLLM configuration
+        cat > "${code_settings_dir}/settings.json" << CODEEOF
+{
+  "workbench.colorTheme": "Default Dark+",
+  "extensions.ignoreRecommendations": false,
+  "extensions.autoUpdate": false,
+  "python.defaultInterpreterPath": "/usr/bin/python3",
+  "git.enableSmartCommit": true,
+  "editor.tabSize": 2,
+  "editor.insertSpaces": true,
+  "files.autoSave": "afterDelay",
+  "files.autoSaveDelay": 1000,
+  "terminal.integrated.defaultProfile.linux": "bash",
+  // AI Assistant Configuration
+  "github.copilot.enable": {
+    "*": false,
+    "yaml": false,
+    "plaintext": false,
+    "markdown": false
+  },
+  "ai.enabled": true,
+  "ai.model.provider": "openai-compatible",
+  "ai.openai-compatible.base-url": "http://${TENANT_PREFIX}-litellm:4000/v1",
+  "ai.openai-compatible.api-key": "${LITELLM_MASTER_KEY}",
+  "ai.openai-compatible.model": "${OLLAMA_DEFAULT_MODEL:-llama3.1:8b}",
+  "ai.openai-compatible.temperature": 0.7,
+  "ai.openai-compatible.max-tokens": 4096,
+  // Continue.dev integration (if extension installed)
+  "continue.model": "${OLLAMA_DEFAULT_MODEL:-llama3.1:8b}",
+  "continue.provider": "openai-compatible",
+  "continue.apiBase": "http://${TENANT_PREFIX}-litellm:4000/v1",
+  "continue.apiKey": "${LITELLM_MASTER_KEY}"
+}
+CODEEOF
+        
+        # Create extensions.json with recommended AI extensions
+        cat > "${code_settings_dir}/extensions.json" << EXTEOF
+{
+  "recommendations": [
+    "continue.continue",
+    "github.copilot",
+    "ms-python.python",
+    "ms-vscode.vscode-typescript-next",
+    "bradlc.vscode-tailwindcss",
+    "esbenp.prettier-vscode",
+    "ms-vscode.vscode-eslint"
+  ],
+  "unwantedRecommendations": [
+    "github.copilot"
+  ]
+}
+EXTEOF
+
         cat >> "${COMPOSE_FILE}" << EOF
   ${TENANT_PREFIX}-code-server:
     image: codercom/code-server:latest
@@ -1821,6 +1878,10 @@ EOF
     user: "${PUID}:${PGID}"
     environment:
       PASSWORD: ${CODE_SERVER_PASSWORD:-changeme}
+      # LiteLLM integration environment variables
+      LITELLM_URL: "http://${TENANT_PREFIX}-litellm:4000/v1"
+      LITELLM_API_KEY: "${LITELLM_MASTER_KEY}"
+      DEFAULT_MODEL: "${OLLAMA_DEFAULT_MODEL:-llama3.1:8b}"
     volumes:
       - ${DATA_DIR}/code-server:/home/coder
       - ${DATA_DIR}:/mnt/tenant-data:ro
@@ -1832,8 +1893,8 @@ EOF
       test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
       interval: 30s
       timeout: 10s
-      retries: 5
-      start_period: 30s
+      retries: 3
+      start_period: 60s
 
 EOF
     fi
@@ -1843,35 +1904,170 @@ EOF
     if [[ "${CONTINUE_DEV_ENABLED:-${ENABLE_CONTINUE_DEV:-false}}" == "true" ]]; then
         local continue_dir="${DATA_DIR}/continue-dev"
         mkdir -p "${continue_dir}"
+        
+        # Generate dynamic model list from OLLAMA_MODELS
+        local models_config=""
+        local first_model="${OLLAMA_DEFAULT_MODEL:-llama3.1:8b}"
+        
+        # Add models from OLLAMA_MODELS variable
+        IFS=',' read -ra models <<< "${OLLAMA_MODELS:-llama3.1:8b,mistral:7b}"
+        for model in "${models[@]}"; do
+            model=$(echo "$model" | xargs)  # trim whitespace
+            if [[ -n "$model" ]]; then
+                if [[ -n "$models_config" ]]; then
+                    models_config="${models_config},"
+                fi
+                models_config="${models_config}
+    {
+      \"title\": \"${model} (via LiteLLM)\",
+      \"provider\": \"openai\",
+      \"model\": \"${model}\",
+      \"apiBase\": \"http://127.0.0.1:${LITELLM_PORT:-4000}/v1\",
+      \"apiKey\": \"${LITELLM_MASTER_KEY}\"
+    }"
+            fi
+        done
+        
+        # Add external providers if enabled
+        if [[ "${ENABLE_OPENAI:-false}" == "true" && -n "${OPENAI_API_KEY:-}" ]]; then
+            if [[ -n "$models_config" ]]; then
+                models_config="${models_config},"
+            fi
+            models_config="${models_config}
+    {
+      \"title\": \"OpenAI GPT-4 (via LiteLLM)\",
+      \"provider\": \"openai\",
+      \"model\": \"gpt-4\",
+      \"apiBase\": \"http://127.0.0.1:${LITELLM_PORT:-4000}/v1\",
+      \"apiKey\": \"${LITELLM_MASTER_KEY}\"
+    }"
+        fi
+        
+        if [[ "${ENABLE_ANTHROPIC:-false}" == "true" && -n "${ANTHROPIC_API_KEY:-}" ]]; then
+            if [[ -n "$models_config" ]]; then
+                models_config="${models_config},"
+            fi
+            models_config="${models_config}
+    {
+      \"title\": \"Claude-3-Sonnet (via LiteLLM)\",
+      \"provider\": \"openai\",
+      \"model\": \"claude-3-sonnet-20240229\",
+      \"apiBase\": \"http://127.0.0.1:${LITELLM_PORT:-4000}/v1\",
+      \"apiKey\": \"${LITELLM_MASTER_KEY}\"
+    }"
+        fi
+        
         cat > "${continue_dir}/config.json" << CONTEOF
 {
-  "models": [
-    {
-      "title": "${TENANT_ID} LiteLLM",
-      "provider": "openai",
-      "model": "${OLLAMA_DEFAULT_MODEL:-llama3.1:8b}",
-      "apiBase": "http://127.0.0.1:${LITELLM_PORT:-4000}/v1",
-      "apiKey": "${LITELLM_MASTER_KEY}"
-    }
+  "models": [${models_config}
   ],
   "tabAutocompleteModel": {
-    "title": "Autocomplete",
+    "title": "${first_model} (via LiteLLM)",
     "provider": "openai",
-    "model": "${OLLAMA_DEFAULT_MODEL:-llama3.1:8b}",
+    "model": "${first_model}",
     "apiBase": "http://127.0.0.1:${LITELLM_PORT:-4000}/v1",
     "apiKey": "${LITELLM_MASTER_KEY}"
   },
   "embeddingsProvider": {
     "provider": "openai",
-    "model": "${OLLAMA_DEFAULT_MODEL:-llama3.1:8b}",
+    "model": "${first_model}",
     "apiBase": "http://127.0.0.1:${LITELLM_PORT:-4000}/v1",
     "apiKey": "${LITELLM_MASTER_KEY}"
+  },
+  "contextProviders": [
+    "open",
+    "search",
+    "edit",
+    "diff",
+    "terminal",
+    "issues",
+    "jira",
+    "github",
+    "gitlab"
+  ],
+  "slashCommands": [
+    {
+      "name": "edit",
+      "description": "Edit code with AI assistance"
+    },
+    {
+      "name": "comment",
+      "description": "Add code comments"
+    },
+    {
+      "name": "share",
+      "description": "Share session"
+    },
+    {
+      "name": "cmd",
+      "description": "Run terminal command"
+    }
+  ],
+  "allowAnonymousTelemetry": false,
+  "disableSessionPersistence": false,
+  "experimental": {
+    "model": "gpt-4",
+    "provider": "openai"
   }
 }
 CONTEOF
+        
+        # Create Continue.dev installation guide
+        cat > "${continue_dir}/README.md" << READMEOF
+# Continue.dev Configuration
+
+This configuration enables Continue.dev to work with your AI Platform's LiteLLM proxy.
+
+## Setup Instructions
+
+1. **Install Continue.dev Extension**
+   - In VS Code: Install "Continue" extension from Continue.dev
+   - In Code Server: Extension should be auto-recommended
+
+2. **Copy Configuration**
+   \`\`\`bash
+   cp ${continue_dir}/config.json ~/.continue/config.json
+   \`\`\`
+
+3. **Available Models**
+   - Local Ollama models via LiteLLM load balancing
+   - External providers (OpenAI, Anthropic) if configured
+   - Automatic model switching based on availability
+
+4. **Features**
+   - Tab autocomplete with ${first_model}
+   - Code editing and generation
+   - Multi-provider model switching
+   - Context-aware assistance
+
+## Model Selection
+
+Use the model selector in Continue.dev to switch between:
+- Local models (fast, private, cost-effective)
+- External models (high quality, API costs apply)
+- Load-balanced routing via LiteLLM
+
+## Troubleshooting
+
+If models don't appear:
+1. Check LiteLLM health: \`curl http://127.0.0.1:${LITELLM_PORT:-4000}/health\`
+2. Verify Ollama models: \`docker exec ${TENANT_PREFIX}-ollama ollama list\`
+3. Check API keys in platform.conf
+
+## Integration with Code Server
+
+The configuration is optimized for use with Code Server and includes:
+- Pre-installed extension recommendations
+- AI assistant settings
+- LiteLLM proxy integration
+- Multi-provider support
+READMEOF
+        
         chown -R "${PUID}:${PGID}" "${continue_dir}"
         ok "Continue.dev config.json generated at ${continue_dir}/config.json"
-        ok "  → Copy to ~/.continue/config.json on your dev machine"
+        ok "  â Copy to ~/.continue/config.json on your dev machine"
+        ok "  â Installation guide available at ${continue_dir}/README.md"
+        ok "  â Available models: $(echo "${OLLAMA_MODELS:-llama3.1:8b,mistral:7b}" | tr ',' ' ')"
     fi
 
     ok "docker-compose.yml generated"

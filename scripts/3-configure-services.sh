@@ -25,6 +25,7 @@
 #          --ollama-pull <model>      Pull a new Ollama model
 #          --ollama-remove <model>    Remove an Ollama model
 #          --configure-models         Configure Ollama and external LLM models interactively
+#          --configure-ai             Configure AI development tools (Code Server, Continue.dev)
 #          --backup                   Create a one-off backup of tenant data
 #          --schedule "<cron>"        Schedule recurring backups (use with --backup)
 #          --setup-persistence        Ensure platform stands up automatically after reboot
@@ -889,6 +890,119 @@ configure_searxng() {
     ok "SearXNG configured"
 }
 
+configure_ai_dev_tools() {
+    if [[ "${CODE_SERVER_ENABLED:-false}" != "true" && "${CONTINUE_DEV_ENABLED:-false}" != "true" ]]; then
+        return 0
+    fi
+    
+    if step_done "ai_dev_tools_configured"; then
+        log "AI dev tools already configured, skipping"
+        return 0
+    fi
+    
+    log "Configuring AI development tools..."
+    
+    # Update Code Server settings with current model configuration
+    if [[ "${CODE_SERVER_ENABLED:-false}" == "true" ]]; then
+        local code_settings_dir="${DATA_DIR}/code-server/.local/share/code-server"
+        if [[ -f "${code_settings_dir}/settings.json" ]]; then
+            log "Updating Code Server AI settings..."
+            
+            # Update the model in settings.json
+            sed -i "s/\"ai.openai-compatible.model\": \"[^\"]*\"/\"ai.openai-compatible.model\": \"${OLLAMA_DEFAULT_MODEL:-llama3.1:8b}\"/g" "${code_settings_dir}/settings.json"
+            sed -i "s/\"continue.model\": \"[^\"]*\"/\"continue.model\": \"${OLLAMA_DEFAULT_MODEL:-llama3.1:8b}\"/g" "${code_settings_dir}/settings.json"
+            
+            ok "Code Server AI settings updated"
+        fi
+    fi
+    
+    # Regenerate Continue.dev config with current models
+    if [[ "${CONTINUE_DEV_ENABLED:-false}" == "true" ]]; then
+        log "Regenerating Continue.dev configuration..."
+        
+        local continue_dir="${DATA_DIR}/continue-dev"
+        mkdir -p "${continue_dir}"
+        
+        # Generate dynamic model list from OLLAMA_MODELS
+        local models_config=""
+        local first_model="${OLLAMA_DEFAULT_MODEL:-llama3.1:8b}"
+        
+        # Add models from OLLAMA_MODELS variable
+        IFS=',' read -ra models <<< "${OLLAMA_MODELS:-llama3.1:8b,mistral:7b}"
+        for model in "${models[@]}"; do
+            model=$(echo "$model" | xargs)  # trim whitespace
+            if [[ -n "$model" ]]; then
+                if [[ -n "$models_config" ]]; then
+                    models_config="${models_config},"
+                fi
+                models_config="${models_config}
+    {
+      \"title\": \"${model} (via LiteLLM)\",
+      \"provider\": \"openai\",
+      \"model\": \"${model}\",
+      \"apiBase\": \"http://127.0.0.1:${LITELLM_PORT:-4000}/v1\",
+      \"apiKey\": \"${LITELLM_MASTER_KEY}\"
+    }"
+            fi
+        done
+        
+        # Add external providers if enabled
+        if [[ "${ENABLE_OPENAI:-false}" == "true" && -n "${OPENAI_API_KEY:-}" ]]; then
+            if [[ -n "$models_config" ]]; then
+                models_config="${models_config},"
+            fi
+            models_config="${models_config}
+    {
+      \"title\": \"OpenAI GPT-4 (via LiteLLM)\",
+      \"provider\": \"openai\",
+      \"model\": \"gpt-4\",
+      \"apiBase\": \"http://127.0.0.1:${LITELLM_PORT:-4000}/v1\",
+      \"apiKey\": \"${LITELLM_MASTER_KEY}\"
+    }"
+        fi
+        
+        if [[ "${ENABLE_ANTHROPIC:-false}" == "true" && -n "${ANTHROPIC_API_KEY:-}" ]]; then
+            if [[ -n "$models_config" ]]; then
+                models_config="${models_config},"
+            fi
+            models_config="${models_config}
+    {
+      \"title\": \"Claude-3-Sonnet (via LiteLLM)\",
+      \"provider\": \"openai\",
+      \"model\": \"claude-3-sonnet-20240229\",
+      \"apiBase\": \"http://127.0.0.1:${LITELLM_PORT:-4000}/v1\",
+      \"apiKey\": \"${LITELLM_MASTER_KEY}\"
+    }"
+        fi
+        
+        cat > "${continue_dir}/config.json" << CONTEOF
+{
+  "models": [${models_config}
+  ],
+  "tabAutocompleteModel": {
+    "title": "${first_model} (via LiteLLM)",
+    "provider": "openai",
+    "model": "${first_model}",
+    "apiBase": "http://127.0.0.1:${LITELLM_PORT:-4000}/v1",
+    "apiKey": "${LITELLM_MASTER_KEY}"
+  },
+  "embeddingsProvider": {
+    "provider": "openai",
+    "model": "${first_model}",
+    "apiBase": "http://127.0.0.1:${LITELLM_PORT:-4000}/v1",
+    "apiKey": "${LITELLM_MASTER_KEY}"
+  }
+}
+CONTEOF
+        
+        ok "Continue.dev configuration regenerated"
+        ok "  â Available models: $(echo "${OLLAMA_MODELS:-llama3.1:8b,mistral:7b}" | tr ',' ' ')"
+    fi
+    
+    mark_done "ai_dev_tools_configured"
+    ok "AI development tools configured"
+}
+
 configure_zep() {
     if [[ "${ZEP_ENABLED:-false}" != "true" ]]; then
         return 0
@@ -1458,6 +1572,10 @@ main() {
                 configure_models=true
                 shift
                 ;;
+            --configure-ai)
+                configure_ai=true
+                shift
+                ;;
             --backup)
                 do_backup=true
                 shift
@@ -1683,6 +1801,7 @@ main() {
         configure_authentik
         configure_signalbot
         configure_searxng
+        configure_ai_dev_tools
         configure_zep
         configure_letta
         configure_bifrost
@@ -1691,6 +1810,11 @@ main() {
     # Model configuration (new feature)
     if [[ -n "$configure_models" ]]; then
         configure_models
+    fi
+    
+    # AI dev tools configuration
+    if [[ -n "$configure_ai" ]]; then
+        configure_ai_dev_tools
     fi
     
     # Show credentials summary
