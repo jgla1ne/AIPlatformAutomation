@@ -772,3 +772,4 @@ Epic 12 — Search        SearXNG privacy search engine, subdomain routing
 - **Interactive Model Management**: Script 3 --configure-models for Ollama and external LLM configuration
 - **Template Saving**: Model configurations saved as reusable templates
 - **SearXNG Integration**: Privacy-respecting search engine deployed across all stacks
+- **Gemma 4 Model Support**: Added Google's latest multimodal model to Ollama selection

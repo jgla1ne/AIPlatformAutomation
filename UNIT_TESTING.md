@@ -345,8 +345,8 @@ curl -s http://127.0.0.1:6333/collections/ingestion | jq '.result.points_count'
 | Test | Command | Expected | Result |
 |---|---|---|---|
 | Ollama list | `--ollama-list` | Table of loaded models | PENDING |
-| Ollama pull | `--ollama-pull llama3.2:3b` | Model downloaded, `ollama list` updated | PENDING |
-| Ollama remove | `--ollama-remove llama3.2:1b` | Model removed from list | PENDING |
+| Ollama pull | `--ollama-pull gemma4:9b` | Model downloaded, `ollama list` updated | PENDING |
+| Ollama remove | `--ollama-remove gemma4:9b` | Model removed from list | PENDING |
 | LiteLLM routing change | `--litellm-routing least-busy` | `litellm_config.yaml` updated, container restarted, health restored | PENDING |
 | Service reconfigure | `--reconfigure grafana` | New password printed, platform.conf updated, grafana restarted | PENDING |
 | Logs tail | `--logs n8n --log-lines 50` | Last 50 log lines from `ai-datasquiz-n8n` | PENDING |

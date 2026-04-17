@@ -197,7 +197,34 @@ bash scripts/1-setup-system.sh <tenant_id>
 - Docker data-root configured to `${DATA_DIR}/docker` (daemon restarted)
 - System packages installed (docker, rclone, etc.)
 
-**Expected outcome:** `Script 1 Complete ✓` banner. `platform.conf` written with all `ENABLE_*`, port, secret, and domain variables. EBS mounted and Docker pointing at it. Ready for Script 2.
+**Expected outcome:** `Script 1 Complete` banner. All configuration saved to `platform.conf`. Ready for Script 2 deployment.
+
+#### Ollama Model Selection
+
+Script 1 provides an interactive model selection menu with the latest available models:
+
+**Small Models (< 4GB RAM):**
+- Llama 3.1 8B - General purpose, good balance
+- Mistral 7B - Fast, efficient for most tasks  
+- Phi-3 Mini 3.8B - Microsoft's compact model
+- Gemma 2B - Google's lightweight model
+
+**Medium Models (4-8GB RAM):**
+- Llama 3.1 70B - High performance, larger context
+- Mixtral 8x7B - Mixture of experts, excellent reasoning
+- Qwen 72B - Strong multilingual capabilities
+
+**Large Models (8-16GB+ RAM):**
+- CodeLlama 70B - Specialized for code generation
+- Llama 3 8B Chat - Optimized for conversations
+- Deepseek Coder 33B - Advanced coding assistant
+- **Gemma 4 9B** - Google's latest multimodal model (NEW!)
+
+**Model Management:**
+- Models are downloaded only once during initial deployment (P14 cost optimization)
+- Script 3 provides `--ollama-pull`, `--ollama-remove`, `--ollama-list` commands
+- `--flushall` properly wipes model cache for clean re-deploys
+- Dynamic validation ensures models exist before LiteLLM configuration
 
 **Key variables written to platform.conf:**
 ```

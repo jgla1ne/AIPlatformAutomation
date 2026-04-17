@@ -1493,10 +1493,11 @@ select_ollama_models() {
     echo "    8) CodeLlama 70B - Specialized for code generation"
     echo "    9) Llama 3 8B Chat - Optimized for conversations"
     echo "   10) Deepseek Coder 33B - Advanced coding assistant"
+    echo "   11) Gemma 4 9B - Google's latest multimodal model"
     echo ""
     
     echo "  🎯 Select models (comma-separated numbers, e.g., 1,3,5):"
-    echo -n "  🎯 Models selection [1-10]: "
+    echo -n "  🎯 Models selection [1-11]: "
     read -r selection
     
     if [[ -z "$selection" ]]; then
@@ -1518,6 +1519,7 @@ select_ollama_models() {
             8) models="${models:+$models,}codellama:70b" ;;
             9) models="${models:+$models,}llama3:8b" ;;
             10) models="${models:+$models,}deepseek-coder:33b" ;;
+            11) models="${models:+$models,}gemma4:9b" ;;
             *) echo "  ⚠️  Invalid selection: $num (skipping)" ;;
         esac
     done
