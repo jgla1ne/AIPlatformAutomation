@@ -67,6 +67,48 @@ section() {
 }
 
 # =============================================================================
+# HEALTH CHECK UTILITIES
+# =============================================================================
+wait_for_health() {
+    local container_name="$1"
+    local timeout="${2:-90}"
+    local interval=5
+    local elapsed=0
+
+    log "Waiting for ${container_name} to become healthy (timeout: ${timeout}s)..."
+
+    while [[ ${elapsed} -lt ${timeout} ]]; do
+        local status
+        status=$(docker inspect \
+            --format='{{.State.Health.Status}}' \
+            "${container_name}" 2>/dev/null) || status="not_found"
+
+        case "${status}" in
+            healthy)
+                log "  ${container_name} is healthy"
+                return 0
+                ;;
+            unhealthy)
+                log "  ${container_name} reported unhealthy"
+                return 1
+                ;;
+            not_found)
+                log "  ${container_name} not found"
+                ;;
+            starting)
+                log "  ${container_name} still starting..."
+                ;;
+        esac
+
+        sleep ${interval}
+        elapsed=$((elapsed + interval))
+    done
+
+    log "  ${container_name} health check timed out after ${timeout}s"
+    return 1
+}
+
+# =============================================================================
 # DRY RUN COMMAND EXECUTOR (README §12)
 # =============================================================================
 run_cmd() {
@@ -1808,12 +1850,12 @@ main() {
     fi
     
     # Model configuration (new feature)
-    if [[ -n "$configure_models" ]]; then
+    if [[ "${configure_models:-false}" == "true" ]]; then
         configure_models
     fi
     
     # AI dev tools configuration
-    if [[ -n "$configure_ai" ]]; then
+    if [[ "${configure_ai:-false}" == "true" ]]; then
         configure_ai_dev_tools
     fi
     
