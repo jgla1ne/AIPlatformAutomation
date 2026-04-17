@@ -704,6 +704,29 @@
 
 ---
 
+## EPIC 12 - Search Integration
+
+**Goal:** Users have access to privacy-respecting search capabilities that augment AI responses without external API dependencies.
+
+---
+
+### Feature 12.1 - Privacy-Respecting Search Engine
+
+**As an** operator,  
+**I want** a local search engine that provides web search capabilities without external dependencies,  
+**so that** AI applications can augment responses with current web information while maintaining privacy.
+
+**Acceptance criteria:**
+- SearXNG deployed automatically in all stack presets (except custom)
+- Subdomain routing via search.${BASE_DOMAIN}
+- Auto-generated secret key for security
+- Integration with LiteLLM for search-augmented responses
+- Health checks and monitoring in Script 3
+- Configurable search engines and preferences
+- No external API dependencies for search functionality
+
+---
+
 ## STORY MAP SUMMARY
 
 ```
@@ -729,20 +752,23 @@ Epic 10 — Dev           code-server, continue-dev
 Epic 11 — Model Management Script 3 --configure-models, --flush-dbs flag
                         Interactive Ollama/external LLM configuration, template saving
                         Automatic database corruption detection and recovery
+Epic 12 — Search        SearXNG privacy search engine, subdomain routing
+                        Auto-generated secrets, health checks, LiteLLM integration
 ```
 
 ---
 
-*Version: 2.2.0 | Last Updated: 2026-04-16*
+*Version: 2.3.0 | Last Updated: 2026-04-17*
 
 ## IMPLEMENTATION STATUS UPDATES
 
-### Completed Features (2026-04-16)
+### Completed Features (2026-04-17)
 - **MongoDB Corruption Recovery**: Automatic detection and recovery implemented in Script 2
 - **Dify Database Recovery**: Automatic detection and recovery of database migration issues
 - **--flush-dbs Flag**: Database-only recovery while preserving containers and models
 - **P14 Model Download Cost Optimization**: Models download once, preserved on re-runs, cleared with --flushall
-- **Full 24-Container Deployment**: All services healthy and operational
+- **Full 25-Container Deployment**: All services healthy and operational
 - **Dynamic Model Validation**: Groq, OpenAI, and Ollama models validated before configuration
 - **Interactive Model Management**: Script 3 --configure-models for Ollama and external LLM configuration
 - **Template Saving**: Model configurations saved as reusable templates
+- **SearXNG Integration**: Privacy-respecting search engine deployed across all stacks

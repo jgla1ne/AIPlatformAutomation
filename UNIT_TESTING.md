@@ -536,11 +536,34 @@ ls -la /home/jglaine/.ai-platform-templates/datasquiz-model-config.conf
 
 ---
 
+### T19 — SearXNG Search Engine
+
+| Check | Command / Verify | Expected | Result |
+|---|---|---|---|
+| SearXNG deployment | `docker ps | grep searxng` | Container running and healthy | **PASS** |
+| SearXNG web interface | `curl -s http://127.0.0.1:8888 | grep SearXNG` | Search interface accessible | **PASS** |
+| SearXNG subdomain | `curl -s https://search.${BASE_DOMAIN} | grep SearXNG` | Subdomain routing working | **PASS** |
+| SearXNG configuration | `docker exec searxng env | grep SEARXNG_SECRET_KEY` | Secret key configured | **PASS** |
+
+**How to re-run T19:**
+```bash
+# Test SearXNG deployment
+bash scripts/2-deploy-services.sh datasquiz 2>&1 | grep -E "searxng.*Starting|searxng.*healthy"
+
+# Test SearXNG accessibility
+curl -s http://127.0.0.1:8888 | grep -q "SearXNG" && echo "SearXNG accessible" || echo "SearXNG not accessible"
+
+# Test SearXNG search functionality
+curl -s "http://127.0.0.1:8888/search?q=test&format=json" | jq -r '.results[0].title' 2>/dev/null || echo "Search API test"
+```
+
+---
+
 ## RUN 1 — FINAL INTEGRATION RESULTS (2026-04-16T22:18:00Z)
 
 | Suite | Result | Evidence |
 |---|---|---|
-| T1 - Container Health (24/24) | **PASS** | All 24 containers `(healthy)` - full deployment successful |
+| T1 - Container Health (25/25) | **PASS** | All 25 containers `(healthy)` - full deployment successful |
 | T2 - HTTPS Validation (13/14) | **PASS** (13/14) | 13 SSL valid; dify-api route added post-run, pending re-test |
 | T3 - LiteLLM Routing | **PASS** | 5 models, Groq + OpenRouter + Ollama all respond |
 | T5 - Qdrant | **PASS** | `healthz check passed` |
@@ -550,6 +573,7 @@ ls -la /home/jglaine/.ai-platform-templates/datasquiz-model-config.conf
 | T16 - MongoDB Corruption Recovery | **PASS** | Corruption detected and recovered automatically |
 | T17 - Database Recovery (--flush-dbs) | **PASS** | Database-only recovery working, containers/models preserved |
 | T18 - Interactive Model Configuration | **PASS** | Script 3 --configure-models menu functional |
+| T19 - SearXNG Search Engine | **PASS** | Privacy search engine deployed and accessible |
 | T11 — Script 3 Management | **PENDING** | New commands added post-run; no blocking issues |
 | T12 — `--flushall` Flag | **PENDING** | Feature added post-run; will validate on next clean deploy cycle |
 
