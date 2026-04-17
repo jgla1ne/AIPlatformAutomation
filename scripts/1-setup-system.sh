@@ -1720,8 +1720,8 @@ configure_signalbot() {
     if [[ "$ENABLE_SEARXNG" == "true" ]]; then
         echo ""
         safe_read "SearXNG port" "8888" "SEARXNG_PORT" "^[0-9]+$"
-        safe_read "SearXNG secret key (leave blank to auto-generate)" "" "SEARXNG_SECRET_KEY"
-        if [[ -z "${SEARXNG_SECRET_KEY:-}" ]]; then
+        safe_read "SearXNG secret key (leave blank to auto-generate)" "AUTO_GENERATE" "SEARXNG_SECRET_KEY" "^.*$"
+        if [[ "$SEARXNG_SECRET_KEY" == "AUTO_GENERATE" || -z "${SEARXNG_SECRET_KEY:-}" ]]; then
             SEARXNG_SECRET_KEY="$(openssl rand -hex 32)"
             echo "    Auto-generated secret key: ${SEARXNG_SECRET_KEY}"
         fi
