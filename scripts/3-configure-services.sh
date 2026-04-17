@@ -1229,7 +1229,7 @@ show_credentials() {
     local _has_mem=false
     [[ "${ZEP_ENABLED:-false}"   == "true" ]] && _has_mem=true
     [[ "${LETTA_ENABLED:-false}" == "true" ]] && _has_mem=true
-    [[ "${MEM0_ENABLED:-false}"  == "true" ]] && _has_mem=true
+    # Mem0 removed - no longer supported
     if [[ "$_has_mem" == "true" ]]; then
         echo "MEMORY LAYER"
         if [[ "${ZEP_ENABLED:-false}" == "true" ]]; then
@@ -1430,7 +1430,7 @@ show_health_status() {
     # Memory
     [[ "${ZEP_ENABLED:-false}"        == "true" ]] && _svc_row "Zep CE"       "zep"         "${ZEP_PORT:-8100}"
     [[ "${LETTA_ENABLED:-false}"      == "true" ]] && _svc_row "Letta"        "letta"       "${LETTA_PORT:-8283}"
-    [[ "${MEM0_ENABLED:-false}"       == "true" ]] && _svc_row "Mem0"         "mem0"        "${MEM0_PORT:-8081}"
+    # Mem0 removed - no longer supported
 
     # Identity + monitoring
     [[ "${AUTHENTIK_ENABLED:-false}"  == "true" ]] && _svc_row "Authentik"    "authentik"   "${AUTHENTIK_PORT:-9000}"
@@ -1677,7 +1677,7 @@ main() {
     SIGNALBOT_ENABLED="${SIGNALBOT_ENABLED:-${ENABLE_SIGNALBOT:-false}}"
     LIBRECHAT_ENABLED="${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}"
     ANYTHINGLLM_ENABLED="${ANYTHINGLLM_ENABLED:-${ENABLE_ANYTHINGLLM:-false}}"
-    MEM0_ENABLED="${MEM0_ENABLED:-${ENABLE_MEM0:-false}}"
+    # Mem0 removed - no longer supported
     ZEP_ENABLED="${ZEP_ENABLED:-${ENABLE_ZEP:-false}}"
     LETTA_ENABLED="${LETTA_ENABLED:-${ENABLE_LETTA:-false}}"
     CODE_SERVER_ENABLED="${CODE_SERVER_ENABLED:-${ENABLE_CODE_SERVER:-false}}"
@@ -2415,7 +2415,7 @@ run_mission_control() {
     # Memory
     [[ "${ZEP_ENABLED:-false}"         == "true" ]] && echo "    Zep CE       → $(_access_url zep   ${ZEP_PORT:-8100})"
     [[ "${LETTA_ENABLED:-false}"       == "true" ]] && echo "    Letta        → $(_access_url letta ${LETTA_PORT:-8283})"
-    [[ "${MEM0_ENABLED:-false}"        == "true" ]] && echo "    Mem0         → http://127.0.0.1:${MEM0_PORT:-8081}  (internal)"
+    # Mem0 removed - no longer supported
 
     # Identity + monitoring
     [[ "${AUTHENTIK_ENABLED:-false}"   == "true" ]] && echo "    Authentik    → $(_access_url authentik  ${AUTHENTIK_PORT:-9000})"

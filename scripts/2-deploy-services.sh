@@ -1635,51 +1635,7 @@ EOF
 EOF
     fi
 
-    # Mem0 — AI memory layer, connects to Postgres + vectordb + LiteLLM
-    local _mem0_img="${MEM0_IMAGE:-mem0ai/mem0:latest}"
-    if [[ "${MEM0_ENABLED:-${ENABLE_MEM0:-false}}" == "true" ]]; then
-        local vdb_url
-        vdb_url=$(get_vectordb_url)
-        cat >> "${COMPOSE_FILE}" << EOF
-  ${TENANT_PREFIX}-mem0:
-    image: ${_mem0_img}
-    container_name: ${TENANT_PREFIX}-mem0
-    restart: unless-stopped
-    user: "${PUID}:${PGID}"
-    environment:
-      # Postgres for history storage
-      POSTGRES_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${POSTGRES_DB}
-      # LiteLLM as embedding + LLM gateway
-      OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
-      OPENAI_API_BASE: http://${TENANT_PREFIX}-litellm:4000/v1
-      EMBEDDING_MODEL: ${OLLAMA_DEFAULT_MODEL}
-      # VectorDB — dynamic
-      VECTOR_STORE: ${VECTOR_DB_TYPE:-qdrant}
-      QDRANT_URL: http://${TENANT_PREFIX}-qdrant:6333
-      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
-      WEAVIATE_URL: http://${TENANT_PREFIX}-weaviate:8080
-      CHROMA_URL: http://${TENANT_PREFIX}-chroma:8000
-      MEM0_API_KEY: ${MEM0_API_KEY:-}
-    volumes:
-      - ${DATA_DIR}/mem0:/app/data
-    ports:
-      - "127.0.0.1:${MEM0_PORT:-8081}:8080"
-    networks:
-      - ${DOCKER_NETWORK}
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-
-EOF
-    fi
-
     # Zep CE — long-term memory layer backed by Postgres, LLM via LiteLLM proxy
-    # Note: Zep 0.x requires store.type in a config.yaml (not settable via env).
-    # This follows the same pattern as litellm_config.yaml — script writes the file,
-    # compose mounts it read-only. Secrets are inlined via bash expansion at generation time.
     if [[ "${ZEP_ENABLED:-false}" == "true" ]]; then
         mkdir -p "${CONFIG_DIR}/zep"
         cat > "${CONFIG_DIR}/zep/config.yaml" << ZEP_CONF
@@ -2635,7 +2591,7 @@ OCEOF
     [[ "${MILVUS_ENABLED:-${ENABLE_MILVUS:-false}}"    == "true" ]] && mkdir -p "${DATA_DIR}/milvus" "${DATA_DIR}/milvus-etcd" "${DATA_DIR}/milvus-minio"
     [[ "${NPM_ENABLED:-false}"                         == "true" ]] && mkdir -p "${DATA_DIR}/npm/data" "${DATA_DIR}/npm/letsencrypt"
     [[ "${ANYTHINGLLM_ENABLED:-${ENABLE_ANYTHINGLLM:-false}}" == "true" ]] && mkdir -p "${DATA_DIR}/anythingllm"
-    [[ "${MEM0_ENABLED:-${ENABLE_MEM0:-false}}"         == "true" ]] && mkdir -p "${DATA_DIR}/mem0"
+    # Mem0 removed - no longer supported
     [[ "${ZEP_ENABLED:-false}"                          == "true" ]] && mkdir -p "${DATA_DIR}/zep"
     [[ "${LETTA_ENABLED:-false}"                        == "true" ]] && mkdir -p "${DATA_DIR}/letta"
     [[ "${GRAFANA_ENABLED:-${ENABLE_GRAFANA:-false}}"   == "true" ]] && mkdir -p "${DATA_DIR}/grafana"
@@ -2868,9 +2824,7 @@ wait_for_all_health() {
         fi
     fi
 
-    if [[ "${MEM0_ENABLED}" == "true" ]]; then
-        wait_for_health "${TENANT_PREFIX}-mem0" 120 || return 1
-    fi
+    # Mem0 removed - no longer supported
 
     if [[ "${ZEP_ENABLED:-false}" == "true" ]]; then
         wait_for_health "${TENANT_PREFIX}-zep" 120 || return 1
@@ -3298,9 +3252,7 @@ main() {
     AUTHENTIK_BOOTSTRAP_PASSWORD="${AUTHENTIK_BOOTSTRAP_PASSWORD:-${ADMIN_PASSWORD:-$(openssl rand -base64 16 | tr -d '=+/')}}"
     WEAVIATE_ENABLED="${WEAVIATE_ENABLED:-${ENABLE_WEAVIATE:-false}}"
     CHROMA_ENABLED="${CHROMA_ENABLED:-${ENABLE_CHROMA:-false}}"
-    MEM0_ENABLED="${MEM0_ENABLED:-${ENABLE_MEM0:-false}}"
-    MEM0_PORT="${MEM0_PORT:-8081}"
-    MEM0_API_KEY="${MEM0_API_KEY:-}"
+    # Mem0 removed - no longer supported
     GRAFANA_ENABLED="${GRAFANA_ENABLED:-${ENABLE_GRAFANA:-false}}"
     PROMETHEUS_ENABLED="${PROMETHEUS_ENABLED:-${ENABLE_PROMETHEUS:-false}}"
     CODE_SERVER_ENABLED="${CODE_SERVER_ENABLED:-${ENABLE_CODE_SERVER:-false}}"
@@ -3532,7 +3484,7 @@ show_post_deploy_dashboard() {
         _d_line "MEMORY LAYER"
         [[ "${ZEP_ENABLED:-false}"   == "true" ]] && _d_line "  Zep CE       $(_svc_url zep   ${ZEP_PORT})  (conversation memory)"
         [[ "${LETTA_ENABLED:-false}" == "true" ]] && _d_line "  Letta        $(_svc_url letta ${LETTA_PORT})  (agent memory runtime)"
-        [[ "${MEM0_ENABLED:-false}"  == "true" ]] && _d_line "  Mem0         http://127.0.0.1:${MEM0_PORT:-8081}"
+        # Mem0 removed - no longer supported
         _d_blank
     fi
 
