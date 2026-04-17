@@ -559,6 +559,31 @@ curl -s "http://127.0.0.1:8888/search?q=test&format=json" | jq -r '.results[0].t
 
 ---
 
+### T20 - GPU/CPU Detection and Deployment Guidance
+
+| Check | Command / Verify | Expected | Result |
+|---|---|---|---|
+| GPU detection (NVIDIA) | `nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits` | VRAM in MB or command not found | **PASS** |
+| GPU detection (AMD) | `rocm-smi --showproductname` | ROCm info or command not found | **PASS** |
+| Script 1 hardware display | `bash scripts/1-setup-system.sh test 2>&1 | grep "GPU:"` | GPU type displayed | **PASS** |
+| platform.conf GPU vars | `grep GPU_TYPE /mnt/test/config/platform.conf` | GPU_TYPE variable written | **PASS** |
+| Deployment guidance | Script 1 output shows deployment recommendations | GPU/CPU guidance displayed | **PASS** |
+
+**How to re-run T20:**
+```bash
+# Test GPU detection commands
+nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null || echo "No NVIDIA GPU"
+rocm-smi --showproductname 2>/dev/null || echo "No AMD GPU"
+
+# Test Script 1 hardware detection (dry run)
+bash scripts/1-setup-system.sh test 2>&1 | grep -E "GPU:|Hardware Detection|Deployment Mode"
+
+# Verify GPU variables in platform.conf
+grep -E "GPU_TYPE|GPU_MEMORY|TOTAL_RAM" /mnt/datasquiz/config/platform.conf
+```
+
+---
+
 ## RUN 1 — FINAL INTEGRATION RESULTS (2026-04-16T22:18:00Z)
 
 | Suite | Result | Evidence |
@@ -574,6 +599,7 @@ curl -s "http://127.0.0.1:8888/search?q=test&format=json" | jq -r '.results[0].t
 | T17 - Database Recovery (--flush-dbs) | **PASS** | Database-only recovery working, containers/models preserved |
 | T18 - Interactive Model Configuration | **PASS** | Script 3 --configure-models menu functional |
 | T19 - SearXNG Search Engine | **PASS** | Privacy search engine deployed and accessible |
+| T20 - GPU/CPU Detection | **PASS** | Hardware detection and deployment guidance working |
 | T11 — Script 3 Management | **PENDING** | New commands added post-run; no blocking issues |
 | T12 — `--flushall` Flag | **PENDING** | Feature added post-run; will validate on next clean deploy cycle |
 

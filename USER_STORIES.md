@@ -727,6 +727,29 @@
 
 ---
 
+## EPIC 13 - Hardware Detection & Optimization
+
+**Goal:** Users receive intelligent deployment recommendations based on detected hardware capabilities for optimal performance.
+
+---
+
+### Feature 13.1 - GPU/CPU Detection and Deployment Guidance
+
+**As an** operator,  
+**I want** the system to automatically detect my hardware capabilities and provide deployment recommendations,  
+**so that** I can choose the right models and configuration for optimal performance.
+
+**Acceptance criteria:**
+- NVIDIA GPU detection with VRAM capacity reporting
+- AMD ROCm GPU detection and compatibility assessment
+- CPU-only detection with efficiency recommendations
+- Hardware-aware model size recommendations
+- Deployment mode confirmation with performance guidance
+- GPU/CPU variables written to platform.conf for Script 2 usage
+- Upgrade recommendations for CPU-only deployments
+
+---
+
 ## STORY MAP SUMMARY
 
 ```
@@ -754,6 +777,8 @@ Epic 11 — Model Management Script 3 --configure-models, --flush-dbs flag
                         Automatic database corruption detection and recovery
 Epic 12 — Search        SearXNG privacy search engine, subdomain routing
                         Auto-generated secrets, health checks, LiteLLM integration
+Epic 13 — Hardware       GPU/CPU detection, deployment guidance, model recommendations
+                        Hardware-aware configuration, performance optimization
 ```
 
 ---
@@ -773,3 +798,4 @@ Epic 12 — Search        SearXNG privacy search engine, subdomain routing
 - **Template Saving**: Model configurations saved as reusable templates
 - **SearXNG Integration**: Privacy-respecting search engine deployed across all stacks
 - **Gemma 4 Model Support**: Added Google's latest multimodal model to Ollama selection
+- **GPU/CPU Detection**: Hardware detection and deployment guidance in Script 1

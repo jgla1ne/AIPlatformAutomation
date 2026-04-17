@@ -226,6 +226,26 @@ Script 1 provides an interactive model selection menu with the latest available 
 - `--flushall` properly wipes model cache for clean re-deploys
 - Dynamic validation ensures models exist before LiteLLM configuration
 
+#### GPU/CPU Detection and Deployment Guidance
+
+Script 1 automatically detects hardware capabilities and provides deployment recommendations:
+
+**Hardware Detection:**
+- **NVIDIA GPU**: Detects VRAM capacity, recommends large models (8-16GB+)
+- **AMD ROCm**: Detects ROCm support, recommends medium models (4-8GB)  
+- **CPU-only**: Detects no GPU, recommends small models (< 4GB) for efficiency
+
+**Deployment Mode Confirmation:**
+- **GPU-accelerated**: Fast inference for production workloads
+- **CPU-only**: Slower inference, suitable for development/testing
+- **Upgrade guidance**: Recommends GPU instances for large model deployments
+
+**System Resources Display:**
+- GPU type and memory (NVIDIA/AMD/None)
+- Total and available RAM
+- Disk space availability
+- Deployment mode recommendations based on hardware
+
 **Key variables written to platform.conf:**
 ```
 TENANT_ID, TENANT_PREFIX, BASE_DIR, DATA_DIR, CONFIG_DIR
@@ -234,6 +254,10 @@ ENABLE_<SERVICE>=true/false  (one per service)
 <SERVICE>_PORT=<preferred>   (Script 2 may allocate different actual port)
 PROXY_TYPE, ENABLE_CADDY, ENABLE_NPM
 PUID, PGID
+GPU_TYPE=nvidia|rocm|none
+GPU_MEMORY=<VRAM_MB>
+TOTAL_RAM=<SYSTEM_RAM_MB>
+AVAILABLE_RAM=<FREE_RAM_MB>
 ```
 
 ---

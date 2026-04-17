@@ -1467,12 +1467,26 @@ collect_api_keys() {
     echo ""
 }
 
-# =============================================================================
 # OLLAMA MODEL SELECTION
 # =============================================================================
 select_ollama_models() {
     echo ""
     echo "  🦙 Available Ollama Models:"
+    echo ""
+    
+    # Display GPU/CPU detection results
+    echo "  📊 Hardware Detection:"
+    if [[ "$GPU_TYPE" == "nvidia" ]]; then
+        echo "    💻 GPU: NVIDIA (${GPU_MEMORY}MB VRAM) - GPU acceleration available"
+        echo "    💻 Recommended: Large models (8-16GB+) for optimal performance"
+    elif [[ "$GPU_TYPE" == "rocm" ]]; then
+        echo "    💻 GPU: AMD ROCm - GPU acceleration available"
+        echo "    💻 Recommended: Medium models (4-8GB) for ROCm compatibility"
+    else
+        echo "    💻 GPU: None detected - CPU-only mode"
+        echo "    💻 Recommended: Small models (< 4GB) for CPU efficiency"
+    fi
+    echo "    💻 RAM: ${TOTAL_RAM}MB total, ${AVAILABLE_RAM}MB available"
     echo ""
     
     # Model groups
@@ -2066,6 +2080,24 @@ display_configuration_summary() {
     [[ "$GPU_TYPE" != "none" ]] && echo "    GPU Memory: ${GPU_MEMORY}MB"
     echo "    RAM: ${TOTAL_RAM}MB total, ${AVAILABLE_RAM}MB available"
     echo "    Disk: ${DISK_SPACE} available"
+    echo ""
+    
+    # GPU/CPU Deployment Confirmation
+    echo "  💻 DEPLOYMENT MODE CONFIRMATION:"
+    if [[ "$GPU_TYPE" == "nvidia" ]]; then
+        echo "    • Recommended: GPU-accelerated deployment for large models"
+        echo "    • Performance: Fast inference with ${GPU_MEMORY}MB VRAM"
+        echo "    • Use Case: Production workloads, large model inference"
+    elif [[ "$GPU_TYPE" == "rocm" ]]; then
+        echo "    • Recommended: GPU-accelerated deployment for medium models"
+        echo "    • Performance: Good inference with AMD ROCm"
+        echo "    • Use Case: Development, medium model workloads"
+    else
+        echo "    • Recommended: CPU-only deployment for small models"
+        echo "    • Performance: Slower inference, no GPU acceleration"
+        echo "    • Use Case: Development, testing, small model workloads"
+        echo "    • Upgrade: Consider GPU instance for large models"
+    fi
     echo ""
     
     # Final Confirmation
