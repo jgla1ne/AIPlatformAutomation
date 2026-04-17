@@ -797,5 +797,11 @@ Epic 13 — Hardware       GPU/CPU detection, deployment guidance, model recomme
 - **Interactive Model Management**: Script 3 --configure-models for Ollama and external LLM configuration
 - **Template Saving**: Model configurations saved as reusable templates
 - **SearXNG Integration**: Privacy-respecting search engine deployed across all stacks
+- **GPU/CPU Detection**: Hardware-aware deployment guidance and model recommendations
+- **Latest Ollama Models**: Llama 3.2, Qwen 2.5, Gemma 4, Deepseek Coder V2 added
+- **Custom Model Entry**: Support for any model from ollama.com/library with variants
+- **AI Development Tools Integration**: Code Server + Continue.dev with LiteLLM proxy
+- **Mem0 Removal**: Deprecated service completely removed from codebase
+- **Multi-Provider AI Routing**: All services properly connected to LiteLLM proxy
 - **Gemma 4 Model Support**: Added Google's latest multimodal model to Ollama selection
 - **GPU/CPU Detection**: Hardware detection and deployment guidance in Script 1

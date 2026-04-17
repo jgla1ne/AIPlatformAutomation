@@ -203,22 +203,35 @@ bash scripts/1-setup-system.sh <tenant_id>
 
 Script 1 provides an interactive model selection menu with the latest available models:
 
+**Available Ollama Models (Script 1 selection):**
+
 **Small Models (< 4GB RAM):**
-- Llama 3.1 8B - General purpose, good balance
-- Mistral 7B - Fast, efficient for most tasks  
-- Phi-3 Mini 3.8B - Microsoft's compact model
-- Gemma 2B - Google's lightweight model
+- Llama 3.2 1B - Latest compact model
+- Llama 3.2 3B - Balanced small model
+- Phi-3 Mini 4K - Microsoft's 4K context model
+- Gemma 2 2B - Google's lightweight model
+- Qwen 2.5 3B - Efficient multilingual model
 
 **Medium Models (4-8GB RAM):**
-- Llama 3.1 70B - High performance, larger context
-- Mixtral 8x7B - Mixture of experts, excellent reasoning
-- Qwen 72B - Strong multilingual capabilities
+- Llama 3.1 8B - General purpose, good balance
+- Llama 3.2 7B - Latest medium model
+- Mistral 7B - Fast, efficient for most tasks
+- Qwen 2.5 7B - Strong reasoning capabilities
+- Deepseek Coder V2 16B - Advanced coding model
 
 **Large Models (8-16GB+ RAM):**
+- Llama 3.1 70B - High performance, larger context
+- Llama 3.3 70B - Latest large model
+- Mixtral 8x7B - Mixture of experts, excellent reasoning
+- Qwen 2.5 72B - Strong multilingual capabilities
 - CodeLlama 70B - Specialized for code generation
-- Llama 3 8B Chat - Optimized for conversations
-- Deepseek Coder 33B - Advanced coding assistant
-- **Gemma 4 9B** - Google's latest multimodal model (NEW!)
+- Gemma 4 9B - Google's latest multimodal model
+- Gemma 4 27B - Google's large multimodal model
+
+**Custom Options:**
+- Custom model entry (option 18) for any model from ollama.com/library
+- Support for model variants: `gemma4:2b`, `nemotron-cascade-2:latest`
+- Multiple models: `gemma4:9b,llama3.2:7b`
 
 **Model Management:**
 - Models are downloaded only once during initial deployment (P14 cost optimization)

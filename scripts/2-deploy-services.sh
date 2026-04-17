@@ -944,6 +944,9 @@ EOF
       CORS_ORIGIN: "*"
       ALLOWED_ORIGINS: "*"
       GATEWAY_CONTROL_UI_ALLOWED_ORIGINS: "*"
+      # Gateway token for Control UI access
+      GATEWAY_TOKEN: ${OPENCLAW_PASSWORD}
+      GATEWAY_CONTROL_UI_TOKEN: ${OPENCLAW_PASSWORD}
     volumes:
       - ${DATA_DIR}/openclaw/data:/app/data
       - ${DATA_DIR}/openclaw/config:/.openclaw
@@ -2065,11 +2068,11 @@ EOF
     if [[ "${OLLAMA_ENABLED}" == "true" ]]; then
         # Get latest Ollama models (upgrades deprecated ones)
         local latest_ollama_models
-        latest_ollama_models=$(get_latest_ollama_models "${OLLAMA_MODELS:-llama3.2:3b}")
+        latest_ollama_models=$(get_latest_ollama_models "${OLLAMA_MODELS}")
         
         # Update the default model if it was deprecated
         local updated_default_model
-        updated_default_model=$(get_latest_ollama_models "${OLLAMA_DEFAULT_MODEL:-llama3.2:3b}")
+        updated_default_model=$(get_latest_ollama_models "${OLLAMA_DEFAULT_MODEL}")
         
         # Expand comma-separated model list into one entry per model
         IFS=',' read -ra ollama_models <<< "${latest_ollama_models}"
@@ -2566,7 +2569,8 @@ prepare_data_dirs() {
   "gateway": {
     "controlUi": {
       "allowedOrigins": ["${_openclaw_origin}", "*"]
-    }
+    },
+    "trustedProxies": ["172.23.0.4"]
   }
 }
 OCEOF
@@ -2976,17 +2980,15 @@ wait_for_all_health() {
             log "WARNING: Dify database migration issues detected"
             log "Attempting automatic database recovery..."
             
-            # Stop Dify containers
+            # Stop Dify services
             docker stop "${TENANT_PREFIX}-dify-api" "${TENANT_PREFIX}-dify" "${TENANT_PREFIX}-dify-worker" 2>/dev/null || true
             
-            # Clear Dify database (PostgreSQL tables)
-            log "Clearing Dify database tables..."
-            docker exec "${TENANT_PREFIX}-postgres" psql -U ds-admin -d datasquiz_ai -c "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO ds-admin; GRANT ALL ON SCHEMA public TO public; CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";" 2>/dev/null || true
+            # Wipe Dify database only
+            docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER:-${TENANT_ID}}" -d "${POSTGRES_DB:-${TENANT_ID}}" -c "DROP SCHEMA IF EXISTS dify CASCADE;" 2>/dev/null || true
             
-            # Restart Dify containers
-            docker start "${TENANT_PREFIX}-dify-api" "${TENANT_PREFIX}-dify" "${TENANT_PREFIX}-dify-worker"
+            # Restart Dify services
+            docker start "${TENANT_PREFIX}-dify-api" "${TENANT_PREFIX}-dify" "${TENANT_PREFIX}-dify-worker" 2>/dev/null || true
             
-            # Wait for Dify to be healthy again
             log "Waiting for Dify services to re-initialize..."
             wait_for_health "${TENANT_PREFIX}-dify-api" 180 || return 1
             wait_for_health "${TENANT_PREFIX}-dify" 90 || return 1
@@ -2996,6 +2998,35 @@ wait_for_all_health() {
                 log "SUCCESS: Dify database recovery completed"
             else
                 log "WARNING: Dify recovery may need manual intervention"
+            fi
+        fi
+        
+        # Check for LiteLLM database migration issues and auto-recover
+        if ! docker logs "${TENANT_PREFIX}-litellm" --tail 10 2>/dev/null | grep -q "Database error\|relation.*does not exist\|migration failed"; then
+            log "LiteLLM database appears healthy"
+        else
+            log "WARNING: LiteLLM database migration issues detected"
+            log "Attempting automatic LiteLLM database recovery..."
+            
+            # Stop LiteLLM
+            docker stop "${TENANT_PREFIX}-litellm" 2>/dev/null || true
+            
+            # Wipe LiteLLM database tables only
+            docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER:-${TENANT_ID}}" -d "${POSTGRES_DB:-${TENANT_ID}}" -c "DROP SCHEMA IF EXISTS litellm CASCADE;" 2>/dev/null || true
+            
+            # Clear LiteLLM cache
+            rm -rf "${DATA_DIR}/litellm/prisma-cache"/* 2>/dev/null || true
+            
+            # Restart LiteLLM
+            docker start "${TENANT_PREFIX}-litellm" 2>/dev/null || true
+            
+            log "Waiting for LiteLLM to re-initialize..."
+            wait_for_health "${TENANT_PREFIX}-litellm" 300 || return 1
+            
+            if ! docker logs "${TENANT_PREFIX}-litellm" --tail 5 2>/dev/null | grep -q "Database error"; then
+                log "SUCCESS: LiteLLM database recovery completed"
+            else
+                log "WARNING: LiteLLM recovery may need manual intervention"
             fi
         fi
     fi
@@ -3041,7 +3072,7 @@ wait_for_all_health() {
         
         # Get the validated and potentially upgraded model list
         local latest_ollama_models
-        latest_ollama_models=$(get_latest_ollama_models "${OLLAMA_MODELS:-llama3.2:3b}")
+        latest_ollama_models=$(get_latest_ollama_models "${OLLAMA_MODELS}")
         
         # Expand comma-separated model list
         IFS=',' read -ra model_list <<< "${latest_ollama_models}"
@@ -3066,7 +3097,7 @@ wait_for_all_health() {
         
         # Verify the default model is available
         local default_model
-        default_model=$(get_latest_ollama_models "${OLLAMA_DEFAULT_MODEL:-llama3.2:3b}")
+        default_model=$(get_latest_ollama_models "${OLLAMA_DEFAULT_MODEL}")
         
         if docker exec "${container_name}" ollama list 2>/dev/null | grep -q "${default_model}"; then
             log "Default Ollama model '${default_model}' is available"
@@ -3203,7 +3234,15 @@ main() {
     # Alias any vars Script 2 expects that platform.conf may call differently
     BASE_DOMAIN="${BASE_DOMAIN:-${DOMAIN}}"
     PROXY_EMAIL="${PROXY_EMAIL:-${ADMIN_EMAIL}}"
-    OPENWEBUI_SECRET="${OPENWEBUI_SECRET:-$(openssl rand -hex 32)}"
+    # Secrets are now generated in Script 1 - just use them from platform.conf
+    AUTHENTIK_SECRET_KEY="${AUTHENTIK_SECRET_KEY}"
+    ZEP_AUTH_SECRET="${ZEP_AUTH_SECRET}"
+    LETTA_SERVER_PASS="${LETTA_SERVER_PASS}"
+    ANYTHINGLLM_JWT_SECRET="${ANYTHINGLLM_JWT_SECRET}"
+    CODE_SERVER_PASSWORD="${CODE_SERVER_PASSWORD}"
+    LITELLM_UI_PASSWORD="${LITELLM_UI_PASSWORD}"
+    DIFY_SECRET_KEY="${DIFY_SECRET_KEY}"
+    DIFY_INIT_PASSWORD="${DIFY_INIT_PASSWORD}"
     # N8N webhook URL must use HTTPS + n8n subdomain when Caddy is active,
     # otherwise n8n's WebSocket/webhook connection fails from the browser.
     if [[ "${CADDY_ENABLED:-false}" == "true" && -n "${BASE_DOMAIN:-${DOMAIN:-}}" ]]; then
@@ -3212,10 +3251,8 @@ main() {
         N8N_WEBHOOK_URL="${N8N_WEBHOOK_URL:-http://${DOMAIN:-localhost}/}"
     fi
     FLOWISE_USERNAME="${FLOWISE_USERNAME:-admin}"
-    FLOWISE_PASSWORD="${FLOWISE_PASSWORD:-$(openssl rand -base64 16 | tr -d '=+/')}"
-    FLOWISE_SECRETKEY_OVERWRITE="${FLOWISE_SECRETKEY_OVERWRITE:-$(openssl rand -hex 32)}"
-    DIFY_SECRET_KEY="${DIFY_SECRET_KEY:-$(openssl rand -hex 32)}"
-    DIFY_API_PORT="${DIFY_API_PORT:-5001}"
+    FLOWISE_PASSWORD="${FLOWISE_PASSWORD}"
+    FLOWISE_SECRETKEY_OVERWRITE="${FLOWISE_SECRETKEY_OVERWRITE}"
     GOOGLE_API_KEY="${GOOGLE_API_KEY:-${GOOGLE_AI_API_KEY:-}}"
     OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-qwen2.5:7b}"
 

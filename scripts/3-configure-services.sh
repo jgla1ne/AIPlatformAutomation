@@ -26,6 +26,7 @@
 #          --ollama-remove <model>    Remove an Ollama model
 #          --configure-models         Configure Ollama and external LLM models interactively
 #          --configure-ai             Configure AI development tools (Code Server, Continue.dev)
+#          --flushall                 Flush all databases and reinitialize (self-healing)
 #          --backup                   Create a one-off backup of tenant data
 #          --schedule "<cron>"        Schedule recurring backups (use with --backup)
 #          --setup-persistence        Ensure platform stands up automatically after reboot
@@ -1618,6 +1619,10 @@ main() {
                 configure_ai=true
                 shift
                 ;;
+            --flushall)
+                flushall=true
+                shift
+                ;;
             --backup)
                 do_backup=true
                 shift
@@ -1857,6 +1862,37 @@ main() {
     # AI dev tools configuration
     if [[ "${configure_ai:-false}" == "true" ]]; then
         configure_ai_dev_tools
+    fi
+    
+    # Flushall databases if requested
+    if [[ "${flushall:-false}" == "true" ]]; then
+        log "Flushing all databases for self-healing..."
+        
+        # Stop all database-dependent services
+        for service in postgres redis mongodb litellm dify-api dify dify-worker zep letta; do
+            docker stop "${TENANT_PREFIX}-${service}" 2>/dev/null || true
+        done
+        
+        # Wipe all databases
+        docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER:-${TENANT_ID}}" -d "${POSTGRES_DB:-${TENANT_ID}}" -c "
+            DROP SCHEMA IF EXISTS dify CASCADE;
+            DROP SCHEMA IF EXISTS litellm CASCADE;
+            DROP SCHEMA IF EXISTS zep CASCADE;
+            DROP SCHEMA IF EXISTS letta CASCADE;
+        " 2>/dev/null || true
+        
+        # Clear caches
+        rm -rf "${DATA_DIR}/litellm/prisma-cache"/* 2>/dev/null || true
+        rm -rf "${DATA_DIR}/mongodb"/* 2>/dev/null || true
+        rm -rf "${DATA_DIR}/redis"/* 2>/dev/null || true
+        
+        # Restart all services
+        for service in postgres redis mongodb litellm dify-api dify dify-worker zep letta; do
+            docker start "${TENANT_PREFIX}-${service}" 2>/dev/null || true
+        done
+        
+        log "Database flush completed. Services are re-initializing..."
+        log "Run Script 3 again in 2-3 minutes to verify health."
     fi
     
     # Show credentials summary

@@ -571,15 +571,46 @@ curl -s "http://127.0.0.1:8888/search?q=test&format=json" | jq -r '.results[0].t
 
 **How to re-run T20:**
 ```bash
-# Test GPU detection commands
-nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null || echo "No NVIDIA GPU"
-rocm-smi --showproductname 2>/dev/null || echo "No AMD GPU"
+# Run Script 1 to see hardware detection
+bash scripts/1-setup-system.sh datasquiz --template '/home/jglaine/.ai-platform-templates/datasquiz-template.conf'
 
-# Test Script 1 hardware detection (dry run)
-bash scripts/1-setup-system.sh test 2>&1 | grep -E "GPU:|Hardware Detection|Deployment Mode"
+# Check platform.conf for GPU variables
+grep -E "GPU_TYPE|GPU_MEMORY|TOTAL_RAM|AVAILABLE_RAM" /mnt/datasquiz/config/platform.conf
+```
 
-# Verify GPU variables in platform.conf
-grep -E "GPU_TYPE|GPU_MEMORY|TOTAL_RAM" /mnt/datasquiz/config/platform.conf
+---
+
+### T21 - New Model Selection & AI Tools Integration
+
+| Check | Command / Verify | Expected | Result |
+|---|---|---|---|
+| Latest Ollama models available | Script 1 model selection menu | Llama 3.2, Qwen 2.5, Gemma 4, Deepseek Coder V2 | **PASS** |
+| Custom model entry option | Select option 18 in Script 1 | Can enter any model from ollama.com/library | **PASS** |
+| Model variant support | Enter `gemma4:2b,nemotron-cascade-2:latest` | Multiple models with variants accepted | **PASS** |
+| Code Server AI integration | Check Code Server settings.json | LiteLLM proxy configuration present | **PASS** |
+| Continue.dev configuration | Check ~/.continue/config.json | Dynamic model list with LiteLLM proxy | **PASS** |
+| AI extensions installed | Check Code Server extensions.json | Continue.dev and AI extensions recommended | **PASS** |
+| LiteLLM routing to new models | Test query through LiteLLM | Routes to selected Ollama models | **PASS** |
+| GPU/CPU detection affects selection | Script 1 shows hardware-based recommendations | Small models for CPU, large for GPU | **PASS** |
+
+**How to re-run T21:**
+```bash
+# Test new model selection
+bash scripts/1-setup-system.sh datasquiz --template '/home/jglaine/.ai-platform-templates/datasquiz-template.conf' << EOF
+2,16
+y
+EOF
+
+# Check AI tools configuration
+cat /mnt/datasquiz/config/platform.conf | grep OLLAMA_MODELS
+cat /mnt/datasquiz/data/code-server/.local/share/code-server/settings.json | grep -A 5 "ai.enabled"
+cat /mnt/datasquiz/data/continue-dev/config.json | jq '.models[].title'
+
+# Test LiteLLM routing
+curl -X POST http://127.0.0.1:4000/v1/chat/completions \
+  -H "Authorization: Bearer $(grep LITELLM_MASTER_KEY /mnt/datasquiz/config/platform.conf | cut -d'=' -f2)" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"llama3.2:3b","messages":[{"role":"user","content":"test"}]}'
 ```
 
 ---
@@ -600,6 +631,7 @@ grep -E "GPU_TYPE|GPU_MEMORY|TOTAL_RAM" /mnt/datasquiz/config/platform.conf
 | T18 - Interactive Model Configuration | **PASS** | Script 3 --configure-models menu functional |
 | T19 - SearXNG Search Engine | **PASS** | Privacy search engine deployed and accessible |
 | T20 - GPU/CPU Detection | **PASS** | Hardware detection and deployment guidance working |
+| T21 - New Model Selection & AI Tools | **PASS** | Latest Ollama models, custom entry, Code Server/Continue.dev integration |
 | T11 — Script 3 Management | **PENDING** | New commands added post-run; no blocking issues |
 | T12 — `--flushall` Flag | **PENDING** | Feature added post-run; will validate on next clean deploy cycle |
 
