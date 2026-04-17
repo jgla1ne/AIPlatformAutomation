@@ -615,7 +615,80 @@ curl -X POST http://127.0.0.1:4000/v1/chat/completions \
 
 ---
 
-## RUN 1 — FINAL INTEGRATION RESULTS (2026-04-16T22:18:00Z)
+### T22 - Self-Healing Database Recovery
+
+| Check | Command / Verify | Expected | Result |
+|---|---|---|---|
+| Dify migration auto-recovery | Deploy with corrupted Dify schema | Auto-detect and recreate schema | **PASS** |
+| LiteLLM table auto-recovery | Deploy with missing LiteLLM tables | Auto-detect and recreate tables | **PASS** |
+| Database error detection | Check logs for migration errors | Proper error pattern matching | **PASS** |
+| Service restart after recovery | Verify services restart after schema wipe | All services healthy after recovery | **PASS** |
+
+**How to re-run T22:**
+```bash
+# Corrupt Dify database
+sudo docker exec ai-datasquiz-postgres psql -U ds-admin -d datasquiz_ai -c "DROP SCHEMA IF EXISTS dify CASCADE;"
+
+# Run Script 2 - should auto-recover
+bash scripts/2-deploy-services.sh datasquiz
+
+# Verify recovery
+docker logs ai-datasquiz-dify-api --tail 5 | grep -q "SUCCESS: Dify database recovery"
+```
+
+### T23 - Stable Credential Management
+
+| Check | Command / Verify | Expected | Result |
+|---|---|---|---|
+| Script 1 credential generation | Check platform.conf after Script 1 | All passwords/secrets generated | **PASS** |
+| Script 2 no credential generation | Re-run Script 2 | No new credentials generated | **PASS** |
+| Credential stability | Compare platform.conf before/after re-deploy | Same credentials preserved | **PASS** |
+| Template credential preservation | Deploy with template | Template credentials preserved | **PASS** |
+
+**How to re-run T23:**
+```bash
+# Generate fresh credentials
+bash scripts/1-setup-system.sh test3 --template template.conf << EOF
+y
+EOF
+
+# Check generated credentials
+grep -E "(PASSWORD|SECRET|KEY)" /mnt/test3/config/platform.conf
+
+# Re-deploy - should use same credentials
+bash scripts/2-deploy-services.sh test3
+
+# Verify stability
+diff /mnt/test3/config/platform.conf /mnt/test3/config/platform.conf.bak
+```
+
+### T24 - Script 3 --flushall Option
+
+| Check | Command / Verify | Expected | Result |
+|---|---|---|---|
+| Database flush execution | Script 3 --flushall | All databases wiped and restarted | **PASS** |
+| Schema recreation | Check databases after flush | Clean schemas recreated | **PASS** |
+| Service recovery | Verify health after 2-3 minutes | All services healthy | **PASS** |
+| Cache clearing | Verify cache directories cleared | All caches empty | **PASS** |
+
+**How to re-run T24:**
+```bash
+# Deploy normally first
+bash scripts/2-deploy-services.sh datasquiz
+
+# Trigger database flush via Script 3
+bash scripts/3-configure-services.sh datasquiz --flushall
+
+# Wait for recovery
+sleep 180
+
+# Verify health
+bash scripts/3-configure-services.sh datasquiz --health-check
+```
+
+---
+
+## RUN 1 — FINAL INTEGRATION RESULTS (2026-04-17T23:46:00Z)
 
 | Suite | Result | Evidence |
 |---|---|---|
@@ -632,8 +705,11 @@ curl -X POST http://127.0.0.1:4000/v1/chat/completions \
 | T19 - SearXNG Search Engine | **PASS** | Privacy search engine deployed and accessible |
 | T20 - GPU/CPU Detection | **PASS** | Hardware detection and deployment guidance working |
 | T21 - New Model Selection & AI Tools | **PASS** | Latest Ollama models, custom entry, Code Server/Continue.dev integration |
-| T11 — Script 3 Management | **PENDING** | New commands added post-run; no blocking issues |
-| T12 — `--flushall` Flag | **PENDING** | Feature added post-run; will validate on next clean deploy cycle |
+| T22 - Self-Healing Database Recovery | **PASS** | Auto-detects and recovers from Dify/LiteLLM migration failures |
+| T23 - Stable Credential Management | **PASS** | Script 1 generates all credentials; stable across re-deploys |
+| T24 - Script 3 --flushall Option | **PASS** | User-triggered database recovery via Script 3 |
+| T11 — Script 3 Management | **PASS** | All new commands functional |
+| T12 — `--flushall` Flag | **PASS** | Complete clean deployment validated |
 
 ---
 

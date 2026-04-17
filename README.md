@@ -47,7 +47,6 @@ Internet
 │  Memory / Knowledge Layer            │
 │  Zep CE   — Conversation memory      │
 │  Letta    — Stateful agent runtime   │
-│  Mem0     — Persistent AI memory     │
 │  Qdrant / Weaviate / Chroma / Milvus │
 └──────────────────────────────────────┘
       │
@@ -281,19 +280,25 @@ AVAILABLE_RAM=<FREE_RAM_MB>
 
 **Prerequisites:** Non-root. Docker group member. Script 1 must have run successfully (EBS mounted, `platform.conf` present, Docker data-root on EBS).
 
+**Self-Healing Database Recovery:**
+Script 2 includes automatic database recovery for common migration issues:
+- **Dify**: Auto-detects migration failures and wipes/recreates schema
+- **LiteLLM**: Auto-detects table errors and clears cache/reinitializes
+- **PostgreSQL**: Maintains schema integrity across service restarts
+- **Result**: First-time deployments succeed reliably without manual intervention
+
 **Usage:**
 ```bash
 # Default: containers pruned; EBS data (Postgres, Redis, MongoDB, Ollama models,
 # Docker image cache) preserved for fast cost-efficient retry
 bash scripts/2-deploy-services.sh <tenant_id>
 
+# Database-only recovery: wipes databases, preserves containers and models
+bash scripts/2-deploy-services.sh <tenant_id> --flush-dbs
+
 # True clean redeploy: wipes all databases, service state dirs, Ollama model
 # cache, and Docker image cache before deploying
 bash scripts/2-deploy-services.sh <tenant_id> --flushall
-```
-
-# Database-only recovery: wipes only database directories while preserving containers and models
-bash scripts/2-deploy-services.sh <tenant_id> --flush-dbs
 ```
 
 **Flags:**
@@ -366,6 +371,15 @@ DIFY_INIT_PASSWORD     (random; used by Script 3 configure_dify() to bootstrap f
 **Usage:**
 ```bash
 bash scripts/3-configure-services.sh <tenant_id>
+
+# Self-healing database recovery
+bash scripts/3-configure-services.sh <tenant_id> --flushall
+
+# Configure AI development tools
+bash scripts/3-configure-services.sh <tenant_id> --configure-ai
+
+# Interactive model management
+bash scripts/3-configure-services.sh <tenant_id> --configure-models
 ```
 
 **Inputs:**

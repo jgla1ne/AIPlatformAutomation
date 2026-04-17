@@ -805,3 +805,7 @@ Epic 13 — Hardware       GPU/CPU detection, deployment guidance, model recomme
 - **Multi-Provider AI Routing**: All services properly connected to LiteLLM proxy
 - **Gemma 4 Model Support**: Added Google's latest multimodal model to Ollama selection
 - **GPU/CPU Detection**: Hardware detection and deployment guidance in Script 1
+- **Self-Healing Database Recovery**: Auto-detects and recovers from Dify/LiteLLM migration failures
+- **Stable Credential Management**: Script 1 generates all credentials; stable across re-deploys
+- **Script 3 Database Flush**: User-triggered database recovery via --flushall option
+- **Enhanced Error Handling**: Robust deployment with automatic failure recovery
