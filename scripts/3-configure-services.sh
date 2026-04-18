@@ -2037,7 +2037,7 @@ configure_ollama_models() {
     echo ""
     echo "📦 Configure Ollama Models:"
     echo ""
-    echo "1. 🔄 Fetch latest models from ollama.com/library"
+    echo "1. 🔄 Fetch newest models (top 10)"
     echo "2. 📋 Use popular models list"
     echo "3. 🔧 Enter custom model name"
     echo ""
@@ -2046,7 +2046,7 @@ configure_ollama_models() {
     
     case $model_choice in
         1)
-            fetch_latest_ollama_models
+            get_newest_models
             read -r model_name
             ;;
         2)
@@ -2118,16 +2118,27 @@ configure_ollama_models() {
 
 validate_model_exists() {
     local model="$1"
-    local models_json
-    models_json=$(curl -s "https://ollama.com/api/tags" 2>/dev/null || echo "")
+    local model_base="${model%:*}"  # Remove tag if present (e.g., gemma4:9b -> gemma4)
     
-    if [[ -z "$models_json" ]]; then
-        # If API fails, allow the model (will fail at pull time anyway)
-        return 0
-    fi
+    # List of known valid model bases
+    local known_models=(
+        "gemma4" "gemma3" "gemma2" "llama3.2" "llama3.1" "llama3.3"
+        "qwen2.5" "qwen3" "mistral" "codellama" "deepseek" "dolphin"
+        "olmo" "smollm" "nemotron" "glm" "ministral" "kimi" "cogito"
+    )
     
-    # Check if model exists in registry
-    if echo "$models_json" | jq -r '.models[] | "\(.name)"' 2>/dev/null | grep -q "^${model}$"; then
+    # Check if model base is in known models
+    for known in "${known_models[@]}"; do
+        if [[ "$model_base" == "$known" ]]; then
+            return 0
+        fi
+    done
+    
+    # If not in known list, try library page check
+    local library_page
+    library_page=$(curl -s "https://ollama.com/library/${model_base}" 2>/dev/null)
+    
+    if [[ -n "$library_page" && ! "$library_page" =~ "404" ]]; then
         return 0
     else
         return 1
