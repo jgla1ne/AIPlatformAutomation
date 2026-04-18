@@ -2004,12 +2004,12 @@ fetch_latest_ollama_models() {
         echo "⚠️  Unable to fetch from registry, using fallback list"
         echo ""
         echo "📋 Popular Models (fallback list):"
-        echo "1. gemma4:31b - Google's latest multimodal"
-        echo "2. gemma3:27b - Google's multimodal model"
-        echo "3. gemma2:9b - Google's compact multimodal"  
-        echo "4. llama3.2:3b - Meta's compact model"
-        echo "5. qwen3.5:397b - Alibaba's large model"
-        echo "6. mistral-large-3:675b - Mistral's flagship model"
+        echo "1. gemma3:12b - Google's multimodal model"
+        echo "2. qwen3-coder:480b - Alibaba's coding model"
+        echo "3. ministral-3:3b - Mistral's compact model"
+        echo "4. gpt-oss:120b - Open-source large model"
+        echo "5. glm-4.6 - GLM's latest model"
+        echo "6. deepseek-v3.2 - DeepSeek's reasoning model"
         echo "7. custom - Enter specific model name"
         echo ""
         return 0
@@ -2052,12 +2052,12 @@ configure_ollama_models() {
         2)
             echo ""
             echo "📋 Popular Models:"
-            echo "1. gemma4:31b - Google's latest multimodal"
-            echo "2. gemma3:27b - Google's multimodal model"
-            echo "3. gemma2:9b - Google's compact multimodal"  
-            echo "4. llama3.2:3b - Meta's compact model"
-            echo "5. qwen3.5:397b - Alibaba's large model"
-            echo "6. mistral-large-3:675b - Mistral's flagship model"
+            echo "1. gemma3:12b - Google's multimodal model"
+            echo "2. qwen3-coder:480b - Alibaba's coding model"
+            echo "3. ministral-3:3b - Mistral's compact model"
+            echo "4. gpt-oss:120b - Open-source large model"
+            echo "5. glm-4.6 - GLM's latest model"
+            echo "6. deepseek-v3.2 - DeepSeek's reasoning model"
             echo ""
             echo "Enter model number or name:"
             read -r model_name
@@ -2085,15 +2085,21 @@ configure_ollama_models() {
             model=$(echo "${model// /}" | xargs)
             
             if [[ -n "$model" ]]; then
+                # Validate model exists in Ollama registry
+                if ! validate_model_exists "$model"; then
+                    error "Model '$model' not found in Ollama registry. Use --ollama-latest to see available models or check spelling."
+                    continue
+                fi
+                
                 log "Pulling Ollama model: $model"
                 if docker exec "${TENANT_PREFIX}-ollama" ollama pull "$model"; then
-                    log "✅ Model '$model' pulled successfully"
+                    log "Model '$model' pulled successfully"
                     
                     # Update platform.conf with new model
                     update_platform_conf_models "$model"
                     success_count=$((success_count + 1))
                 else
-                    error "❌ Failed to pull model '$model'"
+                    error "Failed to pull model '$model'"
                 fi
             fi
         done
@@ -2107,6 +2113,24 @@ configure_ollama_models() {
         fi
     else
         error "❌ No model selected"
+    fi
+}
+
+validate_model_exists() {
+    local model="$1"
+    local models_json
+    models_json=$(curl -s "https://ollama.com/api/tags" 2>/dev/null || echo "")
+    
+    if [[ -z "$models_json" ]]; then
+        # If API fails, allow the model (will fail at pull time anyway)
+        return 0
+    fi
+    
+    # Check if model exists in registry
+    if echo "$models_json" | jq -r '.models[] | "\(.name)"' 2>/dev/null | grep -q "^${model}$"; then
+        return 0
+    else
+        return 1
     fi
 }
 
