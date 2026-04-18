@@ -1508,15 +1508,17 @@ select_ollama_models() {
     echo "   16) SmolLM2 1.7B - Compact language model (1 year ago)"
     echo "   17) Llama 3.2 3B - Meta's compact model (1 year ago)"
     echo "   18) Mistral 7B - Mistral AI's updated model (9 months ago)"
-    echo "   19) Gemma 4 9B - Google's latest compact model (new)"
-    echo "   20) Llama 3.2 3B - Meta's compact model (alternative)"
-    echo "   21) Custom model - Enter specific model name"
-    echo "      Examples: gemma4:27b, nemotron-cascade-2:latest"
-    echo "      Multiple: gemma4:27b,gemma4:9b,llama3.2:3b"
+    echo "   19) Gemma 4 4B - Google's latest compact model (new)"
+    echo "   20) Gemma 4 26B - Google's medium model (new)"
+    echo "   21) Gemma 4 31B - Google's large model (new)"
+    echo "   22) Llama 3.2 3B - Meta's compact model (alternative)"
+    echo "   23) Custom model - Enter specific model name"
+    echo "      Examples: gemma4:4b, gemma4:31b"
+    echo "      Multiple: gemma4:4b,gemma4:26b,gemma4:31b (comma-separated)"
     echo ""
     
-    echo "  🎯 Select models (comma-separated numbers, e.g., 19,20 or 19,20,17):"
-    echo -n "  🎯 Models selection [1-21]: "
+    echo "  Select models (comma-separated numbers, e.g., 19,20,21):"
+    echo -n "  Models selection [1-23]: "
     read -r selection
     
     if [[ -z "$selection" ]]; then
@@ -1546,9 +1548,11 @@ select_ollama_models() {
             16) models="${models:+$models,}smollm2:1.7b" ;;
             17) models="${models:+$models,}llama3.2:3b" ;;
             18) models="${models:+$models,}mistral:7b" ;;
-            19) models="${models:+$models,}gemma4:9b" ;;
-            20) models="${models:+$models,}llama3.2:3b" ;;
-            21) 
+            19) models="${models:+$models,}gemma4:4b" ;;
+            20) models="${models:+$models,}gemma4:26b" ;;
+            21) models="${models:+$models,}gemma4:31b" ;;
+            22) models="${models:+$models,}llama3.2:3b" ;;
+            23) 
                 echo ""
                 echo "  🔧 Custom Model Entry:"
                 echo "  Enter model name(s) as they appear in ollama.com/library"
@@ -1569,8 +1573,8 @@ select_ollama_models() {
         OLLAMA_MODELS="$models"
         echo "  ✅ Selected models: $OLLAMA_MODELS"
     else
-        OLLAMA_MODELS="gemma4:9b,llama3.2:3b"
-        echo "  ⚠️  No valid models selected, using defaults: $OLLAMA_MODELS"
+        OLLAMA_MODELS="gemma4:4b,gemma4:26b"
+        echo "  ✅ No valid models selected, using defaults: $OLLAMA_MODELS"
     fi
 }
 
@@ -3551,8 +3555,8 @@ initialize_service_variables() {
     TOTAL_RAM_GB="${TOTAL_RAM_GB:-8}"
     
     # Ollama Configuration
-    OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-gemma4:9b}"
-    OLLAMA_MODELS="${OLLAMA_MODELS:-gemma4:9b,llama3.2:3b}"
+    OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-gemma4:4b}"
+    OLLAMA_MODELS="${OLLAMA_MODELS:-gemma4:4b,gemma4:26b}"
     
     # LLM Providers
     LLM_PROVIDERS="${LLM_PROVIDERS:-local}"

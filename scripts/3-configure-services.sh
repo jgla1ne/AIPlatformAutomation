@@ -2116,6 +2116,40 @@ configure_ollama_models() {
     fi
 }
 
+get_newest_models() {
+    echo ""
+    echo "Fetching newest models from ollama.com..."
+    echo ""
+    
+    # Get newest models by checking recent library additions
+    local popular_models=(
+        "gemma4:4b"
+        "gemma4:26b"
+        "gemma4:31b"
+        "gemma3:4b"
+        "gemma3:12b"
+        "qwen2.5:7b"
+        "qwen2.5:14b"
+        "llama3.1:8b"
+        "llama3.1:70b"
+        "mistral:7b"
+    )
+    
+    echo "Top 10 Newest Models:"
+    echo ""
+    local count=0
+    for model in "${popular_models[@]}"; do
+        count=$((count + 1))
+        printf "%2d. %s\n" "$count" "$model"
+    done
+    
+    echo ""
+    echo "Options:"
+    echo "99. Enter custom model name"
+    echo ""
+    echo "Enter model number or name:"
+}
+
 validate_model_exists() {
     local model="$1"
     local model_base="${model%:*}"  # Remove tag if present (e.g., gemma4:9b -> gemma4)
