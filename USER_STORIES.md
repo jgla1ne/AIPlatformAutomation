@@ -832,4 +832,9 @@ Epic 13 — Hardware       GPU/CPU detection, deployment guidance, model recomme
 - **Subdomain Architecture**: Multi-tenant support with subdomain routing and internal port mapping
 - **Port Isolation**: Tenant-specific port ranges prevent conflicts between deployments
 - **Internal Service Routing**: Subdomain access routes to different internal ports while keeping 80/443 open
+- **GPU-Accelerated Deployment**: NVIDIA L4 GPU support on g6.2xlarge with 24GB VRAM
+- **GPU Memory Management**: OLLAMA_GPU_LAYERS=auto optimizes VRAM usage for large models
+- **GPU Health Monitoring**: Prometheus/Grafana GPU metrics and alerting
+- **GPU Fallback Support**: Graceful CPU fallback when GPU unavailable
+- **Multi-GPU Ready**: Architecture supports multiple GPU configurations
 - **Prometheus Dynamic Configuration**: Automatic service monitoring based on enabled components
