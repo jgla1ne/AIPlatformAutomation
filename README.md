@@ -1102,7 +1102,7 @@ curl -s -X POST "http://127.0.0.1:${SIGNALBOT_PORT}/v1/register/+<number>/verify
 | **Script 0** — Nuclear Cleanup | Production ready | Typed confirmation, Docker daemon stop before EBS unmount, scoped image removal |
 | **Script 1** — Setup Wizard | Production ready | Interactive wizard, stack presets, memory layer selection, dependency enforcement, writes platform.conf |
 | **Script 2** — Deployment Engine | Production ready | Heredoc compose generation, port allocator, secret persistence, Letta DB creation, MongoDB corruption recovery, Dify database recovery, --flush-dbs flag, P14 model cost optimization, SearXNG search engine, post-deploy dashboard |
-| **Script 3** — Mission Control | Production ready | Sources port-allocations (takes precedence), 24-service health table, domain-aware URLs, credentials summary, ingestion pipeline, log management, service reconfigure, LiteLLM routing, **dynamic model lookup** (--ollama-latest), Ollama model management, interactive model configuration, SearXNG configuration, backup, **reboot persistence** |
+| **Script 3** — Mission Control | Production ready | Sources port-allocations (takes precedence), 24-service health table, domain-aware URLs, credentials summary, ingestion pipeline, log management, service reconfigure, LiteLLM routing, **dynamic model lookup** (--ollama-latest, 30 models), **batch model input** (comma-separated), **success tracking** (X/Y reporting), Ollama model management, interactive model configuration, SearXNG configuration, backup, **reboot persistence** |
 
 ---
 

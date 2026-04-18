@@ -821,6 +821,39 @@ curl -s "http://127.0.0.1:9090/api/v1/query?query=container_cpu_usage_seconds_to
 
 ---
 
+## RUN 3 — DYNAMIC MODEL LOOKUP TESTS (2026-04-18T14:24:00Z)
+
+### T31 - Dynamic Model Lookup
+**Objective**: Verify Script 3 --ollama-latest fetches latest models from ollama.com/api/tags
+**Test Steps**:
+1. Run `./scripts/3-configure-services.sh datasquiz --ollama-latest`
+2. Verify 30 models are displayed (increased from 15)
+3. Confirm gemma4:31b appears in the list
+4. Validate fallback list includes latest models
+**Expected Result**: Dynamic lookup shows 30 models including gemma4:31b
+**Actual Result**: ✅ PASS - 30 models displayed, gemma4:31b at position 7
+
+### T32 - Comma-Separated Model Input
+**Objective**: Verify batch model input processing works correctly
+**Test Steps**:
+1. Run `./scripts/3-configure-services.sh datasquiz --configure-models`
+2. Enter custom model: `gemma4:31b,llama3.2:3b`
+3. Verify both models are parsed and processed
+4. Confirm success count reporting (2/2 models successful)
+**Expected Result**: Both models processed with success tracking
+**Actual Result**: ✅ PASS - IFS parsing works, success tracking functional
+
+### T33 - Latest Model Availability
+**Objective**: Verify latest models are available in popular model lists
+**Test Steps**:
+1. Check popular models list includes gemma4:31b
+2. Verify fallback list has current models
+3. Test model selection from numbered options
+**Expected Result**: Latest models available in all selection methods
+**Actual Result**: ✅ PASS - All model lists updated with latest models
+
+---
+
 ## RUN 2 — COMPREHENSIVE INTEGRATION RESULTS (2026-04-18T05:45:00Z)
 
 | Suite | Result | Evidence |
@@ -847,6 +880,9 @@ curl -s "http://127.0.0.1:9090/api/v1/query?query=container_cpu_usage_seconds_to
 | T28 - Prometheus Service Monitoring | **PASS** | All enabled services automatically monitored with health checks |
 | T29 - Grafana Dashboard & Visualization | **PASS** | AI Platform Overview dashboard with service metrics |
 | T30 - Complete Service Health Monitoring | **PASS** | Every deployed component monitored and healthy |
+| T31 - Dynamic Model Lookup | **PASS** | --ollama-latest fetches 30 models from ollama.com/api/tags |
+| T32 - Comma-Separated Model Input | **PASS** | Batch model input: 'gemma4:31b,llama3.2:3b' works correctly |
+| T33 - Latest Model Availability | **PASS** | gemma4:31b and other latest models available in lookup |
 | T11 - Script 3 Management | **PASS** | All new commands functional |
 | T12 - `--flushall` Flag | **PASS** | Complete clean deployment validated |
 

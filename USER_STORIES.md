@@ -823,7 +823,10 @@ Epic 13 — Hardware       GPU/CPU detection, deployment guidance, model recomme
 - **Resource Usage Tracking**: Container CPU, memory, and performance metrics
 - **Request Rate Monitoring**: LiteLLM API request rates and response times
 - **Grafana Dashboard Provisioning**: Pre-configured AI Platform Overview dashboard
-- **Script 3 Dynamic Model Lookup**: Mission Control provides --ollama-latest to fetch real-time models from ollama.com/library
+- **Script 3 Dynamic Model Lookup**: Mission Control provides --ollama-latest to fetch 30 real-time models from ollama.com/api/tags
+- **Batch Model Input**: Comma-separated model processing for multiple model deployment (e.g., 'gemma4:31b,llama3.2:3b')
 - **Interactive Model Management**: Live model selection with automatic platform.conf and LiteLLM configuration updates
+- **Success Tracking**: Batch operation feedback with X/Y models successful reporting
 - **Modular Model Deployment**: Extensible design for filtering, searching, and custom model entry
+- **Latest Model Availability**: gemma4:31b and other newest models available in all selection methods
 - **Prometheus Dynamic Configuration**: Automatic service monitoring based on enabled components
