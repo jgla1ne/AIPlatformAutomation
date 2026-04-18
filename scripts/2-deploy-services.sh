@@ -1159,6 +1159,10 @@ $(build_dify_deps)
       # LiteLLM as unified LLM gateway
       OPENAI_API_BASE: http://${TENANT_PREFIX}-litellm:4000/v1
       OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      # Default model configuration
+      OPENAI_ORGANIZATION: ""
+      MODEL_PROVIDER: openai
+      DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL}
       # VectorDB — dynamic
       VECTOR_STORE: ${VECTOR_DB_TYPE:-qdrant}
       QDRANT_URL: http://${TENANT_PREFIX}-qdrant:6333
@@ -1207,6 +1211,10 @@ $(build_dify_deps)
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@${TENANT_PREFIX}-redis:6379/1
       OPENAI_API_BASE: http://${TENANT_PREFIX}-litellm:4000/v1
       OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      # Default model configuration
+      OPENAI_ORGANIZATION: ""
+      MODEL_PROVIDER: openai
+      DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL}
       VECTOR_STORE: ${VECTOR_DB_TYPE:-qdrant}
       QDRANT_URL: http://${TENANT_PREFIX}-qdrant:6333
       QDRANT_API_KEY: ${QDRANT_API_KEY:-}
@@ -2974,7 +2982,7 @@ wait_for_all_health() {
         wait_for_health "${TENANT_PREFIX}-dify-worker" 180 || log "dify-worker health check timed out (non-fatal — worker may still be starting)"
         
         # Check for Dify database migration issues and auto-recover
-        if ! docker logs "${TENANT_PREFIX}-dify-api" --tail 10 2>/dev/null | grep -q "Database migration failed\|DuplicateTable\|already exists"; then
+        if ! docker logs "${TENANT_PREFIX}-dify-api" --tail 10 2>/dev/null | grep -q "Database migration failed\|DuplicateTable\|already exists\|sqlalche.me/e/20/f405\|Can't locate revision"; then
             log "Dify database appears healthy"
         else
             log "WARNING: Dify database migration issues detected"
@@ -2983,8 +2991,15 @@ wait_for_all_health() {
             # Stop Dify services
             docker stop "${TENANT_PREFIX}-dify-api" "${TENANT_PREFIX}-dify" "${TENANT_PREFIX}-dify-worker" 2>/dev/null || true
             
-            # Wipe Dify database only
-            docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER:-${TENANT_ID}}" -d "${POSTGRES_DB:-${TENANT_ID}}" -c "DROP SCHEMA IF EXISTS dify CASCADE;" 2>/dev/null || true
+            # Wipe Dify database only - more thorough cleanup
+            docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER:-${TENANT_ID}}" -d "${POSTGRES_DB:-${TENANT_ID}}" -c "
+                DROP SCHEMA IF EXISTS dify CASCADE;
+                DROP TABLE IF EXISTS alembic_version CASCADE;
+                DELETE FROM alembic_version WHERE version LIKE '%dify%';
+            " 2>/dev/null || true
+            
+            # Clear any remaining Dify data
+            rm -rf "${DATA_DIR}/dify"/* 2>/dev/null || true
             
             # Restart Dify services
             docker start "${TENANT_PREFIX}-dify-api" "${TENANT_PREFIX}-dify" "${TENANT_PREFIX}-dify-worker" 2>/dev/null || true
@@ -2992,12 +3007,13 @@ wait_for_all_health() {
             log "Waiting for Dify services to re-initialize..."
             wait_for_health "${TENANT_PREFIX}-dify-api" 180 || return 1
             wait_for_health "${TENANT_PREFIX}-dify" 90 || return 1
-            wait_for_health "${TENANT_PREFIX}-dify-worker" 180 || log "dify-worker health check timed out (non-fatal — worker may still be starting)"
+            wait_for_health "${TENANT_PREFIX}-dify-worker" 180 || log "dify-worker health check timed out (non-fatal - worker may still be starting)"
             
-            if ! docker logs "${TENANT_PREFIX}-dify-api" --tail 5 2>/dev/null | grep -q "Database migration failed"; then
+            if ! docker logs "${TENANT_PREFIX}-dify-api" --tail 5 2>/dev/null | grep -q "Database migration failed\|sqlalche.me/e/20/f405"; then
                 log "SUCCESS: Dify database recovery completed"
             else
                 log "WARNING: Dify recovery may need manual intervention"
+                log "Try: bash scripts/3-configure-services.sh ${TENANT_ID} --flushall"
             fi
         fi
         
