@@ -2400,6 +2400,254 @@ EOF
 
     # Prometheus (internal monitoring — only expose if explicitly enabled)
     if [[ "${PROMETHEUS_ENABLED:-${ENABLE_PROMETHEUS:-false}}" == "true" ]]; then
+        
+        # Create comprehensive Prometheus configuration for all enabled services
+        cat > "${CONFIG_DIR}/prometheus/prometheus.yml" << MONITOREOF
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Ollama monitoring
+  - job_name: 'ollama'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-ollama:11434']
+    metrics_path: '/metrics'
+    scrape_interval: 5s
+
+  # LiteLLM proxy monitoring
+  - job_name: 'litellm'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-litellm:4000']
+    metrics_path: '/metrics'
+    scrape_interval: 5s
+
+  # Zep memory layer monitoring (if enabled)
+MONITOREOF
+        if [[ "${ZEP_ENABLED:-false}" == "true" ]]; then
+            cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << ZEPEOF
+
+  # Zep memory layer monitoring
+  - job_name: 'zep'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-zep:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+ZEPEOF
+        fi
+
+        # Letta agent runtime monitoring (if enabled)
+        if [[ "${LETTA_ENABLED:-false}}" == "true" ]]; then
+            cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << LETTAEOF
+
+  # Letta agent runtime monitoring
+  - job_name: 'letta'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-letta:8283']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+LETTAEOF
+        fi
+
+        # Dify API monitoring (if enabled)
+        if [[ "${DIFY_ENABLED:-false}}" == "true" ]]; then
+            cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << DIFYEEOF
+
+  # Dify API monitoring
+  - job_name: 'dify-api'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-dify-api:5001']
+    metrics_path: '/health'
+    scrape_interval: 30s
+DIFYEEOF
+        fi
+
+        # Dify worker monitoring (if enabled)
+        if [[ "${DIFY_ENABLED:-false}}" == "true" ]]; then
+            cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << DIFYWORKEREOF
+
+  # Dify worker monitoring
+  - job_name: 'dify-worker'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-dify-worker:5001']
+    metrics_path: '/health'
+    scrape_interval: 30s
+DIFYWORKEREOF
+        fi
+
+        # Code Server monitoring (if enabled)
+        if [[ "${CODE_SERVER_ENABLED:-${ENABLE_CODE_SERVER:-false}}" == "true" ]]; then
+            cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << CODESERVEREOF
+
+  # Code Server monitoring
+  - job_name: 'code-server'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-code-server:8080']
+    metrics_path: '/healthz'
+    scrape_interval: 30s
+CODESERVEREOF
+        fi
+
+        # N8N automation monitoring (if enabled)
+        if [[ "${N8N_ENABLED:-false}}" == "true" ]]; then
+            cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << N8NEOF
+
+  # N8N automation monitoring
+  - job_name: 'n8n'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-n8n:5678']
+    metrics_path: '/healthz'
+    scrape_interval: 30s
+N8NEOF
+        fi
+
+        # Flowise monitoring (if enabled)
+        if [[ "${FLOWISE_ENABLED:-false}}" == "true" ]]; then
+            cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << FLOWISEEOF
+
+  # Flowise monitoring
+  - job_name: 'flowise'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-flowise:3000']
+    metrics_path: '/'
+    scrape_interval: 30s
+FLOWISEEOF
+        fi
+
+        # AnythingLLM monitoring (if enabled)
+        if [[ "${ANYTHINGLLM_ENABLED:-false}}" == "true" ]]; then
+            cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << ANYTHINGLLMEOF
+
+  # AnythingLLM monitoring
+  - job_name: 'anythingllm'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-anythingllm:3001']
+    metrics_path: '/health'
+    scrape_interval: 30s
+ANYTHINGLLMEOF
+        fi
+
+        # OpenWebUI monitoring (if enabled)
+        if [[ "${OPENWEBUI_ENABLED:-false}}" == "true" ]]; then
+            cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << OPENWEBUIEOF
+
+  # OpenWebUI monitoring
+  - job_name: 'openwebui'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-openwebui:3000']
+    metrics_path: '/health'
+    scrape_interval: 30s
+OPENWEBUIEOF
+        fi
+
+        # LibreChat monitoring (if enabled)
+        if [[ "${LIBRECHAT_ENABLED:-false}}" == "true" ]]; then
+            cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << LIBRECHATEOF
+
+  # LibreChat monitoring
+  - job_name: 'librechat'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-librechat:3080']
+    metrics_path: '/health'
+    scrape_interval: 30s
+LIBRECHATEOF
+        fi
+
+        # OpenClaw monitoring (if enabled)
+        if [[ "${OPENCLAW_ENABLED:-false}}" == "true" ]]; then
+            cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << OPENCLAWEOF
+
+  # OpenClaw monitoring
+  - job_name: 'openclaw'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-openclaw:18789']
+    metrics_path: '/health'
+    scrape_interval: 30s
+OPENCLAWEOF
+        fi
+
+        # Authentik SSO monitoring (if enabled)
+        if [[ "${AUTHENTIK_ENABLED:-false}}" == "true" ]]; then
+            cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << AUTHENTIKEOF
+
+  # Authentik SSO monitoring
+  - job_name: 'authentik'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-authentik:9000']
+    metrics_path: '/health'
+    scrape_interval: 30s
+AUTHENTIKEOF
+        fi
+
+        # Caddy reverse proxy monitoring (if enabled)
+        if [[ "${CADDY_ENABLED:-false}" == "true" ]]; then
+            cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << CADDYEOF
+
+  # Caddy reverse proxy monitoring
+  - job_name: 'caddy'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-caddy:2019']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+CADDYEOF
+        fi
+
+        # PostgreSQL monitoring
+        cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << POSTGRESEOF
+
+  # PostgreSQL monitoring
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-postgres:5432']
+    scrape_interval: 30s
+POSTGRESEOF
+
+        # Redis monitoring
+        cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << REDISEOF
+
+  # Redis monitoring
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-redis:6379']
+    scrape_interval: 30s
+REDISEOF
+
+        # MongoDB monitoring
+        cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << MONGODBEOF
+
+  # MongoDB monitoring
+  - job_name: 'mongodb'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-mongodb:27017']
+    scrape_interval: 30s
+MONGODBEOF
+
+        # Qdrant vector DB monitoring (if enabled)
+        if [[ "${QDRANT_ENABLED}" == "true" ]]; then
+            cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << QDRANTEOF
+
+  # Qdrant vector DB monitoring
+  - job_name: 'qdrant'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-qdrant:6333']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+QDRANTEOF
+        fi
+
+        # RClone monitoring (if enabled)
+        if [[ "${RCLONE_ENABLED:-false}" == "true" ]]; then
+            cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << RCLONEEOF
+
+  # RClone monitoring
+  - job_name: 'rclone'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-rclone:5572']
+    scrape_interval: 30s
+RCLONEEOF
+        fi
+MONITOREOF
+
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
 prometheus.${BASE_DOMAIN} {
