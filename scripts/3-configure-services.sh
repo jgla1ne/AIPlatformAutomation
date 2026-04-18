@@ -2004,12 +2004,13 @@ fetch_latest_ollama_models() {
         echo "⚠️  Unable to fetch from registry, using fallback list"
         echo ""
         echo "📋 Popular Models (fallback list):"
-        echo "1. gemma2:27b - Google's latest multimodal"
-        echo "2. gemma2:9b - Google's compact multimodal"  
-        echo "3. llama3.2:3b - Meta's compact model"
-        echo "4. qwen2.5:7b - Alibaba's balanced model"
-        echo "5. mistral:7b - Mistral's updated model"
-        echo "6. custom - Enter specific model name"
+        echo "1. gemma4:31b - Google's latest multimodal"
+        echo "2. gemma3:27b - Google's multimodal model"
+        echo "3. gemma2:9b - Google's compact multimodal"  
+        echo "4. llama3.2:3b - Meta's compact model"
+        echo "5. qwen3.5:397b - Alibaba's large model"
+        echo "6. mistral-large-3:675b - Mistral's flagship model"
+        echo "7. custom - Enter specific model name"
         echo ""
         return 0
     fi
@@ -2017,9 +2018,9 @@ fetch_latest_ollama_models() {
     echo "📋 Latest Available Models (from ollama.com/library):"
     echo ""
     
-    # Parse and display top models
+    # Parse and display top models (show more to include gemma4)
     local count=0
-    echo "$models_json" | jq -r '.models[] | "\(.name)"' 2>/dev/null | head -15 | while read -r model; do
+    echo "$models_json" | jq -r '.models[] | "\(.name)"' 2>/dev/null | head -30 | while read -r model; do
         count=$((count + 1))
         printf "%2d. %s\n" "$count" "$model"
     done
@@ -2051,11 +2052,12 @@ configure_ollama_models() {
         2)
             echo ""
             echo "📋 Popular Models:"
-            echo "1. gemma2:27b - Google's latest multimodal"
-            echo "2. gemma2:9b - Google's compact multimodal"  
-            echo "3. llama3.2:3b - Meta's compact model"
-            echo "4. qwen2.5:7b - Alibaba's balanced model"
-            echo "5. mistral:7b - Mistral's updated model"
+            echo "1. gemma4:31b - Google's latest multimodal"
+            echo "2. gemma3:27b - Google's multimodal model"
+            echo "3. gemma2:9b - Google's compact multimodal"  
+            echo "4. llama3.2:3b - Meta's compact model"
+            echo "5. qwen3.5:397b - Alibaba's large model"
+            echo "6. mistral-large-3:675b - Mistral's flagship model"
             echo ""
             echo "Enter model number or name:"
             read -r model_name
@@ -2071,21 +2073,37 @@ configure_ollama_models() {
             ;;
     esac
     
-    # Validate model name and pull if valid
+    # Validate and pull models (handle comma-separated input)
     if [[ -n "$model_name" ]]; then
-        log "Pulling Ollama model: $model_name"
-        if docker exec "${TENANT_PREFIX}-ollama" ollama pull "$model_name"; then
-            log "✅ Model '$model_name' pulled successfully"
+        # Split comma-separated models and process each one
+        IFS=',' read -ra model_array <<< "$model_name"
+        local success_count=0
+        local total_count=${#model_array[@]}
+        
+        for model in "${model_array[@]}"; do
+            # Remove whitespace
+            model=$(echo "${model// /}" | xargs)
             
-            # Update platform.conf with new model
-            update_platform_conf_models "$model_name"
-            
-            log "🔄 Restarting LiteLLM to recognize new model..."
+            if [[ -n "$model" ]]; then
+                log "Pulling Ollama model: $model"
+                if docker exec "${TENANT_PREFIX}-ollama" ollama pull "$model"; then
+                    log "✅ Model '$model' pulled successfully"
+                    
+                    # Update platform.conf with new model
+                    update_platform_conf_models "$model"
+                    success_count=$((success_count + 1))
+                else
+                    error "❌ Failed to pull model '$model'"
+                fi
+            fi
+        done
+        
+        if [[ $success_count -gt 0 ]]; then
+            log "🔄 Restarting LiteLLM to recognize new models..."
             docker restart "${TENANT_PREFIX}-litellm" >/dev/null 2>&1
-            
-            log "✅ Model deployment complete!"
+            log "✅ Model deployment complete! ($success_count/$total_count models successful)"
         else
-            error "❌ Failed to pull model '$model_name'"
+            error "❌ No models were successfully pulled"
         fi
     else
         error "❌ No model selected"
