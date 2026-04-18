@@ -3716,13 +3716,15 @@ show_post_deploy_dashboard() {
         fi
     fi
 
-    # Helper: build a service URL — subdomain when proxy active, host:port otherwise
+    # Helper: build a service URL — subdomain when proxy active, internal routing otherwise
     _svc_url() {
         local subdomain="$1" port="$2"
         if [[ "$use_subdomains" == "true" ]]; then
+            # External access via subdomain
             echo "${base_proto}://${subdomain}.${display_host}"
         else
-            echo "${base_proto}://${display_host}:${port}"
+            # Internal routing via subdomain but different internal port
+            echo "${base_proto}://${subdomain}.${display_host}:${port}"
         fi
     }
 

@@ -160,6 +160,8 @@ sudo bash scripts/0-complete-cleanup.sh <tenant_id> [--dry-run] [--containers-on
 
 **Expected outcome:** `Script 0 Complete ✓` banner. All data gone. Docker daemon stopped if it was using EBS. Script 1 can now run against the same tenant_id on a fresh EBS format.
 
+**Multi-tenant support**: Each tenant gets isolated data directories, Docker networks, and port ranges to prevent conflicts. Subdomain architecture with internal routing: `tenant.domain.net` routes to internal services while keeping ports 80/443 open for direct access. Shared services (monitoring, logging) can be deployed in a shared namespace.
+
 ---
 
 ### Script 1 — Setup Wizard
@@ -385,6 +387,39 @@ bash scripts/2-deploy-services.sh <tenant_id> --flushall
 - All containers running and healthy
 
 **Expected outcome:** `Script 2 Complete ✓` banner + post-deploy dashboard. Every enabled service has a running, healthy container. All URLs accessible (via proxy if configured). Ready for Script 3.
+
+---
+
+## MULTI-TENANT DEPLOYMENT
+
+### Subdomain Architecture with Internal Routing
+
+For multiple tenants, use subdomain-based deployment with internal port mapping:
+
+```bash
+# First tenant
+./scripts/1-setup-system.sh datasquiz \
+  --base-domain ai.dataquiz.net
+
+# Second tenant  
+./scripts/1-setup-system.sh tenant2 \
+  --base-domain tenant2.dataquiz.net
+```
+
+**Service Access Patterns:**
+- **External**: `https://tenant2.dataquiz.net:8080` → routes to internal port `3000`
+- **Internal**: `https://tenant2.dataquiz.net` → routes to internal services on different ports
+
+**Port Isolation:**
+- Each tenant gets dedicated port range (e.g., 3000-3099, 3100-3199)
+- Caddy uses ports 80/443 globally for all tenants
+- Internal services communicate via tenant-specific subdomains
+
+**Benefits:**
+- ✅ No port conflicts between tenants
+- ✅ Independent TLS certificates per tenant
+- ✅ Complete service isolation while maintaining shared monitoring
+- ✅ Flexible internal routing architecture
 
 **Port allocations file** (authoritative over platform.conf for ports):
 ```

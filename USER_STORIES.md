@@ -829,4 +829,7 @@ Epic 13 — Hardware       GPU/CPU detection, deployment guidance, model recomme
 - **Success Tracking**: Batch operation feedback with X/Y models successful reporting
 - **Modular Model Deployment**: Extensible design for filtering, searching, and custom model entry
 - **Latest Model Availability**: gemma4:31b and other newest models available in all selection methods
+- **Subdomain Architecture**: Multi-tenant support with subdomain routing and internal port mapping
+- **Port Isolation**: Tenant-specific port ranges prevent conflicts between deployments
+- **Internal Service Routing**: Subdomain access routes to different internal ports while keeping 80/443 open
 - **Prometheus Dynamic Configuration**: Automatic service monitoring based on enabled components
