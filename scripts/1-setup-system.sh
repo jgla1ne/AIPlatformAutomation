@@ -1490,30 +1490,23 @@ select_ollama_models() {
     echo ""
     
     # Model groups
-    echo "  📦 Small Models (< 4GB RAM):"
-    echo "    1) Llama 3.2 1B - Latest compact model"
-    echo "    2) Llama 3.2 3B - Balanced small model"
-    echo "    3) Phi-3 Mini 4K - Microsoft's 4K context model"
-    echo "    4) Gemma 2 2B - Google's lightweight model"
-    echo "    5) Qwen 2.5 3B - Efficient multilingual model"
-    echo ""
-    
-    echo "  📦 Medium Models (4-8GB RAM):"
-    echo "    6) Llama 3.1 8B - General purpose, good balance"
-    echo "    7) Llama 3.2 7B - Latest medium model"
-    echo "    8) Mistral 7B - Fast, efficient for most tasks"
-    echo "    9) Qwen 2.5 7B - Strong reasoning capabilities"
-    echo "   10) Deepseek Coder V2 16B - Advanced coding model"
-    echo ""
-    
-    echo "  📦 Large Models (8-16GB+ RAM):"
-    echo "   11) Llama 3.1 70B - High performance, larger context"
-    echo "   12) Llama 3.3 70B - Latest large model"
-    echo "   13) Mixtral 8x7B - Mixture of experts, excellent reasoning"
-    echo "   14) Qwen 2.5 72B - Strong multilingual capabilities"
-    echo "   15) CodeLlama 70B - Specialized for code generation"
-    echo "   16) Gemma 4 9B - Google's latest multimodal model"
-    echo "   17) Gemma 4 27B - Google's large multimodal model"
+    echo "   1) Qwen 3.6 35B - Latest Alibaba model (5 hours ago)"
+    echo "   2) Gemma 4 26B - Google's latest multimodal (2 days ago)"
+    echo "   3) MedGemma 27B - Medical specialized Gemma 3 (2 days ago)"
+    echo "   4) GLM 5.1 - Latest agentic engineering model (1 week ago)"
+    echo "   5) Mistral Large 3 - Latest Mistral MoE model (4 months ago)"
+    echo "   6) Kimi K2 - Moonshot AI's MoE model (6 months ago)"
+    echo "   7) Qwen 3 VL 32B - Vision-language model (5 months ago)"
+    echo "   8) Gemma 4 9B - Google's compact multimodal (2 days ago)"
+    echo "   9) Gemma 4 4B - Google's small multimodal (2 days ago)"
+    echo "   10) Olmo 2 13B - Open language model (1 year ago)"
+    echo "   11) Llama 3.3 70B - Meta's latest large model (1 year ago)"
+    echo "   12) DeepSeek V3 671B - DeepSeek's MoE model (1 year ago)"
+    echo "   13) Dolphin 3 8B - General purpose model (1 year ago)"
+    echo "   14) Qwen 3 30B - Alibaba's latest generation (6 months ago)"
+    echo "   15) SmolLM2 1.7B - Compact language model (1 year ago)"
+    echo "   16) Llama 3.2 3B - Meta's compact model (1 year ago)"
+    echo "   17) Mistral 7B - Mistral AI's updated model (9 months ago)"
     echo ""
     
     echo "  🔧 Custom Options:"
@@ -1527,7 +1520,7 @@ select_ollama_models() {
     read -r selection
     
     if [[ -z "$selection" ]]; then
-        selection="6,8"  # Default: Llama 3.1 8B + Llama 3.2 7B
+        selection="8,16"  # Default: Gemma 4 9B + Llama 3.2 3B
     fi
     
     # Convert selection to model names
@@ -1535,29 +1528,29 @@ select_ollama_models() {
     IFS=',' read -ra selections <<< "$selection"
     for num in "${selections[@]}"; do
         case "${num// /}" in
-            1) models="${models:+$models,}llama3.2:1b" ;;
-            2) models="${models:+$models,}llama3.2:3b" ;;
-            3) models="${models:+$models,}phi3:mini" ;;
-            4) models="${models:+$models,}gemma2:2b" ;;
-            5) models="${models:+$models,}qwen2.5:3b" ;;
-            6) models="${models:+$models,}llama3.1:8b" ;;
-            7) models="${models:+$models,}llama3.2:7b" ;;
-            8) models="${models:+$models,}mistral:7b" ;;
-            9) models="${models:+$models,}qwen2.5:7b" ;;
-            10) models="${models:+$models,}deepseek-coder-v2:16b" ;;
-            11) models="${models:+$models,}llama3.1:70b" ;;
-            12) models="${models:+$models,}llama3.3:70b" ;;
-            13) models="${models:+$models,}mixtral:8x7b" ;;
-            14) models="${models:+$models,}qwen2.5:72b" ;;
-            15) models="${models:+$models,}codellama:70b" ;;
-            16) models="${models:+$models,}gemma4:9b" ;;
-            17) models="${models:+$models,}gemma4:27b" ;;
+            1) models="${models:+$models,}qwen3.6:35b" ;;
+            2) models="${models:+$models,}gemma4:26b" ;;
+            3) models="${models:+$models,}medgemma:27b" ;;
+            4) models="${models:+$models,}glm-5.1" ;;
+            5) models="${models:+$models,}mistral-large-3" ;;
+            6) models="${models:+$models,}kimi-k2" ;;
+            7) models="${models:+$models,}qwen3-vl:32b" ;;
+            8) models="${models:+$models,}gemma4:9b" ;;
+            9) models="${models:+$models,}gemma4:4b" ;;
+            10) models="${models:+$models,}olmo2:13b" ;;
+            11) models="${models:+$models,}llama3.3:70b" ;;
+            12) models="${models:+$models,}deepseek-v3:671b" ;;
+            13) models="${models:+$models,}dolphin3:8b" ;;
+            14) models="${models:+$models,}qwen3:30b" ;;
+            15) models="${models:+$models,}smollm2:1.7b" ;;
+            16) models="${models:+$models,}llama3.2:3b" ;;
+            17) models="${models:+$models,}mistral:7b" ;;
             18) 
                 echo ""
                 echo "  🔧 Custom Model Entry:"
                 echo "  Enter model name(s) as they appear in ollama.com/library"
-                echo "  Examples: gemma4:2b, nemotron-cascade-2:latest"
-                echo "  Multiple models: gemma4:9b,llama3.2:7b (comma-separated)"
+                echo "  Examples: qwen3.6:35b, gemma4:26b"
+                echo "  Multiple models: qwen3.6:35b,gemma4:9b (comma-separated)"
                 echo ""
                 echo -n "  🎯 Custom model(s): "
                 read -r custom_models
@@ -1573,7 +1566,7 @@ select_ollama_models() {
         OLLAMA_MODELS="$models"
         echo "  ✅ Selected models: $OLLAMA_MODELS"
     else
-        OLLAMA_MODELS="llama3.1:8b,llama3.2:7b"
+        OLLAMA_MODELS="gemma4:9b,llama3.2:3b"
         echo "  ⚠️  No valid models selected, using defaults: $OLLAMA_MODELS"
     fi
 }
@@ -2500,7 +2493,7 @@ POSTGRES_USER="${POSTGRES_USER:-${TENANT_ID}}"
 POSTGRES_DB="${POSTGRES_DB:-${TENANT_ID}}"
 
 # Ollama default model (first in list)
-OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-llama3.1:8b}"
+OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-gemma4:9b}"
 
 # Application secrets (generated once, stable across deploys)
 LITELLM_UI_PASSWORD="$(gen_password)"
@@ -3386,7 +3379,7 @@ NPM_ADMIN_PORT="${NPM_ADMIN_PORT:-81}"
 # LOCAL MODELS
 ENABLE_LOCAL_MODELS="${ENABLE_LOCAL_MODELS:-true}"
 OLLAMA_MODELS="${OLLAMA_MODELS:-llama3.1:8b,mistral:7b}"
-OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-llama3.1:8b}"
+OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-gemma4:9b}"
 OLLAMA_AUTO_DOWNLOAD="${OLLAMA_AUTO_DOWNLOAD:-true}"
 
 # LLM PROVIDERS (enable flags only — API keys excluded from template)
@@ -3555,8 +3548,8 @@ initialize_service_variables() {
     TOTAL_RAM_GB="${TOTAL_RAM_GB:-8}"
     
     # Ollama Configuration
-    OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-qwen2.5:7b}"
-    OLLAMA_MODELS="${OLLAMA_MODELS:-qwen2.5:7b,llama3.1:8b}"
+    OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-gemma4:9b}"
+    OLLAMA_MODELS="${OLLAMA_MODELS:-gemma4:9b,llama3.2:3b}"
     
     # LLM Providers
     LLM_PROVIDERS="${LLM_PROVIDERS:-local}"

@@ -930,7 +930,7 @@ EOF
     restart: unless-stopped
     user: "${PUID}:${PGID}"
     # Override CMD to enforce port — alpine/openclaw reads port from --port flag, not env
-    command: ["node", "openclaw.mjs", "gateway", "--allow-unconfigured", "--port", "${OPENCLAW_PORT}"]
+    command: ["/bin/bash", "-c", "cd /home/coder && ./install-extensions.sh 2>/dev/null || true && code-server --bind-addr 0.0.0.0:8080 --auth password --disable-telemetry"]
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://:${REDIS_PASSWORD}@${TENANT_PREFIX}-redis:6379
@@ -1819,7 +1819,7 @@ EOF
 }
 CODEEOF
         
-        # Create extensions.json with recommended AI extensions
+        # Create extensions.json with pre-installed AI extensions
         cat > "${code_settings_dir}/extensions.json" << EXTEOF
 {
   "recommendations": [
@@ -1836,6 +1836,21 @@ CODEEOF
   ]
 }
 EXTEOF
+        
+        # Pre-install Continue.dev extension by creating the extensions directory
+        local code_extensions_dir="${DATA_DIR}/code-server/.local/share/code-server/extensions"
+        mkdir -p "${code_extensions_dir}"
+        
+        # Create extension installation script for Code Server
+        cat > "${DATA_DIR}/code-server/install-extensions.sh" << INSTALLEOF
+#!/bin/bash
+# Auto-install Continue.dev extension for Code Server
+echo "Installing Continue.dev extension..."
+code-server --install-extension continue.continue --force 2>/dev/null || echo "Continue.dev extension will be installed on next start"
+echo "Extension installation completed"
+INSTALLEOF
+        
+        chmod +x "${DATA_DIR}/code-server/install-extensions.sh"
 
         cat >> "${COMPOSE_FILE}" << EOF
   ${TENANT_PREFIX}-code-server:
@@ -1848,7 +1863,8 @@ EXTEOF
       # LiteLLM integration environment variables
       LITELLM_URL: "http://${TENANT_PREFIX}-litellm:4000/v1"
       LITELLM_API_KEY: "${LITELLM_MASTER_KEY}"
-      DEFAULT_MODEL: "${OLLAMA_DEFAULT_MODEL:-llama3.1:8b}"
+      DEFAULT_MODEL: "${OLLAMA_DEFAULT_MODEL:-llama3.2:3b}"
+    command: ["/bin/bash", "-c", "cd /home/coder && ./install-extensions.sh 2>/dev/null || true && exec code-server --bind-addr 0.0.0.0:8080 --auth password --disable-telemetry"]
     volumes:
       - ${DATA_DIR}/code-server:/home/coder
       - ${DATA_DIR}:/mnt/tenant-data:ro
@@ -1877,7 +1893,7 @@ EOF
         local first_model="${OLLAMA_DEFAULT_MODEL:-llama3.1:8b}"
         
         # Add models from OLLAMA_MODELS variable
-        IFS=',' read -ra models <<< "${OLLAMA_MODELS:-llama3.1:8b,mistral:7b}"
+        IFS=',' read -ra models <<< "${OLLAMA_MODELS:-gemma4:9b,llama3.2:3b}"
         for model in "${models[@]}"; do
             model=$(echo "$model" | xargs)  # trim whitespace
             if [[ -n "$model" ]]; then
@@ -2034,7 +2050,7 @@ READMEOF
         ok "Continue.dev config.json generated at ${continue_dir}/config.json"
         ok "  â Copy to ~/.continue/config.json on your dev machine"
         ok "  â Installation guide available at ${continue_dir}/README.md"
-        ok "  â Available models: $(echo "${OLLAMA_MODELS:-llama3.1:8b,mistral:7b}" | tr ',' ' ')"
+        ok "  â Available models: $(echo "${OLLAMA_MODELS:-gemma4:9b,llama3.2:3b}" | tr ',' ' ')"
     fi
 
     ok "docker-compose.yml generated"
@@ -3270,7 +3286,7 @@ main() {
     FLOWISE_PASSWORD="${FLOWISE_PASSWORD}"
     FLOWISE_SECRETKEY_OVERWRITE="${FLOWISE_SECRETKEY_OVERWRITE}"
     GOOGLE_API_KEY="${GOOGLE_API_KEY:-${GOOGLE_AI_API_KEY:-}}"
-    OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-qwen2.5:7b}"
+    OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-llama3.2:3b}"
 
     # Derive TENANT_PREFIX if not in platform.conf (backward compat)
     TENANT_PREFIX="${TENANT_PREFIX:-${PLATFORM_PREFIX}-${TENANT_ID}}"
