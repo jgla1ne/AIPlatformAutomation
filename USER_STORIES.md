@@ -814,7 +814,8 @@ Epic 13 — Hardware       GPU/CPU detection, deployment guidance, model recomme
 - **LiteLLM Admin UI**: Web interface for model management and API testing
 - **Complete Service Integration**: All AI services properly connected to LiteLLM proxy
 - **Dify Database Recovery**: Enhanced SQLAlchemy error handling and schema cleanup
-- **Model Loading Optimization**: Automatic model downloading and availability verification
+- **Script 2 Automatic Model Download**: Deployment engine automatically pulls all configured Ollama models without manual intervention
+- **Model Loading Optimization**: Automatic model downloading and availability verification during deployment
 - **Integrated Monitoring Platform**: Complete observability stack with Prometheus + Grafana
 - **Automatic Service Discovery**: Zero-configuration monitoring for all enabled services
 - **Comprehensive Service Coverage**: Ollama, LiteLLM, Dify, Code Server, N8N, Flowise, AnythingLLM, OpenWebUI, LibreChat, OpenClaw, Authentik, Qdrant, PostgreSQL, Redis, MongoDB
@@ -822,4 +823,7 @@ Epic 13 — Hardware       GPU/CPU detection, deployment guidance, model recomme
 - **Resource Usage Tracking**: Container CPU, memory, and performance metrics
 - **Request Rate Monitoring**: LiteLLM API request rates and response times
 - **Grafana Dashboard Provisioning**: Pre-configured AI Platform Overview dashboard
+- **Script 3 Dynamic Model Lookup**: Mission Control provides --ollama-latest to fetch real-time models from ollama.com/library
+- **Interactive Model Management**: Live model selection with automatic platform.conf and LiteLLM configuration updates
+- **Modular Model Deployment**: Extensible design for filtering, searching, and custom model entry
 - **Prometheus Dynamic Configuration**: Automatic service monitoring based on enabled components

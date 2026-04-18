@@ -1491,15 +1491,15 @@ select_ollama_models() {
     
     # Model groups
     echo "   1) Qwen 3.6 35B - Latest Alibaba model (5 hours ago)"
-    echo "   2) Gemma 4 27B - Google's latest multimodal (2 days ago)"
-    echo "   3) Gemma 4 26B - Google's multimodal model (2 days ago)"
-    echo "   4) MedGemma 27B - Medical specialized Gemma 3 (2 days ago)"
+    echo "   2) Gemma 2 27B - Google's latest multimodal (2 days ago)"
+    echo "   3) Gemma 2 26B - Google's multimodal model (2 days ago)"
+    echo "   4) MedGemma 27B - Medical specialized Gemma 2 (2 days ago)"
     echo "   5) GLM 5.1 - Latest agentic engineering model (1 week ago)"
     echo "   6) Mistral Large 3 - Latest Mistral MoE model (4 months ago)"
     echo "   7) Kimi K2 - Moonshot AI's MoE model (6 months ago)"
     echo "   8) Qwen 3 VL 32B - Vision-language model (5 months ago)"
-    echo "   9) Gemma 4 9B - Google's compact multimodal (2 days ago)"
-    echo "   10) Gemma 4 4B - Google's small multimodal (2 days ago)"
+    echo "   9) Gemma 2 9B - Google's compact multimodal (2 days ago)"
+    echo "   10) Gemma 2 4B - Google's small multimodal (2 days ago)"
     echo "   11) Olmo 2 13B - Open language model (1 year ago)"
     echo "   12) Llama 3.3 70B - Meta's latest large model (1 year ago)"
     echo "   13) DeepSeek V3 671B - DeepSeek's MoE model (1 year ago)"
@@ -1521,7 +1521,7 @@ select_ollama_models() {
     read -r selection
     
     if [[ -z "$selection" ]]; then
-        selection="8,16"  # Default: Gemma 4 9B + Llama 3.2 3B
+        selection="9,16"  # Default: Gemma 2 9B + Llama 3.2 3B
     fi
     
     # Convert selection to model names
@@ -1530,15 +1530,15 @@ select_ollama_models() {
     for num in "${selections[@]}"; do
         case "${num// /}" in
             1) models="${models:+$models,}qwen3.6:35b" ;;
-            2) models="${models:+$models,}gemma4:27b" ;;
-            3) models="${models:+$models,}gemma4:26b" ;;
+            2) models="${models:+$models,}gemma2:27b" ;;
+            3) models="${models:+$models,}gemma2:26b" ;;
             4) models="${models:+$models,}medgemma:27b" ;;
             5) models="${models:+$models,}glm-5.1" ;;
             6) models="${models:+$models,}mistral-large-3" ;;
             7) models="${models:+$models,}kimi-k2" ;;
             8) models="${models:+$models,}qwen3-vl:32b" ;;
-            9) models="${models:+$models,}gemma4:9b" ;;
-            10) models="${models:+$models,}gemma4:4b" ;;
+            9) models="${models:+$models,}gemma2:9b" ;;
+            10) models="${models:+$models,}gemma2:4b" ;;
             11) models="${models:+$models,}olmo2:13b" ;;
             12) models="${models:+$models,}llama3.3:70b" ;;
             13) models="${models:+$models,}deepseek-v3:671b" ;;

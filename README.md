@@ -348,7 +348,7 @@ bash scripts/2-deploy-services.sh <tenant_id> --flushall
 |---|---|
 | --flushall | Wipe all data (databases, models, images) |
 | --flush-dbs | Wipe only databases (preserve containers/models) |
-| _(none)_ | Prune containers; keep all EBS data intact. Images and models already cached are reused. Fast retry path — no re-download, no re-migration from scratch. |
+| _(none)_ | Prune containers; keep all EBS data intact. Images and models already cached are reused. Fast retry path — no re-download of models, no re-migration from scratch. |
 | `--flushall` | After stopping containers, delete all DB data dirs (postgres/redis/mongodb), all service state dirs, Ollama model cache, and Docker image cache. Equivalent to a fresh deploy on a wiped volume without running Script 0+1. |
 | `--dry-run` | Print what would be deployed; execute nothing. |
 
@@ -371,7 +371,8 @@ bash scripts/2-deploy-services.sh <tenant_id> --flushall
 7. Config file generation — `litellm_config.yaml`, `Caddyfile` (Caddy only), `zep-config.yaml` (Zep only)
 8. `docker compose up -d`
 9. `wait_for_all_health()` — polls every enabled service health endpoint with per-service timeouts; creates Letta's dedicated PostgreSQL database + pgvector extension after Postgres healthy; restarts Letta after DB creation; checks Zep watermill tables exist (only restarts Zep if tables were missing — avoids unnecessary second boot cycle)
-10. `trigger_initial_rclone_sync()` — restarts the rclone container immediately after all health checks pass so the first Google Drive sync fires without waiting for the poll interval
+10. `trigger_initial_rclone_sync()` — restarts rclone container immediately after all health checks pass so first Google Drive sync fires without waiting for poll interval
+11. `download_ollama_models()` — automatically pulls all configured Ollama models if not present, with cost-optimized duplicate checking
 11. `show_post_deploy_dashboard()` — prints all service URLs (domain-aware), credentials, and pipeline description
 
 **Outputs:**
@@ -1101,7 +1102,7 @@ curl -s -X POST "http://127.0.0.1:${SIGNALBOT_PORT}/v1/register/+<number>/verify
 | **Script 0** — Nuclear Cleanup | Production ready | Typed confirmation, Docker daemon stop before EBS unmount, scoped image removal |
 | **Script 1** — Setup Wizard | Production ready | Interactive wizard, stack presets, memory layer selection, dependency enforcement, writes platform.conf |
 | **Script 2** — Deployment Engine | Production ready | Heredoc compose generation, port allocator, secret persistence, Letta DB creation, MongoDB corruption recovery, Dify database recovery, --flush-dbs flag, P14 model cost optimization, SearXNG search engine, post-deploy dashboard |
-| **Script 3** — Mission Control | Production ready | Sources port-allocations (takes precedence), 24-service health table, domain-aware URLs, credentials summary, ingestion pipeline, log management, service reconfigure, LiteLLM routing, Ollama model management, interactive model configuration, SearXNG configuration, backup, **reboot persistence** |
+| **Script 3** — Mission Control | Production ready | Sources port-allocations (takes precedence), 24-service health table, domain-aware URLs, credentials summary, ingestion pipeline, log management, service reconfigure, LiteLLM routing, **dynamic model lookup** (--ollama-latest), Ollama model management, interactive model configuration, SearXNG configuration, backup, **reboot persistence** |
 
 ---
 

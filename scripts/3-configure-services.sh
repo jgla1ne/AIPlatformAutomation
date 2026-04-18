@@ -24,6 +24,7 @@
 #          --ollama-list              List loaded Ollama models
 #          --ollama-pull <model>      Pull a new Ollama model
 #          --ollama-remove <model>    Remove an Ollama model
+#          --ollama-latest            Fetch latest models from ollama.com/library
 #          --configure-models         Configure Ollama and external LLM models interactively
 #          --configure-ai             Configure AI development tools (Code Server, Continue.dev)
 #          --flushall                 Flush all databases and reinitialize (self-healing)
@@ -1611,6 +1612,10 @@ main() {
                 ollama_model="$2"
                 shift 2
                 ;;
+            --ollama-latest)
+                fetch_latest_models=true
+                shift
+                ;;
             --configure-models)
                 configure_models=true
                 shift
@@ -1854,6 +1859,11 @@ main() {
         configure_bifrost
     fi
     
+    # Fetch latest models if requested
+    if [[ "${fetch_latest_models:-false}" == "true" ]]; then
+        fetch_latest_ollama_models
+    fi
+    
     # Model configuration (new feature)
     if [[ "${configure_models:-false}" == "true" ]]; then
         configure_models
@@ -1981,38 +1991,125 @@ configure_models() {
     esac
 }
 
+fetch_latest_ollama_models() {
+    echo ""
+    echo "🔍 Fetching latest models from Ollama official repository..."
+    echo ""
+    
+    # Fetch latest models from Ollama library
+    local models_json
+    models_json=$(curl -s "https://ollama.com/api/tags" 2>/dev/null || echo "")
+    
+    if [[ -z "$models_json" ]]; then
+        echo "⚠️  Unable to fetch from registry, using fallback list"
+        echo ""
+        echo "📋 Popular Models (fallback list):"
+        echo "1. gemma2:27b - Google's latest multimodal"
+        echo "2. gemma2:9b - Google's compact multimodal"  
+        echo "3. llama3.2:3b - Meta's compact model"
+        echo "4. qwen2.5:7b - Alibaba's balanced model"
+        echo "5. mistral:7b - Mistral's updated model"
+        echo "6. custom - Enter specific model name"
+        echo ""
+        return 0
+    fi
+    
+    echo "📋 Latest Available Models (from ollama.com/library):"
+    echo ""
+    
+    # Parse and display top models
+    local count=0
+    echo "$models_json" | jq -r '.models[] | "\(.name)"' 2>/dev/null | head -15 | while read -r model; do
+        count=$((count + 1))
+        printf "%2d. %s\n" "$count" "$model"
+    done
+    
+    echo ""
+    echo "🔧 Options:"
+    echo "99. Show more models"
+    echo "100. Enter custom model name"
+    echo ""
+    echo "Enter model number or name:"
+}
+
 configure_ollama_models() {
     echo ""
     echo "📦 Configure Ollama Models:"
     echo ""
-    echo "Available model sizes:"
-    echo "1. Small (3B parameters) - Fast, low memory"
-    echo "2. Medium (7B parameters) - Balanced performance"
-    echo "3. Large (13B+ parameters) - High quality, slower"
+    echo "1. 🔄 Fetch latest models from ollama.com/library"
+    echo "2. 📋 Use popular models list"
+    echo "3. 🔧 Enter custom model name"
     echo ""
-    echo "Enter size choice (1-3) or model name (e.g., 'llama3.2:3b'):"
+    echo "Enter choice (1-3):"
     read -r model_choice
     
     case $model_choice in
         1)
-            model_name="llama3.2:3b"
+            fetch_latest_ollama_models
+            read -r model_name
             ;;
         2)
-            model_name="llama3.2:7b"
+            echo ""
+            echo "📋 Popular Models:"
+            echo "1. gemma2:27b - Google's latest multimodal"
+            echo "2. gemma2:9b - Google's compact multimodal"  
+            echo "3. llama3.2:3b - Meta's compact model"
+            echo "4. qwen2.5:7b - Alibaba's balanced model"
+            echo "5. mistral:7b - Mistral's updated model"
+            echo ""
+            echo "Enter model number or name:"
+            read -r model_name
             ;;
         3)
-            model_name="llama3.1:70b"
+            echo ""
+            echo "🔧 Enter custom model name (e.g., 'gemma2:27b'):"
+            read -r model_name
             ;;
         *)
-            model_name="$model_choice"
+            echo "❌ Invalid choice"
+            return 1
             ;;
     esac
     
-    log "Pulling Ollama model: $model_name"
-    if docker exec "${TENANT_PREFIX}-ollama" ollama pull "$model_name"; then
-        log "✅ Model '$model_name' pulled successfully"
+    # Validate model name and pull if valid
+    if [[ -n "$model_name" ]]; then
+        log "Pulling Ollama model: $model_name"
+        if docker exec "${TENANT_PREFIX}-ollama" ollama pull "$model_name"; then
+            log "✅ Model '$model_name' pulled successfully"
+            
+            # Update platform.conf with new model
+            update_platform_conf_models "$model_name"
+            
+            log "🔄 Restarting LiteLLM to recognize new model..."
+            docker restart "${TENANT_PREFIX}-litellm" >/dev/null 2>&1
+            
+            log "✅ Model deployment complete!"
+        else
+            error "❌ Failed to pull model '$model_name'"
+        fi
     else
-        log "❌ Failed to pull model '$model_name'"
+        error "❌ No model selected"
+    fi
+}
+
+update_platform_conf_models() {
+    local new_model="$1"
+    local config_file="${CONFIG_DIR}/platform.conf"
+    
+    # Add new model to OLLAMA_MODELS if not already present
+    if ! grep -q "$new_model" "$config_file"; then
+        # Append to existing models
+        sed -i "s/OLLAMA_MODELS=\"\(.*\)\"/OLLAMA_MODELS=\"\1,$new_model\"/" "$config_file"
+        sed -i 's/,/,/2g' "$config_file"  # Fix double commas
+        log "✅ Added '$new_model' to OLLAMA_MODELS"
+    fi
+    
+    # Update LiteLLM config
+    local litellm_config="${CONFIG_DIR}/litellm/config.yaml"
+    if ! grep -q "$new_model" "$litellm_config"; then
+        # Add model to LiteLLM configuration
+        sed -i "/model_list:/a\\  - model_name: ollama/$new_model\\n    litellm_params:\\n      model: ollama/$new_model\\n      api_base: http://${TENANT_PREFIX}-ollama:11434" "$litellm_config"
+        log "✅ Added '$new_model' to LiteLLM configuration"
     fi
 }
 
