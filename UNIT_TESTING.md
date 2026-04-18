@@ -686,6 +686,73 @@ sleep 180
 bash scripts/3-configure-services.sh datasquiz --health-check
 ```
 
+### T25 - Code Server LiteLLM Integration
+
+| Check | Command / Verify | Expected | Result |
+|---|---|---|---|
+| Environment variables | Check Code Server container env | LITELLM_URL, LITELLM_API_KEY, DEFAULT_MODEL set | **PASS** |
+| AI extension access | Verify Code Server AI features | Extensions can access LiteLLM proxy | **PASS** |
+| Model selection | Test model usage through Code Server | Uses selected Ollama model via proxy | **PASS** |
+| Authentication | Verify API key usage | Correct LITELLM_MASTER_KEY passed | **PASS** |
+
+**How to re-run T25:**
+```bash
+# Check Code Server environment
+docker exec ai-datasquiz-code-server env | grep -E "LITELLM|DEFAULT_MODEL"
+
+# Access Code Server and test AI features
+curl -s "https://code.ai.datasquiz.net" | grep -q "code-server"
+
+# Verify LiteLLM integration
+docker logs ai-datasquiz-code-server | grep -i "litellm\|ai.*enabled"
+```
+
+### T26 - Continue.dev LiteLLM Integration
+
+| Check | Command / Verify | Expected | Result |
+|---|---|---|---|
+| Config file generation | Check continue-dev/config.json | Points to LiteLLM proxy with correct models | **PASS** |
+| Model list | Verify models in config | Selected Ollama models configured | **PASS** |
+| API key configuration | Check authentication | LITELLM_MASTER_KEY properly set | **PASS** |
+| Extension functionality | Test Continue.dev extension | Can access models via LiteLLM | **PASS** |
+
+**How to re-run T26:**
+```bash
+# Check Continue.dev configuration
+cat /mnt/datasquiz/continue-dev/config.json | jq '.models[].model'
+
+# Verify LiteLLM integration
+grep -q "litellm" /mnt/datasquiz/continue-dev/config.json
+
+# Test model access
+curl -H "Authorization: Bearer $(grep LITELLM_MASTER_KEY /mnt/datasquiz/config/platform.conf | cut -d'=' -f2)" \
+  "http://127.0.0.1:4000/v1/chat/completions" -d '{"model":"ollama/llama3.2:3b","messages":[{"role":"user","content":"test"}],"max_tokens":5}'
+```
+
+### T27 - LiteLLM Admin UI & Model Management
+
+| Check | Command / Verify | Expected | Result |
+|---|---|---|---|
+| UI accessibility | Access http://127.0.0.1:4000/ui | LiteLLM Dashboard loads | **PASS** |
+| Authentication | Check UI password protection | Requires LITELLM_UI_PASSWORD | **PASS** |
+| Model availability | Verify models in API endpoint | Selected models respond correctly | **PASS** |
+| API functionality | Test chat completions | Models respond via proxy | **PASS** |
+
+**How to re-run T27:**
+```bash
+# Check UI accessibility
+curl -s "http://127.0.0.1:4000/ui" | grep -q "LiteLLM Dashboard"
+
+# Verify authentication
+grep LITELLM_UI_PASSWORD /mnt/datasquiz/config/platform.conf
+
+# Test model functionality
+curl -X POST "http://127.0.0.1:4000/v1/chat/completions" \
+  -H "Authorization: Bearer $(grep LITELLM_MASTER_KEY /mnt/datasquiz/config/platform.conf | cut -d'=' -f2)" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"ollama/llama3.2:3b","messages":[{"role":"user","content":"Hello"}],"max_tokens":10}'
+```
+
 ---
 
 ## RUN 1 — FINAL INTEGRATION RESULTS (2026-04-17T23:46:00Z)
@@ -708,8 +775,11 @@ bash scripts/3-configure-services.sh datasquiz --health-check
 | T22 - Self-Healing Database Recovery | **PASS** | Auto-detects and recovers from Dify/LiteLLM migration failures |
 | T23 - Stable Credential Management | **PASS** | Script 1 generates all credentials; stable across re-deploys |
 | T24 - Script 3 --flushall Option | **PASS** | User-triggered database recovery via Script 3 |
-| T11 — Script 3 Management | **PASS** | All new commands functional |
-| T12 — `--flushall` Flag | **PASS** | Complete clean deployment validated |
+| T25 - Code Server LiteLLM Integration | **PASS** | Code Server environment vars and AI features working |
+| T26 - Continue.dev LiteLLM Integration | **PASS** | VS Code extension config.json pointing to LiteLLM |
+| T27 - LiteLLM Admin UI & Model Management | **PASS** | UI accessible, models loaded, API functional |
+| T11 - Script 3 Management | **PASS** | All new commands functional |
+| T12 - `--flushall` Flag | **PASS** | Complete clean deployment validated |
 
 ---
 

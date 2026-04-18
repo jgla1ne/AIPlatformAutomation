@@ -287,6 +287,19 @@ Script 2 includes automatic database recovery for common migration issues:
 - **PostgreSQL**: Maintains schema integrity across service restarts
 - **Result**: First-time deployments succeed reliably without manual intervention
 
+**AI Development Tools Integration:**
+All AI development tools are fully integrated with LiteLLM proxy:
+- **Code Server**: Environment variables for LiteLLM URL, API key, and default model
+- **Continue.dev**: VS Code extension with config.json pointing to LiteLLM
+- **Model Access**: Both tools automatically use selected Ollama models via proxy
+- **Unified Authentication**: Single LITELLM_MASTER_KEY for all AI services
+
+**LiteLLM Admin UI:**
+- **Access**: `http://127.0.0.1:4000/ui` (local) or subdomain if Caddy enabled
+- **Authentication**: Password stored in platform.conf (LITELLM_UI_PASSWORD)
+- **Model Management**: View loaded models and usage statistics
+- **API Testing**: Built-in interface for testing model responses
+
 **Usage:**
 ```bash
 # Default: containers pruned; EBS data (Postgres, Redis, MongoDB, Ollama models,
