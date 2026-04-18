@@ -1491,32 +1491,33 @@ select_ollama_models() {
     
     # Model groups
     echo "   1) Qwen 3.6 35B - Latest Alibaba model (5 hours ago)"
-    echo "   2) Gemma 4 26B - Google's latest multimodal (2 days ago)"
-    echo "   3) MedGemma 27B - Medical specialized Gemma 3 (2 days ago)"
-    echo "   4) GLM 5.1 - Latest agentic engineering model (1 week ago)"
-    echo "   5) Mistral Large 3 - Latest Mistral MoE model (4 months ago)"
-    echo "   6) Kimi K2 - Moonshot AI's MoE model (6 months ago)"
-    echo "   7) Qwen 3 VL 32B - Vision-language model (5 months ago)"
-    echo "   8) Gemma 4 9B - Google's compact multimodal (2 days ago)"
-    echo "   9) Gemma 4 4B - Google's small multimodal (2 days ago)"
-    echo "   10) Olmo 2 13B - Open language model (1 year ago)"
-    echo "   11) Llama 3.3 70B - Meta's latest large model (1 year ago)"
-    echo "   12) DeepSeek V3 671B - DeepSeek's MoE model (1 year ago)"
-    echo "   13) Dolphin 3 8B - General purpose model (1 year ago)"
-    echo "   14) Qwen 3 30B - Alibaba's latest generation (6 months ago)"
-    echo "   15) SmolLM2 1.7B - Compact language model (1 year ago)"
-    echo "   16) Llama 3.2 3B - Meta's compact model (1 year ago)"
-    echo "   17) Mistral 7B - Mistral AI's updated model (9 months ago)"
+    echo "   2) Gemma 4 27B - Google's latest multimodal (2 days ago)"
+    echo "   3) Gemma 4 26B - Google's multimodal model (2 days ago)"
+    echo "   4) MedGemma 27B - Medical specialized Gemma 3 (2 days ago)"
+    echo "   5) GLM 5.1 - Latest agentic engineering model (1 week ago)"
+    echo "   6) Mistral Large 3 - Latest Mistral MoE model (4 months ago)"
+    echo "   7) Kimi K2 - Moonshot AI's MoE model (6 months ago)"
+    echo "   8) Qwen 3 VL 32B - Vision-language model (5 months ago)"
+    echo "   9) Gemma 4 9B - Google's compact multimodal (2 days ago)"
+    echo "   10) Gemma 4 4B - Google's small multimodal (2 days ago)"
+    echo "   11) Olmo 2 13B - Open language model (1 year ago)"
+    echo "   12) Llama 3.3 70B - Meta's latest large model (1 year ago)"
+    echo "   13) DeepSeek V3 671B - DeepSeek's MoE model (1 year ago)"
+    echo "   14) Dolphin 3 8B - General purpose model (1 year ago)"
+    echo "   15) Qwen 3 30B - Alibaba's latest generation (6 months ago)"
+    echo "   16) SmolLM2 1.7B - Compact language model (1 year ago)"
+    echo "   17) Llama 3.2 3B - Meta's compact model (1 year ago)"
+    echo "   18) Mistral 7B - Mistral AI's updated model (9 months ago)"
     echo ""
     
     echo "  🔧 Custom Options:"
-    echo "   18) Custom model - Enter specific model name(s)"
-    echo "      Examples: gemma4:2b, nemotron-cascade-2:latest"
-    echo "      Multiple: gemma4:9b,llama3.2:7b"
+    echo "   19) Custom model - Enter specific model name(s)"
+    echo "      Examples: gemma4:27b, nemotron-cascade-2:latest"
+    echo "      Multiple: gemma4:27b,gemma4:9b,llama3.2:3b"
     echo ""
     
     echo "  🎯 Select models (comma-separated numbers, e.g., 6,8,16):"
-    echo -n "  🎯 Models selection [1-18]: "
+    echo -n "  🎯 Models selection [1-19]: "
     read -r selection
     
     if [[ -z "$selection" ]]; then
@@ -1529,28 +1530,29 @@ select_ollama_models() {
     for num in "${selections[@]}"; do
         case "${num// /}" in
             1) models="${models:+$models,}qwen3.6:35b" ;;
-            2) models="${models:+$models,}gemma4:26b" ;;
-            3) models="${models:+$models,}medgemma:27b" ;;
-            4) models="${models:+$models,}glm-5.1" ;;
-            5) models="${models:+$models,}mistral-large-3" ;;
-            6) models="${models:+$models,}kimi-k2" ;;
-            7) models="${models:+$models,}qwen3-vl:32b" ;;
-            8) models="${models:+$models,}gemma4:9b" ;;
-            9) models="${models:+$models,}gemma4:4b" ;;
-            10) models="${models:+$models,}olmo2:13b" ;;
-            11) models="${models:+$models,}llama3.3:70b" ;;
-            12) models="${models:+$models,}deepseek-v3:671b" ;;
-            13) models="${models:+$models,}dolphin3:8b" ;;
-            14) models="${models:+$models,}qwen3:30b" ;;
-            15) models="${models:+$models,}smollm2:1.7b" ;;
-            16) models="${models:+$models,}llama3.2:3b" ;;
-            17) models="${models:+$models,}mistral:7b" ;;
-            18) 
+            2) models="${models:+$models,}gemma4:27b" ;;
+            3) models="${models:+$models,}gemma4:26b" ;;
+            4) models="${models:+$models,}medgemma:27b" ;;
+            5) models="${models:+$models,}glm-5.1" ;;
+            6) models="${models:+$models,}mistral-large-3" ;;
+            7) models="${models:+$models,}kimi-k2" ;;
+            8) models="${models:+$models,}qwen3-vl:32b" ;;
+            9) models="${models:+$models,}gemma4:9b" ;;
+            10) models="${models:+$models,}gemma4:4b" ;;
+            11) models="${models:+$models,}olmo2:13b" ;;
+            12) models="${models:+$models,}llama3.3:70b" ;;
+            13) models="${models:+$models,}deepseek-v3:671b" ;;
+            14) models="${models:+$models,}dolphin3:8b" ;;
+            15) models="${models:+$models,}qwen3:30b" ;;
+            16) models="${models:+$models,}smollm2:1.7b" ;;
+            17) models="${models:+$models,}llama3.2:3b" ;;
+            18) models="${models:+$models,}mistral:7b" ;;
+            19) 
                 echo ""
                 echo "  🔧 Custom Model Entry:"
                 echo "  Enter model name(s) as they appear in ollama.com/library"
-                echo "  Examples: qwen3.6:35b, gemma4:26b"
-                echo "  Multiple models: qwen3.6:35b,gemma4:9b (comma-separated)"
+                echo "  Examples: qwen3.6:35b, gemma4:27b"
+                echo "  Multiple models: qwen3.6:35b,gemma4:27b,gemma4:9b (comma-separated)"
                 echo ""
                 echo -n "  🎯 Custom model(s): "
                 read -r custom_models

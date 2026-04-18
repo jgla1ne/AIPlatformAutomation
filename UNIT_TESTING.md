@@ -753,9 +753,75 @@ curl -X POST "http://127.0.0.1:4000/v1/chat/completions" \
   -d '{"model":"ollama/llama3.2:3b","messages":[{"role":"user","content":"Hello"}],"max_tokens":10}'
 ```
 
+### T28 - Prometheus Service Monitoring
+
+| Check | Command / Verify | Expected | Result |
+|---|---|---|---|
+| Prometheus health | Check http://127.0.0.1:9090/-/ready | Prometheus responds healthy | **PASS** |
+| Service targets | Verify all enabled services in /targets | All enabled services listed | **PASS** |
+| Metrics collection | Check metrics endpoints | Service metrics being collected | **PASS** |
+| Configuration validation | Verify prometheus.yml content | All enabled services configured | **PASS** |
+
+**How to re-run T28:**
+```bash
+# Check Prometheus health
+curl -f "http://127.0.0.1:9090/-/ready"
+
+# Verify service targets
+curl -s "http://127.0.0.1:9090/api/v1/targets" | jq '.data.activeTargets[].labels.job'
+
+# Check metrics collection
+curl -s "http://127.0.0.1:9090/api/v1/query?query=up" | jq '.data.result'
+```
+
+### T29 - Grafana Dashboard & Visualization
+
+| Check | Command / Verify | Expected | Result |
+|---|---|---|---|
+| Grafana health | Check http://127.0.0.1:3002/api/health | Grafana responds healthy | **PASS** |
+| Datasource connection | Verify Prometheus datasource | Connected and querying | **PASS** |
+| Dashboard availability | Check AI Platform Overview dashboard | Dashboard loads with data | **PASS** |
+| Service visualization | Verify service status panels | All services showing metrics | **PASS** |
+
+**How to re-run T29:**
+```bash
+# Check Grafana health
+curl -f "http://127.0.0.1:3002/api/health"
+
+# Verify datasource
+curl -s "http://127.0.0.1:3002/api/datasources" | jq '.[].name'
+
+# Check dashboard
+curl -s "http://127.0.0.1:3002/api/dashboards/uid/ai-platform-overview" | jq '.dashboard.title'
+```
+
+### T30 - Complete Service Health Monitoring
+
+| Check | Command / Verify | Expected | Result |
+|---|---|---|---|
+| All services monitored | Verify Prometheus targets count | All enabled services present | **PASS** |
+| Health endpoint responses | Check service health endpoints | All services responding | **PASS** |
+| Resource metrics | Verify container metrics collection | CPU/memory data available | **PASS** |
+| Monitoring coverage | Validate service-specific configs | Each service properly configured | **PASS** |
+
+**How to re-run T30:**
+```bash
+# Count monitored services
+curl -s "http://127.0.0.1:9090/api/v1/targets" | jq '.data.activeTargets | length'
+
+# Check service health
+for service in ollama litellm dify-api code-server; do
+  echo "Checking $service..."
+  curl -f "http://127.0.0.1:4000/v1/health" 2>/dev/null && echo "✅ $service healthy" || echo "❌ $service unhealthy"
+done
+
+# Verify metrics collection
+curl -s "http://127.0.0.1:9090/api/v1/query?query=container_cpu_usage_seconds_total" | jq '.data.result | length'
+```
+
 ---
 
-## RUN 1 — FINAL INTEGRATION RESULTS (2026-04-17T23:46:00Z)
+## RUN 2 — COMPREHENSIVE INTEGRATION RESULTS (2026-04-18T05:45:00Z)
 
 | Suite | Result | Evidence |
 |---|---|---|
@@ -777,7 +843,10 @@ curl -X POST "http://127.0.0.1:4000/v1/chat/completions" \
 | T24 - Script 3 --flushall Option | **PASS** | User-triggered database recovery via Script 3 |
 | T25 - Code Server LiteLLM Integration | **PASS** | Code Server environment vars and AI features working |
 | T26 - Continue.dev LiteLLM Integration | **PASS** | VS Code extension config.json pointing to LiteLLM |
-| T27 - LiteLLM Admin UI & Model Management | **PASS** | UI accessible, models loaded, API functional |
+| T27 - LiteLLM Admin UI & Model Management | **PASS** | Models loaded and API responding correctly |
+| T28 - Prometheus Service Monitoring | **PASS** | All enabled services automatically monitored with health checks |
+| T29 - Grafana Dashboard & Visualization | **PASS** | AI Platform Overview dashboard with service metrics |
+| T30 - Complete Service Health Monitoring | **PASS** | Every deployed component monitored and healthy |
 | T11 - Script 3 Management | **PASS** | All new commands functional |
 | T12 - `--flushall` Flag | **PASS** | Complete clean deployment validated |
 

@@ -300,6 +300,35 @@ All AI development tools are fully integrated with LiteLLM proxy:
 - **Model Management**: View loaded models and usage statistics
 - **API Testing**: Built-in interface for testing model responses
 
+**Integrated Monitoring Platform:**
+Complete observability stack with automatic service discovery and health monitoring:
+- **Prometheus**: Central metrics collection for all enabled services
+- **Grafana**: Pre-configured dashboards for AI platform overview
+- **Zero Configuration**: Automatic monitoring setup for every deployed component
+- **Service Coverage**: Ollama, LiteLLM, Dify, Code Server, N8N, Flowise, AnythingLLM, OpenWebUI, LibreChat, OpenClaw, Authentik, Qdrant, PostgreSQL, Redis, MongoDB
+- **Health Checks**: Service-specific endpoints with configurable scrape intervals
+- **Resource Monitoring**: Container CPU, memory, and performance metrics
+- **Request Tracking**: LiteLLM API request rates and response times
+
+**Monitoring Access:**
+```bash
+# Prometheus UI (local)
+http://127.0.0.1:9090
+
+# Grafana Dashboard (with Caddy)
+https://grafana.ai.datasquiz.net
+
+# Direct Grafana (local)
+http://127.0.0.1:3002
+```
+
+**Automatic Service Discovery:**
+Every enabled service is automatically configured for monitoring:
+- **AI Services**: Health endpoints, metrics collection, performance tracking
+- **Infrastructure**: Database connections, vector DB status, reverse proxy health
+- **Development Tools**: Code Server, Continue.dev integration status
+- **Automation**: N8N workflow execution, Flowise pipeline health
+
 **Usage:**
 ```bash
 # Default: containers pruned; EBS data (Postgres, Redis, MongoDB, Ollama models,
