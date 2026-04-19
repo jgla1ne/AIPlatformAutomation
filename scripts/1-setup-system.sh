@@ -14,8 +14,7 @@
 #          --save-template FILE    Save configuration as reusable template
 # =============================================================================
 
-# Allow interactive mode to continue even if individual commands fail
-set -uo pipefail
+set -euo pipefail
 
 # =============================================================================
 # NON-INTERACTIVE MODE (P3 fix)
@@ -676,23 +675,25 @@ select_stack_preset() {
     select_menu_option "Stack Preset Selection" \
         "MINIMAL (~4 GB RAM)  — PostgreSQL · Redis · Ollama · LiteLLM · OpenWebUI · Qdrant" \
         "DEVELOPMENT (~6 GB)  — Minimal + Code Server · Continue.dev config" \
+        "CODING (~8 GB)       — Development + Grafana · Prometheus · SearXNG (AI dev optimized)" \
         "STANDARD (~8 GB)     — Development + N8N · Flowise · Grafana · Prometheus · Zep (memory)" \
         "FULL (~16 GB)        — Standard + OpenClaw · AnythingLLM · Dify · Authentik · SignalBot · Zep · Letta · Continue.dev" \
         "CUSTOM               — Pick every service individually (full control)"
     local preset_choice=$?
-    
+
     case $preset_choice in
         0) STACK_PRESET="1"; STACK_NAME="minimal" ;;
         1) STACK_PRESET="2"; STACK_NAME="development" ;;
-        2) STACK_PRESET="3"; STACK_NAME="standard" ;;
-        3) STACK_PRESET="4"; STACK_NAME="full" ;;
-        4) STACK_PRESET="5"; STACK_NAME="custom" ;;
+        2) STACK_PRESET="3"; STACK_NAME="coding" ;;
+        3) STACK_PRESET="4"; STACK_NAME="standard" ;;
+        4) STACK_PRESET="5"; STACK_NAME="full" ;;
+        5) STACK_PRESET="6"; STACK_NAME="custom" ;;
     esac
     
     echo ""
     echo "  ✅ Selected: ${STACK_NAME^} Stack"
 
-    if [[ "$STACK_PRESET" == "5" ]]; then
+    if [[ "$STACK_PRESET" == "6" ]]; then
         configure_custom_stack
     else
         apply_preset_defaults
@@ -712,6 +713,15 @@ select_stack_preset() {
                 echo "    Web UI         : OpenWebUI (→ LiteLLM, Qdrant RAG)"
                 echo "    Vector DB      : Qdrant"
                 echo "    Dev tools      : Code Server (browser IDE), Continue.dev config"
+                ;;
+            coding)
+                echo "    Infrastructure : PostgreSQL, Redis"
+                echo "    LLM            : Ollama (local), LiteLLM (unified gateway)"
+                echo "    Web UI         : OpenWebUI (→ LiteLLM, Qdrant RAG)"
+                echo "    Vector DB      : Qdrant"
+                echo "    Dev tools      : Code Server (browser IDE), Continue.dev config"
+                echo "    Search         : SearXNG (privacy-respecting)"
+                echo "    Monitoring     : Grafana, Prometheus"
                 ;;
             standard)
                 echo "    Infrastructure : PostgreSQL, Redis"
@@ -757,7 +767,7 @@ apply_preset_defaults() {
             ENABLE_SEARXNG="true"
             ;;
         development)
-            # Minimal + Code Server
+            # Minimal + Code Server + Continue.dev
             ENABLE_POSTGRES="true"
             ENABLE_REDIS="true"
             ENABLE_OLLAMA="true"
@@ -765,6 +775,21 @@ apply_preset_defaults() {
             ENABLE_OPENWEBUI="true"
             ENABLE_QDRANT="true"
             ENABLE_CODE_SERVER="true"
+            ENABLE_CONTINUE_DEV="true"
+            ENABLE_SEARXNG="true"
+            ;;
+        coding)
+            # Optimized AI development: Code Server + Continue.dev + monitoring
+            ENABLE_POSTGRES="true"
+            ENABLE_REDIS="true"
+            ENABLE_OLLAMA="true"
+            ENABLE_LITELLM="true"
+            ENABLE_OPENWEBUI="true"
+            ENABLE_QDRANT="true"
+            ENABLE_CODE_SERVER="true"
+            ENABLE_CONTINUE_DEV="true"
+            ENABLE_GRAFANA="true"
+            ENABLE_PROMETHEUS="true"
             ENABLE_SEARXNG="true"
             ;;
         standard)

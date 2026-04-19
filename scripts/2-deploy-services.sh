@@ -24,6 +24,8 @@ if [[ $EUID -eq 0 ]]; then
     exit 1
 fi
 
+set -euo pipefail
+
 # =============================================================================
 # SCRIPT CONFIGURATION
 # =============================================================================
@@ -352,6 +354,13 @@ build_letta_deps() {
         deps="    depends_on:"$'\n'
         deps+="      - ${TENANT_PREFIX}-postgres"$'\n'
     fi
+    deps+="    networks:"$'\n'
+    deps+="      - ${DOCKER_NETWORK}"$'\n'
+    printf '%s' "${deps}"
+}
+
+build_signalbot_deps() {
+    local deps=""
     deps+="    networks:"$'\n'
     deps+="      - ${DOCKER_NETWORK}"$'\n'
     printf '%s' "${deps}"
@@ -929,9 +938,8 @@ EOF
     container_name: ${TENANT_PREFIX}-openclaw
     restart: unless-stopped
     user: "${PUID}:${PGID}"
-    # Override CMD to enforce port — alpine/openclaw reads port from --port flag, not env
-    command: ["/bin/bash", "-c", "cd /home/coder && ./install-extensions.sh 2>/dev/null || true && code-server --bind-addr 0.0.0.0:8080 --auth password --disable-telemetry"]
     environment:
+      OPENCLAW_PORT: ${OPENCLAW_PORT}
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://:${REDIS_PASSWORD}@${TENANT_PREFIX}-redis:6379
       OPENAI_API_BASE: http://${TENANT_PREFIX}-litellm:4000/v1
@@ -940,11 +948,9 @@ EOF
       BRAVE_API_KEY: ${BRAVE_API_KEY:-}
       ADMIN_USERNAME: ${OPENCLAW_USERNAME:-admin}
       ADMIN_PASSWORD: ${OPENCLAW_PASSWORD}
-      # Allow all origins — prevents "origin not allowed" CORS error in the Control UI
       CORS_ORIGIN: "*"
       ALLOWED_ORIGINS: "*"
       GATEWAY_CONTROL_UI_ALLOWED_ORIGINS: "*"
-      # Gateway token for Control UI access
       GATEWAY_TOKEN: ${OPENCLAW_PASSWORD}
       GATEWAY_CONTROL_UI_TOKEN: ${OPENCLAW_PASSWORD}
     volumes:
