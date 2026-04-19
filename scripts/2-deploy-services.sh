@@ -637,7 +637,6 @@ generate_compose() {
     [[ "${GRAFANA_ENABLED}" == "true" ]] && allocate_host_port grafana "${GRAFANA_PORT:-3002}" >/dev/null
     [[ "${PROMETHEUS_ENABLED}" == "true" ]] && allocate_host_port prometheus "${PROMETHEUS_PORT:-9090}" >/dev/null
     [[ "${ANYTHINGLLM_ENABLED}" == "true" ]] && allocate_host_port anythingllm "${ANYTHINGLLM_PORT:-3001}" >/dev/null
-    [[ "${MEM0_ENABLED}" == "true" ]] && allocate_host_port mem0 "${MEM0_PORT:-8081}" >/dev/null
     [[ "${ZEP_ENABLED:-false}" == "true" ]] && allocate_host_port zep "${ZEP_PORT:-8100}" >/dev/null
     [[ "${LETTA_ENABLED:-false}" == "true" ]] && allocate_host_port letta "${LETTA_PORT:-8283}" >/dev/null
 
@@ -677,7 +676,6 @@ generate_compose() {
         [[ -n "${GRAFANA_HOST_PORT:-}" ]] && GRAFANA_PORT="${GRAFANA_HOST_PORT}"
         [[ -n "${PROMETHEUS_HOST_PORT:-}" ]] && PROMETHEUS_PORT="${PROMETHEUS_HOST_PORT}"
         [[ -n "${ANYTHINGLLM_HOST_PORT:-}" ]] && ANYTHINGLLM_PORT="${ANYTHINGLLM_HOST_PORT}"
-        [[ -n "${MEM0_HOST_PORT:-}" ]] && MEM0_PORT="${MEM0_HOST_PORT}"
         [[ -n "${ZEP_HOST_PORT:-}" ]] && ZEP_PORT="${ZEP_HOST_PORT}"
         [[ -n "${LETTA_HOST_PORT:-}" ]] && LETTA_PORT="${LETTA_HOST_PORT}"
         [[ -n "${CADDY_HTTP_HOST_PORT:-}" ]] && CADDY_HTTP_PORT="${CADDY_HTTP_HOST_PORT}"
@@ -870,10 +868,14 @@ EOF
       OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
       WEBUI_SECRET_KEY: ${OPENWEBUI_SECRET}
       DEFAULT_MODELS: ${OLLAMA_DEFAULT_MODEL}
-      # RAG — embed via Ollama, retrieve from chosen vectordb
+      # RAG — embed via LiteLLM, retrieve from Qdrant
       ENABLE_RAG_WEB_SEARCH: "false"
-      RAG_EMBEDDING_ENGINE: ollama
-      RAG_OLLAMA_BASE_URL: http://${TENANT_PREFIX}-ollama:11434
+      RAG_EMBEDDING_ENGINE: openai
+      RAG_OPENAI_API_BASE_URL: http://${TENANT_PREFIX}-litellm:4000/v1
+      RAG_OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      VECTOR_DB: qdrant
+      QDRANT_URL: http://${TENANT_PREFIX}-qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
 EOF
         # Zep memory integration — inject only when Zep is deployed
         if [[ "${ZEP_ENABLED:-false}" == "true" ]]; then
@@ -1689,14 +1691,17 @@ EOF
     environment:
       STORAGE_DIR: /app/server/storage
       JWT_SECRET: ${ANYTHINGLLM_JWT_SECRET}
-      # LLM via LiteLLM unified gateway
-      LLM_PROVIDER: openai
-      OPENAI_API_BASE: http://${TENANT_PREFIX}-litellm:4000/v1
-      OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
-      OPENAI_MODEL_PREF: ${OLLAMA_DEFAULT_MODEL}
-      # Embedding via Ollama
-      EMBEDDING_ENGINE: ollama
-      OLLAMA_EMBEDDING_BASE_PATH: http://${TENANT_PREFIX}-ollama:11434
+      # LLM via LiteLLM unified gateway (generic-openai = custom OpenAI-compatible endpoint)
+      LLM_PROVIDER: generic-openai
+      GENERIC_OPEN_AI_BASE_PATH: http://${TENANT_PREFIX}-litellm:4000/v1
+      GENERIC_OPEN_AI_API_KEY: ${LITELLM_MASTER_KEY}
+      GENERIC_OPEN_AI_MODEL_PREF: ollama/${OLLAMA_DEFAULT_MODEL:-llama3.2:3b}
+      GENERIC_OPEN_AI_MAX_TOKENS: "4096"
+      # Embedding via LiteLLM (generic-openai)
+      EMBEDDING_ENGINE: generic-openai
+      GENERIC_OPEN_AI_EMBEDDING_API_BASE: http://${TENANT_PREFIX}-litellm:4000/v1
+      GENERIC_OPEN_AI_EMBEDDING_API_KEY: ${LITELLM_MASTER_KEY}
+      GENERIC_OPEN_AI_EMBEDDING_MODEL_PREF: ollama/${OLLAMA_DEFAULT_MODEL:-llama3.2:3b}
       # VectorDB — dynamic, no hardcoded type
       VECTOR_DB: ${allm_vdb}
       QDRANT_ENDPOINT: http://${TENANT_PREFIX}-qdrant:6333
@@ -2969,7 +2974,6 @@ OCEOF
     [[ "${MILVUS_ENABLED:-${ENABLE_MILVUS:-false}}"    == "true" ]] && mkdir -p "${DATA_DIR}/milvus" "${DATA_DIR}/milvus-etcd" "${DATA_DIR}/milvus-minio"
     [[ "${NPM_ENABLED:-false}"                         == "true" ]] && mkdir -p "${DATA_DIR}/npm/data" "${DATA_DIR}/npm/letsencrypt"
     [[ "${ANYTHINGLLM_ENABLED:-${ENABLE_ANYTHINGLLM:-false}}" == "true" ]] && mkdir -p "${DATA_DIR}/anythingllm"
-    # Mem0 removed - no longer supported
     [[ "${ZEP_ENABLED:-false}"                          == "true" ]] && mkdir -p "${DATA_DIR}/zep"
     [[ "${LETTA_ENABLED:-false}"                        == "true" ]] && mkdir -p "${DATA_DIR}/letta"
     [[ "${GRAFANA_ENABLED:-${ENABLE_GRAFANA:-false}}"   == "true" ]] && mkdir -p "${DATA_DIR}/grafana"
@@ -3059,7 +3063,7 @@ flush_all_data() {
 
     # 3. Other service state directories that accumulate stale schema files
     #    (litellm Prisma state, dify storage, anythingllm, flowise, n8n, etc.)
-    local -a svc_dirs=("litellm" "dify" "anythingllm" "flowise" "n8n" "letta" "zep" "mem0"
+    local -a svc_dirs=("litellm" "dify" "anythingllm" "flowise" "n8n" "letta" "zep"
                        "openclaw" "grafana" "prometheus" "authentik" "librechat"
                        "openwebui" "qdrant" "weaviate" "chroma" "milvus" "milvus-etcd" "milvus-minio")
     for dir in "${svc_dirs[@]}"; do
@@ -3202,7 +3206,6 @@ wait_for_all_health() {
         fi
     fi
 
-    # Mem0 removed - no longer supported
 
     if [[ "${ZEP_ENABLED:-false}" == "true" ]]; then
         wait_for_health "${TENANT_PREFIX}-zep" 120 || return 1
@@ -3671,7 +3674,6 @@ main() {
     AUTHENTIK_BOOTSTRAP_PASSWORD="${AUTHENTIK_BOOTSTRAP_PASSWORD:-${ADMIN_PASSWORD:-$(openssl rand -base64 16 | tr -d '=+/')}}"
     WEAVIATE_ENABLED="${WEAVIATE_ENABLED:-${ENABLE_WEAVIATE:-false}}"
     CHROMA_ENABLED="${CHROMA_ENABLED:-${ENABLE_CHROMA:-false}}"
-    # Mem0 removed - no longer supported
     GRAFANA_ENABLED="${GRAFANA_ENABLED:-${ENABLE_GRAFANA:-false}}"
     PROMETHEUS_ENABLED="${PROMETHEUS_ENABLED:-${ENABLE_PROMETHEUS:-false}}"
     CODE_SERVER_ENABLED="${CODE_SERVER_ENABLED:-${ENABLE_CODE_SERVER:-false}}"
@@ -3900,12 +3902,11 @@ show_post_deploy_dashboard() {
 
     # MEMORY LAYER
     local has_mem=false
-    [[ "${ZEP_ENABLED:-false}" == "true" || "${LETTA_ENABLED:-false}" == "true" || "${MEM0_ENABLED:-false}" == "true" ]] && has_mem=true
+    [[ "${ZEP_ENABLED:-false}" == "true" || "${LETTA_ENABLED:-false}" == "true" ]] && has_mem=true
     if [[ "$has_mem" == "true" ]]; then
         _d_line "MEMORY LAYER"
         [[ "${ZEP_ENABLED:-false}"   == "true" ]] && _d_line "  Zep CE       $(_svc_url zep   ${ZEP_PORT})  (conversation memory)"
         [[ "${LETTA_ENABLED:-false}" == "true" ]] && _d_line "  Letta        $(_svc_url letta ${LETTA_PORT})  (agent memory runtime)"
-        # Mem0 removed - no longer supported
         _d_blank
     fi
 

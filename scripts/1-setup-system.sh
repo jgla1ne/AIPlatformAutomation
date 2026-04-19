@@ -961,7 +961,6 @@ configure_custom_stack() {
     echo "  🧠 Memory Layer:"
     safe_read_yesno "Zep CE (conversation memory → Postgres + pgvector + LiteLLM)" "false" "ENABLE_ZEP"
     safe_read_yesno "Letta / MemGPT (stateful agent memory → Postgres + LiteLLM)" "false" "ENABLE_LETTA"
-    # Mem0 removed from stack - no longer supported
     echo ""
 
     # Development
@@ -1541,8 +1540,7 @@ collect_api_keys() {
             7) PREFERRED_LLM_PROVIDER="openrouter" ;;
             8) PREFERRED_LLM_PROVIDER="mammouth" ;;
         esac
-    fi
-    
+
     echo ""
     echo "  ✅ Preferred provider for routing: ${PREFERRED_LLM_PROVIDER^}"
     echo ""
@@ -2366,14 +2364,12 @@ ENABLE_BIFROST="${ENABLE_BIFROST:-false}"
 BIFROST_PORT="${BIFROST_PORT:-8000}"
 
 # Memory Layer
-# Mem0 removed - no longer supported
 ZEP_AUTH_SECRET="${ZEP_AUTH_SECRET:-}"
 
 ENABLE_LETTA="${ENABLE_LETTA:-false}"
 LETTA_PORT="${LETTA_PORT:-8283}"
 LETTA_SERVER_PASS="${LETTA_SERVER_PASS:-}"
 
-# Mem0 removed - no longer supported
 
 # Development
 ENABLE_CODE_SERVER="${ENABLE_CODE_SERVER:-false}"
@@ -2669,7 +2665,6 @@ OPENCLAW_IMAGE="${OPENCLAW_IMAGE:-alpine/openclaw:latest}"
 BIFROST_ENABLED="${ENABLE_BIFROST:-false}"
 ANYTHINGLLM_ENABLED="${ENABLE_ANYTHINGLLM:-false}"
 ANYTHINGLLM_JWT_SECRET="${ANYTHINGLLM_JWT_SECRET:-$(gen_secret)}"
-# Mem0 removed from stack - no longer supported
 ZEP_ENABLED="${ENABLE_ZEP:-false}"
 LETTA_ENABLED="${ENABLE_LETTA:-false}"
 CODE_SERVER_ENABLED="${ENABLE_CODE_SERVER:-false}"
@@ -3258,6 +3253,32 @@ configure_ingestion() {
                 
                 case "$RCLONE_CRED_METHOD" in
                     1)
+                        local rclone_conf_dir="/mnt/${TENANT_ID}/config"
+                        mkdir -p "$rclone_conf_dir"
+
+                        # Guard: if a valid SA JSON already exists, offer to keep it
+                        local _existing_sa="${rclone_conf_dir}/service-account.json"
+                        if [[ -f "${_existing_sa}" ]] && [[ $(stat -c%s "${_existing_sa}" 2>/dev/null || echo 0) -gt 50 ]]; then
+                            echo ""
+                            echo "  ✅ Existing service account JSON found: ${_existing_sa}"
+                            echo "     Size: $(stat -c%s "${_existing_sa}") bytes"
+                            safe_read "Keep existing credentials? [y/n]" "y" "_keep_sa" "^[yYnN]$"
+                            if [[ "${_keep_sa,,}" == "y" ]]; then
+                                GDRIVE_CREDENTIALS_FILE="${_existing_sa}"
+                                echo "  Keeping existing credentials."
+                                # Ensure rclone.conf references the existing SA file
+                                {
+                                    echo "[${RCLONE_REMOTE:-gdrive}]"
+                                    echo "type = drive"
+                                    echo "scope = drive.readonly"
+                                    echo "service_account_file = /credentials/service-account.json"
+                                    [[ -n "${GDRIVE_FOLDER_ID:-}" ]] && echo "root_folder_id = ${GDRIVE_FOLDER_ID}"
+                                } > "${rclone_conf_dir}/rclone.conf"
+                                chmod 600 "${rclone_conf_dir}/rclone.conf"
+                                break 2
+                            fi
+                        fi
+
                         echo ""
                         echo "  Paste your Google service account JSON credentials:"
                         echo "  (Press Enter on an empty line to finish)"
@@ -3276,9 +3297,16 @@ configure_ingestion() {
                             fi
                         done
 
+                        # Reject empty paste — do not overwrite a valid existing file with garbage
+                        if [[ ${#json_content} -lt 50 ]]; then
+                            echo "  ⚠ No credentials pasted (or too short). Keeping existing file if present."
+                            if [[ -f "${_existing_sa}" ]] && [[ $(stat -c%s "${_existing_sa}" 2>/dev/null || echo 0) -gt 50 ]]; then
+                                GDRIVE_CREDENTIALS_FILE="${_existing_sa}"
+                            fi
+                            break
+                        fi
+
                         # Save JSON as service-account.json (NOT as rclone.conf)
-                        local rclone_conf_dir="/mnt/${TENANT_ID}/config"
-                        mkdir -p "$rclone_conf_dir"
                         echo "$json_content" > "${rclone_conf_dir}/service-account.json"
                         chmod 600 "${rclone_conf_dir}/service-account.json"
                         GDRIVE_CREDENTIALS_FILE="${rclone_conf_dir}/service-account.json"
@@ -3475,7 +3503,6 @@ ENABLE_CODE_SERVER="${ENABLE_CODE_SERVER:-false}"
 ENABLE_CONTINUE_DEV="${ENABLE_CONTINUE_DEV:-false}"
 ENABLE_ZEP="${ENABLE_ZEP:-false}"
 ENABLE_LETTA="${ENABLE_LETTA:-false}"
-ENABLE_MEM0="${ENABLE_MEM0:-false}"
 ENABLE_GRAFANA="${ENABLE_GRAFANA:-false}"
 ENABLE_PROMETHEUS="${ENABLE_PROMETHEUS:-false}"
 ENABLE_AUTHENTIK="${ENABLE_AUTHENTIK:-false}"
@@ -3543,7 +3570,6 @@ ENABLE_BRAVE="${ENABLE_BRAVE:-false}"
 POSTGRES_USER="${POSTGRES_USER:-${TENANT_ID}}"
 POSTGRES_DB="${POSTGRES_DB:-${TENANT_ID}}"
 OPENCLAW_USERNAME="${OPENCLAW_USERNAME:-ds-admin}"
-# Mem0 removed - no longer supported
 FLOWISE_USERNAME="${FLOWISE_USERNAME:-admin}"
 LIBRECHAT_JWT_SECRET="${LIBRECHAT_JWT_SECRET:-$(gen_secret)}"
 LIBRECHAT_CRYPT_KEY="${LIBRECHAT_CRYPT_KEY:-$(openssl rand -hex 32)}"

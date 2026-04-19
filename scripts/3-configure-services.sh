@@ -1359,7 +1359,6 @@ show_credentials() {
     local _has_mem=false
     [[ "${ZEP_ENABLED:-false}"   == "true" ]] && _has_mem=true
     [[ "${LETTA_ENABLED:-false}" == "true" ]] && _has_mem=true
-    # Mem0 removed - no longer supported
     if [[ "$_has_mem" == "true" ]]; then
         echo "MEMORY LAYER"
         if [[ "${ZEP_ENABLED:-false}" == "true" ]]; then
@@ -1369,9 +1368,6 @@ show_credentials() {
         if [[ "${LETTA_ENABLED:-false}" == "true" ]]; then
             echo "  Letta        $(_url letta ${LETTA_PORT:-8283})"
             echo "    Password   ${LETTA_SERVER_PASS:-<not set>}"
-        fi
-        if [[ "${MEM0_ENABLED:-false}" == "true" ]]; then
-            echo "  Mem0         http://127.0.0.1:${MEM0_PORT:-8081}  (internal)"
         fi
         echo ""
     fi
@@ -1560,7 +1556,6 @@ show_health_status() {
     # Memory
     [[ "${ZEP_ENABLED:-false}"        == "true" ]] && _svc_row "Zep CE"       "zep"         "${ZEP_PORT:-8100}"
     [[ "${LETTA_ENABLED:-false}"      == "true" ]] && _svc_row "Letta"        "letta"       "${LETTA_PORT:-8283}"
-    # Mem0 removed - no longer supported
 
     # Identity + monitoring
     [[ "${AUTHENTIK_ENABLED:-false}"  == "true" ]] && _svc_row "Authentik"    "authentik"   "${AUTHENTIK_PORT:-9000}"
@@ -1781,7 +1776,6 @@ main() {
         [[ -n "${GRAFANA_HOST_PORT:-}" ]] && GRAFANA_PORT="${GRAFANA_HOST_PORT}"
         [[ -n "${PROMETHEUS_HOST_PORT:-}" ]] && PROMETHEUS_PORT="${PROMETHEUS_HOST_PORT}"
         [[ -n "${ANYTHINGLLM_HOST_PORT:-}" ]] && ANYTHINGLLM_PORT="${ANYTHINGLLM_HOST_PORT}"
-        [[ -n "${MEM0_HOST_PORT:-}" ]] && MEM0_PORT="${MEM0_HOST_PORT}"
         [[ -n "${ZEP_HOST_PORT:-}" ]] && ZEP_PORT="${ZEP_HOST_PORT}"
         [[ -n "${LETTA_HOST_PORT:-}" ]] && LETTA_PORT="${LETTA_HOST_PORT}"
     fi
@@ -1815,7 +1809,6 @@ main() {
     SIGNALBOT_ENABLED="${SIGNALBOT_ENABLED:-${ENABLE_SIGNALBOT:-false}}"
     LIBRECHAT_ENABLED="${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}"
     ANYTHINGLLM_ENABLED="${ANYTHINGLLM_ENABLED:-${ENABLE_ANYTHINGLLM:-false}}"
-    # Mem0 removed - no longer supported
     ZEP_ENABLED="${ZEP_ENABLED:-${ENABLE_ZEP:-false}}"
     LETTA_ENABLED="${LETTA_ENABLED:-${ENABLE_LETTA:-false}}"
     CODE_SERVER_ENABLED="${CODE_SERVER_ENABLED:-${ENABLE_CODE_SERVER:-false}}"
@@ -2470,7 +2463,6 @@ check_port_health() {
     # Memory layer
     [[ "${ZEP_ENABLED:-false}"        == "true" ]] && _port_check "Zep"         "${ZEP_PORT:-8100}"        "/healthz"
     [[ "${LETTA_ENABLED:-false}"      == "true" ]] && _port_check "Letta"       "${LETTA_PORT:-8283}"      "/v1/health"
-    [[ "${MEM0_ENABLED:-false}"       == "true" ]] && _port_check "Mem0"        "${MEM0_PORT:-8081}"       "/health"
     # Reverse proxy admin
     [[ "${NPM_ENABLED:-false}"        == "true" ]] && _port_check "NPM Admin"   "${NPM_ADMIN_PORT:-81}"    "/api/"
 
@@ -2767,7 +2759,6 @@ run_mission_control() {
     # Memory
     [[ "${ZEP_ENABLED:-false}"         == "true" ]] && echo "    Zep CE       → $(_access_url zep   ${ZEP_PORT:-8100})"
     [[ "${LETTA_ENABLED:-false}"       == "true" ]] && echo "    Letta        → $(_access_url letta ${LETTA_PORT:-8283})"
-    # Mem0 removed - no longer supported
 
     # Identity + monitoring
     [[ "${AUTHENTIK_ENABLED:-false}"   == "true" ]] && echo "    Authentik    → $(_access_url authentik  ${AUTHENTIK_PORT:-9000})"

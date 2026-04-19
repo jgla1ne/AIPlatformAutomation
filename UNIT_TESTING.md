@@ -1048,7 +1048,7 @@ curl -s "http://127.0.0.1:9090/api/v1/query?query=container_cpu_usage_seconds_to
 | dify-api + dify-worker missing from first deploy | FIXED | Full 3-container stack in Script 2; pending clean re-deploy validation |
 | LiteLLM unhealthy during Prisma migrations (main-stable image, Apr 2026) | FIXED | `start_period` 600s→900s; `wait_for_health` timeout 900→1200 |
 | dify-worker celery healthcheck fragile | FIXED | Replaced `celery inspect ping` with `pgrep -f celery` |
-| OpenClaw / Code Server / Weaviate / ChromaDB / Mem0 missing `start_period` | FIXED | Added 30s–60s `start_period` to all five |
+| OpenClaw / Code Server / Weaviate / ChromaDB missing `start_period` | FIXED | Added 30s–60s `start_period` to all four |
 | T10/T11 test suites | PENDING | New test suites added; will be validated on next clean deploy |
 
 ---
@@ -1073,7 +1073,7 @@ curl -s "http://127.0.0.1:9090/api/v1/query?query=container_cpu_usage_seconds_to
 | dify-worker healthcheck `celery inspect ping` fragile (requires broker) | Replaced with `pgrep -f 'celery'` | `generate_compose()` |
 | OpenClaw missing `start_period` — immediate healthcheck failure on slow DB connect | Added `start_period: 60s` | `generate_compose()` |
 | Code Server missing `start_period` | Added `start_period: 30s` | `generate_compose()` |
-| Weaviate, ChromaDB, Mem0 missing `start_period` | Added `start_period: 30s` to all three | `generate_compose()` |
+| Weaviate, ChromaDB missing `start_period` | Added `start_period: 30s` to both | `generate_compose()` |
 | dify-web healthcheck used `bash /dev/tcp` — bash not in Node.js image | Replaced with `node -e "require('http').get(...)"` | `generate_compose()` |
 | No way to wipe EBS data without Script 0+1 full teardown | Added `--flushall` flag to Script 2 | `flush_all_data()` / `main()` |
 

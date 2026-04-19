@@ -577,7 +577,6 @@ Every `_url <subdomain> <port>` call in Script 3 applies this logic. Caddy is co
 | | Dify (worker) | `langgenius/dify-api` | Celery background tasks (`command: worker`) |
 | **Memory** | Zep CE | `ghcr.io/getzep/zep:latest` | Conversation memory; Postgres + pgvector; embeddings via LiteLLM |
 | | Letta | `letta/letta:latest` | Stateful agent runtime (MemGPT); dedicated Postgres DB; LLMs via LiteLLM |
-| | Mem0 | `mem0ai/mem0` | Persistent AI memory layer |
 | **Identity** | Authentik | `ghcr.io/goauthentik/server` | SSO / OIDC provider |
 | **Monitoring** | Grafana | `grafana/grafana` | Dashboards |
 | | Prometheus | `prom/prometheus` | Metrics scraping |
@@ -698,7 +697,6 @@ Not every image ships `curl`. Use the right tool per image or the healthcheck wi
 | Code Server | 30s | VS Code server initialization |
 | Weaviate | 30s | Data path scan on startup |
 | ChromaDB | 30s | SQLite + segment manager init |
-| Mem0 | 30s | Postgres + vectordb client init |
 
 `wait_for_all_health()` timeouts: litellm 1800s (30 min — Prisma download + migrations), letta 900s, openwebui/authentik 180s. Dify-worker timeout is 180s but non-fatal (worker takes 1-3 min; deployment continues regardless).
 
