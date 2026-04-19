@@ -1016,14 +1016,13 @@ configure_service_credentials() {
         echo ""
     fi
 
-    # OpenClaw
+    # OpenClaw — uses token-based auth (no username), token = OPENCLAW_PASSWORD
     if [[ "${ENABLE_OPENCLAW:-false}" == "true" ]]; then
         OPENCLAW_IMAGE="alpine/openclaw:latest"
-        safe_read "OpenClaw admin username" "admin" "OPENCLAW_USERNAME"
-        safe_read "OpenClaw admin password (leave blank to auto-generate)" "" "OPENCLAW_PASSWORD"
+        safe_read "OpenClaw gateway token (leave blank to auto-generate)" "" "OPENCLAW_PASSWORD"
         if [[ -z "${OPENCLAW_PASSWORD:-}" ]]; then
             OPENCLAW_PASSWORD="$(openssl rand -base64 18 | tr -d '=+/' | cut -c1-16)"
-            echo "    Auto-generated password: ${OPENCLAW_PASSWORD}"
+            echo "    Auto-generated token: ${OPENCLAW_PASSWORD}"
         fi
         echo ""
     fi
@@ -2286,7 +2285,6 @@ write_platform_conf() {
     local n8n_encryption_key=$(openssl rand -hex 32)
     local serpapi_key=${SERPAPI_KEY:-}
     local brave_api_key=${BRAVE_API_KEY:-}
-    local openclaw_username=${OPENCLAW_USERNAME:-ds-admin}
     local openclaw_password=${OPENCLAW_PASSWORD:-$(gen_password)}
     
     log "🎯 Generating comprehensive configuration file..."
@@ -2364,17 +2362,10 @@ ENABLE_BIFROST="${ENABLE_BIFROST:-false}"
 BIFROST_PORT="${BIFROST_PORT:-8000}"
 
 # Memory Layer
-ZEP_AUTH_SECRET="${ZEP_AUTH_SECRET:-}"
-
 ENABLE_LETTA="${ENABLE_LETTA:-false}"
 LETTA_PORT="${LETTA_PORT:-8283}"
-LETTA_SERVER_PASS="${LETTA_SERVER_PASS:-}"
-
 
 # Development
-ENABLE_CODE_SERVER="${ENABLE_CODE_SERVER:-false}"
-CODE_SERVER_PORT="${CODE_SERVER_PORT:-8080}"
-CODE_SERVER_PASSWORD="${CODE_SERVER_PASSWORD:-${code_server_password}}"
 ENABLE_CONTINUE_DEV="${ENABLE_CONTINUE_DEV:-false}"
 
 # Search APIs
@@ -2550,7 +2541,6 @@ AUTHENTIK_PORT="${AUTHENTIK_PORT:-9000}"
 
 # Additional Ports
 SIGNALBOT_PORT="${SIGNALBOT_PORT:-8080}"
-SEARXNG_PORT="${SEARXNG_PORT:-8888}"
 
 # =============================================================================
 # SYSTEM CONFIGURATION
@@ -2624,7 +2614,6 @@ CODE_SERVER_PASSWORD="${code_server_password}"
 N8N_ENCRYPTION_KEY="${n8n_encryption_key}"
 SERPAPI_KEY="${SERPAPI_KEY:-}"
 BRAVE_API_KEY="${BRAVE_API_KEY:-}"
-OPENCLAW_USERNAME="${OPENCLAW_USERNAME:-ds-admin}"
 OPENCLAW_PASSWORD="${OPENCLAW_PASSWORD:-$(gen_password)}"
 
 # N8N webhook URL
@@ -2664,12 +2653,10 @@ OPENCLAW_ENABLED="${ENABLE_OPENCLAW:-false}"
 OPENCLAW_IMAGE="${OPENCLAW_IMAGE:-alpine/openclaw:latest}"
 BIFROST_ENABLED="${ENABLE_BIFROST:-false}"
 ANYTHINGLLM_ENABLED="${ENABLE_ANYTHINGLLM:-false}"
-ANYTHINGLLM_JWT_SECRET="${ANYTHINGLLM_JWT_SECRET:-$(gen_secret)}"
 ZEP_ENABLED="${ENABLE_ZEP:-false}"
 LETTA_ENABLED="${ENABLE_LETTA:-false}"
 CODE_SERVER_ENABLED="${ENABLE_CODE_SERVER:-false}"
 CONTINUE_DEV_ENABLED="${ENABLE_CONTINUE_DEV:-false}"
-WEAVIATE_ENABLED="${ENABLE_WEAVIATE:-false}"
 CHROMA_ENABLED="${ENABLE_CHROMA:-false}"
 
 # =============================================================================
@@ -2692,171 +2679,6 @@ EOF
 # =============================================================================
 # TENANT USER CREATION (README §4.11)
 # =============================================================================
-create_tenant_user() {
-    section "👤 TENANT USER CREATION"
-    
-    local username="${PLATFORM_PREFIX}${TENANT_ID}"
-    TENANT_USER="$username"
-    
-    echo "  📋 Creating system user for tenant: ${TENANT_ID}"
-    echo ""
-    
-    # Check if running as root for user creation
-    if [[ $EUID -ne 0 ]]; then
-        warn "User creation requires root privileges"
-        warn "Current user: $(whoami) (UID: $EUID)"
-        warn "Skipping user creation - will use current user"
-        username=$(whoami)
-        user_home="$HOME"
-        user_config="$user_home/.ai-platform"
-        
-        echo "  🏠 Using current user: $username"
-        echo "  📁 Config directory: $user_config"
-    else
-    if [[ "$(id -un)" == "root" ]]; then
-        useradd -m -s /bin/bash "${TENANT_USER}"
-        echo "  ✅ User ${TENANT_USER} created successfully"
-    else
-        echo "  ⚠️  User creation requires root privileges"
-        echo "  ⚠️  Current user: $(id -un) (UID: $(id -u))"
-        echo "  ⚠️  Skipping user creation - will use current user"
-        echo "  💡 Note: Some operations may require sudo later"
-    fi
-    
-    # Use current user if not root
-    username=$(whoami)
-    user_home="$HOME"
-    user_config="$user_home/.ai-platform"
-    
-    echo "  🏠 Using current user: $username"
-    echo "  📁 Config directory: $user_config"
-    
-    # Check if user already exists
-    if id "$username" >/dev/null 2>&1; then
-        echo "  ✅ User '$username' already exists"
-        echo "  🔄 Updating user groups and permissions..."
-        
-        # Add to docker group (requires sudo)
-        sudo usermod -aG docker "$username" 2>/dev/null || {
-            warn "Could not add user to docker group"
-            warn "Manual intervention may be required"
-        }
-        
-        # Update home directory
-        usermod -d "/home/$username" "$username" 2>/dev/null || true
-        
-    else
-        echo "  Creating new user: $username"
-        
-        # Create user with home directory (requires sudo)
-        if sudo useradd -m -s /bin/bash "$username" 2>/dev/null; then
-            echo "  User '$username' created successfully"
-            
-            # Add to docker group (requires sudo)
-            sudo usermod -aG docker "$username" 2>/dev/null || {
-                warn "Could not add user to docker group"
-                warn "Manual intervention may be required"
-            }
-        else
-            warn "Failed to create user $username"
-            warn "Manual intervention may be required"
-            echo "  Continuing without user creation..."
-            username=$(whoami)
-            user_home="$HOME"
-        fi
-    fi
-    
-    # Set user home directory
-    if [[ "$username" == "$(whoami)" ]]; then
-        user_home="$HOME"
-    else
-        user_home="/home/$username"
-    fi
-    user_config="$user_home/.ai-platform"
-    
-    # Create user directories
-    echo ""
-    echo "  📁 Setting up user directories..."
-    
-    mkdir -p "$user_config/logs" "$user_config/data" 2>/dev/null || {
-        warn "Could not create directories in $user_home"
-        warn "Using fallback: $DATA_DIR"
-        user_config="$DATA_DIR"
-        mkdir -p "$user_config/logs" "$user_config/data"
-    }
-    
-    # Set ownership only if running as root and not current user
-    if [[ $EUID -eq 0 && "$username" != "$(whoami)" ]]; then
-        chown -R "$username:$username" "$user_home" 2>/dev/null || {
-            warn "Could not set ownership for $username"
-        }
-    fi
-    
-    # Create user's .env file with essential variables
-    if [[ ! -d "$user_config" ]]; then
-        warn "Config directory $user_config does not exist"
-        warn "Skipping .env file creation"
-    else
-        cat > "$user_config/.env" <<EOF
-# AI Platform Environment for $username
-# Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-# Basic Configuration
-PLATFORM_PREFIX="${PLATFORM_PREFIX}"
-TENANT_ID="${TENANT_ID}"
-DOMAIN="${DOMAIN}"
-DATA_DIR="${DATA_DIR}"
-
-# Essential Paths
-CONFIG_DIR="${DATA_DIR}/config"
-LOG_DIR="${DATA_DIR}/logs"
-COMPOSE_FILE="${DATA_DIR}/config/docker-compose.yml"
-
-# Docker Configuration
-DOCKER_NETWORK="${DOCKER_NETWORK}"
-EOF
-    
-    # Set permissions only if file was created
-    if [[ -f "$user_config/.env" ]]; then
-        # Set ownership only if running as root and not current user
-        if [[ $EUID -eq 0 && "$username" != "$(whoami)" ]]; then
-            chown "$username:$username" "$user_config/.env" 2>/dev/null || {
-                warn "Could not set ownership for .env file"
-            }
-        fi
-        chmod 600 "$user_config/.env"
-        echo "  🔐 .env file: $user_config/.env"
-    fi
-    fi
-    
-    echo "  ✅ User setup complete"
-    echo "  🏠 Home directory: $user_home"
-    echo "  📁 Config directory: $user_config"
-    if [[ -f "$user_config/.env" ]]; then
-        echo "  🔐 .env file: $user_config/.env"
-    fi
-    echo ""
-    echo "  📋 USER SUMMARY:"
-    echo "    Username: $username"
-    if [[ "$username" == "$(whoami)" ]]; then
-        echo "    UID: $EUID"
-    else
-        echo "    UID: $(id -u "$username" 2>/dev/null || echo "N/A")"
-    fi
-    if [[ "$username" == "$(whoami)" ]]; then
-        echo "    Groups: $(id -Gn | tr ' ' ',')"
-    else
-        echo "    Groups: $(id -Gn "$username" 2>/dev/null | tr ' ' ',' || echo "N/A")"
-    fi
-    if [[ "$username" == "$(whoami)" ]]; then
-        echo "    Shell: $SHELL"
-    else
-        echo "    Shell: $(getent passwd "$username" 2>/dev/null | cut -d: -f7 || echo "N/A")"
-    fi
-    echo ""
-    echo "  🎯 User '$username' is ready for platform management"
-    fi
-}
 
 # =============================================================================
 # PORT HEALTH CHECKS (README COMPLIANCE)
@@ -3039,7 +2861,7 @@ display_service_summary() {
     [[ "${ENABLE_ZEP:-false}"       == "true" ]] && _mc_line "  ✅ Zep CE     (→ Postgres + LiteLLM)                   :${ZEP_PORT:-8100}"
     [[ "${ENABLE_LETTA:-false}"     == "true" ]] && _mc_line "  ✅ Letta      (→ Postgres + LiteLLM)                   :${LETTA_PORT:-8283}"
     [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && _mc_line "  ✅ AnythingLLM (→ LiteLLM + ${VECTOR_DB_TYPE:-qdrant})             :${ANYTHINGLLM_PORT:-3001}"
-    [[ "${ENABLE_OPENCLAW:-false}"  == "true" ]] && _mc_line "  ✅ OpenClaw   (user: ${OPENCLAW_USERNAME:-admin})                  :${OPENCLAW_PORT:-3081}"
+    [[ "${ENABLE_OPENCLAW:-false}"  == "true" ]] && _mc_line "  ✅ OpenClaw   (token auth)                             :${OPENCLAW_PORT:-18789}"
     [[ "${ENABLE_QDRANT:-false}"    == "true" ]] && _mc_line "  ✅ Qdrant                                               :${QDRANT_PORT:-6333}"
     [[ "${ENABLE_WEAVIATE:-false}"  == "true" ]] && _mc_line "  ✅ Weaviate                                             :${WEAVIATE_PORT:-8080}"
     [[ "${ENABLE_CHROMA:-false}"    == "true" ]] && _mc_line "  ✅ ChromaDB                                             :${CHROMA_PORT:-8000}"
@@ -3085,7 +2907,7 @@ display_service_summary() {
     [[ "${ENABLE_FLOWISE:-false}"     == "true" ]] && _mc_line "  Flowise      → http://127.0.0.1:${FLOWISE_PORT:-3030}"
     [[ "${ENABLE_DIFY:-false}"        == "true" ]] && _mc_line "  Dify         → http://127.0.0.1:${DIFY_PORT:-3001}"
     [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && _mc_line "  AnythingLLM  → http://127.0.0.1:${ANYTHINGLLM_PORT:-3001}"
-    [[ "${ENABLE_OPENCLAW:-false}"    == "true" ]] && _mc_line "  OpenClaw     → http://127.0.0.1:${OPENCLAW_PORT:-3081}  (user: ${OPENCLAW_USERNAME:-admin})"
+    [[ "${ENABLE_OPENCLAW:-false}"    == "true" ]] && _mc_line "  OpenClaw     → http://127.0.0.1:${OPENCLAW_PORT:-18789}  (token: see platform.conf)"
     [[ "${ENABLE_GRAFANA:-false}"     == "true" ]] && _mc_line "  Grafana      → http://127.0.0.1:${GRAFANA_PORT:-3002}"
     [[ "${ENABLE_AUTHENTIK:-false}"   == "true" ]] && _mc_line "  Authentik    → http://127.0.0.1:${AUTHENTIK_PORT:-9000}"
     [[ "${ENABLE_CODE_SERVER:-false}" == "true" ]] && _mc_line "  Code Server  → http://127.0.0.1:${CODE_SERVER_PORT:-8080}"
@@ -3200,7 +3022,6 @@ run_interactive_collection() {
     save_configuration_template
     
     write_platform_conf
-    create_tenant_user
 }
 
 # =============================================================================
@@ -3569,7 +3390,6 @@ ENABLE_BRAVE="${ENABLE_BRAVE:-false}"
 # SERVICE CREDENTIALS (usernames only — passwords excluded from template)
 POSTGRES_USER="${POSTGRES_USER:-${TENANT_ID}}"
 POSTGRES_DB="${POSTGRES_DB:-${TENANT_ID}}"
-OPENCLAW_USERNAME="${OPENCLAW_USERNAME:-ds-admin}"
 FLOWISE_USERNAME="${FLOWISE_USERNAME:-admin}"
 LIBRECHAT_JWT_SECRET="${LIBRECHAT_JWT_SECRET:-$(gen_secret)}"
 LIBRECHAT_CRYPT_KEY="${LIBRECHAT_CRYPT_KEY:-$(openssl rand -hex 32)}"

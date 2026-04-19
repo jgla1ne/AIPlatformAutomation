@@ -1336,8 +1336,7 @@ show_credentials() {
             echo "    Password   ${FLOWISE_PASSWORD:-<not set>}"
         fi
         if [[ "${DIFY_ENABLED:-false}" == "true" ]]; then
-            echo "  Dify (web)   $(_url dify ${DIFY_PORT:-3040})"
-            echo "  Dify (api)   $(_url dify-api ${DIFY_API_PORT:-5001})"
+            echo "  Dify         $(_url dify ${DIFY_PORT:-3040})  (web+api via path routing)"
             echo "    Init Pass  ${DIFY_INIT_PASSWORD:-<not set — check platform.conf>}  (set on first login)"
         fi
         echo ""
@@ -1443,6 +1442,37 @@ show_credentials() {
     if [[ "${BIFROST_ENABLED:-false}" == "true" ]]; then
         echo "BIFROST"
         echo "  API Key      ${BIFROST_API_KEY:-<not set>}"
+        echo "  Admin Token  ${BIFROST_ADMIN_TOKEN:-<not set>}"
+        echo ""
+    fi
+
+    # ── External API Keys ─────────────────────────────────────────────────────
+    local _has_ext=false
+    [[ "${ENABLE_ANTHROPIC:-false}" == "true" && -n "${ANTHROPIC_API_KEY:-}" ]] && _has_ext=true
+    [[ "${ENABLE_GOOGLE:-false}"    == "true" && -n "${GOOGLE_AI_API_KEY:-}" ]] && _has_ext=true
+    [[ "${ENABLE_GROQ:-false}"      == "true" && -n "${GROQ_API_KEY:-}" ]]      && _has_ext=true
+    [[ -n "${OPENROUTER_API_KEY:-}" ]]                                           && _has_ext=true
+    [[ "${ENABLE_MAMMOUTH:-false}"  == "true" && -n "${MAMMOUTH_API_KEY:-}" ]]  && _has_ext=true
+    [[ "${ENABLE_OPENAI:-false}"    == "true" && -n "${OPENAI_API_KEY:-}" ]]    && _has_ext=true
+    if [[ "$_has_ext" == "true" ]]; then
+        echo "EXTERNAL API KEYS  (routed through LiteLLM)"
+        [[ "${ENABLE_OPENAI:-false}"    == "true" ]] && [[ -n "${OPENAI_API_KEY:-}" ]]    && echo "  OpenAI       ${OPENAI_API_KEY}"
+        [[ "${ENABLE_ANTHROPIC:-false}" == "true" ]] && [[ -n "${ANTHROPIC_API_KEY:-}" ]] && echo "  Anthropic    ${ANTHROPIC_API_KEY}"
+        [[ "${ENABLE_GOOGLE:-false}"    == "true" ]] && [[ -n "${GOOGLE_AI_API_KEY:-}" ]] && echo "  Google AI    ${GOOGLE_AI_API_KEY}"
+        [[ "${ENABLE_GROQ:-false}"      == "true" ]] && [[ -n "${GROQ_API_KEY:-}" ]]      && echo "  Groq         ${GROQ_API_KEY}"
+        [[ -n "${OPENROUTER_API_KEY:-}" ]]                                                 && echo "  OpenRouter   ${OPENROUTER_API_KEY}"
+        [[ "${ENABLE_MAMMOUTH:-false}"  == "true" ]] && [[ -n "${MAMMOUTH_API_KEY:-}" ]]  && echo "  Mammouth     ${MAMMOUTH_API_KEY}"
+        echo ""
+    fi
+
+    # ── Search API Keys ───────────────────────────────────────────────────────
+    local _has_search_api=false
+    [[ "${ENABLE_SERPAPI:-false}" == "true" && -n "${SERPAPI_KEY:-}" ]] && _has_search_api=true
+    [[ "${ENABLE_BRAVE:-false}"   == "true" && -n "${BRAVE_API_KEY:-}" ]] && _has_search_api=true
+    if [[ "$_has_search_api" == "true" ]]; then
+        echo "SEARCH API KEYS"
+        [[ "${ENABLE_SERPAPI:-false}" == "true" ]] && echo "  SerpAPI      ${SERPAPI_KEY:-<not set>}"
+        [[ "${ENABLE_BRAVE:-false}"   == "true" ]] && echo "  Brave Search ${BRAVE_API_KEY:-<not set>}"
         echo ""
     fi
 
@@ -2752,8 +2782,7 @@ run_mission_control() {
     [[ "${N8N_ENABLED:-false}"         == "true" ]] && echo "    N8N          → $(_access_url n8n     ${N8N_PORT:-5678})"
     [[ "${FLOWISE_ENABLED:-false}"     == "true" ]] && echo "    Flowise      → $(_access_url flowise ${FLOWISE_PORT:-3001})"
     if [[ "${DIFY_ENABLED:-false}"     == "true" ]]; then
-        echo "    Dify         → $(_access_url dify    ${DIFY_PORT:-3040})"
-        echo "    Dify API     → $(_access_url dify-api ${DIFY_API_PORT:-5001})  (backend)"
+        echo "    Dify         → $(_access_url dify    ${DIFY_PORT:-3040})  (web + api path routing)"
     fi
 
     # Memory
@@ -2765,6 +2794,8 @@ run_mission_control() {
     [[ "${GRAFANA_ENABLED:-false}"     == "true" ]] && echo "    Grafana      → $(_access_url grafana    ${GRAFANA_PORT:-3000})"
     [[ "${PROMETHEUS_ENABLED:-false}"  == "true" ]] && echo "    Prometheus   → $(_access_url prometheus ${PROMETHEUS_PORT:-9090})"
     [[ "${CODE_SERVER_ENABLED:-false}" == "true" ]] && echo "    Code Server  → $(_access_url code       ${CODE_SERVER_PORT:-8080})"
+
+    [[ "${SEARXNG_ENABLED:-false}"       == "true" ]] && echo "    SearXNG      → $(_access_url search     ${SEARXNG_PORT:-8888})"
 
     # Signalbot — show QR link
     if [[ "${SIGNALBOT_ENABLED:-false}" == "true" ]]; then

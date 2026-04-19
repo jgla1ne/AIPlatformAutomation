@@ -3824,11 +3824,9 @@ show_post_deploy_dashboard() {
     _svc_url() {
         local subdomain="$1" port="$2"
         if [[ "$use_subdomains" == "true" ]]; then
-            # External access via subdomain
             echo "${base_proto}://${subdomain}.${display_host}"
         else
-            # Internal routing via subdomain but different internal port
-            echo "${base_proto}://${subdomain}.${display_host}:${port}"
+            echo "${base_proto}://${display_host}:${port}"
         fi
     }
 
