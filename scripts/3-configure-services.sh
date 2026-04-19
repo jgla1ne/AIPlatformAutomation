@@ -686,6 +686,86 @@ configure_qdrant() {
     ok "Qdrant configured"
 }
 
+configure_anythingllm() {
+    if [[ "${ANYTHINGLLM_ENABLED:-false}" != "true" ]]; then
+        return 0
+    fi
+
+    if step_done "anythingllm_configured"; then
+        log "AnythingLLM already configured, skipping"
+        return 0
+    fi
+
+    local _port="${ANYTHINGLLM_PORT:-3001}"
+    local _url="http://127.0.0.1:${_port}"
+
+    log "Configuring AnythingLLM..."
+
+    # Wait for AnythingLLM to be ready
+    local _attempts=0
+    while [[ $_attempts -lt 30 ]]; do
+        if curl -sf "${_url}/api/setup-complete" >/dev/null 2>&1; then
+            break
+        fi
+        _attempts=$((_attempts + 1))
+        sleep 3
+    done
+
+    if [[ $_attempts -ge 30 ]]; then
+        fail "AnythingLLM not ready after timeout"
+        return 1
+    fi
+
+    # Determine host-accessible LiteLLM URL (127.0.0.1 works since containers share host network via port mapping)
+    local _litellm_base="http://127.0.0.1:${LITELLM_PORT:-4000}/v1"
+    local _default_model="ollama/${OLLAMA_DEFAULT_MODEL:-llama3.2:3b}"
+
+    # Set LLM provider to generic-openai (LiteLLM)
+    local _resp
+    _resp=$(curl -s -X POST "${_url}/api/system/update-env" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"LLMProvider\": \"generic-openai\",
+            \"GenericOpenAiBasePath\": \"${_litellm_base}\",
+            \"GenericOpenAiKey\": \"${LITELLM_MASTER_KEY}\",
+            \"GenericOpenAiModel\": \"${_default_model}\",
+            \"GenericOpenAiModelTokenLimit\": 4096,
+            \"GenericOpenAiStreamingEnabled\": true
+        }" 2>/dev/null)
+
+    if echo "${_resp}" | grep -q '"error":false'; then
+        ok "  AnythingLLM LLM provider → generic-openai (LiteLLM @ ${_litellm_base})"
+    else
+        warn "  AnythingLLM LLM update may have failed: ${_resp:0:80}"
+    fi
+
+    # Set embedding provider to generic-openai (LiteLLM)
+    _resp=$(curl -s -X POST "${_url}/api/system/update-env" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"EmbeddingEngine\": \"generic-openai\",
+            \"GenericOpenAiEmbeddingApiBase\": \"${_litellm_base}\",
+            \"GenericOpenAiEmbeddingApiKey\": \"${LITELLM_MASTER_KEY}\",
+            \"GenericOpenAiEmbeddingModelPref\": \"${_default_model}\"
+        }" 2>/dev/null)
+
+    if echo "${_resp}" | grep -q '"error":false'; then
+        ok "  AnythingLLM embedding provider → generic-openai (LiteLLM)"
+    else
+        warn "  AnythingLLM embedding update may have failed: ${_resp:0:80}"
+    fi
+
+    # Verify VectorDB is qdrant (set via env at deploy time — just confirm)
+    local _state
+    _state=$(curl -s "${_url}/api/setup-complete" 2>/dev/null)
+    local _vdb
+    _vdb=$(echo "${_state}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['results']['VectorDB'])" 2>/dev/null || echo "?")
+    ok "  AnythingLLM VectorDB: ${_vdb}"
+
+    mark_done "anythingllm_configured"
+    ok "AnythingLLM configured (LiteLLM proxy, Qdrant vector store)"
+}
+
 configure_n8n() {
     if [[ "${N8N_ENABLED}" != "true" ]]; then
         return 0
@@ -965,84 +1045,78 @@ configure_ai_dev_tools() {
     # Regenerate Continue.dev config with current models
     if [[ "${CONTINUE_DEV_ENABLED:-false}" == "true" ]]; then
         log "Regenerating Continue.dev configuration..."
-        
+
         local continue_dir="${DATA_DIR}/continue-dev"
-        mkdir -p "${continue_dir}"
-        
-        # Generate dynamic model list from OLLAMA_MODELS
+        # Continue.dev extension inside code-server reads ~/.continue/config.json
+        local continue_home_dir="${DATA_DIR}/code-server/.continue"
+        mkdir -p "${continue_dir}" "${continue_home_dir}"
+
+        # Install continue.dev extension if code-server is running
+        if [[ "${CODE_SERVER_ENABLED:-false}" == "true" ]]; then
+            docker exec "${TENANT_PREFIX}-code-server" \
+                code-server --install-extension continue.continue --force 2>/dev/null || true
+        fi
+
         local models_config=""
         local first_model="${OLLAMA_DEFAULT_MODEL:-llama3.1:8b}"
-        
-        # Add models from OLLAMA_MODELS variable
-        IFS=',' read -ra models <<< "${OLLAMA_MODELS:-llama3.1:8b,mistral:7b}"
+        local first_litellm_model="ollama/${first_model}"
+
+        IFS=',' read -ra models <<< "${OLLAMA_MODELS:-llama3.2:3b}"
         for model in "${models[@]}"; do
-            model=$(echo "$model" | xargs)  # trim whitespace
+            model=$(echo "$model" | xargs)
             if [[ -n "$model" ]]; then
-                if [[ -n "$models_config" ]]; then
-                    models_config="${models_config},"
-                fi
+                [[ -n "$models_config" ]] && models_config="${models_config},"
                 models_config="${models_config}
     {
       \"title\": \"${model} (via LiteLLM)\",
       \"provider\": \"openai\",
-      \"model\": \"${model}\",
+      \"model\": \"ollama/${model}\",
       \"apiBase\": \"http://127.0.0.1:${LITELLM_PORT:-4000}/v1\",
       \"apiKey\": \"${LITELLM_MASTER_KEY}\"
     }"
             fi
         done
-        
-        # Add external providers if enabled
+
         if [[ "${ENABLE_OPENAI:-false}" == "true" && -n "${OPENAI_API_KEY:-}" ]]; then
-            if [[ -n "$models_config" ]]; then
-                models_config="${models_config},"
-            fi
+            [[ -n "$models_config" ]] && models_config="${models_config},"
             models_config="${models_config}
-    {
-      \"title\": \"OpenAI GPT-4 (via LiteLLM)\",
-      \"provider\": \"openai\",
-      \"model\": \"gpt-4\",
-      \"apiBase\": \"http://127.0.0.1:${LITELLM_PORT:-4000}/v1\",
-      \"apiKey\": \"${LITELLM_MASTER_KEY}\"
-    }"
+    {\"title\":\"GPT-4 (via LiteLLM)\",\"provider\":\"openai\",\"model\":\"gpt-4\",\"apiBase\":\"http://127.0.0.1:${LITELLM_PORT:-4000}/v1\",\"apiKey\":\"${LITELLM_MASTER_KEY}\"}"
         fi
-        
+
         if [[ "${ENABLE_ANTHROPIC:-false}" == "true" && -n "${ANTHROPIC_API_KEY:-}" ]]; then
-            if [[ -n "$models_config" ]]; then
-                models_config="${models_config},"
-            fi
+            [[ -n "$models_config" ]] && models_config="${models_config},"
             models_config="${models_config}
-    {
-      \"title\": \"Claude-3-Sonnet (via LiteLLM)\",
-      \"provider\": \"openai\",
-      \"model\": \"claude-3-sonnet-20240229\",
-      \"apiBase\": \"http://127.0.0.1:${LITELLM_PORT:-4000}/v1\",
-      \"apiKey\": \"${LITELLM_MASTER_KEY}\"
-    }"
+    {\"title\":\"Claude-3-Sonnet (via LiteLLM)\",\"provider\":\"openai\",\"model\":\"claude-3-sonnet-20240229\",\"apiBase\":\"http://127.0.0.1:${LITELLM_PORT:-4000}/v1\",\"apiKey\":\"${LITELLM_MASTER_KEY}\"}"
         fi
-        
-        cat > "${continue_dir}/config.json" << CONTEOF
+
+        local _cfg
+        _cfg=$(cat << CONTEOF
 {
   "models": [${models_config}
   ],
   "tabAutocompleteModel": {
     "title": "${first_model} (via LiteLLM)",
     "provider": "openai",
-    "model": "${first_model}",
+    "model": "${first_litellm_model}",
     "apiBase": "http://127.0.0.1:${LITELLM_PORT:-4000}/v1",
     "apiKey": "${LITELLM_MASTER_KEY}"
   },
   "embeddingsProvider": {
     "provider": "openai",
-    "model": "${first_model}",
+    "model": "${first_litellm_model}",
     "apiBase": "http://127.0.0.1:${LITELLM_PORT:-4000}/v1",
     "apiKey": "${LITELLM_MASTER_KEY}"
-  }
+  },
+  "allowAnonymousTelemetry": false
 }
 CONTEOF
-        
-        ok "Continue.dev configuration regenerated"
-        ok "  â Available models: $(echo "${OLLAMA_MODELS:-llama3.1:8b,mistral:7b}" | tr ',' ' ')"
+)
+        echo "${_cfg}" > "${continue_home_dir}/config.json"
+        echo "${_cfg}" > "${continue_dir}/config.json"
+        chmod 644 "${continue_home_dir}/config.json" "${continue_dir}/config.json"
+
+        ok "Continue.dev configuration written to ${continue_home_dir}/config.json"
+        ok "  Available models: $(echo "${OLLAMA_MODELS:-llama3.2:3b}" | tr ',' ' ')"
     fi
     
     mark_done "ai_dev_tools_configured"
@@ -1862,6 +1936,7 @@ main() {
         configure_librechat
         configure_openclaw
         configure_qdrant
+        configure_anythingllm
         configure_n8n
         configure_flowise
         configure_dify

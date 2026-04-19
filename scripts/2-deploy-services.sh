@@ -1526,7 +1526,7 @@ RCLONE_EOF
     volumes:
       - ${rclone_conf_dir}/rclone.conf:/config/rclone/rclone.conf:ro
       - ${rclone_conf_dir}/service-account.json:/credentials/service-account.json:ro
-      - ${DATA_DIR}/ingestion:/data
+      - ${LOCAL_INGESTION_PATH:-${DATA_DIR}/ingestion/AI_Platform}:/data
     networks:
       - ${DOCKER_NETWORK}
 
@@ -1960,11 +1960,13 @@ INSTALLEOF
 EOF
     fi
 
-    # Continue.dev config generation (no container — it's a VS Code extension)
-    # Generates ~/.continue/config.json pointing to LiteLLM as the LLM provider
+    # Continue.dev config generation — writes into code-server's home dir so the
+    # extension reads it automatically at /home/coder/.continue/config.json.
+    # A reference copy is also kept at ${DATA_DIR}/continue-dev/config.json.
     if [[ "${CONTINUE_DEV_ENABLED:-${ENABLE_CONTINUE_DEV:-false}}" == "true" ]]; then
         local continue_dir="${DATA_DIR}/continue-dev"
-        mkdir -p "${continue_dir}"
+        local continue_home_dir="${DATA_DIR}/code-server/.continue"
+        mkdir -p "${continue_dir}" "${continue_home_dir}"
         
         # Generate dynamic model list from OLLAMA_MODELS
         local models_config=""
@@ -1978,17 +1980,21 @@ EOF
                 if [[ -n "$models_config" ]]; then
                     models_config="${models_config},"
                 fi
+                # LiteLLM requires "ollama/" prefix for ollama-backed models
+                local _litellm_model="ollama/${model}"
                 models_config="${models_config}
     {
       \"title\": \"${model} (via LiteLLM)\",
       \"provider\": \"openai\",
-      \"model\": \"${model}\",
+      \"model\": \"${_litellm_model}\",
       \"apiBase\": \"http://127.0.0.1:${LITELLM_PORT:-4000}/v1\",
       \"apiKey\": \"${LITELLM_MASTER_KEY}\"
     }"
             fi
         done
-        
+
+        local _first_litellm_model="ollama/${first_model}"
+
         # Add external providers if enabled
         if [[ "${ENABLE_OPENAI:-false}" == "true" && -n "${OPENAI_API_KEY:-}" ]]; then
             if [[ -n "$models_config" ]]; then
@@ -2018,20 +2024,21 @@ EOF
     }"
         fi
         
-        cat > "${continue_dir}/config.json" << CONTEOF
+        local _continue_config
+        _continue_config=$(cat << CONTEOF
 {
   "models": [${models_config}
   ],
   "tabAutocompleteModel": {
     "title": "${first_model} (via LiteLLM)",
     "provider": "openai",
-    "model": "${first_model}",
+    "model": "${_first_litellm_model}",
     "apiBase": "http://127.0.0.1:${LITELLM_PORT:-4000}/v1",
     "apiKey": "${LITELLM_MASTER_KEY}"
   },
   "embeddingsProvider": {
     "provider": "openai",
-    "model": "${first_model}",
+    "model": "${_first_litellm_model}",
     "apiBase": "http://127.0.0.1:${LITELLM_PORT:-4000}/v1",
     "apiKey": "${LITELLM_MASTER_KEY}"
   },
@@ -2064,15 +2071,16 @@ EOF
       "description": "Run terminal command"
     }
   ],
-  "allowAnonymousTelemetry": false,
-  "disableSessionPersistence": false,
-  "experimental": {
-    "model": "gpt-4",
-    "provider": "openai"
-  }
+  "allowAnonymousTelemetry": false
 }
 CONTEOF
-        
+)
+        # Write to code-server home (.continue/ is where the extension reads its config)
+        echo "${_continue_config}" > "${continue_home_dir}/config.json"
+        chmod 644 "${continue_home_dir}/config.json"
+        # Also keep a reference copy
+        echo "${_continue_config}" > "${continue_dir}/config.json"
+
         # Create Continue.dev installation guide
         cat > "${continue_dir}/README.md" << READMEOF
 # Continue.dev Configuration
@@ -2950,7 +2958,10 @@ OCEOF
     [[ "${SIGNALBOT_ENABLED}" == "true" ]] && mkdir -p "${DATA_DIR}/signalbot"
     [[ "${SEARXNG_ENABLED}" == "true" ]] && mkdir -p "${DATA_DIR}/searxng"
     [[ "${BIFROST_ENABLED}"   == "true" ]] && mkdir -p "${DATA_DIR}/bifrost"
-    [[ "${ENABLE_INGESTION:-false}" == "true" ]] && mkdir -p "${DATA_DIR}/ingestion" "${DATA_DIR}/rclone"
+    if [[ "${ENABLE_INGESTION:-false}" == "true" ]]; then
+        mkdir -p "${LOCAL_INGESTION_PATH:-${DATA_DIR}/ingestion/AI_Platform}" "${DATA_DIR}/rclone"
+        chmod 775 "${LOCAL_INGESTION_PATH:-${DATA_DIR}/ingestion/AI_Platform}"
+    fi
     [[ "${CADDY_ENABLED}"     == "true" ]] && mkdir -p "${DATA_DIR}/caddy" "${DATA_DIR}/logs/caddy"
     # New services
     [[ "${WEAVIATE_ENABLED:-${ENABLE_WEAVIATE:-false}}" == "true" ]] && mkdir -p "${DATA_DIR}/weaviate"
