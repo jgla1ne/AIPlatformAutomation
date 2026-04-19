@@ -2362,6 +2362,8 @@ ENABLE_BIFROST="${ENABLE_BIFROST:-false}"
 BIFROST_PORT="${BIFROST_PORT:-8000}"
 
 # Memory Layer
+ENABLE_ZEP="${ENABLE_ZEP:-false}"
+ZEP_PORT="${ZEP_PORT:-8100}"
 ENABLE_LETTA="${ENABLE_LETTA:-false}"
 LETTA_PORT="${LETTA_PORT:-8283}"
 
@@ -2896,26 +2898,50 @@ display_service_summary() {
     _mc_line "  Preferred: ${PREFERRED_LLM_PROVIDER:-ollama}   Gateway: ${LLM_GATEWAY_TYPE:-litellm} → all services"
     _mc_sep
 
-    _mc_line "ACCESS URLS  (all bound to 127.0.0.1 — use proxy or SSH tunnel for external)"
+    # Build URL helper — subdomain routing when Caddy/NPM + domain, else IP:port
+    local _use_subs=false
+    local _base_domain="${BASE_DOMAIN:-${DOMAIN:-}}"
+    [[ "${ENABLE_CADDY:-false}" == "true" || "${ENABLE_NPM:-false}" == "true" ]] && \
+        [[ -n "${_base_domain}" ]] && _use_subs=true
+    _mu() {
+        local sub="$1" port="$2"
+        if [[ "$_use_subs" == "true" ]]; then
+            echo "${base_proto}://${sub}.${_base_domain}"
+        else
+            echo "http://${server_ip}:${port}"
+        fi
+    }
+
+    if [[ "$_use_subs" == "true" ]]; then
+        _mc_line "ACCESS URLS  (via Caddy → ${base_proto}://*.${_base_domain})"
+    else
+        _mc_line "ACCESS URLS  (direct — no reverse proxy configured)"
+    fi
     _mc_blank
-    [[ "${ENABLE_OPENWEBUI:-false}"   == "true" ]] && _mc_line "  Open WebUI   → ${base_proto}://${DOMAIN:-$server_ip}  (direct: http://127.0.0.1:${OPENWEBUI_PORT:-3000})"
-    [[ "${ENABLE_LITELLM:-false}"     == "true" ]] && _mc_line "  LiteLLM API  → http://127.0.0.1:${LITELLM_PORT:-4000}/v1"
-    [[ "${ENABLE_OLLAMA:-false}"      == "true" ]] && _mc_line "  Ollama       → http://127.0.0.1:${OLLAMA_PORT:-11434}"
-    [[ "${ENABLE_ZEP:-false}"          == "true" ]] && _mc_line "  Zep          → http://127.0.0.1:${ZEP_PORT:-8100}"
-    [[ "${ENABLE_LETTA:-false}"        == "true" ]] && _mc_line "  Letta        → http://127.0.0.1:${LETTA_PORT:-8283}"
-    [[ "${ENABLE_N8N:-false}"         == "true" ]] && _mc_line "  N8N          → http://127.0.0.1:${N8N_PORT:-5678}"
-    [[ "${ENABLE_FLOWISE:-false}"     == "true" ]] && _mc_line "  Flowise      → http://127.0.0.1:${FLOWISE_PORT:-3030}"
-    [[ "${ENABLE_DIFY:-false}"        == "true" ]] && _mc_line "  Dify         → http://127.0.0.1:${DIFY_PORT:-3001}"
-    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && _mc_line "  AnythingLLM  → http://127.0.0.1:${ANYTHINGLLM_PORT:-3001}"
-    [[ "${ENABLE_OPENCLAW:-false}"    == "true" ]] && _mc_line "  OpenClaw     → http://127.0.0.1:${OPENCLAW_PORT:-18789}  (token: see platform.conf)"
-    [[ "${ENABLE_GRAFANA:-false}"     == "true" ]] && _mc_line "  Grafana      → http://127.0.0.1:${GRAFANA_PORT:-3002}"
-    [[ "${ENABLE_AUTHENTIK:-false}"   == "true" ]] && _mc_line "  Authentik    → http://127.0.0.1:${AUTHENTIK_PORT:-9000}"
-    [[ "${ENABLE_CODE_SERVER:-false}" == "true" ]] && _mc_line "  Code Server  → http://127.0.0.1:${CODE_SERVER_PORT:-8080}"
-    [[ "${ENABLE_CADDY:-false}"       == "true" ]] && _mc_line "  Caddy proxy  → ${base_proto}://${DOMAIN:-$server_ip} (ports ${CADDY_HTTP_PORT:-80}/${CADDY_HTTPS_PORT:-443})"
+    [[ "${ENABLE_OPENWEBUI:-false}"   == "true" ]] && _mc_line "  Open WebUI   → $(_mu openwebui   ${OPENWEBUI_PORT:-3000})"
+    [[ "${ENABLE_LIBRECHAT:-false}"   == "true" ]] && _mc_line "  LibreChat    → $(_mu librechat   ${LIBRECHAT_PORT:-3080})"
+    [[ "${ENABLE_OPENCLAW:-false}"    == "true" ]] && _mc_line "  OpenClaw     → $(_mu openclaw    ${OPENCLAW_PORT:-18789})  (token: ${OPENCLAW_PASSWORD:-see conf})"
+    [[ "${ENABLE_ANYTHINGLLM:-false}" == "true" ]] && _mc_line "  AnythingLLM  → $(_mu anythingllm ${ANYTHINGLLM_PORT:-3001})"
+    [[ "${ENABLE_LITELLM:-false}"     == "true" ]] && _mc_line "  LiteLLM      → $(_mu litellm     ${LITELLM_PORT:-4000})/v1  key: ${LITELLM_MASTER_KEY:-see conf}"
+    [[ "${ENABLE_N8N:-false}"         == "true" ]] && _mc_line "  N8N          → $(_mu n8n         ${N8N_PORT:-5678})"
+    [[ "${ENABLE_FLOWISE:-false}"     == "true" ]] && _mc_line "  Flowise      → $(_mu flowise     ${FLOWISE_PORT:-3000})  ${FLOWISE_USERNAME:-admin} / ${FLOWISE_PASSWORD:-see conf}"
+    [[ "${ENABLE_DIFY:-false}"        == "true" ]] && _mc_line "  Dify         → $(_mu dify        ${DIFY_PORT:-3001})  init: ${DIFY_INIT_PASSWORD:-see conf}"
+    [[ "${ENABLE_ZEP:-false}"         == "true" ]] && _mc_line "  Zep          → $(_mu zep         ${ZEP_PORT:-8100})  secret: ${ZEP_AUTH_SECRET:0:16}..."
+    [[ "${ENABLE_LETTA:-false}"       == "true" ]] && _mc_line "  Letta        → $(_mu letta       ${LETTA_PORT:-8283})  pass: ${LETTA_SERVER_PASS:-see conf}"
+    [[ "${ENABLE_AUTHENTIK:-false}"   == "true" ]] && _mc_line "  Authentik    → $(_mu authentik   ${AUTHENTIK_PORT:-9000})  pass: ${AUTHENTIK_BOOTSTRAP_PASSWORD:-see conf}"
+    [[ "${ENABLE_GRAFANA:-false}"     == "true" ]] && _mc_line "  Grafana      → $(_mu grafana     ${GRAFANA_PORT:-3002})"
+    [[ "${ENABLE_CODE_SERVER:-false}" == "true" ]] && _mc_line "  Code Server  → $(_mu code        ${CODE_SERVER_PORT:-8080})  pass: ${CODE_SERVER_PASSWORD:-see conf}"
+    [[ "${ENABLE_SEARXNG:-false}"     == "true" ]] && _mc_line "  SearXNG      → $(_mu search      ${SEARXNG_PORT:-8888})"
+    [[ "${ENABLE_OLLAMA:-false}"      == "true" ]] && _mc_line "  Ollama       → http://127.0.0.1:${OLLAMA_PORT:-11434}  (internal)"
+    [[ "${ENABLE_CADDY:-false}"       == "true" ]] && _mc_line "  Caddy TLS    → ${base_proto}://${_base_domain}  (${TLS_MODE:-none})"
     _mc_blank
-    _mc_line "  DB/Cache (internal containers only):"
-    [[ "${ENABLE_POSTGRES:-false}"    == "true" ]] && _mc_line "    ${pfx}-postgres:5432  user=${POSTGRES_USER:-$TENANT_ID} db=${POSTGRES_DB:-$TENANT_ID}"
-    [[ "${ENABLE_REDIS:-false}"       == "true" ]] && _mc_line "    ${pfx}-redis:6379"
+    _mc_line "  PostgreSQL: ${pfx}-postgres:5432  user=${POSTGRES_USER:-$TENANT_ID}  pass=${POSTGRES_PASSWORD:-see conf}"
+    [[ "${ENABLE_REDIS:-false}"       == "true" ]] && _mc_line "  Redis:      ${pfx}-redis:6379  pass=${REDIS_PASSWORD:-see conf}"
+    _mc_blank
+    _mc_line "  Qdrant API key : ${QDRANT_API_KEY:-see conf}"
+    [[ "${ENABLE_ANTHROPIC:-false}" == "true" ]] && _mc_line "  Anthropic    : ${ANTHROPIC_API_KEY:0:30}..."
+    [[ "${ENABLE_GOOGLE:-false}"    == "true" ]] && _mc_line "  Google AI    : ${GOOGLE_AI_API_KEY:-see conf}"
+    [[ "${ENABLE_GROQ:-false}"      == "true" ]] && _mc_line "  Groq         : ${GROQ_API_KEY:0:30}..."
     _mc_sep
 
     _mc_line "NEXT STEP:  bash scripts/2-deploy-services.sh ${TENANT_ID}"
