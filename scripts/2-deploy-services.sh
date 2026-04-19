@@ -469,13 +469,44 @@ init_port_allocator() {
     log "Port allocator initialised (${PORT_ALLOCATIONS_FILE})"
 }
 
+# _is_host_port_bound PORT
+# Returns 0 (true) if something is already listening on PORT on this host,
+# excluding our own tenant's containers (which we're about to replace).
+_is_host_port_bound() {
+    local port="$1"
+    # Use ss to check TCP listeners; exclude our own tenant's containers by checking
+    # if the listener is a Docker proxy for one of our own containers.
+    local bound_pids
+    bound_pids=$(ss -tlnp 2>/dev/null | awk -v p=":${port} " '$0 ~ p {print $6}' | grep -oP 'pid=\K[0-9]+' || true)
+    [[ -z "${bound_pids}" ]] && return 1   # nothing listening → port is free
+
+    # Check if every bound process is a docker-proxy for OUR tenant's containers.
+    # If any bound process is NOT ours, the port is truly occupied by another tenant.
+    local pid
+    for pid in ${bound_pids}; do
+        local cmdline
+        cmdline=$(cat /proc/${pid}/cmdline 2>/dev/null | tr '\0' ' ' || true)
+        # docker-proxy for our tenant will have TENANT_PREFIX in container name arg
+        if echo "${cmdline}" | grep -q "docker-proxy"; then
+            # Check if it's proxying for one of our containers
+            if ! echo "${cmdline}" | grep -qF "${TENANT_PREFIX}"; then
+                return 0  # Bound by another tenant's docker-proxy → occupied
+            fi
+        else
+            return 0  # Bound by a non-docker process → occupied
+        fi
+    done
+    return 1  # All listeners are our own containers → effectively free for re-deploy
+}
+
 # allocate_host_port SERVICE PREFERRED_PORT
 # Prints the resolved unique host port; records it so the next service won't reuse it.
+# Checks both within-run claims AND actual host port availability (multi-tenant safe).
 allocate_host_port() {
     local svc="$1" preferred="$2" port
     port="${preferred}"
-    # Walk forward until we find an unclaimed port in this run
-    while [[ -n "${_PORT_CLAIMED[${port}]:-}" ]]; do
+    # Walk forward until we find a port unclaimed in this run AND free on the host
+    while [[ -n "${_PORT_CLAIMED[${port}]:-}" ]] || _is_host_port_bound "${port}"; do
         port=$(( port + 1 ))
     done
     _PORT_CLAIMED["${port}"]="${svc}"
@@ -2238,51 +2269,109 @@ generate_caddyfile() {
     if [[ "${CADDY_ENABLED}" != "true" ]]; then
         return 0
     fi
-    
+
     log "Generating Caddyfile..."
-    
+
     mkdir -p "${CONFIG_DIR}/caddy"
-    
-    cat > "${CONFIG_DIR}/caddy/Caddyfile" << EOF
+
+    # Determine effective TLS mode:
+    # - Let's Encrypt requires Caddy on port 443 (ACME HTTP-01/TLS-ALPN).
+    #   If CADDY_HTTPS_PORT != 443 (e.g. second tenant on same host), ACME fails.
+    #   Auto-downgrade to tls internal (self-signed) so the site still loads.
+    # - selfsigned: use `tls internal` (Caddy's local CA, trusted via caddy trust)
+    # - none: plain HTTP, prefix site blocks with http://
+    local _effective_tls="${TLS_MODE:-letsencrypt}"
+    if [[ "${_effective_tls}" == "letsencrypt" && "${CADDY_HTTPS_PORT:-443}" != "443" ]]; then
+        warn "Caddy HTTPS port is ${CADDY_HTTPS_PORT} (not 443) — Let's Encrypt ACME requires port 443."
+        warn "Auto-switching TLS mode to 'selfsigned' (tls internal) for this tenant."
+        _effective_tls="selfsigned"
+    fi
+
+    # _tls_directive: inserted inside every site block
+    local _tls_directive=""
+    local _scheme="https"
+    case "${_effective_tls}" in
+        letsencrypt) _tls_directive="" ; _scheme="https" ;;
+        selfsigned)  _tls_directive="    tls internal" ; _scheme="https" ;;
+        none)        _tls_directive="" ; _scheme="http" ;;
+        manual)      _tls_directive="    tls ${TLS_CERT_PATH:-} ${TLS_KEY_PATH:-}" ; _scheme="https" ;;
+    esac
+
+    # _site NAME: emits the site block address prefix (http:// or just hostname)
+    _site() {
+        local host="$1"
+        if [[ "${_effective_tls}" == "none" ]]; then
+            printf 'http://%s' "${host}"
+        else
+            printf '%s' "${host}"
+        fi
+    }
+
+    # _tls: emits the TLS directive line (empty string when not needed)
+    _tls() { [[ -n "${_tls_directive}" ]] && printf '%s\n' "${_tls_directive}" || true; }
+
+    # Global Caddy options block — disable ACME entirely when not using letsencrypt
+    if [[ "${_effective_tls}" == "letsencrypt" ]]; then
+        cat > "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 {
     admin :2019
-    email ${PROXY_EMAIL}
+    email ${PROXY_EMAIL:-admin@example.com}
     log {
         output file ${LOG_DIR}/caddy.log
         level INFO
     }
 }
+EOF
+    else
+        cat > "${CONFIG_DIR}/caddy/Caddyfile" << EOF
+{
+    admin :2019
+    auto_https off
+    log {
+        output file ${LOG_DIR}/caddy.log
+        level INFO
+    }
+}
+EOF
+    fi
 
-# Base domain
-${BASE_DOMAIN} {
+    # Base domain
+    cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
+
+# Base domain — informational redirect
+$(_site "${BASE_DOMAIN}") {
+$(_tls)
     respond "AI Platform — ${BASE_DOMAIN}"
 }
 EOF
-    
+
     # LiteLLM
     if [[ "${LITELLM_ENABLED}" == "true" ]]; then
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
-litellm.${BASE_DOMAIN} {
+$(_site "litellm.${BASE_DOMAIN}") {
+$(_tls)
     reverse_proxy ${TENANT_PREFIX}-litellm:4000
 }
 EOF
     fi
-    
+
     # Open WebUI
     if [[ "${OPENWEBUI_ENABLED}" == "true" ]]; then
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
-openwebui.${BASE_DOMAIN} {
+$(_site "openwebui.${BASE_DOMAIN}") {
+$(_tls)
     reverse_proxy ${TENANT_PREFIX}-openwebui:8080
 }
 EOF
     fi
-    
+
     if [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]]; then
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
-librechat.${BASE_DOMAIN} {
+$(_site "librechat.${BASE_DOMAIN}") {
+$(_tls)
     reverse_proxy ${TENANT_PREFIX}-librechat:3080
 }
 EOF
@@ -2292,63 +2381,68 @@ EOF
     if [[ "${OPENCLAW_ENABLED}" == "true" ]]; then
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
-openclaw.${BASE_DOMAIN} {
+$(_site "openclaw.${BASE_DOMAIN}") {
+$(_tls)
     reverse_proxy ${TENANT_PREFIX}-openclaw:${OPENCLAW_PORT}
 }
 EOF
     fi
-    
+
     # N8N
     if [[ "${N8N_ENABLED}" == "true" ]]; then
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
-n8n.${BASE_DOMAIN} {
+$(_site "n8n.${BASE_DOMAIN}") {
+$(_tls)
     reverse_proxy ${TENANT_PREFIX}-n8n:5678
 }
 EOF
     fi
-    
+
     # Flowise
     if [[ "${FLOWISE_ENABLED}" == "true" ]]; then
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
-flowise.${BASE_DOMAIN} {
+$(_site "flowise.${BASE_DOMAIN}") {
+$(_tls)
     reverse_proxy ${TENANT_PREFIX}-flowise:3000
 }
 EOF
     fi
-    
+
     # Dify — path-based routing on one subdomain (mirrors dify's official nginx config).
     # /console/api*, /api*, /v1*, /files* → dify-api; everything else → dify-web.
     # Single subdomain = single self-signed cert = browser XHR works without extra prompts.
     if [[ "${DIFY_ENABLED}" == "true" ]]; then
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
-dify.${BASE_DOMAIN} {
-	handle /console/api* {
-		reverse_proxy ${TENANT_PREFIX}-dify-api:5001
-	}
-	handle /api* {
-		reverse_proxy ${TENANT_PREFIX}-dify-api:5001
-	}
-	handle /v1* {
-		reverse_proxy ${TENANT_PREFIX}-dify-api:5001
-	}
-	handle /files* {
-		reverse_proxy ${TENANT_PREFIX}-dify-api:5001
-	}
-	handle {
-		reverse_proxy ${TENANT_PREFIX}-dify:3000
-	}
+$(_site "dify.${BASE_DOMAIN}") {
+$(_tls)
+    handle /console/api* {
+        reverse_proxy ${TENANT_PREFIX}-dify-api:5001
+    }
+    handle /api* {
+        reverse_proxy ${TENANT_PREFIX}-dify-api:5001
+    }
+    handle /v1* {
+        reverse_proxy ${TENANT_PREFIX}-dify-api:5001
+    }
+    handle /files* {
+        reverse_proxy ${TENANT_PREFIX}-dify-api:5001
+    }
+    handle {
+        reverse_proxy ${TENANT_PREFIX}-dify:3000
+    }
 }
 EOF
     fi
-    
+
     # Authentik
     if [[ "${AUTHENTIK_ENABLED}" == "true" ]]; then
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
-authentik.${BASE_DOMAIN} {
+$(_site "authentik.${BASE_DOMAIN}") {
+$(_tls)
     reverse_proxy ${TENANT_PREFIX}-authentik:9000
 }
 EOF
@@ -2358,7 +2452,8 @@ EOF
     if [[ "${ANYTHINGLLM_ENABLED:-${ENABLE_ANYTHINGLLM:-false}}" == "true" ]]; then
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
-anythingllm.${BASE_DOMAIN} {
+$(_site "anythingllm.${BASE_DOMAIN}") {
+$(_tls)
     reverse_proxy ${TENANT_PREFIX}-anythingllm:3001
 }
 EOF
@@ -2368,7 +2463,8 @@ EOF
     if [[ "${GRAFANA_ENABLED:-${ENABLE_GRAFANA:-false}}" == "true" ]]; then
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
-grafana.${BASE_DOMAIN} {
+$(_site "grafana.${BASE_DOMAIN}") {
+$(_tls)
     reverse_proxy ${TENANT_PREFIX}-grafana:3000
 }
 EOF
@@ -2378,7 +2474,8 @@ EOF
     if [[ "${ZEP_ENABLED:-${ENABLE_ZEP:-false}}" == "true" ]]; then
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
-zep.${BASE_DOMAIN} {
+$(_site "zep.${BASE_DOMAIN}") {
+$(_tls)
     reverse_proxy ${TENANT_PREFIX}-zep:8000
 }
 EOF
@@ -2388,7 +2485,8 @@ EOF
     if [[ "${LETTA_ENABLED:-${ENABLE_LETTA:-false}}" == "true" ]]; then
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
-letta.${BASE_DOMAIN} {
+$(_site "letta.${BASE_DOMAIN}") {
+$(_tls)
     reverse_proxy ${TENANT_PREFIX}-letta:8283
 }
 EOF
@@ -2398,7 +2496,8 @@ EOF
     if [[ "${CODE_SERVER_ENABLED:-${ENABLE_CODE_SERVER:-false}}" == "true" ]]; then
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
-code.${BASE_DOMAIN} {
+$(_site "code.${BASE_DOMAIN}") {
+$(_tls)
     reverse_proxy ${TENANT_PREFIX}-code-server:8080
 }
 EOF
@@ -2443,7 +2542,7 @@ ZEPEOF
         fi
 
         # Letta agent runtime monitoring (if enabled)
-        if [[ "${LETTA_ENABLED:-false}}" == "true" ]]; then
+        if [[ "${LETTA_ENABLED:-false}" == "true" ]]; then
             cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << LETTAEOF
 
   # Letta agent runtime monitoring
@@ -2456,7 +2555,7 @@ LETTAEOF
         fi
 
         # Dify API monitoring (if enabled)
-        if [[ "${DIFY_ENABLED:-false}}" == "true" ]]; then
+        if [[ "${DIFY_ENABLED:-false}" == "true" ]]; then
             cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << DIFYEEOF
 
   # Dify API monitoring
@@ -2469,7 +2568,7 @@ DIFYEEOF
         fi
 
         # Dify worker monitoring (if enabled)
-        if [[ "${DIFY_ENABLED:-false}}" == "true" ]]; then
+        if [[ "${DIFY_ENABLED:-false}" == "true" ]]; then
             cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << DIFYWORKEREOF
 
   # Dify worker monitoring
@@ -2495,7 +2594,7 @@ CODESERVEREOF
         fi
 
         # N8N automation monitoring (if enabled)
-        if [[ "${N8N_ENABLED:-false}}" == "true" ]]; then
+        if [[ "${N8N_ENABLED:-false}" == "true" ]]; then
             cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << N8NEOF
 
   # N8N automation monitoring
@@ -2508,7 +2607,7 @@ N8NEOF
         fi
 
         # Flowise monitoring (if enabled)
-        if [[ "${FLOWISE_ENABLED:-false}}" == "true" ]]; then
+        if [[ "${FLOWISE_ENABLED:-false}" == "true" ]]; then
             cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << FLOWISEEOF
 
   # Flowise monitoring
@@ -2521,7 +2620,7 @@ FLOWISEEOF
         fi
 
         # AnythingLLM monitoring (if enabled)
-        if [[ "${ANYTHINGLLM_ENABLED:-false}}" == "true" ]]; then
+        if [[ "${ANYTHINGLLM_ENABLED:-false}" == "true" ]]; then
             cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << ANYTHINGLLMEOF
 
   # AnythingLLM monitoring
@@ -2534,7 +2633,7 @@ ANYTHINGLLMEOF
         fi
 
         # OpenWebUI monitoring (if enabled)
-        if [[ "${OPENWEBUI_ENABLED:-false}}" == "true" ]]; then
+        if [[ "${OPENWEBUI_ENABLED:-false}" == "true" ]]; then
             cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << OPENWEBUIEOF
 
   # OpenWebUI monitoring
@@ -2547,7 +2646,7 @@ OPENWEBUIEOF
         fi
 
         # LibreChat monitoring (if enabled)
-        if [[ "${LIBRECHAT_ENABLED:-false}}" == "true" ]]; then
+        if [[ "${LIBRECHAT_ENABLED:-false}" == "true" ]]; then
             cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << LIBRECHATEOF
 
   # LibreChat monitoring
@@ -2560,7 +2659,7 @@ LIBRECHATEOF
         fi
 
         # OpenClaw monitoring (if enabled)
-        if [[ "${OPENCLAW_ENABLED:-false}}" == "true" ]]; then
+        if [[ "${OPENCLAW_ENABLED:-false}" == "true" ]]; then
             cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << OPENCLAWEOF
 
   # OpenClaw monitoring
@@ -2573,7 +2672,7 @@ OPENCLAWEOF
         fi
 
         # Authentik SSO monitoring (if enabled)
-        if [[ "${AUTHENTIK_ENABLED:-false}}" == "true" ]]; then
+        if [[ "${AUTHENTIK_ENABLED:-false}" == "true" ]]; then
             cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << AUTHENTIKEOF
 
   # Authentik SSO monitoring
@@ -2652,11 +2751,11 @@ QDRANTEOF
     scrape_interval: 30s
 RCLONEEOF
         fi
-MONITOREOF
 
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
-prometheus.${BASE_DOMAIN} {
+$(_site "prometheus.${BASE_DOMAIN}") {
+$(_tls)
     reverse_proxy ${TENANT_PREFIX}-prometheus:9090
 }
 EOF
@@ -2666,7 +2765,8 @@ EOF
     if [[ "${SIGNALBOT_ENABLED:-${ENABLE_SIGNALBOT:-false}}" == "true" ]]; then
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
-signal.${BASE_DOMAIN} {
+$(_site "signal.${BASE_DOMAIN}") {
+$(_tls)
     reverse_proxy ${TENANT_PREFIX}-signalbot:8080
 }
 EOF
@@ -2676,7 +2776,8 @@ EOF
     if [[ "${SEARXNG_ENABLED:-${ENABLE_SEARXNG:-false}}" == "true" ]]; then
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
-search.${BASE_DOMAIN} {
+$(_site "search.${BASE_DOMAIN}") {
+$(_tls)
     reverse_proxy ${TENANT_PREFIX}-searxng:8888
 }
 EOF
@@ -2687,7 +2788,7 @@ EOF
     # acceptance in the browser, blocking XHR and making /install hang.
 
     chown -R "$PUID:$PGID" "${CONFIG_DIR}/caddy"
-    ok "Caddyfile generated"
+    ok "Caddyfile generated (TLS mode: ${_effective_tls}, HTTPS port: ${CADDY_HTTPS_PORT:-443})"
 }
 
 # =============================================================================
