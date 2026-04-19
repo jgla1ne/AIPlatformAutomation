@@ -703,26 +703,14 @@ select_stack_preset() {
     echo "  Services can always be added/removed after initial setup via Script 3."
     echo ""
     local preset_choice=0
-    # If STACK_NAME is pre-set from template, map it to the menu choice and skip the prompt
-    if [[ -n "${STACK_NAME:-}" ]]; then
-        case "${STACK_NAME}" in
-            minimal)     preset_choice=0 ;;
-            development) preset_choice=1 ;;
-            coding)      preset_choice=2 ;;
-            standard)    preset_choice=3 ;;
-            full)        preset_choice=4 ;;
-            custom)      preset_choice=5 ;;
-        esac
-        echo "  ✨ Stack preset: ${STACK_NAME} (from environment)"
-    else
-        select_menu_option "Stack Preset Selection" \
-            "MINIMAL (~4 GB RAM)  — PostgreSQL · Redis · Ollama · LiteLLM · OpenWebUI · Qdrant" \
-            "DEVELOPMENT (~6 GB)  — Minimal + Code Server · Continue.dev config" \
-            "CODING (~8 GB)       — Development + Grafana · Prometheus · SearXNG (AI dev optimized)" \
-            "STANDARD (~8 GB)     — Development + N8N · Flowise · Grafana · Prometheus · Zep (memory)" \
-            "FULL (~16 GB)        — Standard + OpenClaw · AnythingLLM · Dify · Authentik · SignalBot · Zep · Letta · Continue.dev" \
-            "CUSTOM               — Pick every service individually (full control)" || preset_choice=$?
-    fi
+    [[ -n "${STACK_NAME:-}" ]] && echo "  ℹ  Current stack: ${STACK_NAME}"
+    select_menu_option "Stack Preset Selection" \
+        "MINIMAL (~4 GB RAM)  — PostgreSQL · Redis · Ollama · LiteLLM · OpenWebUI · Qdrant" \
+        "DEVELOPMENT (~6 GB)  — Minimal + Code Server · Continue.dev config" \
+        "CODING (~8 GB)       — Development + Grafana · Prometheus · SearXNG (AI dev optimized)" \
+        "STANDARD (~8 GB)     — Development + N8N · Flowise · Grafana · Prometheus · Zep (memory)" \
+        "FULL (~16 GB)        — Standard + OpenClaw · AnythingLLM · Dify · Authentik · SignalBot · Zep · Letta · Continue.dev" \
+        "CUSTOM               — Pick every service individually (full control)" || preset_choice=$?
 
     case $preset_choice in
         0) STACK_PRESET="1"; STACK_NAME="minimal" ;;
@@ -887,27 +875,13 @@ select_memory_layer() {
     echo ""
 
     local choice=0
-    # If ENABLE_ZEP/ENABLE_LETTA pre-set from template, skip the menu
-    if [[ -n "${ENABLE_ZEP:-}" || -n "${ENABLE_LETTA:-}" ]]; then
-        local _zep="${ENABLE_ZEP:-false}"
-        local _letta="${ENABLE_LETTA:-false}"
-        if [[ "$_zep" == "true" && "$_letta" == "true" ]]; then
-            choice=3
-        elif [[ "$_zep" == "true" ]]; then
-            choice=1
-        elif [[ "$_letta" == "true" ]]; then
-            choice=2
-        else
-            choice=0
-        fi
-        echo "  ✨ Memory layer: zep=${_zep} letta=${_letta} (from environment)"
-    else
-        select_menu_option "Memory Layer" \
-            "NONE     — No memory service" \
-            "ZEP CE   — Conversation memory only (recommended, lighter)" \
-            "LETTA    — Agent memory only (MemGPT)" \
-            "BOTH     — Zep CE + Letta" || choice=$?
-    fi
+    [[ -n "${ENABLE_ZEP:-}" || -n "${ENABLE_LETTA:-}" ]] && \
+        echo "  ℹ  Current memory: zep=${ENABLE_ZEP:-false} letta=${ENABLE_LETTA:-false}"
+    select_menu_option "Memory Layer" \
+        "NONE     — No memory service" \
+        "ZEP CE   — Conversation memory only (recommended, lighter)" \
+        "LETTA    — Agent memory only (MemGPT)" \
+        "BOTH     — Zep CE + Letta" || choice=$?
 
     ENABLE_ZEP="false"
     ENABLE_LETTA="false"
@@ -1266,29 +1240,22 @@ configure_tls() {
     echo ""
     
     local tls_choice=0
-    # If TLS_MODE is pre-set from template, map it to the menu choice and skip the prompt
-    if [[ -n "${TLS_MODE:-}" && "${TLS_MODE}" != "none" ]] || [[ "${TLS_MODE:-}" == "none" && -n "${TLS_MODE:-}" ]]; then
-        case "${TLS_MODE}" in
-            letsencrypt) tls_choice=0 ;;
-            manual)      tls_choice=1 ;;
-            selfsigned)  tls_choice=2 ;;
-            none)        tls_choice=3 ;;
-        esac
-        echo "  ✨ TLS mode: ${TLS_MODE} (from environment)"
-    else
-        select_menu_option "TLS Certificate Selection" \
-            "LET'S ENCRYPT - Automatic free certificates for production (recommended)" \
-            "MANUAL CERTIFICATES - Provide your own cert/key files" \
-            "SELF-SIGNED - Auto-generated cert for development/internal use" \
-            "HTTP ONLY - No TLS (internal networks only)" || tls_choice=$?
-
-        case $tls_choice in
-            0) TLS_MODE="letsencrypt" ;;
-            1) TLS_MODE="manual" ;;
-            2) TLS_MODE="selfsigned" ;;
-            3) TLS_MODE="none" ;;
-        esac
+    # Show current value as a hint if already configured
+    if [[ -n "${TLS_MODE:-}" ]]; then
+        echo "  ℹ  Current TLS mode: ${TLS_MODE}"
     fi
+    select_menu_option "TLS Certificate Selection" \
+        "LET'S ENCRYPT - Automatic free certificates for production (recommended)" \
+        "MANUAL CERTIFICATES - Provide your own cert/key files" \
+        "SELF-SIGNED - Auto-generated cert for development/internal use" \
+        "HTTP ONLY - No TLS (internal networks only)" || tls_choice=$?
+
+    case $tls_choice in
+        0) TLS_MODE="letsencrypt" ;;
+        1) TLS_MODE="manual" ;;
+        2) TLS_MODE="selfsigned" ;;
+        3) TLS_MODE="none" ;;
+    esac
 
     # Collect HTTP→HTTPS redirect exactly once here; never re-ask in configure_proxy
     if [[ "$TLS_MODE" != "none" ]]; then
@@ -1551,31 +1518,17 @@ collect_api_keys() {
     echo "     This determines which provider gets first priority when multiple are available"
     echo ""
     local preferred_provider_choice=0
-    # If PREFERRED_LLM_PROVIDER is pre-set from template, use it and skip the menu
-    if [[ -n "${PREFERRED_LLM_PROVIDER:-}" ]]; then
-        case "${PREFERRED_LLM_PROVIDER}" in
-            openai)      preferred_provider_choice=0 ;;
-            anthropic)   preferred_provider_choice=1 ;;
-            google)      preferred_provider_choice=2 ;;
-            groq)        preferred_provider_choice=3 ;;
-            cohere)      preferred_provider_choice=4 ;;
-            huggingface) preferred_provider_choice=5 ;;
-            ollama)      preferred_provider_choice=6 ;;
-            openrouter)  preferred_provider_choice=7 ;;
-            mammouth)    preferred_provider_choice=8 ;;
-        esac
-        echo "  ✨ Preferred LLM provider: ${PREFERRED_LLM_PROVIDER} (from environment)"
-    else
-        select_menu_option "Preferred LLM Provider (Routing Priority)" \
-            "OpenAI - GPT-4 and GPT-3.5 models" \
-            "Anthropic Claude - Claude 3 family" \
-            "Google AI - Gemini models" \
-            "Groq - Fast inference with Llama models" \
-            "Cohere - Command models" \
-            "Hugging Face - Open model hub" \
-            "Local Ollama - Self-hosted models" \
-            "OpenRouter - Multi-provider aggregator" \
-            "Mammouth - mammouth.ai models" || preferred_provider_choice=$?
+    [[ -n "${PREFERRED_LLM_PROVIDER:-}" ]] && echo "  ℹ  Current preferred provider: ${PREFERRED_LLM_PROVIDER}"
+    select_menu_option "Preferred LLM Provider (Routing Priority)" \
+        "OpenAI - GPT-4 and GPT-3.5 models" \
+        "Anthropic Claude - Claude 3 family" \
+        "Google AI - Gemini models" \
+        "Groq - Fast inference with Llama models" \
+        "Cohere - Command models" \
+        "Hugging Face - Open model hub" \
+        "Local Ollama - Self-hosted models" \
+        "OpenRouter - Multi-provider aggregator" \
+        "Mammouth - mammouth.ai models" || preferred_provider_choice=$?
 
         case $preferred_provider_choice in
             0) PREFERRED_LLM_PROVIDER="openai" ;;
@@ -1645,12 +1598,7 @@ select_ollama_models() {
     echo "      Multiple: gemma4:4b,gemma4:26b,gemma4:31b (comma-separated)"
     echo ""
     
-    # If OLLAMA_MODELS is pre-set from template/environment, use it directly and skip the menu
-    if [[ -n "${OLLAMA_MODELS:-}" ]]; then
-        echo "  ✨ Using pre-configured Ollama models: ${OLLAMA_MODELS} (from environment)"
-        OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-$(echo "${OLLAMA_MODELS}" | cut -d',' -f1)}"
-        return 0
-    fi
+    [[ -n "${OLLAMA_MODELS:-}" ]] && echo "  ℹ  Current models: ${OLLAMA_MODELS}"
 
     echo "  Select models (comma-separated numbers, e.g., 19,20,21):"
     echo -n "  Models selection [1-23]: "
@@ -1814,18 +1762,10 @@ configure_proxy() {
 
     echo ""
     local proxy_choice=0
-    # If PROXY_TYPE is pre-set from template, skip the menu
-    if [[ -n "${PROXY_TYPE:-}" && "${PROXY_TYPE}" != "none" ]]; then
-        case "${PROXY_TYPE}" in
-            caddy) proxy_choice=0 ;;
-            npm)   proxy_choice=1 ;;
-        esac
-        echo "  ✨ Proxy type: ${PROXY_TYPE} (from environment)"
-    else
-        select_menu_option "Reverse Proxy Type" \
-            "CADDY             — Auto-configures all routes; Caddyfile generated by Script 2" \
-            "NGINX PROXY MGR   — Web UI at :81 for manual route management (more flexible)" || proxy_choice=$?
-    fi
+    [[ -n "${PROXY_TYPE:-}" ]] && echo "  ℹ  Current proxy: ${PROXY_TYPE}"
+    select_menu_option "Reverse Proxy Type" \
+        "CADDY             — Auto-configures all routes; Caddyfile generated by Script 2" \
+        "NGINX PROXY MGR   — Web UI at :81 for manual route management (more flexible)" || proxy_choice=$?
 
     ENABLE_CADDY="false"
     ENABLE_NPM="false"
