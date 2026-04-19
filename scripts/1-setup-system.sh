@@ -21,6 +21,11 @@ set -euo pipefail
 # =============================================================================
 export DEBIAN_FRONTEND=noninteractive
 
+# Use system Docker socket if DOCKER_HOST points to a non-existent rootless socket
+if [[ "${DOCKER_HOST:-}" == unix://* ]] && [[ ! -S "${DOCKER_HOST#unix://}" ]]; then
+    export DOCKER_HOST=unix:///var/run/docker.sock
+fi
+
 # =============================================================================
 # NON-ROOT EXECUTION CHECK (README P7)
 # =============================================================================
@@ -149,7 +154,7 @@ safe_read() {
             # Check if value is empty for required fields
             if [[ -z "$value" && -z "$default" ]]; then
                 echo "  ❌ This field is required. Please enter a value."
-                ((attempts++))
+                attempts=$((attempts + 1))
                 continue
             fi
             
@@ -158,7 +163,7 @@ safe_read() {
             # Validate if pattern provided
             if [[ -n "$validation_pattern" && ! "$value" =~ $validation_pattern ]]; then
                 echo "  ❌ Invalid format. Please try again."
-                ((attempts++))
+                attempts=$((attempts + 1))
                 continue
             fi
             
@@ -197,6 +202,24 @@ safe_read_yesno() {
         true|yes) default="y" ;;
         false|no) default="n" ;;
     esac
+
+    # Check for env var override first (same as safe_read does)
+    local env_val
+    env_val=$(printenv "${varname}" 2>/dev/null || true)
+    if [[ -n "$env_val" ]]; then
+        case "${env_val,,}" in
+            true|yes|y)
+                echo "  ✨ ${prompt}: true (from environment)"
+                printf -v "${varname}" '%s' "true"
+                return 0
+                ;;
+            false|no|n)
+                echo "  ✨ ${prompt}: false (from environment)"
+                printf -v "${varname}" '%s' "false"
+                return 0
+                ;;
+        esac
+    fi
 
     # Real TTY - show prompt and wait for input
     while [[ $attempts -lt $max_attempts ]]; do
@@ -242,7 +265,7 @@ safe_read_yesno() {
                 ;;
             *) 
                 echo "  ❌ Please enter 'y' or 'n'"
-                ((attempts++))
+                attempts=$((attempts + 1))
                 ;;
         esac
     done
@@ -358,10 +381,13 @@ configure_storage() {
     
     # Direct to EBS detection and selection
     detect_and_select_ebs
-    
-    # Create mount point directory
-    mkdir -p "/mnt/${TENANT_ID}"
-    
+        
+    # Create mount point (EBS case already handled by format_and_mount_ebs)
+    [[ -d "/mnt/${TENANT_ID}" ]] || sudo mkdir -p "/mnt/${TENANT_ID}" 2>/dev/null || warn "Could not create /mnt/${TENANT_ID} — check permissions"
+    if [[ "${USE_EBS:-false}" != "true" ]]; then
+        sudo chown "$(id -u):$(id -g)" "/mnt/${TENANT_ID}" 2>/dev/null || true
+    fi
+
     # Set data directory
     DATA_DIR="/mnt/${TENANT_ID}"
     
@@ -415,7 +441,7 @@ detect_and_select_ebs() {
 
         # Annotate mount status — flag other tenants clearly to prevent accidental overwrite
         local current_mount
-        current_mount=$(lsblk -no MOUNTPOINT "$dev" 2>/dev/null | grep -v '^$' | tr '\n' ' ' | sed 's/ $//')
+        current_mount=$(lsblk -no MOUNTPOINT "$dev" 2>/dev/null | grep -v '^$' | tr '\n' ' ' | sed 's/ $//' || true)
         if [[ -n "$current_mount" ]]; then
             if [[ "$current_mount" == "/mnt/${TENANT_ID}" ]]; then
                 label+="  [already mounted for THIS tenant — will reuse]"
@@ -438,16 +464,17 @@ detect_and_select_ebs() {
     descriptions+=("Use OS disk — no separate volume (data under /mnt/${TENANT_ID})")
 
     if [[ ${#devices[@]} -gt 1 ]]; then
+        local choice
         select_menu_option "Block Device Selection" "${descriptions[@]}"
-        local choice=$?
+        choice=$?
 
         if [[ $choice -eq $((${#devices[@]}-1)) ]]; then
-            echo "✅ Selected: OS disk storage"
+            echo " Selected: OS disk storage"
             EBS_DEVICE=""
             USE_EBS="false"
         else
             EBS_DEVICE="${devices[$choice]}"
-            echo "✅ Selected: $EBS_DEVICE"
+            echo "  Selected: $EBS_DEVICE"
             USE_EBS="true"
             format_and_mount_ebs
         fi
@@ -597,9 +624,12 @@ SUDO_EOF
 configure_docker_dataroot() {
     local target_root="${DATA_DIR}/docker"
 
-    # Check current data-root
+    # Check current data-root — try system socket first (in case DOCKER_HOST points to non-existent rootless socket)
     local current_root
-    current_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "/var/lib/docker")
+    current_root=$(DOCKER_HOST=unix:///var/run/docker.sock docker info --format '{{.DockerRootDir}}' 2>/dev/null \
+        || docker info --format '{{.DockerRootDir}}' 2>/dev/null \
+        || grep -o '"data-root"[[:space:]]*:[[:space:]]*"[^"]*"' /etc/docker/daemon.json 2>/dev/null | grep -o '"[^"]*"$' | tr -d '"' \
+        || echo "/var/lib/docker")
 
     if [[ "$current_root" == "$target_root" ]]; then
         log "Docker data-root already set to ${target_root} — skipping"
@@ -672,14 +702,27 @@ select_stack_preset() {
     
     echo "  Services can always be added/removed after initial setup via Script 3."
     echo ""
-    select_menu_option "Stack Preset Selection" \
-        "MINIMAL (~4 GB RAM)  — PostgreSQL · Redis · Ollama · LiteLLM · OpenWebUI · Qdrant" \
-        "DEVELOPMENT (~6 GB)  — Minimal + Code Server · Continue.dev config" \
-        "CODING (~8 GB)       — Development + Grafana · Prometheus · SearXNG (AI dev optimized)" \
-        "STANDARD (~8 GB)     — Development + N8N · Flowise · Grafana · Prometheus · Zep (memory)" \
-        "FULL (~16 GB)        — Standard + OpenClaw · AnythingLLM · Dify · Authentik · SignalBot · Zep · Letta · Continue.dev" \
-        "CUSTOM               — Pick every service individually (full control)"
-    local preset_choice=$?
+    local preset_choice=0
+    # If STACK_NAME is pre-set from template, map it to the menu choice and skip the prompt
+    if [[ -n "${STACK_NAME:-}" ]]; then
+        case "${STACK_NAME}" in
+            minimal)     preset_choice=0 ;;
+            development) preset_choice=1 ;;
+            coding)      preset_choice=2 ;;
+            standard)    preset_choice=3 ;;
+            full)        preset_choice=4 ;;
+            custom)      preset_choice=5 ;;
+        esac
+        echo "  ✨ Stack preset: ${STACK_NAME} (from environment)"
+    else
+        select_menu_option "Stack Preset Selection" \
+            "MINIMAL (~4 GB RAM)  — PostgreSQL · Redis · Ollama · LiteLLM · OpenWebUI · Qdrant" \
+            "DEVELOPMENT (~6 GB)  — Minimal + Code Server · Continue.dev config" \
+            "CODING (~8 GB)       — Development + Grafana · Prometheus · SearXNG (AI dev optimized)" \
+            "STANDARD (~8 GB)     — Development + N8N · Flowise · Grafana · Prometheus · Zep (memory)" \
+            "FULL (~16 GB)        — Standard + OpenClaw · AnythingLLM · Dify · Authentik · SignalBot · Zep · Letta · Continue.dev" \
+            "CUSTOM               — Pick every service individually (full control)" || preset_choice=$?
+    fi
 
     case $preset_choice in
         0) STACK_PRESET="1"; STACK_NAME="minimal" ;;
@@ -843,12 +886,28 @@ select_memory_layer() {
     echo "  Letta   — stateful agent memory server (MemGPT-style persistent agents)"
     echo ""
 
-    select_menu_option "Memory Layer" \
-        "NONE     — No memory service" \
-        "ZEP CE   — Conversation memory only (recommended, lighter)" \
-        "LETTA    — Agent memory only (MemGPT)" \
-        "BOTH     — Zep CE + Letta"
-    local choice=$?
+    local choice=0
+    # If ENABLE_ZEP/ENABLE_LETTA pre-set from template, skip the menu
+    if [[ -n "${ENABLE_ZEP:-}" || -n "${ENABLE_LETTA:-}" ]]; then
+        local _zep="${ENABLE_ZEP:-false}"
+        local _letta="${ENABLE_LETTA:-false}"
+        if [[ "$_zep" == "true" && "$_letta" == "true" ]]; then
+            choice=3
+        elif [[ "$_zep" == "true" ]]; then
+            choice=1
+        elif [[ "$_letta" == "true" ]]; then
+            choice=2
+        else
+            choice=0
+        fi
+        echo "  ✨ Memory layer: zep=${_zep} letta=${_letta} (from environment)"
+    else
+        select_menu_option "Memory Layer" \
+            "NONE     — No memory service" \
+            "ZEP CE   — Conversation memory only (recommended, lighter)" \
+            "LETTA    — Agent memory only (MemGPT)" \
+            "BOTH     — Zep CE + Letta" || choice=$?
+    fi
 
     ENABLE_ZEP="false"
     ENABLE_LETTA="false"
@@ -1009,11 +1068,11 @@ configure_llm_gateway() {
     echo "  📋 Configure LLM service gateway and model access"
     echo ""
     
+    local gateway_choice=0
     select_menu_option "LLM Gateway Selection" \
         "LITELLM - Unified API for multiple providers with load balancing" \
         "BIFROST - Advanced gateway with enterprise features" \
-        "DIRECT OLLAMA - Simple direct access to local models"
-    local gateway_choice=$?
+        "DIRECT OLLAMA - Simple direct access to local models" || gateway_choice=$?
     
     case $gateway_choice in
         0) LLM_GATEWAY_TYPE="litellm" ;;
@@ -1041,13 +1100,13 @@ configure_litellm_gateway() {
     safe_read "LiteLLM API key (auto-generated)" "$(gen_secret)" "LITELLM_MASTER_KEY"
     
     # Use menu selection for routing strategy
+    local routing_choice=0
     select_menu_option "LiteLLM Load Balancing Strategy" \
         "cost-optimized (Prefer local models, fallback to external)" \
         "least-busy (Route to least busy model)" \
         "weighted (Weighted round-robin)" \
         "simple (Round-robin)" \
-        "performance-first (Prefer fastest response time)"
-    local routing_choice=$?
+        "performance-first (Prefer fastest response time)" || routing_choice=$?
     case $routing_choice in
         0) LITELLM_ROUTING_STRATEGY="cost-optimized" ;;
         1) LITELLM_ROUTING_STRATEGY="least-busy" ;;
@@ -1107,12 +1166,12 @@ configure_vector_database() {
     echo "  📋 Configure vector database for AI memory and search"
     echo ""
     
+    local vector_choice=0
     select_menu_option "Vector Database Selection" \
         "QDRANT - High-performance vector search with built-in filtering" \
         "WEAVIATE - Enterprise GraphQL API with multi-modal support" \
         "CHROMADB - Lightweight Python-focused database" \
-        "MILVUS - Distributed cloud-native massive scale database"
-    local vector_choice=$?
+        "MILVUS - Distributed cloud-native massive scale database" || vector_choice=$?
     
     case $vector_choice in
         0) VECTOR_DB_TYPE="qdrant" ;;
@@ -1206,19 +1265,30 @@ configure_tls() {
     echo "  📋 Configure SSL/TLS certificates for secure access"
     echo ""
     
-    select_menu_option "TLS Certificate Selection" \
-        "LET'S ENCRYPT - Automatic free certificates for production (recommended)" \
-        "MANUAL CERTIFICATES - Provide your own cert/key files" \
-        "SELF-SIGNED - Auto-generated cert for development/internal use" \
-        "HTTP ONLY - No TLS (internal networks only)"
-    local tls_choice=$?
+    local tls_choice=0
+    # If TLS_MODE is pre-set from template, map it to the menu choice and skip the prompt
+    if [[ -n "${TLS_MODE:-}" && "${TLS_MODE}" != "none" ]] || [[ "${TLS_MODE:-}" == "none" && -n "${TLS_MODE:-}" ]]; then
+        case "${TLS_MODE}" in
+            letsencrypt) tls_choice=0 ;;
+            manual)      tls_choice=1 ;;
+            selfsigned)  tls_choice=2 ;;
+            none)        tls_choice=3 ;;
+        esac
+        echo "  ✨ TLS mode: ${TLS_MODE} (from environment)"
+    else
+        select_menu_option "TLS Certificate Selection" \
+            "LET'S ENCRYPT - Automatic free certificates for production (recommended)" \
+            "MANUAL CERTIFICATES - Provide your own cert/key files" \
+            "SELF-SIGNED - Auto-generated cert for development/internal use" \
+            "HTTP ONLY - No TLS (internal networks only)" || tls_choice=$?
 
-    case $tls_choice in
-        0) TLS_MODE="letsencrypt" ;;
-        1) TLS_MODE="manual" ;;
-        2) TLS_MODE="selfsigned" ;;
-        3) TLS_MODE="none" ;;
-    esac
+        case $tls_choice in
+            0) TLS_MODE="letsencrypt" ;;
+            1) TLS_MODE="manual" ;;
+            2) TLS_MODE="selfsigned" ;;
+            3) TLS_MODE="none" ;;
+        esac
+    fi
 
     # Collect HTTP→HTTPS redirect exactly once here; never re-ask in configure_proxy
     if [[ "$TLS_MODE" != "none" ]]; then
@@ -1431,22 +1501,32 @@ collect_api_keys() {
     safe_read_yesno "Enable Mammouth" "false" "ENABLE_MAMMOUTH"
     if [[ "$ENABLE_MAMMOUTH" == "true" ]]; then
         safe_read "Mammouth API key" "" "MAMMOUTH_API_KEY"
-        safe_read "Mammouth base URL" "https://api.mammouth.ai/v1" "MAMMOUTH_BASE_URL"
-        safe_read "Mammouth models (comma-separated)" "mammouth" "MAMMOUTH_MODELS"
+        # Auto-default base URL and models - behave like other providers
+        MAMMOUTH_BASE_URL="https://api.mammouth.ai/v1"
+        MAMMOUTH_MODELS="mammouth"
+        echo "    🎯 Auto-configured: Base URL = $MAMMOUTH_BASE_URL"
+        echo "    🎯 Auto-configured: Models = $MAMMOUTH_MODELS"
     fi
     echo ""
 
-    # Search APIs (SerpAPI + Brave)
+    # Search APIs (SerpAPI + Brave) - Only if SearXNG not enabled
     echo "  🔍 Search API Configuration:"
-    echo "     (Enables web search in OpenClaw, N8N, Flowise, and AnythingLLM)"
-    safe_read_yesno "Enable SerpAPI (Google/Bing/DDG search)" "false" "ENABLE_SERPAPI"
-    if [[ "$ENABLE_SERPAPI" == "true" ]]; then
-        safe_read "SerpAPI key" "" "SERPAPI_KEY"
-        safe_read "SerpAPI engine" "google" "SERPAPI_ENGINE"
-    fi
-    safe_read_yesno "Enable Brave Search API" "false" "ENABLE_BRAVE"
-    if [[ "$ENABLE_BRAVE" == "true" ]]; then
-        safe_read "Brave Search API key" "" "BRAVE_API_KEY"
+    echo "     (Modular architecture: SearXNG provides search, external APIs optional)"
+    if [[ "${SEARXNG_ENABLED:-false}" != "true" ]]; then
+        safe_read_yesno "Enable SerpAPI (Google/Bing/DDG search)" "false" "ENABLE_SERPAPI"
+        if [[ "$ENABLE_SERPAPI" == "true" ]]; then
+            safe_read "SerpAPI key" "" "SERPAPI_KEY"
+            safe_read "SerpAPI engine" "google" "SERPAPI_ENGINE"
+        fi
+        echo ""
+        safe_read_yesno "Enable Brave Search API" "false" "ENABLE_BRAVESEARCH"
+        if [[ "$ENABLE_BRAVESEARCH" == "true" ]]; then
+            safe_read "Brave Search API key" "" "BRAVE_API_KEY"
+        fi
+    else
+        echo "     ✅ SearXNG enabled - external search APIs not needed"
+        ENABLE_SERPAPI="false"
+        ENABLE_BRAVESEARCH="false"
     fi
     echo ""
 
@@ -1455,7 +1535,14 @@ collect_api_keys() {
     safe_read_yesno "Enable local models" "true" "ENABLE_LOCAL_MODELS"
     if [[ "$ENABLE_LOCAL_MODELS" == "true" ]]; then
         select_ollama_models
-        safe_read_yesno "Auto-download models" "true" "OLLAMA_AUTO_DOWNLOAD"
+        safe_read_yesno "Auto-download models in Script 2" "true" "OLLAMA_AUTO_DOWNLOAD"
+    if [[ "$OLLAMA_AUTO_DOWNLOAD" == "true" ]]; then
+        echo "    📥 Models will be downloaded during deployment"
+        echo "    📥 Use 'no' to deploy without models, add later via Script 3"
+    else
+        echo "    ⏭ Skipping model download in Script 2"
+        echo "    💡 Models can be added later via Script 3 --configure-models"
+    fi
     fi
     echo ""
     
@@ -1463,29 +1550,45 @@ collect_api_keys() {
     echo "  🎯 Select your preferred LLM provider for LiteLLM routing priority:"
     echo "     This determines which provider gets first priority when multiple are available"
     echo ""
-    select_menu_option "Preferred LLM Provider (Routing Priority)" \
-        "OpenAI - GPT-4 and GPT-3.5 models" \
-        "Anthropic Claude - Claude 3 family" \
-        "Google AI - Gemini models" \
-        "Groq - Fast inference with Llama models" \
-        "Cohere - Command models" \
-        "Hugging Face - Open model hub" \
-        "Local Ollama - Self-hosted models" \
-        "OpenRouter - Multi-provider aggregator" \
-        "Mammouth - mammouth.ai models"
-    local preferred_provider_choice=$?
+    local preferred_provider_choice=0
+    # If PREFERRED_LLM_PROVIDER is pre-set from template, use it and skip the menu
+    if [[ -n "${PREFERRED_LLM_PROVIDER:-}" ]]; then
+        case "${PREFERRED_LLM_PROVIDER}" in
+            openai)      preferred_provider_choice=0 ;;
+            anthropic)   preferred_provider_choice=1 ;;
+            google)      preferred_provider_choice=2 ;;
+            groq)        preferred_provider_choice=3 ;;
+            cohere)      preferred_provider_choice=4 ;;
+            huggingface) preferred_provider_choice=5 ;;
+            ollama)      preferred_provider_choice=6 ;;
+            openrouter)  preferred_provider_choice=7 ;;
+            mammouth)    preferred_provider_choice=8 ;;
+        esac
+        echo "  ✨ Preferred LLM provider: ${PREFERRED_LLM_PROVIDER} (from environment)"
+    else
+        select_menu_option "Preferred LLM Provider (Routing Priority)" \
+            "OpenAI - GPT-4 and GPT-3.5 models" \
+            "Anthropic Claude - Claude 3 family" \
+            "Google AI - Gemini models" \
+            "Groq - Fast inference with Llama models" \
+            "Cohere - Command models" \
+            "Hugging Face - Open model hub" \
+            "Local Ollama - Self-hosted models" \
+            "OpenRouter - Multi-provider aggregator" \
+            "Mammouth - mammouth.ai models" || preferred_provider_choice=$?
 
-    case $preferred_provider_choice in
-        0) PREFERRED_LLM_PROVIDER="openai" ;;
-        1) PREFERRED_LLM_PROVIDER="anthropic" ;;
-        2) PREFERRED_LLM_PROVIDER="google" ;;
-        3) PREFERRED_LLM_PROVIDER="groq" ;;
-        4) PREFERRED_LLM_PROVIDER="cohere" ;;
-        5) PREFERRED_LLM_PROVIDER="huggingface" ;;
-        6) PREFERRED_LLM_PROVIDER="ollama" ;;
-        7) PREFERRED_LLM_PROVIDER="openrouter" ;;
-        8) PREFERRED_LLM_PROVIDER="mammouth" ;;
-    esac
+        case $preferred_provider_choice in
+            0) PREFERRED_LLM_PROVIDER="openai" ;;
+            1) PREFERRED_LLM_PROVIDER="anthropic" ;;
+            2) PREFERRED_LLM_PROVIDER="google" ;;
+            3) PREFERRED_LLM_PROVIDER="groq" ;;
+            4) PREFERRED_LLM_PROVIDER="cohere" ;;
+            5) PREFERRED_LLM_PROVIDER="huggingface" ;;
+            6) PREFERRED_LLM_PROVIDER="ollama" ;;
+            7) PREFERRED_LLM_PROVIDER="openrouter" ;;
+            8) PREFERRED_LLM_PROVIDER="mammouth" ;;
+        esac
+    fi
     
     echo ""
     echo "  ✅ Preferred provider for routing: ${PREFERRED_LLM_PROVIDER^}"
@@ -1542,12 +1645,27 @@ select_ollama_models() {
     echo "      Multiple: gemma4:4b,gemma4:26b,gemma4:31b (comma-separated)"
     echo ""
     
+    # If OLLAMA_MODELS is pre-set from template/environment, use it directly and skip the menu
+    if [[ -n "${OLLAMA_MODELS:-}" ]]; then
+        echo "  ✨ Using pre-configured Ollama models: ${OLLAMA_MODELS} (from environment)"
+        OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-$(echo "${OLLAMA_MODELS}" | cut -d',' -f1)}"
+        return 0
+    fi
+
     echo "  Select models (comma-separated numbers, e.g., 19,20,21):"
     echo -n "  Models selection [1-23]: "
-    read -r selection
-    
+    if [[ -t 0 ]]; then
+        read -r selection
+    else
+        # Non-TTY: try piped input with timeout, else use default
+        if ! read -t 5 -r selection 2>/dev/null; then
+            selection="19,17"  # Default: Gemma 4 4B + Llama 3.2 3B (compact, CPU-friendly)
+            echo "  (using default: $selection)"
+        fi
+    fi
+
     if [[ -z "$selection" ]]; then
-        selection="9,16"  # Default: Gemma 2 9B + Llama 3.2 3B
+        selection="19,17"  # Default: Gemma 4 4B + Llama 3.2 3B
     fi
     
     # Convert selection to model names
@@ -1573,9 +1691,9 @@ select_ollama_models() {
             16) models="${models:+$models,}smollm2:1.7b" ;;
             17) models="${models:+$models,}llama3.2:3b" ;;
             18) models="${models:+$models,}mistral:7b" ;;
-            19) models="${models:+$models,}gemma4:4b" ;;
-            20) models="${models:+$models,}gemma4:26b" ;;
-            21) models="${models:+$models,}gemma4:31b" ;;
+            19) models="${models:+$models,}gemma3:4b" ;;
+            20) models="${models:+$models,}gemma3:12b" ;;
+            21) models="${models:+$models,}gemma3:27b" ;;
             22) models="${models:+$models,}llama3.2:3b" ;;
             23) 
                 echo ""
@@ -1598,7 +1716,7 @@ select_ollama_models() {
         OLLAMA_MODELS="$models"
         echo "  ✅ Selected models: $OLLAMA_MODELS"
     else
-        OLLAMA_MODELS="gemma4:4b,gemma4:26b"
+        OLLAMA_MODELS="gemma3:4b,llama3.2:3b"
         echo "  ✅ No valid models selected, using defaults: $OLLAMA_MODELS"
     fi
 }
@@ -1695,10 +1813,19 @@ configure_proxy() {
     fi
 
     echo ""
-    select_menu_option "Reverse Proxy Type" \
-        "CADDY             — Auto-configures all routes; Caddyfile generated by Script 2" \
-        "NGINX PROXY MGR   — Web UI at :81 for manual route management (more flexible)"
-    local proxy_choice=$?
+    local proxy_choice=0
+    # If PROXY_TYPE is pre-set from template, skip the menu
+    if [[ -n "${PROXY_TYPE:-}" && "${PROXY_TYPE}" != "none" ]]; then
+        case "${PROXY_TYPE}" in
+            caddy) proxy_choice=0 ;;
+            npm)   proxy_choice=1 ;;
+        esac
+        echo "  ✨ Proxy type: ${PROXY_TYPE} (from environment)"
+    else
+        select_menu_option "Reverse Proxy Type" \
+            "CADDY             — Auto-configures all routes; Caddyfile generated by Script 2" \
+            "NGINX PROXY MGR   — Web UI at :81 for manual route management (more flexible)" || proxy_choice=$?
+    fi
 
     ENABLE_CADDY="false"
     ENABLE_NPM="false"
@@ -1740,16 +1867,15 @@ configure_proxy() {
 configure_google_drive() {
     section "📁 GOOGLE DRIVE INTEGRATION"
     
-    echo "  📋 Configure Google Drive backup and sync"
-    echo ""
-    
-    safe_read_yesno "Enable Google Drive integration" "false" "ENABLE_GDRIVE"
+    echo "  📂 Google Drive Integration:"
+    safe_read_yesno "Enable Google Drive ingestion" "false" "ENABLE_GDRIVE"
     if [[ "$ENABLE_GDRIVE" == "true" ]]; then
-        echo ""
         safe_read "Google Drive Folder ID" "" "GDRIVE_FOLDER_ID"
         safe_read "Google Drive Folder Name [AI Platform]" "AI Platform" "GDRIVE_FOLDER_NAME"
-        
-        echo ""
+    fi
+    
+    echo ""
+    if [[ "$ENABLE_GDRIVE" == "true" ]]; then
         echo "  ✅ Google Drive Configuration:"
         echo "    Folder ID: ${GDRIVE_FOLDER_ID:-Not set}"
         echo "    Folder Name: $GDRIVE_FOLDER_NAME"
@@ -2188,6 +2314,42 @@ write_platform_conf() {
     
     local config_file="${DATA_DIR}/config/platform.conf"
     local temp_file="/tmp/platform.conf.$$"
+    local generated_date=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local searxng_secret_key=$(gen_secret)
+    
+    # Generate ALL secrets to avoid function calls in heredoc
+    local code_server_password=$(gen_password)
+    local litellm_master_key=$(gen_secret)
+    local bifrost_admin_token=$(gen_secret)
+    local bifrost_api_key=$(gen_secret)
+    local qdrant_api_key=$(gen_secret)
+    local weaviate_api_key=$(gen_secret)
+    local chroma_auth_token=$(gen_secret)
+    local milvus_api_key=$(gen_secret)
+    local postgres_password=$(gen_password)
+    local redis_password=$(gen_password)
+    local n8n_encryption_key=$(gen_secret)
+    local grafana_admin_password=$(gen_password)
+    local litellm_ui_password=$(gen_password)
+    local openwebui_secret=$(gen_secret)
+    local flowise_password=$(gen_password)
+    local flowise_secretkey_overwrite=$(gen_secret)
+    local dify_secret_key=$(gen_secret)
+    local dify_init_password=$(openssl rand -base64 16 | tr -d '=+/')
+    local librechat_jwt_secret=$(gen_secret)
+    local librechat_crypt_key=$(openssl rand -hex 32)
+    local mongo_password=$(gen_password)
+    local authentik_secret_key=$(openssl rand -hex 50)
+    local authentik_bootstrap_password=$(openssl rand -base64 16 | tr -d '=+/')
+    local zep_auth_secret=$(openssl rand -hex 32)
+    local letta_server_pass=$(openssl rand -hex 24)
+    local anythingllm_jwt_secret=$(openssl rand -hex 32)
+    local code_server_password=$(openssl rand -base64 16 | tr -d '=+/')
+    local n8n_encryption_key=$(openssl rand -hex 32)
+    local serpapi_key=${SERPAPI_KEY:-}
+    local brave_api_key=${BRAVE_API_KEY:-}
+    local openclaw_username=${OPENCLAW_USERNAME:-ds-admin}
+    local openclaw_password=${OPENCLAW_PASSWORD:-$(gen_password)}
     
     log "🎯 Generating comprehensive configuration file..."
     
@@ -2198,17 +2360,8 @@ write_platform_conf() {
 # Platform: ${PLATFORM_PREFIX}
 # Tenant: ${TENANT_ID}
 # Domain: ${DOMAIN}
-# Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# Generated: ${generated_date}
 # =============================================================================
-
-# =============================================================================
-# IDENTITY CONFIGURATION
-# =============================================================================
-PLATFORM_PREFIX="${PLATFORM_PREFIX}"
-TENANT_ID="${TENANT_ID}"
-DOMAIN="${DOMAIN}"
-ORGANIZATION="${ORGANIZATION}"
-ADMIN_EMAIL="${ADMIN_EMAIL}"
 
 # =============================================================================
 # STORAGE CONFIGURATION
@@ -2267,7 +2420,7 @@ SIGNAL_RECIPIENT="${SIGNAL_RECIPIENT:-}"
 
 ENABLE_SEARXNG="${ENABLE_SEARXNG:-false}"
 SEARXNG_PORT="${SEARXNG_PORT:-8888}"
-SEARXNG_SECRET_KEY="${SEARXNG_SECRET_KEY:-$(gen_secret)}"
+SEARXNG_SECRET_KEY="${SEARXNG_SECRET_KEY:-${searxng_secret_key}}"
 
 ENABLE_BIFROST="${ENABLE_BIFROST:-false}"
 BIFROST_PORT="${BIFROST_PORT:-8000}"
@@ -2285,7 +2438,7 @@ LETTA_SERVER_PASS="${LETTA_SERVER_PASS:-}"
 # Development
 ENABLE_CODE_SERVER="${ENABLE_CODE_SERVER:-false}"
 CODE_SERVER_PORT="${CODE_SERVER_PORT:-8080}"
-CODE_SERVER_PASSWORD="${CODE_SERVER_PASSWORD:-$(gen_password)}"
+CODE_SERVER_PASSWORD="${CODE_SERVER_PASSWORD:-${code_server_password}}"
 ENABLE_CONTINUE_DEV="${ENABLE_CONTINUE_DEV:-false}"
 
 # Search APIs
@@ -2314,7 +2467,7 @@ AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}"
 AZURE_STORAGE_ACCOUNT="${AZURE_STORAGE_ACCOUNT:-}"
 AZURE_CONTAINER="${AZURE_CONTAINER:-}"
 AZURE_ACCESS_KEY="${AZURE_ACCESS_KEY:-}"
-LOCAL_INGESTION_PATH="${LOCAL_INGESTION_PATH:-/mnt/${TENANT_ID}/ingestion}"
+LOCAL_INGESTION_PATH="${LOCAL_INGESTION_PATH:-/mnt/${TENANT_ID}/ingestion/AI_Platform}"
 
 # =============================================================================
 # LLM GATEWAY CONFIGURATION
@@ -2322,14 +2475,14 @@ LOCAL_INGESTION_PATH="${LOCAL_INGESTION_PATH:-/mnt/${TENANT_ID}/ingestion}"
 LLM_GATEWAY_TYPE="${LLM_GATEWAY_TYPE:-litellm}"
 
 # LiteLLM Configuration
-LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-$(gen_secret)}"
+LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-${litellm_master_key}}"
 LITELLM_ROUTING_STRATEGY="${LITELLM_ROUTING_STRATEGY:-cost-optimized}"
 LITELLM_ENABLE_LOGGING="${LITELLM_ENABLE_LOGGING:-true}"
 LITELLM_ENABLE_COST_TRACKING="${LITELLM_ENABLE_COST_TRACKING:-true}"
 
 # Bifrost Configuration
-BIFROST_ADMIN_TOKEN="${BIFROST_ADMIN_TOKEN:-$(gen_secret)}"
-BIFROST_API_KEY="${BIFROST_API_KEY:-$(gen_secret)}"
+BIFROST_ADMIN_TOKEN="${BIFROST_ADMIN_TOKEN:-${bifrost_admin_token}}"
+BIFROST_API_KEY="${BIFROST_API_KEY:-${bifrost_api_key}}"
 BIFROST_PORT="${BIFROST_PORT:-8000}"
 
 # Direct Ollama Configuration
@@ -2343,21 +2496,21 @@ VECTOR_DB_TYPE="${VECTOR_DB_TYPE:-qdrant}"
 
 # Qdrant Configuration
 QDRANT_PORT="${QDRANT_PORT:-6333}"
-QDRANT_API_KEY="${QDRANT_API_KEY:-$(gen_secret)}"
+QDRANT_API_KEY="${QDRANT_API_KEY:-${qdrant_api_key}}"
 QDRANT_ENABLE_COLLECTIONS="${QDRANT_ENABLE_COLLECTIONS:-true}"
 
 # Weaviate Configuration
 WEAVIATE_PORT="${WEAVIATE_PORT:-8080}"
-WEAVIATE_API_KEY="${WEAVIATE_API_KEY:-$(gen_secret)}"
+WEAVIATE_API_KEY="${WEAVIATE_API_KEY:-${weaviate_api_key}}"
 WEAVIATE_ENABLE_AUTH="${WEAVIATE_ENABLE_AUTH:-true}"
 
 # ChromaDB Configuration
 CHROMA_PORT="${CHROMA_PORT:-8000}"
-CHROMA_AUTH_TOKEN="${CHROMA_AUTH_TOKEN:-$(gen_secret)}"
+CHROMA_AUTH_TOKEN="${CHROMA_AUTH_TOKEN:-${chroma_auth_token}}"
 
 # Milvus Configuration
 MILVUS_PORT="${MILVUS_PORT:-19530}"
-MILVUS_API_KEY="${MILVUS_API_KEY:-$(gen_secret)}"
+MILVUS_API_KEY="${MILVUS_API_KEY:-${milvus_api_key}}"
 
 # =============================================================================
 # TLS CONFIGURATION
@@ -2435,7 +2588,7 @@ LITELLM_PORT="${LITELLM_PORT:-4000}"
 # Web Interface Ports
 OPENWEBUI_PORT="${OPENWEBUI_PORT:-3000}"
 LIBRECHAT_PORT="${LIBRECHAT_PORT:-3080}"
-OPENCLAW_PORT="${OPENCLAW_PORT:-3081}"
+OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
 ANYTHINGLLM_PORT="${ANYTHINGLLM_PORT:-3082}"
 
 # Vector Database Ports
@@ -2489,20 +2642,6 @@ HOST_MTU="${HOST_MTU:-1500}"
 # =============================================================================
 # SECURITY CONFIGURATION
 # =============================================================================
-
-# Generate secure passwords
-POSTGRES_PASSWORD="$(gen_password)"
-REDIS_PASSWORD="$(gen_password)"
-N8N_ENCRYPTION_KEY="$(gen_secret)"
-GRAFANA_ADMIN_PASSWORD="$(gen_password)"
-
-# Export all variables
-export POSTGRES_PASSWORD
-export REDIS_PASSWORD
-export N8N_ENCRYPTION_KEY
-export GRAFANA_ADMIN_PASSWORD
-
-# =============================================================================
 # DERIVED CONFIGURATION (computed at generation time — do not edit manually)
 # =============================================================================
 
@@ -2525,26 +2664,28 @@ POSTGRES_USER="${POSTGRES_USER:-${TENANT_ID}}"
 POSTGRES_DB="${POSTGRES_DB:-${TENANT_ID}}"
 
 # Ollama default model (first in list)
-OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-gemma4:9b}"
+OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-gemma3:4b}"
 
 # Application secrets (generated once, stable across deploys)
-LITELLM_UI_PASSWORD="$(gen_password)"
-OPENWEBUI_SECRET="$(gen_secret)"
+POSTGRES_PASSWORD="${postgres_password}"
+REDIS_PASSWORD="${redis_password}"
+LITELLM_UI_PASSWORD="${litellm_ui_password}"
+OPENWEBUI_SECRET="${openwebui_secret}"
 FLOWISE_USERNAME="admin"
-FLOWISE_PASSWORD="$(gen_password)"
-FLOWISE_SECRETKEY_OVERWRITE="$(gen_secret)"
-DIFY_SECRET_KEY="$(gen_secret)"
-DIFY_INIT_PASSWORD="$(openssl rand -base64 16 | tr -d '=+/')"
-LIBRECHAT_JWT_SECRET="$(gen_secret)"
-LIBRECHAT_CRYPT_KEY="$(openssl rand -hex 32)"
-MONGO_PASSWORD="$(gen_password)"
-AUTHENTIK_SECRET_KEY="$(openssl rand -hex 50)"
-AUTHENTIK_BOOTSTRAP_PASSWORD="${ADMIN_PASSWORD:-$(openssl rand -base64 16 | tr -d '=+/')}"
-ZEP_AUTH_SECRET="$(openssl rand -hex 32)"
-LETTA_SERVER_PASS="$(openssl rand -hex 24)"
-ANYTHINGLLM_JWT_SECRET="$(openssl rand -hex 32)"
-CODE_SERVER_PASSWORD="$(openssl rand -base64 16 | tr -d '=+/')"
-N8N_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+FLOWISE_PASSWORD="${flowise_password}"
+FLOWISE_SECRETKEY_OVERWRITE="${flowise_secretkey_overwrite}"
+DIFY_SECRET_KEY="${dify_secret_key}"
+DIFY_INIT_PASSWORD="${dify_init_password}"
+LIBRECHAT_JWT_SECRET="${librechat_jwt_secret}"
+LIBRECHAT_CRYPT_KEY="${librechat_crypt_key}"
+MONGO_PASSWORD="${mongo_password}"
+AUTHENTIK_SECRET_KEY="${authentik_secret_key}"
+AUTHENTIK_BOOTSTRAP_PASSWORD="${authentik_bootstrap_password}"
+ZEP_AUTH_SECRET="${zep_auth_secret}"
+LETTA_SERVER_PASS="${letta_server_pass}"
+ANYTHINGLLM_JWT_SECRET="${anythingllm_jwt_secret}"
+CODE_SERVER_PASSWORD="${code_server_password}"
+N8N_ENCRYPTION_KEY="${n8n_encryption_key}"
 SERPAPI_KEY="${SERPAPI_KEY:-}"
 BRAVE_API_KEY="${BRAVE_API_KEY:-}"
 OPENCLAW_USERNAME="${OPENCLAW_USERNAME:-ds-admin}"
@@ -2585,12 +2726,10 @@ SIGNALBOT_ENABLED="${ENABLE_SIGNALBOT:-false}"
 SEARXNG_ENABLED="${ENABLE_SEARXNG:-false}"
 OPENCLAW_ENABLED="${ENABLE_OPENCLAW:-false}"
 OPENCLAW_IMAGE="${OPENCLAW_IMAGE:-alpine/openclaw:latest}"
-OPENCLAW_USERNAME="${OPENCLAW_USERNAME:-admin}"
-OPENCLAW_PASSWORD="${OPENCLAW_PASSWORD:-}"
 BIFROST_ENABLED="${ENABLE_BIFROST:-false}"
 ANYTHINGLLM_ENABLED="${ENABLE_ANYTHINGLLM:-false}"
 ANYTHINGLLM_JWT_SECRET="${ANYTHINGLLM_JWT_SECRET:-$(gen_secret)}"
-MEM0_ENABLED="${ENABLE_MEM0:-false}"
+# Mem0 removed from stack - no longer supported
 ZEP_ENABLED="${ENABLE_ZEP:-false}"
 LETTA_ENABLED="${ENABLE_LETTA:-false}"
 CODE_SERVER_ENABLED="${ENABLE_CODE_SERVER:-false}"
@@ -2622,6 +2761,7 @@ create_tenant_user() {
     section "👤 TENANT USER CREATION"
     
     local username="${PLATFORM_PREFIX}${TENANT_ID}"
+    TENANT_USER="$username"
     
     echo "  📋 Creating system user for tenant: ${TENANT_ID}"
     echo ""
@@ -2638,41 +2778,56 @@ create_tenant_user() {
         echo "  🏠 Using current user: $username"
         echo "  📁 Config directory: $user_config"
     else
-        # Check if user already exists
-        if id "$username" >/dev/null 2>&1; then
-            echo "  ✅ User '$username' already exists"
-            echo "  🔄 Updating user groups and permissions..."
+    if [[ "$(id -un)" == "root" ]]; then
+        useradd -m -s /bin/bash "${TENANT_USER}"
+        echo "  ✅ User ${TENANT_USER} created successfully"
+    else
+        echo "  ⚠️  User creation requires root privileges"
+        echo "  ⚠️  Current user: $(id -un) (UID: $(id -u))"
+        echo "  ⚠️  Skipping user creation - will use current user"
+        echo "  💡 Note: Some operations may require sudo later"
+    fi
+    
+    # Use current user if not root
+    username=$(whoami)
+    user_home="$HOME"
+    user_config="$user_home/.ai-platform"
+    
+    echo "  🏠 Using current user: $username"
+    echo "  📁 Config directory: $user_config"
+    
+    # Check if user already exists
+    if id "$username" >/dev/null 2>&1; then
+        echo "  ✅ User '$username' already exists"
+        echo "  🔄 Updating user groups and permissions..."
+        
+        # Add to docker group (requires sudo)
+        sudo usermod -aG docker "$username" 2>/dev/null || {
+            warn "Could not add user to docker group"
+            warn "Manual intervention may be required"
+        }
+        
+        # Update home directory
+        usermod -d "/home/$username" "$username" 2>/dev/null || true
+        
+    else
+        echo "  Creating new user: $username"
+        
+        # Create user with home directory (requires sudo)
+        if sudo useradd -m -s /bin/bash "$username" 2>/dev/null; then
+            echo "  User '$username' created successfully"
             
-            # Add to docker group
-            usermod -aG docker "$username" 2>/dev/null || {
+            # Add to docker group (requires sudo)
+            sudo usermod -aG docker "$username" 2>/dev/null || {
                 warn "Could not add user to docker group"
                 warn "Manual intervention may be required"
             }
-            
-            # Update home directory
-            usermod -d "/home/$username" "$username" 2>/dev/null || true
-            
         else
-            echo "  👤 Creating new user: $username"
-            
-            # Create user with home directory
-            if useradd -m -s /bin/bash "$username" 2>/dev/null; then
-                echo "  ✅ User '$username' created successfully"
-            else
-                warn "Failed to create user $username"
-                warn "Manual intervention may be required"
-                echo "  ⚠️  Continuing without user creation..."
-                username=$(whoami)
-                user_home="$HOME"
-            fi
-            
-            # Add to docker group
-            if [[ "$username" != "$(whoami)" ]]; then
-                usermod -aG docker "$username" 2>/dev/null || {
-                    warn "Could not add user to docker group"
-                    warn "Manual intervention may be required"
-                }
-            fi
+            warn "Failed to create user $username"
+            warn "Manual intervention may be required"
+            echo "  Continuing without user creation..."
+            username=$(whoami)
+            user_home="$HOME"
         fi
     fi
     
@@ -2707,7 +2862,7 @@ create_tenant_user() {
         warn "Config directory $user_config does not exist"
         warn "Skipping .env file creation"
     else
-        cat > "$user_config/.env" << EOF
+        cat > "$user_config/.env" <<EOF
 # AI Platform Environment for $username
 # Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
@@ -2765,6 +2920,7 @@ EOF
     fi
     echo ""
     echo "  🎯 User '$username' is ready for platform management"
+    fi
 }
 
 # =============================================================================
@@ -3083,9 +3239,9 @@ run_interactive_collection() {
     configure_llm_gateway
     configure_vector_database
     
-    # Initialize TLS_MODE before validation
-    TLS_MODE="none"
-    
+    # Initialize TLS_MODE before validation (don't override if already set from template)
+    TLS_MODE="${TLS_MODE:-none}"
+
     # DNS Validation before TLS (README compliance)
     if [[ "$TLS_MODE" == "letsencrypt" ]] || [[ "$TLS_MODE" == "provided" ]]; then
         test_dns_resolution "$DOMAIN" || warn "DNS validation failed - TLS may not work properly"
@@ -3134,7 +3290,15 @@ configure_ingestion() {
         echo "    3) AWS S3 (direct)"
         echo "    4) Azure Blob (direct)"
         echo "    5) Local filesystem"
-        
+
+        # Normalize INGESTION_METHOD from string (template) to number for safe_read validation
+        case "${INGESTION_METHOD:-}" in
+            rclone) export INGESTION_METHOD="1" ;;
+            gdrive) export INGESTION_METHOD="2" ;;
+            s3)     export INGESTION_METHOD="3" ;;
+            azure)  export INGESTION_METHOD="4" ;;
+            local)  export INGESTION_METHOD="5" ;;
+        esac
         safe_read "Ingestion method [1-5]" "1" "INGESTION_METHOD" "^[1-5]$"
         
         case "$INGESTION_METHOD" in
@@ -3391,7 +3555,7 @@ REDIS_PORT="${REDIS_PORT:-6379}"
 OLLAMA_PORT="${OLLAMA_PORT:-11434}"
 LITELLM_PORT="${LITELLM_PORT:-4000}"
 OPENWEBUI_PORT="${OPENWEBUI_PORT:-3000}"
-OPENCLAW_PORT="${OPENCLAW_PORT:-3081}"
+OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
 ANYTHINGLLM_PORT="${ANYTHINGLLM_PORT:-3001}"
 N8N_PORT="${N8N_PORT:-5678}"
 FLOWISE_PORT="${FLOWISE_PORT:-3030}"
@@ -3399,7 +3563,6 @@ DIFY_PORT="${DIFY_PORT:-3001}"
 CODE_SERVER_PORT="${CODE_SERVER_PORT:-8080}"
 ZEP_PORT="${ZEP_PORT:-8100}"
 LETTA_PORT="${LETTA_PORT:-8283}"
-MEM0_PORT="${MEM0_PORT:-8081}"
 GRAFANA_PORT="${GRAFANA_PORT:-3002}"
 PROMETHEUS_PORT="${PROMETHEUS_PORT:-9090}"
 AUTHENTIK_PORT="${AUTHENTIK_PORT:-9000}"
@@ -3411,7 +3574,7 @@ NPM_ADMIN_PORT="${NPM_ADMIN_PORT:-81}"
 # LOCAL MODELS
 ENABLE_LOCAL_MODELS="${ENABLE_LOCAL_MODELS:-true}"
 OLLAMA_MODELS="${OLLAMA_MODELS:-llama3.1:8b,mistral:7b}"
-OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-gemma4:9b}"
+OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-gemma3:4b}"
 OLLAMA_AUTO_DOWNLOAD="${OLLAMA_AUTO_DOWNLOAD:-true}"
 
 # LLM PROVIDERS (enable flags only — API keys excluded from template)
@@ -3439,7 +3602,7 @@ ENABLE_BRAVE="${ENABLE_BRAVE:-false}"
 # SERVICE CREDENTIALS (usernames only — passwords excluded from template)
 POSTGRES_USER="${POSTGRES_USER:-${TENANT_ID}}"
 POSTGRES_DB="${POSTGRES_DB:-${TENANT_ID}}"
-OPENCLAW_USERNAME="${OPENCLAW_USERNAME:-admin}"
+OPENCLAW_USERNAME="${OPENCLAW_USERNAME:-ds-admin}"
 # Mem0 removed - no longer supported
 FLOWISE_USERNAME="${FLOWISE_USERNAME:-admin}"
 LIBRECHAT_JWT_SECRET="${LIBRECHAT_JWT_SECRET:-$(gen_secret)}"
@@ -3576,11 +3739,11 @@ initialize_service_variables() {
     GPU_TYPE="${GPU_TYPE:-cpu}"
     GPU_COUNT="${GPU_COUNT:-0}"
     OLLAMA_GPU_LAYERS="${OLLAMA_GPU_LAYERS:-auto}"
-    CPU_CORES="${CPU_CORES:-2}"
+    CPU_CORES="${CPU_CORES:-$(nproc)}"
     TOTAL_RAM_GB="${TOTAL_RAM_GB:-8}"
     
     # Ollama Configuration
-    OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-gemma4:4b}"
+    OLLAMA_DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-gemma3:4b}"
     OLLAMA_MODELS="${OLLAMA_MODELS:-gemma4:4b,gemma4:26b}"
     
     # LLM Providers

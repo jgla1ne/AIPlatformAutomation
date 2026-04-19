@@ -859,8 +859,10 @@ configure_authentik() {
         fail "Authentik not ready after timeout"
     fi
     
+    # Run migrations to ensure all schema objects exist (idempotent).
+    docker exec "${container_name}" ak migrate 2>/dev/null || true
+
     # Authentik bootstrap is automatic — akadmin user created from AUTHENTIK_BOOTSTRAP_PASSWORD env var.
-    # API token retrieval requires the full OAuth flow; skip for now and just verify the service is live.
     log "  Authentik is live (bootstrap password: ${AUTHENTIK_BOOTSTRAP_PASSWORD:-<not set>})"
     
     mark_done "authentik_configured"
@@ -1221,8 +1223,18 @@ show_credentials() {
         fi
         if [[ "${OPENCLAW_ENABLED:-false}" == "true" ]]; then
             echo "  OpenClaw     $(_url openclaw ${OPENCLAW_PORT:-18789})"
-            echo "    Username   ${OPENCLAW_USERNAME:-admin}"
-            echo "    Password   ${OPENCLAW_PASSWORD:-<not set — check platform.conf>}"
+            # OpenClaw UI asks for a gateway token (not username/password).
+            # The WSS gateway URL is used by the desktop/mobile client to connect.
+            local _oc_gateway_proto="wss"
+            local _oc_gateway_host="${BASE_DOMAIN:-}"
+            if [[ -z "${_oc_gateway_host}" ]] || [[ "${CADDY_ENABLED:-false}" != "true" && "${NPM_ENABLED:-false}" != "true" ]]; then
+                _oc_gateway_proto="ws"
+                _oc_gateway_host="${DOMAIN:-localhost}:${OPENCLAW_PORT:-18789}"
+            else
+                _oc_gateway_host="openclaw.${BASE_DOMAIN}"
+            fi
+            echo "    Gateway URL  ${_oc_gateway_proto}://${_oc_gateway_host}"
+            echo "    Token        ${OPENCLAW_PASSWORD:-<not set — check platform.conf>}"
         fi
         if [[ "${ANYTHINGLLM_ENABLED:-false}" == "true" ]]; then
             echo "  AnythingLLM  $(_url anythingllm ${ANYTHINGLLM_PORT:-3001})"
@@ -1736,6 +1748,9 @@ main() {
     CHROMA_ENABLED="${CHROMA_ENABLED:-${ENABLE_CHROMA:-false}}"
     MILVUS_ENABLED="${MILVUS_ENABLED:-${ENABLE_MILVUS:-false}}"
     
+    # Ensure TENANT_ID is set as an env var (show_credentials and other helpers reference it)
+    TENANT_ID="${TENANT_ID:-${tenant_id}}"
+
     log "=== Script 3: Mission Control ==="
     log "Version: ${SCRIPT_VERSION}"
     log "Tenant: ${tenant_id}"

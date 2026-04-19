@@ -27,6 +27,142 @@
 
 ---
 
+## RUN 6 — 2026-04-19 (OpenClaw CORS Fix, Authentik Migrations, Model Name Correction)
+
+**Status:** `95% PASS` | **Baseline:** `post-v5.6.0`  
+**Blockers fixed this run:** OpenClaw volume mount, CORS config, LiteLLM DB URL, Authentik schema migrations, gemma4→gemma3 model name
+
+### T1 — Container Health (26 containers)
+
+| Container | Status | Result |
+|---|---|---|
+| ai-datasquiz-openclaw | healthy | PASS |
+| ai-datasquiz-litellm | healthy | PASS |
+| ai-datasquiz-dify-worker | healthy | PASS |
+| ai-datasquiz-dify-api | healthy | PASS |
+| ai-datasquiz-letta | healthy | PASS |
+| ai-datasquiz-signalbot | healthy | PASS |
+| ai-datasquiz-authentik | healthy (after `ak migrate`) | PASS |
+| ai-datasquiz-rag-api | healthy | PASS |
+| ai-datasquiz-n8n | healthy | PASS |
+| ai-datasquiz-code-server | healthy | PASS |
+| ai-datasquiz-postgres | healthy | PASS |
+| ai-datasquiz-redis | healthy | PASS |
+| ai-datasquiz-mongodb | healthy | PASS |
+| ai-datasquiz-librechat | healthy | PASS |
+| ai-datasquiz-openwebui | healthy | PASS |
+| ai-datasquiz-dify | healthy | PASS |
+| ai-datasquiz-zep | healthy | PASS |
+| ai-datasquiz-ollama | healthy | PASS |
+| ai-datasquiz-anythingllm | healthy | PASS |
+| ai-datasquiz-caddy | healthy | PASS |
+| ai-datasquiz-rclone | running (no healthcheck — expected) | PASS |
+| ai-datasquiz-flowise | healthy | PASS |
+| ai-datasquiz-prometheus | healthy | PASS |
+| ai-datasquiz-searxng | healthy | PASS |
+| ai-datasquiz-qdrant | healthy | PASS |
+| ai-datasquiz-grafana | healthy | PASS |
+
+**Result: 26/26 running, 25/25 with healthchecks healthy. PASS**
+
+### T2 — HTTPS Validation (13 subdomains)
+
+| Subdomain | HTTP Code | Result |
+|---|---|---|
+| openwebui.ai.datasquiz.net | 200 | PASS |
+| librechat.ai.datasquiz.net | 200 | PASS |
+| openclaw.ai.datasquiz.net | 200 | PASS |
+| n8n.ai.datasquiz.net | 200 | PASS |
+| flowise.ai.datasquiz.net | 200 | PASS |
+| dify.ai.datasquiz.net | 307 | PASS |
+| authentik.ai.datasquiz.net | 302 | PASS (after migration fix) |
+| grafana.ai.datasquiz.net | 302 | PASS |
+| anythingllm.ai.datasquiz.net | 200 | PASS |
+| letta.ai.datasquiz.net | 307 | PASS |
+| code.ai.datasquiz.net | 302 | PASS |
+| prometheus.ai.datasquiz.net | 302 | PASS |
+| zep.ai.datasquiz.net | 404 on `/`, 200 on `/healthz` | PASS (API — no UI at root) |
+
+**Result: 13/13 PASS**
+
+### T3 — LiteLLM Routing (2 model paths)
+
+| Model | Route | Result |
+|---|---|---|
+| ollama/llama3.2:3b | LiteLLM → Ollama | PASS |
+| ollama/gemma3:4b | LiteLLM → Ollama | PASS |
+
+**Note:** `gemma4:4b` does not exist in Ollama registry — corrected to `gemma3:4b` in platform.conf and litellm config.yaml.
+
+### T4 — Internal Service Interconnect
+
+| Check | Result |
+|---|---|
+| litellm → ollama:11434/api/tags | PASS |
+| openwebui → litellm:4000/health (with auth) | PASS |
+| flowise → litellm:4000/health | PASS |
+| n8n → litellm:4000/health/liveliness | PASS |
+| anythingllm → qdrant:6333/healthz | PASS |
+| anythingllm → litellm:4000/health | PASS |
+| dify-api → litellm:4000/health/liveliness | PASS |
+| letta → litellm:4000/health | PASS |
+
+**Result: 8/8 PASS**
+
+### T5 — Qdrant Vector Operations
+
+| Operation | Result |
+|---|---|
+| healthz check | PASS |
+| collection create | PASS |
+| collection delete | PASS |
+
+**Result: PASS**
+
+### T6 — Docker Log Audit
+
+| Service | Error Count | Assessment |
+|---|---|---|
+| litellm | 4 | Expected: "No api key passed in" from unauthenticated health probes |
+| openwebui | 2 | Non-critical startup warnings |
+| flowise, n8n, anythingllm, qdrant, openclaw, redis, caddy, authentik | 0 | PASS |
+| postgres | 7 | Expected: N8N migration table queries during startup (transient) |
+
+**Result: No critical errors. PASS**
+
+### T7 — rclone / Google Drive
+
+| Check | Result |
+|---|---|
+| rclone listremotes | gdrive: listed |
+| SA authentication | FAIL — "unexpected end of JSON input" — service account key is corrupt/empty |
+| File sync | SKIP (blocked by SA auth) |
+
+**Result: FAIL — SA credential file needs to be re-generated and re-uploaded**
+
+### T8 — Caddy Admin & Routes
+
+| Check | Result |
+|---|---|
+| Admin API accessible | PASS (via docker exec) |
+| Route count | 17 routes PASS |
+
+**Result: PASS**
+
+**Fixes applied this run:**
+1. **OpenClaw CORS/mount**: Volume changed from `/.openclaw` to `/home/node/.openclaw`; `openclaw.json` pre-seeded with token and allowed origins; ownership set to uid 1000 via alpine helper container
+2. **LiteLLM DB URL**: `general_settings.database_url` in `litellm/config.yaml` was missing password; fixed with correct `POSTGRES_PASSWORD`
+3. **POSTGRES_PASSWORD / REDIS_PASSWORD persistence**: Added to `persist_generated_secrets()` in Script 2 so they survive re-deploys
+4. **OpenClaw token display**: Script 3 `show_credentials()` now shows WSS gateway URL and token (not username/password)
+5. **TENANT_ID unbound variable**: Fixed in Script 3 `main()` by binding `TENANT_ID="${TENANT_ID:-${tenant_id}}"`
+6. **Authentik 500**: `authentik_tenants_domain` relation missing — resolved with `docker exec ... ak migrate`
+7. **Model name**: `gemma4:4b` → `gemma3:4b` (correct Ollama registry tag)
+
+**Open items:**
+- T7 FAIL: rclone service account JSON is corrupt — needs fresh SA key from GCP Console
+
+---
+
 ## RUN 4 — 2026-04-15 (Mission Accomplished — Release 5.6.0)
 
 **Status:** `100% PASS` | **Baseline:** `v5.6.0`
