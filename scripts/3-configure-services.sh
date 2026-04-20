@@ -1229,24 +1229,27 @@ configure_bifrost() {
 # CREDENTIALS DISPLAY (README §6)
 # =============================================================================
 show_credentials() {
-    # Compute correct URLs — subdomain-based when Caddy/NPM active, IP:port otherwise.
-    # This is the definitive reference a user can open in their browser.
+    # Compute correct URLs — respects URL_ROUTING_MODE (subdomain/port/path).
     local _cred_proto="http"
     local _cred_host
     _cred_host=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
-    local _use_subs=false
-    if [[ "${CADDY_ENABLED:-false}" == "true" || "${NPM_ENABLED:-false}" == "true" ]]; then
+    local _proxy_active=false
+    local _url_mode="${URL_ROUTING_MODE:-subdomain}"
+    if [[ "${CADDY_ENABLED:-false}" == "true" || "${ENABLE_CADDY:-false}" == "true" || \
+          "${NPM_ENABLED:-false}" == "true"   || "${ENABLE_NPM:-false}" == "true" ]]; then
         local _dom="${BASE_DOMAIN:-${DOMAIN:-}}"
         if [[ -n "$_dom" ]]; then
             _cred_proto="https"
             _cred_host="$_dom"
-            _use_subs=true
+            _proxy_active=true
         fi
     fi
     # _url <subdomain> <fallback-port>  →  correct browser URL
     _url() {
-        if [[ "$_use_subs" == "true" ]]; then
+        if [[ "$_proxy_active" == "true" && "$_url_mode" == "subdomain" ]]; then
             echo "${_cred_proto}://${1}.${_cred_host}"
+        elif [[ "$_proxy_active" == "true" && "$_url_mode" == "path" ]]; then
+            echo "${_cred_proto}://${_cred_host}/${1}"
         else
             echo "${_cred_proto}://${_cred_host}:${2}"
         fi
@@ -1262,7 +1265,7 @@ show_credentials() {
     # ── Infrastructure ────────────────────────────────────────────────────────
     if [[ "${POSTGRES_ENABLED:-false}" == "true" ]]; then
         echo "INFRASTRUCTURE"
-        echo "  PostgreSQL   ${_cred_host}:${POSTGRES_PORT:-5432}  (internal)"
+        echo "  PostgreSQL   127.0.0.1:${POSTGRES_PORT:-5432}  (internal — docker network: ${TENANT_PREFIX:-ai}-postgres)"
         echo "  User         ${POSTGRES_USER:-${TENANT_ID}}"
         echo "  Password     ${POSTGRES_PASSWORD:-<not set>}"
         [[ "${REDIS_ENABLED:-false}" == "true" ]] && \
@@ -1410,11 +1413,7 @@ show_credentials() {
     # ── Search Engine ──────────────────────────────────────────────────────────
     if [[ "${SEARXNG_ENABLED:-false}" == "true" ]]; then
         local _search_url
-        if [[ "$_use_subs" == "true" ]]; then
-            _search_url="${_cred_proto}://search.${_cred_host}"
-        else
-            _search_url="http://127.0.0.1:${SEARXNG_PORT:-8888}"
-        fi
+        _search_url="$(_url search ${SEARXNG_PORT:-8888})"
         echo "SEARCH ENGINE"
         echo "  SearXNG      ${_search_url}"
         echo "    Secret     ${SEARXNG_SECRET_KEY:0:16}..."
@@ -2740,30 +2739,34 @@ run_mission_control() {
     fi
     echo ""
 
-    # Determine base URL — use domain when a reverse proxy is active
+    # Determine base URL — respects URL_ROUTING_MODE (subdomain/port/path)
     local base_proto="http"
     local display_host
     display_host=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
-    if [[ "${CADDY_ENABLED:-false}" == "true" || "${NPM_ENABLED:-false}" == "true" ]] && [[ -n "${BASE_DOMAIN:-${DOMAIN:-}}" ]]; then
+    local _dash_proxy_active=false
+    local _dash_url_mode="${URL_ROUTING_MODE:-subdomain}"
+    if [[ "${CADDY_ENABLED:-false}" == "true" || "${ENABLE_CADDY:-false}" == "true" || \
+          "${NPM_ENABLED:-false}" == "true"   || "${ENABLE_NPM:-false}" == "true" ]] && \
+       [[ -n "${BASE_DOMAIN:-${DOMAIN:-}}" ]]; then
         base_proto="https"
         display_host="${BASE_DOMAIN:-${DOMAIN}}"
+        _dash_proxy_active=true
     fi
     local base="${base_proto}://${display_host}"
 
-    # Helper: compute correct browser URL
-    # When Caddy/NPM active: https://subdomain.domain  (no port — proxy handles it)
-    # Otherwise:             http://IP:port
+    # _access_url <subdomain> <fallback-port>  →  correct browser URL
     _access_url() {
         local subdomain="$1" port="$2"
-        if [[ "$use_subdomains" == "true" ]]; then
+        if [[ "$_dash_proxy_active" == "true" && "$_dash_url_mode" == "subdomain" ]]; then
             echo "${base_proto}://${subdomain}.${display_host}"
+        elif [[ "$_dash_proxy_active" == "true" && "$_dash_url_mode" == "path" ]]; then
+            echo "${base_proto}://${display_host}/${subdomain}"
         else
             echo "${base_proto}://${display_host}:${port}"
         fi
     }
     local use_subdomains=false
-    [[ "${CADDY_ENABLED:-false}" == "true" || "${NPM_ENABLED:-false}" == "true" ]] && \
-        [[ -n "${BASE_DOMAIN:-${DOMAIN:-}}" ]] && use_subdomains=true
+    [[ "$_dash_proxy_active" == "true" && "$_dash_url_mode" == "subdomain" ]] && use_subdomains=true
 
     echo "  Access URLs:"
     echo ""

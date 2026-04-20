@@ -113,35 +113,46 @@ validate_groq_models() {
     local api_key="${1}"
     local candidate_models="${2}"
     local valid_models=""
-    
+    local GROQ_DEFAULTS="llama-3.3-70b-versatile,llama-3.1-8b-instant"
+
     if [[ -z "${api_key}" ]]; then
-        echo "${candidate_models}"
+        echo "${candidate_models:-${GROQ_DEFAULTS}}"
         return
     fi
-    
-    # Query Groq API for available models
+
+    # Query Groq API for available models (text/chat models only)
     local available_models
-    available_models=$(curl -s -H "Authorization: Bearer ${api_key}" \
+    available_models=$(curl -s --max-time 10 -H "Authorization: Bearer ${api_key}" \
         "https://api.groq.com/openai/v1/models" | \
-        jq -r '.data[] | select(.id | contains("llama") or contains("mixtral")) | .id' 2>/dev/null || echo "")
-    
+        jq -r '.data[] | select(.id | test("llama|mixtral|qwen|gemma")) | .id' 2>/dev/null || echo "")
+
     if [[ -z "${available_models}" ]]; then
-        echo "WARNING: Could not validate Groq models, using defaults" >&2
-        echo "${candidate_models}"
+        echo "WARNING: Could not reach Groq API, using defaults" >&2
+        echo "${candidate_models:-${GROQ_DEFAULTS}}"
         return
     fi
-    
+
     # Filter candidate models against available ones
-    IFS=',' read -ra candidates <<< "${candidate_models}"
+    IFS=',' read -ra candidates <<< "${candidate_models:-${GROQ_DEFAULTS}}"
     for model in "${candidates[@]}"; do
         model=$(echo "${model// /}" | xargs)  # trim whitespace
-        if echo "${available_models}" | grep -q "${model}"; then
+        if echo "${available_models}" | grep -qx "${model}"; then
             valid_models="${valid_models}${valid_models:+,}${model}"
         else
             echo "WARNING: Groq model '${model}' not available, skipping" >&2
         fi
     done
-    
+
+    # If nothing matched (e.g. stale model names in config), fall back to current defaults
+    if [[ -z "${valid_models}" ]]; then
+        echo "WARNING: No candidate Groq models matched — falling back to defaults" >&2
+        for model in ${GROQ_DEFAULTS//,/ }; do
+            if echo "${available_models}" | grep -qx "${model}"; then
+                valid_models="${valid_models}${valid_models:+,}${model}"
+            fi
+        done
+    fi
+
     echo "${valid_models}"
 }
 
@@ -798,6 +809,11 @@ EOF
     container_name: ${TENANT_PREFIX}-ollama
     restart: unless-stopped
     # ollama runs as root internally, stores models in /root/.ollama — do not override user:
+    environment:
+      # Unload models after 5 min idle to free RAM for other services on low-memory hosts
+      OLLAMA_KEEP_ALIVE: "5m"
+      # Cap concurrent model loads to 1 to prevent memory exhaustion
+      OLLAMA_MAX_LOADED_MODELS: "1"
     volumes:
       - ${DATA_DIR}/ollama:/root/.ollama
     ports:
@@ -874,7 +890,7 @@ EOF
       RAG_OPENAI_API_BASE_URL: http://${TENANT_PREFIX}-litellm:4000/v1
       RAG_OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
       VECTOR_DB: qdrant
-      QDRANT_URL: http://${TENANT_PREFIX}-qdrant:6333
+      QDRANT_URI: http://${TENANT_PREFIX}-qdrant:6333
       QDRANT_API_KEY: ${QDRANT_API_KEY:-}
 EOF
         # Zep memory integration — inject only when Zep is deployed
@@ -1366,7 +1382,7 @@ EOF
       - "127.0.0.1:${SIGNALBOT_PORT:-8080}:8080"
 $(build_signalbot_deps)
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8080/v1/about"]
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/v1/about > /dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -3351,39 +3367,50 @@ wait_for_all_health() {
         wait_for_health "${TENANT_PREFIX}-dify-worker" 180 || log "dify-worker health check timed out (non-fatal — worker may still be starting)"
         
         # Check for Dify database migration issues and auto-recover
-        if ! docker logs "${TENANT_PREFIX}-dify-api" --tail 10 2>/dev/null | grep -q "Database migration failed\|DuplicateTable\|already exists\|sqlalche.me/e/20/f405\|Can't locate revision"; then
-            log "Dify database appears healthy"
-        else
-            log "WARNING: Dify database migration issues detected"
-            log "Attempting automatic database recovery..."
-            
-            # Stop Dify services
-            docker stop "${TENANT_PREFIX}-dify-api" "${TENANT_PREFIX}-dify" "${TENANT_PREFIX}-dify-worker" 2>/dev/null || true
-            
-            # Wipe Dify database only - more thorough cleanup
-            docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER:-${TENANT_ID}}" -d "${POSTGRES_DB:-${TENANT_ID}}" -c "
-                DROP SCHEMA IF EXISTS dify CASCADE;
-                DROP TABLE IF EXISTS alembic_version CASCADE;
-                DELETE FROM alembic_version WHERE version LIKE '%dify%';
-            " 2>/dev/null || true
-            
-            # Clear any remaining Dify data
-            rm -rf "${DATA_DIR}/dify"/* 2>/dev/null || true
-            
-            # Restart Dify services
-            docker start "${TENANT_PREFIX}-dify-api" "${TENANT_PREFIX}-dify" "${TENANT_PREFIX}-dify-worker" 2>/dev/null || true
-            
-            log "Waiting for Dify services to re-initialize..."
-            wait_for_health "${TENANT_PREFIX}-dify-api" 180 || return 1
-            wait_for_health "${TENANT_PREFIX}-dify" 90 || return 1
-            wait_for_health "${TENANT_PREFIX}-dify-worker" 180 || log "dify-worker health check timed out (non-fatal - worker may still be starting)"
-            
-            if ! docker logs "${TENANT_PREFIX}-dify-api" --tail 5 2>/dev/null | grep -q "Database migration failed\|sqlalche.me/e/20/f405"; then
-                log "SUCCESS: Dify database recovery completed"
+        if docker logs "${TENANT_PREFIX}-dify-api" --tail 20 2>/dev/null | grep -q "sqlalche.me/e/20/f405\|Database migration failed\|Can't locate revision\|already exists"; then
+            log "WARNING: Dify migration conflict detected — schema exists but alembic_version is missing"
+            log "Stamping alembic_version to head so Dify skips re-running applied migrations..."
+
+            # Find the head revisions in the Dify migration directory
+            local dify_heads
+            dify_heads=$(docker exec "${TENANT_PREFIX}-dify-api" bash -c "
+                cd /app/api/migrations/versions 2>/dev/null || exit 1
+                all_revs=\$(grep -h '^revision' *.py 2>/dev/null | sed \"s/revision = ['\\\"]\\([^'\\\"]*\\)['\\\"]$/\\1/\")
+                down_revs=\$(grep -h '^down_revision' *.py 2>/dev/null | grep -v None | sed \"s/down_revision = ['\\\"]\\([^'\\\"]*\\)['\\\"]$/\\1/\")
+                for r in \$all_revs; do
+                    if ! echo \"\$down_revs\" | grep -qx \"\$r\"; then echo \"\$r\"; fi
+                done
+            " 2>/dev/null | grep -E '^[0-9a-f]{12}$' | head -1)
+
+            if [[ -n "${dify_heads}" ]]; then
+                docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "
+                    CREATE TABLE IF NOT EXISTS alembic_version (
+                        version_num VARCHAR(32) NOT NULL,
+                        CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
+                    );
+                    INSERT INTO alembic_version (version_num) VALUES ('${dify_heads}') ON CONFLICT DO NOTHING;
+                " 2>/dev/null && log "OK: Stamped alembic_version with head ${dify_heads}"
             else
-                log "WARNING: Dify recovery may need manual intervention"
-                log "Try: bash scripts/3-configure-services.sh ${TENANT_ID} --flushall"
+                log "WARNING: Could not determine Dify alembic head — trying hardcoded fallback stamp"
+                docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "
+                    CREATE TABLE IF NOT EXISTS alembic_version (
+                        version_num VARCHAR(32) NOT NULL,
+                        CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
+                    );
+                " 2>/dev/null || true
             fi
+
+            docker restart "${TENANT_PREFIX}-dify-api" 2>/dev/null || true
+            log "Waiting for Dify API to restart after stamp..."
+            wait_for_health "${TENANT_PREFIX}-dify-api" 180 || log "WARNING: Dify API health check timed out after stamp"
+
+            if docker logs "${TENANT_PREFIX}-dify-api" --tail 5 2>/dev/null | grep -q "Database migration successful\|Starting gunicorn"; then
+                log "OK: Dify migration recovery successful"
+            else
+                log "WARNING: Dify may still have issues — check: docker logs ${TENANT_PREFIX}-dify-api"
+            fi
+        else
+            log "Dify database appears healthy"
         fi
         
         # Check for LiteLLM database migration issues and auto-recover

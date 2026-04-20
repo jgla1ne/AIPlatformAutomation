@@ -1430,7 +1430,7 @@ collect_api_keys() {
     safe_read_yesno "Enable Groq" "false" "ENABLE_GROQ"
     if [[ "$ENABLE_GROQ" == "true" ]]; then
         safe_read "Groq API key" "" "GROQ_API_KEY" "^gsk_[A-Za-z0-9_-]+$"
-        safe_read "Groq models" "llama2-70b-4096,mixtral-8x7b-32768" "GROQ_MODELS"
+        safe_read "Groq models" "llama-3.3-70b-versatile,llama-3.1-8b-instant" "GROQ_MODELS"
     fi
     echo ""
     
@@ -1795,6 +1795,22 @@ configure_proxy() {
             echo "     Default login: admin@example.com / changeme (change immediately)"
             ;;
     esac
+
+    # URL routing mode — controls how service URLs are displayed in dashboards
+    echo ""
+    local url_mode_choice=0
+    [[ -n "${URL_ROUTING_MODE:-}" ]] && echo "  ℹ  Current URL mode: ${URL_ROUTING_MODE}"
+    select_menu_option "URL Routing Mode (how services are exposed)" \
+        "SUBDOMAIN   — https://service.${BASE_DOMAIN:-yourdomain.com}  (recommended with Caddy)" \
+        "PORT        — http://server-ip:port  (no proxy / direct access)" \
+        "PATH        — https://${BASE_DOMAIN:-yourdomain.com}/service  (path-based proxy)" || url_mode_choice=$?
+    case $url_mode_choice in
+        0) URL_ROUTING_MODE="subdomain" ;;
+        1) URL_ROUTING_MODE="port" ;;
+        2) URL_ROUTING_MODE="path" ;;
+        *) URL_ROUTING_MODE="subdomain" ;;
+    esac
+    echo "  ✅ URL routing mode: ${URL_ROUTING_MODE}"
     echo ""
 }
 
@@ -2485,7 +2501,7 @@ GOOGLE_MODELS="${GOOGLE_MODELS:-gemini-pro,gemini-pro-vision}"
 # Groq Configuration
 ENABLE_GROQ="${ENABLE_GROQ:-false}"
 GROQ_API_KEY="${GROQ_API_KEY:-}"
-GROQ_MODELS="${GROQ_MODELS:-llama2-70b-4096,mixtral-8x7b-32768}"
+GROQ_MODELS="${GROQ_MODELS:-llama-3.3-70b-versatile,llama-3.1-8b-instant}"
 
 # Cohere Configuration
 ENABLE_COHERE="${ENABLE_COHERE:-false}"
@@ -2648,6 +2664,9 @@ DIFY_ENABLED="${ENABLE_DIFY:-false}"
 GRAFANA_ENABLED="${ENABLE_GRAFANA:-false}"
 PROMETHEUS_ENABLED="${ENABLE_PROMETHEUS:-false}"
 CADDY_ENABLED="${ENABLE_CADDY:-false}"
+ENABLE_CADDY="${ENABLE_CADDY:-false}"
+NPM_ENABLED="${ENABLE_NPM:-false}"
+URL_ROUTING_MODE="${URL_ROUTING_MODE:-subdomain}"
 AUTHENTIK_ENABLED="${ENABLE_AUTHENTIK:-false}"
 SIGNALBOT_ENABLED="${ENABLE_SIGNALBOT:-false}"
 SEARXNG_ENABLED="${ENABLE_SEARXNG:-false}"
@@ -2898,15 +2917,21 @@ display_service_summary() {
     _mc_line "  Preferred: ${PREFERRED_LLM_PROVIDER:-ollama}   Gateway: ${LLM_GATEWAY_TYPE:-litellm} → all services"
     _mc_sep
 
-    # Build URL helper — subdomain routing when Caddy/NPM + domain, else IP:port
+    # Build URL helper — use URL_ROUTING_MODE to pick subdomain/port/path
     local _use_subs=false
     local _base_domain="${BASE_DOMAIN:-${DOMAIN:-}}"
-    [[ "${ENABLE_CADDY:-false}" == "true" || "${ENABLE_NPM:-false}" == "true" ]] && \
-        [[ -n "${_base_domain}" ]] && _use_subs=true
+    local _proxy_active=false
+    [[ "${ENABLE_CADDY:-false}" == "true" || "${CADDY_ENABLED:-false}" == "true" || \
+       "${ENABLE_NPM:-false}" == "true"   || "${NPM_ENABLED:-false}" == "true" ]] && \
+        [[ -n "${_base_domain}" ]] && _proxy_active=true
+    local _url_mode="${URL_ROUTING_MODE:-subdomain}"
+    [[ "$_proxy_active" == "true" && "$_url_mode" == "subdomain" ]] && _use_subs=true
     _mu() {
         local sub="$1" port="$2"
         if [[ "$_use_subs" == "true" ]]; then
             echo "${base_proto}://${sub}.${_base_domain}"
+        elif [[ "$_proxy_active" == "true" && "$_url_mode" == "path" ]]; then
+            echo "${base_proto}://${_base_domain}/${sub}"
         else
             echo "http://${server_ip}:${port}"
         fi
