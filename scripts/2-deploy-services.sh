@@ -2246,26 +2246,32 @@ EOF
     
     # Anthropic (only if API key is non-empty)
     if [[ -n "${ANTHROPIC_API_KEY}" ]]; then
-        cat >> "${CONFIG_DIR}/litellm/config.yaml" << EOF
-  - model_name: claude-3-sonnet-20240229
+        IFS=',' read -ra _anthropic_models <<< "${ANTHROPIC_MODELS:-claude-3-5-sonnet-20241022,claude-3-5-haiku-20241022}"
+        for _m in "${_anthropic_models[@]}"; do
+            _m="${_m// /}"
+            cat >> "${CONFIG_DIR}/litellm/config.yaml" << EOF
+  - model_name: ${_m}
     litellm_params:
-      model: anthropic/claude-3-sonnet-20240229
+      model: anthropic/${_m}
       api_key: ${ANTHROPIC_API_KEY}
 EOF
+        done
+        unset _anthropic_models _m
     fi
-    
+
     # Google (only if API key is non-empty)
     if [[ -n "${GOOGLE_API_KEY}" ]]; then
-        cat >> "${CONFIG_DIR}/litellm/config.yaml" << EOF
-  - model_name: gemini-pro
+        IFS=',' read -ra _google_models <<< "${GOOGLE_MODELS:-gemini-1.5-flash,gemini-1.5-pro}"
+        for _m in "${_google_models[@]}"; do
+            _m="${_m// /}"
+            cat >> "${CONFIG_DIR}/litellm/config.yaml" << EOF
+  - model_name: ${_m}
     litellm_params:
-      model: google/gemini-pro
-      api_key: ${GOOGLE_API_KEY}
-  - model_name: text-embedding-3-small
-    litellm_params:
-      model: google/text-embedding-004
+      model: google/${_m}
       api_key: ${GOOGLE_API_KEY}
 EOF
+        done
+        unset _google_models _m
     fi
     
     # Groq (only if API key is non-empty)
@@ -2280,7 +2286,7 @@ EOF
             for model in "${groq_models[@]}"; do
                 model=$(echo "${model// /}" | xargs)  # trim whitespace
                 cat >> "${CONFIG_DIR}/litellm/config.yaml" << EOF
-  - model_name: ${model}-groq
+  - model_name: groq/${model}
     litellm_params:
       model: groq/${model}
       api_key: ${GROQ_API_KEY}
@@ -2304,7 +2310,7 @@ EOF
     # Mammouth AI (only if enabled and API key is non-empty)
     if [[ "${ENABLE_MAMMOUTH:-false}" == "true" && -n "${MAMMOUTH_API_KEY:-}" ]]; then
         # Expand comma-separated model list into one entry per model
-        IFS=',' read -ra _mammouth_models <<< "${MAMMOUTH_MODELS:-mammouth}"
+        IFS=',' read -ra _mammouth_models <<< "${MAMMOUTH_MODELS:-claude-sonnet-4-6,gemini-2.5-flash,gpt-4o}"
         for _m in "${_mammouth_models[@]}"; do
             _m="${_m// /}"
             cat >> "${CONFIG_DIR}/litellm/config.yaml" << EOF
@@ -3713,7 +3719,7 @@ main() {
     # Mammouth
     MAMMOUTH_API_KEY="${MAMMOUTH_API_KEY:-}"
     MAMMOUTH_BASE_URL="${MAMMOUTH_BASE_URL:-https://api.mammouth.ai/v1}"
-    MAMMOUTH_MODELS="${MAMMOUTH_MODELS:-mammouth}"
+    MAMMOUTH_MODELS="${MAMMOUTH_MODELS:-claude-sonnet-4-6,gemini-2.5-flash,gpt-4o}"
 
     # Re-compute LITELLM_DB_URL now that TENANT_PREFIX and POSTGRES_USER are resolved
     POSTGRES_USER="${POSTGRES_USER:-${TENANT_ID}}"

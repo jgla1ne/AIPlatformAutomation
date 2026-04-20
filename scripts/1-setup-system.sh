@@ -1412,7 +1412,7 @@ collect_api_keys() {
     safe_read_yesno "Enable Anthropic Claude" "false" "ENABLE_ANTHROPIC"
     if [[ "$ENABLE_ANTHROPIC" == "true" ]]; then
         safe_read "Anthropic API key" "" "ANTHROPIC_API_KEY" "^sk-ant-[A-Za-z0-9_-]+$"
-        safe_read "Anthropic models" "claude-3-sonnet-20240229,claude-3-haiku-20240307" "ANTHROPIC_MODELS"
+        safe_read "Anthropic models" "claude-3-5-sonnet-20241022,claude-3-5-haiku-20241022" "ANTHROPIC_MODELS"
     fi
     echo ""
     
@@ -1421,7 +1421,7 @@ collect_api_keys() {
     safe_read_yesno "Enable Google AI" "false" "ENABLE_GOOGLE"
     if [[ "$ENABLE_GOOGLE" == "true" ]]; then
         safe_read "Google AI API key" "" "GOOGLE_AI_API_KEY" "^[A-Za-z0-9_-]+$"
-        safe_read "Google models" "gemini-pro,gemini-pro-vision" "GOOGLE_MODELS"
+        safe_read "Google models" "gemini-1.5-flash,gemini-1.5-pro" "GOOGLE_MODELS"
     fi
     echo ""
     
@@ -1468,7 +1468,7 @@ collect_api_keys() {
         safe_read "Mammouth API key" "" "MAMMOUTH_API_KEY"
         # Auto-default base URL and models - behave like other providers
         MAMMOUTH_BASE_URL="https://api.mammouth.ai/v1"
-        MAMMOUTH_MODELS="mammouth"
+        MAMMOUTH_MODELS="claude-sonnet-4-6,gemini-2.5-flash,gpt-4o"
         echo "    🎯 Auto-configured: Base URL = $MAMMOUTH_BASE_URL"
         echo "    🎯 Auto-configured: Models = $MAMMOUTH_MODELS"
     fi
@@ -2491,12 +2491,12 @@ OPENAI_MODELS="${OPENAI_MODELS:-gpt-4,gpt-3.5-turbo}"
 # Anthropic Configuration
 ENABLE_ANTHROPIC="${ENABLE_ANTHROPIC:-false}"
 ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
-ANTHROPIC_MODELS="${ANTHROPIC_MODELS:-claude-3-sonnet-20240229,claude-3-haiku-20240307}"
+ANTHROPIC_MODELS="${ANTHROPIC_MODELS:-claude-3-5-sonnet-20241022,claude-3-5-haiku-20241022}"
 
 # Google AI Configuration
 ENABLE_GOOGLE="${ENABLE_GOOGLE:-false}"
 GOOGLE_AI_API_KEY="${GOOGLE_AI_API_KEY:-}"
-GOOGLE_MODELS="${GOOGLE_MODELS:-gemini-pro,gemini-pro-vision}"
+GOOGLE_MODELS="${GOOGLE_MODELS:-gemini-1.5-flash,gemini-1.5-pro}"
 
 # Groq Configuration
 ENABLE_GROQ="${ENABLE_GROQ:-false}"
@@ -2645,7 +2645,7 @@ OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}"
 ENABLE_MAMMOUTH="${ENABLE_MAMMOUTH:-false}"
 MAMMOUTH_API_KEY="${MAMMOUTH_API_KEY:-}"
 MAMMOUTH_BASE_URL="${MAMMOUTH_BASE_URL:-https://api.mammouth.ai/v1}"
-MAMMOUTH_MODELS="${MAMMOUTH_MODELS:-mammouth}"
+MAMMOUTH_MODELS="${MAMMOUTH_MODELS:-claude-sonnet-4-6,gemini-2.5-flash,gpt-4o}"
 
 # =============================================================================
 # SERVICE _ENABLED FLAGS (Script 2/3 compatibility — mirrors ENABLE_* above)
@@ -3423,15 +3423,15 @@ OPENAI_MODELS="${OPENAI_MODELS:-gpt-4o,gpt-4o-mini}"
 ENABLE_ANTHROPIC="${ENABLE_ANTHROPIC:-false}"
 ANTHROPIC_MODELS="${ANTHROPIC_MODELS:-claude-3-5-sonnet-20241022}"
 ENABLE_GOOGLE="${ENABLE_GOOGLE:-false}"
-GOOGLE_MODELS="${GOOGLE_MODELS:-gemini-pro}"
+GOOGLE_MODELS="${GOOGLE_MODELS:-gemini-1.5-flash,gemini-1.5-pro}"
 ENABLE_GROQ="${ENABLE_GROQ:-false}"
-GROQ_MODELS="${GROQ_MODELS:-llama-3.1-8b-instant}"
+GROQ_MODELS="${GROQ_MODELS:-llama-3.3-70b-versatile,llama-3.1-8b-instant}"
 ENABLE_COHERE="${ENABLE_COHERE:-false}"
 ENABLE_HUGGINGFACE="${ENABLE_HUGGINGFACE:-false}"
 ENABLE_OPENROUTER="${ENABLE_OPENROUTER:-false}"
 ENABLE_MAMMOUTH="${ENABLE_MAMMOUTH:-false}"
 MAMMOUTH_BASE_URL="${MAMMOUTH_BASE_URL:-https://api.mammouth.ai/v1}"
-MAMMOUTH_MODELS="${MAMMOUTH_MODELS:-mammouth}"
+MAMMOUTH_MODELS="${MAMMOUTH_MODELS:-claude-sonnet-4-6,gemini-2.5-flash,gpt-4o}"
 
 # SEARCH APIS (key values excluded from template)
 ENABLE_SERPAPI="${ENABLE_SERPAPI:-false}"
