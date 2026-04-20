@@ -1423,11 +1423,7 @@ show_credentials() {
     # ── Alerting / Comms ──────────────────────────────────────────────────────
     if [[ "${SIGNALBOT_ENABLED:-false}" == "true" ]]; then
         local _sig_url
-        if [[ "$_use_subs" == "true" ]]; then
-            _sig_url="${_cred_proto}://signal.${_cred_host}"
-        else
-            _sig_url="http://127.0.0.1:${SIGNALBOT_PORT:-8080}"
-        fi
+        _sig_url="$(_url signal ${SIGNALBOT_PORT:-8080})"
         echo "ALERTING / COMMS"
         echo "  Signalbot    ${_sig_url}/v1/about"
         echo "    QR Pair    ${_sig_url}/v1/qrcodelink?device_name=signal-api"
