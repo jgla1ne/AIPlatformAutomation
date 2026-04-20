@@ -1106,7 +1106,7 @@ configure_litellm_gateway() {
     echo ""
     echo "  📊 LiteLLM Configuration Summary:"
     echo "    Gateway Type: LiteLLM"
-    echo "    Master Key: ${LITELLM_MASTER_KEY:0:10}..."
+    echo "    Master Key: ${LITELLM_MASTER_KEY:-see conf}"
     echo "    Routing: ${LITELLM_ROUTING_STRATEGY}"
     echo "    Logging: ${LITELLM_ENABLE_LOGGING}"
     echo "    Cost Tracking: ${LITELLM_ENABLE_COST_TRACKING}"
@@ -1123,8 +1123,8 @@ configure_bifrost_gateway() {
     echo ""
     echo "  📊 Bifrost Configuration Summary:"
     echo "    Gateway Type: Bifrost"
-    echo "    Admin Token: ${BIFROST_ADMIN_TOKEN:0:10}..."
-    echo "    API Key: ${BIFROST_API_KEY:0:10}..."
+    echo "    Admin Token: ${BIFROST_ADMIN_TOKEN:-see conf}"
+    echo "    API Key: ${BIFROST_API_KEY:-see conf}"
     echo "    Port: ${BIFROST_PORT}"
 }
 
@@ -1193,7 +1193,7 @@ configure_qdrant() {
     echo "  📊 Qdrant Configuration Summary:"
     echo "    Database: Qdrant"
     echo "    Port: ${QDRANT_PORT}"
-    echo "    API Key: ${QDRANT_API_KEY:0:10}..."
+    echo "    API Key: ${QDRANT_API_KEY:-see conf}"
     echo "    Collection Management: ${QDRANT_ENABLE_COLLECTIONS}"
 }
 
@@ -1209,7 +1209,7 @@ configure_weaviate() {
     echo "  📊 Weaviate Configuration Summary:"
     echo "    Database: Weaviate"
     echo "    Port: ${WEAVIATE_PORT}"
-    echo "    API Key: ${WEAVIATE_API_KEY:0:10}..."
+    echo "    API Key: ${WEAVIATE_API_KEY:-see conf}"
     echo "    Authentication: ${WEAVIATE_ENABLE_AUTH}"
 }
 
@@ -1224,7 +1224,7 @@ configure_chroma() {
     echo "  📊 ChromaDB Configuration Summary:"
     echo "    Database: ChromaDB"
     echo "    Port: ${CHROMA_PORT}"
-    echo "    Auth Token: ${CHROMA_AUTH_TOKEN:0:10}..."
+    echo "    Auth Token: ${CHROMA_AUTH_TOKEN:-see conf}"
 }
 
 configure_milvus() {
@@ -1238,7 +1238,7 @@ configure_milvus() {
     echo "  📊 Milvus Configuration Summary:"
     echo "    Database: Milvus"
     echo "    Port: ${MILVUS_PORT}"
-    echo "    API Key: ${MILVUS_API_KEY:0:10}..."
+    echo "    API Key: ${MILVUS_API_KEY:-see conf}"
 }
 
 # =============================================================================
@@ -1893,7 +1893,7 @@ configure_signalbot() {
         echo ""
         echo "  ✅ SearXNG Configuration:"
         echo "    Port: $SEARXNG_PORT"
-        echo "    Secret Key: ${SEARXNG_SECRET_KEY:0:16}..."
+        echo "    Secret Key: ${SEARXNG_SECRET_KEY:-see conf}"
     else
         echo "  ℹ️  SearXNG disabled"
     fi
@@ -2964,7 +2964,7 @@ display_service_summary() {
     [[ "${ENABLE_N8N:-false}"         == "true" ]] && _mc_line "  N8N          → $(_mu n8n         ${N8N_PORT:-5678})"
     [[ "${ENABLE_FLOWISE:-false}"     == "true" ]] && _mc_line "  Flowise      → $(_mu flowise     ${FLOWISE_PORT:-3000})  ${FLOWISE_USERNAME:-admin} / ${FLOWISE_PASSWORD:-see conf}"
     [[ "${ENABLE_DIFY:-false}"        == "true" ]] && _mc_line "  Dify         → $(_mu dify        ${DIFY_PORT:-3001})  init: ${DIFY_INIT_PASSWORD:-see conf}"
-    [[ "${ENABLE_ZEP:-false}"         == "true" ]] && _mc_line "  Zep          → $(_mu zep         ${ZEP_PORT:-8100})  secret: ${ZEP_AUTH_SECRET:0:16}..."
+    [[ "${ENABLE_ZEP:-false}"         == "true" ]] && _mc_line "  Zep          → $(_mu zep         ${ZEP_PORT:-8100})  secret: ${ZEP_AUTH_SECRET:-see conf}"
     [[ "${ENABLE_LETTA:-false}"       == "true" ]] && _mc_line "  Letta        → $(_mu letta       ${LETTA_PORT:-8283})  pass: ${LETTA_SERVER_PASS:-see conf}"
     [[ "${ENABLE_AUTHENTIK:-false}"   == "true" ]] && _mc_line "  Authentik    → $(_mu authentik   ${AUTHENTIK_PORT:-9000})  pass: ${AUTHENTIK_BOOTSTRAP_PASSWORD:-see conf}"
     [[ "${ENABLE_GRAFANA:-false}"     == "true" ]] && _mc_line "  Grafana      → $(_mu grafana     ${GRAFANA_PORT:-3002})"
