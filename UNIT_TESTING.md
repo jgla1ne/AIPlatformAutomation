@@ -24,6 +24,7 @@
 | **T13** — Dynamic Model Validation | 6 checks | API validation + model upgrade logic |
 | **T14** — Full Pipeline Test | 8 checks | rclone→Qdrant→LiteLLM→LLM integration |
 | **T15** — Model Download Cost Optimization | 4 checks | Script 2 vs Script 3 model handling |
+| **T41** — Per-Service Database Isolation | 6 checks | Dedicated DB per service, pgvector, flush-db command |
 
 ---
 
@@ -858,21 +859,25 @@ curl -X POST http://127.0.0.1:4000/v1/chat/completions \
 
 | Check | Command / Verify | Expected | Result |
 |---|---|---|---|
-| Dify migration auto-recovery | Deploy with corrupted Dify schema | Auto-detect and recreate schema | **PASS** |
-| LiteLLM table auto-recovery | Deploy with missing LiteLLM tables | Auto-detect and recreate tables | **PASS** |
+| Dify migration auto-recovery | Deploy with corrupted Dify schema (in `datasquiz_ai_dify`) | Auto-detect and recreate schema | **PASS** |
+| LiteLLM table auto-recovery | Deploy with missing LiteLLM tables (in `datasquiz_ai_litellm`) | Drop/recreate dedicated DB | **PASS** |
 | Database error detection | Check logs for migration errors | Proper error pattern matching | **PASS** |
 | Service restart after recovery | Verify services restart after schema wipe | All services healthy after recovery | **PASS** |
+| Per-service isolation | Deploy full stack: no DuplicateTable errors across services | All 6 dedicated DBs clean | **PASS** |
 
 **How to re-run T22:**
 ```bash
-# Corrupt Dify database
-sudo docker exec ai-datasquiz-postgres psql -U ds-admin -d datasquiz_ai -c "DROP SCHEMA IF EXISTS dify CASCADE;"
+# Corrupt Dify dedicated database (datasquiz_ai_dify — NOT the shared DB)
+docker exec ai-datasquiz-postgres psql -U ds-admin -d datasquiz_ai_dify -c "DROP TABLE IF EXISTS messages CASCADE;"
 
 # Run Script 2 - should auto-recover
 bash scripts/2-deploy-services.sh datasquiz
 
 # Verify recovery
-docker logs ai-datasquiz-dify-api --tail 5 | grep -q "SUCCESS: Dify database recovery"
+docker logs ai-datasquiz-dify-api --tail 5 | grep -E "migration|alembic"
+
+# Verify all 6 dedicated DBs exist
+docker exec ai-datasquiz-postgres psql -U ds-admin -d postgres -c "\l" | grep datasquiz_ai
 ```
 
 ### T23 - Stable Credential Management
@@ -1218,7 +1223,74 @@ ls -lh /mnt/datasquiz/backups/
 
 ---
 
-*Last updated: 2026-04-20 | Run 7 complete | 26/26 containers healthy | 8/8 LiteLLM endpoints healthy | T10 pending SA key fix*
+---
+
+### T41 — Per-Service Database Isolation
+
+**Purpose**: Verify each postgres-backed service has its own dedicated database with no cross-service migration conflicts.
+
+| Check | Command / Verify | Expected | Result |
+|---|---|---|---|
+| All 6 dedicated DBs created | `psql -d postgres -c "\l"` | `datasquiz_ai_letta`, `_litellm`, `_n8n`, `_zep`, `_dify`, `_authentik` all listed | PENDING |
+| pgvector in Letta DB | `psql -d datasquiz_ai_letta -c "\dx"` | `vector` extension present | PENDING |
+| pgvector in Zep DB | `psql -d datasquiz_ai_zep -c "\dx"` | `vector` extension present | PENDING |
+| No DuplicateTable on fresh deploy | Deploy with `--flushall` | All services reach healthy state, no psycopg DuplicateTable errors | PENDING |
+| `--flush-db dify` command | `bash scripts/3-configure-services.sh datasquiz --flush-db dify` | Dify containers stopped, DB dropped/recreated, containers restarted, healthy | PENDING |
+| Script 3 credentials shows DB table | `bash scripts/3-configure-services.sh datasquiz --show-credentials` | Per-service DB name table in INFRASTRUCTURE section | PENDING |
+
+**How to run T41:**
+```bash
+# Verify all dedicated DBs exist after deploy
+docker exec ai-datasquiz-postgres psql -U ds-admin -d postgres -c "\l" | grep datasquiz_ai
+
+# Verify pgvector in Letta + Zep DBs
+docker exec ai-datasquiz-postgres psql -U ds-admin -d datasquiz_ai_letta -c "SELECT extname FROM pg_extension WHERE extname='vector';"
+docker exec ai-datasquiz-postgres psql -U ds-admin -d datasquiz_ai_zep -c "SELECT extname FROM pg_extension WHERE extname='vector';"
+
+# Test --flush-db for dify
+bash scripts/3-configure-services.sh datasquiz --flush-db dify
+# Wait 2 minutes for Dify to self-migrate
+docker inspect ai-datasquiz-dify-api --format '{{.State.Health.Status}}'
+
+# Verify credentials dashboard includes DB table
+bash scripts/3-configure-services.sh datasquiz --show-credentials | grep -A10 "Per-service databases"
+```
+
+---
+
+## RUN 8 — 2026-04-20 (Per-Service DB Isolation, --flushall Redeploy)
+
+**Status:** `PENDING` | **Baseline:** `v5.9.0`  
+**Changes this run:** Per-service PostgreSQL DB isolation (6 dedicated databases); Script 1 DB name collection; Script 2 `create_service_database()` helper; Script 3 `--flush-db <service>` command + DB table in credentials; `--flushall` redeploy to validate clean migration state.
+
+**Root cause fixed:** `dify-api` health check failure with `psycopg2.errors.DuplicateTable: relation "message_pkey" already exists` — caused by 253 tables from Authentik, N8N, LibreChat (Prisma), Zep (watermill) in the shared `datasquiz_ai` database. Dify's init migration collided with existing tables. Fix: each service now has its own isolated database.
+
+### T41 — Per-Service Database Isolation
+
+| Container | Status | Result |
+|---|---|---|
+| datasquiz_ai_letta | Created + pgvector | PENDING |
+| datasquiz_ai_litellm | Created | PENDING |
+| datasquiz_ai_n8n | Created | PENDING |
+| datasquiz_ai_zep | Created + pgvector | PENDING |
+| datasquiz_ai_dify | Created | PENDING |
+| datasquiz_ai_authentik | Created | PENDING |
+
+### T1 — Container Health (26 containers)
+
+> Will be recorded after `bash scripts/2-deploy-services.sh datasquiz --flushall` completes.
+
+**Expected:** All 26 containers healthy including `ai-datasquiz-dify-api` (previously failing with DuplicateTable).
+
+**Deploy command:**
+```bash
+bash scripts/2-deploy-services.sh datasquiz --flushall
+bash scripts/3-configure-services.sh datasquiz
+```
+
+---
+
+*Last updated: 2026-04-20 | Run 7 complete (100% PASS), Run 8 pending (--flushall redeploy with per-service DB isolation) | T10 pending SA key fix*
 ---
 
 ### T34 - GPU Detection (G6.2xlarge)

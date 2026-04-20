@@ -287,6 +287,8 @@ ENABLE_GOOGLE, GOOGLE_AI_API_KEY, GOOGLE_MODELS
 ENABLE_GROQ, GROQ_API_KEY, GROQ_MODELS
 ENABLE_OPENROUTER, OPENROUTER_API_KEY
 ENABLE_MAMMOUTH, MAMMOUTH_API_KEY, MAMMOUTH_BASE_URL, MAMMOUTH_MODELS
+# Per-service PostgreSQL database names (auto-generated; wizard allows override)
+LETTA_DB_NAME, LITELLM_DB_NAME, N8N_DB_NAME, ZEP_DB_NAME, DIFY_DB_NAME, AUTHENTIK_DB_NAME
 # Ingestion
 ENABLE_INGESTION, INGESTION_METHOD=rclone|s3|azure|local
 GDRIVE_CREDENTIALS_FILE, GDRIVE_FOLDER_ID
@@ -304,11 +306,26 @@ SERPAPI_KEY, BRAVE_API_KEY
 
 **Prerequisites:** Non-root. Docker group member. Script 1 must have run successfully (EBS mounted, `platform.conf` present, Docker data-root on EBS).
 
+**Per-Service PostgreSQL Isolation:**
+Each Postgres-backed service gets its own dedicated database, preventing Alembic/Django migration conflicts:
+
+| Service | Database variable | Default name |
+|---|---|---|
+| LiteLLM | `LITELLM_DB_NAME` | `${POSTGRES_DB}_litellm` |
+| N8N | `N8N_DB_NAME` | `${POSTGRES_DB}_n8n` |
+| Zep | `ZEP_DB_NAME` | `${POSTGRES_DB}_zep` (+ pgvector) |
+| Dify | `DIFY_DB_NAME` | `${POSTGRES_DB}_dify` |
+| Authentik | `AUTHENTIK_DB_NAME` | `${POSTGRES_DB}_authentik` |
+| Letta | `LETTA_DB_NAME` | `${POSTGRES_DB}_letta` (+ pgvector) |
+| Shared | `POSTGRES_DB` | e.g. `datasquiz_ai` (RAG API, pgvector) |
+
+All databases are created idempotently by `create_service_database()` in `wait_for_all_health()` after Postgres is ready. Letta and Zep get pgvector enabled automatically in their dedicated databases.
+
 **Self-Healing Database Recovery:**
 Script 2 includes automatic database recovery for common migration issues:
 - **Dify**: Auto-detects migration failures and wipes/recreates schema
-- **LiteLLM**: Auto-detects table errors and clears cache/reinitializes
-- **PostgreSQL**: Maintains schema integrity across service restarts
+- **LiteLLM**: Auto-detects table errors and drops/recreates dedicated database
+- **PostgreSQL**: Each service isolated in its own database — no migration cross-contamination
 - **Result**: First-time deployments succeed reliably without manual intervention
 
 **AI Development Tools Integration:**
@@ -394,7 +411,7 @@ bash scripts/2-deploy-services.sh <tenant_id> --flushall
 6. `generate_compose()` — writes `docker-compose.yml` via heredoc blocks (one per enabled service); no templating, no `.env` files
 7. Config file generation — `litellm_config.yaml`, `Caddyfile` (Caddy only), `zep-config.yaml` (Zep only)
 8. `docker compose up -d`
-9. `wait_for_all_health()` — polls every enabled service health endpoint with per-service timeouts; creates Letta's dedicated PostgreSQL database + pgvector extension after Postgres healthy; restarts Letta after DB creation; checks Zep watermill tables exist (only restarts Zep if tables were missing — avoids unnecessary second boot cycle)
+9. `wait_for_all_health()` — polls every enabled service health endpoint with per-service timeouts; calls `create_service_database()` for each postgres-backed service (LiteLLM, N8N, Zep, Dify, Authentik, Letta) to create dedicated databases idempotently; enables pgvector in Letta + Zep DBs; restarts Letta after DB creation; checks Zep watermill tables exist (only restarts Zep if tables were missing — avoids unnecessary second boot cycle)
 10. `trigger_initial_rclone_sync()` — restarts rclone container immediately after all health checks pass so first Google Drive sync fires without waiting for poll interval
 11. `download_ollama_models()` — automatically pulls all configured Ollama models if not present, with cost-optimized duplicate checking
 11. `show_post_deploy_dashboard()` — prints all service URLs (domain-aware), credentials, and pipeline description
@@ -528,6 +545,11 @@ Port-allocations file is sourced after platform.conf so any Script 2 conflict-re
 
 **Management commands (post-deploy):**
 ```bash
+# Per-service database flush (drop + recreate + re-migrate, no container rebuild)
+bash scripts/3-configure-services.sh <tenant_id> --flush-db litellm
+bash scripts/3-configure-services.sh <tenant_id> --flush-db dify
+# Supported: litellm, n8n, zep, dify, authentik, letta
+
 # Ingestion pipeline — rclone → vector DB
 bash scripts/3-configure-services.sh <tenant_id> --ingest
 bash scripts/3-configure-services.sh <tenant_id> --ingest --skip-sync   # skip rclone step
@@ -581,7 +603,7 @@ URL_ROUTING_MODE=port (or no proxy):
 
 | Layer | Service | Image | Notes |
 |---|---|---|---|
-| **Infrastructure** | PostgreSQL | `pgvector/pgvector:pg15` | Shared DB + vector store; used by LiteLLM, Dify, Authentik, LibreChat RAG API; Letta gets dedicated `${DB}_letta` database |
+| **Infrastructure** | PostgreSQL | `pgvector/pgvector:pg15` | Shared DB (`${POSTGRES_DB}`) for RAG API/pgvector + six dedicated per-service DBs: `${LETTA_DB_NAME}`, `${LITELLM_DB_NAME}`, `${N8N_DB_NAME}`, `${ZEP_DB_NAME}`, `${DIFY_DB_NAME}`, `${AUTHENTIK_DB_NAME}` |
 | | Redis | `redis:7-alpine` | Session / queue store |
 | | MongoDB | `mongo:7` | Required by LibreChat only; co-deployed automatically |
 | **LLM** | Ollama | `ollama/ollama` | Local model runner |
@@ -808,14 +830,29 @@ auth:
 ```
 Script 2 generates this file at deploy time and mounts it `:ro`. Zep has no `curl` or `wget` — use `bash /dev/tcp` for the healthcheck.
 
-### Letta — Dedicated Database
+### Per-Service Database Isolation
 
-Letta and LiteLLM both create a `users` table. They **cannot share a database**. Script 2:
-1. Creates `${POSTGRES_DB}_letta` database after Postgres is healthy: `psql -U ${POSTGRES_USER} -d postgres -c "CREATE DATABASE ..."`
-2. Enables pgvector extension in the new database separately
-3. Restarts the Letta container to break the crash-backoff loop
+Multiple services (Letta, LiteLLM, Dify, N8N, Zep, Authentik) each run Alembic or Django schema migrations. Sharing a single database causes `DuplicateTable` failures — for example, Dify's `messages` table collides with Zep's watermill tables, or Letta and LiteLLM both create a `users` table.
 
-`LETTA_PG_URI` must point to `.../${POSTGRES_DB}_letta`, not `.../${POSTGRES_DB}`.
+**Rule:** Every Postgres-backed service gets its own dedicated database. Script 2's `create_service_database()` creates them idempotently after Postgres is healthy:
+
+```bash
+create_service_database "datasquiz_ai_letta"     true   # true = enable pgvector
+create_service_database "datasquiz_ai_litellm"
+create_service_database "datasquiz_ai_n8n"
+create_service_database "datasquiz_ai_zep"        true
+create_service_database "datasquiz_ai_dify"
+create_service_database "datasquiz_ai_authentik"
+```
+
+Each service's compose environment block references its own `*_DB_NAME` variable. `LETTA_PG_URI` must point to `.../${LETTA_DB_NAME}`, not `.../${POSTGRES_DB}`.
+
+**Per-service DB flush (Script 3):**
+```bash
+bash scripts/3-configure-services.sh <tenant_id> --flush-db <service>
+# Stops the service containers, drops the DB, recreates it, enables pgvector if needed,
+# restarts containers — they self-migrate on startup.
+```
 
 ### Zep — Watermill Table Guard (Conditional Restart)
 
@@ -1052,7 +1089,12 @@ Use when implementing or reviewing any script change:
 - [ ] Are all host ports bound to `127.0.0.1`?
 - [ ] Does `prepare_data_dirs()` chown only created subdirectories (not `lost+found` or `docker`)?
 - [ ] Is `AUTHENTIK_SECRET_KEY` persisted (not regenerated) across redeploys?
-- [ ] Is `LETTA_PG_URI` pointing to `.../${POSTGRES_DB}_letta` (not the shared DB)?
+- [ ] Is `LETTA_PG_URI` pointing to `.../${LETTA_DB_NAME}` (not the shared `${POSTGRES_DB}`)?
+- [ ] Do LiteLLM, N8N, Zep, Dify, and Authentik compose env vars reference `*_DB_NAME` variables (not `${POSTGRES_DB}`)?
+- [ ] Does `create_service_database()` in `wait_for_all_health()` run for all 6 postgres-backed services (idempotent — safe on re-deploy)?
+- [ ] Do Letta and Zep DBs get pgvector enabled in their dedicated databases (not just the shared DB)?
+- [ ] Does Script 3 `--flush-db <service>` stop containers, drop DB, recreate with pgvector if needed, restart?
+- [ ] Does `show_credentials()` in Script 3 display the per-service database name table?
 - [ ] Does every web UI pass LiteLLM master key + base URL (not direct model endpoints)?
 - [ ] Is `N8N_WEBHOOK_URL` using `https://n8n.${BASE_DOMAIN}/` when Caddy is active?
 - [ ] Does `CODE_SERVER_PASSWORD` use a generated random value (not `changeme`) and is it in `persist_generated_secrets()`?
@@ -1141,9 +1183,16 @@ Letta runs Alembic schema migrations before binding the HTTP server. On first de
 
 **Fix (already applied):** `start_period: 600s` in the Letta healthcheck (keeps Docker in `starting` through the migration window) and `wait_for_health letta 900s`. The server comes up ~30s after "Starting Letta Server..." appears in logs.
 
+### `DuplicateTable` / `relation "X" already exists` on any service startup
+
+A Postgres-backed service is sharing a database with another service. Each service must have its own dedicated database. Check:
+1. All six `*_DB_NAME` variables are set in platform.conf (re-run Script 1 if missing)
+2. The service's compose environment block references its `*_DB_NAME` var, not `${POSTGRES_DB}`
+3. Run `bash scripts/3-configure-services.sh <tenant_id> --flush-db <service>` to drop and recreate the dedicated DB
+
 ### Letta `relation "users" already exists`
 
-Letta is sharing a database with LiteLLM. `LETTA_PG_URI` must point to a dedicated `${POSTGRES_DB}_letta` database, not the shared `${POSTGRES_DB}`. Script 2 creates this database automatically after Postgres is healthy.
+Letta is sharing a database with LiteLLM. `LETTA_PG_URI` must point to `${LETTA_DB_NAME}` (e.g. `datasquiz_ai_letta`), not the shared `${POSTGRES_DB}`. Script 2 creates this database automatically after Postgres is healthy.
 
 ### Dify loops on `/install`
 
@@ -1195,9 +1244,9 @@ curl -s -X POST "http://127.0.0.1:${SIGNALBOT_PORT}/v1/register/+<number>/verify
 |---|---|---|
 | **Script 0** — Nuclear Cleanup | Production ready | Typed confirmation, Docker daemon stop before EBS unmount, scoped image removal |
 | **Script 1** — Setup Wizard | Production ready | Interactive wizard, stack presets, memory layer selection, dependency enforcement, writes platform.conf |
-| **Script 2** — Deployment Engine | Production ready | Heredoc compose generation, port allocator, secret persistence, Letta DB creation, MongoDB corruption recovery, Dify database recovery, --flush-dbs flag, P14 model cost optimization, SearXNG search engine, post-deploy dashboard |
-| **Script 3** — Mission Control | Production ready | Sources port-allocations (takes precedence), 24-service health table, domain-aware URLs, credentials summary, ingestion pipeline, log management, service reconfigure, LiteLLM routing, **dynamic model lookup** (--ollama-latest, 30 models), **batch model input** (comma-separated), **success tracking** (X/Y reporting), Ollama model management, interactive model configuration, SearXNG configuration, backup, **reboot persistence** |
+| **Script 2** — Deployment Engine | Production ready | Heredoc compose generation, port allocator, secret persistence, **per-service DB isolation** (6 dedicated databases via `create_service_database()`), MongoDB corruption recovery, Dify/LiteLLM database recovery, --flush-dbs flag, P14 model cost optimization, SearXNG search engine, post-deploy dashboard |
+| **Script 3** — Mission Control | Production ready | Sources port-allocations (takes precedence), 24-service health table, domain-aware URLs, credentials summary (incl. per-service DB table), ingestion pipeline, log management, service reconfigure, LiteLLM routing, **--flush-db \<service\>** (per-service DB reset), **dynamic model lookup** (--ollama-latest, 30 models), **batch model input** (comma-separated), **success tracking** (X/Y reporting), Ollama model management, interactive model configuration, SearXNG configuration, backup, **reboot persistence** |
 
 ---
 
-*Version: 5.8.0 | Last Updated: 2026-04-20 | Architecture: 4 scripts, 26 services (Dify 3-container stack, SearXNG, rclone), single-tenant per EBS volume | Providers: Ollama, Groq, OpenRouter, Mammouth AI, Anthropic, Google, OpenAI | URL_ROUTING_MODE: subdomain/port/path | Mem0 removed*
+*Version: 5.9.0 | Last Updated: 2026-04-20 | Architecture: 4 scripts, 26 services (Dify 3-container stack, SearXNG, rclone), single-tenant per EBS volume | Providers: Ollama, Groq, OpenRouter, Mammouth AI, Anthropic, Google, OpenAI | URL_ROUTING_MODE: subdomain/port/path | Per-service PostgreSQL isolation (6 dedicated DBs) | Mem0 removed*

@@ -47,6 +47,7 @@
 - Validates domain format and DNS resolution
 - Validates EBS device exists before formatting
 - All inputs, including detected `GPU_TYPE` and `GPU_MEMORY`, written to `platform.conf`
+- Per-service PostgreSQL database names collected (or auto-generated as `${POSTGRES_DB}_<service>`) and written to platform.conf: `LETTA_DB_NAME`, `LITELLM_DB_NAME`, `N8N_DB_NAME`, `ZEP_DB_NAME`, `DIFY_DB_NAME`, `AUTHENTIK_DB_NAME`
 - Script: `1-setup-system.sh`
 
 ---
@@ -74,6 +75,7 @@
 - Script exits non-zero if any enabled service fails health checks within timeout
 - Default re-run (no flags): containers pruned, EBS data preserved — fast retry, no re-pull
 - `--flushall` flag: wipes all databases, service state, Ollama models, Docker image cache — true clean redeploy
+- **Per-service DB isolation**: `create_service_database()` creates a dedicated PostgreSQL database for each postgres-backed service (LiteLLM, N8N, Zep, Dify, Authentik, Letta) after Postgres is healthy; pgvector enabled for Letta and Zep; idempotent on re-deploy
 - Script: `2-deploy-services.sh`
 
 ---
@@ -261,7 +263,7 @@
 
 **Acceptance criteria:**
 - Zep CE deployed and healthy at `:8000`
-- Postgres + pgvector backing store (shared Postgres instance, dedicated schema)
+- Dedicated PostgreSQL database `${ZEP_DB_NAME}` (e.g. `datasquiz_ai_zep`) with pgvector extension — separate from shared DB to prevent Alembic migration conflicts
 - Auth token generated and persisted in platform.conf
 - Embeddings generated via LiteLLM (not a separate embedding model)
 - OpenWebUI and LibreChat wired to Zep API URL + token at deploy time
@@ -277,7 +279,7 @@
 
 **Acceptance criteria:**
 - Letta deployed and healthy at `:8283`
-- Dedicated PostgreSQL database `${POSTGRES_DB}_letta` (separate from shared DB to prevent table conflicts)
+- Dedicated PostgreSQL database `${LETTA_DB_NAME}` (e.g. `datasquiz_ai_letta`) — separate from shared DB and from all other service DBs (Letta and LiteLLM both create a `users` table)
 - pgvector extension enabled in dedicated database
 - Database created and pgvector enabled by Script 2 after Postgres healthy
 - Letta restarted after database creation (breaks crash-backoff loop)
@@ -406,6 +408,7 @@
 - N8N deployed and healthy at `:5678`
 - `OPENAI_API_KEY` set to LiteLLM master key
 - `OPENAI_API_BASE_URL` set to `http://${TENANT_PREFIX}-litellm:4000/v1`
+- Dedicated PostgreSQL database `${N8N_DB_NAME}` (e.g. `datasquiz_ai_n8n`); `DB_POSTGRESDB_DATABASE` env var points to it
 - Service: `n8n`
 
 ---
@@ -436,6 +439,7 @@
 - `CONSOLE_API_URL` and `APP_API_URL` set to `https://dify.${BASE_DOMAIN}` (same hostname as the web UI)
 - `HOSTNAME: "0.0.0.0"` set in dify-web environment — Next.js standalone server uses `$HOSTNAME` as its bind address; without it Next.js resolves the container hostname to the Docker bridge IP (e.g. `172.17.0.2`), making `127.0.0.1` unreachable inside the container and breaking all healthcheck probes
 - `DIFY_INIT_PASSWORD` generated and persisted; Script 3 `configure_dify()` calls `/console/api/setup` on port 5001 (not the web port)
+- Dedicated PostgreSQL database `${DIFY_DB_NAME}` (e.g. `datasquiz_ai_dify`); `DB_DATABASE` env var in both `dify-api` and `dify-worker` points to it — prevents collision with Zep watermill tables and Authentik schema
 - Dify-web healthcheck: `node -e "net.connect(3000,'127.0.0.1',...)"` — bash absent in Next.js image; `nc -z` is unreliable (exits 0 even when nothing is listening in this image); Node.js is guaranteed present
 - Dify-api healthcheck: Python3 socket connect to port 5001 — `/health` endpoint returns non-2xx during Flask initialization; TCP check confirms gunicorn is bound
 - `start_period: 2400s` for all three dify containers — all containers start simultaneously; dify services are checked after LiteLLM's ~30 min wait; start_period must exceed that window
@@ -505,6 +509,7 @@
 - Authentik deployed and healthy at `:9000`
 - `AUTHENTIK_BOOTSTRAP_PASSWORD` generated at deploy time, persisted to platform.conf, displayed in Script 3 credentials summary
 - `AUTHENTIK_SECRET_KEY` generated once and persisted (stable across redeploys — regenerating invalidates all sessions)
+- Dedicated PostgreSQL database `${AUTHENTIK_DB_NAME}` (e.g. `datasquiz_ai_authentik`); `AUTHENTIK_POSTGRESQL__NAME` env var points to it
 - Healthcheck at `/-/health/live/` (not `/-/health/`)
 - Script 3 displays akadmin credentials and OIDC configuration steps
 - Service: `authentik`
@@ -724,8 +729,10 @@
 
 **Acceptance criteria:**
 - MongoDB corruption detection and automatic recovery
-- Dify database migration issue detection and recovery
-- --flush-dbs flag for database-only recovery
+- Dify database migration issue detection and recovery (operates on `${DIFY_DB_NAME}`)
+- `--flush-dbs` flag for database-only recovery (Script 2)
+- `--flush-db <service>` command (Script 3) for per-service database reset without full redeploy; stops service containers, drops DB, recreates with pgvector if needed, restarts (service self-migrates on startup)
+- Supported services: `litellm`, `n8n`, `zep`, `dify`, `authentik`, `letta`
 - Container and model preservation during database recovery
 - Graceful error handling with informative logs
 
@@ -799,9 +806,10 @@ Epic 8 — Monitoring     prometheus → grafana
                         script 3 --backup: tar + cron scheduling
 Epic 9 — Alerting       signalbot → Signal messenger
 Epic 10 — Dev           code-server, continue-dev
-Epic 11 — Model Management Script 3 --configure-models, --flush-dbs flag
+Epic 11 — Model Management Script 3 --configure-models, --flush-dbs flag, --flush-db <service>
                         Interactive Ollama/external LLM configuration, template saving
                         Automatic database corruption detection and recovery
+                        Per-service DB isolation (6 dedicated databases via create_service_database())
 Epic 12 — Search        SearXNG privacy search engine, subdomain routing
                         Auto-generated secrets, health checks, LiteLLM integration
 Epic 13 — Hardware       GPU/CPU detection, deployment guidance, model recommendations
@@ -810,9 +818,16 @@ Epic 13 — Hardware       GPU/CPU detection, deployment guidance, model recomme
 
 ---
 
-*Version: 2.4.0 | Last Updated: 2026-04-20*
+*Version: 2.5.0 | Last Updated: 2026-04-20*
 
 ## IMPLEMENTATION STATUS UPDATES
+
+### Completed Features (2026-04-20 — Per-Service DB Isolation)
+- **Per-Service PostgreSQL Isolation**: Each postgres-backed service (LiteLLM, N8N, Zep, Dify, Authentik, Letta) now gets its own dedicated database. Root cause: Dify's `messages` table collided with existing tables (253 tables in the shared DB) causing `DuplicateTable` migration failures on fresh deploys.
+- **Script 1 DB Name Collection**: Wizard collects `*_DB_NAME` variables (or auto-generates `${POSTGRES_DB}_<service>`); written to platform.conf as single source of truth
+- **Script 2 `create_service_database()`**: Idempotent helper; creates all 6 dedicated DBs + pgvector for Letta/Zep after Postgres healthy
+- **Script 3 `--flush-db <service>`**: Per-service DB reset (drop + recreate + restart); no container rebuild required
+- **Script 3 credentials dashboard**: Per-service DB name table added to infrastructure section of `show_credentials()`
 
 ### Completed Features (2026-04-20)
 - **Mammouth AI Multi-Model Proxy**: Single API key for Claude/Gemini/GPT via Mammouth; 3 model entries auto-generated in LiteLLM config (`claude-sonnet-4-6`, `gemini-2.5-flash`, `gpt-4o`)

@@ -1264,10 +1264,24 @@ show_credentials() {
 
     # ── Infrastructure ────────────────────────────────────────────────────────
     if [[ "${POSTGRES_ENABLED:-false}" == "true" ]]; then
-        echo "INFRASTRUCTURE"
-        echo "  PostgreSQL   127.0.0.1:${POSTGRES_PORT:-5432}  (internal — docker network: ${TENANT_PREFIX:-ai}-postgres)"
+        local _pg_base="${POSTGRES_DB:-${TENANT_ID}}"
+        echo "INFRASTRUCTURE — POSTGRESQL"
+        echo "  Host         127.0.0.1:${POSTGRES_PORT:-5432}  (docker-internal: ${TENANT_PREFIX:-ai}-postgres)"
         echo "  User         ${POSTGRES_USER:-${TENANT_ID}}"
         echo "  Password     ${POSTGRES_PASSWORD:-<not set>}"
+        echo ""
+        echo "  Per-service databases (all use the same user/password above):"
+        echo "  ┌────────────────┬───────────────────────────────────────────────────┐"
+        printf "  │ %-14s │ %-49s │\n" "Service" "Database name"
+        echo "  ├────────────────┼───────────────────────────────────────────────────┤"
+        printf "  │ %-14s │ %-49s │\n" "shared" "${_pg_base}   (RAG API / pgvector)"
+        [[ "${LETTA_ENABLED:-false}"     == "true" ]] && printf "  │ %-14s │ %-49s │\n" "Letta"     "${LETTA_DB_NAME:-${_pg_base}_letta}"
+        [[ "${LITELLM_ENABLED:-false}"   == "true" ]] && printf "  │ %-14s │ %-49s │\n" "LiteLLM"   "${LITELLM_DB_NAME:-${_pg_base}_litellm}"
+        [[ "${N8N_ENABLED:-false}"       == "true" ]] && printf "  │ %-14s │ %-49s │\n" "N8N"       "${N8N_DB_NAME:-${_pg_base}_n8n}"
+        [[ "${ZEP_ENABLED:-false}"       == "true" ]] && printf "  │ %-14s │ %-49s │\n" "Zep"       "${ZEP_DB_NAME:-${_pg_base}_zep}"
+        [[ "${DIFY_ENABLED:-false}"      == "true" ]] && printf "  │ %-14s │ %-49s │\n" "Dify"      "${DIFY_DB_NAME:-${_pg_base}_dify}"
+        [[ "${AUTHENTIK_ENABLED:-false}" == "true" ]] && printf "  │ %-14s │ %-49s │\n" "Authentik" "${AUTHENTIK_DB_NAME:-${_pg_base}_authentik}"
+        echo "  └────────────────┴───────────────────────────────────────────────────┘"
         [[ "${REDIS_ENABLED:-false}" == "true" ]] && \
             echo "  Redis pass   ${REDIS_PASSWORD:-<not set>}"
         echo ""
@@ -1605,6 +1619,70 @@ show_health_status() {
 }
 
 # =============================================================================
+# PER-SERVICE DATABASE FLUSH (--flush-db <service>)
+# =============================================================================
+# Drops and recreates a single service's dedicated PostgreSQL database.
+# The service's containers are stopped first and restarted after to trigger
+# a fresh migration run. Requires Script 2 to have run at least once
+# (postgres container must be healthy).
+# Supported services: litellm n8n zep dify authentik letta
+# =============================================================================
+flush_service_database() {
+    local svc="${1:-}"
+    if [[ -z "$svc" ]]; then
+        fail "--flush-db requires a service name: litellm | n8n | zep | dify | authentik | letta"
+    fi
+    local _pg_base="${POSTGRES_DB:-${TENANT_ID}}"
+    local db_name
+    case "$svc" in
+        litellm)   db_name="${LITELLM_DB_NAME:-${_pg_base}_litellm}" ;;
+        n8n)       db_name="${N8N_DB_NAME:-${_pg_base}_n8n}" ;;
+        zep)       db_name="${ZEP_DB_NAME:-${_pg_base}_zep}" ;;
+        dify)      db_name="${DIFY_DB_NAME:-${_pg_base}_dify}" ;;
+        authentik) db_name="${AUTHENTIK_DB_NAME:-${_pg_base}_authentik}" ;;
+        letta)     db_name="${LETTA_DB_NAME:-${_pg_base}_letta}" ;;
+        *)         fail "Unknown service '${svc}'. Supported: litellm n8n zep dify authentik letta" ;;
+    esac
+
+    warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    warn "  --flush-db ${svc}: dropping and recreating database: ${db_name}"
+    warn "  This wipes all data for ${svc}. Starting in 3 seconds..."
+    warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    sleep 3
+
+    # Stop affected containers
+    local containers=("${TENANT_PREFIX}-${svc}")
+    [[ "$svc" == "dify" ]] && containers+=("${TENANT_PREFIX}-dify-api" "${TENANT_PREFIX}-dify-worker")
+    for ctr in "${containers[@]}"; do
+        docker stop "$ctr" 2>/dev/null && log "  Stopped: $ctr" || true
+    done
+
+    # Drop and recreate database
+    log "  Dropping database: ${db_name}"
+    docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d postgres \
+        -c "DROP DATABASE IF EXISTS \"${db_name}\";" 2>/dev/null || true
+    log "  Creating database: ${db_name}"
+    docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d postgres \
+        -c "CREATE DATABASE \"${db_name}\";" 2>/dev/null || true
+    # Enable pgvector for services that need it
+    if [[ "$svc" == "letta" || "$svc" == "zep" ]]; then
+        docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d "${db_name}" \
+            -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null || true
+        ok "  pgvector enabled in ${db_name}"
+    fi
+    # Clear service caches
+    [[ "$svc" == "litellm" ]] && rm -rf "${DATA_DIR}/litellm/prisma-cache"/* 2>/dev/null || true
+
+    # Restart containers — they will run migrations on fresh DB
+    for ctr in "${containers[@]}"; do
+        docker start "$ctr" 2>/dev/null && log "  Started: $ctr" || true
+    done
+
+    ok "Database ${db_name} flushed and recreated. ${svc} will self-migrate on restart."
+    log "Monitor with: docker logs ${TENANT_PREFIX}-${svc} --follow"
+}
+
+# =============================================================================
 # MAIN FUNCTION
 # =============================================================================
 main() {
@@ -1632,6 +1710,7 @@ main() {
     local do_backup=false
     local backup_schedule=""
     local setup_persistence=false
+    local flush_db_svc=""
 
     # Parse arguments
     shift
@@ -1751,6 +1830,10 @@ main() {
             --test-pipeline)
                 test_full_pipeline "$tenant_id"
                 exit 0
+                ;;
+            --flush-db)
+                flush_db_svc="$2"
+                shift 2
                 ;;
             *)
                 fail "Unknown option: $1"
@@ -1988,35 +2071,47 @@ main() {
         configure_ai_dev_tools
     fi
     
-    # Flushall databases if requested
+    # --flush-db <service>: drop and recreate a single service's dedicated database
+    if [[ -n "${flush_db_svc:-}" ]]; then
+        flush_service_database "${flush_db_svc}"
+        exit 0
+    fi
+
+    # --flushall: drop and recreate ALL per-service dedicated databases + wipe caches
     if [[ "${flushall:-false}" == "true" ]]; then
-        log "Flushing all databases for self-healing..."
-        
-        # Stop all database-dependent services
-        for service in postgres redis mongodb litellm dify-api dify dify-worker zep letta; do
-            docker stop "${TENANT_PREFIX}-${service}" 2>/dev/null || true
+        log "Flushing ALL per-service databases for self-healing..."
+        local _pg_base="${POSTGRES_DB:-${TENANT_ID}}"
+        local _svc_db_map=(
+            "litellm:${LITELLM_DB_NAME:-${_pg_base}_litellm}"
+            "n8n:${N8N_DB_NAME:-${_pg_base}_n8n}"
+            "zep:${ZEP_DB_NAME:-${_pg_base}_zep}"
+            "dify:${DIFY_DB_NAME:-${_pg_base}_dify}"
+            "authentik:${AUTHENTIK_DB_NAME:-${_pg_base}_authentik}"
+            "letta:${LETTA_DB_NAME:-${_pg_base}_letta}"
+        )
+        for entry in "${_svc_db_map[@]}"; do
+            local _svc="${entry%%:*}" _db="${entry##*:}"
+            # Stop service containers before dropping their DB
+            for ctr in "${TENANT_PREFIX}-${_svc}" "${TENANT_PREFIX}-${_svc}-api" "${TENANT_PREFIX}-${_svc}-worker"; do
+                docker stop "$ctr" 2>/dev/null || true
+            done
+            log "  Dropping database: ${_db}"
+            docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d postgres \
+                -c "DROP DATABASE IF EXISTS \"${_db}\";" 2>/dev/null || true
         done
-        
-        # Wipe all databases
-        docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER:-${TENANT_ID}}" -d "${POSTGRES_DB:-${TENANT_ID}}" -c "
-            DROP SCHEMA IF EXISTS dify CASCADE;
-            DROP SCHEMA IF EXISTS litellm CASCADE;
-            DROP SCHEMA IF EXISTS zep CASCADE;
-            DROP SCHEMA IF EXISTS letta CASCADE;
-        " 2>/dev/null || true
-        
         # Clear caches
         rm -rf "${DATA_DIR}/litellm/prisma-cache"/* 2>/dev/null || true
         rm -rf "${DATA_DIR}/mongodb"/* 2>/dev/null || true
         rm -rf "${DATA_DIR}/redis"/* 2>/dev/null || true
-        
-        # Restart all services
-        for service in postgres redis mongodb litellm dify-api dify dify-worker zep letta; do
-            docker start "${TENANT_PREFIX}-${service}" 2>/dev/null || true
+        # Restart all stopped services (Script 2 will re-create databases on next full deploy)
+        for entry in "${_svc_db_map[@]}"; do
+            local _svc="${entry%%:*}"
+            for ctr in "${TENANT_PREFIX}-${_svc}" "${TENANT_PREFIX}-${_svc}-api" "${TENANT_PREFIX}-${_svc}-worker"; do
+                docker start "$ctr" 2>/dev/null || true
+            done
         done
-        
-        log "Database flush completed. Services are re-initializing..."
-        log "Run Script 3 again in 2-3 minutes to verify health."
+        log "All per-service databases dropped. Re-run Script 2 to recreate and re-migrate."
+        log "Or wait 2-3 min then run Script 3 again — services will self-migrate on restart."
     fi
     
     # Show credentials summary

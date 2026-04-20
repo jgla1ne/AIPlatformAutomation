@@ -1115,7 +1115,7 @@ EOF
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: ${TENANT_PREFIX}-postgres
       DB_POSTGRESDB_PORT: 5432
-      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB}
+      DB_POSTGRESDB_DATABASE: ${N8N_DB_NAME}
       DB_POSTGRESDB_USER: ${POSTGRES_USER}
       DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
       REDIS_HOST: ${TENANT_PREFIX}-redis
@@ -1247,7 +1247,7 @@ $(build_dify_deps)
       DB_PASSWORD: ${POSTGRES_PASSWORD}
       DB_HOST: ${TENANT_PREFIX}-postgres
       DB_PORT: 5432
-      DB_DATABASE: ${POSTGRES_DB}
+      DB_DATABASE: ${DIFY_DB_NAME}
       REDIS_HOST: ${TENANT_PREFIX}-redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
@@ -1300,7 +1300,7 @@ $(build_dify_deps)
       DB_PASSWORD: ${POSTGRES_PASSWORD}
       DB_HOST: ${TENANT_PREFIX}-postgres
       DB_PORT: 5432
-      DB_DATABASE: ${POSTGRES_DB}
+      DB_DATABASE: ${DIFY_DB_NAME}
       REDIS_HOST: ${TENANT_PREFIX}-redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
@@ -1344,7 +1344,7 @@ EOF
       AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL:-${ADMIN_EMAIL:-admin@localhost}}
       AUTHENTIK_POSTGRESQL__HOST: ${TENANT_PREFIX}-postgres
       AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER}
-      AUTHENTIK_POSTGRESQL__NAME: ${POSTGRES_DB}
+      AUTHENTIK_POSTGRESQL__NAME: ${AUTHENTIK_DB_NAME}
       AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD}
       AUTHENTIK_REDIS__HOST: ${TENANT_PREFIX}-redis
       AUTHENTIK_REDIS__PASSWORD: ${REDIS_PASSWORD}
@@ -1752,7 +1752,7 @@ EOF
 store:
   type: postgres
   postgres:
-    dsn: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${POSTGRES_DB}?sslmode=disable"
+    dsn: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${ZEP_DB_NAME}?sslmode=disable"
 auth:
   required: true
   secret: "${ZEP_AUTH_SECRET}"
@@ -1795,7 +1795,7 @@ EOF
     # Letta writes agent state to /root/.letta — run as root (image default):
     environment:
       LETTA_SERVER_PASS: ${LETTA_SERVER_PASS}
-      LETTA_PG_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${POSTGRES_DB}_letta
+      LETTA_PG_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${LETTA_DB_NAME}
       OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
       OPENAI_API_BASE: http://${TENANT_PREFIX}-litellm:4000/v1
     volumes:
@@ -3195,34 +3195,49 @@ deploy_containers() {
     ok "Containers deployed"
 }
 
+
+# create_service_database <db_name> [pgvector=false]
+# Idempotent: creates the named database and optionally enables pgvector.
+# Called by wait_for_all_health() after Postgres is healthy.
+create_service_database() {
+    local db_name="$1" pgvector="${2:-false}"
+    local create_out
+    create_out=$(docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d postgres \
+        -c "CREATE DATABASE \"${db_name}\";" 2>&1 || true)
+    if echo "$create_out" | grep -qi "already exists"; then
+        log "  Database ${db_name} already exists — skipping"
+    elif echo "$create_out" | grep -qi "error\|fatal"; then
+        warn "  CREATE DATABASE ${db_name}: ${create_out}"
+    else
+        ok "  Database ${db_name} created"
+    fi
+    if [[ "$pgvector" == "true" ]]; then
+        docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d "${db_name}" \
+            -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null | grep -v "^$" | grep -v "already exists" || true
+        ok "  pgvector enabled in ${db_name}"
+    fi
+}
+
 wait_for_all_health() {
     log "Waiting for all services to become healthy..."
-    
+
     # Health check timeouts per service (README §6)
     if [[ "${POSTGRES_ENABLED}" == "true" ]]; then
         wait_for_health "${TENANT_PREFIX}-postgres" 60 || return 1
-        # Create dedicated Letta database if needed (avoids 'users' table conflict with LiteLLM)
+        # Create per-service dedicated databases — each postgres-backed service gets its own DB
+        # to prevent Alembic/Django migration conflicts (e.g. Dify's 'messages' vs Zep watermill tables).
+        log "Creating dedicated per-service databases..."
+        [[ "${LETTA_ENABLED:-false}"     == "true" ]] && create_service_database "${LETTA_DB_NAME}"     true
+        [[ "${LITELLM_ENABLED:-false}"   == "true" ]] && create_service_database "${LITELLM_DB_NAME}"
+        [[ "${N8N_ENABLED:-false}"       == "true" ]] && create_service_database "${N8N_DB_NAME}"
+        [[ "${ZEP_ENABLED:-false}"       == "true" ]] && create_service_database "${ZEP_DB_NAME}"       true
+        [[ "${DIFY_ENABLED:-false}"      == "true" ]] && create_service_database "${DIFY_DB_NAME}"
+        [[ "${AUTHENTIK_ENABLED:-false}" == "true" ]] && create_service_database "${AUTHENTIK_DB_NAME}"
+        ok "Per-service databases ready"
+        # Restart Letta so it gets a clean attempt now that its dedicated DB exists.
+        # Without this, Letta may be in Docker's crash-restart backoff loop
+        # (it crashed before the DB was created) and could wait 64s+ per retry.
         if [[ "${LETTA_ENABLED:-false}" == "true" ]]; then
-            log "Creating dedicated Letta database ${POSTGRES_DB}_letta..."
-            local create_db_out
-            create_db_out=$(docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d postgres \
-                -c "CREATE DATABASE ${POSTGRES_DB}_letta;" 2>&1 || true)
-            if echo "$create_db_out" | grep -qi "already exists"; then
-                log "  Database ${POSTGRES_DB}_letta already exists — skipping"
-            elif echo "$create_db_out" | grep -qi "error\|fatal"; then
-                warn "  CREATE DATABASE output: ${create_db_out}"
-            else
-                ok "  Database ${POSTGRES_DB}_letta created"
-            fi
-            # Enable pgvector extension in the Letta database.
-            # Letta's schema includes VECTOR() columns — the extension must be
-            # present in _letta's own database, not just the main one.
-            docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}_letta" \
-                -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>&1 | grep -v "^$" | grep -v "already exists" || true
-            ok "  pgvector extension enabled in ${POSTGRES_DB}_letta"
-            # Restart Letta so it gets a clean attempt now that the DB exists.
-            # Without this, Letta may be in Docker's crash-restart backoff loop
-            # (it crashed before the DB was created) and could wait 64s+ per retry.
             log "Restarting Letta container after database creation..."
             docker restart "${TENANT_PREFIX}-letta" 2>/dev/null || true
         fi
@@ -3236,13 +3251,13 @@ wait_for_all_health() {
         # Unconditional restart causes a second boot cycle that can exceed the health timeout.
         log "Verifying Zep watermill tables..."
         local _zep_table_count
-        _zep_table_count=$(docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+        _zep_table_count=$(docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d "${ZEP_DB_NAME}" \
             -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' \
                   AND table_name IN ('watermill_message_token_count','watermill_offsets_message_token_count');" \
             2>/dev/null || echo "0")
         if [[ "${_zep_table_count:-0}" -lt 2 ]]; then
             log "  Watermill tables missing — creating manually and restarting Zep..."
-            docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "
+            docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d "${ZEP_DB_NAME}" -c "
                 CREATE TABLE IF NOT EXISTS watermill_message_token_count (
                     \"offset\" SERIAL,
                     uuid VARCHAR(36) NOT NULL,
@@ -3389,16 +3404,16 @@ wait_for_all_health() {
             " 2>/dev/null | grep -E '^[0-9a-f]{12}$' | head -1)
 
             if [[ -n "${dify_heads}" ]]; then
-                docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "
+                docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d "${DIFY_DB_NAME}" -c "
                     CREATE TABLE IF NOT EXISTS alembic_version (
                         version_num VARCHAR(32) NOT NULL,
                         CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
                     );
                     INSERT INTO alembic_version (version_num) VALUES ('${dify_heads}') ON CONFLICT DO NOTHING;
-                " 2>/dev/null && log "OK: Stamped alembic_version with head ${dify_heads}"
+                " 2>/dev/null && log "OK: Stamped alembic_version with head ${dify_heads} in ${DIFY_DB_NAME}"
             else
                 log "WARNING: Could not determine Dify alembic head — trying hardcoded fallback stamp"
-                docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "
+                docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d "${DIFY_DB_NAME}" -c "
                     CREATE TABLE IF NOT EXISTS alembic_version (
                         version_num VARCHAR(32) NOT NULL,
                         CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
@@ -3429,8 +3444,9 @@ wait_for_all_health() {
             # Stop LiteLLM
             docker stop "${TENANT_PREFIX}-litellm" 2>/dev/null || true
             
-            # Wipe LiteLLM database tables only
-            docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER:-${TENANT_ID}}" -d "${POSTGRES_DB:-${TENANT_ID}}" -c "DROP SCHEMA IF EXISTS litellm CASCADE;" 2>/dev/null || true
+            # Wipe LiteLLM dedicated database (drop and recreate for clean migration)
+            docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d postgres -c "DROP DATABASE IF EXISTS \"${LITELLM_DB_NAME}\";" 2>/dev/null || true
+            create_service_database "${LITELLM_DB_NAME}"
             
             # Clear LiteLLM cache
             rm -rf "${DATA_DIR}/litellm/prisma-cache"/* 2>/dev/null || true
@@ -3646,8 +3662,9 @@ main() {
         exit 0
     fi
 
-    # Database URL (needs passwords from platform.conf)
-    LITELLM_DB_URL="postgresql://${POSTGRES_USER:-${TENANT_ID}}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${POSTGRES_DB:-${TENANT_ID}}"
+    # Per-service DB names — early defaults (main() block re-derives after all vars resolved)
+    LITELLM_DB_NAME="${LITELLM_DB_NAME:-${POSTGRES_DB:-${TENANT_ID}}_litellm}"
+    LITELLM_DB_URL="postgresql://${POSTGRES_USER:-${TENANT_ID}}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${LITELLM_DB_NAME}"
 
     # Alias any vars Script 2 expects that platform.conf may call differently
     BASE_DOMAIN="${BASE_DOMAIN:-${DOMAIN}}"
@@ -3721,10 +3738,18 @@ main() {
     MAMMOUTH_BASE_URL="${MAMMOUTH_BASE_URL:-https://api.mammouth.ai/v1}"
     MAMMOUTH_MODELS="${MAMMOUTH_MODELS:-claude-sonnet-4-6,gemini-2.5-flash,gpt-4o}"
 
-    # Re-compute LITELLM_DB_URL now that TENANT_PREFIX and POSTGRES_USER are resolved
+    # Resolve base postgres credentials then derive all per-service DB names and URLs.
     POSTGRES_USER="${POSTGRES_USER:-${TENANT_ID}}"
     POSTGRES_DB="${POSTGRES_DB:-${TENANT_ID}}"
-    LITELLM_DB_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${POSTGRES_DB}"
+    # Per-service DB names — read from platform.conf if present, else default to ${POSTGRES_DB}_<service>
+    LETTA_DB_NAME="${LETTA_DB_NAME:-${POSTGRES_DB}_letta}"
+    LITELLM_DB_NAME="${LITELLM_DB_NAME:-${POSTGRES_DB}_litellm}"
+    N8N_DB_NAME="${N8N_DB_NAME:-${POSTGRES_DB}_n8n}"
+    ZEP_DB_NAME="${ZEP_DB_NAME:-${POSTGRES_DB}_zep}"
+    DIFY_DB_NAME="${DIFY_DB_NAME:-${POSTGRES_DB}_dify}"
+    AUTHENTIK_DB_NAME="${AUTHENTIK_DB_NAME:-${POSTGRES_DB}_authentik}"
+    # LiteLLM DB URL uses its dedicated database
+    LITELLM_DB_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${TENANT_PREFIX}-postgres:5432/${LITELLM_DB_NAME}"
 
     mkdir -p "$CONFIGURED_DIR"
 
