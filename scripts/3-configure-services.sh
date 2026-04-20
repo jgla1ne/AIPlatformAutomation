@@ -1591,6 +1591,12 @@ show_health_status() {
     [[ "${CODE_SERVER_ENABLED:-false}" == "true" ]] && _svc_row "Code Server" "code-server" "${CODE_SERVER_PORT:-8080}"
     [[ "${SIGNALBOT_ENABLED:-false}"  == "true" ]] && _svc_row "Signalbot"    "signalbot"   "${SIGNALBOT_PORT:-8080}"
 
+    # Search
+    [[ "${SEARXNG_ENABLED:-false}"    == "true" ]] && _svc_row "SearXNG"      "searxng"     "${SEARXNG_PORT:-8888}"
+
+    # Ingestion
+    [[ "${ENABLE_INGESTION:-false}"   == "true" ]] && _svc_row "rclone"       "rclone"      "(no healthcheck)"
+
     # Reverse proxy
     [[ "${CADDY_ENABLED:-false}"      == "true" ]] && _svc_row "Caddy"        "caddy"       "80/443"
     [[ "${NPM_ENABLED:-false}"        == "true" ]] && _svc_row "NPM"          "npm"         "${NPM_ADMIN_PORT:-81}(admin)"

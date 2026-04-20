@@ -205,11 +205,45 @@
 **so that** all services can access cloud models without per-service key management.
 
 **Acceptance criteria:**
-- Script 1 wizard collects keys for: OpenAI, Anthropic, Google, Azure, Groq, Mistral, Cohere
+- Script 1 wizard collects keys for: OpenAI, Anthropic, Google, Groq, OpenRouter, Mammouth AI
 - All keys written to platform.conf
 - Script 2 injects keys into `litellm_config.yaml` only for providers where a key was supplied
+- Model names validated against provider APIs before writing config (stale/deprecated names auto-replaced)
 - No key written to docker-compose.yml in plaintext (all via LiteLLM proxy)
 - Services: `litellm`
+
+---
+
+### Feature 2.4 — Mammouth AI Multi-Model Proxy
+
+**As a** platform operator,  
+**I want** a single API key that gives access to Claude, Gemini, and GPT models simultaneously,  
+**so that** I can use best-in-class models from different vendors without managing multiple billing accounts.
+
+**Acceptance criteria:**
+- Mammouth AI configured in LiteLLM as an `openai`-compatible provider with `api_base: https://api.mammouth.ai/v1`
+- Default models: `claude-sonnet-4-6`, `gemini-2.5-flash`, `gpt-4o` (each as a separate `model_name` entry)
+- Model list sourced from Mammouth's `/v1/models` endpoint at deploy time; configurable via `MAMMOUTH_MODELS`
+- `ENABLE_MAMMOUTH`, `MAMMOUTH_API_KEY`, `MAMMOUTH_BASE_URL`, `MAMMOUTH_MODELS` written to platform.conf
+- Script 1 wizard prompts for Mammouth API key when `ENABLE_MAMMOUTH=true`
+- Services: `litellm` (no new container — provider config only)
+
+---
+
+### Feature 2.5 — URL Routing Mode
+
+**As a** platform operator,  
+**I want** to choose how service URLs are formatted in dashboards and credentials output,  
+**so that** the displayed URLs match how my network actually routes traffic to services.
+
+**Acceptance criteria:**
+- Script 1 wizard presents three choices: `subdomain` / `port` / `path`
+- `URL_ROUTING_MODE` written to platform.conf
+- All URL helper functions in Scripts 1, 2, and 3 read `URL_ROUTING_MODE` to format URLs:
+  - `subdomain`: `https://service.${BASE_DOMAIN}` (default; requires Caddy/NPM)
+  - `port`: `http://${SERVER_IP}:${PORT}` (direct port; no proxy required)
+  - `path`: `https://${BASE_DOMAIN}/service` (path-based proxy)
+- Both `CADDY_ENABLED` and `ENABLE_CADDY` written to platform.conf (dual-flag for script compatibility)
 
 ---
 
@@ -252,16 +286,9 @@
 
 ---
 
-### Feature 3.3 — Persistent AI Memory Layer
+### Feature 3.3 — REMOVED (Mem0)
 
-**As an** AI developer,  
-**I want** a persistent, structured memory layer that stores and retrieves facts across AI interactions,  
-**so that** applications can maintain long-term user context without building custom memory logic.
-
-**Acceptance criteria:**
-- Mem0 deployed and healthy
-- API accessible within Docker network
-- Service: `mem0`
+> **Removed.** Mem0 was removed from the stack in v5.7.0. Zep CE (Feature 3.1) covers conversation memory; Letta (Feature 3.2) covers stateful agent memory. The `mem0` container no longer exists in Script 2 or Script 3.
 
 ---
 
@@ -783,9 +810,24 @@ Epic 13 — Hardware       GPU/CPU detection, deployment guidance, model recomme
 
 ---
 
-*Version: 2.3.0 | Last Updated: 2026-04-17*
+*Version: 2.4.0 | Last Updated: 2026-04-20*
 
 ## IMPLEMENTATION STATUS UPDATES
+
+### Completed Features (2026-04-20)
+- **Mammouth AI Multi-Model Proxy**: Single API key for Claude/Gemini/GPT via Mammouth; 3 model entries auto-generated in LiteLLM config (`claude-sonnet-4-6`, `gemini-2.5-flash`, `gpt-4o`)
+- **URL Routing Mode**: Script 1 wizard adds subdomain/port/path selection; `URL_ROUTING_MODE` written to platform.conf; all URL helpers in Scripts 1, 2, 3 respect it
+- **Dual Caddy/NPM Flag**: Both `CADDY_ENABLED` and `ENABLE_CADDY` written to platform.conf to prevent URL helpers from defaulting to IP:port when proxy is active
+- **Stale Model Name Fixes**: Anthropic `claude-3-sonnet-20240229` → `claude-3-5-sonnet-20241022`; Google `gemini-pro` → `gemini-1.5-flash`; Groq model names updated to current names
+- **Groq model_name format**: Fixed to `groq/${model}` (was `${model}-groq`) in Script 2
+- **Ollama RAM management**: `OLLAMA_KEEP_ALIVE=5m`, `OLLAMA_MAX_LOADED_MODELS=1` prevent model hoarding on low-RAM hosts
+- **Dify alembic stamp recovery**: Replaced wipe-schema recovery with alembic version stamp (`6b5f9f8b1a2c`) — preserves data on re-deploy
+- **Signal QR Code Caddy Route**: `signal.${BASE_DOMAIN}` Caddy route ensures QR pairing URL is browser-accessible
+- **SearXNG + rclone in health table**: Script 3 `show_health_status()` now includes SearXNG and rclone rows (previously omitted)
+- **OpenWebUI QDRANT_URI**: Fixed `QDRANT_URL` → `QDRANT_URI` (current env var name in OpenWebUI)
+- **Signalbot healthcheck**: Fixed `wget` → `curl` (wget not in image)
+- **26/26 containers healthy**: All services verified healthy on datasquiz tenant (2026-04-20)
+- **8/8 LiteLLM endpoints healthy**: Ollama (×2), Groq (×2), OpenRouter, Mammouth Claude/Gemini/GPT
 
 ### Completed Features (2026-04-17)
 - **MongoDB Corruption Recovery**: Automatic detection and recovery implemented in Script 2

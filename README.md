@@ -26,41 +26,48 @@ Internet
       ┌────────────┼───────────────────────┐
       │            │                       │
       ▼            ▼                       ▼
-┌──────────┐ ┌──────────────┐     ┌──────────────────┐
-│ LiteLLM  │ │   Web UIs    │     │   Automation     │
-│  Proxy   │ │              │     │                  │
-│  (unified│ │ OpenWebUI    │     │  N8N             │
-│  LLM API)│ │ OpenClaw     │     │  Flowise         │
-│          │ │ AnythingLLM  │     │  Dify            │
-└────┬─────┘ │ LibreChat    │     └──────┬───────────┘
-     │       └──────┬───────┘            │
-     │              │                    │
-     ▼              ▼                    ▼
-┌──────────┐ ┌──────────────┐     ┌──────────────────┐
-│  Ollama  │ │  Authentik   │     │  PostgreSQL+pgvec │
-│  (local  │ │  (SSO/IdP)   │     │  Redis            │
-│  models) │ └──────────────┘     │  MongoDB          │
-└──────────┘                      └──────────────────┘
-      │
-      ▼
+┌──────────────┐ ┌──────────────┐     ┌──────────────────┐
+│ LiteLLM      │ │   Web UIs    │     │   Automation     │
+│  Proxy       │ │              │     │                  │
+│  (unified    │ │ OpenWebUI    │     │  N8N             │
+│  LLM API)    │ │ OpenClaw     │     │  Flowise         │
+│              │ │ AnythingLLM  │     │  Dify            │
+│ Providers:   │ │ LibreChat    │     └──────┬───────────┘
+│  Ollama      │ └──────┬───────┘            │
+│  Groq        │        │                    │
+│  OpenRouter  │        ▼                    ▼
+│  Mammouth    │ ┌──────────────┐     ┌──────────────────┐
+│  Anthropic   │ │  Authentik   │     │  PostgreSQL+pgvec │
+│  Google      │ │  (SSO/IdP)   │     │  Redis            │
+│  OpenAI      │ └──────────────┘     │  MongoDB          │
+└──────┬───────┘                      └──────────────────┘
+       │
+       ▼
+┌───────────────────────────────────────────────┐
+│  Local Model Runner                           │
+│  Ollama  (gemma3, llama3.2, etc.)             │
+└───────────────────────────────────────────────┘
+       │
+       ▼
 ┌──────────────────────────────────────┐
 │  Memory / Knowledge Layer            │
 │  Zep CE   — Conversation memory      │
 │  Letta    — Stateful agent runtime   │
 │  Qdrant / Weaviate / Chroma / Milvus │
 └──────────────────────────────────────┘
-      │
-      ▼
-┌─────────────────┐     ┌──────────────────┐
-│  Monitoring     │     │  Development     │
-│  Grafana        │     │  Code Server     │
-│  Prometheus     │     │  Continue.dev    │
-└─────────────────┘     └──────────────────┘
-      │
-      ▼
+       │
+       ▼
+┌────────────────────┐  ┌──────────────────┐  ┌────────────────────┐
+│  Monitoring        │  │  Development     │  │  Search / Comms    │
+│  Grafana           │  │  Code Server     │  │  SearXNG           │
+│  Prometheus        │  │  Continue.dev    │  │  Signalbot         │
+└────────────────────┘  └──────────────────┘  └────────────────────┘
+       │
+       ▼
 ┌──────────────────────────────────────────┐
-│  Alerting / Comms                        │
-│  Signalbot (Signal messenger REST API)   │
+│  Ingestion                               │
+│  rclone → Google Drive / S3 / local      │
+│  Script 3 --ingest → embed → Qdrant      │
 └──────────────────────────────────────────┘
 ```
 
@@ -266,12 +273,27 @@ TENANT_ID, TENANT_PREFIX, BASE_DIR, DATA_DIR, CONFIG_DIR
 DOMAIN, BASE_DOMAIN, TLS_MODE
 ENABLE_<SERVICE>=true/false  (one per service)
 <SERVICE>_PORT=<preferred>   (Script 2 may allocate different actual port)
-PROXY_TYPE, ENABLE_CADDY, ENABLE_NPM
+PROXY_TYPE, ENABLE_CADDY, CADDY_ENABLED, ENABLE_NPM, NPM_ENABLED
+URL_ROUTING_MODE=subdomain|port|path   (controls dashboard and Script 3 URL format)
 PUID, PGID
 GPU_TYPE=nvidia|rocm|none
 GPU_MEMORY=<VRAM_MB>
 TOTAL_RAM=<SYSTEM_RAM_MB>
 AVAILABLE_RAM=<FREE_RAM_MB>
+# LLM providers (all optional; used only when API key supplied)
+ENABLE_OPENAI, OPENAI_API_KEY, OPENAI_MODELS
+ENABLE_ANTHROPIC, ANTHROPIC_API_KEY, ANTHROPIC_MODELS
+ENABLE_GOOGLE, GOOGLE_AI_API_KEY, GOOGLE_MODELS
+ENABLE_GROQ, GROQ_API_KEY, GROQ_MODELS
+ENABLE_OPENROUTER, OPENROUTER_API_KEY
+ENABLE_MAMMOUTH, MAMMOUTH_API_KEY, MAMMOUTH_BASE_URL, MAMMOUTH_MODELS
+# Ingestion
+ENABLE_INGESTION, INGESTION_METHOD=rclone|s3|azure|local
+GDRIVE_CREDENTIALS_FILE, GDRIVE_FOLDER_ID
+# Memory / search extras
+ZEP_AUTH_SECRET, LETTA_SERVER_PASS
+SEARXNG_PORT, SEARXNG_SECRET_KEY
+SERPAPI_KEY, BRAVE_API_KEY
 ```
 
 ---
@@ -469,8 +491,8 @@ Port-allocations file is sourced after platform.conf so any Script 2 conflict-re
 **Execution:**
 1. Sources both files
 2. Calls `configure_<service>()` for each enabled service (guards against container non-existence)
-3. Displays full health status table (28 service rows)
-4. Runs port health checks (24 endpoints)
+3. Displays full health status table (up to 32 rows depending on enabled services — includes all 3 Dify containers, SearXNG, and rclone)
+4. Runs port health checks for all enabled endpoints
 5. Shows domain-aware access URLs (https://domain when Caddy/NPM active, http://IP otherwise)
 6. Displays all credentials in a single summary block
 
@@ -541,13 +563,17 @@ bash scripts/3-configure-services.sh <tenant_id> --backup --schedule "0 3 * * *"
 
 **Domain-aware URL logic (both `show_credentials()` and access URL section):**
 ```
-if CADDY_ENABLED=true or NPM_ENABLED=true and DOMAIN is set:
-    URL = https://<subdomain>.<DOMAIN>       ← subdomain routing, no port
-else:
-    URL = http://<server-LAN-IP>:<port>      ← direct IP:port
+URL_ROUTING_MODE=subdomain (default):
+    URL = https://<subdomain>.<DOMAIN>        ← requires Caddy/NPM active
+
+URL_ROUTING_MODE=path:
+    URL = https://<DOMAIN>/<subdomain>        ← path-based; less common
+
+URL_ROUTING_MODE=port (or no proxy):
+    URL = http://<server-IP>:<port>           ← direct port access
 ```
 
-Every `_url <subdomain> <port>` call in Script 3 applies this logic. Caddy is configured for subdomains — path-based URLs (`https://domain/service`) are NOT used anywhere.
+`URL_ROUTING_MODE` is set by Script 1 wizard and written to platform.conf. Both `show_credentials()` and `show_post_deploy_dashboard()` in Script 3, and `display_service_summary()` in Script 1, all read this flag to format URLs consistently. Both `CADDY_ENABLED` and `ENABLE_CADDY` are checked (dual flag — both are written to platform.conf for compatibility).
 
 ---
 
@@ -724,6 +750,27 @@ Services running as internal UIDs (not PUID:PGID) cannot write to host-side data
 LITELLM_MIGRATION_DIR: /tmp/litellm-migrations   # avoids P3005 "schema not empty"
 PRISMA_BINARY_CACHE_DIR: /tmp/prisma-cache
 HOME: /tmp                                         # prevents PermissionError in wolfi
+```
+
+### LiteLLM — Model Name Conventions
+
+All model entries in `config.yaml` follow the `provider/model` format for `litellm_params.model`. The `model_name` (alias shown to clients) uses a consistent scheme:
+
+| Provider | `model_name` | `litellm_params.model` |
+|---|---|---|
+| Ollama | `ollama/gemma3:4b` | `ollama/gemma3:4b` |
+| Groq | `groq/llama-3.3-70b-versatile` | `groq/llama-3.3-70b-versatile` |
+| OpenRouter | `openrouter/meta-llama/llama-3-70b-instruct` | `openrouter/meta-llama/...` |
+| Mammouth | `mammouth/claude-sonnet-4-6` | `openai/claude-sonnet-4-6` + `api_base` |
+| Anthropic | `claude-3-5-sonnet-20241022` | `anthropic/claude-3-5-sonnet-20241022` |
+| Google | `gemini-1.5-flash` | `google/gemini-1.5-flash` |
+
+**Mammouth AI** is a multi-model proxy (`https://api.mammouth.ai/v1`) that exposes Claude, Gemini, and GPT models under an OpenAI-compatible API. Configure as `openai/` provider with `api_base` override. Default models: `claude-sonnet-4-6`, `gemini-2.5-flash`, `gpt-4o`. Model names are resolved via Mammouth's `/v1/models` endpoint.
+
+**Ollama memory management** — on low-RAM hosts set these to prevent model hoarding:
+```
+OLLAMA_KEEP_ALIVE: "5m"       # unload model after 5 min idle
+OLLAMA_MAX_LOADED_MODELS: "1" # only keep 1 model hot at a time
 ```
 
 ### OpenWebUI — Correct Variable Names
@@ -920,7 +967,7 @@ Two options, mutually exclusive — only one may be enabled per deployment:
 
 NPM is more flexible (GUI route management, per-route SSL, access lists). Caddy requires no manual post-deploy configuration.
 
-**Critical:** `configure_proxy()` in Script 1 must set `ENABLE_CADDY="true"` **or** `ENABLE_NPM="true"` — not just `PROXY_TYPE`. Script 2 guards on `CADDY_ENABLED` and `NPM_ENABLED` (which are set from these vars).
+**Critical:** Script 1 writes **both** `ENABLE_CADDY` and `CADDY_ENABLED` (and equivalents for NPM) to platform.conf — Scripts 2 and 3 check both names for maximum compatibility. `URL_ROUTING_MODE` (subdomain/port/path) must also be written so Scripts 2 and 3 generate correct URLs. If upgrading an old platform.conf, add all three variables manually.
 
 ### networks: in build_*_deps() Functions
 
@@ -1018,7 +1065,8 @@ Use when implementing or reviewing any script change:
 - [ ] Does Signalbot have a Caddy route (`signal.${BASE_DOMAIN}`)? Is the QR link URL printed in the dashboard?
 - [ ] Does the rclone config reference `service_account_file = /credentials/service-account.json` (not `credentials.json`)?
 - [ ] Does `trigger_initial_rclone_sync()` fire after `wait_for_all_health()` in main()?
-- [ ] Do Script 3 URLs use `https://subdomain.${BASE_DOMAIN}` when Caddy active (not path-based `https://${BASE_DOMAIN}/service` and not IP:port)?
+- [ ] Does platform.conf contain `URL_ROUTING_MODE` (subdomain/port/path) and both `ENABLE_CADDY`+`CADDY_ENABLED` (or NPM equivalents)?
+- [ ] Do all URL helper functions (`_url()` in Script 3, `_mu()` in Script 1) check both `CADDY_ENABLED` and `ENABLE_CADDY` and respect `URL_ROUTING_MODE`?
 - [ ] Does `show_credentials()` display login credentials for every enabled web service?
 - [ ] Does `configure_dify()` call `/console/api/setup` on dify-api port (5001), not on dify-web port?
 - [ ] Does dify-web healthcheck use `node -e "net.connect(3000,'127.0.0.1',...)"` (bash absent in Next.js image; nc -z unreliable; node is guaranteed present)?
@@ -1152,4 +1200,4 @@ curl -s -X POST "http://127.0.0.1:${SIGNALBOT_PORT}/v1/register/+<number>/verify
 
 ---
 
-*Version: 5.7.0 | Last Updated: 2026-04-17 | Architecture: 4 scripts, 25 services (Dify 3-container stack + SearXNG), single-tenant per EBS volume, MongoDB corruption recovery, P14 model cost optimization, SearXNG privacy search*
+*Version: 5.8.0 | Last Updated: 2026-04-20 | Architecture: 4 scripts, 26 services (Dify 3-container stack, SearXNG, rclone), single-tenant per EBS volume | Providers: Ollama, Groq, OpenRouter, Mammouth AI, Anthropic, Google, OpenAI | URL_ROUTING_MODE: subdomain/port/path | Mem0 removed*

@@ -27,6 +27,109 @@
 
 ---
 
+## RUN 7 — 2026-04-20 (Mammouth AI, URL Routing Mode, Model Names, All 26 Healthy)
+
+**Status:** `100% PASS` | **Baseline:** `v5.8.0`  
+**Changes this run:** Mammouth AI provider, URL_ROUTING_MODE, stale model name fixes, Groq naming fix, Ollama RAM management, Dify alembic stamp recovery, health table gains SearXNG + rclone rows
+
+### T1 — Container Health (26 containers)
+
+| Container | Status | Result |
+|---|---|---|
+| ai-datasquiz-anythingllm | healthy | PASS |
+| ai-datasquiz-authentik | healthy | PASS |
+| ai-datasquiz-caddy | healthy | PASS |
+| ai-datasquiz-code-server | healthy | PASS |
+| ai-datasquiz-dify | healthy | PASS |
+| ai-datasquiz-dify-api | healthy | PASS |
+| ai-datasquiz-dify-worker | healthy | PASS |
+| ai-datasquiz-flowise | healthy | PASS |
+| ai-datasquiz-grafana | healthy | PASS |
+| ai-datasquiz-letta | healthy | PASS |
+| ai-datasquiz-librechat | healthy | PASS |
+| ai-datasquiz-litellm | healthy | PASS |
+| ai-datasquiz-mongodb | healthy | PASS |
+| ai-datasquiz-n8n | healthy | PASS |
+| ai-datasquiz-ollama | healthy | PASS |
+| ai-datasquiz-openclaw | healthy | PASS |
+| ai-datasquiz-openwebui | healthy | PASS |
+| ai-datasquiz-postgres | healthy | PASS |
+| ai-datasquiz-prometheus | healthy | PASS |
+| ai-datasquiz-qdrant | healthy | PASS |
+| ai-datasquiz-rag-api | healthy | PASS |
+| ai-datasquiz-redis | healthy | PASS |
+| ai-datasquiz-searxng | healthy | PASS |
+| ai-datasquiz-signalbot | healthy | PASS |
+| ai-datasquiz-zep | healthy | PASS |
+| ai-datasquiz-rclone | running (no healthcheck — expected) | PASS |
+
+**Result: 26/26 running, 25/25 with healthchecks healthy. PASS**
+
+### T3 — LiteLLM Routing (8 model paths)
+
+| Model | Route | Result |
+|---|---|---|
+| ollama/gemma3:4b | LiteLLM → Ollama | PASS |
+| ollama/llama3.2:3b | LiteLLM → Ollama | PASS |
+| groq/llama-3.3-70b-versatile | LiteLLM → Groq | PASS |
+| groq/llama-3.1-8b-instant | LiteLLM → Groq | PASS |
+| openrouter/meta-llama/llama-3-70b-instruct | LiteLLM → OpenRouter | PASS |
+| mammouth/claude-sonnet-4-6 | LiteLLM → Mammouth → Claude | PASS |
+| mammouth/gemini-2.5-flash | LiteLLM → Mammouth → Gemini | PASS |
+| mammouth/gpt-4o | LiteLLM → Mammouth → GPT | PASS |
+
+**Result: 8/8 healthy, 0 unhealthy. PASS**
+
+Live inference test: `ollama/llama3.2:3b` → "Hello there!" — routing confirmed.
+
+### T4 — Internal Service Interconnect
+
+| Check | Result |
+|---|---|
+| OpenWebUI `OPENAI_API_BASE_URL=http://ai-datasquiz-litellm:4000/v1` | PASS |
+| OpenWebUI `QDRANT_URI=http://ai-datasquiz-qdrant:6333` | PASS (was `QDRANT_URL` — fixed) |
+| AnythingLLM `GENERIC_OPEN_AI_BASE_PATH=http://ai-datasquiz-litellm:4000/v1` | PASS |
+| AnythingLLM `QDRANT_ENDPOINT=http://ai-datasquiz-qdrant:6333` | PASS |
+| N8N `OPENAI_API_BASE_URL=http://ai-datasquiz-litellm:4000/v1` | PASS |
+| Flowise `OPENAI_API_BASE_URL=http://ai-datasquiz-litellm:4000/v1` | PASS |
+| Dify-api `OPENAI_API_BASE=http://ai-datasquiz-litellm:4000/v1` | PASS |
+| Dify-worker `OPENAI_API_BASE=http://ai-datasquiz-litellm:4000/v1` | PASS |
+
+**Result: 8/8 PASS**
+
+### T8 — Script 3 URL Format
+
+| Check | Expected | Result |
+|---|---|---|
+| `URL_ROUTING_MODE=subdomain` in platform.conf | present | PASS |
+| `CADDY_ENABLED=true` in platform.conf | present | PASS |
+| `ENABLE_CADDY=true` in platform.conf | present | PASS |
+| Script 3 credentials output shows `https://openwebui.ai.datasquiz.net` | DNS subdomain | PASS |
+| Script 3 credentials output shows `https://n8n.ai.datasquiz.net` | DNS subdomain | PASS |
+| Script 3 no `127.0.0.1:PORT` URLs in output | no IP:port URLs | PASS |
+
+**Result: PASS — all service URLs use DNS subdomains**
+
+**Fixes applied this run:**
+1. **Mammouth AI**: `openai/mammouth` (invalid model name) → 3 entries: `claude-sonnet-4-6`, `gemini-2.5-flash`, `gpt-4o` via Mammouth proxy
+2. **Anthropic direct**: Removed from live config (account has no credits); Mammouth Claude is the working alternative
+3. **Groq model_name**: Fixed `${model}-groq` template → `groq/${model}` in Script 2
+4. **Google Gemini**: `gemini-pro` (deprecated) → `gemini-1.5-flash/pro` in Scripts 1 and 2
+5. **Anthropic models**: `claude-3-sonnet-20240229` → `claude-3-5-sonnet-20241022` in Scripts 1 and 2
+6. **URL_ROUTING_MODE**: Added to Script 1 proxy wizard; written to platform.conf; all URL helpers updated
+7. **Dual Caddy flag**: Both `CADDY_ENABLED` and `ENABLE_CADDY` now written to platform.conf
+8. **SearXNG + rclone in health table**: Added to Script 3 `show_health_status()`
+9. **Ollama RAM**: Added `OLLAMA_KEEP_ALIVE=5m`, `OLLAMA_MAX_LOADED_MODELS=1` to prevent RAM exhaustion on 8GB hosts
+10. **Signalbot healthcheck**: `wget` → `curl` (wget not in image)
+11. **OpenWebUI `QDRANT_URI`**: Fixed `QDRANT_URL` → `QDRANT_URI`
+12. **Dify alembic stamp**: Recovery stamps head `6b5f9f8b1a2c` instead of wiping schema
+
+**Known issues remaining:**
+- T7: rclone service account JSON corrupt — needs fresh SA key from GCP Console
+- Signal phone pairing: QR accessible at `https://signal.ai.datasquiz.net/v1/qrcodelink?device_name=signal-api`; user must scan in Signal app
+
+---
+
 ## RUN 6 — 2026-04-19 (OpenClaw CORS Fix, Authentik Migrations, Model Name Correction)
 
 **Status:** `95% PASS` | **Baseline:** `post-v5.6.0`  
@@ -1035,21 +1138,13 @@ curl -s "http://127.0.0.1:9090/api/v1/query?query=container_cpu_usage_seconds_to
 
 | Issue | Severity | Status |
 |---|---|---|
-| Anthropic key has no credits | LOW — other providers work | Provider-side, no action |
-| Groq `llama3-70b-8192` decommissioned | FIXED | Replaced with `llama-3.1-8b-instant` (alias `llama3-8b-groq`) |
-| Google Drive has no files shared with service account | MEDIUM | Requires manual sharing with `datasquiz-ai@totemic-gravity-489701-b3.iam.gserviceaccount.com` |
-| rclone container not deployed (INGESTION_METHOD was "1") | FIXED | Script 1 now translates numeric to string; pending re-deploy |
-| rclone.conf was raw JSON (invalid format) | FIXED | Script 1 now saves JSON as service-account.json + generates INI rclone.conf |
-| `gemini-pro` model removed from LiteLLM config | LOW — no Google API key | Removed |
-| Signalbot phone number not paired | MEDIUM | Manual step — use `bash scripts/3-configure-services.sh datasquiz --logs signalbot` to check |
+| Anthropic direct API — no credits | LOW — Mammouth Claude works as drop-in replacement | Use `mammouth/claude-sonnet-4-6` instead |
+| rclone service account JSON corrupt | MEDIUM — Google Drive sync disabled | Needs fresh SA key from GCP Console; re-paste in Script 1 |
+| Google Drive folder not shared with service account | MEDIUM | Share folder with `datasquiz-ai@totemic-gravity-489701-b3.iam.gserviceaccount.com` |
+| Signalbot phone number not paired | MEDIUM | Scan QR at `https://signal.ai.datasquiz.net/v1/qrcodelink?device_name=signal-api` |
 | Letta SECURITY log warnings | LOW — expected default behavior | No action |
 | Caddy UDP buffer warning | LOW — cosmetic | No action |
-| dify-web healthcheck `$(hostname)` bug | FIXED | Now uses `node -e "require('http').get(...)"` — bash not present in Node.js image |
-| dify-api + dify-worker missing from first deploy | FIXED | Full 3-container stack in Script 2; pending clean re-deploy validation |
-| LiteLLM unhealthy during Prisma migrations (main-stable image, Apr 2026) | FIXED | `start_period` 600s→900s; `wait_for_health` timeout 900→1200 |
-| dify-worker celery healthcheck fragile | FIXED | Replaced `celery inspect ping` with `pgrep -f celery` |
-| OpenClaw / Code Server / Weaviate / ChromaDB missing `start_period` | FIXED | Added 30s–60s `start_period` to all four |
-| T10/T11 test suites | PENDING | New test suites added; will be validated on next clean deploy |
+| T10 ingestion pipeline | PENDING | Blocked on working SA JSON + GDrive folder share |
 
 ---
 
@@ -1123,7 +1218,7 @@ ls -lh /mnt/datasquiz/backups/
 
 ---
 
-*Last updated: 2026-04-14 | Run 1 complete | T10/T11 pending next clean deploy*
+*Last updated: 2026-04-20 | Run 7 complete | 26/26 containers healthy | 8/8 LiteLLM endpoints healthy | T10 pending SA key fix*
 ---
 
 ### T34 - GPU Detection (G6.2xlarge)
