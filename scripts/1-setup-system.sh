@@ -1019,10 +1019,23 @@ configure_service_credentials() {
     # OpenClaw — uses token-based auth (no username), token = OPENCLAW_PASSWORD
     if [[ "${ENABLE_OPENCLAW:-false}" == "true" ]]; then
         OPENCLAW_IMAGE="alpine/openclaw:latest"
-        safe_read "OpenClaw gateway token (leave blank to auto-generate)" "" "OPENCLAW_PASSWORD"
-        if [[ -z "${OPENCLAW_PASSWORD:-}" ]]; then
-            OPENCLAW_PASSWORD="$(openssl rand -base64 18 | tr -d '=+/' | cut -c1-16)"
-            echo "    Auto-generated token: ${OPENCLAW_PASSWORD}"
+        local _oc_token
+        _oc_token="$(printenv OPENCLAW_PASSWORD 2>/dev/null || true)"
+        if [[ -n "${_oc_token}" ]]; then
+            OPENCLAW_PASSWORD="${_oc_token}"
+            echo "  ✨ OpenClaw gateway token: ${OPENCLAW_PASSWORD} (from environment)"
+        elif [[ -t 0 ]]; then
+            echo -n "  🎯 OpenClaw gateway token (leave blank to auto-generate): "
+            read -r _oc_token
+            if [[ -z "${_oc_token}" ]]; then
+                OPENCLAW_PASSWORD="$(openssl rand -base64 18 | tr -d '=+/' | cut -c1-16)"
+                echo "  ✅ Auto-generated token: ${OPENCLAW_PASSWORD}"
+            else
+                OPENCLAW_PASSWORD="${_oc_token}"
+            fi
+        else
+            OPENCLAW_PASSWORD="${OPENCLAW_PASSWORD:-$(openssl rand -base64 18 | tr -d '=+/' | cut -c1-16)}"
+            echo "  ✅ OpenClaw gateway token: ${OPENCLAW_PASSWORD} (auto-generated)"
         fi
         echo ""
     fi
