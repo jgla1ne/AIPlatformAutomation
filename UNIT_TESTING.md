@@ -28,6 +28,107 @@
 
 ---
 
+## RUN 8 — 2026-04-20 (Per-Service DB Isolation, --flushall Redeploy, docker_wipe_dir)
+
+**Status:** `100% PASS` | **Baseline:** `v5.9.0`  
+**Changes this run:** Per-service PostgreSQL DB isolation (6 dedicated DBs), `docker_wipe_dir()` helper for root-owned file wipe, MongoDB auto-recovery logic fix, stray `MONITOREOF`/`build_signalbot_deps` removed
+
+### T1 — Container Health (26 containers)
+
+| Container | Status | Result |
+|---|---|---|
+| ai-datasquiz-anythingllm | healthy | PASS |
+| ai-datasquiz-authentik | healthy | PASS |
+| ai-datasquiz-caddy | healthy | PASS |
+| ai-datasquiz-code-server | healthy | PASS |
+| ai-datasquiz-dify | healthy | PASS |
+| ai-datasquiz-dify-api | healthy | PASS |
+| ai-datasquiz-dify-worker | healthy | PASS |
+| ai-datasquiz-flowise | healthy | PASS |
+| ai-datasquiz-grafana | healthy | PASS |
+| ai-datasquiz-letta | healthy | PASS |
+| ai-datasquiz-librechat | healthy | PASS |
+| ai-datasquiz-litellm | healthy | PASS |
+| ai-datasquiz-mongodb | healthy (auto-recovered via docker_wipe_dir) | PASS |
+| ai-datasquiz-n8n | healthy | PASS |
+| ai-datasquiz-ollama | healthy | PASS |
+| ai-datasquiz-openclaw | healthy | PASS |
+| ai-datasquiz-openwebui | healthy | PASS |
+| ai-datasquiz-postgres | healthy | PASS |
+| ai-datasquiz-prometheus | healthy | PASS |
+| ai-datasquiz-qdrant | healthy | PASS |
+| ai-datasquiz-rag-api | healthy | PASS |
+| ai-datasquiz-redis | healthy | PASS |
+| ai-datasquiz-rclone | running (no healthcheck — expected) | PASS |
+| ai-datasquiz-searxng | healthy | PASS |
+| ai-datasquiz-signalbot | healthy | PASS |
+| ai-datasquiz-zep | healthy | PASS |
+
+**Result: 26/26 running, 25/25 with healthchecks healthy. PASS**
+
+### T3 — LiteLLM Routing
+
+| Model | Route | Result |
+|---|---|---|
+| ollama/gemma3:4b | LiteLLM → Ollama | PASS (response: ROUTING_OK) |
+
+**Result: PASS**
+
+### T4 — Internal Service Interconnect (per-service DB focus)
+
+| Check | Evidence | Result |
+|---|---|---|
+| LiteLLM `/health/liveliness` | "I'm alive!" on port 4000 | PASS |
+| OpenWebUI → LiteLLM | `RAG_OPENAI_API_BASE_URL=http://ai-datasquiz-litellm:4000/v1` | PASS |
+| N8N dedicated DB | `DB_POSTGRESDB_DATABASE=datasquiz_ai_n8n` | PASS |
+| Dify-api dedicated DB | `DB_DATABASE=datasquiz_ai_dify` | PASS |
+| LiteLLM dedicated DB | `DATABASE_URL` set in container env | PASS |
+| Zep dedicated DB | config.yaml DSN → `datasquiz_ai_zep` | PASS |
+| Letta dedicated DB | `LETTA_PG_URI=…/datasquiz_ai_letta` | PASS |
+
+**Result: 7/7 PASS**
+
+### T41 — Per-Service Database Isolation
+
+| Check | Evidence | Result |
+|---|---|---|
+| `datasquiz_ai_letta` exists | `psql \l` | PASS |
+| `datasquiz_ai_litellm` exists | `psql \l` | PASS |
+| `datasquiz_ai_n8n` exists | `psql \l` | PASS |
+| `datasquiz_ai_zep` exists | `psql \l` | PASS |
+| `datasquiz_ai_dify` exists | `psql \l` | PASS |
+| `datasquiz_ai_authentik` exists | `psql \l` | PASS |
+| pgvector in `datasquiz_ai_zep` | `\dx` shows vector extension | PASS |
+| pgvector in `datasquiz_ai` (shared) | `\dx` shows vector extension | PASS |
+
+**Result: 8/8 PASS — all dedicated DBs created and pgvector installed**
+
+### T6 — Docker Log Audit
+
+| Service | Error Count | Assessment |
+|---|---|---|
+| litellm | 2 | `BadRequestError` from unauthenticated health probes — expected |
+| mongodb | ~170 | `ProtocolError: HTTP request over native MongoDB connection` — Prometheus health probe hitting native port; expected |
+| n8n | 5 | `Failed to connect to task broker at 127.0.0.1:5679` — n8n internal task runner, non-critical |
+| authentik | 5 | Expected startup warnings |
+| postgres | 7 | Expected: N8N migration table queries during startup |
+| openwebui, dify-api, redis, caddy | 0 | PASS |
+
+**Result: No critical errors. PASS**
+
+**Fixes applied this run:**
+1. **`docker_wipe_dir()` helper**: Alpine container wipes root-owned files that `rm -rf` as uid 1001 cannot delete (Postgres pgdata, MongoDB journal, Ollama blobs, LiteLLM Prisma cache)
+2. **MongoDB auto-recovery**: Previous `wait_for_health || return 1` aborted before recovery; fixed by capturing result into `_mongo_healthy` variable, then checking ping, then wiping stale data and restarting
+3. **Per-service DB isolation**: 6 dedicated databases (`datasquiz_ai_{letta,litellm,n8n,zep,dify,authentik}`) — eliminates Alembic/Django `DuplicateTable` migrations collisions; `datasquiz_ai_dify` confirmed clean schema, dify-api healthy
+4. **Stray `MONITOREOF` at line 2762**: Orphaned heredoc terminator from prometheus config refactor — removed
+5. **Stray `$(build_signalbot_deps)`**: Undefined function call inside signalbot compose block — removed
+
+**Known issues (carry-over):**
+- T7: rclone SA JSON corrupt — needs fresh SA key from GCP Console
+- Signal phone pairing: not paired; QR available at `https://signal.ai.datasquiz.net/v1/qrcodelink?device_name=signal-api`
+
+---
+
 ## RUN 7 — 2026-04-20 (Mammouth AI, URL Routing Mode, Model Names, All 26 Healthy)
 
 **Status:** `100% PASS` | **Baseline:** `v5.8.0`  

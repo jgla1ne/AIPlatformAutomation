@@ -1380,7 +1380,6 @@ EOF
       - ${DOCKER_NETWORK}
     ports:
       - "127.0.0.1:${SIGNALBOT_PORT:-8080}:8080"
-$(build_signalbot_deps)
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/v1/about > /dev/null 2>&1 || exit 1"]
       interval: 30s
@@ -2760,7 +2759,6 @@ QDRANTEOF
     scrape_interval: 30s
 RCLONEEOF
         fi
-MONITOREOF
 
         cat >> "${CONFIG_DIR}/caddy/Caddyfile" << EOF
 
@@ -3056,6 +3054,21 @@ flush_existing_deployment() {
     fi
 }
 
+# docker_wipe_dir <path>
+# Wipes a directory's contents using an alpine container running as root.
+# Bypasses "Permission denied" on host when container-written files are owned
+# by root (e.g. MongoDB, Postgres pgdata, Ollama model blobs, LiteLLM Prisma cache).
+# Falls back to plain rm -rf if Docker is not available yet.
+docker_wipe_dir() {
+    local dir_path="$1"
+    [[ -d "${dir_path}" ]] || return 0
+    log "  Wiping: ${dir_path}"
+    if docker run --rm -v "${dir_path}:/data" alpine sh -c "rm -rf /data/* /data/.[!.]* 2>/dev/null; true" 2>/dev/null; then
+        return 0
+    fi
+    rm -rf "${dir_path:?}" 2>/dev/null || true
+}
+
 flush_all_data() {
     # Only called when --flushall is passed.
     # Containers are already stopped by flush_existing_deployment() at this point.
@@ -3068,11 +3081,12 @@ flush_all_data() {
     sleep 5
 
     # 1. Database data directories — each service re-initializes on fresh start
+    #    Uses docker_wipe_dir to handle root-owned files (postgres pgdata, mongodb journal, etc.)
     local -a db_dirs=("postgres" "redis" "mongodb")
     for dir in "${db_dirs[@]}"; do
         if [[ -d "${DATA_DIR}/${dir}" ]]; then
             log "  Wiping database dir: ${DATA_DIR}/${dir}"
-            rm -rf "${DATA_DIR:?}/${dir}"
+            docker_wipe_dir "${DATA_DIR}/${dir}"
         fi
     done
 
@@ -3080,7 +3094,7 @@ flush_all_data() {
     #    prepare_data_dirs() doesn't fail, but purge the model cache
     if [[ -d "${DATA_DIR}/ollama/models" ]]; then
         log "  Removing Ollama model cache: ${DATA_DIR}/ollama/models"
-        rm -rf "${DATA_DIR:?}/ollama/models"
+        docker_wipe_dir "${DATA_DIR}/ollama/models"
     fi
 
     # 3. Other service state directories that accumulate stale schema files
@@ -3091,7 +3105,7 @@ flush_all_data() {
     for dir in "${svc_dirs[@]}"; do
         if [[ -d "${DATA_DIR}/${dir}" ]]; then
             log "  Wiping service dir: ${DATA_DIR}/${dir}"
-            rm -rf "${DATA_DIR:?}/${dir}"
+            docker_wipe_dir "${DATA_DIR}/${dir}"
         fi
     done
 
@@ -3304,36 +3318,34 @@ wait_for_all_health() {
     fi
 
     if [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]]; then
-        # MongoDB health check with corruption detection
+        # MongoDB health check with corruption detection + auto-recovery
+        # Note: do NOT abort on unhealthy — recovery is attempted first.
         log "Checking MongoDB health and connectivity..."
-        wait_for_health "${TENANT_PREFIX}-mongodb" 60 || return 1
-        
-        # Verify MongoDB is actually responsive - fix corruption if needed
-        if ! docker exec "${TENANT_PREFIX}-mongodb" mongosh --eval "db.adminCommand('ping')" 2>/dev/null; then
-            log "WARNING: MongoDB not responding - possible corruption detected"
-            log "Attempting automatic corruption recovery..."
-            
-            # Stop MongoDB container
+        local _mongo_healthy=true
+        wait_for_health "${TENANT_PREFIX}-mongodb" 60 || _mongo_healthy=false
+
+        local _mongo_ping=false
+        docker exec "${TENANT_PREFIX}-mongodb" mongosh --eval "db.adminCommand('ping')" 2>/dev/null && _mongo_ping=true
+
+        if [[ "${_mongo_healthy}" == "false" ]] || [[ "${_mongo_ping}" == "false" ]]; then
+            warn "MongoDB reported unhealthy (exitCode 100 or ping failed) — likely stale data from prior deploy"
+            warn "Attempting automatic corruption recovery..."
+
             docker stop "${TENANT_PREFIX}-mongodb" 2>/dev/null || true
-            
-            # Clear corrupted data (this will recreate fresh database)
-            rm -rf "${DATA_DIR}/mongodb/*" 2>/dev/null || true
-            
-            # Restart MongoDB
+            # Use docker_wipe_dir to bypass root-owned file permission errors
+            docker_wipe_dir "${DATA_DIR}/mongodb"
+
             docker start "${TENANT_PREFIX}-mongodb"
-            
-            # Wait for MongoDB to be ready again
             log "Waiting for MongoDB to initialize with fresh database..."
             wait_for_health "${TENANT_PREFIX}-mongodb" 60 || return 1
-            
-            # Verify MongoDB is responsive
+
             if docker exec "${TENANT_PREFIX}-mongodb" mongosh --eval "db.adminCommand('ping')" 2>/dev/null; then
-                log "SUCCESS: MongoDB corruption recovery completed"
+                ok "MongoDB corruption recovery completed"
             else
-                fail "FATAL: MongoDB recovery failed - manual intervention required"
+                fail "FATAL: MongoDB recovery failed — manual intervention required"
             fi
         else
-            log "SUCCESS: MongoDB is healthy and responsive"
+            ok "MongoDB is healthy and responsive"
         fi
         
         wait_for_health "${TENANT_PREFIX}-librechat" 120 || return 1

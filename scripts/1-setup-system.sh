@@ -331,8 +331,8 @@ detect_system() {
     
     # Network MTU
     if command -v ip >/dev/null 2>&1; then
-        HOST_MTU=$(ip link show | grep -E '^[0-9]+:' | head -1 | awk '{print $5}' | cut -d':' -f1)
-        log "🌐 Host MTU: ${HOST_MTU}"
+        HOST_MTU=$(ip link show 2>/dev/null | grep -E '^[0-9]+:' | head -1 | awk '{print $5}' | cut -d':' -f1 || true)
+        [[ -n "${HOST_MTU}" ]] && log "🌐 Host MTU: ${HOST_MTU}" || true
     fi
 }
 
@@ -400,6 +400,16 @@ configure_storage() {
 
 # EBS detection using lsblk — works for both legacy /dev/sd* and NVMe /dev/nvme* devices
 detect_and_select_ebs() {
+    # Non-interactive shortcut: if USE_EBS and EBS_DEVICE already set (e.g. from template),
+    # skip interactive detection and reuse the pre-configured device.
+    if [[ -n "${EBS_DEVICE:-}" ]] && [[ "${USE_EBS:-false}" == "true" ]] && [[ ! -t 0 ]]; then
+        echo ""
+        echo "  ✨ EBS device: ${EBS_DEVICE} (from template — non-interactive mode)"
+        USE_EBS="true"
+        format_and_mount_ebs
+        return 0
+    fi
+
     echo ""
     echo "🔍 Scanning for available block devices (including NVMe)..."
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -696,10 +706,17 @@ DOCKER_CONF_EOF
 # =============================================================================
 select_stack_preset() {
     section "🎚️  STACK PRESET SELECTION"
-    
+
+    # Non-TTY template shortcut: skip menu when preset already loaded
+    if [[ -n "${STACK_PRESET:-}" ]] && [[ -n "${STACK_NAME:-}" ]] && [[ ! -t 0 ]]; then
+        log "  ✨ Stack preset: ${STACK_PRESET} (${STACK_NAME}) — from template"
+        if [[ "$STACK_PRESET" == "6" ]]; then configure_custom_stack; else apply_preset_defaults; select_memory_layer; fi
+        return 0
+    fi
+
     echo "  📋 Choose your platform complexity and features"
     echo ""
-    
+
     echo "  Services can always be added/removed after initial setup via Script 3."
     echo ""
     local preset_choice=0
@@ -867,6 +884,12 @@ apply_preset_defaults() {
 # Minimal and development have no memory layer option.
 select_memory_layer() {
     [[ "$STACK_NAME" != "standard" && "$STACK_NAME" != "full" ]] && return 0
+
+    # Non-TTY template shortcut: use pre-set memory flags
+    if [[ -n "${ENABLE_ZEP:-}" ]] && [[ -n "${ENABLE_LETTA:-}" ]] && [[ ! -t 0 ]]; then
+        log "  ✨ Memory layer: zep=${ENABLE_ZEP} letta=${ENABLE_LETTA} — from template"
+        return 0
+    fi
 
     section "🧠 MEMORY LAYER SELECTION"
     echo "  Both Zep CE and Letta connect to your existing Postgres + LiteLLM."
@@ -1061,10 +1084,21 @@ configure_service_credentials() {
 # =============================================================================
 configure_llm_gateway() {
     section "🤖 LLM GATEWAY CONFIGURATION"
-    
+
+    # Non-TTY template shortcut
+    if [[ -n "${LLM_GATEWAY_TYPE:-}" ]] && [[ ! -t 0 ]]; then
+        log "  ✨ LLM gateway: ${LLM_GATEWAY_TYPE} — from template"
+        case "$LLM_GATEWAY_TYPE" in
+            litellm) configure_litellm_gateway ;;
+            bifrost) configure_bifrost_gateway ;;
+            direct)  configure_direct_ollama ;;
+        esac
+        return 0
+    fi
+
     echo "  📋 Configure LLM service gateway and model access"
     echo ""
-    
+
     local gateway_choice=0
     select_menu_option "LLM Gateway Selection" \
         "LITELLM - Unified API for multiple providers with load balancing" \
@@ -1095,8 +1129,11 @@ configure_litellm_gateway() {
     log "🎯 Configuring LiteLLM Gateway..."
     
     safe_read "LiteLLM API key (auto-generated)" "$(gen_secret)" "LITELLM_MASTER_KEY"
-    
-    # Use menu selection for routing strategy
+
+    # Use menu selection for routing strategy (skip if already set in non-TTY)
+    if [[ -n "${LITELLM_ROUTING_STRATEGY:-}" ]] && [[ ! -t 0 ]]; then
+        log "  ✨ Routing strategy: ${LITELLM_ROUTING_STRATEGY} — from template"
+    else
     local routing_choice=0
     select_menu_option "LiteLLM Load Balancing Strategy" \
         "cost-optimized (Prefer local models, fallback to external)" \
@@ -1111,7 +1148,8 @@ configure_litellm_gateway() {
         3) LITELLM_ROUTING_STRATEGY="simple" ;;
         4) LITELLM_ROUTING_STRATEGY="performance-first" ;;
     esac
-    
+    fi  # end non-TTY routing shortcut
+
     safe_read "Enable request logging" "true" "LITELLM_ENABLE_LOGGING"
     safe_read "Enable cost tracking" "true" "LITELLM_ENABLE_COST_TRACKING"
     
@@ -1159,10 +1197,22 @@ configure_direct_ollama() {
 # =============================================================================
 configure_vector_database() {
     section "🔍 VECTOR DATABASE CONFIGURATION"
-    
+
+    # Non-TTY template shortcut
+    if [[ -n "${VECTOR_DB_TYPE:-}" ]] && [[ ! -t 0 ]]; then
+        log "  ✨ Vector DB: ${VECTOR_DB_TYPE} — from template"
+        case "$VECTOR_DB_TYPE" in
+            qdrant)   configure_qdrant ;;
+            weaviate) configure_weaviate ;;
+            chroma)   configure_chroma ;;
+            milvus)   configure_milvus ;;
+        esac
+        return 0
+    fi
+
     echo "  📋 Configure vector database for AI memory and search"
     echo ""
-    
+
     local vector_choice=0
     select_menu_option "Vector Database Selection" \
         "QDRANT - High-performance vector search with built-in filtering" \
@@ -1258,10 +1308,24 @@ configure_milvus() {
 # =============================================================================
 configure_tls() {
     section "🔐 TLS CERTIFICATE CONFIGURATION"
-    
+
+    # Non-TTY template shortcut
+    if [[ -n "${TLS_MODE:-}" ]] && [[ ! -t 0 ]]; then
+        log "  ✨ TLS mode: ${TLS_MODE} — from template"
+        HTTP_TO_HTTPS_REDIRECT="${HTTP_TO_HTTPS_REDIRECT:-true}"
+        PROXY_FORCE_HTTPS="${HTTP_TO_HTTPS_REDIRECT}"
+        case "$TLS_MODE" in
+            letsencrypt) configure_letsencrypt ;;
+            manual)      configure_manual_tls ;;
+            selfsigned)  configure_selfsigned_tls ;;
+            none)        HTTP_TO_HTTPS_REDIRECT="false"; PROXY_FORCE_HTTPS="false" ;;
+        esac
+        return 0
+    fi
+
     echo "  📋 Configure SSL/TLS certificates for secure access"
     echo ""
-    
+
     local tls_choice=0
     # Show current value as a hint if already configured
     if [[ -n "${TLS_MODE:-}" ]]; then
@@ -1537,6 +1601,9 @@ collect_api_keys() {
     echo ""
     
     # Preferred LLM Provider for routing (after model configuration)
+    if [[ -n "${PREFERRED_LLM_PROVIDER:-}" ]] && [[ ! -t 0 ]]; then
+        log "  ✨ Preferred LLM provider: ${PREFERRED_LLM_PROVIDER} — from template"
+    else
     echo "  🎯 Select your preferred LLM provider for LiteLLM routing priority:"
     echo "     This determines which provider gets first priority when multiple are available"
     echo ""
@@ -1564,6 +1631,7 @@ collect_api_keys() {
             7) PREFERRED_LLM_PROVIDER="openrouter" ;;
             8) PREFERRED_LLM_PROVIDER="mammouth" ;;
         esac
+    fi  # end non-TTY preferred provider shortcut
 
     echo ""
     echo "  ✅ Preferred provider for routing: ${PREFERRED_LLM_PROVIDER^}"
@@ -1620,6 +1688,11 @@ select_ollama_models() {
     echo "      Multiple: gemma4:4b,gemma4:26b,gemma4:31b (comma-separated)"
     echo ""
     
+    if [[ -n "${OLLAMA_MODELS:-}" ]] && [[ ! -t 0 ]]; then
+        log "  ✨ Ollama models: ${OLLAMA_MODELS} — from template"
+        OLLAMA_DEFAULT_MODEL="${OLLAMA_MODELS%%,*}"
+        return 0
+    fi
     [[ -n "${OLLAMA_MODELS:-}" ]] && echo "  ℹ  Current models: ${OLLAMA_MODELS}"
 
     echo "  Select models (comma-separated numbers, e.g., 19,20,21):"
@@ -1768,6 +1841,31 @@ configure_ports() {
 # =============================================================================
 configure_proxy() {
     section "🌐 PROXY CONFIGURATION"
+
+    # Non-TTY template shortcut
+    if [[ -n "${PROXY_TYPE:-}" ]] && [[ ! -t 0 ]]; then
+        log "  ✨ Proxy: ${PROXY_TYPE}, URL routing: ${URL_ROUTING_MODE:-subdomain} — from template"
+        ENABLE_PROXY="${ENABLE_PROXY:-true}"
+        case "$PROXY_TYPE" in
+            caddy)
+                ENABLE_CADDY="true"; ENABLE_NPM="false"
+                CADDY_HTTP_PORT="${CADDY_HTTP_PORT:-80}"
+                CADDY_HTTPS_PORT="${CADDY_HTTPS_PORT:-443}"
+                PROXY_FORCE_HTTPS="${HTTP_TO_HTTPS_REDIRECT:-true}"
+                ;;
+            npm)
+                ENABLE_NPM="true"; ENABLE_CADDY="false"
+                NPM_HTTP_PORT="${NPM_HTTP_PORT:-80}"
+                NPM_HTTPS_PORT="${NPM_HTTPS_PORT:-443}"
+                ;;
+            none)
+                ENABLE_CADDY="false"; ENABLE_NPM="false"
+                ;;
+        esac
+        URL_ROUTING_MODE="${URL_ROUTING_MODE:-subdomain}"
+        PROXY_ROUTING="${PROXY_ROUTING:-path_based}"
+        return 0
+    fi
 
     echo "  📋 Configure reverse proxy for HTTPS termination and service routing"
     echo ""
@@ -2700,6 +2798,11 @@ PROMETHEUS_ENABLED="${ENABLE_PROMETHEUS:-false}"
 CADDY_ENABLED="${ENABLE_CADDY:-false}"
 ENABLE_CADDY="${ENABLE_CADDY:-false}"
 NPM_ENABLED="${ENABLE_NPM:-false}"
+PROXY_TYPE="${PROXY_TYPE:-caddy}"
+PROXY_ROUTING="${PROXY_ROUTING:-path_based}"
+PROXY_FORCE_HTTPS="${PROXY_FORCE_HTTPS:-true}"
+CADDY_HTTP_PORT="${CADDY_HTTP_PORT:-80}"
+CADDY_HTTPS_PORT="${CADDY_HTTPS_PORT:-443}"
 URL_ROUTING_MODE="${URL_ROUTING_MODE:-subdomain}"
 AUTHENTIK_ENABLED="${ENABLE_AUTHENTIK:-false}"
 SIGNALBOT_ENABLED="${ENABLE_SIGNALBOT:-false}"
@@ -2816,10 +2919,14 @@ check_port_conflicts() {
     done
     
     if [[ $conflicts -gt 0 ]]; then
-        fail "Found $conflicts port conflicts. Please resolve before proceeding."
+        if [[ ! -t 0 ]]; then
+            warn "Found $conflicts port conflicts (non-interactive mode — likely services already running, continuing)"
+        else
+            fail "Found $conflicts port conflicts. Please resolve before proceeding."
+        fi
+    else
+        ok "All required ports are available"
     fi
-    
-    ok "All required ports are available"
 }
 
 # =============================================================================
