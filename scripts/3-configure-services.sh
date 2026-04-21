@@ -616,6 +616,76 @@ configure_librechat() {
     ok "LibreChat configured"
 }
 
+openclaw_manage_pairs() {
+    local devices_dir="${DATA_DIR}/openclaw/home/devices"
+    local pending_file="${devices_dir}/pending.json"
+    local paired_file="${devices_dir}/paired.json"
+
+    if [[ ! -f "$pending_file" ]]; then
+        log "No OpenClaw devices directory found at ${devices_dir}"
+        return 0
+    fi
+
+    local pending_count
+    pending_count=$(python3 -c "import json; d=json.load(open('${pending_file}')); print(len(d))" 2>/dev/null || echo "0")
+
+    if [[ "$pending_count" == "0" ]]; then
+        echo "No pending OpenClaw pairing requests."
+        local paired_count
+        paired_count=$(python3 -c "import json; d=json.load(open('${paired_file}')); print(len(d))" 2>/dev/null || echo "0")
+        echo "Currently paired devices: ${paired_count}"
+        return 0
+    fi
+
+    echo ""
+    echo "Pending OpenClaw pairing requests (${pending_count}):"
+    python3 -c "
+import json
+with open('${pending_file}') as f: pending=json.load(f)
+for rid,r in pending.items():
+    print(f\"  ID: {rid}\")
+    print(f\"  Platform: {r.get('platform','?')}  Client: {r.get('clientId','?')}  Role: {r.get('role','?')}\")
+    print()
+"
+    echo "Options: [a]pprove all  [d]eny all  [q]uit"
+    local choice=""
+    if [[ -t 0 ]]; then
+        read -r -p "Choice [a/d/q]: " choice
+    else
+        choice="a"
+        echo "Non-interactive mode — auto-approving all pending requests"
+    fi
+
+    case "$choice" in
+        a|A)
+            python3 -c "
+import json, time
+pending_path='${pending_file}'
+paired_path='${paired_file}'
+with open(pending_path) as f: pending=json.load(f)
+try:
+    with open(paired_path) as f: paired=json.load(f)
+except: paired={}
+now=int(time.time()*1000)
+for rid,r in pending.items():
+    paired[rid]={**r,'approved':True,'approvedTs':now}
+    print(f'Approved: {rid}')
+with open(paired_path,'w') as f: json.dump(paired,f,indent=2)
+with open(pending_path,'w') as f: json.dump({},f,indent=2)
+print('Done.')
+"
+            docker restart "${TENANT_PREFIX}-openclaw" >/dev/null 2>&1 && ok "OpenClaw restarted — paired devices active"
+            ;;
+        d|D)
+            python3 -c "import json; open('${pending_file}','w').write('{}')"
+            ok "Pending requests cleared (denied)"
+            ;;
+        *)
+            log "No changes made"
+            ;;
+    esac
+}
+
 configure_openclaw() {
     if [[ "${OPENCLAW_ENABLED}" != "true" ]]; then
         return 0
@@ -1711,6 +1781,7 @@ main() {
     local backup_schedule=""
     local setup_persistence=false
     local flush_db_svc=""
+    local openclaw_pairs=false
 
     # Parse arguments
     shift
@@ -1834,6 +1905,10 @@ main() {
             --flush-db)
                 flush_db_svc="$2"
                 shift 2
+                ;;
+            --openclaw-pairs)
+                openclaw_pairs=true
+                shift
                 ;;
             *)
                 fail "Unknown option: $1"
@@ -2014,6 +2089,11 @@ main() {
 
     if [[ -n "$litellm_routing" ]]; then
         change_litellm_routing "$litellm_routing"
+        return 0
+    fi
+
+    if [[ "$openclaw_pairs" == "true" ]]; then
+        openclaw_manage_pairs
         return 0
     fi
 

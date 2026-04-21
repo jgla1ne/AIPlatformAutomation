@@ -3629,6 +3629,33 @@ wait_for_all_health() {
 
     if [[ "${OPENCLAW_ENABLED}" == "true" ]]; then
         wait_for_health "${TENANT_PREFIX}-openclaw" 90 || return 1
+
+        # Auto-approve any pending device pairing requests so the browser
+        # can connect immediately without needing Script 3 --openclaw-pairs.
+        local _oc_pending="${DATA_DIR}/openclaw/home/devices/pending.json"
+        local _oc_paired="${DATA_DIR}/openclaw/home/devices/paired.json"
+        if [[ -f "$_oc_pending" ]]; then
+            local _pending_count
+            _pending_count=$(python3 -c "import json; print(len(json.load(open('$_oc_pending'))))" 2>/dev/null || echo "0")
+            if [[ "$_pending_count" -gt 0 ]]; then
+                log "Auto-approving ${_pending_count} pending OpenClaw pairing request(s)..."
+                python3 -c "
+import json, time
+with open('$_oc_pending') as f: pending=json.load(f)
+try:
+    with open('$_oc_paired') as f: paired=json.load(f)
+except: paired={}
+now=int(time.time()*1000)
+for rid,r in pending.items():
+    paired[rid]={**r,'approved':True,'approvedTs':now}
+with open('$_oc_paired','w') as f: json.dump(paired,f,indent=2)
+with open('$_oc_pending','w') as f: json.dump({},f,indent=2)
+print(f'Approved {len(pending)} request(s)')
+" && docker restart "${TENANT_PREFIX}-openclaw" >/dev/null 2>&1 \
+                    && ok "OpenClaw pairing approved and container restarted" \
+                    || warn "OpenClaw auto-approve failed — run: bash scripts/3-configure-services.sh ${TENANT_ID} --openclaw-pairs"
+            fi
+        fi
     fi
     
     if [[ "${QDRANT_ENABLED}" == "true" ]]; then
