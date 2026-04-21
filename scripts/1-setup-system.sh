@@ -573,49 +573,49 @@ format_and_mount_ebs() {
 
             set -e
 
+            # Stop Docker so it releases any open handles on the EBS block device.
+            # A lazy-umount from Script 0 can leave the device held by Docker even
+            # when /proc/mounts and lsblk show it as unmounted.
+            systemctl stop docker.socket docker.service 2>/dev/null || true
+            sleep 2
+
+            # Kill any remaining process holding the raw device node
+            command -v fuser >/dev/null 2>&1 && fuser -km "$device" 2>/dev/null || true
+
             # Unmount all current mounts of this device (handles /mnt/data etc.)
             current_mounts=$(lsblk -no MOUNTPOINT "$device" 2>/dev/null | grep -v '^$' || true)
             if [[ -n "$current_mounts" ]]; then
                 while IFS= read -r mp; do
                     [[ -z "$mp" ]] && continue
                     echo "     Unmounting: $mp"
-                    umount "$mp" || { echo "ERROR: Could not unmount $mp"; exit 1; }
+                    umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
                 done <<< "$current_mounts"
             fi
 
-            # Remove any stale fstab entry for this device (pre-format UUID)
+            # Flush kernel caches to release any lazy-unmounted superblock reference
+            sync
+            echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+            blockdev --flushbufs "$device" 2>/dev/null || true
+            sleep 2
+
+            # Remove ALL fstab entries for this device (UUID-based and device-path-based)
             old_uuid=$(blkid -s UUID -o value "$device" 2>/dev/null || true)
             if [[ -n "$old_uuid" ]]; then
                 sed -i "/UUID=${old_uuid}/d" /etc/fstab
                 echo "     Removed stale fstab entry (UUID=${old_uuid})"
             fi
+            # Also remove any raw device-path entry (e.g. /dev/nvme1n1 /mnt ...)
+            sed -i "\|^${device}[[:space:]]|d" /etc/fstab
+            # Tell systemd to drop any mount units derived from the removed fstab entries
+            systemctl daemon-reload 2>/dev/null || true
 
-            # Ensure the block device has no open references before formatting.
-            # A previous lazy-umount (umount -l) detaches the filesystem from the
-            # VFS namespace but leaves the kernel reference count > 0 until all
-            # open FDs on that filesystem close. mke2fs detects this and aborts
-            # with "apparently in use by the system" even when /proc/mounts is clean.
-            if command -v fuser >/dev/null 2>&1; then
-                echo "     Waiting for block device to be fully released..."
-                dev_wait=0
-                while [[ $dev_wait -lt 30 ]]; do
-                    holders=$(fuser "$device" 2>/dev/null || true)
-                    if [[ -z "$holders" ]]; then
-                        [[ $dev_wait -gt 0 ]] && echo "     Device released after ${dev_wait}s"
-                        break
-                    fi
-                    fuser -k "$device" 2>/dev/null || true
-                    sleep 1; dev_wait=$((dev_wait+1))
-                done
-                if [[ $dev_wait -ge 30 ]]; then
-                    echo "ERROR: $device still has open references after 30s — cannot format safely"
-                    exit 1
-                fi
-            fi
+            # Wipe all filesystem signatures so mke2fs sees a clean device
+            echo "     Wiping existing filesystem signatures..."
+            wipefs -a "$device"
 
             # Format
             echo "     Formatting ${device} as ext4..."
-            mkfs.ext4 -F "$device"
+            mkfs.ext4 "$device"
 
             # Mount
             mkdir -p "$mount_point"

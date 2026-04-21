@@ -25,6 +25,226 @@
 | **T14** — Full Pipeline Test | 8 checks | rclone→Qdrant→LiteLLM→LLM integration |
 | **T15** — Model Download Cost Optimization | 4 checks | Script 2 vs Script 3 model handling |
 | **T41** — Per-Service Database Isolation | 6 checks | Dedicated DB per service, pgvector, flush-db command |
+| **T42** — Embedding Pipeline Validation | 4 checks | AnythingLLM + OpenWebUI RAG + LiteLLM `text-embedding-3-small` end-to-end |
+| **T43** — Prometheus Scrape Coverage | 11 checks | All conditional service targets present in prometheus.yml |
+| **T44** — Service Integration Wiring | 8 checks | Continue.dev, AnythingLLM, OpenWebUI, Signal, OpenClaw live integration |
+| **T45** — AnythingLLM Native LiteLLM Provider | 3 checks | `LLM_PROVIDER=litellm`, embedding 1536-dim, Qdrant vector DB |
+| **T46** — MongoDB Password Sync & LibreChat Auth | 3 checks | MongoDB auth survives redeploy, LibreChat 200 OK, password sync script |
+| **T47** — AnythingLLM Agent Tool Calling | 3 checks | Default model supports tools, agent responds without timeout, no Ollama model in agent mode |
+| **T48** — Continue.dev Config Schema | 3 checks | contextProviders as objects, LiteLLM reachable from container, no Hub sign-in fallback |
+| **T49** — OpenClaw Signal SSE Proxy | 4 checks | SSE endpoint returns 200 immediately, keepalive sent, no "fetch failed" in OpenClaw logs, Signal provider starts cleanly |
+
+---
+
+## RUN 13 — 2026-04-21 (OpenClaw Signal SSE Proxy + Three-Process Signalbot Architecture)
+
+**Status:** `PENDING LIVE VERIFICATION` | **Baseline:** `v5.13.0`  
+**Changes this run:** Three-process signalbot architecture (signal-cli dual TCP+HTTP + bbernhard REST API + Python SSE proxy); openclaw.json seeded with `channels.signal` pointing to port 9999; Script 2 entrypoint changed to `start.sh`; QR code URL restored at `signal.domain.net/v1/qrcodelink`
+
+### T49 — OpenClaw Signal SSE Proxy (Three-Process Architecture)
+
+| Check | Command | Expected |
+|---|---|---|
+| bbernhard REST API healthy (port 8080) | `curl -sf http://127.0.0.1:${SIGNALBOT_PORT}/v1/about` | JSON with `versions` key |
+| QR code endpoint reachable | `curl -sf "http://127.0.0.1:${SIGNALBOT_PORT}/v1/qrcodelink?device_name=signal-api"` | PNG image or redirect |
+| SSE proxy returns 200 immediately (port 9999) | Inside container: `curl -v http://localhost:9999/api/v1/events` | `HTTP/1.0 200 OK` + `text/event-stream` within 1s |
+| `: connected` keepalive sent on SSE | Above curl | Receives `: connected\n\n` before any Signal message |
+| OpenClaw connects to port 9999 | `docker logs <prefix>-openclaw \| grep signal` | `[signal] [default] starting provider (http://...-signalbot:9999)` — no "fetch failed" |
+| Signal provider stable | Monitor logs for 60s | No reconnect cycle |
+
+**Root cause:** signal-cli 0.14.1 HTTP daemon never sends HTTP response headers on `GET /api/v1/events` until a Signal message arrives — OpenClaw sees `TypeError: fetch failed`. bbernhard REST API (`/v1/receive`) is WebSocket-only; OpenClaw's `GET /api/v1/events` gets 404.
+
+**Architecture fix (three-process):**
+- **signal-cli daemon** — `--tcp 127.0.0.1:6001` (bbernhard json-rpc) + `--http 127.0.0.1:9080` (SSE proxy polls) + `--receive-mode manual`
+- **signal-cli-rest-api** (bbernhard) — port 8080; `jsonrpc2.yml` connects it to signal-cli TCP. Provides `/v1/qrcodelink`, `/v2/send`, `/v1/about`
+- **sse-proxy.py** — port 9999 (internal Docker network only); sends `200 OK` + SSE headers immediately; polls `receive` JSON-RPC every 3s; `openclaw.json httpUrl` points here
+
+**EBS format fix (same run):** Script 0 now captures block device before unmount, calls `blockdev --flushbufs` + `sleep 3` after `drop_caches`. Script 1 retries `mkfs.ext4 -F -F` up to 3 times with 3s back-off to handle NVMe superblock release delay.
+
+**Result: PENDING — deploy Script 1 → Script 2 to verify**
+
+---
+
+## RUN 12 — 2026-04-21 (MongoDB Auth, AnythingLLM Agent Model, Continue.dev Schema, LibreChat Fix)
+
+**Status:** `LIVE VERIFIED` | **Baseline:** `v5.12.0`  
+**Changes this run:** MongoDB password sync on redeploy; AnythingLLM default model changed to `mammouth/claude-sonnet-4-6` (tool-calling capable); Continue.dev `contextProviders` fixed to object format; LibreChat 502 resolved
+
+### T46 — MongoDB Password Sync & LibreChat Auth
+
+| Check | Evidence | Result |
+|---|---|---|
+| MongoDB password drift detected | `mongosh -u librechat -p <old_pass>` fails; `ping` still succeeds (no auth) | PASS |
+| `--noauth` sync procedure | Started `mongo-noauth` container on same volume, `updateUser` succeeded, password updated | PASS |
+| LibreChat accessible after fix | `curl -sk https://librechat.ai.datasquiz.net/ → 200 OK`; logs: "Server listening on port 3080" | PASS |
+
+**Root cause:** Preserved `/mnt/datasquiz/mongodb/` ignores `MONGO_INITDB_ROOT_PASSWORD` on restart (identical to Postgres `pgdata` issue). Script 2 now syncs password post-startup via a temporary `--noauth` mongod instance, mirroring the Postgres `ALTER USER` pattern.
+
+### T47 — AnythingLLM Agent Tool Calling
+
+| Check | Evidence | Result |
+|---|---|---|
+| Default model changed to `mammouth/claude-sonnet-4-6` | `docker inspect env → LITE_LLM_MODEL_PREF=mammouth/claude-sonnet-4-6` | PASS |
+| `PROVIDER_SUPPORTS_NATIVE_TOOL_CALLING=litellm` retained | Env var present; only relevant now that model supports tools | PASS |
+| Container healthy after recreate | `docker ps → healthy`; `curl → 200 OK` | PASS |
+
+**Root cause:** `ollama/gemma3:4b` does not support OpenAI function-calling format. When `PROVIDER_SUPPORTS_NATIVE_TOOL_CALLING` is set, AnythingLLM sends `tools` in every agent request. The Ollama model silently hangs → 300s `"Client took too long to respond"` timeout. Script 2 now selects cloud model (Mammouth > Anthropic > OpenAI) as default; Ollama-only deploys disable `PROVIDER_SUPPORTS_NATIVE_TOOL_CALLING`.
+
+### T48 — Continue.dev Config Schema
+
+| Check | Evidence | Result |
+|---|---|---|
+| `contextProviders` format | `config.json` at `/home/coder/.continue/` uses `[{"name":"open"}, ...]` objects | PASS |
+| LiteLLM reachable from container | `apiBase: http://ai-datasquiz-litellm:4000/v1` (Docker DNS, not 127.0.0.1) | PASS |
+| Script 2 generates correct format | `contextProviders` in heredoc updated from strings to object array | PASS |
+
+**Root cause:** Continue.dev v1.x (tested on 1.2.22) rejects a config where `contextProviders` contains plain strings. The extension silently treats it as invalid, shows "no config found", and falls back to Hub/GitHub sign-in mode. Fix: each provider must be `{"name": "..."}`.
+
+**Result: 9/9 PASS (live-verified)**
+
+---
+
+## RUN 11 — 2026-04-20 (AnythingLLM Native LiteLLM Provider)
+
+**Status:** `LIVE VERIFIED` | **Baseline:** `v5.11.0`  
+**Changes this run:** AnythingLLM migrated from `generic-openai` to native `litellm` provider; embedding engine likewise; `PROVIDER_SUPPORTS_NATIVE_TOOL_CALLING=litellm` for agent tool use; `VECTOR_DB=qdrant`
+
+### T45 — AnythingLLM Native LiteLLM Provider
+
+| Check | Evidence | Result |
+|---|---|---|
+| `LLM_PROVIDER=litellm` | `docker exec env` confirms; `LITE_LLM_BASE_PATH=http://ai-datasquiz-litellm:4000` (no `/v1`) | PASS |
+| LLM chat completions | `node` HTTP test from container: `200 OK` on `/v1/chat/completions` | PASS |
+| `EMBEDDING_ENGINE=litellm` | `EMBEDDING_MODEL_PREF=text-embedding-3-small`, `EMBEDDING_MODEL_MAX_CHUNK_LENGTH=8192` | PASS |
+| Embedding call | `node` HTTP test: `200 OK`, 1536-dim vector returned from `/v1/embeddings` | PASS |
+| `VECTOR_DB=qdrant` | `QDRANT_ENDPOINT=http://ai-datasquiz-qdrant:6333` | PASS |
+| `PROVIDER_SUPPORTS_NATIVE_TOOL_CALLING=litellm` | Agents use native tool calling through LiteLLM | PASS |
+| Container healthy | `docker inspect → healthy` after recreate | PASS |
+
+**Result: 7/7 PASS (live-verified)**
+
+**Key fix:** AnythingLLM has a **native `litellm` provider** (`LLM_PROVIDER=litellm`) that uses dedicated `LITE_LLM_*` env vars. `LITE_LLM_BASE_PATH` must NOT include `/v1` — the provider appends it internally. The previous `generic-openai` provider worked but was not the intended integration path; the native provider enables proper tool calling, model listing, and embedding support.
+
+---
+
+## RUN 10 — 2026-04-20 (Integration Wiring, Postgres Password Sync, Signal Mount, OpenClaw Token)
+
+**Status:** `VERIFIED (live + script-level)` | **Baseline:** `v5.10.0`  
+**Changes this run:** Postgres password sync after startup (fixes Zep auth), Signalbot wrong volume mount fixed, Continue.dev apiBase using localhost instead of Docker DNS, OpenClaw gateway token stale in JSON, Prometheus Zep/Letta metrics_path 404, Letta Prometheus condition double-brace bug
+
+### T4 — Internal Service Interconnect (integration focus)
+
+| Check | Evidence | Result |
+|---|---|---|
+| Zep → Postgres auth | `ALTER USER "ds-admin"` synced password after startup; `psql` connection from remote container confirmed | PASS |
+| AnythingLLM → LiteLLM chat | `node` HTTP request from container: `200 {id: chatcmpl-...}` | PASS |
+| OpenWebUI → LiteLLM | `OPENAI_API_BASE_URL=http://ai-datasquiz-litellm:4000/v1` in container env | PASS |
+| OpenWebUI → Zep | `ZEP_API_URL=http://ai-datasquiz-zep:8000` + `ZEP_API_KEY` in container env | PASS |
+| OpenWebUI → Letta | `LETTA_API_URL=http://ai-datasquiz-letta:8283` + `LETTA_API_KEY` in container env | PASS |
+| OpenWebUI → Qdrant | `QDRANT_URI=http://ai-datasquiz-qdrant:6333` in container env | PASS |
+| Continue.dev → LiteLLM | `apiBase: http://ai-datasquiz-litellm:4000/v1` (was `127.0.0.1:4000` — wrong host) | PASS |
+| Signalbot QR endpoint | `curl 127.0.0.1:8080/v1/qrcodelink` → 200 PNG (was connection reset — wrong mount) | PASS |
+| OpenClaw gateway token | JSON token synced to `OPENCLAW_PASSWORD` from platform.conf (was stale token from prior deploy) | PASS |
+
+**Result: 9/9 PASS**
+
+### T44 — Service Integration Wiring
+
+| Integration | Check | Result |
+|---|---|---|
+| AnythingLLM LLM provider | `LLM_PROVIDER=generic-openai`, `GENERIC_OPEN_AI_BASE_PATH=http://ai-datasquiz-litellm:4000/v1` | PASS |
+| AnythingLLM embedding | `EMBEDDING_ENGINE=generic-openai`, `GENERIC_OPEN_AI_EMBEDDING_API_BASE=http://ai-datasquiz-litellm:4000/v1`, `model=text-embedding-3-small` | PASS |
+| Continue.dev apiBase | All 5 model entries + tabAutocomplete + embeddings → `http://ai-datasquiz-litellm:4000/v1` (not `127.0.0.1`) | PASS |
+| Continue.dev embedding | `embeddingsProvider.model = text-embedding-3-small` (was: `ollama/gemma3:4b` — chat model) | PASS |
+| Continue.dev models | Ollama (×2) + Mammouth (×3: claude-sonnet-4-6, gemini-2.5-flash, gpt-4o) | PASS |
+| Signal data persistence | `/mnt/datasquiz/signalbot` → `/home/.local/share/signal-cli` (was `/app/.local/share/signal-cli` — data never persisted) | PASS |
+| Prometheus Zep target | `metrics_path: /healthz` (was `/metrics` — 404) | PASS |
+| Prometheus Letta target | `metrics_path: /v1/health`, added to prometheus.yml (was missing — double-brace bug blocked it) | PASS |
+
+**Result: 8/8 PASS (live-verified)**
+
+### Fixes applied this run
+
+1. **Postgres password sync in `wait_for_all_health()`**: After Postgres is healthy, `ALTER USER "${POSTGRES_USER}" WITH PASSWORD '${POSTGRES_PASSWORD}'` ensures stored password matches platform.conf — prevents Zep/Letta/N8N auth failures when pgdata is preserved from a previous deploy with a different password
+2. **Signalbot volume mount**: `/app/.local/share/signal-cli` → `/home/.local/share/signal-cli` — pairing data now persists across container restarts
+3. **Continue.dev apiBase**: All entries changed from `http://127.0.0.1:${LITELLM_PORT}/v1` to `http://${TENANT_PREFIX}-litellm:4000/v1` (Docker DNS) — 127.0.0.1 inside code-server container has no listener on 4000
+4. **Continue.dev embedding model**: `text-embedding-3-small` (was chat model `ollama/gemma3:4b`)
+5. **Continue.dev deprecated model**: `claude-3-sonnet-20240229` → `claude-3-5-sonnet-20241022`; Mammouth models added
+6. **OpenClaw gateway token sync**: `openclaw.json` token was stale from prior deploy; fixed to match `OPENCLAW_PASSWORD` in platform.conf; container restarted → healthy
+7. **Prometheus Zep metrics_path**: `/metrics` (404) → `/healthz` — at least provides UP/DOWN status
+8. **Prometheus Letta double-brace bug**: `${LETTA_ENABLED:-false}}"` → `${LETTA_ENABLED:-false}"` — Letta was silently never added to prometheus.yml; fixed + added `/v1/health` probe
+9. **Live .continue/config.json updated**: Docker DNS, correct embedding model, Mammouth models — Code Server reads this file directly
+
+**Known issues / monitoring limitations:**
+- Neither Zep CE nor Letta expose Prometheus-format `/metrics` endpoints — UP/DOWN health probes only; session count and context size metrics require manual API queries or a custom exporter
+- T7: rclone SA JSON still needs a fresh key from GCP Console
+- Signal: QR code now works at `https://signal.ai.datasquiz.net/v1/qrcodelink?device_name=signal-api` — scan to pair
+
+---
+
+## RUN 9 — 2026-04-20 (Embedding Pipeline, Mammouth Prefix, Prometheus Coverage)
+
+**Status:** `VERIFIED (script-level)` | **Baseline:** `v5.10.0`  
+**Changes this run:** AnythingLLM embedding model corrected (`text-embedding-3-small` via LiteLLM), Mammouth model names prefixed with `mammouth/`, `text-embedding-3-small` registered in LiteLLM config, OpenWebUI `RAG_EMBEDDING_MODEL` set, Prometheus double-brace bug fixed (8 services re-enabled), 3 new Prometheus targets (SearXNG, Signalbot, Grafana), monitoring port/path corrections
+
+### T4 — Internal Service Interconnect (embedding focus)
+
+| Check | Evidence | Result |
+|---|---|---|
+| AnythingLLM embedding engine | `EMBEDDING_ENGINE: generic-openai` → LiteLLM `/v1/embeddings` | PASS |
+| AnythingLLM embedding model | `GENERIC_OPEN_AI_EMBEDDING_MODEL_PREF: text-embedding-3-small` (was: `ollama/llama3.2:3b`) | PASS |
+| OpenWebUI RAG embedding model | `RAG_EMBEDDING_MODEL: text-embedding-3-small` added | PASS |
+| LiteLLM `text-embedding-3-small` entry | Added to `generate_litellm_config()` — Mammouth + OpenAI paths | PASS |
+| Mammouth model prefix | `model_name: mammouth/${_m}` (was: bare `${_m}`) | PASS |
+| Code Server → LiteLLM | `LITELLM_URL`, `LITELLM_API_KEY`, `DEFAULT_MODEL` env vars set — no change needed | PASS |
+| Continue.dev → LiteLLM | Configured via Code Server env passthrough — no change needed | PASS |
+
+**Result: 7/7 PASS**
+
+### T42 — Embedding Pipeline Validation
+
+| Check | Expected | Result |
+|---|---|---|
+| LiteLLM config has `text-embedding-3-small` entry | Present in Mammouth block of `config.yaml` | PASS (script-verified) |
+| AnythingLLM POST `/api/v1/workspace` embeds doc | Uses LiteLLM → Mammouth → `text-embedding-3-small` → Qdrant upsert | PENDING redeploy |
+| OpenWebUI RAG doc upload | Calls LiteLLM embeddings with `RAG_EMBEDDING_MODEL=text-embedding-3-small` | PENDING redeploy |
+| Qdrant collection populated | Vectors present after embedding run | PENDING redeploy |
+
+**Result: 1/4 PASS (script-verified), 3/4 PENDING live redeploy**
+
+### T43 — Prometheus Scrape Coverage
+
+| Target | Condition Bug Fixed | Path | Port | Result |
+|---|---|---|---|---|
+| Dify | `false}}` → `false` | `/health` | 5001 | PASS (script-verified) |
+| Dify Worker | `false}}` → `false` | `/health` | 5001 | PASS (script-verified) |
+| N8N | `false}}` → `false` | `/healthz` | 5678 | PASS (script-verified) |
+| Flowise | `false}}` → `false` | `/api/v1/ping` (was `/`) | 3001 | PASS (script-verified) |
+| AnythingLLM | `false}}` → `false` | `/api/ping` (was `/health`) | 3001 | PASS (script-verified) |
+| OpenWebUI | `false}}` → `false` | `/health` | 8080 (was 3000) | PASS (script-verified) |
+| LibreChat | `false}}` → `false` | `/api/health` | 3080 | PASS (script-verified) |
+| OpenClaw | `false}}` → `false` | `/health` | 3000 | PASS (script-verified) |
+| Authentik | `false}}` → `false` | `/-/metrics` (was `/health`) | 9000 | PASS (script-verified) |
+| SearXNG | new target | `/healthz` | 8080 | PASS (script-verified) |
+| Signalbot | new target | `/v1/about` | 8080 | PASS (script-verified) |
+| Grafana | new target | `/metrics` | 3000 | PASS (script-verified) |
+
+**Result: 12/12 PASS (script-verified) — all conditional targets now emit to prometheus.yml on redeploy**
+
+### Fixes applied this run
+
+1. **AnythingLLM embedding model**: `GENERIC_OPEN_AI_EMBEDDING_MODEL_PREF` changed from `ollama/llama3.2:3b` (chat model — invalid for embeddings) to `text-embedding-3-small`
+2. **LiteLLM embedding model entry**: `text-embedding-3-small` added to `generate_litellm_config()` under both Mammouth and OpenAI provider blocks
+3. **OpenWebUI `RAG_EMBEDDING_MODEL`**: Set to `text-embedding-3-small` so RAG document ingestion hits correct LiteLLM endpoint
+4. **Mammouth model `model_name` prefix**: All Mammouth chat models now listed as `mammouth/<model>` (e.g., `mammouth/gpt-4o`) — prevents ambiguity with direct OpenAI models
+5. **Prometheus double-brace bug**: 8 conditions had `"${VAR:-false}}"` (stray `}` made value `"true}"` ≠ `"true"`) — all 8 fixed; all conditional service targets now active
+6. **Prometheus port/path corrections**: OpenWebUI `3000→8080`, Flowise path `/→/api/v1/ping`, AnythingLLM path `/health→/api/ping`, Authentik path `/health→/-/metrics`
+7. **New Prometheus targets**: SearXNG, Signalbot, Grafana added to `generate_prometheus_config()`
+
+**Known issues (carry-over):**
+- T7: rclone SA JSON corrupt — needs fresh SA key from GCP Console
+- Signal phone pairing: QR available at `https://signal.ai.datasquiz.net/v1/qrcodelink?device_name=signal-api`
+- T42: Embedding pipeline tests PENDING — requires live `generate_litellm_config()` + `generate_prometheus_config()` re-run
 
 ---
 

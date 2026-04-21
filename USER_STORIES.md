@@ -818,9 +818,26 @@ Epic 13 — Hardware       GPU/CPU detection, deployment guidance, model recomme
 
 ---
 
-*Version: 2.5.0 | Last Updated: 2026-04-20*
+*Version: 2.6.0 | Last Updated: 2026-04-20*
 
 ## IMPLEMENTATION STATUS UPDATES
+
+### Completed Features (2026-04-21 — LibreChat, AnythingLLM Agent, Continue.dev Schema)
+- **MongoDB password sync on redeploy**: `wait_for_all_health()` now tests MongoDB auth after startup; if it fails (preserved `/data/db` with stale hash), a temporary `--noauth` mongod instance resets the password — mirrors the Postgres `ALTER USER` pattern. LibreChat was returning 502 on every redeploy with changed `MONGO_PASSWORD`.
+- **LibreChat 502 fixed**: Root cause was MongoDB `librechat` user password drift. Fixed via noauth sync; LibreChat now starts cleanly and returns 200 OK.
+- **AnythingLLM agent hang fixed**: `LITE_LLM_MODEL_PREF` now defaults to `mammouth/claude-sonnet-4-6` (or first available cloud model) instead of `ollama/gemma3:4b`. Ollama models don't support OpenAI function-calling format — `PROVIDER_SUPPORTS_NATIVE_TOOL_CALLING=litellm` caused all agent sessions to hang for 300s then timeout. Script 2 now only sets `PROVIDER_SUPPORTS_NATIVE_TOOL_CALLING` when the default model supports tool calling.
+- **Continue.dev "no config found" fixed**: `contextProviders` in the generated `config.json` changed from plain strings (`"open"`) to objects (`{"name": "open"}`). Continue.dev v1.x silently rejects a config with string providers and falls back to Hub/GitHub sign-in mode. Both Script 2 and the live config file fixed.
+- **OpenClaw "pairing required" documented**: This is expected on first deploy — the user must initiate the pairing from the OpenClaw web UI (enter gateway URL + `OPENCLAW_PASSWORD` token). Script 2 correctly seeds the gateway token; the pairing handshake is a user action.
+
+### Completed Features (2026-04-20 — Integration Wiring, Postgres Password Sync)
+- **Postgres password sync**: `wait_for_all_health()` runs `ALTER USER` after Postgres starts — prevents all remote services (Zep, Letta, N8N, Dify, Authentik) from failing auth when pgdata is preserved across redeploys with a regenerated password
+- **Signalbot volume mount corrected**: `/app/.local/share/signal-cli` → `/home/.local/share/signal-cli` — pairing data now persists across container restarts; QR pairing endpoint confirmed working (200 PNG)
+- **Continue.dev Docker DNS fix**: All `apiBase` entries corrected from `http://127.0.0.1:4000/v1` to `http://${TENANT_PREFIX}-litellm:4000/v1`; Mammouth models added; embedding model set to `text-embedding-3-small`; deprecated `claude-3-sonnet-20240229` removed
+- **OpenClaw gateway token sync**: `openclaw.json` now receives current `OPENCLAW_PASSWORD` from platform.conf; stale token from prior deploy fixed; container healthy after restart
+- **Prometheus Zep/Letta targets**: Corrected from `/metrics` (404) to `/healthz` (Zep) and `/v1/health` (Letta); Letta double-brace condition bug fixed — Letta was silently excluded from prometheus.yml on every deploy
+- **AnythingLLM native LiteLLM provider**: Migrated from `generic-openai` to `LLM_PROVIDER=litellm` + `EMBEDDING_ENGINE=litellm` using `LITE_LLM_BASE_PATH` (no `/v1`); live-tested: LLM 200 OK, embeddings 200 OK 1536-dim, `VECTOR_DB=qdrant`; `PROVIDER_SUPPORTS_NATIVE_TOOL_CALLING=litellm` enables agent tool calling
+- **OpenWebUI integration confirmed**: All env vars correct (LiteLLM, Zep, Letta, Qdrant) — requires first-user registration, then all models load automatically from LiteLLM
+- **Context monitoring limitation documented**: Zep CE and Letta do not expose Prometheus-format `/metrics` — UP/DOWN health probes only; session count and context size require manual API queries or a custom exporter
 
 ### Completed Features (2026-04-20 — Per-Service DB Isolation)
 - **Per-Service PostgreSQL Isolation**: Each postgres-backed service (LiteLLM, N8N, Zep, Dify, Authentik, Letta) now gets its own dedicated database. Root cause: Dify's `messages` table collided with existing tables (253 tables in the shared DB) causing `DuplicateTable` migration failures on fresh deploys.

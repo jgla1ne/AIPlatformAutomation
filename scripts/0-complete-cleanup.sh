@@ -259,7 +259,11 @@ PY
     local mount_point="/mnt/${tenant_id}"
     if grep -qs "$mount_point" /proc/mounts; then
         log "Unmounting EBS volume: $mount_point (required before directory removal)"
-        
+
+        # Capture backing device BEFORE unmount (needed for blockdev --flushbufs below)
+        local _ebs_dev
+        _ebs_dev=$(findmnt -no SOURCE "$mount_point" 2>/dev/null || true)
+
         # Aggressively kill processes using the mount (README §6)
         if command -v fuser >/dev/null 2>&1; then
             log "  Terminating processes accessing $mount_point..."
@@ -272,42 +276,20 @@ PY
             run_cmd sudo umount -l "$mount_point" || true
         }
 
-        # Verify mount-namespace entry is gone
+        # Verify mount-namespace entry is gone from /proc/mounts
         if grep -qs "$mount_point" /proc/mounts; then
-            fail "CRITICAL: $mount_point is STILL MOUNTED (detected in /proc/mounts). Wipe aborted to protect EBS data. Manually stop all processes (e.g., Docker, Caddy) and try again."
+            fail "CRITICAL: $mount_point is STILL MOUNTED. Stop all processes (Docker, Caddy) and try again."
         fi
 
-        # After a lazy umount the block device can still be "in use" at the kernel
-        # level until all open FDs on the filesystem are closed — mke2fs in Script 1
-        # will fail with "apparently in use" if we don't wait.
-        # Resolve the actual block device backing the mount point.
-        local ebs_dev
-        ebs_dev=$(findmnt -n -o SOURCE "$mount_point" 2>/dev/null \
-            || grep " $mount_point " /proc/mounts | awk '{print $1}' | head -1 \
-            || true)
-        # Fallback: look in fstab for the UUID that was mounted there
-        if [[ -z "$ebs_dev" ]]; then
-            ebs_dev=$(awk -v mp="$mount_point" '$2==mp{print $1}' /etc/fstab 2>/dev/null | head -1 || true)
-        fi
-
-        if [[ -n "$ebs_dev" && -b "$ebs_dev" ]] && command -v fuser >/dev/null 2>&1; then
-            log "  Waiting for block device $ebs_dev to be fully released..."
-            local dev_wait=0
-            while [[ $dev_wait -lt 30 ]]; do
-                local holders
-                holders=$(sudo fuser "$ebs_dev" 2>/dev/null || true)
-                if [[ -z "$holders" ]]; then
-                    log "  Block device released after ${dev_wait}s"
-                    break
-                fi
-                # Kill any remaining holders and keep waiting
-                sudo fuser -k "$ebs_dev" 2>/dev/null || true
-                sleep 1; dev_wait=$((dev_wait+1))
-            done
-            if [[ $dev_wait -ge 30 ]]; then
-                warn "Block device $ebs_dev still has open references after 30s — mkfs may fail"
-            fi
-        fi
+        # A lazy-umount detaches the path from VFS so /proc/mounts shows clean,
+        # but the kernel holds the block device's superblock in memory until dirty
+        # pages are written and the inode cache is dropped. mke2fs aborts with
+        # "apparently in use" even with -F. Fix: sync, drop_caches, flush block bufs.
+        log "  Syncing filesystems and dropping kernel caches to release superblock..."
+        sync
+        echo 3 | run_cmd sudo tee /proc/sys/vm/drop_caches >/dev/null 2>&1 || true
+        [[ -n "$_ebs_dev" ]] && run_cmd sudo blockdev --flushbufs "$_ebs_dev" 2>/dev/null || true
+        sleep 3   # NVMe superblock release takes 2-3s after drop_caches
         ok "EBS volume unmounted: $mount_point"
     else
         log "No EBS volume mounted at $mount_point (nothing to unmount)"

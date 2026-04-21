@@ -784,10 +784,11 @@ All model entries in `config.yaml` follow the `provider/model` format for `litel
 | Groq | `groq/llama-3.3-70b-versatile` | `groq/llama-3.3-70b-versatile` |
 | OpenRouter | `openrouter/meta-llama/llama-3-70b-instruct` | `openrouter/meta-llama/...` |
 | Mammouth | `mammouth/claude-sonnet-4-6` | `openai/claude-sonnet-4-6` + `api_base` |
+| Mammouth (embed) | `text-embedding-3-small` | `openai/text-embedding-3-small` + `api_base` |
 | Anthropic | `claude-3-5-sonnet-20241022` | `anthropic/claude-3-5-sonnet-20241022` |
 | Google | `gemini-1.5-flash` | `google/gemini-1.5-flash` |
 
-**Mammouth AI** is a multi-model proxy (`https://api.mammouth.ai/v1`) that exposes Claude, Gemini, and GPT models under an OpenAI-compatible API. Configure as `openai/` provider with `api_base` override. Default models: `claude-sonnet-4-6`, `gemini-2.5-flash`, `gpt-4o`. Model names are resolved via Mammouth's `/v1/models` endpoint.
+**Mammouth AI** is a multi-model proxy (`https://api.mammouth.ai/v1`) that exposes Claude, Gemini, and GPT models under an OpenAI-compatible API. Configure as `openai/` provider with `api_base` override. Chat models: `mammouth/claude-sonnet-4-6`, `mammouth/gemini-2.5-flash`, `mammouth/gpt-4o`. Embedding model: `text-embedding-3-small` (proxied via Mammouth → OpenAI). The `mammouth/` prefix on chat model names distinguishes them from direct provider entries (prevents confusion when `gpt-4o` appears in the model list).
 
 **Ollama memory management** — on low-RAM hosts set these to prevent model hoarding:
 ```
@@ -912,12 +913,43 @@ N8N_PROTOCOL=https
 N8N_EDITOR_BASE_URL=https://n8n.${BASE_DOMAIN}
 ```
 
-### Signalbot — Caddy Route Required for QR Pairing
+### Signalbot — Three-Process Architecture + Signal Registration Flow
 
-Signalbot's REST API binds to `127.0.0.1:8080` only. Without a Caddy route the pairing URL (`/v1/qrcodelink`) is not reachable from a browser. Script 2 generates a `signal.${BASE_DOMAIN}` route in the Caddyfile. The post-deploy dashboard prints the full QR link URL:
+The signalbot container runs three processes orchestrated by `start.sh` (written to `${DATA_DIR}/signalbot/` by `prepare_data_dirs()`):
+
+| Process | Port | Purpose |
+|---------|------|---------|
+| `signal-cli daemon --tcp --http` | `127.0.0.1:6001` (TCP) + `127.0.0.1:9080` (HTTP) | Signal connection; dual interface so both consumers can talk to it |
+| `signal-cli-rest-api` (bbernhard, json-rpc mode) | `0.0.0.0:8080` | QR code, registration, phone verify, message send. Caddy routes `signal.domain.net` here |
+| `sse-proxy.py` (Python) | `0.0.0.0:9999` | OpenClaw's `/api/v1/events` SSE + `/api/v1/rpc` forwarding. signal-cli 0.14.1 never sends HTTP headers on SSE until a message arrives — this proxy sends them immediately |
+
+**Signal registration flow (one-time per deployment):**
+
+Script 1 collects `SIGNAL_PHONE` (the linked number). After Script 2 deploys, register via either method:
+
+**Method A — QR code (recommended — links signal-cli as secondary device):**
+1. Open the QR URL printed in the post-deploy dashboard:  
+   `https://signal.yourdomain.net/v1/qrcodelink?device_name=signal-api`
+2. On your phone: Signal → Settings → Linked Devices → Link New Device → scan QR
+3. signal-cli is now a linked device; OpenClaw Signal channel activates automatically
+
+**Method B — Phone number registration (new number only):**
+```bash
+# From the signalbot container
+docker exec ai-<tenant>-signalbot signal-cli \
+  --config /home/.local/share/signal-cli -a ${SIGNAL_PHONE} register
+# Enter the SMS code when prompted, then:
+docker exec ai-<tenant>-signalbot signal-cli \
+  --config /home/.local/share/signal-cli -a ${SIGNAL_PHONE} verify <code>
 ```
-https://signal.ai.yourdomain.net/v1/qrcodelink?device_name=signal-api
+
+**Critical volume mount:** Account data is written to `/home/.local/share/signal-cli`. Wrong mount path loses registration on every restart:
+```yaml
+volumes:
+  - ${DATA_DIR}/signalbot:/home/.local/share/signal-cli
 ```
+
+**OpenClaw httpUrl:** `openclaw.json` `channels.signal.httpUrl` must point to the SSE proxy port (9999), NOT bbernhard's port (8080). bbernhard returns 404 for `/api/v1/events` — OpenClaw would see "fetch failed" or 404 forever.
 
 ### OpenClaw — "Origin Not Allowed" CORS Error
 
@@ -936,6 +968,27 @@ OpenClaw's gateway CORS check rejects browser connections from `https://openclaw
 }
 ```
 The file is only written if absent (idempotent). The `GATEWAY_TOKEN` env var is also set as a fallback for fresh containers with no pre-seeded file.
+
+### AnythingLLM — Use Native `litellm` Provider, Not `generic-openai`
+
+AnythingLLM has a **dedicated LiteLLM provider** (`LLM_PROVIDER=litellm`) separate from the generic OpenAI-compatible path. Using the native provider enables proper model listing, native tool calling for agents, and shared credential management.
+
+**Critical:** `LITE_LLM_BASE_PATH` must NOT include `/v1` — the provider appends it internally:
+```yaml
+LLM_PROVIDER: litellm
+LITE_LLM_BASE_PATH: http://${TENANT_PREFIX}-litellm:4000   # no /v1
+LITE_LLM_API_KEY: ${LITELLM_MASTER_KEY}
+LITE_LLM_MODEL_PREF: ollama/gemma3:4b
+LITE_LLM_MODEL_TOKEN_LIMIT: "4096"
+PROVIDER_SUPPORTS_NATIVE_TOOL_CALLING: "litellm"
+EMBEDDING_ENGINE: litellm
+EMBEDDING_MODEL_PREF: text-embedding-3-small
+EMBEDDING_MODEL_MAX_CHUNK_LENGTH: "8192"
+VECTOR_DB: qdrant
+QDRANT_ENDPOINT: http://${TENANT_PREFIX}-qdrant:6333
+```
+
+The embedding engine also uses `litellm` and reuses the same `LITE_LLM_BASE_PATH`/`LITE_LLM_API_KEY` — no separate `GENERIC_OPEN_AI_EMBEDDING_*` env vars are needed. `text-embedding-3-small` must be registered in LiteLLM's `config.yaml` for the embedding call to succeed.
 
 ### Code Server — Password Generated and Persisted
 
@@ -1120,13 +1173,33 @@ Use when implementing or reviewing any script change:
 - [ ] Is `GPU_TYPE` detected in Script 1 and respected in Script 2 (Ollama/OpenWebUI reservations)?
 - [ ] Does Script 2 include 1-hour `start_period` for LiteLLM first-boot resilience?
 - [ ] Does Script 2 implement dynamic model validation (P13) before configuring LiteLLM?
-- [ ] Are embedding models (`text-embedding-3-small`) dynamically validated and injected into Script 2's LiteLLM config?
+- [ ] Is `text-embedding-3-small` registered in LiteLLM config (via Mammouth when enabled, or direct OpenAI key)? Without it AnythingLLM and OpenWebUI RAG embeddings fail.
+- [ ] Does AnythingLLM use `LLM_PROVIDER=litellm` (NOT `generic-openai`)? The native provider uses `LITE_LLM_BASE_PATH` (no `/v1` suffix), `LITE_LLM_API_KEY`, `LITE_LLM_MODEL_PREF`. `generic-openai` works but loses model listing and native tool calling.
+- [ ] Does AnythingLLM use `EMBEDDING_ENGINE=litellm` with `EMBEDDING_MODEL_PREF=text-embedding-3-small`? The native litellm embedding engine shares `LITE_LLM_BASE_PATH`/`LITE_LLM_API_KEY` — no separate `GENERIC_OPEN_AI_EMBEDDING_*` vars needed.
+- [ ] Is `PROVIDER_SUPPORTS_NATIVE_TOOL_CALLING=litellm` set in AnythingLLM? Without it agents cannot use tool calling through LiteLLM.
+- [ ] Does OpenWebUI set `RAG_EMBEDDING_MODEL: text-embedding-3-small` explicitly?
+- [ ] Do all Mammouth model_names use the `mammouth/` prefix (e.g. `mammouth/gpt-4o`) to distinguish from direct OpenAI entries?
+- [ ] Do all Prometheus condition checks use single-brace `${VAR:-false}"` (not `${VAR:-false}}"` which silently never fires)? This includes the Letta condition — was broken (silently excluded Letta from prometheus.yml).
+- [ ] Does `wait_for_all_health()` run `ALTER USER "${POSTGRES_USER}" WITH PASSWORD '${POSTGRES_PASSWORD}'` after Postgres is healthy? Without this, a preserved pgdata from a previous deploy with a different password causes all remote services (Zep, Letta, N8N, etc.) to fail auth on startup.
+- [ ] Does the Continue.dev config use `http://${TENANT_PREFIX}-litellm:4000/v1` (Docker DNS) NOT `http://127.0.0.1:4000/v1`? The code-server container has no listener on port 4000 — `127.0.0.1` resolves to the container itself.
+- [ ] Does the Continue.dev `embeddingsProvider.model` use `text-embedding-3-small` (NOT a chat model like `ollama/gemma3:4b`)?
+- [ ] Does the Continue.dev config include Mammouth models (prefixed `mammouth/`) when `ENABLE_MAMMOUTH=true`?
+- [ ] Does the Signalbot volume mount use `/home/.local/share/signal-cli` (NOT `/app/.local/share/signal-cli`)? The wrong path means pairing data is never persisted — signal-cli loses registration on every container restart.
+- [ ] Does `prepare_data_dirs()` write `openclaw.json` with the current `${OPENCLAW_PASSWORD}` from platform.conf? If the file already exists with a stale token from a prior deploy, pairing always fails.
+- [ ] Does Prometheus use `metrics_path: /healthz` for Zep and `metrics_path: /v1/health` for Letta? Neither service exposes Prometheus-format `/metrics` — UP/DOWN health probes are the maximum available monitoring granularity without a custom exporter.
 - [ ] Does Script 2 handle model downloads (not Script 3) to avoid re-download costs on re-runs (P14)?
 - [ ] Does Script 2 check if models already exist before pulling to avoid unnecessary downloads?
 - [ ] Does --flushall properly wipe Ollama model cache for clean re-deploys?
 - [ ] Does Script 2 implement MongoDB corruption detection and recovery before LibreChat health check?
 - [ ] Does Script 2 clear MongoDB data directory and restart container when corruption is detected?
+- [ ] Does `wait_for_all_health()` detect MongoDB password drift (preserved data directory ignores `MONGO_INITDB_ROOT_PASSWORD` on redeploy) and sync via a temporary `--noauth` mongod instance? Without this, LibreChat fails with "Authentication failed" after any redeploy that changes `MONGO_PASSWORD`.
+- [ ] Does AnythingLLM `LITE_LLM_MODEL_PREF` default to a cloud model that supports native tool calling (Mammouth/Anthropic/OpenAI) rather than `ollama/<model>`? Ollama models do NOT support OpenAI function-calling format — setting `PROVIDER_SUPPORTS_NATIVE_TOOL_CALLING=litellm` with an Ollama model causes all agent sessions to hang indefinitely (300s timeout).
+- [ ] Does the Continue.dev `contextProviders` use object format (`{"name": "open"}`) NOT string format (`"open"`)? Continue.dev v1.x rejects a config with string contextProviders silently — the extension shows "no config found" and falls back to Hub/GitHub sign-in mode.
 - [ ] Does Script 3 include `--test-pipeline` command for end-to-end validation?
+- [ ] Does `prepare_data_dirs()` write `sse-proxy.py` and `start.sh` into `${DATA_DIR}/signalbot/`? signal-cli 0.14.1 HTTP daemon never sends HTTP response headers on `GET /api/v1/events` until a message arrives — OpenClaw sees "fetch failed" without this proxy.
+- [ ] Does the signalbot entrypoint use `start.sh`? It must start three processes: `signal-cli daemon --tcp 127.0.0.1:6001 --http 127.0.0.1:9080 --receive-mode manual` + `signal-cli-rest-api` (bbernhard on 8080) + `sse-proxy.py` (on 9999).
+- [ ] Does `openclaw.json` `channels.signal.httpUrl` point to port 9999 (SSE proxy) NOT port 8080 (bbernhard)? bbernhard returns 404 for `/api/v1/events` — pointing OpenClaw at bbernhard breaks the Signal channel.
+- [ ] Does `prepare_data_dirs()` seed `channels.signal` in `openclaw.json` when `SIGNALBOT_ENABLED=true`? Without it OpenClaw has no Signal channel config and shows "pairing required" even after QR registration.
 - [ ] Does Script 3 install the `ai-platform-${TENANT_ID}` systemd unit when `--setup-persistence` is used?
 - [ ] Is the Dify worker healthcheck using the lightweight Python-based `/proc` probe (not `celery status`)?
 
@@ -1171,6 +1244,122 @@ sudo docker start ai-datasquiz-mongodb
 
 The litellm service is on the wrong Docker network. Every `build_*_deps()` function must emit `networks: - ${DOCKER_NETWORK}` alongside its `depends_on:` block.
 
+### Postgres password authentication failed (Zep/Letta/N8N crash-loop after redeploy)
+
+**Symptom:** `pgdriver: SASL: FATAL: password authentication failed for user "ds-admin"` in Zep/Letta/N8N logs immediately after a redeploy. `psql` from inside the Postgres container works fine (local trust auth bypasses password check).
+
+**Root cause:** When Postgres data directory (`pgdata`) is preserved from a previous deploy, Postgres ignores the `POSTGRES_PASSWORD` env var on startup and keeps the old stored password hash. If `platform.conf` was updated with a new password, the stored hash and the DSN are out of sync.
+
+**Fix (already applied in Script 2):** `wait_for_all_health()` runs `ALTER USER "${POSTGRES_USER}" WITH PASSWORD '${POSTGRES_PASSWORD}'` immediately after Postgres is healthy — forces the stored hash to match platform.conf before any service attempts a remote connection.
+
+**Manual fix (if hitting this on a running stack):**
+```bash
+docker exec ai-<tenant>-postgres psql -U <POSTGRES_USER> -d postgres \
+  -c "ALTER USER \"<POSTGRES_USER>\" WITH PASSWORD '<POSTGRES_PASSWORD>';"
+```
+
+### Continue.dev "connection refused" / models don't load in Code Server
+
+**Symptom:** Continue.dev extension shows no models or fails to connect.
+
+**Root cause:** The generated `config.json` used `http://127.0.0.1:${LITELLM_PORT}/v1` as `apiBase`. Port 4000 is bound on the **EC2 host**, not inside the code-server container. The extension host runs inside the container, so `127.0.0.1:4000` is unreachable.
+
+**Fix (already applied):** `apiBase` uses `http://${TENANT_PREFIX}-litellm:4000/v1` (Docker DNS). The live file is at `${DATA_DIR}/code-server/.continue/config.json`.
+
+### Signalbot QR code shows connection reset / pairing lost after restart
+
+**Symptom:** `curl https://signal.domain.net/v1/qrcodelink` returns connection reset or HTTP 500. Previously paired number is lost after a container restart.
+
+**Root cause:** The volume was mounted at `/app/.local/share/signal-cli` but the `signal-cli-rest-api` process writes its account data to `/home/.local/share/signal-cli`. Pairing data was stored inside the container and lost on every restart.
+
+**Fix (already applied):** Volume mount corrected to `/home/.local/share/signal-cli`. Account data now persists to `${DATA_DIR}/signalbot/`.
+
+### OpenClaw "invalid token" / browser disconnects immediately
+
+**Symptom:** OpenClaw UI shows "origin not allowed" or the desktop/mobile client rejects the gateway token.
+
+**Root cause:** `openclaw.json` is seeded by `prepare_data_dirs()` only when the file is absent. If the file existed from a prior deploy with a different token, the stale token stays — `OPENCLAW_PASSWORD` in platform.conf is updated but the JSON is not.
+
+**Fix:** Manually update `${DATA_DIR}/openclaw/home/openclaw.json` to match `OPENCLAW_PASSWORD` from platform.conf, then restart the container. Script 3 `--reconfigure openclaw` will also fix this.
+
+### MongoDB password authentication failed (LibreChat 502 after redeploy)
+
+**Symptom:** LibreChat returns 502. Logs show `[connectDb] MongoDB connection error: Authentication failed.` repeatedly. MongoDB container is healthy and `ping` succeeds.
+
+**Root cause:** Same issue as Postgres pgdata: when MongoDB's `/data/db` directory is preserved from a previous deploy, `MONGO_INITDB_ROOT_PASSWORD` is ignored on restart — MongoDB keeps the old stored password hash. If `MONGO_PASSWORD` in `platform.conf` was regenerated or changed, auth fails.
+
+**Fix (already applied in Script 2):** After MongoDB comes healthy, `wait_for_all_health()` tests auth with the current `MONGO_PASSWORD`. If it fails, the script stops MongoDB, starts a temporary `--noauth` mongod instance on the same volume, calls `db.updateUser('librechat', {pwd: '...'})`, then restarts the normal container. This mirrors the Postgres `ALTER USER` pattern.
+
+**Manual fix (if hitting this on a running stack):**
+```bash
+docker stop ai-<tenant>-mongodb
+docker run --rm -d --name mongo-fix -v /mnt/<tenant>/mongodb:/data/db mongo:7 mongod --noauth --dbpath /data/db
+sleep 8
+docker exec mongo-fix mongosh admin --eval "db.updateUser('librechat', {pwd: '<MONGO_PASSWORD_from_platform.conf>'})"
+docker stop mongo-fix
+docker start ai-<tenant>-mongodb
+docker restart ai-<tenant>-librechat
+```
+
+### AnythingLLM agent hangs indefinitely / "Client took too long to respond"
+
+**Symptom:** AnythingLLM starts an agent session on every chat. The chat spinner runs for 5 minutes then shows "Client took too long to respond, chat thread is dead after 300000ms" in logs.
+
+**Root cause:** `PROVIDER_SUPPORTS_NATIVE_TOOL_CALLING=litellm` tells AnythingLLM to send OpenAI `tools` parameter in every agent request. Ollama models (`gemma3:4b`, `llama3.2:3b`) do not support OpenAI function calling format — they hang or error silently when `tools` is included in the request.
+
+**Fix (already applied in Script 2):** When `ENABLE_MAMMOUTH`, `ENABLE_ANTHROPIC`, or `ENABLE_OPENAI` is set, `LITE_LLM_MODEL_PREF` defaults to the first available cloud model (e.g. `mammouth/claude-sonnet-4-6`). `PROVIDER_SUPPORTS_NATIVE_TOOL_CALLING` is only set when the default model supports tool calling. For Ollama-only deployments, native tool calling is disabled (AnythingLLM falls back to prompt-based tool handling).
+
+**Manual fix:** Update the AnythingLLM container's `LITE_LLM_MODEL_PREF` env var to a tool-capable model and recreate the container:
+```bash
+# Edit docker-compose.yml: LITE_LLM_MODEL_PREF: mammouth/claude-sonnet-4-6
+docker compose up -d ai-<tenant>-anythingllm
+```
+
+### Continue.dev "no config found" / shows GitHub sign-in instead of local models
+
+**Symptom:** Continue.dev extension shows a GitHub/Hub authentication dialog. Local models not visible. A config file exists at `~/.continue/config.json` but the extension ignores it.
+
+**Root cause:** Continue.dev v1.x requires `contextProviders` to be an **array of objects** (`[{"name": "open"}, ...]`). If the array contains plain strings (`["open", ...]`), the entire config fails schema validation silently — the extension treats it as missing and falls back to Hub/cloud mode.
+
+**Fix (already applied in Script 2):** `contextProviders` now uses object format. The live config at `${DATA_DIR}/code-server/.continue/config.json` (= `/home/coder/.continue/config.json` inside the container) was also patched.
+
+### OpenClaw "pairing required" — understanding the gateway token
+
+**Symptom:** OpenClaw web UI shows "pairing required" after the gateway token is entered. The `openclaw.json` has the correct token.
+
+**What the gateway token is:** The token in `openclaw.json` (`gateway.auth.token`) is the shared secret the OpenClaw **server** uses to authenticate incoming client connections. It is NOT a session cookie or auto-paired credential.
+
+**Required user action (one-time per device):** Open the OpenClaw web UI → click the "Connect to Gateway" or "Pair" button → enter:
+- Gateway URL: `https://openclaw.<BASE_DOMAIN>` (or `wss://openclaw.<BASE_DOMAIN>`)
+- Gateway Token: the value of `OPENCLAW_PASSWORD` from `platform.conf` (also in `openclaw.json`)
+
+This registers the browser/client session with the gateway. "Pairing required" means no client has connected to this gateway yet — it is expected on first deploy.
+
+**Script 2 responsibility:** Seeds the token into `openclaw.json` before container start (ensures the gateway accepts the token). The actual pairing handshake must be initiated by the end user through the UI — it cannot be automated.
+
+### OpenClaw Signal channel "SSE stream error" / "fetch failed"
+
+**Symptom:** OpenClaw logs repeat `[signal] SSE stream error: TypeError: fetch failed` every 10 seconds. Signal messages are never delivered to OpenClaw.
+
+**Root cause:** signal-cli 0.14.1 HTTP daemon (`--http`) accepts TCP connections to `GET /api/v1/events` but never sends HTTP response headers until a Signal message arrives. OpenClaw's `fetch()` call sits open until the connection is dropped, then sees "fetch failed". This is a bug in signal-cli 0.14.1.
+
+**bbernhard REST API incompatibility:** bbernhard's `signal-cli-rest-api` uses `GET /v1/receive/{account}` as a WebSocket endpoint (not SSE). OpenClaw calls `GET /api/v1/events` which bbernhard returns 404 for.
+
+**Fix (already applied in Script 2):** `prepare_data_dirs()` writes `start.sh` + `sse-proxy.py` to `${DATA_DIR}/signalbot/`. The three-process design:
+- `signal-cli daemon` with both `--tcp 127.0.0.1:6001` (bbernhard) and `--http 127.0.0.1:9080` (SSE proxy), `--receive-mode manual`
+- `signal-cli-rest-api` (bbernhard, port 8080) — QR code, registration, send
+- `sse-proxy.py` (port 9999) — sends `200 OK` + SSE headers immediately; polls signal-cli's `receive` JSON-RPC; `openclaw.json` `httpUrl` points here
+
+Signal channel is healthy when OpenClaw logs `[signal] [default] starting provider (http://...signalbot:9999)` with no subsequent SSE errors.
+
+**Manual fix (if hitting on a running stack):**
+```bash
+# Regenerate start.sh and sse-proxy.py by running prepare_data_dirs via script 2
+bash scripts/2-deploy-services.sh <tenant_id> --verify-only
+docker compose -f /mnt/<tenant>/config/docker-compose.yml up -d ai-<tenant>-signalbot
+docker logs ai-<tenant>-openclaw --since 30s | grep signal
+```
+
 ### LiteLLM P3005 (database schema not empty)
 
 Set `LITELLM_MIGRATION_DIR: /tmp/litellm-migrations` in the compose environment block.
@@ -1211,9 +1400,15 @@ docker inspect ${TENANT_PREFIX}-n8n | grep N8N_WEBHOOK_URL
 ```
 It must be `https://n8n.${BASE_DOMAIN}/` when Caddy is active. Also verify `N8N_HOST`, `N8N_PROTOCOL`, and `N8N_EDITOR_BASE_URL` match.
 
-### EBS format fails (`/dev/nvme1n1 apparently in use`)
+### EBS format fails (`/dev/nvme1n1 apparently in use` / `Device or resource busy while setting up superblock`)
 
-Docker daemon's `data-root` is on the EBS volume and holds open file descriptors to the block device. Script 0 must stop the Docker daemon before unmounting. If running cleanup manually, stop Docker first: `sudo systemctl stop docker`.
+**Symptom:** Script 1 prints `mke2fs forced anyway` then `Device or resource busy while setting up superblock`.
+
+**Root cause:** After `umount -l` (lazy unmount), the kernel holds the NVMe block device's superblock in memory for 2-3 seconds after `drop_caches`. During that window, `mkfs.ext4` fails with EBUSY even with `-F -F`.
+
+**Fix (already applied):** Script 0 now captures the backing device before unmount and calls `blockdev --flushbufs` after `drop_caches` + `sleep 3`. Script 1 retries `mkfs.ext4` up to 3 times with `sync + drop_caches + sleep 3` between attempts.
+
+**Manual workaround:** If it still fails on retry, wait 5 seconds and re-run Script 1 — the device will have fully released by then. Docker must be stopped before formatting: `sudo systemctl stop docker`.
 
 ### HTTPS not serving (services unreachable via domain)
 
@@ -1249,4 +1444,4 @@ curl -s -X POST "http://127.0.0.1:${SIGNALBOT_PORT}/v1/register/+<number>/verify
 
 ---
 
-*Version: 5.9.0 | Last Updated: 2026-04-20 | Architecture: 4 scripts, 26 services (Dify 3-container stack, SearXNG, rclone), single-tenant per EBS volume | Providers: Ollama, Groq, OpenRouter, Mammouth AI, Anthropic, Google, OpenAI | URL_ROUTING_MODE: subdomain/port/path | Per-service PostgreSQL isolation (6 dedicated DBs) | Mem0 removed*
+*Version: 5.13.0 | Last Updated: 2026-04-21 | Architecture: 4 scripts, 26 services (Dify 3-container stack, SearXNG, rclone), single-tenant per EBS volume | Providers: Ollama, Groq, OpenRouter, Mammouth AI, Anthropic, Google, OpenAI | URL_ROUTING_MODE: subdomain/port/path | Per-service PostgreSQL isolation (6 dedicated DBs) | AnythingLLM: native litellm provider (LLM + embedding + Qdrant), cloud model default for agent tool calling | Postgres + MongoDB password sync on redeploy | Signalbot volume mount corrected | Continue.dev uses Docker DNS, contextProviders as objects | LibreChat fixed (MongoDB auth)*

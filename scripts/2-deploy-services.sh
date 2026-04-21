@@ -889,6 +889,7 @@ EOF
       RAG_EMBEDDING_ENGINE: openai
       RAG_OPENAI_API_BASE_URL: http://${TENANT_PREFIX}-litellm:4000/v1
       RAG_OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      RAG_EMBEDDING_MODEL: text-embedding-3-small
       VECTOR_DB: qdrant
       QDRANT_URI: http://${TENANT_PREFIX}-qdrant:6333
       QDRANT_API_KEY: ${QDRANT_API_KEY:-}
@@ -1370,22 +1371,34 @@ EOF
     image: bbernhard/signal-cli-rest-api:latest
     container_name: ${TENANT_PREFIX}-signalbot
     restart: unless-stopped
-    # signal-cli-rest-api runs as internal user (uid 1000) — do not override user:
+    # Two-process design (signal-cli 0.14.1 SSE bug workaround):
+    #   Port 8080 (external): bbernhard REST API in json-rpc mode
+    #              → QR code (/v1/qrcodelink), register, verify, send
+    #   Port 9999 (internal Docker network only): Python SSE proxy
+    #              → /api/v1/events (SSE for OpenClaw) + /api/v1/rpc forwarding
+    #   Port 9080 (loopback): signal-cli HTTP JSON-RPC (SSE proxy polls this)
+    #   Port 6001 (loopback): signal-cli TCP JSON-RPC  (bbernhard connects here)
+    entrypoint:
+      - /bin/sh
+      - /home/.local/share/signal-cli/start.sh
     environment:
-      MODE: json-rpc
-      PHONE_NUMBER: ${SIGNAL_PHONE:-}
+      SIGNAL_PHONE: "${SIGNAL_PHONE:-}"
+      SIGNAL_CLI_HTTP_PORT: "9080"
+      SIGNAL_CLI_TCP_PORT: "6001"
+      PROXY_PORT: "9999"
+      SIGNAL_ACCOUNT: "${SIGNAL_PHONE:-}"
     volumes:
-      - ${DATA_DIR}/signalbot:/app/.local/share/signal-cli
+      - ${DATA_DIR}/signalbot:/home/.local/share/signal-cli
     networks:
       - ${DOCKER_NETWORK}
     ports:
       - "127.0.0.1:${SIGNALBOT_PORT:-8080}:8080"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/v1/about > /dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "curl -sf --max-time 5 http://127.0.0.1:8080/v1/about -o /dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 90s
 
 EOF
     fi
@@ -1697,6 +1710,29 @@ EOF
             milvus)   allm_vdb="milvus" ;;
             *)        allm_vdb="qdrant" ;;
         esac
+        # Choose a tool-calling-capable default model for AnythingLLM agent mode.
+        # Ollama models (gemma3, llama3) don't support OpenAI-style function calling —
+        # setting PROVIDER_SUPPORTS_NATIVE_TOOL_CALLING with them causes agent sessions to hang.
+        # Prefer the first cloud model when available.
+        local _allm_model _allm_token_limit _allm_tool_calling_env
+        if [[ "${ENABLE_MAMMOUTH:-false}" == "true" && -n "${MAMMOUTH_API_KEY:-}" ]]; then
+            _allm_model="mammouth/${MAMMOUTH_MODELS%%,*}"
+            _allm_token_limit="200000"
+            _allm_tool_calling_env="      PROVIDER_SUPPORTS_NATIVE_TOOL_CALLING: \"litellm\""
+        elif [[ "${ENABLE_ANTHROPIC:-false}" == "true" && -n "${ANTHROPIC_API_KEY:-}" ]]; then
+            _allm_model="claude-3-5-sonnet-20241022"
+            _allm_token_limit="200000"
+            _allm_tool_calling_env="      PROVIDER_SUPPORTS_NATIVE_TOOL_CALLING: \"litellm\""
+        elif [[ "${ENABLE_OPENAI:-false}" == "true" && -n "${OPENAI_API_KEY:-}" ]]; then
+            _allm_model="gpt-4o"
+            _allm_token_limit="128000"
+            _allm_tool_calling_env="      PROVIDER_SUPPORTS_NATIVE_TOOL_CALLING: \"litellm\""
+        else
+            # Ollama-only: no native tool calling (prompt-based fallback is used instead)
+            _allm_model="ollama/${OLLAMA_DEFAULT_MODEL:-llama3.2:3b}"
+            _allm_token_limit="4096"
+            _allm_tool_calling_env=""
+        fi
         cat >> "${COMPOSE_FILE}" << EOF
   ${TENANT_PREFIX}-anythingllm:
     image: mintplexlabs/anythingllm:latest
@@ -1706,17 +1742,18 @@ EOF
     environment:
       STORAGE_DIR: /app/server/storage
       JWT_SECRET: ${ANYTHINGLLM_JWT_SECRET}
-      # LLM via LiteLLM unified gateway (generic-openai = custom OpenAI-compatible endpoint)
-      LLM_PROVIDER: generic-openai
-      GENERIC_OPEN_AI_BASE_PATH: http://${TENANT_PREFIX}-litellm:4000/v1
-      GENERIC_OPEN_AI_API_KEY: ${LITELLM_MASTER_KEY}
-      GENERIC_OPEN_AI_MODEL_PREF: ollama/${OLLAMA_DEFAULT_MODEL:-llama3.2:3b}
-      GENERIC_OPEN_AI_MAX_TOKENS: "4096"
-      # Embedding via LiteLLM (generic-openai)
-      EMBEDDING_ENGINE: generic-openai
-      GENERIC_OPEN_AI_EMBEDDING_API_BASE: http://${TENANT_PREFIX}-litellm:4000/v1
-      GENERIC_OPEN_AI_EMBEDDING_API_KEY: ${LITELLM_MASTER_KEY}
-      GENERIC_OPEN_AI_EMBEDDING_MODEL_PREF: ollama/${OLLAMA_DEFAULT_MODEL:-llama3.2:3b}
+      # LLM via native LiteLLM provider — LITE_LLM_BASE_PATH has no /v1 suffix
+      LLM_PROVIDER: litellm
+      LITE_LLM_BASE_PATH: http://${TENANT_PREFIX}-litellm:4000
+      LITE_LLM_API_KEY: ${LITELLM_MASTER_KEY}
+      LITE_LLM_MODEL_PREF: ${_allm_model}
+      LITE_LLM_MODEL_TOKEN_LIMIT: "${_allm_token_limit}"
+      # Native tool calling only for cloud models that support it (not Ollama)
+${_allm_tool_calling_env}
+      # Embedding via native LiteLLM provider — shares LITE_LLM_BASE_PATH + LITE_LLM_API_KEY
+      EMBEDDING_ENGINE: litellm
+      EMBEDDING_MODEL_PREF: text-embedding-3-small
+      EMBEDDING_MODEL_MAX_CHUNK_LENGTH: "8192"
       # VectorDB — dynamic, no hardcoded type
       VECTOR_DB: ${allm_vdb}
       QDRANT_ENDPOINT: http://${TENANT_PREFIX}-qdrant:6333
@@ -2007,13 +2044,31 @@ EOF
       \"title\": \"${model} (via LiteLLM)\",
       \"provider\": \"openai\",
       \"model\": \"${_litellm_model}\",
-      \"apiBase\": \"http://127.0.0.1:${LITELLM_PORT:-4000}/v1\",
+      \"apiBase\": \"http://${TENANT_PREFIX}-litellm:4000/v1\",
       \"apiKey\": \"${LITELLM_MASTER_KEY}\"
     }"
             fi
         done
 
         local _first_litellm_model="ollama/${first_model}"
+
+        # Add Mammouth models if enabled (single key → Claude, Gemini, GPT via proxy)
+        if [[ "${ENABLE_MAMMOUTH:-false}" == "true" && -n "${MAMMOUTH_API_KEY:-}" ]]; then
+            IFS=',' read -ra _mammouth_models <<< "${MAMMOUTH_MODELS:-claude-sonnet-4-6,gemini-2.5-flash,gpt-4o}"
+            for _mm in "${_mammouth_models[@]}"; do
+                _mm=$(echo "$_mm" | xargs)
+                [[ -z "$_mm" ]] && continue
+                [[ -n "$models_config" ]] && models_config="${models_config},"
+                models_config="${models_config}
+    {
+      \"title\": \"${_mm} (via Mammouth/LiteLLM)\",
+      \"provider\": \"openai\",
+      \"model\": \"mammouth/${_mm}\",
+      \"apiBase\": \"http://${TENANT_PREFIX}-litellm:4000/v1\",
+      \"apiKey\": \"${LITELLM_MASTER_KEY}\"
+    }"
+            done
+        fi
 
         # Add external providers if enabled
         if [[ "${ENABLE_OPENAI:-false}" == "true" && -n "${OPENAI_API_KEY:-}" ]]; then
@@ -2022,28 +2077,28 @@ EOF
             fi
             models_config="${models_config}
     {
-      \"title\": \"OpenAI GPT-4 (via LiteLLM)\",
+      \"title\": \"GPT-4o (via LiteLLM)\",
       \"provider\": \"openai\",
-      \"model\": \"gpt-4\",
-      \"apiBase\": \"http://127.0.0.1:${LITELLM_PORT:-4000}/v1\",
+      \"model\": \"gpt-4o\",
+      \"apiBase\": \"http://${TENANT_PREFIX}-litellm:4000/v1\",
       \"apiKey\": \"${LITELLM_MASTER_KEY}\"
     }"
         fi
-        
+
         if [[ "${ENABLE_ANTHROPIC:-false}" == "true" && -n "${ANTHROPIC_API_KEY:-}" ]]; then
             if [[ -n "$models_config" ]]; then
                 models_config="${models_config},"
             fi
             models_config="${models_config}
     {
-      \"title\": \"Claude-3-Sonnet (via LiteLLM)\",
+      \"title\": \"claude-3-5-sonnet (via LiteLLM)\",
       \"provider\": \"openai\",
-      \"model\": \"claude-3-sonnet-20240229\",
-      \"apiBase\": \"http://127.0.0.1:${LITELLM_PORT:-4000}/v1\",
+      \"model\": \"claude-3-5-sonnet-20241022\",
+      \"apiBase\": \"http://${TENANT_PREFIX}-litellm:4000/v1\",
       \"apiKey\": \"${LITELLM_MASTER_KEY}\"
     }"
         fi
-        
+
         local _continue_config
         _continue_config=$(cat << CONTEOF
 {
@@ -2053,25 +2108,24 @@ EOF
     "title": "${first_model} (via LiteLLM)",
     "provider": "openai",
     "model": "${_first_litellm_model}",
-    "apiBase": "http://127.0.0.1:${LITELLM_PORT:-4000}/v1",
+    "apiBase": "http://${TENANT_PREFIX}-litellm:4000/v1",
     "apiKey": "${LITELLM_MASTER_KEY}"
   },
   "embeddingsProvider": {
     "provider": "openai",
-    "model": "${_first_litellm_model}",
-    "apiBase": "http://127.0.0.1:${LITELLM_PORT:-4000}/v1",
+    "model": "text-embedding-3-small",
+    "apiBase": "http://${TENANT_PREFIX}-litellm:4000/v1",
     "apiKey": "${LITELLM_MASTER_KEY}"
   },
   "contextProviders": [
-    "open",
-    "search",
-    "edit",
-    "diff",
-    "terminal",
-    "issues",
-    "jira",
-    "github",
-    "gitlab"
+    {"name": "open"},
+    {"name": "search"},
+    {"name": "diff"},
+    {"name": "terminal"},
+    {"name": "problems"},
+    {"name": "issues"},
+    {"name": "github"},
+    {"name": "gitlab"}
   ],
   "slashCommands": [
     {
@@ -2238,6 +2292,15 @@ EOF
       api_key: ${OPENAI_API_KEY}
 EOF
             done
+            # Add embedding model when OpenAI key available (only if Mammouth not already registered it)
+            if [[ "${ENABLE_MAMMOUTH:-false}" != "true" ]]; then
+                cat >> "${CONFIG_DIR}/litellm/config.yaml" << EOF
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: ${OPENAI_API_KEY}
+EOF
+            fi
         else
             echo "WARNING: No valid OpenAI models available, skipping OpenAI configuration" >&2
         fi
@@ -2313,7 +2376,7 @@ EOF
         for _m in "${_mammouth_models[@]}"; do
             _m="${_m// /}"
             cat >> "${CONFIG_DIR}/litellm/config.yaml" << EOF
-  - model_name: ${_m}
+  - model_name: mammouth/${_m}
     litellm_params:
       model: openai/${_m}
       api_base: ${MAMMOUTH_BASE_URL:-https://api.mammouth.ai/v1}
@@ -2321,6 +2384,15 @@ EOF
 EOF
         done
         unset _mammouth_models _m
+
+        # Embedding model via Mammouth (text-embedding-3-small through Mammouth → OpenAI)
+        cat >> "${CONFIG_DIR}/litellm/config.yaml" << EOF
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_base: ${MAMMOUTH_BASE_URL:-https://api.mammouth.ai/v1}
+      api_key: ${MAMMOUTH_API_KEY}
+EOF
     fi
 
     # General settings
@@ -2540,30 +2612,30 @@ MONITOREOF
         if [[ "${ZEP_ENABLED:-false}" == "true" ]]; then
             cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << ZEPEOF
 
-  # Zep memory layer monitoring
+  # Zep memory layer — healthz probe (Zep CE does not expose Prometheus metrics)
   - job_name: 'zep'
     static_configs:
       - targets: ['${TENANT_PREFIX}-zep:8000']
-    metrics_path: '/metrics'
-    scrape_interval: 10s
+    metrics_path: '/healthz'
+    scrape_interval: 30s
 ZEPEOF
         fi
 
         # Letta agent runtime monitoring (if enabled)
-        if [[ "${LETTA_ENABLED:-false}}" == "true" ]]; then
+        if [[ "${LETTA_ENABLED:-false}" == "true" ]]; then
             cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << LETTAEOF
 
-  # Letta agent runtime monitoring
+  # Letta agent runtime — health probe (Letta does not expose Prometheus metrics)
   - job_name: 'letta'
     static_configs:
       - targets: ['${TENANT_PREFIX}-letta:8283']
-    metrics_path: '/metrics'
-    scrape_interval: 10s
+    metrics_path: '/v1/health'
+    scrape_interval: 30s
 LETTAEOF
         fi
 
         # Dify API monitoring (if enabled)
-        if [[ "${DIFY_ENABLED:-false}}" == "true" ]]; then
+        if [[ "${DIFY_ENABLED:-false}" == "true" ]]; then
             cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << DIFYEEOF
 
   # Dify API monitoring
@@ -2576,7 +2648,7 @@ DIFYEEOF
         fi
 
         # Dify worker monitoring (if enabled)
-        if [[ "${DIFY_ENABLED:-false}}" == "true" ]]; then
+        if [[ "${DIFY_ENABLED:-false}" == "true" ]]; then
             cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << DIFYWORKEREOF
 
   # Dify worker monitoring
@@ -2602,7 +2674,7 @@ CODESERVEREOF
         fi
 
         # N8N automation monitoring (if enabled)
-        if [[ "${N8N_ENABLED:-false}}" == "true" ]]; then
+        if [[ "${N8N_ENABLED:-false}" == "true" ]]; then
             cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << N8NEOF
 
   # N8N automation monitoring
@@ -2615,46 +2687,46 @@ N8NEOF
         fi
 
         # Flowise monitoring (if enabled)
-        if [[ "${FLOWISE_ENABLED:-false}}" == "true" ]]; then
+        if [[ "${FLOWISE_ENABLED:-false}" == "true" ]]; then
             cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << FLOWISEEOF
 
   # Flowise monitoring
   - job_name: 'flowise'
     static_configs:
       - targets: ['${TENANT_PREFIX}-flowise:3000']
-    metrics_path: '/'
+    metrics_path: '/api/v1/ping'
     scrape_interval: 30s
 FLOWISEEOF
         fi
 
         # AnythingLLM monitoring (if enabled)
-        if [[ "${ANYTHINGLLM_ENABLED:-false}}" == "true" ]]; then
+        if [[ "${ANYTHINGLLM_ENABLED:-${ENABLE_ANYTHINGLLM:-false}}" == "true" ]]; then
             cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << ANYTHINGLLMEOF
 
   # AnythingLLM monitoring
   - job_name: 'anythingllm'
     static_configs:
       - targets: ['${TENANT_PREFIX}-anythingllm:3001']
-    metrics_path: '/health'
+    metrics_path: '/api/ping'
     scrape_interval: 30s
 ANYTHINGLLMEOF
         fi
 
         # OpenWebUI monitoring (if enabled)
-        if [[ "${OPENWEBUI_ENABLED:-false}}" == "true" ]]; then
+        if [[ "${OPENWEBUI_ENABLED:-false}" == "true" ]]; then
             cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << OPENWEBUIEOF
 
   # OpenWebUI monitoring
   - job_name: 'openwebui'
     static_configs:
-      - targets: ['${TENANT_PREFIX}-openwebui:3000']
-    metrics_path: '/health'
+      - targets: ['${TENANT_PREFIX}-openwebui:8080']
+    metrics_path: '/api/health'
     scrape_interval: 30s
 OPENWEBUIEOF
         fi
 
         # LibreChat monitoring (if enabled)
-        if [[ "${LIBRECHAT_ENABLED:-false}}" == "true" ]]; then
+        if [[ "${LIBRECHAT_ENABLED:-${ENABLE_LIBRECHAT:-false}}" == "true" ]]; then
             cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << LIBRECHATEOF
 
   # LibreChat monitoring
@@ -2667,7 +2739,7 @@ LIBRECHATEOF
         fi
 
         # OpenClaw monitoring (if enabled)
-        if [[ "${OPENCLAW_ENABLED:-false}}" == "true" ]]; then
+        if [[ "${OPENCLAW_ENABLED:-${ENABLE_OPENCLAW:-false}}" == "true" ]]; then
             cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << OPENCLAWEOF
 
   # OpenClaw monitoring
@@ -2679,17 +2751,56 @@ LIBRECHATEOF
 OPENCLAWEOF
         fi
 
-        # Authentik SSO monitoring (if enabled)
-        if [[ "${AUTHENTIK_ENABLED:-false}}" == "true" ]]; then
+        # Authentik SSO monitoring — exposes Prometheus metrics at /-/metrics
+        if [[ "${AUTHENTIK_ENABLED:-${ENABLE_AUTHENTIK:-false}}" == "true" ]]; then
             cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << AUTHENTIKEOF
 
   # Authentik SSO monitoring
   - job_name: 'authentik'
     static_configs:
       - targets: ['${TENANT_PREFIX}-authentik:9000']
-    metrics_path: '/health'
+    metrics_path: '/-/metrics'
     scrape_interval: 30s
 AUTHENTIKEOF
+        fi
+
+        # SearXNG search engine monitoring (if enabled)
+        if [[ "${SEARXNG_ENABLED:-${ENABLE_SEARXNG:-false}}" == "true" ]]; then
+            cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << SEARXNGEOF
+
+  # SearXNG monitoring
+  - job_name: 'searxng'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-searxng:8888']
+    metrics_path: '/healthz'
+    scrape_interval: 30s
+SEARXNGEOF
+        fi
+
+        # Signalbot monitoring (if enabled)
+        if [[ "${SIGNALBOT_ENABLED:-${ENABLE_SIGNALBOT:-false}}" == "true" ]]; then
+            cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << SIGNALBOTEOF
+
+  # Signalbot monitoring
+  - job_name: 'signalbot'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-signalbot:8080']
+    metrics_path: '/v1/about'
+    scrape_interval: 60s
+SIGNALBOTEOF
+        fi
+
+        # Grafana self-monitoring (if enabled)
+        if [[ "${GRAFANA_ENABLED:-${ENABLE_GRAFANA:-false}}" == "true" ]]; then
+            cat >> "${CONFIG_DIR}/prometheus/prometheus.yml" << GRAFANAEOF
+
+  # Grafana self-monitoring
+  - job_name: 'grafana'
+    static_configs:
+      - targets: ['${TENANT_PREFIX}-grafana:3000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+GRAFANAEOF
         fi
 
         # Caddy reverse proxy monitoring (if enabled)
@@ -2952,6 +3063,18 @@ prepare_data_dirs() {
             _oc_origin="https://openclaw.${BASE_DOMAIN}"
         fi
         if [[ ! -f "${_oc_json}" ]]; then
+            local _signal_section=""
+            if [[ "${SIGNALBOT_ENABLED:-false}" == "true" && -n "${SIGNAL_PHONE:-}" ]]; then
+                _signal_section=',
+  "channels": {
+    "signal": {
+      "enabled": true,
+      "account": "'"${SIGNAL_PHONE}"'",
+      "httpUrl": "http://'"${TENANT_PREFIX}"'-signalbot:9999",
+      "autoStart": false
+    }
+  }'
+            fi
             cat > "${_oc_json}" << OCEOF
 {
   "gateway": {
@@ -2962,7 +3085,7 @@ prepare_data_dirs() {
     "controlUi": {
       "allowedOrigins": ["${_oc_origin}", "*"]
     }
-  }
+  }${_signal_section}
 }
 OCEOF
             # openclaw image runs as node (uid 1000) — file must be readable by that uid
@@ -2980,7 +3103,130 @@ OCEOF
     [[ "${GRAFANA_ENABLED}"   == "true" ]] && mkdir -p "${DATA_DIR}/grafana"
     [[ "${PROMETHEUS_ENABLED}" == "true" ]] && mkdir -p "${DATA_DIR}/prometheus"
     [[ "${AUTHENTIK_ENABLED}" == "true" ]] && mkdir -p "${DATA_DIR}/authentik"
-    [[ "${SIGNALBOT_ENABLED}" == "true" ]] && mkdir -p "${DATA_DIR}/signalbot"
+    if [[ "${SIGNALBOT_ENABLED}" == "true" ]]; then
+        mkdir -p "${DATA_DIR}/signalbot"
+        # SSE proxy (sse-proxy.py): signal-cli 0.14.1 HTTP daemon never sends HTTP response
+        # headers on GET /api/v1/events until a message arrives — OpenClaw sees fetch failed.
+        # This proxy listens on PROXY_PORT (9999, internal Docker network) and immediately
+        # sends 200 + SSE headers, then polls signal-cli receive RPC every 3s.
+        cat > "${DATA_DIR}/signalbot/sse-proxy.py" << 'PYEOF'
+#!/usr/bin/env python3
+"""SSE proxy for OpenClaw: sends HTTP 200 + SSE headers immediately, polls signal-cli."""
+import http.server, json, time, urllib.request, urllib.error, urllib.parse, os
+
+SIGNAL_CLI_HTTP_PORT = int(os.environ.get("SIGNAL_CLI_HTTP_PORT", "9080"))
+PROXY_PORT           = int(os.environ.get("PROXY_PORT", "9999"))
+SIGNAL_ACCOUNT       = os.environ.get("SIGNAL_ACCOUNT", "")
+POLL_TIMEOUT         = 3
+KEEPALIVE_INTERVAL   = 20
+
+def call_rpc(method, params=None, timeout=10):
+    payload = {"jsonrpc": "2.0", "method": method, "id": 1}
+    if params: payload["params"] = params
+    req = urllib.request.Request(f"http://127.0.0.1:{SIGNAL_CLI_HTTP_PORT}/api/v1/rpc",
+        data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r: return json.loads(r.read())
+    except Exception as e: return {"error": str(e)}
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        if self.path.startswith("/api/v1/events"): self._sse()
+        else: self.send_response(404); self.end_headers()
+    def do_POST(self):
+        if self.path == "/api/v1/rpc": self._proxy()
+        else: self.send_response(404); self.end_headers()
+    def _sse(self):
+        self.send_response(200)
+        for h,v in [("Content-Type","text/event-stream"),("Cache-Control","no-cache"),
+                    ("Connection","keep-alive"),("X-Accel-Buffering","no")]: self.send_header(h,v)
+        self.end_headers()
+        p = urllib.parse.urlparse(self.path)
+        acct = urllib.parse.parse_qs(p.query).get("account", [SIGNAL_ACCOUNT])[0]
+        last_ka = time.time()
+        try:
+            self.wfile.write(b": connected\n\n"); self.wfile.flush()
+            while True:
+                if time.time() - last_ka >= KEEPALIVE_INTERVAL:
+                    self.wfile.write(b": keepalive\n\n"); self.wfile.flush(); last_ka = time.time()
+                for env in call_rpc("receive", {"timeout": POLL_TIMEOUT}, POLL_TIMEOUT+5).get("result", []):
+                    msg = ("data: " + json.dumps({"jsonrpc":"2.0","method":"receive",
+                        "params":{"envelope":env,"account":acct}}) + "\n\n").encode()
+                    self.wfile.write(msg); self.wfile.flush(); last_ka = time.time()
+        except (BrokenPipeError, ConnectionResetError): pass
+        except Exception: pass
+    def _proxy(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        req = urllib.request.Request(f"http://127.0.0.1:{SIGNAL_CLI_HTTP_PORT}/api/v1/rpc",
+            data=body, headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                d = r.read(); self.send_response(200); self.send_header("Content-Type","application/json"); self.end_headers(); self.wfile.write(d)
+        except urllib.error.HTTPError as e:
+            d = e.read(); self.send_response(e.code); self.send_header("Content-Type","application/json"); self.end_headers(); self.wfile.write(d)
+        except Exception as e:
+            self.send_response(503); self.send_header("Content-Type","application/json"); self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode())
+
+if __name__ == "__main__":
+    print(f"Waiting for signal-cli on :{SIGNAL_CLI_HTTP_PORT}...", flush=True)
+    for _ in range(60):
+        r = call_rpc("version", timeout=2)
+        if "result" in r or "error" in r: print("signal-cli ready", flush=True); break
+        time.sleep(2)
+    print(f"SSE proxy listening on 0.0.0.0:{PROXY_PORT}", flush=True)
+    http.server.ThreadingHTTPServer(("0.0.0.0", PROXY_PORT), Handler).serve_forever()
+PYEOF
+        # start.sh: orchestrates the three processes in startup order.
+        # 1. signal-cli daemon with dual interface: TCP (bbernhard) + HTTP (SSE proxy)
+        # 2. bbernhard REST API (json-rpc mode via jsonrpc2.yml) — QR code, register, send
+        # 3. Python SSE proxy — OpenClaw /api/v1/events + /api/v1/rpc forwarding
+        cat > "${DATA_DIR}/signalbot/start.sh" << SHEOF
+#!/bin/sh
+set -e
+SIGNAL_CLI_CONFIG_DIR="\${SIGNAL_CLI_CONFIG_DIR:-/home/.local/share/signal-cli}"
+SIGNAL_CLI_HTTP_PORT="\${SIGNAL_CLI_HTTP_PORT:-9080}"
+SIGNAL_CLI_TCP_PORT="\${SIGNAL_CLI_TCP_PORT:-6001}"
+
+# Write jsonrpc2.yml so bbernhard REST API connects to signal-cli via TCP
+cat > "\${SIGNAL_CLI_CONFIG_DIR}/jsonrpc2.yml" << EOF
+config:
+  <multi-account>:
+    tcp_port: \${SIGNAL_CLI_TCP_PORT}
+EOF
+
+# Start signal-cli daemon: TCP for bbernhard, HTTP for SSE proxy, manual receive for polling
+# -a is omitted when SIGNAL_PHONE is empty (QR-code linking flow) — signal-cli daemon
+# multi-account mode does not require an account at startup.
+if [ -n "\${SIGNAL_PHONE:-}" ]; then
+  signal-cli \
+    --config "\${SIGNAL_CLI_CONFIG_DIR}" \
+    -a "\${SIGNAL_PHONE}" \
+    daemon \
+    --tcp "127.0.0.1:\${SIGNAL_CLI_TCP_PORT}" \
+    --http "127.0.0.1:\${SIGNAL_CLI_HTTP_PORT}" \
+    --no-receive-stdout \
+    --receive-mode manual &
+else
+  signal-cli \
+    --config "\${SIGNAL_CLI_CONFIG_DIR}" \
+    daemon \
+    --tcp "127.0.0.1:\${SIGNAL_CLI_TCP_PORT}" \
+    --http "127.0.0.1:\${SIGNAL_CLI_HTTP_PORT}" \
+    --no-receive-stdout \
+    --receive-mode manual &
+fi
+
+# Start bbernhard REST API (auto-detects json-rpc mode from jsonrpc2.yml)
+# Provides: /v1/qrcodelink, /v1/register, /v1/verify, /v2/send, /v1/about
+signal-cli-rest-api -signal-cli-config="\${SIGNAL_CLI_CONFIG_DIR}" &
+
+# Start SSE proxy for OpenClaw — polls signal-cli HTTP for incoming messages
+exec python3 "\${SIGNAL_CLI_CONFIG_DIR}/sse-proxy.py"
+SHEOF
+        chmod +x "${DATA_DIR}/signalbot/start.sh"
+    fi
     [[ "${SEARXNG_ENABLED}" == "true" ]] && mkdir -p "${DATA_DIR}/searxng"
     [[ "${BIFROST_ENABLED}"   == "true" ]] && mkdir -p "${DATA_DIR}/bifrost"
     if [[ "${ENABLE_INGESTION:-false}" == "true" ]]; then
@@ -3238,6 +3484,16 @@ wait_for_all_health() {
     # Health check timeouts per service (README §6)
     if [[ "${POSTGRES_ENABLED}" == "true" ]]; then
         wait_for_health "${TENANT_PREFIX}-postgres" 60 || return 1
+        # Sync the Postgres password stored in pg_authid with whatever is in platform.conf.
+        # When the data directory is preserved across re-deploys, Postgres ignores the
+        # POSTGRES_PASSWORD env var and keeps the old stored hash. Any service that
+        # connects remotely (Zep, LiteLLM, Letta, N8N, …) will fail auth unless we
+        # reconcile here after startup.
+        log "Syncing Postgres password to match platform.conf..."
+        docker exec "${TENANT_PREFIX}-postgres" psql -U "${POSTGRES_USER}" -d postgres \
+            -c "ALTER USER \"${POSTGRES_USER}\" WITH PASSWORD '${POSTGRES_PASSWORD}';" \
+            2>&1 | grep -v "^$" || true
+        ok "Postgres password synced"
         # Create per-service dedicated databases — each postgres-backed service gets its own DB
         # to prevent Alembic/Django migration conflicts (e.g. Dify's 'messages' vs Zep watermill tables).
         log "Creating dedicated per-service databases..."
@@ -3345,7 +3601,27 @@ wait_for_all_health() {
                 fail "FATAL: MongoDB recovery failed — manual intervention required"
             fi
         else
-            ok "MongoDB is healthy and responsive"
+            # Sync MongoDB password — preserved data directories ignore MONGO_INITDB_ROOT_PASSWORD
+            # on restart (same issue as Postgres pgdata). Use a temporary --noauth instance to
+            # update the stored hash without knowing the old password.
+            if ! docker exec "${TENANT_PREFIX}-mongodb" mongosh \
+                -u librechat -p "${MONGO_PASSWORD}" admin \
+                --eval "db.adminCommand('ping')" >/dev/null 2>&1; then
+                log "MongoDB password drift detected — syncing via noauth restart..."
+                docker stop "${TENANT_PREFIX}-mongodb" 2>/dev/null || true
+                docker run --rm -d --name "${TENANT_PREFIX}-mongodb-sync" \
+                    -v "${DATA_DIR}/mongodb:/data/db" mongo:7 mongod --noauth --dbpath /data/db
+                sleep 8
+                docker exec "${TENANT_PREFIX}-mongodb-sync" mongosh admin \
+                    --eval "db.updateUser('librechat', {pwd: '${MONGO_PASSWORD}'})" \
+                    2>&1 | grep -v "^$" || true
+                docker stop "${TENANT_PREFIX}-mongodb-sync" 2>/dev/null || true
+                docker start "${TENANT_PREFIX}-mongodb"
+                wait_for_health "${TENANT_PREFIX}-mongodb" 60 || return 1
+                ok "MongoDB password synced"
+            else
+                ok "MongoDB is healthy and responsive"
+            fi
         fi
         
         wait_for_health "${TENANT_PREFIX}-librechat" 120 || return 1
@@ -4007,8 +4283,10 @@ show_post_deploy_dashboard() {
             else
                 _sig_url="http://127.0.0.1:${SIGNALBOT_PORT}"
             fi
-            _d_line "  Signalbot    ${_sig_url}/v1/about"
-            _d_line "  Signal QR    ${_sig_url}/v1/qrcodelink?device_name=signal-api  (open to pair phone)"
+            _d_line "  Signalbot    ${_sig_url}/v1/about  (bbernhard REST API)"
+            _d_line "  Signal QR    ${_sig_url}/v1/qrcodelink?device_name=signal-api"
+            _d_line "               → Open URL, scan QR with Signal phone app → Settings → Linked Devices"
+            _d_line "               → After pairing: OpenClaw Signal channel activates automatically"
         fi
         if [[ "${SEARXNG_ENABLED:-false}" == "true" ]]; then
             local _search_url
