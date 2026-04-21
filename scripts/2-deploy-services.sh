@@ -3081,8 +3081,8 @@ prepare_data_dirs() {
                     [[ -n "$_channels_json" ]] && _channels_json+=','$'\n'
                     _channels_json+='    "telegram": {
       "enabled": true,
-      "token": "'"${TELEGRAM_BOT_TOKEN}"'",
-      "autoStart": false
+      "botToken": "'"${TELEGRAM_BOT_TOKEN}"'",
+      "dmPolicy": "pairing"
     }'
                 fi
             fi
@@ -3094,8 +3094,11 @@ prepare_data_dirs() {
                     _channels_json+='    "discord": {
       "enabled": true,
       "token": "'"${DISCORD_BOT_TOKEN}"'",
-      "guildId": "'"${DISCORD_GUILD_ID}"'",
-      "autoStart": false
+      "guilds": {
+        "'"${DISCORD_GUILD_ID}"'": {
+          "requireMention": false
+        }
+      }
     }'
                 fi
             fi
