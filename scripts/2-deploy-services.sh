@@ -3054,27 +3054,60 @@ prepare_data_dirs() {
     if [[ "${OPENCLAW_ENABLED}" == "true" ]]; then
         # data + home dir (home is mounted at /home/node/.openclaw — where openclaw.json lives)
         mkdir -p "${DATA_DIR}/openclaw/data" "${DATA_DIR}/openclaw/home"
-        # Pre-seed openclaw.json with gateway token + CORS allowed origins.
-        # Written to the HOME mount so OpenClaw reads it on first boot instead of generating
-        # a random token.  File is only written if absent (idempotent).
+        # Pre-seed openclaw.json with gateway token + CORS allowed origins + channels.
         local _oc_json="${DATA_DIR}/openclaw/home/openclaw.json"
         local _oc_origin="*"
         if [[ "${CADDY_ENABLED:-false}" == "true" && -n "${BASE_DOMAIN:-}" ]]; then
             _oc_origin="https://openclaw.${BASE_DOMAIN}"
         fi
         if [[ ! -f "${_oc_json}" ]]; then
-            local _signal_section=""
-            if [[ "${SIGNALBOT_ENABLED:-false}" == "true" && -n "${SIGNAL_PHONE:-}" ]]; then
-                _signal_section=',
-  "channels": {
-    "signal": {
+            local _channels_json=""
+            
+            # Build Signal block
+            if echo "${OPENCLAW_CHANNELS:-signal}" | grep -qE "signal|all"; then
+                if [[ "${SIGNALBOT_ENABLED:-false}" == "true" && -n "${SIGNAL_PHONE:-}" ]]; then
+                    _channels_json+='    "signal": {
       "enabled": true,
       "account": "'"${SIGNAL_PHONE}"'",
       "httpUrl": "http://'"${TENANT_PREFIX}"'-signalbot:9999",
       "autoStart": false
-    }
+    }'
+                fi
+            fi
+
+            # Build Telegram block
+            if echo "${OPENCLAW_CHANNELS:-}" | grep -qE "telegram|all"; then
+                if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then
+                    [[ -n "$_channels_json" ]] && _channels_json+=','$'\n'
+                    _channels_json+='    "telegram": {
+      "enabled": true,
+      "token": "'"${TELEGRAM_BOT_TOKEN}"'",
+      "autoStart": false
+    }'
+                fi
+            fi
+
+            # Build Discord block
+            if echo "${OPENCLAW_CHANNELS:-}" | grep -qE "discord|all"; then
+                if [[ -n "${DISCORD_BOT_TOKEN:-}" && -n "${DISCORD_GUILD_ID:-}" ]]; then
+                    [[ -n "$_channels_json" ]] && _channels_json+=','$'\n'
+                    _channels_json+='    "discord": {
+      "enabled": true,
+      "token": "'"${DISCORD_BOT_TOKEN}"'",
+      "guildId": "'"${DISCORD_GUILD_ID}"'",
+      "autoStart": false
+    }'
+                fi
+            fi
+
+            local _channels_section=""
+            if [[ -n "$_channels_json" ]]; then
+                _channels_section=',
+  "channels": {
+'"$_channels_json"'
   }'
             fi
+
             cat > "${_oc_json}" << OCEOF
 {
   "gateway": {
@@ -3084,8 +3117,9 @@ prepare_data_dirs() {
     },
     "controlUi": {
       "allowedOrigins": ["${_oc_origin}", "*"]
-    }
-  }${_signal_section}
+    },
+    "trustedProxies": ["0.0.0.0/0"]
+  }${_channels_section}
 }
 OCEOF
             # openclaw image runs as node (uid 1000) — file must be readable by that uid
@@ -3094,6 +3128,31 @@ OCEOF
         # openclaw container runs as node (uid 1000), not PUID — chown accordingly
         docker run --rm -v "${DATA_DIR}/openclaw/home:/target" alpine:latest \
             chown -R 1000:1000 /target 2>/dev/null || true
+
+        # TASK 2: Auto-approve pending pairing requests if they exist
+        local _pending_json="${DATA_DIR}/openclaw/home/devices/pending.json"
+        local _paired_json="${DATA_DIR}/openclaw/home/devices/paired.json"
+        if [[ -f "${_pending_json}" ]]; then
+            log "Checking for pending OpenClaw pairing requests..."
+            # Use python3 to move requests from pending to paired (requires python3 on host)
+            python3 - "${_pending_json}" "${_paired_json}" <<'PYEOF'
+import json, sys, time, os
+pending_path, paired_path = sys.argv[1], sys.argv[2]
+try:
+    with open(pending_path, 'r') as f: pending = json.load(f)
+    if not pending: sys.exit(0)
+    print(f"  Found {len(pending)} pending pairing requests — auto-approving...")
+    if os.path.exists(paired_path):
+        with open(paired_path, 'r') as f: paired = json.load(f)
+    else: paired = {}
+    now = int(time.time() * 1000)
+    for rid, r in pending.items():
+        paired[rid] = {**r, 'approved': True, 'approvedTs': now}
+    with open(paired_path, 'w') as f: json.dump(paired, f, indent=2)
+    with open(pending_path, 'w') as f: json.dump({}, f, indent=2)
+except Exception as e: print(f"  ⚠️ Failed to auto-approve: {e}")
+PYEOF
+        fi
     fi
     [[ "${QDRANT_ENABLED}"    == "true" ]] && mkdir -p "${DATA_DIR}/qdrant"
     [[ "${WEAVIATE_ENABLED}"  == "true" ]] && mkdir -p "${DATA_DIR}/weaviate"

@@ -371,6 +371,8 @@
 - Dynamic internal port: `OPENCLAW_PORT` env var tells OpenClaw which port to bind; port mapping uses same port on both sides
 - Config directory mounted at `/.openclaw` (not just `/app/data`)
 - Proxy routes to `${TENANT_PREFIX}-openclaw:${OPENCLAW_PORT}`
+- **Multi-channel support**: Bridge AI chat to Signal, Telegram, and Discord.
+- **Pairing Approval**: Client devices auto-approved during deploy (Script 2) or manually managed via Script 3 (`--openclaw-pairs`).
 - Service: `openclaw`
 
 ---
@@ -647,10 +649,10 @@
 
 ---
 
-### Feature 9.1 — Signal Messenger Integration
+### Feature 9.1 — Messaging Integration (Signal, Telegram, Discord)
 
 **As an** operator,  
-**I want** to receive platform alerts via Signal,  
+**I want** to receive platform alerts and interact with AI via multiple messaging channels,  
 **so that** I am notified of critical events even when not actively monitoring.
 
 **Acceptance criteria:**
@@ -658,11 +660,12 @@
 - REST API available at `/v1/` for sending messages
 - Three-process architecture: signal-cli daemon (TCP 6001 + HTTP 9080) + bbernhard REST API (port 8080) + Python SSE proxy (port 9999)
 - QR code registration at `signal.<domain>/v1/qrcodelink` OR SMS via Script 2 auto-registration (`SIGNAL_REGISTRATION_METHOD=sms`)
-- `openclaw.json` seeded with `channels.signal` pointing to port 9999 (SSE proxy); `autoStart: false` required (OpenClaw spawns signal-cli locally with `true` → ENOENT)
+- **Multi-Channel**: Telegram and Discord bot tokens collected in Script 1 and seeded to OpenClaw.
+- `openclaw.json` seeded with `channels` block pointing to port 9999 (SSE proxy) for Signal, plus Telegram and Discord configs.
 - N8N workflows can trigger Signalbot via HTTP request node
 - Healthcheck at `/v1/about` (not `/`)
 - `start_period: 90s` (three-process startup takes ~30s)
-- Service: `signalbot`
+- Services: `signalbot`, `openclaw`
 
 ---
 

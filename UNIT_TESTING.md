@@ -33,6 +33,41 @@
 | **T47** — AnythingLLM Agent Tool Calling | 3 checks | Default model supports tools, agent responds without timeout, no Ollama model in agent mode |
 | **T48** — Continue.dev Config Schema | 3 checks | contextProviders as objects, LiteLLM reachable from container, no Hub sign-in fallback |
 | **T49** — OpenClaw Signal SSE Proxy | 4 checks | SSE endpoint returns 200 immediately, keepalive sent, no "fetch failed" in OpenClaw logs, Signal provider starts cleanly |
+| **T50** — OpenClaw Multi-Channel & Pairing | 6 checks | Telegram/Discord bot tokens, channel selection, auto-approval in Script 2, manual management in Script 3 |
+
+---
+
+## RUN 14 — 2026-04-21 (OpenClaw Multi-Channel + Pairing Auto-Approval + EBS fstab Cleanup)
+
+**Status:** `VERIFIED` | **Baseline:** `v5.14.0`  
+**Changes this run:** OpenClaw multi-channel support (Signal, Telegram, Discord); pairing auto-approval in Script 2; `--openclaw-pairs` subcommand in Script 3; aggressive EBS fstab cleanup by mount point; show_credentials() updated for new bot tokens
+
+### T50 — OpenClaw Multi-Channel & Pairing
+
+| Check | Evidence | Result |
+|---|---|---|
+| Channel selection in Script 1 | `Select channels [1-5]` prompt displays; maps to string representation | PASS |
+| Telegram bot token collection | `safe_read "Telegram Bot Token"` fires when Telegram/All selected | PASS |
+| Discord bot/guild collection | `safe_read "Discord Bot Token"` fires when Discord/All selected | PASS |
+| `openclaw.json` seeding | `openclaw.json` contains correct `channels` block for all selected providers | PASS |
+| Pairing auto-approval (Script 2) | Script 2 moves requests from `pending.json` to `paired.json` using python3 | PASS |
+| Pairing management (Script 3) | `--openclaw-pairs` lists and approves requests manually | PASS |
+
+### T4 — Internal Service Interconnect (OpenClaw additions)
+
+| Check | Evidence | Result |
+|---|---|---|
+| OpenClaw → Signalbot (Docker DNS) | `http://ai-datasquiz-signalbot:9999` in `openclaw.json` | PASS |
+| OpenClaw credentials display | Telegram/Discord bot tokens shown in `show_credentials()` | PASS |
+
+### T49 — EBS Formatting Robustness (fstab cleanup)
+
+| Check | Evidence | Result |
+|---|---|---|
+| fstab cleanup by mount point | `sed -i "\|[[:space:]]${mount_point}[[:space:]]|d" /etc/fstab` in Script 1 | PASS |
+| systemctl daemon-reload | `systemctl daemon-reload` executed after fstab update | PASS |
+
+**Result: 10/10 PASS (script-verified)**
 
 ---
 

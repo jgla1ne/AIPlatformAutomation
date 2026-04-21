@@ -529,7 +529,7 @@ Port-allocations file is sourced after platform.conf so any Script 2 conflict-re
 | LiteLLM | URL, master key, UI password |
 | OpenWebUI | URL (register on first visit) |
 | LibreChat | URL (register on first visit) |
-| OpenClaw | URL, WSS gateway URL, gateway token |
+| OpenClaw | URL, WSS gateway URL, gateway token, channel bot tokens (Telegram/Discord) |
 | AnythingLLM | URL, JWT secret |
 | N8N | URL, encryption key |
 | Flowise | URL, username, password |
@@ -611,7 +611,7 @@ URL_ROUTING_MODE=port (or no proxy):
 | | Bifrost | `bifrost` | Optional alternative LLM gateway |
 | **Web UIs** | OpenWebUI | `ghcr.io/open-webui/open-webui:main` | Primary chat UI |
 | | AnythingLLM | `mintplexlabs/anythingllm` | RAG-first UI |
-| | OpenClaw | `alpine/openclaw:latest` | Dynamic internal port via `OPENCLAW_PORT` env var |
+| | OpenClaw | `alpine/openclaw:latest` | Dynamic internal port via `OPENCLAW_PORT` env var; supports Signal, Telegram, and Discord channels |
 | | LibreChat | `ghcr.io/danny-avila/librechat:latest` | Requires MongoDB (co-deployed); LLMs via LiteLLM |
 | | LibreChat RAG API | `registry.librechat.ai/danny-avila/librechat-rag-api-dev-lite:latest` | Document RAG; embeddings via LiteLLM, vectors via pgvector |
 | **Vector DB** | Qdrant | `qdrant/qdrant` | Fast ANN search |
@@ -1450,3 +1450,20 @@ curl -s -X POST "http://127.0.0.1:${SIGNALBOT_PORT}/v1/register/+<number>/verify
 ---
 
 *Version: 5.13.0 | Last Updated: 2026-04-21 | Architecture: 4 scripts, 26 services (Dify 3-container stack, SearXNG, rclone), single-tenant per EBS volume | Providers: Ollama, Groq, OpenRouter, Mammouth AI, Anthropic, Google, OpenAI | URL_ROUTING_MODE: subdomain/port/path | Per-service PostgreSQL isolation (6 dedicated DBs) | AnythingLLM: native litellm provider (LLM + embedding + Qdrant), cloud model default for agent tool calling | Postgres + MongoDB password sync on redeploy | Signalbot volume mount corrected | Continue.dev uses Docker DNS, contextProviders as objects | LibreChat fixed (MongoDB auth)*
+### OpenClaw Device Pairing & Multi-Channel Support
+
+OpenClaw requires client devices (mobile/desktop) to be paired with the gateway.
+
+**Pairing Process:**
+1. Connect via OpenClaw UI or app.
+2. The client will request pairing.
+3. **Auto-Approval**: Script 2 automatically approves all pending pairing requests during deployment.
+4. **Manual Approval**: Run `bash scripts/3-configure-services.sh <tenant_id> --openclaw-pairs` to list and approve requests manually.
+
+**Multi-Channel Configuration:**
+OpenClaw can bridge multiple communication channels:
+- **Signal**: Requires `ENABLE_SIGNALBOT=true` and a registered phone number.
+- **Telegram**: Requires a Telegram Bot Token.
+- **Discord**: Requires a Discord Bot Token and Guild ID.
+
+Selection is performed during Script 1's setup wizard.

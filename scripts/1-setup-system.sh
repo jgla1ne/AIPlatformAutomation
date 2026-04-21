@@ -606,6 +606,8 @@ format_and_mount_ebs() {
             fi
             # Also remove any raw device-path entry (e.g. /dev/nvme1n1 /mnt ...)
             sed -i "\|^${device}[[:space:]]|d" /etc/fstab
+            # And remove any entry for this specific mount point (to be ultra-safe)
+            sed -i "\|[[:space:]]${mount_point}[[:space:]]|d" /etc/fstab
             # Tell systemd to drop any mount units derived from the removed fstab entries
             systemctl daemon-reload 2>/dev/null || true
 
@@ -1105,6 +1107,32 @@ configure_service_credentials() {
         else
             OPENCLAW_PASSWORD="${OPENCLAW_PASSWORD:-$(openssl rand -base64 18 | tr -d '=+/' | cut -c1-16)}"
             echo "  ✅ OpenClaw gateway token: ${OPENCLAW_PASSWORD} (auto-generated)"
+        fi
+
+        echo ""
+        echo "  OpenClaw communication channels:"
+        echo "  1) Signal only"
+        echo "  2) Telegram only"
+        echo "  3) Discord only"
+        echo "  4) Web only (no messaging channel)"
+        echo "  5) All channels"
+        safe_read "Select channels [1-5]" "1" "OPENCLAW_CHANNELS"
+
+        # Map choice to string representation
+        case "${OPENCLAW_CHANNELS}" in
+            1) OPENCLAW_CHANNELS="signal" ;;
+            2) OPENCLAW_CHANNELS="telegram" ;;
+            3) OPENCLAW_CHANNELS="discord" ;;
+            4) OPENCLAW_CHANNELS="web" ;;
+            5) OPENCLAW_CHANNELS="all" ;;
+        esac
+
+        if echo "${OPENCLAW_CHANNELS}" | grep -qE "telegram|all"; then
+            safe_read "Telegram Bot Token" "" "TELEGRAM_BOT_TOKEN"
+        fi
+        if echo "${OPENCLAW_CHANNELS}" | grep -qE "discord|all"; then
+            safe_read "Discord Bot Token" "" "DISCORD_BOT_TOKEN"
+            safe_read "Discord Guild ID" "" "DISCORD_GUILD_ID"
         fi
         echo ""
     fi
@@ -2534,6 +2562,11 @@ ENABLE_SIGNALBOT="${ENABLE_SIGNALBOT:-false}"
 SIGNAL_PHONE="${SIGNAL_PHONE:-}"
 SIGNAL_RECIPIENT="${SIGNAL_RECIPIENT:-}"
 SIGNAL_REGISTRATION_METHOD="${SIGNAL_REGISTRATION_METHOD:-qr}"
+
+OPENCLAW_CHANNELS="${OPENCLAW_CHANNELS:-signal}"
+TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
+DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN:-}"
+DISCORD_GUILD_ID="${DISCORD_GUILD_ID:-}"
 
 ENABLE_SEARXNG="${ENABLE_SEARXNG:-false}"
 SEARXNG_PORT="${SEARXNG_PORT:-8888}"

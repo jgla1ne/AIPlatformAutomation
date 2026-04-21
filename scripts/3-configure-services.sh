@@ -617,67 +617,68 @@ configure_librechat() {
 }
 
 openclaw_manage_pairs() {
-    local devices_dir="${DATA_DIR}/openclaw/home/devices"
-    local pending_file="${devices_dir}/pending.json"
-    local paired_file="${devices_dir}/paired.json"
-
-    if [[ ! -f "$pending_file" ]]; then
-        log "No OpenClaw devices directory found at ${devices_dir}"
-        return 0
-    fi
+    local container="${TENANT_PREFIX}-openclaw"
+    local pending_path="/home/node/.openclaw/devices/pending.json"
+    local paired_path="/home/node/.openclaw/devices/paired.json"
 
     local pending_count
-    pending_count=$(python3 -c "import json; d=json.load(open('${pending_file}')); print(len(d))" 2>/dev/null || echo "0")
+    pending_count=$(docker exec "$container" python3 -c \
+        "import json; print(len(json.load(open('${pending_path}'))))" 2>/dev/null || echo "0")
 
     if [[ "$pending_count" == "0" ]]; then
         echo "No pending OpenClaw pairing requests."
         local paired_count
-        paired_count=$(python3 -c "import json; d=json.load(open('${paired_file}')); print(len(d))" 2>/dev/null || echo "0")
+        paired_count=$(docker exec "$container" python3 -c \
+            "import json; print(len(json.load(open('${paired_path}'))))" 2>/dev/null || echo "0")
         echo "Currently paired devices: ${paired_count}"
         return 0
     fi
 
     echo ""
     echo "Pending OpenClaw pairing requests (${pending_count}):"
-    python3 -c "
+    docker exec "$container" python3 -c "
 import json
-with open('${pending_file}') as f: pending=json.load(f)
+with open('${pending_path}') as f: pending=json.load(f)
 for rid,r in pending.items():
-    print(f\"  ID: {rid}\")
-    print(f\"  Platform: {r.get('platform','?')}  Client: {r.get('clientId','?')}  Role: {r.get('role','?')}\")
+    print(f'  ID: {rid}')
+    print(f'  Platform: {r.get(\"platform\",\"?\")}  Client: {r.get(\"clientId\",\"?\")}  Role: {r.get(\"role\",\"?\")}')
     print()
 "
-    echo "Options: [a]pprove all  [d]eny all  [q]uit"
-    local choice=""
+    local choice="a"
     if [[ -t 0 ]]; then
+        echo "Options: [a]pprove all  [d]eny all  [q]uit"
         read -r -p "Choice [a/d/q]: " choice
     else
-        choice="a"
         echo "Non-interactive mode — auto-approving all pending requests"
     fi
 
     case "$choice" in
         a|A)
-            python3 -c "
-import json, time
-pending_path='${pending_file}'
-paired_path='${paired_file}'
+            docker exec "$container" python3 -c "
+import json, time, os
+pending_path='${pending_path}'; paired_path='${paired_path}'; conf_path='/home/node/.openclaw/openclaw.json'
+if os.path.exists(conf_path):
+    with open(conf_path) as f: conf=json.load(f)
+    if 'gateway' not in conf: conf['gateway']={}
+    conf['gateway']['trustedProxies']=['0.0.0.0/0']
+    with open(conf_path,'w') as f: json.dump(conf,f,indent=2)
 with open(pending_path) as f: pending=json.load(f)
 try:
     with open(paired_path) as f: paired=json.load(f)
 except: paired={}
 now=int(time.time()*1000)
 for rid,r in pending.items():
-    paired[rid]={**r,'approved':True,'approvedTs':now}
+    paired[rid]={**r,'approved':True,'status':'approved','approvedTs':now}
     print(f'Approved: {rid}')
 with open(paired_path,'w') as f: json.dump(paired,f,indent=2)
 with open(pending_path,'w') as f: json.dump({},f,indent=2)
 print('Done.')
 "
-            docker restart "${TENANT_PREFIX}-openclaw" >/dev/null 2>&1 && ok "OpenClaw restarted — paired devices active"
+            warn "Approved! Try to connect in the UI now. If it still says 'pairing required', run: docker restart $container"
             ;;
         d|D)
-            python3 -c "import json; open('${pending_file}','w').write('{}')"
+            docker exec "$container" python3 -c \
+                "open('${pending_path}','w').write('{}')"
             ok "Pending requests cleared (denied)"
             ;;
         *)
@@ -1396,6 +1397,13 @@ show_credentials() {
             fi
             echo "    Gateway URL  ${_oc_gateway_proto}://${_oc_gateway_host}"
             echo "    Token        ${OPENCLAW_PASSWORD:-<not set — check platform.conf>}"
+            if echo "${OPENCLAW_CHANNELS:-}" | grep -qE "telegram|all"; then
+                echo "    Telegram Bot ${TELEGRAM_BOT_TOKEN:-<not set>}"
+            fi
+            if echo "${OPENCLAW_CHANNELS:-}" | grep -qE "discord|all"; then
+                echo "    Discord Bot  ${DISCORD_BOT_TOKEN:-<not set>}"
+                echo "    Discord GID  ${DISCORD_GUILD_ID:-<not set>}"
+            fi
         fi
         if [[ "${ANYTHINGLLM_ENABLED:-false}" == "true" ]]; then
             echo "  AnythingLLM  $(_url anythingllm ${ANYTHINGLLM_PORT:-3001})"
