@@ -656,10 +656,12 @@
 **Acceptance criteria:**
 - Signalbot deployed and healthy at configured port
 - REST API available at `/v1/` for sending messages
-- Phone number pairing documented in README and Script 3 instructions
+- Three-process architecture: signal-cli daemon (TCP 6001 + HTTP 9080) + bbernhard REST API (port 8080) + Python SSE proxy (port 9999)
+- QR code registration at `signal.<domain>/v1/qrcodelink` OR SMS via Script 2 auto-registration (`SIGNAL_REGISTRATION_METHOD=sms`)
+- `openclaw.json` seeded with `channels.signal` pointing to port 9999 (SSE proxy); `autoStart: false` required (OpenClaw spawns signal-cli locally with `true` → ENOENT)
 - N8N workflows can trigger Signalbot via HTTP request node
 - Healthcheck at `/v1/about` (not `/`)
-- `start_period: 60s` (signal-cli daemon takes ~26s to start)
+- `start_period: 90s` (three-process startup takes ~30s)
 - Service: `signalbot`
 
 ---
@@ -821,6 +823,13 @@ Epic 13 — Hardware       GPU/CPU detection, deployment guidance, model recomme
 *Version: 2.6.0 | Last Updated: 2026-04-20*
 
 ## IMPLEMENTATION STATUS UPDATES
+
+### Completed Features (2026-04-21 — Signal SSE Proxy, SMS Registration, autoStart Fix)
+- **Three-process signalbot architecture**: signal-cli 0.14.1 HTTP daemon never sends SSE headers until a message arrives. Fix: Python SSE proxy (`sse-proxy.py`) on port 9999 sends `200 OK` + headers immediately, polls `receive` RPC every 3s. bbernhard REST API stays on port 8080 for QR code and sending. `openclaw.json httpUrl` points to 9999.
+- **`autoStart: false` is required**: With `true`, OpenClaw tries to spawn `signal-cli` locally (`ENOENT` — not installed in OpenClaw container). With `false` + `httpUrl`, OpenClaw connects to the external signalbot container cleanly and the channel auto-starts on gateway boot.
+- **SMS registration in Script 1+2**: Script 1 now prompts for `SIGNAL_REGISTRATION_METHOD` (qr/sms). SMS mode has Script 2 auto-call `/v1/register` after signalbot starts, then interactively prompt for the 6-digit verification code.
+- **Signal account verified via QR**: `+61410594574` linked as secondary device via QR scan; signalbot reports `["+61410594574"]` on `/v1/accounts`.
+- **EBS lazy-unmount fix**: Script 0 stops Docker + `blockdev --flushbufs` + `sleep 3` before unmount. Script 1 `wipefs -a` + `dd` zero GPT headers + `udevadm settle` before `mkfs.ext4` to clear udev/kernel references.
 
 ### Completed Features (2026-04-21 — LibreChat, AnythingLLM Agent, Continue.dev Schema)
 - **MongoDB password sync on redeploy**: `wait_for_all_health()` now tests MongoDB auth after startup; if it fails (preserved `/data/db` with stale hash), a temporary `--noauth` mongod instance resets the password — mirrors the Postgres `ALTER USER` pattern. LibreChat was returning 502 on every redeploy with changed `MONGO_PASSWORD`.

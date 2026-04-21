@@ -609,9 +609,20 @@ format_and_mount_ebs() {
             # Tell systemd to drop any mount units derived from the removed fstab entries
             systemctl daemon-reload 2>/dev/null || true
 
-            # Wipe all filesystem signatures so mke2fs sees a clean device
-            echo "     Wiping existing filesystem signatures..."
-            wipefs -a "$device"
+            # Wipe signatures + zero partition table headers + settle udev
+            # blockdev --rereadpt fails with BLKRRPART when udev holds the device;
+            # zeroing the GPT header/footer forces the kernel to release the reference.
+            echo "     Wiping filesystem signatures..."
+            wipefs -a "$device" 2>/dev/null || true
+            sync; sleep 1
+            dev_sectors=$(blockdev --getsz "$device" 2>/dev/null || true)
+            dd if=/dev/zero of="$device" bs=512 count=34 2>/dev/null || true
+            if [[ -n "$dev_sectors" ]]; then
+                dd if=/dev/zero of="$device" bs=512 seek=$((dev_sectors - 34)) count=34 2>/dev/null || true
+            fi
+            udevadm trigger --subsystem-match=block 2>/dev/null || true
+            udevadm settle 2>/dev/null || true
+            sync; sleep 2
 
             # Format
             echo "     Formatting ${device} as ext4..."
@@ -1999,12 +2010,19 @@ configure_signalbot() {
         safe_read "Signal phone number (E.164 format, e.g., +15551234567)" "" "SIGNAL_PHONE" "^\+[1-9][0-9]{1,14}$"
         safe_read "Signal recipient number (E.164 format)" "" "SIGNAL_RECIPIENT" "^\+[1-9][0-9]{1,14}$"
         safe_read "Signal bot port" "8080" "SIGNALBOT_PORT" "^[0-9]+$"
-        
+
+        echo ""
+        echo "  Signal Registration Method:"
+        echo "    qr  — Scan QR code at https://signal.<domain>/v1/qrcodelink after deploy (recommended)"
+        echo "    sms — Receive SMS verification code to $SIGNAL_PHONE during Script 2 deploy"
+        safe_read "Registration method [qr/sms]" "qr" "SIGNAL_REGISTRATION_METHOD" "^(qr|sms)$"
+
         echo ""
         echo "  ✅ Signal Bot Configuration:"
         echo "    Phone Number: $SIGNAL_PHONE"
         echo "    Recipient: $SIGNAL_RECIPIENT"
         echo "    Port: $SIGNALBOT_PORT"
+        echo "    Registration: $SIGNAL_REGISTRATION_METHOD"
     else
         echo "  ℹ️  Signal bot disabled"
     fi
@@ -2515,6 +2533,7 @@ ENABLE_AUTHENTIK="${ENABLE_AUTHENTIK:-false}"
 ENABLE_SIGNALBOT="${ENABLE_SIGNALBOT:-false}"
 SIGNAL_PHONE="${SIGNAL_PHONE:-}"
 SIGNAL_RECIPIENT="${SIGNAL_RECIPIENT:-}"
+SIGNAL_REGISTRATION_METHOD="${SIGNAL_REGISTRATION_METHOD:-qr}"
 
 ENABLE_SEARXNG="${ENABLE_SEARXNG:-false}"
 SEARXNG_PORT="${SEARXNG_PORT:-8888}"
@@ -3614,6 +3633,7 @@ GRAFANA_ADMIN_USER="${GRAFANA_ADMIN_USER:-admin}"
 # SIGNAL BOT
 SIGNAL_PHONE="${SIGNAL_PHONE:-}"
 SIGNAL_RECIPIENT="${SIGNAL_RECIPIENT:-}"
+SIGNAL_REGISTRATION_METHOD="${SIGNAL_REGISTRATION_METHOD:-qr}"
 
 # GOOGLE DRIVE
 ENABLE_GDRIVE="${ENABLE_GDRIVE:-false}"

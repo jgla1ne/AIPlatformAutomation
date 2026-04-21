@@ -36,32 +36,36 @@
 
 ---
 
-## RUN 13 — 2026-04-21 (OpenClaw Signal SSE Proxy + Three-Process Signalbot Architecture)
+## RUN 13 — 2026-04-21 (OpenClaw Signal SSE Proxy + Three-Process Signalbot Architecture + SMS Registration)
 
-**Status:** `PENDING LIVE VERIFICATION` | **Baseline:** `v5.13.0`  
-**Changes this run:** Three-process signalbot architecture (signal-cli dual TCP+HTTP + bbernhard REST API + Python SSE proxy); openclaw.json seeded with `channels.signal` pointing to port 9999; Script 2 entrypoint changed to `start.sh`; QR code URL restored at `signal.domain.net/v1/qrcodelink`
+**Status:** `LIVE VERIFIED` | **Baseline:** `v5.13.0`  
+**Changes this run:** Three-process signalbot (signal-cli dual TCP+HTTP + bbernhard + SSE proxy on 9999); openclaw.json `channels.signal` seeded with `autoStart: false`; SMS registration option in Script 1+2; QR code URL restored; EBS lazy-unmount fix in Script 0+1
 
 ### T49 — OpenClaw Signal SSE Proxy (Three-Process Architecture)
 
-| Check | Command | Expected |
+| Check | Evidence | Result |
 |---|---|---|
-| bbernhard REST API healthy (port 8080) | `curl -sf http://127.0.0.1:${SIGNALBOT_PORT}/v1/about` | JSON with `versions` key |
-| QR code endpoint reachable | `curl -sf "http://127.0.0.1:${SIGNALBOT_PORT}/v1/qrcodelink?device_name=signal-api"` | PNG image or redirect |
-| SSE proxy returns 200 immediately (port 9999) | Inside container: `curl -v http://localhost:9999/api/v1/events` | `HTTP/1.0 200 OK` + `text/event-stream` within 1s |
-| `: connected` keepalive sent on SSE | Above curl | Receives `: connected\n\n` before any Signal message |
-| OpenClaw connects to port 9999 | `docker logs <prefix>-openclaw \| grep signal` | `[signal] [default] starting provider (http://...-signalbot:9999)` — no "fetch failed" |
-| Signal provider stable | Monitor logs for 60s | No reconnect cycle |
+| bbernhard healthy (port 8080) | `GET /v1/about → 200` every 30s in signalbot logs | PASS |
+| QR code endpoint reachable | `GET /v1/qrcodelink?device_name=signal-api → 200` (9.5s — waited for scan) | PASS |
+| Signal account registered after QR scan | `curl http://signalbot:8080/v1/accounts → ["+61410594574"]` | PASS |
+| SSE proxy returns 200 immediately | Inside container: `curl http://localhost:9999/api/v1/events` → `: connected` | PASS |
+| OpenClaw connects to port 9999 | Log: `[signal] [default] starting provider (http://ai-datasquiz-signalbot:9999)` — no SSE errors | PASS |
+| `autoStart: false` prevents spawn error | With `autoStart: true` OpenClaw crashes with `spawn signal-cli ENOENT`; `false` connects cleanly | PASS |
 
-**Root cause:** signal-cli 0.14.1 HTTP daemon never sends HTTP response headers on `GET /api/v1/events` until a Signal message arrives — OpenClaw sees `TypeError: fetch failed`. bbernhard REST API (`/v1/receive`) is WebSocket-only; OpenClaw's `GET /api/v1/events` gets 404.
+**Root cause (SSE):** signal-cli 0.14.1 never sends HTTP headers on `GET /api/v1/events` until a message arrives. SSE proxy sends `200 OK` + headers immediately, polls `receive` RPC every 3s.
 
-**Architecture fix (three-process):**
-- **signal-cli daemon** — `--tcp 127.0.0.1:6001` (bbernhard json-rpc) + `--http 127.0.0.1:9080` (SSE proxy polls) + `--receive-mode manual`
-- **signal-cli-rest-api** (bbernhard) — port 8080; `jsonrpc2.yml` connects it to signal-cli TCP. Provides `/v1/qrcodelink`, `/v2/send`, `/v1/about`
-- **sse-proxy.py** — port 9999 (internal Docker network only); sends `200 OK` + SSE headers immediately; polls `receive` JSON-RPC every 3s; `openclaw.json httpUrl` points here
+**Root cause (autoStart):** With `autoStart: true`, OpenClaw attempts to spawn `signal-cli` as a local binary inside the OpenClaw container — `ENOENT` because signal-cli is not installed there. With `autoStart: false` + `httpUrl`, OpenClaw connects to the external signalbot container at port 9999 without spawning anything locally. The channel still starts automatically on gateway boot.
 
-**EBS format fix (same run):** Script 0 now captures block device before unmount, calls `blockdev --flushbufs` + `sleep 3` after `drop_caches`. Script 1 retries `mkfs.ext4 -F -F` up to 3 times with 3s back-off to handle NVMe superblock release delay.
+**Three-process architecture:**
+- `signal-cli daemon --tcp 127.0.0.1:6001 --http 127.0.0.1:9080 --receive-mode manual`
+- `signal-cli-rest-api` (bbernhard) — port 8080; `jsonrpc2.yml` → TCP 6001. QR code, register, verify, send
+- `sse-proxy.py` — port 9999 internal; sends headers immediately; polls `receive` RPC; `openclaw.json httpUrl` here
 
-**Result: PENDING — deploy Script 1 → Script 2 to verify**
+**Registration options (Script 1 `SIGNAL_REGISTRATION_METHOD`):**
+- `qr` (default): scan QR at `signal.<domain>/v1/qrcodelink` after deploy — links signal-cli as secondary device
+- `sms`: Script 2 auto-calls `/v1/register` after signalbot starts, prompts for 6-digit SMS code
+
+**Result: 6/6 PASS (live-verified)**
 
 ---
 

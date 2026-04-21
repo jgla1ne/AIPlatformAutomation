@@ -3759,6 +3759,29 @@ wait_for_all_health() {
     
     if [[ "${SIGNALBOT_ENABLED}" == "true" ]]; then
         wait_for_health "${TENANT_PREFIX}-signalbot" 90 || return 1
+
+        # SMS registration: if method=sms, trigger register → prompt for verification code
+        if [[ "${SIGNAL_REGISTRATION_METHOD:-qr}" == "sms" ]] && [[ -n "${SIGNAL_PHONE:-}" ]]; then
+            local sig_api="http://127.0.0.1:${SIGNALBOT_PORT:-8080}"
+            log "Triggering Signal SMS registration for ${SIGNAL_PHONE}..."
+            curl -sf -X POST "${sig_api}/v1/register/${SIGNAL_PHONE}" \
+                -H "Content-Type: application/json" -d '{"use_voice":false}' >/dev/null 2>&1 \
+                && log "SMS sent to ${SIGNAL_PHONE}" || warn "SMS registration request failed — verify manually"
+
+            if [[ -t 0 ]]; then
+                local verify_code=""
+                safe_read "Enter SMS verification code received on ${SIGNAL_PHONE}" "" "verify_code" "^[0-9]{6}$"
+                if [[ -n "$verify_code" ]]; then
+                    curl -sf -X POST "${sig_api}/v1/verify/${SIGNAL_PHONE}" \
+                        -H "Content-Type: application/json" \
+                        -d "{\"token\":\"${verify_code}\"}" >/dev/null 2>&1 \
+                        && ok "Signal account verified — registration complete" \
+                        || warn "Verification failed — check the code and retry via: curl -X POST ${sig_api}/v1/verify/${SIGNAL_PHONE} -d '{\"token\":\"<code>\"}'"
+                fi
+            else
+                log "Non-interactive mode: verify manually with: curl -X POST ${sig_api}/v1/verify/${SIGNAL_PHONE} -H 'Content-Type: application/json' -d '{\"token\":\"<code>\"}'"
+            fi
+        fi
     fi
     
     if [[ "${SEARXNG_ENABLED}" == "true" ]]; then

@@ -925,23 +925,26 @@ The signalbot container runs three processes orchestrated by `start.sh` (written
 
 **Signal registration flow (one-time per deployment):**
 
-Script 1 collects `SIGNAL_PHONE` (the linked number). After Script 2 deploys, register via either method:
+Script 1 collects `SIGNAL_PHONE` **and** `SIGNAL_REGISTRATION_METHOD` (`qr` or `sms`). Script 2 uses this to automate registration after the container starts.
 
-**Method A — QR code (recommended — links signal-cli as secondary device):**
+**Method A — QR code (recommended, `SIGNAL_REGISTRATION_METHOD=qr`):**
 1. Open the QR URL printed in the post-deploy dashboard:  
    `https://signal.yourdomain.net/v1/qrcodelink?device_name=signal-api`
 2. On your phone: Signal → Settings → Linked Devices → Link New Device → scan QR
-3. signal-cli is now a linked device; OpenClaw Signal channel activates automatically
+3. signal-cli is now a linked device; restart OpenClaw container to activate
 
-**Method B — Phone number registration (new number only):**
+**Method B — SMS verification (`SIGNAL_REGISTRATION_METHOD=sms`):**
+
+Script 2 automatically calls `POST /v1/register/${SIGNAL_PHONE}` after signalbot starts healthy, then prompts for the 6-digit SMS code. Manual equivalent:
 ```bash
-# From the signalbot container
-docker exec ai-<tenant>-signalbot signal-cli \
-  --config /home/.local/share/signal-cli -a ${SIGNAL_PHONE} register
-# Enter the SMS code when prompted, then:
-docker exec ai-<tenant>-signalbot signal-cli \
-  --config /home/.local/share/signal-cli -a ${SIGNAL_PHONE} verify <code>
+curl -X POST http://127.0.0.1:${SIGNALBOT_PORT}/v1/register/+15551234567 \
+  -H 'Content-Type: application/json' -d '{"use_voice":false}'
+# SMS arrives → verify:
+curl -X POST http://127.0.0.1:${SIGNALBOT_PORT}/v1/verify/+15551234567 \
+  -H 'Content-Type: application/json' -d '{"token":"123456"}'
 ```
+
+**OpenClaw `autoStart: false` is intentional.** With `autoStart: true`, OpenClaw tries to spawn `signal-cli` locally (ENOENT — not installed in the OpenClaw container). With `autoStart: false`, OpenClaw connects to the external `httpUrl` correctly. The Signal channel starts automatically when the gateway boots — no user action required beyond completing registration.
 
 **Critical volume mount:** Account data is written to `/home/.local/share/signal-cli`. Wrong mount path loses registration on every restart:
 ```yaml
@@ -1200,6 +1203,8 @@ Use when implementing or reviewing any script change:
 - [ ] Does the signalbot entrypoint use `start.sh`? It must start three processes: `signal-cli daemon --tcp 127.0.0.1:6001 --http 127.0.0.1:9080 --receive-mode manual` + `signal-cli-rest-api` (bbernhard on 8080) + `sse-proxy.py` (on 9999).
 - [ ] Does `openclaw.json` `channels.signal.httpUrl` point to port 9999 (SSE proxy) NOT port 8080 (bbernhard)? bbernhard returns 404 for `/api/v1/events` — pointing OpenClaw at bbernhard breaks the Signal channel.
 - [ ] Does `prepare_data_dirs()` seed `channels.signal` in `openclaw.json` when `SIGNALBOT_ENABLED=true`? Without it OpenClaw has no Signal channel config and shows "pairing required" even after QR registration.
+- [ ] Is `openclaw.json` `channels.signal.autoStart` set to `false`? `true` causes OpenClaw to spawn `signal-cli` locally (ENOENT — not installed in the OpenClaw container). With `false`, OpenClaw uses the external `httpUrl` correctly and the channel still auto-starts on gateway boot.
+- [ ] Does Script 1 prompt for `SIGNAL_REGISTRATION_METHOD` (qr/sms)? Script 2 uses this: sms mode triggers `POST /v1/register` + prompts for verification code; qr mode prints the QR URL in the post-deploy dashboard.
 - [ ] Does Script 3 install the `ai-platform-${TENANT_ID}` systemd unit when `--setup-persistence` is used?
 - [ ] Is the Dify worker healthcheck using the lightweight Python-based `/proc` probe (not `celery status`)?
 
