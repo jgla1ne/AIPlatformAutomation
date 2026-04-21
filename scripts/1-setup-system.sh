@@ -590,6 +590,29 @@ format_and_mount_ebs() {
                 echo "     Removed stale fstab entry (UUID=${old_uuid})"
             fi
 
+            # Ensure the block device has no open references before formatting.
+            # A previous lazy-umount (umount -l) detaches the filesystem from the
+            # VFS namespace but leaves the kernel reference count > 0 until all
+            # open FDs on that filesystem close. mke2fs detects this and aborts
+            # with "apparently in use by the system" even when /proc/mounts is clean.
+            if command -v fuser >/dev/null 2>&1; then
+                echo "     Waiting for block device to be fully released..."
+                dev_wait=0
+                while [[ $dev_wait -lt 30 ]]; do
+                    holders=$(fuser "$device" 2>/dev/null || true)
+                    if [[ -z "$holders" ]]; then
+                        [[ $dev_wait -gt 0 ]] && echo "     Device released after ${dev_wait}s"
+                        break
+                    fi
+                    fuser -k "$device" 2>/dev/null || true
+                    sleep 1; dev_wait=$((dev_wait+1))
+                done
+                if [[ $dev_wait -ge 30 ]]; then
+                    echo "ERROR: $device still has open references after 30s — cannot format safely"
+                    exit 1
+                fi
+            fi
+
             # Format
             echo "     Formatting ${device} as ext4..."
             mkfs.ext4 -F "$device"

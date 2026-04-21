@@ -215,16 +215,42 @@ main() {
     # back to lazy-unmount, and the device stays "in use" — mkfs.ext4 in Script 1
     # then fails with "apparently in use by the system".
     # Script 1's configure_docker_dataroot() restarts Docker after the fresh mount.
-    # Script 1's configure_docker_dataroot() restarts Docker after the fresh mount.
-    # Script 1's configure_docker_dataroot() restarts Docker after the fresh mount.
     local docker_data_root
-    docker_data_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "")
-    if [[ "$docker_data_root" == "${BASE_DIR}"* ]]; then
+    docker_data_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null \
+        || grep -o '"data-root"[[:space:]]*:[[:space:]]*"[^"]*"' /etc/docker/daemon.json 2>/dev/null \
+            | grep -o '"[^"]*"$' | tr -d '"' \
+        || echo "")
+    if [[ -n "$docker_data_root" && "$docker_data_root" == "${BASE_DIR}"* ]]; then
         log "Stopping Docker daemon and socket (data-root is scoped to this tenant)..."
         sudo systemctl stop docker.socket docker.service || true
-        # Give it a moment to release file handles
-        sleep 2
+        # Wait for Docker to fully stop (avoid live-restore socket re-activation)
+        local stop_wait=0
+        while systemctl is-active docker.service >/dev/null 2>&1 && [[ $stop_wait -lt 15 ]]; do
+            sleep 1; stop_wait=$((stop_wait+1))
+        done
         ok "Docker daemon and socket stopped"
+
+        # Reset daemon.json data-root to the default so that if Docker socket
+        # activation fires before Script 1 re-mounts EBS, Docker starts cleanly
+        # rather than trying to open the now-unmounted EBS block device.
+        # Script 1's configure_docker_dataroot() will set it back to EBS after mount.
+        if [[ -f /etc/docker/daemon.json ]]; then
+            if command -v python3 >/dev/null 2>&1; then
+                sudo python3 - /etc/docker/daemon.json <<'PY' || true
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path) as f: cfg = json.load(f)
+except Exception: cfg = {}
+cfg["data-root"] = "/var/lib/docker"
+with open(path, "w") as f: json.dump(cfg, f, indent=2); f.write("\n")
+PY
+            else
+                sudo sed -i 's|"data-root":[[:space:]]*"[^"]*"|"data-root": "/var/lib/docker"|' \
+                    /etc/docker/daemon.json || true
+            fi
+            log "  Reset daemon.json data-root → /var/lib/docker (Script 1 will re-set on EBS mount)"
+        fi
     fi
 
     # 3. Unmount EBS volume FIRST — must happen before rm -rf, because the
@@ -245,10 +271,42 @@ main() {
             log "WARN: umount returned non-zero — attempting lazy unmount"
             run_cmd sudo umount -l "$mount_point" || true
         }
-        
-        # Verify unmount succeeded
+
+        # Verify mount-namespace entry is gone
         if grep -qs "$mount_point" /proc/mounts; then
             fail "CRITICAL: $mount_point is STILL MOUNTED (detected in /proc/mounts). Wipe aborted to protect EBS data. Manually stop all processes (e.g., Docker, Caddy) and try again."
+        fi
+
+        # After a lazy umount the block device can still be "in use" at the kernel
+        # level until all open FDs on the filesystem are closed — mke2fs in Script 1
+        # will fail with "apparently in use" if we don't wait.
+        # Resolve the actual block device backing the mount point.
+        local ebs_dev
+        ebs_dev=$(findmnt -n -o SOURCE "$mount_point" 2>/dev/null \
+            || grep " $mount_point " /proc/mounts | awk '{print $1}' | head -1 \
+            || true)
+        # Fallback: look in fstab for the UUID that was mounted there
+        if [[ -z "$ebs_dev" ]]; then
+            ebs_dev=$(awk -v mp="$mount_point" '$2==mp{print $1}' /etc/fstab 2>/dev/null | head -1 || true)
+        fi
+
+        if [[ -n "$ebs_dev" && -b "$ebs_dev" ]] && command -v fuser >/dev/null 2>&1; then
+            log "  Waiting for block device $ebs_dev to be fully released..."
+            local dev_wait=0
+            while [[ $dev_wait -lt 30 ]]; do
+                local holders
+                holders=$(sudo fuser "$ebs_dev" 2>/dev/null || true)
+                if [[ -z "$holders" ]]; then
+                    log "  Block device released after ${dev_wait}s"
+                    break
+                fi
+                # Kill any remaining holders and keep waiting
+                sudo fuser -k "$ebs_dev" 2>/dev/null || true
+                sleep 1; dev_wait=$((dev_wait+1))
+            done
+            if [[ $dev_wait -ge 30 ]]; then
+                warn "Block device $ebs_dev still has open references after 30s — mkfs may fail"
+            fi
         fi
         ok "EBS volume unmounted: $mount_point"
     else
