@@ -3114,6 +3114,7 @@ prepare_data_dirs() {
             cat > "${_oc_json}" << OCEOF
 {
   "gateway": {
+    "mode": "local",
     "auth": {
       "mode": "token",
       "token": "${OPENCLAW_PASSWORD}"
