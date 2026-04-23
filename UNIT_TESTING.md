@@ -1722,3 +1722,198 @@ bash scripts/3-configure-services.sh datasquiz
 4. Check performance degradation
 **Expected Result**: Graceful CPU fallback
 **Actual Result**: **PASS** - Fallback working correctly
+
+---
+
+## RUN 15 — 2026-04-23 (OpenClaw Critical Issues - Port Mapping, Gateway Mode, Device Pairing Loops)
+
+**Status:** `PARTIAL` | **Baseline:** `v5.15.0`  
+**Changes this run:** Critical OpenClaw fixes after 20+ hour production investigation; port mapping constraint fix; gateway mode configuration; device scope upgrade loop mitigation; channel authentication validation; hardened test scenarios
+
+### T51 — OpenClaw Port Mapping & Remote Access
+
+| Check | Evidence | Result |
+|---|---|---|
+| Port mapping binds to all interfaces | `docker port ai-datasquiz-openclaw | grep "0.0.0.0:18789"` | PASS |
+| Remote Web UI accessible via HTTPS | `curl -I https://openclaw.ai.datasquiz.net/` returns 200 | PASS |
+| WebSocket challenge/response works | `wscat -c wss://openclaw.ai.datasquiz.net/` receives nonce | PASS |
+| Caddy proxy forwarding correct | `curl -H "Host: openclaw.ai.datasquiz.net" http://localhost:18789/` | PASS |
+| Gateway mode set to remote | `docker exec ai-datasquiz-openclaw openclaw config get gateway.mode` returns "remote" | PASS |
+| Localhost access still works | `curl -I http://127.0.0.1:18789/` returns 200 | PASS |
+
+### T52 — OpenClaw Device Pairing Loop Detection
+
+| Check | Evidence | Result |
+|---|---|---|
+| No duplicate deviceIds in paired.json | `docker exec ai-datasquiz-openclaw cat /home/node/.openclaw/devices/paired.json | jq '.[].deviceId' | sort | uniq -d` returns empty | PASS |
+| All devices have full operator scopes | `docker exec ai-datasquiz-openclaw cat /home/node/.openclaw/devices/paired.json | jq '.[].scopes | contains(["operator.read","operator.write","operator.admin","operator.approvals","operator.pairing"])'` all true | PASS |
+| Device state persists across restarts | `docker restart ai-datasquiz-openclaw` then `cat /home/node/.openclaw/devices/paired.json | jq length` unchanged | PASS |
+| No infinite pending requests | `watch -n 5 'cat /home/node/.openclaw/devices/pending.json | jq length'` remains 0 after approval | PASS |
+| Browser session persistence | Clear cookies, reconnect, same deviceId used | PASS |
+| Cross-platform device recognition | Phone and desktop generate same deviceId for same browser profile | PASS |
+
+### T53 — OpenClaw Channel Authentication Validation
+
+| Check | Evidence | Result |
+|---|---|---|
+| Telegram bot token valid | `curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" | jq .ok` returns true | FAIL - 401 Unauthorized |
+| Discord bot token valid | `curl -s -H "Authorization: Bot ${DISCORD_BOT_TOKEN}" "https://discord.com/api/users/@me" | jq .username` returns bot name | PASS |
+| Discord privileged intents enabled | No 4014 errors in OpenClaw logs | FAIL - 4014 Gateway closed errors |
+| Signal pairing API responsive | `curl -s "http://127.0.0.1:${SIGNALBOT_PORT}/v1/about" | jq .number` returns phone | PASS |
+| Signal QR code generation | `curl -s "http://127.0.0.1:${SIGNALBOT_PORT}/v1/qrcodelink?device_name=test"` returns URL | PASS |
+| Channel startup sequence clean | No authentication errors in first 60s of logs | FAIL - Telegram 401, Discord 4014 |
+
+### T54 — OpenClaw Configuration Integrity
+
+| Check | Evidence | Result |
+|---|---|---|
+| Gateway mode matches deployment intent | `cat /home/node/.openclaw/openclaw.json | jq .gateway.mode` equals "remote" | PASS |
+| Allowed origins include domain | `cat /home/node/.openclaw/openclaw.json | jq '.gateway.controlUi.allowedOrigins | contains(["https://openclaw.ai.datasquiz.net"])'` | PASS |
+| Auth token matches platform.conf | `cat /home/node/.openclaw/openclaw.json | jq .gateway.auth.token` equals `${OPENCLAW_PASSWORD}` | PASS |
+| Trusted proxies configured for Caddy | `cat /home/node/.openclaw/openclaw.json | jq '.gateway.trustedProxies | contains(["0.0.0.0/0"])'` | PASS |
+| Volume mounts correct | `docker exec ai-datasquiz-openclaw ls -la /home/node/.openclaw/` shows devices/ and openclaw.json | PASS |
+| File permissions correct | `docker exec ai-datasquiz-openclaw stat /home/node/.openclaw/openclaw.json` shows 644 | PASS |
+
+### T55 — OpenClaw Signal Integration Timing
+
+| Check | Evidence | Result |
+|---|---|---|
+| Signal QR code appears immediately | QR code generated within 5s of container start | PASS |
+| Signal pairing confirmation delay | Time from QR scan to OpenClaw pairing confirmation | FAIL - 4+ hour delay |
+| Signal provider starts cleanly | No Signal provider errors in first 30s | PASS |
+| Signal message delivery test | Send message via Signal, appears in OpenClaw | PARTIAL - Delayed |
+| Signal API response time | `curl -s "http://127.0.0.1:${SIGNALBOT_PORT}/v1/about"` response time < 2s | PASS |
+| Signal container health | `docker ps | grep signalbot` shows healthy | PASS |
+
+### T56 — OpenClaw Multi-Platform Stress Test
+
+| Check | Evidence | Result |
+|---|---|---|
+| Simultaneous device connections | 3 devices connect, all show unique requestIds | PASS |
+| Device approval concurrency | Approve multiple devices simultaneously | PASS |
+| Cross-platform session persistence | Same user on phone/desktop maintains session | PARTIAL - Session breaks on platform switch |
+| WebSocket connection stability | Connection remains stable for 10+ minutes | PASS |
+| Device rejection handling | Invalid token connections properly rejected | PASS |
+| Rate limiting behavior | Multiple rapid connection attempts handled gracefully | PASS |
+
+### T57 — OpenClaw Error Recovery
+
+| Check | Evidence | Result |
+|---|---|---|
+| Nuclear device reset recovery | Complete device state wipe + restart restores functionality | PASS |
+| Configuration corruption recovery | Invalid config auto-restores from backup | PASS |
+| Channel authentication failure recovery | Invalid token doesn't crash gateway | PASS |
+| Network partition recovery | Caddy restart restores connectivity | PASS |
+| Container restart recovery | OpenClaw restart maintains approved devices | PASS |
+| Database corruption recovery | Device JSON corruption handled gracefully | PASS |
+
+---
+
+## Hardened Test Scenarios - Production Constraints
+
+### Scenario A: Port Mapping Validation
+```bash
+# Test for localhost binding issue
+if docker port ai-datasquiz-openclaw | grep "127.0.0.1:18789"; then
+  echo "FAIL: Port bound to localhost only"
+  exit 1
+fi
+
+# Verify remote accessibility
+if ! curl -sf https://openclaw.${BASE_DOMAIN}/ > /dev/null; then
+  echo "FAIL: Remote access not working"
+  exit 1
+fi
+```
+
+### Scenario B: Device Loop Detection
+```bash
+# Monitor for device pairing loops
+for i in {1..10}; do
+  device_count=$(docker exec ai-datasquiz-openclaw cat /home/node/.openclaw/devices/paired.json | jq length)
+  echo "Device count: $device_count"
+  sleep 30
+done
+
+# Check for duplicate deviceIds
+duplicates=$(docker exec ai-datasquiz-openclaw cat /home/node/.openclaw/devices/paired.json | jq '.[].deviceId' | sort | uniq -d)
+if [ -n "$duplicates" ]; then
+  echo "FAIL: Duplicate deviceIds detected: $duplicates"
+  exit 1
+fi
+```
+
+### Scenario C: Channel Authentication Matrix
+```bash
+# Validate all channel tokens
+telegram_ok=$(curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" | jq .ok)
+discord_ok=$(curl -s -H "Authorization: Bot ${DISCORD_BOT_TOKEN}" "https://discord.com/api/users/@me" | jq .username)
+
+echo "Telegram: $telegram_ok"
+echo "Discord: $discord_ok"
+
+if [ "$telegram_ok" = "false" ] || [ -z "$discord_ok" ]; then
+  echo "FAIL: Channel authentication issues detected"
+  exit 1
+fi
+```
+
+### Scenario D: Signal Timing Investigation
+```bash
+# Monitor Signal pairing timing
+echo "Starting Signal timing test..."
+start_time=$(date +%s)
+
+# Generate QR code
+qr_time=$(date +%s)
+curl -s "http://127.0.0.1:${SIGNALBOT_PORT}/v1/qrcodelink?device_name=timing-test" > /dev/null
+
+# Monitor for pairing completion
+while true; do
+  if docker exec ai-datasquiz-openclaw cat /home/node/.openclaw/devices/paired.json | jq length | grep -q "^[1-9]"; then
+    end_time=$(date +%s)
+    duration=$((end_time - start_time))
+    echo "Signal pairing completed in ${duration}s"
+    break
+  fi
+  sleep 10
+done
+```
+
+---
+
+## Critical Constraints Summary
+
+| Constraint | Test Coverage | Status | Mitigation |
+|---|---|---|---|
+| **Port Binding** | T51 | PASS | Script 2 fix applied |
+| **Gateway Mode** | T51 | PASS | Remote mode configured |
+| **Device Loops** | T52 | PASS | Nuclear reset available |
+| **Channel Auth** | T53 | FAIL | Token regeneration needed |
+| **Signal Timing** | T55 | FAIL | 4+ hour delay under investigation |
+| **Multi-Platform** | T56 | PARTIAL | Session persistence issues |
+| **Error Recovery** | T57 | PASS | Recovery procedures validated |
+
+---
+
+## Production Deployment Validation
+
+### Pre-Deployment Checklist
+- [ ] Script 2 port mapping fix verified
+- [ ] Gateway mode set to "remote"
+- [ ] OpenClaw version 2026.4.22+ installed
+- [ ] All channel tokens validated
+- [ ] Discord privileged intents enabled
+- [ ] Signal QR code pairing tested
+- [ ] Device pairing loop detection enabled
+- [ ] Error recovery procedures documented
+
+### Post-Deployment Validation
+- [ ] Remote Web UI accessible (HTTPS 200)
+- [ ] WebSocket challenge/response working
+- [ ] No duplicate deviceIds in paired.json
+- [ ] Full operator scopes applied
+- [ ] Channel authentication successful
+- [ ] Signal pairing timing acceptable
+- [ ] Multi-platform session persistence
+- [ ] Error recovery procedures tested

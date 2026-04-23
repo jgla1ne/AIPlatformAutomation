@@ -1467,3 +1467,137 @@ OpenClaw can bridge multiple communication channels:
 - **Discord**: Requires a Discord Bot Token and Guild ID.
 
 Selection is performed during Script 1's setup wizard.
+
+---
+
+## 🔧 OpenClaw Troubleshooting Guide
+
+**Based on 20+ hour production investigation - critical constraints and solutions**
+
+### 🚨 Critical Issues Identified
+
+#### Issue 1: Port Mapping Constraint
+**Symptom:** `wss://openclaw.domain.com` returns 502 Bad Gateway, localhost works
+**Root Cause:** Script 2 binds to `127.0.0.1:18789` (localhost only) instead of all interfaces
+**Fix Applied:** Updated port mapping in Script 2 from `"127.0.0.1:${OPENCLAW_PORT}:${OPENCLAW_PORT}"` to `"${OPENCLAW_PORT}:${OPENCLAW_PORT}"`
+**Verification:** `docker port ai-datasquiz-openclaw` should show `0.0.0.0:18789`
+
+#### Issue 2: Gateway Mode Constraint  
+**Symptom:** Remote connections rejected with "pairing required" loops
+**Root Cause:** `gateway.mode: "local"` only accepts loopback connections
+**Fix:** Set `gateway.mode: "remote"` for external access via Caddy proxy
+**Command:** `docker exec ai-datasquiz-openclaw openclaw config set gateway.mode remote`
+
+#### Issue 3: Device Scope Upgrade Loop (GitHub Issue #21688)
+**Symptom:** Same device generates infinite pairing requests even after approval
+**Root Cause:** `resolvePairingLocality()` misclassifies loopback shared-secret clients as remote
+**Fixed in:** OpenClaw 2026.4.22+ with `shared_secret_loopback_local` classification
+**Workaround:** Nuclear device reset + full scope approval
+
+#### Issue 4: Channel Authentication Constraints
+**Telegram:** 401 Unauthorized - requires valid BotFather token regeneration
+**Discord:** 4014 Gateway closed - requires privileged gateway intents in Developer Portal
+**Signal:** 4+ hour delay for pairing confirmations - API timing issue
+
+### 🛠️ Hardened Test Scenarios
+
+#### Scenario 1: Remote Access Validation
+```bash
+# Test 1: Port mapping
+docker port ai-datasquiz-openclaw | grep "0.0.0.0:18789"
+
+# Test 2: Web UI accessibility
+curl -I https://openclaw.${BASE_DOMAIN}/
+
+# Test 3: WebSocket challenge
+wscat -c wss://openclaw.${BASE_DOMAIN}/
+
+# Test 4: Gateway mode
+docker exec ai-datasquiz-openclaw openclaw config get gateway.mode
+```
+
+#### Scenario 2: Device Pairing Loop Detection
+```bash
+# Monitor device state changes
+watch -n 5 'docker exec ai-datasquiz-openclaw cat /home/node/.openclaw/devices/paired.json | jq length'
+
+# Check for duplicate deviceIds
+docker exec ai-datasquiz-openclaw cat /home/node/.openclaw/devices/paired.json | jq '.[].deviceId' | sort | uniq -d
+
+# Verify scope completeness
+docker exec ai-datasquiz-openclaw cat /home/node/.openclaw/devices/paired.json | jq '.[].scopes'
+```
+
+#### Scenario 3: Channel Authentication Validation
+```bash
+# Telegram token validation
+curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" | jq .ok
+
+# Discord token validation  
+curl -s -H "Authorization: Bot ${DISCORD_BOT_TOKEN}" "https://discord.com/api/users/@me" | jq .username
+
+# Signal pairing status
+curl -s "http://127.0.0.1:${SIGNALBOT_PORT}/v1/about" | jq .number
+```
+
+### 🔧 Recovery Procedures
+
+#### Nuclear Device Reset
+```bash
+# Complete device state reset
+docker exec ai-datasquiz-openclaw sh -c '
+rm -f /home/node/.openclaw/devices/*.json
+echo "{}" > /home/node/.openclaw/devices/paired.json
+echo "{}" > /home/node/.openclaw/devices/pending.json
+'
+docker restart ai-datasquiz-openclaw
+```
+
+#### Full Scope Device Approval
+```bash
+# Get device ID
+DEVICE_ID=$(docker exec ai-datasquiz-openclaw cat /home/node/.openclaw/devices/paired.json | jq -r '.[].deviceId' | head -1)
+
+# Rotate with full scopes (if CLI accessible)
+docker exec ai-datasquiz-openclaw openclaw devices rotate \
+  --device ${DEVICE_ID} \
+  --role operator \
+  --scope operator.read \
+  --scope operator.write \
+  --scope operator.admin \
+  --scope operator.approvals \
+  --scope operator.pairing \
+  --json
+```
+
+#### Configuration Validation
+```bash
+# Verify critical config fields
+docker exec ai-datasquiz-openclaw cat /home/node/.openclaw/openclaw.json | jq '.gateway.mode'
+docker exec ai-datasquiz-openclaw cat /home/node/.openclaw/openclaw.json | jq '.gateway.controlUi.allowedOrigins'
+docker exec ai-datasquiz-openclaw cat /home/node/.openclaw/openclaw.json | jq '.gateway.auth.token'
+```
+
+### 📊 Known Constraints Summary
+
+| Constraint | Impact | Mitigation |
+|---|---|---|
+| **Port Binding** | Remote access fails | Script 2 fix applied |
+| **Gateway Mode** | Local vs remote connections | Set to "remote" for external access |
+| **Device Scope Loops** | Infinite pairing requests | Fixed in 2026.4.22+ |
+| **Channel Tokens** | Authentication failures | Token regeneration/intents |
+| **Signal Delays** | 4+ hour pairing confirmations | API timing investigation needed |
+| **Browser Session** | Device recognition issues | Clear localStorage/cookies |
+
+### 🎯 Production Deployment Checklist
+
+- [ ] Script 2 port mapping fix applied
+- [ ] Gateway mode set to "remote" for external access
+- [ ] OpenClaw version 2026.4.22+ (GitHub Issue #21688 fix)
+- [ ] All channel tokens validated and current
+- [ ] Discord privileged gateway intents enabled
+- [ ] Signal QR code pairing completed successfully
+- [ ] Device pairing tested from multiple platforms
+- [ ] WebSocket challenge/response verified
+- [ ] No duplicate deviceIds in paired.json
+- [ ] Full operator scopes applied to all devices

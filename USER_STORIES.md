@@ -924,3 +924,176 @@ Epic 13 — Hardware       GPU/CPU detection, deployment guidance, model recomme
 - **GPU Fallback Support**: Graceful CPU fallback when GPU unavailable
 - **Multi-GPU Ready**: Architecture supports multiple GPU configurations
 - **Prometheus Dynamic Configuration**: Automatic service monitoring based on enabled components
+
+---
+
+## EPIC 4 — OpenClaw Multi-Channel Gateway
+
+**Goal:** A user can access OpenClaw from any device (web, mobile, desktop) via secure WebSocket connections and bridge multiple communication channels (Signal, Telegram, Discord) through a unified AI gateway.
+
+---
+
+### Feature 4.1 — Remote Access & WebSocket Connectivity
+
+**As a** remote user,  
+**I want** to access OpenClaw via `wss://openclaw.domain.com` from any device,  
+**so that** I can use AI assistant functionality without being on the local network.
+
+**Acceptance criteria:**
+- OpenClaw container binds to `0.0.0.0:18789` (all interfaces) not `127.0.0.1:18789`
+- Caddy reverse proxy correctly forwards HTTPS WebSocket connections to OpenClaw
+- Gateway mode configured as "remote" for external access
+- WebSocket challenge/response works immediately on connection
+- HTTP/2 200 response from web UI at `https://openclaw.domain.com`
+- No 502 Bad Gateway errors from Caddy proxy
+- Port mapping verified: `docker port ai-datasquiz-openclaw` shows `0.0.0.0:18789`
+- TLS termination handled by Caddy, OpenClaw receives plain WebSocket
+- Token authentication works across all platforms (web, mobile, desktop)
+- **Constraint**: Requires Script 2 port mapping fix to bind to all interfaces
+- **Constraint**: Gateway mode must be "remote" not "local" for external access
+- **Script**: `2-deploy-services.sh` (port mapping), `3-configure-services.sh` (gateway mode)
+
+---
+
+### Feature 4.2 — Device Pairing & Session Persistence
+
+**As a** user,  
+**I want** to pair my device once and maintain that session across browser sessions and platform switches,  
+**so that** I don't have to repeatedly approve pairing requests for the same device.
+
+**Acceptance criteria:**
+- Device pairing approval persists across container restarts
+- Same browser profile generates consistent `deviceId` across sessions
+- No duplicate `deviceId` entries in `paired.json`
+- Full operator scopes applied: `operator.read`, `operator.write`, `operator.admin`, `operator.approvals`, `operator.pairing`
+- Browser localStorage/cookies maintain session state
+- Cross-platform session persistence (phone ↔ desktop) for same user account
+- No infinite pairing request loops (GitHub Issue #21688)
+- Device state survives network interruptions
+- Nuclear device reset available for recovery
+- **Constraint**: Requires OpenClaw 2026.4.22+ for GitHub Issue #21688 fix
+- **Constraint**: Browser must allow localStorage/cookies for domain
+- **Constraint**: Device fingerprinting must be consistent across sessions
+- **Script**: `3-configure-services.sh --openclaw-pairs` (manual approval)
+
+---
+
+### Feature 4.3 — Multi-Channel Authentication & Bridging
+
+**As a** user,  
+**I want** to interact with AI assistant through Signal, Telegram, or Discord,  
+**so that** I can use my preferred messaging platform for AI conversations.
+
+**Acceptance criteria:**
+- **Signal**: QR code pairing works, messages appear in OpenClaw within reasonable time
+- **Telegram**: Bot token valid, no 401 Unauthorized errors, commands work
+- **Discord**: Bot token valid, privileged gateway intents enabled, no 4014 errors
+- Channel selection configured during Script 1 setup wizard
+- Auto-approval of pairing requests during Script 2 deployment
+- Manual channel management via Script 3 commands
+- Message delivery from external channels to OpenClaw gateway
+- AI responses delivered back through original channel
+- Channel authentication failures don't crash gateway
+- **Constraint**: Telegram requires valid BotFather token regeneration
+- **Constraint**: Discord requires privileged gateway intents in Developer Portal
+- **Constraint**: Signal has 4+ hour pairing confirmation delay under investigation
+- **Script**: `1-setup-system.sh` (channel selection), `2-deploy-services.sh` (token configuration)
+
+---
+
+### Feature 4.4 — Error Recovery & Troubleshooting
+
+**As a** DevOps engineer,  
+**I want** comprehensive recovery procedures and monitoring for OpenClaw issues,  
+**so that** I can quickly diagnose and resolve production problems.
+
+**Acceptance criteria:**
+- Nuclear device reset procedure documented and automated
+- Configuration corruption auto-recovery from backup
+- Channel authentication failure isolation (doesn't crash gateway)
+- Network partition recovery (Caddy restart restores connectivity)
+- Container restart recovery (maintains approved devices)
+- Device JSON corruption handling
+- Comprehensive logging for troubleshooting
+- Health check endpoints for monitoring
+- Error pattern detection in logs
+- Performance metrics for WebSocket connections
+- **Constraint**: Requires manual intervention for token regeneration
+- **Constraint**: Signal timing issues need external API investigation
+- **Script**: `3-configure-services.sh` (recovery commands), monitoring stack
+
+---
+
+### Feature 4.5 — Production Hardening & Security
+
+**As a** security-conscious administrator,  
+**I want** OpenClaw properly secured for production deployment,  
+**so that** the AI gateway doesn't expose unnecessary attack surfaces.
+
+**Acceptance criteria:**
+- Token-based authentication enforced (no anonymous access)
+- Allowed origins restricted to specific domains
+- Trusted proxies configured for Caddy reverse proxy
+- Rate limiting on connection attempts
+- Secure WebSocket (wss://) enforced in production
+- Container runs as non-root user (node:1000)
+- File permissions properly set (644 for config, 600 for secrets)
+- Volume mounts use bind mounts, not named volumes for predictable paths
+- Secrets stored in `platform.conf` with 600 permissions
+- No hardcoded credentials in container images
+- **Constraint**: Requires proper DNS configuration for domain access
+- **Constraint**: TLS certificates managed by Caddy/Let's Encrypt
+- **Script**: `1-setup-system.sh` (security configuration), `2-deploy-services.sh` (container hardening)
+
+---
+
+## USER STORY CONSTRAINTS MATRIX
+
+| Story | Technical Constraint | Operational Constraint | Security Constraint |
+|---|---|---|---|
+| **4.1 Remote Access** | Port mapping to 0.0.0.0 required | Caddy proxy dependency | TLS termination mandatory |
+| **4.2 Device Pairing** | OpenClaw 2026.4.22+ required | Browser localStorage dependency | Token validation enforced |
+| **4.3 Multi-Channel** | External API dependencies | Token regeneration process | Privileged intents required |
+| **4.4 Error Recovery** | Container restart capability | Manual intervention needed | Log access controlled |
+| **4.5 Production Hardening** | Non-root container execution | DNS configuration complexity | Secret management critical |
+
+---
+
+## PRODUCTION READINESS CHECKLIST
+
+### Pre-Deployment
+- [ ] Script 2 port mapping fix applied (`0.0.0.0:18789`)
+- [ ] Gateway mode set to "remote" for external access
+- [ ] OpenClaw version 2026.4.22+ (GitHub Issue #21688 fix)
+- [ ] All channel tokens validated and current
+- [ ] Discord privileged gateway intents enabled
+- [ ] Signal QR code pairing procedure documented
+- [ ] Error recovery procedures tested
+- [ ] Security hardening verified
+
+### Post-Deployment
+- [ ] Remote Web UI accessible (HTTPS 200)
+- [ ] WebSocket challenge/response working
+- [ ] Device pairing persists across sessions
+- [ ] No duplicate deviceIds in paired.json
+- [ ] Full operator scopes applied
+- [ ] Channel authentication successful
+- [ ] Signal pairing timing acceptable
+- [ ] Error recovery procedures functional
+- [ ] Monitoring and alerting configured
+- [ ] Security audit passed
+
+---
+
+## KNOWN ISSUES & MITIGATIONS
+
+| Issue | Impact | Mitigation | Timeline |
+|---|---|---|---|
+| **Port Binding Issue** | Remote access fails | Script 2 fix applied | ✅ Resolved |
+| **Gateway Mode Constraint** | Local connections only | Set to "remote" mode | ✅ Resolved |
+| **Device Pairing Loops** | Infinite requests | GitHub Issue #21688 fix | ✅ Resolved |
+| **Telegram Token Invalid** | 401 Unauthorized | Token regeneration | 🔄 In Progress |
+| **Discord Intents Missing** | 4014 Gateway closed | Enable privileged intents | 🔄 In Progress |
+| **Signal Timing Delay** | 4+ hour confirmation | API timing investigation | ⚠️ Under Investigation |
+| **Browser Session Issues** | Device recognition | Clear localStorage/cookies | ✅ Workaround Available |
+| **Cross-Platform Sessions** | Session breaks on switch | Browser profile sync | ⚠️ Partial Fix |

@@ -1048,7 +1048,7 @@ EOF
       # Mount config dir to OpenClaw's REAL home dir so openclaw.json persists
       - ${DATA_DIR}/openclaw/home:/home/node/.openclaw
     ports:
-      - "127.0.0.1:${OPENCLAW_PORT}:${OPENCLAW_PORT}"
+      - "${OPENCLAW_PORT}:${OPENCLAW_PORT}"
 $(build_openclaw_deps)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${OPENCLAW_PORT}/health"]
