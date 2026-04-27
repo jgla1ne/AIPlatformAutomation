@@ -623,6 +623,116 @@ configure_librechat() {
 }
 
 # =============================================================================
+# CHANNEL UPDATE FUNCTION
+# --update-channels  : rebuild openclaw.json channels from platform.conf,
+#                      preserve gateway.* settings, restart OpenClaw
+# =============================================================================
+
+update_channels() {
+    local cfg="${DATA_DIR}/openclaw/home/openclaw.json"
+
+    if [[ ! -f "$cfg" ]]; then
+        fail "--update-channels: openclaw.json not found at ${cfg}. Run Script 2 first."
+    fi
+
+    log "Rebuilding OpenClaw channel config from platform.conf..."
+
+    # Build channels JSON from current platform.conf values
+    local _channels_json=""
+
+    # Signal
+    if echo "${OPENCLAW_CHANNELS:-}" | grep -qE "signal|all"; then
+        if [[ "${SIGNALBOT_ENABLED:-false}" == "true" && -n "${SIGNAL_PHONE:-}" ]]; then
+            _channels_json+='"signal": {
+      "enabled": true,
+      "account": "'"${SIGNAL_PHONE}"'",
+      "httpUrl": "http://'"${TENANT_PREFIX}"'-signalbot:9999",
+      "autoStart": false
+    }'
+        fi
+    fi
+
+    # Telegram
+    if echo "${OPENCLAW_CHANNELS:-}" | grep -qE "telegram|all"; then
+        if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then
+            local _tg_valid=false
+            local _tg_check
+            _tg_check=$(curl -s --max-time 10 \
+                "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" 2>/dev/null \
+                | python3 -c "import sys,json; r=json.load(sys.stdin); print('true' if r.get('ok') else 'false')" \
+                2>/dev/null || echo "false")
+            [[ "$_tg_check" == "true" ]] && _tg_valid=true
+            [[ -n "$_channels_json" ]] && _channels_json+=','$'\n'
+            if [[ "$_tg_valid" == "true" ]]; then
+                _channels_json+='"telegram": {
+      "enabled": true,
+      "botToken": "'"${TELEGRAM_BOT_TOKEN}"'",
+      "dmPolicy": "pairing"
+    }'
+                ok "Telegram token valid — enabled"
+            else
+                warn "Telegram token invalid — channel remains disabled. Regenerate via BotFather."
+                _channels_json+='"telegram": {
+      "enabled": false,
+      "botToken": "'"${TELEGRAM_BOT_TOKEN}"'",
+      "dmPolicy": "pairing"
+    }'
+            fi
+        fi
+    fi
+
+    # Discord
+    if echo "${OPENCLAW_CHANNELS:-}" | grep -qE "discord|all"; then
+        if [[ -n "${DISCORD_BOT_TOKEN:-}" && -n "${DISCORD_GUILD_ID:-}" ]]; then
+            [[ -n "$_channels_json" ]] && _channels_json+=','$'\n'
+            _channels_json+='"discord": {
+      "enabled": true,
+      "token": "'"${DISCORD_BOT_TOKEN}"'",
+      "guilds": {
+        "'"${DISCORD_GUILD_ID}"'": {
+          "requireMention": true
+        }
+      }
+    }'
+        fi
+    fi
+
+    # Merge channels into existing openclaw.json (preserve gateway.* intact)
+    if [[ -n "$_channels_json" ]]; then
+        python3 - "${cfg}" <<PYEOF
+import json, sys
+path = sys.argv[1]
+channels_raw = """${_channels_json}"""
+with open(path) as f:
+    c = json.load(f)
+# Parse channel entries from the raw JSON fragment
+channels_obj = json.loads('{' + channels_raw + '}')
+c['channels'] = channels_obj
+with open(path, 'w') as f:
+    json.dump(c, f, indent=2)
+print('Channels updated.')
+PYEOF
+    else
+        # No channels configured — remove channels key
+        python3 -c "
+import json
+path='${cfg}'
+with open(path) as f: c=json.load(f)
+c.pop('channels', None)
+with open(path,'w') as f: json.dump(c,f,indent=2)
+print('No channels configured — channels section removed.')
+"
+    fi
+
+    docker restart "${TENANT_PREFIX}-openclaw" >/dev/null 2>&1 \
+        && ok "OpenClaw restarted with updated channel config" \
+        || warn "Failed to restart OpenClaw — run: docker restart ${TENANT_PREFIX}-openclaw"
+
+    log "Channel status:"
+    echo "${OPENCLAW_CHANNELS:-none}"
+}
+
+# =============================================================================
 # SERVICE UPDATE FUNCTIONS
 # --update <service|all>  : pull latest image and recreate container(s)
 # --ollama-update         : re-pull all configured Ollama models
@@ -848,15 +958,15 @@ const pending=JSON.parse(fs.readFileSync('${c_pending}','utf8'));
 let paired={};
 try{paired=JSON.parse(fs.readFileSync('${c_paired}','utf8'));}catch(e){}
 for(const [rid,r] of Object.entries(pending)){
-  paired[rid]={...r,approved:true,status:'approved',approvedTs:now,scopes};
-  console.log('Approved:',rid);
+  const stableId=(typeof r.deviceId==='string' && r.deviceId) ? r.deviceId : rid;
+  paired[stableId]={...r,requestId:rid,approved:true,status:'approved',approvedTs:now,scopes};
+  console.log('Approved request:',rid,'as device:',stableId);
 }
 fs.writeFileSync('${c_paired}',JSON.stringify(paired,null,2));
 fs.writeFileSync('${c_pending}','{}');
 console.log('Done. Paired devices:',Object.keys(paired).length);
 "
-            docker restart "$container" >/dev/null 2>&1 || true
-            ok "Approved! Container restarted. Connect from the browser now."
+            ok "Approved! Refresh the browser; the device record now persists by deviceId."
             ;;
         d|D)
             docker exec "$container" node -e "require('fs').writeFileSync('${c_pending}','{}')" 2>/dev/null || true
@@ -1944,7 +2054,82 @@ flush_service_database() {
 # =============================================================================
 # MAIN FUNCTION
 # =============================================================================
+show_help() {
+    cat <<'HELP'
+SCRIPT 3 — MISSION CONTROL
+  Post-deploy configuration, credentials display, health monitoring, and
+  live management of a running tenant stack. Sources platform.conf and
+  .configured/port-allocations (authoritative for actual ports).
+
+USAGE
+  bash scripts/3-configure-services.sh <tenant_id> [COMMAND]
+
+ARGUMENTS
+  tenant_id         Tenant identifier (e.g. datasquiz)
+
+ONE-SHOT COMMANDS (return immediately, no full configure run)
+  --help                    Show this help and exit
+  --health-check            Print live health table for all containers
+  --show-credentials        Print all service URLs and credentials
+  --audit-logs              Scan all containers for ERROR/FATAL (last 60s)
+  --logs <service>          Tail logs for a service; use --log-lines N (default 200)
+  --openclaw-pairs          List pending OpenClaw device pairing requests and approve
+  --update [service|all]    Pull latest image and recreate container(s).
+                            Omit service or use "all" to update every non-data
+                            container. Data services (postgres/redis/mongodb)
+                            are warned; skipped in "all" mode.
+  --ollama-update           Re-pull all configured Ollama model weights
+  --update-channels         Regenerate openclaw.json channels section from
+                            platform.conf and restart OpenClaw container
+  --ollama-list             List Ollama models currently loaded
+  --ollama-pull <model>     Download an Ollama model (e.g. llama3.2:3b)
+  --ollama-remove <model>   Remove an Ollama model to free disk space
+  --litellm-routing <strat> Change LiteLLM routing strategy live. Strategies:
+                              simple-shuffle | least-busy | usage-based-routing
+                              cost-based-routing | latency-based-routing
+  --reconfigure <service>   Reset credentials for a service and restart it.
+                            Supported: openwebui librechat openclaw dify flowise
+                              n8n litellm grafana code-server anythingllm
+  --flush-db <service>      Drop and recreate a service's PostgreSQL database
+                            (service self-migrates on restart). Supported:
+                              litellm n8n zep dify authentik letta
+  --ingest [--skip-sync]    Run rclone→Qdrant ingestion pipeline
+  --backup [--schedule S]   One-off backup or schedule recurring (cron string)
+  --setup-persistence       Install systemd unit for automatic reboot standup
+  --openclaw-pairs          List and approve pending device pairing requests
+
+FULL CONFIGURE RUN (default — no one-shot flag)
+  Runs all configure_*() functions for enabled services, then shows health
+  table + credentials dashboard. Safe to re-run (idempotent marker files).
+
+  --verify-only             Skip configuration, only show health + credentials
+  --dry-run                 Print actions without executing
+
+SERVICE NAMES (for --logs, --reconfigure, --update, --flush-db)
+  postgres redis mongodb ollama litellm openwebui librechat anythingllm
+  openclaw n8n flowise dify dify-api dify-worker authentik grafana prometheus
+  searxng zep letta qdrant code-server signalbot rclone caddy
+
+EXAMPLES
+  bash scripts/3-configure-services.sh datasquiz
+  bash scripts/3-configure-services.sh datasquiz --health-check
+  bash scripts/3-configure-services.sh datasquiz --update openclaw
+  bash scripts/3-configure-services.sh datasquiz --update all
+  bash scripts/3-configure-services.sh datasquiz --ollama-update
+  bash scripts/3-configure-services.sh datasquiz --update-channels
+  bash scripts/3-configure-services.sh datasquiz --logs litellm --log-lines 500
+  bash scripts/3-configure-services.sh datasquiz --reconfigure openclaw
+  bash scripts/3-configure-services.sh datasquiz --flush-db dify
+  bash scripts/3-configure-services.sh datasquiz --litellm-routing cost-based-routing
+  bash scripts/3-configure-services.sh datasquiz --ollama-pull gemma3:4b
+  bash scripts/3-configure-services.sh datasquiz --ingest --skip-sync
+  bash scripts/3-configure-services.sh datasquiz --backup --schedule "0 3 * * *"
+HELP
+    exit 0
+}
+
 main() {
+    [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]] && show_help
     local tenant_id="${1:-}"
     local verify_only=false
     local health_check=false
@@ -1973,11 +2158,15 @@ main() {
     local openclaw_pairs=false
     local update_svc=""
     local update_ollama=false
+    local do_update_channels=false
 
     # Parse arguments
     shift
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --help|-h)
+                show_help
+                ;;
             --verify-only)
                 verify_only=true
                 shift
@@ -2113,6 +2302,10 @@ main() {
                 ;;
             --ollama-update)
                 update_ollama=true
+                shift
+                ;;
+            --update-channels)
+                do_update_channels=true
                 shift
                 ;;
             *)
@@ -2309,6 +2502,11 @@ main() {
 
     if [[ "$update_ollama" == "true" ]]; then
         update_ollama_models
+        return 0
+    fi
+
+    if [[ "$do_update_channels" == "true" ]]; then
+        update_channels
         return 0
     fi
 
@@ -3087,17 +3285,16 @@ check_signal_pairing() {
     fi
 
     # Check if number is registered/linked
-    local accounts
-    accounts=$(curl -sf --max-time 5 "${signalbot_url}/v1/accounts" 2>/dev/null || true)
-    if echo "$accounts" | jq -e '.[] | select(. == "'"${phone}"'")' >/dev/null 2>&1; then
+    local accounts_file="${DATA_DIR}/signalbot/data/accounts.json"
+    if [[ -f "${accounts_file}" ]] && jq -e --arg phone "${phone}" '.accounts[]? | select(.number == $phone)' "${accounts_file}" >/dev/null 2>&1; then
         echo "  ✓ Signal number ${phone} is registered and linked"
     else
         echo "  ✗ Signal number ${phone} is NOT paired"
         echo ""
         echo "  To pair your Signal account:"
         echo "    Option A — Link existing device (scan QR code):"
-        echo "      curl -s '${signalbot_url}/v1/qrcodelink/${phone}?device_name=ai-platform' | jq -r '.uri'"
-        echo "      Then scan the URI with: signal-cli link -n 'ai-platform'"
+        echo "      Open: ${signalbot_url}/v1/qrcodelink?device_name=ai-platform"
+        echo "      Then scan the QR code from Signal -> Settings -> Linked devices"
         echo ""
         echo "    Option B — Register new number:"
         echo "      curl -s -X POST '${signalbot_url}/v1/register/${phone}'"
@@ -3541,7 +3738,7 @@ Valid options: ${valid_strategies}"
         fail "LiteLLM is not enabled"
     fi
 
-    local litellm_config="${DATA_DIR}/config/litellm_config.yaml"
+    local litellm_config="${CONFIG_DIR}/litellm/config.yaml"
     if [[ ! -f "$litellm_config" ]]; then
         fail "LiteLLM config not found: ${litellm_config}"
     fi
@@ -3560,8 +3757,8 @@ Valid options: ${valid_strategies}"
     fi
 
     # Also update platform.conf
-    if grep -q "^LITELLM_ROUTING_STRATEGY=" "${DATA_DIR}/config/platform.conf"; then
-        sed -i "s|^LITELLM_ROUTING_STRATEGY=.*|LITELLM_ROUTING_STRATEGY=\"${strategy}\"|" "${DATA_DIR}/config/platform.conf"
+    if grep -q "^LITELLM_ROUTING_STRATEGY=" "${BASE_DIR}/platform.conf"; then
+        sed -i "s|^LITELLM_ROUTING_STRATEGY=.*|LITELLM_ROUTING_STRATEGY=\"${strategy}\"|" "${BASE_DIR}/platform.conf"
     fi
 
     # Reload LiteLLM by restart (config is file-mounted)

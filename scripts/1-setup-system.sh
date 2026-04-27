@@ -1110,30 +1110,73 @@ configure_service_credentials() {
         fi
 
         echo ""
-        echo "  OpenClaw communication channels:"
-        echo "  1) Signal only"
-        echo "  2) Telegram only"
-        echo "  3) Discord only"
-        echo "  4) Web only (no messaging channel)"
-        echo "  5) All channels"
-        safe_read "Select channels [1-5]" "1" "OPENCLAW_CHANNELS"
+        echo "  OpenClaw communication channels (enable individually):"
+        echo ""
 
-        # Map choice to string representation
-        case "${OPENCLAW_CHANNELS}" in
-            1) OPENCLAW_CHANNELS="signal" ;;
-            2) OPENCLAW_CHANNELS="telegram" ;;
-            3) OPENCLAW_CHANNELS="discord" ;;
-            4) OPENCLAW_CHANNELS="web" ;;
-            5) OPENCLAW_CHANNELS="all" ;;
-        esac
+        # --- Signal ---
+        local _oc_signal="n"
+        if [[ -n "${ENABLE_SIGNALBOT:-}" ]]; then
+            [[ "${ENABLE_SIGNALBOT}" == "true" ]] && _oc_signal="y" || _oc_signal="n"
+        fi
+        if [[ -t 0 ]]; then
+            printf "    Enable Signal channel? [y/N]: "
+            read -r _oc_signal
+            _oc_signal="${_oc_signal:-n}"
+        fi
+        if [[ "${_oc_signal,,}" == "y" ]]; then
+            ENABLE_SIGNALBOT="true"
+            safe_read "  Signal phone number (e.g. +61412345678)" "${SIGNAL_PHONE:-}" "SIGNAL_PHONE"
+            safe_read "  Registration method [qr/sms]" "${SIGNAL_REGISTRATION_METHOD:-qr}" "SIGNAL_REGISTRATION_METHOD"
+        else
+            ENABLE_SIGNALBOT="false"
+        fi
 
-        if echo "${OPENCLAW_CHANNELS}" | grep -qE "telegram|all"; then
-            safe_read "Telegram Bot Token" "" "TELEGRAM_BOT_TOKEN"
+        # --- Telegram ---
+        local _oc_tg="n"
+        if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then _oc_tg="y"; fi
+        if [[ -t 0 ]]; then
+            printf "    Enable Telegram channel? [y/N]: "
+            read -r _oc_tg
+            _oc_tg="${_oc_tg:-n}"
         fi
-        if echo "${OPENCLAW_CHANNELS}" | grep -qE "discord|all"; then
-            safe_read "Discord Bot Token" "" "DISCORD_BOT_TOKEN"
-            safe_read "Discord Guild ID" "" "DISCORD_GUILD_ID"
+        if [[ "${_oc_tg,,}" == "y" ]]; then
+            safe_read "  Telegram Bot Token (from BotFather)" "${TELEGRAM_BOT_TOKEN:-}" "TELEGRAM_BOT_TOKEN"
+            echo "  ℹ  Token will be validated at deploy time. Invalid tokens are seeded as disabled."
+        else
+            TELEGRAM_BOT_TOKEN=""
         fi
+
+        # --- Discord ---
+        local _oc_dc="n"
+        if [[ -n "${DISCORD_BOT_TOKEN:-}" ]]; then _oc_dc="y"; fi
+        if [[ -t 0 ]]; then
+            printf "    Enable Discord channel? [y/N]: "
+            read -r _oc_dc
+            _oc_dc="${_oc_dc:-n}"
+        fi
+        if [[ "${_oc_dc,,}" == "y" ]]; then
+            safe_read "  Discord Bot Token" "${DISCORD_BOT_TOKEN:-}" "DISCORD_BOT_TOKEN"
+            safe_read "  Discord Guild ID (Server ID)" "${DISCORD_GUILD_ID:-}" "DISCORD_GUILD_ID"
+            echo "  ⚠  Enable 'Message Content Intent' in Discord Developer Portal → Bot → Privileged Gateway Intents"
+            echo "     otherwise OpenClaw will fail with error 4014."
+        else
+            DISCORD_BOT_TOKEN=""
+            DISCORD_GUILD_ID=""
+        fi
+
+        # Build OPENCLAW_CHANNELS string from individual selections
+        local _oc_parts=""
+        [[ "${_oc_signal,,}" == "y" ]] && _oc_parts="signal"
+        [[ "${_oc_tg,,}"     == "y" ]] && _oc_parts="${_oc_parts:+${_oc_parts},}telegram"
+        [[ "${_oc_dc,,}"     == "y" ]] && _oc_parts="${_oc_parts:+${_oc_parts},}discord"
+        if [[ "${_oc_signal,,}" == "y" && "${_oc_tg,,}" == "y" && "${_oc_dc,,}" == "y" ]]; then
+            OPENCLAW_CHANNELS="all"
+        elif [[ -z "$_oc_parts" ]]; then
+            OPENCLAW_CHANNELS="web"
+        else
+            OPENCLAW_CHANNELS="$_oc_parts"
+        fi
+        echo "  ✅ Channels: ${OPENCLAW_CHANNELS}"
         echo ""
     fi
 
@@ -4088,7 +4131,57 @@ initialize_service_variables() {
 # =============================================================================
 # MAIN FUNCTION
 # =============================================================================
+show_help() {
+    cat <<'HELP'
+SCRIPT 1 — SETUP WIZARD
+  Interactive wizard that collects all deployment configuration and writes
+  platform.conf. Formats and mounts the EBS volume. Does NOT touch Docker.
+
+USAGE
+  bash scripts/1-setup-system.sh [tenant_id] [OPTIONS]
+
+ARGUMENTS
+  tenant_id         Tenant identifier (e.g. datasquiz). Prompted if omitted.
+
+OPTIONS
+  --help            Show this help and exit
+  --dry-run         Simulate collection; do not write platform.conf or mount EBS
+  --template FILE   Load defaults from a saved template file
+  --save-template F Save the collected configuration as a reusable template
+  --ingest-from F   Import credentials from an existing .env file
+  --preserve-secrets  Keep existing secrets from a prior platform.conf
+  --generate-new    Regenerate all secrets even if platform.conf already exists
+  --deployment-mode minimal|standard|full  Skip stack-preset prompt
+
+WIZARD SECTIONS (interactive prompts)
+  Tenant identity   ID, display name, admin email
+  Domain / TLS      Base domain, TLS mode (letsencrypt / selfsigned / none)
+  EBS               Device path, mount point; formats + mounts on first run
+  Stack preset      minimal / development / standard / full / custom
+  Memory layer      None / Zep / Letta / Both (standard/full/custom only)
+  LLM providers     Ollama model selection; API keys for OpenAI, Anthropic,
+                    Google, Groq, OpenRouter, Mammouth AI
+  OpenClaw          Gateway token; per-channel enable (Signal, Telegram, Discord)
+  Signalbot         Phone number; registration method (qr / sms)
+  Proxy             Caddy or Nginx Proxy Manager; URL routing mode
+  Ingestion         Google Drive rclone config
+  PUID / PGID       Host user ID for volume ownership
+
+OUTPUTS
+  /mnt/<tenant>/config/platform.conf   Single source of truth for all scripts
+  /etc/fstab entry                     EBS auto-mount on reboot
+
+EXAMPLES
+  bash scripts/1-setup-system.sh datasquiz
+  bash scripts/1-setup-system.sh datasquiz --dry-run
+  bash scripts/1-setup-system.sh datasquiz --template saved.conf
+  bash scripts/1-setup-system.sh datasquiz --deployment-mode standard
+HELP
+    exit 0
+}
+
 main() {
+    [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]] && show_help
     local tenant_id="${1:-}"
     local template_file=""
     local preserve_secrets=false
@@ -4096,10 +4189,13 @@ main() {
     local deployment_mode=""
     local dry_run=false
     local save_template=""
-    
+
     # Parse command line arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --help|-h)
+                show_help
+                ;;
             --ingest-from)
                 template_file="$2"
                 shift 2

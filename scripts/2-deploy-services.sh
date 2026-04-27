@@ -3088,12 +3088,18 @@ prepare_data_dirs() {
         fi
 
         # Build Telegram block
+        # Note: python3 json.load returns Python bool True/False → print() gives "True"/"False"
         if echo "${OPENCLAW_CHANNELS:-}" | grep -qE "telegram|all"; then
             if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then
                 local _telegram_valid=false
                 if command -v curl >/dev/null 2>&1; then
-                    local _telegram_check=$(curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" 2>/dev/null | python3 -c "import sys, json; print(json.load(sys.stdin).get('ok', 'false'))" 2>/dev/null || echo "false")
-                    [[ "$_telegram_check" == "True" ]] && _telegram_valid=true
+                    # Normalise to lowercase "true"/"false" for reliable comparison
+                    local _telegram_check
+                    _telegram_check=$(curl -s --max-time 10 \
+                        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" 2>/dev/null \
+                        | python3 -c "import sys,json; r=json.load(sys.stdin); print('true' if r.get('ok') else 'false')" \
+                        2>/dev/null || echo "false")
+                    [[ "$_telegram_check" == "true" ]] && _telegram_valid=true
                 fi
                 [[ -n "$_channels_json" ]] && _channels_json+=','$'\n'
                 if [[ "$_telegram_valid" == "true" ]]; then
@@ -3103,7 +3109,7 @@ prepare_data_dirs() {
       "dmPolicy": "pairing"
     }'
                 else
-                    log "WARNING: Telegram bot token invalid - disabling Telegram channel"
+                    log "WARNING: Telegram bot token invalid — channel seeded as disabled. Regenerate via BotFather."
                     _channels_json+='    "telegram": {
       "enabled": false,
       "botToken": "'"${TELEGRAM_BOT_TOKEN}"'",
@@ -3137,6 +3143,27 @@ prepare_data_dirs() {
   }'
         fi
 
+        # Pick a primary model that actually exists in our LiteLLM config.
+        # OpenClaw uses provider "openai" routed through LiteLLM, so the model
+        # name must match a model_name entry in litellm_config.yaml.
+        # Priority: Mammouth → Anthropic → Groq → OpenAI → Ollama
+        local _oc_primary_model=""
+        if [[ "${LITELLM_ENABLED:-false}" == "true" ]]; then
+            if [[ "${ENABLE_MAMMOUTH:-false}" == "true" && -n "${MAMMOUTH_MODELS:-}" ]]; then
+                _oc_primary_model="openai/mammouth/${MAMMOUTH_MODELS%%,*}"
+            elif [[ "${ENABLE_ANTHROPIC:-false}" == "true" && -n "${ANTHROPIC_MODELS:-}" ]]; then
+                _oc_primary_model="openai/${ANTHROPIC_MODELS%%,*}"
+            elif [[ "${ENABLE_GROQ:-false}" == "true" && -n "${GROQ_MODELS:-}" ]]; then
+                _oc_primary_model="openai/groq/${GROQ_MODELS%%,*}"
+            elif [[ "${ENABLE_OPENAI:-false}" == "true" && -n "${OPENAI_MODELS:-}" ]]; then
+                _oc_primary_model="openai/${OPENAI_MODELS%%,*}"
+            elif [[ "${OLLAMA_ENABLED:-false}" == "true" ]]; then
+                local _first_ollama="${OLLAMA_DEFAULT_MODEL:-${OLLAMA_MODELS%%,*}}"
+                [[ -n "$_first_ollama" ]] && _oc_primary_model="openai/ollama/${_first_ollama}"
+            fi
+        fi
+        [[ -z "$_oc_primary_model" ]] && _oc_primary_model="openai/gpt-4o"
+
         cat > "${_oc_json}" << OCEOF
 {
   "gateway": {
@@ -3150,6 +3177,33 @@ prepare_data_dirs() {
       "dangerouslyDisableDeviceAuth": true
     },
     "trustedProxies": ["0.0.0.0/0"]
+  },
+  "agents": {
+    "defaults": {
+      "models": {
+        "${_oc_primary_model}": {
+          "alias": "Datasquiz Default"
+        }
+      },
+      "model": {
+        "primary": "${_oc_primary_model}"
+      }
+    }
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "openai": {
+        "baseUrl": "http://${TENANT_PREFIX}-litellm:4000/v1",
+        "apiKey": "${LITELLM_MASTER_KEY}",
+        "models": [
+          {
+            "id": "${_oc_primary_model#openai/}",
+            "name": "${_oc_primary_model#openai/}"
+          }
+        ]
+      }
+    }
   }${_channels_section}
 }
 OCEOF
@@ -3721,13 +3775,14 @@ const pending=JSON.parse(fs.readFileSync('${_oc_c_pending}','utf8'));
 let paired={};
 try{paired=JSON.parse(fs.readFileSync('${_oc_c_paired}','utf8'));}catch(e){}
 for(const [rid,r] of Object.entries(pending)){
-  paired[rid]={...r,approved:true,status:'approved',approvedTs:now,scopes};
+  const stableId=(typeof r.deviceId==='string' && r.deviceId) ? r.deviceId : rid;
+  paired[stableId]={...r,requestId:rid,approved:true,status:'approved',approvedTs:now,scopes};
 }
 fs.writeFileSync('${_oc_c_paired}',JSON.stringify(paired,null,2));
 fs.writeFileSync('${_oc_c_pending}','{}');
 console.log('Approved',Object.keys(pending).length,'request(s)');
-" && docker restart "${TENANT_PREFIX}-openclaw" >/dev/null 2>&1 \
-                && ok "OpenClaw pairing approved and container restarted" \
+" \
+                && ok "OpenClaw pairing approved" \
                 || warn "OpenClaw auto-approve failed — run: bash scripts/3-configure-services.sh ${TENANT_ID} --openclaw-pairs"
         fi
     fi
@@ -3993,7 +4048,70 @@ trigger_initial_rclone_sync() {
 # =============================================================================
 # MAIN FUNCTION (README §6 - strict execution order)
 # =============================================================================
+show_help() {
+    cat <<'HELP'
+SCRIPT 2 — DEPLOYMENT ENGINE
+  Read platform.conf, generate all configs (docker-compose.yml, Caddyfile,
+  litellm_config.yaml, openclaw.json, zep-config.yaml), allocate ports, deploy
+  all containers, and wait until every enabled service is healthy.
+
+USAGE
+  bash scripts/2-deploy-services.sh <tenant_id> [OPTIONS]
+
+ARGUMENTS
+  tenant_id         Tenant identifier — must match the one used in Script 1
+
+OPTIONS
+  --help            Show this help and exit
+  --dry-run         Generate configs and print actions; do not start containers
+  --flushall        Wipe databases (postgres/redis/mongodb), Ollama model cache,
+                    and Docker image cache before deploying. Use for a fully
+                    clean redeploy. 5-second abort window. Preserves config/,
+                    logs/, and rclone/ credentials.
+  --flush-dbs       Wipe only database directories (postgres/redis/mongodb),
+                    preserve containers and Ollama models. For DB corruption
+                    recovery without re-pulling images.
+  --verify-only     Verify container health without deploying anything
+
+DEPLOYMENT FLOW
+  1.  Framework validation (Docker data-root on EBS, daemon healthy)
+  2.  prepare_data_dirs() — mkdir + chown for all enabled services
+  3.  Port allocator — resolves conflicts; writes .configured/port-allocations
+  4.  persist_generated_secrets() — idempotent secret generation to platform.conf
+  5.  generate_compose() — writes docker-compose.yml (heredoc, no templating)
+  6.  Config generation — Caddyfile, litellm_config.yaml, zep-config.yaml,
+      openclaw.json (always regenerated from platform.conf)
+  7.  docker compose up -d
+  8.  wait_for_all_health() — per-service health polling; creates per-service
+      PostgreSQL databases; enables pgvector for Letta/Zep; syncs Postgres +
+      MongoDB passwords on redeploy; auto-approves OpenClaw pending devices
+  9.  download_ollama_models() — pulls configured models if not present
+  10. show_post_deploy_dashboard() — URLs, credentials, next steps
+
+DATA SAFETY (default re-run, no flags)
+  EBS data (postgres/, redis/, mongodb/, ollama/models/, images) is PRESERVED.
+  Re-running without --flushall gives fast cost-efficient retries.
+
+OUTPUTS
+  /mnt/<tenant>/config/docker-compose.yml
+  /mnt/<tenant>/config/Caddyfile
+  /mnt/<tenant>/config/litellm_config.yaml
+  /mnt/<tenant>/config/zep-config.yaml
+  /mnt/<tenant>/openclaw/home/openclaw.json
+  /mnt/<tenant>/.configured/port-allocations
+  platform.conf updated with runtime secrets
+
+EXAMPLES
+  bash scripts/2-deploy-services.sh datasquiz
+  bash scripts/2-deploy-services.sh datasquiz --dry-run
+  bash scripts/2-deploy-services.sh datasquiz --flushall
+  bash scripts/2-deploy-services.sh datasquiz --flush-dbs
+HELP
+    exit 0
+}
+
 main() {
+    [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]] && show_help
     local tenant_id="${1:-}"
     local dry_run=false
     local flush_all=false
@@ -4002,6 +4120,9 @@ main() {
     shift
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --help|-h)
+                show_help
+                ;;
             --dry-run)
                 dry_run=true
                 shift

@@ -65,7 +65,47 @@ confirm_destructive() {
 # =============================================================================
 # MAIN FUNCTION (README §6 - strict execution order)
 # =============================================================================
+show_help() {
+    cat <<'HELP'
+SCRIPT 0 — NUCLEAR CLEANUP
+  Completely remove all containers, images, volumes, networks, and EBS data
+  for a named tenant. Requires root. Irreversible without a backup.
+
+USAGE
+  sudo bash scripts/0-complete-cleanup.sh <tenant_id> [OPTIONS]
+
+ARGUMENTS
+  tenant_id         Tenant identifier (e.g. datasquiz)
+
+OPTIONS
+  --dry-run         Print every action that would be taken; execute nothing
+  --containers-only Stop containers and remove networks only; leave all data
+                    directories and EBS mount intact
+  --help            Show this help and exit
+
+EXECUTION ORDER (when not --dry-run)
+  1. Typed confirmation: must type exactly  DELETE <tenant_id>
+  2. docker compose down --volumes (or manual container removal by label)
+  3. Remove Docker images scoped to tenant (label + name prefix)
+  4. Stop Docker daemon if data-root is on EBS (holds block-device FDs)
+  5. umount /mnt/<tenant>  (lazy fallback if busy)
+  6. rm -rf /mnt/<tenant>  (safety: rejects paths outside /opt/ or /mnt/)
+  7. docker network rm <tenant>-network
+
+SAFETY
+  Path guard: refuses /mnt or /opt root directories
+  EBS guard:  verifies unmount succeeded before rmdir
+
+EXAMPLES
+  sudo bash scripts/0-complete-cleanup.sh datasquiz --dry-run
+  sudo bash scripts/0-complete-cleanup.sh datasquiz --containers-only
+  sudo bash scripts/0-complete-cleanup.sh datasquiz
+HELP
+    exit 0
+}
+
 main() {
+    [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]] && show_help
     local tenant_id="${1:-}"
     local dry_run=false
     local containers_only=false
@@ -74,6 +114,9 @@ main() {
     shift
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --help|-h)
+                show_help
+                ;;
             --dry-run)
                 dry_run=true
                 shift
