@@ -869,7 +869,20 @@ Script 2's `prepare_data_dirs()` **always regenerates** `openclaw.json` on every
 
 **`channels.*.dmPolicy`**: Set to `"open"` with `"allowFrom": ["*"]` for Signal and Telegram so any user can send a message without an OpenClaw pairing handshake. `requireMention: false` for Discord. These are set by Script 2 and `--update-channels`.
 
-**OpenClaw embedded agent model**: Script 2 selects the primary model from the first available provider in this order: Mammouth → Anthropic → Groq → OpenAI → Ollama. The model is routed through LiteLLM (`models.providers.openai.baseUrl = http://litellm:4000/v1`). The default `openai/gpt-5.4` is NOT used — that causes 401 errors because it bypasses LiteLLM.
+**OpenClaw model routing through LiteLLM**: All models in OpenClaw's model picker are backed by LiteLLM (`models.providers.openai.baseUrl = http://litellm:4000/v1`). Script 2 generates the full model list from platform.conf, ordering local Ollama models first (lowest latency/cost), then Mammouth, Anthropic, Groq, OpenAI:
+
+```
+ollama/gemma3:4b        → Ollama local (default primary)
+ollama/llama3.2:3b      → Ollama local
+mammouth/claude-sonnet-4-6 → Mammouth API
+mammouth/gemini-2.5-flash  → Mammouth API
+mammouth/gpt-4o            → Mammouth API
+claude-3-5-sonnet-...      → Anthropic direct
+groq/llama-3.3-70b-...     → Groq
+...
+```
+
+The **default (primary) model is the first Ollama model** when Ollama is enabled. All model IDs match the `model_name` entries in `litellm_config.yaml`. To change the default live: use OpenClaw's model picker in the UI or run `--update-channels` which triggers a hot-reload.
 
 **Multi-channel setup** (Script 1 per-channel y/N prompts):
 - **Signal**: `ENABLE_SIGNALBOT=true` + phone number. After deploy, scan QR at `https://signal.<BASE_DOMAIN>/v1/qrcodelink`. If signalbot's signal-cli process dies (zombie after QR registration), restart the container: `docker restart ${TENANT_PREFIX}-signalbot`. The 3-process architecture (signal-cli daemon + bbernhard REST API + SSE proxy) uses `start.sh`; SSE proxy is PID 1 and does NOT restart dead child processes automatically.
@@ -1534,11 +1547,11 @@ With `gateway.controlUi.dangerouslyDisableDeviceAuth: true` in `openclaw.json` (
 
 Each channel is asked independently (y/N) — you can enable any combination:
 
-| Channel | Status | Notes |
+| Channel | Status | Setup required |
 |---|---|---|
-| **Signal** | ✅ Working | Scan QR at `https://signal.<BASE_DOMAIN>/v1/qrcodelink` after deploy. If signal-cli goes zombie (zombie process after QR registration), `docker restart ${TENANT_PREFIX}-signalbot`. |
-| **Telegram** | ✅ Working | Token validated against Telegram API at deploy time. If 401: regenerate via BotFather → update `TELEGRAM_BOT_TOKEN` in platform.conf → `--update-channels`. |
-| **Discord** | ❌ Needs intents | Enable **Message Content Intent** in [Discord Developer Portal → Bot → Privileged Gateway Intents](https://discord.com/developers/applications). Error 4014 = intents not enabled. |
+| **Signal** | ✅ Working | Scan QR at `https://signal.<BASE_DOMAIN>/v1/qrcodelink` after deploy. If signal-cli zombie after QR, `docker restart ${TENANT_PREFIX}-signalbot`. |
+| **Telegram** | ✅ Working | 1. Get token from BotFather → `TELEGRAM_BOT_TOKEN` in platform.conf → `--update-channels`. 2. Users must send `/start` to the bot before it can respond to them (Telegram policy — bots cannot initiate DMs). |
+| **Discord** | ❌ Needs bot invite | 1. Enable **Message Content Intent** in [Developer Portal → Bot → Privileged Gateway Intents](https://discord.com/developers/applications). 2. Invite the bot: `https://discord.com/oauth2/authorize?client_id=<BOT_CLIENT_ID>&permissions=8&scope=bot` (get the Client ID from Developer Portal → General Information). Error `channels unresolved` = bot not yet a member of the server. |
 
 **Recovery — reset gateway token:**
 ```bash

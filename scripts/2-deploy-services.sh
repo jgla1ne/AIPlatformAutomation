@@ -3169,6 +3169,64 @@ prepare_data_dirs() {
         fi
         [[ -z "$_oc_primary_model" ]] && _oc_primary_model="openai/gpt-4o"
 
+        # Build the full model list for OpenClaw from all configured LiteLLM providers.
+        # Model ids must match exactly the model_name entries in litellm_config.yaml.
+        # OpenClaw provider is "openai" (LiteLLM is OpenAI-compatible); full ref = "openai/<id>".
+        local _oc_models_json=""
+
+        # Local Ollama models first — lowest latency, no cost
+        if [[ "${OLLAMA_ENABLED:-false}" == "true" && -n "${OLLAMA_MODELS:-}" ]]; then
+            IFS=',' read -ra _om <<< "${OLLAMA_MODELS}"
+            for _m in "${_om[@]}"; do
+                _m="${_m// /}"
+                [[ -z "$_m" ]] && continue
+                [[ -n "$_oc_models_json" ]] && _oc_models_json+=","$'\n'
+                _oc_models_json+='          {"id":"ollama/'"${_m}"'","name":"'"${_m}"' (Local)"}'
+            done
+        fi
+        # Mammouth (Claude/Gemini/GPT via single key)
+        if [[ "${ENABLE_MAMMOUTH:-false}" == "true" && -n "${MAMMOUTH_MODELS:-}" ]]; then
+            IFS=',' read -ra _mm <<< "${MAMMOUTH_MODELS}"
+            for _m in "${_mm[@]}"; do
+                _m="${_m// /}"
+                [[ -z "$_m" ]] && continue
+                [[ -n "$_oc_models_json" ]] && _oc_models_json+=","$'\n'
+                _oc_models_json+='          {"id":"mammouth/'"${_m}"'","name":"'"${_m}"' (Mammouth)"}'
+            done
+        fi
+        # Anthropic
+        if [[ "${ENABLE_ANTHROPIC:-false}" == "true" && -n "${ANTHROPIC_MODELS:-}" ]]; then
+            IFS=',' read -ra _am <<< "${ANTHROPIC_MODELS}"
+            for _m in "${_am[@]}"; do
+                _m="${_m// /}"
+                [[ -z "$_m" ]] && continue
+                [[ -n "$_oc_models_json" ]] && _oc_models_json+=","$'\n'
+                _oc_models_json+='          {"id":"'"${_m}"'","name":"'"${_m}"' (Anthropic)"}'
+            done
+        fi
+        # Groq
+        if [[ "${ENABLE_GROQ:-false}" == "true" && -n "${GROQ_MODELS:-}" ]]; then
+            IFS=',' read -ra _gm <<< "${GROQ_MODELS}"
+            for _m in "${_gm[@]}"; do
+                _m="${_m// /}"
+                [[ -z "$_m" ]] && continue
+                [[ -n "$_oc_models_json" ]] && _oc_models_json+=","$'\n'
+                _oc_models_json+='          {"id":"groq/'"${_m}"'","name":"'"${_m}"' (Groq)"}'
+            done
+        fi
+        # OpenAI
+        if [[ "${ENABLE_OPENAI:-false}" == "true" && -n "${OPENAI_MODELS:-}" ]]; then
+            IFS=',' read -ra _oam <<< "${OPENAI_MODELS}"
+            for _m in "${_oam[@]}"; do
+                _m="${_m// /}"
+                [[ -z "$_m" ]] && continue
+                [[ -n "$_oc_models_json" ]] && _oc_models_json+=","$'\n'
+                _oc_models_json+='          {"id":"'"${_m}"'","name":"'"${_m}"' (OpenAI)"}'
+            done
+        fi
+        # Fallback if no models found
+        [[ -z "$_oc_models_json" ]] && _oc_models_json='          {"id":"gpt-4o","name":"GPT-4o"}'
+
         # ${DATA_DIR}/openclaw/home is drwx------ ubuntu (uid 1000).
         # The deploy user (jglaine, uid 1001) cannot write there directly.
         # Write to /tmp first, then copy + chown via docker run (runs as root).
@@ -3189,11 +3247,6 @@ prepare_data_dirs() {
   },
   "agents": {
     "defaults": {
-      "models": {
-        "${_oc_primary_model}": {
-          "alias": "Datasquiz Default"
-        }
-      },
       "model": {
         "primary": "${_oc_primary_model}"
       }
@@ -3206,10 +3259,7 @@ prepare_data_dirs() {
         "baseUrl": "http://${TENANT_PREFIX}-litellm:4000/v1",
         "apiKey": "${LITELLM_MASTER_KEY}",
         "models": [
-          {
-            "id": "${_oc_primary_model#openai/}",
-            "name": "${_oc_primary_model#openai/}"
-          }
+${_oc_models_json}
         ]
       }
     }
