@@ -802,7 +802,7 @@ OLLAMA_MAX_LOADED_MODELS: "1" # only keep 1 model hot at a time
 
 ### OpenClaw — Dynamic Port, Config Mount, and Token Auth
 
-OpenClaw reads `OPENCLAW_PORT` from its environment and binds to **that port** inside the container. Do NOT pass `--port` in the command — let the env var control the bind port. Correct port mapping: `"127.0.0.1:${OPENCLAW_PORT}:${OPENCLAW_PORT}"`. Caddy/NPM proxy targets `${TENANT_PREFIX}-openclaw:${OPENCLAW_PORT}`.
+OpenClaw reads `OPENCLAW_PORT` from its environment and binds to **that port** inside the container. Do NOT pass `--port` in the command — let the env var control the bind port. Correct port mapping: `"${OPENCLAW_PORT}:${OPENCLAW_PORT}"` (no explicit host binding → Docker default 0.0.0.0, required so Caddy on the Docker network can reach it). Caddy/NPM proxy targets `${TENANT_PREFIX}-openclaw:${OPENCLAW_PORT}`.
 
 OpenClaw stores its config at `/home/node/.openclaw/openclaw.json` (not `/.openclaw`). The volume must be mounted there:
 ```yaml
@@ -810,7 +810,13 @@ volumes:
   - ${DATA_DIR}/openclaw/data:/app/data
   - ${DATA_DIR}/openclaw/home:/home/node/.openclaw
 ```
-Script 2's `prepare_data_dirs()` pre-seeds `openclaw.json` with the `OPENCLAW_PASSWORD` gateway token and allowed CORS origins before the first container start — this is the only way to seed the token (env var `GATEWAY_TOKEN` seeds it only when the file is absent).
+Script 2's `prepare_data_dirs()` **always regenerates** `openclaw.json` on every deploy — this keeps `OPENCLAW_PASSWORD` in sync with platform.conf across redeploys.
+
+**Gateway mode** (`gateway.mode`): Set to `"remote"` when Caddy is enabled (OpenClaw must trust proxy headers and allow browser WebSocket connections forwarded from external IPs). Set to `"local"` for direct port access without a reverse proxy. Without the correct mode, OpenClaw blocks WebSocket connections entirely.
+
+**Alpine/Node.js image has no python3** — `openclaw_manage_pairs()` in Script 3 reads `pending.json` / `paired.json` via host python3 on the volume-mounted paths (`${DATA_DIR}/openclaw/home/devices/`), NOT via `docker exec python3`.
+
+**Approved device scopes**: When approving a pairing request, the entry written to `paired.json` must include `"scopes": ["operator.read","operator.write","operator.admin","operator.approvals","operator.pairing"]` or OpenClaw may not recognise the device as fully authorised in newer versions.
 
 **Credentials displayed by Script 3:**
 - Web UI: `https://openclaw.${BASE_DOMAIN}`
@@ -1283,9 +1289,9 @@ docker exec ai-<tenant>-postgres psql -U <POSTGRES_USER> -d postgres \
 
 **Symptom:** OpenClaw UI shows "origin not allowed" or the desktop/mobile client rejects the gateway token.
 
-**Root cause:** `openclaw.json` is seeded by `prepare_data_dirs()` only when the file is absent. If the file existed from a prior deploy with a different token, the stale token stays — `OPENCLAW_PASSWORD` in platform.conf is updated but the JSON is not.
+**Root cause (fixed):** `openclaw.json` was previously only written when absent, so a stale token from a prior deploy would persist. Now Script 2 always regenerates `openclaw.json` from platform.conf.
 
-**Fix:** Manually update `${DATA_DIR}/openclaw/home/openclaw.json` to match `OPENCLAW_PASSWORD` from platform.conf, then restart the container. Script 3 `--reconfigure openclaw` will also fix this.
+**If hitting this on a running stack:** Run `bash scripts/3-configure-services.sh <tenant_id> --reconfigure openclaw` — this regenerates a fresh token, writes it to both platform.conf and `openclaw.json`, and restarts the container. Re-pair all devices after token rotation.
 
 ### MongoDB password authentication failed (LibreChat 502 after redeploy)
 

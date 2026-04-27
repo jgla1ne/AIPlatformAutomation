@@ -618,27 +618,33 @@ configure_librechat() {
 
 openclaw_manage_pairs() {
     local container="${TENANT_PREFIX}-openclaw"
-    local pending_path="/home/node/.openclaw/devices/pending.json"
-    local paired_path="/home/node/.openclaw/devices/paired.json"
+    # Use host-side volume paths — Alpine/Node.js image has no python3.
+    local h_pending="${DATA_DIR}/openclaw/home/devices/pending.json"
+    local h_paired="${DATA_DIR}/openclaw/home/devices/paired.json"
 
-    local pending_count
-    pending_count=$(docker exec "$container" python3 -c \
-        "import json; print(len(json.load(open('${pending_path}'))))" 2>/dev/null || echo "0")
+    # Ensure devices dir exists (may not exist on fresh deploy before first browser connect)
+    mkdir -p "${DATA_DIR}/openclaw/home/devices"
+
+    local pending_count=0
+    if [[ -f "${h_pending}" ]]; then
+        pending_count=$(python3 -c "import json; print(len(json.load(open('${h_pending}'))))" 2>/dev/null || echo "0")
+    fi
 
     if [[ "$pending_count" == "0" ]]; then
         echo "No pending OpenClaw pairing requests."
-        local paired_count
-        paired_count=$(docker exec "$container" python3 -c \
-            "import json; print(len(json.load(open('${paired_path}'))))" 2>/dev/null || echo "0")
+        local paired_count=0
+        if [[ -f "${h_paired}" ]]; then
+            paired_count=$(python3 -c "import json; print(len(json.load(open('${h_paired}'))))" 2>/dev/null || echo "0")
+        fi
         echo "Currently paired devices: ${paired_count}"
         return 0
     fi
 
     echo ""
     echo "Pending OpenClaw pairing requests (${pending_count}):"
-    docker exec "$container" python3 -c "
+    python3 -c "
 import json
-with open('${pending_path}') as f: pending=json.load(f)
+with open('${h_pending}') as f: pending=json.load(f)
 for rid,r in pending.items():
     print(f'  ID: {rid}')
     print(f'  Platform: {r.get(\"platform\",\"?\")}  Client: {r.get(\"clientId\",\"?\")}  Role: {r.get(\"role\",\"?\")}')
@@ -654,31 +660,33 @@ for rid,r in pending.items():
 
     case "$choice" in
         a|A)
-            docker exec "$container" python3 -c "
-import json, time, os
-pending_path='${pending_path}'; paired_path='${paired_path}'; conf_path='/home/node/.openclaw/openclaw.json'
-if os.path.exists(conf_path):
-    with open(conf_path) as f: conf=json.load(f)
-    if 'gateway' not in conf: conf['gateway']={}
-    conf['gateway']['trustedProxies']=['0.0.0.0/0']
-    with open(conf_path,'w') as f: json.dump(conf,f,indent=2)
-with open(pending_path) as f: pending=json.load(f)
+            python3 -c "
+import json, time
+scopes=['operator.read','operator.write','operator.admin','operator.approvals','operator.pairing']
+with open('${h_pending}') as f: pending=json.load(f)
 try:
-    with open(paired_path) as f: paired=json.load(f)
+    with open('${h_paired}') as f: paired=json.load(f)
 except: paired={}
 now=int(time.time()*1000)
 for rid,r in pending.items():
-    paired[rid]={**r,'approved':True,'status':'approved','approvedTs':now}
+    paired[rid]={**r,'approved':True,'status':'approved','approvedTs':now,'scopes':scopes}
     print(f'Approved: {rid}')
-with open(paired_path,'w') as f: json.dump(paired,f,indent=2)
-with open(pending_path,'w') as f: json.dump({},f,indent=2)
+with open('${h_paired}','w') as f: json.dump(paired,f,indent=2)
+with open('${h_pending}','w') as f: json.dump({},f,indent=2)
 print('Done.')
 "
-            warn "Approved! Try to connect in the UI now. If it still says 'pairing required', run: docker restart $container"
+            # Fix ownership so container (uid 1000) can read the updated file
+            docker run --rm -v "${DATA_DIR}/openclaw/home:/target" alpine:latest \
+                chown -R 1000:1000 /target 2>/dev/null || true
+            docker restart "$container" >/dev/null 2>&1 || true
+            ok "Approved! Container restarted. Connect from the browser now."
             ;;
         d|D)
-            docker exec "$container" python3 -c \
-                "open('${pending_path}','w').write('{}')"
+            python3 -c "
+import json
+with open('${h_pending}','w') as f: json.dump({},f)
+print('Cleared.')
+"
             ok "Pending requests cleared (denied)"
             ;;
         *)
@@ -3220,16 +3228,24 @@ reconfigure_service() {
 
         openclaw)
             local new_pass
-            new_pass=$(openssl rand -base64 16 | tr -d '=+/')
-            _update_conf "OPENCLAW_ADMIN_PASSWORD" "$new_pass"
-            # OpenClaw stores password in its config file — rewrite it
-            local cfg="${DATA_DIR}/openclaw/config/config.json"
+            new_pass=$(openssl rand -hex 24)
+            _update_conf "OPENCLAW_PASSWORD" "$new_pass"
+            # Rewrite the gateway token in openclaw.json (host volume path)
+            local cfg="${DATA_DIR}/openclaw/home/openclaw.json"
             if [[ -f "$cfg" ]]; then
-                jq --arg p "$new_pass" '.auth.adminPassword = $p' "$cfg" > "${cfg}.tmp" && mv "${cfg}.tmp" "$cfg"
+                python3 -c "
+import json
+with open('${cfg}') as f: c=json.load(f)
+if 'gateway' not in c: c['gateway']={}
+if 'auth' not in c['gateway']: c['gateway']['auth']={}
+c['gateway']['auth']['token']='${new_pass}'
+with open('${cfg}','w') as f: json.dump(c,f,indent=2)
+print('Token updated.')
+"
             fi
             docker restart "${TENANT_PREFIX}-openclaw" 2>/dev/null || true
-            echo "  OpenClaw admin password reset to: ${new_pass}"
-            echo "  Written to platform.conf and config.json."
+            echo "  OpenClaw gateway token reset to: ${new_pass}"
+            echo "  Written to platform.conf and openclaw.json. Re-pair your devices."
             ;;
 
         dify)

@@ -3065,64 +3065,82 @@ prepare_data_dirs() {
         # Pre-seed openclaw.json with gateway token + CORS allowed origins + channels.
         local _oc_json="${DATA_DIR}/openclaw/home/openclaw.json"
         local _oc_origin="*"
+        # "remote" mode when behind Caddy so OpenClaw trusts proxy headers and accepts
+        # browser WebSocket connections forwarded from external IPs.  "local" for direct access.
+        local _oc_mode="local"
         if [[ "${CADDY_ENABLED:-false}" == "true" && -n "${BASE_DOMAIN:-}" ]]; then
             _oc_origin="https://openclaw.${BASE_DOMAIN}"
+            _oc_mode="remote"
         fi
-        if [[ ! -f "${_oc_json}" ]]; then
-            local _channels_json=""
-            
-            # Build Signal block
-            if echo "${OPENCLAW_CHANNELS:-signal}" | grep -qE "signal|all"; then
-                if [[ "${SIGNALBOT_ENABLED:-false}" == "true" && -n "${SIGNAL_PHONE:-}" ]]; then
-                    _channels_json+='    "signal": {
+        # Always regenerate openclaw.json so OPENCLAW_PASSWORD stays in sync with platform.conf.
+        local _channels_json=""
+
+        # Build Signal block
+        if echo "${OPENCLAW_CHANNELS:-signal}" | grep -qE "signal|all"; then
+            if [[ "${SIGNALBOT_ENABLED:-false}" == "true" && -n "${SIGNAL_PHONE:-}" ]]; then
+                _channels_json+='    "signal": {
       "enabled": true,
       "account": "'"${SIGNAL_PHONE}"'",
       "httpUrl": "http://'"${TENANT_PREFIX}"'-signalbot:9999",
       "autoStart": false
     }'
-                fi
             fi
+        fi
 
-            # Build Telegram block
-            if echo "${OPENCLAW_CHANNELS:-}" | grep -qE "telegram|all"; then
-                if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then
-                    [[ -n "$_channels_json" ]] && _channels_json+=','$'\n'
+        # Build Telegram block
+        if echo "${OPENCLAW_CHANNELS:-}" | grep -qE "telegram|all"; then
+            if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then
+                local _telegram_valid=false
+                if command -v curl >/dev/null 2>&1; then
+                    local _telegram_check=$(curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" 2>/dev/null | python3 -c "import sys, json; print(json.load(sys.stdin).get('ok', 'false'))" 2>/dev/null || echo "false")
+                    [[ "$_telegram_check" == "True" ]] && _telegram_valid=true
+                fi
+                [[ -n "$_channels_json" ]] && _channels_json+=','$'\n'
+                if [[ "$_telegram_valid" == "true" ]]; then
                     _channels_json+='    "telegram": {
       "enabled": true,
       "botToken": "'"${TELEGRAM_BOT_TOKEN}"'",
       "dmPolicy": "pairing"
     }'
+                else
+                    log "WARNING: Telegram bot token invalid - disabling Telegram channel"
+                    _channels_json+='    "telegram": {
+      "enabled": false,
+      "botToken": "'"${TELEGRAM_BOT_TOKEN}"'",
+      "dmPolicy": "pairing"
+    }'
                 fi
             fi
+        fi
 
-            # Build Discord block
-            if echo "${OPENCLAW_CHANNELS:-}" | grep -qE "discord|all"; then
-                if [[ -n "${DISCORD_BOT_TOKEN:-}" && -n "${DISCORD_GUILD_ID:-}" ]]; then
-                    [[ -n "$_channels_json" ]] && _channels_json+=','$'\n'
-                    _channels_json+='    "discord": {
+        # Build Discord block
+        if echo "${OPENCLAW_CHANNELS:-}" | grep -qE "discord|all"; then
+            if [[ -n "${DISCORD_BOT_TOKEN:-}" && -n "${DISCORD_GUILD_ID:-}" ]]; then
+                [[ -n "$_channels_json" ]] && _channels_json+=','$'\n'
+                _channels_json+='    "discord": {
       "enabled": true,
       "token": "'"${DISCORD_BOT_TOKEN}"'",
       "guilds": {
         "'"${DISCORD_GUILD_ID}"'": {
-          "requireMention": false
+          "requireMention": true
         }
       }
     }'
-                fi
             fi
+        fi
 
-            local _channels_section=""
-            if [[ -n "$_channels_json" ]]; then
-                _channels_section=',
+        local _channels_section=""
+        if [[ -n "$_channels_json" ]]; then
+            _channels_section=',
   "channels": {
 '"$_channels_json"'
   }'
-            fi
+        fi
 
-            cat > "${_oc_json}" << OCEOF
+        cat > "${_oc_json}" << OCEOF
 {
   "gateway": {
-    "mode": "local",
+    "mode": "${_oc_mode}",
     "auth": {
       "mode": "token",
       "token": "${OPENCLAW_PASSWORD}"
@@ -3134,9 +3152,8 @@ prepare_data_dirs() {
   }${_channels_section}
 }
 OCEOF
-            # openclaw image runs as node (uid 1000) — file must be readable by that uid
-            chmod 644 "${_oc_json}"
-        fi
+        # openclaw image runs as node (uid 1000) — file must be readable by that uid
+        chmod 644 "${_oc_json}"
         # openclaw container runs as node (uid 1000), not PUID — chown accordingly
         docker run --rm -v "${DATA_DIR}/openclaw/home:/target" alpine:latest \
             chown -R 1000:1000 /target 2>/dev/null || true
@@ -3158,8 +3175,9 @@ try:
         with open(paired_path, 'r') as f: paired = json.load(f)
     else: paired = {}
     now = int(time.time() * 1000)
+    scopes = ['operator.read','operator.write','operator.admin','operator.approvals','operator.pairing']
     for rid, r in pending.items():
-        paired[rid] = {**r, 'approved': True, 'approvedTs': now}
+        paired[rid] = {**r, 'approved': True, 'status': 'approved', 'approvedTs': now, 'scopes': scopes}
     with open(paired_path, 'w') as f: json.dump(paired, f, indent=2)
     with open(pending_path, 'w') as f: json.dump({}, f, indent=2)
 except Exception as e: print(f"  ⚠️ Failed to auto-approve: {e}")
@@ -3717,8 +3735,9 @@ try:
     with open('$_oc_paired') as f: paired=json.load(f)
 except: paired={}
 now=int(time.time()*1000)
+scopes=['operator.read','operator.write','operator.admin','operator.approvals','operator.pairing']
 for rid,r in pending.items():
-    paired[rid]={**r,'approved':True,'approvedTs':now}
+    paired[rid]={**r,'approved':True,'status':'approved','approvedTs':now,'scopes':scopes}
 with open('$_oc_paired','w') as f: json.dump(paired,f,indent=2)
 with open('$_oc_pending','w') as f: json.dump({},f,indent=2)
 print(f'Approved {len(pending)} request(s)')

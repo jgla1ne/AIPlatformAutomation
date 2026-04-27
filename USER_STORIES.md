@@ -1089,11 +1089,14 @@ Epic 13 — Hardware       GPU/CPU detection, deployment guidance, model recomme
 
 | Issue | Impact | Mitigation | Timeline |
 |---|---|---|---|
-| **Port Binding Issue** | Remote access fails | Script 2 fix applied | ✅ Resolved |
-| **Gateway Mode Constraint** | Local connections only | Set to "remote" mode | ✅ Resolved |
-| **Device Pairing Loops** | Infinite requests | GitHub Issue #21688 fix | ✅ Resolved |
-| **Telegram Token Invalid** | 401 Unauthorized | Token regeneration | 🔄 In Progress |
-| **Discord Intents Missing** | 4014 Gateway closed | Enable privileged intents | 🔄 In Progress |
+| **Port Binding Issue** | Remote access fails | Script 2: `"${PORT}:${PORT}"` (0.0.0.0 default) | ✅ Resolved |
+| **Gateway Mode** | WebSocket blocked | `"mode":"remote"` when Caddy enabled, `"local"` otherwise | ✅ Resolved |
+| **Stale openclaw.json on redeploy** | Token mismatch → auth fails | Script 2 always regenerates `openclaw.json` | ✅ Resolved |
+| **Script 3 --openclaw-pairs broken** | docker exec python3 fails (not in image) | Rewritten to use host python3 on volume paths | ✅ Resolved |
+| **Missing scopes in paired.json** | Device re-asks for pairing | Full operator scopes written on approval | ✅ Resolved |
+| **Wrong --reconfigure openclaw path** | Token reset silently fails | Fixed path + key in Script 3 | ✅ Resolved |
+| **Device Pairing Loops (GitHub #21688)** | Infinite requests | Latest alpine/openclaw:latest has fix | ✅ Resolved |
+| **Telegram Token Invalid** | 401 Unauthorized | Token regeneration via BotFather | 🔄 In Progress |
+| **Discord Intents Missing** | 4014 Gateway closed | Enable privileged intents in Discord Dev Portal | 🔄 In Progress |
 | **Signal Timing Delay** | 4+ hour confirmation | API timing investigation | ⚠️ Under Investigation |
 | **Browser Session Issues** | Device recognition | Clear localStorage/cookies | ✅ Workaround Available |
-| **Cross-Platform Sessions** | Session breaks on switch | Browser profile sync | ⚠️ Partial Fix |

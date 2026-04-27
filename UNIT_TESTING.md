@@ -1882,38 +1882,49 @@ done
 
 ---
 
-## Critical Constraints Summary
+## Critical Constraints Summary (updated 2026-04-27)
 
 | Constraint | Test Coverage | Status | Mitigation |
 |---|---|---|---|
-| **Port Binding** | T51 | PASS | Script 2 fix applied |
-| **Gateway Mode** | T51 | PASS | Remote mode configured |
-| **Device Loops** | T52 | PASS | Nuclear reset available |
-| **Channel Auth** | T53 | FAIL | Token regeneration needed |
+| **Port Binding** | T51 | PASS | `"${PORT}:${PORT}"` (0.0.0.0 default) |
+| **Gateway Mode** | T51 | PASS | `"remote"` when Caddy enabled (was `"local"` — now fixed) |
+| **Stale openclaw.json token** | T58 | PASS | Script 2 always regenerates from platform.conf |
+| **Script 3 pairs broken (no python3)** | T58 | PASS | Host python3 on volume paths (was `docker exec python3`) |
+| **Missing device scopes** | T52 | PASS | Full operator scopes written on approval |
+| **Wrong reconfigure path** | T58 | PASS | Fixed key + path in Script 3 |
+| **Device Loops (GitHub #21688)** | T52 | PASS | Latest image fix + correct scopes |
+| **Channel Auth** | T53 | FAIL | Token regeneration needed (external) |
 | **Signal Timing** | T55 | FAIL | 4+ hour delay under investigation |
 | **Multi-Platform** | T56 | PARTIAL | Session persistence issues |
 | **Error Recovery** | T57 | PASS | Recovery procedures validated |
 
 ---
 
-## Production Deployment Validation
+## RUN 16 — 2026-04-27 (OpenClaw Root-Cause Fixes)
 
-### Pre-Deployment Checklist
-- [ ] Script 2 port mapping fix verified
-- [ ] Gateway mode set to "remote"
-- [ ] OpenClaw version 2026.4.22+ installed
-- [ ] All channel tokens validated
-- [ ] Discord privileged intents enabled
-- [ ] Signal QR code pairing tested
-- [ ] Device pairing loop detection enabled
-- [ ] Error recovery procedures documented
+**Status:** `PENDING` | **Baseline:** `v5.16.0`  
+**Changes this run:** Five root-cause fixes for OpenClaw pairing failure that Windsurf's investigation did not resolve.
 
-### Post-Deployment Validation
-- [ ] Remote Web UI accessible (HTTPS 200)
-- [ ] WebSocket challenge/response working
-- [ ] No duplicate deviceIds in paired.json
-- [ ] Full operator scopes applied
-- [ ] Channel authentication successful
-- [ ] Signal pairing timing acceptable
-- [ ] Multi-platform session persistence
-- [ ] Error recovery procedures tested
+### T58 — OpenClaw Pairing Infrastructure Validation
+
+Tests the four script-level bugs that caused persistent pairing failure.
+
+| Check | Command | Expected |
+|---|---|---|
+| `gateway.mode` is `"remote"` with Caddy | `python3 -c "import json; print(json.load(open('${DATA_DIR}/openclaw/home/openclaw.json'))['gateway']['mode'])"` | `remote` |
+| Token in JSON matches platform.conf | Compare `OPENCLAW_PASSWORD` from platform.conf vs `gateway.auth.token` in openclaw.json | match |
+| openclaw.json regenerated on redeploy | Deploy twice; check token changes in JSON | yes |
+| Host python3 counts pending correctly | `python3 -c "import json; print(len(json.load(open('${DATA_DIR}/openclaw/home/devices/pending.json'))))"` | integer |
+| `--openclaw-pairs` approves on host | Run `bash scripts/3-configure-services.sh <tenant> --openclaw-pairs`; check paired.json updated | updated |
+| Approved entry has scopes | `python3 -c "import json; d=json.load(open('${DATA_DIR}/openclaw/home/devices/paired.json')); print(list(d.values())[0].get('scopes'))"` | full list |
+| `--reconfigure openclaw` writes correct path | `bash scripts/3-configure-services.sh <tenant> --reconfigure openclaw`; confirm `home/openclaw.json` updated | updated |
+
+### Post-Deployment Checklist (clean deploy)
+- [ ] `openclaw.json` present with `"mode": "remote"` (Caddy) or `"mode": "local"` (direct)
+- [ ] Token in `openclaw.json` matches `OPENCLAW_PASSWORD` in platform.conf
+- [ ] Web UI reachable: `https://openclaw.${BASE_DOMAIN}` returns HTTP 200
+- [ ] Enter gateway URL + token in web UI → pairing request created in pending.json
+- [ ] Run `--openclaw-pairs` → approved entry appears in paired.json with operator scopes
+- [ ] Browser reconnects without re-prompting for pairing
+- [ ] Discord bot: enable Privileged Gateway Intents in Discord Developer Portal
+- [ ] Telegram bot: regenerate token via BotFather if 401 errors appear
