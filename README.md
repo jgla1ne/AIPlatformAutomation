@@ -1550,7 +1550,7 @@ Each channel is asked independently (y/N) — you can enable any combination:
 | Channel | Status | Setup required |
 |---|---|---|
 | **Signal** | ✅ Working | Scan QR at `https://signal.<BASE_DOMAIN>/v1/qrcodelink` after deploy. If signal-cli zombie after QR, `docker restart ${TENANT_PREFIX}-signalbot`. |
-| **Telegram** | ✅ Working | 1. Get token from BotFather → `TELEGRAM_BOT_TOKEN` in platform.conf → `--update-channels`. 2. Users must send `/start` to the bot before it can respond to them (Telegram policy — bots cannot initiate DMs). |
+| **Telegram** | ✅ Verified | Token valid; `@Datasquiz_aid_test_bot` responding. Users must send `/start` to the bot first (Telegram policy — bots cannot initiate DMs). |
 | **Discord** | ❌ Needs bot invite | 1. Enable **Message Content Intent** in [Developer Portal → Bot → Privileged Gateway Intents](https://discord.com/developers/applications). 2. Invite the bot: `https://discord.com/oauth2/authorize?client_id=<BOT_CLIENT_ID>&permissions=8&scope=bot` (get the Client ID from Developer Portal → General Information). Error `channels unresolved` = bot not yet a member of the server. |
 
 **Recovery — reset gateway token:**

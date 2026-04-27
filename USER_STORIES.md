@@ -1101,7 +1101,7 @@ Epic 13 — Hardware       GPU/CPU detection, deployment guidance, model recomme
 | **Missing scopes in paired.json** | Device re-asks for pairing | Full operator scopes written on approval | ✅ Resolved |
 | **Wrong --reconfigure openclaw path** | Token reset silently fails | Fixed path + key in Script 3 | ✅ Resolved |
 | **Device Pairing Loops (GitHub #21688)** | Infinite requests | Latest alpine/openclaw:latest has fix | ✅ Resolved |
-| **Telegram Token Invalid** | 401 Unauthorized | Token regenerated via BotFather + `--update-channels` | ✅ Resolved |
+| **Telegram Token Invalid** | 401 Unauthorized | Token regenerated via BotFather + `--update-channels`; users send `/start` first | ✅ Resolved |
 | **Discord Intents Missing** | 4014 Gateway closed | (1) Enable Message Content Intent in Dev Portal (2) Invite bot via OAuth URL | 🔄 In Progress (external) |
 | **Discord channels unresolved** | Bot can't find server | Bot must be invited: `https://discord.com/oauth2/authorize?client_id=<ID>&permissions=8&scope=bot` | 🔄 In Progress |
 | **OpenClaw only showing cloud models** | Local Ollama models missing | Script 2 now generates full model list; Ollama first, dmPolicy open | ✅ Resolved |

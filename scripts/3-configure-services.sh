@@ -711,6 +711,12 @@ if(isAll||ch.includes('discord')) {
 if(Object.keys(channels).length>0) c.channels=channels;
 else delete c.channels;
 
+// Ensure LLM idle timeout is set (Ollama needs 120s on first model load)
+if(!c.agents) c.agents={};
+if(!c.agents.defaults) c.agents.defaults={};
+if(!c.agents.defaults.llm) c.agents.defaults.llm={};
+if(!c.agents.defaults.llm.idleTimeoutSeconds) c.agents.defaults.llm.idleTimeoutSeconds=120;
+
 fs.writeFileSync(path,JSON.stringify(c,null,2));
 console.log('Channels updated:',Object.keys(channels).join(', ')||'none');
 " 2>/dev/null

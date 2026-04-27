@@ -3249,6 +3249,9 @@ prepare_data_dirs() {
     "defaults": {
       "model": {
         "primary": "${_oc_primary_model}"
+      },
+      "llm": {
+        "idleTimeoutSeconds": 120
       }
     }
   },
