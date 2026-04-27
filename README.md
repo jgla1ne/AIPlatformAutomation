@@ -863,6 +863,18 @@ Script 2's `prepare_data_dirs()` **always regenerates** `openclaw.json` on every
 
 **Alpine/Node.js image has no python3** — `openclaw_manage_pairs()` in Script 3 reads `pending.json` / `paired.json` via `docker exec $container node` (Node.js is guaranteed present), NOT via host python3. Host python3 fails silently because the device files are `600 ubuntu:ubuntu` and the deploy user cannot read them.
 
+**OpenClaw embedded agent model**: Script 2 selects the primary model from the first available provider in this order: Mammouth → Anthropic → Groq → OpenAI → Ollama. The model is routed through LiteLLM (`models.providers.openai.baseUrl = http://litellm:4000/v1`). The default `openai/gpt-5.4` is NOT used — that causes 401 errors because it bypasses LiteLLM.
+
+**Multi-channel setup** (Script 1 per-channel y/N prompts):
+- **Signal**: `ENABLE_SIGNALBOT=true` + phone number. After deploy, scan QR at `https://signal.<BASE_DOMAIN>/v1/qrcodelink`. If signalbot's signal-cli process dies (zombie after QR registration), restart the container: `docker restart ${TENANT_PREFIX}-signalbot`. The 3-process architecture (signal-cli daemon + bbernhard REST API + SSE proxy) uses `start.sh`; SSE proxy is PID 1 and does NOT restart dead child processes automatically.
+- **Telegram**: Token validated against Telegram API at deploy time. Invalid token → `enabled: false` seeded in `openclaw.json`. Regenerate token via BotFather; then run `bash scripts/3-configure-services.sh <tenant> --update-channels`.
+- **Discord**: Requires **Privileged Gateway Intents** (Message Content Intent) enabled in [Discord Developer Portal → Bot → Privileged Gateway Intents](https://discord.com/developers/applications). Without it OpenClaw logs `4014 missing privileged gateway intents` and the channel stays disconnected.
+
+**`--update-channels` (Script 3)**: Rebuilds the `channels` section in `openclaw.json` from current `platform.conf` values, re-validates Telegram token, restarts OpenClaw. Use after token regeneration without a full Script 2 redeploy:
+```bash
+bash scripts/3-configure-services.sh <tenant_id> --update-channels
+```
+
 **Credentials displayed by Script 3:**
 - Web UI: `https://openclaw.${BASE_DOMAIN}`
 - Gateway URL (for desktop/mobile client): `wss://openclaw.${BASE_DOMAIN}`
@@ -1382,15 +1394,9 @@ docker compose up -d ai-<tenant>-anythingllm
 
 **Symptom:** OpenClaw web UI shows "pairing required" after the gateway token is entered. The `openclaw.json` has the correct token.
 
-**What the gateway token is:** The token in `openclaw.json` (`gateway.auth.token`) is the shared secret the OpenClaw **server** uses to authenticate incoming client connections. It is NOT a session cookie or auto-paired credential.
+**Resolution (already applied):** `gateway.controlUi.dangerouslyDisableDeviceAuth: true` in `openclaw.json` bypasses the device-pairing handshake entirely for the browser control UI. No pairing prompt should appear. If it does, the most likely cause is a stale `openclaw.json` without this flag — run `bash scripts/3-configure-services.sh <tenant> --reconfigure openclaw` or regenerate with Script 2.
 
-**Required user action (one-time per device):** Open the OpenClaw web UI → click the "Connect to Gateway" or "Pair" button → enter:
-- Gateway URL: `https://openclaw.<BASE_DOMAIN>` (or `wss://openclaw.<BASE_DOMAIN>`)
-- Gateway Token: the value of `OPENCLAW_PASSWORD` from `platform.conf` (also in `openclaw.json`)
-
-This registers the browser/client session with the gateway. "Pairing required" means no client has connected to this gateway yet — it is expected on first deploy.
-
-**Script 2 responsibility:** Seeds the token into `openclaw.json` before container start (ensures the gateway accepts the token). The actual pairing handshake must be initiated by the end user through the UI — it cannot be automated.
+**What the gateway token is:** The token (`OPENCLAW_PASSWORD`) is the shared secret the browser must present to connect to the gateway. It is NOT a per-device pairing token. Enter it once in the UI; the browser session persists via localStorage.
 
 ### OpenClaw Signal channel "SSE stream error" / "fetch failed"
 
@@ -1407,11 +1413,17 @@ This registers the browser/client session with the gateway. "Pairing required" m
 
 Signal channel is healthy when OpenClaw logs `[signal] [default] starting provider (http://...signalbot:9999)` with no subsequent SSE errors.
 
+**signal-cli zombie after QR registration:** The SSE proxy (PID 1 in the signalbot container) does NOT supervise child processes. When signal-cli exits after a QR pairing event, it becomes a zombie. The SSE proxy loops at ~90% CPU polling a dead `http://127.0.0.1:9080`. Fix: `docker restart ${TENANT_PREFIX}-signalbot`. To confirm: `docker exec ${TENANT_PREFIX}-signalbot ps aux` — healthy shows `java ... daemon` as a live process, not `<defunct>`.
+
 **Manual fix (if hitting on a running stack):**
 ```bash
-# Regenerate start.sh and sse-proxy.py by running prepare_data_dirs via script 2
-bash scripts/2-deploy-services.sh <tenant_id> --verify-only
-docker compose -f /mnt/<tenant>/config/docker-compose.yml up -d ai-<tenant>-signalbot
+# Restart signalbot (revives all 3 processes)
+docker restart ai-<tenant>-signalbot
+
+# Update channels without full redeploy (e.g. after Telegram token regeneration)
+bash scripts/3-configure-services.sh <tenant_id> --update-channels
+
+# Check Signal provider started cleanly
 docker logs ai-<tenant>-openclaw --since 30s | grep signal
 ```
 
@@ -1511,10 +1523,15 @@ With `gateway.controlUi.dangerouslyDisableDeviceAuth: true` in `openclaw.json` (
 3. Enter Token: `OPENCLAW_PASSWORD` from platform.conf (also shown in Script 3 credentials)
 4. Connected — no pairing prompt, no admin approval step
 
-**Multi-channel setup (Script 1 wizard):**
-- **Signal**: Set `ENABLE_SIGNALBOT=true`, provide phone number. After Script 2, scan the QR code at `https://signal.<BASE_DOMAIN>/v1/qrcodelink?device_name=openclaw`
-- **Telegram**: Provide bot token from BotFather. Token is validated during Script 2; invalid tokens are seeded as `enabled: false`
-- **Discord**: Provide bot token + Guild ID. Enable **Privileged Gateway Intents** in Discord Developer Portal or the bot silently fails with error 4014
+**Multi-channel setup (Script 1 per-channel prompts):**
+
+Each channel is asked independently (y/N) — you can enable any combination:
+
+| Channel | Status | Action needed |
+|---|---|---|
+| **Signal** | ✅ Working | Scan QR at `https://signal.<BASE_DOMAIN>/v1/qrcodelink` after deploy. If signal-cli goes zombie, `docker restart ${TENANT_PREFIX}-signalbot`. |
+| **Telegram** | ❌ Requires valid token | Token validated at deploy. If 401: regenerate via BotFather, update `TELEGRAM_BOT_TOKEN` in platform.conf, run `--update-channels`. |
+| **Discord** | ❌ Requires intents | Enable **Message Content Intent** (Privileged Gateway Intents) in [Discord Developer Portal → Bot](https://discord.com/developers/applications). Error 4014 = intents missing. |
 
 **Recovery — reset gateway token:**
 ```bash
@@ -1533,8 +1550,8 @@ DOCKER_HOST=unix:///var/run/docker.sock docker restart ai-<tenant>-openclaw
 
 **Configuration validation:**
 ```bash
-python3 -c "import json; c=json.load(open('/mnt/<tenant>/openclaw/home/openclaw.json')); print('mode:', c['gateway']['mode']); print('disableDeviceAuth:', c['gateway']['controlUi'].get('dangerouslyDisableDeviceAuth'))"
-# Expected: mode: remote, disableDeviceAuth: True
+python3 -c "import json; c=json.load(open('/mnt/<tenant>/openclaw/home/openclaw.json')); print('mode:', c['gateway']['mode']); print('disableDeviceAuth:', c['gateway']['controlUi'].get('dangerouslyDisableDeviceAuth')); print('primaryModel:', c['agents']['defaults']['model']['primary']); print('openaiBaseUrl:', c['models']['providers']['openai']['baseUrl'])"
+# Expected: mode: remote, disableDeviceAuth: True, primaryModel: openai/ollama/<default> (or configured fallback), openaiBaseUrl: http://ai-<tenant>-litellm:4000/v1
 ```
 
 ### OpenClaw — Production Deployment Checklist
@@ -1542,7 +1559,9 @@ python3 -c "import json; c=json.load(open('/mnt/<tenant>/openclaw/home/openclaw.
 - [x] `gateway.mode: "remote"` — set by Script 2 when Caddy is enabled
 - [x] `gateway.controlUi.dangerouslyDisableDeviceAuth: true` — set by Script 2 (eliminates pairing loop)
 - [x] `gateway.auth.token` matches `OPENCLAW_PASSWORD` in platform.conf — always regenerated by Script 2
+- [x] `agents.defaults.model.primary` points at LiteLLM-backed OpenAI transport (`openai/ollama/<model>` when local Ollama is enabled)
+- [x] `models.providers.openai.baseUrl` points at `http://ai-<tenant>-litellm:4000/v1`
 - [x] Port mapping `"${OPENCLAW_PORT}:${OPENCLAW_PORT}"` (0.0.0.0 default for Caddy access)
-- [ ] Signal: QR code scanned at `https://signal.<BASE_DOMAIN>/v1/qrcodelink` after first deploy
+- [ ] Signal: QR code scanned at `http://127.0.0.1:<SIGNALBOT_PORT>/v1/qrcodelink?device_name=ai-platform` after first deploy
 - [ ] Telegram: bot token valid (test: `curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" | jq .ok`)
 - [ ] Discord: privileged gateway intents enabled in Discord Developer Portal

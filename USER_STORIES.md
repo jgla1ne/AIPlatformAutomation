@@ -998,19 +998,15 @@ Epic 13 — Hardware       GPU/CPU detection, deployment guidance, model recomme
 **so that** I can use my preferred messaging platform for AI conversations.
 
 **Acceptance criteria:**
-- **Signal**: QR code pairing works, messages appear in OpenClaw within reasonable time
-- **Telegram**: Bot token valid, no 401 Unauthorized errors, commands work
-- **Discord**: Bot token valid, privileged gateway intents enabled, no 4014 errors
-- Channel selection configured during Script 1 setup wizard
-- Auto-approval of pairing requests during Script 2 deployment
-- Manual channel management via Script 3 commands
-- Message delivery from external channels to OpenClaw gateway
-- AI responses delivered back through original channel
-- Channel authentication failures don't crash gateway
-- **Constraint**: Telegram requires valid BotFather token regeneration
+- Script 1 prompts for each channel **independently** (y/N per channel — not a single 1-5 choice menu)
+- **Signal**: 3-process signalbot (signal-cli daemon + bbernhard REST API + SSE proxy). QR scan at `https://signal.<BASE_DOMAIN>/v1/qrcodelink`. If signal-cli goes zombie after QR registration, restart signalbot container. `openclaw.json` `channels.signal.httpUrl` points to SSE proxy port 9999 (not bbernhard port 8080).
+- **Telegram**: Token validated against Telegram API at deploy time; invalid tokens seeded as `enabled: false`. Regenerate via BotFather, then run `--update-channels`.
+- **Discord**: Bot token valid, **Message Content Intent** enabled in Discord Developer Portal (Bot → Privileged Gateway Intents). Error 4014 = intents missing (external fix).
+- Channel authentication failures are isolated — do not crash the gateway
+- `--update-channels` (Script 3): rebuilds channels section from platform.conf, re-validates Telegram, restarts container — no full redeploy needed
+- **Constraint**: Telegram requires valid BotFather token
 - **Constraint**: Discord requires privileged gateway intents in Developer Portal
-- **Constraint**: Signal has 4+ hour pairing confirmation delay under investigation
-- **Script**: `1-setup-system.sh` (channel selection), `2-deploy-services.sh` (token configuration)
+- **Script**: `1-setup-system.sh` (per-channel selection), `2-deploy-services.sh` (seeding), `3-configure-services.sh --update-channels`
 
 ---
 

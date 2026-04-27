@@ -1800,16 +1800,21 @@ bash scripts/3-configure-services.sh datasquiz
 | **openclaw.json always regenerated** | ✅ PASS | Script 2 always writes (not only when absent) |
 | **--openclaw-pairs uses docker exec node** | ✅ PASS | Device files are 600 uid-1000; host python3 can't read them |
 | **--reconfigure openclaw path/key** | ✅ PASS | Fixed: `OPENCLAW_PASSWORD` + `home/openclaw.json` |
-| **Telegram token** | ⚠️ EXTERNAL | Regenerate via BotFather |
-| **Discord privileged intents** | ⚠️ EXTERNAL | Enable in Discord Developer Portal |
-| **Signal QR pairing** | ✅ INFRASTRUCTURE PASS | Manual QR scan required (by design) |
+| **Telegram token** | ⚠️ EXTERNAL | Regenerate via BotFather → `--update-channels` |
+| **Discord privileged intents** | ⚠️ EXTERNAL | Enable Message Content Intent in Discord Dev Portal |
+| **Signal QR pairing** | ✅ INFRASTRUCTURE PASS | QR scan one-time; signal-cli zombie fix = `docker restart signalbot` |
+| **signal-cli zombie process** | ✅ FIXED | After QR registration signal-cli may die; SSE proxy has no supervisor; restart signalbot |
+| **OpenClaw agent model (gpt-5.4)** | ✅ FIXED | Model selection now picks Mammouth→Anthropic→Groq→OpenAI→Ollama |
+| **Script 1 channel one-or-all** | ✅ FIXED | Per-channel y/N prompts; any combination selectable |
+| **--update-channels missing** | ✅ FIXED | Script 3 --update-channels rebuilds channels, re-validates Telegram, restarts |
+| **--help missing** | ✅ FIXED | All 4 scripts have man-style --help |
 
 ---
 
 ## RUN 16 — 2026-04-27 (OpenClaw Root-Cause Fixes — VERIFIED)
 
 **Status:** `PASS` | **Baseline:** `v1.0.0`  
-**Changes this run:** `dangerouslyDisableDeviceAuth: true` eliminates browser pairing loop. Source-code audit of OpenClaw internals confirmed that `approveDevicePairing()` uses in-memory events — external JSON manipulation is fundamentally unable to notify the waiting browser. `docker exec node` replaces host python3 for device file operations (files are `600 ubuntu:ubuntu`). openclaw.json always regenerated. gateway.mode dynamic.
+**Changes this run:** `dangerouslyDisableDeviceAuth: true` eliminates browser pairing loop. Source-code audit of OpenClaw internals confirmed that `approveDevicePairing()` uses in-memory events — external JSON manipulation is fundamentally unable to notify the waiting browser. `docker exec node` replaces host python3 for device file operations (files are `600 ubuntu:ubuntu`). openclaw.json always regenerated. gateway.mode dynamic. LiteLLM agent model. Channel multi-select in Script 1. --update-channels in Script 3.
 
 ### T58 — OpenClaw Browser Access & Config Integrity
 
@@ -1817,19 +1822,34 @@ bash scripts/3-configure-services.sh datasquiz
 |---|---|---|
 | `dangerouslyDisableDeviceAuth` present | `python3 -c "import json; print(json.load(open('/mnt/datasquiz/openclaw/home/openclaw.json'))['gateway']['controlUi']['dangerouslyDisableDeviceAuth'])"` | **PASS — True** |
 | `gateway.mode` is `"remote"` | `python3 -c "import json; print(json.load(open('/mnt/datasquiz/openclaw/home/openclaw.json'))['gateway']['mode'])"` | **PASS — remote** |
+| Agent model routes through LiteLLM | `docker logs ai-datasquiz-openclaw 2>&1 \| grep "agent model"` | **PASS — openai/mammouth/claude-sonnet-4-6** |
 | Browser connects without pairing loop | Open `https://openclaw.ai.datasquiz.net`, enter token | **PASS — direct connect** |
 | No repeated pairing prompts on refresh | Reload browser 5× | **PASS** |
 | openclaw.json regenerated (token sync) | Redeploy; verify token in JSON matches platform.conf | **PASS** |
 | `--openclaw-pairs` reads pending correctly | `bash scripts/3-configure-services.sh datasquiz --openclaw-pairs` | **PASS — uses docker exec node** |
 | `--reconfigure openclaw` updates correct file | Run reconfigure; verify `home/openclaw.json` updated | **PASS** |
-| Signal channel config seeded | `python3 -c "import json; print(json.load(open('/mnt/datasquiz/openclaw/home/openclaw.json')).get('channels',{}).get('signal',{}).get('enabled'))"` | **PASS — True** |
+| Signal channel seeded and starting | `docker logs ai-datasquiz-openclaw 2>&1 \| grep "\[signal\]"` | **PASS — starting provider** |
+| signalbot 3-process health | `docker exec ai-datasquiz-signalbot ps aux \| grep -c "java\|python3\|signal-cli-rest"` | **PASS — 3 processes** |
+| `--update-channels` runs cleanly | `bash scripts/3-configure-services.sh datasquiz --update-channels` | **PASS** |
+| `--help` on all scripts exits with usage | `bash scripts/3-configure-services.sh --help \| head -1` | **PASS** |
+| Script 1 per-channel prompts | `bash scripts/1-setup-system.sh --help \| grep -i channel` | **PASS** |
+
+### T59 — Channel Status (2026-04-27)
+
+| Channel | Status | Root cause | Fix |
+|---|---|---|---|
+| Signal | ✅ Connected | signal-cli was zombie after QR → restarted signalbot | `docker restart ${TENANT_PREFIX}-signalbot` |
+| Telegram | ❌ Token invalid | `ok: false` from Telegram API | Regenerate via BotFather → `--update-channels` |
+| Discord | ❌ 4014 intents | Privileged Gateway Intents not enabled in Developer Portal | External action in Discord Dev Portal |
 
 ### Post-Deployment Verification (clean deploy)
 - [x] `openclaw.json` has `"mode": "remote"` + `"dangerouslyDisableDeviceAuth": true`
+- [x] Agent model: `openai/mammouth/claude-sonnet-4-6` (routes through LiteLLM)
 - [x] Token in `openclaw.json` matches `OPENCLAW_PASSWORD` in platform.conf
 - [x] `https://openclaw.<BASE_DOMAIN>` returns HTTP 200
 - [x] Browser connects with gateway token — no pairing prompt
 - [x] Container restart does not break browser session
-- [ ] Signal: QR scan at `https://signal.<BASE_DOMAIN>/v1/qrcodelink` after first deploy
-- [ ] Discord: enable Privileged Gateway Intents in Discord Developer Portal
-- [ ] Telegram: regenerate bot token via BotFather
+- [x] Signal: provider starting, SSE connection held, signal-cli alive
+- [ ] Signal: QR scan at `https://signal.<BASE_DOMAIN>/v1/qrcodelink` (one-time, after first deploy)
+- [ ] Telegram: regenerate bot token via BotFather → `--update-channels`
+- [ ] Discord: enable Message Content Intent in Discord Developer Portal
