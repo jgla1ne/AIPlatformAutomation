@@ -618,38 +618,44 @@ configure_librechat() {
 
 openclaw_manage_pairs() {
     local container="${TENANT_PREFIX}-openclaw"
-    # Use host-side volume paths — Alpine/Node.js image has no python3.
-    local h_pending="${DATA_DIR}/openclaw/home/devices/pending.json"
-    local h_paired="${DATA_DIR}/openclaw/home/devices/paired.json"
+    # Use docker exec node — files are owned by uid 1000 (ubuntu on host) with mode 600,
+    # so host python3 running as jglaine gets Permission denied.  Node.js is always
+    # available in the alpine/openclaw image and runs as uid 1000 inside the container.
+    local c_pending="/home/node/.openclaw/devices/pending.json"
+    local c_paired="/home/node/.openclaw/devices/paired.json"
 
-    # Ensure devices dir exists (may not exist on fresh deploy before first browser connect)
-    mkdir -p "${DATA_DIR}/openclaw/home/devices"
-
-    local pending_count=0
-    if [[ -f "${h_pending}" ]]; then
-        pending_count=$(python3 -c "import json; print(len(json.load(open('${h_pending}'))))" 2>/dev/null || echo "0")
-    fi
+    local pending_count
+    pending_count=$(docker exec "$container" node -e "
+try{
+  const d=JSON.parse(require('fs').readFileSync('${c_pending}','utf8'));
+  process.stdout.write(String(Object.keys(d).length));
+}catch(e){process.stdout.write('0');}
+" 2>/dev/null || echo "0")
 
     if [[ "$pending_count" == "0" ]]; then
         echo "No pending OpenClaw pairing requests."
-        local paired_count=0
-        if [[ -f "${h_paired}" ]]; then
-            paired_count=$(python3 -c "import json; print(len(json.load(open('${h_paired}'))))" 2>/dev/null || echo "0")
-        fi
+        local paired_count
+        paired_count=$(docker exec "$container" node -e "
+try{
+  const d=JSON.parse(require('fs').readFileSync('${c_paired}','utf8'));
+  process.stdout.write(String(Object.keys(d).length));
+}catch(e){process.stdout.write('0');}
+" 2>/dev/null || echo "0")
         echo "Currently paired devices: ${paired_count}"
         return 0
     fi
 
     echo ""
     echo "Pending OpenClaw pairing requests (${pending_count}):"
-    python3 -c "
-import json
-with open('${h_pending}') as f: pending=json.load(f)
-for rid,r in pending.items():
-    print(f'  ID: {rid}')
-    print(f'  Platform: {r.get(\"platform\",\"?\")}  Client: {r.get(\"clientId\",\"?\")}  Role: {r.get(\"role\",\"?\")}')
-    print()
-"
+    docker exec "$container" node -e "
+const d=JSON.parse(require('fs').readFileSync('${c_pending}','utf8'));
+for(const [id,r] of Object.entries(d)){
+  console.log('  ID:',id);
+  console.log('  Platform:',r.platform||'?','  Client:',r.clientId||'?','  Role:',r.role||'?');
+  console.log();
+}
+" 2>/dev/null || true
+
     local choice="a"
     if [[ -t 0 ]]; then
         echo "Options: [a]pprove all  [d]eny all  [q]uit"
@@ -660,33 +666,26 @@ for rid,r in pending.items():
 
     case "$choice" in
         a|A)
-            python3 -c "
-import json, time
-scopes=['operator.read','operator.write','operator.admin','operator.approvals','operator.pairing']
-with open('${h_pending}') as f: pending=json.load(f)
-try:
-    with open('${h_paired}') as f: paired=json.load(f)
-except: paired={}
-now=int(time.time()*1000)
-for rid,r in pending.items():
-    paired[rid]={**r,'approved':True,'status':'approved','approvedTs':now,'scopes':scopes}
-    print(f'Approved: {rid}')
-with open('${h_paired}','w') as f: json.dump(paired,f,indent=2)
-with open('${h_pending}','w') as f: json.dump({},f,indent=2)
-print('Done.')
+            docker exec "$container" node -e "
+const fs=require('fs');
+const now=Date.now();
+const scopes=['operator.read','operator.write','operator.admin','operator.approvals','operator.pairing'];
+const pending=JSON.parse(fs.readFileSync('${c_pending}','utf8'));
+let paired={};
+try{paired=JSON.parse(fs.readFileSync('${c_paired}','utf8'));}catch(e){}
+for(const [rid,r] of Object.entries(pending)){
+  paired[rid]={...r,approved:true,status:'approved',approvedTs:now,scopes};
+  console.log('Approved:',rid);
+}
+fs.writeFileSync('${c_paired}',JSON.stringify(paired,null,2));
+fs.writeFileSync('${c_pending}','{}');
+console.log('Done. Paired devices:',Object.keys(paired).length);
 "
-            # Fix ownership so container (uid 1000) can read the updated file
-            docker run --rm -v "${DATA_DIR}/openclaw/home:/target" alpine:latest \
-                chown -R 1000:1000 /target 2>/dev/null || true
             docker restart "$container" >/dev/null 2>&1 || true
             ok "Approved! Container restarted. Connect from the browser now."
             ;;
         d|D)
-            python3 -c "
-import json
-with open('${h_pending}','w') as f: json.dump({},f)
-print('Cleared.')
-"
+            docker exec "$container" node -e "require('fs').writeFileSync('${c_pending}','{}')" 2>/dev/null || true
             ok "Pending requests cleared (denied)"
             ;;
         *)

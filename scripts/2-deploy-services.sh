@@ -3158,31 +3158,9 @@ OCEOF
         docker run --rm -v "${DATA_DIR}/openclaw/home:/target" alpine:latest \
             chown -R 1000:1000 /target 2>/dev/null || true
 
-        # TASK 2: Auto-approve pending pairing requests if they exist
-        local _pending_json="${DATA_DIR}/openclaw/home/devices/pending.json"
-        local _paired_json="${DATA_DIR}/openclaw/home/devices/paired.json"
-        if [[ -f "${_pending_json}" ]]; then
-            log "Checking for pending OpenClaw pairing requests..."
-            # Use python3 to move requests from pending to paired (requires python3 on host)
-            python3 - "${_pending_json}" "${_paired_json}" <<'PYEOF'
-import json, sys, time, os
-pending_path, paired_path = sys.argv[1], sys.argv[2]
-try:
-    with open(pending_path, 'r') as f: pending = json.load(f)
-    if not pending: sys.exit(0)
-    print(f"  Found {len(pending)} pending pairing requests — auto-approving...")
-    if os.path.exists(paired_path):
-        with open(paired_path, 'r') as f: paired = json.load(f)
-    else: paired = {}
-    now = int(time.time() * 1000)
-    scopes = ['operator.read','operator.write','operator.admin','operator.approvals','operator.pairing']
-    for rid, r in pending.items():
-        paired[rid] = {**r, 'approved': True, 'status': 'approved', 'approvedTs': now, 'scopes': scopes}
-    with open(paired_path, 'w') as f: json.dump(paired, f, indent=2)
-    with open(pending_path, 'w') as f: json.dump({}, f, indent=2)
-except Exception as e: print(f"  ⚠️ Failed to auto-approve: {e}")
-PYEOF
-        fi
+        # Pending pairing approval is handled in wait_for_all_health() AFTER the container
+        # starts, using docker exec node (files are 600 ubuntu:ubuntu — host python3 can't
+        # read them, and docker exec isn't possible before the container is running).
     fi
     [[ "${QDRANT_ENABLED}"    == "true" ]] && mkdir -p "${DATA_DIR}/qdrant"
     [[ "${WEAVIATE_ENABLED}"  == "true" ]] && mkdir -p "${DATA_DIR}/weaviate"
@@ -3721,30 +3699,35 @@ wait_for_all_health() {
 
         # Auto-approve any pending device pairing requests so the browser
         # can connect immediately without needing Script 3 --openclaw-pairs.
-        local _oc_pending="${DATA_DIR}/openclaw/home/devices/pending.json"
-        local _oc_paired="${DATA_DIR}/openclaw/home/devices/paired.json"
-        if [[ -f "$_oc_pending" ]]; then
-            local _pending_count
-            _pending_count=$(python3 -c "import json; print(len(json.load(open('$_oc_pending'))))" 2>/dev/null || echo "0")
-            if [[ "$_pending_count" -gt 0 ]]; then
-                log "Auto-approving ${_pending_count} pending OpenClaw pairing request(s)..."
-                python3 -c "
-import json, time
-with open('$_oc_pending') as f: pending=json.load(f)
-try:
-    with open('$_oc_paired') as f: paired=json.load(f)
-except: paired={}
-now=int(time.time()*1000)
-scopes=['operator.read','operator.write','operator.admin','operator.approvals','operator.pairing']
-for rid,r in pending.items():
-    paired[rid]={**r,'approved':True,'status':'approved','approvedTs':now,'scopes':scopes}
-with open('$_oc_paired','w') as f: json.dump(paired,f,indent=2)
-with open('$_oc_pending','w') as f: json.dump({},f,indent=2)
-print(f'Approved {len(pending)} request(s)')
+        # Use docker exec node — files are 600 ubuntu:ubuntu; host python3 as deploy user
+        # gets Permission denied. Node.js is guaranteed present in the openclaw image.
+        local _oc_c_pending="/home/node/.openclaw/devices/pending.json"
+        local _oc_c_paired="/home/node/.openclaw/devices/paired.json"
+        local _pending_count
+        _pending_count=$(docker exec "${TENANT_PREFIX}-openclaw" node -e "
+try{
+  const d=JSON.parse(require('fs').readFileSync('${_oc_c_pending}','utf8'));
+  process.stdout.write(String(Object.keys(d).length));
+}catch(e){process.stdout.write('0');}
+" 2>/dev/null || echo "0")
+        if [[ "$_pending_count" -gt 0 ]]; then
+            log "Auto-approving ${_pending_count} pending OpenClaw pairing request(s)..."
+            docker exec "${TENANT_PREFIX}-openclaw" node -e "
+const fs=require('fs');
+const now=Date.now();
+const scopes=['operator.read','operator.write','operator.admin','operator.approvals','operator.pairing'];
+const pending=JSON.parse(fs.readFileSync('${_oc_c_pending}','utf8'));
+let paired={};
+try{paired=JSON.parse(fs.readFileSync('${_oc_c_paired}','utf8'));}catch(e){}
+for(const [rid,r] of Object.entries(pending)){
+  paired[rid]={...r,approved:true,status:'approved',approvedTs:now,scopes};
+}
+fs.writeFileSync('${_oc_c_paired}',JSON.stringify(paired,null,2));
+fs.writeFileSync('${_oc_c_pending}','{}');
+console.log('Approved',Object.keys(pending).length,'request(s)');
 " && docker restart "${TENANT_PREFIX}-openclaw" >/dev/null 2>&1 \
-                    && ok "OpenClaw pairing approved and container restarted" \
-                    || warn "OpenClaw auto-approve failed — run: bash scripts/3-configure-services.sh ${TENANT_ID} --openclaw-pairs"
-            fi
+                && ok "OpenClaw pairing approved and container restarted" \
+                || warn "OpenClaw auto-approve failed — run: bash scripts/3-configure-services.sh ${TENANT_ID} --openclaw-pairs"
         fi
     fi
     
