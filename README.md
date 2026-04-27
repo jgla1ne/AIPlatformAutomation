@@ -1194,7 +1194,7 @@ Use when implementing or reviewing any script change:
 - [ ] Does the Continue.dev `embeddingsProvider.model` use `text-embedding-3-small` (NOT a chat model like `ollama/gemma3:4b`)?
 - [ ] Does the Continue.dev config include Mammouth models (prefixed `mammouth/`) when `ENABLE_MAMMOUTH=true`?
 - [ ] Does the Signalbot volume mount use `/home/.local/share/signal-cli` (NOT `/app/.local/share/signal-cli`)? The wrong path means pairing data is never persisted — signal-cli loses registration on every container restart.
-- [ ] Does `prepare_data_dirs()` write `openclaw.json` with the current `${OPENCLAW_PASSWORD}` from platform.conf? If the file already exists with a stale token from a prior deploy, pairing always fails.
+- [ ] Does `prepare_data_dirs()` **always regenerate** `openclaw.json` (not just when absent) with the current `${OPENCLAW_PASSWORD}`, `gateway.mode` (`"remote"` when Caddy, `"local"` otherwise), and `gateway.controlUi.dangerouslyDisableDeviceAuth: true`? Writing only when absent leaves stale tokens on redeploy.
 - [ ] Does Prometheus use `metrics_path: /healthz` for Zep and `metrics_path: /v1/health` for Letta? Neither service exposes Prometheus-format `/metrics` — UP/DOWN health probes are the maximum available monitoring granularity without a custom exporter.
 - [ ] Does Script 2 handle model downloads (not Script 3) to avoid re-download costs on re-runs (P14)?
 - [ ] Does Script 2 check if models already exist before pulling to avoid unnecessary downloads?
@@ -1204,7 +1204,6 @@ Use when implementing or reviewing any script change:
 - [ ] Does `wait_for_all_health()` detect MongoDB password drift (preserved data directory ignores `MONGO_INITDB_ROOT_PASSWORD` on redeploy) and sync via a temporary `--noauth` mongod instance? Without this, LibreChat fails with "Authentication failed" after any redeploy that changes `MONGO_PASSWORD`.
 - [ ] Does AnythingLLM `LITE_LLM_MODEL_PREF` default to a cloud model that supports native tool calling (Mammouth/Anthropic/OpenAI) rather than `ollama/<model>`? Ollama models do NOT support OpenAI function-calling format — setting `PROVIDER_SUPPORTS_NATIVE_TOOL_CALLING=litellm` with an Ollama model causes all agent sessions to hang indefinitely (300s timeout).
 - [ ] Does the Continue.dev `contextProviders` use object format (`{"name": "open"}`) NOT string format (`"open"`)? Continue.dev v1.x rejects a config with string contextProviders silently — the extension shows "no config found" and falls back to Hub/GitHub sign-in mode.
-- [ ] Does Script 3 include `--test-pipeline` command for end-to-end validation?
 - [ ] Does `prepare_data_dirs()` write `sse-proxy.py` and `start.sh` into `${DATA_DIR}/signalbot/`? signal-cli 0.14.1 HTTP daemon never sends HTTP response headers on `GET /api/v1/events` until a message arrives — OpenClaw sees "fetch failed" without this proxy.
 - [ ] Does the signalbot entrypoint use `start.sh`? It must start three processes: `signal-cli daemon --tcp 127.0.0.1:6001 --http 127.0.0.1:9080 --receive-mode manual` + `signal-cli-rest-api` (bbernhard on 8080) + `sse-proxy.py` (on 9999).
 - [ ] Does `openclaw.json` `channels.signal.httpUrl` point to port 9999 (SSE proxy) NOT port 8080 (bbernhard)? bbernhard returns 404 for `/api/v1/events` — pointing OpenClaw at bbernhard breaks the Signal channel.
@@ -1455,155 +1454,50 @@ curl -s -X POST "http://127.0.0.1:${SIGNALBOT_PORT}/v1/register/+<number>/verify
 
 ---
 
-*Version: 5.13.0 | Last Updated: 2026-04-21 | Architecture: 4 scripts, 26 services (Dify 3-container stack, SearXNG, rclone), single-tenant per EBS volume | Providers: Ollama, Groq, OpenRouter, Mammouth AI, Anthropic, Google, OpenAI | URL_ROUTING_MODE: subdomain/port/path | Per-service PostgreSQL isolation (6 dedicated DBs) | AnythingLLM: native litellm provider (LLM + embedding + Qdrant), cloud model default for agent tool calling | Postgres + MongoDB password sync on redeploy | Signalbot volume mount corrected | Continue.dev uses Docker DNS, contextProviders as objects | LibreChat fixed (MongoDB auth)*
-### OpenClaw Device Pairing & Multi-Channel Support
+*Version: 1.0.0 | Last Updated: 2026-04-27 | Architecture: 4 scripts, 26+ services, single-tenant per EBS volume | Providers: Ollama, Groq, OpenRouter, Mammouth AI, Anthropic, Google, OpenAI | Per-service PostgreSQL isolation (6 dedicated DBs) | OpenClaw: dangerouslyDisableDeviceAuth eliminates pairing loop | Signal: 3-process SSE proxy | All UIs wired to LiteLLM gateway*
 
-OpenClaw requires client devices (mobile/desktop) to be paired with the gateway.
+### OpenClaw — Web Browser Access (No Pairing Required)
 
-**Pairing Process:**
-1. Connect via OpenClaw UI or app.
-2. The client will request pairing.
-3. **Auto-Approval**: Script 2 automatically approves all pending pairing requests during deployment.
-4. **Manual Approval**: Run `bash scripts/3-configure-services.sh <tenant_id> --openclaw-pairs` to list and approve requests manually.
+With `gateway.controlUi.dangerouslyDisableDeviceAuth: true` in `openclaw.json` (set by Script 2), the browser control UI connects with the gateway token alone. **No device pairing flow**. This is the correct setting for Caddy-behind-TLS deployments where the gateway token is the auth boundary.
 
-**Multi-Channel Configuration:**
-OpenClaw can bridge multiple communication channels:
-- **Signal**: Requires `ENABLE_SIGNALBOT=true` and a registered phone number.
-- **Telegram**: Requires a Telegram Bot Token.
-- **Discord**: Requires a Discord Bot Token and Guild ID.
+**Connection flow:**
+1. Open `https://openclaw.<BASE_DOMAIN>` in any browser
+2. Enter Gateway URL: `wss://openclaw.<BASE_DOMAIN>`
+3. Enter Token: `OPENCLAW_PASSWORD` from platform.conf (also shown in Script 3 credentials)
+4. Connected — no pairing prompt, no admin approval step
 
-Selection is performed during Script 1's setup wizard.
+**Multi-channel setup (Script 1 wizard):**
+- **Signal**: Set `ENABLE_SIGNALBOT=true`, provide phone number. After Script 2, scan the QR code at `https://signal.<BASE_DOMAIN>/v1/qrcodelink?device_name=openclaw`
+- **Telegram**: Provide bot token from BotFather. Token is validated during Script 2; invalid tokens are seeded as `enabled: false`
+- **Discord**: Provide bot token + Guild ID. Enable **Privileged Gateway Intents** in Discord Developer Portal or the bot silently fails with error 4014
 
----
-
-## 🔧 OpenClaw Troubleshooting Guide
-
-**Based on 20+ hour production investigation - critical constraints and solutions**
-
-### 🚨 Critical Issues Identified
-
-#### Issue 1: Port Mapping Constraint
-**Symptom:** `wss://openclaw.domain.com` returns 502 Bad Gateway, localhost works
-**Root Cause:** Script 2 binds to `127.0.0.1:18789` (localhost only) instead of all interfaces
-**Fix Applied:** Updated port mapping in Script 2 from `"127.0.0.1:${OPENCLAW_PORT}:${OPENCLAW_PORT}"` to `"${OPENCLAW_PORT}:${OPENCLAW_PORT}"`
-**Verification:** `docker port ai-datasquiz-openclaw` should show `0.0.0.0:18789`
-
-#### Issue 2: Gateway Mode Constraint  
-**Symptom:** Remote connections rejected with "pairing required" loops
-**Root Cause:** `gateway.mode: "local"` only accepts loopback connections
-**Fix:** Set `gateway.mode: "remote"` for external access via Caddy proxy
-**Command:** `docker exec ai-datasquiz-openclaw openclaw config set gateway.mode remote`
-
-#### Issue 3: Device Scope Upgrade Loop (GitHub Issue #21688)
-**Symptom:** Same device generates infinite pairing requests even after approval
-**Root Cause:** `resolvePairingLocality()` misclassifies loopback shared-secret clients as remote
-**Fixed in:** OpenClaw 2026.4.22+ with `shared_secret_loopback_local` classification
-**Workaround:** Nuclear device reset + full scope approval
-
-#### Issue 4: Channel Authentication Constraints
-**Telegram:** 401 Unauthorized - requires valid BotFather token regeneration
-**Discord:** 4014 Gateway closed - requires privileged gateway intents in Developer Portal
-**Signal:** 4+ hour delay for pairing confirmations - API timing issue
-
-### 🛠️ Hardened Test Scenarios
-
-#### Scenario 1: Remote Access Validation
+**Recovery — reset gateway token:**
 ```bash
-# Test 1: Port mapping
-docker port ai-datasquiz-openclaw | grep "0.0.0.0:18789"
-
-# Test 2: Web UI accessibility
-curl -I https://openclaw.${BASE_DOMAIN}/
-
-# Test 3: WebSocket challenge
-wscat -c wss://openclaw.${BASE_DOMAIN}/
-
-# Test 4: Gateway mode
-docker exec ai-datasquiz-openclaw openclaw config get gateway.mode
+bash scripts/3-configure-services.sh <tenant_id> --reconfigure openclaw
+# Generates a new OPENCLAW_PASSWORD, updates platform.conf and openclaw.json, restarts container
+# All browser sessions need to reconnect with the new token
 ```
 
-#### Scenario 2: Device Pairing Loop Detection
+**Recovery — nuclear device state reset:**
 ```bash
-# Monitor device state changes
-watch -n 5 'docker exec ai-datasquiz-openclaw cat /home/node/.openclaw/devices/paired.json | jq length'
-
-# Check for duplicate deviceIds
-docker exec ai-datasquiz-openclaw cat /home/node/.openclaw/devices/paired.json | jq '.[].deviceId' | sort | uniq -d
-
-# Verify scope completeness
-docker exec ai-datasquiz-openclaw cat /home/node/.openclaw/devices/paired.json | jq '.[].scopes'
+# Wipe device state and restart (use when openclaw.json is corrupted or state is inconsistent)
+python3 -c "import json; f=open('/mnt/<tenant>/openclaw/home/devices/pending.json','w'); f.write('{}'); f.close()"
+python3 -c "import json; f=open('/mnt/<tenant>/openclaw/home/devices/paired.json','w'); f.write('{}'); f.close()"
+DOCKER_HOST=unix:///var/run/docker.sock docker restart ai-<tenant>-openclaw
 ```
 
-#### Scenario 3: Channel Authentication Validation
+**Configuration validation:**
 ```bash
-# Telegram token validation
-curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" | jq .ok
-
-# Discord token validation  
-curl -s -H "Authorization: Bot ${DISCORD_BOT_TOKEN}" "https://discord.com/api/users/@me" | jq .username
-
-# Signal pairing status
-curl -s "http://127.0.0.1:${SIGNALBOT_PORT}/v1/about" | jq .number
+python3 -c "import json; c=json.load(open('/mnt/<tenant>/openclaw/home/openclaw.json')); print('mode:', c['gateway']['mode']); print('disableDeviceAuth:', c['gateway']['controlUi'].get('dangerouslyDisableDeviceAuth'))"
+# Expected: mode: remote, disableDeviceAuth: True
 ```
 
-### 🔧 Recovery Procedures
+### OpenClaw — Production Deployment Checklist
 
-#### Nuclear Device Reset
-```bash
-# Complete device state reset
-docker exec ai-datasquiz-openclaw sh -c '
-rm -f /home/node/.openclaw/devices/*.json
-echo "{}" > /home/node/.openclaw/devices/paired.json
-echo "{}" > /home/node/.openclaw/devices/pending.json
-'
-docker restart ai-datasquiz-openclaw
-```
-
-#### Full Scope Device Approval
-```bash
-# Get device ID
-DEVICE_ID=$(docker exec ai-datasquiz-openclaw cat /home/node/.openclaw/devices/paired.json | jq -r '.[].deviceId' | head -1)
-
-# Rotate with full scopes (if CLI accessible)
-docker exec ai-datasquiz-openclaw openclaw devices rotate \
-  --device ${DEVICE_ID} \
-  --role operator \
-  --scope operator.read \
-  --scope operator.write \
-  --scope operator.admin \
-  --scope operator.approvals \
-  --scope operator.pairing \
-  --json
-```
-
-#### Configuration Validation
-```bash
-# Verify critical config fields
-docker exec ai-datasquiz-openclaw cat /home/node/.openclaw/openclaw.json | jq '.gateway.mode'
-docker exec ai-datasquiz-openclaw cat /home/node/.openclaw/openclaw.json | jq '.gateway.controlUi.allowedOrigins'
-docker exec ai-datasquiz-openclaw cat /home/node/.openclaw/openclaw.json | jq '.gateway.auth.token'
-```
-
-### 📊 Known Constraints Summary
-
-| Constraint | Impact | Mitigation |
-|---|---|---|
-| **Port Binding** | Remote access fails | Script 2 fix applied |
-| **Gateway Mode** | Local vs remote connections | Set to "remote" for external access |
-| **Device Scope Loops** | Infinite pairing requests | Fixed in 2026.4.22+ |
-| **Channel Tokens** | Authentication failures | Token regeneration/intents |
-| **Signal Delays** | 4+ hour pairing confirmations | API timing investigation needed |
-| **Browser Session** | Device recognition issues | Clear localStorage/cookies |
-
-### 🎯 Production Deployment Checklist
-
-- [ ] Script 2 port mapping fix applied
-- [ ] Gateway mode set to "remote" for external access
-- [ ] OpenClaw version 2026.4.22+ (GitHub Issue #21688 fix)
-- [ ] All channel tokens validated and current
-- [ ] Discord privileged gateway intents enabled
-- [ ] Signal QR code pairing completed successfully
-- [ ] Device pairing tested from multiple platforms
-- [ ] WebSocket challenge/response verified
-- [ ] No duplicate deviceIds in paired.json
-- [ ] Full operator scopes applied to all devices
+- [x] `gateway.mode: "remote"` — set by Script 2 when Caddy is enabled
+- [x] `gateway.controlUi.dangerouslyDisableDeviceAuth: true` — set by Script 2 (eliminates pairing loop)
+- [x] `gateway.auth.token` matches `OPENCLAW_PASSWORD` in platform.conf — always regenerated by Script 2
+- [x] Port mapping `"${OPENCLAW_PORT}:${OPENCLAW_PORT}"` (0.0.0.0 default for Caddy access)
+- [ ] Signal: QR code scanned at `https://signal.<BASE_DOMAIN>/v1/qrcodelink` after first deploy
+- [ ] Telegram: bot token valid (test: `curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" | jq .ok`)
+- [ ] Discord: privileged gateway intents enabled in Discord Developer Portal
