@@ -612,8 +612,10 @@ bash scripts/3-configure-services.sh <tenant_id> --reconfigure dify
 # Supported: openwebui, librechat, openclaw, dify, flowise, n8n, litellm, grafana, code-server, anythingllm
 
 # Change LiteLLM routing strategy
-bash scripts/3-configure-services.sh <tenant_id> --litellm-routing least-busy
-# Valid: simple-shuffle, least-busy, usage-based-routing, cost-based-routing, latency-based-routing
+bash scripts/3-configure-services.sh <tenant_id> --litellm-routing external-first
+# external-first (CPU-only): latency-based + Ollama→cloud fallbacks after 25s timeout
+# Other: simple-shuffle, least-busy, usage-based-routing, cost-based-routing, latency-based-routing
+# Script 2 auto-applies: GPU_TYPE=none → external-first; GPU_TYPE=nvidia/rocm → simple-shuffle
 
 # Ollama model management
 bash scripts/3-configure-services.sh <tenant_id> --ollama-list

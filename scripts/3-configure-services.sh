@@ -20,7 +20,12 @@
 #          --log-lines <N>            Number of lines to show (default: 200)
 #          --audit-logs               Show ERROR/WARN counts for all containers
 #          --reconfigure <service>    Reset credentials for a service
-#          --litellm-routing <strat>  Change LiteLLM routing strategy
+#          --litellm-routing <strat>  Change LiteLLM routing strategy live.
+#                                     Strategies: simple-shuffle, least-busy,
+#                                     usage-based-routing, cost-based-routing,
+#                                     latency-based-routing, external-first
+#                                     (external-first = CPU alias: latency-based
+#                                      + Ollama→cloud fallbacks after 25s timeout)
 #          --ollama-list              List loaded Ollama models
 #          --ollama-pull <model>      Pull a new Ollama model
 #          --ollama-remove <model>    Remove an Ollama model

@@ -1855,7 +1855,42 @@ bash scripts/3-configure-services.sh datasquiz
 - [x] `https://openclaw.<BASE_DOMAIN>` returns HTTP 200
 - [x] Browser connects with gateway token — no pairing prompt
 - [x] Container restart does not break browser session
-- [x] Signal: provider starting, SSE connection held, signal-cli alive
-- [ ] Signal: QR scan at `https://signal.<BASE_DOMAIN>/v1/qrcodelink` (one-time, after first deploy)
-- [ ] Telegram: regenerate bot token via BotFather → `--update-channels`
-- [ ] Discord: enable Message Content Intent in Discord Developer Portal
+- [x] Signal: provider starting, SSE connection held, signal-cli alive, /health returns 200
+- [x] Signal: QR-linked device active
+- [x] Telegram: `@Datasquiz_aid_test_bot` responding — token valid, users send /start first
+- [x] Discord: `@Datasquiz_AI_test` in server, intents enabled, responding via Mammouth
+
+---
+
+## RUN 17 — 2026-04-27 (CPU Routing + Channel Final Verification)
+
+**Status:** `PASS` | **Baseline:** `v1.0.1`
+
+### T60 — GPU-Aware LiteLLM Routing (external-first)
+
+| Check | Command | Result |
+|---|---|---|
+| `router_settings.routing_strategy` | `grep routing_strategy /mnt/datasquiz/config/litellm/config.yaml` | **PASS — latency-based-routing** |
+| Ollama→cloud fallbacks present | `grep fallbacks /mnt/datasquiz/config/litellm/config.yaml` | **PASS** |
+| Fallback timeout set | `grep timeout /mnt/datasquiz/config/litellm/config.yaml` | **PASS — 25** |
+| `--litellm-routing external-first` works | `bash scripts/3-configure-services.sh datasquiz --litellm-routing external-first` | **PASS** |
+| OpenClaw primary model | `docker exec ai-datasquiz-openclaw node -e "..."` → agent model log | **PASS — mammouth/claude-sonnet-4-6** |
+| OpenClaw idle timeout | `docker logs ai-datasquiz-openclaw \| grep "idleTimeout"` | **PASS — 0 (disabled)** |
+| LiteLLM healthy after restart | `curl -sf http://127.0.0.1:4000/health/liveliness` | **PASS — "I'm alive!"** |
+| 11 models available | `curl .../v1/models \| jq '.data\|length'` | **PASS — 11** |
+
+### T61 — All Channels Verified Live
+
+| Channel | Status | Evidence |
+|---|---|---|
+| Signal | ✅ | `[signal] [default] starting provider`; `/health` → 200; QR-linked |
+| Telegram | ✅ | `[telegram] [default] starting provider (@Datasquiz_aid_test_bot)` |
+| Discord | ✅ | `[discord] [default] starting provider (@Datasquiz_AI_test)`; responded to message |
+
+### Post-Deployment Checklist v1.0.1
+- [x] All 3 channels connected and responding
+- [x] LiteLLM: `external-first` routing applied (CPU instance)
+- [x] OpenClaw: `mammouth/claude-sonnet-4-6` as default; idle timeout disabled
+- [x] Signal SSE proxy: `/health` returns 200 (was 404)
+- [x] Script 3 `--help` updated with `external-first` strategy documentation
+- [x] All 4 scripts have man-style `--help`
