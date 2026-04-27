@@ -1099,7 +1099,7 @@ Epic 13 — Hardware       GPU/CPU detection, deployment guidance, model recomme
 | **Missing scopes in paired.json** | Device re-asks for pairing | Full operator scopes written on approval | ✅ Resolved |
 | **Wrong --reconfigure openclaw path** | Token reset silently fails | Fixed path + key in Script 3 | ✅ Resolved |
 | **Device Pairing Loops (GitHub #21688)** | Infinite requests | Latest alpine/openclaw:latest has fix | ✅ Resolved |
-| **Telegram Token Invalid** | 401 Unauthorized | Token regeneration via BotFather | 🔄 In Progress |
-| **Discord Intents Missing** | 4014 Gateway closed | Enable privileged intents in Discord Dev Portal | 🔄 In Progress |
+| **Telegram Token Invalid** | 401 Unauthorized | Token regenerated via BotFather + `--update-channels` | ✅ Resolved |
+| **Discord Intents Missing** | 4014 Gateway closed | Enable Message Content Intent in Discord Dev Portal | 🔄 In Progress (external) |
 | **Signal Timing Delay** | 4+ hour confirmation | API timing investigation | ⚠️ Under Investigation |
 | **Browser Session Issues** | Device recognition | Clear localStorage/cookies | ✅ Workaround Available |

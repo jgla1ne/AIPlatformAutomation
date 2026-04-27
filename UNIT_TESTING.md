@@ -1800,7 +1800,7 @@ bash scripts/3-configure-services.sh datasquiz
 | **openclaw.json always regenerated** | ✅ PASS | Script 2 always writes (not only when absent) |
 | **--openclaw-pairs uses docker exec node** | ✅ PASS | Device files are 600 uid-1000; host python3 can't read them |
 | **--reconfigure openclaw path/key** | ✅ PASS | Fixed: `OPENCLAW_PASSWORD` + `home/openclaw.json` |
-| **Telegram token** | ⚠️ EXTERNAL | Regenerate via BotFather → `--update-channels` |
+| **Telegram token** | ✅ RESOLVED | Regenerated via BotFather → `--update-channels` → connected |
 | **Discord privileged intents** | ⚠️ EXTERNAL | Enable Message Content Intent in Discord Dev Portal |
 | **Signal QR pairing** | ✅ INFRASTRUCTURE PASS | QR scan one-time; signal-cli zombie fix = `docker restart signalbot` |
 | **signal-cli zombie process** | ✅ FIXED | After QR registration signal-cli may die; SSE proxy has no supervisor; restart signalbot |
@@ -1834,13 +1834,19 @@ bash scripts/3-configure-services.sh datasquiz
 | `--help` on all scripts exits with usage | `bash scripts/3-configure-services.sh --help \| head -1` | **PASS** |
 | Script 1 per-channel prompts | `bash scripts/1-setup-system.sh --help \| grep -i channel` | **PASS** |
 
-### T59 — Channel Status (2026-04-27)
+### T59 — Channel Status (2026-04-27 — VERIFIED LIVE)
 
-| Channel | Status | Root cause | Fix |
-|---|---|---|---|
-| Signal | ✅ Connected | signal-cli was zombie after QR → restarted signalbot | `docker restart ${TENANT_PREFIX}-signalbot` |
-| Telegram | ❌ Token invalid | `ok: false` from Telegram API | Regenerate via BotFather → `--update-channels` |
-| Discord | ❌ 4014 intents | Privileged Gateway Intents not enabled in Developer Portal | External action in Discord Dev Portal |
+| Channel | Status | Notes |
+|---|---|---|
+| Signal | ✅ Connected | `[signal] [default] starting provider` — no SSE errors. QR-linked device active. |
+| Telegram | ✅ Connected | `[telegram] [default] starting provider` — no 401 errors. Token regenerated via BotFather → `--update-channels`. |
+| Discord | ❌ 4014 intents | `gateway closed with code 4014` — enable Message Content Intent in Discord Dev Portal |
+
+**Channel fix workflow verified:**
+1. Regenerate Telegram token via BotFather → update `TELEGRAM_BOT_TOKEN` in platform.conf
+2. `bash scripts/3-configure-services.sh datasquiz --update-channels`
+3. Script re-validates token, rebuilds channels, chowns to uid 1000, restarts OpenClaw
+4. `[telegram] [default] starting provider` appears in logs within 20s (no errors = connected)
 
 ### Post-Deployment Verification (clean deploy)
 - [x] `openclaw.json` has `"mode": "remote"` + `"dangerouslyDisableDeviceAuth": true`

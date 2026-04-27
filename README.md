@@ -1527,11 +1527,11 @@ With `gateway.controlUi.dangerouslyDisableDeviceAuth: true` in `openclaw.json` (
 
 Each channel is asked independently (y/N) — you can enable any combination:
 
-| Channel | Status | Action needed |
+| Channel | Status | Notes |
 |---|---|---|
-| **Signal** | ✅ Working | Scan QR at `https://signal.<BASE_DOMAIN>/v1/qrcodelink` after deploy. If signal-cli goes zombie, `docker restart ${TENANT_PREFIX}-signalbot`. |
-| **Telegram** | ❌ Requires valid token | Token validated at deploy. If 401: regenerate via BotFather, update `TELEGRAM_BOT_TOKEN` in platform.conf, run `--update-channels`. |
-| **Discord** | ❌ Requires intents | Enable **Message Content Intent** (Privileged Gateway Intents) in [Discord Developer Portal → Bot](https://discord.com/developers/applications). Error 4014 = intents missing. |
+| **Signal** | ✅ Working | Scan QR at `https://signal.<BASE_DOMAIN>/v1/qrcodelink` after deploy. If signal-cli goes zombie (zombie process after QR registration), `docker restart ${TENANT_PREFIX}-signalbot`. |
+| **Telegram** | ✅ Working | Token validated against Telegram API at deploy time. If 401: regenerate via BotFather → update `TELEGRAM_BOT_TOKEN` in platform.conf → `--update-channels`. |
+| **Discord** | ❌ Needs intents | Enable **Message Content Intent** in [Discord Developer Portal → Bot → Privileged Gateway Intents](https://discord.com/developers/applications). Error 4014 = intents not enabled. |
 
 **Recovery — reset gateway token:**
 ```bash
