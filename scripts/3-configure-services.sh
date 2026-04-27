@@ -724,12 +724,16 @@ print('No channels configured — channels section removed.')
 "
     fi
 
+    # openclaw.json written by host user (jglaine) — container runs as uid 1000 (node).
+    # Without this chown OpenClaw gets EACCES when trying to persist plugin state.
+    docker run --rm -v "${DATA_DIR}/openclaw/home:/target" alpine:latest \
+        chown -R 1000:1000 /target 2>/dev/null || true
+
     docker restart "${TENANT_PREFIX}-openclaw" >/dev/null 2>&1 \
         && ok "OpenClaw restarted with updated channel config" \
         || warn "Failed to restart OpenClaw — run: docker restart ${TENANT_PREFIX}-openclaw"
 
-    log "Channel status:"
-    echo "${OPENCLAW_CHANNELS:-none}"
+    log "Channel status: ${OPENCLAW_CHANNELS:-none}"
 }
 
 # =============================================================================
