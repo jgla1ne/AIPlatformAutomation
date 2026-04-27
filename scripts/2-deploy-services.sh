@@ -3169,63 +3169,53 @@ prepare_data_dirs() {
         fi
         [[ -z "$_oc_primary_model" ]] && _oc_primary_model="openai/gpt-4o"
 
-        # Build the full model list for OpenClaw from all configured LiteLLM providers.
-        # Model ids must match exactly the model_name entries in litellm_config.yaml.
-        # OpenClaw provider is "openai" (LiteLLM is OpenAI-compatible); full ref = "openai/<id>".
+        # Build full model list for OpenClaw from all configured LiteLLM providers.
+        # GPU_TYPE=none (CPU-only): cloud models listed first — local Ollama is too slow.
+        # GPU_TYPE=nvidia|rocm: local Ollama listed first (low latency, no cost).
         local _oc_models_json=""
+        local _is_gpu=false
+        [[ "${GPU_TYPE:-none}" != "none" ]] && _is_gpu=true
 
-        # Local Ollama models first — lowest latency, no cost
+        _append_model() {
+            local id="$1" label="$2"
+            [[ -n "$_oc_models_json" ]] && _oc_models_json+=","$'\n'
+            _oc_models_json+='          {"id":"'"${id}"'","name":"'"${label}"'"}'
+        }
+
+        # Helper: append all models from a comma-separated list
+        _append_provider_models() {
+            local prefix="$1" list="$2" suffix="$3"
+            IFS=',' read -ra _ms <<< "${list}"
+            for _m in "${_ms[@]}"; do
+                _m="${_m// /}"
+                [[ -z "$_m" ]] && continue
+                _append_model "${prefix}${_m}" "${_m}${suffix}"
+            done
+        }
+
+        if [[ "$_is_gpu" == "true" && "${OLLAMA_ENABLED:-false}" == "true" && -n "${OLLAMA_MODELS:-}" ]]; then
+            # GPU: Ollama first (fast local inference)
+            _append_provider_models "ollama/" "${OLLAMA_MODELS}" " (Local GPU)"
+        fi
+
+        # Cloud providers (always fast regardless of GPU)
+        [[ "${ENABLE_MAMMOUTH:-false}" == "true" && -n "${MAMMOUTH_MODELS:-}" ]] && \
+            _append_provider_models "mammouth/" "${MAMMOUTH_MODELS}" " (Mammouth)"
+        [[ "${ENABLE_ANTHROPIC:-false}" == "true" && -n "${ANTHROPIC_MODELS:-}" ]] && \
+            _append_provider_models "" "${ANTHROPIC_MODELS}" " (Anthropic)"
+        [[ "${ENABLE_GROQ:-false}" == "true" && -n "${GROQ_MODELS:-}" ]] && \
+            _append_provider_models "groq/" "${GROQ_MODELS}" " (Groq)"
+        [[ "${ENABLE_OPENAI:-false}" == "true" && -n "${OPENAI_MODELS:-}" ]] && \
+            _append_provider_models "" "${OPENAI_MODELS}" " (OpenAI)"
+
         if [[ "${OLLAMA_ENABLED:-false}" == "true" && -n "${OLLAMA_MODELS:-}" ]]; then
-            IFS=',' read -ra _om <<< "${OLLAMA_MODELS}"
-            for _m in "${_om[@]}"; do
-                _m="${_m// /}"
-                [[ -z "$_m" ]] && continue
-                [[ -n "$_oc_models_json" ]] && _oc_models_json+=","$'\n'
-                _oc_models_json+='          {"id":"ollama/'"${_m}"'","name":"'"${_m}"' (Local)"}'
-            done
+            if [[ "$_is_gpu" == "false" ]]; then
+                # CPU: Ollama at bottom with warning label — always available but slow
+                _append_provider_models "ollama/" "${OLLAMA_MODELS}" " (Local/CPU — slow)"
+            fi
         fi
-        # Mammouth (Claude/Gemini/GPT via single key)
-        if [[ "${ENABLE_MAMMOUTH:-false}" == "true" && -n "${MAMMOUTH_MODELS:-}" ]]; then
-            IFS=',' read -ra _mm <<< "${MAMMOUTH_MODELS}"
-            for _m in "${_mm[@]}"; do
-                _m="${_m// /}"
-                [[ -z "$_m" ]] && continue
-                [[ -n "$_oc_models_json" ]] && _oc_models_json+=","$'\n'
-                _oc_models_json+='          {"id":"mammouth/'"${_m}"'","name":"'"${_m}"' (Mammouth)"}'
-            done
-        fi
-        # Anthropic
-        if [[ "${ENABLE_ANTHROPIC:-false}" == "true" && -n "${ANTHROPIC_MODELS:-}" ]]; then
-            IFS=',' read -ra _am <<< "${ANTHROPIC_MODELS}"
-            for _m in "${_am[@]}"; do
-                _m="${_m// /}"
-                [[ -z "$_m" ]] && continue
-                [[ -n "$_oc_models_json" ]] && _oc_models_json+=","$'\n'
-                _oc_models_json+='          {"id":"'"${_m}"'","name":"'"${_m}"' (Anthropic)"}'
-            done
-        fi
-        # Groq
-        if [[ "${ENABLE_GROQ:-false}" == "true" && -n "${GROQ_MODELS:-}" ]]; then
-            IFS=',' read -ra _gm <<< "${GROQ_MODELS}"
-            for _m in "${_gm[@]}"; do
-                _m="${_m// /}"
-                [[ -z "$_m" ]] && continue
-                [[ -n "$_oc_models_json" ]] && _oc_models_json+=","$'\n'
-                _oc_models_json+='          {"id":"groq/'"${_m}"'","name":"'"${_m}"' (Groq)"}'
-            done
-        fi
-        # OpenAI
-        if [[ "${ENABLE_OPENAI:-false}" == "true" && -n "${OPENAI_MODELS:-}" ]]; then
-            IFS=',' read -ra _oam <<< "${OPENAI_MODELS}"
-            for _m in "${_oam[@]}"; do
-                _m="${_m// /}"
-                [[ -z "$_m" ]] && continue
-                [[ -n "$_oc_models_json" ]] && _oc_models_json+=","$'\n'
-                _oc_models_json+='          {"id":"'"${_m}"'","name":"'"${_m}"' (OpenAI)"}'
-            done
-        fi
-        # Fallback if no models found
-        [[ -z "$_oc_models_json" ]] && _oc_models_json='          {"id":"gpt-4o","name":"GPT-4o"}'
+
+        [[ -z "$_oc_models_json" ]] && _oc_models_json='          {"id":"gpt-4o","name":"GPT-4o (fallback)"}'
 
         # ${DATA_DIR}/openclaw/home is drwx------ ubuntu (uid 1000).
         # The deploy user (jglaine, uid 1001) cannot write there directly.
@@ -3251,7 +3241,7 @@ prepare_data_dirs() {
         "primary": "${_oc_primary_model}"
       },
       "llm": {
-        "idleTimeoutSeconds": 120
+        "idleTimeoutSeconds": 0
       }
     }
   },
