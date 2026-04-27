@@ -814,9 +814,9 @@ Script 2's `prepare_data_dirs()` **always regenerates** `openclaw.json` on every
 
 **Gateway mode** (`gateway.mode`): Set to `"remote"` when Caddy is enabled (OpenClaw must trust proxy headers and allow browser WebSocket connections forwarded from external IPs). Set to `"local"` for direct port access without a reverse proxy. Without the correct mode, OpenClaw blocks WebSocket connections entirely.
 
-**Alpine/Node.js image has no python3** — `openclaw_manage_pairs()` in Script 3 reads `pending.json` / `paired.json` via host python3 on the volume-mounted paths (`${DATA_DIR}/openclaw/home/devices/`), NOT via `docker exec python3`.
+**`dangerouslyDisableDeviceAuth: true` is required for the browser control UI.** Without it, OpenClaw requires every browser session to complete a device-pairing handshake — a full round-trip where the server must send a signed token to the waiting WebSocket connection. If that connection is broken for any reason (container restart after approval, network hiccup), the browser never receives its token and regenerates a new pairing request on every page load, creating an infinite pairing loop. Setting `gateway.controlUi.dangerouslyDisableDeviceAuth: true` tells OpenClaw to skip device-level pairing for the control UI entirely — the gateway token (`OPENCLAW_PASSWORD`) remains the sole authentication factor. This is safe in our setup: the token is a 48-character random hex string, and the gateway is behind Caddy TLS.
 
-**Approved device scopes**: When approving a pairing request, the entry written to `paired.json` must include `"scopes": ["operator.read","operator.write","operator.admin","operator.approvals","operator.pairing"]` or OpenClaw may not recognise the device as fully authorised in newer versions.
+**Alpine/Node.js image has no python3** — `openclaw_manage_pairs()` in Script 3 reads `pending.json` / `paired.json` via `docker exec $container node` (Node.js is guaranteed present), NOT via host python3. Host python3 fails silently because the device files are `600 ubuntu:ubuntu` and the deploy user cannot read them.
 
 **Credentials displayed by Script 3:**
 - Web UI: `https://openclaw.${BASE_DOMAIN}`

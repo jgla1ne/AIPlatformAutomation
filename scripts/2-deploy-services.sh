@@ -3146,7 +3146,8 @@ prepare_data_dirs() {
       "token": "${OPENCLAW_PASSWORD}"
     },
     "controlUi": {
-      "allowedOrigins": ["${_oc_origin}", "*"]
+      "allowedOrigins": ["${_oc_origin}", "*"],
+      "dangerouslyDisableDeviceAuth": true
     },
     "trustedProxies": ["0.0.0.0/0"]
   }${_channels_section}
