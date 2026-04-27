@@ -2405,9 +2405,64 @@ general_settings:
   drop_params: true
   set_verbose: false
 EOF
-    
+
+    # Router settings — GPU-aware routing strategy.
+    # CPU-only (GPU_TYPE=none): latency-based routing + Ollama→cloud fallbacks.
+    #   Local inference on CPU is slower than cloud APIs. If Ollama exceeds the
+    #   timeout (25s), LiteLLM automatically retries with the cloud fallback.
+    # GPU: simple-shuffle (local inference is fast; balance load).
+    local _routing_strategy="${LITELLM_ROUTING_STRATEGY:-}"
+    if [[ -z "$_routing_strategy" ]]; then
+        [[ "${GPU_TYPE:-none}" == "none" ]] && _routing_strategy="latency-based-routing" || _routing_strategy="simple-shuffle"
+    fi
+
+    cat >> "${CONFIG_DIR}/litellm/config.yaml" << EOF
+
+router_settings:
+  routing_strategy: ${_routing_strategy}
+EOF
+
+    # CPU-only: add Ollama→cloud fallbacks so slow/failed Ollama requests
+    # automatically retry against the fastest available cloud provider.
+    if [[ "${GPU_TYPE:-none}" == "none" && "${OLLAMA_ENABLED:-false}" == "true" ]]; then
+        # Pick best cloud fallback (Mammouth → Groq → Anthropic)
+        local _fb1="mammouth/${MAMMOUTH_MODELS%%,*}"
+        local _fb2=""
+        if [[ "${ENABLE_GROQ:-false}" == "true" && -n "${GROQ_MODELS:-}" ]]; then
+            _fb2="groq/${GROQ_MODELS%%,*}"
+        elif [[ "${ENABLE_ANTHROPIC:-false}" == "true" && -n "${ANTHROPIC_MODELS:-}" ]]; then
+            _fb2="${ANTHROPIC_MODELS%%,*}"
+        fi
+        if [[ -z "${_fb1//mammouth\//}" && "${ENABLE_MAMMOUTH:-false}" != "true" ]]; then
+            _fb1="${_fb2:-}"
+            _fb2=""
+        fi
+
+        cat >> "${CONFIG_DIR}/litellm/config.yaml" << EOF
+  timeout: 25
+  allowed_fails: 1
+  cooldown_time: 60
+EOF
+        if [[ -n "${_fb1:-}" ]]; then
+            echo "  fallbacks:" >> "${CONFIG_DIR}/litellm/config.yaml"
+            echo "  context_window_fallbacks:" >> "${CONFIG_DIR}/litellm/config.yaml"
+            IFS=',' read -ra _ollama_ms <<< "${OLLAMA_MODELS}"
+            for _om in "${_ollama_ms[@]}"; do
+                _om="${_om// /}"
+                [[ -z "$_om" ]] && continue
+                local _fbs="[\"${_fb1}\""
+                [[ -n "${_fb2:-}" ]] && _fbs+=", \"${_fb2}\""
+                _fbs+="]"
+                sed -i "/^  fallbacks:/a\\    - {\"ollama\\/${_om}\": ${_fbs}}" "${CONFIG_DIR}/litellm/config.yaml"
+                sed -i "/^  context_window_fallbacks:/a\\    - {\"ollama\\/${_om}\": [\"${_fb1}\"]}" "${CONFIG_DIR}/litellm/config.yaml"
+            done
+        fi
+        log "LiteLLM: CPU-only mode — Ollama falls back to cloud after 25s timeout"
+    fi
+
+    update_conf_value "LITELLM_ROUTING_STRATEGY" "${_routing_strategy}"
     chown -R "$PUID:$PGID" "${CONFIG_DIR}/litellm"
-    ok "LiteLLM configuration generated"
+    ok "LiteLLM configuration generated (routing: ${_routing_strategy})"
 }
 
 # =============================================================================

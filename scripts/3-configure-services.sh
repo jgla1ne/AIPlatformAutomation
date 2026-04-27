@@ -2083,6 +2083,9 @@ ONE-SHOT COMMANDS (return immediately, no full configure run)
   --litellm-routing <strat> Change LiteLLM routing strategy live. Strategies:
                               simple-shuffle | least-busy | usage-based-routing
                               cost-based-routing | latency-based-routing
+                              external-first  (CPU-only alias: latency-based +
+                              Ollama→cloud fallbacks; Ollama times out after 25s
+                              and retries against fastest cloud provider)
   --reconfigure <service>   Reset credentials for a service and restart it.
                             Supported: openwebui librechat openclaw dify flowise
                               n8n litellm grafana code-server anythingllm
@@ -3721,13 +3724,71 @@ print('Token updated.')
 # =============================================================================
 # LITELLM ROUTING STRATEGY
 # =============================================================================
+_apply_ollama_cloud_fallbacks() {
+    local litellm_config="${CONFIG_DIR}/litellm/config.yaml"
+    [[ ! -f "$litellm_config" ]] && return 0
+
+    # Pick best cloud fallback available
+    local _fb1="" _fb2=""
+    if [[ "${ENABLE_MAMMOUTH:-false}" == "true" && -n "${MAMMOUTH_MODELS:-}" ]]; then
+        _fb1="mammouth/${MAMMOUTH_MODELS%%,*}"
+    fi
+    if [[ "${ENABLE_GROQ:-false}" == "true" && -n "${GROQ_MODELS:-}" ]]; then
+        _fb2="groq/${GROQ_MODELS%%,*}"
+    elif [[ "${ENABLE_ANTHROPIC:-false}" == "true" && -n "${ANTHROPIC_MODELS:-}" ]]; then
+        _fb2="${ANTHROPIC_MODELS%%,*}"
+    fi
+    [[ -z "$_fb1" ]] && { _fb1="$_fb2"; _fb2=""; }
+    [[ -z "$_fb1" ]] && { warn "No cloud fallback available — skipping Ollama fallback config"; return 0; }
+
+    # Remove any existing router_settings block then rewrite
+    python3 - "$litellm_config" "$_fb1" "$_fb2" "${OLLAMA_MODELS:-}" <<'PYEOF'
+import re, sys
+path, fb1, fb2, ollama_models = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+with open(path) as f: content = f.read()
+# Remove old router_settings
+content = re.sub(r'\nrouter_settings:.*?(?=\n\S|\Z)', '', content, flags=re.DOTALL).rstrip()
+
+fbs = [f'"{fb1}"'] + ([f'"{fb2}"'] if fb2 else [])
+fbs_str = "[" + ", ".join(fbs) + "]"
+fallback_lines = ""
+cwf_lines = ""
+for m in (m.strip() for m in ollama_models.split(",") if m.strip()):
+    fallback_lines += f'\n    - {{"ollama/{m}": {fbs_str}}}'
+    cwf_lines      += f'\n    - {{"ollama/{m}": ["{fb1}"]}}'
+
+block = f"""
+
+router_settings:
+  routing_strategy: latency-based-routing
+  timeout: 25
+  allowed_fails: 1
+  cooldown_time: 60
+  fallbacks:{fallback_lines}
+  context_window_fallbacks:{cwf_lines}
+"""
+content += block
+with open(path, 'w') as f: f.write(content)
+print(f"Applied Ollama→cloud fallbacks (primary: {fb1})")
+PYEOF
+}
+
 change_litellm_routing() {
     local strategy="$1"
+
+    # external-first: alias for latency-based-routing + Ollama→cloud fallbacks
+    # This is the recommended strategy for CPU-only instances where local
+    # inference is slower than cloud APIs.
+    if [[ "$strategy" == "external-first" ]]; then
+        strategy="latency-based-routing"
+        log "external-first = latency-based-routing + Ollama→cloud fallbacks"
+        _apply_ollama_cloud_fallbacks
+    fi
 
     local valid_strategies="simple-shuffle least-busy usage-based-routing cost-based-routing latency-based-routing"
     if ! echo "$valid_strategies" | grep -qw "$strategy"; then
         fail "Invalid routing strategy: ${strategy}
-Valid options: ${valid_strategies}"
+Valid options: ${valid_strategies} external-first"
     fi
 
     if [[ "${LITELLM_ENABLED:-false}" != "true" ]]; then
