@@ -31,7 +31,13 @@
 #          --backup                   Create a one-off backup of tenant data
 #          --schedule "<cron>"        Schedule recurring backups (use with --backup)
 #          --setup-persistence        Ensure platform stands up automatically after reboot
-#          --test-pipeline           Test complete rclone→Qdrant→LiteLLM→LLM pipeline
+#          --update [service|all]     Pull latest image and recreate container(s).
+#                                     Omit service or pass "all" to update every non-data
+#                                     container for this tenant. Data services (postgres,
+#                                     redis, mongodb) are skipped in "all" mode and warned
+#                                     in single-service mode (major version = data risk).
+#          --ollama-update            Re-pull all Ollama models configured in platform.conf
+#                                     (updates model weights to latest manifest for each tag)
 # =============================================================================
 
 set -euo pipefail
@@ -614,6 +620,174 @@ configure_librechat() {
 
     mark_done "librechat_configured"
     ok "LibreChat configured"
+}
+
+# =============================================================================
+# SERVICE UPDATE FUNCTIONS
+# --update <service|all>  : pull latest image and recreate container(s)
+# --ollama-update         : re-pull all configured Ollama models
+# =============================================================================
+
+# Services that must NOT be included in --update all because major-version
+# bumps can corrupt on-disk data formats (Postgres, Redis, MongoDB).
+# Individual updates are still allowed with an explicit warning.
+_DATA_SERVICES=("postgres" "redis" "mongodb")
+
+_is_data_service() {
+    local svc="$1"
+    for ds in "${_DATA_SERVICES[@]}"; do
+        [[ "$svc" == "$ds" ]] && return 0
+    done
+    return 1
+}
+
+_update_one_service() {
+    local svc="$1"
+    local container="${TENANT_PREFIX}-${svc}"
+
+    if ! docker inspect "$container" >/dev/null 2>&1; then
+        log "  Skipping ${svc} — not deployed"
+        return 0
+    fi
+
+    local image
+    image=$(docker inspect "$container" --format '{{.Config.Image}}' 2>/dev/null)
+    [[ -z "$image" ]] && { warn "  ${svc}: cannot determine image"; return 1; }
+
+    local before_id after_id
+    before_id=$(docker inspect "$image" --format '{{.Id}}' 2>/dev/null || echo "none")
+
+    log "  ${svc}: pulling ${image}"
+    if ! docker pull "$image" >/dev/null 2>&1; then
+        warn "  ${svc}: docker pull failed"
+        return 1
+    fi
+
+    after_id=$(docker inspect "$image" --format '{{.Id}}' 2>/dev/null || echo "none")
+
+    if [[ "$before_id" == "$after_id" ]]; then
+        log "  ${svc}: already latest (${after_id:7:12})"
+        return 0
+    fi
+
+    log "  ${svc}: new image ${after_id:7:12} — recreating container"
+    local compose_file="${CONFIG_DIR}/docker-compose.yml"
+    if [[ ! -f "$compose_file" ]]; then
+        warn "  ${svc}: docker-compose.yml missing at ${compose_file} — cannot recreate"
+        return 1
+    fi
+
+    docker compose -f "$compose_file" up -d --no-deps "$container" >/dev/null 2>&1
+
+    # Wait for health (up to 90s)
+    local attempts=0
+    while [[ $attempts -lt 18 ]]; do
+        local health
+        health=$(docker inspect "$container" --format '{{.State.Health.Status}}' 2>/dev/null || echo "none")
+        case "$health" in
+            healthy)
+                ok "  ${svc}: updated and healthy (${before_id:7:12} → ${after_id:7:12})"
+                return 0 ;;
+            unhealthy)
+                warn "  ${svc}: updated but UNHEALTHY — run: docker logs ${container}"
+                return 1 ;;
+        esac
+        sleep 5
+        ((attempts++))
+    done
+    # No healthcheck defined — treat as success if container is running
+    local state
+    state=$(docker inspect "$container" --format '{{.State.Status}}' 2>/dev/null)
+    if [[ "$state" == "running" ]]; then
+        ok "  ${svc}: updated and running (no healthcheck)"
+        return 0
+    fi
+    warn "  ${svc}: container not running after update"
+    return 1
+}
+
+update_services() {
+    local target="${1:-all}"
+
+    if [[ "$target" != "all" ]]; then
+        # Single-service update — warn for data services but allow
+        if _is_data_service "$target"; then
+            warn "⚠  ${target} is a data service. Major version bumps can corrupt on-disk data."
+            warn "   Back up first: bash scripts/3-configure-services.sh ${TENANT_ID} --backup"
+            warn "   Proceeding in 5s — Ctrl-C to abort"
+            sleep 5
+        fi
+        _update_one_service "$target"
+        return $?
+    fi
+
+    # --update all: check every running tenant container, skip data services
+    log "Checking for updates across all deployed services (data services skipped)..."
+
+    local ok_count=0 fail_count=0
+    while IFS= read -r cname; do
+        local svc="${cname#${TENANT_PREFIX}-}"
+        if _is_data_service "$svc"; then
+            log "  Skipping ${svc} (data service — update manually)"
+            continue
+        fi
+        if _update_one_service "$svc"; then
+            (( ++ok_count )) || true
+        else
+            (( ++fail_count )) || true
+        fi
+    done < <(docker ps --format '{{.Names}}' | grep "^${TENANT_PREFIX}-" | sort)
+
+    echo ""
+    ok "Done — ${ok_count} services checked/updated, ${fail_count} failed"
+    [[ $fail_count -eq 0 ]]
+}
+
+update_ollama_models() {
+    if [[ "${OLLAMA_ENABLED:-false}" != "true" ]]; then
+        warn "Ollama is not enabled for tenant ${TENANT_ID}"
+        return 0
+    fi
+
+    local container="${TENANT_PREFIX}-ollama"
+    if ! docker inspect "$container" >/dev/null 2>&1; then
+        warn "Ollama container not running"
+        return 1
+    fi
+
+    local ollama_url="http://127.0.0.1:${OLLAMA_PORT:-11434}"
+    local models="${OLLAMA_MODELS:-}"
+
+    if [[ -z "$models" ]]; then
+        # Fall back to what's actually loaded
+        log "OLLAMA_MODELS not set — querying running container for loaded models"
+        models=$(curl -sf "${ollama_url}/api/tags" 2>/dev/null | \
+            python3 -c "import json,sys; print(','.join(m['name'] for m in json.load(sys.stdin).get('models',[])))" 2>/dev/null || echo "")
+    fi
+
+    if [[ -z "$models" ]]; then
+        warn "No models found to update"
+        return 0
+    fi
+
+    log "Re-pulling Ollama models: ${models}"
+    local updated=0 failed=0
+    IFS=',' read -ra model_list <<< "$models"
+    for model in "${model_list[@]}"; do
+        model=$(echo "$model" | tr -d ' ')
+        [[ -z "$model" ]] && continue
+        log "  Pulling ${model}..."
+        if curl -sf --max-time 600 -X POST "${ollama_url}/api/pull" \
+               -H "Content-Type: application/json" \
+               -d "{\"name\":\"${model}\"}" >/dev/null 2>&1; then
+            ok "  ${model}: up to date"
+            (( ++updated )) || true
+        else
+            warn "  ${model}: pull failed"
+            (( ++failed )) || true
+        fi
+    done
+    ok "Ollama model update: ${updated} pulled, ${failed} failed"
 }
 
 openclaw_manage_pairs() {
@@ -1797,6 +1971,8 @@ main() {
     local setup_persistence=false
     local flush_db_svc=""
     local openclaw_pairs=false
+    local update_svc=""
+    local update_ollama=false
 
     # Parse arguments
     shift
@@ -1923,6 +2099,20 @@ main() {
                 ;;
             --openclaw-pairs)
                 openclaw_pairs=true
+                shift
+                ;;
+            --update)
+                # Optional service argument: --update openclaw  OR  --update all  OR  --update (defaults to "all")
+                if [[ -n "${2:-}" && "${2:-}" != --* ]]; then
+                    update_svc="$2"
+                    shift 2
+                else
+                    update_svc="all"
+                    shift
+                fi
+                ;;
+            --ollama-update)
+                update_ollama=true
                 shift
                 ;;
             *)
@@ -2109,6 +2299,16 @@ main() {
 
     if [[ "$openclaw_pairs" == "true" ]]; then
         openclaw_manage_pairs
+        return 0
+    fi
+
+    if [[ -n "$update_svc" ]]; then
+        update_services "$update_svc"
+        return 0
+    fi
+
+    if [[ "$update_ollama" == "true" ]]; then
+        update_ollama_models
         return 0
     fi
 

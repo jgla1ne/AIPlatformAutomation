@@ -108,7 +108,25 @@
 
 ---
 
-### Feature 1.5 — Idempotent Re-runs
+### Feature 1.5 — Live Stack Updates
+
+**As a** DevOps engineer managing multiple tenant stacks,  
+**I want** to update running services to the latest image without a full redeploy,  
+**so that** I can apply security patches and new features to any tenant with minimal downtime.
+
+**Acceptance criteria:**
+- `--update <service>` pulls the latest image for a specific service, recreates the container, and waits for health
+- `--update` / `--update all` rolls through every non-data container for the tenant; each service health-checked before proceeding
+- Data services (postgres, redis, mongodb) excluded from `--update all`; updating them individually shows a 5s warning (major version = data risk)
+- `--ollama-update` re-pulls all `OLLAMA_MODELS` from platform.conf to pick up latest model weights for the same tag
+- If no new image is available, reports "already latest" — idempotent
+- Container image ID before/after pull is compared; only recreates if a new layer was downloaded
+- Script 2 clean re-run continues to be the authoritative "full refresh" path (config + images + secrets)
+- Script: `3-configure-services.sh --update [service|all]`, `3-configure-services.sh --ollama-update`
+
+---
+
+### Feature 1.6 — Idempotent Re-runs
 
 **As a** DevOps engineer,  
 **I want** all four scripts to be safely re-runnable without duplicating work or breaking existing state,  
