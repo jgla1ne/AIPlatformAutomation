@@ -3319,6 +3319,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def do_GET(self):
         if self.path.startswith("/api/v1/events"): self._sse()
+        elif self.path in ("/", "/health", "/healthz"):
+            self.send_response(200); self.send_header("Content-Type","text/plain"); self.end_headers(); self.wfile.write(b"ok")
         else: self.send_response(404); self.end_headers()
     def do_POST(self):
         if self.path == "/api/v1/rpc": self._proxy()
