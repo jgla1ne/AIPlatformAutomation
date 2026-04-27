@@ -629,107 +629,93 @@ configure_librechat() {
 # =============================================================================
 
 update_channels() {
-    local cfg="${DATA_DIR}/openclaw/home/openclaw.json"
+    local container="${TENANT_PREFIX}-openclaw"
 
-    if [[ ! -f "$cfg" ]]; then
-        fail "--update-channels: openclaw.json not found at ${cfg}. Run Script 2 first."
+    # ${DATA_DIR}/openclaw/home is drwx------ ubuntu (uid 1000); host user cannot
+    # read or write it. All file operations use docker exec node (runs as uid 1000).
+    if ! docker inspect "$container" >/dev/null 2>&1; then
+        fail "--update-channels: container ${container} not running. Deploy with Script 2 first."
     fi
 
     log "Rebuilding OpenClaw channel config from platform.conf..."
 
-    # Build channels JSON from current platform.conf values
-    local _channels_json=""
-
-    # Signal
-    if echo "${OPENCLAW_CHANNELS:-}" | grep -qE "signal|all"; then
-        if [[ "${SIGNALBOT_ENABLED:-false}" == "true" && -n "${SIGNAL_PHONE:-}" ]]; then
-            _channels_json+='"signal": {
-      "enabled": true,
-      "account": "'"${SIGNAL_PHONE}"'",
-      "httpUrl": "http://'"${TENANT_PREFIX}"'-signalbot:9999",
-      "autoStart": false
-    }'
-        fi
-    fi
-
-    # Telegram
+    # Validate Telegram token before enabling
+    local _tg_enabled="false"
     if echo "${OPENCLAW_CHANNELS:-}" | grep -qE "telegram|all"; then
         if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then
-            local _tg_valid=false
             local _tg_check
             _tg_check=$(curl -s --max-time 10 \
                 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" 2>/dev/null \
                 | python3 -c "import sys,json; r=json.load(sys.stdin); print('true' if r.get('ok') else 'false')" \
                 2>/dev/null || echo "false")
-            [[ "$_tg_check" == "true" ]] && _tg_valid=true
-            [[ -n "$_channels_json" ]] && _channels_json+=','$'\n'
-            if [[ "$_tg_valid" == "true" ]]; then
-                _channels_json+='"telegram": {
-      "enabled": true,
-      "botToken": "'"${TELEGRAM_BOT_TOKEN}"'",
-      "dmPolicy": "pairing"
-    }'
-                ok "Telegram token valid — enabled"
+            if [[ "$_tg_check" == "true" ]]; then
+                _tg_enabled="true"
+                ok "Telegram token valid — enabling channel"
             else
                 warn "Telegram token invalid — channel remains disabled. Regenerate via BotFather."
-                _channels_json+='"telegram": {
-      "enabled": false,
-      "botToken": "'"${TELEGRAM_BOT_TOKEN}"'",
-      "dmPolicy": "pairing"
-    }'
             fi
         fi
     fi
 
-    # Discord
-    if echo "${OPENCLAW_CHANNELS:-}" | grep -qE "discord|all"; then
-        if [[ -n "${DISCORD_BOT_TOKEN:-}" && -n "${DISCORD_GUILD_ID:-}" ]]; then
-            [[ -n "$_channels_json" ]] && _channels_json+=','$'\n'
-            _channels_json+='"discord": {
-      "enabled": true,
-      "token": "'"${DISCORD_BOT_TOKEN}"'",
-      "guilds": {
-        "'"${DISCORD_GUILD_ID}"'": {
-          "requireMention": true
-        }
-      }
-    }'
-        fi
-    fi
+    # Build channels object as node.js script running inside the container.
+    # All values passed as env vars to avoid shell quoting/escaping issues.
+    SIGNAL_ENABLED=$([[ "${SIGNALBOT_ENABLED:-false}" == "true" ]] && echo true || echo false) \
+    SIGNAL_PHONE="${SIGNAL_PHONE:-}" \
+    SIGNAL_URL="http://${TENANT_PREFIX}-signalbot:9999" \
+    OPENCLAW_CHANNELS="${OPENCLAW_CHANNELS:-}" \
+    TG_ENABLED="$_tg_enabled" \
+    TG_TOKEN="${TELEGRAM_BOT_TOKEN:-}" \
+    DC_ENABLED=$([[ -n "${DISCORD_BOT_TOKEN:-}" && -n "${DISCORD_GUILD_ID:-}" ]] && echo true || echo false) \
+    DC_TOKEN="${DISCORD_BOT_TOKEN:-}" \
+    DC_GUILD="${DISCORD_GUILD_ID:-}" \
+    docker exec -e SIGNAL_ENABLED -e SIGNAL_PHONE -e SIGNAL_URL \
+                -e OPENCLAW_CHANNELS -e TG_ENABLED -e TG_TOKEN \
+                -e DC_ENABLED -e DC_TOKEN -e DC_GUILD \
+                "$container" node -e "
+const fs=require('fs');
+const path='/home/node/.openclaw/openclaw.json';
+const ch=process.env.OPENCLAW_CHANNELS||'';
+const isAll=ch.includes('all');
 
-    # Merge channels into existing openclaw.json (preserve gateway.* intact)
-    if [[ -n "$_channels_json" ]]; then
-        python3 - "${cfg}" <<PYEOF
-import json, sys
-path = sys.argv[1]
-channels_raw = """${_channels_json}"""
-with open(path) as f:
-    c = json.load(f)
-# Parse channel entries from the raw JSON fragment
-channels_obj = json.loads('{' + channels_raw + '}')
-c['channels'] = channels_obj
-with open(path, 'w') as f:
-    json.dump(c, f, indent=2)
-print('Channels updated.')
-PYEOF
-    else
-        # No channels configured — remove channels key
-        python3 -c "
-import json
-path='${cfg}'
-with open(path) as f: c=json.load(f)
-c.pop('channels', None)
-with open(path,'w') as f: json.dump(c,f,indent=2)
-print('No channels configured — channels section removed.')
-"
-    fi
+// Read existing config to preserve gateway.* and other settings
+let c={};
+try { c=JSON.parse(fs.readFileSync(path,'utf8')); } catch(e) { c={gateway:{}}; }
 
-    # openclaw.json written by host user (jglaine) — container runs as uid 1000 (node).
-    # Without this chown OpenClaw gets EACCES when trying to persist plugin state.
-    docker run --rm -v "${DATA_DIR}/openclaw/home:/target" alpine:latest \
-        chown -R 1000:1000 /target 2>/dev/null || true
+const channels={};
 
-    docker restart "${TENANT_PREFIX}-openclaw" >/dev/null 2>&1 \
+// Signal
+if(isAll||ch.includes('signal')) {
+  if(process.env.SIGNAL_ENABLED==='true' && process.env.SIGNAL_PHONE) {
+    channels.signal={enabled:true,account:process.env.SIGNAL_PHONE,
+      httpUrl:process.env.SIGNAL_URL,autoStart:false,
+      dmPolicy:'open',allowFrom:['*']};
+  }
+}
+
+// Telegram
+if(isAll||ch.includes('telegram')) {
+  if(process.env.TG_TOKEN) {
+    channels.telegram={enabled:process.env.TG_ENABLED==='true',
+      botToken:process.env.TG_TOKEN,dmPolicy:'open',allowFrom:['*']};
+  }
+}
+
+// Discord
+if(isAll||ch.includes('discord')) {
+  if(process.env.DC_ENABLED==='true' && process.env.DC_GUILD) {
+    channels.discord={enabled:true,token:process.env.DC_TOKEN,
+      guilds:{[process.env.DC_GUILD]:{requireMention:false}}};
+  }
+}
+
+if(Object.keys(channels).length>0) c.channels=channels;
+else delete c.channels;
+
+fs.writeFileSync(path,JSON.stringify(c,null,2));
+console.log('Channels updated:',Object.keys(channels).join(', ')||'none');
+" 2>/dev/null
+
+    docker restart "$container" >/dev/null 2>&1 \
         && ok "OpenClaw restarted with updated channel config" \
         || warn "Failed to restart OpenClaw — run: docker restart ${TENANT_PREFIX}-openclaw"
 

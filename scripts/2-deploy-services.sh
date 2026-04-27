@@ -3076,13 +3076,16 @@ prepare_data_dirs() {
         local _channels_json=""
 
         # Build Signal block
+        # dmPolicy "open" + allowFrom ["*"]: respond to anyone without pairing
         if echo "${OPENCLAW_CHANNELS:-signal}" | grep -qE "signal|all"; then
             if [[ "${SIGNALBOT_ENABLED:-false}" == "true" && -n "${SIGNAL_PHONE:-}" ]]; then
                 _channels_json+='    "signal": {
       "enabled": true,
       "account": "'"${SIGNAL_PHONE}"'",
       "httpUrl": "http://'"${TENANT_PREFIX}"'-signalbot:9999",
-      "autoStart": false
+      "autoStart": false,
+      "dmPolicy": "open",
+      "allowFrom": ["*"]
     }'
             fi
         fi
@@ -3106,14 +3109,16 @@ prepare_data_dirs() {
                     _channels_json+='    "telegram": {
       "enabled": true,
       "botToken": "'"${TELEGRAM_BOT_TOKEN}"'",
-      "dmPolicy": "pairing"
+      "dmPolicy": "open",
+      "allowFrom": ["*"]
     }'
                 else
-                    log "WARNING: Telegram bot token invalid — channel seeded as disabled. Regenerate via BotFather."
+                    log "WARNING: Telegram bot token invalid — channel seeded as disabled. Regenerate via BotFather, then run --update-channels."
                     _channels_json+='    "telegram": {
       "enabled": false,
       "botToken": "'"${TELEGRAM_BOT_TOKEN}"'",
-      "dmPolicy": "pairing"
+      "dmPolicy": "open",
+      "allowFrom": ["*"]
     }'
                 fi
             fi
@@ -3128,7 +3133,7 @@ prepare_data_dirs() {
       "token": "'"${DISCORD_BOT_TOKEN}"'",
       "guilds": {
         "'"${DISCORD_GUILD_ID}"'": {
-          "requireMention": true
+          "requireMention": false
         }
       }
     }'
@@ -3164,7 +3169,11 @@ prepare_data_dirs() {
         fi
         [[ -z "$_oc_primary_model" ]] && _oc_primary_model="openai/gpt-4o"
 
-        cat > "${_oc_json}" << OCEOF
+        # ${DATA_DIR}/openclaw/home is drwx------ ubuntu (uid 1000).
+        # The deploy user (jglaine, uid 1001) cannot write there directly.
+        # Write to /tmp first, then copy + chown via docker run (runs as root).
+        local _oc_tmp="/tmp/openclaw-config-${TENANT_ID}.json"
+        cat > "${_oc_tmp}" << OCEOF
 {
   "gateway": {
     "mode": "${_oc_mode}",
@@ -3207,11 +3216,13 @@ prepare_data_dirs() {
   }${_channels_section}
 }
 OCEOF
-        # openclaw image runs as node (uid 1000) — file must be readable by that uid
-        chmod 644 "${_oc_json}"
-        # openclaw container runs as node (uid 1000), not PUID — chown accordingly
-        docker run --rm -v "${DATA_DIR}/openclaw/home:/target" alpine:latest \
-            chown -R 1000:1000 /target 2>/dev/null || true
+        docker run --rm \
+            -v "${_oc_tmp}:/src/openclaw.json:ro" \
+            -v "${DATA_DIR}/openclaw/home:/target" \
+            alpine:latest sh -c \
+            "mkdir -p /target && cp /src/openclaw.json /target/openclaw.json && chown 1000:1000 /target/openclaw.json && chmod 644 /target/openclaw.json" \
+            2>/dev/null || warn "Failed to write openclaw.json to volume — will use existing config or --allow-unconfigured"
+        rm -f "${_oc_tmp}"
 
         # Pending pairing approval is handled in wait_for_all_health() AFTER the container
         # starts, using docker exec node (files are 600 ubuntu:ubuntu — host python3 can't
