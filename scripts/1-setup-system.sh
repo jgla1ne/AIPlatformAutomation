@@ -1241,17 +1241,17 @@ configure_litellm_gateway() {
     else
     local routing_choice=0
     select_menu_option "LiteLLM Load Balancing Strategy" \
-        "cost-optimized (Prefer local models, fallback to external)" \
+        "latency-based (Fastest model first; CPU: auto-falls back to cloud)" \
         "least-busy (Route to least busy model)" \
-        "weighted (Weighted round-robin)" \
-        "simple (Round-robin)" \
-        "performance-first (Prefer fastest response time)" || routing_choice=$?
+        "simple-shuffle (Round-robin)" \
+        "cost-based-routing (Cheapest model first)" \
+        "usage-based-routing (Balance by usage)" || routing_choice=$?
     case $routing_choice in
-        0) LITELLM_ROUTING_STRATEGY="cost-optimized" ;;
+        0) LITELLM_ROUTING_STRATEGY="latency-based-routing" ;;
         1) LITELLM_ROUTING_STRATEGY="least-busy" ;;
-        2) LITELLM_ROUTING_STRATEGY="weighted" ;;
-        3) LITELLM_ROUTING_STRATEGY="simple" ;;
-        4) LITELLM_ROUTING_STRATEGY="performance-first" ;;
+        2) LITELLM_ROUTING_STRATEGY="simple-shuffle" ;;
+        3) LITELLM_ROUTING_STRATEGY="cost-based-routing" ;;
+        4) LITELLM_ROUTING_STRATEGY="usage-based-routing" ;;
     esac
     fi  # end non-TTY routing shortcut
 
@@ -2662,7 +2662,7 @@ LLM_GATEWAY_TYPE="${LLM_GATEWAY_TYPE:-litellm}"
 
 # LiteLLM Configuration
 LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-${litellm_master_key}}"
-LITELLM_ROUTING_STRATEGY="${LITELLM_ROUTING_STRATEGY:-cost-optimized}"
+LITELLM_ROUTING_STRATEGY="${LITELLM_ROUTING_STRATEGY:-latency-based-routing}"
 LITELLM_ENABLE_LOGGING="${LITELLM_ENABLE_LOGGING:-true}"
 LITELLM_ENABLE_COST_TRACKING="${LITELLM_ENABLE_COST_TRACKING:-true}"
 
@@ -3136,7 +3136,7 @@ display_service_summary() {
     [[ "${ENABLE_POSTGRES:-false}"  == "true" ]] && _mc_line "  ✅ PostgreSQL  (${POSTGRES_USER:-$TENANT_ID} / ${POSTGRES_DB:-$TENANT_ID})           :${POSTGRES_PORT:-5432}"
     [[ "${ENABLE_REDIS:-false}"     == "true" ]] && _mc_line "  ✅ Redis                                                :${REDIS_PORT:-6379}"
     [[ "${ENABLE_OLLAMA:-false}"    == "true" ]] && _mc_line "  ✅ Ollama (models: ${OLLAMA_MODELS:-llama3.1:8b})          :${OLLAMA_PORT:-11434}"
-    [[ "${ENABLE_LITELLM:-false}"   == "true" ]] && _mc_line "  ✅ LiteLLM (routing: ${LITELLM_ROUTING_STRATEGY:-cost-optimized})             :${LITELLM_PORT:-4000}"
+    [[ "${ENABLE_LITELLM:-false}"   == "true" ]] && _mc_line "  ✅ LiteLLM (routing: ${LITELLM_ROUTING_STRATEGY:-latency-based-routing})             :${LITELLM_PORT:-4000}"
     [[ "${ENABLE_OPENWEBUI:-false}" == "true" ]] && _mc_line "  ✅ OpenWebUI  (→ LiteLLM + Ollama RAG)                 :${OPENWEBUI_PORT:-3000}"
     [[ "${ENABLE_ZEP:-false}"       == "true" ]] && _mc_line "  ✅ Zep CE     (→ Postgres + LiteLLM)                   :${ZEP_PORT:-8100}"
     [[ "${ENABLE_LETTA:-false}"     == "true" ]] && _mc_line "  ✅ Letta      (→ Postgres + LiteLLM)                   :${LETTA_PORT:-8283}"
@@ -3587,7 +3587,7 @@ STACK_NAME="${STACK_NAME:-custom}"
 
 # LLM GATEWAY
 LLM_GATEWAY_TYPE="${LLM_GATEWAY_TYPE:-litellm}"
-LITELLM_ROUTING_STRATEGY="${LITELLM_ROUTING_STRATEGY:-cost-optimized}"
+LITELLM_ROUTING_STRATEGY="${LITELLM_ROUTING_STRATEGY:-latency-based-routing}"
 
 # VECTOR DATABASE
 VECTOR_DB_TYPE="${VECTOR_DB_TYPE:-qdrant}"
@@ -3851,7 +3851,7 @@ initialize_service_variables() {
     OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}"
     
     # LiteLLM Routing Strategy
-    LITELLM_ROUTING_STRATEGY="${LITELLM_ROUTING_STRATEGY:-cost-optimized}"
+    LITELLM_ROUTING_STRATEGY="${LITELLM_ROUTING_STRATEGY:-latency-based-routing}"
     LITELLM_INTERNAL_PORT="${LITELLM_INTERNAL_PORT:-4000}"
     
     # Internal Service Ports

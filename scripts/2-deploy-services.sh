@@ -2330,7 +2330,7 @@ EOF
             cat >> "${CONFIG_DIR}/litellm/config.yaml" << EOF
   - model_name: ${_m}
     litellm_params:
-      model: google/${_m}
+      model: gemini/${_m}
       api_key: ${GOOGLE_API_KEY}
 EOF
         done
@@ -3310,6 +3310,11 @@ prepare_data_dirs() {
 ${_oc_models_json}
         ]
       }
+    }
+  },
+  "plugins": {
+    "entries": {
+      "bonjour": {"enabled": false}
     }
   }${_channels_section}
 }
