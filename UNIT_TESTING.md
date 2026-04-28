@@ -35,6 +35,95 @@
 | **T49** — OpenClaw Signal SSE Proxy | 4 checks | SSE endpoint returns 200 immediately, keepalive sent, no "fetch failed" in OpenClaw logs, Signal provider starts cleanly |
 | **T50** — OpenClaw Multi-Channel & Pairing | 6 checks | Telegram/Discord bot tokens, channel selection, auto-approval in Script 2, manual management in Script 3 |
 | **T51** — OpenClaw Idle Timeout + Grafana Provisioning | 4 checks | Script 3 keeps idle timeout disabled; Caddy uses native WebSocket proxying; Grafana datasource/dashboard generated dynamically |
+| **T53** — Ollama Exact Model Input + Latest Pulls | 4 checks | Script 1 documents exact model input; Script 3 accepts comma-separated pulls; `--ollama-update` re-pulls latest tag manifests; LiteLLM config is refreshed |
+| **T54** — Grafana Credential Collection | 3 checks | Script 1 prompts for Grafana username/password; blank password auto-generates; docs expose the contract |
+| **T52** — Project 2 Control-Plane Contract | 7 checks | Project 2 can derive packages, prerequisites, actions, health checks, OpenClaw pairing, tenant metadata, and quota envelopes from Project 1 behavior |
+
+| **T55** — End-to-End Admin Server Registration | 5 checks | datasquiz tenant registered in control plane; 21 active services populated; health-check jobs succeed; SMTP diagnostic logs on startup; non-interactive redeploy procedure documented |
+
+---
+
+## RUN 20 — 2026-04-28 (Admin Server Tenant + Control-Plane End-to-End Verification)
+
+**Status:** `PASS` — live verification on 2026-04-28 with datasquiz tenant and Project 2 control plane.
+
+### T55 — End-to-End Admin Server Registration
+
+| Check | Evidence | Result |
+|---|---|---|
+| datasquiz tenant active | `SELECT status FROM tenants WHERE tenant_id='datasquiz'` returns `active` | PASS |
+| 21 services populated | `tenant_services` table has 21 active rows for datasquiz covering all full-stack services with real subdomain URLs | PASS |
+| Post-deploy health check | `post_deploy_health_check` job executed successfully (status=succeeded) via web worker | PASS |
+| SMTP diagnostic on startup | Container logs clear SES credential warning; emails queue in `email_outbox` without crashing | PASS |
+| Admin server automation | `AI_PLATFORM_REPO=/opt/AIPlatformAutomation` resolves inside container via `/home/jglaine/AIPlatformAutomation` volume mount; `su-exec appuser:dockerhost docker ps` works with matching GID 987 | PASS |
+
+### Non-Interactive Re-Deploy Procedure (for datasquiz admin tenant)
+
+When a full nuke+redeploy is needed, use `--template` to bypass Script 1 interactivity:
+
+```bash
+# 1. Run as root — wipes EBS and all containers
+sudo bash scripts/0-complete-cleanup.sh datasquiz
+
+# 2. Non-interactive: load all config from existing platform.conf
+bash scripts/1-setup-system.sh datasquiz --template /mnt/datasquiz/config/platform.conf
+
+# 3. Re-deploy (or use --flushall for a truly clean EBS state)
+bash scripts/2-deploy-services.sh datasquiz
+
+# 4. Post-deploy configure and health check
+bash scripts/3-configure-services.sh datasquiz
+```
+
+After redeploy, sync the datasquiz tenant back into the control plane from the admin surface at `ai.datasquiz.net` using **Sync existing /mnt tenant** with `planCode=full`.
+
+---
+
+## RUN 16 — 2026-04-28 (Project 2 Control-Plane Contract Alignment)
+
+**Status:** `DOCUMENTED + PROJECT 2 TESTED`  
+**Changes this run:** Project 1 docs now explicitly define the contract consumed by Project 2. Project 2 unit tests include a full customer onboarding regression and an admin metadata growth regression.
+
+### T52 — Project 2 Control-Plane Contract
+
+| Check | Evidence | Result |
+|---|---|---|
+| Package catalog source | Project 2 parses Script 1 presets into shopfront packages | PASS |
+| Prerequisite catalog source | Project 2 parses Script 1 prompts into customer prerequisite fields | PASS |
+| Action catalog source | Project 2 parses Script 2/3 options into tenant/admin action catalog | PASS |
+| OpenClaw pairing action | Script 3 `--openclaw-pairs` remains documented as operator/admin action | PASS |
+| Post-deploy health action | Script 3 `--health-check` remains the dashboard health-check command | PASS |
+| Script 0 safety boundary | Project 2 records wipe requests as auditable jobs and does not execute Script 0 from HTTP | PASS |
+| Tenant metadata handoff | Project 2 tests tenant request, email verification, payment, dashboard access, and admin metadata aggregation | PASS |
+
+**Result: 7/7 PASS by documentation contract and Project 2 automated tests**
+
+---
+
+## RUN 18 — 2026-04-28 (Ollama Exact Model Input + Latest Pulls)
+
+**Status:** `PASS` — script updated, syntax checked, and live `datasquiz` tenant pull verified on 2026-04-28.
+
+### T53 — Ollama Exact Model Input + Latest Pulls
+
+| Check | Evidence | Result |
+|---|---|---|
+| Script 1 exact model input | README and wizard text allow exact model names from `ollama.com/library?sort=newest` | PASS |
+| Comma-separated model list | Script 1 custom/non-TTY input and Script 3 `--ollama-pull` accept comma-separated names | PASS |
+| Latest manifest behavior | Script 3 `--ollama-update` re-pulls every configured tag from `OLLAMA_MODELS` | PASS |
+| LiteLLM refresh | Successful `--ollama-pull` updates `platform.conf`, updates LiteLLM config, restarts LiteLLM, and exposes models through `/v1/models` | PASS |
+
+Live tenant `datasquiz` test: `bash scripts/3-configure-services.sh datasquiz --ollama-pull gemma4:e4b,deepseek-v4-flash:cloud` pulled 2/2 models. `ollama list` shows both models, `platform.conf` includes both in `OLLAMA_MODELS`, LiteLLM is healthy, and `http://127.0.0.1:4000/v1/models` exposes `ollama/gemma4:e4b` and `ollama/deepseek-v4-flash:cloud`.
+
+## RUN 19 — 2026-04-28 (Grafana Credential Collection)
+
+**Status:** `PASS` — Script 1 syntax checked.
+
+| Check | Evidence | Result |
+|---|---|---|
+| Username collected | Script 1 prompts for `GRAFANA_ADMIN_USER` when Grafana is enabled | PASS |
+| Password collected/generated | Script 1 accepts `GRAFANA_ADMIN_PASSWORD` or auto-generates when blank | PASS |
+| Documentation updated | README and user stories define Grafana credential behavior | PASS |
 
 ---
 

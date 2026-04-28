@@ -1032,6 +1032,17 @@ configure_custom_stack() {
     echo "  📊 Monitoring:"
     safe_read_yesno "Grafana (dashboards)" "false" "ENABLE_GRAFANA"
     safe_read_yesno "Prometheus (metrics)" "false" "ENABLE_PROMETHEUS"
+    if [[ "${ENABLE_GRAFANA:-false}" == "true" ]]; then
+        safe_read "Grafana admin username" "${GRAFANA_ADMIN_USER:-admin}" "GRAFANA_ADMIN_USER" "^[a-zA-Z0-9_.@-]+$"
+        if [[ -z "${GRAFANA_ADMIN_PASSWORD:-}" ]]; then
+            read -rsp "  🔐 Grafana admin password (blank = auto-generate): " GRAFANA_ADMIN_PASSWORD
+            echo ""
+        fi
+        if [[ -z "${GRAFANA_ADMIN_PASSWORD:-}" ]]; then
+            GRAFANA_ADMIN_PASSWORD="$(gen_password)"
+            ok "Generated Grafana admin password"
+        fi
+    fi
     echo ""
 
     # Authentication

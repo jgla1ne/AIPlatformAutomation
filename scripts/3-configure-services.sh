@@ -3867,9 +3867,23 @@ manage_ollama_models() {
             ;;
         pull)
             [[ -z "$model" ]] && fail "Usage: --ollama-pull <model>"
-            log "Pulling Ollama model: ${model} (this may take several minutes)..."
-            docker exec "${container}" ollama pull "$model"
-            ok "Model pulled: ${model}"
+            local pulled=0 failed=0
+            IFS=',' read -ra requested_models <<< "$model"
+            for requested_model in "${requested_models[@]}"; do
+                requested_model="$(echo "${requested_model}" | xargs)"
+                [[ -z "${requested_model}" ]] && continue
+                log "Pulling Ollama model: ${requested_model} (this may take several minutes)..."
+                if docker exec "${container}" ollama pull "${requested_model}"; then
+                    update_platform_conf_models "${requested_model}"
+                    ok "Model pulled: ${requested_model}"
+                    (( ++pulled )) || true
+                else
+                    warn "Model pull failed: ${requested_model}"
+                    (( ++failed )) || true
+                fi
+            done
+            [[ "${pulled}" -gt 0 ]] && docker restart "${TENANT_PREFIX}-litellm" >/dev/null 2>&1 || true
+            ok "Ollama pull complete: ${pulled} pulled, ${failed} failed"
             ;;
         remove)
             [[ -z "$model" ]] && fail "Usage: --ollama-remove <model>"

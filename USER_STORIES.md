@@ -119,6 +119,7 @@
 - `--update` / `--update all` rolls through every non-data container for the tenant; each service health-checked before proceeding
 - Data services (postgres, redis, mongodb) excluded from `--update all`; updating them individually shows a 5s warning (major version = data risk)
 - `--ollama-update` re-pulls all `OLLAMA_MODELS` from platform.conf to pick up latest model weights for the same tag
+- `--ollama-pull <model[,model...]>` accepts exact model names from `ollama.com/library`, including tags and comma-separated lists
 - If no new image is available, reports "already latest" — idempotent
 - Container image ID before/after pull is compared; only recreates if a new layer was downloaded
 - Script 2 clean re-run continues to be the authoritative "full refresh" path (config + images + secrets)
@@ -582,6 +583,7 @@
 **Acceptance criteria:**
 - Prometheus deployed and scraping all containers
 - Grafana deployed at configured port with Prometheus datasource pre-configured
+- Script 1 collects Grafana admin username and password when Grafana is enabled, with automatic password generation when blank
 - LiteLLM cost metrics available (LiteLLM exposes Prometheus metrics natively)
 - Script 2 generates tenant-scoped Grafana provisioning artifacts dynamically from enabled services, including service availability and memory-layer health panels for Zep and Letta when selected
 - Services: `grafana`, `prometheus`
@@ -738,7 +740,8 @@
 
 **Acceptance criteria:**
 - Interactive menu for model configuration (Script 3 --configure-models)
-- Ollama model size selection (Small/Medium/Large) or custom model names
+- Ollama model size selection (Small/Medium/Large) or custom exact model names from `https://ollama.com/library?sort=newest`
+- Custom Ollama entries accept comma-separated exact model parameters so operators can paste values directly from the Ollama library
 - External LLM provider configuration (Groq, OpenAI, Anthropic, Google)
 - API key management with secure input
 - Template saving for model configurations
@@ -1067,6 +1070,52 @@ Epic 13 — Hardware       GPU/CPU detection, deployment guidance, model recomme
 | **4.3 Multi-Channel** | External API dependencies | Token regeneration (Telegram/Discord) | Privileged intents required (Discord) |
 | **4.4 Error Recovery** | Host-path python3/node for device file ops (files are 600 uid 1000) | Manual Signal QR pairing | Log access controlled |
 | **4.5 Production Hardening** | Non-root container (node:1000) | DNS configuration required | 48-char random gateway token |
+
+---
+
+## EPIC 9 — Control-Plane Integration
+
+**Goal:** Project 1 remains the deployable stack authority while Project 2 exposes a safe business-facing shopfront, admin registry, and tenant dashboard.
+
+### Feature 9.1 — Generated Package and Prerequisite Catalog
+
+**As a** platform operator,  
+**I want** Project 2 to generate its shopfront package and prerequisite catalog from Project 1 scripts,  
+**so that** customers only see stack options and integration keys that Project 1 can actually deploy.
+
+**Acceptance criteria:**
+- Script 1 stack presets remain parseable by Project 2
+- Script 1 input prompts remain descriptive enough to become customer prerequisite labels
+- memory-layer choices include Zep, Letta, or both where supported
+- service toggles for Ollama, vector DBs, proxy, memory, OpenClaw, N8N, Dify, monitoring, and auth stay represented in generated catalogs
+- changes to presets or prompts are documented in Project 1 and verified by Project 2 tests
+
+### Feature 9.2 — Dashboard Action Contract
+
+**As a** tenant administrator,  
+**I want** Project 2 dashboard actions to map to Project 1 Script 2 and Script 3 capabilities,  
+**so that** the web UI reflects what operators can safely perform today.
+
+**Acceptance criteria:**
+- customer-safe actions map to non-destructive Script 3 operations
+- privileged actions are marked operator-only
+- OpenClaw pairing management is exposed as an operator/admin action
+- Script 0 cleanup is represented only as an auditable admin request, never a direct web execution
+- post-deploy health checks use Script 3 `--health-check`
+
+### Feature 9.3 — Tenant Metadata and Quota Handoff
+
+**As a** server administrator,  
+**I want** each Project 1 tenant deployment to be represented in Project 2 metadata,  
+**so that** tenant dashboards and admin views can show status, service inventory, one EBS volume per tenant, quota envelopes, and future cost controls.
+
+**Acceptance criteria:**
+- tenant runtime data remains under `/mnt/<tenant>`
+- tenant metadata is synchronized into Project 2 Postgres
+- one EBS volume per tenant is represented in the control-plane quota policy
+- tenant admins see only their tenant metadata
+- server admins can see one, multiple, or all tenants for future aggregate analytics
+- Grafana and Prometheus tenant dashboards follow the same tenant/admin visibility model
 
 ---
 

@@ -131,6 +131,19 @@ Script 3 ──reads──────────┘ (platform.conf + port-allo
          ──verifies──► port health, DNS, API keys
 ```
 
+### Control-Plane Contract With Project 2
+
+Project 2 (`/home/jglaine/Datasquiz_Web_AI`) treats this repository as the deployable-platform source of truth.
+
+- Script 1 presets generate the shopfront package catalog.
+- Script 1 prompts generate customer prerequisite and integration-key lists.
+- Script 2 and Script 3 options generate the tenant action catalog.
+- Script 3 `--health-check`, `--show-credentials`, `--logs`, `--backup`, `--openclaw-pairs`, and related operations become tenant/admin dashboard actions.
+- Script 0 remains operator-only and is never executed directly by the web control plane.
+- Tenant metadata, quotas, and approval state live in the Project 2 control-plane Postgres database, while runtime data and service config stay under `/mnt/<tenant>`.
+
+When adding or renaming stack presets, service toggles, Script 2 flags, or Script 3 operations, update this README, `USER_STORIES.md`, and `UNIT_TESTING.md` so the Project 2 shopfront and tests can stay aligned.
+
 ---
 
 ## SCRIPT REFERENCE
@@ -237,13 +250,16 @@ Script 1 provides an interactive model selection menu with the latest available 
 - Gemma 4 27B - Google's large multimodal model
 
 **Custom Options:**
-- Custom model entry (option 18) for any model from ollama.com/library
-- Support for model variants: `gemma3:4b`, `nemotron-cascade-2:latest`
-- Multiple models: `gemma3:4b,llama3.2:3b` (note: `gemma4` tags do not exist in Ollama registry — use `gemma3`)
+- Custom model entry for any exact model parameter from `https://ollama.com/library?sort=newest`
+- Support for model variants/tags such as `gemma3:4b`, `nemotron-cascade-2:latest`, or provider-supported `:cloud` tags
+- Multiple models are comma-separated, for example `gemma3:4b,llama3.2:3b`
+- Script 2 and Script 3 use `ollama pull`, which fetches the latest manifest for the requested tag every time it pulls
 
 **Model Management:**
 - Models are downloaded only once during initial deployment (P14 cost optimization)
-- Script 3 provides `--ollama-pull`, `--ollama-remove`, `--ollama-list` commands
+- Script 3 provides `--ollama-pull`, `--ollama-remove`, `--ollama-list`, and `--ollama-update` commands
+- `--ollama-pull` accepts one exact model name or a comma-separated list and adds successful pulls to `platform.conf` and LiteLLM config
+- `--ollama-update` re-pulls every model in `OLLAMA_MODELS` so running tenants pick up the latest available tag manifests
 - `--flushall` properly wipes model cache for clean re-deploys
 - Dynamic validation ensures models exist before LiteLLM configuration
 
@@ -345,6 +361,7 @@ All AI development tools are fully integrated with LiteLLM proxy:
 Complete observability stack with automatic service discovery and health monitoring:
 - **Prometheus**: Central metrics collection for all enabled services
 - **Grafana**: Pre-configured dashboards for AI platform overview
+- **Grafana credentials**: Script 1 collects `GRAFANA_ADMIN_USER` and `GRAFANA_ADMIN_PASSWORD` when Grafana is enabled; leaving the password blank generates one automatically and stores it in `platform.conf`
 - **Dynamic tenant dashboard provisioning**: Script 2 writes the Prometheus datasource and a tenant dashboard for each deployment where Grafana is enabled. The dashboard covers selected-service availability plus LiteLLM, OpenClaw, Zep, and Letta health when those services are selected.
 - **Zero Configuration**: Automatic monitoring setup for every deployed component
 - **Service Coverage**: Ollama, LiteLLM, Dify, Code Server, N8N, Flowise, AnythingLLM, OpenWebUI, LibreChat, OpenClaw, Authentik, Qdrant, PostgreSQL, Redis, MongoDB
@@ -621,6 +638,7 @@ bash scripts/3-configure-services.sh <tenant_id> --litellm-routing external-firs
 # Ollama model management
 bash scripts/3-configure-services.sh <tenant_id> --ollama-list
 bash scripts/3-configure-services.sh <tenant_id> --ollama-pull llama3.2:3b
+bash scripts/3-configure-services.sh <tenant_id> --ollama-pull gemma3:4b,nemotron-cascade-2:latest
 bash scripts/3-configure-services.sh <tenant_id> --ollama-remove llama3.2:1b
 
 # Interactive model configuration
