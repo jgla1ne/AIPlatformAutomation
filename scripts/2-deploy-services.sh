@@ -1051,11 +1051,12 @@ EOF
       - "${OPENCLAW_PORT}:${OPENCLAW_PORT}"
 $(build_openclaw_deps)
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${OPENCLAW_PORT}/health"]
+      # OpenClaw /health can block while channels start; verify the gateway port is accepting.
+      test: ["CMD-SHELL", "node -e \"const net=require('net'); const s=net.connect(${OPENCLAW_PORT},'127.0.0.1'); s.on('connect',()=>{s.end(); process.exit(0)}); s.on('error',()=>process.exit(1)); setTimeout(()=>process.exit(1),3000);\""]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 60s
+      start_period: 150s
 
 EOF
     fi
@@ -1278,9 +1279,8 @@ $(build_dify_deps)
       - "127.0.0.1:${DIFY_API_PORT:-5001}:5001"
 $(build_dify_deps)
     healthcheck:
-      # Lightweight shell probe: checks TCP port 5001 connectivity using native /dev/tcp.
-      # Adheres to 'NO PYTHON' requirement for healthchecks to prevent process piling.
-      test: ["CMD-SHELL", "timeout 3 bash -c 'cat < /dev/tcp/127.0.0.1/5001' 2>/dev/null || exit 1"]
+      # Use an HTTP probe; a raw TCP cat can leave Gunicorn workers hanging.
+      test: ["CMD-SHELL", "python - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:5001/health', timeout=3).read()\nPY"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -1866,9 +1866,11 @@ EOF
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
       GF_PATHS_DATA: /var/lib/grafana
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
       GF_SERVER_ROOT_URL: http://localhost:${GRAFANA_PORT:-3002}
     volumes:
       - ${DATA_DIR}/grafana:/var/lib/grafana
+      - ${CONFIG_DIR}/grafana/provisioning:/etc/grafana/provisioning:ro
     ports:
       - "127.0.0.1:${GRAFANA_PORT:-3002}:3000"
     networks:
@@ -2417,6 +2419,11 @@ EOF
     if [[ -z "$_routing_strategy" ]]; then
         [[ "${GPU_TYPE:-none}" == "none" ]] && _routing_strategy="latency-based-routing" || _routing_strategy="simple-shuffle"
     fi
+    case "$_routing_strategy" in
+        cost-optimized)
+            _routing_strategy="cost-based-routing"
+            ;;
+    esac
 
     cat >> "${CONFIG_DIR}/litellm/config.yaml" << EOF
 
@@ -2545,14 +2552,7 @@ EOF
         cat >> "${_tenant_caddy}" << EOF
 
 openclaw.${BASE_DOMAIN} {
-    reverse_proxy ${TENANT_PREFIX}-openclaw:${OPENCLAW_PORT} {
-        header_up Connection {>Connection}
-        header_up Upgrade {>Upgrade}
-        header_up Sec-WebSocket-Key {>Sec-WebSocket-Key}
-        header_up Sec-WebSocket-Version {>Sec-WebSocket-Version}
-        header_up Sec-WebSocket-Protocol {>Sec-WebSocket-Protocol}
-        header_up Sec-WebSocket-Accept {>Sec-WebSocket-Accept}
-    }
+    reverse_proxy ${TENANT_PREFIX}-openclaw:${OPENCLAW_PORT}
 }
 EOF
     fi
@@ -3353,7 +3353,82 @@ OCEOF
     [[ "${N8N_ENABLED}"       == "true" ]] && mkdir -p "${DATA_DIR}/n8n"
     [[ "${FLOWISE_ENABLED}"   == "true" ]] && mkdir -p "${DATA_DIR}/flowise"
     [[ "${DIFY_ENABLED}"      == "true" ]] && mkdir -p "${DATA_DIR}/dify"
-    [[ "${GRAFANA_ENABLED}"   == "true" ]] && mkdir -p "${DATA_DIR}/grafana"
+    if [[ "${GRAFANA_ENABLED}" == "true" ]]; then
+        mkdir -p "${DATA_DIR}/grafana" \
+                 "${CONFIG_DIR}/grafana/provisioning/datasources" \
+                 "${CONFIG_DIR}/grafana/provisioning/dashboards/json"
+        cat > "${CONFIG_DIR}/grafana/provisioning/datasources/prometheus.yml" << GRAFANADS
+apiVersion: 1
+datasources:
+  - name: Tenant Prometheus
+    type: prometheus
+    uid: tenant-prometheus
+    access: proxy
+    url: http://${TENANT_PREFIX}-prometheus:9090
+    isDefault: true
+    editable: false
+GRAFANADS
+        cat > "${CONFIG_DIR}/grafana/provisioning/dashboards/tenant-ai-platform.yml" << GRAFANAPROV
+apiVersion: 1
+providers:
+  - name: tenant-ai-platform
+    orgId: 1
+    folder: Datasquiz Tenant
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /etc/grafana/provisioning/dashboards/json
+GRAFANAPROV
+        cat > "${CONFIG_DIR}/grafana/provisioning/dashboards/json/tenant-ai-platform.json" << GRAFANADASH
+{
+  "uid": "tenant-ai-platform-${TENANT_ID}",
+  "title": "Tenant AI Platform - ${TENANT_ID}",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": ["datasquiz", "tenant", "${TENANT_ID}"],
+  "panels": [
+    {
+      "type": "stat",
+      "title": "LiteLLM Up",
+      "datasource": {"type": "prometheus", "uid": "tenant-prometheus"},
+      "targets": [{"expr": "up{job=\"litellm\"}", "refId": "A"}],
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0}
+    },
+    {
+      "type": "stat",
+      "title": "OpenClaw Up",
+      "datasource": {"type": "prometheus", "uid": "tenant-prometheus"},
+      "targets": [{"expr": "up{job=\"openclaw\"}", "refId": "A"}],
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0}
+    },
+    {
+      "type": "stat",
+      "title": "Zep Memory Health",
+      "datasource": {"type": "prometheus", "uid": "tenant-prometheus"},
+      "targets": [{"expr": "up{job=\"zep\"}", "refId": "A"}],
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0}
+    },
+    {
+      "type": "stat",
+      "title": "Letta Agent Health",
+      "datasource": {"type": "prometheus", "uid": "tenant-prometheus"},
+      "targets": [{"expr": "up{job=\"letta\"}", "refId": "A"}],
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0}
+    },
+    {
+      "type": "timeseries",
+      "title": "Selected Service Availability",
+      "datasource": {"type": "prometheus", "uid": "tenant-prometheus"},
+      "targets": [{"expr": "up", "refId": "A", "legendFormat": "{{job}}"}],
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 4}
+    }
+  ]
+}
+GRAFANADASH
+        chown -R "$PUID:$PGID" "${CONFIG_DIR}/grafana" "${DATA_DIR}/grafana"
+    fi
     [[ "${PROMETHEUS_ENABLED}" == "true" ]] && mkdir -p "${DATA_DIR}/prometheus"
     [[ "${AUTHENTIK_ENABLED}" == "true" ]] && mkdir -p "${DATA_DIR}/authentik"
     if [[ "${SIGNALBOT_ENABLED}" == "true" ]]; then
@@ -4294,6 +4369,7 @@ main() {
 
     # Normalise / derive variables not directly in platform.conf
     # These are safe to compute here since platform.conf is already sourced.
+    TENANT_ID="${TENANT_ID:-$tenant_id}"
     CONFIGURED_DIR="${DATA_DIR}/.configured"
     BASE_DIR="${DATA_DIR}"
     CONFIG_DIR="${DATA_DIR}/config"

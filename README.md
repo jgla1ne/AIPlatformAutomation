@@ -345,6 +345,7 @@ All AI development tools are fully integrated with LiteLLM proxy:
 Complete observability stack with automatic service discovery and health monitoring:
 - **Prometheus**: Central metrics collection for all enabled services
 - **Grafana**: Pre-configured dashboards for AI platform overview
+- **Dynamic tenant dashboard provisioning**: Script 2 writes the Prometheus datasource and a tenant dashboard for each deployment where Grafana is enabled. The dashboard covers selected-service availability plus LiteLLM, OpenClaw, Zep, and Letta health when those services are selected.
 - **Zero Configuration**: Automatic monitoring setup for every deployed component
 - **Service Coverage**: Ollama, LiteLLM, Dify, Code Server, N8N, Flowise, AnythingLLM, OpenWebUI, LibreChat, OpenClaw, Authentik, Qdrant, PostgreSQL, Redis, MongoDB
 - **Health Checks**: Service-specific endpoints with configurable scrape intervals
@@ -1274,7 +1275,7 @@ Use when implementing or reviewing any script change:
 - [ ] Does the Signalbot volume mount use `/home/.local/share/signal-cli` (NOT `/app/.local/share/signal-cli`)? The wrong path means pairing data is never persisted — signal-cli loses registration on every container restart.
 - [x] Does `prepare_data_dirs()` write `openclaw.json` via `/tmp` + `docker run alpine cp+chown`? Home vol is `drwx------ ubuntu (uid 1000)` — deploy user cannot write there directly.
 - [x] Does the generated `openclaw.json` set `dmPolicy: "open"` + `allowFrom: ["*"]` for Signal/Telegram and `requireMention: false` for Discord? Without this OpenClaw requires each user to complete a pairing handshake — the bot appears silent.
-- [ ] Does Prometheus use `metrics_path: /healthz` for Zep and `metrics_path: /v1/health` for Letta? Neither service exposes Prometheus-format `/metrics` — UP/DOWN health probes are the maximum available monitoring granularity without a custom exporter.
+- [ ] Does Prometheus use `metrics_path: /healthz` for Zep and `metrics_path: /v1/health` for Letta? Neither service exposes Prometheus-format `/metrics` — UP/DOWN health probes are provisioned into Prometheus/Grafana; session count and context size require a custom exporter or API polling.
 - [ ] Does Script 2 handle model downloads (not Script 3) to avoid re-download costs on re-runs (P14)?
 - [ ] Does Script 2 check if models already exist before pulling to avoid unnecessary downloads?
 - [ ] Does --flushall properly wipe Ollama model cache for clean re-deploys?

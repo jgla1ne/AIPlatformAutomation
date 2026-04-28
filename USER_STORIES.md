@@ -583,6 +583,7 @@
 - Prometheus deployed and scraping all containers
 - Grafana deployed at configured port with Prometheus datasource pre-configured
 - LiteLLM cost metrics available (LiteLLM exposes Prometheus metrics natively)
+- Script 2 generates tenant-scoped Grafana provisioning artifacts dynamically from enabled services, including service availability and memory-layer health panels for Zep and Letta when selected
 - Services: `grafana`, `prometheus`
 
 ---
@@ -869,7 +870,7 @@ Epic 13 — Hardware       GPU/CPU detection, deployment guidance, model recomme
 - **Prometheus Zep/Letta targets**: Corrected from `/metrics` (404) to `/healthz` (Zep) and `/v1/health` (Letta); Letta double-brace condition bug fixed — Letta was silently excluded from prometheus.yml on every deploy
 - **AnythingLLM native LiteLLM provider**: Migrated from `generic-openai` to `LLM_PROVIDER=litellm` + `EMBEDDING_ENGINE=litellm` using `LITE_LLM_BASE_PATH` (no `/v1`); live-tested: LLM 200 OK, embeddings 200 OK 1536-dim, `VECTOR_DB=qdrant`; `PROVIDER_SUPPORTS_NATIVE_TOOL_CALLING=litellm` enables agent tool calling
 - **OpenWebUI integration confirmed**: All env vars correct (LiteLLM, Zep, Letta, Qdrant) — requires first-user registration, then all models load automatically from LiteLLM
-- **Context monitoring limitation documented**: Zep CE and Letta do not expose Prometheus-format `/metrics` — UP/DOWN health probes only; session count and context size require manual API queries or a custom exporter
+- **Context monitoring limitation documented**: Zep CE and Letta do not expose Prometheus-format `/metrics` — UP/DOWN health probes are provisioned into Prometheus/Grafana; session count and context size require manual API queries or a custom exporter
 
 ### Completed Features (2026-04-20 — Per-Service DB Isolation)
 - **Per-Service PostgreSQL Isolation**: Each postgres-backed service (LiteLLM, N8N, Zep, Dify, Authentik, Letta) now gets its own dedicated database. Root cause: Dify's `messages` table collided with existing tables (253 tables in the shared DB) causing `DuplicateTable` migration failures on fresh deploys.

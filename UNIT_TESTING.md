@@ -34,6 +34,25 @@
 | **T48** — Continue.dev Config Schema | 3 checks | contextProviders as objects, LiteLLM reachable from container, no Hub sign-in fallback |
 | **T49** — OpenClaw Signal SSE Proxy | 4 checks | SSE endpoint returns 200 immediately, keepalive sent, no "fetch failed" in OpenClaw logs, Signal provider starts cleanly |
 | **T50** — OpenClaw Multi-Channel & Pairing | 6 checks | Telegram/Discord bot tokens, channel selection, auto-approval in Script 2, manual management in Script 3 |
+| **T51** — OpenClaw Idle Timeout + Grafana Provisioning | 4 checks | Script 3 keeps idle timeout disabled; Caddy uses native WebSocket proxying; Grafana datasource/dashboard generated dynamically |
+
+---
+
+## RUN 15 — 2026-04-28 (OpenClaw WebSocket Regression Guard + Dynamic Monitoring Provisioning)
+
+**Status:** `SCRIPT VERIFIED`  
+**Changes this run:** Script 3 `--update-channels` now keeps `agents.defaults.llm.idleTimeoutSeconds=0`; OpenClaw Caddy route uses Caddy's native WebSocket proxy behavior; Grafana provisioning files are generated per tenant with a Prometheus datasource and selected-service health dashboard.
+
+### T51 — OpenClaw Idle Timeout + Grafana Provisioning
+
+| Check | Evidence | Result |
+|---|---|---|
+| Script 2 seed config disables OpenClaw idle timeout | `openclaw.json` heredoc contains `"idleTimeoutSeconds": 0` | PASS |
+| Script 3 channel refresh keeps timeout disabled | `update_channels()` sets `c.agents.defaults.llm.idleTimeoutSeconds=0` | PASS |
+| Caddy OpenClaw route avoids stale manual WS headers | route is `reverse_proxy ${TENANT_PREFIX}-openclaw:${OPENCLAW_PORT}` | PASS |
+| Grafana provisioning generated dynamically | datasource + tenant dashboard JSON generated under `${CONFIG_DIR}/grafana/provisioning` | PASS |
+
+**Result: 4/4 PASS (script-verified)**
 
 ---
 

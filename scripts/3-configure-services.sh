@@ -716,11 +716,12 @@ if(isAll||ch.includes('discord')) {
 if(Object.keys(channels).length>0) c.channels=channels;
 else delete c.channels;
 
-// Ensure LLM idle timeout is set (Ollama needs 120s on first model load)
+// Disable the idle timer for chat channels. Discord and Telegram can exceed
+// OpenClaw's default idle window while LiteLLM is waiting on a slow provider.
 if(!c.agents) c.agents={};
 if(!c.agents.defaults) c.agents.defaults={};
 if(!c.agents.defaults.llm) c.agents.defaults.llm={};
-if(!c.agents.defaults.llm.idleTimeoutSeconds) c.agents.defaults.llm.idleTimeoutSeconds=120;
+c.agents.defaults.llm.idleTimeoutSeconds=0;
 
 fs.writeFileSync(path,JSON.stringify(c,null,2));
 console.log('Channels updated:',Object.keys(channels).join(', ')||'none');
