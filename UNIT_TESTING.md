@@ -55,7 +55,7 @@
 | 21 services populated | `tenant_services` table has 21 active rows for datasquiz covering all full-stack services with real subdomain URLs | PASS |
 | Post-deploy health check | `post_deploy_health_check` job executed successfully (status=succeeded) via web worker | PASS |
 | SMTP diagnostic on startup | Container logs clear SES credential warning; emails queue in `email_outbox` without crashing | PASS |
-| Admin server automation | `AI_PLATFORM_REPO=/opt/AIPlatformAutomation` resolves inside container via `/home/jglaine/AIPlatformAutomation` volume mount; `su-exec appuser:dockerhost docker ps` works with matching GID 987 | PASS |
+| Admin server automation | Container mounts `/home/jglaine/AIPlatformAutomation:/home/jglaine/AIPlatformAutomation` — same path inside and outside; `AI_PLATFORM_REPO=/home/jglaine/AIPlatformAutomation`; `su-exec appuser:dockerhost` with Docker GID 987 confirmed; health-check runs cleanly | PASS |
 
 ### Non-Interactive Re-Deploy Procedure (for datasquiz admin tenant)
 
